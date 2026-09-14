@@ -3149,7 +3149,7 @@
             <key>Type</key>
             <string>Boolean</string>
             <key>Value</key>
-            <integer>1</integer>
+            <integer>0</integer>
         </map>
         <key>NameTagShowDistanceColors</key>
         <map>

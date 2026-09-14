@@ -3768,7 +3768,7 @@ void LLVOAvatar::idleUpdateNameTagText(bool new_name)
     S32 distance_m = -1;
 
     static LLCachedControl<bool> show_distance_color_tag(gSavedSettings, "NameTagShowDistanceColors", false);
-    static LLCachedControl<bool> show_distance_in_tag(gSavedSettings, "NameTagShowDistance", true);
+    static LLCachedControl<bool> show_distance_in_tag(gSavedSettings, "NameTagShowDistance", false);
     static LLUIColor tag_whisper_color = LLUIColorTable::instance().getColor("NameTagWhisperDistanceColor", LLColor4::green);
     static LLUIColor tag_chat_color = LLUIColorTable::instance().getColor("NameTagChatDistanceColor", LLColor4::green);
     static LLUIColor tag_shout_color = LLUIColorTable::instance().getColor("NameTagShoutDistanceColor", LLColor4::yellow);
