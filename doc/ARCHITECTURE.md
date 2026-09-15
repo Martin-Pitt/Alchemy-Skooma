@@ -16,7 +16,7 @@
 
 **Rendering layer:**
 - **llrender** - OpenGL abstraction: shaders (`LLGLSLShader`, `LLShaderMgr`), vertex buffers (`LLVertexBuffer`), render targets (`LLRenderTarget`), textures, font rendering (FreeType + HarfBuzz)
-- **llwindow** - Platform window management and input (native Win32/Cocoa/X11 and SDL3 on Linux). Depends on llrender
+- **llwindow** - Platform window management and input (native Win32/Cocoa, and SDL3 on Linux, where GL is EGL on Wayland and X11 alike -- the viewer includes no X11 or GLX header). Depends on llrender
 
 **Content model layer:**
 - **llinventory** - Inventory item/folder data model
@@ -140,7 +140,7 @@ Key shader groups: GBuffer write (`gDeferredDiffuseProgram`, `gDeferredPBROpaque
 
 **PBR:** GLTF PBR metallic-roughness workflow. `LLFetchedGLTFMaterial` (`llfetchedgltfmaterial.h`) wraps material data (base color, normal, metallic/roughness, emissive, occlusion textures). `LLGLTFMaterialList` manages the material registry. Terrain also supports PBR via `gDeferredPBRTerrainProgram[]`. BRDF LUT generated at startup via `gDeferredGenBrdfLutProgram`.
 
-**Reflection probes:** `LLReflectionMapManager` (`llreflectionmapmanager.h`) manages up to 256 probes with box/sphere shapes, stored in cubemap arrays. Resolution: 128×128 radiance, 16×16 irradiance. Probes are blended via neighbor tracking. `LLHeroProbeManager` (`llheroprobemanager.h`) handles up to 2 high-quality planar probes at 1024×1024 for mirrors and reflective surfaces. Probe data is bound as a UBO during the lighting pass.
+**Reflection probes:** `LLReflectionMapManager` (`llreflectionmapmanager.h`) manages up to 256 probes with box/sphere shapes, stored in cubemap arrays. Resolution: 128×128 radiance; irradiance is nine spherical-harmonic coefficients per probe (`shProjectF.glsl`), integrated from the 8×8 mip by default (`ALProbeSHProjectionRes`). The projection runs row-parallel by default (`ALProbeSHProjectionTwoPass`): one fragment per coefficient and face row writes a partial-sum strip, then `shProjectReduceF.glsl` adds the rows. Probes are blended via neighbor tracking. `LLHeroProbeManager` (`llheroprobemanager.h`) handles up to 2 high-quality planar probes at 1024×1024 for mirrors and reflective surfaces. Probe data is bound as a UBO during the lighting pass.
 
 ### Environment System
 

@@ -166,6 +166,36 @@ public:
     static F32  memoryAdjustFactor(F32 allocated_MB, F32 physical_MB, F32 heap_cap_MB,
                                    F32 low_setting_MB, F32 high_setting_MB,
                                    bool low_is_explicit = false, bool high_is_explicit = false);
+
+    // What isAnyVisible answers, with no octree to ask. The frame numbers are the
+    // octree's own counter; the distance is squared, from the camera to the entry's
+    // bounding centre, and the threshold is the radius of the sphere behind the
+    // camera. An entry stays in memory while its group was recently visible, while
+    // its frame window has not run out, or while it sits inside that sphere.
+    struct VisibilityFacts
+    {
+        bool mHasGroup             = false;
+        bool mGroupRecentlyVisible = false;
+        bool mGroupOccluded        = false;
+        S32  mGroupAnyVisibleFrame = 0;
+        S32  mEntryVisibleFrame    = 0;
+        S32  mCurrentFrame         = 0;
+        U32  mMinFrameRange        = 0;
+        bool mIsChild              = false;
+        F32  mDistanceSquared      = 0.f;
+        F32  mRadius               = 0.f;
+        F32  mDistThreshold        = 0.f;
+    };
+    static bool staysInMemory(const VisibilityFacts& facts);
+
+    // The radius outside which an entry may be evicted, from the radius that
+    // loads one, the SceneLoadMinRadius setting and the draw distance. Wider
+    // than the load radius on purpose: sRearFarRadius does both jobs otherwise,
+    // and loading and unloading at the same distance is what paged objects in
+    // and out when the memory bounds pinned that radius to two metres. Never
+    // narrower than the setting, and never wider than the draw distance.
+    static F32  evictRadius(F32 rear_far_radius, F32 min_radius, F32 draw_radius);
+
     static F32  getSquaredPixelThreshold(bool is_front);
 
 private:
@@ -210,6 +240,11 @@ public:
     static U32                  sMinFrameRange;
     static F32                  sNearRadius;
     static F32                  sRearFarRadius;
+    static F32                  sEvictFarRadius;
+    // The last factor updateDebugSettings derived the radii from: 1 with memory
+    // to spare, 0 at the tightest. Kept so readers can report the policy the
+    // radii came from without recomputing it.
+    static F32                  sMemoryAdjustFactor;
     static F32                  sFrontPixelThreshold;
     static F32                  sRearPixelThreshold;
 };

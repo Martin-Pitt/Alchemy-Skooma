@@ -66,13 +66,6 @@
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>   // kInternetEventClass / kAEGetURL
 
-#if defined(LL_BUGSPLAT)
-#include <filesystem>
-#include <vector>
-#include "llbugsplat_mac.h"
-@import BugSplat;
-#endif
-
 // Forward decl so the Obj-C @implementation below can call into the C++ side.
 static void handleUrl(const char* url_utf8);
 
@@ -88,14 +81,6 @@ static void handleUrl(const char* url_utf8);
            withReplyEvent:(NSAppleEventDescriptor *)replyEvent;
 @end
 
-#if defined(LL_BUGSPLAT)
-// BugSplat delegate. Lives for the duration of the process so it can
-// service the BugsplatMac framework's callbacks after a crash report has
-// been queued from the *previous* run.
-@interface LLBugSplatDelegate : NSObject <BugSplatDelegate>
-@property (nonatomic, assign) std::string secondLogPath;
-@end
-#endif
 #endif
 
 #if LL_LINUX && LL_DBUS
@@ -107,7 +92,7 @@ static void handleUrl(const char* url_utf8);
 #define VIEWERAPI_INTERFACE "com.secondlife.ViewerAppAPI"
 #endif
 
-#if LL_DARWIN
+#if LL_DARWIN && ! AL_SENTRY
 // *FIX:Mani It would be nice to provide a clean interface to get the
 // default_unix_signal_handler for the LLApp class.
 extern void default_unix_signal_handler(int, siginfo_t *, void *);
@@ -195,7 +180,6 @@ namespace
     char **gArgV = NULL;
     // LLAppViewerWin32 on Windows (USE_SDL_WINDOW builds), LLAppViewerSDL elsewhere.
     LLAppViewer* gViewerAppPtr = NULL;
-    void (*gOldTerminateHandler)() = NULL;
 #if LL_WINDOWS
     // NvDRSSessionHandle from ll_nvapi_session_create(), torn down in SDL_AppQuit.
     void* gNvApiSession = nullptr;
@@ -339,191 +323,6 @@ static bool isSLURL(const char* s)
 
 @end
 
-#if defined(LL_BUGSPLAT)
-
-namespace
-{
-
-struct BugSplatAttachmentInfo
-{
-    BugSplatAttachmentInfo(const std::string& path, const std::string& type):
-        pathname(path),
-        basename(std::filesystem::path(path).filename().string()),
-        mimetype(type)
-    {}
-
-    std::string pathname, basename, mimetype;
-};
-
-} // namespace
-
-@implementation LLBugSplatDelegate
-
-- (void)bugSplatWillSendCrashReport:(BugSplat *)bugSplat
-{
-    infos("bugSplatWillSendCrashReport");
-}
-
-- (void)bugSplatWillSendCrashReportsAlways:(BugSplat *)bugSplat
-{
-    infos("bugSplatWillSendCrashReportsAlways");
-}
-
-- (void)bugSplatDidFinishSendingCrashReport:(BugSplat *)bugSplat
-{
-    infos("bugSplatDidFinishSendingCrashReport");
-
-    if (!_secondLogPath.empty())
-    {
-        std::filesystem::remove(_secondLogPath);
-    }
-    clearDumpLogsDir();
-}
-
-- (void)bugSplatWillCancelSendingCrashReport:(BugSplat *)bugSplat
-{
-    infos("bugSplatWillCancelSendingCrashReport");
-}
-
-- (void)bugSplatWillShowSubmitCrashReportAlert:(BugSplat *)bugSplat
-{
-    infos("bugSplatWillShowSubmitCrashReportAlert");
-}
-
-- (void)bugSplat:(BugSplat *)bugSplat didFailWithError:(NSError *)error
-{
-    std::string error_str([[error localizedDescription] UTF8String]);
-    infos("bugSplat:didFailWithError: " + error_str);
-}
-
-- (NSString *)applicationLogForBugSplat:(BugSplat *)bugSplat
-{
-    CrashMetadata& meta(CrashMetadata_instance());
-    // As of BugsplatMac 1.0.6, userName and userEmail properties are exposed
-    // by the BugsplatStartupManager. Set them here, since the
-    // defaultUserNameForBugsplatStartupManager and
-    // defaultUserEmailForBugsplatStartupManager methods are called later, for
-    // the *current* run, rather than for the previous crashed run whose crash
-    // report we are about to send.
-    infos("applicationLogForBugsplatStartupManager setting userName = '" +
-          meta.agentFullname + '"');
-    bugSplat.userName =
-        [NSString stringWithCString:meta.agentFullname.c_str()
-                           encoding:NSUTF8StringEncoding];
-    // Use the email field for OS version, just as we do on Windows, until
-    // BugSplat provides more metadata fields.
-    infos("applicationLogForBugsplatStartupManager setting userEmail = '" +
-          meta.OSInfo + '"');
-    bugSplat.userEmail =
-        [NSString stringWithCString:meta.OSInfo.c_str()
-                           encoding:NSUTF8StringEncoding];
-
-    // This strangely-named override method's return value contributes the
-    // User Description metadata field.
-    infos("applicationLogForBugsplatStartupManager -> '" + meta.fatalMessage + "'");
-    return [NSString stringWithCString:meta.fatalMessage.c_str()
-                              encoding:NSUTF8StringEncoding];
-}
-
-- (NSString *)applicationKeyForBugSplat:(BugSplat *)bugSplat
-                                 signal:(NSString *)signal
-                          exceptionName:(NSString *)exceptionName
-                        exceptionReason:(NSString *)exceptionReason
-{
-    // Windows sends location within region as well, but that's because
-    // BugSplat for Windows intercepts crashes during the same run, and that
-    // information can be queried once. On the Mac, any metadata we have is
-    // written (and rewritten) to the static_debug_info.log file that we read
-    // at the start of the next viewer run.
-    std::string regionName(CrashMetadata_instance().regionName);
-    infos("applicationKeyForBugsplatStartupManager -> '" + regionName + "'");
-    return [NSString stringWithCString:regionName.c_str()
-                              encoding:NSUTF8StringEncoding];
-}
-
-- (NSArray<BugSplatAttachment *> *)attachmentsForBugSplat:(BugSplat *)bugSplat
-{
-    const CrashMetadata& metadata(CrashMetadata_instance());
-
-    std::vector<BugSplatAttachmentInfo> info{
-        BugSplatAttachmentInfo(metadata.logFilePathname,         "text/plain"),
-        BugSplatAttachmentInfo(metadata.userSettingsPathname,    "text/xml"),
-        BugSplatAttachmentInfo(metadata.accountSettingsPathname, "text/xml"),
-        BugSplatAttachmentInfo(metadata.staticDebugPathname,     "text/xml"),
-        BugSplatAttachmentInfo(metadata.attributesPathname,      "text/xml")
-    };
-
-    _secondLogPath = metadata.secondLogFilePathname;
-    if (!_secondLogPath.empty())
-    {
-        info.push_back(BugSplatAttachmentInfo(_secondLogPath, "text/xml"));
-    }
-
-    // BugsplatMac only notices a crash during the viewer run *following* the
-    // crash, so info[0].basename is "SecondLife.crash". The Bugsplat service
-    // doesn't respect the MIME type when returning the log data to a browser,
-    // so rename .crash to _log.txt for download usability.
-    info[0].basename =
-        std::filesystem::path(info[0].pathname).stem().string() + "_log.txt";
-    infos("attachmentsForBugsplatStartupManager attaching log " + info[0].basename);
-
-    NSMutableArray *attachments = [[NSMutableArray alloc] init];
-
-    for (const BugSplatAttachmentInfo& attach : info)
-    {
-        NSString *nspathname = [NSString stringWithCString:attach.pathname.c_str()
-                                                  encoding:NSUTF8StringEncoding];
-        NSString *nsbasename = [NSString stringWithCString:attach.basename.c_str()
-                                                  encoding:NSUTF8StringEncoding];
-        NSString *nsmimetype = [NSString stringWithCString:attach.mimetype.c_str()
-                                                  encoding:NSUTF8StringEncoding];
-        NSData *nsdata = [NSData dataWithContentsOfFile:nspathname];
-
-        BugSplatAttachment *attachment =
-            [[BugSplatAttachment alloc] initWithFilename:nsbasename
-                                          attachmentData:nsdata
-                                             contentType:nsmimetype];
-
-        [attachments addObject:attachment];
-        infos("attachmentsForBugsplatStartupManager attaching " + attach.pathname);
-    }
-
-    return attachments;
-}
-
-@end
-
-namespace
-{
-    // Strong-ref the delegate for the life of the process; BugsplatMac stores
-    // it as a weak/assign reference.
-    LLBugSplatDelegate* gBugSplatDelegate = nil;
-
-    void initBugSplat()
-    {
-        // Engage BugSplat *before* LLAppViewer::init() so any crash during
-        // initialization is captured. https://www.bugsplat.com/docs/platforms/os-x#initialization
-        gBugSplatDelegate = [[LLBugSplatDelegate alloc] init];
-        [[BugSplat shared] setDelegate:gBugSplatDelegate];
-        [[BugSplat shared] setAutoSubmitCrashReport:YES];
-        [[BugSplat shared] setPersistUserDetails:NO];
-        [[BugSplat shared] setAskUserDetails:NO];
-        [BugSplat shared].expirationTimeInterval = 0;
-        [[BugSplat shared] start];
-        infos("bugsplat setup");
-
-        // BugsplatMac submits queued crash reports on a background thread, so
-        // its delegate callbacks (attachmentsForBugSplat:, etc.) can land
-        // *after* LLAppViewer::init() runs writeSystemInfo() and clobbers
-        // static_debug_info.log with this run's data. Force the singleton to
-        // read the previous run's file now, while the LLAppViewer constructor
-        // has already populated mStaticDebugFileName via setDebugFileNames()
-        // but the base init() hasn't yet overwritten the file contents.
-        CrashMetadata_instance();
-    }
-}
-
-#endif // LL_BUGSPLAT
 #endif // LL_DARWIN
 
 void check_vm_bloat()
@@ -618,18 +417,6 @@ finally:
 #endif // LL_LINUX
 }
 
-static void exceptionTerminateHandler()
-{
-    // reinstall default terminate() handler in case we re-terminate.
-    if (gOldTerminateHandler) std::set_terminate(gOldTerminateHandler);
-    // treat this like a regular viewer crash, with nice stacktrace etc.
-    long *null_ptr;
-    null_ptr = 0;
-    *null_ptr = 0xDEADBEEF; //Force an exception that will trigger breakpad.
-    // we've probably been killed-off before now, but...
-    gOldTerminateHandler(); // call old terminate() handler
-}
-
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
 #if LL_WINDOWS && LL_VELOPACK
@@ -684,8 +471,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
     << SDL_VERSIONNUM_MINOR(r_sdl_version) << "."
     << SDL_VERSIONNUM_MICRO(r_sdl_version) << LL_ENDL;
 
-    // install unexpected exception handler
-    gOldTerminateHandler = std::set_terminate(exceptionTerminateHandler);
+    LLAppViewer::installTerminateHandler();
 
 #if LL_WINDOWS
     // Set a debug info flag to indicate if multiple instances are running.
@@ -798,9 +584,6 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
 bool LLAppViewerSDL::init()
 {
-#if LL_DARWIN && defined(LL_BUGSPLAT)
-    initBugSplat();
-#endif
 
     bool success = LLAppViewer::init();
 
@@ -838,20 +621,12 @@ bool LLAppViewerSDL::init()
     }
 #endif
 
-#if LL_SEND_CRASH_REPORTS
-    if (success)
-    {
-        LLAppViewer* pApp = LLAppViewer::instance();
-        pApp->initCrashReporting();
-    }
-#endif
-
     return success;
 }
 
 bool LLAppViewerSDL::restoreErrorTrap()
 {
-#if LL_DARWIN
+#if LL_DARWIN && ! AL_SENTRY
     // This method intends to reinstate signal handlers.
     // *NOTE:Mani It was found that the first execution of a shader was overriding
     // our initial signal handlers somehow.
@@ -874,9 +649,7 @@ bool LLAppViewerSDL::restoreErrorTrap()
 #define SET_SIG(SIGNAL) sigaction(SIGNAL, &act, &old_act); \
 if(act.sa_sigaction != old_act.sa_sigaction) ++reset_count;
     // Synchronous signals
-#   ifndef LL_BUGSPLAT
-    SET_SIG(SIGABRT) // let bugsplat catch this
-#   endif
+    SET_SIG(SIGABRT)
     SET_SIG(SIGALRM)
     SET_SIG(SIGBUS)
     SET_SIG(SIGFPE)
@@ -907,6 +680,8 @@ if(act.sa_sigaction != old_act.sa_sigaction) ++reset_count;
     // *NOTE:Mani there is a case for implementing this on the mac.
     // Linux doesn't need it to my knowledge.
     // Windows has its own exception handling that doesn't use Unix signals at all.
+    // With a crash reporter in the process the crash signals are its own, and
+    // reinstalling the viewer's over them every frame would take them away.
     return true;
 #endif
 }
@@ -1177,10 +952,6 @@ void LLAppViewerSDL::setOSHibernationMode(eHibernationMode mode)
 #endif
 
     LL_INFOS("OS") << "OS hibernation mode set to " << (S32)mode << LL_ENDL;
-}
-
-void LLAppViewerSDL::initCrashReporting(bool reportFreeze)
-{
 }
 
 bool LLAppViewerSDL::beingDebugged()

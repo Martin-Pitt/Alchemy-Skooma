@@ -1,9 +1,10 @@
 # -*- cmake -*-
 
-add_library (llui STATIC)
+add_library(llui STATIC)
 
-target_sources(llui
-    PRIVATE
+target_sources(
+  llui
+  PRIVATE
     fsvirtualtrackpad.cpp
     llaccordionctrl.cpp
     llaccordionctrltab.cpp
@@ -110,6 +111,7 @@ target_sources(llui
     llxuiparser.cpp
     alcanvasview.cpp
     alcolorfield.cpp
+    alcolorsheet.cpp
     aldeferredrebuild.cpp
     aldockpanel.cpp
     alemptystate.cpp
@@ -140,215 +142,203 @@ target_sources(llui
     alxuitranslate.cpp
     alxuitreemodel.cpp
     llxyvector.cpp
-
-    PUBLIC
+  PUBLIC
     FILE_SET HEADERS
-    FILES
-    altextcaret.h
-    alviewtype.h
-    fsvirtualtrackpad.h
-    llaccordionctrl.h
-    llaccordionctrltab.h
-    llbadge.h
-    llbadgeholder.h
-    llbadgeowner.h
-    llbutton.h
-    llcallbackmap.h
-    llchatautocompletemodel.h
-    llchatentry.h
-    llchat.h
-    llchatmentionhelper.h
-    llcheckboxctrl.h
-    llclipboard.h
-    llcombobox.h
-    llcommandmanager.h
-    llconsole.h
-    llcontainerview.h
-    llctrlselectioninterface.h
-    lldraghandle.h
-    lldockablefloater.h
-    lldockcontrol.h
-    lleditmenuhandler.h
-    llemojidictionary.h
-    llemojihelper.h
-    llf32uictrl.h
-    llfiltereditor.h
-    llflashtimer.h
-    llflatlistview.h
-    llfloater.h
-    llfloaterreg.h
-    llfloaterreglistener.h
-    llflyoutbutton.h
-    llfocusmgr.h
-    llgestureautocompletehelper.h
-    llfolderview.h
-    llfolderviewitem.h
-    llfolderviewmodel.h
-    llfunctorregistry.h
-    llhelp.h
-    lliconctrl.h
-    llkeywords.h
-    lllayoutstack.h
-    lllazyvalue.h
-    lllineeditor.h
-    llloadingindicator.h
-    lllocalcliprect.h
-    llmenubutton.h
-    llmenugl.h
-    llmodaldialog.h
-    llmultifloater.h
-    llmultisliderctrl.h
-    llmultislider.h
-    llnotificationptr.h
-    llnotifications.h
-    llnotificationslistener.h
-    llnotificationsutil.h
-    llnotificationtemplate.h
-    llnotificationvisibilityrule.h
-    llpanel.h
-    llprogressbar.h
-    llradiogroup.h
-    llresizebar.h
-    llresizehandle.h
-    llresmgr.h
-    llsearchablecontrol.h
-    llsearcheditor.h
-    llscrollbar.h
-    llscrollcontainer.h
-    llscrollingpanellist.h
-    llscrolllistcell.h
-    llscrolllistcolumn.h
-    llscrolllistctrl.h
-    llscrolllistitem.h
-    llsliderctrl.h
-    llslider.h
-    llspellcheck.h
-    llspellcheckengine.h
-    llspellcheckmenuhandler.h
-    llspinctrl.h
-    llstatbar.h
-    llstatgraph.h
-    llstatview.h
-    llstyle.h
-    lltabcontainer.h
-    lltextbase.h
-    lltextbox.h
-    lltexteditor.h
-    lltextparser.h
-    lltextutil.h
-    lltextvalidate.h
-    lltimectrl.h
-    lltoggleablemenu.h
-    lltoolbar.h
-    lltooltip.h
-    lltrans.h
-    lltransutil.h
-    lluicolortable.h
-    lluiconstants.h
-    lluictrlfactory.h
-    lluictrl.h
-    lluifwd.h
-    llui.h
-    lluicolor.h
-    lluistring.h
-    llundo.h
-    llurlaction.h
-    llurlentry.h
-    llurlmatch.h
-    llurlregistry.h
-    llviewborder.h
-    llviewinject.h
-    llviewmodel.h
-    llview.h
-    llviewquery.h
-    llvirtualtrackball.h
-    llwindowshade.h
-    llxuiparser.h
-    alcanvasview.h
-    alcolorfield.h
-    aldeferredrebuild.h
-    aldockpanel.h
-    alemptystate.h
-    alflagsfield.h
-    alhistorylist.h
-    aljumpbar.h
-    alpopover.h
-    alquickopen.h
-    alscopebar.h
-    alspecimenlist.h
-    alstringmatch.h
-    altabstrip.h
-    alfollowscontrol.h
-    alfontfield.h
-    alcolorpicker.h
-    alpropertygrid.h
-    alxuicatalog.h
-    alxuidiagnostics.h
-    alxuiedit.h
-    alxuidocuments.h
-    alxuifindings.h
-    alxuilint.h
-    alxuinotes.h
-    alxuioverlay.h
-    alxuischema.h
-    alxuiselection.h
-    alxuishellbuild.h
-    alxuisourcemap.h
-    alxuitranslate.h
-    alxuitreemodel.h
-    llxyvector.h
-    )
+      FILES
+        altextcaret.h
+        alviewtype.h
+        fsvirtualtrackpad.h
+        llaccordionctrl.h
+        llaccordionctrltab.h
+        llbadge.h
+        llbadgeholder.h
+        llbadgeowner.h
+        llbutton.h
+        llcallbackmap.h
+        llchatautocompletemodel.h
+        llchatentry.h
+        llchat.h
+        llchatmentionhelper.h
+        llcheckboxctrl.h
+        llclipboard.h
+        llcombobox.h
+        llcommandmanager.h
+        llconsole.h
+        llcontainerview.h
+        llctrlselectioninterface.h
+        lldraghandle.h
+        lldockablefloater.h
+        lldockcontrol.h
+        lleditmenuhandler.h
+        llemojidictionary.h
+        llemojihelper.h
+        llf32uictrl.h
+        llfiltereditor.h
+        llflashtimer.h
+        llflatlistview.h
+        llfloater.h
+        llfloaterreg.h
+        llfloaterreglistener.h
+        llflyoutbutton.h
+        llfocusmgr.h
+        llgestureautocompletehelper.h
+        llfolderview.h
+        llfolderviewitem.h
+        llfolderviewmodel.h
+        llfunctorregistry.h
+        llhelp.h
+        lliconctrl.h
+        llkeywords.h
+        lllayoutstack.h
+        lllazyvalue.h
+        lllineeditor.h
+        llloadingindicator.h
+        lllocalcliprect.h
+        llmenubutton.h
+        llmenugl.h
+        llmodaldialog.h
+        llmultifloater.h
+        llmultisliderctrl.h
+        llmultislider.h
+        llnotificationptr.h
+        llnotifications.h
+        llnotificationslistener.h
+        llnotificationsutil.h
+        llnotificationtemplate.h
+        llnotificationvisibilityrule.h
+        llpanel.h
+        llprogressbar.h
+        llradiogroup.h
+        llresizebar.h
+        llresizehandle.h
+        llresmgr.h
+        llsearchablecontrol.h
+        llsearcheditor.h
+        llscrollbar.h
+        llscrollcontainer.h
+        llscrollingpanellist.h
+        llscrolllistcell.h
+        llscrolllistcolumn.h
+        llscrolllistctrl.h
+        llscrolllistitem.h
+        llsliderctrl.h
+        llslider.h
+        llspellcheck.h
+        llspellcheckengine.h
+        llspellcheckmenuhandler.h
+        llspinctrl.h
+        llstatbar.h
+        llstatgraph.h
+        llstatview.h
+        llstyle.h
+        lltabcontainer.h
+        lltextbase.h
+        lltextbox.h
+        lltexteditor.h
+        lltextparser.h
+        lltextutil.h
+        lltextvalidate.h
+        lltimectrl.h
+        lltoggleablemenu.h
+        lltoolbar.h
+        lltooltip.h
+        lltrans.h
+        lltransutil.h
+        lluicolortable.h
+        lluiconstants.h
+        lluictrlfactory.h
+        lluictrl.h
+        lluifwd.h
+        llui.h
+        lluicolor.h
+        lluistring.h
+        llundo.h
+        llurlaction.h
+        llurlentry.h
+        llurlmatch.h
+        llurlregistry.h
+        llviewborder.h
+        llviewinject.h
+        llviewmodel.h
+        llview.h
+        llviewquery.h
+        llvirtualtrackball.h
+        llwindowshade.h
+        llxuiparser.h
+        alcanvasview.h
+        alcolorfield.h
+        alcolorsheet.h
+        aldeferredrebuild.h
+        aldockpanel.h
+        alemptystate.h
+        alflagsfield.h
+        alhistorylist.h
+        aljumpbar.h
+        alpopover.h
+        alquickopen.h
+        alscopebar.h
+        alspecimenlist.h
+        alstringmatch.h
+        altabstrip.h
+        alfollowscontrol.h
+        alfontfield.h
+        alcolorpicker.h
+        alpropertygrid.h
+        alxuicatalog.h
+        alxuidiagnostics.h
+        alxuiedit.h
+        alxuidocuments.h
+        alxuifindings.h
+        alxuilint.h
+        alxuinotes.h
+        alxuioverlay.h
+        alxuischema.h
+        alxuiselection.h
+        alxuishellbuild.h
+        alxuisourcemap.h
+        alxuitranslate.h
+        alxuitreemodel.h
+        llxyvector.h
+)
 
 # Spell checking: the backend-agnostic LLSpellChecker core (llspellcheck.cpp) is always compiled;
 # exactly one platform engine is selected by build option — native macOS NSSpellChecker
 # (Objective-C++), native Windows Spell Checking API, or Hunspell (default).
 target_sources(llui PRIVATE llspellcheck.cpp)
-if (USE_NSSPELLCHECKER)
+if(AL_USE_NSSPELLCHECKER)
   target_sources(llui PRIVATE llspellcheckengine_mac.mm)
   set_source_files_properties(llspellcheckengine_mac.mm PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
-elseif (USE_WINSPELLCHECK)
+elseif(AL_USE_WINSPELLCHECK)
   target_sources(llui PRIVATE llspellcheckengine_win32.cpp)
   set_source_files_properties(llspellcheckengine_win32.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
-else ()
+else()
   target_sources(llui PRIVATE llspellcheckengine_hunspell.cpp)
-endif ()
+endif()
 
-SET(llurlentry_TEST_DEPENDENCIES
-    llurlmatch.cpp
-    llurlregistry.cpp
-    )
+target_link_libraries(
+  llui
+  PRIVATE al::flags
+  PUBLIC
+    llrender
+    llwindow
+    llimage
+    llinventory
+    llmessage
+    llcorehttp
+    llfilesystem
+    llxml
+    llmath
+    llcommon
+  PRIVATE ll::fastfloat
+)
 
-set_source_files_properties(llurlentry.cpp
-    PROPERTIES LL_TEST_ADDITIONAL_SOURCE_FILES
-    "${llurlentry_TEST_DEPENDENCIES}"
-    )
-
-target_include_directories( llui  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
-# Libraries on which this library depends, needed for Linux builds
-# Sort by high-level to low-level
-target_link_libraries(llui
-        PUBLIC
-        llrender
-        llwindow
-        llimage
-        llinventory
-        llmessage
-        llcorehttp
-        llfilesystem
-        llxml
-        llmath
-        llcommon
-        PRIVATE
-        ll::fastfloat
-    )
-
-if (USE_NSSPELLCHECKER)
-    target_link_libraries(llui PUBLIC ll::nsspellchecker)
-elseif (USE_WINSPELLCHECK)
-    target_link_libraries(llui PUBLIC ll::winspellcheck)
-else ()
-    target_link_libraries(llui PUBLIC ll::hunspell)
-endif ()
+if(AL_USE_NSSPELLCHECKER)
+  target_link_libraries(llui PUBLIC ll::nsspellchecker)
+elseif(AL_USE_WINSPELLCHECK)
+  target_link_libraries(llui PUBLIC ll::winspellcheck)
+else()
+  target_link_libraries(llui PUBLIC ll::hunspell)
+endif()
 
 target_precompile_headers(llui REUSE_FROM llprecompiled)
 
@@ -360,82 +350,93 @@ target_precompile_headers(llui REUSE_FROM llprecompiled)
 add_subdirectory(utils)
 
 # Add tests
-if(BUILD_TESTING)
-  if (USE_NSSPELLCHECKER)
+if(AL_BUILD_TESTS)
+  if(AL_USE_NSSPELLCHECKER)
     set(spellcheck_lib ll::nsspellchecker)
-  elseif (USE_WINSPELLCHECK)
+  elseif(AL_USE_WINSPELLCHECK)
     set(spellcheck_lib ll::winspellcheck)
-  else ()
+  else()
     set(spellcheck_lib ll::hunspell)
-  endif ()
-  set(test_libs llmessage llcorehttp llxml llrender llcommon ${spellcheck_lib})
+  endif()
 
-  SET(llui_TEST_SOURCE_FILES
-      llchatautocompletemodel.cpp
-      llurlmatch.cpp
-      )
-  set_property( SOURCE ${llui_TEST_SOURCE_FILES} PROPERTY LL_TEST_ADDITIONAL_LIBRARIES ${test_libs})
-  LL_ADD_PROJECT_UNIT_TESTS(llui "${llui_TEST_SOURCE_FILES}")
+  set(
+    test_libs
+    llmessage
+    llcorehttp
+    llxml
+    llrender
+    llcommon
+    ${spellcheck_lib}
+  )
+  al_add_test(llchatautocompletemodel UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(llurlmatch UNIT PROJECT llui LIBRARIES ${test_libs})
 
-  # INTEGRATION TESTS
-  set(test_libs llui llmessage llcorehttp llxml llrender llcommon ${spellcheck_lib})
-  set(test_project llui)
-  LL_ADD_INTEGRATION_TEST(llstatbar "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llview "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lluistring "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llurlentry llurlentry.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llemojidictionary llemojidictionary.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llxuiparser "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llfocusmgr "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lllayoutstack "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llresizebar "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llaccordionctrltab "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llspinctrl "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llcombobox "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llradiogroup "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lltabcontainer "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alpropertygrid "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alcolorfield "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alcolorpicker "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alfontfield "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alflagsfield "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuinotes "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alfollowscontrol "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alcanvasview "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(aldockpanel "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alemptystate "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuioverlay "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuifill "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llfloater "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alviewtype "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuidiagnostics "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuishellbuild "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuicatalog "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuilint "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuiedit "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuidocuments "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuifindings "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alhistorylist "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alpopover "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alscopebar "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(aljumpbar "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alspecimenlist "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(altabstrip "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alquickopen "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuitranslate "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuischema "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuiselection "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuisourcemap "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(alxuitreemodel "" "${test_libs}" "${test_project}")
+  set(test_libs llui ${test_libs})
+  foreach(
+    test
+    llstatbar
+    llview
+    lluistring
+    llxuiparser
+    llfocusmgr
+    alxuioverlay
+    alxuidocuments
+    alxuifindings
+    alxuitranslate
+  )
+    al_add_test(${test} PROJECT llui LIBRARIES ${test_libs})
+  endforeach()
+  al_add_test(llurlentry PROJECT llui SOURCES llurlentry.cpp LIBRARIES ${test_libs})
+  al_add_test(llemojidictionary PROJECT llui SOURCES llemojidictionary.cpp LIBRARIES ${test_libs})
 
   # Tests that build widgets above LLView stand up a UI over the source
   # tree's skins and fonts; this is where it is.
-  foreach(ui_test alcolorfield alcolorpicker alfontfield alflagsfield alxuinotes alhistorylist aljumpbar alpopover alquickopen alscopebar alspecimenlist altabstrip lllayoutstack llresizebar llfloater llaccordionctrltab llspinctrl llcombobox lltabcontainer alpropertygrid alfollowscontrol alcanvasview aldockpanel alemptystate alxuifill alviewtype alxuidiagnostics alxuishellbuild
-                  alxuicatalog alxuiselection alxuisourcemap alxuitreemodel alxuilint
-                  alxuiedit alxuischema llradiogroup)
-    if (TARGET INTEGRATION_TEST_${ui_test})
-      target_compile_definitions(INTEGRATION_TEST_${ui_test} PRIVATE
-          "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\"")
-    endif()
+  foreach(
+    test
+    lllayoutstack
+    llresizebar
+    llaccordionctrltab
+    llspinctrl
+    llcombobox
+    llradiogroup
+    lltabcontainer
+    llfloater
+    alpropertygrid
+    alcolorfield
+    alcolorpicker
+    alfontfield
+    alflagsfield
+    alxuinotes
+    alfollowscontrol
+    alcanvasview
+    aldockpanel
+    alemptystate
+    alxuifill
+    alviewtype
+    alxuidiagnostics
+    alxuishellbuild
+    alxuicatalog
+    alxuilint
+    alxuiedit
+    alhistorylist
+    alpopover
+    alscopebar
+    aljumpbar
+    alspecimenlist
+    altabstrip
+    alquickopen
+    alxuischema
+    alxuiselection
+    alxuisourcemap
+    alxuitreemodel
+    alcolorsheet
+    lluicolortable
+  )
+    al_add_test(
+      ${test}
+      PROJECT llui
+      LIBRARIES ${test_libs}
+      DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+    )
   endforeach()
 endif()

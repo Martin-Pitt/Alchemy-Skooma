@@ -151,47 +151,21 @@
       "name": "vlc-bin",
       "platform": "windows | osx"
     },
-    {
-      "name": "webrtc",
-      "features": [
-        {
-          "name": "alsa",
-          "platform": "linux"
-        },
-        {
-          "name": "pulseaudio",
-          "platform": "linux"
-        }
-      ]
-    },
     "websocketpp",
     "xxhash",
     "zlib"
   ],
   "features": {
-    "bugsplat": {
-      "description": "Build with support for Bugsplat crash reporting",
-      "dependencies": [
-        {
-          "name": "bugsplat",
-          "platform": "windows & x64"
-        },
-        {
-          "name": "bugsplat-apple",
-          "platform": "osx"
-        }
-      ]
-    },
     "dullahan-example": {
       "description": "Build with support for Dullahan OpenGL example application",
       "dependencies": [
         {
           "name": "glad",
-          "platform": "windows | linux",
           "features": [
             "gl-api-41",
             "loader"
-          ]
+          ],
+          "platform": "windows | linux"
         },
         {
           "name": "imgui",
@@ -220,18 +194,6 @@
       "description": "Build with support for Kakadu JPEG2000",
       "dependencies": [
         "kdu"
-      ]
-    },
-    "offscreen": {
-      "description": "Build with support for Mesa3D Software OSR backend",
-      "dependencies": [
-        {
-          "name": "mesa",
-          "features": [
-            "offscreen"
-          ],
-          "platform": "windows"
-        }
       ]
     },
     "openal": {
@@ -314,6 +276,24 @@
       "description": "Build with support for the Velopack install and update framework",
       "dependencies": [
         "velopack"
+      ]
+    },
+    "webrtc": {
+      "description": "Build with WebRTC voice",
+      "dependencies": [
+        {
+          "name": "webrtc",
+          "features": [
+            {
+              "name": "alsa",
+              "platform": "linux"
+            },
+            {
+              "name": "pulseaudio",
+              "platform": "linux"
+            }
+          ]
+        }
       ]
     }
   }

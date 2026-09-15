@@ -327,7 +327,7 @@ void LLReflectionMapManager::update()
     if (!mRenderTarget.isComplete())
     {
         U32 color_fmt = render_hdr ? GL_R11F_G11F_B10F : GL_RGB8;
-        U32 targetRes = mProbeResolution * 4; // super sample
+        U32 targetRes = mProbeResolution * mSuperSample; // super sample
         mRenderTarget.allocate(targetRes, targetRes, color_fmt, true);
     }
 
@@ -341,6 +341,23 @@ void LLReflectionMapManager::update()
         {
             mMipChain[i].allocate(res, res, render_hdr ? GL_R11F_G11F_B10F : GL_RGB8);
             res /= 2;
+        }
+    }
+
+    {
+        // Scratch for the row-parallel SH projection in updateProbeFace: nine coefficients wide,
+        // one row per face row of the mip it integrates. Sized here, outside the reset guard in
+        // initReflectionMaps, so a change of ALProbeSHProjectionRes resizes this and nothing else.
+        static LLCachedControl<bool> two_pass(gSavedSettings, "ALProbeSHProjectionTwoPass", true);
+        S32 sh_mip = 0;
+        const U32 sh_rows = two_pass ? 6 * shProjectionRes(sh_mip) : 0;
+        if (mSHPartial.isComplete() && mSHPartial.getHeight() != sh_rows)
+        {
+            mSHPartial.release();
+        }
+        if (sh_rows > 0 && !mSHPartial.isComplete())
+        {
+            mSHPartial.allocate(LL_SH_COEFF_COUNT, sh_rows, GL_RGBA16F);
         }
     }
 
@@ -1150,38 +1167,102 @@ void LLReflectionMapManager::updateProbeFace(LLReflectionMap* probe, U32 face)
             // The old pass re-integrated the environment once per output texel; this integrates
             // it once, into the only nine numbers irradiance actually has.
             //
-            // Integrate a mip whose faces are mSHProjectionRes, not mip 0. Averaging texels
+            // Integrate the mip ALProbeSHProjectionRes asks for, not mip 0. Averaging texels
             // before an integral does not change the integral, and the target basis cannot
             // represent anything the finer mip would add.
             S32 sh_mip = 0;
-            U32 sh_res = mProbeResolution;
-            while (sh_res > mSHProjectionRes && (size_t)(sh_mip + 1) < mMipChain.size())
+            const U32 sh_res = shProjectionRes(sh_mip);
+
+            // The last draw is the same for both forms below: nine fragments write this probe's
+            // row of mSHCoeffs. This probe owns one row and must not disturb any other, so the
+            // viewport is the write mask -- the target is never cleared.
+            auto draw_coefficients = [&](LLGLSLShader& program)
             {
-                sh_res >>= 1;
-                ++sh_mip;
+                program.uniform1i(LLShaderMgr::U_WIDTH, (S32)sh_res);
+
+                mSHCoeffs.bindTarget();
+                glViewport(0, probe->mCubeIndex, LL_SH_COEFF_COUNT, 1);
+
+                mVertexBuffer->setBuffer();
+                mVertexBuffer->drawArrays(gGL.TRIANGLE_STRIP, 0, 4);
+
+                mSHCoeffs.flush();
+                program.unbind();
+            };
+
+            static LLCachedControl<bool> two_pass(gSavedSettings, "ALProbeSHProjectionTwoPass", true);
+            const U32 sh_rows = 6 * sh_res;
+            if (two_pass && mSHPartial.isComplete() && mSHPartial.getHeight() == sh_rows)
+            {
+                // Row-parallel form: 9 x 6R fragments each integrate one face row into
+                // mSHPartial, then nine fragments add the rows. The single-pass form below
+                // serialises the whole cube inside each of nine fragments, which is what made
+                // it a multi-millisecond stall however few texels it read.
+                {
+                    LL_PROFILE_GPU_ZONE("probe sh rows");
+                    gSHProjectionRowsProgram.bind();
+                    S32 channel = gSHProjectionRowsProgram.enableTexture(LLShaderMgr::REFLECTION_PROBES);
+                    mTexture->bind(channel);
+
+                    gSHProjectionRowsProgram.uniform1i(LLShaderMgr::SOURCE_IDX, sourceIdx);
+                    gSHProjectionRowsProgram.uniform1f(LLShaderMgr::MIP_LEVEL, (GLfloat)sh_mip);
+                    gSHProjectionRowsProgram.uniform1i(LLShaderMgr::U_WIDTH, (S32)sh_res);
+
+                    mSHPartial.bindTarget();
+                    // bindTarget sets the viewport to the whole target, which is exactly this
+                    // strip; restated because the draw depends on it.
+                    glViewport(0, 0, LL_SH_COEFF_COUNT, sh_rows);
+
+                    mVertexBuffer->setBuffer();
+                    mVertexBuffer->drawArrays(gGL.TRIANGLE_STRIP, 0, 4);
+
+                    mSHPartial.flush();
+                    gSHProjectionRowsProgram.unbind();
+                }
+                {
+                    LL_PROFILE_GPU_ZONE("probe sh reduce");
+                    gSHProjectionReduceProgram.bind();
+                    // texelFetch source: point sampled, so nothing is filtered across rows
+                    gSHProjectionReduceProgram.bindTexture(LLShaderMgr::SH_PARTIAL, &mSHPartial, ALSamplers::PointClamp);
+                    draw_coefficients(gSHProjectionReduceProgram);
+                }
             }
+            else
+            {
+                // Single pass: nine fragments each walk the whole cube. Kept for A/B captures
+                // and as the fallback when the partial target is not there.
+                gSHProjectionProgram.bind();
+                S32 channel = gSHProjectionProgram.enableTexture(LLShaderMgr::REFLECTION_PROBES);
+                mTexture->bind(channel);
 
-            gSHProjectionProgram.bind();
-            S32 channel = gSHProjectionProgram.enableTexture(LLShaderMgr::REFLECTION_PROBES);
-            mTexture->bind(channel);
-
-            gSHProjectionProgram.uniform1i(LLShaderMgr::SOURCE_IDX, sourceIdx);
-            gSHProjectionProgram.uniform1f(LLShaderMgr::MIP_LEVEL, (GLfloat)sh_mip);
-            gSHProjectionProgram.uniform1i(LLShaderMgr::U_WIDTH, (S32)sh_res);
-
-            mSHCoeffs.bindTarget();
-            // This probe owns one row and must not disturb any other, so the viewport is the
-            // write mask -- the target is never cleared.
-            glViewport(0, probe->mCubeIndex, LL_SH_COEFF_COUNT, 1);
-
-            mVertexBuffer->setBuffer();
-            mVertexBuffer->drawArrays(gGL.TRIANGLE_STRIP, 0, 4);
-
-            mSHCoeffs.flush();
-
-            gSHProjectionProgram.unbind();
+                gSHProjectionProgram.uniform1i(LLShaderMgr::SOURCE_IDX, sourceIdx);
+                gSHProjectionProgram.uniform1f(LLShaderMgr::MIP_LEVEL, (GLfloat)sh_mip);
+                draw_coefficients(gSHProjectionProgram);
+            }
         }
     }
+}
+
+U32 LLReflectionMapManager::shProjectionRes(S32& mip) const
+{
+    // Face edge length the SH projection integrates over. Irradiance is band-limited to nine
+    // coefficients, so this only has to be fine enough not to alias the source before the
+    // integral -- it is not an output resolution and does not bound reconstruction quality.
+    // scripts/content_tools/check_sh_projection.py puts the 8x8 default within half a percent
+    // of a 128x128 integration; 4x4 is the floor, where that error passes one percent. The
+    // cost scales with the texel count, so 32 (the old fixed value) is sixteen times 8.
+    static LLCachedControl<S32> projection_res(gSavedSettings, "ALProbeSHProjectionRes", 8);
+    const U32 target = llmin((U32)llmax((S32)projection_res, 4), mProbeResolution);
+
+    // Every probe resolution writes mips down to 2x2, so the walk always reaches the target.
+    mip = 0;
+    U32 res = mProbeResolution;
+    while (res > target && (size_t)(mip + 1) < mMipChain.size())
+    {
+        res >>= 1;
+        ++mip;
+    }
+    return res;
 }
 
 void LLReflectionMapManager::reset()
@@ -1621,6 +1702,18 @@ void LLReflectionMapManager::initReflectionMaps()
 {
     static LLCachedControl<U32> ref_probe_res(gSavedSettings, "RenderReflectionProbeResolution", 128U);
     U32 probe_resolution = nhpo2(llclamp(ref_probe_res(), (U32)64, (U32)512));
+
+    // The supersample factor sizes the scratch target and, through LLPipeline, the aux pack a
+    // face renders into; a change is applied like a resolution change, by the listener that
+    // rebuilds the GL buffers (handleReflectionProbeDetailChanged), so here it only has to be
+    // read. 1, 2 or 4: the blur and downsample below assume a power of two.
+    static LLCachedControl<S32> super_sample(gSavedSettings, "ALProbeSuperSample", 4);
+    const U32 supersample = super_sample >= 4 ? 4u : (super_sample >= 2 ? 2u : 1u);
+    if (supersample != mSuperSample)
+    {
+        mSuperSample = supersample;
+        mRenderTarget.release();
+    }
     // No irradiance resolution to size any more: irradiance is nine SH coefficients whatever
     // the environment looks like, so the setting that used to pick a cubemap edge length is gone.
     if (mTexture.isNull() || mReflectionProbeCount != mDynamicProbeCount || mProbeResolution != probe_resolution ||
@@ -1749,6 +1842,7 @@ void LLReflectionMapManager::cleanup()
 
     mTexture = nullptr;
     mSHCoeffs.release();
+    mSHPartial.release();
 
     mProbes.clear();
     mKillList.clear();

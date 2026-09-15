@@ -8,13 +8,15 @@ Alchemy Viewer is a third-party client for Second Life, forked from the official
 
 ## Build System
 
-CMake with vcpkg for dependency management. The source root for CMake is `indra/` (not the repo root). All CMake presets are defined in `indra/CMakePresets.json`.
+CMake with vcpkg for dependency management. The source root for CMake is `indra/` (not the repo root). CMake presets are generated: `indra/CMakePresets.json` includes one file per generator under `indra/cmake/presets/`, written by `indra/cmake/presets/generate.py` from its tables — edit the script and rerun it, not the JSON.
 
 ### Prerequisites
 
-- CMake 3.27+, Python 3.13+, Rust (for Velopack), .NET SDK, Visual Studio 2022/2026 (Windows) or Xcode (macOS) or GCC/Clang+Ninja (Linux)
-- Python venv: `python3 -m venv .venv && .venv/Scripts/Activate.ps1 && pip install -r requirements.txt` (Windows) or `source .venv/bin/activate` (Unix)
-- Dotnet tooling: `dotnet tool restore`
+- CMake 4.0+, Visual Studio 2022/2026 (Windows) or Xcode (macOS) or GCC/Clang+Ninja (Linux)
+- Rust and the .NET SDK (`dotnet tool restore`) only for Velopack installers
+- Python 3 with `llsd` (`pip install -r requirements.txt`) only for the four tests that spawn a Python peer; without it they are registered disabled
+
+CMake files are formatted with gersemi (`.gersemirc` at the repo root): run `gersemi -i <files>` on any CMake file you edit.
 
 ### Configure (first time or after CMake changes)
 
@@ -29,7 +31,7 @@ cmake -S indra --preset ninja-os
 cmake -S indra --preset xcode-os
 ```
 
-Append `-os` presets for open-source builds, omit `-os` for proprietary builds (adds `-DINSTALL_PROPRIETARY=ON`). List available presets: `cmake -S indra --list-presets`
+Append `-os` presets for open-source builds, omit `-os` for proprietary builds (adds `-DAL_ENABLE_PROPRIETARY=ON`). List available presets: `cmake -S indra --list-presets`
 
 ### Build
 
@@ -50,7 +52,7 @@ The viewer executable lands at `build-<OS>-<preset>/newview/<CONFIG>/` (e.g., `S
 
 ### Tests
 
-Tests are off by default. To enable: add `-DBUILD_TESTING=ON` to the configure command. Then run via CTest:
+Tests are off by default. To enable: add `-DAL_BUILD_TESTS=ON` to the configure command. Then run via CTest:
 
 ```
 ctest --test-dir build-<OS>-<preset> --output-on-failure

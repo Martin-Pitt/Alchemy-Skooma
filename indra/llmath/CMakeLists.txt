@@ -2,8 +2,9 @@
 
 add_library(llmath STATIC)
 
-target_sources(llmath
-    PRIVATE
+target_sources(
+  llmath
+  PRIVATE
     llbbox.cpp
     llbboxlocal.cpp
     llcalc.cpp
@@ -36,94 +37,99 @@ target_sources(llmath
     v4coloru.cpp
     v4math.cpp
     xform.cpp
-    )
+)
 
-target_sources(llmath
-    PUBLIC
+target_sources(
+  llmath
+  PUBLIC
     FILE_SET HEADERS
-    FILES
-    llbbox.h
-    llbboxlocal.h
-    llcalc.h
-    llcalcparser.h
-    llcamera.h
-    llcoord.h
-    llcoordframe.h
-    llinterp.h
-    llline.h
-    llmath.h
-    llmatrix3a.h
-    llmatrix3a.inl
-    llmatrix4a.h
-    llmeshoptimizer.h
-    llmodularmath.h
-    lloctree.h
-    llperlin.h
-    llplane.h
-    llquantize.h
-    llquaternion.h
-    llquaternion2.h
-    llquaternion2.inl
-    llrect.h
-    llrigginginfo.h
-    llsimdmath.h
-    llsimdtypes.h
-    llsimdtypes.inl
-    lltreenode.h
-    llvector4a.h
-    llvector4a.inl
-    llvector4logical.h
-    llvolume.h
-    llvolumemgr.h
-    llvolumeoctree.h
-    llsdutil_math.h
-    m3math.h
-    m4math.h
-    raytrace.h
-    v2math.h
-    v3color.h
-    v3colorutil.h
-    v3dmath.h
-    v3math.h
-    v4color.h
-    v4coloru.h
-    v4math.h
-    xform.h
-    )
+      FILES
+        llbbox.h
+        llbboxlocal.h
+        llcalc.h
+        llcalcparser.h
+        llcamera.h
+        llcoord.h
+        llcoordframe.h
+        llinterp.h
+        llline.h
+        llmath.h
+        llmatrix3a.h
+        llmatrix3a.inl
+        llmatrix4a.h
+        llmeshoptimizer.h
+        llmodularmath.h
+        lloctree.h
+        llperlin.h
+        llplane.h
+        llquantize.h
+        llquaternion.h
+        llquaternion2.h
+        llquaternion2.inl
+        llrect.h
+        llrigginginfo.h
+        llsimdmath.h
+        llsimdtypes.h
+        llsimdtypes.inl
+        lltreenode.h
+        llvector4a.h
+        llvector4a.inl
+        llvector4logical.h
+        llvolume.h
+        llvolumemgr.h
+        llvolumeoctree.h
+        llsdutil_math.h
+        m3math.h
+        m4math.h
+        raytrace.h
+        v2math.h
+        v3color.h
+        v3colorutil.h
+        v3dmath.h
+        v3math.h
+        v4color.h
+        v4coloru.h
+        v4math.h
+        xform.h
+)
 
-target_link_libraries(llmath PUBLIC llcommon ll::mikktspace ll::sse2neon ll::meshoptimizer)
-target_include_directories(llmath  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  llmath
+  PRIVATE al::flags
+  PUBLIC llcommon ll::mikktspace ll::sse2neon ll::meshoptimizer
+)
 target_precompile_headers(llmath REUSE_FROM llprecompiled)
 
 # Add tests
-if (BUILD_TESTING)
-  # UNIT TESTS
-  SET(llmath_TEST_SOURCE_FILES
-    llbboxlocal.cpp
-    llmodularmath.cpp
-    llrect.cpp
-    v2math.cpp
-    v3color.cpp
-    v4color.cpp
-    v4coloru.cpp
-    )
+if(AL_BUILD_TESTS)
+  foreach(
+    test
+    llbboxlocal
+    llmodularmath
+    llrect
+    v2math
+    v3color
+    v4color
+    v4coloru
+  )
+    al_add_test(${test} UNIT PROJECT llmath)
+  endforeach()
 
-  LL_ADD_PROJECT_UNIT_TESTS(llmath "${llmath_TEST_SOURCE_FILES}")
-
-  # INTEGRATION TESTS
-  set(test_libs llmath llcommon)
-  set(test_project llmath)
-  # TODO: Some of these need refactoring to be proper Unit tests rather than Integration tests.
-  LL_ADD_INTEGRATION_TEST(alignment "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llbbox llbbox.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llquaternion llquaternion.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsdutil_math "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(mathmisc "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(m3math "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llmatrix4a "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llquaternion2 llquaternion.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(v3dmath v3dmath.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(v3math v3math.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(v4math v4math.cpp "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(xform xform.cpp "${test_libs}" "${test_project}")
-endif ()
+  foreach(
+    test
+    alignment
+    llsdutil_math
+    mathmisc
+    m3math
+    llmatrix4a
+  )
+    al_add_test(${test} PROJECT llmath LIBRARIES llmath llcommon)
+  endforeach()
+  al_add_test(llbbox PROJECT llmath SOURCES llbbox.cpp LIBRARIES llmath llcommon)
+  al_add_test(llquaternion PROJECT llmath SOURCES llquaternion.cpp LIBRARIES llmath llcommon)
+  al_add_test(llquaternion2 PROJECT llmath SOURCES llquaternion.cpp LIBRARIES llmath llcommon)
+  al_add_test(v3dmath PROJECT llmath SOURCES v3dmath.cpp LIBRARIES llmath llcommon)
+  al_add_test(v3math PROJECT llmath SOURCES v3math.cpp LIBRARIES llmath llcommon)
+  al_add_test(v4math PROJECT llmath SOURCES v4math.cpp LIBRARIES llmath llcommon)
+  al_add_test(xform PROJECT llmath SOURCES xform.cpp LIBRARIES llmath llcommon)
+endif()

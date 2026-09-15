@@ -1,33 +1,22 @@
 # -*- cmake -*-
 
-if (LL_COMMON_LINK_SHARED)
+if(AL_BUILD_SHARED_LLCOMMON)
   add_library(llcommon SHARED)
 
   target_compile_definitions(llcommon PUBLIC LL_COMMON_LINK_SHARED=1)
-
-  add_custom_command(
-    TARGET llcommon POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:llcommon>" "${SHARED_LIB_STAGING_DIR}"
-    COMMAND_EXPAND_LISTS
-  )
-
-  add_custom_command(
-    TARGET llcommon POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:llcommon>" "${VIEWER_STAGING_DIR}"
-    COMMAND_EXPAND_LISTS
-  )
-
-  add_custom_command(
-    TARGET llcommon POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:llcommon>" "${VIEWER_STAGING_DIR}/llplugin"
-    COMMAND_EXPAND_LISTS
+  set_target_properties(
+    llcommon
+    PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${SHARED_LIB_STAGING_DIR}"
+      LIBRARY_OUTPUT_DIRECTORY "${SHARED_LIB_STAGING_DIR}"
   )
 else()
   add_library(llcommon STATIC)
 endif()
 
-target_sources(llcommon
-    PRIVATE
+target_sources(
+  llcommon
+  PRIVATE
     alparamtype.cpp
     apply.cpp
     commoncontrol.cpp
@@ -121,265 +110,244 @@ target_sources(llcommon
     workqueue.cpp
 )
 
-target_sources(llcommon
-    PUBLIC
+target_sources(
+  llcommon
+  PUBLIC
     FILE_SET HEADERS
-    FILES
-    alparamtype.h
-    always_return.h
-    apply.h
-    chrono.h
-    classic_callback.h
-    commoncontrol.h
-    fsyspath.h
-    function_types.h
-    indra_constants.h
-    lazyeventapi.h
-    linden_common.h
-    llalignedarray.h
-    llapp.h
-    llapr.h
-    llassettype.h
-    llatomic.h
-    llbase64.h
-    llbitpack.h
-    llboost.h
-    llcallbacklist.h
-    llcleanup.h
-    llcommon.h
-    llcommonutils.h
-    llcond.h
-    llcoros.h
-    llcrc.h
-    llcriticaldamp.h
-    lldate.h
-    lldeadmantimer.h
-    lldefs.h
-    lldependencies.h
-    lldepthstack.h
-    lldictionary.h
-    lldoubledispatch.h
-    llendianswizzle.h
-    llerror.h
-    llerrorcontrol.h
-    llevent.h
-    lleventapi.h
-    lleventcoro.h
-    lleventdispatcher.h
-    lleventfilter.h
-    llevents.h
-    lleventemitter.h
-    llexception.h
-    llfasttimer.h
-    llfile.h
-    llfindlocale.h
-    llfixedbuffer.h
-    llformat.h
-    llframetimer.h
-    llhandle.h
-    llhash.h
-    llheartbeat.h
-    llheteromap.h
-    llindexedvector.h
-    llinitdestroyclass.h
-    llinitparam.h
-    llinstancetracker.h
-    llinstancetrackersubclass.h
-    llkeybind.h
-    llkeythrottle.h
-    llleap.h
-    llleaplistener.h
-    llliveappconfig.h
-    lllivefile.h
-    llmainthreadtask.h
-    llmd5.h
-    llmemory.h
-    llmemorystream.h
-    llmetrics.h
-    llmortician.h
-    llmutex.h
-    llnametable.h
-    llpointer.h
-    llprofiler.h
-    llprofilercategories.h
-    llpounceable.h
-    llpredicate.h
-    llpreprocessor.h
-    llpriqueuemap.h
-    llprocess.h
-    llprocessor.h
-    llprocinfo.h
-    llptrto.h
-    llqueuedthread.h
-    llrand.h
-    llrefcount.h
-    llregex.h
-    llregistry.h
-    llrun.h
-    llsafehandle.h
-    llsd.h
-    llsdjson.h
-    llsdparam.h
-    llsdserialize.h
-    llsdserialize_xml.h
-    llsdutil.h
-    llsimplehash.h
-    llsingleton.h
-    llstl.h
-    llstreamtools.h
-    llstrider.h
-    llstring.h
-    llstringtable.h
-    llstaticstringtable.h
-    llstatsaccumulator.h
-    llsys.h
-    lltempredirect.h
-    llthread.h
-    llthreadlocalstorage.h
-    llthreadsafequeue.h
-    lltimer.h
-    lltrace.h
-    lltraceaccumulators.h
-    lltracerecording.h
-    lltracethreadrecorder.h
-    lltreeiterators.h
-    llunits.h
-    llunittype.h
-    lluri.h
-    lluriparser.h
-    lluuid.h
-    llwatchdog.h
-    llwin32headers.h
-    llworkerthread.h
-    hbxxh.h
-    lockstatic.h
-    stdtypes.h
-    stringize.h
-    threadpool.h
-    threadpool_fwd.h
-    threadsafeschedule.h
-    tuple.h
-    u64.h
-    workqueue.h
-    )
-
-if (DARWIN)
-  target_sources(llcommon
-      PRIVATE
-      llsys_objc.mm
-      PUBLIC
-      FILE_SET HEADERS
       FILES
-      llsys_objc.h
-  )
+        alparamtype.h
+        always_return.h
+        apply.h
+        chrono.h
+        classic_callback.h
+        commoncontrol.h
+        fsyspath.h
+        function_types.h
+        indra_constants.h
+        lazyeventapi.h
+        linden_common.h
+        llalignedarray.h
+        llapp.h
+        llapr.h
+        llassettype.h
+        llatomic.h
+        llbase64.h
+        llbitpack.h
+        llboost.h
+        llcallbacklist.h
+        llcleanup.h
+        llcommon.h
+        llcommonutils.h
+        llcond.h
+        llcoros.h
+        llcrc.h
+        llcriticaldamp.h
+        lldate.h
+        lldeadmantimer.h
+        lldefs.h
+        lldependencies.h
+        lldepthstack.h
+        lldictionary.h
+        lldoubledispatch.h
+        llendianswizzle.h
+        llerror.h
+        llerrorcontrol.h
+        llevent.h
+        lleventapi.h
+        lleventcoro.h
+        lleventdispatcher.h
+        lleventfilter.h
+        llevents.h
+        lleventemitter.h
+        llexception.h
+        llfasttimer.h
+        llfile.h
+        llfindlocale.h
+        llfixedbuffer.h
+        llformat.h
+        llframetimer.h
+        llhandle.h
+        llhash.h
+        llheartbeat.h
+        llheteromap.h
+        llindexedvector.h
+        llinitdestroyclass.h
+        llinitparam.h
+        llinstancetracker.h
+        llinstancetrackersubclass.h
+        llkeybind.h
+        llkeythrottle.h
+        llleap.h
+        llleaplistener.h
+        llliveappconfig.h
+        lllivefile.h
+        llmainthreadtask.h
+        llmd5.h
+        llmemory.h
+        llmemorystream.h
+        llmetrics.h
+        llmortician.h
+        llmutex.h
+        llnametable.h
+        llpointer.h
+        llprofiler.h
+        llprofilercategories.h
+        llpounceable.h
+        llpredicate.h
+        llpreprocessor.h
+        llpriqueuemap.h
+        llprocess.h
+        llprocessor.h
+        llprocinfo.h
+        llptrto.h
+        llqueuedthread.h
+        llrand.h
+        llrefcount.h
+        llregex.h
+        llregistry.h
+        llrun.h
+        llsafehandle.h
+        llsd.h
+        llsdjson.h
+        llsdparam.h
+        llsdserialize.h
+        llsdserialize_xml.h
+        llsdutil.h
+        llsimplehash.h
+        llsingleton.h
+        llstl.h
+        llstreamtools.h
+        llstrider.h
+        llstring.h
+        llstringtable.h
+        llstaticstringtable.h
+        llstatsaccumulator.h
+        llsys.h
+        lltempredirect.h
+        llthread.h
+        llthreadlocalstorage.h
+        llthreadsafequeue.h
+        lltimer.h
+        lltrace.h
+        lltraceaccumulators.h
+        lltracerecording.h
+        lltracethreadrecorder.h
+        lltreeiterators.h
+        llunits.h
+        llunittype.h
+        lluri.h
+        lluriparser.h
+        lluuid.h
+        llwatchdog.h
+        llwin32headers.h
+        llworkerthread.h
+        hbxxh.h
+        lockstatic.h
+        stdtypes.h
+        stringize.h
+        threadpool.h
+        threadpool_fwd.h
+        threadsafeschedule.h
+        tuple.h
+        u64.h
+        workqueue.h
+)
 
-  set_source_files_properties(
-    llsys_objc.mm
-    PROPERTIES
-    SKIP_PRECOMPILE_HEADERS TRUE
-  )
-endif (DARWIN)
+if(DARWIN)
+  target_sources(llcommon PRIVATE llsys_objc.mm PUBLIC FILE_SET HEADERS FILES llsys_objc.h)
 
-if (USE_TRACY)
+  set_source_files_properties(llsys_objc.mm PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
+endif()
+
+if(AL_USE_TRACY)
   # Skip precompiled headers on these files due to special compilation needs
-  set_source_files_properties(
-    llfasttimer.cpp
-    PROPERTIES
-    SKIP_PRECOMPILE_HEADERS TRUE
-  )
-endif ()
+  set_source_files_properties(llfasttimer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
+endif()
 
 target_link_libraries(
-        llcommon
-        PUBLIC
-        ll::apr
-        ll::zlib-ng
-        ll::boost
-        ll::oslibraries
-        ll::tracy
-        ll::sse2neon
-        ll::xxhash
-        ll::simdjson
-        ll::simdutf
-        ll::fmt
-        Threads::Threads
-        PRIVATE
-        ll::fastfloat
-        ll::icu
-    )
+  llcommon
+  PRIVATE al::flags
+  PUBLIC
+    ll::apr
+    ll::zlib-ng
+    ll::boost
+    ll::oslibraries
+    ll::tracy
+    ll::sse2neon
+    ll::xxhash
+    ll::simdjson
+    ll::simdutf
+    ll::fmt
+    Threads::Threads
+  PRIVATE ll::fastfloat ll::icu
+)
 
-target_include_directories(llcommon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(AL_BUILD_TESTS)
+  # No unit tests: the harness itself links llcommon, so a test of one of its
+  # files could not stand alone. Every test here links the library.
+  foreach(
+    test
+    apply
+    bitpack
+    classic_callback
+    commonmisc
+    lazyeventapi
+    llapp
+    llbase64
+    llcond
+    lldate
+    lldeadmantimer
+    lldependencies
+    lldoubledispatch
+    llerror
+    lleventcoro
+    lleventdispatcher
+    lleventfilter
+    llevents
+    llfile
+    llframetimer
+    llhttpdate
+    llheteromap
+    llinitparam
+    llinstancetracker
+    llmainthreadtask
+    llmutex
+    llpounceable
+    llprocessor
+    llprocinfo
+    llrand
+    llsd
+    llsdjson
+    llsdutil
+    llsingleton
+    llstreamtools
+    llstring
+    llstring_utf
+    lltrace
+    lltreeiterators
+    llunits
+    lluri
+    lluuid
+    stringize
+    threadsafeschedule
+    tuple
+    workqueue
+  )
+    al_add_test(${test} PROJECT llcommon LIBRARIES llcommon)
+  endforeach()
 
-add_dependencies(llcommon stage_third_party_libs)
+  # These drive a Python peer: LEAP's protocol is to an external script,
+  # llprocess spawns one, and llsdserialize round-trips through the llsd
+  # package as an independent implementation.
+  foreach(test llleap llprocess llsdserialize)
+    al_add_test(${test} PROJECT llcommon LIBRARIES llcommon PYTHON)
+  endforeach()
 
-if (BUILD_TESTING)
-  SET(llcommon_TEST_SOURCE_FILES
-    # unit-testing llcommon is not possible right now as the test-harness *itself* depends upon llcommon, causing a circular dependency.  Add your 'unit' tests as integration tests for now.
-    )
-  LL_ADD_PROJECT_UNIT_TESTS(llcommon "${llcommon_TEST_SOURCE_FILES}")
-
-  #set(TEST_DEBUG on)
-  set(test_libs llcommon)
-  set(test_project llcommon)
-  LL_ADD_INTEGRATION_TEST(apply "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(bitpack "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(classic_callback "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(commonmisc "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lazyeventapi "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llapp "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llbase64 "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llcond "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lldate "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lldeadmantimer "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lldependencies "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lldoubledispatch "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llerror "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lleventcoro "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lleventdispatcher "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lleventfilter "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llevents "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llfile "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llframetimer "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llhttpdate "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llheteromap "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llinitparam "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llinstancetracker "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llleap "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llmainthreadtask "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llmutex "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llpounceable "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llprocess "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llprocessor "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llprocinfo "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llrand "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsd "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsdjson "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsdserialize "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsdutil "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llsingleton "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llstreamtools "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llstring "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llstring_utf "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lltrace "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lltreeiterators "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(llunits "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lluri "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(lluuid "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(stringize "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(threadsafeschedule "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(tuple "" "${test_libs}" "${test_project}")
-  LL_ADD_INTEGRATION_TEST(workqueue "" "${test_libs}" "${test_project}")
-
-## llexception_test.cpp isn't a regression test, and doesn't need to be run
-## every build. It's to help a developer make implementation choices about
-## throwing and catching exceptions.
-##LL_ADD_INTEGRATION_TEST(llexception "" "${test_libs}" "${test_project}")
+  ## llexception_test.cpp isn't a regression test, and doesn't need to be run
+  ## every build. It's to help a developer make implementation choices about
+  ## throwing and catching exceptions.
+  ##al_add_test(llexception PROJECT llcommon LIBRARIES llcommon)
 
   # Skip precompiled header for tests that need special handling
-  set_source_files_properties(
-    tests/llsd_test.cpp
-    PROPERTIES
-    SKIP_PRECOMPILE_HEADERS TRUE
-  )
-
-endif ()
+  set_source_files_properties(tests/llsd_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
+endif()

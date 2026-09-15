@@ -43,11 +43,12 @@ public:
     bool init() override; // Override to do application initialization
     bool cleanup() override;
 
-    bool reportCrashToBugsplat(void* pExcepInfo) override;
-    bool reportCustomToBugsplat(const std::string& description) override;
-
     // returns true if other windows were found and are still running.
     static bool sendShutdownToOtherInstances(const std::wstring& install_dir);
+
+    // Whether Windows Error Reporting leaves the viewer's crashes alone; the
+    // entry persists in the registry across runs.
+    static void setWinErrorReportingExcluded(bool excluded);
 
 protected:
     bool initWindow() override; // Override to initialize the viewer's window.
@@ -67,8 +68,6 @@ protected:
     std::string generateSerialNumber();
 
 private:
-    void disableWinErrorReporting();
-
     std::string mCmdLine;
     bool mIsConsoleAllocated;
 };
