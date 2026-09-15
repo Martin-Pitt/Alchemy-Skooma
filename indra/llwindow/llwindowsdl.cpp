@@ -54,13 +54,6 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <stdio.h>
-
-#if LL_X11
-LLWindowSDL::X11_DATA LLWindowSDL::sX11Data = {};
-#endif
-#if LL_WAYLAND
-LLWindowSDL::WAYLAND_DATA LLWindowSDL::sWaylandData = {};
-#endif
 #endif // LL_LINUX
 
 #if LL_DARWIN
@@ -83,17 +76,6 @@ bool LLWindowSDL::sUseMultGL = false;
 // in the LLWindowSDL constructor; only needs the process module handle, not
 // the window, so the SDL backend can provide the same access LLWindowWin32 does.
 static LPDIRECTINPUT8 gSDLDirectInput8 = nullptr;
-#endif
-
-// Native shared-GL-context creation (see createSharedContext). The GLX/EGL
-// entry points are resolved at runtime via SDL_GL_GetProcAddress /
-// SDL_EGL_GetProcAddress (the viewer doesn't link libGL/libEGL directly under
-// SDL), so we only need the platform types and tokens here.
-#if LL_X11
-#include <GL/glx.h>
-#endif
-#if LL_WAYLAND
-#include <EGL/egl.h>
 #endif
 
 bool gHiDPISupport = true;
@@ -323,7 +305,7 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
         context_flags |= SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG;
 #else
-        // GLX/EGL only honor the core profile mask when the requested version
+        // EGL only honors the core profile mask when the requested version
         // is >= 3.2; without an explicit version SDL defaults to 2.1 and the
         // driver silently returns a compatibility context (Mesa hands back 4.6
         // Compatibility). Request the highest version the viewer targets; the
@@ -489,43 +471,18 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         mRefreshRate = DEFAULT_REFRESH_RATE;
     }
 
-    /* Grab the window manager specific information */
+    /* Latch the display server. Only a few input quirks depend on it (see
+       showCursor) and the CEF plugin's Ozone platform; GL is EGL on both. */
 #if LL_LINUX
     if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "x11") == 0)
     {
         LL_INFOS() << "Running under X11" << LL_ENDL;
         mServerProtocol = X11;
-
-        gGLManager.mIsX11 = true;
-
-#if LL_X11
-        sX11Data.xdisplay = (Display *)SDL_GetPointerProperty(SDL_GetWindowProperties(mWindow), SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
-        sX11Data.xwindow = (Window)SDL_GetNumberProperty(SDL_GetWindowProperties(mWindow), SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
-        sX11Data.xscreen = (int)SDL_GetNumberProperty(SDL_GetWindowProperties(mWindow), SDL_PROP_WINDOW_X11_SCREEN_NUMBER, -1);
-        if (sX11Data.xdisplay && sX11Data.xwindow)
-        {
-
-        }
-#endif
-
-        gGLManager.initGLX();
     }
     else if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0)
     {
         LL_INFOS() << "Running under Wayland" << LL_ENDL;
         mServerProtocol = Wayland;
-
-        gGLManager.mIsWayland = true;
-
-#if LL_WAYLAND
-        sWaylandData.display = (struct wl_display *)SDL_GetPointerProperty(SDL_GetWindowProperties(mWindow), SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
-        sWaylandData.surface = (struct wl_surface *)SDL_GetPointerProperty(SDL_GetWindowProperties(mWindow), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
-        if (sWaylandData.display && sWaylandData.surface)
-        {
-        }
-#endif
-
-        gGLManager.initEGL();
 
         // NOTE: the Wayland init path used to unsetenv("DISPLAY") here to
         // coax dullahan/CEF onto the native Wayland path. That global env
@@ -536,6 +493,8 @@ bool LLWindowSDL::createContext(int x, int y, int width, int height, int bits, b
         // dullahan as the forced Ozone platform - routing CEF onto native
         // Wayland without mutating any shared environment.
     }
+
+    gGLManager.initEGL();
 #endif
 
     SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &redBits);
@@ -643,346 +602,39 @@ void LLWindowSDL::refreshMinSizePixelShadow()
     mMinWindowHeightPx = (U32)(mMinWindowHeight * mCachedPixelDensity);
 }
 
-// Opaque handle returned from createSharedContext() and passed back to
-// makeContextCurrent()/destroySharedContext(). Carries whatever the platform
-// GL API needs to bind and tear down the context.
-namespace
-{
-    struct LLSDLSharedContext
-    {
-#if LL_WINDOWS
-        HGLRC rc = nullptr;
-        HDC   dc = nullptr;        // main window DC the sibling context binds to
-#elif LL_DARWIN
-        CGLContextObj ctx = nullptr;
-#else // LL_LINUX
-#if LL_X11
-        // X11 / GLX
-        Display*   glx_dpy  = nullptr;
-        GLXContext glx_ctx  = nullptr;
-        GLXPbuffer glx_pbuf = 0;
-#endif
-#if LL_WAYLAND
-        // Wayland / EGL — kept as void* so EGL types stay out of the header
-        void* egl_dpy = nullptr;   // EGLDisplay
-        void* egl_ctx = nullptr;   // EGLContext
-#endif
-#endif
-    };
-
-    // Platform GL teardown for one shared context. No bookkeeping — the caller
-    // owns mSharedContexts and the LLSDLSharedContext allocation.
-    void tearDownNativeSharedContext(LLSDLSharedContext* s)
-    {
-        if (!s) return;
-#if LL_WINDOWS
-        if (s->rc && !wglDeleteContext(s->rc))
-        {
-            LL_WARNS("Window") << "wglDeleteContext(shared) failed: " << GetLastError() << LL_ENDL;
-        }
-#elif LL_DARWIN
-        if (s->ctx)
-        {
-            CGLDestroyContext(s->ctx);
-        }
-#else // LL_LINUX
-#if LL_X11
-        if (s->glx_ctx)
-        {
-            typedef void (*fn_destroyctx)(Display*, GLXContext);
-            typedef void (*fn_destroypb)(Display*, GLXPbuffer);
-            auto glx_destroyctx = (fn_destroyctx)SDL_GL_GetProcAddress("glXDestroyContext");
-            auto glx_destroypb  = (fn_destroypb)SDL_GL_GetProcAddress("glXDestroyPbuffer");
-            if (glx_destroyctx) glx_destroyctx(s->glx_dpy, s->glx_ctx);
-            if (glx_destroypb && s->glx_pbuf) glx_destroypb(s->glx_dpy, s->glx_pbuf);
-        }
-#endif
-#if LL_WAYLAND
-        if (s->egl_ctx)
-        {
-            typedef unsigned int (*fn_destroyctx)(void*, void*);
-            auto egl_destroyctx = (fn_destroyctx)SDL_EGL_GetProcAddress("eglDestroyContext");
-            if (egl_destroyctx) egl_destroyctx(s->egl_dpy, s->egl_ctx);
-        }
-#endif
-#endif
-    }
-}
-
-// Create a GL context that shares object namespace with the main context, for
-// a worker thread (texture upload, VBO streaming). Uses the platform-native GL
-// API behind SDL instead of a hidden carrier SDL_Window — see the header note.
-// Runs on the main thread (the thread that constructs the GL worker pool).
+// The context itself is made by sdl_create_shared_context against the
+// current context, so the main one is bound first. Runs on the main thread,
+// the one that constructs the GL worker pool.
 void* LLWindowSDL::createSharedContext()
 {
-    // Bind the main context so the platform "get current" queries below return
-    // the main display / config / share-context, and so the new context shares
-    // object namespace with the right context.
     if (!SDL_GL_MakeCurrent(mWindow, mContext))
     {
         LL_WARNS() << "SDL_GL_MakeCurrent(main) failed in createSharedContext: "
                    << SDL_GetError() << LL_ENDL;
     }
 
-    // A version request derived from the live main context, clamped to the
-    // range the viewer supports. WGL/EGL need this explicitly (mirroring
-    // LLWindowWin32::createSharedContext); GLX/CGL inherit it from the share
-    // context, hence the guard against an unused-variable warning there.
-#if LL_WINDOWS || LL_WAYLAND
-    const F32 gl_ver = llclamp(gGLManager.mGLVersion, 3.0f, 4.6f);
-    const S32 ver_major = (S32)gl_ver;
-    const S32 ver_minor = (S32)ll_round((gl_ver - ver_major) * 10.f);
-#endif
-
-    auto* shared = new LLSDLSharedContext();
-    bool ok = false;
-
-#if LL_WINDOWS
-    HDC   dc    = wglGetCurrentDC();
-    HGLRC share = wglGetCurrentContext();
-    if (dc && share && wglCreateContextAttribsARB)
-    {
-        S32 attribs[] =
-        {
-            WGL_CONTEXT_MAJOR_VERSION_ARB, ver_major,
-            WGL_CONTEXT_MINOR_VERSION_ARB, ver_minor,
-            WGL_CONTEXT_PROFILE_MASK_ARB,  LLRender::sGLCoreProfile ? WGL_CONTEXT_CORE_PROFILE_BIT_ARB : WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-            WGL_CONTEXT_FLAGS_ARB, gDebugGL ? WGL_CONTEXT_DEBUG_BIT_ARB : 0,
-            0
-        };
-        HGLRC rc = nullptr;
-        for (;;)
-        {
-            rc = wglCreateContextAttribsARB(dc, share, attribs);
-            if (rc) break;
-            if (attribs[3] > 0)      { attribs[3]--; }                   // step minor down
-            else if (attribs[1] > 3) { attribs[1]--; attribs[3] = 3; }   // step major down
-            else                     { break; }                         // gave up at 3.0
-        }
-        if (rc)
-        {
-            shared->rc = rc;
-            shared->dc = dc;
-            ok = true;
-        }
-        else
-        {
-            LL_WARNS() << "wglCreateContextAttribsARB (shared) failed" << LL_ENDL;
-        }
-    }
-#elif LL_DARWIN
-    CGLContextObj share = CGLGetCurrentContext();
-    if (share)
-    {
-        CGLPixelFormatObj pf = CGLGetPixelFormat(share);
-        CGLContextObj ctx = nullptr;
-        CGLError err = CGLCreateContext(pf, share, &ctx);
-        if (err == kCGLNoError && ctx)
-        {
-            shared->ctx = ctx;
-            ok = true;
-        }
-        else
-        {
-            LL_WARNS() << "CGLCreateContext (shared) failed: " << CGLErrorString(err) << LL_ENDL;
-        }
-    }
-#else // LL_LINUX
-#if LL_X11
-    if (mServerProtocol == X11)
-    {
-        // GLX: bind the shared context to a 1x1 offscreen GLXPbuffer (no window
-        // manager interaction, destroyable from the worker thread). Each worker
-        // needs its own drawable — reusing the main window drawable would
-        // BadAccess (it's already current on the main thread).
-        typedef Display*     (*fn_getdpy)(void);
-        typedef GLXContext   (*fn_getctx)(void);
-        typedef GLXFBConfig* (*fn_choose)(Display*, int, const int*, int*);
-        typedef GLXContext   (*fn_newctx)(Display*, GLXFBConfig, int, GLXContext, Bool);
-        typedef GLXPbuffer   (*fn_pbuffer)(Display*, GLXFBConfig, const int*);
-
-        auto glx_getdpy  = (fn_getdpy)SDL_GL_GetProcAddress("glXGetCurrentDisplay");
-        auto glx_getctx  = (fn_getctx)SDL_GL_GetProcAddress("glXGetCurrentContext");
-        auto glx_choose  = (fn_choose)SDL_GL_GetProcAddress("glXChooseFBConfig");
-        auto glx_newctx  = (fn_newctx)SDL_GL_GetProcAddress("glXCreateNewContext");
-        auto glx_pbuffer = (fn_pbuffer)SDL_GL_GetProcAddress("glXCreatePbuffer");
-
-        if (glx_getdpy && glx_getctx && glx_choose && glx_newctx && glx_pbuffer)
-        {
-            Display*   dpy   = glx_getdpy();
-            GLXContext share = glx_getctx();
-            int screen = (sX11Data.xscreen >= 0) ? sX11Data.xscreen : (dpy ? DefaultScreen(dpy) : 0);
-            const int cfg_attribs[] =
-            {
-                GLX_DRAWABLE_TYPE, GLX_PBUFFER_BIT,
-                GLX_RENDER_TYPE,   GLX_RGBA_BIT,
-                GLX_RED_SIZE, 8, GLX_GREEN_SIZE, 8, GLX_BLUE_SIZE, 8, GLX_ALPHA_SIZE, 8,
-                None
-            };
-            int n = 0;
-            GLXFBConfig* fbc = (dpy ? glx_choose(dpy, screen, cfg_attribs, &n) : nullptr);
-            if (fbc && n > 0)
-            {
-                const int pb_attribs[] = { GLX_PBUFFER_WIDTH, 1, GLX_PBUFFER_HEIGHT, 1, None };
-                GLXPbuffer pbuf = glx_pbuffer(dpy, fbc[0], pb_attribs);
-                GLXContext ctx  = glx_newctx(dpy, fbc[0], GLX_RGBA_TYPE, share, True);
-                // glXChooseFBConfig returns an Xlib-allocated array that must be
-                // released with XFree. The SDL backend doesn't link libX11 (GLX
-                // is reached through SDL_GL_GetProcAddress), so resolve XFree from
-                // the already-resident libX11 at runtime via SDL's loader instead
-                // of taking an X11 link dependency. On the X11 server path libX11
-                // is always loaded; if XFree can't be found, skip the free (a
-                // tiny, bounded, once-per-worker-context leak) rather than crash.
-                if (SDL_SharedObject* x11lib = SDL_LoadObject("libX11.so.6"))
-                {
-                    if (SDL_FunctionPointer x_free = SDL_LoadFunction(x11lib, "XFree"))
-                    {
-                        ((int (*)(void*))x_free)(fbc);
-                    }
-                    SDL_UnloadObject(x11lib);
-                }
-                if (pbuf && ctx)
-                {
-                    shared->glx_dpy  = dpy;
-                    shared->glx_pbuf = pbuf;
-                    shared->glx_ctx  = ctx;
-                    ok = true;
-                }
-                else
-                {
-                    LL_WARNS() << "GLX shared pbuffer/context creation failed" << LL_ENDL;
-                    LLSDLSharedContext tmp; tmp.glx_dpy = dpy; tmp.glx_ctx = ctx; tmp.glx_pbuf = pbuf;
-                    tearDownNativeSharedContext(&tmp);
-                }
-            }
-            else
-            {
-                LL_WARNS() << "glXChooseFBConfig found no pbuffer-capable config" << LL_ENDL;
-            }
-        }
-        else
-        {
-            LL_WARNS() << "Could not resolve GLX entry points for shared context" << LL_ENDL;
-        }
-    }
-#endif // LL_X11
-#if LL_WAYLAND
-    if (mServerProtocol == Wayland)
-    {
-        // Wayland / EGL: a surfaceless context (EGL_NO_SURFACE) avoids needing a
-        // per-worker drawable. Requires EGL_KHR_surfaceless_context (Mesa has
-        // it). SDL exposes the display/config it created the main context with.
-        typedef void* (*fn_getctx)(void);
-        typedef void* (*fn_createctx)(void*, void*, void*, const int*);
-        typedef unsigned int (*fn_bindapi)(unsigned int);
-
-        auto egl_getctx    = (fn_getctx)SDL_EGL_GetProcAddress("eglGetCurrentContext");
-        auto egl_createctx = (fn_createctx)SDL_EGL_GetProcAddress("eglCreateContext");
-        auto egl_bindapi   = (fn_bindapi)SDL_EGL_GetProcAddress("eglBindAPI");
-
-        void* dpy   = (void*)SDL_EGL_GetCurrentDisplay();
-        void* cfg   = (void*)SDL_EGL_GetCurrentConfig();
-        void* share = egl_getctx ? egl_getctx() : nullptr;
-
-        if (dpy && egl_createctx && share)
-        {
-            if (egl_bindapi) egl_bindapi(EGL_OPENGL_API);
-            // Must request the version explicitly — an empty attrib list defaults
-            // to GL 1.0, which can't drive the modern texture/VBO uploads the
-            // worker shares with the main context. (EGL 1.5 tokens.)
-            const int ctx_attribs[] =
-            {
-                EGL_CONTEXT_MAJOR_VERSION, ver_major,
-                EGL_CONTEXT_MINOR_VERSION, ver_minor,
-                EGL_NONE
-            };
-            void* ctx = egl_createctx(dpy, cfg, share, ctx_attribs);
-            if (ctx && ctx != EGL_NO_CONTEXT)
-            {
-                shared->egl_dpy = dpy;
-                shared->egl_ctx = ctx;
-                ok = true;
-            }
-            else
-            {
-                LL_WARNS() << "eglCreateContext (shared) failed" << LL_ENDL;
-            }
-        }
-        else
-        {
-            LL_WARNS() << "Could not resolve EGL state/entry points for shared context" << LL_ENDL;
-        }
-    }
-#endif // LL_WAYLAND
-#endif // LL_LINUX
-
-    if (!ok)
-    {
-        delete shared;
-        return nullptr;
-    }
-
+    void* shared = sdl_create_shared_context();
+    if (shared)
     {
         LLMutexLock lk(&mSharedCtxMutex);
         mSharedContexts.insert(shared);
     }
-    LL_DEBUGS() << "Created native shared GL context." << LL_ENDL;
     return shared;
 }
 
 void LLWindowSDL::makeContextCurrent(void* contextPtr)
 {
-    if (!contextPtr) return;
-    auto* s = (LLSDLSharedContext*)contextPtr;
-#if LL_WINDOWS
-    if (!wglMakeCurrent(s->dc, s->rc))
-    {
-        LL_WARNS("Window") << "wglMakeCurrent(shared) failed: " << GetLastError() << LL_ENDL;
-    }
-#elif LL_DARWIN
-    CGLSetCurrentContext(s->ctx);
-#else // LL_LINUX
-#if LL_X11
-    if (s->glx_ctx)
-    {
-        typedef Bool (*fn_makecur)(Display*, GLXDrawable, GLXContext);
-        auto glx_makecur = (fn_makecur)SDL_GL_GetProcAddress("glXMakeCurrent");
-        if (glx_makecur && !glx_makecur(s->glx_dpy, s->glx_pbuf, s->glx_ctx))
-        {
-            LL_WARNS("Window") << "glXMakeCurrent(shared) failed" << LL_ENDL;
-        }
-    }
-#endif
-#if LL_WAYLAND
-    if (s->egl_ctx)
-    {
-        // eglBindAPI is per-thread, so re-assert OpenGL on the worker before
-        // binding the context surfaceless.
-        typedef unsigned int (*fn_bindapi)(unsigned int);
-        typedef unsigned int (*fn_makecur)(void*, void*, void*, void*);
-        auto egl_bindapi = (fn_bindapi)SDL_EGL_GetProcAddress("eglBindAPI");
-        auto egl_makecur = (fn_makecur)SDL_EGL_GetProcAddress("eglMakeCurrent");
-        if (egl_bindapi) egl_bindapi(EGL_OPENGL_API);
-        if (egl_makecur && !egl_makecur(s->egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->egl_ctx))
-        {
-            LL_WARNS("Window") << "eglMakeCurrent(shared, surfaceless) failed" << LL_ENDL;
-        }
-    }
-#endif
-#endif // LL_LINUX
-    LL_PROFILER_GPU_CONTEXT;
+    sdl_make_shared_context_current(contextPtr);
 }
 
 void LLWindowSDL::destroySharedContext(void* contextPtr)
 {
     if (!contextPtr) return;
-    auto* s = (LLSDLSharedContext*)contextPtr;
-    tearDownNativeSharedContext(s);
     {
         LLMutexLock lk(&mSharedCtxMutex);
-        mSharedContexts.erase(s);
+        mSharedContexts.erase(contextPtr);
     }
-    delete s;
+    sdl_destroy_shared_context(contextPtr);
 }
 
 void LLWindowSDL::toggleVSync(bool enable_vsync)
@@ -1045,9 +697,7 @@ void LLWindowSDL::destroyContext()
                        << " shared GL context(s) still alive at shutdown — releasing." << LL_ENDL;
             for (void* handle : mSharedContexts)
             {
-                auto* s = (LLSDLSharedContext*)handle;
-                tearDownNativeSharedContext(s);
-                delete s;
+                sdl_destroy_shared_context(handle);
             }
             mSharedContexts.clear();
         }
@@ -3964,11 +3614,12 @@ void LLWindowSDL::spawnWebBrowser(const std::string& escaped_url, bool async)
 void* LLWindowSDL::getPlatformWindow()
 {
     // Note: on Linux this returns nullptr by design. The X11 Window handle
-    // (typedef Window = XID = unsigned long, not a pointer) and the Wayland
-    // wl_surface* don't share a single native-handle type, and current
-    // callers all cast directly to HWND. Linux code that needs the native
-    // handle should reach into LLWindowSDL::sX11Data or sWaylandData, which
-    // are populated in createContext() with the correct typed pointers.
+    // (an XID, not a pointer) and the Wayland wl_surface* don't share a
+    // single native-handle type, and current callers all cast directly to
+    // HWND. Linux code that needs the native handle should read the
+    // SDL_PROP_WINDOW_WAYLAND_* / SDL_PROP_WINDOW_X11_* window property at
+    // the point of use, with its own forward declaration of the type; the
+    // viewer includes no windowing-system header.
     void* ret = nullptr;
     if (mWindow)
     {

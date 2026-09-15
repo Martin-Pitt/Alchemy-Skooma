@@ -28,6 +28,8 @@
 
 #include "llappviewer.h"
 
+#include "alcrashreporter.h"
+
 // Viewer includes
 #include "llversioninfo.h"
 #include "llfeaturemanager.h"
@@ -152,6 +154,11 @@
 #include "stringize.h"
 #include "llcoros.h"
 #include "llexception.h"
+#include <boost/exception/diagnostic_information.hpp>
+#include <exception>
+#if !LL_WINDOWS
+#include <unistd.h>
+#endif
 #include "../dullahan/src/dullahan_version.h"
 #include "vlc/libvlc_version.h"
 
@@ -709,14 +716,14 @@ LLAppViewer::LLAppViewer()
     // from the previous viewer run between this constructor call and the
     // init() call, which will overwrite the static_debug_info.log file for
     // THIS run. So setDebugFileNames() early.
-#   ifdef LL_BUGSPLAT
-    // MAINT-8917: don't create a dump directory just for the
-    // static_debug_info.log file
+#   if AL_SENTRY
+    // The crash reporter keeps its own database; the debug files need no
+    // per-run dump directory of their own.
     std::string logdir = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "");
-#   else // ! LL_BUGSPLAT
-    // write Google Breakpad minidump files to a per-run dump directory to avoid multiple viewer issues.
+#   else // ! AL_SENTRY
+    // write minidump files to a per-run dump directory to avoid multiple viewer issues.
     std::string logdir = gDirUtilp->getExpandedFilename(LL_PATH_DUMP, "");
-#   endif // ! LL_BUGSPLAT
+#   endif // ! AL_SENTRY
     mDumpPath = logdir;
 
     setDebugFileNames(logdir);
@@ -788,6 +795,10 @@ bool LLAppViewer::init()
 
     setupErrorHandling(mSecondInstance);
 
+    // As early as consent can be read: before the settings, on the sentinel
+    // they keep for it.
+    ALCrashReporter::init();
+
     //
     // Start of the application
     //
@@ -842,6 +853,34 @@ bool LLAppViewer::init()
         // much on successful startup!
         LLError::setFatalFunction([rc](const std::string&){ _exit(rc); });
     }
+
+    // The settings hold the answer on crash reports from here: it refreshes
+    // the sentinel the reporter started on, and follows changes to it.
+    // The setting only reaches disk at a clean exit: a run that crashed
+    // after the answer was given left it unasked, while the sentinel kept
+    // the answer. The sentinel's yes becomes the setting's.
+    if (gSavedSettings.getS32("AlchemyCrashReportConsent") == 0
+        && ALCrashReporter::consentRecorded(ALCrashReporter::consentSentinel()))
+    {
+        gSavedSettings.setS32("AlchemyCrashReportConsent", 1);
+    }
+    auto crash_reports_allowed = []()
+    {
+        return gSavedSettings.getS32("AlchemyCrashReportConsent") == 1 && !LLApp::isCrashloggerDisabled();
+    };
+    ALCrashReporter::refreshConsent(crash_reports_allowed());
+    gSavedSettings.getControl("AlchemyCrashReportConsent")->getSignal()->connect(
+        [crash_reports_allowed](LLControlVariable*, const LLSD&, const LLSD&)
+        {
+            ALCrashReporter::refreshConsent(crash_reports_allowed());
+        });
+    gAgent.addRegionChangedCallback([]()
+    {
+        if (LLViewerRegion* region = gAgent.getRegion())
+        {
+            ALCrashReporter::setTag("region", region->getName());
+        }
+    });
 
     // Initialize the non-LLCurl libcurl library.  Should be called
     // before consumers (LLTextureFetch).
@@ -1066,6 +1105,12 @@ bool LLAppViewer::init()
 
     gGLManager.getGLInfo(gDebugInfo);
     gGLManager.printGLInfoString();
+
+    ALCrashReporter::setTag("gl_vendor", gGLManager.mGLVendor);
+    ALCrashReporter::setTag("gl_renderer", gGLManager.mGLRenderer);
+    ALCrashReporter::setTag("gl_version", gGLManager.mGLVersionString);
+    ALCrashReporter::setTag("gpu_driver", gGLManager.mDriverVersionVendorString);
+    ALCrashReporter::setTag("vram_mb", std::to_string(gGLManager.mVRAM));
 
     // If we don't have the right GL requirements, exit.
     // ? AG: It seems we never set mHasRequirements to false
@@ -1395,8 +1440,11 @@ bool LLAppViewer::doFrame()
     }
 #endif
 
-    LL_PROFILE_GPU_ZONE("Frame");
     {
+    // The "doFrame" zone above already owns this scope, and a Tracy GPU zone
+    // is a fixed-name local, so this one has to live in the block it times
+    // or the two collide the moment GPU profiling is compiled in.
+    LL_PROFILE_GPU_ZONE("Frame");
     // and now adjust the visuals from previous frame.
     if(LLPerfStats::tunables.userAutoTuneEnabled && LLPerfStats::tunables.tuningFlag != LLPerfStats::Tunables::Nothing)
     {
@@ -1537,8 +1585,7 @@ bool LLAppViewer::doFrame()
             }
 
             // Render scene.
-            // *TODO: Should we run display() even during gHeadlessClient?  DK 2011-02-18
-            if (!LLApp::isExiting() && !gHeadlessClient && gViewerWindow)
+            if (!LLApp::isExiting() && gViewerWindow)
             {
                 LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df Display");
                 pingMainloopTimeout("Main:Display");
@@ -2243,6 +2290,8 @@ bool LLAppViewer::cleanup()
 
     LL_INFOS() << "Goodbye!" << LL_ENDL;
 
+    ALCrashReporter::shutdown();
+
     removeDumpDir();
 
     // return 0;
@@ -2314,6 +2363,25 @@ bool LLAppViewer::initThreads()
 
     // *FIX: no error handling here!
     return true;
+}
+
+namespace
+{
+    // std::terminate is the C++ runtime giving up: an exception nobody
+    // caught, or a throw through noexcept. Which exception is only knowable
+    // here, so it goes into the log and onto the report before the crash.
+    void on_terminate()
+    {
+        const std::string reason = boost::current_exception_diagnostic_information();
+        LL_WARNS("Terminate") << "std::terminate: " << reason << LL_ENDL;
+        ALCrashReporter::fatal("terminate", reason);
+    }
+}
+
+// static
+void LLAppViewer::installTerminateHandler()
+{
+    std::set_terminate(on_terminate);
 }
 
 // Callback for all LL_ERROR calls
@@ -2420,6 +2488,9 @@ void LLAppViewer::initLoggingAndGetLastDuration()
                                 ,gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "")
                                 );
     LLError::addGenericRecorder(&errorCallback);
+    // LL_ERRS crashes its caller once the recorders have run; this makes it
+    // a crash the reporter is sure to see, with the message on the report.
+    LLError::setFatalFunction([](const std::string& message) { ALCrashReporter::fatal("ll_errs", message); });
     //LLError::setTimeFunction(getRuntime);
 
     LLError::LLUserWarningMsg::setHandler(errorHandler);
@@ -3170,9 +3241,13 @@ bool LLAppViewer::initConfiguration()
         }
     }
 
+    // The window backend is decided here, ahead of the splash: a headless
+    // viewer renders on a window that is never shown and puts up no splash.
+    gHeadlessClient = gSavedSettings.getBOOL("HeadlessClient");
+
     // Display splash screen.  Must be after above check for previous
     // crash as this dialog is always frontmost.
-    if (!gGPUBenchmarkMode)
+    if (!gGPUBenchmarkMode && !gHeadlessClient)
     {
         std::string splash_msg;
         LLStringUtil::format_map_t args;
@@ -3218,7 +3293,9 @@ bool LLAppViewer::initConfiguration()
     // This happens AFTER LLSplashScreen::show(). That may or may not be
     // important.
     //
-    if (mSecondInstance && !gSavedSettings.getBOOL("AllowMultipleViewers"))
+    // The GPU benchmark child is always a second instance: its parent holds
+    // the marker lock.
+    if (mSecondInstance && !gGPUBenchmarkMode && !gSavedSettings.getBOOL("AllowMultipleViewers"))
     {
         OSMessageBox(
             LLTrans::getString("MBAlreadyRunning"),
@@ -3434,9 +3511,6 @@ bool LLAppViewer::initWindow()
     LL_PROFILE_ZONE_SCOPED;
     LL_INFOS("AppInit") << "Initializing window..." << LL_ENDL;
 
-    // store setting in a global for easy access and modification
-    gHeadlessClient = gSavedSettings.getBOOL("HeadlessClient");
-
     // always start windowed
     bool ignorePixelDepth = gSavedSettings.getBOOL("IgnorePixelDepth");
 
@@ -3522,13 +3596,9 @@ bool LLAppViewer::initWindow()
             },
             [](std::string &desc)
             {
-#if LL_WINDOWS && LL_BUGSPLAT
                 LLAppViewer* app = LLAppViewer::instance();
                 app->writeDebugInfo();
-                return app->reportCustomToBugsplat(desc);
-#else
-                return false;
-#endif
+                return app->reportFreeze(desc);
             },
             []()
             {
@@ -3608,11 +3678,37 @@ bool LLAppViewer::initWindow()
     return true;
 }
 
+#if LL_WINDOWS
+bool LLAppViewer::reportCrash(void* exception_pointers)
+{
+    return ALCrashReporter::handleException(exception_pointers);
+}
+#endif
+
+bool LLAppViewer::reportFreeze(const std::string& description)
+{
+    if (!ALCrashReporter::reportFreeze(description))
+    {
+        return false;
+    }
+    // The report is filed and the viewer is still hung. What the reporter's
+    // own dialog used to do on its way out: the marker for the next launch,
+    // then out, since nothing here can be unwound.
+    createErrorMarker(logoutRequestSent() ? LAST_EXEC_LOGOUT_FROZE : LAST_EXEC_FROZE);
+    ALCrashReporter::shutdown();
+#if LL_WINDOWS
+    TerminateProcess(GetCurrentProcess(), 3);
+#else
+    _exit(3);
+#endif
+    return true;
+}
+
 void LLAppViewer::writeDebugInfo(bool isStatic)
 {
-#if LL_WINDOWS && LL_BUGSPLAT
-    // bugsplat does not create dump folder and debug logs are written directly
-    // to logs folder, so it conflicts with main instance
+#if AL_SENTRY
+    // The debug files sit in the logs directory rather than a per-run dump
+    // directory, so a second instance would overwrite the first's.
     if (mSecondInstance)
     {
         return;
@@ -4013,18 +4109,17 @@ void LLAppViewer::writeSystemInfo()
     if (! gDebugInfo.has("Dynamic") )
         gDebugInfo["Dynamic"] = LLSD::emptyMap();
 
+    // The report filed on the next launch joins the crash by this.
+    gDebugInfo["RunId"] = ALCrashReporter::runId();
+
 #if LL_DARWIN
-    // crash processing in CrashMetadataSingleton reads SLLog. macOS reports a
-    // crash on the NEXT run, so what it wants is the copy taken at shutdown.
+    // macOS reports a crash on the NEXT run, so what the report filed then
+    // wants is the copy of the log taken at the next start.
     gDebugInfo["SLLog"] = getLogFileSibling(getActiveLogFileName(), ".crash");
-#elif LL_WINDOWS && !LL_BUGSPLAT
-    gDebugInfo["SLLog"] = getActiveLogFileName();
 #else
-    // The current log is still open and being written when the report is
-    // taken, so attach the previous run's instead; attachmentsForBugSplat
-    // expects that ".old" name.
-    // Far from ideal, especially when multiple instances get involved. Todo: improve.
-    gDebugInfo["SLLog"] = getOldLogFileName(getActiveLogFileName());
+    // The crash handler reads the attachment at crash time, so the live log
+    // is the one to name.
+    gDebugInfo["SLLog"] = getActiveLogFileName();
 #endif
 
     gDebugInfo["ClientInfo"]["Name"] = LLVersionInfo::instance().getChannel();
@@ -4061,16 +4156,16 @@ void LLAppViewer::writeSystemInfo()
     gDebugInfo["MainloopThreadID"] = (S32)thread_id;
 #endif
 
-#ifndef LL_BUGSPLAT
+#if ! AL_SENTRY
     // "CrashNotHandled" is set here, while things are running well,
     // in case of a freeze. If there is a freeze, the crash logger will be launched
     // and can read this value from the debug_info.log.
     gDebugInfo["CrashNotHandled"] = LLSD::Boolean(true);
-#else // LL_BUGSPLAT
+#else // AL_SENTRY
     // "CrashNotHandled" is obsolete; it used (not very successsfully)
     // to try to distinguish crashes from freezes - the intent here to to avoid calling it a freeze
     gDebugInfo["CrashNotHandled"] = LLSD::Boolean(false);
-#endif // ! LL_BUGSPLAT
+#endif // AL_SENTRY
 
     // Insert crash host url (url to post crash log to) if configured. This insures
     // that the crash report will go to the proper location in the case of a
@@ -4187,6 +4282,13 @@ bool LLAppViewer::markerIsSameVersion(const std::string& marker_name) const
     if (marker_file)
     {
         marker_version_length = marker_file.read(marker_data, sizeof(marker_data), ec);
+        if (ec || marker_version_length <= 0)
+        {
+            // A running instance holds the marker locked, and the read is
+            // refused: not a version match, and not a crash.
+            LL_DEBUGS("MarkerFile") << "Cannot read marker '" << marker_name << "': " << ec.message() << LL_ENDL;
+            return false;
+        }
         std::string marker_string(marker_data, marker_version_length);
         size_t pos = marker_string.find('\n');
         if (pos != std::string::npos)
@@ -4266,6 +4368,11 @@ bool LLAppViewer::getMarkerData(const std::string& marker_name, std::string& dat
     {
         marker_version_length = marker_file.read(marker_data, sizeof(marker_data), ec);
         marker_file.close();
+        if (ec || marker_version_length <= 0)
+        {
+            LL_DEBUGS("MarkerFile") << "Cannot read marker '" << marker_name << "': " << ec.message() << LL_ENDL;
+            return false;
+        }
         std::string marker_string(marker_data, marker_version_length);
         size_t pos = marker_string.find('\n');
         if (pos != std::string::npos)
@@ -4329,7 +4436,9 @@ void LLAppViewer::processMarkerFiles()
         // now test to see if this file is locked by a running process (try to open for write)
         marker_log_stream << "Checking exec marker file for lock...";
         std::error_code ec;
-        mMarkerFile.open(mMarkerFileName, LLFile::out|LLFile::trunc|LLFile::binary, ec);
+        // Not truncated on open: a running instance's marker keeps what it
+        // says, and only the winner of the lock rewrites it.
+        mMarkerFile.open(mMarkerFileName, LLFile::out|LLFile::binary, ec);
         if (!mMarkerFile)
         {
             marker_log_stream << "Exec marker file open failed - assume it is locked.";
@@ -4337,9 +4446,10 @@ void LLAppViewer::processMarkerFiles()
         }
         else
         {
-            // We were able to open it, now try to lock it ourselves...
+            // We were able to open it, now try to lock it ourselves. Without
+            // noblock the lock would wait for the running instance to exit.
             std::error_code ec;
-            if (0 != mMarkerFile.lock(LLFile::exclusive, ec) || ec)
+            if (0 != mMarkerFile.lock(LLFile::exclusive|LLFile::noblock, ec) || ec)
             {
                 marker_log_stream << "Locking exec marker failed.";
                 mSecondInstance = true; // lost a race? be conservative
@@ -4347,6 +4457,11 @@ void LLAppViewer::processMarkerFiles()
             else
             {
                 // No other instances; we've locked this file now, so record our version; delete on quit.
+                // The stale contents go through a second handle: the lock guards
+                // reads and writes, not the length.
+                LLFile stale;
+                stale.open(mMarkerFileName, LLFile::out|LLFile::trunc|LLFile::binary, ec);
+                stale.close();
                 recordMarkerVersion(mMarkerFile);
                 marker_log_stream << "Exec marker file existed but was not locked; rewritten.";
             }
@@ -4384,7 +4499,7 @@ void LLAppViewer::processMarkerFiles()
         {
             LL_DEBUGS("MarkerFile") << "Exec marker file '"<< mMarkerFileName << "' created." << LL_ENDL;
             std::error_code ec;
-            if (0 == mMarkerFile.lock(LLFile::exclusive, ec))
+            if (0 == mMarkerFile.lock(LLFile::exclusive|LLFile::noblock, ec))
             {
                 recordMarkerVersion(mMarkerFile);
                 LL_DEBUGS("MarkerFile") << "Exec marker file locked." << LL_ENDL;
@@ -5382,8 +5497,16 @@ void LLAppViewer::idle()
     // Cap out-of-control frame times
     // Too low because in menus, swapping, debugger, etc.
     // Too high because idle called with no objects in view, etc.
+    //
+    // The ceiling used to be 200, which floored every step at 5 ms. Everything downstream turns a
+    // per-second rate into a per-frame step with these -- keyboard turning multiplies by
+    // gFrameDTClamped, the camera orbit/pan/zoom keys divide by gFPSClamped -- so on any display
+    // faster than 200 Hz each step was bigger than the frame had earned: at 500 fps the avatar
+    // turned at 225 degrees a second instead of 90. A genuinely short frame is not an error to be
+    // clamped. The only hazard up here is a near-zero dt, and a ceiling far above any real refresh
+    // rate still guards that.
     const F32 MIN_FRAME_RATE = 1.f;
-    const F32 MAX_FRAME_RATE = 200.f;
+    const F32 MAX_FRAME_RATE = 10000.f;
 
     F32 frame_rate_clamped = 1.f / dt_raw;
     frame_rate_clamped = llclamp(frame_rate_clamped, MIN_FRAME_RATE, MAX_FRAME_RATE);
@@ -6177,6 +6300,36 @@ void LLAppViewer::idleNetwork()
 
     gObjectList.mNumNewObjects = 0;
 
+#if AL_NET_IMPAIRMENT
+    // Deliberate damage to the inbound stream, applied here rather than once at login so the
+    // level can be changed while watching what it does. Absent from the build that ships.
+    {
+        static LLCachedControl<F32> sim_loss(gSavedSettings, "ALSimulatePacketLoss", 0.f);
+        static LLCachedControl<F32> sim_burst(gSavedSettings, "ALSimulatePacketLossBurst", 1.f);
+        static LLCachedControl<F32> sim_reorder(gSavedSettings, "ALSimulatePacketReorder", 0.f);
+        static LLCachedControl<S32> sim_reorder_delay(gSavedSettings, "ALSimulatePacketReorderDelay", 3);
+
+        gMessageSystem->setNetImpairment(sim_loss, sim_burst, sim_reorder, sim_reorder_delay);
+
+        // Say so periodically while it is on. Without this, "nothing went wrong" during a test is
+        // ambiguous between the recovery working and the impairment never having been applied.
+        const ALNetImpairment& impairment = gMessageSystem->getNetImpairment();
+        if (impairment.isActive())
+        {
+            static LLFrameTimer report_timer;
+            if (report_timer.getElapsedTimeF32() > 10.f)
+            {
+                report_timer.reset();
+                LL_INFOS("NetImpairment") << "simulating " << sim_loss() << "% loss in bursts of "
+                                          << sim_burst() << ", " << sim_reorder() << "% reordered by "
+                                          << sim_reorder_delay() << " packets; dropped so far "
+                                          << impairment.getDroppedCount() << ", reordered "
+                                          << impairment.getReorderedCount() << LL_ENDL;
+            }
+        }
+    }
+#endif
+
     static LLCachedControl<bool> speed_test(gSavedSettings, "SpeedTest", false);
     if (!speed_test())
     {
@@ -6498,6 +6651,50 @@ void LLAppViewer::forceExceptionThreadCrash()
     thread->start();
 }
 
+namespace
+{
+    // Each frame holds a page the optimizer cannot drop, so the recursion
+    // is real and the stack runs out within a few thousand calls.
+    int overflow_the_stack(int depth)
+    {
+        volatile char page[4096];
+        page[0] = static_cast<char>(depth);
+        if (depth >= 0)
+        {
+            return overflow_the_stack(depth + 1) + page[0];
+        }
+        return page[0];
+    }
+
+    void throw_through_noexcept() noexcept
+    {
+        LLTHROW(LLException("User selected Force Terminate"));
+    }
+}
+
+void LLAppViewer::forceErrorAbort()
+{
+    LL_WARNS() << "Forcing a deliberate abort" << LL_ENDL;
+#if LL_WINDOWS
+    // abort() is a fast-fail here, which no in-process handler sees: only
+    // Windows Error Reporting and the module the reporter registers with it.
+    _set_abort_behavior(0, _WRITE_ABORT_MSG);
+#endif
+    std::abort();
+}
+
+void LLAppViewer::forceErrorStackOverflow()
+{
+    LL_WARNS() << "Forcing a deliberate stack overflow" << LL_ENDL;
+    overflow_the_stack(0);
+}
+
+void LLAppViewer::forceErrorTerminate()
+{
+    LL_WARNS() << "Forcing a deliberate std::terminate" << LL_ENDL;
+    throw_through_noexcept();
+}
+
 void LLAppViewer::initMainloopTimeout(std::string_view state)
 {
     if (!mMainloopTimeout)
@@ -6640,6 +6837,9 @@ void LLAppViewer::handleLoginComplete()
     {
         gWindowTitle.append(" - ").append(gAgentAvatarp->getFullname());
         gViewerWindow->getWindow()->setTitle(gWindowTitle);
+
+        ALCrashReporter::setUser(gAgent.getID(), gAgentAvatarp->getFullname());
+        ALCrashReporter::attach(gDirUtilp->getExpandedFilename(LL_PATH_PER_SL_ACCOUNT, "settings_per_account.xml"));
     }
 
     mOnLoginCompleted();

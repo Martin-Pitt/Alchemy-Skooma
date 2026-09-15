@@ -653,6 +653,8 @@ LLViewerRegion::LLViewerRegion(const U64 &handle,
     mPaused(false),
     mRegionCacheHitCount(0),
     mRegionCacheMissCount(0),
+    mObjectsEvicted(0),
+    mObjectsBuiltFromCache(0),
     mInterestListMode(IL_MODE_DEFAULT)
 {
     mWidth = region_width_meters;
@@ -843,6 +845,10 @@ void LLViewerRegion::saveObjectCache()
         mGLTFOverridesDirty = false;
     }
 
+    // The map holds the only reference to its entries, and the eviction walk's
+    // cursor is a bare pointer into them.
+    mLastVisitedEntry = NULL;
+
     if (LLAppViewer::instance()->isQuitting())
     {
         mImpl->mCacheMap.clear();
@@ -911,7 +917,12 @@ void LLViewerRegion::updateRenderMatrix()
 
 void LLViewerRegion::setTimeDilation(F32 time_dilation)
 {
-    mTimeDilation = time_dilation;
+    // This scales the step every object in the region is predicted forward by, and it is only ever
+    // written from an incoming object update -- a region that goes quiet keeps whatever it last
+    // reported. A floor keeps a badly lagged or malformed report from stopping prediction outright
+    // and banking the whole stall as one step once updates resume.
+    constexpr F32 MIN_TIME_DILATION = 0.01f;
+    mTimeDilation = llclamp(time_dilation, MIN_TIME_DILATION, 1.f);
 }
 
 const LLVector3d & LLViewerRegion::getOriginGlobal() const
@@ -1239,11 +1250,14 @@ U32 LLViewerRegion::getNumOfActiveCachedObjects() const
     return static_cast<U32>(mImpl->mActiveSet.size());
 }
 
-void LLViewerRegion::getObjectCacheFootprint(U32& cached, U32& active, U32& waiting, U64& bytes) const
+void LLViewerRegion::getObjectCacheFootprint(U32& cached, U32& active, U32& waiting, U64& bytes,
+                                            U64& evicted, U64& built) const
 {
     cached = static_cast<U32>(mImpl->mCacheMap.size());
     active = static_cast<U32>(mImpl->mActiveSet.size());
     waiting = static_cast<U32>(mImpl->mWaitingSet.size());
+    evicted = mObjectsEvicted;
+    built = mObjectsBuiltFromCache;
 
     // The entry itself plus the packed object data it holds. Node map and set
     // overhead is not counted, so this is a floor.
@@ -1803,10 +1817,8 @@ bool LLViewerRegion::isViewerCameraStatic()
 
 void LLViewerRegion::killInvisibleObjects(F32 max_time)
 {
-#if 1 // TODO: kill this.  This is ill-conceived, objects that aren't in the camera frustum should not be deleted from memory.
-        // because of this, every time you turn around the simulator sends a swarm of full object update messages from cache
-    // probe misses and objects have to be reloaded from scratch.  From some reason, disabling this causes holes to
-    // appear in the scene when flying back and forth between regions
+    LL_PROFILE_ZONE_SCOPED;
+
     if(!sVOCacheCullingEnabled)
     {
         return;
@@ -1820,17 +1832,31 @@ void LLViewerRegion::killInvisibleObjects(F32 max_time)
         return;
     }
 
-    // LLVOCacheEntry::isAnyVisible answers true for every entry while the
-    // eviction it once drove is switched off, so the walk below cannot kill
-    // anything; it is kept for the day that is switched back on.
-    return;
+    // Dropping an object the camera cannot see costs the work of rebuilding it
+    // when the camera comes back, so by default it is only done while memory is
+    // actually short. The 2024 note above isAnyVisible describes this evicting
+    // things still in view; the radius that decided that was pinned to two
+    // metres by memory bounds left over from 32-bit builds, and mode 2 is how
+    // that gets measured rather than argued.
+    static LLCachedControl<U32> eviction_mode(gSavedSettings, "AlchemyVOCacheEvictionMode", 1u);
+    if(eviction_mode == 0u)
+    {
+        return;
+    }
+    constexpr F32 PRESSURE_THRESHOLD = 0.5f; //half the radii pulled in
+    if(eviction_mode == 1u && LLVOCacheEntry::sMemoryAdjustFactor > PRESSURE_THRESHOLD)
+    {
+        return;
+    }
 
     LLTimer update_timer;
     LLVector4a camera_origin;
     camera_origin.load3(LLViewerCamera::getInstance()->getOrigin().mV);
     LLVector4a local_origin;
     local_origin.load3((LLViewerCamera::getInstance()->getOrigin() - getOriginAgent()).mV);
-    F32 back_threshold = LLVOCacheEntry::sRearFarRadius;
+    // Wider than the radius that loads an entry, so that turning around does not
+    // cross both at once.
+    F32 back_threshold = LLVOCacheEntry::sEvictFarRadius;
 
     size_t max_update = 64;
     if(!mInvisibilityCheckHistory && isViewerCameraStatic())
@@ -1841,7 +1867,10 @@ void LLViewerRegion::killInvisibleObjects(F32 max_time)
 
     std::vector<LLDrawable*> delete_list;
     auto update_counter = llmin(max_update, mImpl->mActiveSet.size());
-    LLVOCacheEntry::vocache_entry_set_t::iterator iter = mImpl->mActiveSet.upper_bound(mLastVisitedEntry);
+    // The cursor is the first entry the previous walk did not reach. lower_bound
+    // resumes on it while it is still in the set and on its successor once it
+    // has left; upper_bound would step past it either way.
+    LLVOCacheEntry::vocache_entry_set_t::iterator iter = mImpl->mActiveSet.lower_bound(mLastVisitedEntry);
 
     for(; update_counter > 0; --update_counter, ++iter)
     {
@@ -1854,19 +1883,26 @@ void LLViewerRegion::killInvisibleObjects(F32 max_time)
                 break;
             }
         }
-        if((*iter)->getParentID() > 0)
-        {
-            continue; //skip child objects, they are removed with their parent.
-        }
-
+        // An entry can lose its octree entry while it is still in the active set
+        // -- clearCachedVisibleObjects walks this same set and skips those -- and
+        // a child is removed with its parent rather than on its own. Neither is a
+        // reason to stop reading the clock, so the deadline is checked below for
+        // every entry the walk visits, skipped or not.
         LLVOCacheEntry* vo_entry = *iter;
-        if(!vo_entry->isAnyVisible(camera_origin, local_origin, back_threshold) && vo_entry->mLastCameraUpdated < sLastCameraUpdated)
+        if(vo_entry && vo_entry->getEntry() && !vo_entry->getParentID())
         {
-            killObject(vo_entry, delete_list);
+            if(!vo_entry->isAnyVisible(camera_origin, local_origin, back_threshold) && vo_entry->mLastCameraUpdated < sLastCameraUpdated)
+            {
+                killObject(vo_entry, delete_list);
+            }
         }
 
         if(max_time < update_timer.getElapsedTimeF32()) //time out
         {
+            // The loop's own increment has not run yet, so step past the entry
+            // just visited: the cursor below is the first one not reached, on
+            // this exit as on the other.
+            ++iter;
             break;
         }
     }
@@ -1884,27 +1920,39 @@ void LLViewerRegion::killInvisibleObjects(F32 max_time)
     if(!delete_list.empty())
     {
         mInvisibilityCheckHistory |= 1;
+        mObjectsEvicted += delete_list.size();
         for (auto drawable : delete_list)
         {
             gObjectList.killObject(drawable->getVObj());
         }
         delete_list.clear();
     }
-
-    return;
-#endif
 }
 
 void LLViewerRegion::killObject(LLVOCacheEntry* entry, std::vector<LLDrawable*>& delete_list)
 {
+    // An active entry can be without an octree entry, and a drawable can outlive
+    // the object it drew: addNewObject guards both before it touches a cached
+    // entry's drawable, and llassert is compiled out of a release build.
+    LLViewerOctreeEntry* oct_entry = entry->getEntry();
+    if(!oct_entry)
+    {
+        return;
+    }
+
     //kill the object.
-    LLDrawable* drawablep = (LLDrawable*)entry->getEntry()->getDrawable();
+    LLDrawable* drawablep = (LLDrawable*)oct_entry->getDrawable();
     llassert(drawablep);
-    llassert(drawablep->getRegion() == this);
+    llassert(!drawablep || drawablep->getRegion() == this);
 
     if(drawablep && !drawablep->getParent())
     {
         LLViewerObject* v_obj = drawablep->getVObj();
+        if(!v_obj || drawablep->isDead())
+        {
+            return;
+        }
+
         if (v_obj->isSelected()
             || (v_obj->flagAnimSource() && isAgentAvatarValid() && gAgentAvatarp->hasMotionFromSource(v_obj->getID())))
         {
@@ -1962,6 +2010,7 @@ LLViewerObject* LLViewerRegion::addNewObject(LLVOCacheEntry* entry)
         obj = gObjectList.processObjectUpdateFromCache(entry, this);
         if(obj)
         {
+            mObjectsBuiltFromCache++;
             if(!entry->isState(LLVOCacheEntry::ACTIVE))
             {
                 mImpl->mWaitingSet.insert(entry);

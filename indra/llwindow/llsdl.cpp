@@ -27,10 +27,23 @@
 #include <initializer_list>
 #include <list>
 
-#include "SDL3/SDL.h"
+#include "llsdl.h"
 
 #include "llerror.h"
+#include "llgl.h"
+#include "llrender.h"
 #include "llwindow.h"
+
+#if LL_DARWIN
+#include <OpenGL/OpenGL.h>
+#endif
+
+// The EGL entry points are resolved at runtime through SDL_EGL_GetProcAddress
+// (the viewer does not link libEGL directly under SDL), so only the tokens
+// are wanted here.
+#if LL_LINUX
+#include <EGL/egl.h>
+#endif
 
 bool gSDLMainHandled = false;
 
@@ -86,6 +99,16 @@ void set_sdl_hints()
 
     std::initializer_list<std::tuple< char const*, char const * > > hintList =
             {
+#if LL_LINUX
+                    // The viewer's GL layer on Linux is EGL and nothing else:
+                    // the worker threads' shared contexts are surfaceless EGL
+                    // contexts and EGL_KHR_image is resolved through it. SDL
+                    // would otherwise create the main context with GLX under
+                    // its x11 driver; with this it uses EGL on X11 too, so one
+                    // code path serves both and no X11 header enters the tree.
+                    {SDL_HINT_VIDEO_FORCE_EGL,"1"},
+#endif
+
                     // Don't ask the compositor to bypass us in fullscreen —
                     // keeps screen recorders, alt-tab thumbnails, picom-style
                     // effects, etc. working. Slight latency cost in exclusive
@@ -152,8 +175,25 @@ void set_sdl_hints()
 #endif
 }
 
-void init_sdl(const std::string& app_name)
+void init_sdl(const std::string& app_name, bool hidden_window)
 {
+#if LL_LINUX
+    // No X or Wayland socket -- CI, a container, WSL without one -- and the
+    // default driver has nowhere to put even a hidden window. The offscreen
+    // driver gives a context over EGL with no surface at all. With a display,
+    // the default driver's hidden window is closer to what ships, and a
+    // driver named in the environment is left alone.
+    if (hidden_window
+        && !SDL_getenv("SDL_VIDEO_DRIVER")
+        && !SDL_getenv("DISPLAY")
+        && !SDL_getenv("WAYLAND_DISPLAY"))
+    {
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    }
+#else
+    (void)hidden_window;
+#endif
+
 #ifndef LL_SDL_WINDOW
     if (!gSDLMainHandled)
     {
@@ -235,4 +275,206 @@ void quit_sdl()
     {
         SDL_Quit();
     }
+}
+
+// The handle behind sdl_create_shared_context: whatever the platform GL API
+// needs to bind and tear the context down.
+namespace
+{
+    struct LLSDLSharedContext
+    {
+#if LL_WINDOWS
+        HGLRC rc = nullptr;
+        HDC   dc = nullptr;        // the DC the sibling context binds to
+#elif LL_DARWIN
+        CGLContextObj ctx = nullptr;
+#else // LL_LINUX
+        // EGL, as void* so the EGL types stay out of the header
+        void* egl_dpy = nullptr;   // EGLDisplay
+        void* egl_ctx = nullptr;   // EGLContext
+#endif
+    };
+}
+
+void* sdl_create_shared_context()
+{
+    // A version request derived from the live main context, clamped to the
+    // range the viewer supports. WGL/EGL need this explicitly (mirroring
+    // LLWindowWin32::createSharedContext); CGL inherits it from the share
+    // context, hence the guard against an unused-variable warning there.
+#if LL_WINDOWS || LL_LINUX
+    const F32 gl_ver = llclamp(gGLManager.mGLVersion, 3.0f, 4.6f);
+    const S32 ver_major = (S32)gl_ver;
+    const S32 ver_minor = (S32)ll_round((gl_ver - ver_major) * 10.f);
+#endif
+
+    auto* shared = new LLSDLSharedContext();
+    bool ok = false;
+
+#if LL_WINDOWS
+    HDC   dc    = wglGetCurrentDC();
+    HGLRC share = wglGetCurrentContext();
+    if (dc && share && wglCreateContextAttribsARB)
+    {
+        S32 attribs[] =
+        {
+            WGL_CONTEXT_MAJOR_VERSION_ARB, ver_major,
+            WGL_CONTEXT_MINOR_VERSION_ARB, ver_minor,
+            WGL_CONTEXT_PROFILE_MASK_ARB,  LLRender::sGLCoreProfile ? WGL_CONTEXT_CORE_PROFILE_BIT_ARB : WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+            WGL_CONTEXT_FLAGS_ARB, gDebugGL ? WGL_CONTEXT_DEBUG_BIT_ARB : 0,
+            0
+        };
+        HGLRC rc = nullptr;
+        for (;;)
+        {
+            rc = wglCreateContextAttribsARB(dc, share, attribs);
+            if (rc) break;
+            if (attribs[3] > 0)      { attribs[3]--; }                   // step minor down
+            else if (attribs[1] > 3) { attribs[1]--; attribs[3] = 3; }   // step major down
+            else                     { break; }                         // gave up at 3.0
+        }
+        if (rc)
+        {
+            shared->rc = rc;
+            shared->dc = dc;
+            ok = true;
+        }
+        else
+        {
+            LL_WARNS() << "wglCreateContextAttribsARB (shared) failed" << LL_ENDL;
+        }
+    }
+    else
+    {
+        LL_WARNS() << "No current WGL context, or wglCreateContextAttribsARB not loaded (initWGL), for shared context" << LL_ENDL;
+    }
+#elif LL_DARWIN
+    CGLContextObj share = CGLGetCurrentContext();
+    if (share)
+    {
+        CGLPixelFormatObj pf = CGLGetPixelFormat(share);
+        CGLContextObj ctx = nullptr;
+        CGLError err = CGLCreateContext(pf, share, &ctx);
+        if (err == kCGLNoError && ctx)
+        {
+            shared->ctx = ctx;
+            ok = true;
+        }
+        else
+        {
+            LL_WARNS() << "CGLCreateContext (shared) failed: " << CGLErrorString(err) << LL_ENDL;
+        }
+    }
+#else // LL_LINUX
+    {
+        // EGL: a surfaceless context (EGL_NO_SURFACE) avoids needing a
+        // per-worker drawable. Requires EGL_KHR_surfaceless_context (Mesa and
+        // NVIDIA have it). SDL exposes the display/config it created the main
+        // context with -- with EGL on X11 too, see SDL_HINT_VIDEO_FORCE_EGL.
+        typedef void* (*fn_getctx)(void);
+        typedef void* (*fn_createctx)(void*, void*, void*, const int*);
+        typedef unsigned int (*fn_bindapi)(unsigned int);
+
+        auto egl_getctx    = (fn_getctx)SDL_EGL_GetProcAddress("eglGetCurrentContext");
+        auto egl_createctx = (fn_createctx)SDL_EGL_GetProcAddress("eglCreateContext");
+        auto egl_bindapi   = (fn_bindapi)SDL_EGL_GetProcAddress("eglBindAPI");
+
+        void* dpy   = (void*)SDL_EGL_GetCurrentDisplay();
+        void* cfg   = (void*)SDL_EGL_GetCurrentConfig();
+        void* share = egl_getctx ? egl_getctx() : nullptr;
+
+        if (dpy && egl_createctx && share)
+        {
+            if (egl_bindapi) egl_bindapi(EGL_OPENGL_API);
+            // Must request the version explicitly — an empty attrib list defaults
+            // to GL 1.0, which can't drive the modern texture/VBO uploads the
+            // worker shares with the main context. (EGL 1.5 tokens.)
+            const int ctx_attribs[] =
+            {
+                EGL_CONTEXT_MAJOR_VERSION, ver_major,
+                EGL_CONTEXT_MINOR_VERSION, ver_minor,
+                EGL_NONE
+            };
+            void* ctx = egl_createctx(dpy, cfg, share, ctx_attribs);
+            if (ctx && ctx != EGL_NO_CONTEXT)
+            {
+                shared->egl_dpy = dpy;
+                shared->egl_ctx = ctx;
+                ok = true;
+            }
+            else
+            {
+                LL_WARNS() << "eglCreateContext (shared) failed" << LL_ENDL;
+            }
+        }
+        else
+        {
+            LL_WARNS() << "Could not resolve EGL state/entry points for shared context" << LL_ENDL;
+        }
+    }
+#endif // LL_LINUX
+
+    if (!ok)
+    {
+        delete shared;
+        return nullptr;
+    }
+
+    LL_DEBUGS() << "Created native shared GL context." << LL_ENDL;
+    return shared;
+}
+
+void sdl_make_shared_context_current(void* handle)
+{
+    if (!handle) return;
+    auto* s = (LLSDLSharedContext*)handle;
+#if LL_WINDOWS
+    if (!wglMakeCurrent(s->dc, s->rc))
+    {
+        LL_WARNS("Window") << "wglMakeCurrent(shared) failed: " << GetLastError() << LL_ENDL;
+    }
+#elif LL_DARWIN
+    CGLSetCurrentContext(s->ctx);
+#else // LL_LINUX
+    if (s->egl_ctx)
+    {
+        // eglBindAPI is per-thread, so re-assert OpenGL on the worker before
+        // binding the context surfaceless.
+        typedef unsigned int (*fn_bindapi)(unsigned int);
+        typedef unsigned int (*fn_makecur)(void*, void*, void*, void*);
+        auto egl_bindapi = (fn_bindapi)SDL_EGL_GetProcAddress("eglBindAPI");
+        auto egl_makecur = (fn_makecur)SDL_EGL_GetProcAddress("eglMakeCurrent");
+        if (egl_bindapi) egl_bindapi(EGL_OPENGL_API);
+        if (egl_makecur && !egl_makecur(s->egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, s->egl_ctx))
+        {
+            LL_WARNS("Window") << "eglMakeCurrent(shared, surfaceless) failed" << LL_ENDL;
+        }
+    }
+#endif // LL_LINUX
+    LL_PROFILER_GPU_CONTEXT;
+}
+
+void sdl_destroy_shared_context(void* handle)
+{
+    if (!handle) return;
+    auto* s = (LLSDLSharedContext*)handle;
+#if LL_WINDOWS
+    if (s->rc && !wglDeleteContext(s->rc))
+    {
+        LL_WARNS("Window") << "wglDeleteContext(shared) failed: " << GetLastError() << LL_ENDL;
+    }
+#elif LL_DARWIN
+    if (s->ctx)
+    {
+        CGLDestroyContext(s->ctx);
+    }
+#else // LL_LINUX
+    if (s->egl_ctx)
+    {
+        typedef unsigned int (*fn_destroyctx)(void*, void*);
+        auto egl_destroyctx = (fn_destroyctx)SDL_EGL_GetProcAddress("eglDestroyContext");
+        if (egl_destroyctx) egl_destroyctx(s->egl_dpy, s->egl_ctx);
+    }
+#endif
+    delete s;
 }

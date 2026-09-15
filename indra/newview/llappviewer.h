@@ -120,10 +120,19 @@ public:
     // so --logfile can only be read from the raw command line.
     static void setStartupCommandLine(int argc, char** argv);
 
+    // std::terminate becomes a crash report with the exception on it. Called
+    // from the entry point, before anything can throw.
+    static void installTerminateHandler();
+
     bool quitRequested() { return mQuitRequested; }
     bool logoutRequestSent() { return mLogoutRequestSent; }
     bool isSecondInstance() { return mSecondInstance; }
     void writeDebugInfo(bool isStatic=true);
+
+#if LL_WINDOWS
+    bool reportCrash(void* exception_pointers) override;
+#endif
+    bool reportFreeze(const std::string& description) override;
 
     void setServerReleaseNotesURL(const std::string& url) { mServerReleaseNotesURL = url; }
     LLSD getViewerInfo() const;
@@ -187,6 +196,9 @@ public:
     virtual void forceErrorWorkQueueCrash();
     virtual void forceErrorThreadCrash();
     virtual void forceExceptionThreadCrash();
+    virtual void forceErrorAbort();
+    virtual void forceErrorStackOverflow();
+    virtual void forceErrorTerminate();
 
     // The list is found in app_settings/settings_files.xml
     // but since they are used explicitly in code,

@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2010&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2026, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -24,8 +24,7 @@
  * $/LicenseInfo$
  */
 
-#ifndef LL_LLFLOATERBUYCURRENCYHTML_H
-#define LL_LLFLOATERBUYCURRENCYHTML_H
+#pragma once
 
 #include "llfloater.h"
 #include "llmediactrl.h"
@@ -34,28 +33,29 @@ class LLFloaterBuyCurrencyHTML final :
     public LLFloater,
     public LLViewerMediaObserver
 {
-    public:
+    friend class LLFloaterReg;
+
+public:
     AL_VIEW_TYPE(LLFloaterBuyCurrencyHTML, LLFloater);
 
-        LLFloaterBuyCurrencyHTML( const LLSD& key );
+    LLFloaterBuyCurrencyHTML(const LLSD& key);
+    ~LLFloaterBuyCurrencyHTML();
+    bool postBuild() override;
+    void onClose(bool app_quitting) override;
+    void handleMediaEvent(LLPluginClassMedia* self, EMediaEvent event) override;
 
-        /*virtual*/ bool postBuild() override;
-        /*virtual*/ void onClose( bool app_quitting ) override;
+    void navigateToFinalURL();
+    void setShortfall(S32 shortfall) { mShortfall = shortfall; }
+    void setFallbackContext(const std::string& message, S32 sum);
+    static std::string buildURL(S32 shortfall = 0);
 
-        // inherited from LLViewerMediaObserver
-        /*virtual*/ void handleMediaEvent( LLPluginClassMedia* self, EMediaEvent event ) override;
+private:
+    void fallbackToLegacy();
 
-        // allow our controlling parent to tell us paramters
-        void setParams( bool specific_sum_requested, const std::string& message, S32 sum );
-
-        // parse and construct URL and set browser to navigate there.
-        void navigateToFinalURL();
-
-    private:
-        LLMediaCtrl* mBrowser;
-        bool mSpecificSumRequested;
-        std::string mMessage;
-        S32 mSum;
+    LLMediaCtrl* mBrowser;
+    S32 mShortfall{0};
+    bool mHasFallbackTarget{false};
+    std::string mFallbackMessage;
+    S32 mFallbackSum{0};
 };
 
-#endif  // LL_LLFLOATERBUYCURRENCYHTML_H

@@ -691,4 +691,156 @@ namespace tut
         ensureSameOverride(overrides[1], read[1]);
         ensureSameOverride(overrides[2], read[2]);
     }
+
+    template<> template<>
+    void vocacheTestObject::test<12>()
+    {
+        set_test_name("an entry stays in memory while its group was seen, its frame window holds, or it is inside the rear sphere");
+
+        // A stand-in for an entry that nothing has looked at in a while: its
+        // group was last visible well outside the window, and it sits far
+        // enough back that the sphere cannot reach it either.
+        const S32 NOW = 5000;
+        const U32 RANGE = 64;
+        auto forgotten = [&]()
+        {
+            LLVOCacheEntry::VisibilityFacts facts;
+            facts.mHasGroup = true;
+            facts.mGroupAnyVisibleFrame = NOW - 1000;
+            facts.mEntryVisibleFrame = NOW - 1000;
+            facts.mCurrentFrame = NOW;
+            facts.mMinFrameRange = RANGE;
+            facts.mDistanceSquared = 10000.f; // 100m
+            facts.mRadius = 1.f;
+            facts.mDistThreshold = 32.f;
+            return facts;
+        };
+
+        ensure("an entry nothing has seen, far behind the camera, is dropped",
+               !LLVOCacheEntry::staysInMemory(forgotten()));
+
+        // the group is the first answer, and it outranks distance entirely
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            facts.mGroupRecentlyVisible = true;
+            facts.mDistanceSquared = 1e12f;
+            ensure("a recently visible group keeps an entry at any distance",
+                   LLVOCacheEntry::staysInMemory(facts));
+        }
+
+        // the frame window, with no group to ask
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            facts.mHasGroup = false;
+            facts.mGroupAnyVisibleFrame = 0;
+            facts.mEntryVisibleFrame = NOW - ((S32)RANGE - 1);
+            ensure("inside the frame window a group-less entry is kept",
+                   LLVOCacheEntry::staysInMemory(facts));
+
+            facts.mEntryVisibleFrame = NOW - ((S32)RANGE + 1);
+            ensure("past the frame window and past the sphere it is dropped",
+                   !LLVOCacheEntry::staysInMemory(facts));
+        }
+
+        // a group that saw something more recently than the entry did wins
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            facts.mEntryVisibleFrame = NOW - 1000;
+            facts.mGroupAnyVisibleFrame = NOW - ((S32)RANGE - 1);
+            ensure("the more recent of group and entry is the one used",
+                   LLVOCacheEntry::staysInMemory(facts));
+        }
+
+        // the sphere behind the camera, and the two things that switch it off
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            facts.mDistanceSquared = 32.f * 32.f; // inside 32 + 1
+            ensure("inside the rear sphere it is kept", LLVOCacheEntry::staysInMemory(facts));
+
+            facts.mIsChild = true;
+            ensure("a child is not judged by the sphere; it goes with its parent",
+                   !LLVOCacheEntry::staysInMemory(facts));
+
+            facts.mIsChild = false;
+            facts.mGroupOccluded = true;
+            ensure("a group known to be occluded does not get the sphere either",
+                   !LLVOCacheEntry::staysInMemory(facts));
+        }
+
+        // the sphere's edge is exclusive, and the entry's own radius widens it
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            const F32 edge = facts.mDistThreshold + facts.mRadius;
+            facts.mDistanceSquared = edge * edge;
+            ensure("exactly on the sphere is outside it", !LLVOCacheEntry::staysInMemory(facts));
+
+            facts.mRadius = 80.f;
+            ensure("a large entry reaches into the sphere from further out",
+                   LLVOCacheEntry::staysInMemory(facts));
+        }
+
+        // A zero window evicts an object that was visible this very frame. The
+        // settings are read once a second, which is why sMinFrameRange starts at
+        // the widest window they can produce rather than at zero.
+        {
+            LLVOCacheEntry::VisibilityFacts facts = forgotten();
+            facts.mMinFrameRange = 0;
+            facts.mEntryVisibleFrame = NOW;
+            facts.mGroupAnyVisibleFrame = NOW;
+            ensure("a zero frame window drops an entry seen this frame",
+                   !LLVOCacheEntry::staysInMemory(facts));
+
+            facts.mMinFrameRange = 1;
+            ensure("a window of one keeps it", LLVOCacheEntry::staysInMemory(facts));
+        }
+    }
+
+    template<> template<>
+    void vocacheTestObject::test<13>()
+    {
+        set_test_name("the radius that evicts an entry is wider than the one that loads it");
+
+        const F32 MIN_RADIUS = 32.f;   // SceneLoadMinRadius
+        const F32 DRAW = 128.f;
+        auto evict = [&](F32 rear_far) { return LLVOCacheEntry::evictRadius(rear_far, MIN_RADIUS, DRAW); };
+
+        // sRearFarRadius runs from about two metres under memory pressure to
+        // three quarters of draw distance with none.
+        const F32 rear_radii[] = { 2.f, 8.f, 32.f, 96.f };
+        F32 previous = -1.f;
+        for (F32 rear_far : rear_radii)
+        {
+            const F32 radius = evict(rear_far);
+            ensure("the eviction radius clears the load radius", radius >= rear_far * 1.25f);
+            ensure("and never reaches inside SceneLoadMinRadius", radius >= llmin(MIN_RADIUS, DRAW));
+            ensure("and does not shrink as the load radius grows", radius >= previous);
+            previous = radius;
+        }
+
+        // a draw distance under the setting is the floor instead
+        ensure("a short draw distance floors the radius, not the setting",
+               LLVOCacheEntry::evictRadius(2.f, MIN_RADIUS, 16.f) == 16.f);
+
+        // The sphere is the whole sphere, not just the part behind the camera,
+        // and nothing beyond the draw distance is drawn, so nothing beyond it is
+        // worth keeping for the turn back. Above four fifths of draw distance the
+        // band between the two radii narrows to what is left.
+        ensure("the draw distance caps the radius",
+               LLVOCacheEntry::evictRadius(120.f, MIN_RADIUS, DRAW) == DRAW);
+
+        // The invariant the two radii exist for: an entry sitting exactly at the
+        // distance the back cull preloads it from is not evictable, however long
+        // it has been out of sight. Turning around cannot cross both at once.
+        for (F32 rear_far : rear_radii)
+        {
+            LLVOCacheEntry::VisibilityFacts facts;
+            facts.mCurrentFrame = 5000;
+            facts.mEntryVisibleFrame = 0;
+            facts.mMinFrameRange = 64;
+            facts.mDistanceSquared = rear_far * rear_far;
+            facts.mDistThreshold = evict(rear_far);
+            ensure("an entry at the load radius is never evicted at the eviction radius",
+                   LLVOCacheEntry::staysInMemory(facts));
+        }
+    }
 }

@@ -877,7 +877,8 @@ bool LLPipeline::allocateScreenBufferInternal(U32 resX, U32 resY)
         }
 
         mRT = &mAuxillaryRT;
-        U32 res = mReflectionMapManager.mProbeResolution * 4;  //multiply by 4 because probes will be 16x super sampled
+        // faces render supersampled (ALProbeSuperSample, 4 = the original 16x) and are downsampled to the probe
+        U32 res = mReflectionMapManager.mProbeResolution * mReflectionMapManager.superSample();
         allocateScreenBufferInternal(res, res);
 
         if (RenderMirrors)
@@ -1067,6 +1068,13 @@ bool LLPipeline::allocateShadowBuffer(U32 resX, U32 resY)
     S32 shadow_detail = RenderShadowDetail;
 
     F32 scale = gCubeSnapshot ? 1.0f : llmax(0.f, RenderShadowResolutionScale); // Don't scale probe shadow maps
+    if (gCubeSnapshot && mRT == &mAuxillaryRT)
+    {
+        // The probe pack's colour target follows ALProbeSuperSample, its shadow maps stay at
+        // the size the full supersample gave them: a coarser capture is not a reason for
+        // coarser shadows in it.
+        resX = resY = mReflectionMapManager.mProbeResolution * 4;
+    }
     U32 sun_shadow_map_width = BlurHappySize(resX, scale);
     U32 sun_shadow_map_height = BlurHappySize(resY, scale);
 
@@ -3251,9 +3259,16 @@ void LLPipeline::markMoved(LLDrawable *drawablep, bool damped_motion)
         }
         drawablep->setState(LLDrawable::ON_MOVE_LIST);
     }
+    // The last request this frame wins. This used to be labelled "UNDAMPED trumps DAMPED", which is
+    // not what it does: a damped call clears the flag an earlier undamped one set. That is relied
+    // on -- LLSelectMgr::selectionMove, the joystick edit path, moves a selected object (which marks
+    // itself undamped) and then asks for a damped move so a noisy analog device eases rather than
+    // snaps. A caller that needs a snap to survive must not be followed by a damped call for the
+    // same drawable; LLViewerObject::updateDrawable, the common one, only ever upgrades a drawable
+    // that is already queued. updateMovedList clears the flag once the move is processed.
     if (! damped_motion)
     {
-        drawablep->setState(LLDrawable::MOVE_UNDAMPED); // UNDAMPED trumps DAMPED
+        drawablep->setState(LLDrawable::MOVE_UNDAMPED);
     }
     else if (drawablep->isState(LLDrawable::MOVE_UNDAMPED))
     {
