@@ -48,7 +48,6 @@
         "zlib"
       ]
     },
-    "glm",
     "harfbuzz",
     "icu",
     {
@@ -140,10 +139,6 @@
     "secondlife-emoji-shortcodes",
     "simdjson",
     "simdutf",
-    {
-      "name": "sse2neon",
-      "platform": "osx"
-    },
     "tinyexr",
     "tinygltf",
     "v-hacd",

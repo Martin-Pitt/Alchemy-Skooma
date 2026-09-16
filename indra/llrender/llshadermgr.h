@@ -33,6 +33,8 @@
 #include "llgl.h"
 #include "llglslshader.h"
 
+#include <boost/unordered/unordered_flat_map.hpp>
+
 class LLShaderMgr
 {
 public:
@@ -65,7 +67,9 @@ public:
         NORMAL_TEXCOORD,                      //  "normal_texcoord" (GLTF)
         METALLIC_ROUGHNESS_TEXCOORD,          //  "metallic_roughness_texcoord" (GLTF)
 
-        TERRAIN_TEXTURE_TRANSFORMS,           //  "terrain_texture_transforms" (GLTF)
+        TERRAIN_UV_TRANSFORM,                 //  "terrain_uv_transform"
+        TERRAIN_UV_OFFSET,                    //  "terrain_uv_offset"
+        TERRAIN_NORMAL_AXES,                  //  "terrain_normal_axes"
 
         VIEWPORT,                           //  "viewport"
         LIGHT_POSITION,                     //  "light_position"
@@ -280,6 +284,15 @@ public:
 
         TERRAIN_ALPHARAMP,                  //  "alpha_ramp"
         TERRAIN_PAINTMAP,                   //  "paint_map"
+
+        TERRAIN_HEIGHT_MAP,                 //  "terrain_height_map"
+        TERRAIN_COMPOSITION_MAP,            //  "terrain_composition_map"
+        TERRAIN_TESS_ORIGIN,                //  "terrain_tess_origin"
+        TERRAIN_TESS_DENSITY,               //  "terrain_tess_density"
+        TERRAIN_GRID_SCALE,                 //  "terrain_grid_scale"
+        TERRAIN_SMOOTHING,                  //  "terrain_smoothing"
+        TERRAIN_PARCEL_OVERLAY,             //  "parcel_overlay"
+        TERRAIN_SHOW_PARCEL_OWNERS,         //  "show_parcel_owners"
 
         TERRAIN_DETAIL0_BASE_COLOR,                //  "detail_0_base_color" (GLTF)
         TERRAIN_DETAIL1_BASE_COLOR,                //  "detail_1_base_color" (GLTF)
@@ -579,10 +592,30 @@ public:
     bool loadCachedProgramBinary(LLGLSLShader* shader);
     bool saveCachedProgramBinary(LLGLSLShader* shader);
 
+    // The pipeline stages a shader object can be compiled for, as indices into
+    // mShaderObjects. GLSL links per stage, so an object a program attaches must
+    // have been compiled for the stage it is attached to; the same source can
+    // sit in several maps.
+    enum EShaderStage : U32
+    {
+        STAGE_VERTEX = 0,
+        STAGE_TESS_CONTROL,
+        STAGE_TESS_EVALUATION,
+        STAGE_GEOMETRY,
+        STAGE_FRAGMENT,
+        STAGE_COMPUTE,
+        STAGE_COUNT
+    };
+    static EShaderStage stageIndex(GLenum type);
+    // The "#define <STAGE>_SHADER 1" line loadShaderFile prepends for a stage.
+    static const char* stageDefine(GLenum type);
+
+    void clearShaderObjects();
+
 public:
-    // Map of shader names to compiled
-    std::map<std::string, GLuint> mVertexShaderObjects;
-    std::map<std::string, GLuint> mFragmentShaderObjects;
+    // Compiled shared shader objects per stage, keyed by path -- or by the
+    // distinct key an axis copy was stored under (see loadShaderFile).
+    boost::unordered_flat_map<std::string, GLuint> mShaderObjects[STAGE_COUNT];
 
     //global (reserved slot) shader parameters
     std::vector<std::string> mReservedAttribs;

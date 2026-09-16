@@ -32,12 +32,12 @@
 
 #include "lltimer.h"
 #include "llvowater.h"
-#include "llpatchvertexarray.h"
 #include "llviewertexture.h"
+
+#include <memory>
 
 class LLTimer;
 class LLUUID;
-class LLAgent;
 
 static const U8 NO_EDGE    = 0x00;
 static const U8 EAST_EDGE  = 0x01;
@@ -55,6 +55,7 @@ class LLViewerRegion;
 class LLSurfacePatch;
 class LLBitPack;
 class LLGroupHeader;
+class ALTerrainSurfaceMaps;
 
 class LLSurface
 {
@@ -78,10 +79,26 @@ public:
     void disconnectAllNeighbors();
 
     virtual void decompressDCTPatch(LLBitPack &bitpack, LLGroupHeader *gopp, bool b_large_patch);
-    virtual void updatePatchVisibilities(LLAgent &agent);
 
     inline F32 getZ(const U32 k) const              { return mSurfaceZ[k]; }
     inline F32 getZ(const S32 i, const S32 j) const { return mSurfaceZ[i + j*mGridsPerEdge]; }
+
+    // A grid sample, reaching into the neighbouring surfaces past this one's
+    // edge the way the surface maps' apron does, and repeating the nearest own
+    // sample where there is no neighbour. The overload takes the neighbour
+    // presence precomputed, for a caller sampling many times.
+    F32 sampleZ(S32 gx, S32 gy) const;
+    F32 sampleZ(S32 gx, S32 gy, const bool (&has_neighbor)[8]) const;
+
+    // Whether the terrain is drawn, and answers height queries, as the smooth
+    // surface through its samples rather than the two-triangle surface the
+    // simulator collides against: AlchemyRenderTerrainSmoothing.
+    static bool isSmoothing();
+
+    // The smooth surface at (x, y) in region metres, with its gradient per
+    // metre. The GPU's twin is terrain_height_smooth in terrainSurface.glsl;
+    // the two must agree.
+    F32 smoothHeight(F32 x, F32 y, F32* dzdx, F32* dzdy) const;
 
     LLVector3 getOriginAgent() const;
     const LLVector3d &getOriginGlobal() const;
@@ -89,8 +106,6 @@ public:
     S32 getGridsPerEdge() const;
     S32 getPatchesPerEdge() const;
     S32 getGridsPerPatchEdge() const;
-    U32 getRenderStride(const U32 render_level) const;
-    U32 getRenderLevel(const U32 render_stride) const;
 
     // Returns the height of the surface immediately above (or below) location,
     // or if location is not above surface returns zero.
@@ -128,6 +143,8 @@ public:
 
     void dirtySurfacePatch(LLSurfacePatch *patchp);
     LLVOWater *getWaterObj()                        { return mWaterObjp; }
+
+    ALTerrainSurfaceMaps& getSurfaceMaps()          { return *mSurfaceMaps; }
 
     static void setTextureSize(const S32 texture_size);
 
@@ -175,10 +192,12 @@ private:
     // Array of grid data, mGridsPerEdge * mGridsPerEdge
     F32 *mSurfaceZ;
 
-    // Array of grid normals, mGridsPerEdge * mGridsPerEdge
-    LLVector3 *mNorm;
-
     std::set<LLSurfacePatch *> mDirtyPatchList;
+
+    // The GPU's copy of this surface. Its apron reads the neighbours, so a
+    // change here stales theirs too: see dirtySurfaceMaps.
+    std::unique_ptr<ALTerrainSurfaceMaps> mSurfaceMaps;
+    void dirtySurfaceMaps();
 
 
     // The textures should never be directly initialized - use the setter methods!
@@ -186,14 +205,9 @@ private:
 
     LLPointer<LLVOWater>    mWaterObjp;
 
-    // When we want multiple cameras we'll need one of each these for each camera
-    S32 mVisiblePatchCount;
-
     U32         mGridsPerPatchEdge;         // Number of grid points on a side of a patch
     F32         mMetersPerGrid;             // Converts (i,j) indecies to distance
     F32         mMetersPerEdge;             // = mMetersPerGrid * (mGridsPerEdge-1)
-
-    LLPatchVertexArray mPVArray;
 
     bool        mHasZData;              // We've received any patch data for this surface.
     F32         mMinZ;                  // min z for this region (during the session)

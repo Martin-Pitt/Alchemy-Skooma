@@ -6586,7 +6586,6 @@ void LLSelectMgr::processForceObjectSelect(LLMessageSystem* msg, void**)
     LLSelectMgr::getInstance()->highlightObjectAndFamily(objects);
 }
 
-extern F32  gGLModelView[16];
 
 void LLSelectMgr::updateSilhouettes()
 {
@@ -6921,7 +6920,7 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
         if (!is_hud_object)
         {
             gGL.loadIdentity();
-            gGL.multMatrix(gGLModelView);
+            gGL.multMatrix(LLViewerCamera::getCurrent().getModelview());
         }
 
         if (objectp->mDrawable->isActive())
@@ -7580,7 +7579,7 @@ void LLSelectNode::renderOneSilhouette(const LLColor4 &color)
     if (!is_hud_object)
     {
         gGL.loadIdentity();
-        gGL.multMatrix(gGLModelView);
+        gGL.multMatrix(LLViewerCamera::getCurrent().getModelview());
     }
 
 

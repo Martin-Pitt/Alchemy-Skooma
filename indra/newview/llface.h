@@ -56,7 +56,6 @@ const U8 FACE_DO_NOT_BATCH_TEXTURES = 255;
 
 class alignas(16) LLFace
 {
-    LL_ALIGN_NEW
 public:
     LLFace(const LLFace& rhs) = delete;
     const LLFace& operator=(const LLFace& rhs) = delete;
@@ -139,7 +138,7 @@ public:
     void            setDrawable(LLDrawable *drawable);
     void            setTEOffset(const S32 te_offset);
 
-    void            renderIndexed();
+    void            renderIndexed(U32 mode = LLRender::TRIANGLES);
 
     void            setFaceColor(const LLColor4& color); // override material color
     void            unsetFaceColor(); // switch back to material color

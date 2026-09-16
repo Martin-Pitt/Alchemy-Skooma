@@ -158,6 +158,7 @@ if(AL_BUILD_VIEWER)
     alfloatertransactionlog.cpp
     alsceneexplorerpredicate.cpp
     alscopedata.cpp
+    alterrainsurfacemaps.cpp
     alfloaterwebprofile.cpp
     alfloaterxuilibrary.cpp
     alfloaterxuistudio.cpp
@@ -657,7 +658,6 @@ if(AL_BUILD_VIEWER)
     llpanelwearing.cpp
     llparcelselection.cpp
     llparticipantlist.cpp
-    llpatchvertexarray.cpp
     llpathfindingcharacter.cpp
     llpathfindingcharacterlist.cpp
     llpathfindinglinkset.cpp
@@ -944,6 +944,7 @@ if(AL_BUILD_VIEWER)
     alfloatertransactionlog.h
     alsceneexplorerpredicate.h
     alscopedata.h
+    alterrainsurfacemaps.h
     altexturetable.h
     alfloaterwebprofile.h
     alfloaterxuilibrary.h
@@ -1435,7 +1436,6 @@ if(AL_BUILD_VIEWER)
     llpanelwearing.h
     llparcelselection.h
     llparticipantlist.h
-    llpatchvertexarray.h
     llpathfindingcharacter.h
     llpathfindingcharacterlist.h
     llpathfindinglinkset.h
@@ -2329,6 +2329,7 @@ if(AL_BUILD_TESTS)
     llversioninfo
     llvocache
     lutcube
+    noise
   )
     al_add_test(${test} UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endforeach()
@@ -2366,6 +2367,9 @@ if(AL_BUILD_TESTS)
 
   al_add_test(cppfeatures PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(altexturetable PROJECT ${test_project} LIBRARIES ${test_libs})
+  # The map layout and the neighbour walk are inline in the header; the GL
+  # and surface side stays out of the test.
+  al_add_test(alterrainsurfacemaps PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(
     llsechandler_basic
     PROJECT ${test_project}

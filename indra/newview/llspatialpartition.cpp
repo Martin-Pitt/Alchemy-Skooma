@@ -1697,7 +1697,7 @@ void renderOctree(LLSpatialGroup* group)
                 if (rigged)
                 {
                     gGL.pushMatrix();
-                    gGL.loadMatrix(gGLModelView);
+                    gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
                     if (!LLRenderPass::uploadMatrixPalette(face->mAvatar, face->mSkinInfo, lastAvatar, lastMeshId, skipLastSkin))
                     {
                         continue;
@@ -2069,7 +2069,7 @@ void renderNormals(LLDrawable *drawablep)
                 {
                     LLVector4a n, p;
 
-                    n.setMul(face.mNormals[j], 1.0);
+                    n = face.mNormals[j];
                     n.mul(inv_scale);  // Pre-scale normal, so it's left with an inverse-transpose xform after MVP
                     n.normalize3fast();
                     n.mul(draw_length);
@@ -2090,7 +2090,7 @@ void renderNormals(LLDrawable *drawablep)
                     {
                         LLVector4a t, p;
 
-                        t.setMul(face.mTangents[j], 1.0f);
+                        t = face.mTangents[j];
                         t.normalize3fast();
                         t.mul(draw_length);
                         p.setAdd(face.mPositions[j], t);
@@ -2676,7 +2676,7 @@ void renderBatchSize(LLDrawInfo* params)
     if (params->mAvatar)
     {
         gGL.pushMatrix();
-        gGL.loadMatrix(gGLModelView);
+        gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
         bind = true;
         old_shader->mRiggedVariant->bind();
         LLRenderPass::uploadMatrixPalette(*params);
@@ -3010,7 +3010,7 @@ void renderRaycast(LLDrawable* drawablep)
         {
             // draw intersection point
             gGL.pushMatrix();
-            gGL.loadMatrix(gGLModelView);
+            gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
             LLVector3 translate(gDebugRaycastIntersection.getF32ptr());
             gGL.translatef(translate.mV[0], translate.mV[1], translate.mV[2]);
             LLCoordFrame orient;
@@ -3332,7 +3332,7 @@ public:
                 gGL.flush();
                 gGL.pushMatrix();
                 gGLLastMatrix = NULL;
-                gGL.loadMatrix(gGLModelView);
+                gGL.loadMatrix(LLViewerCamera::getCurrent().getModelview());
                 renderXRay(group, mCamera);
                 stop_glerror();
                 gGLLastMatrix = NULL;
