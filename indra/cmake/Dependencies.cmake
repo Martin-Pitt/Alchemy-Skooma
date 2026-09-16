@@ -77,7 +77,6 @@ al_import(ll::colladadom   PACKAGE unofficial-collada-dom CONFIG TARGETS unoffic
 al_import(ll::fastfloat    PACKAGE FastFloat       CONFIG TARGETS FastFloat::fast_float)
 al_import(ll::fmt          PACKAGE fmt             CONFIG TARGETS fmt::fmt)
 al_import(ll::freetype     PACKAGE Freetype               TARGETS Freetype::Freetype)
-al_import(ll::glm          PACKAGE glm             CONFIG TARGETS glm::glm-header-only)
 al_import(ll::libavif      PACKAGE libavif         CONFIG TARGETS avif)
 al_import(ll::libjpeg      PACKAGE JPEG                   TARGETS JPEG::JPEG)
 al_import(ll::libpng       PACKAGE PNG                    TARGETS PNG::PNG)
@@ -104,12 +103,6 @@ al_import(ll::tut          INCLUDE ${INDRA_SOURCE_DIR}/externals/tut/)
 
 # Per platform, and per option. The target is empty where the condition is
 # false, so the option gates sources at the consumer and nothing else.
-if(DARWIN OR BUILD_TARGET_IS_ARM64)
-  set(al_wants_sse2neon ON)
-else()
-  set(al_wants_sse2neon OFF)
-endif()
-al_import(ll::sse2neon     HEADER sse2neon/sse2neon.h                                    WHEN al_wants_sse2neon)
 al_import(ll::nvapi        PACKAGE unofficial-nvapi    CONFIG TARGETS unofficial::nvapi::nvapi       WHEN WINDOWS)
 al_import(ll::fontconfig   PACKAGE Fontconfig                 TARGETS Fontconfig::Fontconfig        WHEN LINUX)
 al_import(ll::faudio       PACKAGE FAudio              CONFIG TARGETS FAudio::FAudio DEFINES LL_FAUDIO=1     WHEN AL_USE_FAUDIO)

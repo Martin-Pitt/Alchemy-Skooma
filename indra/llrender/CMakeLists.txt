@@ -132,6 +132,10 @@ if(AL_BUILD_TESTS)
   # Arithmetic only: where a local coordinate lands under the UI transform.
   al_add_test(lluitransform PROJECT llrender LIBRARIES llrender)
 
+  # Arithmetic only: the matrix stack, the projection helpers and the
+  # clip-plane classes against the scalar matrix and the formulas.
+  al_add_test(llrendermatrix PROJECT llrender LIBRARIES llrender)
+
   # The font suites: tables and shaping, no GL.
   foreach(test alfontcolrv1 llfontregistry llfontbitmapcache llfontfreetype)
     al_add_test(${test} PROJECT llrender LIBRARIES llrender DEFINES ${font_defines})
@@ -164,4 +168,6 @@ if(AL_BUILD_TESTS)
   al_add_test(lluiimage GL PROJECT llrender LIBRARIES llrender)
   # The hidden window itself, and a worker thread's shared context on it.
   al_add_test(alwindowsdlheadless GL PROJECT llrender LIBRARIES llrender)
+  # Tessellation stages and the quad conventions the terrain relies on.
+  al_add_test(altessellation_gl GL PROJECT llrender LIBRARIES llrender)
 endif()

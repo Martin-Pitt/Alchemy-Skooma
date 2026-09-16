@@ -55,6 +55,7 @@
 #include "llhudmanager.h"
 #include "llflexibleobject.h"
 #include "llskinningutil.h"
+#include "alsimdkernels.h"
 #include "llsky.h"
 #include "lltexturefetch.h"
 #include "llvector4a.h"
@@ -4255,7 +4256,7 @@ U32 LLVOVolume::getRenderCost(texture_cost_t &textures) const
             {
                 alpha = 1;
             }
-            else if (img && (img->getPrimaryFormat() == GL_ALPHA || img->getPrimaryFormat() == GL_RED))
+            else if (img && img->isAlphaOnly())
             {
                 invisi = 1;
             }
@@ -5169,18 +5170,7 @@ void LLRiggedVolume::update(
                 else
             #endif
                 {
-                    for (S32 j = 0; j < dst_face.mNumVertices; ++j)
-                    {
-                        LLMatrix4a final_mat;
-                        LLSkinningUtil::getPerVertexSkinMatrix(weight[j].getF32ptr(), mat, false, final_mat, max_joints);
-
-                        LLVector4a& v = vol_face.mPositions[j];
-                        LLVector4a t;
-                        LLVector4a dst;
-                        bind_shape_matrix.affineTransform(v, t);
-                        final_mat.affineTransform(t, dst);
-                        pos[j] = dst;
-                    }
+                    alsimd::skin_points(weight, mat, max_joints, bind_shape_matrix, vol_face.mPositions, pos, dst_face.mNumVertices);
                 }
 
                 //update bounding box
@@ -5188,22 +5178,18 @@ void LLRiggedVolume::update(
                 LLVector4a& min = dst_face.mExtents[0];
                 LLVector4a& max = dst_face.mExtents[1];
 
-                min = pos[0];
-                max = pos[1];
-                if (i==0)
+                alsimd::extents(pos, dst_face.mNumVertices, min, max);
+
+                if (rigged_face_count == 1)
                 {
                     box_min = min;
                     box_max = max;
                 }
-
-                for (S32 j = 1; j < dst_face.mNumVertices; ++j)
+                else
                 {
-                    min.setMin(min, pos[j]);
-                    max.setMax(max, pos[j]);
+                    box_min.setMin(min,box_min);
+                    box_max.setMax(max,box_max);
                 }
-
-                box_min.setMin(min,box_min);
-                box_max.setMax(max,box_max);
 
                 dst_face.mCenter->setAdd(dst_face.mExtents[0], dst_face.mExtents[1]);
                 dst_face.mCenter->mul(0.5f);
@@ -5290,7 +5276,7 @@ bool can_batch_texture(LLFace* facep)
         return false;
     }
 
-    if (facep->getTexture() && (facep->getTexture()->getPrimaryFormat() == GL_ALPHA || facep->getTexture()->getPrimaryFormat() == GL_RED))
+    if (facep->getTexture() && facep->getTexture()->isAlphaOnly())
     { //can't batch invisiprims
         return false;
     }
@@ -5398,7 +5384,7 @@ bool can_batch_legacy_material(LLFace* facep)
         return false;
     }
 
-    if (facep->getTexture() && (facep->getTexture()->getPrimaryFormat() == GL_ALPHA || facep->getTexture()->getPrimaryFormat() == GL_RED))
+    if (facep->getTexture() && facep->getTexture()->isAlphaOnly())
     { // invisiprim
         return false;
     }
@@ -5480,7 +5466,7 @@ void LLVolumeGeometryManager::freeFaces()
     }
 }
 
-void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep, U32 type)
+void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep, U32 type, bool material_slot)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_VOLUME;
     if (   type == LLRenderPass::PASS_ALPHA
@@ -5601,11 +5587,14 @@ void LLVolumeGeometryManager::registerFace(LLSpatialGroup* group, LLFace* facep,
     // A GLTF PBR face carrying a real material slot (assigned by the indexed
     // accumulation in genDrawInfo) participates in multi-material batching via
     // mGLTFMaterialList, parallel to mTextureList for diffuse texture batching.
-    bool gltf_indexed = (gltf_mat != nullptr) && (index < FACE_DO_NOT_BATCH_TEXTURES);
+    // The index alone cannot say so: on the texture-batching path a material
+    // face's index is 0, and taking that for a slot merged unlike materials
+    // into one batch whenever the distance sort put them side by side.
+    bool gltf_indexed = (gltf_mat != nullptr) && material_slot;
 
     // A legacy Blinn-Phong face carrying a material slot participates in indexed
     // batching via mMaterialSlotList (parallel to mGLTFMaterialList for PBR).
-    bool legacy_indexed = (mat != nullptr) && (index < FACE_DO_NOT_BATCH_TEXTURES);
+    bool legacy_indexed = (mat != nullptr) && material_slot;
 
     bool batchable = false;
 
@@ -6678,6 +6667,11 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
 
         U32 texture_count = 0;
 
+        // true when the faces of this span carry material slots from the indexed
+        // accumulation below; on the texture-batching path a material face's index
+        // is 0 and means nothing
+        bool material_slots = false;
+
         {
             LL_PROFILE_ZONE_NAMED("genDrawInfo - face size");
             if (batch_gltf && !hud_group && can_batch_gltf_material(facep))
@@ -6773,6 +6767,10 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                         (*f)->mDrawInfo = NULL;
                         (*f)->setTextureIndex(FACE_DO_NOT_BATCH_TEXTURES);
                     }
+                }
+                else
+                {
+                    material_slots = true;
                 }
             }
             else if (batch_legacy && !hud_group && can_batch_legacy_material(facep))
@@ -6874,6 +6872,10 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                         (*f)->mDrawInfo = NULL;
                         (*f)->setTextureIndex(FACE_DO_NOT_BATCH_TEXTURES);
                     }
+                }
+                else
+                {
+                    material_slots = true;
                 }
             }
             else if (batch_textures)
@@ -7134,16 +7136,16 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                 { // all other parameters ignored if gltf material is present
                     if (gltf_mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND)
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                        registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                         is_alpha = true;
                     }
                     else if (gltf_mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_MASK)
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK);
+                        registerFace(group, facep, LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK, material_slots);
                     }
                     else
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_GLTF_PBR);
+                        registerFace(group, facep, LLRenderPass::PASS_GLTF_PBR, material_slots);
                     }
                 }
                 else
@@ -7157,16 +7159,16 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                     {
                         if (blinn_phong_opaque)
                         {
-                            registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK);
+                            registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, material_slots);
                         }
                         else
                         {
-                            registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                            registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                         }
                     }
                     else if (is_alpha)
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                        registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                     }
                     else
                     {
@@ -7178,24 +7180,24 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                         {
                             if (blinn_phong_opaque)
                             {
-                                registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT);
+                                registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT, material_slots);
                             }
                             else
                             {
-                                registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                                registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                             }
                         }
                     }
                 }
                 else if (blinn_phong_transparent)
                 {
-                    registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                    registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                 }
                 else if (use_legacy_bump)
                 {
                     llassert(mask & LLVertexBuffer::MAP_TANGENT);
                     // we have a material AND legacy bump settings, but no normal map
-                    registerFace(group, facep, LLRenderPass::PASS_BUMP);
+                    registerFace(group, facep, LLRenderPass::PASS_BUMP, material_slots);
                 }
                 else
                 {
@@ -7246,7 +7248,7 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
 
                     // if this is going into alpha pool, distance sort MUST be true
                     llassert(pass[mask] == LLRenderPass::PASS_ALPHA ? distance_sort : true);
-                    registerFace(group, facep, pass[mask]);
+                    registerFace(group, facep, pass[mask], material_slots);
                 }
             }
             else if (mat)
@@ -7262,21 +7264,21 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
 
                 if (mode == LLMaterial::DIFFUSE_ALPHA_MODE_MASK)
                 {
-                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK : LLRenderPass::PASS_ALPHA_MASK);
+                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK : LLRenderPass::PASS_ALPHA_MASK, material_slots);
                 }
                 else if (is_alpha )
                 {
-                    registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                    registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                 }
                 else if (gPipeline.shadersLoaded()
                     && te->getShiny()
                     && can_be_shiny)
                 {
-                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT_SHINY : LLRenderPass::PASS_SHINY);
+                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT_SHINY : LLRenderPass::PASS_SHINY, material_slots);
                 }
                 else
                 {
-                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT : LLRenderPass::PASS_SIMPLE);
+                    registerFace(group, facep, fullbright ? LLRenderPass::PASS_FULLBRIGHT : LLRenderPass::PASS_SIMPLE, material_slots);
                 }
             }
             else if (is_alpha)
@@ -7284,88 +7286,88 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                 // can we safely treat this as an alpha mask?
                 if (facep->getFaceColor().mV[3] <= 0.f)
                 { //100% transparent, don't render unless we're highlighting transparent
-                    registerFace(group, facep, LLRenderPass::PASS_ALPHA_INVISIBLE);
+                    registerFace(group, facep, LLRenderPass::PASS_ALPHA_INVISIBLE, material_slots);
                 }
                 else if (facep->canRenderAsMask() && !hud_group)
                 {
                     if (te->getFullbright() || LLPipeline::sNoAlpha)
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK);
+                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, material_slots);
                     }
                     else
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_ALPHA_MASK);
+                        registerFace(group, facep, LLRenderPass::PASS_ALPHA_MASK, material_slots);
                     }
                 }
                 else
                 {
-                    registerFace(group, facep, LLRenderPass::PASS_ALPHA);
+                    registerFace(group, facep, LLRenderPass::PASS_ALPHA, material_slots);
                 }
             }
             else if (gPipeline.shadersLoaded()
                 && te->getShiny()
                 && can_be_shiny)
             { //shiny
-                if (tex && (tex->getPrimaryFormat() == GL_ALPHA || tex->getPrimaryFormat() == GL_RED))
+                if (tex && tex->isAlphaOnly())
                 { //invisiprim+shiny
                     if (!facep->getViewerObject()->isAttachment() && !facep->getViewerObject()->isRiggedMesh())
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_INVISI_SHINY);
-                        registerFace(group, facep, LLRenderPass::PASS_INVISIBLE);
+                        registerFace(group, facep, LLRenderPass::PASS_INVISI_SHINY, material_slots);
+                        registerFace(group, facep, LLRenderPass::PASS_INVISIBLE, material_slots);
                     }
                 }
                 else if (!hud_group)
                 { //deferred rendering
                     if (te->getFullbright())
                     { //register in post deferred fullbright shiny pass
-                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_SHINY);
+                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_SHINY, material_slots);
                         if (te->getBumpmap())
                         { //register in post deferred bump pass
-                            registerFace(group, facep, LLRenderPass::PASS_POST_BUMP);
+                            registerFace(group, facep, LLRenderPass::PASS_POST_BUMP, material_slots);
                         }
                     }
                     else if (use_legacy_bump)
                     { //register in deferred bump pass
                         llassert(mask& LLVertexBuffer::MAP_TANGENT);
-                        registerFace(group, facep, LLRenderPass::PASS_BUMP);
+                        registerFace(group, facep, LLRenderPass::PASS_BUMP, material_slots);
                     }
                     else
                     { //register in deferred simple pass (deferred simple includes shiny)
                         llassert(mask & LLVertexBuffer::MAP_NORMAL);
-                        registerFace(group, facep, LLRenderPass::PASS_SIMPLE);
+                        registerFace(group, facep, LLRenderPass::PASS_SIMPLE, material_slots);
                     }
                 }
                 else if (fullbright)
                 {   //not deferred, register in standard fullbright shiny pass
-                    registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_SHINY);
+                    registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_SHINY, material_slots);
                 }
                 else
                 { //not deferred or fullbright, register in standard shiny pass
-                    registerFace(group, facep, LLRenderPass::PASS_SHINY);
+                    registerFace(group, facep, LLRenderPass::PASS_SHINY, material_slots);
                 }
             }
             else
             { //not alpha and not shiny
-                if (!is_alpha && tex && (tex->getPrimaryFormat() == GL_ALPHA || tex->getPrimaryFormat() == GL_RED))
+                if (!is_alpha && tex && tex->isAlphaOnly())
                 { //invisiprim
                     if (!facep->getViewerObject()->isAttachment() && !facep->getViewerObject()->isRiggedMesh())
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_INVISIBLE);
+                        registerFace(group, facep, LLRenderPass::PASS_INVISIBLE, material_slots);
                     }
                 }
                 else if (fullbright || bake_sunlight)
                 { //fullbright
                     if (mat && mat->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_MASK)
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK);
+                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, material_slots);
                     }
                     else
                     {
-                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT);
+                        registerFace(group, facep, LLRenderPass::PASS_FULLBRIGHT, material_slots);
                     }
                     if (!hud_group && use_legacy_bump)
                     { //if this is the deferred render and a bump map is present, register in post deferred bump
-                        registerFace(group, facep, LLRenderPass::PASS_POST_BUMP);
+                        registerFace(group, facep, LLRenderPass::PASS_POST_BUMP, material_slots);
                     }
                 }
                 else
@@ -7373,18 +7375,18 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                     if (use_legacy_bump)
                     { //non-shiny or fullbright deferred bump
                         llassert(mask& LLVertexBuffer::MAP_TANGENT);
-                        registerFace(group, facep, LLRenderPass::PASS_BUMP);
+                        registerFace(group, facep, LLRenderPass::PASS_BUMP, material_slots);
                     }
                     else
                     { //all around simple
                         llassert(mask & LLVertexBuffer::MAP_NORMAL);
                         if (mat && mat->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_MASK)
                         { //material alpha mask can be respected in non-deferred
-                            registerFace(group, facep, LLRenderPass::PASS_ALPHA_MASK);
+                            registerFace(group, facep, LLRenderPass::PASS_ALPHA_MASK, material_slots);
                         }
                         else
                         {
-                            registerFace(group, facep, LLRenderPass::PASS_SIMPLE);
+                            registerFace(group, facep, LLRenderPass::PASS_SIMPLE, material_slots);
                         }
                     }
                 }
@@ -7394,7 +7396,7 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                     !is_alpha &&
                     te->getShiny())
                 { //shiny as an extra pass when shaders are disabled
-                    registerFace(group, facep, LLRenderPass::PASS_SHINY);
+                    registerFace(group, facep, LLRenderPass::PASS_SHINY, material_slots);
                 }
             }
 
@@ -7407,7 +7409,7 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
                 if (!force_simple && use_legacy_bump)
                 {
                     llassert(mask & LLVertexBuffer::MAP_TANGENT);
-                    registerFace(group, facep, LLRenderPass::PASS_BUMP);
+                    registerFace(group, facep, LLRenderPass::PASS_BUMP, material_slots);
                 }
             }
 
@@ -7415,11 +7417,11 @@ U32 LLVolumeGeometryManager::genDrawInfo(LLSpatialGroup* group, U32 mask, LLFace
             {
                 if (gltf_mat)
                 {
-                    registerFace(group, facep, LLRenderPass::PASS_GLTF_GLOW);
+                    registerFace(group, facep, LLRenderPass::PASS_GLTF_GLOW, material_slots);
                 }
                 else
                 {
-                    registerFace(group, facep, LLRenderPass::PASS_GLOW);
+                    registerFace(group, facep, LLRenderPass::PASS_GLOW, material_slots);
                 }
             }
 

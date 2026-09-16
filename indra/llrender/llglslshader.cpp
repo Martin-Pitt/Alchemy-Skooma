@@ -388,7 +388,10 @@ void LLGLSLShader::placeProfileQuery(bool for_runtime)
         if (!for_runtime)
         {
             glBeginQuery(GL_SAMPLES_PASSED, mSamplesQuery);
-            glBeginQuery(GL_PRIMITIVES_GENERATED, mPrimitivesQuery);
+            if (gGLManager.canQueryPrimitives(mFeatures.hasTessellatedTerrain))
+            {
+                glBeginQuery(GL_PRIMITIVES_GENERATED, mPrimitivesQuery);
+            }
         }
     }
 }
@@ -403,7 +406,10 @@ bool LLGLSLShader::readProfileQuery(bool for_runtime, bool force_read)
             if (!for_runtime)
             {
                 glEndQuery(GL_SAMPLES_PASSED);
-                glEndQuery(GL_PRIMITIVES_GENERATED);
+                if (gGLManager.canQueryPrimitives(mFeatures.hasTessellatedTerrain))
+                {
+                    glEndQuery(GL_PRIMITIVES_GENERATED);
+                }
             }
             mProfilePending = for_runtime;
         }
@@ -430,7 +436,10 @@ bool LLGLSLShader::readProfileQuery(bool for_runtime, bool force_read)
             glGetQueryObjectui64v(mSamplesQuery, GL_QUERY_RESULT, &samples_passed);
 
             GLuint64 primitives_generated = 0;
-            glGetQueryObjectui64v(mPrimitivesQuery, GL_QUERY_RESULT, &primitives_generated);
+            if (gGLManager.canQueryPrimitives(mFeatures.hasTessellatedTerrain))
+            {
+                glGetQueryObjectui64v(mPrimitivesQuery, GL_QUERY_RESULT, &primitives_generated);
+            }
             sTotalTimeElapsed += time_elapsed;
 
             sTotalSamplesDrawn += samples_passed;
@@ -871,45 +880,25 @@ void dumpAttachObject(const char* func_name, GLuint program_object, const std::s
 }
 #endif // DEBUG_SHADER_INCLUDES
 
-bool LLGLSLShader::attachVertexObject(std::string object_path)
+bool LLGLSLShader::attachStageObject(GLenum stage, const std::string& object_path)
 {
-    if (LLShaderMgr::instance()->mVertexShaderObjects.count(object_path) > 0)
-    {
-        stop_glerror();
-        glAttachShader(mProgramObject, LLShaderMgr::instance()->mVertexShaderObjects[object_path]);
-#if DEBUG_SHADER_INCLUDES
-        dumpAttachObject("attachVertexObject", mProgramObject, object_path);
-#endif // DEBUG_SHADER_INCLUDES
-        stop_glerror();
-        return true;
-    }
-    else
-    {
-        LL_SHADER_LOADING_WARNS() << "Attempting to attach shader object: '" << object_path << "' that hasn't been compiled." << LL_ENDL;
-        return false;
-    }
-}
-
-bool LLGLSLShader::attachFragmentObject(std::string object_path)
-{
-    if(mUsingBinaryProgram)
+    if (mUsingBinaryProgram)
         return true;
 
-    if (LLShaderMgr::instance()->mFragmentShaderObjects.count(object_path) > 0)
+    const auto& objects = LLShaderMgr::instance()->mShaderObjects[LLShaderMgr::stageIndex(stage)];
+    const auto found = objects.find(object_path);
+    if (found == objects.end())
     {
-        stop_glerror();
-        glAttachShader(mProgramObject, LLShaderMgr::instance()->mFragmentShaderObjects[object_path]);
-#if DEBUG_SHADER_INCLUDES
-        dumpAttachObject("attachFragmentObject", mProgramObject, object_path);
-#endif // DEBUG_SHADER_INCLUDES
-        stop_glerror();
-        return true;
-    }
-    else
-    {
-        LL_SHADER_LOADING_WARNS() << "Attempting to attach shader object: '" << object_path << "' that hasn't been compiled." << LL_ENDL;
+        LL_SHADER_LOADING_WARNS() << "Attempting to attach shader object: '" << object_path << "' that hasn't been compiled for stage " << stage << LL_ENDL;
         return false;
     }
+    stop_glerror();
+    glAttachShader(mProgramObject, found->second);
+#if DEBUG_SHADER_INCLUDES
+    dumpAttachObject("attachStageObject", mProgramObject, object_path);
+#endif // DEBUG_SHADER_INCLUDES
+    stop_glerror();
+    return true;
 }
 
 void LLGLSLShader::attachObject(GLuint object)
@@ -2067,6 +2056,23 @@ void LLGLSLShader::uniformMatrix4fv(U32 index, U32 count, GLboolean transpose, c
             glUniformMatrix4fv(mUniform[index], count, transpose, v);
         }
     }
+}
+
+void LLGLSLShader::uniformMatrix4fv(U32 index, const LLMatrix4a& m)
+{
+    uniformMatrix4fv(index, 1, GL_FALSE, m.getF32ptr());
+}
+
+void LLGLSLShader::uniformMatrix3fv(U32 index, const LLMatrix3a& m)
+{
+    F32 packed[9];
+    const F32* r0 = m.getRow<0>().getF32ptr();
+    const F32* r1 = m.getRow<1>().getF32ptr();
+    const F32* r2 = m.getRow<2>().getF32ptr();
+    packed[0] = r0[0]; packed[1] = r0[1]; packed[2] = r0[2];
+    packed[3] = r1[0]; packed[4] = r1[1]; packed[5] = r1[2];
+    packed[6] = r2[0]; packed[7] = r2[1]; packed[8] = r2[2];
+    uniformMatrix3fv(index, 1, GL_FALSE, packed);
 }
 
 GLint LLGLSLShader::getUniformLocation(const LLStaticHashedString& uniform)

@@ -98,9 +98,6 @@
 #include "rlvlocks.h"
 // [/RLVa:KB]
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 extern LLPointer<LLViewerTexture> gStartTexture;
 extern bool gShiftFrame;
@@ -828,18 +825,16 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
                 LLGLState::checkStates();
 
-                glm::mat4 proj = get_current_projection();
-                glm::mat4 mod = get_current_modelview();
+                const LLCamera saved_camera = LLViewerCamera::getCurrent();
                 glViewport(0,0,512,512);
 
                 LLVOAvatar::updateImpostors();
 
-                set_current_projection(proj);
-                set_current_modelview(mod);
+                LLViewerCamera::setCurrent(saved_camera);
                 gGL.matrixMode(LLRender::MM_PROJECTION);
-                gGL.loadMatrix(glm::value_ptr(proj));
+                gGL.loadMatrix(saved_camera.getProjection());
                 gGL.matrixMode(LLRender::MM_MODELVIEW);
-                gGL.loadMatrix(glm::value_ptr(mod));
+                gGL.loadMatrix(saved_camera.getModelview());
                 gViewerWindow->setup3DViewport();
 
                 LLGLState::checkStates();
@@ -1283,8 +1278,7 @@ void render_hud_attachments()
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.pushMatrix();
 
-    glm::mat4 current_proj = get_current_projection();
-    glm::mat4 current_mod = get_current_modelview();
+    const LLCamera saved_camera = LLViewerCamera::getCurrent();
 
     // clamp target zoom level to reasonable values
 //  gAgentCamera.mHUDTargetZoom = llclamp(gAgentCamera.mHUDTargetZoom, 0.1f, 1.f);
@@ -1298,10 +1292,7 @@ void render_hud_attachments()
     if (LLPipeline::sShowHUDAttachments && !gDisconnected && setup_hud_matrices())
     {
         LLPipeline::sRenderingHUDs = true;
-        LLCamera hud_cam = *LLViewerCamera::getInstance();
-        hud_cam.setOrigin(-1.f, 0.f, 0.f);
-        hud_cam.setAxes(LLVector3(1.f, 0.f, 0.f), LLVector3(0.f, 1.f, 0.f), LLVector3(0.f, 0.f, 1.f));
-        LLViewerCamera::updateFrustumPlanes(hud_cam, true);
+        LLCamera hud_cam = LLViewerCamera::getCurrent();
 
         static LLCachedControl<bool> render_hud_particles(gSavedSettings, "RenderHUDParticles", false);
         bool render_particles = gPipeline.hasRenderType(LLPipeline::RENDER_TYPE_PARTICLES) && render_hud_particles;
@@ -1389,8 +1380,7 @@ void render_hud_attachments()
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.popMatrix();
 
-    set_current_projection(current_proj);
-    set_current_modelview(current_mod);
+    LLViewerCamera::setCurrent(saved_camera);
 }
 
 LLRect get_whole_screen_region()
@@ -1413,7 +1403,7 @@ LLRect get_whole_screen_region()
     return whole_screen;
 }
 
-bool get_hud_matrices(const LLRect& screen_region, glm::mat4 &proj, glm::mat4&model)
+bool get_hud_matrices(const LLRect& screen_region, LLMatrix4a& proj, LLMatrix4a& model)
 {
     if (isAgentAvatarValid() && gAgentAvatarp->hasHUDAttachment())
     {
@@ -1425,27 +1415,25 @@ bool get_hud_matrices(const LLRect& screen_region, glm::mat4 &proj, glm::mat4&mo
         // the flatten-hack [2][2] constant mirrors: window = 1 + 0.005*z == 1 - window_fwd,
         // same per-unit spacing and clip budget, reversed direction.
         proj = al_ortho(-0.5f * LLViewerCamera::getInstance()->getAspect(), 0.5f * LLViewerCamera::getInstance()->getAspect(), -0.5f, 0.5f, 0.f, hud_depth);
-        proj[2][2] = LLRender::sReverseZ ? 0.005f : -0.01f;
+        proj.mMatrix[2].getF32ptr()[2] = LLRender::sReverseZ ? 0.005f : -0.01f;
 
         F32 aspect_ratio = LLViewerCamera::getInstance()->getAspect();
 
         F32 scale_x = (F32)gViewerWindow->getWorldViewWidthScaled() / (F32)screen_region.getWidth();
         F32 scale_y = (F32)gViewerWindow->getWorldViewHeightScaled() / (F32)screen_region.getHeight();
 
-        glm::mat4 mat = glm::identity<glm::mat4>();
-        mat = glm::translate(mat,
-            glm::vec3(clamp_rescale((F32)(screen_region.getCenterX() - screen_region.mLeft), 0.f, (F32)gViewerWindow->getWorldViewWidthScaled(), 0.5f * scale_x * aspect_ratio, -0.5f * scale_x * aspect_ratio),
-                clamp_rescale((F32)(screen_region.getCenterY() - screen_region.mBottom), 0.f, (F32)gViewerWindow->getWorldViewHeightScaled(), 0.5f * scale_y, -0.5f * scale_y),
-                0.f));
-        mat = glm::scale(mat, glm::vec3(scale_x, scale_y, 1.f));
-        proj *= mat;
+        // the region scaled up to the view, then moved to its centre, ahead of the ortho
+        LLMatrix4a mat;
+        mat.setMul(LLMatrix4a::scaling(scale_x, scale_y, 1.f),
+                   LLMatrix4a::translation(clamp_rescale((F32)(screen_region.getCenterX() - screen_region.mLeft), 0.f, (F32)gViewerWindow->getWorldViewWidthScaled(), 0.5f * scale_x * aspect_ratio, -0.5f * scale_x * aspect_ratio),
+                                           clamp_rescale((F32)(screen_region.getCenterY() - screen_region.mBottom), 0.f, (F32)gViewerWindow->getWorldViewHeightScaled(), 0.5f * scale_y, -0.5f * scale_y),
+                                           0.f));
+        proj.setMul(mat, proj);
 
-        glm::mat4 tmp_model = glm::make_mat4(OGL_TO_CFR_ROTATION);
-        mat = glm::identity<glm::mat4>();
-        mat = glm::translate(mat, glm::vec3(-hud_bbox.getCenterLocal().mV[VX] + (hud_depth * 0.5f), 0.f, 0.f));
-        mat = glm::scale(mat, glm::vec3(zoom_level));
-        tmp_model *= mat;
-        model = tmp_model;
+        // the HUD zoomed and moved in front of the camera, then into the GL frame
+        mat.setMul(LLMatrix4a::scaling(zoom_level, zoom_level, zoom_level),
+                   LLMatrix4a::translation(-hud_bbox.getCenterLocal().mV[VX] + (hud_depth * 0.5f), 0.f, 0.f));
+        model.setMul(mat, LLMatrix4a(OGL_TO_CFR_ROTATION));
 
         return true;
     }
@@ -1455,7 +1443,7 @@ bool get_hud_matrices(const LLRect& screen_region, glm::mat4 &proj, glm::mat4&mo
     }
 }
 
-bool get_hud_matrices(glm::mat4 &proj, glm::mat4&model)
+bool get_hud_matrices(LLMatrix4a& proj, LLMatrix4a& model)
 {
     LLRect whole_screen = get_whole_screen_region();
     return get_hud_matrices(whole_screen, proj, model);
@@ -1469,18 +1457,26 @@ bool setup_hud_matrices()
 
 bool setup_hud_matrices(const LLRect& screen_region)
 {
-    glm::mat4 proj, model;
+    LLMatrix4a proj, model;
     bool result = get_hud_matrices(screen_region, proj, model);
     if (!result) return result;
 
     // set up transform to keep HUD objects in front of camera
     gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.loadMatrix(glm::value_ptr(proj));
-    set_current_projection(proj);
+    gGL.loadMatrix(proj);
 
     gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.loadMatrix(glm::value_ptr(model));
-    set_current_modelview(model);
+    gGL.loadMatrix(model);
+
+    // the HUD's camera: at the HUD's origin looking along +x, with the
+    // HUD's matrices and the frustum they give
+    LLCamera hud_cam = *LLViewerCamera::getInstance();
+    hud_cam.setOrigin(-1.f, 0.f, 0.f);
+    hud_cam.setAxes(LLVector3(1.f, 0.f, 0.f), LLVector3(0.f, 1.f, 0.f), LLVector3(0.f, 0.f, 1.f));
+    hud_cam.setProjection(proj);
+    hud_cam.setModelview(model);
+    LLViewerCamera::updateFrustumPlanes(hud_cam, true);
+    LLViewerCamera::setCurrent(hud_cam);
     return true;
 }
 
@@ -1491,13 +1487,14 @@ void render_ui(F32 zoom_factor, int subfield)
     LL_PROFILE_GPU_ZONE("ui");
     LLGLState::checkStates();
 
-    glm::mat4 saved_view = get_current_modelview();
+    // the world camera, as the scene just rendered with it
+    const LLCamera saved_camera = LLViewerCamera::getCurrent();
 
     if (!gSnapshot)
     {
         gGL.pushMatrix();
-        gGL.loadMatrix(gGLLastModelView);
-        set_current_modelview(glm::make_mat4(gGLLastModelView));
+        gGL.loadMatrix(LLViewerCamera::getInstance()->getModelview());
+        LLViewerCamera::setCurrent(*LLViewerCamera::getInstance());
     }
 
     if(LLSceneMonitor::getInstance()->needsUpdate())
@@ -1570,7 +1567,7 @@ void render_ui(F32 zoom_factor, int subfield)
 
     if (!gSnapshot)
     {
-        set_current_modelview(saved_view);
+        LLViewerCamera::setCurrent(saved_camera);
         gGL.popMatrix();
     }
 }

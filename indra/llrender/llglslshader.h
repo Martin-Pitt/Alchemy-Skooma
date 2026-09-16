@@ -59,6 +59,7 @@ public:
     bool attachNothing = false;
     bool hasHeroProbes = false;
     bool isPBRTerrain = false;
+    bool hasTessellatedTerrain = false; // terrainSurface for the evaluation and fragment stages, and the atmospherics interface the evaluation stage owes the fragment stage
     bool hasTonemap = false;
     bool hasColorGrade = false;
     bool hasPostEffects = false;
@@ -187,7 +188,7 @@ public:
     // code can never drift apart. mReservedUniform indexes LLShaderMgr::mReservedUniforms for
     // the GLSL member name; mName overrides it for members that aren't reserved uniforms.
     // mMatrix marks a matrix member, which is additionally required to introspect
-    // COLUMN-major: std140's default, and what the pack code writes (glm's own storage,
+    // COLUMN-major: std140's default, and what the pack code writes (an LLMatrix4a's rows,
     // uploaded straight through). A row-major layout would silently transpose every read.
 #if !LL_RELEASE_FOR_DOWNLOAD
     struct EngineBlockLayoutMember
@@ -320,8 +321,12 @@ public:
     // recreating the program invalidates them. Returns false if the program OR any requested
     // variant fails; a failed axis leaves its pointer null.
     bool createShader(U32 variants = 0);
-    bool attachFragmentObject(std::string object);
-    bool attachVertexObject(std::string object);
+    // Attach the shared object compiled for `stage` under `object` (a path, or a variant key
+    // from LLShaderMgr::variantObjectKey). An object compiled for another stage does not
+    // count: GLSL resolves calls within a stage.
+    bool attachStageObject(GLenum stage, const std::string& object);
+    bool attachFragmentObject(const std::string& object) { return attachStageObject(GL_FRAGMENT_SHADER, object); }
+    bool attachVertexObject(const std::string& object) { return attachStageObject(GL_VERTEX_SHADER, object); }
     void attachObject(GLuint object);
     void attachObjects(GLuint* objects = NULL, S32 count = 0);
     bool mapAttributes();
@@ -346,6 +351,12 @@ public:
     void uniformMatrix3fv(U32 index, U32 count, GLboolean transpose, const GLfloat* v);
     void uniformMatrix3x4fv(U32 index, U32 count, GLboolean transpose, const GLfloat* v);
     void uniformMatrix4fv(U32 index, U32 count, GLboolean transpose, const GLfloat* v);
+
+    // The native matrices, as they lie: their rows are the columns the
+    // shader reads, so the shader's M * v is the row-vector product v * M.
+    void uniformMatrix4fv(U32 index, const LLMatrix4a& m);
+    void uniformMatrix3fv(U32 index, const LLMatrix3a& m);
+
     void uniform1i(const LLStaticHashedString& uniform, GLint i);
 
     void setMinimumAlpha(F32 minimum);

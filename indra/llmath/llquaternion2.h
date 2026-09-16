@@ -27,22 +27,12 @@
 #ifndef LL_QUATERNION2_H
 #define LL_QUATERNION2_H
 
-/////////////////////////////
-// LLQuaternion2
-/////////////////////////////
-// This class stores a quaternion x*i + y*j + z*k + w in <x, y, z, w> order
-// (i.e., w in high order element of vector)
-/////////////////////////////
-/////////////////////////////
-// These classes are intentionally minimal right now. If you need additional
-// functionality, please contact someone with SSE experience (e.g., Falcon or
-// Huseby).
-/////////////////////////////
+// A quaternion x*i + y*j + z*k + w in one register, in <x, y, z, w> order:
+// w is the high lane.
 #include "llquaternion.h"
 
 class alignas(16) LLQuaternion2
 {
-    LL_ALIGN_NEW
 public:
 
     //////////////////////////
@@ -57,6 +47,11 @@ public:
 
     // Ctor from the raw <x, y, z, w> vector
     explicit LLQuaternion2( const LLVector4a& q ) : mQ(q) {}
+
+    // Lane for lane; see equals() for a tolerance, and remember a rotation
+    // has two quaternions.
+    bool operator==(const LLQuaternion2& rhs) const { return mQ == rhs.mQ; }
+    bool operator!=(const LLQuaternion2& rhs) const { return mQ != rhs.mQ; }
 
     // The rotation that changes nothing
     static inline const LLQuaternion2& identity();
@@ -81,6 +76,15 @@ public:
     /////////////////////////
     // Quaternion modification
     /////////////////////////
+
+    // Set this to the rotation of radians about axis, which need not be
+    // unit length; the identity when the axis has no length.
+    inline void setAxisAngle(const LLVector4a& axis, F32 radians);
+
+    // Set this to the rotation the upper 3x3 of m applies, which must be
+    // orthonormal: the rows are read as the rotated axes. A basis that is
+    // not a rotation gives the identity.
+    void setFromMatrix(const class LLMatrix4a& m);
 
     // Set this quaternion to the conjugate of src
     inline void setConjugate(const LLQuaternion2& src);
@@ -142,6 +146,7 @@ protected:
 
 };
 
-static_assert(std::is_trivial<LLQuaternion2>::value, "LLQuaternion2 must be a trivial type");
+static_assert(std::is_trivially_copyable<LLQuaternion2>::value && std::is_standard_layout<LLQuaternion2>::value, "LLQuaternion2 is plain data");
+static_assert(sizeof(LLQuaternion2) == 16 && alignof(LLQuaternion2) == 16, "LLQuaternion2 is one register");
 
 #endif

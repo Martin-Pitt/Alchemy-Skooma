@@ -90,8 +90,47 @@ std::string LLShaderMgr::variantObjectKey(const std::string& path, U32 axes, con
     // and no second copy was compiled. Absence is always that decision and never a failure:
     // loadBasicShaders aborts the whole load if a copy it did want fails to build.
     const std::string key = path + suffix;
-    const auto& objects = (stage == GL_VERTEX_SHADER) ? mVertexShaderObjects : mFragmentShaderObjects;
-    return objects.count(key) ? key : path;
+    return mShaderObjects[stageIndex(stage)].contains(key) ? key : path;
+}
+
+// static
+LLShaderMgr::EShaderStage LLShaderMgr::stageIndex(GLenum type)
+{
+    switch (type)
+    {
+        case GL_VERTEX_SHADER:          return STAGE_VERTEX;
+        case GL_TESS_CONTROL_SHADER:    return STAGE_TESS_CONTROL;
+        case GL_TESS_EVALUATION_SHADER: return STAGE_TESS_EVALUATION;
+        case GL_GEOMETRY_SHADER:        return STAGE_GEOMETRY;
+        case GL_FRAGMENT_SHADER:        return STAGE_FRAGMENT;
+        case GL_COMPUTE_SHADER:         return STAGE_COMPUTE;
+        default:
+            LL_ERRS("Shaders") << "Unknown shader stage " << type << LL_ENDL;
+            return STAGE_VERTEX;
+    }
+}
+
+// static
+const char* LLShaderMgr::stageDefine(GLenum type)
+{
+    switch (stageIndex(type))
+    {
+        case STAGE_VERTEX:          return "#define VERTEX_SHADER 1\n";
+        case STAGE_TESS_CONTROL:    return "#define TESS_CONTROL_SHADER 1\n";
+        case STAGE_TESS_EVALUATION: return "#define TESS_EVALUATION_SHADER 1\n";
+        case STAGE_GEOMETRY:        return "#define GEOMETRY_SHADER 1\n";
+        case STAGE_FRAGMENT:        return "#define FRAGMENT_SHADER 1\n";
+        case STAGE_COMPUTE:         return "#define COMPUTE_SHADER 1\n";
+        default:                    return "";
+    }
+}
+
+void LLShaderMgr::clearShaderObjects()
+{
+    for (auto& objects : mShaderObjects)
+    {
+        objects.clear();
+    }
 }
 
 bool LLShaderMgr::attachShaderFeatures(LLGLSLShader * shader)
@@ -206,6 +245,30 @@ bool LLShaderMgr::attachShaderFeatures(LLGLSLShader * shader)
     if (!shader->attachVertexObject("deferred/textureUtilV.glsl"))
     {
         return false;
+    }
+
+    ///////////////////////////////////////////
+    // Attach Tessellation Evaluation Features
+    ///////////////////////////////////////////
+
+    if (features->hasTessellatedTerrain)
+    {
+        // GLSL resolves calls within a stage: the evaluation stage needs its own copy of the
+        // surface it evaluates. atmosphericsVarsV declares the outputs the fragment side's
+        // atmosphericsVarsF expects to find in the stage before it, which with tessellation is
+        // this one.
+        for (const char* object : { "deferred/terrainSurface.glsl", "windlight/atmosphericsVarsV.glsl" })
+        {
+            if (!shader->attachStageObject(GL_TESS_EVALUATION_SHADER, object))
+            {
+                return false;
+            }
+        }
+        // The fragment stage reads the same surface for the normal under each fragment.
+        if (!shader->attachFragmentObject("deferred/terrainSurface.glsl"))
+        {
+            return false;
+        }
     }
 
     ///////////////////////////////////////
@@ -654,14 +717,7 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         }
     }
 
-    if (type == GL_FRAGMENT_SHADER)
-    {
-        extra_code_text[extra_code_count++] = strdup("#define FRAGMENT_SHADER 1\n");
-    }
-    else
-    {
-        extra_code_text[extra_code_count++] = strdup("#define VERTEX_SHADER 1\n");
-    }
+    extra_code_text[extra_code_count++] = strdup(stageDefine(type));
 
     // Use alpha float to store bit flags
     // See: C++: addDeferredAttachment(), shader: frag_data[2]
@@ -1084,12 +1140,7 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
         // one -- a shared object compiled a second time under different defines needs its own
         // entry, since attach is by key (see variantObjectKey).
         const std::string& key = cache_key.empty() ? filename : cache_key;
-        if (type == GL_VERTEX_SHADER) {
-            mVertexShaderObjects[key] = ret;
-        }
-        else if (type == GL_FRAGMENT_SHADER) {
-            mFragmentShaderObjects[key] = ret;
-        }
+        mShaderObjects[stageIndex(type)][key] = ret;
         shader_level = try_gpu_class;
     }
     else
@@ -1507,9 +1558,11 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("normal_texcoord"); // (GLTF)
     mReservedUniforms.push_back("metallic_roughness_texcoord"); // (GLTF)
 
-    mReservedUniforms.push_back("terrain_texture_transforms"); // (GLTF)
+    mReservedUniforms.push_back("terrain_uv_transform");
+    mReservedUniforms.push_back("terrain_uv_offset");
+    mReservedUniforms.push_back("terrain_normal_axes");
 
-    llassert(mReservedUniforms.size() == LLShaderMgr::TERRAIN_TEXTURE_TRANSFORMS +1);
+    llassert(mReservedUniforms.size() == LLShaderMgr::TERRAIN_NORMAL_AXES +1);
 
     mReservedUniforms.push_back("viewport");
 
@@ -1751,6 +1804,15 @@ void LLShaderMgr::initAttribsAndUniforms()
 
     mReservedUniforms.push_back("alpha_ramp");
     mReservedUniforms.push_back("paint_map");
+
+    mReservedUniforms.push_back("terrain_height_map");
+    mReservedUniforms.push_back("terrain_composition_map");
+    mReservedUniforms.push_back("terrain_tess_origin");
+    mReservedUniforms.push_back("terrain_tess_density");
+    mReservedUniforms.push_back("terrain_grid_scale");
+    mReservedUniforms.push_back("terrain_smoothing");
+    mReservedUniforms.push_back("parcel_overlay");
+    mReservedUniforms.push_back("show_parcel_owners");
 
     mReservedUniforms.push_back("detail_0_base_color");
     mReservedUniforms.push_back("detail_1_base_color");

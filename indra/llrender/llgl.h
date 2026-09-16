@@ -45,7 +45,7 @@
 #include "llgltypes.h"
 #include "llinstancetracker.h"
 
-#include "glm/mat4x4.hpp"
+#include "llmatrix4a.h"
 
 extern bool gDebugGL;
 extern bool gDebugSession;
@@ -84,6 +84,14 @@ public:
     void initEGL(); // Initializes EGL extensions (Linux, Wayland and X11 alike)
 
     std::string getRawGLString(); // For sending to simulator
+
+    // Apple's Metal-backed driver aborts on tessellated draws while a
+    // GL_PRIMITIVES_GENERATED query is active without transform feedback.
+    // Timer and sample queries, and primitive queries for other draws, work.
+    bool canQueryPrimitives(bool tessellated) const
+    {
+        return !tessellated || !mIsApple;
+    }
 
     bool mInited;
     bool mIsDisabled;
@@ -358,13 +366,12 @@ public:
   GL_MODELVIEW_MATRIX is active whenever program execution
   leaves this class.
   Does not stack.
-  Caches inverse of projection matrix used in gGLObliqueProjectionInverse
 */
 class LLGLUserClipPlane
 {
 public:
 
-    LLGLUserClipPlane(const LLPlane& plane, const glm::mat4& modelview, const glm::mat4& projection, bool apply = true);
+    LLGLUserClipPlane(const LLPlane& plane, const LLMatrix4a& modelview, const LLMatrix4a& projection, bool apply = true);
     ~LLGLUserClipPlane();
 
     void setPlane(F32 a, F32 b, F32 c, F32 d);
@@ -373,12 +380,13 @@ public:
 private:
     bool mApply;
 
-    glm::mat4 mProjection;
-    glm::mat4 mModelview;
+    LLMatrix4a mProjection;
+    LLMatrix4a mModelview;
 };
 
 /*
   Modify and load projection matrix to push depth values to far clip plane.
+  The default constructor squashes the projection on the stack.
 
   Restores projection matrix on destruction.
   Saves/restores matrix mode around projection manipulation.
@@ -388,9 +396,9 @@ class LLGLSquashToFarClip
 {
 public:
     LLGLSquashToFarClip();
-    LLGLSquashToFarClip(const glm::mat4& projection, U32 layer = 0);
+    LLGLSquashToFarClip(const LLMatrix4a& projection, U32 layer = 0);
 
-    void setProjectionMatrix(glm::mat4 projection, U32 layer);
+    void setProjectionMatrix(LLMatrix4a projection, U32 layer);
 
     ~LLGLSquashToFarClip();
 };
@@ -451,7 +459,6 @@ public:
     void wait();
 };
 
-extern LLMatrix4 gGLObliqueProjectionInverse;
 
 #include "llglstates.h"
 
