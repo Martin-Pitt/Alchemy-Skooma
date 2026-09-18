@@ -55,6 +55,8 @@
      name="description_form"
      top_pad="0"
      width="280" />
+    <!-- <SK:Nexii> loudness normalization -- baked into the uploaded asset,
+         so it is never applied without being visible here -->
     <check_box
      control_name="SKSoundLoudnessNormalizeUploads"
      follows="left|top"
@@ -66,6 +68,7 @@
      name="normalize_loudness"
      top_pad="10"
      width="270" />
+    <!-- </SK:Nexii> -->
     <button
      follows="left|bottom"
      height="22"
