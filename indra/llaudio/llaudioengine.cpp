@@ -1689,7 +1689,10 @@ LLAudioSource::LLAudioSource(const LLUUID& id, const LLUUID& owner_id, const F32
     mQueuedDatap(NULL),
     mSourceID(source_id),
     mIsTrigger(is_trigger),
-    mLoudnessGain(1.f) // <SK:Nexii> loudness normalization
+    // <SK:Nexii> loudness normalization
+    mLoudnessGain(1.f),
+    mLoudnessDatap(NULL)
+    // </SK:Nexii>
 {
     mLogID.generate();
 }
@@ -1722,7 +1725,10 @@ void LLAudioSource::setChannel(LLAudioChannel *channelp)
 }
 
 
-// <SK:Nexii> loudness normalization -- linear-gain units per second.
+// <SK:Nexii> loudness normalization -- linear-gain units per second. The widest
+// correction we allow spans roughly unity to 4.0, so this settles in under two
+// seconds while staying well below the rate at which a gain change is heard as
+// a click rather than a fade.
 static const F32 SK_LOUDNESS_SLEW_PER_SEC = 2.f;
 
 void LLAudioSource::update()
@@ -1732,18 +1738,25 @@ void LLAudioSource::update()
         return ; //no need to update
     }
 
-    // <SK:Nexii> loudness normalization -- a measurement can land while the
-    // sound is already playing (cache hits measure behind the first play), so
-    // ramp to the new trim instead of stepping it, which would click.
+    // <SK:Nexii> loudness normalization -- resolve the per-asset trim.
+    //
+    // Ramping is only correct for a trim that changes *under* a sound that is
+    // already audible, which is the cache-hit case: the sound starts untrimmed
+    // and the measurement lands behind it. Before the source holds a channel
+    // there is nothing to click, and ramping up from unity there would give
+    // every sound the very artefact the ramp exists to avoid -- a moment at
+    // the wrong level before settling. So snap until we are playing.
     {
         const F32 target = mCurrentDatap ? mCurrentDatap->getLoudnessGain() : 1.f;
-        if (!is_approx_equal(mLoudnessGain, target))
+        if (!mChannelp || mCurrentDatap != mLoudnessDatap)
         {
-            // ~6 dB per second, so the widest correction we allow takes well
-            // under a second and stays below the threshold of a click.
+            mLoudnessGain = target;
+            mLoudnessDatap = mCurrentDatap;
+        }
+        else if (!is_approx_equal(mLoudnessGain, target))
+        {
             const F32 max_step = SK_LOUDNESS_SLEW_PER_SEC * LLFrameTimer::getFrameDeltaTimeF32();
-            const F32 delta = target - mLoudnessGain;
-            mLoudnessGain += llclamp(delta, -max_step, max_step);
+            mLoudnessGain += llclamp(target - mLoudnessGain, -max_step, max_step);
         }
     }
     // </SK:Nexii>

@@ -532,10 +532,12 @@ protected:
     LLUUID          mLogID;
     LLUUID          mSourceID;
     bool            mIsTrigger;
-    // <SK:Nexii> loudness normalization -- current trim, slewed toward the
-    // current data's target in update() so a measurement that lands while the
-    // sound is already playing does not produce an audible step.
+    // <SK:Nexii> loudness normalization -- current trim, and the data it was
+    // resolved against. Snapped while the source is not yet holding a channel
+    // or has just switched asset; ramped only when the trim changes under a
+    // sound that is already audible.
     F32             mLoudnessGain;
+    LLAudioData    *mLoudnessDatap;
     // </SK:Nexii>
 
     //LLAudioSource *mSyncMasterp;  // If we're a slave, the source that we're synced to.
