@@ -62,3 +62,8 @@ if(AL_USE_FAUDIO)
     PUBLIC FILE_SET HEADERS FILES llaudioengine_faudio.h lllistener_faudio.h
   )
 endif()
+
+# Add tests
+if(AL_BUILD_TESTS)
+  al_add_test(sklufs UNIT PROJECT llaudio SOURCES llwavfile.cpp)
+endif()
