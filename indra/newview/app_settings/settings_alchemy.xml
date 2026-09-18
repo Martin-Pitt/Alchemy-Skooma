@@ -3424,6 +3424,45 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKSoundLoudnessNormalize</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Even out the playback level of world and UI sounds toward a common loudness target, so a hot gesture does not sit far above a quiet one. Measured per asset; nothing in the cache is modified.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKSoundLoudnessTargetLUFS</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Target integrated loudness for sound normalization, in LUFS. -23 is the EBU R 128 broadcast standard; -18 (ReplayGain) and -16 to -14 (streaming services) are louder alternatives.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>-23.0</real>
+        </map>
+        <key>SKSoundLoudnessNormalizeUploads</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Normalize sound uploads to the loudness target before encoding. Unlike playback normalization this alters the uploaded asset itself, so it is also exposed as a checkbox on the upload window.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
     </map>
 </llsd>
 

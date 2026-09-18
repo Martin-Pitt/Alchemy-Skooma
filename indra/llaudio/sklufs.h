@@ -128,6 +128,11 @@ void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain);
 
 // Integrated loudness of a RIFF/WAVE file on disk, for pre-upload measurement.
 // Returns false when the file could not be read or is not 8/16-bit PCM.
-bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs);
+//
+// Set downmix_to_mono to measure the channel average rather than the file as
+// multichannel. The vorbis encoder downmixes on upload, and a correlated stereo
+// pair measures up to 3 LU hotter than its own downmix, so measuring the file
+// as-is would solve for a gain the encoded asset never sees.
+bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, bool downmix_to_mono = false);
 
 #endif // SK_LUFS_H

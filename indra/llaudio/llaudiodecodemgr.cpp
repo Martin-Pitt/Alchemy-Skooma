@@ -39,6 +39,7 @@
 #include "workqueue.h"
 
 #include "llvorbisencode.h"
+#include "sklufs.h" // <SK:Nexii> decode-time loudness measurement
 
 #include "vorbis/codec.h"
 #include "vorbis/vorbisfile.h"
@@ -81,6 +82,12 @@ public:
     bool isDone() const                 { return mDone; }
     const LLUUID &getUUID() const       { return mUUID; }
 
+    // <SK:Nexii> loudness normalization -- integrated loudness of the decoded
+    // clip, or SK_LUFS_SILENCE if it was never measured. Valid once
+    // finishDecode() has returned true.
+    F32 getLoudnessLUFS() const         { return mLoudnessLUFS; }
+    // </SK:Nexii>
+
 protected:
     virtual ~LLVorbisDecodeState();
 
@@ -96,6 +103,12 @@ protected:
     LLFileSystem *mInFilep;
     OggVorbis_File mVF;
     S32 mCurrentSection;
+
+    // <SK:Nexii> loudness normalization -- fed from decodeSection() as the
+    // samples stream past, so measuring costs no extra pass over the buffer.
+    std::unique_ptr<SKLufsMeter> mLoudnessMeter;
+    F32 mLoudnessLUFS;
+    // </SK:Nexii>
 };
 
 size_t cache_read(void *ptr, size_t size, size_t nmemb, void *datasource)
@@ -172,6 +185,7 @@ LLVorbisDecodeState::LLVorbisDecodeState(const LLUUID &uuid, const std::string &
     mCurrentSection = 0;
     mOutFilename = out_filename;
     mFileHandle = LLLFSThread::nullHandle();
+    mLoudnessLUFS = SK_LUFS_SILENCE; // <SK:Nexii> loudness normalization
 
     // No default value for mVF, it's an ogg structure?
     // Hey, let's zero it anyway, for predictability.
@@ -262,6 +276,12 @@ bool LLVorbisDecodeState::initDecode()
         mInFilep = NULL;
         return false;
     }
+
+    // <SK:Nexii> loudness normalization -- measure against the stream's real
+    // geometry; the .wav header written below is hardcoded mono 44.1k, which
+    // is not necessarily what ov_read() is about to hand us.
+    mLoudnessMeter = std::make_unique<SKLufsMeter>((U32)vi->rate, (U32)vi->channels);
+    // </SK:Nexii>
 
     try
     {
@@ -404,6 +424,13 @@ bool LLVorbisDecodeState::decodeSection()
 //          LL_INFOS("AudioEngine") << "Vorbis read " << ret << "bytes" << LL_ENDL;
         /* we don't bother dealing with sample rate changes, etc, but.
            you'll have to*/
+        // <SK:Nexii> loudness normalization -- ov_read() gives little-endian
+        // signed 16-bit, which is what the meter wants.
+        if (mLoudnessMeter)
+        {
+            mLoudnessMeter->feedBytesLE((const U8*)pcmout, (size_t)ret);
+        }
+        // </SK:Nexii>
         std::copy(pcmout, pcmout+ret, std::back_inserter(mWAVBuffer));
     }
     return eof;
@@ -420,6 +447,15 @@ bool LLVorbisDecodeState::finishDecode()
     if (mFileHandle == LLLFSThread::nullHandle())
     {
         ov_clear(&mVF);
+
+        // <SK:Nexii> loudness normalization -- read the meter before the
+        // crossfade below rewrites the head and tail samples.
+        if (mLoudnessMeter)
+        {
+            mLoudnessLUFS = mLoudnessMeter->close();
+            mLoudnessMeter.reset();
+        }
+        // </SK:Nexii>
 
         // write "data" chunk length, in little-endian format
         S32 data_length = static_cast<S32>(mWAVBuffer.size()) - WAV_HEADER_SIZE;
@@ -762,6 +798,10 @@ bool tryFinishAudio(const LLUUID &decode_id, LLPointer<LLVorbisDecodeState> deco
     if (valid)
     {
         adp->setHasWAVLoadFailed(false);
+        // <SK:Nexii> loudness normalization -- the meter ran alongside the
+        // decode, so the trim is known before the buffer can ever be played.
+        adp->setLoudnessLUFS(decode_state->getLoudnessLUFS());
+        // </SK:Nexii>
     }
 
     return true;

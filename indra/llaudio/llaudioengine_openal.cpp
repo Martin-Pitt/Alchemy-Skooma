@@ -838,6 +838,11 @@ LLAudioChannelOpenAL::LLAudioChannelOpenAL()
     mLastSamplePos(0)
 {
     alGenSources(1, &mALSource);
+    // <SK:Nexii> loudness normalization -- AL_MAX_GAIN defaults to 1.0, which
+    // would silently discard the boost half of a per-asset loudness trim. The
+    // ceiling matches SK_LUFS_MAX_BOOST_DB.
+    alSourcef(mALSource, AL_MAX_GAIN, 4.f);
+    // </SK:Nexii>
 }
 
 LLAudioChannelOpenAL::~LLAudioChannelOpenAL()

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater
  legacy_header_height="18"
- height="180"
+ height="205"
  layout="topleft"
  name="Sound Preview"
  help_topic="sound_preview"
@@ -55,6 +55,17 @@
      name="description_form"
      top_pad="0"
      width="280" />
+    <check_box
+     control_name="SKSoundLoudnessNormalizeUploads"
+     follows="left|top"
+     height="16"
+     label="Normalize loudness"
+     tool_tip="Adjust this sound to the viewer's loudness target before uploading. This changes the uploaded asset, not just how it sounds to you."
+     layout="topleft"
+     left_delta="0"
+     name="normalize_loudness"
+     top_pad="10"
+     width="270" />
     <button
      follows="left|bottom"
      height="22"

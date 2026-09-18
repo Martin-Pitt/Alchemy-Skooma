@@ -301,7 +301,7 @@ void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain)
     }
 }
 
-bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs)
+bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, bool downmix_to_mono)
 {
     LLAudio::WavInfo info;
     if (!LLAudio::parseWav(path, info) || info.format_tag != 1 || info.pcm.empty())
@@ -314,32 +314,61 @@ bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs)
         return false;
     }
 
-    SKLufsMeter meter(info.sample_rate, info.channels);
+    if (info.bits_per_sample != 8 && info.bits_per_sample != 16)
+    {
+        return false;
+    }
+
+    // Widen everything to interleaved signed 16-bit first, so the format
+    // handling lives in one place. 8-bit WAV is unsigned and centred on 128.
+    const size_t bytes_per_sample = info.bits_per_sample / 8;
+    const size_t total_samples    = info.pcm.size() / bytes_per_sample;
+    const size_t frames           = total_samples / info.channels;
+    if (!frames)
+    {
+        return false;
+    }
+
+    std::vector<S16> pcm(total_samples);
+    if (info.bits_per_sample == 16)
+    {
+        for (size_t i = 0; i < total_samples; ++i)
+        {
+            pcm[i] = (S16)((U16)info.pcm[i * 2] | ((U16)info.pcm[i * 2 + 1] << 8));
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < total_samples; ++i)
+        {
+            pcm[i] = (S16)(((S32)info.pcm[i] - 128) << 8);
+        }
+    }
+
+    U32 measure_channels = info.channels;
+    if (downmix_to_mono && info.channels > 1)
+    {
+        std::vector<S16> mono(frames);
+        for (size_t f = 0; f < frames; ++f)
+        {
+            S32 sum = 0;
+            for (U32 c = 0; c < info.channels; ++c)
+            {
+                sum += pcm[f * info.channels + c];
+            }
+            mono[f] = (S16)llclamp(sum / (S32)info.channels, -32768, 32767);
+        }
+        pcm.swap(mono);
+        measure_channels = 1;
+    }
+
+    SKLufsMeter meter(info.sample_rate, measure_channels);
     if (!meter.isValid())
     {
         return false;
     }
 
-    if (info.bits_per_sample == 16)
-    {
-        meter.feedBytesLE(info.pcm.data(), info.pcm.size());
-    }
-    else if (info.bits_per_sample == 8)
-    {
-        // 8-bit WAV is unsigned and centred on 128; widen to the meter's
-        // signed 16-bit input rather than teaching the meter a second format.
-        std::vector<S16> widened(info.pcm.size());
-        for (size_t i = 0; i < info.pcm.size(); ++i)
-        {
-            widened[i] = (S16)(((S32)info.pcm[i] - 128) << 8);
-        }
-        meter.feed(widened.data(), widened.size() / info.channels);
-    }
-    else
-    {
-        return false;
-    }
-
+    meter.feed(pcm.data(), pcm.size() / measure_channels);
     out_lufs = meter.close();
     return true;
 }

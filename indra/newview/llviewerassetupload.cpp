@@ -33,6 +33,8 @@
 #include "lltrans.h"
 #include "lluuid.h"
 #include "llvorbisencode.h"
+#include "sklufs.h"        // <SK:Nexii> loudness normalization
+#include "llviewercontrol.h" // <SK:Nexii> loudness normalization
 #include "lluploaddialog.h"
 #include "llnotificationsutil.h"
 #include "llagent.h"
@@ -443,7 +445,26 @@ LLSD LLNewFileResourceUploadInfo::exportTempFile()
 
         LL_INFOS() << "Attempting to encode wav as an ogg file" << LL_ENDL;
 
-        encodeResult = encode_vorbis_file(getFileName(), filename);
+        // <SK:Nexii> loudness normalization -- unlike playback normalization
+        // this bakes into the asset everyone else will hear, so it follows its
+        // own setting and the checkbox on the upload window.
+        F32 upload_gain = 1.f;
+        static LLCachedControl<bool> normalize_uploads(gSavedSettings, "SKSoundLoudnessNormalizeUploads");
+        if (normalize_uploads())
+        {
+            F32 lufs = SK_LUFS_SILENCE;
+            // Measure the mono downmix, which is what encode_vorbis_file emits.
+            if (sk_lufs_measure_wav_file(getFileName(), lufs, true) && lufs > SK_LUFS_SILENCE)
+            {
+                static LLCachedControl<F32> target(gSavedSettings, "SKSoundLoudnessTargetLUFS");
+                upload_gain = sk_lufs_gain_for_target(lufs, target());
+                LL_INFOS() << "Sound upload measured " << lufs << " LUFS, encoding with gain "
+                           << upload_gain << " toward " << target() << " LUFS" << LL_ENDL;
+            }
+        }
+
+        encodeResult = encode_vorbis_file(getFileName(), filename, upload_gain);
+        // </SK:Nexii>
 
         if (LLVORBISENC_NOERR != encodeResult)
         {
