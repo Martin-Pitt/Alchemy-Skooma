@@ -211,6 +211,7 @@ LLFloater::Params::Params()
     header_vpad("header_vpad", 7),
     close_image("close_image"),
     restore_image("restore_image"),
+    collapse_side_image("collapse_side_image"), // <SK:Nexii>
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
     collapse_image("collapse_image"),
 // [/SL:KB]
@@ -219,6 +220,7 @@ LLFloater::Params::Params()
     help_image("help_image"),
     close_pressed_image("close_pressed_image"),
     restore_pressed_image("restore_pressed_image"),
+    collapse_side_pressed_image("collapse_side_pressed_image"), // <SK:Nexii>
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
     collapse_pressed_image("collapse_pressed_image"),
 // [/SL:KB]
@@ -429,6 +431,7 @@ void LLFloater::layoutDragHandle()
     mDragHandle->setTurned(isCollapsedToSide()); // <SK:Nexii> Collapsed to a side of the screen
     mDragHandle->setShape(rect);
     updateTitleButtons();
+    updateCollapseButtonIcon(); // <SK:Nexii>
 }
 
 // static
@@ -946,6 +949,7 @@ void LLFloater::closeHostedFloater()
 void LLFloater::translate(S32 x, S32 y)
 {
     LLView::translate(x, y);
+    updateCollapseButtonIcon(); // <SK:Nexii> Moving may change which way it would fold
 
     if (!mTranslateWithDependents || mDependents.empty())
         return;
@@ -1478,6 +1482,33 @@ LLRect LLFloater::calcCollapsedRect(ECollapseEdge edge)
     }
     return view->getCollapsedPosition(this, rect, edge);
 }
+
+// <SK:Nexii> Which way the collapse button points: a floater that would fold to
+// a side of the screen gets the turned glyph, so the button reads as what it is
+// about to do rather than as a promise the placement does not keep.
+void LLFloater::updateCollapseButtonIcon()
+{
+    LLButton* button = mButtons[BUTTON_COLLAPSE];
+    if (!button || !mCollapseSideImage || isMinimized())
+    {
+        return;
+    }
+
+    const bool turned = isSideEdge(pickCollapseEdge());
+    if (turned == mCollapseIconTurned)
+    {
+        return;
+    }
+    mCollapseIconTurned = turned;
+
+    LLPointer<LLUIImage> unselected = turned ? mCollapseSideImage : mCollapseImage;
+    LLPointer<LLUIImage> pressed = turned ? mCollapseSidePressedImage : mCollapsePressedImage;
+
+    button->setImageUnselected(unselected);
+    button->setImageSelected(pressed);
+    button->setImageHoverSelected(pressed);
+}
+// </SK:Nexii>
 
 void LLFloater::drawCollapsedBackground(LLUIImage* image, const LLColor4& color)
 {
@@ -2703,6 +2734,14 @@ void LLFloater::buildButtons(const Params& floater_params)
         mButtons[i] = buttonp;
     }
 
+// <SK:Nexii> The collapse button says which way the floater would fold
+    mCollapseImage = getButtonImage(floater_params, BUTTON_COLLAPSE);
+    mCollapsePressedImage = getButtonPressedImage(floater_params, BUTTON_COLLAPSE);
+    mCollapseSideImage = floater_params.collapse_side_image();
+    mCollapseSidePressedImage = floater_params.collapse_side_pressed_image();
+    mCollapseIconTurned = false;
+// </SK:Nexii>
+
     updateTitleButtons();
 }
 
@@ -3410,6 +3449,18 @@ void LLFloaterView::adjustToFitScreen(LLFloater* floater, bool allow_partial_out
     // tool builds one -- would otherwise hold its floaters to the viewer's.
     const LLRect constraint = snap_in_toolbars ? getSnapRect() : getRect();
     S32 min_overlap_pixels = allow_partial_outside ? FLOATER_MIN_VISIBLE_PIXELS : S32_MAX;
+
+// <SK:Nexii> A collapsed floater was already placed against its edge with the
+// toolbars taken into account. The shove that keeps an expanded floater clear of
+// a toolbar's buttons works on its far edge, which on a bar the depth of a header
+// lands it on the toolbar rather than beside it -- so it is not offered one.
+    if (floater->isMinimized())
+    {
+        const LLRect none;
+        floater->fitWithDependentsOnScreen(none, none, none, constraint, min_overlap_pixels);
+        return;
+    }
+// </SK:Nexii>
 
     floater->fitWithDependentsOnScreen(mToolbarLeftRect, mToolbarBottomRect, mToolbarRightRect, constraint, min_overlap_pixels);
 }

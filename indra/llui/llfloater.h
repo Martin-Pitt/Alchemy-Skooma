@@ -206,6 +206,7 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_image,
 // [/SL:KB]
+                                collapse_side_image, // <SK:Nexii> Shown when the floater would fold to a side of the screen
                                 tear_off_image,
                                 dock_image,
                                 help_image;
@@ -214,6 +215,7 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_pressed_image,
 // [/SL:KB]
+                                collapse_side_pressed_image, // <SK:Nexii>
                                 tear_off_pressed_image,
                                 dock_pressed_image,
                                 help_pressed_image;
@@ -453,6 +455,7 @@ protected:
     LLRect          calcExpandedRect() const;
     LLRect          getCollapseSnapRect();
     void            drawCollapsedBackground(LLUIImage* image, const LLColor4& color);
+    void            updateCollapseButtonIcon();
 // </SK:Nexii>
 
     void            setExpandedRect(const LLRect& rect) { mExpandedRect = rect; } // size when not collapsed
@@ -612,6 +615,13 @@ private:
 
 // <SK:Nexii> A collapsed floater the user moved expands where they left it, not where it came from
     bool            mDraggedWhileCollapsed;
+    // Both pairs, kept because the collapse button swaps between them as the
+    // floater moves and the params they came from are long gone by then.
+    LLPointer<LLUIImage> mCollapseImage;
+    LLPointer<LLUIImage> mCollapsePressedImage;
+    LLPointer<LLUIImage> mCollapseSideImage;
+    LLPointer<LLUIImage> mCollapseSidePressedImage;
+    bool            mCollapseIconTurned { false };
 // </SK:Nexii>
 
     F32             mDefaultRelativeX;

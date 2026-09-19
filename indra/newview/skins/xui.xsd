@@ -20853,7 +20853,9 @@
       <xs:element name="close_image" type="al_any"/>
       <xs:element name="close_pressed_image" type="al_any"/>
       <xs:element name="collapse_image" type="al_any"/>
+      <xs:element name="collapse_side_image" type="al_any"/>
       <xs:element name="collapse_pressed_image" type="al_any"/>
+      <xs:element name="collapse_side_pressed_image" type="al_any"/>
       <xs:element name="commit_callback" type="al_any"/>
       <xs:element name="dock_image" type="al_any"/>
       <xs:element name="dock_pressed_image" type="al_any"/>
@@ -20867,7 +20869,9 @@
       <xs:element name="floater.close_image" type="al_any"/>
       <xs:element name="floater.close_pressed_image" type="al_any"/>
       <xs:element name="floater.collapse_image" type="al_any"/>
+      <xs:element name="floater.collapse_side_image" type="al_any"/>
       <xs:element name="floater.collapse_pressed_image" type="al_any"/>
+      <xs:element name="floater.collapse_side_pressed_image" type="al_any"/>
       <xs:element name="floater.commit_callback" type="al_any"/>
       <xs:element name="floater.dock_image" type="al_any"/>
       <xs:element name="floater.dock_pressed_image" type="al_any"/>
@@ -20992,9 +20996,13 @@
     <xs:attribute name="close_pressed_image" type="xs:string"/>
     <xs:attribute name="close_pressed_image.name" type="xs:string"/>
     <xs:attribute name="collapse_image" type="xs:string"/>
+    <xs:attribute name="collapse_side_image" type="xs:string"/>
     <xs:attribute name="collapse_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_side_image.name" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_side_pressed_image" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_side_pressed_image.name" type="xs:string"/>
     <xs:attribute name="commit_callback" type="xs:string"/>
     <xs:attribute name="commit_callback.control" type="xs:string"/>
     <xs:attribute name="commit_callback.function" type="xs:string"/>
@@ -44265,7 +44273,9 @@
       <xs:element name="close_image" type="al_any"/>
       <xs:element name="close_pressed_image" type="al_any"/>
       <xs:element name="collapse_image" type="al_any"/>
+      <xs:element name="collapse_side_image" type="al_any"/>
       <xs:element name="collapse_pressed_image" type="al_any"/>
+      <xs:element name="collapse_side_pressed_image" type="al_any"/>
       <xs:element name="commit_callback" type="al_any"/>
       <xs:element name="dock_image" type="al_any"/>
       <xs:element name="dock_pressed_image" type="al_any"/>
@@ -44290,7 +44300,9 @@
       <xs:element name="multi_floater.close_image" type="al_any"/>
       <xs:element name="multi_floater.close_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.collapse_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_side_image" type="al_any"/>
       <xs:element name="multi_floater.collapse_pressed_image" type="al_any"/>
+      <xs:element name="multi_floater.collapse_side_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.commit_callback" type="al_any"/>
       <xs:element name="multi_floater.dock_image" type="al_any"/>
       <xs:element name="multi_floater.dock_pressed_image" type="al_any"/>
@@ -44404,9 +44416,13 @@
     <xs:attribute name="close_pressed_image" type="xs:string"/>
     <xs:attribute name="close_pressed_image.name" type="xs:string"/>
     <xs:attribute name="collapse_image" type="xs:string"/>
+    <xs:attribute name="collapse_side_image" type="xs:string"/>
     <xs:attribute name="collapse_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_side_image.name" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image" type="xs:string"/>
+    <xs:attribute name="collapse_side_pressed_image" type="xs:string"/>
     <xs:attribute name="collapse_pressed_image.name" type="xs:string"/>
+    <xs:attribute name="collapse_side_pressed_image.name" type="xs:string"/>
     <xs:attribute name="commit_callback" type="xs:string"/>
     <xs:attribute name="commit_callback.control" type="xs:string"/>
     <xs:attribute name="commit_callback.function" type="xs:string"/>
