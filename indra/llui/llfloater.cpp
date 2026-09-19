@@ -211,7 +211,12 @@ LLFloater::Params::Params()
     header_vpad("header_vpad", 7),
     close_image("close_image"),
     restore_image("restore_image"),
-    collapse_side_image("collapse_side_image"), // <SK:Nexii>
+// <SK:Nexii>
+    collapse_down_image("collapse_down_image"),
+    collapse_up_image("collapse_up_image"),
+    collapse_left_image("collapse_left_image"),
+    collapse_right_image("collapse_right_image"),
+// </SK:Nexii>
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
     collapse_image("collapse_image"),
 // [/SL:KB]
@@ -220,7 +225,12 @@ LLFloater::Params::Params()
     help_image("help_image"),
     close_pressed_image("close_pressed_image"),
     restore_pressed_image("restore_pressed_image"),
-    collapse_side_pressed_image("collapse_side_pressed_image"), // <SK:Nexii>
+// <SK:Nexii>
+    collapse_down_pressed_image("collapse_down_pressed_image"),
+    collapse_up_pressed_image("collapse_up_pressed_image"),
+    collapse_left_pressed_image("collapse_left_pressed_image"),
+    collapse_right_pressed_image("collapse_right_pressed_image"),
+// </SK:Nexii>
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
     collapse_pressed_image("collapse_pressed_image"),
 // [/SL:KB]
@@ -1423,12 +1433,13 @@ LLFloater::ECollapseEdge LLFloater::pickCollapseEdge()
 {
     static LLUICachedControl<bool> prefer_side("SkoomaFloaterCollapsePreferSide", false);
     static LLUICachedControl<F32>  axis_bias("SkoomaFloaterCollapseAxisBias", 0.5f);
+    static LLUICachedControl<S32>  snap_distance("SkoomaFloaterCollapseSnapDistance", 200);
 
     // A floater dragged by its left edge has no header to turn, and one inside
     // a host is not the thing being placed on screen.
     if (mDragOnLeft || getHost())
     {
-        return COLLAPSE_EDGE_TOP;
+        return COLLAPSE_EDGE_NONE;
     }
 
     const LLRect snap = getCollapseSnapRect();
@@ -1445,8 +1456,28 @@ LLFloater::ECollapseEdge LLFloater::pickCollapseEdge()
     const F32 flat_gap = (F32)llmin(to_bottom, to_top);
     const F32 side_gap = (F32)llmin(to_left, to_right);
 
-    // One axis wins outright at a corner; the other has to be this much closer
-    // before it takes the floater. A bias of one makes it plain nearest-edge.
+    // Folding against an edge is only meaningful for a floater already near
+    // one. An axis out of reach is not a candidate; with neither in reach the
+    // floater collapses to its header where it stands.
+    const F32 reach = (F32)llmax((S32)snap_distance, 0);
+    const bool flat_near = flat_gap <= reach;
+    const bool side_near = side_gap <= reach;
+    if (!flat_near && !side_near)
+    {
+        return COLLAPSE_EDGE_NONE;
+    }
+    if (!side_near)
+    {
+        return flat;
+    }
+    if (!flat_near)
+    {
+        return side;
+    }
+
+    // Both in reach, so this is a corner: one axis wins it, and the other has
+    // to be this much closer to take the floater. A bias of one makes it plain
+    // nearest-edge.
     const F32 bias = llclamp((F32)axis_bias, 0.f, 1.f);
     if (prefer_side)
     {
@@ -1460,6 +1491,14 @@ LLRect LLFloater::calcCollapsedRect(ECollapseEdge edge)
     static LLUICachedControl<bool> snap_to_edge("SkoomaFloaterCollapseSnapToEdge", true);
 
     const S32 header = (mHeaderHeight > 0) ? mHeaderHeight : LLFloater::getDefaultParams().header_height;
+
+    // Too far from any edge to fold against one: the header bar, where it is.
+    if (edge == COLLAPSE_EDGE_NONE)
+    {
+        LLRect in_place;
+        in_place.setLeftTopAndSize(mExpandedRect.mLeft, mExpandedRect.mTop, mExpandedRect.getWidth(), header);
+        return in_place;
+    }
 
     // Whichever way it folds, the bar keeps the span the floater already had
     // along the edge it is folding against.
@@ -1489,20 +1528,26 @@ LLRect LLFloater::calcCollapsedRect(ECollapseEdge edge)
 void LLFloater::updateCollapseButtonIcon()
 {
     LLButton* button = mButtons[BUTTON_COLLAPSE];
-    if (!button || !mCollapseSideImage || isMinimized())
+    if (!button || isMinimized())
     {
         return;
     }
 
-    const bool turned = isSideEdge(pickCollapseEdge());
-    if (turned == mCollapseIconTurned)
+    const ECollapseEdge edge = pickCollapseEdge();
+    if (edge == mCollapseIconEdge)
     {
         return;
     }
-    mCollapseIconTurned = turned;
 
-    LLPointer<LLUIImage> unselected = turned ? mCollapseSideImage : mCollapseImage;
-    LLPointer<LLUIImage> pressed = turned ? mCollapseSidePressedImage : mCollapsePressedImage;
+    // A skin that names no glyph for this direction keeps the plain one.
+    LLPointer<LLUIImage> unselected = mCollapseImages[edge];
+    LLPointer<LLUIImage> pressed = mCollapsePressedImages[edge];
+    if (!unselected)
+    {
+        unselected = mCollapseImages[COLLAPSE_EDGE_NONE];
+        pressed = mCollapsePressedImages[COLLAPSE_EDGE_NONE];
+    }
+    mCollapseIconEdge = edge;
 
     button->setImageUnselected(unselected);
     button->setImageSelected(pressed);
@@ -1554,6 +1599,7 @@ LLRect LLFloater::calcExpandedRect() const
     case COLLAPSE_EDGE_RIGHT:
         rect.setLeftTopAndSize(cur.mRight - width, cur.mTop, width, height);
         break;
+    case COLLAPSE_EDGE_NONE:
     case COLLAPSE_EDGE_TOP:
     case COLLAPSE_EDGE_LEFT:
     default:
@@ -2735,11 +2781,19 @@ void LLFloater::buildButtons(const Params& floater_params)
     }
 
 // <SK:Nexii> The collapse button says which way the floater would fold
-    mCollapseImage = getButtonImage(floater_params, BUTTON_COLLAPSE);
-    mCollapsePressedImage = getButtonPressedImage(floater_params, BUTTON_COLLAPSE);
-    mCollapseSideImage = floater_params.collapse_side_image();
-    mCollapseSidePressedImage = floater_params.collapse_side_pressed_image();
-    mCollapseIconTurned = false;
+    mCollapseImages[COLLAPSE_EDGE_NONE] = getButtonImage(floater_params, BUTTON_COLLAPSE);
+    mCollapseImages[COLLAPSE_EDGE_BOTTOM] = floater_params.collapse_down_image();
+    mCollapseImages[COLLAPSE_EDGE_TOP] = floater_params.collapse_up_image();
+    mCollapseImages[COLLAPSE_EDGE_LEFT] = floater_params.collapse_left_image();
+    mCollapseImages[COLLAPSE_EDGE_RIGHT] = floater_params.collapse_right_image();
+
+    mCollapsePressedImages[COLLAPSE_EDGE_NONE] = getButtonPressedImage(floater_params, BUTTON_COLLAPSE);
+    mCollapsePressedImages[COLLAPSE_EDGE_BOTTOM] = floater_params.collapse_down_pressed_image();
+    mCollapsePressedImages[COLLAPSE_EDGE_TOP] = floater_params.collapse_up_pressed_image();
+    mCollapsePressedImages[COLLAPSE_EDGE_LEFT] = floater_params.collapse_left_pressed_image();
+    mCollapsePressedImages[COLLAPSE_EDGE_RIGHT] = floater_params.collapse_right_pressed_image();
+
+    mCollapseIconEdge = COLLAPSE_EDGE_NONE;
 // </SK:Nexii>
 
     updateTitleButtons();
@@ -3209,6 +3263,11 @@ LLRect LLFloaterView::getCollapsedPosition(const LLFloater* floater, LLRect bar,
             r.translate(0, delta);
         }
     };
+
+    if (edge == LLFloater::COLLAPSE_EDGE_NONE)
+    {
+        return bar;
+    }
 
     const LLRect screen = getLocalRect();
     place(bar, outer_of(screen));

@@ -3088,6 +3088,17 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SkoomaFloaterCollapseSnapDistance</key>
+        <map>
+            <key>Comment</key>
+            <string>How near a screen edge a floater has to be, in pixels, before collapsing folds it against that edge. Further out than this it collapses to its header where it stands</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>200</integer>
+        </map>
         <key>SkoomaFloaterCollapsePreferSide</key>
         <map>
             <key>Comment</key>

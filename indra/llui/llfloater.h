@@ -153,13 +153,15 @@ public:
         BUTTON_COUNT
     };
 
-// <SK:Nexii> Collapse replaces minimize; a collapsed floater folds against whichever screen edge it sits nearest
+// <SK:Nexii> Collapse replaces minimize; a collapsed floater near a screen edge folds against it
     enum ECollapseEdge
     {
-        COLLAPSE_EDGE_BOTTOM = 0,   // header bar, floater's own width
+        COLLAPSE_EDGE_NONE = 0,     // header bar, left where the floater already was
+        COLLAPSE_EDGE_BOTTOM,       // header bar, floater's own width
         COLLAPSE_EDGE_TOP,          // header bar, floater's own width
         COLLAPSE_EDGE_LEFT,         // header bar turned 90 degrees counter-clockwise
-        COLLAPSE_EDGE_RIGHT         // header bar turned 90 degrees counter-clockwise
+        COLLAPSE_EDGE_RIGHT,        // header bar turned 90 degrees counter-clockwise
+        COLLAPSE_EDGE_COUNT
     };
 
     static bool     isSideEdge(ECollapseEdge edge) { return edge == COLLAPSE_EDGE_LEFT || edge == COLLAPSE_EDGE_RIGHT; }
@@ -206,7 +208,12 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_image,
 // [/SL:KB]
-                                collapse_side_image, // <SK:Nexii> Shown when the floater would fold to a side of the screen
+// <SK:Nexii> Shown in place of collapse_image when the floater would fold against that screen edge
+                                collapse_down_image,
+                                collapse_up_image,
+                                collapse_left_image,
+                                collapse_right_image,
+// </SK:Nexii>
                                 tear_off_image,
                                 dock_image,
                                 help_image;
@@ -215,7 +222,12 @@ public:
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-3.2
                                 collapse_pressed_image,
 // [/SL:KB]
-                                collapse_side_pressed_image, // <SK:Nexii>
+// <SK:Nexii>
+                                collapse_down_pressed_image,
+                                collapse_up_pressed_image,
+                                collapse_left_pressed_image,
+                                collapse_right_pressed_image,
+// </SK:Nexii>
                                 tear_off_pressed_image,
                                 dock_pressed_image,
                                 help_pressed_image;
@@ -615,13 +627,12 @@ private:
 
 // <SK:Nexii> A collapsed floater the user moved expands where they left it, not where it came from
     bool            mDraggedWhileCollapsed;
-    // Both pairs, kept because the collapse button swaps between them as the
-    // floater moves and the params they came from are long gone by then.
-    LLPointer<LLUIImage> mCollapseImage;
-    LLPointer<LLUIImage> mCollapsePressedImage;
-    LLPointer<LLUIImage> mCollapseSideImage;
-    LLPointer<LLUIImage> mCollapseSidePressedImage;
-    bool            mCollapseIconTurned { false };
+    // One glyph per way the floater could fold, kept because the collapse button
+    // swaps between them as it moves and the params they came from are long
+    // gone by then. Indexed by ECollapseEdge.
+    LLPointer<LLUIImage> mCollapseImages[COLLAPSE_EDGE_COUNT];
+    LLPointer<LLUIImage> mCollapsePressedImages[COLLAPSE_EDGE_COUNT];
+    ECollapseEdge   mCollapseIconEdge { COLLAPSE_EDGE_NONE };
 // </SK:Nexii>
 
     F32             mDefaultRelativeX;

@@ -331,9 +331,15 @@ with the same filename but different name
   
   <texture name="Icon_Collapse_Foreground" file_name="windows/Icon_Collapse_Foreground.png" preload="true" />
   <texture name="Icon_Collapse_Press" file_name="windows/Icon_Collapse_Press.png" preload="true" />
-  <!-- <SK:Nexii> The same glyph turned, for a floater that would collapse to a side of the screen -->
-  <texture name="Icon_Collapse_Side_Foreground" file_name="windows/Icon_Collapse_Side_Foreground.png" preload="true" />
-  <texture name="Icon_Collapse_Side_Press" file_name="windows/Icon_Collapse_Side_Press.png" preload="true" />
+  <!-- <SK:Nexii> A bar and an arrow into it, one per screen edge a floater can collapse against -->
+  <texture name="Icon_Collapse_Down_Foreground" file_name="windows/Icon_Collapse_Down_Foreground.png" preload="true" />
+  <texture name="Icon_Collapse_Down_Press" file_name="windows/Icon_Collapse_Down_Press.png" preload="true" />
+  <texture name="Icon_Collapse_Up_Foreground" file_name="windows/Icon_Collapse_Up_Foreground.png" preload="true" />
+  <texture name="Icon_Collapse_Up_Press" file_name="windows/Icon_Collapse_Up_Press.png" preload="true" />
+  <texture name="Icon_Collapse_Left_Foreground" file_name="windows/Icon_Collapse_Left_Foreground.png" preload="true" />
+  <texture name="Icon_Collapse_Left_Press" file_name="windows/Icon_Collapse_Left_Press.png" preload="true" />
+  <texture name="Icon_Collapse_Right_Foreground" file_name="windows/Icon_Collapse_Right_Foreground.png" preload="true" />
+  <texture name="Icon_Collapse_Right_Press" file_name="windows/Icon_Collapse_Right_Press.png" preload="true" />
   <!-- </SK:Nexii> -->
 
   <texture name="Icon_Paste" file_name="icons/paste_clipboard.png" preload="true" />
