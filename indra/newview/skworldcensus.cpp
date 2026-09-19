@@ -298,12 +298,17 @@ void SKWorldCensus::finishScan()
 bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos)
 {
     static LLCachedControl<F32> settle(gSavedSettings, "SKNavSettleSeconds", 4.f);
+    // The baseline moves only when the root is seen to have moved, so a slow
+    // drift adds up to a move instead of hiding under the epsilon each frame.
     Rest& rest = mRest[root->getID()];
-    if (rest.mKnown && dist_vec(rest.mPosition, pos) > MOVED_EPSILON)
+    if (!rest.mKnown || dist_vec(rest.mPosition, pos) > MOVED_EPSILON)
     {
-        rest.mMovedAt = gFrameTimeSeconds;
+        if (rest.mKnown)
+        {
+            rest.mMovedAt = gFrameTimeSeconds;
+        }
+        rest.mPosition = pos;
     }
-    rest.mPosition = pos;
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
     return rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
@@ -357,8 +362,10 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
 
+    // Cull by the part's reach, not its centre: a 200 m surround whose centre
+    // is far away still hangs into the range.
     const LLVector3d pos = object->getRegion()->getOriginGlobal() + LLVector3d(object->getPositionRegion());
-    if (dist_vec(pos, snap.mCenter) > snap.mRange)
+    if (dist_vec(pos, snap.mCenter) - 0.5 * object->getScale().magVec() > snap.mRange)
     {
         return;
     }
@@ -387,6 +394,10 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
 
     U64 sig = SEED;
+    // The root is part of the signature: relinking changes the cluster a part
+    // belongs to without moving it.
+    sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData));
+    sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData + 8));
     sig = mixVec(sig, object->getPositionRegion());
     sig = mixQuat(sig, object->getRotationRegion());
     sig = mixVec(sig, object->getScale());
