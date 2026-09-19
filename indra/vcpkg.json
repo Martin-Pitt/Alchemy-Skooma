@@ -100,6 +100,7 @@
       ]
     },
     "pugixml",
+    "recastnavigation",
     {
       "name": "sdl3",
       "features": [
