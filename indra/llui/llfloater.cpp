@@ -1433,7 +1433,7 @@ LLFloater::ECollapseEdge LLFloater::pickCollapseEdge()
 {
     static LLUICachedControl<bool> prefer_side("SkoomaFloaterCollapsePreferSide", false);
     static LLUICachedControl<F32>  axis_bias("SkoomaFloaterCollapseAxisBias", 0.5f);
-    static LLUICachedControl<S32>  snap_distance("SkoomaFloaterCollapseSnapDistance", 200);
+    static LLUICachedControl<S32>  snap_distance("SkoomaFloaterCollapseSnapDistance", 100);
 
     // A floater dragged by its left edge has no header to turn, and one inside
     // a host is not the thing being placed on screen.

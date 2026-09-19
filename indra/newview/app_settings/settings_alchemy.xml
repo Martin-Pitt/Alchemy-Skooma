@@ -3097,7 +3097,7 @@
             <key>Type</key>
             <string>S32</string>
             <key>Value</key>
-            <integer>200</integer>
+            <integer>100</integer>
         </map>
         <key>SkoomaFloaterCollapsePreferSide</key>
         <map>
