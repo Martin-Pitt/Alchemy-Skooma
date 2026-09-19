@@ -2822,6 +2822,13 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                     new_v.clear();
                     setAcceleration(LLVector3::zero);
                     mRegionCrossExpire = 0;
+
+                    // <SK:Nexii> Ghosted physical objects: a physical object stopped here without a word from either side of the border may already be gone server-side, so have gObjectList ask once. Seats are skipped: a rider's handoff is slow and its own updates re-home the seat.
+                    if (flagUsePhysics() && !isAvatar() && !isSeat())
+                    {
+                        gObjectList.skWatchGhostCandidate(this, frame_time);
+                    }
+                    // </SK:Nexii>
                 }
             }
         }

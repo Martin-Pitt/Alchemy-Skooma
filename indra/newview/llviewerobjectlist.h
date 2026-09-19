@@ -27,6 +27,7 @@
 #ifndef LL_LLVIEWEROBJECTLIST_H
 #define LL_LLVIEWEROBJECTLIST_H
 
+#include <deque> // <SK:Nexii> Ghosted physical objects
 #include <map>
 #include <set>
 
@@ -131,6 +132,11 @@ public:
     void removeFromActiveList(LLViewerObject* objectp);
     void updateActive(LLViewerObject *objectp);
 
+    // <SK:Nexii> Ghosted physical objects: queue a physical object that stopped predicting a region crossing, and probe the due ones with a silent select so a simulator that no longer owns them answers with KillObject
+    void skWatchGhostCandidate(LLViewerObject* objectp, F64Seconds armed_at);
+    void skProbeGhostCandidates(F64Seconds now);
+    // </SK:Nexii>
+
     void updateAvatarVisibility();
 
     inline S32 getNumObjects() { return (S32) mObjects.size(); }
@@ -220,6 +226,15 @@ protected:
     uuid_set_t   mPendingPhysicsFlags;
 
     std::vector<LLDebugBeacon> mDebugBeacons;
+
+    // <SK:Nexii> Ghosted physical objects: armed in frame order with one fixed delay, so the front is always the next due
+    struct SKGhostCandidate
+    {
+        LLPointer<LLViewerObject> mObject;
+        F64Seconds mArmedAt;
+    };
+    std::deque<SKGhostCandidate> mSKGhostCandidates;
+    // </SK:Nexii>
 
     S32 mCurLazyUpdateIndex;
 

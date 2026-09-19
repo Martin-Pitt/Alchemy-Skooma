@@ -126,7 +126,56 @@ void LLViewerObjectList::destroy()
     mDeadObjects.clear();
     mMapObjects.clear();
     mUUIDObjectMap.clear();
+    mSKGhostCandidates.clear(); // <SK:Nexii> Ghosted physical objects
 }
+
+// <SK:Nexii> Ghosted physical objects
+// A physical object the viewer predicted across a region border and then stopped for lack of
+// any update may be one the simulator has already handed off: neither side speaks of it again
+// and the copy stands at the edge forever. A silent select/deselect makes a simulator answer
+// with KillObject for a local id it no longer owns, which is what culls a ghost when a user
+// clicks one. RequestMultipleObjects cannot: it only refreshes objects that still exist.
+void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp, F64Seconds armed_at)
+{
+    mSKGhostCandidates.push_back({ objectp, armed_at });
+}
+
+void LLViewerObjectList::skProbeGhostCandidates(F64Seconds now)
+{
+    // Grace after the predicted stop, on top of the crossing window already spent predicting.
+    const F64Seconds SK_GHOST_PROBE_DELAY(0.4);
+
+    while (!mSKGhostCandidates.empty() && now - mSKGhostCandidates.front().mArmedAt >= SK_GHOST_PROBE_DELAY)
+    {
+        const SKGhostCandidate candidate = mSKGhostCandidates.front();
+        mSKGhostCandidates.pop_front();
+
+        LLViewerObject* objectp = candidate.mObject;
+        LLViewerRegion* regionp = objectp->getRegion();
+        // Anything heard from a simulator since arming means the object still exists or was re-homed.
+        if (objectp->isDead() || !regionp || objectp->getLocalID() == 0
+            || objectp->mLastMessageUpdateSecs >= candidate.mArmedAt)
+        {
+            continue;
+        }
+
+        LL_DEBUGS("Interpolate") << "Probing possibly ghosted physical object " << objectp->getID()
+                                 << " stopped after a region crossing" << LL_ENDL;
+
+        LLMessageSystem* msg = gMessageSystem;
+        for (const char* message_name : { _PREHASH_ObjectSelect, _PREHASH_ObjectDeselect })
+        {
+            msg->newMessageFast(message_name);
+            msg->nextBlockFast(_PREHASH_AgentData);
+            msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
+            msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+            msg->nextBlockFast(_PREHASH_ObjectData);
+            msg->addU32Fast(_PREHASH_ObjectLocalID, objectp->getLocalID());
+            msg->sendReliable(regionp->getHost());
+        }
+    }
+}
+// </SK:Nexii>
 
 
 void LLViewerObjectList::getUUIDFromLocal(LLUUID &id,
@@ -1058,6 +1107,8 @@ void LLViewerObjectList::update(LLAgent &agent)
             LLViewerTextureAnim::updateClass();
         }
     }
+
+    skProbeGhostCandidates((F64Seconds)frame_time); // <SK:Nexii> Ghosted physical objects
 
 
 
