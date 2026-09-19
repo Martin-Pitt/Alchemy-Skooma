@@ -2375,6 +2375,8 @@ if(AL_BUILD_TESTS)
     SOURCES llsechandler_basic.cpp
   )
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
+  # The recastnavigation port links and runs: a floor, a block, a path round it.
+  al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
   al_add_test(
     llslurl
     PROJECT ${test_project}
