@@ -49,6 +49,7 @@
 #include "lldrawpool.h"
 #include "lloctree.h"
 #include "llphysicsshapebuilderutil.h"
+#include "skphysicsshape.h" // <SK:Nexii> navmesh census shares the physics-shape decision
 #include "llvoavatar.h"
 #include "llvolumemgr.h"
 #include "llviewershadermgr.h"
@@ -2205,12 +2206,13 @@ void render_hull(LLModel::PhysicsMesh& mesh, const LLColor4& color)
 
 void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe)
 {
-    U8 physics_type = volume->getPhysicsShapeType();
-
-    if (physics_type == LLViewerObject::PHYSICS_SHAPE_NONE || volume->isFlexible())
+    // <SK:Nexii> The navmesh census decides the physics shape through the same call (skphysicsshape.h)
+    SKPhysicsShape shape;
+    if (!skPhysicsShapeClassify(volume, shape))
     {
         return;
     }
+    // </SK:Nexii>
 
     //not allowed to return at this point without rendering *something*
 
@@ -2240,15 +2242,10 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
     U32 data_mask = LLVertexBuffer::MAP_VERTEX;
 
-    LLVolumeParams volume_params = volume->getVolume()->getParams();
-
-    LLPhysicsVolumeParams physics_params(volume_params,
-        physics_type == LLViewerObject::PHYSICS_SHAPE_CONVEX_HULL);
-
-    LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification physics_spec;
-    LLPhysicsShapeBuilderUtil::determinePhysicsShape(physics_params, volume->getScale(), physics_spec);
-
+    // <SK:Nexii> spec and type come from the shared decision above
+    LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification physics_spec = shape.mSpec;
     U32 type = physics_spec.getType();
+    // </SK:Nexii>
 
     LLVector3 center(0,0,0);
     LLVector3 size(0.25f,0.25f,0.25f);
