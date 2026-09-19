@@ -97,7 +97,7 @@ namespace sknav
 {
     void ClusterSet::at(const LLVector3d& p, std::vector<ClusterPtr>& out) const
     {
-        const auto it = mByTile.find(TileKey{ tileIndex(p.mdV[VX]), tileIndex(p.mdV[VY]) });
+        const auto it = mByTile.find(TileKey{ cell(p.mdV[VX], mTile), cell(p.mdV[VY], mTile) });
         if (it == mByTile.end())
         {
             return;
@@ -202,6 +202,7 @@ namespace sknav
         }
 
         ClusterSet set;
+        set.mTile = tile;
         for (auto& entry : built)
         {
             std::shared_ptr<Cluster>& c = entry.second;

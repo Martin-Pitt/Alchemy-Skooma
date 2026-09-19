@@ -26,6 +26,7 @@
 #define SK_WORLDCENSUS_H
 
 #include "llsingleton.h"
+#include "llviewerobject.h"
 #include "sknavcluster.h"
 #include "sknavtypes.h"
 
@@ -105,13 +106,17 @@ private:
     {
         LLVector3d mPosition;
         F32 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F32 mLastSeen = 0.f;
         bool mKnown = false;
     };
 
     struct Scan
     {
         std::shared_ptr<SKCensusSnapshot> mPending;
-        S32 mIndex = 0;             ///< next object-list index to look at
+        /// The object list as it stood when the scan began: the live list is
+        /// compacted every frame and would move objects past the cursor.
+        std::vector<LLPointer<LLViewerObject>> mObjects;
+        S32 mIndex = 0;             ///< next entry of mObjects to look at
         std::vector<U64> mRegions;  ///< the region set the scan started with
         F32 mElapsedMs = 0.f;
         bool mActive = false;

@@ -54,6 +54,7 @@ namespace sknav
         std::vector<ClusterPtr> mClusters;
         /// Clusters whose AABB overlaps each lattice tile, for lookups by position.
         std::unordered_map<TileKey, std::vector<ClusterPtr>, TileKeyHash> mByTile;
+        F64 mTile = TILE_M;     ///< the pitch mByTile was built with
 
         /// Clusters whose AABB contains the point.
         void at(const LLVector3d& p, std::vector<ClusterPtr>& out) const;

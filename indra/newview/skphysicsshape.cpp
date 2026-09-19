@@ -32,6 +32,8 @@
 #include "llvolumemgr.h"
 #include "llvovolume.h"
 
+#include <algorithm>
+
 namespace
 {
     typedef LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification Spec;
@@ -97,7 +99,8 @@ namespace
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
 {
     out.mPhysicsType = volume->getPhysicsShapeType();
-    if (out.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_NONE || volume->isFlexible())
+    // A volume arrives before its full update gives it an LLVolume; nothing to say yet.
+    if (out.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_NONE || volume->isFlexible() || !volume->getVolume())
     {
         return false;
     }
@@ -114,6 +117,10 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
     out.mProvenance = sknav::Provenance::EXACT;
 
     Spec spec = shape.mSpec;
+    if (!volume->getVolume())
+    {
+        return false;
+    }
     const LLVolumeParams& params = volume->getVolume()->getParams();
     const LLVector3 scale = volume->getScale();
 
@@ -177,7 +184,9 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             else
             {
                 // The overlay builds a single hull lazily and caches it on the
-                // volume; take it when it is there, and the faces meanwhile.
+                // volume; take it when it is there, and the faces meanwhile
+                // (they sit inside the hull, so an obstacle reads slightly small
+                // until the overlay has been shown once).
                 LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
                 if (phys->mHullPoints && phys->mHullIndices)
                 {
@@ -193,21 +202,22 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             break;
         }
         case Spec::BOX:
-        {
-            // The spec's scale is the world-size box; back it into the unscaled
-            // frame as the overlay does before drawing under the object transform.
-            out.mShape = sknav::Shape::BOX;
-            out.mCenter = spec.getCenter();
-            const LLVector3 world = spec.getScale();
-            out.mHalf.set(world[0] / (2.f * scale[0]), world[1] / (2.f * scale[1]), world[2] / (2.f * scale[2]));
-            break;
-        }
         case Spec::SPHERE:
         case Spec::CYLINDER:
         {
-            out.mShape = spec.getType() == Spec::SPHERE ? sknav::Shape::SPHERE : sknav::Shape::CYLINDER;
-            out.mCenter.setZero();
-            out.mHalf.set(0.5f, 0.5f, 0.5f);
+            // The spec's centre and size are in world units (a cut cylinder is
+            // shorter than its object and sits off-centre); back both into the
+            // unscaled frame so the object transform puts them right.
+            out.mShape = spec.getType() == Spec::BOX ? sknav::Shape::BOX
+                       : spec.getType() == Spec::SPHERE ? sknav::Shape::SPHERE : sknav::Shape::CYLINDER;
+            const LLVector3 centre = spec.getCenter();
+            const LLVector3 size = spec.getScale();
+            for (S32 i = 0; i < 3; ++i)
+            {
+                const F32 s = std::max(scale[i], 1e-4f);
+                out.mCenter.mV[i] = centre[i] / s;
+                out.mHalf.mV[i] = size[i] / (2.f * s);
+            }
             break;
         }
         case Spec::PRIM_MESH:

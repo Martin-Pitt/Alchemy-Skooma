@@ -29,6 +29,8 @@
 #include "llagent.h"
 #include "llappviewer.h"
 #include "llglslshader.h"
+#include "llmeshrepository.h"
+#include "llmodel.h"
 #include "llpathfindinglinkset.h"
 #include "llpathfindingmanager.h"
 #include "llpathfindingobjectlist.h"
@@ -221,6 +223,16 @@ void SKWorldCensus::beginScan()
     mScan.mPending = std::make_shared<SKCensusSnapshot>();
     mScan.mPending->mCenter = gAgent.getPositionGlobal();
     mScan.mPending->mRange = range();
+    mScan.mObjects.clear();
+    const S32 count = gObjectList.getNumObjects();
+    mScan.mObjects.reserve(count);
+    for (S32 i = 0; i < count; ++i)
+    {
+        if (LLViewerObject* object = gObjectList.getObject(i))
+        {
+            mScan.mObjects.push_back(object);
+        }
+    }
     mScan.mIndex = 0;
     mScan.mRegions = regionHandles();
     mScan.mElapsedMs = 0.f;
@@ -230,13 +242,14 @@ void SKWorldCensus::beginScan()
 void SKWorldCensus::abandonScan()
 {
     mScan.mPending.reset();
+    mScan.mObjects.clear();
     mScan.mActive = false;
 }
 
 void SKWorldCensus::continueScan(F32 budget_ms)
 {
     LLTimer timer;
-    const S32 count = gObjectList.getNumObjects();
+    const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)
     {
         if (timer.getElapsedTimeF32() * 1000.f > budget_ms)
@@ -244,12 +257,13 @@ void SKWorldCensus::continueScan(F32 budget_ms)
             mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
             return;
         }
-        LLViewerObject* object = gObjectList.getObject(mScan.mIndex++);
-        if (object)
+        LLViewerObject* object = mScan.mObjects[mScan.mIndex++].get();
+        if (object && !object->isDead())
         {
             visit(object);
         }
     }
+    mScan.mObjects.clear();
     mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
     finishScan();
 }
@@ -269,17 +283,14 @@ void SKWorldCensus::finishScan()
     done->mStats.mRolesKnown = static_cast<U32>(mRoles.size());
     done->mStamp = ++mStamp;
 
-    // Parts not seen for a minute leave the cache.
+    // Parts and roots not seen for a minute leave the caches.
     for (auto it = mParts.begin(); it != mParts.end();)
     {
-        if (gFrameTimeSeconds - it->second.mLastSeen > 60.f)
-        {
-            it = mParts.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
+        it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
+    }
+    for (auto it = mRest.begin(); it != mRest.end();)
+    {
+        it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
     }
     mSnapshot = done;
 }
@@ -293,6 +304,7 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos)
         rest.mMovedAt = gFrameTimeSeconds;
     }
     rest.mPosition = pos;
+    rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
     return rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
 }
@@ -329,6 +341,10 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
     LLVOVolume* volume = static_cast<LLVOVolume*>(object);
+    if (!volume->getVolume())
+    {
+        return;
+    }
     LLViewerObject* root = rootOf(object);
     if (root->isAttachment() || root->asAvatar())
     {
@@ -381,12 +397,45 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, static_cast<U64>(navRole));
     sig = mix(sig, object->isPhysicsShapeUnknown());
     sig = mix(sig, volume->getLOD());
-    if (const LLVolume* v = volume->getVolume())
     {
+        const LLVolume* v = volume->getVolume();
         sig = mix(sig, v->getNumVolumeFaces());
         sig = mix(sig, v->mNumHullPoints);
         sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VX]);
         sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VY]);
+        // The volume parameters: a cut, hollow or twist edit keeps position,
+        // scale and face count and still changes every triangle.
+        const LLVolumeParams& vp = v->getParams();
+        const LLPathParams& path = vp.getPathParams();
+        const LLProfileParams& profile = vp.getProfileParams();
+        sig = mix(sig, path.getCurveType());
+        sig = mixF32(sig, path.getBegin());
+        sig = mixF32(sig, path.getEnd());
+        sig = mixF32(sig, path.getScaleX());
+        sig = mixF32(sig, path.getScaleY());
+        sig = mixF32(sig, path.getShearX());
+        sig = mixF32(sig, path.getShearY());
+        sig = mixF32(sig, path.getTwist());
+        sig = mixF32(sig, path.getTwistBegin());
+        sig = mixF32(sig, path.getRadiusOffset());
+        sig = mixF32(sig, path.getTaperX());
+        sig = mixF32(sig, path.getTaperY());
+        sig = mixF32(sig, path.getRevolutions());
+        sig = mixF32(sig, path.getSkew());
+        sig = mix(sig, profile.getCurveType());
+        sig = mixF32(sig, profile.getBegin());
+        sig = mixF32(sig, profile.getEnd());
+        sig = mixF32(sig, profile.getHollow());
+        const LLUUID& sculpt = vp.getSculptID();
+        sig = mix(sig, *reinterpret_cast<const U64*>(sculpt.mData));
+        sig = mix(sig, *reinterpret_cast<const U64*>(sculpt.mData + 8));
+        // A mesh's decomposition arriving is what turns a placeholder box into
+        // hulls; its state has to move the signature or the box stays for ever.
+        if (volume->isMesh())
+        {
+            const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
+            sig = mix(sig, decomp ? 1 + decomp->mMesh.size() * 4 + decomp->mPhysicsShapeMesh.mPositions.size() + decomp->mBaseHullMesh.mPositions.size() : 0);
+        }
     }
 
     PartCache& cache = mParts[object->getID()];
@@ -497,6 +546,11 @@ void SKWorldCensus::requestRoles()
     if (sameRegion && mRolesRequestedAt >= 0.f && gFrameTimeSeconds - mRolesRequestedAt < every)
     {
         return;
+    }
+    if (!sameRegion)
+    {
+        // Roles are per region; the old region's linksets are gone with it.
+        mRoles.clear();
     }
     mRolesWanted = false;
     mRolesRequestedAt = gFrameTimeSeconds;
