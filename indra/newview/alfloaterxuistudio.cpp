@@ -3366,7 +3366,6 @@ LLView* ALFloaterXUIStudio::buildFromNode(const ALXUICatalog::Entry& entry, ALXU
             floater->setCanResize(false);
             floater->enableResizeCtrls(false);
             floater->setCanClose(false);
-            floater->setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
             floater->setCanCollapse(false);
             floater->setCanTearOff(false);
             floater->setVisible(true);

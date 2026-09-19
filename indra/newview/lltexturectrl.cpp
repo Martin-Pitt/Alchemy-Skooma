@@ -195,7 +195,6 @@ LLFloaterTexturePicker::LLFloaterTexturePicker(
     setTentative(tentative);
     mCanApplyImmediately = can_apply_immediately;
     buildFromFile("floater_texture_ctrl.xml");
-    setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
     setCanCollapse(false);
 }
 

@@ -39,10 +39,9 @@ void LLDockableFloater::init(LLDockableFloater* thiz)
             && thiz->mDockControl.get()->isDockVisible());
     thiz->resetInstance();
 
-    // all dockable floaters should have close, dock and minimize buttons
+    // all dockable floaters should have close, dock and collapse buttons // <SK:Nexii>
     thiz->setCanClose(true);
     thiz->setCanDock(true);
-    thiz->setCanCollapse(true); // <SK:Nexii> Collapse replaces minimize
 // [SL:KB] - Patch: UI-FloaterCollapse | Checked: Catznip-5.2
     thiz->setCanCollapse(true);
 // [/SL:KB]

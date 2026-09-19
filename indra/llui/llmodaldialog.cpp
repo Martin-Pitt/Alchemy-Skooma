@@ -46,7 +46,6 @@ LLModalDialog::LLModalDialog( const LLSD& key, bool modal )
 {
     if (modal)
     {
-        setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
         setCanCollapse(false);
         setCanClose(false);
     }

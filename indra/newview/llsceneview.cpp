@@ -89,7 +89,6 @@ LLSceneView::LLSceneView(const LLRect& rect)
     setRect(rect);
     setVisible(false);
 
-    setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
     setCanCollapse(false);
     setCanClose(true);
 }
