@@ -898,6 +898,7 @@ if(AL_BUILD_VIEWER)
     rlvenvironment.cpp
     sknavcluster.cpp
     skphysicsshape.cpp
+    sknavbuild.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1684,6 +1685,7 @@ if(AL_BUILD_VIEWER)
     sknavcluster.h
     sknavtypes.h
     skphysicsshape.h
+    sknavbuild.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
@@ -1950,6 +1952,7 @@ if(AL_BUILD_VIEWER)
       ll::tinyexr
       ll::minizip
       ll::pugixml
+      ll::recast
       ll::velopack
       ll::webrtc
   )
@@ -2386,6 +2389,8 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
   # Clustering is pure: records in, clusters and tile signatures out.
   al_add_test(sknavcluster UNIT PROJECT ${test_project})
+  # The tile build is pure: records and terrain in, Detour tile data out.
+  al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast)
   al_add_test(
     llslurl
     PROJECT ${test_project}
