@@ -500,6 +500,33 @@ void gl_draw_scaled_image(S32 x, S32 y, S32 width, S32 height, LLTexture* image,
     gl_draw_scaled_rotated_image( x, y, width, height, 0.f, image, color, uv_rect );
 }
 
+// <SK:Nexii>
+LLLocalQuarterTurn::LLLocalQuarterTurn(S32 thickness)
+{
+    // The UI's own placement: where a local point lands is (origin + local)
+    // times the accumulated scale, which is what the pivot below is measured in.
+    const F32 scale_x = LLFontGL::sCurScaleX * LLFontGL::sScaleX;
+    const F32 scale_y = LLFontGL::sCurScaleY * LLFontGL::sScaleY;
+    const F32 origin_x = floorf(LLFontGL::sCurOrigin.mX * scale_x);
+    const F32 origin_y = floorf(LLFontGL::sCurOrigin.mY * scale_y);
+    const F32 depth = (F32)thickness * scale_x;
+
+    gGL.flush();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.translatef(origin_x + depth, origin_y, 0.f);
+    gGL.rotatef(90.f, 0.f, 0.f, 1.f);
+    gGL.translatef(-origin_x, -origin_y, 0.f);
+}
+
+LLLocalQuarterTurn::~LLLocalQuarterTurn()
+{
+    gGL.flush();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+}
+// </SK:Nexii>
+
 void gl_draw_scaled_image_with_border(S32 x, S32 y, S32 border_width, S32 border_height, S32 width, S32 height, LLTexture* image, const LLColor4& color, bool solid_color, const LLRectf& uv_rect, bool scale_inner)
 {
     if (NULL == image)

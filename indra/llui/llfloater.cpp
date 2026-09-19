@@ -46,6 +46,7 @@
 #include "llkeyboard.h"
 #include "llmenugl.h"   // MENU_BAR_HEIGHT
 #include "llmodaldialog.h"
+#include "lllocalcliprect.h"
 #include "lltextbox.h"
 #include "lltoolbar.h"  // LLToolBar::requestRefresh
 #include "llresmgr.h"
@@ -1455,45 +1456,50 @@ LLRect LLFloater::calcCollapsedRect(ECollapseEdge edge)
     static LLUICachedControl<bool> snap_to_edge("SkoomaFloaterCollapseSnapToEdge", true);
 
     const S32 header = (mHeaderHeight > 0) ? mHeaderHeight : LLFloater::getDefaultParams().header_height;
-    const LLRect snap = getCollapseSnapRect();
-    const bool snap_flush = snap_to_edge && getCanDrag() && !isDocked();
 
+    // Whichever way it folds, the bar keeps the span the floater already had
+    // along the edge it is folding against.
     LLRect rect;
     if (!isSideEdge(edge))
     {
-        S32 top = mExpandedRect.mTop;
-        if (edge == COLLAPSE_EDGE_BOTTOM)
-        {
-            top = (snap_flush ? snap.mBottom : mExpandedRect.mBottom) + header;
-        }
-        else if (snap_flush)
-        {
-            top = snap.mTop;
-        }
+        const S32 top = (edge == COLLAPSE_EDGE_BOTTOM) ? mExpandedRect.mBottom + header : mExpandedRect.mTop;
         rect.setLeftTopAndSize(mExpandedRect.mLeft, top, mExpandedRect.getWidth(), header);
-        return rect;
-    }
-
-    // The turned strip is the header bar rotated, so it is as long as the
-    // floater is wide -- but never longer than the screen it has to sit on.
-    const S32 length = llmin(mExpandedRect.getWidth(), snap.getHeight());
-    S32 top = llmin(mExpandedRect.mTop, snap.mTop);
-    top = llmax(top, snap.mBottom + length);
-
-    S32 left = mExpandedRect.mLeft;
-    if (edge == COLLAPSE_EDGE_LEFT)
-    {
-        if (snap_flush)
-        {
-            left = snap.mLeft;
-        }
     }
     else
     {
-        left = (snap_flush ? snap.mRight : mExpandedRect.mRight) - header;
+        const S32 left = (edge == COLLAPSE_EDGE_RIGHT) ? mExpandedRect.mRight - header : mExpandedRect.mLeft;
+        rect.setLeftTopAndSize(left, mExpandedRect.mTop, header, mExpandedRect.getHeight());
     }
-    rect.setLeftTopAndSize(left, top, header, length);
-    return rect;
+
+    LLFloaterView* view = getParentAs<LLFloaterView>();
+    if (!view || !snap_to_edge || !getCanDrag() || isDocked())
+    {
+        return rect;
+    }
+    return view->getCollapsedPosition(this, rect, edge);
+}
+
+void LLFloater::drawCollapsedBackground(LLUIImage* image, const LLColor4& color)
+{
+    const bool turned = isCollapsedToSide();
+    const S32 thickness = turned ? getRect().getWidth()  : getRect().getHeight();
+    const S32 length    = turned ? getRect().getHeight() : getRect().getWidth();
+
+    // A collapsed floater is its own title bar and nothing else, so it is drawn
+    // from the top of the floater's background at the depth that art was cut
+    // for, and the window below it clipped away. Squeezed into a header-deep
+    // rect instead, the nine-slice shrinks its fixed borders to suit and the
+    // title band arrives at a fraction of its height.
+    const S32 natural = llmax(image->getHeight(), thickness);
+    LLLocalClipRect clip(getLocalRect());
+
+    if (turned)
+    {
+        LLLocalQuarterTurn turn(thickness);
+        image->draw(0, thickness - natural, length, natural, color);
+        return;
+    }
+    image->draw(0, thickness - natural, length, natural, color);
 }
 
 LLRect LLFloater::calcExpandedRect() const
@@ -2306,6 +2312,13 @@ void LLFloater::draw()
 
         if (image)
         {
+// <SK:Nexii> A collapsed floater is all title bar, so it is drawn as one
+            if (isMinimized())
+            {
+                drawCollapsedBackground(image, overlay_color % alpha);
+            }
+            else
+// </SK:Nexii>
             // We're using images for this floater's backgrounds
             image->draw(getLocalRect(), overlay_color % alpha);
         }
@@ -2323,8 +2336,11 @@ void LLFloater::draw()
 
                 const LLFontGL* font = LLFontGL::getFontSansSerif();
                 LLRect r = getRect();
-                gl_rect_2d_offset_local(0, r.getHeight(), r.getWidth(), r.getHeight() - font->getLineHeight() - 1,
+// <SK:Nexii> Collapsed, the whole of it is the title bar
+                const S32 band = isMinimized() ? r.getHeight() : (font->getLineHeight() + 1);
+                gl_rect_2d_offset_local(0, r.getHeight(), r.getWidth(), r.getHeight() - band,
                     titlebar_focus_color % alpha, 0, true);
+// </SK:Nexii>
             }
         }
     }
@@ -3105,6 +3121,115 @@ void LLFloaterView::focusFrontFloater()
     }
 }
 
+// <SK:Nexii> Touching is not colliding: a bar placed flush against a toolbar, or
+// stacked on another bar, shares an edge with it and must not be pushed again.
+static bool rects_collide(const LLRect& a, const LLRect& b)
+{
+    return a.mLeft < b.mRight && a.mRight > b.mLeft
+        && a.mBottom < b.mTop && a.mTop > b.mBottom;
+}
+
+// Where a collapsed bar folds to. Flush against the screen itself
+// rather than the snap rect, since a bar the depth of a header is not competing
+// with the chrome for room -- except where a toolbar is in the way, which it sits
+// against instead. Anything already folded there is stacked over rather than
+// covered.
+LLRect LLFloaterView::getCollapsedPosition(const LLFloater* floater, LLRect bar, LLFloater::ECollapseEdge edge) const
+{
+    // The bar's outer edge is the one that meets whatever it folds against; its
+    // inner edge is the one the next bar stacks on.
+    const auto outer_of = [edge](const LLRect& r) -> S32
+    {
+        switch (edge)
+        {
+        case LLFloater::COLLAPSE_EDGE_BOTTOM: return r.mBottom;
+        case LLFloater::COLLAPSE_EDGE_TOP:    return r.mTop;
+        case LLFloater::COLLAPSE_EDGE_LEFT:   return r.mLeft;
+        default:                              return r.mRight;
+        }
+    };
+    const auto inner_of = [edge](const LLRect& r) -> S32
+    {
+        switch (edge)
+        {
+        case LLFloater::COLLAPSE_EDGE_BOTTOM: return r.mTop;
+        case LLFloater::COLLAPSE_EDGE_TOP:    return r.mBottom;
+        case LLFloater::COLLAPSE_EDGE_LEFT:   return r.mRight;
+        default:                              return r.mLeft;
+        }
+    };
+    const auto place = [edge, &outer_of](LLRect& r, S32 outer)
+    {
+        const S32 delta = outer - outer_of(r);
+        if (edge == LLFloater::COLLAPSE_EDGE_LEFT || edge == LLFloater::COLLAPSE_EDGE_RIGHT)
+        {
+            r.translate(delta, 0);
+        }
+        else
+        {
+            r.translate(0, delta);
+        }
+    };
+
+    const LLRect screen = getLocalRect();
+    place(bar, outer_of(screen));
+
+    LLRect toolbar;
+    switch (edge)
+    {
+    case LLFloater::COLLAPSE_EDGE_BOTTOM: toolbar = mToolbarBottomRect; break;
+    case LLFloater::COLLAPSE_EDGE_LEFT:   toolbar = mToolbarLeftRect;   break;
+    case LLFloater::COLLAPSE_EDGE_RIGHT:  toolbar = mToolbarRightRect;  break;
+    default:                              toolbar = mToolbarTopRect;    break;
+    }
+    if (toolbar.notEmpty() && rects_collide(toolbar, bar))
+    {
+        place(bar, inner_of(toolbar));
+    }
+
+    // One pass per bar already folded here, and there cannot be more of those
+    // than there are children.
+    for (S32 pass = 0, passes = getChildCount(); pass <= passes; ++pass)
+    {
+        const LLFloater* blocker = nullptr;
+        for (const LLView* child : *getChildList())
+        {
+            const LLFloater* other = static_cast<const LLFloater*>(child);
+            // Only what is folded against this same edge: stacking clear of a
+            // strip down one side would throw a bar at the bottom the whole
+            // height of that strip, which is not what is in the way.
+            if (other == floater || !other->isMinimized() || !other->getVisible() || other->getCollapseEdge() != edge)
+            {
+                continue;
+            }
+            if (rects_collide(other->getRect(), bar))
+            {
+                blocker = other;
+                break;
+            }
+        }
+        if (!blocker)
+        {
+            break;
+        }
+
+        LLRect stacked = bar;
+        place(stacked, inner_of(blocker->getRect()));
+
+        // Stacking runs away from the edge, so the far side of the screen is
+        // where it has to stop; a bar wider than the screen is still stackable.
+        const S32 outward = (edge == LLFloater::COLLAPSE_EDGE_BOTTOM || edge == LLFloater::COLLAPSE_EDGE_LEFT) ? 1 : -1;
+        if ((inner_of(stacked) - inner_of(screen)) * outward > 0)
+        {
+            break;
+        }
+        bar = stacked;
+    }
+
+    return bar;
+}
+// </SK:Nexii>
+
 void LLFloaterView::destroyAllChildren()
 {
     LLView::deleteAllChildren();
@@ -3525,8 +3650,9 @@ void LLFloaterView::setToolbarRect(LLToolBarEnums::EToolBarLocation tb, const LL
         mToolbarRightRect = toolbar_rect;
         break;
     case LLToolBarEnums::TOOLBAR_TOP:
-        // Only the left, bottom and right rects are consulted, by
-        // fitWithDependentsOnScreen.
+        // <SK:Nexii> fitWithDependentsOnScreen still consults only the other
+        // three; this one is here for where a collapsed floater folds to.
+        mToolbarTopRect = toolbar_rect;
         break;
     default:
         LL_WARNS() << "setToolbarRect() passed odd toolbar number " << (S32) tb << LL_ENDL;

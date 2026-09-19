@@ -118,6 +118,21 @@ void gl_washer_angular_2d(F32 outer_radius, F32 inner_radius,
 
 void gl_draw_image(S32 x, S32 y, LLTexture* image, const LLColor4& color = UI_VERTEX_COLOR, const LLRectf& uv_rect = LLRectf(0.f, 1.f, 1.f, 0.f));
 void gl_draw_scaled_target(S32 x, S32 y, S32 width, S32 height, LLRenderTarget* target, const LLColor4& color = UI_VERTEX_COLOR, const LLRectf& uv_rect = LLRectf(0.f, 1.f, 1.f, 0.f));
+// <SK:Nexii> Draws what follows turned ninety degrees counter-clockwise about the
+// current view's origin, shifted back so a strip `thickness` deep lands where the
+// unturned drawing would have started. Scissor rects stay axis-aligned in screen
+// space, so a clip around a turned drawing has to be the strip it lands in.
+class LLLocalQuarterTurn
+{
+public:
+    LLLocalQuarterTurn(S32 thickness);
+    ~LLLocalQuarterTurn();
+
+    LLLocalQuarterTurn(const LLLocalQuarterTurn&) = delete;
+    LLLocalQuarterTurn& operator=(const LLLocalQuarterTurn&) = delete;
+};
+// </SK:Nexii>
+
 void gl_draw_scaled_image(S32 x, S32 y, S32 width, S32 height, LLTexture* image, const LLColor4& color = UI_VERTEX_COLOR, const LLRectf& uv_rect = LLRectf(0.f, 1.f, 1.f, 0.f));
 void gl_draw_rotated_image(S32 x, S32 y, F32 degrees, LLTexture* image, const LLColor4& color = UI_VERTEX_COLOR, const LLRectf& uv_rect = LLRectf(0.f, 1.f, 1.f, 0.f));
 void gl_draw_scaled_rotated_image(S32 x, S32 y, S32 width, S32 height, F32 degrees, LLTexture* image, const LLColor4& color = UI_VERTEX_COLOR, const LLRectf& uv_rect = LLRectf(0.f, 1.f, 1.f, 0.f), LLRenderTarget* target = NULL);

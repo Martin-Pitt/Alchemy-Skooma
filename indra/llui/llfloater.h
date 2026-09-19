@@ -452,6 +452,7 @@ protected:
     LLRect          calcCollapsedRect(ECollapseEdge edge);
     LLRect          calcExpandedRect() const;
     LLRect          getCollapseSnapRect();
+    void            drawCollapsedBackground(LLUIImage* image, const LLColor4& color);
 // </SK:Nexii>
 
     void            setExpandedRect(const LLRect& rect) { mExpandedRect = rect; } // size when not collapsed
@@ -686,6 +687,12 @@ public:
 
     void setToolbarRect(LLToolBarEnums::EToolBarLocation tb, const LLRect& toolbar_rect);
 
+// <SK:Nexii> Where a collapsed bar of this shape sits against `edge`: flush to the
+// screen, clear of any toolbar in the way, and stacked outwards over whatever is
+// already folded there.
+    LLRect          getCollapsedPosition(const LLFloater* floater, LLRect bar, LLFloater::ECollapseEdge edge) const;
+// </SK:Nexii>
+
 private:
     void hiddenFloaterClosed(LLFloater* floater);
 
@@ -693,6 +700,7 @@ private:
     LLRect              mToolbarLeftRect;
     LLRect              mToolbarBottomRect;
     LLRect              mToolbarRightRect;
+    LLRect              mToolbarTopRect; // <SK:Nexii> What a floater collapsing to the top edge has to clear
     LLHandle<LLView>    mSnapView;
     bool            mFocusCycleMode;
     typedef std::vector<std::pair<LLHandle<LLFloater>, boost::signals2::connection> > hidden_floaters_t;

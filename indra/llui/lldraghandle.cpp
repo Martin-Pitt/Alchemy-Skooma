@@ -38,6 +38,7 @@
 #include "lltextbox.h"
 #include "llcontrol.h"
 #include "llfontgl.h"
+#include "lllocalcliprect.h"
 #include "llrender.h"
 #include "llwindow.h"
 #include "llfocusmgr.h"
@@ -183,26 +184,12 @@ void LLDragHandleTop::draw()
 // <SK:Nexii> Turn the header, title and all, when the floater is collapsed to a side
     if (mTurned)
     {
-        // The font's own placement convention, so that the pivot this rotates
-        // about is the one the glyphs are about to be measured against.
-        const F32 scale_x = LLFontGL::sCurScaleX * LLFontGL::sScaleX;
-        const F32 scale_y = LLFontGL::sCurScaleY * LLFontGL::sScaleY;
-        const F32 origin_x = floorf(LLFontGL::sCurOrigin.mX * scale_x);
-        const F32 origin_y = floorf(LLFontGL::sCurOrigin.mY * scale_y);
-        const F32 strip_width = (F32)getRect().getWidth() * scale_x;
-
-        gGL.flush();
-        gGL.matrixMode(LLRender::MM_MODELVIEW);
-        gGL.pushMatrix();
-        gGL.translatef(origin_x + strip_width, origin_y, 0.f);
-        gGL.rotatef(90.f, 0.f, 0.f, 1.f);
-        gGL.translatef(-origin_x, -origin_y, 0.f);
-
+        // The strip is axis-aligned even though what lands in it is not, so a
+        // scissor around it still means what it says -- and the title, drawn
+        // through the turn, has had to give up its own.
+        LLLocalClipRect clip(getLocalRect());
+        LLLocalQuarterTurn turn(getRect().getWidth());
         LLView::draw();
-
-        gGL.flush();
-        gGL.matrixMode(LLRender::MM_MODELVIEW);
-        gGL.popMatrix();
         return;
     }
 // </SK:Nexii>
