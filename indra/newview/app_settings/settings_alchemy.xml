@@ -1022,7 +1022,7 @@
         <key>AlchemyMouselookIFFMarkers</key>
         <map>
             <key>Comment</key>
-            <string>Display target markers for offscreen avatars in mouselook</string>
+            <string>Display target markers for offscreen avatars in mouselook (restricted to your active group where damage is enabled)</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

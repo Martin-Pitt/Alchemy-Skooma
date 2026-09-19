@@ -175,7 +175,7 @@
    layout="topleft"
    left_delta="0"
    name="alchemy_mlook_iff_markers"
-   tool_tip="Shows arrows on the sides of the screen for users not currently visible."
+   tool_tip="Shows arrows on the sides of the screen for users not currently visible. In a damage-enabled area only members of your active group are shown."
    top_pad="0"
    width="256" />
   <text

@@ -57,6 +57,52 @@
 #include "lltrans.h"
 #include "lltracker.h"
 #include "rlvhandler.h"
+// <SK:Nexii> AlchemyMouselookIFFMarkers restricted to your own group in combat areas
+#include "llgroupmgr.h"
+#include "llviewerparcelmgr.h"
+
+namespace
+{
+    // Damage is enabled where the agent stands, so a marker on an avatar the agent
+    // cannot see is worth more than the feature is meant to give away.
+    bool inCombatArea()
+    {
+        LLViewerParcelMgr* parcel_mgr = LLViewerParcelMgr::getInstance();
+        return parcel_mgr->allowAgentDamage(gAgent.getRegion(), parcel_mgr->getAgentParcel());
+    }
+
+    // The member list of the agent's active group, or null while it is unknown -- which
+    // is the answer that marks nobody. A roster we have not got yet is asked for here,
+    // and LLGroupMgr drops rosters nothing is observing, so keep asking.
+    const LLGroupMgrGroupData::member_list_t* activeGroupRoster()
+    {
+        constexpr F32 REQUEST_INTERVAL = 30.f;
+
+        const LLUUID& group_id = gAgent.getGroupID();
+        if (group_id.isNull())
+        {
+            return nullptr;
+        }
+
+        LLGroupMgr* group_mgr = LLGroupMgr::getInstance();
+        LLGroupMgrGroupData* group_data = group_mgr->getGroupData(group_id);
+        if (group_data && group_data->isMemberDataComplete())
+        {
+            return &group_data->mMembers;
+        }
+
+        static LLFrameTimer request_timer;
+        static LLUUID requested_group;
+        if (requested_group != group_id || request_timer.hasExpired())
+        {
+            requested_group = group_id;
+            request_timer.resetWithExpiry(REQUEST_INTERVAL);
+            group_mgr->sendCapGroupMembersRequest(group_id);
+        }
+        return nullptr;
+    }
+}
+// </SK:Nexii>
 
 LLToolGun::LLToolGun( LLToolComposite* composite )
 :   LLTool( std::string("gun"), composite ),
@@ -182,6 +228,11 @@ void LLToolGun::draw()
     {
         bool target_rendered = false;
 
+        // <SK:Nexii> AlchemyMouselookIFFMarkers restricted to your own group in combat areas
+        const bool markers_group_only = show_iff_markers && inCombatArea();
+        const LLGroupMgrGroupData::member_list_t* group_roster = markers_group_only ? activeGroupRoster() : nullptr;
+        // </SK:Nexii>
+
         LLVector3d myPosition = gAgentCamera.getCameraPositionGlobal();
         LLQuaternion myRotation = LLViewerCamera::getInstance()->getQuaternion();
         myRotation.set(-myRotation.mQ[VX], -myRotation.mQ[VY], -myRotation.mQ[VZ], myRotation.mQ[VW]);
@@ -202,10 +253,15 @@ void LLToolGun::draw()
                 marker_color = ALAvatarGroups::instance().getAvatarColor(id, LLColor4::white, ALAvatarGroups::COLOR_MINIMAP);
             marker_color.mV[VALPHA] = 0.75f;
 
-            if (show_iff_markers)
+            // <SK:Nexii> AlchemyMouselookIFFMarkers: in a combat area a marker is only drawn
+            // for a member of your own group, so the feature cannot find an opponent for you.
+            const bool draw_marker = show_iff_markers
+                && (!markers_group_only || (group_roster && group_roster->count(id) != 0));
+            if (draw_marker)
             {
                 LLTracker::instance()->drawMarker(targetPosition, marker_color, true);
             }
+            // </SK:Nexii>
 
             if (!target_rendered && !gRlvHandler.hasBehaviour(RLV_BHVR_SHOWNAMES))
             {
