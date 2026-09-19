@@ -3512,6 +3512,116 @@
             <key>Value</key>
             <real>4.0</real>
         </map>
+        <key>SKNavAvatarRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of radius the avatar class of the navmesh is eroded by.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
+        </map>
+        <key>SKNavBuildWeather</key>
+        <map>
+            <key>Comment</key>
+            <string>Also build the weather class of the navmesh (0.5 m headroom, no erosion).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavBuildsInFlight</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh tile builds allowed on the worker at once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
+        <key>SKNavBuildsPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh tile builds launched per frame at most.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
+        <key>SKNavCell</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh cell size in metres, horizontal and vertical.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.125</real>
+        </map>
+        <key>SKNavClimb</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of step the navmesh still treats as connected floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.75</real>
+        </map>
+        <key>SKNavMeshAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the navmesh even when the overlay is off and no consumer asked.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the agent the navmesh overlay draws polygons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>96.0</real>
+        </map>
+        <key>SKNavSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope the navmesh still treats as floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>45.0</real>
+        </map>
+        <key>SKNavWeatherHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of headroom the weather class of the navmesh needs.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
     </map>
 </llsd>
 

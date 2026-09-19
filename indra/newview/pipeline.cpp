@@ -107,6 +107,7 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
+#include "sknavmesh.h" // <SK:Nexii> navmesh overlay
 #include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
@@ -9397,6 +9398,7 @@ void LLPipeline::renderFinalize()
     if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH))
     {
         SKWorldCensus::instance().renderDebug();
+        SKNavMesh::instance().renderDebug();
     }
     // </SK:Nexii>
 

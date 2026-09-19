@@ -899,6 +899,7 @@ if(AL_BUILD_VIEWER)
     sknavcluster.cpp
     skphysicsshape.cpp
     sknavbuild.cpp
+    sknavmesh.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1686,6 +1687,7 @@ if(AL_BUILD_VIEWER)
     sknavtypes.h
     skphysicsshape.h
     sknavbuild.h
+    sknavmesh.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
