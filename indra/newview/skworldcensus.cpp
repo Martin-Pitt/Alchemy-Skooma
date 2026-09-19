@@ -622,7 +622,7 @@ void SKWorldCensus::renderDebug()
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTextureSlot(0)->unbind();
 
-    gGL.begin(LLRender::LINES);
+    // gDebugProgram takes its colour as a uniform, so each colour is its own batch.
     for (const RecordPtr& r : snap->mRecords)
     {
         switch (r->mProvenance)
@@ -636,15 +636,18 @@ void SKWorldCensus::renderDebug()
         {
             gGL.diffuseColor4f(1.f, 1.f, 0.2f, 0.8f);
         }
+        gGL.begin(LLRender::LINES);
         lineBox(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax));
+        gGL.end();
     }
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
         const U32 h = static_cast<U32>(mix(SEED, c->mId.mData[0] | (c->mId.mData[1] << 8) | (c->mId.mData[2] << 16)));
         gGL.diffuseColor4f(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f), 0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
+        gGL.begin(LLRender::LINES);
         lineBox(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax));
+        gGL.end();
     }
-    gGL.end();
     gGL.flush();
     gDebugProgram.unbind();
 }
