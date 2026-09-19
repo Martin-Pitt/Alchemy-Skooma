@@ -1973,8 +1973,6 @@ LLVolume::LLVolume(const LLVolumeParams &params, const F32 detail, const bool ge
     mNumHullIndices = 0;
 
     // set defaults
-    mSculptValidationCache.fill(LLSculptValidationState::Unvalidated);
-
     if (mParams.getPathParams().getCurveType() == LL_PCODE_PATH_FLEXIBLE)
     {
         mPathp = new LLDynamicPath();
@@ -2000,13 +1998,6 @@ void LLVolume::resizePath(S32 length)
     mPathp->resizePath(length);
     mVolumeFaces.clear();
     setDirty();
-}
-
-void LLVolume::setDirty()
-{
-    mPathp->setDirty();
-    mProfilep->setDirty();
-    mSculptValidationCache.fill(LLSculptValidationState::Unvalidated);
 }
 
 void LLVolume::regen()
@@ -2446,13 +2437,15 @@ bool LLVolume::unpackVolumeFacesInternal(const LLSD& mdl)
             // dereferencing is strict-aliasing UB (you may not access a
             // char-typed object through a non-char pointer). std::memcpy is
             // defined and compiles down to a load on every supported target.
-            const U8* indices_bytes = idx.data();
-            LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("unpackVolumeFaces - indices");
-            for (U32 j = 0; j < num_indices; ++j)
             {
-                U16 idx_v;
-                std::memcpy(&idx_v, indices_bytes + j * sizeof(U16), sizeof(U16));
-                face.mIndices[j] = idx_v;
+                const U8* indices_bytes = idx.data();
+                LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("unpackVolumeFaces - indices");
+                for (U32 j = 0; j < num_indices; ++j)
+                {
+                    U16 idx_v;
+                    std::memcpy(&idx_v, indices_bytes + j * sizeof(U16), sizeof(U16));
+                    face.mIndices[j] = idx_v;
+                }
             }
 
             //copy out vertices
@@ -2731,36 +2724,38 @@ bool LLVolume::unpackVolumeFacesInternal(const LLSD& mdl)
 
             //calculate bounding box
             // VFExtents change
-            LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("unpackVolumeFaces - extents");
-            LLVector4a& min = face.mExtents[0];
-            LLVector4a& max = face.mExtents[1];
-
-            if (face.mNumVertices < 3)
-            { //empty face, use a dummy 1cm (at 1m scale) bounding box
-                min.splat(-0.005f);
-                max.splat(0.005f);
-            }
-            else
             {
-                alsimd::extents(face.mPositions, face.mNumVertices, min, max);
+                LL_PROFILE_ZONE_NAMED_CATEGORY_VOLUME("unpackVolumeFaces - extents");
+                LLVector4a& min = face.mExtents[0];
+                LLVector4a& max = face.mExtents[1];
 
-                if (face.mTexCoords)
-                {
-                    LLVector2& min_tc = face.mTexCoordExtents[0];
-                    LLVector2& max_tc = face.mTexCoordExtents[1];
-
-                    min_tc = face.mTexCoords[0];
-                    max_tc = face.mTexCoords[0];
-
-                    for (S32 j = 1; j < face.mNumVertices; ++j)
-                    {
-                        update_min_max(min_tc, max_tc, face.mTexCoords[j]);
-                    }
+                if (face.mNumVertices < 3)
+                { //empty face, use a dummy 1cm (at 1m scale) bounding box
+                    min.splat(-0.005f);
+                    max.splat(0.005f);
                 }
                 else
                 {
-                    face.mTexCoordExtents[0].set(0,0);
-                    face.mTexCoordExtents[1].set(1,1);
+                    alsimd::extents(face.mPositions, face.mNumVertices, min, max);
+
+                    if (face.mTexCoords)
+                    {
+                        LLVector2& min_tc = face.mTexCoordExtents[0];
+                        LLVector2& max_tc = face.mTexCoordExtents[1];
+
+                        min_tc = face.mTexCoords[0];
+                        max_tc = face.mTexCoords[0];
+
+                        for (S32 j = 1; j < face.mNumVertices; ++j)
+                        {
+                            update_min_max(min_tc, max_tc, face.mTexCoords[j]);
+                        }
+                    }
+                    else
+                    {
+                        face.mTexCoordExtents[0].set(0,0);
+                        face.mTexCoordExtents[1].set(1,1);
+                    }
                 }
             }
         }
@@ -3207,100 +3202,10 @@ S32 sculpt_sides(F32 detail)
     }
 }
 
-static bool validate_sculpt_geometry(const LLVolume* volume)
-{
-    if (!volume || volume->getNumVolumeFaces() == 0)
-    {
-        return true;
-    }
 
-    // Validate each face in the sculpt
-    for (S32 face_idx = 0; face_idx < volume->getNumVolumeFaces(); ++face_idx)
-    {
-        const LLVolumeFace& face = volume->getVolumeFace(face_idx);
-
-        // Skip validation for degenerate faces
-        if (face.mNumVertices < 3 || face.mNumIndices < 3)
-        {
-            continue;
-        }
-
-        // Calculate 'bounding' surface
-        LLVector4a extent_size;
-        extent_size.setSub(face.mExtents[1], face.mExtents[0]);
-
-        F32 width = extent_size[0];
-        F32 height = extent_size[1];
-        F32 depth = extent_size[2];
-
-        F32 bounding_surface = width * height + width * depth + height * depth;
-        bounding_surface *= 2;
-
-        if (!llfinite(bounding_surface) || bounding_surface <= FLT_EPSILON)
-        {
-            return false;
-        }
-
-        // Calculate total surface area of all triangles
-        F32 total_triangle_area = 0.0f;
-        S32 num_triangles = face.mNumIndices / 3;
-
-        for (S32 i = 0; i < num_triangles; ++i)
-        {
-            S32 idx_base = i * 3;
-            U16 idx0 = face.mIndices[idx_base];
-            U16 idx1 = face.mIndices[idx_base + 1];
-            U16 idx2 = face.mIndices[idx_base + 2];
-
-            // Validate indices
-            if (idx0 >= face.mNumVertices || idx1 >= face.mNumVertices || idx2 >= face.mNumVertices)
-            {
-                continue;
-            }
-
-            const LLVector4a& v0 = face.mPositions[idx0];
-            const LLVector4a& v1 = face.mPositions[idx1];
-            const LLVector4a& v2 = face.mPositions[idx2];
-
-            // Calculate triangle area
-            LLVector4a edge1, edge2, cross;
-            edge1.setSub(v1, v0);
-            edge2.setSub(v2, v0);
-            cross.setCross3(edge1, edge2);
-
-            F32 triangle_area = cross.getLength3().getF32() * 0.5f;
-            total_triangle_area += triangle_area;
-        }
-
-        if (!llfinite(total_triangle_area))
-        {
-            return false;
-        }
-
-        // The idea here is that the total area of a sculpt is normally comparable
-        // to the area of a bounding box. But a random overlapping collection of
-        // triangles has a significantly larger area than a sculpt normally has.
-        F32 area_ratio = total_triangle_area / bounding_surface;
-
-        constexpr F32 MAX_AREA_TO_AREA_RATIO = 16.0f;
-        if (area_ratio > MAX_AREA_TO_AREA_RATIO)
-        {
-            LL_DEBUGS("LLVOLUME") << "Sculpt rejected: excessive triangle area."
-                << "  Face index: " << face_idx
-                << "  Total triangle area: " << total_triangle_area << " sq m"
-                << "  Bounding surface area: " << bounding_surface << " sq m"
-                << "  Ratio: " << area_ratio
-                << "  Triangle count: " << num_triangles
-                << "  Bounds: [" << width << " x " << height << " x " << depth << "]" << LL_ENDL;
-            return false;
-        }
-    }
-
-    return true;
-}
 
 // determine the number of vertices in both s and t direction for this sculpt
-static void sculpt_calc_mesh_resolution(U16 width, U16 height, U8 type, F32 detail, S32& s, S32& t)
+void sculpt_calc_mesh_resolution(U16 width, U16 height, U8 type, F32 detail, S32& s, S32& t)
 {
     // this code has the following properties:
     // 1) the aspect ratio of the mesh is as close as possible to the ratio of the map
@@ -3410,62 +3315,10 @@ void LLVolume::sculpt(U16 sculpt_width, U16 sculpt_height, S8 sculpt_components,
 
     mSculptLevel = sculpt_level;
 
-    LLSculptValidationState cached_state = LLSculptValidationState::Valid;
-    if (!data_is_empty && (sculpt_level >= 0) && sculpt_level < SCULPT_CACHE_SIZE)
-    {
-        // validation might be expensive, so we do it only once per lod.
-        cached_state = mSculptValidationCache[sculpt_level];
-    }
+    // Delete any existing faces so that they get regenerated
+    mVolumeFaces.clear();
 
-    switch (cached_state)
-    {
-    case LLSculptValidationState::Valid:
-        {
-            // Delete any existing faces, then regenerate
-            mVolumeFaces.clear();
-            createVolumeFaces();
-            break;
-        }
-    case LLSculptValidationState::Invalid:
-        {
-            // Invalid geometry
-            // Regenerate mesh with an empty placeholder
-            mVolumeFaces.clear();
-            sculptGenerateEmptyPlaceholder();
-            createVolumeFaces();
-            break;
-        }
-    case LLSculptValidationState::Unvalidated:
-        {
-            // First time at this LOD
-            mVolumeFaces.clear();
-            createVolumeFaces();
-
-            bool valid_geometry = true;
-
-            // Todo: can this be backed into createVolumeFaces?
-            // Or calculated without having to call createVolumeFaces first?
-            // Todo 2: should the same be done for meshes?
-            valid_geometry = validate_sculpt_geometry(this);
-            mSculptValidationCache[sculpt_level] = valid_geometry ? LLSculptValidationState::Valid : LLSculptValidationState::Invalid;
-
-            if (!valid_geometry)
-            {
-                LL_WARNS("LLVOLUME") << "Sculpt failed geometry validation - either invalid image or malicious. "
-                    << "Replacing with placeholder. Image: " << mParams.getSculptID() << LL_ENDL;
-
-                // Clear the malicious faces
-                mVolumeFaces.clear();
-
-                // Regenerate mesh with empty placeholder
-                sculptGenerateEmptyPlaceholder();
-
-                // Recreate faces with placeholder geometry
-                createVolumeFaces();
-            }
-            break;
-        }
-    } //switch (cached_state)
+    createVolumeFaces();
 }
 
 
