@@ -49,9 +49,25 @@ namespace
 {
     using namespace sknav;
 
-    const F32 TILE_PAD_M = 2.f;         ///< geometry and terrain taken this far beyond the tile
-    const S32 MAX_TILES_PER_MESH = 4096;
+    // Detour packs tile, poly and salt bits into 32: 10 + 12 leaves the 10 salt
+    // bits init insists on. 1024 tiles is a square kilometre per structure.
+    const S32 MAX_TILES_PER_MESH = 1024;
     const S32 MAX_POLYS_PER_TILE = 4096;
+
+    /// How far past a tile geometry and terrain are taken: Recast's border
+    /// (radius cells + 3) for the widest class, plus a metre of terrain grid.
+    F32 padFor(const TileBuildInput& params)
+    {
+        F32 border = 0.f;
+        for (S32 c = 0; c < NUM_CLASSES; ++c)
+        {
+            if (params.mClasses[c])
+            {
+                border = std::max(border, (std::ceil(params.mParams[c].mRadius / params.mCell) + 3.f) * params.mCell);
+            }
+        }
+        return border + 1.f;
+    }
 
     LLVector3d tileMin(const LLVector3d& origin, const TileKey& key)
     {
@@ -123,6 +139,8 @@ bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
     if (!dtStatusSucceed(nav->init(&p)))
     {
         dtFreeNavMesh(nav);
+        mStats.mFailures++;
+        LL_WARNS_ONCE("SKNav") << "dtNavMesh::init refused " << MAX_TILES_PER_MESH << " tiles x " << MAX_POLYS_PER_TILE << " polys" << LL_ENDL;
         return false;
     }
     dtNavMeshQuery* query = dtAllocNavMeshQuery();
@@ -179,22 +197,28 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, 0.f, climb, slope };
 }
 
-U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max) const
+U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const
 {
     // Every patch under the padded tile, by its last update and height range:
-    // exact and cheap, and it never churns.
+    // exact and cheap, and it never churns. The regions are the ones under
+    // the padded corners, the same lookup the terrain window uses.
     U64 h = SEED;
-    const F64 pad = TILE_PAD_M;
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    const LLVector3d pmin = tile_min - LLVector3d(pad, pad, 0), pmax = tile_max + LLVector3d(pad, pad, 0);
+    LLWorld* world = LLWorld::getInstance();
+    std::vector<LLViewerRegion*> regions;
+    const LLVector3d corners[5] = { pmin, LLVector3d(pmax.mdV[VX], pmin.mdV[VY], 0), LLVector3d(pmin.mdV[VX], pmax.mdV[VY], 0), pmax, (pmin + pmax) * 0.5 };
+    for (const LLVector3d& c : corners)
+    {
+        LLViewerRegion* r = world->getRegionFromPosGlobal(c);
+        if (r && std::find(regions.begin(), regions.end(), r) == regions.end())
+        {
+            regions.push_back(r);
+        }
+    }
+    for (LLViewerRegion* region : regions)
     {
         const LLVector3d& o = region->getOriginGlobal();
         const F64 w = region->getWidth();
-        const LLVector3d rmin(o.mdV[VX], o.mdV[VY], -1e9), rmax(o.mdV[VX] + w, o.mdV[VY] + w, 1e9);
-        const LLVector3d pmin = tile_min - LLVector3d(pad, pad, 0), pmax = tile_max + LLVector3d(pad, pad, 0);
-        if (!overlapsXY(pmin, pmax, rmin, rmax))
-        {
-            continue;
-        }
         LLSurface& land = region->getLand();
         const S32 per_edge = land.getPatchesPerEdge();
         const F64 patch_m = w / per_edge;
@@ -235,12 +259,18 @@ void SKNavMesh::fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& til
     LLWorld* world = LLWorld::getInstance();
     LLViewerRegion* centre = world->getRegionFromPosGlobal((tile_min + tile_max) * 0.5);
     out.mWater = centre ? centre->getWaterHeight() - static_cast<F32>(mesh_origin.mdV[VZ]) : -1e9f;
+    LLViewerRegion* region = nullptr;
     for (S32 y = 0; y < n; ++y)
     {
         for (S32 x = 0; x < n; ++x)
         {
             const LLVector3d p(start.mdV[VX] + x * spacing, start.mdV[VY] + y * spacing, 0.0);
-            LLViewerRegion* region = world->getRegionFromPosGlobal(p);
+            // Regions are 256 m squares; the last one answers most samples.
+            if (!region || p.mdV[VX] < region->getOriginGlobal().mdV[VX] || p.mdV[VX] >= region->getOriginGlobal().mdV[VX] + region->getWidth() ||
+                p.mdV[VY] < region->getOriginGlobal().mdV[VY] || p.mdV[VY] >= region->getOriginGlobal().mdV[VY] + region->getWidth())
+            {
+                region = world->getRegionFromPosGlobal(p);
+            }
             if (region)
             {
                 out.mZ[y * n + x] = region->getLand().resolveHeightGlobal(p) - static_cast<F32>(mesh_origin.mdV[VZ]);
@@ -264,6 +294,9 @@ void SKNavMesh::fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& til
 void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 {
     const U64 params = paramsSignature();
+    TileBuildInput probe;
+    fillParams(probe);
+    const F32 pad = padFor(probe);
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
         std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
@@ -297,7 +330,18 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
             tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
             tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            tile.mSignature = mix(mix(entry.second, terrainSignature(tile.mMin, tile.mMax)), params);
+            // The build takes every record within the pad, so the signature
+            // covers that same set rather than the cluster's unpadded one.
+            const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
+            U64 members = SEED;
+            for (const RecordPtr& r : c->mRecords)
+            {
+                if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
+                {
+                    members = mix(members, r->mSignature);
+                }
+            }
+            tile.mSignature = mix(mix(members, terrainSignature(tile.mMin, tile.mMax, pad)), params);
         }
         // Tiles the cluster no longer covers leave the Detour meshes.
         for (const auto& old : mesh->mTiles)
@@ -320,6 +364,9 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 void SKNavMesh::reconcileTerrain()
 {
     const U64 params = paramsSignature();
+    TileBuildInput probe;
+    fillParams(probe);
+    const F32 pad = padFor(probe);
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         std::unique_ptr<Mesh>& mesh = mMeshes[region->getRegionID()];
@@ -345,7 +392,7 @@ void SKNavMesh::reconcileTerrain()
                 tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
                 tile.mMin.mdV[VZ] = land.getMinZ();
                 tile.mMax.mdV[VZ] = land.getMaxZ();
-                tile.mSignature = mix(terrainSignature(tile.mMin, tile.mMax), params);
+                tile.mSignature = mix(terrainSignature(tile.mMin, tile.mMax, pad), params);
             }
         }
     }
@@ -366,7 +413,8 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile, const Cluster
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
-    fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, TILE_PAD_M, input->mTerrain);
+    const F32 pad = padFor(*input);
+    fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
 
     F32 zmin = 1e9f, zmax = -1e9f;
     for (F32 z : input->mTerrain.mZ)
@@ -379,7 +427,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile, const Cluster
     }
     if (cluster)
     {
-        const LLVector3d pmin = tile.mMin - LLVector3d(TILE_PAD_M, TILE_PAD_M, 0), pmax = tile.mMax + LLVector3d(TILE_PAD_M, TILE_PAD_M, 0);
+        const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
         for (const RecordPtr& r : cluster->mRecords)
         {
             if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
@@ -433,8 +481,11 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         return;     // superseded: the scheduler will launch it again
     }
     mStats.mBuilds++;
-    mStats.mLastBuildMs = result->mMillis;
-    mStats.mWorstBuildMs = std::max(mStats.mWorstBuildMs, result->mMillis);
+    if (result->mStatus == TileBuildResult::SUCCESS)
+    {
+        mStats.mLastBuildMs = result->mMillis;
+        mStats.mWorstBuildMs = std::max(mStats.mWorstBuildMs, result->mMillis);
+    }
     if (result->mStatus == TileBuildResult::FAILED)
     {
         mStats.mFailures++;
@@ -468,6 +519,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
             if (!dtStatusSucceed(nav->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
             {
                 dtFree(copy);
+                tile.mPolys[cls] = 0;
                 mStats.mFailures++;
                 LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
             }
@@ -753,6 +805,15 @@ void SKNavMesh::renderDebug()
             }
             for (U8 area = 1; area <= 3; ++area)
             {
+                bool any = false;
+                for (int p = 0; p < tile->header->polyCount && !any; ++p)
+                {
+                    any = areaOf(tile->polys[p].flags) == area;
+                }
+                if (!any)
+                {
+                    continue;
+                }
                 switch (area)
                 {
                     case AREA_GROUND: gGL.diffuseColor4f(0.3f, 0.9f, 0.3f, 0.8f); break;

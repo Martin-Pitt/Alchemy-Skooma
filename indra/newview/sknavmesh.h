@@ -114,7 +114,7 @@ private:
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile, const sknav::ClusterPtr& cluster);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
-    U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max) const;
+    U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
     U64 paramsSignature() const;
     void fillParams(sknav::TileBuildInput& input) const;
     bool ensureNav(Mesh& mesh, S32 cls);

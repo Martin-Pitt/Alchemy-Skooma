@@ -92,7 +92,7 @@ namespace
             p.orig[0] = p.orig[1] = p.orig[2] = 0.f;
             p.tileWidth = 32.f;
             p.tileHeight = 32.f;
-            p.maxTiles = 64;
+            p.maxTiles = 1024;      // the viewer's split: 10 + 12 bits leaves Detour its 10 salt bits
             p.maxPolys = 4096;
             tut::ensure("mesh init", dtStatusSucceed(mNav->init(&p)));
             mQuery = dtAllocNavMeshQuery();

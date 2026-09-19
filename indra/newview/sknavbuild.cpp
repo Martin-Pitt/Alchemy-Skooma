@@ -38,6 +38,7 @@ namespace
 {
     using namespace sknav;
 
+    const F32 VOID_Z = -900.f;      ///< terrain samples below this have no region
     const S32 CYLINDER_SIDES = 16;
     const S32 SPHERE_RINGS = 6;
     const S32 SPHERE_SEGMENTS = 12;
@@ -227,7 +228,13 @@ namespace sknav
             {
                 for (S32 x = 0; x + 1 < t.mWidth; ++x)
                 {
-                    const LLVector3 a(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, t.mZ[y * t.mWidth + x]);
+                    // A sample below the void sentinel has no region under it: no floor there.
+                    const F32 z00 = t.mZ[y * t.mWidth + x], z10 = t.mZ[y * t.mWidth + x + 1], z11 = t.mZ[(y + 1) * t.mWidth + x + 1], z01 = t.mZ[(y + 1) * t.mWidth + x];
+                    if (z00 < VOID_Z || z10 < VOID_Z || z11 < VOID_Z || z01 < VOID_Z)
+                    {
+                        continue;
+                    }
+                    const LLVector3 a(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, z00);
                     const LLVector3 b(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + y * t.mSpacing, t.mZ[y * t.mWidth + x + 1]);
                     const LLVector3 c(t.mOrigin.mV[VX] + (x + 1) * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x + 1]);
                     const LLVector3 d(t.mOrigin.mV[VX] + x * t.mSpacing, t.mOrigin.mV[VY] + (y + 1) * t.mSpacing, t.mZ[(y + 1) * t.mWidth + x]);
