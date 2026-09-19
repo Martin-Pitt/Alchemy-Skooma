@@ -107,6 +107,7 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
+#include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
 #include "llviewerstats.h"
@@ -9392,6 +9393,12 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> navmesh census overlay: record and cluster boxes
+    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH))
+    {
+        SKWorldCensus::instance().renderDebug();
+    }
+    // </SK:Nexii>
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer

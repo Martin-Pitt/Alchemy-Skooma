@@ -615,6 +615,7 @@ public:
     inline bool     flagCameraDecoupled() const     { return ((mFlags & FLAGS_CAMERA_DECOUPLED) != 0); }
 
     U8       getPhysicsShapeType() const;
+    bool     isPhysicsShapeUnknown() const { return mPhysicsShapeUnknown; } // <SK:Nexii> navmesh census provenance
     inline F32      getPhysicsGravity() const       { return mPhysicsGravity; }
     inline F32      getPhysicsFriction() const      { return mPhysicsFriction; }
     inline F32      getPhysicsDensity() const       { return mPhysicsDensity; }

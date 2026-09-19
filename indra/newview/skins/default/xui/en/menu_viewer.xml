@@ -3656,6 +3656,16 @@ function="World.EnvPreset"
            parameter="physics shapes" />
         </menu_item_check>
         <menu_item_check
+         label="Navmesh"
+         name="SKNavmesh">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="navmesh" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="navmesh" />
+        </menu_item_check>
+        <menu_item_check
          label="Occlusion"
          name="Occlusion">
           <menu_item_check.on_check

@@ -712,6 +712,7 @@ public:
         RENDER_DEBUG_IMPOSTORS          = 0x100000000,
         RENDER_DEBUG_REFLECTION_PROBES  = 0x200000000,
         RENDER_DEBUG_PROBE_UPDATES      = 0x400000000,
+        RENDER_DEBUG_NAVMESH            = 0x800000000, // <SK:Nexii> navmesh census and mesh overlay
     };
 
 public:

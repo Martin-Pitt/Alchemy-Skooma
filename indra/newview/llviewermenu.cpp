@@ -1199,6 +1199,10 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES;
     }
+    else if ("navmesh" == info_display) // <SK:Nexii> navmesh census and mesh overlay
+    {
+        return LLPipeline::RENDER_DEBUG_NAVMESH;
+    }
     else if ("occlusion" == info_display)
     {
         return LLPipeline::RENDER_DEBUG_OCCLUSION;

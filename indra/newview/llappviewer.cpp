@@ -216,6 +216,7 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "skworldcensus.h" // <SK:Nexii> navmesh census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -5829,6 +5830,7 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update"); //LL_RECORD_BLOCK_TIME(FTM_WORLD_UPDATE);
         gPipeline.updateMove();
     }
+    SKWorldCensus::instance().update(); // <SK:Nexii> navmesh census: a time-sliced scan after objects moved
 
     LLWorld::getInstance()->updateParticles();
 
