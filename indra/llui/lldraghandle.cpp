@@ -38,6 +38,7 @@
 #include "lltextbox.h"
 #include "llcontrol.h"
 #include "llfontgl.h"
+#include "llrender.h"
 #include "llwindow.h"
 #include "llfocusmgr.h"
 #include "lluictrlfactory.h"
@@ -151,8 +152,61 @@ std::string LLDragHandleLeft::getTitle() const
 }
 
 
+// <SK:Nexii> A turned header is laid out as the flat bar it still is and rotated
+// ninety degrees counter-clockwise on the way to the screen, so the title reads
+// bottom to top and the end that carried the buttons ends up at the top.
+void LLDragHandleTop::setTurned(bool turned)
+{
+    if (turned == mTurned)
+    {
+        return;
+    }
+    mTurned = turned;
+    if (mTitleBox)
+    {
+        // The scissor a clipping text box would set is axis-aligned in screen
+        // space, which is not where the turned title ends up.
+        mTitleBox->setClip(!turned);
+    }
+    reshapeTitleBox();
+}
+// </SK:Nexii>
+
+void LLDragHandleTop::setButtonsRect(const LLRect& rect)
+{
+    LLDragHandle::setButtonsRect(rect);
+    reshapeTitleBox();
+}
+
 void LLDragHandleTop::draw()
 {
+// <SK:Nexii> Turn the header, title and all, when the floater is collapsed to a side
+    if (mTurned)
+    {
+        // The font's own placement convention, so that the pivot this rotates
+        // about is the one the glyphs are about to be measured against.
+        const F32 scale_x = LLFontGL::sCurScaleX * LLFontGL::sScaleX;
+        const F32 scale_y = LLFontGL::sCurScaleY * LLFontGL::sScaleY;
+        const F32 origin_x = floorf(LLFontGL::sCurOrigin.mX * scale_x);
+        const F32 origin_y = floorf(LLFontGL::sCurOrigin.mY * scale_y);
+        const F32 strip_width = (F32)getRect().getWidth() * scale_x;
+
+        gGL.flush();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.pushMatrix();
+        gGL.translatef(origin_x + strip_width, origin_y, 0.f);
+        gGL.rotatef(90.f, 0.f, 0.f, 1.f);
+        gGL.translatef(-origin_x, -origin_y, 0.f);
+
+        LLView::draw();
+
+        gGL.flush();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.popMatrix();
+        return;
+    }
+// </SK:Nexii>
+
     /* Disable lines.  Can drag anywhere in most windows.  JC
     if( getVisible() && getEnabled() && mForeground)
     {
@@ -240,15 +294,28 @@ void LLDragHandleTop::reshapeTitleBox()
         return;
     }
     const LLFontGL* font = LLFontGL::getFontSansSerif();
-    S32 title_width = getRect().getWidth();
-    title_width -= LEFT_PAD + 2 * BORDER_PAD + getButtonsRect().getWidth();
-    S32 title_height = font->getLineHeight();
+    const S32 title_height = font->getLineHeight();
     LLRect title_rect;
-    title_rect.setLeftTopAndSize(
-        LEFT_PAD,
-        getRect().getHeight() - mLabelVPad,
-        title_width,
-        title_height);
+// <SK:Nexii> A turned header runs along the strip's height, with the buttons at its far end
+    if (mTurned)
+    {
+        const S32 title_width = llmax(getRect().getHeight() - LEFT_PAD - 2 * BORDER_PAD - getButtonsRect().getHeight(), 1);
+        title_rect.setLeftTopAndSize(
+            LEFT_PAD,
+            getRect().getWidth() - mLabelVPad,
+            title_width,
+            title_height);
+    }
+    else
+// </SK:Nexii>
+    {
+        const S32 title_width = llmax(getRect().getWidth() - LEFT_PAD - 2 * BORDER_PAD - getButtonsRect().getWidth(), 1);
+        title_rect.setLeftTopAndSize(
+            LEFT_PAD,
+            getRect().getHeight() - mLabelVPad,
+            title_width,
+            title_height);
+    }
 
     // calls reshape on mTitleBox
     mTitleBox->setShape( title_rect );

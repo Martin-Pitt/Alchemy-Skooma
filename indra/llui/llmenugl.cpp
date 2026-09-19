@@ -4002,7 +4002,7 @@ LLTearOffMenu::LLTearOffMenu(LLMenuGL* menup) :
 
     setName(menup->getName());
     setTitle(menup->getLabel());
-    setCanMinimize(false);
+    setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
     setCanCollapse(false);
     // flag menu as being torn off
     menup->setTornOff(true);

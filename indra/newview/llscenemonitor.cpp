@@ -652,7 +652,7 @@ LLSceneMonitorView::LLSceneMonitorView(const LLRect& rect)
     setRect(rect);
     setVisible(false);
 
-    setCanMinimize(false);
+    setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
     setCanCollapse(false);
     setCanClose(true);
 

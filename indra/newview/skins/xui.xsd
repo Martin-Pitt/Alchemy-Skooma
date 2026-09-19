@@ -20880,8 +20880,6 @@
       <xs:element name="floater.highlight_light_color" type="al_any"/>
       <xs:element name="floater.init_callback" type="al_any"/>
       <xs:element name="floater.initial_value" type="al_any"/>
-      <xs:element name="floater.minimize_image" type="al_any"/>
-      <xs:element name="floater.minimize_pressed_image" type="al_any"/>
       <xs:element name="floater.mouseenter_callback" type="al_any"/>
       <xs:element name="floater.mouseleave_callback" type="al_any"/>
       <xs:element name="floater.open_callback" type="al_any"/>
@@ -20905,8 +20903,6 @@
       <xs:element name="highlight_light_color" type="al_any"/>
       <xs:element name="init_callback" type="al_any"/>
       <xs:element name="initial_value" type="al_any"/>
-      <xs:element name="minimize_image" type="al_any"/>
-      <xs:element name="minimize_pressed_image" type="al_any"/>
       <xs:element name="mouseenter_callback" type="al_any"/>
       <xs:element name="mouseleave_callback" type="al_any"/>
       <xs:element name="open_callback" type="al_any"/>
@@ -21073,10 +21069,6 @@
     <xs:attribute name="length" type="xs:string"/>
     <xs:attribute name="min_height" type="xs:integer"/>
     <xs:attribute name="min_width" type="xs:integer"/>
-    <xs:attribute name="minimize_image" type="xs:string"/>
-    <xs:attribute name="minimize_image.name" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image.name" type="xs:string"/>
     <xs:attribute name="mouse_opaque" type="xs:boolean"/>
     <xs:attribute name="mouseenter_callback" type="xs:string"/>
     <xs:attribute name="mouseenter_callback.control" type="xs:string"/>
@@ -44286,8 +44278,6 @@
       <xs:element name="highlight_light_color" type="al_any"/>
       <xs:element name="init_callback" type="al_any"/>
       <xs:element name="initial_value" type="al_any"/>
-      <xs:element name="minimize_image" type="al_any"/>
-      <xs:element name="minimize_pressed_image" type="al_any"/>
       <xs:element name="mouseenter_callback" type="al_any"/>
       <xs:element name="mouseleave_callback" type="al_any"/>
       <xs:element name="multi_floater.bg_alpha_color" type="al_any"/>
@@ -44313,8 +44303,6 @@
       <xs:element name="multi_floater.highlight_light_color" type="al_any"/>
       <xs:element name="multi_floater.init_callback" type="al_any"/>
       <xs:element name="multi_floater.initial_value" type="al_any"/>
-      <xs:element name="multi_floater.minimize_image" type="al_any"/>
-      <xs:element name="multi_floater.minimize_pressed_image" type="al_any"/>
       <xs:element name="multi_floater.mouseenter_callback" type="al_any"/>
       <xs:element name="multi_floater.mouseleave_callback" type="al_any"/>
       <xs:element name="multi_floater.open_callback" type="al_any"/>
@@ -44493,10 +44481,6 @@
     <xs:attribute name="length" type="xs:string"/>
     <xs:attribute name="min_height" type="xs:integer"/>
     <xs:attribute name="min_width" type="xs:integer"/>
-    <xs:attribute name="minimize_image" type="xs:string"/>
-    <xs:attribute name="minimize_image.name" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image" type="xs:string"/>
-    <xs:attribute name="minimize_pressed_image.name" type="xs:string"/>
     <xs:attribute name="mouse_opaque" type="xs:boolean"/>
     <xs:attribute name="mouseenter_callback" type="xs:string"/>
     <xs:attribute name="mouseenter_callback.control" type="xs:string"/>

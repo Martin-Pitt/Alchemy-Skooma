@@ -315,14 +315,14 @@ void notify_of_message(const LLSD& msg, bool is_dnd_msg)
                 {
                     if (NULL != im_box && im_box->isMinimized())
                     {
-                        LLFloater::onClickMinimize(im_box);
+                        LLFloater::onClickRestore(im_box); // <SK:Nexii> Collapse replaces minimize
                     }
                 }
                 else
                 {
                     if (session_floater->isMinimized())
                     {
-                        LLFloater::onClickMinimize(session_floater);
+                        LLFloater::onClickRestore(session_floater); // <SK:Nexii> Collapse replaces minimize
                     }
                 }
             }

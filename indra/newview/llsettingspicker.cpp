@@ -78,7 +78,7 @@ LLFloaterSettingsPicker::LLFloaterSettingsPicker(LLView * owner, LLUUID initial_
     mOwnerHandle = owner->getHandle();
 
     buildFromFile(FLOATER_DEFINITION_XML);
-    setCanMinimize(false);
+    setCanCollapse(false); // <SK:Nexii> Collapse replaces minimize
     setCanCollapse(false);
 }
 
