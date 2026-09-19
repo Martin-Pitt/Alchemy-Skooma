@@ -1431,13 +1431,16 @@ LLRect LLFloater::getCollapseSnapRect()
 
 LLFloater::ECollapseEdge LLFloater::pickCollapseEdge()
 {
+    static LLUICachedControl<bool> directional("SkoomaFloaterCollapseDirectional", true);
     static LLUICachedControl<bool> prefer_side("SkoomaFloaterCollapsePreferSide", false);
     static LLUICachedControl<F32>  axis_bias("SkoomaFloaterCollapseAxisBias", 0.5f);
     static LLUICachedControl<S32>  snap_distance("SkoomaFloaterCollapseSnapDistance", 100);
 
-    // A floater dragged by its left edge has no header to turn, and one inside
-    // a host is not the thing being placed on screen.
-    if (mDragOnLeft || getHost())
+    // Turned off, collapsing is what it was before it learnt about edges: the
+    // header bar, where the floater already was. A floater dragged by its left
+    // edge has no header to turn either, and one inside a host is not the thing
+    // being placed on screen.
+    if (!directional || mDragOnLeft || getHost())
     {
         return COLLAPSE_EDGE_NONE;
     }
