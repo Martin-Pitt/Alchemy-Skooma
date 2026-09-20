@@ -896,12 +896,9 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    sknavcluster.cpp
     skphysicsshape.cpp
-    sknavbuild.cpp
     sknavlevels.cpp
     sknavmesh.cpp
-    sknavwalls.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1685,13 +1682,9 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    sknavcluster.h
-    sknavtypes.h
     skphysicsshape.h
-    sknavbuild.h
     sknavlevels.h
     sknavmesh.h
-    sknavwalls.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
@@ -1959,6 +1952,7 @@ if(AL_BUILD_VIEWER)
       ll::minizip
       ll::pugixml
       ll::recast
+      sknavmesh
       ll::velopack
       ll::webrtc
   )
@@ -2393,20 +2387,8 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-  # Clustering is pure: records in, clusters and tile signatures out.
-  al_add_test(sknavcluster UNIT PROJECT ${test_project})
-  # The tile build is pure: records and terrain in, Detour tile data out.
-  al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavwalls.cpp)
-  # Walls come off the same heightfield the tile build uses.
-  al_add_test(sknavwalls UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavbuild.cpp)
   # Storeys and their connectors are a read-only walk of a built mesh.
-  al_add_test(
-    sknavlevels
-    UNIT
-    PROJECT ${test_project}
-    LIBRARIES ll::recast
-    SOURCES sknavbuild.cpp sknavwalls.cpp
-  )
+  al_add_test(sknavlevels UNIT PROJECT ${test_project} LIBRARIES sknavmesh ll::recast)
   al_add_test(
     llslurl
     PROJECT ${test_project}
