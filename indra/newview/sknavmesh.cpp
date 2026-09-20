@@ -226,12 +226,11 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     // it. A face that is truly vertical still cannot be a walkable polygon of
     // a heightfield - it has no top - which is what the wall faces are for.
     //
-    // Its radius is a cell rather than nothing. Weather has no width to speak
-    // of, but a radius of zero skips rcErodeWalkableArea altogether, and then
-    // walkable area runs right up against solids and the tile border, which is
-    // not a path Recast is usually asked to take and it leaves slivers.
-    input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight,
-                                                             llmax(static_cast<F32>(weatherRadius), input.mCell),
+    // Its radius is zero: weather has no width, and erosion would hold it a
+    // cell short of the walls it is supposed to drain down. That does skip
+    // rcErodeWalkableArea, which is a suspect whenever this class produces
+    // degenerate polygons - SKNavWeatherRadius at 0.125 is the experiment.
+    input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, llmax(static_cast<F32>(weatherRadius), 0.f),
                                                              climb,
                                                              llclamp(static_cast<F32>(weatherSlope), 1.f, 89.9f) };
 
@@ -1300,6 +1299,51 @@ std::string SKNavMesh::markUnderCamera()
         else
         {
             out << "no floor for class " << cls << "\n";
+        }
+    }
+
+    // The polygon each class actually has here, with its corners: a shape that
+    // reads as degenerate on screen is one to measure rather than squint at.
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        for (const auto& entry : mMeshes)
+        {
+            const Mesh& mesh = *entry.second;
+            if (!mesh.mNav[cls] || !mesh.mQuery[cls])
+            {
+                continue;
+            }
+            const LLVector3d local64 = mMark - mesh.mOrigin;
+            const LLVector3 local(static_cast<F32>(local64.mdV[VX]), static_cast<F32>(local64.mdV[VY]),
+                                  static_cast<F32>(local64.mdV[VZ]));
+            F32 centre[3], nearest[3];
+            toRecast(local, centre);
+            const F32 extents[3] = { 2.f, 4.f, 2.f };
+            dtQueryFilter filter;
+            dtPolyRef ref = 0;
+            if (!dtStatusSucceed(mesh.mQuery[cls]->findNearestPoly(centre, extents, &filter, &ref, nearest)) || !ref)
+            {
+                continue;
+            }
+            const dtMeshTile* tile = nullptr;
+            const dtPoly* poly = nullptr;
+            if (!dtStatusSucceed(mesh.mNav[cls]->getTileAndPolyByRef(ref, &tile, &poly)) || !poly)
+            {
+                continue;
+            }
+            out << "class " << cls << " polygon in " << (mesh.mTerrain ? "region " : "cluster ") << mesh.mId
+                << ": area " << static_cast<S32>(poly->getArea()) << " flags " << poly->flags << " verts "
+                << static_cast<S32>(poly->vertCount);
+            F64 area2 = 0.0;
+            for (S32 v = 0; v < static_cast<S32>(poly->vertCount); ++v)
+            {
+                const LLVector3 p = fromRecast(&tile->verts[poly->verts[v] * 3]);
+                const LLVector3 q = fromRecast(&tile->verts[poly->verts[(v + 1) % poly->vertCount] * 3]);
+                area2 += static_cast<F64>(p.mV[VX]) * q.mV[VY] - static_cast<F64>(q.mV[VX]) * p.mV[VY];
+                out << (v ? ", " : " [") << p;
+            }
+            out << "] area " << std::fabs(area2) * 0.5 << " m2, detail tris "
+                << static_cast<S32>(tile->detailMeshes[poly - tile->polys].triCount) << "\n";
         }
     }
 
