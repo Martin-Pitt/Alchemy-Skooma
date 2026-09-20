@@ -179,7 +179,7 @@ LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
         const S32 width = llclamp(setting > 0 ? static_cast<S32>(setting) : cores - 2, 1, 16);
         mWorkers = std::make_unique<LL::ThreadPool>("NavMesh", width);
         mWorkers->start();
-        LL_INFOS("SKNav") << "navmesh build pool: " << width << " threads on " << cores << " cores" << LL_ENDL;
+        LL_INFOS("SKNav") << "navmesh build pool: " << mWorkers->getWidth() << " threads on " << cores << " cores" << LL_ENDL;
     }
     return LL::WorkQueue::getInstance("NavMesh");
 }

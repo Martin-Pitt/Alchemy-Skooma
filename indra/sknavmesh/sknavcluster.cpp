@@ -207,16 +207,24 @@ namespace sknav
         {
             std::shared_ptr<Cluster>& c = entry.second;
             // Per tile: the signature of the members that intersect it, in
-            // member order (already sorted by root and part).
+            // member order (already sorted by root and part). The members go
+            // into a grid first: a structure of twenty thousand records over
+            // a square kilometre is otherwise records times tiles, millions of
+            // overlap tests on the main thread at every census.
+            std::unordered_map<TileKey, std::vector<S32>, TileKeyHash> by_tile;
+            for (size_t i = 0; i < c->mRecords.size(); ++i)
+            {
+                forEachTile(c->mRecords[i]->mMin, c->mRecords[i]->mMax, tile,
+                            [&](const TileKey& k) { by_tile[k].push_back(static_cast<S32>(i)); });
+            }
             forEachTile(c->mMin, c->mMax, tile, [&](const TileKey& k) {
-                const LLVector3d tmin(k.mX * tile, k.mY * tile, -1e9);
-                const LLVector3d tmax((k.mX + 1) * tile, (k.mY + 1) * tile, 1e9);
                 U64 sig = SEED;
-                for (const RecordPtr& r : c->mRecords)
+                const auto it = by_tile.find(k);
+                if (it != by_tile.end())
                 {
-                    if (overlaps(r->mMin, r->mMax, tmin, tmax))
+                    for (S32 i : it->second)
                     {
-                        sig = mix(sig, r->mSignature);
+                        sig = mix(sig, c->mRecords[i]->mSignature);
                     }
                 }
                 c->mTiles[k] = sig;
