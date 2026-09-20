@@ -3411,19 +3411,6 @@
             <key>Value</key>
             <string>All</string>
         </map>
-        <key>ShowAdvancedHoverTips</key>
-        <map>
-            <key>Comment</key>
-            <string>
-                Toggles more hover tips details.
-            </string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>
@@ -3511,6 +3498,19 @@
             <string>F32</string>
             <key>Value</key>
             <real>4.0</real>
+        </map>
+        <key>ShowAdvancedHoverTips</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                Toggles more hover tips details.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
     </map>
 </llsd>
