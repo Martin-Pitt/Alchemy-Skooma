@@ -161,9 +161,13 @@ U64 SKNavMesh::paramsSignature() const
     fillParams(probe);
     U64 h = SEED;
     h = mixF32(h, probe.mCell);
+    h = mix(h, probe.mWallFaces);
+    h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
     {
         h = mix(h, probe.mClasses[c]);
+        h = mix(h, probe.mEdges[c]);
+        h = mixF32(h, probe.mDropMax[c]);
         h = mixF32(h, probe.mParams[c].mHeight);
         h = mixF32(h, probe.mParams[c].mRadius);
         h = mixF32(h, probe.mParams[c].mClimb);
@@ -180,6 +184,10 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 45.f);
     static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
     static LLCachedControl<bool> weather(gSavedSettings, "SKNavBuildWeather", false);
+    static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
+    static LLCachedControl<F32> dropAvatar(gSavedSettings, "SKNavDropMax", 10.f);
+    static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
+    static LLCachedControl<F32> dropSpacing(gSavedSettings, "SKNavDropSpacing", 2.f);
 
     input.mCell = llclamp(static_cast<F32>(cell), 0.05f, 1.f);
     // The avatar class is as tall as the user's own avatar, rounded up to the
@@ -195,6 +203,14 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb, slope };
     input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
     input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, 0.f, climb, slope };
+
+    // Faces are for the weather class's readers, edges and drops for both.
+    input.mWallFaces = walls && weather;
+    input.mEdges[static_cast<S32>(AgentClass::AVATAR)] = walls;
+    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather;
+    input.mDropMax[static_cast<S32>(AgentClass::AVATAR)] = dropAvatar;
+    input.mDropMax[static_cast<S32>(AgentClass::WEATHER)] = dropWeather;
+    input.mDropSpacing = llmax(0.5f, static_cast<F32>(dropSpacing));
 }
 
 U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const
@@ -525,6 +541,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
             }
         }
     }
+    tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
+        tile.mLinks[cls] = std::make_shared<const std::vector<DropLink>>(std::move(result->mLinks[cls]));
+    }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
 }
@@ -643,6 +665,9 @@ void SKNavMesh::update()
     mStats.mTiles = 0;
     mStats.mTilesBuilt = 0;
     mStats.mPolys = 0;
+    mStats.mFaces = 0;
+    mStats.mSegments = 0;
+    mStats.mLinks = 0;
     mStats.mInFlight = mInFlight;
     for (const auto& entry : mMeshes)
     {
@@ -653,6 +678,12 @@ void SKNavMesh::update()
             {
                 mStats.mTilesBuilt++;
                 mStats.mPolys += t.second.mPolys[0];
+                mStats.mFaces += t.second.mFaces ? static_cast<U32>(t.second.mFaces->size()) : 0;
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    mStats.mSegments += t.second.mSegments[cls] ? static_cast<U32>(t.second.mSegments[cls]->size()) : 0;
+                    mStats.mLinks += t.second.mLinks[cls] ? static_cast<U32>(t.second.mLinks[cls]->size()) : 0;
+                }
             }
         }
     }
@@ -667,8 +698,9 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u avatar polys, %u builds, %u failures, last %.1f ms, worst %.1f ms",
-                    mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight, mStats.mPolys, mStats.mBuilds,
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u avatar polys, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
+                    mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight, mStats.mPolys,
+                    mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs);
 }
 
@@ -767,6 +799,117 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
     return !out.empty();
 }
 
+void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const
+{
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        for (const auto& t : mesh.mTiles)
+        {
+            const Tile& tile = t.second;
+            if (tile.mBuilt && overlapsXY(tile.mMin, tile.mMax, min, max))
+            {
+                fn(mesh, tile);
+            }
+        }
+    }
+}
+
+void SKNavMesh::wallFacesIn(const LLVector3d& min, const LLVector3d& max, const WallFaceFn& fn) const
+{
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mFaces)
+        {
+            return;
+        }
+        for (const WallFace& f : *tile.mFaces)
+        {
+            const LLVector3d fmin = mesh.mOrigin + LLVector3d(f.mMin), fmax = mesh.mOrigin + LLVector3d(f.mMax);
+            if (overlapsXY(fmin, fmax, min, max))
+            {
+                fn(fmin, fmax, f.mSide, f.mArea);
+            }
+        }
+    });
+}
+
+void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const SegmentFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mSegments[c])
+        {
+            return;
+        }
+        for (const WallSegment& seg : *tile.mSegments[c])
+        {
+            fn(mesh.mOrigin + LLVector3d(seg.mA), mesh.mOrigin + LLVector3d(seg.mB), seg.mKind, seg.mValue);
+        }
+    });
+}
+
+void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const LinkFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mLinks[c])
+        {
+            return;
+        }
+        for (const DropLink& link : *tile.mLinks[c])
+        {
+            fn(mesh.mOrigin + LLVector3d(link.mFrom), mesh.mOrigin + LLVector3d(link.mTo), link.mHeight);
+        }
+    });
+}
+
+bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass cls, F32 eye_height,
+                        Cover& cover_out, F32& height_out, F32 reach) const
+{
+    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+    static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
+    LLVector3 heading(dir.mV[VX], dir.mV[VY], 0.f);
+    if (heading.normVec() < 0.5f)
+    {
+        return false;
+    }
+    const LLVector3d box(reach, reach, reach);
+    F32 best = -1.f;
+    F32 bestDot = 0.f;
+    segmentsIn(pos - box, pos + box, cls, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
+        if (kind != EdgeKind::WALL)
+        {
+            return;
+        }
+        // The nearest point of the segment, and only if it lies ahead.
+        const LLVector3d ab64 = b - a, ap64 = pos - a;
+        const LLVector3 ab(static_cast<F32>(ab64.mdV[VX]), static_cast<F32>(ab64.mdV[VY]), 0.f);
+        const LLVector3 ap(static_cast<F32>(ap64.mdV[VX]), static_cast<F32>(ap64.mdV[VY]), 0.f);
+        const F32 len2 = ab.magVecSquared();
+        const F32 t = len2 > 0.f ? llclamp(ab * ap / len2, 0.f, 1.f) : 0.f;
+        LLVector3 to = ab * t - ap;
+        to.mV[VZ] = 0.f;
+        const F32 distance = to.normVec();
+        if (distance > reach)
+        {
+            return;
+        }
+        const F32 ahead = to * heading;
+        if (ahead > 0.5f && ahead > bestDot)
+        {
+            bestDot = ahead;
+            best = value;
+        }
+    });
+    if (best < 0.f)
+    {
+        return false;
+    }
+    height_out = best;
+    cover_out = coverClass(best, eye_height, climb, peek);
+    return true;
+}
+
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
@@ -849,6 +992,56 @@ void SKNavMesh::renderDebug()
             }
         }
     }
+
+    // Walls: the floor edges by what lies beyond them, cover coloured against
+    // the user's own eye height, and a tick from each ledge to where it lands.
+    static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
+    if (show_walls)
+    {
+        static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+        static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
+        const F32 eye = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 1.8f;
+        const LLVector3d box(range, range, range);
+        gGL.setLineWidth(2.f);
+        gGL.begin(LLRender::LINES);
+        segmentsIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
+            switch (kind)
+            {
+                case EdgeKind::WALL:
+                    switch (coverClass(value, eye, climb, peek))
+                    {
+                        case Cover::FULL: gGL.diffuseColor4f(1.f, 1.f, 1.f, 0.9f); break;
+                        case Cover::HALF: gGL.diffuseColor4f(1.f, 0.8f, 0.2f, 0.9f); break;
+                        default: gGL.diffuseColor4f(0.6f, 0.6f, 0.6f, 0.7f); break;
+                    }
+                    break;
+                case EdgeKind::LEDGE: gGL.diffuseColor4f(1.f, 0.3f, 0.3f, 0.9f); break;
+                case EdgeKind::OVERHANG: gGL.diffuseColor4f(0.7f, 0.3f, 1.f, 0.8f); break;
+                default: return;
+            }
+            const LLVector3 pa = gAgent.getPosAgentFromGlobal(a) + LLVector3(0.f, 0.f, 0.08f);
+            const LLVector3 pb = gAgent.getPosAgentFromGlobal(b) + LLVector3(0.f, 0.f, 0.08f);
+            gGL.vertex3fv(pa.mV);
+            gGL.vertex3fv(pb.mV);
+            // A wall is drawn again at its own height, so how tall it is shows.
+            if (kind == EdgeKind::WALL)
+            {
+                const LLVector3 up(0.f, 0.f, value);
+                gGL.vertex3fv((pa + up).mV);
+                gGL.vertex3fv((pb + up).mV);
+            }
+        });
+        gGL.diffuseColor4f(0.2f, 1.f, 1.f, 0.9f);
+        linksIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& from, const LLVector3d& to, F32) {
+            const LLVector3 pf = gAgent.getPosAgentFromGlobal(from) + LLVector3(0.f, 0.f, 0.08f);
+            const LLVector3 pt = gAgent.getPosAgentFromGlobal(to) + LLVector3(0.f, 0.f, 0.08f);
+            gGL.vertex3fv(pf.mV);
+            gGL.vertex3fv(pt.mV);
+        });
+        gGL.end();
+        gGL.setLineWidth(1.f);
+    }
+
     gGL.flush();
     gDebugProgram.unbind();
 }

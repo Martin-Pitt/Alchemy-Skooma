@@ -210,7 +210,7 @@ namespace sknav
         // across-column and one z-interval merge along the wall's direction.
         static const S32 DX[4] = { 1, -1, 0, 0 };
         static const S32 DZ[4] = { 0, 0, 1, -1 };
-        std::vector<Interval> mine, theirs;
+        std::vector<Interval> theirs;
         for (S32 side = 0; side < 4; ++side)
         {
             const bool alongZ = (side < 2);     // ±x faces run along z

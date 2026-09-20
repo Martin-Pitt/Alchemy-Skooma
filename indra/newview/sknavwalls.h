@@ -58,6 +58,12 @@ namespace sknav
 
     /// An exposed side of solid: the surface Atmo paints and drains along.
     /// mSide is the outward direction: 0 +x, 1 -x, 2 +y, 3 -y in SL axes.
+    ///
+    /// mArea is the Recast area of the span the face belongs to, which is null
+    /// for anything steep: only up-facing triangles are given an area, because
+    /// that is how Recast decides walkability. So a genuine wall reports no
+    /// area, and telling an object's wall from a terrain cliff needs a second
+    /// rasterisation this does not do. Do not gate behaviour on it.
     struct WallFace
     {
         LLVector3 mMin;         ///< a thin axis-aligned box; the thin axis is the side's

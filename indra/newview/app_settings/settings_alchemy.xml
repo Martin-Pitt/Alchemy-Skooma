@@ -3622,6 +3622,72 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SKNavBuildWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Read walls, floor edges and drop links off the navmesh as it is built.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavCoverPeek</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres a wall may fall short of the eye and still count as full cover.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.15</real>
+        </map>
+        <key>SKNavDropMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres an avatar may drop from a ledge onto floor below.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKNavDropSpacing</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres between drop links along a ledge.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
+        <key>SKNavWeatherDropMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres water may fall from a ledge and still be traced to where it lands.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>24.0</real>
+        </map>
+        <key>SKNavOverlayWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw walls, ledges and drop links in the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
     </map>
 </llsd>
 

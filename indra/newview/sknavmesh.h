@@ -30,6 +30,7 @@
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -64,6 +65,21 @@ public:
     /// when b was not reachable and the path ends at the closest point found.
     bool findPath(const LLVector3d& a, const LLVector3d& b, sknav::AgentClass cls, std::vector<LLVector3d>& out, bool& partial) const;
 
+    /// Walls (sknavwalls.h). Positions handed to the callback are global.
+    /// Wall faces are what Atmo paints and drains along; segments are the
+    /// floor edges the map draws; links are where a floor can be left.
+    typedef std::function<void(const LLVector3d& min, const LLVector3d& max, U8 side, U8 area)> WallFaceFn;
+    typedef std::function<void(const LLVector3d& a, const LLVector3d& b, sknav::EdgeKind kind, F32 value)> SegmentFn;
+    typedef std::function<void(const LLVector3d& from, const LLVector3d& to, F32 height)> LinkFn;
+    void wallFacesIn(const LLVector3d& min, const LLVector3d& max, const WallFaceFn& fn) const;
+    void segmentsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const SegmentFn& fn) const;
+    void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+
+    /// The cover a segment ahead of this position gives someone of that eye
+    /// height, and how tall it is. False when nothing is within reach.
+    bool coverAt(const LLVector3d& pos, const LLVector3& dir, sknav::AgentClass cls, F32 eye_height,
+                 sknav::Cover& cover_out, F32& height_out, F32 reach = 1.f) const;
+
     std::string statsLine() const;
 
     struct Stats
@@ -76,6 +92,9 @@ public:
         U32 mPolys = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
+        U32 mFaces = 0;
+        U32 mSegments = 0;
+        U32 mLinks = 0;
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
     };
@@ -91,6 +110,11 @@ private:
         F32 mMillis = 0.f;
         LLVector3d mMin;        ///< global, for scheduling by distance and drawing
         LLVector3d mMax;
+        /// Published with the tile, mesh-local; shared so a read hands them
+        /// out without copying and a rebuild never rewrites one in place.
+        std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
     };
 
     struct Mesh
@@ -119,6 +143,8 @@ private:
     void fillParams(sknav::TileBuildInput& input) const;
     bool ensureNav(Mesh& mesh, S32 cls);
     Mesh* meshAt(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out) const;
+    /// Every published tile whose footprint meets the box, with its mesh.
+    void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
     U64 mCensusStamp = 0;
