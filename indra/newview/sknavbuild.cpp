@@ -31,6 +31,7 @@
 #include "Recast.h"
 #include "sknavwalls.h"
 
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -157,6 +158,102 @@ namespace
         }
     }
 
+    /// Recast rasterises surfaces, so a closed body arrives hollow: the floor
+    /// it stands on stays walkable inside it with the body's own roof as
+    /// headroom, and the navmesh offers a storey inside every solid object.
+    /// A convex body is exactly the span between its lowest and highest
+    /// surface in each column, so fill that in and the inside is gone.
+    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    {
+        if (tri_end <= tri_begin)
+        {
+            return;
+        }
+        // The columns this body covers, clipped to the tile.
+        F32 bmin[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, bmax[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (S32 t = tri_begin * 3; t < tri_end * 3; ++t)
+        {
+            const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+            for (S32 k = 0; k < 3; ++k)
+            {
+                bmin[k] = std::min(bmin[k], v[k]);
+                bmax[k] = std::max(bmax[k], v[k]);
+            }
+        }
+        const S32 x0 = std::max(0, static_cast<S32>(std::floor((bmin[0] - hf.bmin[0]) / hf.cs)));
+        const S32 x1 = std::min(hf.width - 1, static_cast<S32>(std::floor((bmax[0] - hf.bmin[0]) / hf.cs)));
+        const S32 z0 = std::max(0, static_cast<S32>(std::floor((bmin[2] - hf.bmin[2]) / hf.cs)));
+        const S32 z1 = std::min(hf.height - 1, static_cast<S32>(std::floor((bmax[2] - hf.bmin[2]) / hf.cs)));
+        if (x1 < x0 || z1 < z0)
+        {
+            return;
+        }
+        const S32 w = x1 - x0 + 1, h = z1 - z0 + 1;
+        std::vector<F32> lo(static_cast<size_t>(w) * h, FLT_MAX), hi(static_cast<size_t>(w) * h, -FLT_MAX);
+
+        for (S32 t = tri_begin; t < tri_end; ++t)
+        {
+            const F32* a = &soup.mVerts[soup.mTris[t * 3] * 3];
+            const F32* b = &soup.mVerts[soup.mTris[t * 3 + 1] * 3];
+            const F32* c = &soup.mVerts[soup.mTris[t * 3 + 2] * 3];
+            // Its footprint, and its plane, in the xz ground plane.
+            const F32 d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+            if (std::fabs(d) < 1e-9f)
+            {
+                continue;   // edge on: it adds nothing a neighbouring face does not
+            }
+            const S32 tx0 = std::max(x0, static_cast<S32>(std::floor((std::min(std::min(a[0], b[0]), c[0]) - hf.bmin[0]) / hf.cs)));
+            const S32 tx1 = std::min(x1, static_cast<S32>(std::floor((std::max(std::max(a[0], b[0]), c[0]) - hf.bmin[0]) / hf.cs)));
+            const S32 tz0 = std::max(z0, static_cast<S32>(std::floor((std::min(std::min(a[2], b[2]), c[2]) - hf.bmin[2]) / hf.cs)));
+            const S32 tz1 = std::min(z1, static_cast<S32>(std::floor((std::max(std::max(a[2], b[2]), c[2]) - hf.bmin[2]) / hf.cs)));
+            for (S32 cz = tz0; cz <= tz1; ++cz)
+            {
+                for (S32 cx = tx0; cx <= tx1; ++cx)
+                {
+                    const F32 px = hf.bmin[0] + (cx + 0.5f) * hf.cs;
+                    const F32 pz = hf.bmin[2] + (cz + 0.5f) * hf.cs;
+                    const F32 l0 = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / d;
+                    const F32 l1 = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / d;
+                    const F32 l2 = 1.f - l0 - l1;
+                    if (l0 < 0.f || l1 < 0.f || l2 < 0.f)
+                    {
+                        continue;
+                    }
+                    const F32 y = l0 * a[1] + l1 * b[1] + l2 * c[1];
+                    const size_t i = static_cast<size_t>(cz - z0) * w + (cx - x0);
+                    lo[i] = std::min(lo[i], y);
+                    hi[i] = std::max(hi[i], y);
+                }
+            }
+        }
+
+        rcContext ctx(false);
+        for (S32 cz = z0; cz <= z1; ++cz)
+        {
+            for (S32 cx = x0; cx <= x1; ++cx)
+            {
+                const size_t i = static_cast<size_t>(cz - z0) * w + (cx - x0);
+                if (lo[i] > hi[i])
+                {
+                    continue;
+                }
+                const F32 top = std::min(hi[i], hf.bmax[1]);
+                const F32 bottom = std::max(lo[i], hf.bmin[1]);
+                if (top <= bottom)
+                {
+                    continue;
+                }
+                const S32 smin = static_cast<S32>(std::floor((bottom - hf.bmin[1]) / hf.ch));
+                const S32 smax = static_cast<S32>(std::ceil((top - hf.bmin[1]) / hf.ch));
+                // The fill carries no area: it is the inside of something, never
+                // a floor. Merging keeps the surfaces' own area, so the body's
+                // roof stays walkable.
+                rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(std::max(0, smin)),
+                          static_cast<unsigned short>(std::max(smin + 1, smax)), RC_NULL_AREA, climb);
+            }
+        }
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -211,6 +308,7 @@ namespace sknav
         // Gather the soup in Recast space.
         Soup soup;
         std::vector<LLVector3> tris;
+        std::vector<std::pair<S32, S32>> convex;    // triangle ranges of closed bodies
         for (const RecordPtr& r : input.mRecords)
         {
             if (!r)
@@ -219,7 +317,12 @@ namespace sknav
             }
             tris.clear();
             emitRecord(*r, input.mMeshOrigin, tris);
+            const S32 before = soup.ntris();
             soup.add(tris, AREA_OBJECT, input.mTerrain.mWater);
+            if (r->mShape != Shape::TRIANGLES)
+            {
+                convex.emplace_back(before, soup.ntris());
+            }
         }
         const TerrainWindow& t = input.mTerrain;
         if (t.mWidth >= 2 && t.mHeight >= 2 && t.mZ.size() >= static_cast<size_t>(t.mWidth * t.mHeight))
@@ -301,6 +404,10 @@ namespace sknav
             {
                 result.mError = "rasterize";
                 return result;
+            }
+            for (const auto& range : convex)
+            {
+                fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
             }
             rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *mem.hf);
             rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf);
