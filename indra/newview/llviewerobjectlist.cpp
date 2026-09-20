@@ -161,6 +161,27 @@ static void sk_send_existence_probe(LLViewerObject* objectp)
     }
 }
 
+// Take a suspect off the screen while the simulator is asked about it. A ghost is nearly always
+// what this is, so hiding first means the common case disappears on sight rather than a second
+// later; the rare survivor is restored below. Looping sounds go quiet the same way -- a ghosted
+// weapon hanging at a border is as audible as it is visible.
+static void sk_hide_suspect(LLViewerObject* objectp)
+{
+    gPipeline.hideObject(objectp->getID());
+    objectp->adjustAudioGain(0.f);
+}
+
+static void sk_restore_suspect(LLViewerObject* objectp, F32 saved_gain)
+{
+    if (objectp->isDead())
+    {
+        return;
+    }
+
+    gPipeline.restoreHiddenObject(objectp->getID());
+    objectp->adjustAudioGain(saved_gain);
+}
+
 void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp)
 {
     if (objectp->mSKGhostWatched || objectp->isDead() || objectp->isAvatar() || objectp->isAttachment())
@@ -171,22 +192,32 @@ void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp)
     objectp->mSKGhostWatched = true;
     mSKGhostCandidates.push_back({ objectp,
                                    objectp->getPositionRegion(),
-                                   (F64Seconds)LLFrameTimer::getElapsedSeconds() });
+                                   (F64Seconds)LLFrameTimer::getElapsedSeconds(),
+                                   (F64Seconds)0.0,
+                                   0.f,
+                                   1.f,
+                                   false });
 }
 
 void LLViewerObjectList::skUpdateGhostWatch(F64Seconds now)
 {
-    // Sampling a position four times a second is enough to tell moving from stopped, and puts a
-    // ghost's probe within about a second of it coming to rest.
+    // Sampling a position four times a second is enough to tell moving from stopped.
     const F64Seconds SK_SWEEP_INTERVAL(0.25);
-    // How long the object must hold still before it counts as stopped rather than slow.
+    // How long an object must hold still before it counts as stopped rather than slow. Only for
+    // objects that came to rest away from a border, where there is nothing better to go on.
     const F64Seconds SK_STILL_TIME(0.5);
-    // How far the last word from the simulator must predate that stop. An object the simulator
-    // stopped is reported stopped, so the two times coincide; an object that ran out of
-    // prediction kept moving for the whole crossing window after the last thing we were told.
-    const F64Seconds SK_UNANNOUNCED_STOP(0.4);
+    // A simulator streaming a fast object speaks far more often than this, so silence for longer
+    // than one of its own update intervals is already out of character.
+    const F64Seconds SK_UNANNOUNCED_STOP(0.1);
+    // What makes that silence evidence is the ground covered on nothing but a remembered
+    // velocity. Time alone cannot say: a tenth of a second is 20m of weapon fire and 10cm of
+    // drifting prim.
+    const F32 SK_UNCONFIRMED_COAST = 5.f; // metres
     // Ignore drift below this, so a residual trickle of prediction does not read as motion.
     const F32 SK_STILL_DISTANCE_SQ = 1e-6f; // 1mm
+    // How long to let a probe be answered before concluding that nothing is coming. A ghost is
+    // killed well inside this; anything still here afterwards was real and is put back.
+    const F64Seconds SK_CONFIRM_TIME(1.0);
 
     if (mSKGhostCandidates.empty() || now < mSKGhostNextSweep)
     {
@@ -199,6 +230,7 @@ void LLViewerObjectList::skUpdateGhostWatch(F64Seconds now)
         SKGhostCandidate& candidate = mSKGhostCandidates[i];
         LLViewerObject* objectp = candidate.mObject;
         bool done = true;
+        bool probe = false;
 
         // Stop watching anything that died, lost its region, or is no longer the kind of object
         // this is about.
@@ -206,39 +238,88 @@ void LLViewerObjectList::skUpdateGhostWatch(F64Seconds now)
             && objectp->flagUsePhysics() && objectp->flagTemporaryOnRez())
         {
             const LLVector3 pos = objectp->getPositionRegion();
-            if ((pos - candidate.mLastPos).magVecSquared() > SK_STILL_DISTANCE_SQ)
+            const F32 step_sq = (pos - candidate.mLastPos).magVecSquared();
+            const F64Seconds silence = candidate.mLastMovedAt - objectp->mLastMessageUpdateSecs;
+
+            if (candidate.mProbedAt > (F64Seconds)0.0)
             {
-                candidate.mLastPos = pos;
-                candidate.mLastMovedAt = now;
-                done = false;
-            }
-            else if (now - candidate.mLastMovedAt < SK_STILL_TIME
-                     || candidate.mLastMovedAt - objectp->mLastMessageUpdateSecs < SK_UNANNOUNCED_STOP)
-            {
-                done = false;
+                // Already asked. A ghost is killed by the answer and never reaches this again.
+                done = (now - candidate.mProbedAt >= SK_CONFIRM_TIME);
             }
             else if (objectp->isSelected())
             {
                 // Deselecting it out from under the user would be worse than leaving a ghost.
                 done = false;
             }
+            else if (objectp->mSKHaltedAtBoundary)
+            {
+                // The viewer stopped this one itself, at a border, for want of anything saying
+                // where it went. That needs no corroborating: a temporary object that flew into
+                // the void, or sat out an entire crossing window in silence, is the thing being
+                // looked for. Hide it now and ask afterwards, so the answer only has to undo
+                // something in the rare case where the object turns out to still exist.
+                done = false;
+                if (!candidate.mHidden)
+                {
+                    candidate.mAudioGain = objectp->mAudioGain;
+                    sk_hide_suspect(objectp);
+                    candidate.mHidden = true;
+                }
+                else
+                {
+                    probe = true;
+                }
+            }
+            else if (step_sq > SK_STILL_DISTANCE_SQ)
+            {
+                // Still moving. Remember how fast, so there is a speed to weigh the silence
+                // against once it does stop.
+                const F32 sampled = (F32)(now - candidate.mLastMovedAt).value();
+                candidate.mLastSpeed = (sampled > 0.f) ? (sqrtf(step_sq) / sampled) : 0.f;
+                candidate.mLastPos = pos;
+                candidate.mLastMovedAt = now;
+                done = false;
+            }
+            else if (now - candidate.mLastMovedAt < SK_STILL_TIME
+                     || silence < SK_UNANNOUNCED_STOP
+                     || candidate.mLastSpeed * (F32)silence.value() < SK_UNCONFIRMED_COAST)
+            {
+                done = false;
+            }
             else
             {
-                LL_DEBUGS("Interpolate") << "Probing possibly ghosted physical object "
-                                         << objectp->getID() << ", stopped "
-                                         << (now - candidate.mLastMovedAt).value()
-                                         << "s ago and unheard from for "
-                                         << (now - objectp->mLastMessageUpdateSecs).value()
-                                         << "s" << LL_ENDL;
-                sk_send_existence_probe(objectp);
+                probe = true;
             }
         }
 
-        // One probe settles it: a ghost is killed by the reply, and anything that answers is real.
+        if (probe)
+        {
+            // A probe only means anything while the simulator can answer it. On a circuit that
+            // has stopped talking the reply would never come, and the silence being read as
+            // evidence is the circuit's, not the object's -- so wait for it to come back.
+            LLCircuitData* cdp = gMessageSystem->mCircuitInfo.findCircuit(objectp->getRegion()->getHost());
+            if (cdp && cdp->isAlive() && !cdp->isBlocked())
+            {
+                LL_DEBUGS("Interpolate") << "Probing possibly ghosted physical object "
+                                         << objectp->getID() << ", unheard from for "
+                                         << (now - objectp->mLastMessageUpdateSecs).value() << "s"
+                                         << (objectp->mSKHaltedAtBoundary ? ", halted at a border" : "")
+                                         << LL_ENDL;
+                sk_send_existence_probe(objectp);
+                candidate.mProbedAt = now;
+            }
+            done = false;
+        }
+
+        // One probe settles it either way, so nothing is watched past its answer.
         if (done)
         {
             if (objectp)
             {
+                if (candidate.mHidden)
+                {
+                    sk_restore_suspect(objectp, candidate.mAudioGain);
+                }
                 objectp->mSKGhostWatched = false;
             }
             mSKGhostCandidates[i] = mSKGhostCandidates.back();

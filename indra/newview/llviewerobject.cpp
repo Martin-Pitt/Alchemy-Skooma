@@ -303,6 +303,7 @@ LLViewerObject::LLViewerObject(const LLUUID &id, const LLPCode pcode, LLViewerRe
     mOnMap(false),
     mStatic(false),
     mSKGhostWatched(false), // <SK:Nexii> Ghosted physical objects
+    mSKHaltedAtBoundary(false), // <SK:Nexii> Ghosted physical objects
     mSeatCount(0),
     mNumFaces(0),
     mRotTime(0.f),
@@ -2560,6 +2561,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     mLastInterpUpdateSecs = (F64Seconds)update_time;
     mLastMessageUpdateSecs = mLastInterpUpdateSecs;
+    mSKHaltedAtBoundary = false; // <SK:Nexii> Ghosted physical objects: the simulator still knows about this one
     if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
@@ -2800,6 +2802,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                 // Stop motion and get server update for bouncing on the edge
                 new_v.clear();
                 setAcceleration(LLVector3::zero);
+                mSKHaltedAtBoundary = true; // <SK:Nexii> Ghosted physical objects: the viewer stopped this at the border, not the simulator
             }
             else
             {
@@ -2823,6 +2826,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                     new_v.clear();
                     setAcceleration(LLVector3::zero);
                     mRegionCrossExpire = 0;
+                    mSKHaltedAtBoundary = true; // <SK:Nexii> Ghosted physical objects: the viewer stopped this at the border, not the simulator
                 }
             }
         }

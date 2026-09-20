@@ -232,6 +232,10 @@ protected:
         LLPointer<LLViewerObject> mObject;
         LLVector3 mLastPos;
         F64Seconds mLastMovedAt;
+        F64Seconds mProbedAt;   // zero until probed
+        F32 mLastSpeed;
+        F32 mAudioGain;         // gain before it was silenced
+        bool mHidden;
     };
     std::vector<SKGhostCandidate> mSKGhostCandidates;
     F64Seconds mSKGhostNextSweep;
