@@ -184,8 +184,6 @@ private:
     /// that one mesh holds the ground, the walls that block it and the floors
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
-    /// The records that reach into a tile, kept on it for the build.
-    static void gatherRecords(const std::vector<sknav::RecordPtr>& from, Tile& tile, F32 pad);
     static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
     /// Tiles the mesh no longer wants leave its Detour meshes.
     static void dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);

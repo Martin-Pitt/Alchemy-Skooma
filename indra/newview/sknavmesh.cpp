@@ -87,6 +87,40 @@ namespace
         return !(amin.mdV[VX] > bmax.mdV[VX] || bmin.mdV[VX] > amax.mdV[VX] || amin.mdV[VY] > bmax.mdV[VY] || bmin.mdV[VY] > amax.mdV[VY]);
     }
 
+    /// The records each lattice tile can see, bucketed by the cells their
+    /// padded AABB touches. A tile is one cell, so a lookup is one hash: the
+    /// per-tile scan over every record in the region is gone, and a record is
+    /// kept only by the tiles it can actually reach.
+    struct RecordGrid
+    {
+        std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mCells;
+
+        void insert(const RecordPtr& r, F32 pad)
+        {
+            const LLVector3d pmin = r->mMin - LLVector3d(pad, pad, 0);
+            const LLVector3d pmax = r->mMax + LLVector3d(pad, pad, 0);
+            const TileKey k0 = tileOf(pmin), k1 = tileOf(pmax);
+            for (S32 y = k0.mY; y <= k1.mY; ++y)
+            {
+                for (S32 x = k0.mX; x <= k1.mX; ++x)
+                {
+                    mCells[{ x, y }].push_back(r);
+                }
+            }
+        }
+
+        void query(const TileKey& key, std::vector<RecordPtr>& out) const
+        {
+            const auto it = mCells.find(key);
+            if (it == mCells.end())
+            {
+                out.clear();
+                return;
+            }
+            out = it->second;
+        }
+    };
+
     /// The lattice origin a mesh gets: the tile corner at or below the point, z zero.
     LLVector3d latticeOrigin(const LLVector3d& p)
     {
@@ -512,6 +546,11 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
         }
         mesh->mLastSeen = gFrameTimeSeconds;
         const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
+        RecordGrid grid;
+        for (const RecordPtr& r : c->mRecords)
+        {
+            grid.insert(r, pad);
+        }
         std::map<TileKey, Tile> wanted;
         for (const auto& entry : c->mTiles)
         {
@@ -526,7 +565,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
             tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
             tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            gatherRecords(c->mRecords, tile, pad);
+            grid.query(entry.first, tile.mRecords);
             tile.mSignature = mix(recordSignature(tile.mRecords), params);
         }
         dropTiles(*mesh, wanted);
@@ -567,6 +606,11 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
+            RecordGrid grid;
+            for (const RecordPtr& r : mine)
+            {
+                grid.insert(r, pad);
+            }
 
             // Past the region's own edge as far as its records reach, within
             // SKNavVoidMargin: the surrounds and the things hanging off the
@@ -602,7 +646,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
                     tile.mMin.mdV[VZ] = land.getMinZ();
                     tile.mMax.mdV[VZ] = land.getMaxZ();
-                    gatherRecords(mine, tile, pad);
+                    grid.query(TileKey{ ox + x, oy + y }, tile.mRecords);
                     const bool over_land = (x >= 0 && x < per_edge && y >= 0 && y < per_edge);
                     if (!over_land && tile.mRecords.empty())
                     {
@@ -634,19 +678,6 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
         it = live.count(it->second->mId) ? std::next(it) : mMeshes.erase(it);
-    }
-}
-
-void SKNavMesh::gatherRecords(const std::vector<RecordPtr>& from, Tile& tile, F32 pad)
-{
-    const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
-    tile.mRecords.clear();
-    for (const RecordPtr& r : from)
-    {
-        if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
-        {
-            tile.mRecords.push_back(r);
-        }
     }
 }
 
