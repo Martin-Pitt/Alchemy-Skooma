@@ -47,6 +47,24 @@ constexpr F32 SK_LUFS_TOLERANCE = 0.5f;
 constexpr F32 SK_LUFS_MAX_BOOST_DB = 12.f;
 constexpr F32 SK_LUFS_MAX_CUT_DB   = -24.f;
 
+// A boost is additionally capped so the clip's sample peak stays under this
+// ceiling. Loudness is an average, so transient material -- most SL sounds --
+// can read far below target while already peaking near full scale; boosting it
+// to hit the target drives the peak past 0 dBFS and the mastering limiter then
+// audibly claws it back. EBU R 128 pairs its -23 LUFS target with a -1 dBTP
+// ceiling for exactly this reason. Sample peak, not true peak: inter-sample
+// overshoot needs oversampling to see, and the 1 dB of margin covers it for
+// material at this length.
+constexpr F32 SK_LUFS_PEAK_CEILING_DB = -1.f;
+constexpr F32 SK_LUFS_PEAK_CEILING    = 0.891251f; // 10^(-1/20)
+
+// Fraction of the correction to actually apply. At 1.0 every clip inside the
+// boost/cut limits lands on exactly the target, which flattens the level
+// differences a creator chose -- in a virtual world the gap between a whisper
+// and a cannon is content, not a mastering error. Half the correction halves
+// the spread while leaving the authored ordering and half its magnitude intact.
+constexpr F32 SK_LUFS_STRENGTH_DEFAULT = 0.5f;
+
 /**
  * Incremental integrated-loudness meter, BS.1770-4.
  *
@@ -75,6 +93,11 @@ public:
     // Non-destructive: feeding may continue afterwards.
     F32 close() const;
 
+    // Largest absolute sample seen, 0..1. Taken before K-weighting: the shelf
+    // adds about 4 dB at high frequencies, so a filtered peak would overstate
+    // how much headroom the clip actually consumes.
+    F32 peak() const { return mPeak; }
+
     bool isValid() const { return mValid; }
 
 private:
@@ -97,6 +120,10 @@ private:
 
     void pushFrame(const S16* frame);
 
+    // Gated loudness over sub-block energies grouped `per_block` at a time.
+    // Returns SK_LUFS_SILENCE when nothing survives the gates.
+    F32 gatedLoudness(size_t per_block) const;
+
     U32  mSampleRate;
     U32  mChannels;
     bool mValid;
@@ -109,18 +136,31 @@ private:
     F64    mSubBlockAcc;    // channel-weighted mean square, summed over the sub-block
     std::vector<F64> mSubBlockEnergy;
 
-    // Whole-clip fallback for material shorter than one 400 ms gating block.
+    // Whole-clip fallback for material too short to fill even one sub-block.
     F64    mTotalAcc;
     size_t mTotalFrames;
+
+    F32    mPeak;
 
     // Partial frame carried between feedBytesLE() calls.
     U8     mLeftover[2 * 8];
     size_t mLeftoverBytes;
 };
 
-// Linear gain that moves a measured loudness onto the target, clamped to the
+// Linear gain that moves a measured loudness toward the target, clamped to the
 // boost/cut limits above. Returns 1.0 for silence or an already-on-target clip.
-F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs);
+//
+// strength scales the correction in dB before clamping; see
+// SK_LUFS_STRENGTH_DEFAULT.
+//
+// peak is the clip's sample peak (0..1). A boost is capped so peak * gain stays
+// under SK_LUFS_PEAK_CEILING; a clip already above the ceiling is simply left
+// alone rather than cut, since trimming for peak is a different feature. Pass 0
+// when the peak is unknown, which disables the cap.
+F32 sk_lufs_gain_for_target(F32 measured_lufs,
+                            F32 target_lufs,
+                            F32 strength = 1.f,
+                            F32 peak = 0.f);
 
 // In-place linear gain on 16-bit PCM, saturating rather than wrapping.
 // For the upload path, where the samples themselves are the deliverable.
@@ -133,6 +173,9 @@ void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain);
 // multichannel. The vorbis encoder downmixes on upload, and a correlated stereo
 // pair measures up to 3 LU hotter than its own downmix, so measuring the file
 // as-is would solve for a gain the encoded asset never sees.
-bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, bool downmix_to_mono = false);
+bool sk_lufs_measure_wav_file(const std::string& path,
+                              F32&               out_lufs,
+                              F32&               out_peak,
+                              bool               downmix_to_mono = false);
 
 #endif // SK_LUFS_H

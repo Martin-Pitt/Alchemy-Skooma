@@ -453,11 +453,13 @@ LLSD LLNewFileResourceUploadInfo::exportTempFile()
         if (normalize_uploads())
         {
             F32 lufs = SK_LUFS_SILENCE;
+            F32 peak = 0.f;
             // Measure the mono downmix, which is what encode_vorbis_file emits.
-            if (sk_lufs_measure_wav_file(getFileName(), lufs, true) && lufs > SK_LUFS_SILENCE)
+            if (sk_lufs_measure_wav_file(getFileName(), lufs, peak, true) && lufs > SK_LUFS_SILENCE)
             {
                 static LLCachedControl<F32> target(gSavedSettings, "SKSoundLoudnessTargetLUFS");
-                upload_gain = sk_lufs_gain_for_target(lufs, target());
+                static LLCachedControl<F32> strength(gSavedSettings, "SKSoundLoudnessStrength");
+                upload_gain = sk_lufs_gain_for_target(lufs, target(), strength(), peak);
                 LL_INFOS() << "Sound upload measured " << lufs << " LUFS, encoding with gain "
                            << upload_gain << " toward " << target() << " LUFS" << LL_ENDL;
             }

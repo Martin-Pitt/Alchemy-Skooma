@@ -3450,6 +3450,19 @@
             <key>Value</key>
             <real>-23.0</real>
         </map>
+        <key>SKSoundLoudnessStrength</key>
+        <map>
+            <key>Comment</key>
+            <string>
+                How much of the loudness correction to apply, 0 to 1. At 1.0 every sound lands on exactly the target, which flattens the level differences creators chose; 0.5 halves the spread while keeping the authored ordering. 0 disables the correction without disabling measurement.
+            </string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
         <key>SKSoundLoudnessNormalizeUploads</key>
         <map>
             <key>Comment</key>

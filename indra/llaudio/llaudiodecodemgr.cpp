@@ -86,6 +86,7 @@ public:
     // clip, or SK_LUFS_SILENCE if it was never measured. Valid once
     // finishDecode() has returned true.
     F32 getLoudnessLUFS() const         { return mLoudnessLUFS; }
+    F32 getLoudnessPeak() const         { return mLoudnessPeak; }
     // </SK:Nexii>
 
 protected:
@@ -108,6 +109,7 @@ protected:
     // samples stream past, so measuring costs no extra pass over the buffer.
     std::unique_ptr<SKLufsMeter> mLoudnessMeter;
     F32 mLoudnessLUFS;
+    F32 mLoudnessPeak;
     // </SK:Nexii>
 };
 
@@ -186,6 +188,7 @@ LLVorbisDecodeState::LLVorbisDecodeState(const LLUUID &uuid, const std::string &
     mOutFilename = out_filename;
     mFileHandle = LLLFSThread::nullHandle();
     mLoudnessLUFS = SK_LUFS_SILENCE; // <SK:Nexii> loudness normalization
+    mLoudnessPeak = 0.f;             // <SK:Nexii> loudness normalization
 
     // No default value for mVF, it's an ogg structure?
     // Hey, let's zero it anyway, for predictability.
@@ -453,6 +456,7 @@ bool LLVorbisDecodeState::finishDecode()
         if (mLoudnessMeter)
         {
             mLoudnessLUFS = mLoudnessMeter->close();
+            mLoudnessPeak = mLoudnessMeter->peak();
             mLoudnessMeter.reset();
         }
         // </SK:Nexii>
@@ -800,7 +804,8 @@ bool tryFinishAudio(const LLUUID &decode_id, LLPointer<LLVorbisDecodeState> deco
         adp->setHasWAVLoadFailed(false);
         // <SK:Nexii> loudness normalization -- the meter ran alongside the
         // decode, so the trim is known before the buffer can ever be played.
-        adp->setLoudnessLUFS(decode_state->getLoudnessLUFS());
+        adp->setLoudnessMeasurement(decode_state->getLoudnessLUFS(),
+                                    decode_state->getLoudnessPeak());
         // </SK:Nexii>
     }
 

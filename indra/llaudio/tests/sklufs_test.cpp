@@ -305,7 +305,8 @@ namespace tut
         ensure("wrote mono test wav", write_wav(path, mono, 1, TEST_SAMPLE_RATE));
 
         F32 lufs = SK_LUFS_SILENCE;
-        ensure("measured mono wav from disk", sk_lufs_measure_wav_file(path, lufs));
+        F32 peak = 0.f;
+        ensure("measured mono wav from disk", sk_lufs_measure_wav_file(path, lufs, peak));
         ensure_approximately_equals("mono wav measures -23 LUFS", lufs, -23.f, 6);
 
         // Identical channels: as stereo the powers sum (+3 LU); downmixed they
@@ -314,17 +315,103 @@ namespace tut
         ensure("wrote stereo test wav", write_wav(path, stereo, 2, TEST_SAMPLE_RATE));
 
         F32 as_stereo = SK_LUFS_SILENCE;
-        ensure("measured stereo wav", sk_lufs_measure_wav_file(path, as_stereo, false));
+        ensure("measured stereo wav", sk_lufs_measure_wav_file(path, as_stereo, peak, false));
         ensure_approximately_equals("correlated stereo is 3 LU hotter", as_stereo, -20.f, 6);
 
         F32 downmixed = SK_LUFS_SILENCE;
-        ensure("measured stereo wav downmixed", sk_lufs_measure_wav_file(path, downmixed, true));
+        ensure("measured stereo wav downmixed", sk_lufs_measure_wav_file(path, downmixed, peak, true));
         ensure_approximately_equals("downmix matches the mono level", downmixed, -23.f, 6);
 
         std::remove(path.c_str());
 
         F32 unused = SK_LUFS_SILENCE;
         ensure("a missing file is a failure, not silence",
-               !sk_lufs_measure_wav_file("sklufs_test_does_not_exist.wav", unused));
+               !sk_lufs_measure_wav_file("sklufs_test_does_not_exist.wav", unused, peak));
+    }
+
+    // Strength scales the correction in dB, so half strength is the square
+    // root of the full linear gain, and the authored ordering survives.
+    template<> template<>
+    void sklufs_object_t::test<9>()
+    {
+        const F32 full = sk_lufs_gain_for_target(-33.f, -23.f, 1.f);
+        const F32 half = sk_lufs_gain_for_target(-33.f, -23.f, 0.5f);
+        ensure_approximately_equals("full strength is +10 dB", full, powf(10.f, 10.f / 20.f), 16);
+        ensure_approximately_equals("half strength is +5 dB", half, powf(10.f, 5.f / 20.f), 16);
+
+        ensure_equals("zero strength is a no-op", sk_lufs_gain_for_target(-40.f, -23.f, 0.f), 1.f);
+
+        // Two clips 10 LU apart stay 5 LU apart at half strength.
+        const F32 quiet = sk_lufs_gain_for_target(-33.f, -23.f, 0.5f);
+        const F32 loud  = sk_lufs_gain_for_target(-23.f, -23.f, 0.5f);
+        const F32 gap   = 20.f * log10f(quiet / loud) ;
+        ensure_approximately_equals("a 10 LU authored gap halves to 5 LU", 10.f - gap, 5.f, 5);
+    }
+
+    // The peak cap: a boost may not drive the sample peak past the ceiling,
+    // and a clip already over it is left alone rather than cut.
+    template<> template<>
+    void sklufs_object_t::test<10>()
+    {
+        // Peaking at -1 dBFS exactly: no headroom left, no boost.
+        ensure_equals("no headroom means no boost",
+                      sk_lufs_gain_for_target(-40.f, -23.f, 1.f, SK_LUFS_PEAK_CEILING), 1.f);
+
+        // Peaking at full scale: still no boost, and never a cut.
+        ensure_equals("full-scale peak is left alone",
+                      sk_lufs_gain_for_target(-40.f, -23.f, 1.f, 1.f), 1.f);
+
+        // Half-scale peak (-6 dBFS) leaves 5 dB of headroom, so a 17 dB
+        // request is capped to that.
+        const F32 capped = sk_lufs_gain_for_target(-40.f, -23.f, 1.f, 0.5f);
+        ensure_approximately_equals("boost capped to available headroom",
+                                    0.5f * capped, SK_LUFS_PEAK_CEILING, 16);
+
+        // Plenty of headroom: the cap does not bind.
+        ensure_approximately_equals("headroom to spare leaves the boost alone",
+                                    sk_lufs_gain_for_target(-30.f, -23.f, 1.f, 0.01f),
+                                    powf(10.f, 7.f / 20.f), 16);
+
+        // A cut is never capped -- the ceiling only limits boosts.
+        ensure_approximately_equals("cuts ignore the ceiling",
+                                    sk_lufs_gain_for_target(-10.f, -23.f, 1.f, 1.f),
+                                    powf(10.f, -13.f / 20.f), 16);
+
+        // Unknown peak disables the cap.
+        ensure_approximately_equals("peak 0 disables the cap",
+                                    sk_lufs_gain_for_target(-30.f, -23.f, 1.f, 0.f),
+                                    powf(10.f, 7.f / 20.f), 16);
+    }
+
+    // Peak is taken before K-weighting, and reported over everything fed.
+    template<> template<>
+    void sklufs_object_t::test<11>()
+    {
+        std::vector<S16> pcm = make_sine(1000.0, 0.5, 1, 1.0);
+        SKLufsMeter meter(TEST_SAMPLE_RATE, 1);
+        meter.feed(pcm.data(), pcm.size());
+        // The shelf lifts 1 kHz by ~0.7 dB; an unfiltered peak must not show it.
+        ensure_approximately_equals("peak is the raw sample peak", meter.peak(), 0.5f, 8);
+
+        SKLufsMeter quiet(TEST_SAMPLE_RATE, 1);
+        std::vector<S16> zeros(TEST_SAMPLE_RATE, 0);
+        quiet.feed(zeros.data(), zeros.size());
+        ensure_equals("silence peaks at zero", quiet.peak(), 0.f);
+    }
+
+    // A padded one-shot -- too short for a 400 ms gating block -- must measure
+    // its own level, not the average including its trailing silence. The
+    // whole-clip mean this replaced read about 4.8 dB low here.
+    template<> template<>
+    void sklufs_object_t::test<12>()
+    {
+        std::vector<S16> clip(TEST_SAMPLE_RATE * 3 / 10, 0);        // 300 ms
+        std::vector<S16> burst = make_sine(1000.0, 0.1, 1, 0.1);    // 100 ms at -23 LUFS
+        std::copy(burst.begin(), burst.end(), clip.begin());
+
+        SKLufsMeter meter(TEST_SAMPLE_RATE, 1);
+        meter.feed(clip.data(), clip.size());
+        ensure_approximately_equals("padded one-shot measures its own level",
+                                    meter.close(), -23.f, 5);
     }
 }

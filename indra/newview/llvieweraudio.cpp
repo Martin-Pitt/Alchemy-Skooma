@@ -463,7 +463,8 @@ void audio_update_volume(bool force_update)
         // through a listener; the setter early-outs when nothing changed.
         static LLCachedControl<bool> loudness_normalize(gSavedSettings, "SKSoundLoudnessNormalize");
         static LLCachedControl<F32> loudness_target(gSavedSettings, "SKSoundLoudnessTargetLUFS");
-        gAudiop->setLoudnessNormalization(loudness_normalize(), loudness_target());
+        static LLCachedControl<F32> loudness_strength(gSavedSettings, "SKSoundLoudnessStrength");
+        gAudiop->setLoudnessNormalization(loudness_normalize(), loudness_target(), loudness_strength());
         // </SK:Nexii>
 
         // Streaming Music

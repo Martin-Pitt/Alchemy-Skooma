@@ -63,6 +63,7 @@ SKLufsMeter::SKLufsMeter(U32 sample_rate, U32 num_channels)
     mSubBlockAcc(0.0),
     mTotalAcc(0.0),
     mTotalFrames(0),
+    mPeak(0.f),
     mLeftoverBytes(0)
 {
     if (!mValid)
@@ -125,6 +126,7 @@ void SKLufsMeter::pushFrame(const S16* frame)
     for (U32 c = 0; c < mChannels; ++c)
     {
         const F64 x = (F64)frame[c] / 32768.0;
+        mPeak = llmax(mPeak, (F32)fabs(x)); // before weighting; see peak()
         const F64 y = mHighpass[c].process(mShelf[c].process(x));
         frame_power += channel_weight(c) * y * y;
     }
@@ -200,30 +202,24 @@ void SKLufsMeter::feedBytesLE(const U8* bytes, size_t byte_count)
     }
 }
 
-F32 SKLufsMeter::close() const
+F32 SKLufsMeter::gatedLoudness(size_t per_block) const
 {
-    if (!mValid || !mTotalFrames)
+    if (!per_block || mSubBlockEnergy.size() < per_block)
     {
         return SK_LUFS_SILENCE;
     }
 
+    const F64 block_div = (F64)(per_block * mSubBlockLen);
     std::vector<F64> powers;
-    if (mSubBlockEnergy.size() >= 4)
+    powers.reserve(mSubBlockEnergy.size() - per_block + 1);
+    for (size_t j = 0; j + per_block <= mSubBlockEnergy.size(); ++j)
     {
-        const F64 block_div = (F64)(4 * mSubBlockLen);
-        powers.reserve(mSubBlockEnergy.size() - 3);
-        for (size_t j = 0; j + 4 <= mSubBlockEnergy.size(); ++j)
+        F64 sum = 0.0;
+        for (size_t k = 0; k < per_block; ++k)
         {
-            powers.push_back((mSubBlockEnergy[j] + mSubBlockEnergy[j + 1] + mSubBlockEnergy[j + 2] +
-                              mSubBlockEnergy[j + 3]) /
-                             block_div);
+            sum += mSubBlockEnergy[j + k];
         }
-    }
-    else
-    {
-        // Shorter than one gating block, which most SL sounds are. Measure the
-        // whole clip as a single block rather than reporting silence.
-        powers.push_back(mTotalAcc / (F64)mTotalFrames);
+        powers.push_back(sum / block_div);
     }
 
     // First pass: absolute gate only, to establish the relative threshold.
@@ -267,14 +263,54 @@ F32 SKLufsMeter::close() const
     return (F32)block_loudness(gated_sum / (F64)gated_count);
 }
 
-F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs)
+F32 SKLufsMeter::close() const
+{
+    if (!mValid || !mTotalFrames)
+    {
+        return SK_LUFS_SILENCE;
+    }
+
+    // Full-size 400 ms gating blocks at 75% overlap: the BS.1770 measurement.
+    const F32 full = gatedLoudness(4);
+    if (full > SK_LUFS_SILENCE)
+    {
+        return full;
+    }
+
+    // Too short to fill a 400 ms gating block, which most SL sounds are. Gate
+    // the 100 ms sub-blocks directly instead of averaging the whole clip: the
+    // whole-clip mean counts trailing silence as signal, so a padded one-shot
+    // reads below its own level and earns a boost it does not need.
+    //
+    // This only helps below 400 ms. Above that the standard blocks apply and a
+    // brief transient in a longer clip still measures diluted -- that is what
+    // integrated loudness means, and the peak cap is what keeps such a clip
+    // from being boosted into distortion.
+    const F32 partial = gatedLoudness(1);
+    if (partial > SK_LUFS_SILENCE)
+    {
+        return partial;
+    }
+
+    // Shorter than a single sub-block, or silent. The whole-clip mean is all
+    // that is left; guard the log, since digital silence has zero power.
+    if (mTotalAcc <= 0.0)
+    {
+        return SK_LUFS_SILENCE;
+    }
+    return llmax(SK_LUFS_SILENCE, (F32)block_loudness(mTotalAcc / (F64)mTotalFrames));
+}
+
+F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs, F32 strength, F32 peak)
 {
     if (measured_lufs <= SK_LUFS_SILENCE)
     {
         return 1.f;
     }
 
-    F32 delta_db = target_lufs - measured_lufs;
+    // Scale before the tolerance test, so a clip already near the target is not
+    // nudged by a fraction of a dB for nothing.
+    F32 delta_db = llclamp(strength, 0.f, 1.f) * (target_lufs - measured_lufs);
     if (fabsf(delta_db) <= SK_LUFS_TOLERANCE)
     {
         return 1.f;
@@ -284,7 +320,16 @@ F32 sk_lufs_gain_for_target(F32 measured_lufs, F32 target_lufs)
 
     // Loudness is a power measure, so a dB delta maps to an amplitude ratio
     // through /20, not /10.
-    return powf(10.f, delta_db / 20.f);
+    F32 gain = powf(10.f, delta_db / 20.f);
+
+    // Never boost a clip past the peak ceiling. A clip already over it keeps
+    // unity rather than being cut -- that would be a limiter, not this.
+    if (gain > 1.f && peak > 0.f)
+    {
+        gain = llclamp(gain, 1.f, llmax(1.f, SK_LUFS_PEAK_CEILING / peak));
+    }
+
+    return gain;
 }
 
 void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain)
@@ -301,7 +346,7 @@ void sk_lufs_apply_gain16(S16* samples, size_t count, F32 gain)
     }
 }
 
-bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, bool downmix_to_mono)
+bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, F32& out_peak, bool downmix_to_mono)
 {
     LLAudio::WavInfo info;
     if (!LLAudio::parseWav(path, info) || info.format_tag != 1 || info.pcm.empty())
@@ -370,5 +415,6 @@ bool sk_lufs_measure_wav_file(const std::string& path, F32& out_lufs, bool downm
 
     meter.feed(pcm.data(), pcm.size() / measure_channels);
     out_lufs = meter.close();
+    out_peak = meter.peak();
     return true;
 }

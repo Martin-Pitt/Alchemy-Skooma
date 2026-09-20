@@ -198,9 +198,10 @@ public:
     // Per-asset playback trim toward a target integrated loudness. Changing
     // either value re-derives the trim on every known asset, so the UI can
     // drive it live.
-    void setLoudnessNormalization(bool enabled, F32 target_lufs);
+    void setLoudnessNormalization(bool enabled, F32 target_lufs, F32 strength);
     bool isLoudnessNormalizationEnabled() const { return mLoudnessNormalize; }
     F32  getLoudnessTargetLUFS() const          { return mLoudnessTargetLUFS; }
+    F32  getLoudnessStrength() const            { return mLoudnessStrength; }
 
     // Measure an already-decoded .dsf on a worker thread. Used for cache hits,
     // which carry no measurement from decode. The sound plays untrimmed in the
@@ -209,7 +210,7 @@ public:
 
     // Remember a measurement for future sessions. First one wins, so replaying
     // a known sound does not dirty the index.
-    void recordLoudnessMeasurement(const LLUUID& id, F32 lufs);
+    void recordLoudnessMeasurement(const LLUUID& id, F32 lufs, F32 peak);
     // </SK:Nexii>
 
     F32 getInternetStreamGain();
@@ -393,12 +394,14 @@ protected:
     // <SK:Nexii> loudness normalization
     bool mLoudnessNormalize;
     F32  mLoudnessTargetLUFS;
+    F32  mLoudnessStrength;
 
     // Measurements survive the session so a cached sound is only ever measured
     // once, and the trim is not re-applied audibly on every restart.
     void loadLoudnessIndex();
     void saveLoudnessIndex();
-    std::map<LLUUID, F32> mLoudnessIndex;
+    struct LoudnessEntry { F32 lufs; F32 peak; };
+    std::map<LLUUID, LoudnessEntry> mLoudnessIndex;
     bool mLoudnessIndexDirty;
     // </SK:Nexii>
 
@@ -580,6 +583,7 @@ class LLAudioData
     // Integrated loudness of the decoded clip, or SK_LUFS_SILENCE when it has
     // not been measured yet (a .dsf left by a build without this feature).
     F32  getLoudnessLUFS() const { return mLoudnessLUFS; }
+    F32  getLoudnessPeak() const { return mLoudnessPeak; }
     bool hasLoudnessMeasurement() const { return mLoudnessLUFS > SK_LUFS_SILENCE; }
 
     // Playback trim derived from the measurement and the current target. 1.0
@@ -587,8 +591,8 @@ class LLAudioData
     // its natural level rather than waiting on the meter.
     F32  getLoudnessGain() const { return mLoudnessGain; }
 
-    void setLoudnessLUFS(F32 lufs);
-    void refreshLoudnessGain(bool enabled, F32 target_lufs);
+    void setLoudnessMeasurement(F32 lufs, F32 peak);
+    void refreshLoudnessGain(bool enabled, F32 target_lufs, F32 strength);
 
     // Set while a background measurement of this asset is in flight, so the
     // engine schedules at most one per asset.
@@ -613,6 +617,7 @@ class LLAudioData
     bool           mHasDecodeFailed;     // Set true if decoding failed, meaning the sound asset is bad
     // <SK:Nexii> loudness normalization
     F32  mLoudnessLUFS;
+    F32  mLoudnessPeak;   // sample peak 0..1, caps the boost
     F32  mLoudnessGain;
     bool mLoudnessMeasurePending;
     // </SK:Nexii>
