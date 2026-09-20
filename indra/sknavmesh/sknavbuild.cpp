@@ -389,8 +389,8 @@ namespace sknav
             cfg.minRegionArea = 8 * 8;
             cfg.mergeRegionArea = 20 * 20;
             cfg.maxVertsPerPoly = 6;
-            cfg.detailSampleDist = 6.f * cfg.cs;
-            cfg.detailSampleMaxError = 2.f * cfg.ch;
+            cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
+            cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
             cfg.borderSize = cfg.walkableRadius + 3;
             cfg.tileSize = static_cast<int>(input.mTileSize / cfg.cs);
             cfg.width = cfg.tileSize + cfg.borderSize * 2;
@@ -442,7 +442,21 @@ namespace sknav
                 result.mError = "erode";
                 return result;
             }
-            if (!rcBuildDistanceField(&ctx, *mem.chf) || !rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea))
+            bool regions = false;
+            switch (input.mPartition)
+            {
+                case Partition::MONOTONE:
+                    regions = rcBuildRegionsMonotone(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
+                case Partition::LAYERS:
+                    regions = rcBuildLayerRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea);
+                    break;
+                default:
+                    regions = rcBuildDistanceField(&ctx, *mem.chf) &&
+                              rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
+            }
+            if (!regions)
             {
                 result.mError = "regions";
                 return result;

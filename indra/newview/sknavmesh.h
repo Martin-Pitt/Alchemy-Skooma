@@ -33,7 +33,6 @@
 
 #include <functional>
 #include <map>
-#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -121,6 +120,9 @@ private:
         F32 mMillis = 0.f;
         LLVector3d mMin;        ///< global, for scheduling by distance and drawing
         LLVector3d mMax;
+        /// What the build rasterises here, gathered when the tile's signature
+        /// is worked out rather than walked again on the way to the worker.
+        std::vector<sknav::RecordPtr> mRecords;
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
@@ -131,6 +133,9 @@ private:
     struct Mesh
     {
         LLUUID mId;                         ///< cluster id, or the region id for terrain
+        /// The region's own mesh: its terrain and everything standing on it.
+        /// A cluster only gets a mesh of its own when it sits clear of the
+        /// ground, and then it has no terrain in it at all.
         bool mTerrain = false;
         U64 mRegion = 0;                    ///< the region that owns it, for lifetime
         U32 mGeneration = 0;                ///< results carry it; a torn-down mesh rejects old ones
@@ -150,15 +155,19 @@ private:
     };
 
     bool wanted() const;
-    /// With the world switched off, the world is not drawn at all: the same
-    /// render types the Develop menu turns off, turned off here and put back
-    /// exactly as they were. Painting over the finished frame instead would
-    /// leave the mesh lit, fogged and sitting on a flat rectangle.
-    void hideWorld(bool hide);
     void reconcile(const SKCensusSnapshotPtr& snap);
-    void reconcileTerrain();
-    void schedule(const SKCensusSnapshotPtr& snap);
-    bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile, const sknav::ClusterPtr& cluster);
+    /// Whether a cluster stands on the ground under it, within
+    /// SKNavGroundedMargin. A grounded structure is meshed with the region so
+    /// that one mesh holds the ground, the walls that block it and the floors
+    /// that lead off it; anything clear of the ground gets a mesh to itself.
+    bool grounded(const sknav::Cluster& cluster) const;
+    /// The records that reach into a tile, kept on it for the build.
+    static void gatherRecords(const std::vector<sknav::RecordPtr>& from, Tile& tile, F32 pad);
+    static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
+    /// Tiles the mesh no longer wants leave its Detour meshes.
+    static void dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
+    void schedule();
+    bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
@@ -172,19 +181,12 @@ private:
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
-    /// Lattice tiles where a cluster mesh already meshes the ground. Its
-    /// tiles carry the terrain under them so that a structure and the ground
-    /// it stands on are one mesh and can be pathed across; the region's
-    /// terrain mesh then has to leave those tiles alone, or the same ground is
-    /// walkable twice over.
-    std::set<sknav::TileKey> mGroundTaken;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;
     Stats mStats;
     F32 mLastLog = 0.f;
     bool mDemanding = false;
-    std::vector<U32> mHiddenTypes;  ///< render types we turned off, to put back
 };
 
 #endif // SK_NAVMESH_H

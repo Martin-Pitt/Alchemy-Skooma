@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace
 {
@@ -119,7 +120,6 @@ SKNavMesh::SKNavMesh()
 
 SKNavMesh::~SKNavMesh()
 {
-    hideWorld(false);
 }
 
 bool SKNavMesh::wanted() const
@@ -167,6 +167,8 @@ U64 SKNavMesh::paramsSignature() const
     fillParams(probe);
     U64 h = SEED;
     h = mixF32(h, probe.mCell);
+    h = mix(h, static_cast<U64>(probe.mPartition));
+    h = mixF32(h, probe.mDetailSampleCells);
     h = mix(h, probe.mWallFaces);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
@@ -195,7 +197,12 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
     static LLCachedControl<F32> dropSpacing(gSavedSettings, "SKNavDropSpacing", 2.f);
 
+    static LLCachedControl<U32> partition(gSavedSettings, "SKNavPartition", 0);
+    static LLCachedControl<F32> detail(gSavedSettings, "SKNavDetailSample", 6.f);
+
     input.mCell = llclamp(static_cast<F32>(cell), 0.05f, 1.f);
+    input.mPartition = static_cast<Partition>(llclamp(static_cast<S32>(partition), 0, 2));
+    input.mDetailSampleCells = llclamp(static_cast<F32>(detail), 0.f, 32.f);
     // The avatar class is as tall as the user's own avatar, rounded up to the
     // next cell, so a tall avatar never gets floor it cannot stand on.
     F32 height = 2.f;
@@ -313,19 +320,64 @@ void SKNavMesh::fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& til
     }
 }
 
+bool SKNavMesh::grounded(const Cluster& cluster) const
+{
+    static LLCachedControl<F32> margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
+    if (!LLWorld::instanceExists())
+    {
+        return false;
+    }
+    // The highest ground under the cluster's footprint: a structure on a slope
+    // stands on the high side of it.
+    LLWorld* world = LLWorld::getInstance();
+    const LLVector3d corners[5] = {
+        cluster.mMin,
+        LLVector3d(cluster.mMax.mdV[VX], cluster.mMin.mdV[VY], 0.0),
+        LLVector3d(cluster.mMin.mdV[VX], cluster.mMax.mdV[VY], 0.0),
+        cluster.mMax,
+        (cluster.mMin + cluster.mMax) * 0.5,
+    };
+    F32 land = -1e9f;
+    for (const LLVector3d& corner : corners)
+    {
+        land = llmax(land, static_cast<F32>(world->resolveLandHeightGlobal(corner)));
+    }
+    return static_cast<F32>(cluster.mMin.mdV[VZ]) - land <= margin;
+}
+
 void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 {
     const U64 params = paramsSignature();
     TileBuildInput probe;
     fillParams(probe);
     const F32 pad = padFor(probe);
-    mGroundTaken.clear();
+
+    // Grounded structures are meshed with the region they stand in, so that
+    // one mesh holds the ground, the walls that block it and the floors that
+    // lead off it. Meshing them separately meant every cluster sharing a
+    // lattice tile rasterised that tile's ground again.
+    std::vector<RecordPtr> ground_records;
+    std::vector<const Cluster*> airborne;
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
-        for (const auto& entry : c->mTiles)
+        if (grounded(*c))
         {
-            mGroundTaken.insert(entry.first);
+            ground_records.insert(ground_records.end(), c->mRecords.begin(), c->mRecords.end());
         }
+        else
+        {
+            airborne.push_back(c.get());
+        }
+    }
+
+    std::set<LLUUID> live;
+
+    // Clusters clear of the ground: a mesh each, and no terrain in it. A
+    // skybox three kilometres up has nothing to do with the land below it, and
+    // a heightfield spanning the gap would overflow Recast's span heights.
+    for (const Cluster* c : airborne)
+    {
+        live.insert(c->mId);
         std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
         if (!mesh)
         {
@@ -340,8 +392,6 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             }
         }
         mesh->mLastSeen = gFrameTimeSeconds;
-        // The cluster's tiles are on the global lattice; ours are relative to
-        // the mesh origin, which is on it too.
         const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
         std::map<TileKey, Tile> wanted;
         for (const auto& entry : c->mTiles)
@@ -357,105 +407,121 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
             tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
             tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            // The build takes every record within the pad, so the signature
-            // covers that same set rather than the cluster's unpadded one.
-            const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
-            U64 members = SEED;
-            for (const RecordPtr& r : c->mRecords)
-            {
-                if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
-                {
-                    members = mix(members, r->mSignature);
-                }
-            }
-            tile.mSignature = mix(mix(members, terrainSignature(tile.mMin, tile.mMax, pad)), params);
+            gatherRecords(c->mRecords, tile, pad);
+            tile.mSignature = mix(recordSignature(tile.mRecords), params);
         }
-        // Tiles the cluster no longer covers leave the Detour meshes.
-        for (const auto& old : mesh->mTiles)
-        {
-            if (wanted.count(old.first) == 0 && old.second.mBuilt)
-            {
-                mesh->mLevelsStale = true;
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                {
-                    if (mesh->mNav[cls])
-                    {
-                        mesh->mNav[cls]->removeTile(mesh->mNav[cls]->getTileRefAt(old.first.mY, old.first.mX, 0), nullptr, nullptr);
-                    }
-                }
-            }
-        }
+        dropTiles(*mesh, wanted);
         mesh->mTiles.swap(wanted);
     }
-}
 
-void SKNavMesh::reconcileTerrain()
-{
-    const U64 params = paramsSignature();
-    TileBuildInput probe;
-    fillParams(probe);
-    const F32 pad = padFor(probe);
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    // One mesh per region: its terrain, and every structure standing on it. A
+    // record belongs to the region its own origin names, so a build straddling
+    // a border is split between the two rather than rasterised into both.
+    if (LLWorld::instanceExists())
     {
-        std::unique_ptr<Mesh>& mesh = mMeshes[region->getRegionID()];
-        if (!mesh)
+        for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
-            mesh = std::make_unique<Mesh>();
-            mesh->mId = region->getRegionID();
-            mesh->mTerrain = true;
-            mesh->mRegion = region->getHandle();
-            mesh->mGeneration = mNextGeneration++;
-            mesh->mOrigin = latticeOrigin(region->getOriginGlobal());
-        }
-        mesh->mLastSeen = gFrameTimeSeconds;
-        const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
-        const LLSurface& land = region->getLand();
-        const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
-        std::map<TileKey, Tile> wanted;
-        for (S32 y = 0; y < per_edge; ++y)
-        {
-            for (S32 x = 0; x < per_edge; ++x)
+            live.insert(region->getRegionID());
+            std::unique_ptr<Mesh>& mesh = mMeshes[region->getRegionID()];
+            if (!mesh)
             {
-                const TileKey key{ x, y };
-                // A cluster mesh here already carries this ground, and two
-                // meshes over one patch of ground is two walkable surfaces.
-                if (mGroundTaken.count(TileKey{ ox + x, oy + y }))
-                {
-                    continue;
-                }
-                Tile& tile = wanted[key];
-                const auto old_tile = mesh->mTiles.find(key);
-                if (old_tile != mesh->mTiles.end())
-                {
-                    tile = old_tile->second;
-                }
-                tile.mMin = tileMin(mesh->mOrigin, key);
-                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-                tile.mMin.mdV[VZ] = land.getMinZ();
-                tile.mMax.mdV[VZ] = land.getMaxZ();
-                tile.mSignature = mix(terrainSignature(tile.mMin, tile.mMax, pad), params);
+                mesh = std::make_unique<Mesh>();
+                mesh->mId = region->getRegionID();
+                mesh->mTerrain = true;
+                mesh->mRegion = region->getHandle();
+                mesh->mGeneration = mNextGeneration++;
+                mesh->mOrigin = latticeOrigin(region->getOriginGlobal());
             }
-        }
-        // Ground a cluster has taken over leaves the Detour meshes.
-        for (const auto& old_tile : mesh->mTiles)
-        {
-            if (wanted.count(old_tile.first) == 0 && old_tile.second.mBuilt)
+            mesh->mLastSeen = gFrameTimeSeconds;
+
+            const LLVector3d& origin = region->getOriginGlobal();
+            std::vector<RecordPtr> mine;
+            for (const RecordPtr& r : ground_records)
             {
-                mesh->mLevelsStale = true;
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                if (r->mOrigin == origin)
                 {
-                    if (mesh->mNav[cls])
+                    mine.push_back(r);
+                }
+            }
+
+            const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
+            const LLSurface& land = region->getLand();
+            std::map<TileKey, Tile> wanted;
+            for (S32 y = 0; y < per_edge; ++y)
+            {
+                for (S32 x = 0; x < per_edge; ++x)
+                {
+                    const TileKey key{ x, y };
+                    Tile& tile = wanted[key];
+                    const auto old = mesh->mTiles.find(key);
+                    if (old != mesh->mTiles.end())
                     {
-                        mesh->mNav[cls]->removeTile(mesh->mNav[cls]->getTileRefAt(old_tile.first.mY, old_tile.first.mX, 0), nullptr, nullptr);
+                        tile = old->second;
                     }
+                    tile.mMin = tileMin(mesh->mOrigin, key);
+                    tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                    tile.mMin.mdV[VZ] = land.getMinZ();
+                    tile.mMax.mdV[VZ] = land.getMaxZ();
+                    gatherRecords(mine, tile, pad);
+                    tile.mSignature = mix(mix(recordSignature(tile.mRecords),
+                                              terrainSignature(tile.mMin, tile.mMax, pad)), params);
                 }
             }
+            dropTiles(*mesh, wanted);
+            mesh->mTiles.swap(wanted);
         }
-        mesh->mTiles.swap(wanted);
+    }
+
+    // A cluster that has gone, or that has come down to the ground and is now
+    // the region's business, takes its mesh with it.
+    for (auto it = mMeshes.begin(); it != mMeshes.end();)
+    {
+        it = live.count(it->second->mId) ? std::next(it) : mMeshes.erase(it);
     }
 }
 
-bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile, const ClusterPtr& cluster)
+void SKNavMesh::gatherRecords(const std::vector<RecordPtr>& from, Tile& tile, F32 pad)
+{
+    const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
+    tile.mRecords.clear();
+    for (const RecordPtr& r : from)
+    {
+        if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
+        {
+            tile.mRecords.push_back(r);
+        }
+    }
+}
+
+U64 SKNavMesh::recordSignature(const std::vector<RecordPtr>& records)
+{
+    U64 h = SEED;
+    for (const RecordPtr& r : records)
+    {
+        h = mix(h, r->mSignature);
+    }
+    return h;
+}
+
+void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
+{
+    for (const auto& old : mesh.mTiles)
+    {
+        if (wanted.count(old.first) == 0 && old.second.mBuilt)
+        {
+            mesh.mLevelsStale = true;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                if (mesh.mNav[cls])
+                {
+                    mesh.mNav[cls]->removeTile(mesh.mNav[cls]->getTileRefAt(old.first.mY, old.first.mX, 0), nullptr, nullptr);
+                }
+            }
+        }
+    }
+}
+
+bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
 {
     LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
     LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
@@ -471,7 +537,13 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile, const Cluster
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
     const F32 pad = padFor(*input);
-    fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
+    // Only a region mesh has ground in it: a cluster clear of the ground has
+    // nothing to do with the land far below it, and a heightfield spanning
+    // the gap would overflow Recast's span heights.
+    if (mesh.mTerrain)
+    {
+        fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
+    }
 
     F32 zmin = 1e9f, zmax = -1e9f;
     for (F32 z : input->mTerrain.mZ)
@@ -482,18 +554,11 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile, const Cluster
             zmax = std::max(zmax, z);
         }
     }
-    if (cluster)
+    input->mRecords = tile.mRecords;
+    for (const RecordPtr& r : input->mRecords)
     {
-        const LLVector3d pmin = tile.mMin - LLVector3d(pad, pad, 0), pmax = tile.mMax + LLVector3d(pad, pad, 0);
-        for (const RecordPtr& r : cluster->mRecords)
-        {
-            if (overlapsXY(r->mMin, r->mMax, pmin, pmax))
-            {
-                input->mRecords.push_back(r);
-                zmin = std::min(zmin, static_cast<F32>(r->mMin.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
-                zmax = std::max(zmax, static_cast<F32>(r->mMax.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
-            }
-        }
+        zmin = std::min(zmin, static_cast<F32>(r->mMin.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
+        zmax = std::max(zmax, static_cast<F32>(r->mMax.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
     }
     if (zmin > zmax)
     {
@@ -661,7 +726,7 @@ void SKNavMesh::relabel()
     }
 }
 
-void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
+void SKNavMesh::schedule()
 {
     static LLCachedControl<S32> perFrame(gSavedSettings, "SKNavBuildsPerFrame", 2);
     static LLCachedControl<S32> inFlightMax(gSavedSettings, "SKNavBuildsInFlight", 2);
@@ -671,7 +736,6 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
         Mesh* mMesh;
         TileKey mKey;
         Tile* mTile;
-        ClusterPtr mCluster;
         F64 mDistance;
     };
     std::vector<Candidate> candidates;
@@ -682,22 +746,6 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
-        ClusterPtr cluster;
-        if (!mesh.mTerrain)
-        {
-            for (const ClusterPtr& c : snap->mClusters.mClusters)
-            {
-                if (c->mId == mesh.mId)
-                {
-                    cluster = c;
-                    break;
-                }
-            }
-            if (!cluster)
-            {
-                continue;
-            }
-        }
         for (auto& t : mesh.mTiles)
         {
             Tile& tile = t.second;
@@ -707,7 +755,7 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
             }
             const LLVector3d centre = (tile.mMin + tile.mMax) * 0.5;
             const F64 nearest = llmin(dist_vec_squared2D(centre, agent), dist_vec_squared2D(centre, camera));
-            candidates.push_back({ &mesh, t.first, &tile, cluster, nearest });
+            candidates.push_back({ &mesh, t.first, &tile, nearest });
         }
     }
     mStats.mQueued = static_cast<U32>(candidates.size());
@@ -720,7 +768,7 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
         {
             break;
         }
-        if (launch(*c.mMesh, c.mKey, *c.mTile, c.mCluster))
+        if (launch(*c.mMesh, c.mKey, *c.mTile))
         {
             launched++;
         }
@@ -749,25 +797,19 @@ void SKNavMesh::update()
         return;
     }
 
-    static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
-    hideWorld(want && !show_world);
-
     SKCensusSnapshotPtr snap = census.snapshot();
     if (!snap)
     {
         return;
     }
-    if (snap->mStamp != mCensusStamp)
+    // On a new census, and once a second besides: the land patches change
+    // without the census noticing, and a region mesh is built from both.
+    static F32 last = -1.f;
+    if (snap->mStamp != mCensusStamp || gFrameTimeSeconds - last > 1.f)
     {
         mCensusStamp = snap->mStamp;
+        last = gFrameTimeSeconds;
         reconcile(snap);
-    }
-    // Terrain follows the land patches, which change without the census noticing.
-    static F32 lastTerrain = -1.f;
-    if (gFrameTimeSeconds - lastTerrain > 1.f)
-    {
-        lastTerrain = gFrameTimeSeconds;
-        reconcileTerrain();
     }
 
     // Meshes nothing has claimed for a while are gone with their structure.
@@ -776,7 +818,7 @@ void SKNavMesh::update()
         it = (gFrameTimeSeconds - it->second->mLastSeen > 30.f) ? mMeshes.erase(it) : std::next(it);
     }
 
-    schedule(snap);
+    schedule();
     relabel();
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
@@ -1092,50 +1134,6 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
     return true;
 }
 
-void SKNavMesh::hideWorld(bool hide)
-{
-    // The world render types the Develop menu offers, less sky and clouds: a
-    // horizon to orient against costs nothing and an empty black frame is
-    // worse than useless.
-    static const U32 WORLD_TYPES[] = {
-        LLPipeline::RENDER_TYPE_SIMPLE,     LLPipeline::RENDER_TYPE_MATERIALS,
-        LLPipeline::RENDER_TYPE_ALPHA,      LLPipeline::RENDER_TYPE_ALPHA_MASK,
-        LLPipeline::RENDER_TYPE_FULLBRIGHT_ALPHA_MASK, LLPipeline::RENDER_TYPE_FULLBRIGHT,
-        LLPipeline::RENDER_TYPE_GLOW,       LLPipeline::RENDER_TYPE_TREE,
-        LLPipeline::RENDER_TYPE_AVATAR,     LLPipeline::RENDER_TYPE_CONTROL_AV,
-        LLPipeline::RENDER_TYPE_TERRAIN,    LLPipeline::RENDER_TYPE_WATER,
-        LLPipeline::RENDER_TYPE_VOLUME,     LLPipeline::RENDER_TYPE_GRASS,
-        LLPipeline::RENDER_TYPE_PARTICLES,  LLPipeline::RENDER_TYPE_BUMP,
-        LLPipeline::RENDER_TYPE_GLTF_PBR,
-    };
-
-    if (hide == !mHiddenTypes.empty())
-    {
-        return;
-    }
-    if (hide)
-    {
-        for (U32 type : WORLD_TYPES)
-        {
-            // Only what is on: a type the user turned off themselves has to
-            // stay off when the overlay puts the world back.
-            if (gPipeline.hasRenderType(type))
-            {
-                LLPipeline::toggleRenderType(type);
-                mHiddenTypes.push_back(type);
-            }
-        }
-    }
-    else
-    {
-        for (U32 type : mHiddenTypes)
-        {
-            LLPipeline::toggleRenderType(type);
-        }
-        mHiddenTypes.clear();
-    }
-}
-
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
@@ -1366,6 +1364,19 @@ void SKNavMesh::renderDebug()
         });
     }
 
+    if (opaque)
+    {
+        // Wipe the frame, as the stock pathfinding console does, and leave the
+        // world in the pipeline: it is still rendered and still picked, so the
+        // camera goes on working. Taking the render types out instead would
+        // give alt-cam nothing to aim at.
+        const LLColor4 clear = gSavedSettings.getColor4("SKNavOverlayBackdrop");
+        gGL.flush();
+        gGL.setColorMask(true, true);
+        glClearColor(clear.mV[VRED], clear.mV[VGREEN], clear.mV[VBLUE], 0.f);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        gGL.setColorMask(true, false);
+    }
     if (geom.empty())
     {
         return;

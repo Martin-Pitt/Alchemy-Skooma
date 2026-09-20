@@ -3779,6 +3779,39 @@
                 <real>0.88</real>
             </array>
         </map>
+        <key>SKNavPartition</key>
+        <map>
+            <key>Comment</key>
+            <string>How Recast divides walkable area into regions: 0 watershed, 1 monotone, 2 layers.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavDetailSample</key>
+        <map>
+            <key>Comment</key>
+            <string>How often the detail mesh samples a polygon for height, in cells. 0 leaves polygons flat and adds no vertices.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>6.0</real>
+        </map>
+        <key>SKNavGroundedMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far above the land a structure may sit and still be meshed with the region rather than on its own, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
         <key>SKNavOverlayClass</key>
         <map>
             <key>Comment</key>

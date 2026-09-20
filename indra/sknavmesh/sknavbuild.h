@@ -64,6 +64,13 @@ namespace sknav
 
     /// Everything one tile build reads. Immutable once handed to a worker:
     /// records are shared const, the rest is copied in.
+    /// How Recast divides the walkable area into regions before it builds
+    /// contours. Watershed handles open ground well but can leave holes;
+    /// monotone never does but favours long thin polygons; layers is Recast's
+    /// own suggestion for a tiled mesh. Which reads best on a flat floor is a
+    /// question for a real region, so it is a setting rather than a choice.
+    enum class Partition : U8 { WATERSHED, MONOTONE, LAYERS };
+
     struct TileBuildInput
     {
         LLVector3d mMeshOrigin;             ///< global; the mesh's Recast origin is this point
@@ -73,6 +80,9 @@ namespace sknav
         F32 mZMin = 0.f;                    ///< mesh-local z range the tile rasterises
         F32 mZMax = 0.f;
         F32 mCell = CELL_M;
+        Partition mPartition = Partition::WATERSHED;
+        F32 mDetailSampleCells = 6.f;       ///< 0 leaves the polygons untouched
+        F32 mDetailMaxErrorCells = 2.f;
         std::vector<RecordPtr> mRecords;    ///< everything intersecting the padded tile
         TerrainWindow mTerrain;
         bool mClasses[NUM_CLASSES] = { true, false };
