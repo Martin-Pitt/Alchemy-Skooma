@@ -377,19 +377,35 @@ bool SKWorldCensus::isSurround(LLViewerObject* root, const LLVector3d& mn, const
     {
         return true;
     }
-    // A record whose centre lies in no connected region is beyond the edge.
-    const LLVector3d centre = (mn + mx) * 0.5;
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    // How far the thing reaches outside every connected region. Asking where
+    // its centre is was wrong: a sim surround is usually a megaprim rezzed
+    // inside the sim whose skirt hangs a long way past the edge, and by its
+    // centre it is an ordinary object - which then falls at the physics gate,
+    // since a surround is phantom or shape-NONE precisely because there is no
+    // physics out in the void.
+    static LLCachedControl<F32> reach(gSavedSettings, "SKNavSurroundReach", 8.f);
+    F64 outside = 0.0;
+    const LLVector3d corners[4] = {
+        mn,
+        LLVector3d(mx.mdV[VX], mn.mdV[VY], 0.0),
+        LLVector3d(mn.mdV[VX], mx.mdV[VY], 0.0),
+        mx,
+    };
+    for (const LLVector3d& corner : corners)
     {
-        const LLVector3d& o = region->getOriginGlobal();
-        const F64 w = region->getWidth();
-        if (centre.mdV[VX] >= o.mdV[VX] && centre.mdV[VX] < o.mdV[VX] + w &&
-            centre.mdV[VY] >= o.mdV[VY] && centre.mdV[VY] < o.mdV[VY] + w)
+        F64 nearest = 1e9;
+        for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
-            return false;
+            const LLVector3d& o = region->getOriginGlobal();
+            const F64 w = region->getWidth();
+            // How far outside this region the corner is, zero when within it.
+            const F64 dx = llmax(o.mdV[VX] - corner.mdV[VX], corner.mdV[VX] - (o.mdV[VX] + w), 0.0);
+            const F64 dy = llmax(o.mdV[VY] - corner.mdV[VY], corner.mdV[VY] - (o.mdV[VY] + w), 0.0);
+            nearest = llmin(nearest, llmax(dx, dy));
         }
+        outside = llmax(outside, nearest);
     }
-    return true;
+    return outside > reach;
 }
 
 void SKWorldCensus::visit(LLViewerObject* object)
@@ -438,7 +454,9 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // Phantom stays out unless the sim says it is an exclusion volume; a
     // surround stays in whatever its flags, as its rendered shape.
     const bool phantom = root->flagPhantom();
-    const bool surround = isSurround(root, pos, pos);
+    // Its own extent, not its centre: that is the whole point of a surround.
+    const LLVector3d span(0.5 * object->getScale().magVec(), 0.5 * object->getScale().magVec(), 0.0);
+    const bool surround = isSurround(root, pos - span, pos + span);
     if (phantom && navRole != NavRole::EXCLUSION_VOLUME && !surround)
     {
         return;

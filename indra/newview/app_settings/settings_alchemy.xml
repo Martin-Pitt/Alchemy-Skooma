@@ -3834,6 +3834,28 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <key>SKNavSurroundReach</key>
+        <map>
+            <key>Comment</key>
+            <string>How far outside every connected region a thing must reach before the census treats it as a sim surround, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKNavVoidMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far past a region's edge the navmesh will follow what hangs off it, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>256.0</real>
+        </map>
         <key>SKNavGroundedMargin</key>
         <map>
             <key>Comment</key>

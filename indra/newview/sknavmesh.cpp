@@ -445,6 +445,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             mesh->mLastSeen = gFrameTimeSeconds;
 
             const LLVector3d& origin = region->getOriginGlobal();
+            const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
             std::vector<RecordPtr> mine;
             for (const RecordPtr& r : ground_records)
             {
@@ -456,10 +457,29 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
             const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
             const LLSurface& land = region->getLand();
-            std::map<TileKey, Tile> wanted;
-            for (S32 y = 0; y < per_edge; ++y)
+
+            // Past the region's own edge as far as its records reach, within
+            // SKNavVoidMargin: the surrounds and the things hanging off the
+            // sim are out there, and the void is exactly where they are.
+            static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+            const S32 out = llclamp(static_cast<S32>(std::ceil(void_margin / TILE_M)), 0, 16);
+            S32 x0 = 0, x1 = per_edge - 1, y0 = 0, y1 = per_edge - 1;
+            for (const RecordPtr& r : mine)
             {
-                for (S32 x = 0; x < per_edge; ++x)
+                x0 = llmin(x0, tileIndex(r->mMin.mdV[VX]) - ox);
+                x1 = llmax(x1, tileIndex(r->mMax.mdV[VX]) - ox);
+                y0 = llmin(y0, tileIndex(r->mMin.mdV[VY]) - oy);
+                y1 = llmax(y1, tileIndex(r->mMax.mdV[VY]) - oy);
+            }
+            x0 = llmax(x0, -out);
+            y0 = llmax(y0, -out);
+            x1 = llmin(x1, per_edge - 1 + out);
+            y1 = llmin(y1, per_edge - 1 + out);
+
+            std::map<TileKey, Tile> wanted;
+            for (S32 y = y0; y <= y1; ++y)
+            {
+                for (S32 x = x0; x <= x1; ++x)
                 {
                     const TileKey key{ x, y };
                     Tile& tile = wanted[key];
@@ -473,6 +493,13 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     tile.mMin.mdV[VZ] = land.getMinZ();
                     tile.mMax.mdV[VZ] = land.getMaxZ();
                     gatherRecords(mine, tile, pad);
+                    const bool over_land = (x >= 0 && x < per_edge && y >= 0 && y < per_edge);
+                    if (!over_land && tile.mRecords.empty())
+                    {
+                        // Empty void: nothing to mesh out here.
+                        wanted.erase(key);
+                        continue;
+                    }
                     tile.mSignature = mix(mix(recordSignature(tile.mRecords),
                                               terrainSignature(tile.mMin, tile.mMax, pad)), params);
                 }
