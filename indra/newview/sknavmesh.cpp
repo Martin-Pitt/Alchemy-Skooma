@@ -189,7 +189,8 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
     static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
-    static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 45.f);
+    static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
+    static LLCachedControl<F32> weatherSlope(gSavedSettings, "SKNavWeatherSlope", 89.f);
     static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
     static LLCachedControl<bool> weather(gSavedSettings, "SKNavBuildWeather", false);
     static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
@@ -213,9 +214,14 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     height = std::ceil(height / input.mCell) * input.mCell;
 
     input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
-    input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb, slope };
+    input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
+                                                            llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
     input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
-    input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, 0.f, climb, slope };
+    // Weather runs down whatever it lands on, so nearly everything is floor to
+    // it. A face that is truly vertical still cannot be a walkable polygon of
+    // a heightfield - it has no top - which is what the wall faces are for.
+    input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, 0.f, climb,
+                                                             llclamp(static_cast<F32>(weatherSlope), 1.f, 89.9f) };
 
     // Faces are for the weather class's readers, edges and drops for both.
     input.mWallFaces = walls && weather;

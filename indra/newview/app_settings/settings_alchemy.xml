@@ -3590,13 +3590,24 @@
         <key>SKNavSlope</key>
         <map>
             <key>Comment</key>
-            <string>Degrees of slope the navmesh still treats as floor.</string>
+            <string>Degrees of slope the avatar class still treats as floor. Avatars in Second Life climb far steeper ground than a navmesh usually allows.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>45.0</real>
+            <real>74.0</real>
+        </map>
+        <key>SKNavWeatherSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope the weather class still treats as floor. Weather runs down whatever it lands on, so this sits as high as a heightfield allows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>89.0</real>
         </map>
         <key>SKNavWeatherHeight</key>
         <map>
