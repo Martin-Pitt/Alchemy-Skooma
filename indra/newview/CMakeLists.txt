@@ -900,6 +900,7 @@ if(AL_BUILD_VIEWER)
     skphysicsshape.cpp
     sknavbuild.cpp
     sknavmesh.cpp
+    sknavwalls.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1688,6 +1689,7 @@ if(AL_BUILD_VIEWER)
     skphysicsshape.h
     sknavbuild.h
     sknavmesh.h
+    sknavwalls.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
@@ -2392,7 +2394,9 @@ if(AL_BUILD_TESTS)
   # Clustering is pure: records in, clusters and tile signatures out.
   al_add_test(sknavcluster UNIT PROJECT ${test_project})
   # The tile build is pure: records and terrain in, Detour tile data out.
-  al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast)
+  al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavwalls.cpp)
+  # Walls come off the same heightfield the tile build uses.
+  al_add_test(sknavwalls UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavbuild.cpp)
   al_add_test(
     llslurl
     PROJECT ${test_project}

@@ -29,6 +29,7 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
+#include "sknavwalls.h"
 
 #include <chrono>
 #include <cmath>
@@ -344,6 +345,20 @@ namespace sknav
             {
                 continue;
             }
+
+            // Walls come off the same heightfield, before it goes: the faces
+            // once (span geometry is the same for every class), the floor
+            // edges and the drops per class.
+            if (input.mWallFaces && result.mFaces.empty())
+            {
+                extractWallFaces(*mem.hf, cfg.borderSize, result.mFaces);
+            }
+            if (input.mEdges[cls])
+            {
+                classifyEdges(*mem.pmesh, *mem.hf, *mem.chf, p, input.mDropMax[cls],
+                              cls == static_cast<S32>(AgentClass::AVATAR), input.mDropSpacing,
+                              result.mSegments[cls], result.mLinks[cls]);
+            }
             for (int i = 0; i < mem.pmesh->npolys; ++i)
             {
                 const U8 area = mem.pmesh->areas[i] == RC_WALKABLE_AREA ? AREA_OBJECT : mem.pmesh->areas[i];
@@ -351,8 +366,44 @@ namespace sknav
                 mem.pmesh->flags[i] = area ? static_cast<unsigned short>(1u << area) : 0;
             }
 
+            // A drop link becomes a one-way off-mesh connection, so findPath
+            // may step off a ledge onto the floor below. The weather class's
+            // links are drainage only and stay out of the mesh.
+            std::vector<F32> con_verts;
+            std::vector<F32> con_rad;
+            std::vector<U8> con_dir;
+            std::vector<U8> con_areas;
+            std::vector<unsigned short> con_flags;
+            std::vector<unsigned int> con_ids;
+            if (cls == static_cast<S32>(AgentClass::AVATAR))
+            {
+                for (const DropLink& link : result.mLinks[cls])
+                {
+                    F32 from[3], to[3];
+                    toRecast(link.mFrom, from);
+                    toRecast(link.mTo, to);
+                    con_verts.insert(con_verts.end(), from, from + 3);
+                    con_verts.insert(con_verts.end(), to, to + 3);
+                    con_rad.push_back(1.f);
+                    con_dir.push_back(0);   // one way: you can drop, not climb
+                    con_areas.push_back(AREA_DROP);
+                    con_flags.push_back(static_cast<unsigned short>(1u << AREA_DROP));
+                    con_ids.push_back(static_cast<unsigned int>(con_ids.size()));
+                }
+            }
+
             dtNavMeshCreateParams params;
             std::memset(&params, 0, sizeof(params));
+            if (!con_rad.empty())
+            {
+                params.offMeshConVerts = con_verts.data();
+                params.offMeshConRad = con_rad.data();
+                params.offMeshConDir = con_dir.data();
+                params.offMeshConAreas = con_areas.data();
+                params.offMeshConFlags = con_flags.data();
+                params.offMeshConUserID = con_ids.data();
+                params.offMeshConCount = static_cast<int>(con_rad.size());
+            }
             params.verts = mem.pmesh->verts;
             params.vertCount = mem.pmesh->nverts;
             params.polys = mem.pmesh->polys;

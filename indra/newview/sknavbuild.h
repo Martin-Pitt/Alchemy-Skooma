@@ -26,6 +26,7 @@
 #define SK_NAVBUILD_H
 
 #include "sknavtypes.h"
+#include "sknavwalls.h"
 
 #include <memory>
 #include <string>
@@ -76,6 +77,12 @@ namespace sknav
         TerrainWindow mTerrain;
         bool mClasses[NUM_CLASSES] = { true, false };
         ClassParams mParams[NUM_CLASSES];
+        /// Walls (sknavwalls.h). Faces are class-independent and cost a pass
+        /// over the raw heightfield; edges and drops are per class.
+        bool mWallFaces = false;
+        bool mEdges[NUM_CLASSES] = { false, false };
+        F32 mDropMax[NUM_CLASSES] = { 10.f, 24.f };
+        F32 mDropSpacing = 2.f;
     };
 
     struct TileBuildResult
@@ -87,6 +94,11 @@ namespace sknav
         S32 mPolys[NUM_CLASSES] = { 0, 0 };
         S32 mTriangles = 0;                 ///< rasterised
         F32 mMillis = 0.f;
+        /// Exposed vertical surfaces of the tile's solids, mesh-local SL metres.
+        std::vector<WallFace> mFaces;
+        /// Floor edges with what lies beyond them, and where a floor can be left.
+        std::vector<WallSegment> mSegments[NUM_CLASSES];
+        std::vector<DropLink> mLinks[NUM_CLASSES];
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
