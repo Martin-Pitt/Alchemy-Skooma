@@ -843,7 +843,7 @@ void SKWorldCensus::renderDebug()
     {
         LLGLEnable blend(GL_BLEND);
         LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-        geom.draw(1.f);
+        geom.draw();
     }
     SKNavOverlayGeom::unbindShader();
 }

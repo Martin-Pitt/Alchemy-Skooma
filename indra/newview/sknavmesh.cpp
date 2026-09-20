@@ -40,6 +40,7 @@
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
+#include "llviewerwindow.h"
 #include "llviewershadermgr.h"
 #include "llvoavatarself.h"
 #include "llworld.h"
@@ -118,6 +119,7 @@ SKNavMesh::SKNavMesh()
 
 SKNavMesh::~SKNavMesh()
 {
+    hideWorld(false);
 }
 
 bool SKNavMesh::wanted() const
@@ -747,6 +749,9 @@ void SKNavMesh::update()
         return;
     }
 
+    static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
+    hideWorld(want && !show_world);
+
     SKCensusSnapshotPtr snap = census.snapshot();
     if (!snap)
     {
@@ -1087,6 +1092,50 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
     return true;
 }
 
+void SKNavMesh::hideWorld(bool hide)
+{
+    // The world render types the Develop menu offers, less sky and clouds: a
+    // horizon to orient against costs nothing and an empty black frame is
+    // worse than useless.
+    static const U32 WORLD_TYPES[] = {
+        LLPipeline::RENDER_TYPE_SIMPLE,     LLPipeline::RENDER_TYPE_MATERIALS,
+        LLPipeline::RENDER_TYPE_ALPHA,      LLPipeline::RENDER_TYPE_ALPHA_MASK,
+        LLPipeline::RENDER_TYPE_FULLBRIGHT_ALPHA_MASK, LLPipeline::RENDER_TYPE_FULLBRIGHT,
+        LLPipeline::RENDER_TYPE_GLOW,       LLPipeline::RENDER_TYPE_TREE,
+        LLPipeline::RENDER_TYPE_AVATAR,     LLPipeline::RENDER_TYPE_CONTROL_AV,
+        LLPipeline::RENDER_TYPE_TERRAIN,    LLPipeline::RENDER_TYPE_WATER,
+        LLPipeline::RENDER_TYPE_VOLUME,     LLPipeline::RENDER_TYPE_GRASS,
+        LLPipeline::RENDER_TYPE_PARTICLES,  LLPipeline::RENDER_TYPE_BUMP,
+        LLPipeline::RENDER_TYPE_GLTF_PBR,
+    };
+
+    if (hide == !mHiddenTypes.empty())
+    {
+        return;
+    }
+    if (hide)
+    {
+        for (U32 type : WORLD_TYPES)
+        {
+            // Only what is on: a type the user turned off themselves has to
+            // stay off when the overlay puts the world back.
+            if (gPipeline.hasRenderType(type))
+            {
+                LLPipeline::toggleRenderType(type);
+                mHiddenTypes.push_back(type);
+            }
+        }
+    }
+    else
+    {
+        for (U32 type : mHiddenTypes)
+        {
+            LLPipeline::toggleRenderType(type);
+        }
+        mHiddenTypes.clear();
+    }
+}
+
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
@@ -1127,6 +1176,11 @@ void SKNavMesh::renderDebug()
     const F32 FILL = 0.65f;
 
     SKNavOverlayGeom geom;
+    {
+        LLViewerCamera* view = LLViewerCamera::getInstance();
+        geom.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), view->getOrigin(), view->getView(),
+                          gViewerWindow ? gViewerWindow->getWorldViewHeightRaw() : 0);
+    }
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
@@ -1312,42 +1366,6 @@ void SKNavMesh::renderDebug()
         });
     }
 
-    if (opaque)
-    {
-        // Lay the backdrop over the world rather than clearing to it. Wiping
-        // the frame takes the buildings with it, and the mesh is a great deal
-        // easier to read against the shapes it was built from; the colour's
-        // own alpha says how much of them is left.
-        const LLColor4 backdrop = gSavedSettings.getColor4("SKNavOverlayBackdrop");
-        SKNavOverlayGeom::bindShader();
-        {
-            LLGLEnable blend(GL_BLEND);
-            LLGLDepthTest depth(GL_FALSE, GL_FALSE);
-            gGL.matrixMode(LLRender::MM_PROJECTION);
-            gGL.pushMatrix();
-            gGL.loadIdentity();
-            gGL.matrixMode(LLRender::MM_MODELVIEW);
-            gGL.pushMatrix();
-            gGL.loadIdentity();
-            gGL.begin(LLRender::TRIANGLES);
-            static const F32 CORNERS[6][2] = { { -1.f, -1.f }, { 1.f, -1.f }, { 1.f, 1.f },
-                                               { -1.f, -1.f }, { 1.f, 1.f }, { -1.f, 1.f } };
-            for (const auto& corner : CORNERS)
-            {
-                gGL.color4fv(backdrop.mV);
-                gGL.vertex3f(corner[0], corner[1], 0.f);
-            }
-            gGL.end();
-            gGL.flush();
-            gGL.popMatrix();
-            gGL.matrixMode(LLRender::MM_PROJECTION);
-            gGL.popMatrix();
-            gGL.matrixMode(LLRender::MM_MODELVIEW);
-        }
-        SKNavOverlayGeom::unbindShader();
-        // The world's depth goes with it, so the mesh sorts against itself.
-        glClear(GL_DEPTH_BUFFER_BIT);
-    }
     if (geom.empty())
     {
         return;
@@ -1357,17 +1375,16 @@ void SKNavMesh::renderDebug()
     {
         LLGLEnable blend(GL_BLEND);
         LLGLDisable cull(GL_CULL_FACE);
-        const F32 width = llclamp(static_cast<F32>(edge_width), 1.f, 8.f);
         {
             LLGLDepthTest depth(GL_TRUE, opaque ? GL_TRUE : GL_FALSE);
-            geom.draw(width);
+            geom.draw();
         }
         if (xray && !opaque)
         {
             // What is behind geometry, darker and fainter, so it reads as being
             // seen through the wall rather than in front of it.
             LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
-            geom.draw(width, 0.55f, 0.45f);
+            geom.draw(0.55f, 0.45f);
         }
     }
     SKNavOverlayGeom::unbindShader();

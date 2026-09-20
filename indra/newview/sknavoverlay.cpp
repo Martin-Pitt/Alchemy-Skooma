@@ -31,6 +31,8 @@
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
 
+#include <cmath>
+
 void SKNavOverlayGeom::line(const LLVector3& a, const LLVector3& b, const LLColor4& color)
 {
     mLineVerts.push_back(a);
@@ -39,12 +41,52 @@ void SKNavOverlayGeom::line(const LLVector3& a, const LLVector3& b, const LLColo
     mLineColors.push_back(color);
 }
 
+void SKNavOverlayGeom::setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F32 fov_y, S32 viewport_height)
+{
+    mEdgeWidth = pixels;
+    mCamera = camera_agent;
+    // How many world units a pixel covers, per metre of depth.
+    mPixelScale = (viewport_height > 0) ? (2.f * std::tan(fov_y * 0.5f) / static_cast<F32>(viewport_height)) : 0.f;
+}
+
 void SKNavOverlayGeom::edge(const LLVector3& a, const LLVector3& b, const LLColor4& color)
 {
-    mEdgeVerts.push_back(a);
-    mEdgeVerts.push_back(b);
-    mEdgeColors.push_back(color);
-    mEdgeColors.push_back(color);
+    if (mEdgeWidth <= 1.f || mPixelScale <= 0.f)
+    {
+        mEdgeVerts.push_back(a);
+        mEdgeVerts.push_back(b);
+        mEdgeColors.push_back(color);
+        mEdgeColors.push_back(color);
+        return;
+    }
+
+    LLVector3 along = b - a;
+    const F32 length = along.normalize();
+    if (length <= 0.f)
+    {
+        return;
+    }
+    // A ribbon that faces the camera, half a width to each side of the edge,
+    // widened with depth so it holds its width on screen.
+    auto offset = [&](const LLVector3& p) {
+        LLVector3 to_camera = mCamera - p;
+        const F32 depth = to_camera.normalize();
+        LLVector3 side = along % to_camera;
+        if (side.normalize() <= 0.f)
+        {
+            side = LLVector3(0.f, 0.f, 1.f) % along;
+            side.normalize();
+        }
+        return side * (mEdgeWidth * 0.5f * llmax(depth, 0.1f) * mPixelScale);
+    };
+    const LLVector3 oa = offset(a), ob = offset(b);
+    const LLVector3 quad[4] = { a - oa, a + oa, b + ob, b - ob };
+    static const S32 ORDER[6] = { 0, 1, 2, 0, 2, 3 };
+    for (S32 i : ORDER)
+    {
+        mEdgeVerts.push_back(quad[i]);
+        mEdgeColors.push_back(color);
+    }
 }
 
 void SKNavOverlayGeom::tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color)
@@ -99,7 +141,7 @@ void SKNavOverlayGeom::unbindShader()
     gUIProgram.unbind();
 }
 
-void SKNavOverlayGeom::draw(F32 width, F32 shade, F32 alpha) const
+void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
 {
     auto emit = [&](const std::vector<LLVector3>& verts, const std::vector<LLColor4>& colors, U32 mode) {
         if (verts.empty())
@@ -117,11 +159,7 @@ void SKNavOverlayGeom::draw(F32 width, F32 shade, F32 alpha) const
         gGL.flush();
     };
     emit(mTriVerts, mTriColors, LLRender::TRIANGLES);
-    // The driver has the last word on width: LLRender clamps to the aliased
-    // line range, which is [1, 1] on some of them.
-    gGL.setLineWidth(width);
-    emit(mEdgeVerts, mEdgeColors, LLRender::LINES);
-    gGL.setLineWidth(llmax(1.f, width - 1.f));
+    const bool ribboned = mEdgeWidth > 1.f && mPixelScale > 0.f;
+    emit(mEdgeVerts, mEdgeColors, ribboned ? LLRender::TRIANGLES : LLRender::LINES);
     emit(mLineVerts, mLineColors, LLRender::LINES);
-    gGL.setLineWidth(1.f);
 }

@@ -45,8 +45,16 @@ class SKNavOverlayGeom
 public:
     void line(const LLVector3& a, const LLVector3& b, const LLColor4& color);
     /// An edge of the walkable surface itself, drawn wider than the rest so
-    /// the shape of the mesh reads before its annotations do.
+    /// the shape of the mesh reads before its annotations do. Built as a
+    /// camera-facing ribbon rather than a wide GL line: LLRender clamps line
+    /// width to the driver's aliased range, which is a single pixel on most
+    /// core profiles, so a wide line is not a thing that can be asked for.
+    /// Needs setEdgeWidth() first; without it an edge is an ordinary line.
     void edge(const LLVector3& a, const LLVector3& b, const LLColor4& color);
+
+    /// Width in pixels, and where it is measured from. The ribbon is widened
+    /// with distance so that it stays the same width on screen.
+    void setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F32 fov_y, S32 viewport_height);
     void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color);
     /// The twelve edges of an axis-aligned box.
     void box(const LLVector3& min, const LLVector3& max, const LLColor4& color);
@@ -54,11 +62,10 @@ public:
     bool empty() const { return mTriVerts.empty() && mLineVerts.empty() && mEdgeVerts.empty(); }
     void clear();
 
-    /// Draw what was gathered: fills, then edges, then the thinner lines over
-    /// them. `shade` darkens the colours (the x-ray pass, seen through
-    /// geometry) and `alpha` scales them; `width` is the edge width in pixels,
-    /// and everything else is drawn a pixel thinner.
-    void draw(F32 width, F32 shade = 1.f, F32 alpha = 1.f) const;
+    /// Draw what was gathered: fills, then edges, then the lines over them.
+    /// `shade` darkens the colours (the x-ray pass, seen through geometry)
+    /// and `alpha` scales them.
+    void draw(F32 shade = 1.f, F32 alpha = 1.f) const;
 
     /// Bind `gUIProgram` against a white texture with alpha blending, which is
     /// what `draw()` expects. Colour is per vertex, so one bind covers the lot.
@@ -70,8 +77,11 @@ private:
     std::vector<LLColor4>  mTriColors;
     std::vector<LLVector3> mLineVerts;
     std::vector<LLColor4>  mLineColors;
-    std::vector<LLVector3> mEdgeVerts;
+    std::vector<LLVector3> mEdgeVerts;      ///< triangles when ribboned, lines when not
     std::vector<LLColor4>  mEdgeColors;
+    LLVector3 mCamera;
+    F32 mPixelScale = 0.f;                  ///< world units per pixel per metre of depth
+    F32 mEdgeWidth = 1.f;
 };
 
 #endif // SK_NAVOVERLAY_H

@@ -150,6 +150,11 @@ private:
     };
 
     bool wanted() const;
+    /// With the world switched off, the world is not drawn at all: the same
+    /// render types the Develop menu turns off, turned off here and put back
+    /// exactly as they were. Painting over the finished frame instead would
+    /// leave the mesh lit, fogged and sitting on a flat rectangle.
+    void hideWorld(bool hide);
     void reconcile(const SKCensusSnapshotPtr& snap);
     void reconcileTerrain();
     void schedule(const SKCensusSnapshotPtr& snap);
@@ -179,6 +184,7 @@ private:
     Stats mStats;
     F32 mLastLog = 0.f;
     bool mDemanding = false;
+    std::vector<U32> mHiddenTypes;  ///< render types we turned off, to put back
 };
 
 #endif // SK_NAVMESH_H
