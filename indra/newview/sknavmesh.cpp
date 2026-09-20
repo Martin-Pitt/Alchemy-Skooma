@@ -322,6 +322,42 @@ U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& ti
     return h;
 }
 
+U64 SKNavMesh::landStamp(LLViewerRegion& region) const
+{
+    // The whole region's land in one value, so a tile can tell in one compare
+    // that nothing under it moved. Cheaper than re-signing every tile of the
+    // region, which is what this replaces.
+    LLSurface& land = region.getLand();
+    const S32 per_edge = land.getPatchesPerEdge();
+    U64 h = mix(SEED, region.getHandle());
+    for (S32 y = 0; y < per_edge; ++y)
+    {
+        for (S32 x = 0; x < per_edge; ++x)
+        {
+            const LLSurfacePatch* patch = land.getPatch(x, y);
+            if (patch)
+            {
+                h = mix(h, patch->getLastUpdateTime());
+                h = mixF32(h, patch->getMinZ());
+                h = mixF32(h, patch->getMaxZ());
+            }
+        }
+    }
+    return mixF32(h, region.getWaterHeight());
+}
+
+U64 SKNavMesh::worldStamp() const
+{
+    // Which regions there are, so a tile's terrain signature is redone when
+    // one arrives or leaves: its window reaches past its own region's edge.
+    U64 h = SEED;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        h = mix(h, region->getHandle());
+    }
+    return h;
+}
+
 void SKNavMesh::fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, TerrainWindow& out) const
 {
     const F32 spacing = 1.f;
@@ -368,6 +404,40 @@ void SKNavMesh::fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& til
     }
 }
 
+void SKNavMesh::sampleTerrain()
+{
+    static LLCachedControl<F32> budget(gSavedSettings, "SKNavTerrainBudgetMS", 1.f);
+    LLTimer timer;
+    TileBuildInput probe;
+    fillParams(probe);
+    const F32 pad = padFor(probe);
+    const F32 budget_ms = llmax(0.1f, static_cast<F32>(budget));
+    for (auto& entry : mMeshes)
+    {
+        Mesh& mesh = *entry.second;
+        if (!mesh.mTerrain)
+        {
+            continue;
+        }
+        for (auto& t : mesh.mTiles)
+        {
+            Tile& tile = t.second;
+            if (!tile.mTerrainStale)
+            {
+                continue;
+            }
+            if (timer.getElapsedTimeF32() * 1000.f > budget_ms)
+            {
+                return;
+            }
+            auto window = std::make_shared<TerrainWindow>();
+            fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, pad, *window);
+            tile.mTerrain = window;
+            tile.mTerrainStale = false;
+        }
+    }
+}
+
 bool SKNavMesh::grounded(const Cluster& cluster) const
 {
     static LLCachedControl<F32> margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
@@ -399,6 +469,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     TileBuildInput probe;
     fillParams(probe);
     const F32 pad = padFor(probe);
+    const U64 world_stamp = worldStamp();
 
     // Grounded structures are meshed with the region they stand in, so that
     // one mesh holds the ground, the walls that block it and the floors that
@@ -495,6 +566,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
             const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
             const LLSurface& land = region->getLand();
+            const U64 land_stamp = landStamp(*region);
 
             // Past the region's own edge as far as its records reach, within
             // SKNavVoidMargin: the surrounds and the things hanging off the
@@ -538,8 +610,18 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                         wanted.erase(key);
                         continue;
                     }
-                    tile.mSignature = mix(mix(recordSignature(tile.mRecords),
-                                              terrainSignature(tile.mMin, tile.mMax, pad)), params);
+                    // The land under the tile stands until its region's stamp
+                    // moves, and then only this tile re-signs and waits for its
+                    // window to be sampled again. The world stamp catches a
+                    // region arriving or leaving under the tile's padded edge.
+                    if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
+                    {
+                        tile.mLandStamp = land_stamp;
+                        tile.mWorldStamp = world_stamp;
+                        tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
+                        tile.mTerrainStale = true;
+                    }
+                    tile.mSignature = mix(mix(recordSignature(tile.mRecords), tile.mTerrainSignature), params);
                 }
             }
             dropTiles(*mesh, wanted);
@@ -611,13 +693,18 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
-    const F32 pad = padFor(*input);
     // Only a region mesh has ground in it: a cluster clear of the ground has
     // nothing to do with the land far below it, and a heightfield spanning
-    // the gap would overflow Recast's span heights.
+    // the gap would overflow Recast's span heights. The window was sampled
+    // when the land last moved; until the budget has got to it, the tile waits
+    // rather than build on ground that is already gone.
     if (mesh.mTerrain)
     {
-        fillTerrain(mesh.mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
+        if (!tile.mTerrain || tile.mTerrainStale)
+        {
+            return false;
+        }
+        input->mTerrain = *tile.mTerrain;
     }
 
     F32 zmin = 1e9f, zmax = -1e9f;
@@ -902,6 +989,7 @@ void SKNavMesh::update()
         it = (gFrameTimeSeconds - it->second->mLastSeen > 30.f) ? mMeshes.erase(it) : std::next(it);
     }
 
+    sampleTerrain();
     schedule();
     relabel();
 

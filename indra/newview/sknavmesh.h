@@ -133,6 +133,15 @@ private:
         /// What the build rasterises here, gathered when the tile's signature
         /// is worked out rather than walked again on the way to the worker.
         std::vector<sknav::RecordPtr> mRecords;
+        /// The terrain window the tile is built from, sampled on the main
+        /// thread under a budget and reused until the land under the tile
+        /// moves (mLandStamp). mTerrainStale means the window is not the
+        /// current land yet, so the tile waits rather than build on old ground.
+        std::shared_ptr<const sknav::TerrainWindow> mTerrain;
+        U64 mTerrainSignature = 0;
+        U64 mLandStamp = 0;
+        U64 mWorldStamp = 0;
+        bool mTerrainStale = false;
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
@@ -185,6 +194,14 @@ private:
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
+    /// What the region's land looks like now, over all its patches. A tile's
+    /// cached terrain signature stands until this moves.
+    U64 landStamp(LLViewerRegion& region) const;
+    /// Which regions there are, for the same purpose.
+    U64 worldStamp() const;
+    /// Sample the terrain window of the tiles whose land moved, under
+    /// SKNavTerrainBudgetMS, so a first build-out never stalls a frame.
+    void sampleTerrain();
     U64 paramsSignature() const;
     void fillParams(sknav::TileBuildInput& input) const;
     bool ensureNav(Mesh& mesh, S32 cls);

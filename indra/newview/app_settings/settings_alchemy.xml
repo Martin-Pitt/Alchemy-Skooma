@@ -3944,6 +3944,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKNavTerrainBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a frame may spend sampling navmesh terrain heights.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
         <key>ShowAdvancedHoverTips</key>
         <map>
             <key>Comment</key>
