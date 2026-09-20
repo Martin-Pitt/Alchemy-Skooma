@@ -3688,6 +3688,61 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKNavBuildLevels</key>
+        <map>
+            <key>Comment</key>
+            <string>Work out the storeys of each structure and the ways between them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavLevelBand</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres in height a storey reaches from where it started.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.75</real>
+        </map>
+        <key>SKNavLevelMinArea</key>
+        <map>
+            <key>Comment</key>
+            <string>Square metres of floor below which a storey is only a landing.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>9.0</real>
+        </map>
+        <key>SKNavLevelSettleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a structure must be quiet before its storeys are worked out again.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SKNavOverlayByLevel</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour the navmesh overlay by storey instead of by what the floor is.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
     </map>
 </llsd>
 

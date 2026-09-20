@@ -557,6 +557,67 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    mesh.mPublishedAt = gFrameTimeSeconds;
+    mesh.mLevelsStale = true;
+}
+
+void SKNavMesh::relabel()
+{
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavBuildLevels", true);
+    static LLCachedControl<F32> settle(gSavedSettings, "SKNavLevelSettleSeconds", 0.25f);
+    static LLCachedControl<F32> band(gSavedSettings, "SKNavLevelBand", 0.75f);
+    static LLCachedControl<F32> minArea(gSavedSettings, "SKNavLevelMinArea", 9.f);
+    if (!enabled)
+    {
+        return;
+    }
+    // One structure a frame, the nearest first: the walk is cheap but a mall
+    // is not, and nothing needs its storeys the instant a tile lands.
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    Mesh* pick = nullptr;
+    F64 best = 0.0;
+    for (auto& entry : mMeshes)
+    {
+        Mesh& mesh = *entry.second;
+        if (!mesh.mLevelsStale || mesh.mPublishedAt < 0.f || gFrameTimeSeconds - mesh.mPublishedAt < settle)
+        {
+            continue;
+        }
+        const F64 distance = dist_vec_squared(mesh.mOrigin, agent);
+        if (!pick || distance < best)
+        {
+            pick = &mesh;
+            best = distance;
+        }
+    }
+    if (!pick)
+    {
+        return;
+    }
+    pick->mLevelsStale = false;
+
+    LevelParams params;
+    params.mBand = band;
+    params.mMinArea = minArea;
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        if (!pick->mNav[cls] || !pick->mQuery[cls])
+        {
+            pick->mLevels[cls].reset();
+            continue;
+        }
+        std::vector<DropLink> links;
+        for (const auto& t : pick->mTiles)
+        {
+            if (t.second.mLinks[cls])
+            {
+                links.insert(links.end(), t.second.mLinks[cls]->begin(), t.second.mLinks[cls]->end());
+            }
+        }
+        auto levels = std::make_shared<Levels>();
+        buildLevels(*pick->mNav[cls], *pick->mQuery[cls], params, links, *levels);
+        pick->mLevels[cls] = levels;
+    }
 }
 
 void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
@@ -668,6 +729,7 @@ void SKNavMesh::update()
     }
 
     schedule(snap);
+    relabel();
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -676,9 +738,19 @@ void SKNavMesh::update()
     mStats.mFaces = 0;
     mStats.mSegments = 0;
     mStats.mLinks = 0;
+    mStats.mLevels = 0;
+    mStats.mConnectors = 0;
     mStats.mInFlight = mInFlight;
     for (const auto& entry : mMeshes)
     {
+        if (const Levels* levels = entry.second->mLevels[0].get())
+        {
+            for (const Level& level : levels->mLevels)
+            {
+                mStats.mLevels += level.mTransitional ? 0 : 1;
+            }
+            mStats.mConnectors += static_cast<U32>(levels->mConnectors.size());
+        }
         for (const auto& t : entry.second->mTiles)
         {
             mStats.mTiles++;
@@ -706,13 +778,13 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u avatar polys, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u avatar polys, %u storeys, %u connectors, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight, mStats.mPolys,
-                    mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
+                    mStats.mLevels, mStats.mConnectors, mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs);
 }
 
-SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const
+SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out, U16* level_out) const
 {
     const S32 c = static_cast<S32>(cls);
     Mesh* best = nullptr;
@@ -739,15 +811,19 @@ SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z
                 bestDz = dz;
                 best = &mesh;
                 z_out = nearest[1] + static_cast<F32>(mesh.mOrigin.mdV[VZ]);
+                if (level_out)
+                {
+                    *level_out = mesh.mLevels[c] ? mesh.mLevels[c]->levelOf(ref) : Levels::NO_LEVEL;
+                }
             }
         }
     }
     return best;
 }
 
-bool SKNavMesh::floorUnder(const LLVector3d& pos, AgentClass cls, F32& z_out, LLUUID* mesh_out) const
+bool SKNavMesh::floorUnder(const LLVector3d& pos, AgentClass cls, F32& z_out, LLUUID* mesh_out, U16* level_out) const
 {
-    Mesh* mesh = meshAt(pos, cls, z_out);
+    Mesh* mesh = meshAt(pos, cls, z_out, level_out);
     if (!mesh)
     {
         return false;
@@ -805,6 +881,35 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
         out.push_back(mesh->mOrigin + LLVector3d(fromRecast(&straight[i * 3])));
     }
     return !out.empty();
+}
+
+void SKNavMesh::connectorsOf(const LLUUID& mesh_id, U16 level, const ConnectorFn& fn) const
+{
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end() || !it->second->mLevels[0])
+    {
+        return;
+    }
+    const Mesh& mesh = *it->second;
+    for (const Connector& c : mesh.mLevels[0]->mConnectors)
+    {
+        if (c.mLow != level && c.mHigh != level)
+        {
+            continue;
+        }
+        fn(mesh.mOrigin + LLVector3d(c.mLowPoint), mesh.mOrigin + LLVector3d(c.mHighPoint), c.mKind, c.mOneWay);
+    }
+}
+
+bool SKNavMesh::levelHeight(const LLUUID& mesh_id, U16 level, F32& z_out) const
+{
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end() || !it->second->mLevels[0] || level >= it->second->mLevels[0]->mLevels.size())
+    {
+        return false;
+    }
+    z_out = it->second->mLevels[0]->mLevels[level].mZ + static_cast<F32>(it->second->mOrigin.mdV[VZ]);
+    return true;
 }
 
 void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const
@@ -941,6 +1046,7 @@ void SKNavMesh::renderDebug()
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTextureSlot(0)->unbind();
 
+    static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
@@ -948,6 +1054,21 @@ void SKNavMesh::renderDebug()
         if (!nav)
         {
             continue;
+        }
+        const Levels* levels = mesh.mLevels[cls].get();
+        if (levels)
+        {
+            // The ways off each storey, drawn from the low end to the high one.
+            gGL.diffuseColor4f(1.f, 0.9f, 0.3f, 0.9f);
+            gGL.begin(LLRender::LINES);
+            for (const Connector& c : levels->mConnectors)
+            {
+                const LLVector3 low = gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mLowPoint));
+                const LLVector3 high = gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mHighPoint));
+                gGL.vertex3fv((low + LLVector3(0.f, 0.f, 0.1f)).mV);
+                gGL.vertex3fv((high + LLVector3(0.f, 0.f, 0.1f)).mV);
+            }
+            gGL.end();
         }
         const LLVector3 originAgent = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
         for (int i = 0; i < nav->getMaxTiles(); ++i)
@@ -981,13 +1102,36 @@ void SKNavMesh::renderDebug()
                     case AREA_OBJECT: gGL.diffuseColor4f(0.3f, 0.6f, 1.f, 0.8f); break;
                     default: gGL.diffuseColor4f(0.2f, 0.4f, 0.9f, 0.5f); break;
                 }
-                gGL.begin(LLRender::LINES);
+                // gDebugProgram takes its colour as a uniform, so colouring by
+                // storey means a batch per polygon rather than one per area.
+                const bool per_poly = by_level && levels;
+                if (!per_poly)
+                {
+                    gGL.begin(LLRender::LINES);
+                }
                 for (int p = 0; p < tile->header->polyCount; ++p)
                 {
                     const dtPoly& poly = tile->polys[p];
                     if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || areaOf(poly.flags) != area)
                     {
                         continue;
+                    }
+                    if (per_poly)
+                    {
+                        // Each storey its own colour, so a building's floors
+                        // can be told apart at a glance.
+                        const U16 level = levels->levelOf(nav->getPolyRefBase(tile) | static_cast<dtPolyRef>(p));
+                        if (level == Levels::NO_LEVEL)
+                        {
+                            gGL.diffuseColor4f(0.5f, 0.5f, 0.5f, 0.5f);
+                        }
+                        else
+                        {
+                            const U32 h = static_cast<U32>(mix(SEED, level));
+                            gGL.diffuseColor4f(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
+                                               0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
+                        }
+                        gGL.begin(LLRender::LINES);
                     }
                     const dtPolyDetail& detail = tile->detailMeshes[p];
                     for (unsigned int t = 0; t < detail.triCount; ++t)
@@ -1005,8 +1149,15 @@ void SKNavMesh::renderDebug()
                             gGL.vertex3fv(v[(k + 1) % 3].mV);
                         }
                     }
+                    if (per_poly)
+                    {
+                        gGL.end();
+                    }
                 }
-                gGL.end();
+                if (!per_poly)
+                {
+                    gGL.end();
+                }
             }
         }
     }

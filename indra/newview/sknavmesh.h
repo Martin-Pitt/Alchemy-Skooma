@@ -27,6 +27,7 @@
 
 #include "llsingleton.h"
 #include "sknavbuild.h"
+#include "sknavlevels.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 
@@ -59,7 +60,14 @@ public:
     /// The floor under a global position within the class's reach: the nearest
     /// walkable polygon's height. Cluster meshes at the position first, then
     /// the region's terrain.
-    bool floorUnder(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, LLUUID* mesh_out = nullptr) const;
+    bool floorUnder(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, LLUUID* mesh_out = nullptr, U16* level_out = nullptr) const;
+
+    /// The storeys of the structure under a position, and the ways off the
+    /// one the position is on. Points are global.
+    typedef std::function<void(const LLVector3d& low, const LLVector3d& high, sknav::ConnectorKind kind, bool one_way)> ConnectorFn;
+    void connectorsOf(const LLUUID& mesh_id, U16 level, const ConnectorFn& fn) const;
+    /// The height of a storey of a structure, for the map's floor window.
+    bool levelHeight(const LLUUID& mesh_id, U16 level, F32& z_out) const;
 
     /// A path within one mesh (the one under a). Points are global; partial
     /// when b was not reachable and the path ends at the closest point found.
@@ -92,6 +100,8 @@ public:
         U32 mPolys = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
+        U32 mLevels = 0;
+        U32 mConnectors = 0;
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
@@ -127,6 +137,12 @@ private:
         dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr, nullptr };
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
+        /// The storeys of this structure per class, and what they were worked
+        /// out from: a tile publishing makes them stale, and they are redone
+        /// once the structure has been quiet for a moment.
+        std::shared_ptr<const sknav::Levels> mLevels[sknav::NUM_CLASSES];
+        F32 mPublishedAt = -1.f;
+        bool mLevelsStale = true;
         F32 mLastSeen = 0.f;
         ~Mesh();
     };
@@ -142,7 +158,9 @@ private:
     U64 paramsSignature() const;
     void fillParams(sknav::TileBuildInput& input) const;
     bool ensureNav(Mesh& mesh, S32 cls);
-    Mesh* meshAt(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out) const;
+    Mesh* meshAt(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, U16* level_out = nullptr) const;
+    /// One structure's storeys, at most one structure a frame.
+    void relabel();
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
