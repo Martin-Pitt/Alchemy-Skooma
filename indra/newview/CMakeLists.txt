@@ -898,7 +898,6 @@ if(AL_BUILD_VIEWER)
     rlvenvironment.cpp
     skphysicsshape.cpp
     sknavmesh.cpp
-    sknavwalls.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1684,7 +1683,6 @@ if(AL_BUILD_VIEWER)
     rlvcommon.h
     skphysicsshape.h
     sknavmesh.h
-    sknavwalls.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
@@ -2387,8 +2385,6 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-  # Walls come off the same heightfield the tile build uses.
-  al_add_test(sknavwalls UNIT PROJECT ${test_project} LIBRARIES sknavmesh ll::recast)
   al_add_test(
     llslurl
     PROJECT ${test_project}
