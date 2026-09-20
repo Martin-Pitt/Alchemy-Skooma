@@ -38,9 +38,11 @@
 #include "llpathfindingmanager.h"
 #include "llpathfindingobjectlist.h"
 #include "llrender.h"
+#include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
+#include "llvocache.h"
 #include "llviewershadermgr.h"
 #include "llvovolume.h"
 #include "llworld.h"
@@ -95,6 +97,52 @@ namespace
             default: return NavRole::UNKNOWN;
         }
     }
+
+    /// The region's object cache, as an octree of entries that have bounds but
+    /// no object: everything the sim has told us about that is too far away to
+    /// have been drawn. Only linkset roots are in the tree, and a root's bounds
+    /// cover its children, so this yields one box per linkset.
+    class CacheGather : public OctreeTraveler
+    {
+    public:
+        CacheGather(const LLVector4a& mn, const LLVector4a& mx, std::vector<LLVOCacheEntry*>& out)
+            : mMin(mn), mMax(mx), mOut(out)
+        {
+        }
+
+        void traverse(const OctreeNode* node) override
+        {
+            const LLVector4a& c = node->getCenter();
+            const LLVector4a& s = node->getSize();
+            for (S32 a = 0; a < 3; ++a)
+            {
+                if (c[a] + s[a] < mMin[a] || c[a] - s[a] > mMax[a])
+                {
+                    return;
+                }
+            }
+            OctreeTraveler::traverse(node);
+        }
+
+        void visit(const OctreeNode* node) override
+        {
+            for (auto i = node->getDataBegin(); i != node->getDataEnd(); ++i)
+            {
+                LLViewerOctreeEntry* entry = *i;
+                // A drawable means the object exists and the live pass has it,
+                // with its real shape rather than a box.
+                if (!entry || entry->hasDrawable() || !entry->hasVOCacheEntry())
+                {
+                    continue;
+                }
+                mOut.push_back(static_cast<LLVOCacheEntry*>(entry->getVOCacheEntry()));
+            }
+        }
+
+    private:
+        LLVector4a mMin, mMax;
+        std::vector<LLVOCacheEntry*>& mOut;
+    };
 
     void extend(LLVector3d& mn, LLVector3d& mx, const LLVector3d& p)
     {
@@ -212,6 +260,10 @@ void SKWorldCensus::beginScan()
 {
     mScan.mPending = std::make_shared<SKCensusSnapshot>();
     mScan.mPending->mCenter = gAgent.getPositionGlobal();
+    // Where you are looking matters as much as where you stand: cam across a
+    // sim and the mesh should be there, while the ground under the avatar
+    // stays built whatever the camera does.
+    mScan.mPending->mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     mScan.mPending->mRange = range();
     mScan.mObjects.clear();
     const S32 count = gObjectList.getNumObjects();
@@ -225,6 +277,9 @@ void SKWorldCensus::beginScan()
     }
     mScan.mIndex = 0;
     mScan.mRegions = regionHandles();
+    mScan.mCached.clear();
+    mScan.mCachedIndex = 0;
+    gatherCached();
     mScan.mElapsedMs = 0.f;
     mScan.mActive = true;
 }
@@ -254,6 +309,18 @@ void SKWorldCensus::continueScan(F32 budget_ms)
         }
     }
     mScan.mObjects.clear();
+
+    // Then what the region has cached but never drawn, under the same budget.
+    while (mScan.mCachedIndex < mScan.mCached.size())
+    {
+        if (timer.getElapsedTimeF32() * 1000.f > budget_ms)
+        {
+            mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
+            return;
+        }
+        visitCached(mScan.mCached[mScan.mCachedIndex++]);
+    }
+    mScan.mCached.clear();
     mScan.mElapsedMs += timer.getElapsedTimeF32() * 1000.f;
     finishScan();
 }
@@ -355,7 +422,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // Cull by the part's reach, not its centre: a 200 m surround whose centre
     // is far away still hangs into the range.
     const LLVector3d pos = object->getRegion()->getOriginGlobal() + LLVector3d(object->getPositionRegion());
-    if (dist_vec(pos, snap.mCenter) - 0.5 * object->getScale().magVec() > snap.mRange)
+    const F64 reach = snap.mRange + 0.5 * object->getScale().magVec();
+    if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
     {
         return;
     }
@@ -463,6 +531,126 @@ void SKWorldCensus::visit(LLViewerObject* object)
     if (rec->mRole == Role::SURROUND) snap.mStats.mSurround++;
     if (rec->mProvenance == Provenance::BOX) snap.mStats.mPlaceholders++;
     if (rec->mTriangles) snap.mStats.mTriangles += static_cast<U32>(rec->mTriangles->size() / 3);
+}
+
+void SKWorldCensus::gatherCached()
+{
+    static LLCachedControl<bool> use_cache(gSavedSettings, "SKNavCensusObjectCache", true);
+    if (!use_cache || !LLWorld::instanceExists())
+    {
+        return;
+    }
+    const SKCensusSnapshot& snap = *mScan.mPending;
+    // One box around both centres for the octree, then the round test per
+    // entry, the same way the live pass culls.
+    LLVector3d gmin, gmax;
+    for (S32 a = 0; a < 3; ++a)
+    {
+        gmin.mdV[a] = llmin(snap.mCenter.mdV[a], snap.mCamera.mdV[a]) - snap.mRange;
+        gmax.mdV[a] = llmax(snap.mCenter.mdV[a], snap.mCamera.mdV[a]) + snap.mRange;
+    }
+
+    std::vector<LLVOCacheEntry*> found;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        LLVOCachePartition* partition = region->getVOCachePartition();
+        if (!partition || !partition->mOctree)
+        {
+            continue;
+        }
+        const LLVector3d origin = region->getOriginGlobal();
+        const LLVector3 lo(gmin - origin), hi(gmax - origin);
+        const LLVector4a mn(lo.mV[VX], lo.mV[VY], lo.mV[VZ]), mx(hi.mV[VX], hi.mV[VY], hi.mV[VZ]);
+
+        found.clear();
+        CacheGather gather(mn, mx, found);
+        gather.traverse(partition->mOctree);
+
+        const U64 handle = region->getHandle();
+        for (LLVOCacheEntry* entry : found)
+        {
+            if (!entry || !entry->isValid() || entry->isState(LLVOCacheEntry::ACTIVE) || !entry->getEntry())
+            {
+                continue;
+            }
+            const LLVector4a* extents = entry->getSpatialExtents();
+            CachedPart part;
+            part.mOrigin = origin;
+            part.mCenter.set((extents[0][0] + extents[1][0]) * 0.5f, (extents[0][1] + extents[1][1]) * 0.5f,
+                             (extents[0][2] + extents[1][2]) * 0.5f);
+            part.mHalf.set((extents[1][0] - extents[0][0]) * 0.5f, (extents[1][1] - extents[0][1]) * 0.5f,
+                           (extents[1][2] - extents[0][2]) * 0.5f);
+            if (part.mHalf.mV[VX] <= 0.f || part.mHalf.mV[VY] <= 0.f || part.mHalf.mV[VZ] <= 0.f)
+            {
+                continue;
+            }
+            const LLVector3d pos = origin + LLVector3d(part.mCenter);
+            const F64 reach = snap.mRange + part.mHalf.magVec();
+            if (dist_vec(pos, snap.mCenter) > reach && dist_vec(pos, snap.mCamera) > reach)
+            {
+                continue;
+            }
+            // No asset id is ever going to arrive for something we have not
+            // drawn, so the record is keyed by where it is instead: the region
+            // and the local id, tagged so it cannot collide with a real one.
+            const U32 local = entry->getLocalID();
+            const U32 tag = 0x534b4e56;     // 'SKNV'
+            memcpy(part.mId.mData, &handle, sizeof(handle));
+            memcpy(part.mId.mData + 8, &local, sizeof(local));
+            memcpy(part.mId.mData + 12, &tag, sizeof(tag));
+            mScan.mCached.push_back(part);
+        }
+    }
+}
+
+void SKWorldCensus::visitCached(const CachedPart& part)
+{
+    SKCensusSnapshot& snap = *mScan.mPending;
+    snap.mStats.mObjectsSeen++;
+
+    U64 sig = SEED;
+    sig = mix(sig, *reinterpret_cast<const U64*>(part.mId.mData));
+    sig = mix(sig, *reinterpret_cast<const U64*>(part.mId.mData + 8));
+    sig = mixVec(sig, part.mCenter);
+    sig = mixVec(sig, part.mHalf);
+    sig = mixF64(sig, part.mOrigin.mdV[VX]);
+    sig = mixF64(sig, part.mOrigin.mdV[VY]);
+
+    PartCache& cache = mParts[part.mId];
+    cache.mLastSeen = gFrameTimeSeconds;
+    RecordPtr rec;
+    if (cache.mRecord && cache.mSignature == sig)
+    {
+        rec = cache.mRecord;
+        snap.mStats.mCached++;
+    }
+    else
+    {
+        std::shared_ptr<Record> made = std::make_shared<Record>();
+        made->mRoot = part.mId;
+        made->mPart = part.mId;
+        made->mRole = Role::NAV;
+        // The same meaning BOX already carries: a stand-in until the real
+        // shape turns up, which here is when you get close enough to draw it.
+        made->mProvenance = Provenance::BOX;
+        made->mShape = Shape::BOX;
+        made->mOrigin = part.mOrigin;
+        made->mCenter = part.mCenter;
+        made->mAxes[0].set(1.f, 0.f, 0.f);
+        made->mAxes[1].set(0.f, 1.f, 0.f);
+        made->mAxes[2].set(0.f, 0.f, 1.f);
+        made->mHalf = part.mHalf;
+        made->mMin = part.mOrigin + LLVector3d(part.mCenter - part.mHalf);
+        made->mMax = part.mOrigin + LLVector3d(part.mCenter + part.mHalf);
+        made->mSignature = sig;
+        rec = made;
+        cache.mRecord = rec;
+        cache.mSignature = sig;
+    }
+
+    snap.mRecords.push_back(rec);
+    snap.mStats.mPlaceholders++;
+    snap.mStats.mFromObjectCache++;
 }
 
 sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature)
@@ -603,9 +791,9 @@ std::string SKWorldCensus::statsLine() const
     {
         largest = std::max(largest, c->mRecords.size());
     }
-    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders), %u tris, %u roles; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms",
+    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache), %u tris, %u roles; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms",
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
-                    s.mPlaceholders, s.mTriangles, s.mRolesKnown, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs);
+                    s.mPlaceholders, s.mFromObjectCache, s.mTriangles, s.mRolesKnown, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs);
 }
 
 void SKWorldCensus::renderDebug()

@@ -45,7 +45,8 @@ struct SKCensusSnapshot
 {
     U64 mStamp = 0;                             ///< moves once per completed scan
     LLVector3d mCenter;                         ///< the agent when the scan started
-    F64 mRange = 0.0;                           ///< metres from the centre the scan covered
+    LLVector3d mCamera;                         ///< the camera then: covered as well, and often elsewhere
+    F64 mRange = 0.0;                           ///< metres from either centre the scan covered
     std::vector<sknav::RecordPtr> mRecords;     ///< static and dynamic alike; clusters skip the dynamic
     sknav::ClusterSet mClusters;
 
@@ -57,6 +58,7 @@ struct SKCensusSnapshot
         U32 mSurround = 0;
         U32 mPlaceholders = 0;      ///< provenance BOX: an asset still fetching
         U32 mCached = 0;            ///< parts reused from the previous scan
+        U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
         U32 mTriangles = 0;
         U32 mRolesKnown = 0;
         F32 mScanMs = 0.f;          ///< main-thread time the scan took, summed over its slices
@@ -110,6 +112,16 @@ private:
         bool mKnown = false;
     };
 
+    /// What the region's object cache knows about something it has never
+    /// instantiated: where it is and how big, and nothing else.
+    struct CachedPart
+    {
+        LLUUID mId;                 ///< synthesised from the region and the local id
+        LLVector3d mOrigin;         ///< the region's origin, global
+        LLVector3 mCenter;          ///< region-local
+        LLVector3 mHalf;
+    };
+
     struct Scan
     {
         std::shared_ptr<SKCensusSnapshot> mPending;
@@ -118,6 +130,10 @@ private:
         std::vector<LLPointer<LLViewerObject>> mObjects;
         S32 mIndex = 0;             ///< next entry of mObjects to look at
         std::vector<U64> mRegions;  ///< the region set the scan started with
+        /// Objects the region has cached but not drawn: bounds only, gathered
+        /// once when the scan begins and emitted as boxes after the live pass.
+        std::vector<CachedPart> mCached;
+        size_t mCachedIndex = 0;
         F32 mElapsedMs = 0.f;
         bool mActive = false;
     };
@@ -133,6 +149,10 @@ private:
 
     /// One object into the pending snapshot: zero, one or many records.
     void visit(LLViewerObject* object);
+    /// One cached object into the pending snapshot, as a box.
+    void visitCached(const CachedPart& part);
+    /// Every cached entry near either centre that has no object of its own.
+    void gatherCached();
     bool classifyRest(LLViewerObject* root, const LLVector3d& pos);
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature);

@@ -639,7 +639,10 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
         F64 mDistance;
     };
     std::vector<Candidate> candidates;
+    // Nearest of the two: the ground under the avatar keeps its priority, and
+    // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -667,7 +670,8 @@ void SKNavMesh::schedule(const SKCensusSnapshotPtr& snap)
                 continue;
             }
             const LLVector3d centre = (tile.mMin + tile.mMax) * 0.5;
-            candidates.push_back({ &mesh, t.first, &tile, cluster, dist_vec_squared(LLVector3d(centre.mdV[VX], centre.mdV[VY], agent.mdV[VZ]), agent) });
+            const F64 nearest = llmin(dist_vec_squared2D(centre, agent), dist_vec_squared2D(centre, camera));
+            candidates.push_back({ &mesh, t.first, &tile, cluster, nearest });
         }
     }
     mStats.mQueued = static_cast<U32>(candidates.size());
