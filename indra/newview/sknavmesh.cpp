@@ -506,6 +506,14 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     {
         mStats.mFailures++;
         LL_WARNS("SKNav") << "tile build failed: " << result->mError << LL_ENDL;
+        // The walls of the build before this one describe geometry that has
+        // changed; drop them rather than answer with them.
+        tile.mFaces.reset();
+        for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+        {
+            tile.mSegments[cls].reset();
+            tile.mLinks[cls].reset();
+        }
         tile.mBuilt = signature;    // do not retry the same input
         return;
     }
@@ -843,7 +851,12 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
         }
         for (const WallSegment& seg : *tile.mSegments[c])
         {
-            fn(mesh.mOrigin + LLVector3d(seg.mA), mesh.mOrigin + LLVector3d(seg.mB), seg.mKind, seg.mValue);
+            const LLVector3d a = mesh.mOrigin + LLVector3d(seg.mA), b = mesh.mOrigin + LLVector3d(seg.mB);
+            if (overlapsXY(LLVector3d(llmin(a.mdV[VX], b.mdV[VX]), llmin(a.mdV[VY], b.mdV[VY]), 0.0),
+                           LLVector3d(llmax(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VY], b.mdV[VY]), 0.0), min, max))
+            {
+                fn(a, b, seg.mKind, seg.mValue);
+            }
         }
     });
 }
@@ -858,7 +871,12 @@ void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass
         }
         for (const DropLink& link : *tile.mLinks[c])
         {
-            fn(mesh.mOrigin + LLVector3d(link.mFrom), mesh.mOrigin + LLVector3d(link.mTo), link.mHeight);
+            const LLVector3d from = mesh.mOrigin + LLVector3d(link.mFrom), to = mesh.mOrigin + LLVector3d(link.mTo);
+            if (overlapsXY(LLVector3d(llmin(from.mdV[VX], to.mdV[VX]), llmin(from.mdV[VY], to.mdV[VY]), 0.0),
+                           LLVector3d(llmax(from.mdV[VX], to.mdV[VX]), llmax(from.mdV[VY], to.mdV[VY]), 0.0), min, max))
+            {
+                fn(from, to, link.mHeight);
+            }
         }
     });
 }
@@ -875,7 +893,7 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
     }
     const LLVector3d box(reach, reach, reach);
     F32 best = -1.f;
-    F32 bestDot = 0.f;
+    F32 bestDistance = reach;
     segmentsIn(pos - box, pos + box, cls, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
         if (kind != EdgeKind::WALL)
         {
@@ -894,10 +912,10 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
         {
             return;
         }
-        const F32 ahead = to * heading;
-        if (ahead > 0.5f && ahead > bestDot)
+        // Ahead at all, and nearer than anything found so far.
+        if (to * heading > 0.5f && distance < bestDistance)
         {
-            bestDot = ahead;
+            bestDistance = distance;
             best = value;
         }
     });

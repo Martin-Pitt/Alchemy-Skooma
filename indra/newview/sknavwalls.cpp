@@ -109,10 +109,11 @@ namespace
             const Interval& a = solids[above];
             if (a.mBottom <= floor_y + p.mClimb)
             {
-                // Solid from the floor up: a step, or a wall. Stack solids with
-                // gaps too small to fit through.
+                // Solid from the floor up: a step, or a wall. Stack solids
+                // over gaps too short to fit through, so a wall built of two
+                // boxes with a hand's breadth between them is one wall.
                 F32 top = a.mTop;
-                for (size_t i = above + 1; i < solids.size() && solids[i].mBottom - top < p.mClimb; ++i)
+                for (size_t i = above + 1; i < solids.size() && solids[i].mBottom - top < p.mHeight; ++i)
                 {
                     top = solids[i].mTop;
                 }
@@ -302,6 +303,7 @@ namespace sknav
         const F32 inset = std::ceil(params.mRadius / hf.cs) * hf.cs;
         const F32 probes[3] = { inset + hf.cs * 0.75f, inset + hf.cs * 1.75f, inset + hf.cs * 2.75f };
         const S32 landing_steps = static_cast<S32>(std::ceil(params.mRadius / hf.cs)) + 2;
+        F32 sinceLink = link_spacing;   // a link at the first landable sample, then one per spacing
         auto vert = [&](unsigned short v, F32* out) {
             out[0] = pmesh.bmin[0] + pmesh.verts[v * 3] * pmesh.cs;
             out[1] = pmesh.bmin[1] + pmesh.verts[v * 3 + 1] * pmesh.ch;
@@ -353,7 +355,6 @@ namespace sknav
 
                 WallSegment current;
                 bool open = false;
-                F32 sinceLink = link_spacing;   // a link at the first landable sample
                 for (S32 k = 0; k <= steps; ++k)
                 {
                     const F32 t = std::min(1.f, k / static_cast<F32>(steps));
@@ -383,7 +384,7 @@ namespace sknav
                     const bool same = open && s.mKind == current.mKind && std::fabs(s.mValue - current.mValue) < 0.25f;
                     if (!same)
                     {
-                        if (open && current.mKind != EdgeKind::OPEN)
+                        if (open && current.mKind != EdgeKind::OPEN && current.mA != current.mB)
                         {
                             segments.push_back(current);
                         }
@@ -401,14 +402,14 @@ namespace sknav
                         sinceLink = 0.f;
                         DropLink link;
                         const F32 from[3] = { px - nx * hf.cs, py, pz - nz * hf.cs };
-                        const F32 to[3] = { ox + nx * hf.cs, s.mLanding, oz + nz * hf.cs };
+                        const F32 to[3] = { ox, s.mLanding, oz };
                         link.mFrom = fromRecast(from);
                         link.mTo = fromRecast(to);
                         link.mHeight = s.mValue;
                         links.push_back(link);
                     }
                 }
-                if (open && current.mKind != EdgeKind::OPEN)
+                if (open && current.mKind != EdgeKind::OPEN && current.mA != current.mB)
                 {
                     segments.push_back(current);
                 }

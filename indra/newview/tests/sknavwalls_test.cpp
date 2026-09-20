@@ -187,10 +187,37 @@ namespace tut
         ensure(llformat("but not too far for water: %zu", r.mLinks[WEATHER].size()), !r.mLinks[WEATHER].empty());
     }
 
+    // A wall of two boxes with a gap too short to crawl through is one wall
+    // of the upper box's height, and no segment is a point.
+    template<> template<>
+    void sknavwalls_object::test<6>()
+    {
+        TileBuildInput in = tile();
+        in.mRecords.push_back(box(14.f, 4.f, 0.f, 15.f, 28.f, 1.2f));
+        in.mRecords.push_back(box(14.f, 4.f, 2.0f, 15.f, 28.f, 3.f));
+        const TileBuildResult r = buildTile(in);
+        ensure_equals("built: " + r.mError, static_cast<int>(r.mStatus), static_cast<int>(TileBuildResult::SUCCESS));
+
+        F32 wall_len = 0.f, wall_h = 0.f;
+        summarise(r.mSegments[AVATAR], EdgeKind::WALL, wall_len, wall_h);
+        ensure(llformat("wall found: %.1f m", wall_len), wall_len > 30.f);
+        // The 0.8 m gap is shorter than the 2 m the class needs, so the wall
+        // reaches the top of the upper box, not the top of the lower one.
+        ensure(llformat("wall is the whole stack: %.2f m", wall_h), wall_h > 2.5f);
+
+        for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+        {
+            for (const WallSegment& seg : r.mSegments[cls])
+            {
+                ensure(llformat("segment has length (class %d)", cls), (seg.mB - seg.mA).magVecSquared() > 0.f);
+            }
+        }
+    }
+
     // Exposed faces: a block on flat ground shows its four sides, from the
     // ground to its top, and nothing above it.
     template<> template<>
-    void sknavwalls_object::test<5>()
+    void sknavwalls_object::test<7>()
     {
         TileBuildInput in = tile();
         in.mRecords.push_back(box(12.f, 12.f, 0.f, 20.f, 20.f, 2.f));
