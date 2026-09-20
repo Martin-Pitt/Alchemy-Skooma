@@ -26,6 +26,9 @@
 
 #include "sknavmesh.h"
 
+#include "sknavoverlay.h"
+#include "sknavpalette.h"
+
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
@@ -34,6 +37,7 @@
 #include "llrender.h"
 #include "llsurface.h"
 #include "llsurfacepatch.h"
+#include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
@@ -1048,17 +1052,32 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
-    const S32 cls = static_cast<S32>(AgentClass::AVATAR);
-    const LLVector3d agent = gAgent.getPositionGlobal();
-
-    gGL.flush();
-    gDebugProgram.bind();
-    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-    LLGLEnable blend(GL_BLEND);
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-    gGL.getTextureSlot(0)->unbind();
-
+    static LLCachedControl<bool> solid(gSavedSettings, "SKNavOverlaySolid", true);
+    static LLCachedControl<bool> xray(gSavedSettings, "SKNavOverlayXRay", false);
+    static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
     static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
+    static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
+
+    const S32 cls = static_cast<S32>(AgentClass::AVATAR);
+    // The mesh is built around the agent, but the overlay is read by camming
+    // about, so anything near either one is drawn.
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 reach = range;
+    auto within = [&](const LLVector3d& p) {
+        return dist_vec_squared2D(p, agent) <= reach * reach || dist_vec_squared2D(p, camera) <= reach * reach;
+    };
+
+    // With the world wiped there is nothing to see through: the mesh draws
+    // opaque and writes depth, so stacked storeys sort by depth rather than by
+    // the order their tiles happen to come out of Detour.
+    const bool opaque = !show_world;
+    auto strength = [opaque](LLColor4 color, F32 scale) {
+        color.mV[VALPHA] = opaque ? 1.f : color.mV[VALPHA] * scale;
+        return color;
+    };
+
+    SKNavOverlayGeom geom;
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
@@ -1071,16 +1090,17 @@ void SKNavMesh::renderDebug()
         if (levels)
         {
             // The ways off each storey, drawn from the low end to the high one.
-            gGL.diffuseColor4f(1.f, 0.9f, 0.3f, 0.9f);
-            gGL.begin(LLRender::LINES);
+            const LLColor4 color = strength(skNavSwatchColor(SKNavSwatch::CONNECTOR), 1.f);
+            const LLVector3 lift(0.f, 0.f, 0.1f);
             for (const Connector& c : levels->mConnectors)
             {
-                const LLVector3 low = gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mLowPoint));
-                const LLVector3 high = gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mHighPoint));
-                gGL.vertex3fv((low + LLVector3(0.f, 0.f, 0.1f)).mV);
-                gGL.vertex3fv((high + LLVector3(0.f, 0.f, 0.1f)).mV);
+                const LLVector3d low = mesh.mOrigin + LLVector3d(c.mLowPoint);
+                if (within(low))
+                {
+                    geom.line(gAgent.getPosAgentFromGlobal(low) + lift,
+                              gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mHighPoint)) + lift, color);
+                }
             }
-            gGL.end();
         }
         const LLVector3 originAgent = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
         for (int i = 0; i < nav->getMaxTiles(); ++i)
@@ -1092,83 +1112,74 @@ void SKNavMesh::renderDebug()
             }
             const LLVector3d tmin = mesh.mOrigin + LLVector3d(fromRecast(tile->header->bmin));
             const LLVector3d tmax = mesh.mOrigin + LLVector3d(fromRecast(tile->header->bmax));
-            const LLVector3d centre = (tmin + tmax) * 0.5;
-            if (dist_vec(LLVector3d(centre.mdV[VX], centre.mdV[VY], agent.mdV[VZ]), agent) > range)
+            if (!within((tmin + tmax) * 0.5))
             {
                 continue;
             }
-            for (U8 area = 1; area <= 3; ++area)
+            for (int p = 0; p < tile->header->polyCount; ++p)
             {
-                bool any = false;
-                for (int p = 0; p < tile->header->polyCount && !any; ++p)
-                {
-                    any = areaOf(tile->polys[p].flags) == area;
-                }
-                if (!any)
+                const dtPoly& poly = tile->polys[p];
+                if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
                 {
                     continue;
                 }
-                switch (area)
+                LLColor4 color;
+                if (by_level && levels)
                 {
-                    case AREA_GROUND: gGL.diffuseColor4f(0.3f, 0.9f, 0.3f, 0.8f); break;
-                    case AREA_OBJECT: gGL.diffuseColor4f(0.3f, 0.6f, 1.f, 0.8f); break;
-                    default: gGL.diffuseColor4f(0.2f, 0.4f, 0.9f, 0.5f); break;
-                }
-                // gDebugProgram takes its colour as a uniform, so colouring by
-                // storey means a batch per polygon rather than one per area.
-                const bool per_poly = by_level && levels;
-                if (!per_poly)
-                {
-                    gGL.begin(LLRender::LINES);
-                }
-                for (int p = 0; p < tile->header->polyCount; ++p)
-                {
-                    const dtPoly& poly = tile->polys[p];
-                    if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || areaOf(poly.flags) != area)
+                    // Each storey its own colour, so a building's floors can be
+                    // told apart at a glance.
+                    const U16 level = levels->levelOf(nav->getPolyRefBase(tile) | static_cast<dtPolyRef>(p));
+                    if (level == Levels::NO_LEVEL)
                     {
-                        continue;
+                        color = skNavSwatchColor(SKNavSwatch::LEVEL);
                     }
-                    if (per_poly)
+                    else
                     {
-                        // Each storey its own colour, so a building's floors
-                        // can be told apart at a glance.
-                        const U16 level = levels->levelOf(nav->getPolyRefBase(tile) | static_cast<dtPolyRef>(p));
-                        if (level == Levels::NO_LEVEL)
-                        {
-                            gGL.diffuseColor4f(0.5f, 0.5f, 0.5f, 0.5f);
-                        }
-                        else
-                        {
-                            const U32 h = static_cast<U32>(mix(SEED, level));
-                            gGL.diffuseColor4f(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
-                                               0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
-                        }
-                        gGL.begin(LLRender::LINES);
-                    }
-                    const dtPolyDetail& detail = tile->detailMeshes[p];
-                    for (unsigned int t = 0; t < detail.triCount; ++t)
-                    {
-                        const unsigned char* tri = &tile->detailTris[(detail.triBase + t) * 4];
-                        LLVector3 v[3];
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            const F32* rc = tri[k] < poly.vertCount ? &tile->verts[poly.verts[tri[k]] * 3] : &tile->detailVerts[(detail.vertBase + tri[k] - poly.vertCount) * 3];
-                            v[k] = originAgent + fromRecast(rc) + LLVector3(0.f, 0.f, 0.05f);
-                        }
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            gGL.vertex3fv(v[k].mV);
-                            gGL.vertex3fv(v[(k + 1) % 3].mV);
-                        }
-                    }
-                    if (per_poly)
-                    {
-                        gGL.end();
+                        const U32 h = static_cast<U32>(mix(SEED, level));
+                        color.set(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
+                                  0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
                     }
                 }
-                if (!per_poly)
+                else
                 {
-                    gGL.end();
+                    switch (areaOf(poly.flags))
+                    {
+                        case AREA_GROUND: color = skNavSwatchColor(SKNavSwatch::GROUND); break;
+                        case AREA_OBJECT: color = skNavSwatchColor(SKNavSwatch::OBJECT); break;
+                        case AREA_SUBMERGED: color = skNavSwatchColor(SKNavSwatch::SUBMERGED); break;
+                        default: color = skNavSwatchColor(SKNavSwatch::LEVEL); break;
+                    }
+                }
+                const LLColor4 fill = strength(color, 0.35f);
+                const LLColor4 edge = strength(color, 1.f);
+                const dtPolyDetail& detail = tile->detailMeshes[p];
+                for (unsigned int t = 0; t < detail.triCount; ++t)
+                {
+                    const unsigned char* tri = &tile->detailTris[(detail.triBase + t) * 4];
+                    LLVector3 v[3];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const F32* rc = tri[k] < poly.vertCount ? &tile->verts[poly.verts[tri[k]] * 3]
+                                                                : &tile->detailVerts[(detail.vertBase + tri[k] - poly.vertCount) * 3];
+                        v[k] = originAgent + fromRecast(rc);
+                    }
+                    if (solid)
+                    {
+                        const LLVector3 lift(0.f, 0.f, 0.04f);
+                        geom.tri(v[0] + lift, v[1] + lift, v[2] + lift, fill);
+                    }
+                    // Filled, the polygon outline is enough and the detail
+                    // triangles under it are only noise; as a wireframe those
+                    // triangles are the whole drawing.
+                    const LLVector3 lift(0.f, 0.f, 0.06f);
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        if (solid && !(dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY))
+                        {
+                            continue;
+                        }
+                        geom.line(v[k] + lift, v[(k + 1) % 3] + lift, edge);
+                    }
                 }
             }
         }
@@ -1176,56 +1187,93 @@ void SKNavMesh::renderDebug()
 
     // Walls: the floor edges by what lies beyond them, cover coloured against
     // the user's own eye height, and a tick from each ledge to where it lands.
-    static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     if (show_walls)
     {
         static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
         static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
         const F32 eye = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 1.8f;
-        const LLVector3d box(range, range, range);
-        gGL.setLineWidth(2.f);
-        segmentsIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
+        const LLVector3 lift(0.f, 0.f, 0.08f);
+        // One query over both centres, then the round test per segment: two
+        // queries would draw whatever lies in both boxes twice.
+        LLVector3d qmin, qmax;
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            qmin.mdV[axis] = llmin(agent.mdV[axis], camera.mdV[axis]) - reach;
+            qmax.mdV[axis] = llmax(agent.mdV[axis], camera.mdV[axis]) + reach;
+        }
+        segmentsIn(qmin, qmax, AgentClass::AVATAR, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
+            if (!within(a))
+            {
+                return;
+            }
+            LLColor4 color;
             switch (kind)
             {
                 case EdgeKind::WALL:
                     switch (coverClass(value, eye, climb, peek))
                     {
-                        case Cover::FULL: gGL.diffuseColor4f(1.f, 1.f, 1.f, 0.9f); break;
-                        case Cover::HALF: gGL.diffuseColor4f(1.f, 0.8f, 0.2f, 0.9f); break;
-                        default: gGL.diffuseColor4f(0.6f, 0.6f, 0.6f, 0.7f); break;
+                        case Cover::FULL: color = skNavSwatchColor(SKNavSwatch::COVER_FULL); break;
+                        case Cover::HALF: color = skNavSwatchColor(SKNavSwatch::COVER_HALF); break;
+                        default: color = skNavSwatchColor(SKNavSwatch::COVER_LOW); break;
                     }
                     break;
-                case EdgeKind::LEDGE: gGL.diffuseColor4f(1.f, 0.3f, 0.3f, 0.9f); break;
-                case EdgeKind::OVERHANG: gGL.diffuseColor4f(0.7f, 0.3f, 1.f, 0.8f); break;
+                case EdgeKind::LEDGE: color = skNavSwatchColor(SKNavSwatch::LEDGE); break;
+                case EdgeKind::OVERHANG: color = skNavSwatchColor(SKNavSwatch::OVERHANG); break;
                 default: return;
             }
-            const LLVector3 pa = gAgent.getPosAgentFromGlobal(a) + LLVector3(0.f, 0.f, 0.08f);
-            const LLVector3 pb = gAgent.getPosAgentFromGlobal(b) + LLVector3(0.f, 0.f, 0.08f);
-            // One batch per line: the colour is a uniform, not per vertex.
-            gGL.begin(LLRender::LINES);
-            gGL.vertex3fv(pa.mV);
-            gGL.vertex3fv(pb.mV);
+            color = strength(color, 1.f);
+            const LLVector3 pa = gAgent.getPosAgentFromGlobal(a) + lift;
+            const LLVector3 pb = gAgent.getPosAgentFromGlobal(b) + lift;
+            geom.line(pa, pb, color);
             // A wall is drawn again at its own height, so how tall it is shows.
             if (kind == EdgeKind::WALL)
             {
                 const LLVector3 up(0.f, 0.f, value);
-                gGL.vertex3fv((pa + up).mV);
-                gGL.vertex3fv((pb + up).mV);
+                geom.line(pa + up, pb + up, color);
             }
-            gGL.end();
         });
-        gGL.diffuseColor4f(0.2f, 1.f, 1.f, 0.9f);
-        gGL.begin(LLRender::LINES);
-        linksIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& from, const LLVector3d& to, F32) {
-            const LLVector3 pf = gAgent.getPosAgentFromGlobal(from) + LLVector3(0.f, 0.f, 0.08f);
-            const LLVector3 pt = gAgent.getPosAgentFromGlobal(to) + LLVector3(0.f, 0.f, 0.08f);
-            gGL.vertex3fv(pf.mV);
-            gGL.vertex3fv(pt.mV);
+        const LLColor4 drop = strength(skNavSwatchColor(SKNavSwatch::DROP), 1.f);
+        linksIn(qmin, qmax, AgentClass::AVATAR, [&](const LLVector3d& from, const LLVector3d& to, F32) {
+            if (within(from))
+            {
+                geom.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
+            }
         });
-        gGL.end();
-        gGL.setLineWidth(1.f);
     }
 
-    gGL.flush();
-    gDebugProgram.unbind();
+    if (opaque)
+    {
+        // As the stock pathfinding console does: wipe the frame, so that what
+        // is left is the navmesh and nothing else.
+        const LLColor4 clear = gSavedSettings.getColor4("PathfindingNavMeshClear");
+        gGL.flush();
+        gGL.setColorMask(true, true);
+        glClearColor(clear.mV[VRED], clear.mV[VGREEN], clear.mV[VBLUE], 0.f);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        gGL.setColorMask(true, false);
+    }
+    if (geom.empty())
+    {
+        return;
+    }
+
+    SKNavOverlayGeom::bindShader();
+    {
+        LLGLEnable blend(GL_BLEND);
+        LLGLDisable cull(GL_CULL_FACE);
+        gGL.setLineWidth(2.f);
+        {
+            LLGLDepthTest depth(GL_TRUE, opaque ? GL_TRUE : GL_FALSE);
+            geom.draw();
+        }
+        if (xray && !opaque)
+        {
+            // What is behind geometry, darker and fainter, so it reads as being
+            // seen through the wall rather than in front of it.
+            LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
+            geom.draw(0.55f, 0.45f);
+        }
+        gGL.setLineWidth(1.f);
+    }
+    SKNavOverlayGeom::unbindShader();
 }
