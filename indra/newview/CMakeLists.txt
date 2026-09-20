@@ -896,7 +896,6 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
-    sknavcluster.cpp
     skphysicsshape.cpp
     sknavbuild.cpp
     sknavmesh.cpp
@@ -1683,8 +1682,6 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
-    sknavcluster.h
-    sknavtypes.h
     skphysicsshape.h
     sknavbuild.h
     sknavmesh.h
@@ -1955,6 +1952,7 @@ if(AL_BUILD_VIEWER)
       ll::minizip
       ll::pugixml
       ll::recast
+      sknavmesh
       ll::velopack
       ll::webrtc
   )
@@ -2389,8 +2387,6 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-  # Clustering is pure: records in, clusters and tile signatures out.
-  al_add_test(sknavcluster UNIT PROJECT ${test_project})
   # The tile build is pure: records and terrain in, Detour tile data out.
   al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast)
   al_add_test(
