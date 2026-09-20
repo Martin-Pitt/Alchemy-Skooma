@@ -27,7 +27,6 @@
 #ifndef LL_LLVIEWEROBJECTLIST_H
 #define LL_LLVIEWEROBJECTLIST_H
 
-#include <deque> // <SK:Nexii> Ghosted physical objects
 #include <map>
 #include <set>
 
@@ -132,9 +131,9 @@ public:
     void removeFromActiveList(LLViewerObject* objectp);
     void updateActive(LLViewerObject *objectp);
 
-    // <SK:Nexii> Ghosted physical objects: queue a physical object that stopped predicting a region crossing, and probe the due ones with a silent select so a simulator that no longer owns them answers with KillObject
-    void skWatchGhostCandidate(LLViewerObject* objectp, F64Seconds armed_at);
-    void skProbeGhostCandidates(F64Seconds now);
+    // <SK:Nexii> Ghosted physical objects: watch temp-on-rez physical objects for a stop the simulator never announced, and probe those with a silent select so a simulator that no longer owns one answers with KillObject
+    void skWatchGhostCandidate(LLViewerObject* objectp);
+    void skUpdateGhostWatch(F64Seconds now);
     // </SK:Nexii>
 
     void updateAvatarVisibility();
@@ -227,13 +226,15 @@ protected:
 
     std::vector<LLDebugBeacon> mDebugBeacons;
 
-    // <SK:Nexii> Ghosted physical objects: armed in frame order with one fixed delay, so the front is always the next due
+    // <SK:Nexii> Ghosted physical objects: swept a few times a second, and only ever as long as the temp-on-rez physical objects in view
     struct SKGhostCandidate
     {
         LLPointer<LLViewerObject> mObject;
-        F64Seconds mArmedAt;
+        LLVector3 mLastPos;
+        F64Seconds mLastMovedAt;
     };
-    std::deque<SKGhostCandidate> mSKGhostCandidates;
+    std::vector<SKGhostCandidate> mSKGhostCandidates;
+    F64Seconds mSKGhostNextSweep;
     // </SK:Nexii>
 
     S32 mCurLazyUpdateIndex;

@@ -110,6 +110,7 @@ LLViewerObjectList::LLViewerObjectList()
     mWasPaused = false;
     mNumDeadObjectUpdates = 0;
     mNumUnknownUpdates = 0;
+    mSKGhostNextSweep = (F64Seconds)0.0; // <SK:Nexii> Ghosted physical objects
 }
 
 LLViewerObjectList::~LLViewerObjectList()
@@ -130,48 +131,122 @@ void LLViewerObjectList::destroy()
 }
 
 // <SK:Nexii> Ghosted physical objects
-// A physical object the viewer predicted across a region border and then stopped for lack of
-// any update may be one the simulator has already handed off: neither side speaks of it again
-// and the copy stands at the edge forever. A silent select/deselect makes a simulator answer
-// with KillObject for a local id it no longer owns, which is what culls a ghost when a user
-// clicks one. RequestMultipleObjects cannot: it only refreshes objects that still exist.
-void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp, F64Seconds armed_at)
+// A simulator that stops an object says so. One that has handed the object off to a neighbour
+// says nothing at all, and if the viewer never heard about the handoff its copy coasts on the
+// last known velocity, runs out of prediction at the border and stands there for the rest of the
+// session. Weapon fire is the common case: temp-on-rez and physical, rezzed by the hundred, and
+// every one that crosses a border can leave a ghost behind.
+//
+// The tell is an object that stopped moving without a word from the simulator to say it should
+// have. Watching for that costs nothing here, because the two flags narrow the candidates to
+// objects that are physical and temporary -- a handful at a time even on a busy combat parcel --
+// and the sweep below only samples a position.
+static void sk_send_existence_probe(LLViewerObject* objectp)
 {
-    mSKGhostCandidates.push_back({ objectp, armed_at });
+    // Briefly select and deselect the object server-side. A simulator answers a select for a
+    // local id it no longer owns with KillObject, which is what culls a ghost when a user clicks
+    // one. RequestMultipleObjects cannot do this: it only refreshes objects that still exist.
+    LLMessageSystem* msg = gMessageSystem;
+    const LLHost& host = objectp->getRegion()->getHost();
+
+    for (const char* message_name : { _PREHASH_ObjectSelect, _PREHASH_ObjectDeselect })
+    {
+        msg->newMessageFast(message_name);
+        msg->nextBlockFast(_PREHASH_AgentData);
+        msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
+        msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+        msg->nextBlockFast(_PREHASH_ObjectData);
+        msg->addU32Fast(_PREHASH_ObjectLocalID, objectp->getLocalID());
+        msg->sendReliable(host);
+    }
 }
 
-void LLViewerObjectList::skProbeGhostCandidates(F64Seconds now)
+void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp)
 {
-    // Grace after the predicted stop, on top of the crossing window already spent predicting.
-    const F64Seconds SK_GHOST_PROBE_DELAY(0.4);
-
-    while (!mSKGhostCandidates.empty() && now - mSKGhostCandidates.front().mArmedAt >= SK_GHOST_PROBE_DELAY)
+    if (objectp->mSKGhostWatched || objectp->isDead() || objectp->isAvatar() || objectp->isAttachment())
     {
-        const SKGhostCandidate candidate = mSKGhostCandidates.front();
-        mSKGhostCandidates.pop_front();
+        return;
+    }
 
+    objectp->mSKGhostWatched = true;
+    mSKGhostCandidates.push_back({ objectp,
+                                   objectp->getPositionRegion(),
+                                   (F64Seconds)LLFrameTimer::getElapsedSeconds() });
+}
+
+void LLViewerObjectList::skUpdateGhostWatch(F64Seconds now)
+{
+    // Sampling a position four times a second is enough to tell moving from stopped, and puts a
+    // ghost's probe within about a second of it coming to rest.
+    const F64Seconds SK_SWEEP_INTERVAL(0.25);
+    // How long the object must hold still before it counts as stopped rather than slow.
+    const F64Seconds SK_STILL_TIME(0.5);
+    // How far the last word from the simulator must predate that stop. An object the simulator
+    // stopped is reported stopped, so the two times coincide; an object that ran out of
+    // prediction kept moving for the whole crossing window after the last thing we were told.
+    const F64Seconds SK_UNANNOUNCED_STOP(0.4);
+    // Ignore drift below this, so a residual trickle of prediction does not read as motion.
+    const F32 SK_STILL_DISTANCE_SQ = 1e-6f; // 1mm
+
+    if (mSKGhostCandidates.empty() || now < mSKGhostNextSweep)
+    {
+        return;
+    }
+    mSKGhostNextSweep = now + SK_SWEEP_INTERVAL;
+
+    for (size_t i = 0; i < mSKGhostCandidates.size();)
+    {
+        SKGhostCandidate& candidate = mSKGhostCandidates[i];
         LLViewerObject* objectp = candidate.mObject;
-        LLViewerRegion* regionp = objectp->getRegion();
-        // Anything heard from a simulator since arming means the object still exists or was re-homed.
-        if (objectp->isDead() || !regionp || objectp->getLocalID() == 0
-            || objectp->mLastMessageUpdateSecs >= candidate.mArmedAt)
+        bool done = true;
+
+        // Stop watching anything that died, lost its region, or is no longer the kind of object
+        // this is about.
+        if (objectp && !objectp->isDead() && objectp->getRegion() && objectp->getLocalID() != 0
+            && objectp->flagUsePhysics() && objectp->flagTemporaryOnRez())
         {
-            continue;
+            const LLVector3 pos = objectp->getPositionRegion();
+            if ((pos - candidate.mLastPos).magVecSquared() > SK_STILL_DISTANCE_SQ)
+            {
+                candidate.mLastPos = pos;
+                candidate.mLastMovedAt = now;
+                done = false;
+            }
+            else if (now - candidate.mLastMovedAt < SK_STILL_TIME
+                     || candidate.mLastMovedAt - objectp->mLastMessageUpdateSecs < SK_UNANNOUNCED_STOP)
+            {
+                done = false;
+            }
+            else if (objectp->isSelected())
+            {
+                // Deselecting it out from under the user would be worse than leaving a ghost.
+                done = false;
+            }
+            else
+            {
+                LL_DEBUGS("Interpolate") << "Probing possibly ghosted physical object "
+                                         << objectp->getID() << ", stopped "
+                                         << (now - candidate.mLastMovedAt).value()
+                                         << "s ago and unheard from for "
+                                         << (now - objectp->mLastMessageUpdateSecs).value()
+                                         << "s" << LL_ENDL;
+                sk_send_existence_probe(objectp);
+            }
         }
 
-        LL_DEBUGS("Interpolate") << "Probing possibly ghosted physical object " << objectp->getID()
-                                 << " stopped after a region crossing" << LL_ENDL;
-
-        LLMessageSystem* msg = gMessageSystem;
-        for (const char* message_name : { _PREHASH_ObjectSelect, _PREHASH_ObjectDeselect })
+        // One probe settles it: a ghost is killed by the reply, and anything that answers is real.
+        if (done)
         {
-            msg->newMessageFast(message_name);
-            msg->nextBlockFast(_PREHASH_AgentData);
-            msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
-            msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
-            msg->nextBlockFast(_PREHASH_ObjectData);
-            msg->addU32Fast(_PREHASH_ObjectLocalID, objectp->getLocalID());
-            msg->sendReliable(regionp->getHost());
+            if (objectp)
+            {
+                objectp->mSKGhostWatched = false;
+            }
+            mSKGhostCandidates[i] = mSKGhostCandidates.back();
+            mSKGhostCandidates.pop_back();
+        }
+        else
+        {
+            ++i;
         }
     }
 }
@@ -300,6 +375,14 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
     }
 
     updateActive(objectp);
+
+    // <SK:Nexii> Ghosted physical objects: the flags are current here, and these two narrow the
+    // watch to weapon fire and the like -- the objects that ghost at a region border.
+    if (objectp->flagUsePhysics() && objectp->flagTemporaryOnRez())
+    {
+        skWatchGhostCandidate(objectp);
+    }
+    // </SK:Nexii>
 
     if (just_created)
     {
@@ -1106,10 +1189,12 @@ void LLViewerObjectList::update(LLAgent &agent)
         {
             LLViewerTextureAnim::updateClass();
         }
+
+        // <SK:Nexii> Ghosted physical objects: reads the positions the loops above just set, and
+        // stays out of FreezeTime, where nothing moves and everything would read as stopped.
+        skUpdateGhostWatch((F64Seconds)frame_time);
+        // </SK:Nexii>
     }
-
-    skProbeGhostCandidates((F64Seconds)frame_time); // <SK:Nexii> Ghosted physical objects
-
 
 
     fetchObjectCosts();

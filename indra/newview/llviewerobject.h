@@ -983,6 +983,7 @@ protected:
     bool            mOnActiveList;
     bool            mOnMap;                     // On the map.
     bool            mStatic;                    // Object doesn't move.
+    bool            mSKGhostWatched;            // <SK:Nexii> Ghosted physical objects: queued on gObjectList's ghost watch
     S32             mSeatCount;
     S32             mNumFaces;
 
