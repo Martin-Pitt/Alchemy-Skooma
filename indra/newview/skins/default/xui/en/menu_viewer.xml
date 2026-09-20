@@ -3146,6 +3146,18 @@ function="World.EnvPreset"
          label="Consoles"
          name="Consoles"
          tear_off="true">
+            <!-- <SK:Nexii> navmesh console -->
+            <menu_item_check
+             label="Navmesh Console"
+             name="SKNavmeshConsole">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="sk_navmesh" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="sk_navmesh" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Texture Console"
              name="Texture Console"

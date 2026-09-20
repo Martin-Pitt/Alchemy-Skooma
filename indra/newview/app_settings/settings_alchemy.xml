@@ -3730,6 +3730,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKNavOverlayCensus</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the census shapes and their structures in the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavOverlaySolid</key>
         <map>
             <key>Comment</key>

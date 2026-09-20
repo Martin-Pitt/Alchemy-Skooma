@@ -46,6 +46,7 @@
 #include "alfloaterprofilelegacy.h"
 #include "alfloaterprogressview.h"
 #include "alfloaterscopes.h"
+#include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
 #include "alfloaterwebprofile.h"
@@ -596,6 +597,9 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("legacy_profile", "floater_al_profile_legacy.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterProfileLegacy>);
     LLFloaterReg::add("lightbox", "floater_lightbox_settings.xml", (LLFloaterBuildFunc) &LLFloaterReg::build<ALFloaterLightBox>);
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
+    // <SK:Nexii> navmesh console: overlay switches, status and legend
+    LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
+    // </SK:Nexii>
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);
     LLFloaterReg::add("message_log", "floater_message_log.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageLog>);
     LLFloaterReg::add("message_rewriter", "floater_message_rewriter.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageRewriter>);

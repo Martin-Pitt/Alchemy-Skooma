@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SK:Nexii> The navmesh's own console: what the census and the mesh are doing,
+     the overlay's switches, and a legend for the colours it draws. -->
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="true"
+ min_height="480"
+ min_width="300"
+ height="620"
+ layout="topleft"
+ name="floater_sk_navmesh"
+ save_rect="true"
+ single_instance="true"
+ title="Navmesh console"
+ width="320">
+  <floater.string name="census_none">The census has not run yet.</floater.string>
+  <floater.string name="mesh_none">Nothing built yet.</floater.string>
+  <floater.string name="overlay_off">The overlay is off; nothing below draws until you turn it on.</floater.string>
+
+  <!-- One per swatch in sknavpalette.h, keyed by its name there. -->
+  <floater.string name="sk_nav_ground">Ground — walkable terrain</floater.string>
+  <floater.string name="sk_nav_object">Object — walkable surface of a build</floater.string>
+  <floater.string name="sk_nav_submerged">Submerged — walkable, but under water</floater.string>
+  <floater.string name="sk_nav_level">Storey — one colour per floor, by storey</floater.string>
+  <floater.string name="sk_nav_connector">Connector — stair or ramp between storeys</floater.string>
+  <floater.string name="sk_nav_cover_full">Full cover — taller than your eye height</floater.string>
+  <floater.string name="sk_nav_cover_half">Half cover — you can shoot over it</floater.string>
+  <floater.string name="sk_nav_cover_low">Low wall — too low to take cover behind</floater.string>
+  <floater.string name="sk_nav_ledge">Ledge — a landable drop over this edge</floater.string>
+  <floater.string name="sk_nav_overhang">Overhang — nothing below within reach</floater.string>
+  <floater.string name="sk_nav_drop">Drop link — where a ledge lands</floater.string>
+  <floater.string name="sk_nav_shape_exact">Census: the object's own triangles</floater.string>
+  <floater.string name="sk_nav_shape_hull">Census: its convex hull</floater.string>
+  <floater.string name="sk_nav_shape_box">Census: its bounding box, shape unknown</floater.string>
+  <floater.string name="sk_nav_shape_render">Census: its rendered shape</floater.string>
+  <floater.string name="sk_nav_shape_dynamic">Census: still moving, left out of the build</floater.string>
+  <floater.string name="sk_nav_cluster">Structure — one colour per cluster</floater.string>
+
+  <text
+   name="mesh_status_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top="24"
+   width="292">
+    Navmesh
+  </text>
+  <text
+   name="mesh_status"
+   height="58"
+   word_wrap="true"
+   use_ellipses="false"
+   type="string"
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   width="292">
+  </text>
+  <text
+   name="census_status_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="6"
+   width="292">
+    Census
+  </text>
+  <text
+   name="census_status"
+   height="58"
+   word_wrap="true"
+   use_ellipses="false"
+   type="string"
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   width="292">
+  </text>
+
+  <check_box
+   height="19"
+   label="Draw the overlay"
+   layout="topleft"
+   follows="left|top"
+   left="12"
+   name="overlay_on"
+   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh"
+   top_pad="10"
+   width="292" />
+  <check_box
+   height="19"
+   label="Filled surface"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_solid"
+   control_name="SKNavOverlaySolid"
+   tool_tip="Fill the polygons and outline them. Off draws the detail triangles as a wireframe"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Colour by storey"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_levels"
+   control_name="SKNavOverlayByLevel"
+   tool_tip="A colour per floor of a structure instead of per surface kind"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Walls, cover and ledges"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_walls"
+   control_name="SKNavOverlayWalls"
+   tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Census shapes"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_census"
+   control_name="SKNavOverlayCensus"
+   tool_tip="The physics shapes the mesh is built from, and the structure each belongs to"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="X-ray vision"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_xray"
+   control_name="SKNavOverlayXRay"
+   tool_tip="Also draw what is hidden behind geometry, darker and fainter"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Draw the world underneath"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_world"
+   control_name="SKNavOverlayWorld"
+   tool_tip="Off wipes the frame, leaving the navmesh on its own"
+   top_pad="4"
+   width="276" />
+  <slider
+   control_name="SKNavOverlayRange"
+   decimal_digits="0"
+   follows="left|top"
+   height="20"
+   increment="8"
+   initial_value="96"
+   label="Range (m)"
+   label_width="80"
+   layout="topleft"
+   left="28"
+   max_val="512"
+   min_val="16"
+   name="overlay_range"
+   tool_tip="How far from you or your camera the overlay is drawn"
+   top_pad="6"
+   width="276" />
+
+  <text
+   name="legend_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   width="292">
+    Legend
+  </text>
+  <scroll_list
+   name="legend"
+   follows="left|top|right|bottom"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   height="150"
+   width="292"
+   draw_heading="false"
+   draw_stripes="false"
+   can_sort="false"
+   column_padding="0">
+    <scroll_list.columns
+     name="what"
+     relative_width="1.0" />
+  </scroll_list>
+</floater>

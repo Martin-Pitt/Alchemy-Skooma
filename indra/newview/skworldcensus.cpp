@@ -610,8 +610,9 @@ std::string SKWorldCensus::statsLine() const
 
 void SKWorldCensus::renderDebug()
 {
+    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
     SKCensusSnapshotPtr snap = mSnapshot;
-    if (!snap)
+    if (!show || !snap)
     {
         return;
     }
