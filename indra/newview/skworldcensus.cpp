@@ -26,6 +26,9 @@
 
 #include "skworldcensus.h"
 
+#include "sknavoverlay.h"
+#include "sknavpalette.h"
+
 #include "llagent.h"
 #include "llappviewer.h"
 #include "llglslshader.h"
@@ -99,19 +102,6 @@ namespace
         {
             mn.mdV[i] = std::min(mn.mdV[i], p.mdV[i]);
             mx.mdV[i] = std::max(mx.mdV[i], p.mdV[i]);
-        }
-    }
-
-    void lineBox(const LLVector3& mn, const LLVector3& mx)
-    {
-        const LLVector3 c[8] = {
-            { mn[0], mn[1], mn[2] }, { mx[0], mn[1], mn[2] }, { mx[0], mx[1], mn[2] }, { mn[0], mx[1], mn[2] },
-            { mn[0], mn[1], mx[2] }, { mx[0], mn[1], mx[2] }, { mx[0], mx[1], mx[2] }, { mn[0], mx[1], mx[2] },
-        };
-        static const S32 e[24] = { 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7 };
-        for (S32 i = 0; i < 24; ++i)
-        {
-            gGL.vertex3fv(c[e[i]].mV);
         }
     }
 }
@@ -626,39 +616,45 @@ void SKWorldCensus::renderDebug()
         return;
     }
 
-    gGL.flush();
-    gDebugProgram.bind();
-    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-    LLGLEnable blend(GL_BLEND);
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-    gGL.getTextureSlot(0)->unbind();
-
-    // gDebugProgram takes its colour as a uniform, so each colour is its own batch.
+    SKNavOverlayGeom geom;
     for (const RecordPtr& r : snap->mRecords)
     {
-        switch (r->mProvenance)
-        {
-            case Provenance::EXACT: gGL.diffuseColor4f(0.2f, 1.f, 0.2f, 0.6f); break;
-            case Provenance::HULL: gGL.diffuseColor4f(0.2f, 0.6f, 1.f, 0.6f); break;
-            case Provenance::BOX: gGL.diffuseColor4f(1.f, 0.2f, 0.2f, 0.8f); break;
-            case Provenance::RENDER: gGL.diffuseColor4f(1.f, 0.6f, 0.2f, 0.6f); break;
-        }
+        SKNavSwatch swatch = SKNavSwatch::SHAPE_BOX;
         if (r->mDynamic)
         {
-            gGL.diffuseColor4f(1.f, 1.f, 0.2f, 0.8f);
+            swatch = SKNavSwatch::SHAPE_DYNAMIC;
         }
-        gGL.begin(LLRender::LINES);
-        lineBox(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax));
-        gGL.end();
+        else
+        {
+            switch (r->mProvenance)
+            {
+                case Provenance::EXACT: swatch = SKNavSwatch::SHAPE_EXACT; break;
+                case Provenance::HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
+                case Provenance::BOX: swatch = SKNavSwatch::SHAPE_BOX; break;
+                case Provenance::RENDER: swatch = SKNavSwatch::SHAPE_RENDER; break;
+            }
+        }
+        geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), skNavSwatchColor(swatch));
     }
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
+        // A colour per structure, from its id, so the same structure keeps it
+        // between scans.
         const U32 h = static_cast<U32>(mix(SEED, c->mId.mData[0] | (c->mId.mData[1] << 8) | (c->mId.mData[2] << 16)));
-        gGL.diffuseColor4f(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f), 0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
-        gGL.begin(LLRender::LINES);
-        lineBox(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax));
-        gGL.end();
+        const LLColor4 color(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
+                             0.3f + 0.7f * (((h >> 16) & 255) / 255.f), skNavSwatchColor(SKNavSwatch::CLUSTER).mV[VALPHA]);
+        geom.box(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax), color);
     }
-    gGL.flush();
-    gDebugProgram.unbind();
+    if (geom.empty())
+    {
+        return;
+    }
+
+    SKNavOverlayGeom::bindShader();
+    {
+        LLGLEnable blend(GL_BLEND);
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        geom.draw();
+    }
+    SKNavOverlayGeom::unbindShader();
 }
