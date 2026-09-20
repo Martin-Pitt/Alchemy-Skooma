@@ -39,6 +39,14 @@ void SKNavOverlayGeom::line(const LLVector3& a, const LLVector3& b, const LLColo
     mLineColors.push_back(color);
 }
 
+void SKNavOverlayGeom::edge(const LLVector3& a, const LLVector3& b, const LLColor4& color)
+{
+    mEdgeVerts.push_back(a);
+    mEdgeVerts.push_back(b);
+    mEdgeColors.push_back(color);
+    mEdgeColors.push_back(color);
+}
+
 void SKNavOverlayGeom::tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color)
 {
     mTriVerts.push_back(a);
@@ -72,6 +80,8 @@ void SKNavOverlayGeom::clear()
     mTriColors.clear();
     mLineVerts.clear();
     mLineColors.clear();
+    mEdgeVerts.clear();
+    mEdgeColors.clear();
 }
 
 void SKNavOverlayGeom::bindShader()
@@ -89,7 +99,7 @@ void SKNavOverlayGeom::unbindShader()
     gUIProgram.unbind();
 }
 
-void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
+void SKNavOverlayGeom::draw(F32 width, F32 shade, F32 alpha) const
 {
     auto emit = [&](const std::vector<LLVector3>& verts, const std::vector<LLColor4>& colors, U32 mode) {
         if (verts.empty())
@@ -107,5 +117,11 @@ void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
         gGL.flush();
     };
     emit(mTriVerts, mTriColors, LLRender::TRIANGLES);
+    // The driver has the last word on width: LLRender clamps to the aliased
+    // line range, which is [1, 1] on some of them.
+    gGL.setLineWidth(width);
+    emit(mEdgeVerts, mEdgeColors, LLRender::LINES);
+    gGL.setLineWidth(llmax(1.f, width - 1.f));
     emit(mLineVerts, mLineColors, LLRender::LINES);
+    gGL.setLineWidth(1.f);
 }

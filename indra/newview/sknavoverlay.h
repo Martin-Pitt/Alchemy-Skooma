@@ -44,16 +44,21 @@ class SKNavOverlayGeom
 {
 public:
     void line(const LLVector3& a, const LLVector3& b, const LLColor4& color);
+    /// An edge of the walkable surface itself, drawn wider than the rest so
+    /// the shape of the mesh reads before its annotations do.
+    void edge(const LLVector3& a, const LLVector3& b, const LLColor4& color);
     void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color);
     /// The twelve edges of an axis-aligned box.
     void box(const LLVector3& min, const LLVector3& max, const LLColor4& color);
 
-    bool empty() const { return mTriVerts.empty() && mLineVerts.empty(); }
+    bool empty() const { return mTriVerts.empty() && mLineVerts.empty() && mEdgeVerts.empty(); }
     void clear();
 
-    /// Draw what was gathered: fills first, then lines. `shade` darkens the
-    /// colours (the x-ray pass, seen through geometry) and `alpha` scales them.
-    void draw(F32 shade = 1.f, F32 alpha = 1.f) const;
+    /// Draw what was gathered: fills, then edges, then the thinner lines over
+    /// them. `shade` darkens the colours (the x-ray pass, seen through
+    /// geometry) and `alpha` scales them; `width` is the edge width in pixels,
+    /// and everything else is drawn a pixel thinner.
+    void draw(F32 width, F32 shade = 1.f, F32 alpha = 1.f) const;
 
     /// Bind `gUIProgram` against a white texture with alpha blending, which is
     /// what `draw()` expects. Colour is per vertex, so one bind covers the lot.
@@ -65,6 +70,8 @@ private:
     std::vector<LLColor4>  mTriColors;
     std::vector<LLVector3> mLineVerts;
     std::vector<LLColor4>  mLineColors;
+    std::vector<LLVector3> mEdgeVerts;
+    std::vector<LLColor4>  mEdgeColors;
 };
 
 #endif // SK_NAVOVERLAY_H

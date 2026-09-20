@@ -1090,7 +1090,7 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
-    static LLCachedControl<bool> solid(gSavedSettings, "SKNavOverlaySolid", true);
+    static LLCachedControl<F32> edge_width(gSavedSettings, "SKNavOverlayEdgeWidth", 3.f);
     static LLCachedControl<bool> xray(gSavedSettings, "SKNavOverlayXRay", false);
     static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
     static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
@@ -1100,7 +1100,11 @@ void SKNavMesh::renderDebug()
     // arbitrary polygon on it, so the lines land far from the stairs.
     static LLCachedControl<bool> show_connectors(gSavedSettings, "SKNavOverlayConnectors", false);
 
-    const S32 cls = static_cast<S32>(AgentClass::AVATAR);
+    // Which class the overlay shows. WEATHER is only there to look at when
+    // it is being built (SKNavBuildWeather); the console says so.
+    static LLCachedControl<U32> which(gSavedSettings, "SKNavOverlayClass", 0);
+    const S32 cls = llclamp(static_cast<S32>(which), 0, NUM_CLASSES - 1);
+    const AgentClass agent_class = static_cast<AgentClass>(cls);
     // The mesh is built around the agent, but the overlay is read by camming
     // about, so anything near either one is drawn.
     const LLVector3d agent = gAgent.getPositionGlobal();
@@ -1118,6 +1122,9 @@ void SKNavMesh::renderDebug()
         color.mV[VALPHA] = opaque ? 1.f : color.mV[VALPHA] * scale;
         return color;
     };
+    // Over the world the surface is only slightly transparent: enough to see
+    // what it is lying on, not so much that it stops reading as a surface.
+    const F32 FILL = 0.65f;
 
     SKNavOverlayGeom geom;
     for (const auto& entry : mMeshes)
@@ -1192,7 +1199,7 @@ void SKNavMesh::renderDebug()
                         default: color = skNavSwatchColor(SKNavSwatch::LEVEL); break;
                     }
                 }
-                const LLColor4 fill = strength(color, 0.35f);
+                const LLColor4 fill = strength(color, FILL);
                 const LLColor4 edge = strength(color, 1.f);
                 if (show_links)
                 {
@@ -1232,22 +1239,17 @@ void SKNavMesh::renderDebug()
                                                                 : &tile->detailVerts[(detail.vertBase + tri[k] - poly.vertCount) * 3];
                         v[k] = originAgent + fromRecast(rc);
                     }
-                    if (solid)
-                    {
-                        const LLVector3 lift(0.f, 0.f, 0.04f);
-                        geom.tri(v[0] + lift, v[1] + lift, v[2] + lift, fill);
-                    }
-                    // Filled, the polygon outline is enough and the detail
-                    // triangles under it are only noise; as a wireframe those
-                    // triangles are the whole drawing.
+                    const LLVector3 fill_lift(0.f, 0.f, 0.04f);
+                    geom.tri(v[0] + fill_lift, v[1] + fill_lift, v[2] + fill_lift, fill);
+                    // Only the polygon outline: the detail triangles under it
+                    // are the same surface and add nothing but noise.
                     const LLVector3 lift(0.f, 0.f, 0.06f);
                     for (int k = 0; k < 3; ++k)
                     {
-                        if (solid && !(dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY))
+                        if (dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
                         {
-                            continue;
+                            geom.edge(v[k] + lift, v[(k + 1) % 3] + lift, edge);
                         }
-                        geom.line(v[k] + lift, v[(k + 1) % 3] + lift, edge);
                     }
                 }
             }
@@ -1270,7 +1272,7 @@ void SKNavMesh::renderDebug()
             qmin.mdV[axis] = llmin(agent.mdV[axis], camera.mdV[axis]) - reach;
             qmax.mdV[axis] = llmax(agent.mdV[axis], camera.mdV[axis]) + reach;
         }
-        segmentsIn(qmin, qmax, AgentClass::AVATAR, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
+        segmentsIn(qmin, qmax, agent_class, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
             if (!within(a))
             {
                 return;
@@ -1302,7 +1304,7 @@ void SKNavMesh::renderDebug()
             }
         });
         const LLColor4 drop = strength(skNavSwatchColor(SKNavSwatch::DROP), 1.f);
-        linksIn(qmin, qmax, AgentClass::AVATAR, [&](const LLVector3d& from, const LLVector3d& to, F32) {
+        linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32) {
             if (within(from))
             {
                 geom.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
@@ -1312,14 +1314,39 @@ void SKNavMesh::renderDebug()
 
     if (opaque)
     {
-        // As the stock pathfinding console does: wipe the frame, so that what
-        // is left is the navmesh and nothing else.
-        const LLColor4 clear = gSavedSettings.getColor4("PathfindingNavMeshClear");
-        gGL.flush();
-        gGL.setColorMask(true, true);
-        glClearColor(clear.mV[VRED], clear.mV[VGREEN], clear.mV[VBLUE], 0.f);
-        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-        gGL.setColorMask(true, false);
+        // Lay the backdrop over the world rather than clearing to it. Wiping
+        // the frame takes the buildings with it, and the mesh is a great deal
+        // easier to read against the shapes it was built from; the colour's
+        // own alpha says how much of them is left.
+        const LLColor4 backdrop = gSavedSettings.getColor4("SKNavOverlayBackdrop");
+        SKNavOverlayGeom::bindShader();
+        {
+            LLGLEnable blend(GL_BLEND);
+            LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+            gGL.matrixMode(LLRender::MM_PROJECTION);
+            gGL.pushMatrix();
+            gGL.loadIdentity();
+            gGL.matrixMode(LLRender::MM_MODELVIEW);
+            gGL.pushMatrix();
+            gGL.loadIdentity();
+            gGL.begin(LLRender::TRIANGLES);
+            static const F32 CORNERS[6][2] = { { -1.f, -1.f }, { 1.f, -1.f }, { 1.f, 1.f },
+                                               { -1.f, -1.f }, { 1.f, 1.f }, { -1.f, 1.f } };
+            for (const auto& corner : CORNERS)
+            {
+                gGL.color4fv(backdrop.mV);
+                gGL.vertex3f(corner[0], corner[1], 0.f);
+            }
+            gGL.end();
+            gGL.flush();
+            gGL.popMatrix();
+            gGL.matrixMode(LLRender::MM_PROJECTION);
+            gGL.popMatrix();
+            gGL.matrixMode(LLRender::MM_MODELVIEW);
+        }
+        SKNavOverlayGeom::unbindShader();
+        // The world's depth goes with it, so the mesh sorts against itself.
+        glClear(GL_DEPTH_BUFFER_BIT);
     }
     if (geom.empty())
     {
@@ -1330,19 +1357,18 @@ void SKNavMesh::renderDebug()
     {
         LLGLEnable blend(GL_BLEND);
         LLGLDisable cull(GL_CULL_FACE);
-        gGL.setLineWidth(2.f);
+        const F32 width = llclamp(static_cast<F32>(edge_width), 1.f, 8.f);
         {
             LLGLDepthTest depth(GL_TRUE, opaque ? GL_TRUE : GL_FALSE);
-            geom.draw();
+            geom.draw(width);
         }
         if (xray && !opaque)
         {
             // What is behind geometry, darker and fainter, so it reads as being
             // seen through the wall rather than in front of it.
             LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
-            geom.draw(0.55f, 0.45f);
+            geom.draw(width, 0.55f, 0.45f);
         }
-        gGL.setLineWidth(1.f);
     }
     SKNavOverlayGeom::unbindShader();
 }

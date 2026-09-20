@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="480"
+ min_height="560"
  min_width="300"
- height="620"
+ height="720"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -16,6 +16,7 @@
  width="320">
   <floater.string name="census_none">The census has not run yet.</floater.string>
   <floater.string name="mesh_none">Nothing built yet.</floater.string>
+  <floater.string name="weather_off">The weather class is not being built; turn it on below to see it.</floater.string>
   <floater.string name="overlay_off">The overlay is off; nothing below draws until you turn it on.</floater.string>
 
   <!-- One per swatch in sknavpalette.h, keyed by its name there. -->
@@ -98,15 +99,29 @@
    tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh"
    top_pad="10"
    width="292" />
+  <combo_box
+   control_name="SKNavOverlayClass"
+   follows="left|top"
+   height="20"
+   label="Class"
+   layout="topleft"
+   left="28"
+   name="overlay_class"
+   tool_tip="Avatar: what you can walk on. Weather: the surfaces snow, rain and puddles settle on, which is a much lower agent and needs building first"
+   top_pad="6"
+   width="276">
+    <combo_box.item label="Avatar class" value="0" name="class_avatar" />
+    <combo_box.item label="Weather class" value="1" name="class_weather" />
+  </combo_box>
   <check_box
    height="19"
-   label="Filled surface"
+   label="Build the weather class"
    layout="topleft"
    follows="left|top"
    left="28"
-   name="show_solid"
-   control_name="SKNavOverlaySolid"
-   tool_tip="Fill the polygons and outline them. Off draws the detail triangles as a wireframe"
+   name="build_weather"
+   control_name="SKNavBuildWeather"
+   tool_tip="Build the weather class as well as the avatar one. Nothing draws for it until this is on"
    top_pad="4"
    width="276" />
   <check_box
@@ -185,6 +200,23 @@
    control_name="SKNavOverlayWorld"
    tool_tip="Off wipes the frame, leaving the navmesh on its own"
    top_pad="4"
+   width="276" />
+  <slider
+   control_name="SKNavOverlayEdgeWidth"
+   decimal_digits="0"
+   follows="left|top"
+   height="20"
+   increment="1"
+   initial_value="3"
+   label="Edge width"
+   label_width="80"
+   layout="topleft"
+   left="28"
+   max_val="8"
+   min_val="1"
+   name="overlay_edge_width"
+   tool_tip="How wide the edges of the walkable surface are drawn. Some drivers refuse anything above one pixel"
+   top_pad="6"
    width="276" />
   <slider
    control_name="SKNavOverlayRange"

@@ -30,6 +30,7 @@
 #include "llscrolllistctrl.h"
 #include "llscrolllistitem.h"
 #include "lluictrl.h"
+#include "llviewercontrol.h"
 #include "pipeline.h"
 #include "sknavmesh.h"
 #include "sknavpalette.h"
@@ -89,7 +90,16 @@ void SKFloaterNavMesh::draw()
         // rather than the other way about.
         const bool on = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
         getChild<LLUICtrl>("overlay_on")->setValue(on);
-        getChild<LLUICtrl>("mesh_status")->setValue(on ? SKNavMesh::instance().statsLine() : getString("overlay_off"));
+        std::string mesh_line = getString("overlay_off");
+        if (on)
+        {
+            // Asking for a class nothing is building shows an empty world and
+            // no reason for it.
+            const bool weather = gSavedSettings.getU32("SKNavOverlayClass") == 1;
+            mesh_line = (weather && !gSavedSettings.getBOOL("SKNavBuildWeather")) ? getString("weather_off")
+                                                                                  : SKNavMesh::instance().statsLine();
+        }
+        getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
     }
     LLFloater::draw();

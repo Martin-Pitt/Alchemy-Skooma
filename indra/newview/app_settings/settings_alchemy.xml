@@ -3752,6 +3752,44 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKNavOverlayEdgeWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>How wide the navmesh overlay draws the edges of the walkable surface, in pixels.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKNavOverlayBackdrop</key>
+        <map>
+            <key>Comment</key>
+            <string>What the navmesh overlay lays over the world when the world is switched off; its alpha is how much of the world still shows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Color4</string>
+            <key>Value</key>
+            <array>
+                <real>0.05</real>
+                <real>0.06</real>
+                <real>0.08</real>
+                <real>0.88</real>
+            </array>
+        </map>
+        <key>SKNavOverlayClass</key>
+        <map>
+            <key>Comment</key>
+            <string>Which agent class the navmesh overlay draws: 0 avatar, 1 weather.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavOverlayConnectors</key>
         <map>
             <key>Comment</key>
@@ -3767,17 +3805,6 @@
         <map>
             <key>Comment</key>
             <string>Colour tile-boundary edges in the navmesh overlay by whether Detour joined them.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
-        <key>SKNavOverlaySolid</key>
-        <map>
-            <key>Comment</key>
-            <string>Fill the navmesh overlay&apos;s polygons instead of drawing them as a wireframe.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
