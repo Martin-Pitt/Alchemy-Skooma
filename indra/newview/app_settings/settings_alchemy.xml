@@ -3856,6 +3856,17 @@
             <key>Value</key>
             <real>256.0</real>
         </map>
+        <key>SKNavWeatherRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius of the weather class, in metres. Never less than one cell: at zero Recast skips erosion and leaves slivers.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.125</real>
+        </map>
         <key>SKNavGroundedMargin</key>
         <map>
             <key>Comment</key>
