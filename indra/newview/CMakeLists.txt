@@ -897,7 +897,6 @@ if(AL_BUILD_VIEWER)
     rlvactions.cpp
     rlvenvironment.cpp
     skphysicsshape.cpp
-    sknavbuild.cpp
     sknavmesh.cpp
     skworldcensus.cpp
     rlvcommon.cpp
@@ -1683,7 +1682,6 @@ if(AL_BUILD_VIEWER)
     rlvactions.h
     rlvcommon.h
     skphysicsshape.h
-    sknavbuild.h
     sknavmesh.h
     skworldcensus.h
     rlvdefines.h
@@ -2387,8 +2385,6 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
-  # The tile build is pure: records and terrain in, Detour tile data out.
-  al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast)
   al_add_test(
     llslurl
     PROJECT ${test_project}
