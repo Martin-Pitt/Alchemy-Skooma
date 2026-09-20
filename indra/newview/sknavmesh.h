@@ -65,9 +65,9 @@ public:
     /// The storeys of the structure under a position, and the ways off the
     /// one the position is on. Points are global.
     typedef std::function<void(const LLVector3d& low, const LLVector3d& high, sknav::ConnectorKind kind, bool one_way)> ConnectorFn;
-    void connectorsOf(const LLUUID& mesh_id, U16 level, const ConnectorFn& fn) const;
+    void connectorsOf(const LLUUID& mesh_id, sknav::AgentClass cls, U16 level, const ConnectorFn& fn) const;
     /// The height of a storey of a structure, for the map's floor window.
-    bool levelHeight(const LLUUID& mesh_id, U16 level, F32& z_out) const;
+    bool levelHeight(const LLUUID& mesh_id, sknav::AgentClass cls, U16 level, F32& z_out) const;
 
     /// A path within one mesh (the one under a). Points are global; partial
     /// when b was not reachable and the path ends at the closest point found.
@@ -142,6 +142,7 @@ private:
         /// once the structure has been quiet for a moment.
         std::shared_ptr<const sknav::Levels> mLevels[sknav::NUM_CLASSES];
         F32 mPublishedAt = -1.f;
+        F32 mRelabelledAt = -1.f;
         bool mLevelsStale = true;
         F32 mLastSeen = 0.f;
         ~Mesh();

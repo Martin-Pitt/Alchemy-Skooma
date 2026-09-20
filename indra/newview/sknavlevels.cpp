@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <set>
 
 namespace
 {
@@ -45,7 +46,8 @@ namespace
         LLVector3 mCentre;      // mesh-local SL
         LLVector3 mMin;
         LLVector3 mMax;
-        bool mFlat = false;
+        bool mFlat = false;     // floor: level, or gentle enough to walk as floor
+        bool mLevelled = false; // flat outright, so it may start a storey
         U16 mLevel = Levels::NO_LEVEL;
         S32 mRun = -1;          // index of the sloped/transitional run it belongs to
     };
@@ -86,7 +88,8 @@ namespace
                 p.mCentre = sum / static_cast<F32>(poly.vertCount);
                 const F32 rise = p.mMax.mV[VZ] - p.mMin.mV[VZ];
                 const F32 run = std::max(p.mMax.mV[VX] - p.mMin.mV[VX], p.mMax.mV[VY] - p.mMin.mV[VY]);
-                p.mFlat = rise <= params.mStepTolerance || rise <= params.mFlatGradient * run;
+                p.mLevelled = rise <= params.mStepTolerance;
+                p.mFlat = p.mLevelled || rise <= params.mFlatGradient * run;
                 index[p.mRef] = static_cast<S32>(out.size());
                 out.push_back(p);
             }
@@ -148,16 +151,20 @@ namespace sknav
             order[i] = static_cast<S32>(i);
         }
         std::sort(order.begin(), order.end(), [&](S32 a, S32 b) {
+            const LLVector3& p = polys[a].mMin;
+            const LLVector3& q = polys[b].mMin;
             if (polys[a].mCentre.mV[VZ] != polys[b].mCentre.mV[VZ])
             {
                 return polys[a].mCentre.mV[VZ] < polys[b].mCentre.mV[VZ];
             }
-            return polys[a].mRef < polys[b].mRef;
+            if (p.mV[VX] != q.mV[VX]) return p.mV[VX] < q.mV[VX];
+            if (p.mV[VY] != q.mV[VY]) return p.mV[VY] < q.mV[VY];
+            return p.mV[VZ] < q.mV[VZ];
         });
 
         for (S32 seed : order)
         {
-            if (!polys[seed].mFlat || polys[seed].mLevel != Levels::NO_LEVEL)
+            if (!polys[seed].mLevelled || polys[seed].mLevel != Levels::NO_LEVEL)
             {
                 continue;
             }
@@ -209,6 +216,9 @@ namespace sknav
             const U16 level = polys[i].mLevel;
             return level == Levels::NO_LEVEL || out.mLevels[level].mTransitional;
         };
+        // One connector per pair of storeys, however many ways there are
+        // between them: the map wants an arrow, not one per staircase.
+        std::set<std::pair<U16, U16>> pairs;
         S32 runs = 0;
         for (size_t start = 0; start < polys.size(); ++start)
         {
@@ -236,9 +246,10 @@ namespace sknav
                 }
             }
 
-            // Which real storeys this run touches, and where.
-            S32 low = -1, high = -1;
-            LLVector3 low_point, high_point;
+            // Every storey this run touches, and where it touches it. A
+            // stairwell passing three floors joins each to the next, not just
+            // the bottom to the top.
+            std::vector<std::pair<U16, LLVector3>> touched;
             for (S32 m : members)
             {
                 neighbours(nav, index, polys[m].mRef, nei);
@@ -249,33 +260,36 @@ namespace sknav
                     {
                         continue;
                     }
-                    if (low < 0 || out.mLevels[level].mZ < out.mLevels[low].mZ)
+                    if (std::none_of(touched.begin(), touched.end(), [&](const auto& t) { return t.first == level; }))
                     {
-                        low = level;
-                        low_point = polys[n].mCentre;
-                    }
-                    if (high < 0 || out.mLevels[level].mZ > out.mLevels[high].mZ)
-                    {
-                        high = level;
-                        high_point = polys[n].mCentre;
+                        touched.emplace_back(level, polys[n].mCentre);
                     }
                 }
             }
-            if (low >= 0 && high >= 0 && low != high)
+            std::sort(touched.begin(), touched.end(), [&](const auto& a, const auto& b) {
+                return out.mLevels[a.first].mZ < out.mLevels[b.first].mZ;
+            });
+            for (size_t i = 1; i < touched.size(); ++i)
             {
                 Connector c;
-                c.mLow = static_cast<U16>(low);
-                c.mHigh = static_cast<U16>(high);
-                c.mLowPoint = low_point;
-                c.mHighPoint = high_point;
+                c.mLow = touched[i - 1].first;
+                c.mHigh = touched[i].first;
+                c.mLowPoint = touched[i - 1].second;
+                c.mHighPoint = touched[i].second;
                 c.mKind = ConnectorKind::CLIMB;
-                out.mConnectors.push_back(c);
+                if (pairs.insert({ c.mLow, c.mHigh }).second)
+                {
+                    out.mConnectors.push_back(c);
+                }
             }
         }
 
         // A drop is a connector too, but only downward.
         const F32 extents[3] = { 1.f, 2.f, 1.f };
         dtQueryFilter filter;
+        // A drop link's own off-mesh polygon sits right where its ends are;
+        // looking for the floor there must not find it.
+        filter.setExcludeFlags(static_cast<unsigned short>(1u << AREA_DROP));
         auto levelAt = [&](const LLVector3& point) -> U16 {
             F32 centre[3], nearest[3];
             toRecast(point, centre);
@@ -299,14 +313,9 @@ namespace sknav
             {
                 continue;
             }
-            // One per pair of storeys: a ledge makes a link every couple of
-            // metres and the map wants one arrow, not thirty.
-            const bool known = std::any_of(out.mConnectors.begin(), out.mConnectors.end(), [&](const Connector& c) {
-                return c.mKind == ConnectorKind::DROP && c.mHigh == from && c.mLow == to;
-            });
-            if (known)
+            if (!pairs.insert({ to, from }).second)
             {
-                continue;
+                continue;   // a ledge makes a link every couple of metres
             }
             Connector c;
             c.mHigh = from;

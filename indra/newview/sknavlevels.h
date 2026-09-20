@@ -69,7 +69,11 @@ namespace sknav
 
     struct LevelParams
     {
-        F32 mStepTolerance = 0.3f;  ///< a polygon that rises less than this is floor whatever its size
+        /// A polygon that rises less than this is floor whatever its size, and
+        /// only such a polygon can start a storey: a gentle ramp is walkable
+        /// like a floor but is not one, and letting it seed would make a
+        /// storey of every band's worth of its climb.
+        F32 mStepTolerance = 0.3f;
         /// Rise over run above which a polygon is a way up rather than floor.
         /// Absolute rise alone will not do: where a floor meets the bottom
         /// step of a staircase Recast makes one broad polygon that rises the
@@ -78,8 +82,10 @@ namespace sknav
         F32 mBand = 0.75f;          ///< how far in z a storey reaches from where it started
         /// Square metres of footprint below which a storey is only a landing.
         /// Counted as the bounding box, not the polygons: Recast merges a flat
-        /// floor into a handful of them, so their number says nothing.
-        F32 mMinArea = 9.f;
+        /// floor into a handful of them, so their number says nothing. A room
+        /// four metres across is the smallest thing called a storey, which
+        /// also catches the level patch a ramp leaves where its slope eases.
+        F32 mMinArea = 16.f;
     };
 
     /// The storeys of one structure, and which storey each polygon is on.

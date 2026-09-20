@@ -364,6 +364,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
         {
             if (wanted.count(old.first) == 0 && old.second.mBuilt)
             {
+                mesh->mLevelsStale = true;
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
                     if (mesh->mNav[cls])
@@ -566,16 +567,15 @@ void SKNavMesh::relabel()
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavBuildLevels", true);
     static LLCachedControl<F32> settle(gSavedSettings, "SKNavLevelSettleSeconds", 0.25f);
     static LLCachedControl<F32> band(gSavedSettings, "SKNavLevelBand", 0.75f);
-    static LLCachedControl<F32> minArea(gSavedSettings, "SKNavLevelMinArea", 9.f);
+    static LLCachedControl<F32> minArea(gSavedSettings, "SKNavLevelMinArea", 16.f);
     if (!enabled)
     {
         return;
     }
     // One structure a frame, the nearest first: the walk is cheap but a mall
     // is not, and nothing needs its storeys the instant a tile lands.
-    const LLVector3d agent = gAgent.getPositionGlobal();
     Mesh* pick = nullptr;
-    F64 best = 0.0;
+    F32 oldest = 0.f;
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -583,11 +583,11 @@ void SKNavMesh::relabel()
         {
             continue;
         }
-        const F64 distance = dist_vec_squared(mesh.mOrigin, agent);
-        if (!pick || distance < best)
+        const F32 waited = gFrameTimeSeconds - mesh.mRelabelledAt;
+        if (!pick || waited > oldest)
         {
             pick = &mesh;
-            best = distance;
+            oldest = waited;
         }
     }
     if (!pick)
@@ -595,6 +595,7 @@ void SKNavMesh::relabel()
         return;
     }
     pick->mLevelsStale = false;
+    pick->mRelabelledAt = gFrameTimeSeconds;
 
     LevelParams params;
     params.mBand = band;
@@ -883,15 +884,21 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
     return !out.empty();
 }
 
-void SKNavMesh::connectorsOf(const LLUUID& mesh_id, U16 level, const ConnectorFn& fn) const
+void SKNavMesh::connectorsOf(const LLUUID& mesh_id, AgentClass cls, U16 level, const ConnectorFn& fn) const
 {
     const auto it = mMeshes.find(mesh_id);
-    if (it == mMeshes.end() || !it->second->mLevels[0])
+    if (it == mMeshes.end())
     {
         return;
     }
     const Mesh& mesh = *it->second;
-    for (const Connector& c : mesh.mLevels[0]->mConnectors)
+    // A copy, so relabelling cannot swap it out under the walk.
+    const std::shared_ptr<const Levels> levels = mesh.mLevels[static_cast<S32>(cls)];
+    if (!levels)
+    {
+        return;
+    }
+    for (const Connector& c : levels->mConnectors)
     {
         if (c.mLow != level && c.mHigh != level)
         {
@@ -901,14 +908,19 @@ void SKNavMesh::connectorsOf(const LLUUID& mesh_id, U16 level, const ConnectorFn
     }
 }
 
-bool SKNavMesh::levelHeight(const LLUUID& mesh_id, U16 level, F32& z_out) const
+bool SKNavMesh::levelHeight(const LLUUID& mesh_id, AgentClass cls, U16 level, F32& z_out) const
 {
     const auto it = mMeshes.find(mesh_id);
-    if (it == mMeshes.end() || !it->second->mLevels[0] || level >= it->second->mLevels[0]->mLevels.size())
+    if (it == mMeshes.end())
     {
         return false;
     }
-    z_out = it->second->mLevels[0]->mLevels[level].mZ + static_cast<F32>(it->second->mOrigin.mdV[VZ]);
+    const std::shared_ptr<const Levels> levels = it->second->mLevels[static_cast<S32>(cls)];
+    if (!levels || level >= levels->mLevels.size())
+    {
+        return false;
+    }
+    z_out = levels->mLevels[level].mZ + static_cast<F32>(it->second->mOrigin.mdV[VZ]);
     return true;
 }
 
@@ -1055,7 +1067,7 @@ void SKNavMesh::renderDebug()
         {
             continue;
         }
-        const Levels* levels = mesh.mLevels[cls].get();
+        const std::shared_ptr<const Levels> levels = mesh.mLevels[cls];
         if (levels)
         {
             // The ways off each storey, drawn from the low end to the high one.
@@ -1172,7 +1184,6 @@ void SKNavMesh::renderDebug()
         const F32 eye = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 1.8f;
         const LLVector3d box(range, range, range);
         gGL.setLineWidth(2.f);
-        gGL.begin(LLRender::LINES);
         segmentsIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& a, const LLVector3d& b, EdgeKind kind, F32 value) {
             switch (kind)
             {
@@ -1190,6 +1201,8 @@ void SKNavMesh::renderDebug()
             }
             const LLVector3 pa = gAgent.getPosAgentFromGlobal(a) + LLVector3(0.f, 0.f, 0.08f);
             const LLVector3 pb = gAgent.getPosAgentFromGlobal(b) + LLVector3(0.f, 0.f, 0.08f);
+            // One batch per line: the colour is a uniform, not per vertex.
+            gGL.begin(LLRender::LINES);
             gGL.vertex3fv(pa.mV);
             gGL.vertex3fv(pb.mV);
             // A wall is drawn again at its own height, so how tall it is shows.
@@ -1199,8 +1212,10 @@ void SKNavMesh::renderDebug()
                 gGL.vertex3fv((pa + up).mV);
                 gGL.vertex3fv((pb + up).mV);
             }
+            gGL.end();
         });
         gGL.diffuseColor4f(0.2f, 1.f, 1.f, 0.9f);
+        gGL.begin(LLRender::LINES);
         linksIn(agent - box, agent + box, AgentClass::AVATAR, [&](const LLVector3d& from, const LLVector3d& to, F32) {
             const LLVector3 pf = gAgent.getPosAgentFromGlobal(from) + LLVector3(0.f, 0.f, 0.08f);
             const LLVector3 pt = gAgent.getPosAgentFromGlobal(to) + LLVector3(0.f, 0.f, 0.08f);

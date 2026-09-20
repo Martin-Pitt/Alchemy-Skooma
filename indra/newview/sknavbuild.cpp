@@ -163,6 +163,12 @@ namespace
     /// headroom, and the navmesh offers a storey inside every solid object.
     /// A convex body is exactly the span between its lowest and highest
     /// surface in each column, so fill that in and the inside is gone.
+    ///
+    /// A column counts as covered when the body's surface passes over its
+    /// centre. A body too narrow to cover any centre is therefore not filled,
+    /// which costs nothing: such a body has no interior column to be hollow,
+    /// and the side faces that rasterise across its cells already make it
+    /// solid there.
     void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
     {
         if (tri_end <= tri_begin)
@@ -243,13 +249,21 @@ namespace
                 {
                     continue;
                 }
-                const S32 smin = static_cast<S32>(std::floor((bottom - hf.bmin[1]) / hf.ch));
-                const S32 smax = static_cast<S32>(std::ceil((top - hf.bmin[1]) / hf.ch));
+                // Spans are cell counts in an unsigned short and Recast caps
+                // them; a megaprim reaching a kilometre would otherwise wrap.
+                S32 smin = static_cast<S32>(std::floor((bottom - hf.bmin[1]) / hf.ch));
+                S32 smax = static_cast<S32>(std::ceil((top - hf.bmin[1]) / hf.ch));
+                smin = llclamp(smin, 0, RC_SPAN_MAX_HEIGHT);
+                smax = llclamp(smax, 0, RC_SPAN_MAX_HEIGHT);
+                if (smax <= smin)
+                {
+                    continue;
+                }
                 // The fill carries no area: it is the inside of something, never
                 // a floor. Merging keeps the surfaces' own area, so the body's
                 // roof stays walkable.
-                rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(std::max(0, smin)),
-                          static_cast<unsigned short>(std::max(smin + 1, smax)), RC_NULL_AREA, climb);
+                rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(smin),
+                          static_cast<unsigned short>(smax), RC_NULL_AREA, climb);
             }
         }
     }

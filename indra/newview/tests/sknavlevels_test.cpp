@@ -249,10 +249,25 @@ namespace tut
         ensure("a way up between them" + b.dump(), b.connectors(ConnectorKind::CLIMB) >= 1);
     }
 
+    // A ramp gentle enough to walk like a floor is still not a floor. Only a
+    // polygon that is level outright may start a storey, so a long shallow
+    // climb stays one way up rather than becoming a storey every band.
+    template<> template<>
+    void sknavlevels_object::test<5>()
+    {
+        TileBuildInput in = tile();
+        in.mRecords.push_back(box(2.f, 4.f, 0.f, 10.f, 20.f, 3.f));
+        in.mRecords.push_back(ramp(10.f, 8.f, 3.f, 30.f, 14.f, 0.f));   // 3 m over 20 m
+        const Built b(in);
+
+        ensure_equals("the ground and the platform, and nothing between" + b.dump(), b.real().size(), 2u);
+        ensure(llformat("a way up, got %d", b.connectors(ConnectorKind::CLIMB)), b.connectors(ConnectorKind::CLIMB) >= 1);
+    }
+
     // With no way up, the only way between the platform and the ground is off
     // the edge, and that is a one-way connector.
     template<> template<>
-    void sknavlevels_object::test<4>()
+    void sknavlevels_object::test<6>()
     {
         TileBuildInput in = tile();
         in.mRecords.push_back(box(8.f, 8.f, 0.f, 24.f, 24.f, 3.f));
