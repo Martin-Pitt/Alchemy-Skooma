@@ -899,6 +899,7 @@ if(AL_BUILD_VIEWER)
     sknavcluster.cpp
     skphysicsshape.cpp
     sknavbuild.cpp
+    sknavlevels.cpp
     sknavmesh.cpp
     sknavwalls.cpp
     skworldcensus.cpp
@@ -1688,6 +1689,7 @@ if(AL_BUILD_VIEWER)
     sknavtypes.h
     skphysicsshape.h
     sknavbuild.h
+    sknavlevels.h
     sknavmesh.h
     sknavwalls.h
     skworldcensus.h
@@ -2397,6 +2399,14 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavbuild UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavwalls.cpp)
   # Walls come off the same heightfield the tile build uses.
   al_add_test(sknavwalls UNIT PROJECT ${test_project} LIBRARIES ll::recast SOURCES sknavbuild.cpp)
+  # Storeys and their connectors are a read-only walk of a built mesh.
+  al_add_test(
+    sknavlevels
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES ll::recast
+    SOURCES sknavbuild.cpp sknavwalls.cpp
+  )
   al_add_test(
     llslurl
     PROJECT ${test_project}
