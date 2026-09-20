@@ -30,6 +30,7 @@
   <floater.string name="sk_nav_cover_full">Full cover — taller than your eye height</floater.string>
   <floater.string name="sk_nav_cover_half">Half cover — you can shoot over it</floater.string>
   <floater.string name="sk_nav_cover_low">Low wall — too low to take cover behind</floater.string>
+  <floater.string name="sk_nav_wall_face">Wall face — the vertical surface itself, full height</floater.string>
   <floater.string name="sk_nav_ledge">Ledge — a landable drop over this edge</floater.string>
   <floater.string name="sk_nav_overhang">Overhang — nothing below within reach</floater.string>
   <floater.string name="sk_nav_drop">Drop link — where a ledge lands</floater.string>
@@ -166,6 +167,17 @@
    name="show_walls"
    control_name="SKNavOverlayWalls"
    tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Wall faces"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_faces"
+   control_name="SKNavOverlayFaces"
+   tool_tip="The vertical surfaces at their full height, which is what Atmo reads. The cover segments above stop at four metres because that is all a cover class can mean"
    top_pad="4"
    width="276" />
   <check_box

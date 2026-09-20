@@ -42,6 +42,7 @@ enum class SKNavSwatch : S32
     COVER_FULL,     ///< wall taller than the reader's eye
     COVER_HALF,     ///< wall that can be shot over
     COVER_LOW,      ///< wall too low to take cover behind
+    WALL_FACE,      ///< the vertical surface itself, what Atmo paints and drains
     LEDGE,          ///< floor edge with a landable drop beyond it
     OVERHANG,       ///< floor edge with nothing below within reach
     DROP,           ///< where a ledge lands

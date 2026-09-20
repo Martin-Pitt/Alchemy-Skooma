@@ -1148,6 +1148,7 @@ void SKNavMesh::renderDebug()
     static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
     static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
+    static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
     // Off by default: the storey model joins a stairwell to a floor at an
     // arbitrary polygon on it, so the lines land far from the stairs.
@@ -1361,6 +1362,53 @@ void SKNavMesh::renderDebug()
                 geom.line(pa + up, pb + up, color);
             }
         });
+        if (show_faces)
+        {
+            // The vertical surfaces themselves, the whole exposed height of
+            // them. The cover segments above stop at four metres because that
+            // is all a cover class can mean; these do not.
+            const LLColor4 base = skNavSwatchColor(SKNavSwatch::WALL_FACE);
+            wallFacesIn(qmin, qmax, [&](const LLVector3d& fmin, const LLVector3d& fmax, U8 side, U8) {
+                if (!within((fmin + fmax) * 0.5))
+                {
+                    return;
+                }
+                const LLVector3 a = gAgent.getPosAgentFromGlobal(fmin), b = gAgent.getPosAgentFromGlobal(fmax);
+                // A face is a thin box; the thin axis is the one it faces along.
+                const LLVector3 size = b - a;
+                S32 thin = 0;
+                for (S32 k = 1; k < 3; ++k)
+                {
+                    thin = (size.mV[k] < size.mV[thin]) ? k : thin;
+                }
+                const S32 u = (thin + 1) % 3, v = (thin + 2) % 3;
+                LLVector3 corner[4];
+                for (S32 c = 0; c < 4; ++c)
+                {
+                    corner[c] = a;
+                    corner[c].mV[thin] = (a.mV[thin] + b.mV[thin]) * 0.5f;
+                    corner[c].mV[u] = (c == 1 || c == 2) ? b.mV[u] : a.mV[u];
+                    corner[c].mV[v] = (c >= 2) ? b.mV[v] : a.mV[v];
+                }
+                // Which way it faces, by brightness, so a corner reads as two
+                // surfaces rather than one.
+                LLColor4 color = base;
+                const F32 tint = 0.7f + 0.1f * static_cast<F32>(side & 3);
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    color.mV[k] *= tint;
+                }
+                geom.tri(corner[0], corner[1], corner[2], strength(color, 1.f));
+                geom.tri(corner[0], corner[2], corner[3], strength(color, 1.f));
+                LLColor4 line = color;
+                line.mV[VALPHA] = 0.9f;
+                for (S32 c = 0; c < 4; ++c)
+                {
+                    geom.line(corner[c], corner[(c + 1) % 4], strength(line, 1.f));
+                }
+            });
+        }
+
         const LLColor4 drop = strength(skNavSwatchColor(SKNavSwatch::DROP), 1.f);
         linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32) {
             if (within(from))

@@ -47,6 +47,7 @@ namespace
         { LLColor4(1.00f, 1.00f, 1.00f, 0.90f), "sk_nav_cover_full" },
         { LLColor4(1.00f, 0.80f, 0.20f, 0.90f), "sk_nav_cover_half" },
         { LLColor4(0.60f, 0.60f, 0.60f, 0.70f), "sk_nav_cover_low" },
+        { LLColor4(0.55f, 0.75f, 0.95f, 0.45f), "sk_nav_wall_face" },
         { LLColor4(1.00f, 0.30f, 0.30f, 0.90f), "sk_nav_ledge" },
         { LLColor4(0.70f, 0.30f, 1.00f, 0.80f), "sk_nav_overhang" },
         { LLColor4(0.20f, 1.00f, 1.00f, 0.90f), "sk_nav_drop" },

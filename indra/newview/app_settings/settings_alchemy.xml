@@ -3812,6 +3812,17 @@
             <key>Value</key>
             <real>6.0</real>
         </map>
+        <key>SKNavOverlayFaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the wall faces in the navmesh overlay: the vertical surfaces Atmo paints and drains, at their full height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavGroundedMargin</key>
         <map>
             <key>Comment</key>
