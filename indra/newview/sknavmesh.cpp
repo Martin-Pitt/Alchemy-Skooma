@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <set>
 
 namespace
@@ -1143,6 +1144,135 @@ bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass 
     return true;
 }
 
+std::string SKNavMesh::markUnderCamera()
+{
+    if (!gViewerWindow)
+    {
+        return "no window";
+    }
+    const LLRect& view = gViewerWindow->getWorldViewRectScaled();
+    LLVector4a intersection;
+    LLViewerObject* hit = gViewerWindow->cursorIntersect(view.getCenterX(), view.getCenterY(), 1024.f, nullptr, -1,
+                                                         true, false, true, true, nullptr, &intersection);
+    if (!hit)
+    {
+        mHasMark = false;
+        return "nothing under the camera within 1024 m";
+    }
+    const LLVector3 agent_pos(intersection.getF32ptr());
+    mMark = gAgent.getPosGlobalFromAgent(agent_pos);
+    mHasMark = true;
+
+    std::ostringstream out;
+    out << "\n--- navmesh dump at " << mMark << " ---\n";
+    if (LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(mMark))
+    {
+        out << "region " << region->getName() << " local " << LLVector3(mMark - region->getOriginGlobal()) << "\n";
+    }
+
+    LLViewerObject* root = hit;
+    while (!root->isRoot() && root->getParent())
+    {
+        root = static_cast<LLViewerObject*>(root->getParent());
+    }
+    out << "object " << hit->getID() << " root " << root->getID() << " scale " << hit->getScale()
+        << " physics type " << static_cast<S32>(hit->getPhysicsShapeType())
+        << (hit->isPhysicsShapeUnknown() ? " (not yet told)" : "")
+        << (root->flagPhantom() ? " phantom" : "") << (root->flagUsePhysics() ? " physical" : "")
+        << (root->flagObjectPermanent() ? " permanent" : "") << (root->isLocalOnly() ? " local" : "") << "\n";
+
+    // What the census made of everything around the mark.
+    const LLVector3d reach(4.0, 4.0, 4.0);
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        S32 shown = 0;
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (!overlapsXY(r->mMin, r->mMax, mMark - reach, mMark + reach) || mMark.mdV[VZ] + 4.0 < r->mMin.mdV[VZ] ||
+                mMark.mdV[VZ] - 4.0 > r->mMax.mdV[VZ])
+            {
+                continue;
+            }
+            if (++shown > 12)
+            {
+                out << "  ... and more\n";
+                break;
+            }
+            out << "  record root " << r->mRoot << " provenance " << static_cast<S32>(r->mProvenance) << " shape "
+                << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
+                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " z " << r->mMin.mdV[VZ] << ".."
+                << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+        }
+        if (!shown)
+        {
+            out << "  no census record within 4 m\n";
+        }
+        for (const ClusterPtr& c : snap->mClusters.mClusters)
+        {
+            if (overlapsXY(c->mMin, c->mMax, mMark - reach, mMark + reach))
+            {
+                out << "  cluster " << c->mId << " records " << c->mRecords.size() << " tiles " << c->mTiles.size()
+                    << " z " << c->mMin.mdV[VZ] << ".." << c->mMax.mdV[VZ] << " grounded " << grounded(*c) << "\n";
+            }
+        }
+    }
+
+    // And what the navmesh built from it.
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        const S32 ox = tileIndex(mesh.mOrigin.mdV[VX]), oy = tileIndex(mesh.mOrigin.mdV[VY]);
+        const TileKey key{ tileIndex(mMark.mdV[VX]) - ox, tileIndex(mMark.mdV[VY]) - oy };
+        const auto it = mesh.mTiles.find(key);
+        if (it == mesh.mTiles.end())
+        {
+            continue;
+        }
+        const Tile& tile = it->second;
+        out << (mesh.mTerrain ? "region mesh " : "cluster mesh ") << mesh.mId << " tile " << key.mX << "," << key.mY
+            << " records " << tile.mRecords.size() << " z " << tile.mMin.mdV[VZ] << ".." << tile.mMax.mdV[VZ]
+            << " polys " << tile.mPolys[0] << "/" << tile.mPolys[1] << " built " << (tile.mBuilt == tile.mSignature)
+            << " in flight " << tile.mInFlight << " " << tile.mMillis << " ms\n";
+        if (tile.mFaces)
+        {
+            S32 shown = 0;
+            for (const WallFace& f : *tile.mFaces)
+            {
+                const LLVector3d fmin = mesh.mOrigin + LLVector3d(f.mMin), fmax = mesh.mOrigin + LLVector3d(f.mMax);
+                if (!overlapsXY(fmin, fmax, mMark - reach, mMark + reach))
+                {
+                    continue;
+                }
+                if (++shown > 8)
+                {
+                    out << "    ... and more faces\n";
+                    break;
+                }
+                out << "    face side " << static_cast<S32>(f.mSide) << " area " << static_cast<S32>(f.mArea) << " z "
+                    << fmin.mdV[VZ] << ".." << fmax.mdV[VZ] << " (" << (fmax.mdV[VZ] - fmin.mdV[VZ]) << " m tall)\n";
+            }
+        }
+    }
+
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        F32 z = 0.f;
+        LLUUID which;
+        if (floorUnder(mMark, static_cast<AgentClass>(cls), z, &which))
+        {
+            out << "floor for class " << cls << " at " << z << " in " << which << "\n";
+        }
+        else
+        {
+            out << "no floor for class " << cls << "\n";
+        }
+    }
+
+    LL_INFOS("SKNavDump") << out.str() << LL_ENDL;
+    return llformat("marked %.1f, %.1f, %.1f - the rest is in the log under SKNavDump", mMark.mdV[VX], mMark.mdV[VY],
+                    mMark.mdV[VZ]);
+}
+
 void SKNavMesh::renderDebug()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
@@ -1419,6 +1549,15 @@ void SKNavMesh::renderDebug()
                 geom.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
             }
         });
+    }
+
+    if (mHasMark)
+    {
+        const LLVector3 m = gAgent.getPosAgentFromGlobal(mMark);
+        const LLColor4 pink(1.f, 0.2f, 1.f, 0.95f);
+        geom.edge(m - LLVector3(0.f, 0.f, 5.f), m + LLVector3(0.f, 0.f, 5.f), pink);
+        geom.edge(m - LLVector3(1.f, 0.f, 0.f), m + LLVector3(1.f, 0.f, 0.f), pink);
+        geom.edge(m - LLVector3(0.f, 1.f, 0.f), m + LLVector3(0.f, 1.f, 0.f), pink);
     }
 
     if (opaque)

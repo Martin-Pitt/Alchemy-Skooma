@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="560"
+ min_height="600"
  min_width="300"
- height="720"
+ height="780"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -248,6 +248,28 @@
    top_pad="6"
    width="276" />
 
+  <button
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   height="23"
+   width="292"
+   name="mark_button"
+   label="Mark what the camera is pointing at"
+   tool_tip="Cast from the middle of the screen, mark the hit, and write down everything the census and the navmesh know there. The report goes to the log under SKNavDump" />
+  <text
+   name="mark_status"
+   height="26"
+   word_wrap="true"
+   use_ellipses="false"
+   type="string"
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   width="292">
+  </text>
   <text
    name="legend_label"
    height="13"

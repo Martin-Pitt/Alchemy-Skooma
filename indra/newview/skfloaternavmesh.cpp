@@ -44,6 +44,9 @@ SKFloaterNavMesh::SKFloaterNavMesh(const LLSD& key)
 bool SKFloaterNavMesh::postBuild()
 {
     getChild<LLUICtrl>("overlay_on")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleOverlay(); });
+    getChild<LLUICtrl>("mark_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("mark_status")->setValue(SKNavMesh::instance().markUnderCamera());
+    });
     buildLegend();
     return true;
 }

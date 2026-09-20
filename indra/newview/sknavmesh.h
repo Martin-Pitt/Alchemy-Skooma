@@ -90,6 +90,11 @@ public:
 
     std::string statsLine() const;
 
+    /// Cast from the middle of the screen, mark what it hits, and write down
+    /// everything the census and the navmesh know there. Returns a line for
+    /// the console; the report itself goes to the log under SKNavDump.
+    std::string markUnderCamera();
+
     struct Stats
     {
         U32 mMeshes = 0;
@@ -187,6 +192,8 @@ private:
     Stats mStats;
     F32 mLastLog = 0.f;
     bool mDemanding = false;
+    LLVector3d mMark;
+    bool mHasMark = false;
 };
 
 #endif // SK_NAVMESH_H
