@@ -124,6 +124,11 @@ SKWorldCensus::~SKWorldCensus()
 {
 }
 
+void SKWorldCensus::cleanupSingleton()
+{
+    abandonScan();
+}
+
 void SKWorldCensus::addDemand(const std::string& who, F32 range_m)
 {
     mDemands[who] = range_m;

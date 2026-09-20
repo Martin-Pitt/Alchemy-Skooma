@@ -74,6 +74,10 @@ class SKWorldCensus : public LLSingleton<SKWorldCensus>
     LLSINGLETON(SKWorldCensus);
     ~SKWorldCensus() override;
 
+    /// Drops any LLPointer<LLViewerObject> a mid-flight scan is holding, so it can't
+    /// outlive LLAvatarAppearance::cleanupClass() and tear the self avatar down late.
+    void cleanupSingleton() override;
+
 public:
     /// Once per frame after objects have moved. Does nothing unless the
     /// navmesh is enabled and something wants a census (a demand, or the overlay).
