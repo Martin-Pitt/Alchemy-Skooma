@@ -30,6 +30,7 @@
 #include "sknavlevels.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
+#include "threadpool.h"
 
 #include <functional>
 #include <map>
@@ -53,6 +54,10 @@ class SKNavMesh : public LLSingleton<SKNavMesh>
 public:
     /// Once per frame after the census.
     void update();
+
+    /// Close the build pool before the singleton goes: a job in flight holds
+    /// this pointer to publish its result.
+    void cleanupSingleton() override;
 
     /// Polygon edges of the avatar class near the agent, from the debug pass.
     void renderDebug();
@@ -160,6 +165,10 @@ private:
     };
 
     bool wanted() const;
+    /// The pool the tile builds run on, created on first use. A pool of its
+    /// own, so the builds neither queue behind nor starve the viewer's shared
+    /// work: they are pure and independent, one per core.
+    LL::WorkQueue::ptr_t workerQueue();
     void reconcile(const SKCensusSnapshotPtr& snap);
     /// Whether a cluster stands on the ground under it, within
     /// SKNavGroundedMargin. A grounded structure is meshed with the region so
@@ -186,6 +195,7 @@ private:
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
+    std::unique_ptr<LL::ThreadPool> mWorkers;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;

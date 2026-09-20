@@ -51,6 +51,7 @@
 #include <cmath>
 #include <sstream>
 #include <set>
+#include <thread>
 
 namespace
 {
@@ -128,6 +129,36 @@ bool SKNavMesh::wanted() const
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
     return enabled && (always || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH));
+}
+
+LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
+{
+    if (!mWorkers)
+    {
+        // A pool of its own. The viewer's shared "General" pool is one thread
+        // in a normal session, so tile builds queued behind it both starve
+        // everything else on that queue and leave every other core idle. A
+        // tile build is pure and independent, so one per core is the shape
+        // that fits, leaving a couple for the viewer itself.
+        static LLCachedControl<S32> setting(gSavedSettings, "SKNavWorkerThreads", 0);
+        const S32 cores = static_cast<S32>(std::thread::hardware_concurrency());
+        const S32 width = llclamp(setting > 0 ? static_cast<S32>(setting) : cores - 2, 1, 16);
+        mWorkers = std::make_unique<LL::ThreadPool>("NavMesh", width);
+        mWorkers->start();
+        LL_INFOS("SKNav") << "navmesh build pool: " << width << " threads on " << cores << " cores" << LL_ENDL;
+    }
+    return LL::WorkQueue::getInstance("NavMesh");
+}
+
+void SKNavMesh::cleanupSingleton()
+{
+    // Join the pool before the singleton dies: a job in flight carries this
+    // pointer in its publish callback, and the main loop stops pumping first.
+    if (mWorkers)
+    {
+        mWorkers->close();
+        mWorkers.reset();
+    }
 }
 
 bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
@@ -568,8 +599,8 @@ void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
 bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
 {
     LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
-    LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
-    if (!main_queue || !general || general->isClosed())
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    if (!main_queue || !workers || workers->isClosed())
     {
         return false;
     }
@@ -615,7 +646,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
     const bool posted = main_queue->postTo(
-        general,
+        workers,
         [input]() { return std::make_shared<TileBuildResult>(buildTile(*input)); },
         [this, id, generation, key, signature](std::shared_ptr<TileBuildResult> result) { publish(id, generation, key, signature, result); });
     if (posted)
@@ -772,8 +803,17 @@ void SKNavMesh::relabel()
 
 void SKNavMesh::schedule()
 {
-    static LLCachedControl<S32> perFrame(gSavedSettings, "SKNavBuildsPerFrame", 2);
-    static LLCachedControl<S32> inFlightMax(gSavedSettings, "SKNavBuildsInFlight", 2);
+    static LLCachedControl<S32> perFrame(gSavedSettings, "SKNavBuildsPerFrame", 4);
+    static LLCachedControl<S32> inFlightMax(gSavedSettings, "SKNavBuildsInFlight", 0);
+
+    if (!workerQueue())
+    {
+        return;
+    }
+    // In flight is the pool's width unless the setting overrides it: more than
+    // that cannot run at once, and each build holds a heightfield's worth of
+    // memory while it does.
+    const S32 in_flight_cap = inFlightMax > 0 ? static_cast<S32>(inFlightMax) : static_cast<S32>(mWorkers->getWidth());
 
     struct Candidate
     {
@@ -808,7 +848,7 @@ void SKNavMesh::schedule()
     S32 launched = 0;
     for (const Candidate& c : candidates)
     {
-        if (launched >= perFrame || mInFlight >= inFlightMax)
+        if (launched >= perFrame || mInFlight >= in_flight_cap)
         {
             break;
         }

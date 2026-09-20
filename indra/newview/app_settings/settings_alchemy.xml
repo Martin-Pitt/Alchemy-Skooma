@@ -3524,13 +3524,13 @@
         <key>SKNavBuildsInFlight</key>
         <map>
             <key>Comment</key>
-            <string>Navmesh tile builds allowed on the worker at once.</string>
+            <string>Navmesh tile builds allowed on the worker at once. 0 = the build pool's width.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>S32</string>
             <key>Value</key>
-            <integer>2</integer>
+            <integer>0</integer>
         </map>
         <key>SKNavBuildsPerFrame</key>
         <map>
@@ -3541,7 +3541,7 @@
             <key>Type</key>
             <string>S32</string>
             <key>Value</key>
-            <integer>2</integer>
+            <integer>4</integer>
         </map>
         <key>SKNavCell</key>
         <map>
@@ -3932,6 +3932,17 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
+        </map>
+        <key>SKNavWorkerThreads</key>
+        <map>
+            <key>Comment</key>
+            <string>Threads the navmesh tile builds run on. 0 = one per core, less two.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
         </map>
         <key>ShowAdvancedHoverTips</key>
         <map>
