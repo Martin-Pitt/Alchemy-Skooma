@@ -89,7 +89,13 @@ namespace sknav
 
     /// Every exposed span side inside the tile proper (border columns left
     /// out), greedy-merged along the wall. Recast space in, SL mesh-local out.
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, std::vector<WallFace>& out);
+    /// `min_height` drops anything shorter, which on sloping ground is most
+    /// of what a heightfield has: a smooth hillside rasterises into a
+    /// staircase, and every riser of it is an exposed vertical face. A riser
+    /// is the cell size times the tangent of the slope, so half a metre keeps
+    /// everything steeper than about seventy-five degrees at a 0.125 m cell
+    /// and throws the terracing away.
+    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out);
 
     /// Walk every boundary edge of the polymesh, sample the column just
     /// outside, classify, and merge runs into segments. Ledge samples with a

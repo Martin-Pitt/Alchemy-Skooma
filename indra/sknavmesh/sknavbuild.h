@@ -83,6 +83,7 @@ namespace sknav
         Partition mPartition = Partition::WATERSHED;
         F32 mDetailSampleCells = 6.f;       ///< 0 leaves the polygons untouched
         F32 mDetailMaxErrorCells = 2.f;
+        F32 mWallMinHeight = 0.5f;          ///< shorter faces are a slope's terracing, not a wall
         std::vector<RecordPtr> mRecords;    ///< everything intersecting the padded tile
         TerrainWindow mTerrain;
         bool mClasses[NUM_CLASSES] = { true, false };

@@ -169,6 +169,7 @@ U64 SKNavMesh::paramsSignature() const
     h = mixF32(h, probe.mCell);
     h = mix(h, static_cast<U64>(probe.mPartition));
     h = mixF32(h, probe.mDetailSampleCells);
+    h = mixF32(h, probe.mWallMinHeight);
     h = mix(h, probe.mWallFaces);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
@@ -200,10 +201,12 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
 
     static LLCachedControl<U32> partition(gSavedSettings, "SKNavPartition", 0);
     static LLCachedControl<F32> detail(gSavedSettings, "SKNavDetailSample", 6.f);
+    static LLCachedControl<F32> wallMin(gSavedSettings, "SKNavWallMinHeight", 0.5f);
 
     input.mCell = llclamp(static_cast<F32>(cell), 0.05f, 1.f);
     input.mPartition = static_cast<Partition>(llclamp(static_cast<S32>(partition), 0, 2));
     input.mDetailSampleCells = llclamp(static_cast<F32>(detail), 0.f, 32.f);
+    input.mWallMinHeight = llclamp(static_cast<F32>(wallMin), 0.f, 8.f);
     // The avatar class is as tall as the user's own avatar, rounded up to the
     // next cell, so a tall avatar never gets floor it cannot stand on.
     F32 height = 2.f;

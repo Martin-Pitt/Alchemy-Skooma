@@ -490,7 +490,7 @@ namespace sknav
             // edges and the drops per class.
             if (input.mWallFaces && result.mFaces.empty())
             {
-                extractWallFaces(*mem.hf, cfg.borderSize, result.mFaces);
+                extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
             }
             if (input.mEdges[cls])
             {

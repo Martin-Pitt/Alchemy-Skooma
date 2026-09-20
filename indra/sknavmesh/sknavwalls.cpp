@@ -205,7 +205,7 @@ namespace sknav
         return Cover::NONE;
     }
 
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, std::vector<WallFace>& out)
+    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out)
     {
         // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z. Faces of one side, one
         // across-column and one z-interval merge along the wall's direction.
@@ -269,6 +269,10 @@ namespace sknav
                     }
                     i = j;
                     // Recast cells back to SL mesh-local metres: x = Recast z, y = Recast x, z = Recast y.
+                    if (run.mTop - run.mBottom < min_height)
+                    {
+                        continue;
+                    }
                     WallFace f;
                     const F32 rx0 = hf.bmin[0] + (alongZ ? run.mAcross : run.mAlong0) * hf.cs;
                     const F32 rx1 = hf.bmin[0] + (alongZ ? run.mAcross + 1 : run.mAlong1 + 1) * hf.cs;
