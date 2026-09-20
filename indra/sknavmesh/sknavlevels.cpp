@@ -32,6 +32,7 @@
 #include "DetourNavMeshQuery.h"
 
 #include <algorithm>
+#include <numeric>
 #include <cmath>
 #include <deque>
 #include <set>
@@ -208,6 +209,38 @@ namespace sknav
             const F32 footprint = (info.mMax.mV[VX] - info.mMin.mV[VX]) * (info.mMax.mV[VY] - info.mMin.mV[VY]);
             info.mTransitional = footprint < params.mMinArea;
             out.mLevels.push_back(info);
+        }
+
+        // Number the storeys from the ground up. They are discovered in
+        // whatever order the polygons happen to come out of Detour, which
+        // changes every time a tile is rebuilt, so anything that colours or
+        // labels by storey would change with it.
+        {
+            std::vector<U16> order(out.mLevels.size());
+            std::iota(order.begin(), order.end(), static_cast<U16>(0));
+            std::stable_sort(order.begin(), order.end(), [&](U16 a, U16 b) {
+                if (out.mLevels[a].mZ != out.mLevels[b].mZ)
+                {
+                    return out.mLevels[a].mZ < out.mLevels[b].mZ;
+                }
+                return out.mLevels[a].mMin.mV[VX] < out.mLevels[b].mMin.mV[VX];
+            });
+            std::vector<U16> remap(out.mLevels.size());
+            std::vector<Level> sorted;
+            sorted.reserve(order.size());
+            for (U16 i = 0; i < static_cast<U16>(order.size()); ++i)
+            {
+                remap[order[i]] = i;
+                sorted.push_back(out.mLevels[order[i]]);
+            }
+            out.mLevels.swap(sorted);
+            for (Poly& p : polys)
+            {
+                if (p.mLevel != Levels::NO_LEVEL)
+                {
+                    p.mLevel = remap[p.mLevel];
+                }
+            }
         }
 
         // Runs: sloped polygons, and the small storeys that are really landings

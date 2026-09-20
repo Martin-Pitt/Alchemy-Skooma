@@ -33,6 +33,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -166,6 +167,12 @@ private:
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
+    /// Lattice tiles where a cluster mesh already meshes the ground. Its
+    /// tiles carry the terrain under them so that a structure and the ground
+    /// it stands on are one mesh and can be pathed across; the region's
+    /// terrain mesh then has to leave those tiles alone, or the same ground is
+    /// walkable twice over.
+    std::set<sknav::TileKey> mGroundTaken;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;

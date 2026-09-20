@@ -399,10 +399,14 @@ namespace sknav
             // The tile in Recast space: x = SL y, z = SL x, y = SL z.
             const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
             cfg.bmin[0] = y0 - cfg.borderSize * cfg.cs;
-            cfg.bmin[1] = input.mZMin - cfg.ch;
+            // Snapped to the cell grid, not to this tile's own lowest point:
+            // heights quantise to ch from bmin, so two tiles that started
+            // from different z put the same floor on different spans, and the
+            // two sides of a seam end up at slightly different heights.
+            cfg.bmin[1] = std::floor((input.mZMin - cfg.ch) / cfg.ch) * cfg.ch;
             cfg.bmin[2] = x0 - cfg.borderSize * cfg.cs;
             cfg.bmax[0] = y0 + input.mTileSize + cfg.borderSize * cfg.cs;
-            cfg.bmax[1] = input.mZMax + cfg.ch;
+            cfg.bmax[1] = std::ceil((input.mZMax + cfg.ch) / cfg.ch) * cfg.ch;
             cfg.bmax[2] = x0 + input.mTileSize + cfg.borderSize * cfg.cs;
 
             Freed mem;

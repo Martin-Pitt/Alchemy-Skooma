@@ -24,6 +24,8 @@
   <floater.string name="sk_nav_submerged">Submerged — walkable, but under water</floater.string>
   <floater.string name="sk_nav_level">Storey — one colour per floor, by storey</floater.string>
   <floater.string name="sk_nav_connector">Connector — stair or ramp between storeys</floater.string>
+  <floater.string name="sk_nav_tile_joined">Tile seam — joined to the next tile</floater.string>
+  <floater.string name="sk_nav_tile_open">Tile seam — nothing joined to it</floater.string>
   <floater.string name="sk_nav_cover_full">Full cover — taller than your eye height</floater.string>
   <floater.string name="sk_nav_cover_half">Half cover — you can shoot over it</floater.string>
   <floater.string name="sk_nav_cover_low">Low wall — too low to take cover behind</floater.string>
@@ -116,6 +118,28 @@
    name="show_levels"
    control_name="SKNavOverlayByLevel"
    tool_tip="A colour per floor of a structure instead of per surface kind"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Storey connectors"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_connectors"
+   control_name="SKNavOverlayConnectors"
+   tool_tip="Lines from each storey to the ones it connects to. The storey model is still rough, so these land in odd places"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Tile seams"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="show_links"
+   control_name="SKNavOverlayLinks"
+   tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile"
    top_pad="4"
    width="276" />
   <check_box

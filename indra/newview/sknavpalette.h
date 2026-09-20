@@ -37,6 +37,8 @@ enum class SKNavSwatch : S32
     SUBMERGED,      ///< walkable, but under water
     LEVEL,          ///< stands in for the per-storey colours, which are hashed
     CONNECTOR,      ///< stair or ramp between two storeys
+    TILE_JOINED,    ///< tile-boundary edge Detour linked to its neighbour
+    TILE_OPEN,      ///< tile-boundary edge with nothing joined to it
     COVER_FULL,     ///< wall taller than the reader's eye
     COVER_HALF,     ///< wall that can be shot over
     COVER_LOW,      ///< wall too low to take cover behind

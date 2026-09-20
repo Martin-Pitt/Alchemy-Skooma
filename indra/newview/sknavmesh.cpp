@@ -317,8 +317,13 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     TileBuildInput probe;
     fillParams(probe);
     const F32 pad = padFor(probe);
+    mGroundTaken.clear();
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
+        for (const auto& entry : c->mTiles)
+        {
+            mGroundTaken.insert(entry.first);
+        }
         std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
         if (!mesh)
         {
@@ -403,12 +408,25 @@ void SKNavMesh::reconcileTerrain()
         mesh->mLastSeen = gFrameTimeSeconds;
         const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
         const LLSurface& land = region->getLand();
+        const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
+        std::map<TileKey, Tile> wanted;
         for (S32 y = 0; y < per_edge; ++y)
         {
             for (S32 x = 0; x < per_edge; ++x)
             {
                 const TileKey key{ x, y };
-                Tile& tile = mesh->mTiles[key];
+                // A cluster mesh here already carries this ground, and two
+                // meshes over one patch of ground is two walkable surfaces.
+                if (mGroundTaken.count(TileKey{ ox + x, oy + y }))
+                {
+                    continue;
+                }
+                Tile& tile = wanted[key];
+                const auto old_tile = mesh->mTiles.find(key);
+                if (old_tile != mesh->mTiles.end())
+                {
+                    tile = old_tile->second;
+                }
                 tile.mMin = tileMin(mesh->mOrigin, key);
                 tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
                 tile.mMin.mdV[VZ] = land.getMinZ();
@@ -416,6 +434,22 @@ void SKNavMesh::reconcileTerrain()
                 tile.mSignature = mix(terrainSignature(tile.mMin, tile.mMax, pad), params);
             }
         }
+        // Ground a cluster has taken over leaves the Detour meshes.
+        for (const auto& old_tile : mesh->mTiles)
+        {
+            if (wanted.count(old_tile.first) == 0 && old_tile.second.mBuilt)
+            {
+                mesh->mLevelsStale = true;
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    if (mesh->mNav[cls])
+                    {
+                        mesh->mNav[cls]->removeTile(mesh->mNav[cls]->getTileRefAt(old_tile.first.mY, old_tile.first.mX, 0), nullptr, nullptr);
+                    }
+                }
+            }
+        }
+        mesh->mTiles.swap(wanted);
     }
 }
 
@@ -1061,6 +1095,10 @@ void SKNavMesh::renderDebug()
     static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
     static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
+    static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
+    // Off by default: the storey model joins a stairwell to a floor at an
+    // arbitrary polygon on it, so the lines land far from the stairs.
+    static LLCachedControl<bool> show_connectors(gSavedSettings, "SKNavOverlayConnectors", false);
 
     const S32 cls = static_cast<S32>(AgentClass::AVATAR);
     // The mesh is built around the agent, but the overlay is read by camming
@@ -1091,7 +1129,7 @@ void SKNavMesh::renderDebug()
             continue;
         }
         const std::shared_ptr<const Levels> levels = mesh.mLevels[cls];
-        if (levels)
+        if (levels && show_connectors)
         {
             // The ways off each storey, drawn from the low end to the high one.
             const LLColor4 color = strength(skNavSwatchColor(SKNavSwatch::CONNECTOR), 1.f);
@@ -1156,6 +1194,33 @@ void SKNavMesh::renderDebug()
                 }
                 const LLColor4 fill = strength(color, 0.35f);
                 const LLColor4 edge = strength(color, 1.f);
+                if (show_links)
+                {
+                    // Tile-boundary edges by whether Detour found a neighbour
+                    // to join them to: an open one is a hole in the surface,
+                    // and the only way to tell it from a real outside edge.
+                    const LLVector3 lift(0.f, 0.f, 0.09f);
+                    for (int v = 0; v < static_cast<int>(poly.vertCount); ++v)
+                    {
+                        if (!(poly.neis[v] & DT_EXT_LINK))
+                        {
+                            continue;
+                        }
+                        bool joined = false;
+                        for (unsigned int l = poly.firstLink; l != DT_NULL_LINK; l = tile->links[l].next)
+                        {
+                            if (tile->links[l].edge == v && tile->links[l].side != 0xff)
+                            {
+                                joined = true;
+                                break;
+                            }
+                        }
+                        const LLVector3 a = originAgent + fromRecast(&tile->verts[poly.verts[v] * 3]) + lift;
+                        const LLVector3 b = originAgent + fromRecast(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3]) + lift;
+                        geom.line(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
+                    }
+                }
+
                 const dtPolyDetail& detail = tile->detailMeshes[p];
                 for (unsigned int t = 0; t < detail.triCount; ++t)
                 {
