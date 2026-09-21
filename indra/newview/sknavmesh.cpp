@@ -1403,6 +1403,21 @@ std::string SKNavMesh::markUnderCamera()
             }
             out << "] area " << std::fabs(area2) * 0.5 << " m2, detail tris "
                 << static_cast<S32>(tile->detailMeshes[poly - tile->polys].triCount) << "\n";
+
+            // The nearest polygon of each area at the mark, so two surfaces
+            // in one mesh - a platform and the terrain it meets - both show,
+            // and the step between them with them.
+            for (U8 area = AREA_GROUND; area <= AREA_SUBMERGED; ++area)
+            {
+                dtQueryFilter area_filter;
+                area_filter.setIncludeFlags(static_cast<unsigned short>(1u << area));
+                dtPolyRef area_ref = 0;
+                F32 area_pt[3];
+                if (dtStatusSucceed(mesh.mQuery[cls]->findNearestPoly(centre, extents, &area_filter, &area_ref, area_pt)) && area_ref)
+                {
+                    out << "    nearest area " << static_cast<S32>(area) << " at z " << area_pt[1] << "\n";
+                }
+            }
         }
     }
 
