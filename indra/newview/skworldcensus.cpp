@@ -483,7 +483,13 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, surround);
     sig = mix(sig, static_cast<U64>(navRole));
     sig = mix(sig, object->isPhysicsShapeUnknown());
-    sig = mix(sig, volume->getLOD());
+    // Only what is built from the rendered volume - a surround, a classic
+    // sculpt - depends on the loaded LOD. Mixing it in for everything else
+    // re-signs every record as the camera moves and rebuilds its tiles for
+    // nothing, which is what leaves tiles in flight while you walk.
+    const bool from_render = surround
+        || (hasPhysics && shape.mSpec.getType() == LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::SCULPT);
+    sig = mix(sig, from_render ? volume->getLOD() : 0);
     {
         const LLVolume* v = volume->getVolume();
         sig = mix(sig, v->getNumVolumeFaces());

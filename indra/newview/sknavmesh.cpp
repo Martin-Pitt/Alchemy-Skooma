@@ -723,10 +723,13 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
 U64 SKNavMesh::recordSignature(const std::vector<RecordPtr>& records)
 {
-    U64 h = SEED;
+    // Order independent: the grid hands the same records back in whatever
+    // order the census scan produced them, and a signature that changes with
+    // that order rebuilds the tile on every scan.
+    U64 h = 0;
     for (const RecordPtr& r : records)
     {
-        h = mix(h, r->mSignature);
+        h ^= mix(SEED, r->mSignature);
     }
     return h;
 }
