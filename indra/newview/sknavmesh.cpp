@@ -1208,6 +1208,25 @@ std::string SKNavMesh::markUnderCamera()
         out << "region " << region->getName() << " local " << LLVector3(mMark - region->getOriginGlobal()) << "\n";
     }
 
+    // The avatar class's build parameters, read the way the build reads them:
+    // whether erosion or the headroom rule ate the floor can only be judged
+    // with the numbers it ran with.
+    {
+        static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
+        static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
+        static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+        static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
+        F32 height = 2.f;
+        if (isAgentAvatarValid())
+        {
+            height = llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f);
+        }
+        const F32 cell_m = llmax(static_cast<F32>(cell), 0.05f);
+        height = std::ceil(height / cell_m) * cell_m;
+        out << "agent height " << height << " radius " << radius << " climb " << climb << " slope " << slope
+            << " cell " << cell << " (erode " << std::ceil(static_cast<F32>(radius) / cell_m) << " cells)\n";
+    }
+
     LLViewerObject* root = hit;
     while (!root->isRoot() && root->getParent())
     {
@@ -1286,15 +1305,26 @@ std::string SKNavMesh::markUnderCamera()
             {
                 continue;
             }
-            if (++shown > 12)
+            if (++shown > 24)
             {
                 out << "  ... and more\n";
                 break;
             }
+            const bool covers = overlapsXY(r->mMin, r->mMax, mMark, mMark);
             out << "  record root " << r->mRoot << " provenance " << static_cast<S32>(r->mProvenance) << " shape "
                 << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
-                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " z " << r->mMin.mdV[VZ] << ".."
-                << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
+                << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0);
+            if (covers)
+            {
+                out << " <-- covers the mark";
+                if (r->mMin.mdV[VZ] > mMark.mdV[VZ])
+                {
+                    out << ", bottom " << (r->mMin.mdV[VZ] - mMark.mdV[VZ]) << " m above it";
+                }
+            }
+            out << "\n";
         }
         if (!shown)
         {
