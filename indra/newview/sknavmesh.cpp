@@ -572,9 +572,11 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
         mesh->mTiles.swap(wanted);
     }
 
-    // One mesh per region: its terrain, and every structure standing on it. A
-    // record belongs to the region its own origin names, so a build straddling
-    // a border is split between the two rather than rasterised into both.
+    // One mesh per region: its terrain, and every record that reaches over
+    // that land. A record's own region names it for the void past every edge,
+    // but where it stands on another region's land it is meshed with that
+    // land, so a structure and the ground under it stay one mesh even when
+    // the structure was rezzed across the border.
     if (LLWorld::instanceExists())
     {
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
@@ -593,32 +595,46 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             mesh->mLastSeen = gFrameTimeSeconds;
 
             const LLVector3d& origin = region->getOriginGlobal();
+            const F64 width = region->getWidth();
+            const LLVector3d land_min = origin - LLVector3d(pad, pad, 0);
+            const LLVector3d land_max = origin + LLVector3d(width + pad, width + pad, 0);
             const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
-            std::vector<RecordPtr> mine;
+            std::vector<RecordPtr> land_records;    // reaches over this region's land
+            std::vector<RecordPtr> own_records;     // this region's own, for the void
             for (const RecordPtr& r : ground_records)
             {
+                if (overlapsXY(r->mMin, r->mMax, land_min, land_max))
+                {
+                    land_records.push_back(r);
+                }
                 if (r->mOrigin == origin)
                 {
-                    mine.push_back(r);
+                    own_records.push_back(r);
                 }
             }
 
             const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
-            RecordGrid grid;
-            for (const RecordPtr& r : mine)
+            RecordGrid land_grid;
+            for (const RecordPtr& r : land_records)
             {
-                grid.insert(r, pad);
+                land_grid.insert(r, pad);
+            }
+            RecordGrid void_grid;
+            for (const RecordPtr& r : own_records)
+            {
+                void_grid.insert(r, pad);
             }
 
-            // Past the region's own edge as far as its records reach, within
-            // SKNavVoidMargin: the surrounds and the things hanging off the
-            // sim are out there, and the void is exactly where they are.
+            // The region's own tiles, plus the void past its edge as far as
+            // its own records reach, within SKNavVoidMargin: the surrounds and
+            // the things hanging off the sim are out there, and the void is
+            // exactly where they are.
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
             const S32 out = llclamp(static_cast<S32>(std::ceil(void_margin / TILE_M)), 0, 16);
             S32 x0 = 0, x1 = per_edge - 1, y0 = 0, y1 = per_edge - 1;
-            for (const RecordPtr& r : mine)
+            for (const RecordPtr& r : own_records)
             {
                 x0 = llmin(x0, tileIndex(r->mMin.mdV[VX]) - ox);
                 x1 = llmax(x1, tileIndex(r->mMax.mdV[VX]) - ox);
@@ -636,6 +652,8 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 for (S32 x = x0; x <= x1; ++x)
                 {
                     const TileKey key{ x, y };
+                    const TileKey global{ ox + x, oy + y };
+                    const bool over_land = (x >= 0 && x < per_edge && y >= 0 && y < per_edge);
                     Tile& tile = wanted[key];
                     const auto old = mesh->mTiles.find(key);
                     if (old != mesh->mTiles.end())
@@ -646,38 +664,46 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
                     tile.mMin.mdV[VZ] = land.getMinZ();
                     tile.mMax.mdV[VZ] = land.getMaxZ();
-                    grid.query(TileKey{ ox + x, oy + y }, tile.mRecords);
-                    const bool over_land = (x >= 0 && x < per_edge && y >= 0 && y < per_edge);
-                    if (!over_land && tile.mRecords.empty())
+                    if (over_land)
                     {
-                        // Empty void: nothing to mesh out here.
-                        wanted.erase(key);
-                        continue;
+                        land_grid.query(global, tile.mRecords);
+                        tile.mOverLand = true;
+                        // The land under the tile stands until its region's
+                        // stamp moves, and then only this tile re-signs and
+                        // waits for its window to be sampled again. The world
+                        // stamp catches a region arriving or leaving under the
+                        // tile's padded edge.
+                        if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
+                        {
+                            tile.mLandStamp = land_stamp;
+                            tile.mWorldStamp = world_stamp;
+                            tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
+                            tile.mTerrainStale = true;
+                        }
                     }
-                    tile.mOverLand = over_land;
-                    if (!over_land)
+                    else
                     {
-                        // Past this region's edge the land is somebody else's:
-                        // its own region meshes it, and rasterising it here
-                        // too puts the same ground into two meshes, at two
-                        // slightly different sets of polygons. What reaches
-                        // out here is this region's own records - a surround
-                        // hanging over the edge - and they get the void to
-                        // themselves.
+                        // Past this region's edge only the void is this
+                        // region's business. A tile over another region's land
+                        // belongs to that region's mesh, records and all, so
+                        // the ground and what stands on it stay together and
+                        // the same patch is not meshed twice.
+                        if (LLWorld::getInstance()->getRegionFromPosGlobal((tile.mMin + tile.mMax) * 0.5))
+                        {
+                            wanted.erase(key);
+                            continue;
+                        }
+                        void_grid.query(global, tile.mRecords);
+                        if (tile.mRecords.empty())
+                        {
+                            // Empty void: nothing to mesh out here.
+                            wanted.erase(key);
+                            continue;
+                        }
+                        tile.mOverLand = false;
                         tile.mTerrain.reset();
                         tile.mTerrainStale = false;
                         tile.mTerrainSignature = 0;
-                    }
-                    // The land under the tile stands until its region's stamp
-                    // moves, and then only this tile re-signs and waits for its
-                    // window to be sampled again. The world stamp catches a
-                    // region arriving or leaving under the tile's padded edge.
-                    else if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
-                    {
-                        tile.mLandStamp = land_stamp;
-                        tile.mWorldStamp = world_stamp;
-                        tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
-                        tile.mTerrainStale = true;
                     }
                     tile.mSignature = mix(mix(recordSignature(tile.mRecords), tile.mTerrainSignature), params);
                 }
