@@ -1365,6 +1365,8 @@ std::string SKNavMesh::markUnderCamera()
             F32 mMin;
             F32 mMax;
             F32 mNormalZ;
+            F32 mWidth;
+            F32 mDepth;
             S32 mProvenance;
             LLUUID mRoot;
         };
@@ -1404,10 +1406,12 @@ std::string SKNavMesh::markUnderCamera()
                     nz = n.mV[VZ];
                 }
                 bool dup = false;
+                const F32 width = xmax - xmin, depth = ymax - ymin;
                 for (const OverTri& o : over)
                 {
                     if (o.mProvenance == static_cast<S32>(r->mProvenance) && o.mRoot == r->mRoot &&
-                        std::fabs(o.mMin - zmin) < 0.01f && std::fabs(o.mMax - zmax) < 0.01f && std::fabs(o.mNormalZ - nz) < 0.02f)
+                        std::fabs(o.mMin - zmin) < 0.01f && std::fabs(o.mMax - zmax) < 0.01f && std::fabs(o.mNormalZ - nz) < 0.02f &&
+                        std::fabs(o.mWidth - width) < 0.05f && std::fabs(o.mDepth - depth) < 0.05f)
                     {
                         dup = true;
                         break;
@@ -1415,7 +1419,7 @@ std::string SKNavMesh::markUnderCamera()
                 }
                 if (!dup)
                 {
-                    over.push_back({ zmin, zmax, nz, static_cast<S32>(r->mProvenance), r->mRoot });
+                    over.push_back({ zmin, zmax, nz, width, depth, static_cast<S32>(r->mProvenance), r->mRoot });
                 }
             }
         }
@@ -1428,8 +1432,8 @@ std::string SKNavMesh::markUnderCamera()
                 out << "  ... and more triangles over the mark\n";
                 break;
             }
-            out << "  tri over the mark z " << o.mMin << ".." << o.mMax << " normal z " << o.mNormalZ << " provenance "
-                << o.mProvenance << " root " << o.mRoot << "\n";
+            out << "  tri over the mark z " << o.mMin << ".." << o.mMax << " normal z " << o.mNormalZ << " footprint "
+                << o.mWidth << " x " << o.mDepth << " m provenance " << o.mProvenance << " root " << o.mRoot << "\n";
         }
     }
 
