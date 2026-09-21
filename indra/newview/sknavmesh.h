@@ -142,6 +142,11 @@ private:
         U64 mLandStamp = 0;
         U64 mWorldStamp = 0;
         bool mTerrainStale = false;
+        /// False for a tile past the region's own edge: the land there is
+        /// another region's, and that region meshes it, so this tile carries
+        /// only the records that reach out of the region (a surround hanging
+        /// over the edge) and no ground at all.
+        bool mOverLand = true;
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;

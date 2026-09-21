@@ -456,7 +456,7 @@ void SKNavMesh::sampleTerrain()
         for (auto& t : mesh.mTiles)
         {
             Tile& tile = t.second;
-            if (!tile.mTerrainStale)
+            if (!tile.mOverLand || !tile.mTerrainStale)
             {
                 continue;
             }
@@ -654,11 +654,25 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                         wanted.erase(key);
                         continue;
                     }
+                    tile.mOverLand = over_land;
+                    if (!over_land)
+                    {
+                        // Past this region's edge the land is somebody else's:
+                        // its own region meshes it, and rasterising it here
+                        // too puts the same ground into two meshes, at two
+                        // slightly different sets of polygons. What reaches
+                        // out here is this region's own records - a surround
+                        // hanging over the edge - and they get the void to
+                        // themselves.
+                        tile.mTerrain.reset();
+                        tile.mTerrainStale = false;
+                        tile.mTerrainSignature = 0;
+                    }
                     // The land under the tile stands until its region's stamp
                     // moves, and then only this tile re-signs and waits for its
                     // window to be sampled again. The world stamp catches a
                     // region arriving or leaving under the tile's padded edge.
-                    if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
+                    else if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
                     {
                         tile.mLandStamp = land_stamp;
                         tile.mWorldStamp = world_stamp;
@@ -724,12 +738,12 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
-    // Only a region mesh has ground in it: a cluster clear of the ground has
-    // nothing to do with the land far below it, and a heightfield spanning
-    // the gap would overflow Recast's span heights. The window was sampled
-    // when the land last moved; until the budget has got to it, the tile waits
-    // rather than build on ground that is already gone.
-    if (mesh.mTerrain)
+    // Only a region mesh has ground in it, and only its own ground: a cluster
+    // clear of the ground has nothing to do with the land far below it, and a
+    // tile past the region's edge is standing on land another region meshes.
+    // The window was sampled when the land last moved; until the budget has
+    // got to it, the tile waits rather than build on ground that is gone.
+    if (mesh.mTerrain && tile.mOverLand)
     {
         if (!tile.mTerrain || tile.mTerrainStale)
         {
