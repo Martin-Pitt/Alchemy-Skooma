@@ -2113,11 +2113,11 @@ void renderNormals(LLDrawable *drawablep)
                 LLFace& face = **it;
                 LLVertexBuffer* buf = face.getVertexBuffer();
                 if (!buf) { continue; }
-                U32 mask_vn = LLVertexBuffer::TYPE_VERTEX | LLVertexBuffer::TYPE_NORMAL;
+                U32 mask_vn = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_NORMAL;
                 if ((buf->getTypeMask() & mask_vn) != mask_vn) { continue; }
 
                 LLGLSLShader* shader;
-                if ((buf->getTypeMask() & LLVertexBuffer::TYPE_TANGENT) != LLVertexBuffer::TYPE_TANGENT)
+                if ((buf->getTypeMask() & LLVertexBuffer::MAP_TANGENT) != LLVertexBuffer::MAP_TANGENT)
                 {
                     shader = &gNormalDebugProgram[NORMAL_DEBUG_SHADER_DEFAULT];
                 }
