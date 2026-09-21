@@ -1338,6 +1338,50 @@ std::string SKNavMesh::markUnderCamera()
                     << " z " << c->mMin.mdV[VZ] << ".." << c->mMax.mdV[VZ] << " grounded " << grounded(*c) << "\n";
             }
         }
+
+        // The record triangles over the mark, with how flat each is: a floor
+        // goes missing when a surface hangs over it by less than the agent's
+        // height, and which surface does is the whole question.
+        S32 tris_shown = 0;
+        const F64 slack = 0.15;
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (!r->mTriangles)
+            {
+                continue;
+            }
+            const LLVector3d local = mMark - r->mOrigin;
+            for (size_t t = 0; t + 2 < r->mTriangles->size() && tris_shown < 12; t += 3)
+            {
+                const LLVector3& a = (*r->mTriangles)[t];
+                const LLVector3& b = (*r->mTriangles)[t + 1];
+                const LLVector3& c = (*r->mTriangles)[t + 2];
+                const F32 xmin = llmin(a.mV[VX], llmin(b.mV[VX], c.mV[VX]));
+                const F32 xmax = llmax(a.mV[VX], llmax(b.mV[VX], c.mV[VX]));
+                const F32 ymin = llmin(a.mV[VY], llmin(b.mV[VY], c.mV[VY]));
+                const F32 ymax = llmax(a.mV[VY], llmax(b.mV[VY], c.mV[VY]));
+                if (local.mdV[VX] < xmin - slack || local.mdV[VX] > xmax + slack || local.mdV[VY] < ymin - slack ||
+                    local.mdV[VY] > ymax + slack)
+                {
+                    continue;
+                }
+                const F32 zmin = llmin(a.mV[VZ], llmin(b.mV[VZ], c.mV[VZ]));
+                const F32 zmax = llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ]));
+                LLVector3 n = (b - a) % (c - a);
+                F32 nz = 0.f;
+                if (n.normVec() > 0.f)
+                {
+                    nz = n.mV[VZ];
+                }
+                out << "  tri over the mark z " << zmin << ".." << zmax << " normal z " << nz << " provenance "
+                    << static_cast<S32>(r->mProvenance) << " root " << r->mRoot << "\n";
+                ++tris_shown;
+            }
+        }
+        if (tris_shown >= 12)
+        {
+            out << "  ... and more triangles over the mark\n";
+        }
     }
 
     // And what the navmesh built from it.
