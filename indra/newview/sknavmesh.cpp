@@ -41,6 +41,7 @@
 #include "llsurfacepatch.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
 #include "llviewershadermgr.h"
@@ -1297,6 +1298,20 @@ std::string SKNavMesh::markUnderCamera()
     const LLVector3d reach(4.0, 4.0, 4.0);
     if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
     {
+        // The physics shape type each end of the record carries. The sim only
+        // tells the linkset root, so a child that reads Prim while its root
+        // reads none is a part we should not have made a shape of.
+        auto shape_type = [](const RecordPtr& r, bool root) -> std::string
+        {
+            LLViewerObject* object = gObjectList.findObject(root ? r->mRoot : r->mPart);
+            if (!object)
+            {
+                return "gone";
+            }
+            static const char* names[] = { "prim", "none", "convex" };
+            const U8 type = object->getPhysicsShapeType();
+            return std::string(type < 3 ? names[type] : "other") + (object->isPhysicsShapeUnknown() ? "?" : "");
+        };
         S32 shown = 0;
         for (const RecordPtr& r : snap->mRecords)
         {
@@ -1315,7 +1330,8 @@ std::string SKNavMesh::markUnderCamera()
                 << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
                 << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
                 << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
-                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0);
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << " part "
+                << shape_type(r, false) << " root " << shape_type(r, true);
             if (covers)
             {
                 out << " <-- covers the mark";
@@ -1341,8 +1357,18 @@ std::string SKNavMesh::markUnderCamera()
 
         // The record triangles over the mark, with how flat each is: a floor
         // goes missing when a surface hangs over it by less than the agent's
-        // height, and which surface does is the whole question.
-        S32 tris_shown = 0;
+        // height, and which surface does is the whole question. Lowest first,
+        // and one line per distinct surface: a box standing there would
+        // otherwise fill the list with its own twelve triangles.
+        struct OverTri
+        {
+            F32 mMin;
+            F32 mMax;
+            F32 mNormalZ;
+            S32 mProvenance;
+            LLUUID mRoot;
+        };
+        std::vector<OverTri> over;
         const F64 slack = 0.15;
         for (const RecordPtr& r : snap->mRecords)
         {
@@ -1351,7 +1377,7 @@ std::string SKNavMesh::markUnderCamera()
                 continue;
             }
             const LLVector3d local = mMark - r->mOrigin;
-            for (size_t t = 0; t + 2 < r->mTriangles->size() && tris_shown < 12; t += 3)
+            for (size_t t = 0; t + 2 < r->mTriangles->size(); t += 3)
             {
                 const LLVector3& a = (*r->mTriangles)[t];
                 const LLVector3& b = (*r->mTriangles)[t + 1];
@@ -1367,20 +1393,43 @@ std::string SKNavMesh::markUnderCamera()
                 }
                 const F32 zmin = llmin(a.mV[VZ], llmin(b.mV[VZ], c.mV[VZ]));
                 const F32 zmax = llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ]));
+                if (zmax < mMark.mdV[VZ] - 2.0)
+                {
+                    continue;
+                }
                 LLVector3 n = (b - a) % (c - a);
                 F32 nz = 0.f;
                 if (n.normVec() > 0.f)
                 {
                     nz = n.mV[VZ];
                 }
-                out << "  tri over the mark z " << zmin << ".." << zmax << " normal z " << nz << " provenance "
-                    << static_cast<S32>(r->mProvenance) << " root " << r->mRoot << "\n";
-                ++tris_shown;
+                bool dup = false;
+                for (const OverTri& o : over)
+                {
+                    if (o.mProvenance == static_cast<S32>(r->mProvenance) && o.mRoot == r->mRoot &&
+                        std::fabs(o.mMin - zmin) < 0.01f && std::fabs(o.mMax - zmax) < 0.01f && std::fabs(o.mNormalZ - nz) < 0.02f)
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup)
+                {
+                    over.push_back({ zmin, zmax, nz, static_cast<S32>(r->mProvenance), r->mRoot });
+                }
             }
         }
-        if (tris_shown >= 12)
+        std::sort(over.begin(), over.end(), [](const OverTri& a, const OverTri& b) { return a.mMin < b.mMin; });
+        S32 tris_shown = 0;
+        for (const OverTri& o : over)
         {
-            out << "  ... and more triangles over the mark\n";
+            if (++tris_shown > 16)
+            {
+                out << "  ... and more triangles over the mark\n";
+                break;
+            }
+            out << "  tri over the mark z " << o.mMin << ".." << o.mMax << " normal z " << o.mNormalZ << " provenance "
+                << o.mProvenance << " root " << o.mRoot << "\n";
         }
     }
 
