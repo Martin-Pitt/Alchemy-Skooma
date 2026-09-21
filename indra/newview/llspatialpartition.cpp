@@ -2263,9 +2263,22 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
             gGL.getTextureSlot(0)->unbind();
 
-            if (!decomp->mHull.empty())
-            { //decomposition exists, use that
+            // <SK:Nexii> A mesh whose physics shape type is Prim collides as
+            // the physics mesh it was uploaded with, not as its convex
+            // decomposition: ask for the physics mesh and take it the moment
+            // it lands, the hulls only cover the wait. Convex Hull shapes
+            // never reach this branch (they arrive as USER_CONVEX).
+            gMeshRepo.fetchPhysicsShape(mesh_id);
 
+            if (!decomp->mPhysicsShapeMesh.empty())
+            {
+                //decomp has physics mesh, render that mesh
+                gGL.diffuseColor4fv(color.mV);
+
+                LLVertexBuffer::drawArrays(LLRender::TRIANGLES, decomp->mPhysicsShapeMesh.mPositions);
+            }
+            else if (!decomp->mHull.empty())
+            { //physics mesh still on its way, the decomposition covers the wait
                 if (decomp->mMesh.empty())
                 {
                     gMeshRepo.buildPhysicsMesh(*decomp);
@@ -2276,22 +2289,9 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
                     render_hull(decomp->mMesh[i], color);
                 }
             }
-            else if (!decomp->mPhysicsShapeMesh.empty())
-            {
-                //decomp has physics mesh, render that mesh
-                gGL.diffuseColor4fv(color.mV);
-
-                LLVertexBuffer::drawArrays(LLRender::TRIANGLES, decomp->mPhysicsShapeMesh.mPositions);
-            }
             else
             { //no mesh or decomposition, render base hull
                 renderMeshBaseHull(volume, data_mask, color);
-
-                if (decomp->mPhysicsShapeMesh.empty())
-                {
-                    //attempt to fetch physics shape mesh if available
-                    gMeshRepo.fetchPhysicsShape(mesh_id);
-                }
             }
         }
         else
