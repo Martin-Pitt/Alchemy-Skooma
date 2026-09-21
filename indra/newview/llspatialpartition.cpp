@@ -2237,7 +2237,11 @@ void renderPhysicsShape(LLDrawable* drawable, LLVOVolume* volume, bool wireframe
 
     if (wireframe)
     {
+        // Halve the colour but keep the alpha: this pass is what separates
+        // coplanar shapes, and at half alpha it reads as a slightly darker
+        // wash of the fill rather than an edge.
         color = color * 0.5f;
+        color.mV[VALPHA] = 1.f;
     }
 
     U32 data_mask = LLVertexBuffer::MAP_VERTEX;
@@ -2537,7 +2541,12 @@ void renderPhysicsShapes(LLSpatialGroup* group, bool wireframe)
         else
         {
             LLVOVolume* volume = drawable->getVOVolume();
-            if (volume && !volume->isAttachment() && volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_NONE )
+            // A phantom does not collide, so its shape is not something anyone
+            // can stand on or bump into; drawing it only makes the overlay
+            // noisier. The flag can sit on the part or on the linkset root, so
+            // check both.
+            const bool phantom = volume && (volume->flagPhantom() || volume->getRootEdit()->flagPhantom());
+            if (volume && !phantom && !volume->isAttachment() && volume->getPhysicsShapeType() != LLViewerObject::PHYSICS_SHAPE_NONE )
             {
                 if (!group->getSpatialPartition()->isBridge())
                 {
