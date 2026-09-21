@@ -6555,6 +6555,34 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         {
             get_vertex_buffer_from_mesh(mesh, decomp.mMesh[i]);
         }
+        else
+        {
+            // QuickHull builds nothing for a hull with no volume: every point
+            // coplanar. Such a hull is still the physics shape the sim collides
+            // with -- an analyzed physics model is often only its surfaces --
+            // so fan it from its own points rather than leaving the physics
+            // shape overlay and the navmesh census with nothing to draw.
+            const std::vector<LLVector3>& points = decomp.mHull[i];
+            LLModel::PhysicsMesh& out = decomp.mMesh[i];
+
+            for (size_t j = 1; j + 1 < points.size(); ++j)
+            {
+                const LLVector3& v0 = points[0];
+                const LLVector3& v1 = points[j];
+                const LLVector3& v2 = points[j + 1];
+
+                LLVector3 normal = (v1 - v0) % (v2 - v0);
+                normal.normalize();
+
+                out.mPositions.push_back(v0);
+                out.mPositions.push_back(v1);
+                out.mPositions.push_back(v2);
+
+                out.mNormals.push_back(normal);
+                out.mNormals.push_back(normal);
+                out.mNormals.push_back(normal);
+            }
+        }
     }
 
     if (!decomp.mBaseHull.empty() && decomp.mBaseHullMesh.empty())
