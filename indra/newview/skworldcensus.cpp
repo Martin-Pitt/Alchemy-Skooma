@@ -455,7 +455,20 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // surround stays in whatever its flags, as its rendered shape.
     const bool phantom = root->flagPhantom();
     // Its own extent, not its centre: that is the whole point of a surround.
-    const LLVector3d span(0.5 * object->getScale().magVec(), 0.5 * object->getScale().magVec(), 0.0);
+    // A rotated box, not the scale's magnitude smeared over x and y: a tall
+    // thin tower is not a wide one, and smearing it calls an ordinary
+    // structure a surround because a corner of the smear pokes outside the
+    // region.
+    const LLVector3 half = object->getScale() * 0.5f;
+    const LLQuaternion rot = object->getRotationRegion();
+    const LLVector3 axis[3] = { LLVector3(1.f, 0.f, 0.f) * rot, LLVector3(0.f, 1.f, 0.f) * rot, LLVector3(0.f, 0.f, 1.f) * rot };
+    LLVector3 extent;
+    for (S32 i = 0; i < 3; ++i)
+    {
+        extent.mV[i] = std::fabs(axis[0].mV[i]) * half.mV[0] + std::fabs(axis[1].mV[i]) * half.mV[1]
+                     + std::fabs(axis[2].mV[i]) * half.mV[2];
+    }
+    const LLVector3d span(extent);
     const bool surround = isSurround(root, pos - span, pos + span);
     if (phantom && navRole != NavRole::EXCLUSION_VOLUME && !surround)
     {
