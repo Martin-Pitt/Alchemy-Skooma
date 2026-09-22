@@ -483,4 +483,40 @@ namespace tut
         ensure("path attempted", ok);
         ensure("riser keeps the treads split", partial);
     }
+
+    // Nothing below the land is worth a mesh: the sim keeps every agent on or
+    // above it, so a box buried under the ground leaves no underground floor,
+    // and one sunk into it stands only on the part that pokes out.
+    template<> template<>
+    void sknavbuild_object::test<12>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mZMin = -4.f;
+        in.mTerrain = flat(0.f);
+        // A buried roof 2.5 m down keeps 2 m of headroom to the land above it,
+        // so the headroom filter alone would leave it walkable; only the cull
+        // takes it out.
+        in.mRecords.push_back(box(14.f, 14.f, -4.f, 18.f, 18.f, -2.5f));
+        in.mRecords.push_back(box(20.f, 14.f, -3.5f, 24.f, 18.f, 2.5f));    // sunk, roof 2.5 m proud
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("terrain floor", r.mPolys[0] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        // Each query sits deep enough that the land's own polys are out of
+        // reach: only a span that survived underground could answer.
+        ensure("nothing under the buried box", m.nearest(LLVector3(16.f, 16.f, -3.f), snapped, 0.5f) == 0);
+        ensure("nothing under the proud box", m.nearest(LLVector3(22.f, 16.f, -3.f), snapped, 0.5f) == 0);
+        ensure("the proud roof is floor", m.nearest(LLVector3(22.f, 16.f, 2.5f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 2.5f) < 0.3f);
+        // The land itself is still walkable floor: a path crosses the tile
+        // round the proud box, where the buried one left no mark.
+        F32 length = 0.f;
+        bool partial = true;
+        ensure("path on the land: " + m.mWhy, m.path(LLVector3(4.f, 16.f, 0.f), LLVector3(28.f, 16.f, 0.f), length, partial));
+        ensure("path complete", !partial);
+        ensure("path went round", length > 24.f);
+    }
 }

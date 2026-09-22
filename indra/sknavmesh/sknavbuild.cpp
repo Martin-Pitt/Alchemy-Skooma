@@ -467,6 +467,81 @@ namespace
         }
     }
 
+    /// The land's surface as a span index at one heightfield cell, or -1 where
+    /// the terrain window has no say: outside it, or in the void past a
+    /// region's edge. Interpolated on the same two triangles per sample quad
+    /// the land is rasterised with, so the surface the cull reads is the one
+    /// the build put down.
+    S32 groundIndex(const rcHeightfield& hf, const TerrainWindow& t, S32 cx, S32 cz)
+    {
+        const F32 px = hf.bmin[0] + (cx + 0.5f) * hf.cs;    // Recast x runs along SL y
+        const F32 pz = hf.bmin[2] + (cz + 0.5f) * hf.cs;    // and Recast z along SL x
+        const F32 gx = (pz - t.mOrigin.mV[VX]) / t.mSpacing;
+        const F32 gy = (px - t.mOrigin.mV[VY]) / t.mSpacing;
+        if (gx < 0.f || gy < 0.f || gx > t.mWidth - 1.f || gy > t.mHeight - 1.f)
+        {
+            return -1;
+        }
+        const S32 i0 = llclamp(static_cast<S32>(gx), 0, t.mWidth - 2);
+        const S32 j0 = llclamp(static_cast<S32>(gy), 0, t.mHeight - 2);
+        const F32 u = llclamp(gx - i0, 0.f, 1.f);
+        const F32 v = llclamp(gy - j0, 0.f, 1.f);
+        const F32 z00 = t.mZ[j0 * t.mWidth + i0], z10 = t.mZ[j0 * t.mWidth + i0 + 1];
+        const F32 z01 = t.mZ[(j0 + 1) * t.mWidth + i0], z11 = t.mZ[(j0 + 1) * t.mWidth + i0 + 1];
+        if (z00 < VOID_Z || z10 < VOID_Z || z01 < VOID_Z || z11 < VOID_Z)
+        {
+            return -1;
+        }
+        const F32 z = u > v ? z00 + u * (z10 - z00) + v * (z11 - z10)
+                            : z00 + v * (z01 - z00) + u * (z11 - z01);
+        return llclamp(static_cast<S32>(std::floor((z - hf.bmin[1]) / hf.ch)), 0, RC_SPAN_MAX_HEIGHT);
+    }
+
+    /// Nothing legitimate lies below the land: the terrain surface is the
+    /// ground, the sim keeps every agent on or above it, and a prim buried in
+    /// it is out of reach. A span wholly under the surface at its column is
+    /// removed, and one that reaches through it is trimmed to start there, so
+    /// no floor, wall face or drop is ever read off the buried part. Columns
+    /// the terrain window does not cover - the void past a region's edge, a
+    /// mesh clear of the ground - keep everything.
+    void cullUnderground(rcHeightfield& hf, const TerrainWindow& t)
+    {
+        if (t.mWidth < 2 || t.mHeight < 2 || t.mZ.size() < static_cast<size_t>(t.mWidth * t.mHeight))
+        {
+            return;
+        }
+        for (S32 cz = 0; cz < hf.height; ++cz)
+        {
+            for (S32 cx = 0; cx < hf.width; ++cx)
+            {
+                rcSpan** link = &hf.spans[cx + cz * hf.width];
+                if (!*link)
+                {
+                    continue;
+                }
+                const S32 ground = groundIndex(hf, t, cx, cz);
+                if (ground < 0)
+                {
+                    continue;
+                }
+                while (*link)
+                {
+                    rcSpan* s = *link;
+                    if (static_cast<S32>(s->smax) < ground)
+                    {
+                        *link = s->next;    // wholly underground
+                        continue;
+                    }
+                    if (static_cast<S32>(s->smin) < ground)
+                    {
+                        s->smin = static_cast<unsigned short>(ground);  // the earth fills below the surface
+                    }
+                    link = &s->next;
+                }
+            }
+        }
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -678,6 +753,7 @@ namespace sknav
                 cutVolume(*mem.hf, cut_soup, range.first, range.second);
             }
             bridgeCrevices(*mem.hf, cfg.walkableClimb);
+            cullUnderground(*mem.hf, input.mTerrain);
             // The ledge filter marks a span a ledge when the height range of
             // its accessible neighbours exceeds the climb it is given, which
             // reads every slope steeper than atan(climb / two cells) as a

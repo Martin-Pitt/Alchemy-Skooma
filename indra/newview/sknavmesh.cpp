@@ -916,6 +916,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             zmax = std::max(zmax, z);
         }
     }
+    const F32 land_min = zmin;
     for (const RecordPtr& r : tile.mRecords)
     {
         // An exclusion volume is not a shape: the sim takes the navmesh out
@@ -933,6 +934,14 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     {
         zmin = std::min(zmin, static_cast<F32>(r->mMin.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
         zmax = std::max(zmax, static_cast<F32>(r->mMax.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
+    }
+    // The land's lowest sample is the deepest ground there is: a record
+    // buried below it never becomes a floor, so the heightfield does not
+    // reach down for it. Whatever still falls under the surface, the tile
+    // build takes out of the spans.
+    if (land_min < 1e9f)
+    {
+        zmin = std::max(zmin, land_min);
     }
     if (zmin > zmax)
     {
