@@ -159,7 +159,9 @@ private:
     void gatherCached();
     bool classifyRest(LLViewerObject* root, const LLVector3d& pos);
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
-    sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature);
+    /// One record from one part, at the sim-side transform the caller signed.
+    sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
+                            const LLVector3& pos, const LLQuaternion& rot);
 
     void requestRoles();
     void onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindingObjectList> list);

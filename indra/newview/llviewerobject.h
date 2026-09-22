@@ -343,6 +343,13 @@ public:
 
     const LLQuaternion getRotationRegion() const;
     const LLQuaternion getRotationEdit() const;
+    // <SK:Nexii> navmesh census: the rotation the simulator last set, without
+    // the client-side llTargetOmega spin the viewer accumulates on top of it.
+    // The sim's physics never sees that spin on a non-physical object or a
+    // linkset child, so the shape it declares sits at this rotation for as
+    // long as the prim turns on its own.
+    const LLQuaternion& getRotationSim() const { return mPreviousRotation; }
+    // </SK:Nexii>
     const LLQuaternion getRenderRotation() const;
     virtual const LLMatrix4a& getRenderMatrix() const;
 

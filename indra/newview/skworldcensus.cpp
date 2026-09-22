@@ -68,6 +68,28 @@ namespace
         return root;
     }
 
+    // The region transform the simulator knows for a part: every link
+    // contributes the rotation the sim last set. The viewer applies
+    // llTargetOmega to a non-physical object or a linkset child on its own,
+    // and the sim's physics never sees that spin, so the shape the sim
+    // declares sits at this transform while the rendered one turns for as
+    // long as the prim spins.
+    void simRegionTransform(const LLViewerObject* object, LLVector3& pos, LLQuaternion& rot)
+    {
+        if (object->isRoot())
+        {
+            pos = object->getPosition();
+            rot = object->getRotationSim();
+        }
+        else
+        {
+            const LLViewerObject* parent = static_cast<const LLViewerObject*>(object->getParent());
+            simRegionTransform(parent, pos, rot);
+            pos += object->getPosition() * rot;
+            rot = object->getRotationSim() * rot;
+        }
+    }
+
     U64 mixVec(U64 h, const LLVector3& v)
     {
         h = mixF32(h, v.mV[0]);
@@ -449,6 +471,12 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
 
+    // What the record is signed and built from: the sim-side transform, which
+    // holds still while a part spins on its own (simRegionTransform).
+    LLVector3 sim_pos;
+    LLQuaternion sim_rot;
+    simRegionTransform(object, sim_pos, sim_rot);
+
     const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()));
     const NavRole navRole = roleOf(root->getID());
     if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
@@ -465,7 +493,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // structure a surround because a corner of the smear pokes outside the
     // region.
     const LLVector3 half = object->getScale() * 0.5f;
-    const LLQuaternion rot = object->getRotationRegion();
+    const LLQuaternion rot = sim_rot;
     const LLVector3 axis[3] = { LLVector3(1.f, 0.f, 0.f) * rot, LLVector3(0.f, 1.f, 0.f) * rot, LLVector3(0.f, 0.f, 1.f) * rot };
     LLVector3 extent;
     for (S32 i = 0; i < 3; ++i)
@@ -492,8 +520,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
     // belongs to without moving it.
     sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData));
     sig = mix(sig, *reinterpret_cast<const U64*>(root->getID().mData + 8));
-    sig = mixVec(sig, object->getPositionRegion());
-    sig = mixQuat(sig, object->getRotationRegion());
+    sig = mixVec(sig, sim_pos);
+    sig = mixQuat(sig, sim_rot);
     sig = mixVec(sig, object->getScale());
     sig = mix(sig, shape.mPhysicsType);
     sig = mix(sig, hasPhysics ? static_cast<U64>(shape.mSpec.getType()) : 99);
@@ -559,7 +587,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
     else
     {
-        rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, sig);
+        rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, sig, sim_pos, sim_rot);
         if (!rec)
         {
             return;
@@ -695,7 +723,8 @@ void SKWorldCensus::visitCached(const CachedPart& part)
     snap.mStats.mFromObjectCache++;
 }
 
-sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature)
+sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
+                                       const LLVector3& pos, const LLQuaternion& rot)
 {
     SKShapeGeometry geom;
     bool ok = false;
@@ -724,8 +753,6 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mSignature = signature;
     rec->mOrigin = volume->getRegion()->getOriginGlobal();
 
-    const LLVector3 pos = volume->getPositionRegion();
-    const LLQuaternion rot = volume->getRotationRegion();
     const LLVector3 scale = volume->getScale();
 
     rec->mMin.set(1e30, 1e30, 1e30);
