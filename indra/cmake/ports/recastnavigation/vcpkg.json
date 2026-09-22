@@ -1,7 +1,7 @@
 {
   "name": "recastnavigation",
   "version": "1.6.0",
-  "port-version": 2,
+  "port-version": 3,
   "description": "Navigation-mesh Toolset for Games",
   "homepage": "https://github.com/recastnavigation/recastnavigation",
   "license": "Zlib",

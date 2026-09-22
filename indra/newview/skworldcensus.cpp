@@ -124,6 +124,11 @@ SKWorldCensus::~SKWorldCensus()
 {
 }
 
+void SKWorldCensus::cleanupSingleton()
+{
+    abandonScan();
+}
+
 void SKWorldCensus::addDemand(const std::string& who, F32 range_m)
 {
     mDemands[who] = range_m;
@@ -524,6 +529,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;
+        rec->mConvexTris = geom.mConvexTris;
     }
     else
     {
@@ -639,6 +645,7 @@ void SKWorldCensus::renderDebug()
         switch (r->mProvenance)
         {
             case Provenance::EXACT: gGL.diffuseColor4f(0.2f, 1.f, 0.2f, 0.6f); break;
+            case Provenance::BASE_HULL:
             case Provenance::HULL: gGL.diffuseColor4f(0.2f, 0.6f, 1.f, 0.6f); break;
             case Provenance::BOX: gGL.diffuseColor4f(1.f, 0.2f, 0.2f, 0.8f); break;
             case Provenance::RENDER: gGL.diffuseColor4f(1.f, 0.6f, 0.2f, 0.6f); break;
