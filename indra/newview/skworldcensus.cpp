@@ -501,17 +501,17 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, surround);
     sig = mix(sig, static_cast<U64>(navRole));
     sig = mix(sig, object->isPhysicsShapeUnknown());
-    // Only what is built from the rendered volume - a surround, a classic
-    // sculpt - depends on the loaded LOD. Mixing it in for everything else
-    // re-signs every record as the camera moves and rebuilds its tiles for
-    // nothing, which is what leaves tiles in flight while you walk.
-    const bool from_render = surround
-        || (hasPhysics && shape.mSpec.getType() == LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::SCULPT);
+    // Only a surround is built from the rendered volume, so only a surround
+    // depends on the loaded LOD. Mixing it in for everything else re-signs
+    // records as the camera moves and rebuilds their tiles for nothing, which
+    // is what leaves tiles in flight while you walk. The display volume's face
+    // count and the hull the physics-shapes overlay caches on it are the same
+    // trap and are not what any shape is built from; the build reads a fixed
+    // detail or the decomposition instead (skphysicsshape.cpp).
+    const bool from_render = surround;
     sig = mix(sig, from_render ? volume->getLOD() : 0);
     {
         const LLVolume* v = volume->getVolume();
-        sig = mix(sig, v->getNumVolumeFaces());
-        sig = mix(sig, v->mNumHullPoints);
         sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VX]);
         sig = mixF64(sig, object->getRegion()->getOriginGlobal().mdV[VY]);
         // The volume parameters: a cut, hollow or twist edit keeps position,

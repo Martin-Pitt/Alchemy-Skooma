@@ -72,15 +72,6 @@ namespace
         }
     }
 
-    void appendHull(const LLVolume* volume, std::vector<LLVector3>& out)
-    {
-        out.reserve(out.size() + volume->mNumHullIndices);
-        for (S32 i = 0; i < volume->mNumHullIndices; ++i)
-        {
-            out.emplace_back(volume->mHullPoints[volume->mHullIndices[i]].getF32ptr());
-        }
-    }
-
     void appendSoup(const std::vector<LLVector3>& positions, std::vector<LLVector3>& out)
     {
         // A PhysicsMesh is three positions per triangle already.
@@ -235,20 +226,12 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             }
             else
             {
-                // The overlay builds a single hull lazily and caches it on the
-                // volume; take it when it is there, and the faces meanwhile
-                // (they sit inside the hull, so an obstacle reads slightly small
-                // until the overlay has been shown once).
+                // The physics-detail volume, not the loaded one: the faces sit
+                // inside the single hull the overlay draws, and taking them at
+                // a fixed detail is what keeps the shape - and so the tiles
+                // built from it - from moving with the camera.
                 LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
-                if (phys->mHullPoints && phys->mHullIndices)
-                {
-                    out.mProvenance = sknav::Provenance::HULL;
-                    appendHull(phys, out.mTriangles);
-                }
-                else
-                {
-                    appendFaces(phys, out.mTriangles);
-                }
+                appendFaces(phys, out.mTriangles);
                 LLPrimitive::sVolumeManager->unrefVolume(phys);
             }
             break;
@@ -281,10 +264,14 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
         }
         case Spec::SCULPT:
         {
-            // The overlay draws nothing for a classic sculpt; the physics engine
-            // uses its convex hull. The rendered faces are the closest thing we have.
+            // The sim collides with the sculpt's convex hull, which the viewer
+            // never builds; the faces at a fixed detail are the closest stable
+            // stand-in. The loaded volume would make the shape follow the
+            // camera, rebuilding every tile the sculpt reaches.
+            LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
             out.mProvenance = sknav::Provenance::RENDER;
-            appendFaces(volume->getVolume(), out.mTriangles);
+            appendFaces(phys, out.mTriangles);
+            LLPrimitive::sVolumeManager->unrefVolume(phys);
             break;
         }
         default:
