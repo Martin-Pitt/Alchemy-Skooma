@@ -1087,7 +1087,6 @@ void SKNavMesh::update()
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
     mStats.mTilesBuilt = 0;
-    mStats.mPolys = 0;
     mStats.mFaces = 0;
     mStats.mSegments = 0;
     mStats.mLinks = 0;
@@ -1110,7 +1109,6 @@ void SKNavMesh::update()
             if (t.second.mBuilt)
             {
                 mStats.mTilesBuilt++;
-                mStats.mPolys += t.second.mPolys[0];
                 mStats.mFaces += t.second.mFaces ? static_cast<U32>(t.second.mFaces->size()) : 0;
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
@@ -1131,8 +1129,8 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u avatar polys, %u storeys, %u connectors, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
-                    mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight, mStats.mPolys,
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u storeys, %u connectors, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
+                    mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mLevels, mStats.mConnectors, mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs);
 }

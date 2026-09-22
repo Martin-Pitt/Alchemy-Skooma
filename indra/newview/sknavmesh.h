@@ -107,7 +107,6 @@ public:
         U32 mTilesBuilt = 0;
         U32 mQueued = 0;
         U32 mInFlight = 0;
-        U32 mPolys = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
         U32 mLevels = 0;
