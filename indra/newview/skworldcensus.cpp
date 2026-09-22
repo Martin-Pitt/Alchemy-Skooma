@@ -449,16 +449,6 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
 
-    const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()));
-    const NavRole navRole = roleOf(root->getID());
-    if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
-    {
-        mRolesWanted = true;
-    }
-
-    // Phantom stays out unless the sim says it is an exclusion volume; a
-    // surround stays in whatever its flags, as its rendered shape.
-    const bool phantom = root->flagPhantom();
     // Its own extent, not its centre: that is the whole point of a surround.
     // A rotated box, not the scale's magnitude smeared over x and y: a tall
     // thin tower is not a wide one, and smearing it calls an ordinary
@@ -473,6 +463,33 @@ void SKWorldCensus::visit(LLViewerObject* object)
         extent.mV[i] = std::fabs(axis[0].mV[i]) * half.mV[0] + std::fabs(axis[1].mV[i]) * half.mV[1]
                      + std::fabs(axis[2].mV[i]) * half.mV[2];
     }
+
+    const NavRole navRole = roleOf(root->getID());
+    if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
+    {
+        mRolesWanted = true;
+    }
+
+    // A part under the agent's erosion radius in every world axis cannot
+    // leave a surface an agent could stand on, and erosion takes back any
+    // dent it makes: nothing it does to a tile survives to the built mesh,
+    // so it never becomes a record and never re-signs the tile it hangs
+    // over. Small parts appear in clouds as content streams in, and each
+    // one arriving was a whole tile rebuild for nothing. An exclusion volume
+    // keeps: the sim takes the navmesh out of it whatever its size.
+    static LLCachedControl<F32> min_shape(gSavedSettings, "SKNavMinShape", 0.3f);
+    if (navRole != NavRole::EXCLUSION_VOLUME
+        && extent.mV[VX] < min_shape && extent.mV[VY] < min_shape && extent.mV[VZ] < min_shape)
+    {
+        snap.mStats.mTiny++;
+        return;
+    }
+
+    const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()));
+
+    // Phantom stays out unless the sim says it is an exclusion volume; a
+    // surround stays in whatever its flags, as its rendered shape.
+    const bool phantom = root->flagPhantom();
     const LLVector3d span(extent);
     const bool surround = isSurround(root, pos - span, pos + span);
     if (phantom && navRole != NavRole::EXCLUSION_VOLUME && !surround)
@@ -834,9 +851,9 @@ std::string SKWorldCensus::statsLine() const
     {
         largest = std::max(largest, c->mRecords.size());
     }
-    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache), %u tris, %u roles; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms",
+    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny), %u tris, %u roles; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms",
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
-                    s.mPlaceholders, s.mFromObjectCache, s.mTriangles, s.mRolesKnown, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs);
+                    s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs);
 }
 
 void SKWorldCensus::renderDebug()

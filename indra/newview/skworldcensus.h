@@ -59,6 +59,7 @@ struct SKCensusSnapshot
         U32 mPlaceholders = 0;      ///< provenance BOX: an asset still fetching
         U32 mCached = 0;            ///< parts reused from the previous scan
         U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
+        U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record
         U32 mTriangles = 0;
         U32 mRolesKnown = 0;
         F32 mScanMs = 0.f;          ///< main-thread time the scan took, summed over its slices
