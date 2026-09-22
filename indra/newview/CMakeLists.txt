@@ -162,8 +162,10 @@ if(AL_BUILD_VIEWER)
     alfloaterwebprofile.cpp
     alfloaterxuilibrary.cpp
     alfloaterxuistudio.cpp
+    alviewcapture.cpp
     algradehistory.cpp
     allegacynotificationwellwindow.cpp
+    allightboxdirectory.cpp
     almotionpredictor.cpp
     alobjectproperties.cpp
     alagentlocationformat.cpp
@@ -948,8 +950,10 @@ if(AL_BUILD_VIEWER)
     alfloaterwebprofile.h
     alfloaterxuilibrary.h
     alfloaterxuistudio.h
+    alviewcapture.h
     algradehistory.h
     allegacynotificationwellwindow.h
+    allightboxdirectory.h
     almotionpredictor.h
     alobjectproperties.h
     alagentlocationformat.h
