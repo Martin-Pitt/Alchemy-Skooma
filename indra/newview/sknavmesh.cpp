@@ -1254,6 +1254,26 @@ std::string SKNavMesh::markUnderCamera()
         }
     }
 
+    // The part's own record, the one that decides what the navmesh has under
+    // the camera, with the box it covers: it is often past the nearby list's
+    // cap, and its extent is what says whether a ledge is too narrow to erode.
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (r->mPart != hit->getID())
+            {
+                continue;
+            }
+            out << "  part record provenance " << static_cast<S32>(r->mProvenance) << " shape "
+                << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
+                << static_cast<S32>(r->mNavRole) << " x " << r->mMin.mdV[VX] << ".." << r->mMax.mdV[VX] << " y "
+                << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ] << ".." << r->mMax.mdV[VZ]
+                << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+            break;
+        }
+    }
+
     // What the census made of everything around the mark.
     const LLVector3d reach(4.0, 4.0, 4.0);
     if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
