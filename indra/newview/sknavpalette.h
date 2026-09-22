@@ -35,8 +35,7 @@ enum class SKNavSwatch : S32
     GROUND,         ///< walkable terrain
     OBJECT,         ///< walkable object surface
     SUBMERGED,      ///< walkable, but under water
-    LEVEL,          ///< stands in for the per-storey colours, which are hashed
-    CONNECTOR,      ///< stair or ramp between two storeys
+    OTHER,          ///< walkable, with an area class the palette does not know
     TILE_JOINED,    ///< tile-boundary edge Detour linked to its neighbour
     TILE_OPEN,      ///< tile-boundary edge with nothing joined to it
     COVER_FULL,     ///< wall taller than the reader's eye

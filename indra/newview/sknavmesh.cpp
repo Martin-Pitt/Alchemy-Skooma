@@ -745,7 +745,6 @@ void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
     {
         if (wanted.count(old.first) == 0 && old.second.mBuilt)
         {
-            mesh.mLevelsStale = true;
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
             {
                 if (mesh.mNav[cls])
@@ -916,67 +915,6 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
-    mesh.mPublishedAt = gFrameTimeSeconds;
-    mesh.mLevelsStale = true;
-}
-
-void SKNavMesh::relabel()
-{
-    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavBuildLevels", true);
-    static LLCachedControl<F32> settle(gSavedSettings, "SKNavLevelSettleSeconds", 0.25f);
-    static LLCachedControl<F32> band(gSavedSettings, "SKNavLevelBand", 0.75f);
-    static LLCachedControl<F32> minArea(gSavedSettings, "SKNavLevelMinArea", 16.f);
-    if (!enabled)
-    {
-        return;
-    }
-    // One structure a frame, the nearest first: the walk is cheap but a mall
-    // is not, and nothing needs its storeys the instant a tile lands.
-    Mesh* pick = nullptr;
-    F32 oldest = 0.f;
-    for (auto& entry : mMeshes)
-    {
-        Mesh& mesh = *entry.second;
-        if (!mesh.mLevelsStale || mesh.mPublishedAt < 0.f || gFrameTimeSeconds - mesh.mPublishedAt < settle)
-        {
-            continue;
-        }
-        const F32 waited = gFrameTimeSeconds - mesh.mRelabelledAt;
-        if (!pick || waited > oldest)
-        {
-            pick = &mesh;
-            oldest = waited;
-        }
-    }
-    if (!pick)
-    {
-        return;
-    }
-    pick->mLevelsStale = false;
-    pick->mRelabelledAt = gFrameTimeSeconds;
-
-    LevelParams params;
-    params.mBand = band;
-    params.mMinArea = minArea;
-    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-    {
-        if (!pick->mNav[cls] || !pick->mQuery[cls])
-        {
-            pick->mLevels[cls].reset();
-            continue;
-        }
-        std::vector<DropLink> links;
-        for (const auto& t : pick->mTiles)
-        {
-            if (t.second.mLinks[cls])
-            {
-                links.insert(links.end(), t.second.mLinks[cls]->begin(), t.second.mLinks[cls]->end());
-            }
-        }
-        auto levels = std::make_shared<Levels>();
-        buildLevels(*pick->mNav[cls], *pick->mQuery[cls], params, links, *levels);
-        pick->mLevels[cls] = levels;
-    }
 }
 
 void SKNavMesh::schedule()
@@ -1082,7 +1020,6 @@ void SKNavMesh::update()
 
     sampleTerrain();
     schedule();
-    relabel();
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1090,19 +1027,9 @@ void SKNavMesh::update()
     mStats.mFaces = 0;
     mStats.mSegments = 0;
     mStats.mLinks = 0;
-    mStats.mLevels = 0;
-    mStats.mConnectors = 0;
     mStats.mInFlight = mInFlight;
     for (const auto& entry : mMeshes)
     {
-        if (const Levels* levels = entry.second->mLevels[0].get())
-        {
-            for (const Level& level : levels->mLevels)
-            {
-                mStats.mLevels += level.mTransitional ? 0 : 1;
-            }
-            mStats.mConnectors += static_cast<U32>(levels->mConnectors.size());
-        }
         for (const auto& t : entry.second->mTiles)
         {
             mStats.mTiles++;
@@ -1129,13 +1056,13 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u storeys, %u connectors, %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
-                    mStats.mLevels, mStats.mConnectors, mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
+                    mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs);
 }
 
-SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out, U16* level_out) const
+SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const
 {
     const S32 c = static_cast<S32>(cls);
     Mesh* best = nullptr;
@@ -1162,19 +1089,15 @@ SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z
                 bestDz = dz;
                 best = &mesh;
                 z_out = nearest[1] + static_cast<F32>(mesh.mOrigin.mdV[VZ]);
-                if (level_out)
-                {
-                    *level_out = mesh.mLevels[c] ? mesh.mLevels[c]->levelOf(ref) : Levels::NO_LEVEL;
-                }
             }
         }
     }
     return best;
 }
 
-bool SKNavMesh::floorUnder(const LLVector3d& pos, AgentClass cls, F32& z_out, LLUUID* mesh_out, U16* level_out) const
+bool SKNavMesh::floorUnder(const LLVector3d& pos, AgentClass cls, F32& z_out, LLUUID* mesh_out) const
 {
-    Mesh* mesh = meshAt(pos, cls, z_out, level_out);
+    Mesh* mesh = meshAt(pos, cls, z_out);
     if (!mesh)
     {
         return false;
@@ -1232,46 +1155,6 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
         out.push_back(mesh->mOrigin + LLVector3d(fromRecast(&straight[i * 3])));
     }
     return !out.empty();
-}
-
-void SKNavMesh::connectorsOf(const LLUUID& mesh_id, AgentClass cls, U16 level, const ConnectorFn& fn) const
-{
-    const auto it = mMeshes.find(mesh_id);
-    if (it == mMeshes.end())
-    {
-        return;
-    }
-    const Mesh& mesh = *it->second;
-    // A copy, so relabelling cannot swap it out under the walk.
-    const std::shared_ptr<const Levels> levels = mesh.mLevels[static_cast<S32>(cls)];
-    if (!levels)
-    {
-        return;
-    }
-    for (const Connector& c : levels->mConnectors)
-    {
-        if (c.mLow != level && c.mHigh != level)
-        {
-            continue;
-        }
-        fn(mesh.mOrigin + LLVector3d(c.mLowPoint), mesh.mOrigin + LLVector3d(c.mHighPoint), c.mKind, c.mOneWay);
-    }
-}
-
-bool SKNavMesh::levelHeight(const LLUUID& mesh_id, AgentClass cls, U16 level, F32& z_out) const
-{
-    const auto it = mMeshes.find(mesh_id);
-    if (it == mMeshes.end())
-    {
-        return false;
-    }
-    const std::shared_ptr<const Levels> levels = it->second->mLevels[static_cast<S32>(cls)];
-    if (!levels || level >= levels->mLevels.size())
-    {
-        return false;
-    }
-    z_out = levels->mLevels[level].mZ + static_cast<F32>(it->second->mOrigin.mdV[VZ]);
-    return true;
 }
 
 void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const
@@ -1771,13 +1654,9 @@ void SKNavMesh::renderDebug()
     static LLCachedControl<F32> edge_width(gSavedSettings, "SKNavOverlayEdgeWidth", 3.f);
     static LLCachedControl<bool> xray(gSavedSettings, "SKNavOverlayXRay", false);
     static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
-    static LLCachedControl<bool> by_level(gSavedSettings, "SKNavOverlayByLevel", false);
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
-    // Off by default: the storey model joins a stairwell to a floor at an
-    // arbitrary polygon on it, so the lines land far from the stairs.
-    static LLCachedControl<bool> show_connectors(gSavedSettings, "SKNavOverlayConnectors", false);
 
     // Which class the overlay shows. WEATHER is only there to look at when
     // it is being built (SKNavBuildWeather); the console says so.
@@ -1794,7 +1673,7 @@ void SKNavMesh::renderDebug()
     };
 
     // With the world wiped there is nothing to see through: the mesh draws
-    // opaque and writes depth, so stacked storeys sort by depth rather than by
+    // opaque and writes depth, so stacked floors sort by depth rather than by
     // the order their tiles happen to come out of Detour.
     const bool opaque = !show_world;
     auto strength = [opaque](LLColor4 color, F32 scale) {
@@ -1819,22 +1698,6 @@ void SKNavMesh::renderDebug()
         {
             continue;
         }
-        const std::shared_ptr<const Levels> levels = mesh.mLevels[cls];
-        if (levels && show_connectors)
-        {
-            // The ways off each storey, drawn from the low end to the high one.
-            const LLColor4 color = strength(skNavSwatchColor(SKNavSwatch::CONNECTOR), 1.f);
-            const LLVector3 lift(0.f, 0.f, 0.1f);
-            for (const Connector& c : levels->mConnectors)
-            {
-                const LLVector3d low = mesh.mOrigin + LLVector3d(c.mLowPoint);
-                if (within(low))
-                {
-                    geom.line(gAgent.getPosAgentFromGlobal(low) + lift,
-                              gAgent.getPosAgentFromGlobal(mesh.mOrigin + LLVector3d(c.mHighPoint)) + lift, color);
-                }
-            }
-        }
         const LLVector3 originAgent = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
         for (int i = 0; i < nav->getMaxTiles(); ++i)
         {
@@ -1857,31 +1720,12 @@ void SKNavMesh::renderDebug()
                     continue;
                 }
                 LLColor4 color;
-                if (by_level && levels)
+                switch (areaOf(poly.flags))
                 {
-                    // Each storey its own colour, so a building's floors can be
-                    // told apart at a glance.
-                    const U16 level = levels->levelOf(nav->getPolyRefBase(tile) | static_cast<dtPolyRef>(p));
-                    if (level == Levels::NO_LEVEL)
-                    {
-                        color = skNavSwatchColor(SKNavSwatch::LEVEL);
-                    }
-                    else
-                    {
-                        const U32 h = static_cast<U32>(mix(SEED, level));
-                        color.set(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
-                                  0.3f + 0.7f * (((h >> 16) & 255) / 255.f), 0.9f);
-                    }
-                }
-                else
-                {
-                    switch (areaOf(poly.flags))
-                    {
-                        case AREA_GROUND: color = skNavSwatchColor(SKNavSwatch::GROUND); break;
-                        case AREA_OBJECT: color = skNavSwatchColor(SKNavSwatch::OBJECT); break;
-                        case AREA_SUBMERGED: color = skNavSwatchColor(SKNavSwatch::SUBMERGED); break;
-                        default: color = skNavSwatchColor(SKNavSwatch::LEVEL); break;
-                    }
+                    case AREA_GROUND: color = skNavSwatchColor(SKNavSwatch::GROUND); break;
+                    case AREA_OBJECT: color = skNavSwatchColor(SKNavSwatch::OBJECT); break;
+                    case AREA_SUBMERGED: color = skNavSwatchColor(SKNavSwatch::SUBMERGED); break;
+                    default: color = skNavSwatchColor(SKNavSwatch::OTHER); break;
                 }
                 const LLColor4 fill = strength(color, FILL);
                 const LLColor4 edge = strength(color, 1.f);
