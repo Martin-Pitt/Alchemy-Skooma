@@ -1,0 +1,39 @@
+Detour bug, no upstream PR pinned: closestPointOnDetailEdges reads the
+boundary edges of a polygon's detail triangulation and interpolates between
+the closest pair. Recast can hand back a polygon with an empty detail
+triangulation (see fix-detail-mesh-empty-tris.patch, which guards the read
+that creates them), and such a polygon has no boundary edge at all: pmin
+stays null and the dtVlerp reads through it, crashing every findNearestPoly
+or closestPointOnPoly that lands on the polygon. Fall back to the polygon's
+own edges, which always exist.
+diff --git a/Detour/Source/DetourNavMesh.cpp b/Detour/Source/DetourNavMesh.cpp
+index 2240526..3d34f3b 100644
+--- a/Detour/Source/DetourNavMesh.cpp
++++ b/Detour/Source/DetourNavMesh.cpp
+@@ -670,6 +670,26 @@ namespace
+ 			}
+ 		}
+ 
++		if (dmin == FLT_MAX)
++		{
++			// No boundary edge in the detail mesh (an empty triangulation):
++			// fall back to the polygon's own edges.
++			for (int i = 0, j = poly->vertCount-1; i < poly->vertCount; j = i++)
++			{
++				const float* vj = &tile->verts[poly->verts[j]*3];
++				const float* vi = &tile->verts[poly->verts[i]*3];
++				float t;
++				float d = dtDistancePtSegSqr2D(pos, vj, vi, t);
++				if (d < dmin)
++				{
++					dmin = d;
++					tmin = t;
++					pmin = vj;
++					pmax = vi;
++				}
++			}
++		}
++
+ 		dtVlerp(closest, pmin, pmax, tmin);
+ 	}
+ }

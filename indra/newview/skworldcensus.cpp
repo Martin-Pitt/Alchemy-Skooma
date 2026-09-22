@@ -114,6 +114,11 @@ SKWorldCensus::~SKWorldCensus()
 {
 }
 
+void SKWorldCensus::cleanupSingleton()
+{
+    abandonScan();
+}
+
 void SKWorldCensus::addDemand(const std::string& who, F32 range_m)
 {
     mDemands[who] = range_m;
@@ -514,6 +519,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;
+        rec->mConvexTris = geom.mConvexTris;
     }
     else
     {

@@ -31,6 +31,7 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -50,6 +51,41 @@ namespace
         r->mMin.set(x0, y0, z0);
         r->mMax.set(x1, y1, z1);
         return r;
+    }
+
+    // A record of triangles, as the census hands one over.
+    RecordPtr soup(const std::vector<LLVector3>& tris, Provenance provenance)
+    {
+        auto r = std::make_shared<Record>();
+        r->mShape = Shape::TRIANGLES;
+        r->mProvenance = provenance;
+        r->mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
+        r->mMin.set(1e9, 1e9, 1e9);
+        r->mMax.set(-1e9, -1e9, -1e9);
+        for (const LLVector3& p : tris)
+        {
+            for (S32 k = 0; k < 3; ++k)
+            {
+                r->mMin.mdV[k] = std::min(r->mMin.mdV[k], static_cast<F64>(p.mV[k]));
+                r->mMax.mdV[k] = std::max(r->mMax.mdV[k], static_cast<F64>(p.mV[k]));
+            }
+        }
+        return r;
+    }
+
+    // A hull record: the triangle soup the sim collides with as a solid.
+    RecordPtr hull(const std::vector<LLVector3>& tris)
+    {
+        return soup(tris, Provenance::HULL);
+    }
+
+    // A flat quad at z, as a floor arrives from a physics mesh.
+    std::vector<LLVector3> slab(F32 x0, F32 y0, F32 x1, F32 y1, F32 z)
+    {
+        return {
+            LLVector3(x0, y0, z), LLVector3(x1, y0, z), LLVector3(x1, y1, z),
+            LLVector3(x0, y0, z), LLVector3(x1, y1, z), LLVector3(x0, y1, z),
+        };
     }
 
     // A window that reaches past the tile's border cells on every side: Recast
@@ -275,5 +311,176 @@ namespace tut
 
         const TileBuildResult empty = buildTile(tile(3, 3));
         ensure("empty tile", empty.mStatus == TileBuildResult::EMPTY);
+    }
+
+    // A hull is what the sim collides with, and it collides with it from
+    // either side: a surface is floor whichever way its triangles wind, and a
+    // closed hull is solid, so there is no floor inside it.
+    template<> template<>
+    void sknavbuild_object::test<6>()
+    {
+        // A flat quad 2 m up, wound downward (clockwise seen from above).
+        std::vector<LLVector3> quad = {
+            LLVector3(4.f, 4.f, 2.f), LLVector3(4.f, 12.f, 2.f), LLVector3(12.f, 12.f, 2.f),
+            LLVector3(4.f, 4.f, 2.f), LLVector3(12.f, 12.f, 2.f), LLVector3(12.f, 4.f, 2.f),
+        };
+        // A closed box 1 m up and 6 m tall, wound outward.
+        const LLVector3 c[8] = {
+            LLVector3(16.f, 16.f, 1.f), LLVector3(28.f, 16.f, 1.f), LLVector3(28.f, 28.f, 1.f), LLVector3(16.f, 28.f, 1.f),
+            LLVector3(16.f, 16.f, 7.f), LLVector3(28.f, 16.f, 7.f), LLVector3(28.f, 28.f, 7.f), LLVector3(16.f, 28.f, 7.f),
+        };
+        std::vector<LLVector3> box_tris;
+        auto tri = [&](int a, int b, int d) {
+            box_tris.push_back(c[a]);
+            box_tris.push_back(c[b]);
+            box_tris.push_back(c[d]);
+        };
+        tri(0, 3, 2); tri(0, 2, 1);     // bottom
+        tri(4, 5, 6); tri(4, 6, 7);     // top
+        tri(0, 1, 5); tri(0, 5, 4);     // -y
+        tri(1, 2, 6); tri(1, 6, 5);     // +x
+        tri(2, 3, 7); tri(2, 7, 6);     // +y
+        tri(3, 0, 4); tri(3, 4, 7);     // -x
+
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(hull(quad));
+        in.mRecords.push_back(hull(box_tris));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("down-facing hull surface is floor", m.nearest(LLVector3(8.f, 8.f, 2.f), snapped, 0.5f) != 0);
+        ensure("at the surface height", std::fabs(snapped[1] - 2.f) < 0.3f);
+
+        // Inside the box the fill leaves nothing walkable, and the terrain
+        // below has a metre of headroom, which no avatar fits under.
+        ensure("no floor inside the closed hull", m.nearest(LLVector3(22.f, 22.f, 1.f), snapped, 0.5f) == 0);
+        ensure("the box roof is floor", m.nearest(LLVector3(22.f, 22.f, 7.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 7.f) < 0.3f);
+    }
+
+    // A steep ramp, 80 degrees: the weather class walks it, the avatar class
+    // does not. The ledge filter must not cut it out of the weather mesh,
+    // which its own rule would do at a climb of 0.75 m, where every slope
+    // steeper than 72 degrees reads as a ledge.
+    template<> template<>
+    void sknavbuild_object::test<7>()
+    {
+        std::vector<LLVector3> ramp = {
+            LLVector3(4.f, 4.f, 0.f), LLVector3(12.f, 4.f, 0.f), LLVector3(12.f, 7.5f, 20.f),
+            LLVector3(4.f, 4.f, 0.f), LLVector3(12.f, 7.5f, 20.f), LLVector3(4.f, 7.5f, 20.f),
+        };
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mParams[0].mSlope = 74.f;
+        in.mParams[1].mSlope = 89.f;
+        in.mRecords.push_back(soup(ramp, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        F32 snapped[3];
+        Mesh weather;
+        weather.add(r.mData[1]);
+        ensure("weather walks the steep ramp", weather.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) != 0);
+
+        Mesh avatar;
+        avatar.add(r.mData[0]);
+        ensure("the avatar class leaves it", avatar.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) == 0);
+    }
+
+    // A crevice one column wide between two floors is true air, and the sim
+    // has it solid: the bridge joins it, so a path crosses.
+    template<> template<>
+    void sknavbuild_object::test<8>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = true;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path across the crevice: " + m.mWhy, ok);
+        ensure("crevice joined", !partial);
+    }
+
+    // The wall's own matter in the crevice keeps the sides split: the bridge
+    // must not tunnel from a floor through a face that stands on it.
+    template<> template<>
+    void sknavbuild_object::test<9>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const std::vector<LLVector3> wall = {
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 4.f),
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 4.f), LLVector3(4.f, 11.875f, 4.f),
+        };
+        in.mRecords.push_back(soup(wall, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path attempted", ok);
+        ensure("wall keeps the crevice split", partial);
+    }
+
+    // Two empty columns are not a crevice: nothing joins a gap that wide.
+    template<> template<>
+    void sknavbuild_object::test<10>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 13.2f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path attempted", ok);
+        ensure("wide gap stays split", partial);
+    }
+
+    // A riser between two treads is matter at the seam's level, so the treads
+    // stay split: they do not bridge straight up the step.
+    template<> template<>
+    void sknavbuild_object::test<11>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.5f), Provenance::EXACT));
+        const std::vector<LLVector3> riser = {
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.5f),
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.5f), LLVector3(4.f, 11.875f, 2.5f),
+        };
+        in.mRecords.push_back(soup(riser, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.5f), length, partial);
+        ensure("path attempted", ok);
+        ensure("riser keeps the treads split", partial);
     }
 }
