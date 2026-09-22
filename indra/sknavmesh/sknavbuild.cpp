@@ -187,7 +187,7 @@ namespace
         std::vector<F32> mHi;
     };
 
-    void bodyExtent(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, BodyExtent& out)
+    void bodyExtent(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, BodyExtent& out, F32 pad = 0.f)
     {
         out = BodyExtent();
         if (tri_end <= tri_begin)
@@ -205,6 +205,10 @@ namespace
                 bmax[k] = std::max(bmax[k], v[k]);
             }
         }
+        bmin[0] -= pad;
+        bmin[2] -= pad;
+        bmax[0] += pad;
+        bmax[2] += pad;
         const S32 x0 = std::max(0, static_cast<S32>(std::floor((bmin[0] - hf.bmin[0]) / hf.cs)));
         const S32 x1 = std::min(hf.width - 1, static_cast<S32>(std::floor((bmax[0] - hf.bmin[0]) / hf.cs)));
         const S32 z0 = std::max(0, static_cast<S32>(std::floor((bmin[2] - hf.bmin[2]) / hf.cs)));
@@ -244,14 +248,14 @@ namespace
                     const F32 l0 = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / d;
                     const F32 l1 = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / d;
                     const F32 l2 = 1.f - l0 - l1;
-                    if (l0 < 0.f || l1 < 0.f || l2 < 0.f)
+                    if (l0 < -pad || l1 < -pad || l2 < -pad)
                     {
                         continue;
                     }
                     const F32 y = l0 * a[1] + l1 * b[1] + l2 * c[1];
                     const size_t i = static_cast<size_t>(cz - z0) * out.mW + (cx - x0);
-                    out.mLo[i] = std::min(out.mLo[i], y);
-                    out.mHi[i] = std::max(out.mHi[i], y);
+                    out.mLo[i] = std::min(out.mLo[i], y - pad);
+                    out.mHi[i] = std::max(out.mHi[i], y + pad);
                 }
             }
         }
@@ -259,8 +263,12 @@ namespace
 
     void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
     {
+        // Havok pads every convex shape by 5 cm, so two solids leave a 10 cm
+        // gap; the census's hulls carry none and read small at their edges,
+        // which leaves a navmesh gap the sim does not have.
+        const F32 pad = 0.05f;
         BodyExtent body;
-        bodyExtent(hf, soup, tri_begin, tri_end, body);
+        bodyExtent(hf, soup, tri_begin, tri_end, body, pad);
         if (body.mW <= 0 || body.mH <= 0)
         {
             return;
