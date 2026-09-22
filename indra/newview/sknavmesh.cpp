@@ -790,8 +790,20 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             zmax = std::max(zmax, z);
         }
     }
-    input->mRecords = tile.mRecords;
-    for (const RecordPtr& r : input->mRecords)
+    for (const RecordPtr& r : tile.mRecords)
+    {
+        // An exclusion volume is not a shape: the sim takes the navmesh out
+        // of its inside. Build it as a cut, not as something to stand on.
+        if (r && r->mNavRole == sknav::NavRole::EXCLUSION_VOLUME)
+        {
+            input->mCuts.push_back(r);
+        }
+        else
+        {
+            input->mRecords.push_back(r);
+        }
+    }
+    for (const RecordPtr& r : tile.mRecords)
     {
         zmin = std::min(zmin, static_cast<F32>(r->mMin.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
         zmax = std::max(zmax, static_cast<F32>(r->mMax.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
