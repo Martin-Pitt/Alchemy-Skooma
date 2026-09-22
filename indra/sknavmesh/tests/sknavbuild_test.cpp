@@ -53,12 +53,12 @@ namespace
         return r;
     }
 
-    // A hull record: the triangle soup the sim collides with as a solid.
-    RecordPtr hull(const std::vector<LLVector3>& tris)
+    // A record of triangles, as the census hands one over.
+    RecordPtr soup(const std::vector<LLVector3>& tris, Provenance provenance)
     {
         auto r = std::make_shared<Record>();
         r->mShape = Shape::TRIANGLES;
-        r->mProvenance = Provenance::HULL;
+        r->mProvenance = provenance;
         r->mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
         r->mMin.set(1e9, 1e9, 1e9);
         r->mMax.set(-1e9, -1e9, -1e9);
@@ -71,6 +71,12 @@ namespace
             }
         }
         return r;
+    }
+
+    // A hull record: the triangle soup the sim collides with as a solid.
+    RecordPtr hull(const std::vector<LLVector3>& tris)
+    {
+        return soup(tris, Provenance::HULL);
     }
 
     // A window that reaches past the tile's border cells on every side: Recast
@@ -345,5 +351,34 @@ namespace tut
         ensure("no floor inside the closed hull", m.nearest(LLVector3(22.f, 22.f, 1.f), snapped, 0.5f) == 0);
         ensure("the box roof is floor", m.nearest(LLVector3(22.f, 22.f, 7.f), snapped, 0.5f) != 0);
         ensure("roof at its height", std::fabs(snapped[1] - 7.f) < 0.3f);
+    }
+
+    // A steep ramp, 80 degrees: the weather class walks it, the avatar class
+    // does not. The ledge filter must not cut it out of the weather mesh,
+    // which its own rule would do at a climb of 0.75 m, where every slope
+    // steeper than 72 degrees reads as a ledge.
+    template<> template<>
+    void sknavbuild_object::test<7>()
+    {
+        std::vector<LLVector3> ramp = {
+            LLVector3(4.f, 4.f, 0.f), LLVector3(12.f, 4.f, 0.f), LLVector3(12.f, 7.5f, 20.f),
+            LLVector3(4.f, 4.f, 0.f), LLVector3(12.f, 7.5f, 20.f), LLVector3(4.f, 7.5f, 20.f),
+        };
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mParams[0].mSlope = 74.f;
+        in.mParams[1].mSlope = 89.f;
+        in.mRecords.push_back(soup(ramp, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        F32 snapped[3];
+        Mesh weather;
+        weather.add(r.mData[1]);
+        ensure("weather walks the steep ramp", weather.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) != 0);
+
+        Mesh avatar;
+        avatar.add(r.mData[0]);
+        ensure("the avatar class leaves it", avatar.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) == 0);
     }
 }

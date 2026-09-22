@@ -433,8 +433,18 @@ namespace sknav
             {
                 fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
             }
+            // The ledge filter marks a span a ledge when the height range of
+            // its accessible neighbours exceeds the climb it is given, which
+            // reads every slope steeper than atan(climb / two cells) as a
+            // ledge: at 0.75 m of climb that is 72 degrees, below both
+            // classes' slope limits, so it cuts lines and holes out of exactly
+            // the steep ground the class is meant to walk. Give it a climb
+            // that matches the class's own slope, and the rule only fires
+            // beyond the slope limit, where the slope test has already said
+            // no.
+            const F32 ledge_climb = llmax(p.mClimb, 2.f * cfg.cs * std::tan(p.mSlope * DEG_TO_RAD));
             rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *mem.hf);
-            rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf);
+            rcFilterLedgeSpans(&ctx, cfg.walkableHeight, static_cast<int>(std::ceil(ledge_climb / cfg.ch)), *mem.hf);
             rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *mem.hf);
 
             mem.chf = rcAllocCompactHeightfield();
