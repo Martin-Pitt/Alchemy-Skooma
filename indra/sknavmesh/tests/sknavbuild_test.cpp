@@ -79,6 +79,15 @@ namespace
         return soup(tris, Provenance::HULL);
     }
 
+    // A flat quad at z, as a floor arrives from a physics mesh.
+    std::vector<LLVector3> slab(F32 x0, F32 y0, F32 x1, F32 y1, F32 z)
+    {
+        return {
+            LLVector3(x0, y0, z), LLVector3(x1, y0, z), LLVector3(x1, y1, z),
+            LLVector3(x0, y0, z), LLVector3(x1, y1, z), LLVector3(x0, y1, z),
+        };
+    }
+
     // A window that reaches past the tile's border cells on every side: Recast
     // makes a portal only where walkable spans continue into the border.
     TerrainWindow flat(F32 z, S32 n = 37, F32 ox = -2.f, F32 oy = -2.f)
@@ -380,5 +389,98 @@ namespace tut
         Mesh avatar;
         avatar.add(r.mData[0]);
         ensure("the avatar class leaves it", avatar.nearest(LLVector3(8.f, 5.75f, 10.f), snapped, 0.5f) == 0);
+    }
+
+    // A crevice one column wide between two floors is true air, and the sim
+    // has it solid: the bridge joins it, so a path crosses.
+    template<> template<>
+    void sknavbuild_object::test<8>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = true;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path across the crevice: " + m.mWhy, ok);
+        ensure("crevice joined", !partial);
+    }
+
+    // The wall's own matter in the crevice keeps the sides split: the bridge
+    // must not tunnel from a floor through a face that stands on it.
+    template<> template<>
+    void sknavbuild_object::test<9>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const std::vector<LLVector3> wall = {
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 4.f),
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 4.f), LLVector3(4.f, 11.875f, 4.f),
+        };
+        in.mRecords.push_back(soup(wall, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path attempted", ok);
+        ensure("wall keeps the crevice split", partial);
+    }
+
+    // Two empty columns are not a crevice: nothing joins a gap that wide.
+    template<> template<>
+    void sknavbuild_object::test<10>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 13.2f, 12.f, 20.f, 2.f), Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.f), length, partial);
+        ensure("path attempted", ok);
+        ensure("wide gap stays split", partial);
+    }
+
+    // A riser between two treads is matter at the seam's level, so the treads
+    // stay split: they do not bridge straight up the step.
+    template<> template<>
+    void sknavbuild_object::test<11>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(soup(slab(4.f, 4.f, 12.f, 11.7f, 2.f), Provenance::EXACT));
+        in.mRecords.push_back(soup(slab(4.f, 12.05f, 12.f, 20.f, 2.5f), Provenance::EXACT));
+        const std::vector<LLVector3> riser = {
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.5f),
+            LLVector3(4.f, 11.875f, 2.f), LLVector3(12.f, 11.875f, 2.5f), LLVector3(4.f, 11.875f, 2.5f),
+        };
+        in.mRecords.push_back(soup(riser, Provenance::EXACT));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = false;
+        const bool ok = m.path(LLVector3(8.f, 8.f, 2.f), LLVector3(8.f, 16.f, 2.5f), length, partial);
+        ensure("path attempted", ok);
+        ensure("riser keeps the treads split", partial);
     }
 }

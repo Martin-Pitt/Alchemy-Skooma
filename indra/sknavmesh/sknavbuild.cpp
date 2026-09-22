@@ -362,6 +362,111 @@ namespace
         }
     }
 
+    /// A walkable span in the column already within the agent's climb of both
+    /// surfaces: they are joined through it and need no bridge.
+    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
+    {
+        for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+        {
+            if (s->area != RC_NULL_AREA && rcAbs(static_cast<S32>(s->smax) - lo) <= climb &&
+                rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Matter that stands in the way of joining two surfaces at lo and hi: a
+    /// span that reaches above the lower surface and starts at or below the
+    /// higher one. Ground and slabs below the seam are not in the way, so a
+    /// crevice on an upper storey still joins; a wall face, a filled body or a
+    /// riser is, so the wall's inside cannot tunnel to its outside.
+    bool creviceBlocked(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi)
+    {
+        for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+        {
+            if (static_cast<S32>(s->smax) > lo && static_cast<S32>(s->smin) <= hi)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Recast joins a span to its neighbours only, so a crevice that leaves a
+    /// column without a span at the surfaces' level splits them, and the
+    /// erosion that follows widens it: the top of a staircase, solid in the
+    /// sim, read as a gap. Join the two sides across one such column when
+    /// their tops are within the agent's climb and nothing stands at that
+    /// level between them.
+    void bridgeCrevices(rcHeightfield& hf, S32 climb)
+    {
+        struct Bridge
+        {
+            S32 mX = 0;
+            S32 mZ = 0;
+            unsigned short mSMin = 0;
+            unsigned short mSMax = 0;
+            U8 mArea = RC_NULL_AREA;
+        };
+        std::vector<Bridge> bridges;
+        // Collect first, then add: a span laid while scanning would be read as
+        // a neighbour by a later column and by the column's other axis, which
+        // must judge the heightfield they were given.
+        for (S32 z = 1; z + 1 < hf.height; ++z)
+        {
+            for (S32 x = 1; x + 1 < hf.width; ++x)
+            {
+                for (S32 axis = 0; axis < 2; ++axis)
+                {
+                    const S32 dx = axis == 0 ? 1 : 0;
+                    const S32 dz = axis == 0 ? 0 : 1;
+                    for (const rcSpan* a = hf.spans[(x - dx) + (z - dz) * hf.width]; a; a = a->next)
+                    {
+                        if (a->area == RC_NULL_AREA)
+                        {
+                            continue;
+                        }
+                        for (const rcSpan* b = hf.spans[(x + dx) + (z + dz) * hf.width]; b; b = b->next)
+                        {
+                            if (b->area == RC_NULL_AREA)
+                            {
+                                continue;
+                            }
+                            const S32 atop = a->smax, btop = b->smax;
+                            if (rcAbs(atop - btop) > climb)
+                            {
+                                continue;
+                            }
+                            const S32 lo = std::min(atop, btop), hi = std::max(atop, btop);
+                            if (columnJoins(hf, x, z, lo, hi, climb) || creviceBlocked(hf, x, z, lo, hi))
+                            {
+                                continue;
+                            }
+                            // The bridge's surface is the higher one, so no
+                            // side is lifted; its floor reaches down to the
+                            // lower, so both sides connect.
+                            const S32 bottom = hi > lo ? lo : hi - 1;
+                            Bridge bridge;
+                            bridge.mX = x;
+                            bridge.mZ = z;
+                            bridge.mSMin = static_cast<unsigned short>(std::max(0, bottom));
+                            bridge.mSMax = static_cast<unsigned short>(std::max(hi, bottom + 1));
+                            bridge.mArea = std::max(a->area, b->area);
+                            bridges.push_back(bridge);
+                        }
+                    }
+                }
+            }
+        }
+        rcContext ctx(false);
+        for (const Bridge& bridge : bridges)
+        {
+            rcAddSpan(&ctx, hf, bridge.mX, bridge.mZ, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
+        }
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -568,6 +673,7 @@ namespace sknav
             {
                 cutVolume(*mem.hf, cut_soup, range.first, range.second);
             }
+            bridgeCrevices(*mem.hf, cfg.walkableClimb);
             // The ledge filter marks a span a ledge when the height range of
             // its accessible neighbours exceeds the climb it is given, which
             // reads every slope steeper than atan(climb / two cells) as a
