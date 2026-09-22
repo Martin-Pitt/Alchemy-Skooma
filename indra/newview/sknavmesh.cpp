@@ -1767,6 +1767,29 @@ std::string SKNavMesh::markUnderCamera()
             << " records " << tile.mRecords.size() << " z " << tile.mMin.mdV[VZ] << ".." << tile.mMax.mdV[VZ]
             << " polys " << tile.mPolys[0] << "/" << tile.mPolys[1] << " built " << (tile.mBuilt == tile.mSignature)
             << " in flight " << tile.mInFlight << " " << tile.mMillis << " ms\n";
+        // What the tile itself was built from, as far as the mark reaches. The
+        // census's list above reads the live snapshot; a surface in the mesh
+        // with no census record under it means the tile holds a record the
+        // census no longer does, and only this list can say which.
+        S32 tile_shown = 0;
+        for (const RecordPtr& r : tile.mRecords)
+        {
+            if (!overlapsXY(r->mMin, r->mMax, mMark - reach, mMark + reach) || mMark.mdV[VZ] + 4.0 < r->mMin.mdV[VZ] ||
+                mMark.mdV[VZ] - 4.0 > r->mMax.mdV[VZ])
+            {
+                continue;
+            }
+            if (++tile_shown > 24)
+            {
+                out << "    ... and more tile records\n";
+                break;
+            }
+            out << "    tile record root " << r->mRoot << " provenance " << static_cast<S32>(r->mProvenance) << " shape "
+                << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
+                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
+                << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+        }
         if (tile.mFaces)
         {
             S32 shown = 0;
