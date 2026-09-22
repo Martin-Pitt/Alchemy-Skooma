@@ -54,9 +54,10 @@ namespace sknav
     enum class Provenance : U8
     {
         EXACT,      ///< the physics shape itself (analytic, physics mesh, prim volume)
-        HULL,       ///< a convex decomposition or single hull
+        HULL,       ///< a convex decomposition hull
         BOX,        ///< a placeholder while the asset is still fetching
         RENDER,     ///< the rendered volume faces (surrounds)
+        BASE_HULL,  ///< the single base hull, when there is no decomposition
     };
 
     /// The sim's navmesh role for a linkset, when known.
@@ -91,6 +92,7 @@ namespace sknav
         LLVector3 mAxes[3];         ///< analytic shapes: unit axes in region space
         LLVector3 mHalf;            ///< analytic shapes: half extents along mAxes
         std::shared_ptr<const std::vector<LLVector3>> mTriangles; ///< TRIANGLES: 3 per triangle, region-local
+        std::vector<S32> mConvexTris;       ///< TRIANGLES as separate convex bodies: triangle count of each, in order
 
         LLVector3d mMin;            ///< global AABB
         LLVector3d mMax;

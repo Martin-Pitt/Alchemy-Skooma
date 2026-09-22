@@ -98,6 +98,13 @@ namespace
 
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
 {
+    // The type is a per-prim setting: only a child can be none, and a root
+    // that should not collide is made phantom instead. A part's own type is
+    // what decides its shape. The sim answers the linkset's request rather
+    // than a child's own, though, so ask the root as well - a child whose
+    // type has not arrived reads as prim, which is how a hologram child of a
+    // prim linkset became a solid.
+    volume->getRootEdit()->getPhysicsShapeType();
     out.mPhysicsType = volume->getPhysicsShapeType();
     // A volume arrives before its full update gives it an LLVolume; nothing to say yet.
     if (out.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_NONE || volume->isFlexible() || !volume->getVolume())
@@ -129,6 +136,23 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
         case Spec::USER_MESH:
         {
             LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
+            // The hulls are a physics shape: the decomposition the sim
+            // collides against for a Convex Hull mesh, and the stand-in while
+            // a Prim mesh's physics mesh is still on its way. The rendered
+            // shape is not an option here - a mesh LOD can be hundreds of
+            // thousands of triangles, and only a megasculpty's surround is
+            // ever meshed from what the eye sees. The part's signature
+            // carries the physics mesh's size, so its arrival re-records the
+            // part and the tiles holding it rebuild.
+            if (shape.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_PRIM)
+            {
+                gMeshRepo.fetchPhysicsShape(params.getSculptID());
+                if (decomp && !decomp->mPhysicsShapeMesh.empty())
+                {
+                    appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
+                    break;
+                }
+            }
             if (!decomp)
             {
                 boundingBox(volume, out);
@@ -143,12 +167,19 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 out.mProvenance = sknav::Provenance::HULL;
                 for (const LLModel::PhysicsMesh& hull : decomp->mMesh)
                 {
+                    const size_t before = out.mTriangles.size();
                     appendSoup(hull.mPositions, out.mTriangles);
+                    out.mConvexTris.push_back(static_cast<S32>((out.mTriangles.size() - before) / 3));
                 }
-            }
-            else if (!decomp->mPhysicsShapeMesh.empty())
-            {
-                appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
+                if (out.mTriangles.empty())
+                {
+                    // The hull list held nothing buildable - a point cloud
+                    // with no area at all, which the sim cannot collide with
+                    // either. The asset has arrived and has nothing to say, so
+                    // say nothing: the object's box is no stand-in for a large
+                    // sparse mesh, whose box top is a floor in mid-air.
+                    return false;
+                }
             }
             else
             {
@@ -156,14 +187,17 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 {
                     gMeshRepo.buildPhysicsMesh(*decomp);
                 }
-                gMeshRepo.fetchPhysicsShape(params.getSculptID());
                 if (decomp->mBaseHullMesh.empty())
                 {
-                    boundingBox(volume, out);
-                    return true;
+                    return false;
                 }
-                out.mProvenance = sknav::Provenance::HULL;
+                // The single hull of a shape with no decomposition.
+                out.mProvenance = sknav::Provenance::BASE_HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
+                if (out.mTriangles.empty())
+                {
+                    return false;
+                }
             }
             break;
         }
@@ -173,13 +207,31 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             if (volume->isMesh())
             {
                 LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
-                if (!decomp || (decomp->mBaseHullMesh.empty() && (gMeshRepo.buildPhysicsMesh(*decomp), decomp->mBaseHullMesh.empty())))
+                if (!decomp)
                 {
+                    // The mesh itself is still on its way; the box stands in
+                    // until it arrives, and the part re-signs when it does.
                     boundingBox(volume, out);
                     return true;
                 }
+                if (decomp->mBaseHullMesh.empty() || decomp->mMesh.empty())
+                {
+                    gMeshRepo.buildPhysicsMesh(*decomp);
+                }
+                // The hull is the shape, and the sim has none where the asset
+                // stores none: a convex-hull mesh with no hull is walked
+                // straight through, so no box stand-in - it would be a floor
+                // in mid-air over whatever the object draws.
+                if (decomp->mBaseHullMesh.empty())
+                {
+                    return false;
+                }
                 out.mProvenance = sknav::Provenance::HULL;
                 appendSoup(decomp->mBaseHullMesh.mPositions, out.mTriangles);
+                if (out.mTriangles.empty())
+                {
+                    return false;
+                }
             }
             else
             {

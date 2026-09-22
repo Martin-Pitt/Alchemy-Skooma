@@ -109,7 +109,7 @@ namespace
         }
     };
 
-    void build(const Soup& soup, Built& out)
+    void build(const Soup& soup, Built& out, bool empty_detail = false)
     {
         rcContext ctx(false);
 
@@ -159,6 +159,17 @@ namespace
         tut::ensure("detail mesh", rcBuildPolyMeshDetail(&ctx, *pmesh, *chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *dmesh));
         rcFreeCompactHeightfield(chf);
         rcFreeContourSet(cset);
+
+        if (empty_detail)
+        {
+            // Recast can hand back a polygon with an empty triangulation
+            // ("Could not triangulate polygon"); Detour has to cope with it.
+            // meshes is a packed vertBase/triBase/vertCount/triCount per poly.
+            for (int i = 0; i < pmesh->npolys; ++i)
+            {
+                dmesh->meshes[i * 4 + 3] = 0;
+            }
+        }
 
         // Detour drops polys whose flags are zero from every query.
         for (int i = 0; i < pmesh->npolys; ++i)
@@ -290,5 +301,24 @@ namespace tut
         const dtStatus status = built.query->findPath(gref, tref, g, t, &filter, path, &npath, 256);
         ensure("findPath to the top", dtStatusSucceed(status));
         ensure("top is unreachable from the ground", dtStatusDetail(status, DT_PARTIAL_RESULT));
+    }
+
+    // A polygon whose detail triangulation came out empty has no boundary
+    // edge for closestPointOnPoly to read, and used to take the null one and
+    // crash every query that landed on it. The fallback is the polygon's own
+    // edges, so the query still answers.
+    template<> template<>
+    void sknavrecast_object::test<4>()
+    {
+        Built stripped;
+        build(scene(), stripped, true);
+        ensure("polys built", stripped.polys > 0);
+
+        const float extents[3] = { 10.f, 5.f, 10.f };
+        const float pos[3] = { 8.f, 0.f, 8.f };
+        float snapped[3];
+        const dtPolyRef ref = nearest(stripped, pos, extents, snapped);
+        ensure("empty detail still answers", ref != 0);
+        ensure("snapped point is on the map", snapped[0] >= -1.f && snapped[0] <= FLOOR + 1.f);
     }
 }
