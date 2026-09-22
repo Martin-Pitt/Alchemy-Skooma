@@ -363,7 +363,30 @@ namespace sknav
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
             soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
-            if (r->mShape != Shape::TRIANGLES || hull)
+            // A decomposition is a set of convex bodies, not one: a door frame
+            // is a sill, two posts and a lintel, and their union filled from
+            // its lowest to its highest surface walls off the opening they
+            // exist to leave. Fill each body on its own. A record whose
+            // bodies are not told apart arrives as one range and is filled as
+            // one, which is what its whole shape has always meant.
+            S32 pieces = 0;
+            for (const S32 count : r->mConvexTris)
+            {
+                pieces += count;
+            }
+            if (hull && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
+            {
+                S32 at = before;
+                for (const S32 count : r->mConvexTris)
+                {
+                    if (count > 0)
+                    {
+                        convex.emplace_back(at, at + count);
+                    }
+                    at += count;
+                }
+            }
+            else if (r->mShape != Shape::TRIANGLES || hull)
             {
                 convex.emplace_back(before, soup.ntris());
             }
