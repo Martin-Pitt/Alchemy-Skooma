@@ -9,6 +9,7 @@ vcpkg_from_github(
     PATCHES
         fix-detail-mesh-edge-detection.patch #Upstream fix https://github.com/recastnavigation/recastnavigation/pull/657
         fix-detail-mesh-empty-tris.patch #Upstream fix https://github.com/recastnavigation/recastnavigation/pull/796
+        fix-closest-point-on-empty-detail.patch #No upstream PR pinned yet
 )
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"

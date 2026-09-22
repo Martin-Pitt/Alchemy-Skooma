@@ -56,6 +56,12 @@ struct SKShapeGeometry
     LLVector3 mCenter;
     LLVector3 mHalf;
     std::vector<LLVector3> mTriangles;
+    /// mTriangles as several separate convex bodies end to end (a
+    /// decomposition): the triangle count of each, in order. The build fills
+    /// a closed body to make it solid, and the union of a door frame's sill,
+    /// posts and lintel is not a body - filled as one it walls off the
+    /// opening they exist to leave. Empty means one body.
+    std::vector<S32> mConvexTris;
 };
 
 /// The physics geometry for a classified shape. Asks the mesh repository for

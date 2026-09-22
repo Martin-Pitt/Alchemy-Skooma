@@ -1998,6 +1998,10 @@ bool LLAppViewer::cleanup()
 
     LLViewerObject::cleanupVOClasses();
 
+    // <SK:Nexii> navmesh census: release any held viewer objects before the avatar appearance dictionary below goes away
+    SKWorldCensus::deleteSingleton();
+    // </SK:Nexii>
+
     SUBSYSTEM_CLEANUP(LLAvatarAppearance);
 
     LLTracker::cleanupInstance();
