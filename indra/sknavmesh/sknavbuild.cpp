@@ -254,8 +254,8 @@ namespace
                     }
                     const F32 y = l0 * a[1] + l1 * b[1] + l2 * c[1];
                     const size_t i = static_cast<size_t>(cz - z0) * out.mW + (cx - x0);
-                    out.mLo[i] = std::min(out.mLo[i], y - pad);
-                    out.mHi[i] = std::max(out.mHi[i], y + pad);
+                    out.mLo[i] = std::min(out.mLo[i], y);
+                    out.mHi[i] = std::max(out.mHi[i], y);
                 }
             }
         }
