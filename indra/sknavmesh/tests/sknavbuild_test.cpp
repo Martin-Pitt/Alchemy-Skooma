@@ -519,4 +519,112 @@ namespace tut
         ensure("path complete", !partial);
         ensure("path went round", length > 24.f);
     }
+
+    // A slab whose edge ends one step above the land the sim lets an agent
+    // walk up: the headroom filter takes the land out from under the slab's
+    // lip, and the erosion used to read that strip as a wall to keep its
+    // radius back from, carving the walkable ground either side of the seam
+    // away and leaving the step a hole. Both classes walk the seam.
+    template<> template<>
+    void sknavbuild_object::test<13>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.25f);
+        // The viewer's own numbers at its cell, coarse: height 1.25 m erodes
+        // with a radius of 2 cells here, and the step is one cell.
+        in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
+        in.mParams[1] = { 0.5f, 0.125f, 0.75f, 89.f };
+        // The slab spans the tile so the seam can only be crossed, never
+        // round: land to the north, its top a step up to the south.
+        in.mRecords.push_back(box(0.f, -2.f, -0.5f, 36.f, 16.05f, 0.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("avatar polys", r.mPolys[0] > 0);
+        ensure("weather polys", r.mPolys[1] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 length = 0.f;
+        bool partial = true;
+        ensure("path found: " + m.mWhy, m.path(LLVector3(16.f, 20.f, 0.25f), LLVector3(16.f, 12.f, 0.5f), length, partial));
+        ensure("the seam is walked", !partial);
+        ensure("the path reaches the top", length > 7.f);
+
+        Mesh w;
+        w.add(r.mData[1]);
+        F32 wlength = 0.f;
+        bool wpartial = true;
+        ensure("weather path found: " + w.mWhy, w.path(LLVector3(16.f, 20.f, 0.25f), LLVector3(16.f, 12.f, 0.5f), wlength, wpartial));
+        ensure("the weather class walks the seam", !wpartial);
+    }
+
+    // The seam as the region had it: land rising over a wedge of ground whose
+    // edge ends a step up, with a buried slab under the east side. Nothing
+    // along the seam may lose its floor.
+    template<> template<>
+    void sknavbuild_object::test<14>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mCell = 0.125f;
+        in.mZMin = 0.f;
+        in.mZMax = 12.f;
+        in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
+        in.mParams[1] = { 0.5f, 0.125f, 0.75f, 89.f };
+        // The land: 5.375 m at the seam (y 6.2), rising a metre by y 8.2.
+        TerrainWindow t;
+        t.mOrigin.set(-2.f, -2.f, 0.f);
+        t.mSpacing = 1.f;
+        t.mWidth = 36;
+        t.mHeight = 36;
+        t.mZ.assign(36 * 36, 0.f);
+        for (S32 j = 0; j < 36; ++j)
+        {
+            for (S32 i = 0; i < 36; ++i)
+            {
+                const F32 y = -2.f + j * 1.f;
+                t.mZ[j * 36 + i] = y <= 6.2f ? 5.375f : llmin(5.375f + (y - 6.2f) * 0.5f, 6.375f);
+            }
+        }
+        t.mWater = -10.f;
+        in.mTerrain = t;
+        // The box under the east side, its top under the land, edge at y 6.2.
+        in.mRecords.push_back(box(5.f, 6.25f, 2.07f, 35.f, 50.f, 5.195f));
+        // The ground: a wedge plate whose top runs 5.5 m at the seam down to
+        // 5.25 m eight metres south, over a buried underside.
+        std::vector<LLVector3> ground;
+        const F32 x0 = -2.f, x1 = 22.f, y0 = -2.f, y1 = 6.3f;
+        const F32 zN = 5.5f, zS = 5.25f, zB = 4.6f;
+        const LLVector3 n00(x0, y1, zN), n10(x1, y1, zN), s00(x0, y0, zS), s10(x1, y0, zS);
+        const LLVector3 b00(x0, y0, zB), b10(x1, y0, zB), bN0(x0, y1, zB), bN1(x1, y1, zB);
+        const std::vector<LLVector3> quads = {
+            n00, n10, s10, n00, s10, s00,     // top
+            b00, b10, s10, b00, s10, s00,     // bottom
+            s00, s10, b10, s00, b10, b00,     // south edge
+            n00, n10, bN1, n00, bN1, bN0,     // north edge (the lip)
+            n00, s00, b00, n00, b00, bN0,     // west edge
+            n10, s10, b10, n10, b10, bN1,     // east edge
+        };
+        ground.insert(ground.end(), quads.begin(), quads.end());
+        in.mRecords.push_back(soup(ground, Provenance::HULL));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("avatar polys", r.mPolys[0] > 0);
+        ensure("weather polys", r.mPolys[1] > 0);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        S32 holes = 0;
+        std::string profile;
+        for (F32 y = 3.f; y <= 9.01f; y += 0.25f)
+        {
+            F32 snapped[3];
+            const dtPolyRef ref = m.nearest(LLVector3(10.f, y, 5.4f), snapped, 0.02f);
+            if (!ref)
+            {
+                holes++;
+            }
+            profile += (ref ? std::string(" ") : std::string(" HOLE ")) + llformat("%.2f", y);
+        }
+        ensure("no hole along the seam:" + profile, holes == 0);
+    }
 }
