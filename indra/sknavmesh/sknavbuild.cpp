@@ -264,6 +264,26 @@ namespace
                 {
                     continue;
                 }
+                // A body whose inside holds a walkable surface is not solid
+                // there: that surface is what the agent stands on, and one
+                // fill over it takes both away - the surface itself and the
+                // one below it that should have been dropped in its favour.
+                // Leave the column to the stacked-surface rule, which keeps
+                // the higher surface and discards the one within the agent's
+                // height below it.
+                bool holds_surface = false;
+                for (const rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                {
+                    if (s->area != RC_NULL_AREA && static_cast<S32>(s->smin) > smin && static_cast<S32>(s->smax) < smax)
+                    {
+                        holds_surface = true;
+                        break;
+                    }
+                }
+                if (holds_surface)
+                {
+                    continue;
+                }
                 // The fill carries no area: it is the inside of something, never
                 // a floor. Merging keeps the surfaces' own area, so the body's
                 // roof stays walkable.
