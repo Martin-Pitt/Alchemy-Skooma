@@ -112,8 +112,9 @@ namespace
         std::vector<F32> mVerts;      // Recast space
         std::vector<S32> mTris;
         std::vector<U8> mAreas;       // per triangle, the Area of its source
+        std::vector<U8> mTwoSided;    // per triangle, walkable from either side
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -129,6 +130,7 @@ namespace
                 const S32 v = static_cast<S32>(base + i);
                 mTris.insert(mTris.end(), { v, v + 1, v + 2 });
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
+                mTwoSided.push_back(two_sided);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -136,7 +138,9 @@ namespace
     };
 
     // Mark walkable by slope, keeping the source area; non-walkable stays
-    // RC_NULL_AREA and still rasterises as an obstacle.
+    // RC_NULL_AREA and still rasterises as an obstacle. A double-sided surface
+    // is walkable whichever way its winding points: the sim collides with a
+    // hull from either side, so a down-facing top is still the floor.
     void markWalkable(const Soup& soup, F32 slope_deg, std::vector<U8>& out)
     {
         const F32 threshold = std::cos(slope_deg * DEG_TO_RAD);
@@ -151,7 +155,8 @@ namespace
             rcVsub(e1, c, a);
             rcVcross(n, e0, e1);
             rcVnormalize(n);
-            if (n[1] > threshold)
+            const F32 up = soup.mTwoSided[i] ? std::fabs(n[1]) : n[1];
+            if (up > threshold)
             {
                 out[i] = soup.mAreas[i];
             }
@@ -329,11 +334,16 @@ namespace sknav
             {
                 continue;
             }
+            // A hull is a convex solid the sim collides with from either side:
+            // mark it walkable whichever way its triangles wind, and fill it,
+            // because the sim collides with the whole body and not just the
+            // surface the decomposition happened to hand back.
+            const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
             tris.clear();
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
-            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater);
-            if (r->mShape != Shape::TRIANGLES)
+            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
+            if (r->mShape != Shape::TRIANGLES || hull)
             {
                 convex.emplace_back(before, soup.ntris());
             }
@@ -359,7 +369,7 @@ namespace sknav
                     quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
                 }
             }
-            soup.add(tris, AREA_GROUND, t.mWater);
+            soup.add(tris, AREA_GROUND, t.mWater, false);
         }
         result.mTriangles = soup.ntris();
         if (soup.ntris() == 0)

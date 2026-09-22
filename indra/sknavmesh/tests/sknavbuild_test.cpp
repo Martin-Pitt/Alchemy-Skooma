@@ -31,6 +31,7 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -49,6 +50,26 @@ namespace
         r->mAxes[2].set(0, 0, 1);
         r->mMin.set(x0, y0, z0);
         r->mMax.set(x1, y1, z1);
+        return r;
+    }
+
+    // A hull record: the triangle soup the sim collides with as a solid.
+    RecordPtr hull(const std::vector<LLVector3>& tris)
+    {
+        auto r = std::make_shared<Record>();
+        r->mShape = Shape::TRIANGLES;
+        r->mProvenance = Provenance::HULL;
+        r->mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
+        r->mMin.set(1e9, 1e9, 1e9);
+        r->mMax.set(-1e9, -1e9, -1e9);
+        for (const LLVector3& p : tris)
+        {
+            for (S32 k = 0; k < 3; ++k)
+            {
+                r->mMin.mdV[k] = std::min(r->mMin.mdV[k], static_cast<F64>(p.mV[k]));
+                r->mMax.mdV[k] = std::max(r->mMax.mdV[k], static_cast<F64>(p.mV[k]));
+            }
+        }
         return r;
     }
 
@@ -275,5 +296,54 @@ namespace tut
 
         const TileBuildResult empty = buildTile(tile(3, 3));
         ensure("empty tile", empty.mStatus == TileBuildResult::EMPTY);
+    }
+
+    // A hull is what the sim collides with, and it collides with it from
+    // either side: a surface is floor whichever way its triangles wind, and a
+    // closed hull is solid, so there is no floor inside it.
+    template<> template<>
+    void sknavbuild_object::test<6>()
+    {
+        // A flat quad 2 m up, wound downward (clockwise seen from above).
+        std::vector<LLVector3> quad = {
+            LLVector3(4.f, 4.f, 2.f), LLVector3(4.f, 12.f, 2.f), LLVector3(12.f, 12.f, 2.f),
+            LLVector3(4.f, 4.f, 2.f), LLVector3(12.f, 12.f, 2.f), LLVector3(12.f, 4.f, 2.f),
+        };
+        // A closed box 1 m up and 6 m tall, wound outward.
+        const LLVector3 c[8] = {
+            LLVector3(16.f, 16.f, 1.f), LLVector3(28.f, 16.f, 1.f), LLVector3(28.f, 28.f, 1.f), LLVector3(16.f, 28.f, 1.f),
+            LLVector3(16.f, 16.f, 7.f), LLVector3(28.f, 16.f, 7.f), LLVector3(28.f, 28.f, 7.f), LLVector3(16.f, 28.f, 7.f),
+        };
+        std::vector<LLVector3> box_tris;
+        auto tri = [&](int a, int b, int d) {
+            box_tris.push_back(c[a]);
+            box_tris.push_back(c[b]);
+            box_tris.push_back(c[d]);
+        };
+        tri(0, 3, 2); tri(0, 2, 1);     // bottom
+        tri(4, 5, 6); tri(4, 6, 7);     // top
+        tri(0, 1, 5); tri(0, 5, 4);     // -y
+        tri(1, 2, 6); tri(1, 6, 5);     // +x
+        tri(2, 3, 7); tri(2, 7, 6);     // +y
+        tri(3, 0, 4); tri(3, 4, 7);     // -x
+
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(hull(quad));
+        in.mRecords.push_back(hull(box_tris));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("down-facing hull surface is floor", m.nearest(LLVector3(8.f, 8.f, 2.f), snapped, 0.5f) != 0);
+        ensure("at the surface height", std::fabs(snapped[1] - 2.f) < 0.3f);
+
+        // Inside the box the fill leaves nothing walkable, and the terrain
+        // below has a metre of headroom, which no avatar fits under.
+        ensure("no floor inside the closed hull", m.nearest(LLVector3(22.f, 22.f, 1.f), snapped, 0.5f) == 0);
+        ensure("the box roof is floor", m.nearest(LLVector3(22.f, 22.f, 7.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 7.f) < 0.3f);
     }
 }
