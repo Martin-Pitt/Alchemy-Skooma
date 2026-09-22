@@ -162,6 +162,11 @@ SKWorldCensus::~SKWorldCensus()
 {
 }
 
+void SKWorldCensus::cleanupSingleton()
+{
+    abandonScan();
+}
+
 void SKWorldCensus::addDemand(const std::string& who, F32 range_m)
 {
     mDemands[who] = range_m;
@@ -702,6 +707,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;
+        rec->mConvexTris = geom.mConvexTris;
     }
     else
     {
@@ -821,6 +827,7 @@ void SKWorldCensus::renderDebug()
                 case Provenance::HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
                 case Provenance::BOX: swatch = SKNavSwatch::SHAPE_BOX; break;
                 case Provenance::RENDER: swatch = SKNavSwatch::SHAPE_RENDER; break;
+                case Provenance::BASE_HULL: swatch = SKNavSwatch::SHAPE_HULL; break;
             }
         }
         geom.box(gAgent.getPosAgentFromGlobal(r->mMin), gAgent.getPosAgentFromGlobal(r->mMax), skNavSwatchColor(swatch));

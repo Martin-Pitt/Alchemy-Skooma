@@ -112,8 +112,9 @@ namespace
         std::vector<F32> mVerts;      // Recast space
         std::vector<S32> mTris;
         std::vector<U8> mAreas;       // per triangle, the Area of its source
+        std::vector<U8> mTwoSided;    // per triangle, walkable from either side
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -129,6 +130,7 @@ namespace
                 const S32 v = static_cast<S32>(base + i);
                 mTris.insert(mTris.end(), { v, v + 1, v + 2 });
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
+                mTwoSided.push_back(two_sided);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -136,7 +138,9 @@ namespace
     };
 
     // Mark walkable by slope, keeping the source area; non-walkable stays
-    // RC_NULL_AREA and still rasterises as an obstacle.
+    // RC_NULL_AREA and still rasterises as an obstacle. A double-sided surface
+    // is walkable whichever way its winding points: the sim collides with a
+    // hull from either side, so a down-facing top is still the floor.
     void markWalkable(const Soup& soup, F32 slope_deg, std::vector<U8>& out)
     {
         const F32 threshold = std::cos(slope_deg * DEG_TO_RAD);
@@ -151,7 +155,8 @@ namespace
             rcVsub(e1, c, a);
             rcVcross(n, e0, e1);
             rcVnormalize(n);
-            if (n[1] > threshold)
+            const F32 up = soup.mTwoSided[i] ? std::fabs(n[1]) : n[1];
+            if (up > threshold)
             {
                 out[i] = soup.mAreas[i];
             }
@@ -169,8 +174,22 @@ namespace
     /// which costs nothing: such a body has no interior column to be hollow,
     /// and the side faces that rasterise across its cells already make it
     /// solid there.
-    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    /// The height range a closed body covers in each column of its footprint:
+    /// mLo and mHi, indexed from (mX0, mZ0) over mW by mH cells, FLT_MAX and
+    /// -FLT_MAX where the body does not pass over a column's centre.
+    struct BodyExtent
     {
+        S32 mX0 = 0;
+        S32 mZ0 = 0;
+        S32 mW = 0;
+        S32 mH = 0;
+        std::vector<F32> mLo;
+        std::vector<F32> mHi;
+    };
+
+    void bodyExtent(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, BodyExtent& out, F32 pad = 0.f)
+    {
+        out = BodyExtent();
         if (tri_end <= tri_begin)
         {
             return;
@@ -186,6 +205,10 @@ namespace
                 bmax[k] = std::max(bmax[k], v[k]);
             }
         }
+        bmin[0] -= pad;
+        bmin[2] -= pad;
+        bmax[0] += pad;
+        bmax[2] += pad;
         const S32 x0 = std::max(0, static_cast<S32>(std::floor((bmin[0] - hf.bmin[0]) / hf.cs)));
         const S32 x1 = std::min(hf.width - 1, static_cast<S32>(std::floor((bmax[0] - hf.bmin[0]) / hf.cs)));
         const S32 z0 = std::max(0, static_cast<S32>(std::floor((bmin[2] - hf.bmin[2]) / hf.cs)));
@@ -194,8 +217,12 @@ namespace
         {
             return;
         }
-        const S32 w = x1 - x0 + 1, h = z1 - z0 + 1;
-        std::vector<F32> lo(static_cast<size_t>(w) * h, FLT_MAX), hi(static_cast<size_t>(w) * h, -FLT_MAX);
+        out.mX0 = x0;
+        out.mZ0 = z0;
+        out.mW = x1 - x0 + 1;
+        out.mH = z1 - z0 + 1;
+        out.mLo.assign(static_cast<size_t>(out.mW) * out.mH, FLT_MAX);
+        out.mHi.assign(static_cast<size_t>(out.mW) * out.mH, -FLT_MAX);
 
         for (S32 t = tri_begin; t < tri_end; ++t)
         {
@@ -221,17 +248,35 @@ namespace
                     const F32 l0 = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / d;
                     const F32 l1 = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / d;
                     const F32 l2 = 1.f - l0 - l1;
-                    if (l0 < 0.f || l1 < 0.f || l2 < 0.f)
+                    if (l0 < -pad || l1 < -pad || l2 < -pad)
                     {
                         continue;
                     }
                     const F32 y = l0 * a[1] + l1 * b[1] + l2 * c[1];
-                    const size_t i = static_cast<size_t>(cz - z0) * w + (cx - x0);
-                    lo[i] = std::min(lo[i], y);
-                    hi[i] = std::max(hi[i], y);
+                    const size_t i = static_cast<size_t>(cz - z0) * out.mW + (cx - x0);
+                    out.mLo[i] = std::min(out.mLo[i], y);
+                    out.mHi[i] = std::max(out.mHi[i], y);
                 }
             }
         }
+    }
+
+    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    {
+        // Havok pads every convex shape by 5 cm, so two solids leave a 10 cm
+        // gap; the census's hulls carry none and read small at their edges,
+        // which leaves a navmesh gap the sim does not have.
+        const F32 pad = 0.05f;
+        BodyExtent body;
+        bodyExtent(hf, soup, tri_begin, tri_end, body, pad);
+        if (body.mW <= 0 || body.mH <= 0)
+        {
+            return;
+        }
+        const S32 x0 = body.mX0, z0 = body.mZ0, w = body.mW, h = body.mH;
+        const S32 x1 = x0 + w - 1, z1 = z0 + h - 1;
+        const std::vector<F32>& lo = body.mLo;
+        const std::vector<F32>& hi = body.mHi;
 
         rcContext ctx(false);
         for (S32 cz = z0; cz <= z1; ++cz)
@@ -259,12 +304,166 @@ namespace
                 {
                     continue;
                 }
+                // A body whose inside holds a walkable surface is not solid
+                // there: that surface is what the agent stands on, and one
+                // fill over it takes both away - the surface itself and the
+                // one below it that should have been dropped in its favour.
+                // Leave the column to the stacked-surface rule, which keeps
+                // the higher surface and discards the one within the agent's
+                // height below it.
+                bool holds_surface = false;
+                for (const rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                {
+                    if (s->area != RC_NULL_AREA && static_cast<S32>(s->smin) > smin && static_cast<S32>(s->smax) < smax)
+                    {
+                        holds_surface = true;
+                        break;
+                    }
+                }
+                if (holds_surface)
+                {
+                    continue;
+                }
                 // The fill carries no area: it is the inside of something, never
                 // a floor. Merging keeps the surfaces' own area, so the body's
                 // roof stays walkable.
                 rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(smin),
                           static_cast<unsigned short>(smax), RC_NULL_AREA, climb);
             }
+        }
+    }
+
+    /// Take the navmesh out of a volume. The sim's exclusion volumes are holes
+    /// in its own mesh, so they are never a surface to stand on: every walkable
+    /// span that overlaps the volume in a column it covers is cleared.
+    void cutVolume(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
+    {
+        BodyExtent body;
+        bodyExtent(hf, soup, tri_begin, tri_end, body);
+        for (S32 cz = body.mZ0; cz < body.mZ0 + body.mH; ++cz)
+        {
+            for (S32 cx = body.mX0; cx < body.mX0 + body.mW; ++cx)
+            {
+                const size_t i = static_cast<size_t>(cz - body.mZ0) * body.mW + (cx - body.mX0);
+                if (body.mLo[i] > body.mHi[i])
+                {
+                    continue;
+                }
+                const S32 smin = static_cast<S32>(std::floor((body.mLo[i] - hf.bmin[1]) / hf.ch));
+                const S32 smax = static_cast<S32>(std::ceil((body.mHi[i] - hf.bmin[1]) / hf.ch));
+                for (rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                {
+                    if (s->area != RC_NULL_AREA && static_cast<S32>(s->smin) < smax && static_cast<S32>(s->smax) > smin)
+                    {
+                        s->area = RC_NULL_AREA;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A walkable span in the column already within the agent's climb of both
+    /// surfaces: they are joined through it and need no bridge.
+    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
+    {
+        for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+        {
+            if (s->area != RC_NULL_AREA && rcAbs(static_cast<S32>(s->smax) - lo) <= climb &&
+                rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Matter that stands in the way of joining two surfaces at lo and hi: a
+    /// span that reaches above the lower surface and starts at or below the
+    /// higher one. Ground and slabs below the seam are not in the way, so a
+    /// crevice on an upper storey still joins; a wall face, a filled body or a
+    /// riser is, so the wall's inside cannot tunnel to its outside.
+    bool creviceBlocked(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi)
+    {
+        for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+        {
+            if (static_cast<S32>(s->smax) > lo && static_cast<S32>(s->smin) <= hi)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Recast joins a span to its neighbours only, so a crevice that leaves a
+    /// column without a span at the surfaces' level splits them, and the
+    /// erosion that follows widens it: the top of a staircase, solid in the
+    /// sim, read as a gap. Join the two sides across one such column when
+    /// their tops are within the agent's climb and nothing stands at that
+    /// level between them.
+    void bridgeCrevices(rcHeightfield& hf, S32 climb)
+    {
+        struct Bridge
+        {
+            S32 mX = 0;
+            S32 mZ = 0;
+            unsigned short mSMin = 0;
+            unsigned short mSMax = 0;
+            U8 mArea = RC_NULL_AREA;
+        };
+        std::vector<Bridge> bridges;
+        // Collect first, then add: a span laid while scanning would be read as
+        // a neighbour by a later column and by the column's other axis, which
+        // must judge the heightfield they were given.
+        for (S32 z = 1; z + 1 < hf.height; ++z)
+        {
+            for (S32 x = 1; x + 1 < hf.width; ++x)
+            {
+                for (S32 axis = 0; axis < 2; ++axis)
+                {
+                    const S32 dx = axis == 0 ? 1 : 0;
+                    const S32 dz = axis == 0 ? 0 : 1;
+                    for (const rcSpan* a = hf.spans[(x - dx) + (z - dz) * hf.width]; a; a = a->next)
+                    {
+                        if (a->area == RC_NULL_AREA)
+                        {
+                            continue;
+                        }
+                        for (const rcSpan* b = hf.spans[(x + dx) + (z + dz) * hf.width]; b; b = b->next)
+                        {
+                            if (b->area == RC_NULL_AREA)
+                            {
+                                continue;
+                            }
+                            const S32 atop = a->smax, btop = b->smax;
+                            if (rcAbs(atop - btop) > climb)
+                            {
+                                continue;
+                            }
+                            const S32 lo = std::min(atop, btop), hi = std::max(atop, btop);
+                            if (columnJoins(hf, x, z, lo, hi, climb) || creviceBlocked(hf, x, z, lo, hi))
+                            {
+                                continue;
+                            }
+                            // The bridge's surface is the higher one, so no
+                            // side is lifted; its floor reaches down to the
+                            // lower, so both sides connect.
+                            const S32 bottom = hi > lo ? lo : hi - 1;
+                            Bridge bridge;
+                            bridge.mX = x;
+                            bridge.mZ = z;
+                            bridge.mSMin = static_cast<unsigned short>(std::max(0, bottom));
+                            bridge.mSMax = static_cast<unsigned short>(std::max(hi, bottom + 1));
+                            bridge.mArea = std::max(a->area, b->area);
+                            bridges.push_back(bridge);
+                        }
+                    }
+                }
+            }
+        }
+        rcContext ctx(false);
+        for (const Bridge& bridge : bridges)
+        {
+            rcAddSpan(&ctx, hf, bridge.mX, bridge.mZ, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
         }
     }
 
@@ -329,13 +528,60 @@ namespace sknav
             {
                 continue;
             }
+            // A hull is a convex solid the sim collides with from either side:
+            // mark it walkable whichever way its triangles wind, and fill it,
+            // because the sim collides with the whole body and not just the
+            // surface the decomposition happened to hand back.
+            const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
             tris.clear();
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
-            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater);
-            if (r->mShape != Shape::TRIANGLES)
+            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
+            // A decomposition is a set of convex bodies, not one: a door frame
+            // is a sill, two posts and a lintel, and their union filled from
+            // its lowest to its highest surface walls off the opening they
+            // exist to leave. Fill each body on its own. A record whose
+            // bodies are not told apart arrives as one range and is filled as
+            // one, which is what its whole shape has always meant.
+            S32 pieces = 0;
+            for (const S32 count : r->mConvexTris)
+            {
+                pieces += count;
+            }
+            if (hull && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
+            {
+                S32 at = before;
+                for (const S32 count : r->mConvexTris)
+                {
+                    if (count > 0)
+                    {
+                        convex.emplace_back(at, at + count);
+                    }
+                    at += count;
+                }
+            }
+            else if (r->mShape != Shape::TRIANGLES || hull)
             {
                 convex.emplace_back(before, soup.ntris());
+            }
+        }
+        // An exclusion volume is a cut, not a shape: its triangles never enter
+        // the soup, they only say where the navmesh is taken out of.
+        Soup cut_soup;
+        std::vector<std::pair<S32, S32>> cuts;
+        for (const RecordPtr& r : input.mCuts)
+        {
+            if (!r)
+            {
+                continue;
+            }
+            tris.clear();
+            emitRecord(*r, input.mMeshOrigin, tris);
+            const S32 before = cut_soup.ntris();
+            cut_soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, false);
+            if (cut_soup.ntris() > before)
+            {
+                cuts.emplace_back(before, cut_soup.ntris());
             }
         }
         const TerrainWindow& t = input.mTerrain;
@@ -359,7 +605,7 @@ namespace sknav
                     quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
                 }
             }
-            soup.add(tris, AREA_GROUND, t.mWater);
+            soup.add(tris, AREA_GROUND, t.mWater, false);
         }
         result.mTriangles = soup.ntris();
         if (soup.ntris() == 0)
@@ -423,8 +669,23 @@ namespace sknav
             {
                 fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
             }
+            for (const auto& range : cuts)
+            {
+                cutVolume(*mem.hf, cut_soup, range.first, range.second);
+            }
+            bridgeCrevices(*mem.hf, cfg.walkableClimb);
+            // The ledge filter marks a span a ledge when the height range of
+            // its accessible neighbours exceeds the climb it is given, which
+            // reads every slope steeper than atan(climb / two cells) as a
+            // ledge: at 0.75 m of climb that is 72 degrees, below both
+            // classes' slope limits, so it cuts lines and holes out of exactly
+            // the steep ground the class is meant to walk. Give it a climb
+            // that matches the class's own slope, and the rule only fires
+            // beyond the slope limit, where the slope test has already said
+            // no.
+            const F32 ledge_climb = llmax(p.mClimb, 2.f * cfg.cs * std::tan(p.mSlope * DEG_TO_RAD));
             rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *mem.hf);
-            rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf);
+            rcFilterLedgeSpans(&ctx, cfg.walkableHeight, static_cast<int>(std::ceil(ledge_climb / cfg.ch)), *mem.hf);
             rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *mem.hf);
 
             mem.chf = rcAllocCompactHeightfield();

@@ -74,6 +74,9 @@ namespace sknav
         F32 mZMax = 0.f;
         F32 mCell = CELL_M;
         std::vector<RecordPtr> mRecords;    ///< everything intersecting the padded tile
+        /// The sim's exclusion volumes: their inside is cut out of the
+        /// navmesh rather than built, so they never become a surface.
+        std::vector<RecordPtr> mCuts;
         TerrainWindow mTerrain;
         bool mClasses[NUM_CLASSES] = { true, false };
         ClassParams mParams[NUM_CLASSES];
