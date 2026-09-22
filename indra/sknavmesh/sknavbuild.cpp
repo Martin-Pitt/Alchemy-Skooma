@@ -174,8 +174,22 @@ namespace
     /// which costs nothing: such a body has no interior column to be hollow,
     /// and the side faces that rasterise across its cells already make it
     /// solid there.
-    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    /// The height range a closed body covers in each column of its footprint:
+    /// mLo and mHi, indexed from (mX0, mZ0) over mW by mH cells, FLT_MAX and
+    /// -FLT_MAX where the body does not pass over a column's centre.
+    struct BodyExtent
     {
+        S32 mX0 = 0;
+        S32 mZ0 = 0;
+        S32 mW = 0;
+        S32 mH = 0;
+        std::vector<F32> mLo;
+        std::vector<F32> mHi;
+    };
+
+    void bodyExtent(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, BodyExtent& out)
+    {
+        out = BodyExtent();
         if (tri_end <= tri_begin)
         {
             return;
@@ -199,8 +213,12 @@ namespace
         {
             return;
         }
-        const S32 w = x1 - x0 + 1, h = z1 - z0 + 1;
-        std::vector<F32> lo(static_cast<size_t>(w) * h, FLT_MAX), hi(static_cast<size_t>(w) * h, -FLT_MAX);
+        out.mX0 = x0;
+        out.mZ0 = z0;
+        out.mW = x1 - x0 + 1;
+        out.mH = z1 - z0 + 1;
+        out.mLo.assign(static_cast<size_t>(out.mW) * out.mH, FLT_MAX);
+        out.mHi.assign(static_cast<size_t>(out.mW) * out.mH, -FLT_MAX);
 
         for (S32 t = tri_begin; t < tri_end; ++t)
         {
@@ -231,12 +249,26 @@ namespace
                         continue;
                     }
                     const F32 y = l0 * a[1] + l1 * b[1] + l2 * c[1];
-                    const size_t i = static_cast<size_t>(cz - z0) * w + (cx - x0);
-                    lo[i] = std::min(lo[i], y);
-                    hi[i] = std::max(hi[i], y);
+                    const size_t i = static_cast<size_t>(cz - z0) * out.mW + (cx - x0);
+                    out.mLo[i] = std::min(out.mLo[i], y);
+                    out.mHi[i] = std::max(out.mHi[i], y);
                 }
             }
         }
+    }
+
+    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    {
+        BodyExtent body;
+        bodyExtent(hf, soup, tri_begin, tri_end, body);
+        if (body.mW <= 0 || body.mH <= 0)
+        {
+            return;
+        }
+        const S32 x0 = body.mX0, z0 = body.mZ0, w = body.mW, h = body.mH;
+        const S32 x1 = x0 + w - 1, z1 = z0 + h - 1;
+        const std::vector<F32>& lo = body.mLo;
+        const std::vector<F32>& hi = body.mHi;
 
         rcContext ctx(false);
         for (S32 cz = z0; cz <= z1; ++cz)
@@ -289,6 +321,35 @@ namespace
                 // roof stays walkable.
                 rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(smin),
                           static_cast<unsigned short>(smax), RC_NULL_AREA, climb);
+            }
+        }
+    }
+
+    /// Take the navmesh out of a volume. The sim's exclusion volumes are holes
+    /// in its own mesh, so they are never a surface to stand on: every walkable
+    /// span that overlaps the volume in a column it covers is cleared.
+    void cutVolume(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
+    {
+        BodyExtent body;
+        bodyExtent(hf, soup, tri_begin, tri_end, body);
+        for (S32 cz = body.mZ0; cz < body.mZ0 + body.mH; ++cz)
+        {
+            for (S32 cx = body.mX0; cx < body.mX0 + body.mW; ++cx)
+            {
+                const size_t i = static_cast<size_t>(cz - body.mZ0) * body.mW + (cx - body.mX0);
+                if (body.mLo[i] > body.mHi[i])
+                {
+                    continue;
+                }
+                const S32 smin = static_cast<S32>(std::floor((body.mLo[i] - hf.bmin[1]) / hf.ch));
+                const S32 smax = static_cast<S32>(std::ceil((body.mHi[i] - hf.bmin[1]) / hf.ch));
+                for (rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                {
+                    if (s->area != RC_NULL_AREA && static_cast<S32>(s->smin) < smax && static_cast<S32>(s->smax) > smin)
+                    {
+                        s->area = RC_NULL_AREA;
+                    }
+                }
             }
         }
     }
@@ -391,6 +452,25 @@ namespace sknav
                 convex.emplace_back(before, soup.ntris());
             }
         }
+        // An exclusion volume is a cut, not a shape: its triangles never enter
+        // the soup, they only say where the navmesh is taken out of.
+        Soup cut_soup;
+        std::vector<std::pair<S32, S32>> cuts;
+        for (const RecordPtr& r : input.mCuts)
+        {
+            if (!r)
+            {
+                continue;
+            }
+            tris.clear();
+            emitRecord(*r, input.mMeshOrigin, tris);
+            const S32 before = cut_soup.ntris();
+            cut_soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, false);
+            if (cut_soup.ntris() > before)
+            {
+                cuts.emplace_back(before, cut_soup.ntris());
+            }
+        }
         const TerrainWindow& t = input.mTerrain;
         if (t.mWidth >= 2 && t.mHeight >= 2 && t.mZ.size() >= static_cast<size_t>(t.mWidth * t.mHeight))
         {
@@ -475,6 +555,10 @@ namespace sknav
             for (const auto& range : convex)
             {
                 fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
+            }
+            for (const auto& range : cuts)
+            {
+                cutVolume(*mem.hf, cut_soup, range.first, range.second);
             }
             // The ledge filter marks a span a ledge when the height range of
             // its accessible neighbours exceeds the climb it is given, which
