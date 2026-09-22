@@ -34,6 +34,8 @@
 #include "llagent.h"
 #include "llappviewer.h"
 #include "llglslshader.h"
+#include "llmeshrepository.h"
+#include "llmodel.h"
 #include "llrender.h"
 #include "llsurface.h"
 #include "llsurfacepatch.h"
@@ -43,8 +45,10 @@
 #include "llviewerwindow.h"
 #include "llviewershadermgr.h"
 #include "llvoavatarself.h"
+#include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skphysicsshape.h"
 #include "workqueue.h"
 
 #include <algorithm>
@@ -1214,6 +1218,41 @@ std::string SKNavMesh::markUnderCamera()
         << (hit->isPhysicsShapeUnknown() ? " (not yet told)" : "")
         << (root->flagPhantom() ? " phantom" : "") << (root->flagUsePhysics() ? " physical" : "")
         << (root->flagObjectPermanent() ? " permanent" : "") << (root->isLocalOnly() ? " local" : "") << "\n";
+
+    // What the shared resolver says this object's shape is, and which of the
+    // three sources the census can take it from: a decomposition, the physics
+    // mesh the sim actually collides with, or the base hull that covers the
+    // wait. An object whose census record reads HULL but has no hulls is
+    // being built from the base hull.
+    if (LLVOVolume* volume = dynamic_cast<LLVOVolume*>(hit))
+    {
+        if (volume->getVolume())
+        {
+            SKPhysicsShape shape;
+            const bool known = skPhysicsShapeClassify(volume, shape);
+            const LLUUID sculpt = volume->getVolume()->getParams().getSculptID();
+            LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
+            out << "  shape spec " << (known ? static_cast<S32>(shape.mSpec.getType()) : -1)
+                << " mesh " << sculpt << " decomp " << (decomp ? "yes" : "no");
+            if (decomp)
+            {
+                S32 hull_points = 0;
+                for (const std::vector<LLVector3>& hull : decomp->mHull)
+                {
+                    hull_points += static_cast<S32>(hull.size());
+                }
+                S32 hull_tris = 0;
+                for (const LLModel::PhysicsMesh& hull : decomp->mMesh)
+                {
+                    hull_tris += static_cast<S32>(hull.mPositions.size() / 3);
+                }
+                out << " hulls " << decomp->mHull.size() << " (" << hull_points << " points, " << hull_tris << " tris built)"
+                    << " physics mesh tris " << decomp->mPhysicsShapeMesh.mPositions.size() / 3
+                    << " base hull tris " << decomp->mBaseHullMesh.mPositions.size() / 3;
+            }
+            out << "\n";
+        }
+    }
 
     // What the census made of everything around the mark.
     const LLVector3d reach(4.0, 4.0, 4.0);
