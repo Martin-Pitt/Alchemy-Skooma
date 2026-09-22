@@ -163,11 +163,29 @@ SKNavMesh::~SKNavMesh()
 {
 }
 
+bool SKNavMesh::overlayActive()
+{
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
+    if (!enabled)
+    {
+        return false;
+    }
+    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH))
+    {
+        return true;
+    }
+    // A layer of its own is enough. The walls, the wall faces and the census
+    // boxes all read the built mesh, and none of them needs the surface drawn
+    // in the way of what they are for.
+    return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
+        || gSavedSettings.getBOOL("SKNavOverlayCensus");
+}
+
 bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH));
+    return enabled && (always || overlayActive());
 }
 
 LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
@@ -566,12 +584,13 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             {
                 tile = old->second;
             }
+            std::vector<RecordPtr> before = std::move(tile.mRecords);
             tile.mMin = tileMin(mesh->mOrigin, key);
             tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
             tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
             tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
             grid.query(entry.first, tile.mRecords);
-            tile.mSignature = mix(recordSignature(tile.mRecords), params);
+            reSign(tile, before, recordSignature(tile.mRecords), 0, params);
         }
         dropTiles(*mesh, wanted);
         mesh->mTiles.swap(wanted);
@@ -665,6 +684,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     {
                         tile = old->second;
                     }
+                    std::vector<RecordPtr> before = std::move(tile.mRecords);
                     tile.mMin = tileMin(mesh->mOrigin, key);
                     tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
                     tile.mMin.mdV[VZ] = land.getMinZ();
@@ -710,7 +730,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                         tile.mTerrainStale = false;
                         tile.mTerrainSignature = 0;
                     }
-                    tile.mSignature = mix(mix(recordSignature(tile.mRecords), tile.mTerrainSignature), params);
+                    reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
                 }
             }
             dropTiles(*mesh, wanted);
@@ -737,6 +757,108 @@ U64 SKNavMesh::recordSignature(const std::vector<RecordPtr>& records)
         h ^= mix(SEED, r->mSignature);
     }
     return h;
+}
+
+void SKNavMesh::reSign(Tile& tile, const std::vector<RecordPtr>& before, U64 records, U64 terrain, U64 params)
+{
+    // The old signatures are what says which input moved: the mixed signature
+    // alone cannot tell a record from the land from the parameters.
+    const bool records_moved = records != tile.mRecordSignature;
+    const bool terrain_moved = terrain != tile.mTerrainSignature;
+    tile.mRecordSignature = records;
+    tile.mSignature = mix(mix(records, terrain), params);
+    if (tile.mSignature == tile.mBuilt)
+    {
+        return;     // what it was built from is what it would be built from now
+    }
+    if (!tile.mBuilt)
+    {
+        tile.mCause = CAUSE_CREATED;
+        tile.mHasCauseAt = false;
+    }
+    else if (records_moved)
+    {
+        tile.mCause = CAUSE_RECORDS;
+        tile.mHasCauseAt = changedRecord(before, tile.mRecords, tile.mCauseAt);
+    }
+    else if (terrain_moved)
+    {
+        tile.mCause = CAUSE_TERRAIN;
+        LLVector3d centre = (tile.mMin + tile.mMax) * 0.5;
+        if (LLWorld::instanceExists())
+        {
+            centre.mdV[VZ] = LLWorld::getInstance()->resolveLandHeightGlobal(centre);
+        }
+        tile.mCauseAt = centre;
+        tile.mHasCauseAt = true;
+    }
+    else
+    {
+        tile.mCause = CAUSE_PARAMS;
+        tile.mHasCauseAt = false;
+    }
+}
+
+bool SKNavMesh::changedRecord(const std::vector<RecordPtr>& before, const std::vector<RecordPtr>& after, LLVector3d& out)
+{
+    // The census reuses a part's record while its signature holds, so a
+    // pointer that is new here is a part that appeared or changed, and one
+    // that is gone is a part that left.
+    for (const RecordPtr& r : after)
+    {
+        if (r && std::find(before.begin(), before.end(), r) == before.end())
+        {
+            out = (r->mMin + r->mMax) * 0.5;
+            return true;
+        }
+    }
+    for (const RecordPtr& r : before)
+    {
+        if (r && std::find(after.begin(), after.end(), r) == after.end())
+        {
+            out = (r->mMin + r->mMax) * 0.5;
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavMesh::tileBlip(const Mesh& mesh, const Tile& tile) const
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayUpdates", true);
+    if (!show || tile.mCause == CAUSE_NONE)
+    {
+        return;
+    }
+    LLColor4 color;
+    switch (tile.mCause)
+    {
+        case CAUSE_CREATED: color.set(0.25f, 1.f, 0.25f, 1.f); break;
+        case CAUSE_RECORDS: color.set(1.f, 0.6f, 0.1f, 1.f); break;
+        case CAUSE_TERRAIN: color.set(0.2f, 0.8f, 1.f, 1.f); break;
+        case CAUSE_PARAMS: color.set(1.f, 0.3f, 1.f, 1.f); break;
+        default: color.set(1.f, 0.2f, 0.2f, 1.f); break;    // a failed build
+    }
+    // The blip rises from the tile's own floor, which is the land under it for
+    // a region tile and the middle of its own height range otherwise.
+    LLVector3d at = (tile.mMin + tile.mMax) * 0.5;
+    if (mesh.mTerrain && tile.mOverLand && LLWorld::instanceExists())
+    {
+        at.mdV[VZ] = LLWorld::getInstance()->resolveLandHeightGlobal(at);
+    }
+    else
+    {
+        at.mdV[VZ] = (tile.mMin.mdV[VZ] + tile.mMax.mdV[VZ]) * 0.5;
+    }
+    const LLVector3 pos = gAgent.getPosAgentFromGlobal(at);
+    if (tile.mHasCauseAt)
+    {
+        gPipeline.addDebugBlip(pos, color, gAgent.getPosAgentFromGlobal(tile.mCauseAt));
+    }
+    else
+    {
+        gPipeline.addDebugBlip(pos, color);
+    }
 }
 
 void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
@@ -873,6 +995,9 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
             tile.mLinks[cls].reset();
         }
         tile.mBuilt = signature;    // do not retry the same input
+        tile.mCause = CAUSE_FAILED;
+        tile.mHasCauseAt = false;
+        tileBlip(mesh, tile);
         return;
     }
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
@@ -915,6 +1040,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    tileBlip(mesh, tile);
 }
 
 void SKNavMesh::schedule()
@@ -1658,6 +1784,11 @@ void SKNavMesh::renderDebug()
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
 
+    // The surface itself hangs off the pipeline's debug mask, the same switch
+    // as Develop > Render Metadata > Navmesh. The layers below are switches of
+    // their own and draw whether or not the surface is in the way.
+    const bool navmesh = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
+
     // Which class the overlay shows. WEATHER is only there to look at when
     // it is being built (SKNavBuildWeather); the console says so.
     static LLCachedControl<U32> which(gSavedSettings, "SKNavOverlayClass", 0);
@@ -1674,8 +1805,9 @@ void SKNavMesh::renderDebug()
 
     // With the world wiped there is nothing to see through: the mesh draws
     // opaque and writes depth, so stacked floors sort by depth rather than by
-    // the order their tiles happen to come out of Detour.
-    const bool opaque = !show_world;
+    // the order their tiles happen to come out of Detour. Only the surface
+    // wipes the world; a layer on its own draws over it.
+    const bool opaque = navmesh && !show_world;
     auto strength = [opaque](LLColor4 color, F32 scale) {
         color.mV[VALPHA] = opaque ? 1.f : color.mV[VALPHA] * scale;
         return color;
@@ -1694,7 +1826,7 @@ void SKNavMesh::renderDebug()
     {
         const Mesh& mesh = *entry.second;
         const dtNavMesh* nav = mesh.mNav[cls];
-        if (!nav)
+        if (!navmesh || !nav)
         {
             continue;
         }

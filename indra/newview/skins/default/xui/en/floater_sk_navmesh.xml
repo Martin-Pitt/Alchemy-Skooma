@@ -17,7 +17,7 @@
   <floater.string name="census_none">The census has not run yet.</floater.string>
   <floater.string name="mesh_none">Nothing built yet.</floater.string>
   <floater.string name="weather_off">The weather class is not being built; turn it on below to see it.</floater.string>
-  <floater.string name="overlay_off">The overlay is off; nothing below draws until you turn it on.</floater.string>
+  <floater.string name="overlay_off">Nothing is switched on; tick a layer below, or Draw the navmesh.</floater.string>
 
   <!-- One per swatch in sknavpalette.h, keyed by its name there. -->
   <floater.string name="sk_nav_ground">Ground — walkable terrain</floater.string>
@@ -89,15 +89,27 @@
    width="292">
   </text>
 
+  <text
+   name="overlay_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   width="292">
+    Overlay
+  </text>
   <check_box
    height="19"
-   label="Draw the overlay"
+   label="Draw the navmesh"
    layout="topleft"
    follows="left|top"
    left="12"
    name="overlay_on"
-   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh"
-   top_pad="10"
+   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh. The layers below draw whether or not the surface is drawn"
+   top_pad="4"
    width="292" />
   <combo_box
    control_name="SKNavOverlayClass"
@@ -126,70 +138,70 @@
    width="276" />
   <check_box
    height="19"
-   label="Tile seams"
-   layout="topleft"
-   follows="left|top"
-   left="28"
-   name="show_links"
-   control_name="SKNavOverlayLinks"
-   tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile"
-   top_pad="4"
-   width="276" />
-  <check_box
-   height="19"
    label="Walls, cover and ledges"
    layout="topleft"
    follows="left|top"
-   left="28"
+   left="12"
    name="show_walls"
    control_name="SKNavOverlayWalls"
-   tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands"
-   top_pad="4"
-   width="276" />
+   tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands. Draws without the navmesh surface"
+   top_pad="6"
+   width="292" />
   <check_box
    height="19"
    label="Wall faces"
    layout="topleft"
    follows="left|top"
-   left="28"
+   left="12"
    name="show_faces"
    control_name="SKNavOverlayFaces"
-   tool_tip="The vertical surfaces at their full height, which is what Atmo reads. The cover segments above stop at four metres because that is all a cover class can mean"
+   tool_tip="The vertical surfaces at their full height, which is what Atmo reads. The cover segments above stop at four metres because that is all a cover class can mean. Draws without the navmesh surface"
    top_pad="4"
-   width="276" />
+   width="292" />
   <check_box
    height="19"
-   label="Census shapes"
+   label="Tile seams"
    layout="topleft"
    follows="left|top"
-   left="28"
-   name="show_census"
-   control_name="SKNavOverlayCensus"
-   tool_tip="The physics shapes the mesh is built from, and the structure each belongs to"
+   left="12"
+   name="show_links"
+   control_name="SKNavOverlayLinks"
+   tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile. Part of the surface, so it needs Draw the navmesh"
    top_pad="4"
-   width="276" />
+   width="292" />
   <check_box
    height="19"
    label="X-ray vision"
    layout="topleft"
    follows="left|top"
-   left="28"
+   left="12"
    name="show_xray"
    control_name="SKNavOverlayXRay"
    tool_tip="Also draw what is hidden behind geometry, darker and fainter"
    top_pad="4"
-   width="276" />
+   width="292" />
   <check_box
    height="19"
    label="Draw the world underneath"
    layout="topleft"
    follows="left|top"
-   left="28"
+   left="12"
    name="show_world"
    control_name="SKNavOverlayWorld"
    tool_tip="Off wipes the frame, leaving the navmesh on its own"
    top_pad="4"
-   width="276" />
+   width="292" />
+  <check_box
+   height="19"
+   label="Tile update blips"
+   layout="topleft"
+   follows="left|top"
+   left="12"
+   name="show_updates"
+   control_name="SKNavOverlayUpdates"
+   tool_tip="A rising blip each time a tile is built or rebuilt, coloured by why, with a line back to the record that moved"
+   top_pad="4"
+   width="292" />
   <slider
    control_name="SKNavOverlayEdgeWidth"
    decimal_digits="0"
@@ -224,6 +236,39 @@
    tool_tip="How far from you or your camera the overlay is drawn"
    top_pad="6"
    width="276" />
+  <text
+   name="census_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   width="292">
+    Census and physics
+  </text>
+  <check_box
+   height="19"
+   label="Census shapes"
+   layout="topleft"
+   follows="left|top"
+   left="12"
+   name="show_census"
+   control_name="SKNavOverlayCensus"
+   tool_tip="The physics shapes the mesh is built from, and the structure each belongs to. Draws without the navmesh surface"
+   top_pad="4"
+   width="292" />
+  <check_box
+   height="19"
+   label="Physics shapes"
+   layout="topleft"
+   follows="left|top"
+   left="12"
+   name="physics_shapes"
+   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Physics Shapes: what the sim collides with"
+   top_pad="4"
+   width="292" />
 
   <button
    follows="left|top"

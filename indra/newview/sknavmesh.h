@@ -61,6 +61,13 @@ public:
     /// Polygon edges of the avatar class near the agent, from the debug pass.
     void renderDebug();
 
+    /// Whether anything the debug pass draws is switched on: the navmesh
+    /// surface from the pipeline's debug mask, or any layer that reads the
+    /// built mesh on its own - the walls, the wall faces, the census boxes.
+    /// The pipeline calls the debug passes only when this is true, and the
+    /// build follows it too, so a layer draws whether or not the surface is.
+    static bool overlayActive();
+
     /// The floor under a global position within the class's reach: the nearest
     /// walkable polygon's height. Cluster meshes at the position first, then
     /// the region's terrain.
@@ -110,6 +117,19 @@ public:
     const Stats& stats() const { return mStats; }
 
 private:
+    /// Why a tile needed building, for the update blip. A record beats the
+    /// land and both beat the parameters, because a signature that moved with
+    /// all three moved for the most specific reason.
+    enum TileCause : U8
+    {
+        CAUSE_NONE = 0,     ///< nothing to say: no cause was recorded
+        CAUSE_CREATED,      ///< the tile was never built
+        CAUSE_RECORDS,      ///< a record appeared, left or changed
+        CAUSE_TERRAIN,      ///< the land under the tile moved
+        CAUSE_PARAMS,       ///< the build parameters moved
+        CAUSE_FAILED,       ///< the last build of it failed
+    };
+
     struct Tile
     {
         U64 mSignature = 0;     ///< what the tile should be built from
@@ -119,6 +139,11 @@ private:
         F32 mMillis = 0.f;
         LLVector3d mMin;        ///< global, for scheduling by distance and drawing
         LLVector3d mMax;
+        /// Why mSignature last moved away from what was built, and where what
+        /// caused it sits (global), when something did.
+        U8 mCause = CAUSE_NONE;
+        LLVector3d mCauseAt;
+        bool mHasCauseAt = false;
         /// What the build rasterises here, gathered when the tile's signature
         /// is worked out rather than walked again on the way to the worker.
         std::vector<sknav::RecordPtr> mRecords;
@@ -128,6 +153,7 @@ private:
         /// current land yet, so the tile waits rather than build on old ground.
         std::shared_ptr<const sknav::TerrainWindow> mTerrain;
         U64 mTerrainSignature = 0;
+        U64 mRecordSignature = 0;
         U64 mLandStamp = 0;
         U64 mWorldStamp = 0;
         bool mTerrainStale = false;
@@ -172,6 +198,14 @@ private:
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
     static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
+    /// Work out what a tile is built from, note why it moved away from what
+    /// was built, and keep the old signature to tell the next move by.
+    void reSign(Tile& tile, const std::vector<sknav::RecordPtr>& before, U64 records, U64 terrain, U64 params);
+    /// Where the first record that was not here before sits, or the first that
+    /// left: the part that moved or appeared is what a line should point at.
+    static bool changedRecord(const std::vector<sknav::RecordPtr>& before, const std::vector<sknav::RecordPtr>& after, LLVector3d& out);
+    /// A rising blip for a tile that was just built, coloured by why.
+    void tileBlip(const Mesh& mesh, const Tile& tile) const;
     /// Tiles the mesh no longer wants leave its Detour meshes.
     static void dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
     void schedule();

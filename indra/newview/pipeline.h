@@ -557,6 +557,10 @@ public:
     static void refreshCachedSettings();
 
     void addDebugBlip(const LLVector3& position, const LLColor4& color);
+    // <SK:Nexii> navmesh tile updates: the same blip, with a line back to
+    // whatever caused the update
+    void addDebugBlip(const LLVector3& position, const LLColor4& color, const LLVector3& from);
+    // </SK:Nexii>
 
     void hidePermanentObjects( std::vector<U32>& restoreList );
     void restorePermanentObjects( const std::vector<U32>& restoreList );
@@ -1269,6 +1273,11 @@ protected:
         LLColor4 mColor;
         LLVector3 mPosition;
         F32 mAge;
+        // <SK:Nexii> navmesh tile updates: the blip a tile update spawns also
+        // points at what caused it, when something did
+        LLVector3 mFrom;
+        bool mHasFrom = false;
+        // </SK:Nexii>
 
         DebugBlip(const LLVector3& position, const LLColor4& color)
             : mColor(color), mPosition(position), mAge(0.f)

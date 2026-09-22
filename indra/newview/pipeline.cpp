@@ -5274,6 +5274,23 @@ void LLPipeline::renderDebug()
         glPointSize(8.f);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
 
+        // <SK:Nexii> navmesh tile updates: a line from the blip back to what
+        // caused the update, under the same depth test as the blip itself
+        gGL.begin(LLRender::LINES);
+        for (std::list<DebugBlip>::const_iterator iter = mDebugBlips.begin(); iter != mDebugBlips.end(); ++iter)
+        {
+            const DebugBlip& blip = *iter;
+            if (!blip.mHasFrom)
+            {
+                continue;
+            }
+            gGL.color4fv(blip.mColor.mV);
+            gGL.vertex3fv(blip.mFrom.mV);
+            gGL.vertex3fv(blip.mPosition.mV);
+        }
+        gGL.end();
+        // </SK:Nexii>
+
         gGL.begin(LLRender::POINTS);
         for (std::list<DebugBlip>::iterator iter = mDebugBlips.begin(); iter != mDebugBlips.end(); )
         {
@@ -10526,7 +10543,9 @@ void LLPipeline::renderFinalize()
         renderPhysicsDisplay();
     }
     // <SK:Nexii> navmesh census overlay: record and cluster boxes
-    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH))
+    // A layer of the navmesh debug pass can be on without the surface itself,
+    // so ask the pass rather than the mask alone.
+    if (SKNavMesh::overlayActive())
     {
         SKWorldCensus::instance().renderDebug();
         SKNavMesh::instance().renderDebug();
@@ -14087,6 +14106,17 @@ void LLPipeline::addDebugBlip(const LLVector3& position, const LLColor4& color)
     DebugBlip blip(position, color);
     mDebugBlips.push_back(blip);
 }
+
+// <SK:Nexii> navmesh tile updates: the same blip, pointing back at what
+// caused the update when something did
+void LLPipeline::addDebugBlip(const LLVector3& position, const LLColor4& color, const LLVector3& from)
+{
+    DebugBlip blip(position, color);
+    blip.mFrom = from;
+    blip.mHasFrom = true;
+    mDebugBlips.push_back(blip);
+}
+// </SK:Nexii>
 
 void LLPipeline::hidePermanentObjects( std::vector<U32>& restoreList )
 {

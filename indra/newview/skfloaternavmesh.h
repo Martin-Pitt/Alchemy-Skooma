@@ -36,11 +36,12 @@
  * (@ref sknavpalette.h), so a colour cannot be changed in one place and
  * described wrongly in the other.
  *
- * Every switch but the first is an ordinary setting bound in XUI. The first
- * one is not a setting at all: the overlay hangs off the pipeline's debug mask
- * (@c LLPipeline::RENDER_DEBUG_NAVMESH), the same bit the Develop menu's
- * Navmesh entry toggles, so it is driven from code and read back each frame in
- * case the menu changed it.
+ * Every switch but two is an ordinary setting bound in XUI. The two that are
+ * not settings are the pipeline's debug masks: Draw the navmesh
+ * (@c LLPipeline::RENDER_DEBUG_NAVMESH, the same bit the Develop menu's
+ * Navmesh entry toggles) and Physics shapes
+ * (@c LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES), so both are driven from code
+ * and read back each frame in case the menu changed them.
  */
 class SKFloaterNavMesh final : public LLFloater
 {
@@ -54,6 +55,7 @@ public:
 private:
     void buildLegend();
     void onToggleOverlay();
+    void onTogglePhysicsShapes();
 
     LLFrameTimer mRefresh;
 };

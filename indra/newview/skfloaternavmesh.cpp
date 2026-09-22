@@ -44,6 +44,7 @@ SKFloaterNavMesh::SKFloaterNavMesh(const LLSD& key)
 bool SKFloaterNavMesh::postBuild()
 {
     getChild<LLUICtrl>("overlay_on")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onToggleOverlay(); });
+    getChild<LLUICtrl>("physics_shapes")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onTogglePhysicsShapes(); });
     getChild<LLUICtrl>("mark_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("mark_status")->setValue(SKNavMesh::instance().markUnderCamera());
     });
@@ -82,6 +83,15 @@ void SKFloaterNavMesh::onToggleOverlay()
     }
 }
 
+void SKFloaterNavMesh::onTogglePhysicsShapes()
+{
+    const bool want = getChild<LLUICtrl>("physics_shapes")->getValue().asBoolean();
+    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES) != want)
+    {
+        LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES);
+    }
+}
+
 void SKFloaterNavMesh::draw()
 {
     // Twice a second: the numbers move every frame, but nobody reads them
@@ -89,12 +99,15 @@ void SKFloaterNavMesh::draw()
     if (mRefresh.getElapsedTimeF32() > 0.5f)
     {
         mRefresh.reset();
-        // The Develop menu toggles the same bit, so the box follows the mask
-        // rather than the other way about.
+        // The Develop menu toggles the same bits, so the boxes follow the
+        // masks rather than the other way about.
         const bool on = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
         getChild<LLUICtrl>("overlay_on")->setValue(on);
+        getChild<LLUICtrl>("physics_shapes")->setValue(gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_PHYSICS_SHAPES));
+        // The mesh runs for a layer on its own too, so the line follows what
+        // is being built, not the surface switch.
         std::string mesh_line = getString("overlay_off");
-        if (on)
+        if (SKNavMesh::overlayActive() || gSavedSettings.getBOOL("SKNavMeshAlways"))
         {
             // Asking for a class nothing is building shows an empty world and
             // no reason for it.
