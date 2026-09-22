@@ -85,6 +85,9 @@ namespace sknav
         F32 mDetailMaxErrorCells = 2.f;
         F32 mWallMinHeight = 0.5f;          ///< shorter faces are a slope's terracing, not a wall
         std::vector<RecordPtr> mRecords;    ///< everything intersecting the padded tile
+        /// The sim's exclusion volumes: their inside is cut out of the
+        /// navmesh rather than built, so they never become a surface.
+        std::vector<RecordPtr> mCuts;
         TerrainWindow mTerrain;
         bool mClasses[NUM_CLASSES] = { true, false };
         ClassParams mParams[NUM_CLASSES];

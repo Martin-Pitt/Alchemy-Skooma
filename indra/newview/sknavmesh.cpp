@@ -34,17 +34,22 @@
 #include "llagent.h"
 #include "llappviewer.h"
 #include "llglslshader.h"
+#include "llmeshrepository.h"
+#include "llmodel.h"
 #include "llrender.h"
 #include "llsurface.h"
 #include "llsurfacepatch.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
 #include "llviewershadermgr.h"
 #include "llvoavatarself.h"
+#include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skphysicsshape.h"
 #include "workqueue.h"
 
 #include <algorithm>
@@ -1418,6 +1423,25 @@ std::string SKNavMesh::markUnderCamera()
         out << "region " << region->getName() << " local " << LLVector3(mMark - region->getOriginGlobal()) << "\n";
     }
 
+    // The avatar class's build parameters, read the way the build reads them:
+    // whether erosion or the headroom rule ate the floor can only be judged
+    // with the numbers it ran with.
+    {
+        static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
+        static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
+        static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+        static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
+        F32 height = 2.f;
+        if (isAgentAvatarValid())
+        {
+            height = llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f);
+        }
+        const F32 cell_m = llmax(static_cast<F32>(cell), 0.05f);
+        height = std::ceil(height / cell_m) * cell_m;
+        out << "agent height " << height << " radius " << radius << " climb " << climb << " slope " << slope
+            << " cell " << cell << " (erode " << std::ceil(static_cast<F32>(radius) / cell_m) << " cells)\n";
+    }
+
     LLViewerObject* root = hit;
     while (!root->isRoot() && root->getParent())
     {
@@ -1429,10 +1453,79 @@ std::string SKNavMesh::markUnderCamera()
         << (root->flagPhantom() ? " phantom" : "") << (root->flagUsePhysics() ? " physical" : "")
         << (root->flagObjectPermanent() ? " permanent" : "") << (root->isLocalOnly() ? " local" : "") << "\n";
 
+    // What the shared resolver says this object's shape is, and which of the
+    // three sources the census can take it from: a decomposition, the physics
+    // mesh the sim actually collides with, or the base hull that covers the
+    // wait. An object whose census record reads HULL but has no hulls is
+    // being built from the base hull.
+    if (LLVOVolume* volume = dynamic_cast<LLVOVolume*>(hit))
+    {
+        if (volume->getVolume())
+        {
+            SKPhysicsShape shape;
+            const bool known = skPhysicsShapeClassify(volume, shape);
+            const LLUUID sculpt = volume->getVolume()->getParams().getSculptID();
+            LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
+            out << "  shape spec " << (known ? static_cast<S32>(shape.mSpec.getType()) : -1)
+                << " mesh " << sculpt << " decomp " << (decomp ? "yes" : "no");
+            if (decomp)
+            {
+                S32 hull_points = 0;
+                for (const std::vector<LLVector3>& hull : decomp->mHull)
+                {
+                    hull_points += static_cast<S32>(hull.size());
+                }
+                S32 hull_tris = 0;
+                for (const LLModel::PhysicsMesh& hull : decomp->mMesh)
+                {
+                    hull_tris += static_cast<S32>(hull.mPositions.size() / 3);
+                }
+                out << " hulls " << decomp->mHull.size() << " (" << hull_points << " points, " << hull_tris << " tris built)"
+                    << " physics mesh tris " << decomp->mPhysicsShapeMesh.mPositions.size() / 3
+                    << " base hull tris " << decomp->mBaseHullMesh.mPositions.size() / 3;
+            }
+            out << "\n";
+        }
+    }
+
+    // The part's own record, the one that decides what the navmesh has under
+    // the camera, with the box it covers: it is often past the nearby list's
+    // cap, and its extent is what says whether a ledge is too narrow to erode.
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (r->mPart != hit->getID())
+            {
+                continue;
+            }
+            out << "  part record provenance " << static_cast<S32>(r->mProvenance) << " shape "
+                << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
+                << static_cast<S32>(r->mNavRole) << " x " << r->mMin.mdV[VX] << ".." << r->mMax.mdV[VX] << " y "
+                << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ] << ".." << r->mMax.mdV[VZ]
+                << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+            break;
+        }
+    }
+
     // What the census made of everything around the mark.
     const LLVector3d reach(4.0, 4.0, 4.0);
     if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
     {
+        // The physics shape type each end of the record carries. The sim only
+        // tells the linkset root, so a child that reads Prim while its root
+        // reads none is a part we should not have made a shape of.
+        auto shape_type = [](const RecordPtr& r, bool root) -> std::string
+        {
+            LLViewerObject* object = gObjectList.findObject(root ? r->mRoot : r->mPart);
+            if (!object)
+            {
+                return "gone";
+            }
+            static const char* names[] = { "prim", "none", "convex" };
+            const U8 type = object->getPhysicsShapeType();
+            return std::string(type < 3 ? names[type] : "other") + (object->isPhysicsShapeUnknown() ? "?" : "");
+        };
         S32 shown = 0;
         for (const RecordPtr& r : snap->mRecords)
         {
@@ -1441,15 +1534,27 @@ std::string SKNavMesh::markUnderCamera()
             {
                 continue;
             }
-            if (++shown > 12)
+            if (++shown > 24)
             {
                 out << "  ... and more\n";
                 break;
             }
+            const bool covers = overlapsXY(r->mMin, r->mMax, mMark, mMark);
             out << "  record root " << r->mRoot << " provenance " << static_cast<S32>(r->mProvenance) << " shape "
                 << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
-                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " z " << r->mMin.mdV[VZ] << ".."
-                << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+                << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
+                << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << " part "
+                << shape_type(r, false) << " root " << shape_type(r, true);
+            if (covers)
+            {
+                out << " <-- covers the mark";
+                if (r->mMin.mdV[VZ] > mMark.mdV[VZ])
+                {
+                    out << ", bottom " << (r->mMin.mdV[VZ] - mMark.mdV[VZ]) << " m above it";
+                }
+            }
+            out << "\n";
         }
         if (!shown)
         {
@@ -1462,6 +1567,87 @@ std::string SKNavMesh::markUnderCamera()
                 out << "  cluster " << c->mId << " records " << c->mRecords.size() << " tiles " << c->mTiles.size()
                     << " z " << c->mMin.mdV[VZ] << ".." << c->mMax.mdV[VZ] << " grounded " << grounded(*c) << "\n";
             }
+        }
+
+        // The record triangles over the mark, with how flat each is: a floor
+        // goes missing when a surface hangs over it by less than the agent's
+        // height, and which surface does is the whole question. Lowest first,
+        // and one line per distinct surface: a box standing there would
+        // otherwise fill the list with its own twelve triangles.
+        struct OverTri
+        {
+            F32 mMin;
+            F32 mMax;
+            F32 mNormalZ;
+            F32 mWidth;
+            F32 mDepth;
+            S32 mProvenance;
+            LLUUID mRoot;
+        };
+        std::vector<OverTri> over;
+        const F64 slack = 0.15;
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (!r->mTriangles)
+            {
+                continue;
+            }
+            const LLVector3d local = mMark - r->mOrigin;
+            for (size_t t = 0; t + 2 < r->mTriangles->size(); t += 3)
+            {
+                const LLVector3& a = (*r->mTriangles)[t];
+                const LLVector3& b = (*r->mTriangles)[t + 1];
+                const LLVector3& c = (*r->mTriangles)[t + 2];
+                const F32 xmin = llmin(a.mV[VX], llmin(b.mV[VX], c.mV[VX]));
+                const F32 xmax = llmax(a.mV[VX], llmax(b.mV[VX], c.mV[VX]));
+                const F32 ymin = llmin(a.mV[VY], llmin(b.mV[VY], c.mV[VY]));
+                const F32 ymax = llmax(a.mV[VY], llmax(b.mV[VY], c.mV[VY]));
+                if (local.mdV[VX] < xmin - slack || local.mdV[VX] > xmax + slack || local.mdV[VY] < ymin - slack ||
+                    local.mdV[VY] > ymax + slack)
+                {
+                    continue;
+                }
+                const F32 zmin = llmin(a.mV[VZ], llmin(b.mV[VZ], c.mV[VZ]));
+                const F32 zmax = llmax(a.mV[VZ], llmax(b.mV[VZ], c.mV[VZ]));
+                if (zmax < mMark.mdV[VZ] - 2.0)
+                {
+                    continue;
+                }
+                LLVector3 n = (b - a) % (c - a);
+                F32 nz = 0.f;
+                if (n.normVec() > 0.f)
+                {
+                    nz = n.mV[VZ];
+                }
+                bool dup = false;
+                const F32 width = xmax - xmin, depth = ymax - ymin;
+                for (const OverTri& o : over)
+                {
+                    if (o.mProvenance == static_cast<S32>(r->mProvenance) && o.mRoot == r->mRoot &&
+                        std::fabs(o.mMin - zmin) < 0.01f && std::fabs(o.mMax - zmax) < 0.01f && std::fabs(o.mNormalZ - nz) < 0.02f &&
+                        std::fabs(o.mWidth - width) < 0.05f && std::fabs(o.mDepth - depth) < 0.05f)
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup)
+                {
+                    over.push_back({ zmin, zmax, nz, width, depth, static_cast<S32>(r->mProvenance), r->mRoot });
+                }
+            }
+        }
+        std::sort(over.begin(), over.end(), [](const OverTri& a, const OverTri& b) { return a.mMin < b.mMin; });
+        S32 tris_shown = 0;
+        for (const OverTri& o : over)
+        {
+            if (++tris_shown > 16)
+            {
+                out << "  ... and more triangles over the mark\n";
+                break;
+            }
+            out << "  tri over the mark z " << o.mMin << ".." << o.mMax << " normal z " << o.mNormalZ << " footprint "
+                << o.mWidth << " x " << o.mDepth << " m provenance " << o.mProvenance << " root " << o.mRoot << "\n";
         }
     }
 
@@ -1558,6 +1744,21 @@ std::string SKNavMesh::markUnderCamera()
             }
             out << "] area " << std::fabs(area2) * 0.5 << " m2, detail tris "
                 << static_cast<S32>(tile->detailMeshes[poly - tile->polys].triCount) << "\n";
+
+            // The nearest polygon of each area at the mark, so two surfaces
+            // in one mesh - a platform and the terrain it meets - both show,
+            // and the step between them with them.
+            for (U8 area = AREA_GROUND; area <= AREA_SUBMERGED; ++area)
+            {
+                dtQueryFilter area_filter;
+                area_filter.setIncludeFlags(static_cast<unsigned short>(1u << area));
+                dtPolyRef area_ref = 0;
+                F32 area_pt[3];
+                if (dtStatusSucceed(mesh.mQuery[cls]->findNearestPoly(centre, extents, &area_filter, &area_ref, area_pt)) && area_ref)
+                {
+                    out << "    nearest area " << static_cast<S32>(area) << " at z " << area_pt[1] << "\n";
+                }
+            }
         }
     }
 
