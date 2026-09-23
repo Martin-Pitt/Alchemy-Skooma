@@ -676,7 +676,10 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             grid.query(entry.first, tile.mRecords);
             reSign(tile, before, recordSignature(tile.mRecords), 0, params);
         }
-        dropTiles(*mesh, wanted);
+        if (dropTiles(*mesh, wanted))
+        {
+            mRevision++;
+        }
         mesh->mTiles.swap(wanted);
     }
 
@@ -817,7 +820,10 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
                 }
             }
-            dropTiles(*mesh, wanted);
+            if (dropTiles(*mesh, wanted))
+            {
+                mRevision++;
+            }
             mesh->mTiles.swap(wanted);
         }
     }
@@ -826,7 +832,15 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // the region's business, takes its mesh with it.
     for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        it = live.count(it->second->mId) ? std::next(it) : mMeshes.erase(it);
+        if (live.count(it->second->mId))
+        {
+            ++it;
+        }
+        else
+        {
+            it = mMeshes.erase(it);
+            mRevision++;            // its tiles leave the overlay with it
+        }
     }
 }
 
@@ -945,8 +959,9 @@ void SKNavMesh::tileBlip(const Mesh& mesh, const Tile& tile) const
     }
 }
 
-void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
+bool SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
 {
+    bool dropped = false;
     for (const auto& old : mesh.mTiles)
     {
         if (wanted.count(old.first) == 0 && old.second.mBuilt)
@@ -958,8 +973,10 @@ void SKNavMesh::dropTiles(Mesh& mesh, const std::map<TileKey, Tile>& wanted)
                     mesh.mNav[cls]->removeTile(mesh.mNav[cls]->getTileRefAt(old.first.mY, old.first.mX, 0), nullptr, nullptr);
                 }
             }
+            dropped = true;
         }
     }
+    return dropped;
 }
 
 bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
@@ -1091,6 +1108,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mCause = CAUSE_FAILED;
         tile.mHasCauseAt = false;
         tileBlip(mesh, tile);
+        mRevision++;                // the tile's walls are gone: the overlay moved
         return;
     }
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
@@ -1134,6 +1152,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
     tileBlip(mesh, tile);
+    mRevision++;                    // a published tile is one the overlay redraws
 }
 
 void SKNavMesh::schedule()
@@ -1234,7 +1253,15 @@ void SKNavMesh::update()
     // Meshes nothing has claimed for a while are gone with their structure.
     for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        it = (gFrameTimeSeconds - it->second->mLastSeen > 30.f) ? mMeshes.erase(it) : std::next(it);
+        if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
+        {
+            it = mMeshes.erase(it);
+            mRevision++;
+        }
+        else
+        {
+            ++it;
+        }
     }
 
     sampleTerrain();
@@ -1890,11 +1917,10 @@ std::string SKNavMesh::markUnderCamera()
                     mMark.mdV[VZ]);
 }
 
-void SKNavMesh::renderDebug()
+void SKNavMesh::refreshOverlay()
 {
     static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
     static LLCachedControl<F32> edge_width(gSavedSettings, "SKNavOverlayEdgeWidth", 3.f);
-    static LLCachedControl<bool> xray(gSavedSettings, "SKNavOverlayXRay", false);
     static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
@@ -1914,9 +1940,16 @@ void SKNavMesh::renderDebug()
     // alone: the agent parks wherever it was left, and a copy of the drawing
     // around it too only got in the way of what the camera came to look at.
     // Its last fifth falls away rather than stopping, so the edge reads as
-    // distance; the fade is applied per vertex when the geometry is drawn.
-    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    // distance; the fade bakes into the colours as they are gathered.
+    LLViewerCamera* view = LLViewerCamera::getInstance();
+    const LLVector3 camera_agent = view->getOrigin();
+    const LLVector3 camera_forward = view->getAtAxis();
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(camera_agent);
     const F64 reach = range;
+    // How wide a pixel is on screen, which is what an edge ribbon is built
+    // against: the eye's vertical field of view and the viewport it fills.
+    const F32 fov_y = view->getView();
+    const S32 viewport_height = gViewerWindow ? gViewerWindow->getWorldViewHeightRaw() : 0;
     auto within = [&](const LLVector3d& p) {
         return dist_vec_squared2D(p, camera) <= reach * reach;
     };
@@ -1933,14 +1966,56 @@ void SKNavMesh::renderDebug()
     // Over the world the surface is only slightly transparent: enough to see
     // what it is lying on, not so much that it stops reading as a surface.
     const F32 FILL = 0.65f;
+    // What a wall segment's cover is judged against: the reader's own eye
+    // height. The wall pass below uses these, and the key needs them, because
+    // they colour what is drawn.
+    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+    static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
+    const F32 eye = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 1.8f;
 
-    SKNavOverlayGeom geom;
+    // Everything the gather depends on besides the camera, hashed into one
+    // value: a revision over the built mesh, the switches that shape the
+    // drawing, and the mark. A new value means a new gather.
+    U64 key = SEED;
+    key = mix(key, mRevision);
+    key = mix(key, static_cast<U64>(cls));
+    key = mix(key, (navmesh ? 1ull : 0ull) | (show_world ? 2ull : 0ull) | (show_walls ? 4ull : 0ull)
+                       | (show_faces ? 8ull : 0ull) | (show_links ? 16ull : 0ull));
+    key = mixF32(key, static_cast<F32>(reach));
+    key = mixF32(key, llclamp(static_cast<F32>(edge_width), 1.f, 8.f));
+    key = mixF32(key, fov_y);
+    key = mix(key, static_cast<U64>(viewport_height));
+    key = mixF32(key, static_cast<F32>(climb));
+    key = mixF32(key, static_cast<F32>(peek));
+    key = mixF32(key, eye);
+    key = mix(key, mHasMark ? 1ull : 0ull);
+    if (mHasMark)
     {
-        LLViewerCamera* view = LLViewerCamera::getInstance();
-        geom.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), view->getOrigin(), view->getView(),
-                          gViewerWindow ? gViewerWindow->getWorldViewHeightRaw() : 0);
-        geom.setFade(gAgent.getPosAgentFromGlobal(camera), static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
+        key = mixF64(key, mMark.mdV[VX]);
+        key = mixF64(key, mMark.mdV[VY]);
+        key = mixF64(key, mMark.mdV[VZ]);
     }
+
+    // The camera may move a metre and a half without the fade band, nineteen
+    // metres deep, reading any different, and turn ten degrees without the
+    // edge ribbons losing the way they face. A distance and a dot, not
+    // buckets, so a camera parked at a boundary does not rebuild every frame.
+    static const F32 MOVE_M = 1.5f;
+    static const F32 TURN_DOT = 0.985f;
+    const bool rebuild = !mOverlayFresh || key != mOverlayKey
+        || dist_vec_squared(camera_agent, mOverlayCamera) > MOVE_M * MOVE_M
+        || camera_forward * mOverlayForward < TURN_DOT;
+    if (!rebuild)
+    {
+        return;
+    }
+
+    mOverlay.clear();
+    // The ribbon faces the camera and widens with depth, so it is built from
+    // where the camera is now; the fade waits for upload() and bakes there.
+    mOverlay.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), camera_agent, fov_y, viewport_height);
+    mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
+
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
@@ -2003,7 +2078,7 @@ void SKNavMesh::renderDebug()
                         }
                         const LLVector3 a = originAgent + fromRecast(&tile->verts[poly.verts[v] * 3]) + lift;
                         const LLVector3 b = originAgent + fromRecast(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3]) + lift;
-                        geom.line(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
+                        mOverlay.line(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
                     }
                 }
 
@@ -2019,7 +2094,7 @@ void SKNavMesh::renderDebug()
                         v[k] = originAgent + fromRecast(rc);
                     }
                     const LLVector3 fill_lift(0.f, 0.f, 0.04f);
-                    geom.tri(v[0] + fill_lift, v[1] + fill_lift, v[2] + fill_lift, fill);
+                    mOverlay.tri(v[0] + fill_lift, v[1] + fill_lift, v[2] + fill_lift, fill);
                     // Only the polygon outline: the detail triangles under it
                     // are the same surface and add nothing but noise.
                     const LLVector3 lift(0.f, 0.f, 0.06f);
@@ -2027,7 +2102,7 @@ void SKNavMesh::renderDebug()
                     {
                         if (dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
                         {
-                            geom.edge(v[k] + lift, v[(k + 1) % 3] + lift, edge);
+                            mOverlay.edge(v[k] + lift, v[(k + 1) % 3] + lift, edge);
                         }
                     }
                 }
@@ -2039,9 +2114,6 @@ void SKNavMesh::renderDebug()
     // the user's own eye height, and a tick from each ledge to where it lands.
     if (show_walls)
     {
-        static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
-        static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
-        const F32 eye = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 1.8f;
         const LLVector3 lift(0.f, 0.f, 0.08f);
         // One query over the camera's reach, then the round test per segment: the
         // box is only there to keep the query small.
@@ -2074,12 +2146,12 @@ void SKNavMesh::renderDebug()
             color = strength(color, 1.f);
             const LLVector3 pa = gAgent.getPosAgentFromGlobal(a) + lift;
             const LLVector3 pb = gAgent.getPosAgentFromGlobal(b) + lift;
-            geom.line(pa, pb, color);
+            mOverlay.line(pa, pb, color);
             // A wall is drawn again at its own height, so how tall it is shows.
             if (kind == EdgeKind::WALL)
             {
                 const LLVector3 up(0.f, 0.f, value);
-                geom.line(pa + up, pb + up, color);
+                mOverlay.line(pa + up, pb + up, color);
             }
         });
         if (show_faces)
@@ -2118,13 +2190,13 @@ void SKNavMesh::renderDebug()
                 {
                     color.mV[k] *= tint;
                 }
-                geom.tri(corner[0], corner[1], corner[2], strength(color, 1.f));
-                geom.tri(corner[0], corner[2], corner[3], strength(color, 1.f));
+                mOverlay.tri(corner[0], corner[1], corner[2], strength(color, 1.f));
+                mOverlay.tri(corner[0], corner[2], corner[3], strength(color, 1.f));
                 LLColor4 line = color;
                 line.mV[VALPHA] = 0.9f;
                 for (S32 c = 0; c < 4; ++c)
                 {
-                    geom.line(corner[c], corner[(c + 1) % 4], strength(line, 1.f));
+                    mOverlay.line(corner[c], corner[(c + 1) % 4], strength(line, 1.f));
                 }
             });
         }
@@ -2133,7 +2205,7 @@ void SKNavMesh::renderDebug()
         linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32) {
             if (within(from))
             {
-                geom.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
+                mOverlay.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
             }
         });
     }
@@ -2142,10 +2214,28 @@ void SKNavMesh::renderDebug()
     {
         const LLVector3 m = gAgent.getPosAgentFromGlobal(mMark);
         const LLColor4 pink(1.f, 0.2f, 1.f, 0.95f);
-        geom.edge(m - LLVector3(0.f, 0.f, 5.f), m + LLVector3(0.f, 0.f, 5.f), pink);
-        geom.edge(m - LLVector3(1.f, 0.f, 0.f), m + LLVector3(1.f, 0.f, 0.f), pink);
-        geom.edge(m - LLVector3(0.f, 1.f, 0.f), m + LLVector3(0.f, 1.f, 0.f), pink);
+        mOverlay.edge(m - LLVector3(0.f, 0.f, 5.f), m + LLVector3(0.f, 0.f, 5.f), pink);
+        mOverlay.edge(m - LLVector3(1.f, 0.f, 0.f), m + LLVector3(1.f, 0.f, 0.f), pink);
+        mOverlay.edge(m - LLVector3(0.f, 1.f, 0.f), m + LLVector3(0.f, 1.f, 0.f), pink);
     }
+
+    mOverlay.upload();
+    mOverlayKey = key;
+    mOverlayCamera = camera_agent;
+    mOverlayForward = camera_forward;
+    mOverlayFresh = true;
+}
+
+void SKNavMesh::renderDebug()
+{
+    static LLCachedControl<bool> xray(gSavedSettings, "SKNavOverlayXRay", false);
+    static LLCachedControl<bool> show_world(gSavedSettings, "SKNavOverlayWorld", true);
+    const bool navmesh = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
+    // Whether the surface wipes the world or lies over it decides both the
+    // alpha baked into the cache and the depth state below, so read it here.
+    const bool opaque = navmesh && !show_world;
+
+    refreshOverlay();
 
     if (opaque)
     {
@@ -2160,7 +2250,7 @@ void SKNavMesh::renderDebug()
         glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
         gGL.setColorMask(true, false);
     }
-    if (geom.empty())
+    if (mOverlay.empty())
     {
         return;
     }
@@ -2171,14 +2261,14 @@ void SKNavMesh::renderDebug()
         LLGLDisable cull(GL_CULL_FACE);
         {
             LLGLDepthTest depth(GL_TRUE, opaque ? GL_TRUE : GL_FALSE);
-            geom.draw();
+            mOverlay.draw();
         }
         if (xray && !opaque)
         {
             // What is behind geometry, darker and fainter, so it reads as being
             // seen through the wall rather than in front of it.
             LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
-            geom.draw(0.55f, 0.45f);
+            mOverlay.draw(0.55f, 0.45f);
         }
     }
     SKNavOverlayGeom::unbindShader();

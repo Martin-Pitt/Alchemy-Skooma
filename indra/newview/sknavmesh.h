@@ -27,6 +27,7 @@
 
 #include "llsingleton.h"
 #include "sknavbuild.h"
+#include "sknavoverlay.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
@@ -218,8 +219,9 @@ private:
     static bool changedRecord(const std::vector<sknav::RecordPtr>& before, const std::vector<sknav::RecordPtr>& after, LLVector3d& out);
     /// A rising blip for a tile that was just built, coloured by why.
     void tileBlip(const Mesh& mesh, const Tile& tile) const;
-    /// Tiles the mesh no longer wants leave its Detour meshes.
-    static void dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
+    /// Tiles the mesh no longer wants leave its Detour meshes. True when any
+    /// did, which is a change the debug overlay's cache has to hear about.
+    static bool dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
@@ -237,6 +239,11 @@ private:
     void fillParams(sknav::TileBuildInput& input) const;
     bool ensureNav(Mesh& mesh, S32 cls);
     Mesh* meshAt(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out) const;
+    /// Gather the debug overlay anew when the mesh, one of the switches or
+    /// the camera has moved enough that the cached one is no longer right,
+    /// and upload it. A quiet mesh and a parked camera cost one signature
+    /// compare a frame; renderDebug() then only draws what is cached.
+    void refreshOverlay();
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
@@ -250,6 +257,21 @@ private:
     bool mDemanding = false;
     LLVector3d mMark;
     bool mHasMark = false;
+
+    /// A counter over what the debug overlay draws: bumped whenever a tile
+    /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps
+    /// its gathered geometry until this moves, so a published tile redraws
+    /// the pass on the next frame and a quiet mesh costs nothing.
+    U64 mRevision = 0;
+    /// The overlay as gathered, and what it was gathered from: everything
+    /// but the camera's position and facing, hashed into mOverlayKey, with
+    /// those two kept exact so a rebuild is a threshold with hysteresis
+    /// rather than a bucket boundary the camera can jitter across.
+    SKNavOverlayGeom mOverlay;
+    U64 mOverlayKey = 0;
+    bool mOverlayFresh = false;
+    LLVector3 mOverlayCamera;
+    LLVector3 mOverlayForward;
 };
 
 #endif // SK_NAVMESH_H
