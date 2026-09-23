@@ -912,6 +912,16 @@ namespace sknav
                 result.mError = "detail";
                 return result;
             }
+            // Recast hands the detail vertices back one cell higher than the
+            // polygon vertices they refine (RecastMeshDetail.cpp, "Is this
+            // offset necessary?"), and Detour keeps the polygon's own corners
+            // at their unshifted height, so every vertex the detail pass adds
+            // would stand a cell proud of the corners around it and tilt the
+            // triangles between them. Take the offset back out.
+            for (int v = 0; v < mem.dmesh->nverts; ++v)
+            {
+                mem.dmesh->verts[v * 3 + 1] -= cfg.ch;
+            }
             result.mPolys[cls] = mem.pmesh->npolys;
             if (mem.pmesh->npolys == 0)
             {
