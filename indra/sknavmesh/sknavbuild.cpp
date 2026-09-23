@@ -261,7 +261,10 @@ namespace
         }
     }
 
-    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    /// An exact body (a prim's own box, sphere or cylinder) is the solid the
+    /// sim collides with, so it is filled whatever it covers; a hull is the
+    /// census's reading of a mesh and yields to any surface it finds inside.
+    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb, bool exact)
     {
         // Havok pads every convex shape by 5 cm, so two solids leave a 10 cm
         // gap; the census's hulls carry none and read small at their edges,
@@ -310,9 +313,11 @@ namespace
                 // one below it that should have been dropped in its favour.
                 // Leave the column to the stacked-surface rule, which keeps
                 // the higher surface and discards the one within the agent's
-                // height below it.
+                // height below it. Only a hull earns that doubt: the terrain
+                // under a box sunk into the ground is inside a solid, and
+                // sparing it offered a floor inside every such prim.
                 bool holds_surface = false;
-                for (const rcSpan* s = hf.spans[cx + cz * hf.width]; s; s = s->next)
+                for (const rcSpan* s = exact ? nullptr : hf.spans[cx + cz * hf.width]; s; s = s->next)
                 {
                     if (s->area != RC_NULL_AREA && static_cast<S32>(s->smin) > smin && static_cast<S32>(s->smax) < smax)
                     {
@@ -691,7 +696,8 @@ namespace sknav
         // Gather the soup in Recast space.
         Soup soup;
         std::vector<LLVector3> tris;
-        std::vector<std::pair<S32, S32>> convex;    // triangle ranges of closed bodies
+        struct Body { S32 mBegin; S32 mEnd; bool mExact; };
+        std::vector<Body> convex;    // triangle ranges of closed bodies
         for (const RecordPtr& r : input.mRecords)
         {
             if (!r)
@@ -725,14 +731,14 @@ namespace sknav
                 {
                     if (count > 0)
                     {
-                        convex.emplace_back(at, at + count);
+                        convex.push_back({ at, at + count, false });
                     }
                     at += count;
                 }
             }
             else if (r->mShape != Shape::TRIANGLES || hull)
             {
-                convex.emplace_back(before, soup.ntris());
+                convex.push_back({ before, soup.ntris(), r->mShape != Shape::TRIANGLES });
             }
         }
         // An exclusion volume is a cut, not a shape: its triangles never enter
@@ -839,9 +845,9 @@ namespace sknav
                 result.mError = "rasterize";
                 return result;
             }
-            for (const auto& range : convex)
+            for (const Body& body : convex)
             {
-                fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
+                fillConvex(*mem.hf, soup, body.mBegin, body.mEnd, cfg.walkableClimb, body.mExact);
             }
             for (const auto& range : cuts)
             {

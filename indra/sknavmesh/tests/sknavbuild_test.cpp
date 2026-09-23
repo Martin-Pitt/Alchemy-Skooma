@@ -689,4 +689,26 @@ namespace tut
         ensure("dais is floor", m.nearest(LLVector3(17.f, 16.f, 0.5f), top, 0.05f) != 0);
         ensure("dais keeps its height", std::fabs(top[1] - floor - 0.5f) < 0.1f);
     }
+
+    // A box sunk into the ground is solid down to its bottom: the terrain it
+    // swallows is not a floor inside it. Its roof is, and so is the ground
+    // around it.
+    template<> template<>
+    void sknavbuild_object::test<16>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(8.f, 8.f, -0.5f, 24.f, 24.f, 3.f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("no floor on the terrain inside the box", m.nearest(LLVector3(16.f, 16.f, 0.f), snapped, 0.5f) == 0);
+        ensure("the box roof is floor", m.nearest(LLVector3(16.f, 16.f, 3.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 3.f) < 0.3f);
+        ensure("ground beside the box is floor", m.nearest(LLVector3(4.f, 4.f, 0.f), snapped, 0.5f) != 0);
+        ensure("ground at its height", std::fabs(snapped[1]) < 0.3f);
+    }
 }
