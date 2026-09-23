@@ -65,9 +65,8 @@ struct SKShapeGeometry
 };
 
 /// The physics geometry for a classified shape. Asks the mesh repository for
-/// what is missing exactly as the overlay does, and while it is missing
-/// returns the volume's bounding box with provenance BOX. False only when
-/// there is nothing to emit.
+/// what is missing exactly as the overlay does. False while it is missing and
+/// when there is nothing to emit: nothing stands in for a fetch.
 bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKShapeGeometry& out);
 
 /// The rendered geometry: the volume's faces at whatever LOD is loaded, with

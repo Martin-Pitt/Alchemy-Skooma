@@ -56,7 +56,7 @@ struct SKCensusSnapshot
         U32 mRecords = 0;
         U32 mDynamic = 0;
         U32 mSurround = 0;
-        U32 mPlaceholders = 0;      ///< provenance BOX: an asset still fetching
+        U32 mPlaceholders = 0;      ///< provenance BOX: objects known only from the region's object cache
         U32 mCached = 0;            ///< parts reused from the previous scan
         U32 mFromObjectCache = 0;   ///< boxes from the region's object cache, never drawn this session
         U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record

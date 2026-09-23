@@ -77,14 +77,6 @@ namespace
         // A PhysicsMesh is three positions per triangle already.
         out.insert(out.end(), positions.begin(), positions.end() - (positions.size() % 3));
     }
-
-    void boundingBox(const LLVOVolume* volume, SKShapeGeometry& out)
-    {
-        out.mShape = sknav::Shape::BOX;
-        out.mProvenance = sknav::Provenance::BOX;
-        out.mCenter.setZero();
-        out.mHalf.set(0.5f, 0.5f, 0.5f);
-    }
 }
 
 bool skPhysicsShapeClassify(LLVOVolume* volume, SKPhysicsShape& out)
@@ -127,27 +119,36 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
         case Spec::USER_MESH:
         {
             LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
-            // The hulls are a physics shape: the decomposition the sim
-            // collides against for a Convex Hull mesh, and the stand-in while
-            // a Prim mesh's physics mesh is still on its way. The rendered
-            // shape is not an option here - a mesh LOD can be hundreds of
-            // thousands of triangles, and only a megasculpty's surround is
-            // ever meshed from what the eye sees. The part's signature
-            // carries the physics mesh's size, so its arrival re-records the
-            // part and the tiles holding it rebuild.
+            // A Prim mesh collides as the physics mesh it was uploaded with
+            // when the asset has one, and as its hull decomposition when it
+            // has none. Nothing stands in for the wait: a hull or a box the
+            // sim never collided with is a floor and a wall it never had, and
+            // the census asks again next pass, so the fetch costs a few
+            // passes of silence and no rebuild. The rendered shape is not an
+            // option either - a mesh LOD can be hundreds of thousands of
+            // triangles, and only a megasculpty's surround is ever meshed
+            // from what the eye sees.
             if (shape.mPhysicsType == LLViewerObject::PHYSICS_SHAPE_PRIM)
             {
-                gMeshRepo.fetchPhysicsShape(params.getSculptID());
-                if (decomp && !decomp->mPhysicsShapeMesh.empty())
+                const S32 physics_mesh = gMeshRepo.physicsMeshSize(params.getSculptID());
+                if (physics_mesh < 0)
                 {
+                    return false;   // header on its way: which shape it collides as is unknown
+                }
+                if (physics_mesh > 0)
+                {
+                    gMeshRepo.fetchPhysicsShape(params.getSculptID());
+                    if (!decomp || decomp->mPhysicsShapeMesh.empty())
+                    {
+                        return false;   // the physics mesh is on its way
+                    }
                     appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
                     break;
                 }
             }
             if (!decomp)
             {
-                boundingBox(volume, out);
-                return true;
+                return false;   // the decomposition is on its way
             }
             if (!decomp->mHull.empty())
             {
@@ -200,10 +201,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                 LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(params.getSculptID());
                 if (!decomp)
                 {
-                    // The mesh itself is still on its way; the box stands in
-                    // until it arrives, and the part re-signs when it does.
-                    boundingBox(volume, out);
-                    return true;
+                    return false;   // the hull is on its way; nothing stands in
                 }
                 if (decomp->mBaseHullMesh.empty() || decomp->mMesh.empty())
                 {
