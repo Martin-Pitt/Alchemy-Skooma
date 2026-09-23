@@ -143,7 +143,7 @@ bool LLToolCamera::handleMouseDown(S32 x, S32 y, MASK mask)
 
     gViewerWindow->hideCursor();
 
-    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true);
+    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*bool pick_transparent*/ false, /*bool pick_rigged*/ false, /*bool pick_unselectable*/ true, /*bool pick_reflection_probes*/ false, /*bool pick_focus*/ true);
 
     return true;
 }

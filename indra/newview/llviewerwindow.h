@@ -137,6 +137,10 @@ public:
     bool            mPickUnselectable;
     bool            mPickReflectionProbe = false;
     bool            mPickHUD{ false };
+    // Focus pick: used by the camera tool to place the camera's focus point.
+    // Reaches the camera's far plane instead of the legacy pick range, and
+    // falls back to the water plane when no object is hit.
+    bool            mPickFocus = false;
     void            getSurfaceInfo();
 
 private:
@@ -436,7 +440,8 @@ public:
                                 bool pick_transparent = false,
                                 bool pick_rigged = false,
                                 bool pick_unselectable = false,
-                                bool pick_reflection_probes = false);
+                                bool pick_reflection_probes = false,
+                                bool pick_focus = false);
     LLPickInfo      pickImmediate(S32 x, S32 y, bool pick_transparent, bool pick_rigged = false, bool pick_particle = false, bool pick_unselectable = true, bool pick_reflection_probe = false);
     LLHUDIcon* cursorIntersectIcon(S32 mouse_x, S32 mouse_y, F32 depth,
                                            LLVector4a* intersection);

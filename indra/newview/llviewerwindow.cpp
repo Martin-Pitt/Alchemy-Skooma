@@ -4706,7 +4706,8 @@ void LLViewerWindow::pickAsync( S32 x,
                                 bool pick_transparent,
                                 bool pick_rigged,
                                 bool pick_unselectable,
-                                bool pick_reflection_probes)
+                                bool pick_reflection_probes,
+                                bool pick_focus)
 {
     static LLCachedControl<bool> select_invisible_objects(gSavedSettings, "SelectInvisibleObjects");
     // "Show Debug Alpha" means no object actually transparent
@@ -4717,6 +4718,7 @@ void LLViewerWindow::pickAsync( S32 x,
     }
 
     LLPickInfo pick_info(LLCoordGL(x, y_from_bot), mask, pick_transparent, pick_rigged, false, pick_reflection_probes, true, pick_unselectable, callback);
+    pick_info.mPickFocus = pick_focus;
     schedulePick(pick_info);
 }
 
@@ -6814,7 +6816,17 @@ void LLPickInfo::fetchResults()
 
     LLVector2 uv;
 
-    LLHUDIcon* hit_icon = gViewerWindow->cursorIntersectIcon(mMousePt.mX, mMousePt.mY, 512.f, &intersection);
+    // A focus pick (alt-zoom or the camera tool) is not limited to the legacy
+    // MAX_FAR_CLIP range: it reaches as far as the camera can see, so that
+    // distant terrain and water can still be focused. Ordinary picks keep
+    // today's range.
+    F32 pick_depth = MAX_FAR_CLIP;
+    if (mPickFocus)
+    {
+        pick_depth = llmax(MAX_FAR_CLIP, LLViewerCamera::getInstance()->getFar());
+    }
+
+    LLHUDIcon* hit_icon = gViewerWindow->cursorIntersectIcon(mMousePt.mX, mMousePt.mY, pick_depth, &intersection);
 
     LLVector4a origin;
     origin.load3(LLViewerCamera::getInstance()->getOrigin().mV);
@@ -6830,7 +6842,7 @@ void LLPickInfo::fetchResults()
         icon_dist = delta.getLength3().getF32();
     }
 
-    LLViewerObject* hit_object = gViewerWindow->cursorIntersect(mMousePt.mX, mMousePt.mY, 512.f,
+    LLViewerObject* hit_object = gViewerWindow->cursorIntersect(mMousePt.mX, mMousePt.mY, pick_depth,
                                     nullptr, -1, mPickTransparent, mPickRigged, mPickUnselectable, mPickReflectionProbe, &face_hit,
                                 &intersection, &uv, &normal, &tangent, &start, &end);
 
@@ -6868,13 +6880,55 @@ void LLPickInfo::fetchResults()
 
     LLViewerObject* objectp = hit_object;
 
+    F32 object_dist = F32_MAX;
+    if (objectp)
+    {
+        LLVector4a delta;
+        delta.setSub(origin, intersection);
+        object_dist = delta.getLength3().getF32();
+    }
 
-    LLVector4a delta;
-    delta.setSub(origin, intersection);
+    // Water is not pickable, so a focus pick tests its (immaterial) plane
+    // directly. The region's water object and the void beyond the regions are
+    // both drawn at the region's water height, so one plane covers both. If
+    // water is not drawn at all there is no surface to focus on, so fall back
+    // to 0m -- the height the void is implied at (see
+    // LLViewerParcelOverlay::renderPropertyLines).
+    LLVector4a water_point;
+    F32 water_dist = 0.f;
+    bool hit_water = false;
+    if (mPickFocus)
+    {
+        F32 water_z = 0.f;
+        if (gPipeline.hasRenderType(LLPipeline::RENDER_TYPE_WATER))
+        {
+            LLViewerRegion* regionp = gAgent.getRegion();
+            if (regionp)
+            {
+                water_z = regionp->getWaterHeight();
+            }
+        }
+
+        F32 dz = end.getF32ptr()[VZ] - start.getF32ptr()[VZ];
+        if (dz != 0.f)
+        {
+            F32 t = (water_z - start.getF32ptr()[VZ]) / dz;
+            if (t >= 0.f && t <= 1.f)
+            {
+                water_point.setLerp(start, end, t);
+                LLVector4a delta;
+                delta.setSub(origin, water_point);
+                water_dist = delta.getLength3().getF32();
+                hit_water = true;
+            }
+        }
+    }
 
     if (hit_icon &&
         (!objectp ||
-        icon_dist < delta.getLength3().getF32()))
+        icon_dist < object_dist) &&
+        (!hit_water ||
+        icon_dist < water_dist))
     {
         // was this name referring to a hud icon?
         mHUDIcon = hit_icon;
@@ -6882,7 +6936,7 @@ void LLPickInfo::fetchResults()
         mPosGlobal = mHUDIcon->getPositionGlobal();
 
     }
-    else if (objectp)
+    else if (objectp && (!hit_water || object_dist <= water_dist))
     {
         if( objectp->getPCode() == LLViewerObject::LL_VO_SURFACE_PATCH )
         {
@@ -6892,7 +6946,10 @@ void LLPickInfo::fetchResults()
 
             // put global position into land_pos
             LLVector3d land_pos;
-            if (!gViewerWindow->mousePointOnLandGlobal(mPickPt.mX, mPickPt.mY, &land_pos, mPickUnselectable))
+            // Focus picks resolve land out to the draw distance instead of the
+            // legacy pick range, so alt-zoom can focus on any terrain it can see.
+            bool ignore_distance = mPickUnselectable && !mPickFocus;
+            if (!gViewerWindow->mousePointOnLandGlobal(mPickPt.mX, mPickPt.mY, &land_pos, ignore_distance))
             {
                 // The selected point is beyond the draw distance or is otherwise
                 // not selectable. Return before calling mPickCallback().
@@ -6928,6 +6985,14 @@ void LLPickInfo::fetchResults()
                 getSurfaceInfo();
             }
         }
+    }
+    else if (hit_water)
+    {
+        // Focus landed on the water surface (or its 0m stand-in). Water is not
+        // an object, so the point itself is all there is to focus on.
+        mPickType = PICK_LAND;
+        mObjectID.setNull();
+        mPosGlobal = gAgent.getPosGlobalFromAgent(LLVector3(water_point.getF32ptr()));
     }
 
     if (mPickParticle)
