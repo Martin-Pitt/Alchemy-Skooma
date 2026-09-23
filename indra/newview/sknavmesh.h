@@ -100,6 +100,12 @@ public:
     /// the console; the report itself goes to the log under SKNavDump.
     std::string markUnderCamera();
 
+    /// Every built mesh, tile, polygon, segment, link and face to one JSON
+    /// file in the logs folder, for reading offline: the mini-map's test
+    /// fixtures, and evidence attached to a report. Returns a line for the
+    /// console with the counts, the size and the full path.
+    std::string exportAll() const;
+
     struct Stats
     {
         U32 mMeshes = 0;

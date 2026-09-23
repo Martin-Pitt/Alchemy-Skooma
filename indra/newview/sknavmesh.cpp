@@ -33,6 +33,9 @@
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
 #include "llappviewer.h"
+#include "lldate.h"
+#include "lldir.h"
+#include "llfile.h"
 #include "llglslshader.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
@@ -54,6 +57,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <sstream>
 #include <set>
 #include <thread>
@@ -1915,6 +1919,192 @@ std::string SKNavMesh::markUnderCamera()
     LL_INFOS("SKNavDump") << out.str() << LL_ENDL;
     return llformat("marked %.1f, %.1f, %.1f - the rest is in the log under SKNavDump", mMark.mdV[VX], mMark.mdV[VY],
                     mMark.mdV[VZ]);
+}
+
+std::string SKNavMesh::exportAll() const
+{
+    // Written straight to the file rather than through an LLSD tree: a built
+    // region is hundreds of thousands of numbers, and holding them as LLSD
+    // first would stall the main thread for seconds before a byte landed.
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknavmesh-export.json");
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    file << std::setprecision(10);
+
+    auto vec3d = [&file](const LLVector3d& v) {
+        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
+    };
+    auto vec3 = [&file](const LLVector3& v) {
+        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
+    };
+
+    F32 height = 2.f;
+    if (isAgentAvatarValid())
+    {
+        height = llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f);
+    }
+    static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
+    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+    static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
+
+    U32 meshes_written = 0, tiles_written = 0, polys_written = 0, segments_written = 0;
+    U32 links_written = 0, faces_written = 0;
+
+    file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
+    file << ",\"agent\":";
+    vec3d(gAgent.getPositionGlobal());
+    file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb
+         << ",\"slope\":" << slope << ",\"cell\":" << cell << '}';
+    file << ",\"classes\":[\"avatar\",\"weather\"]";
+    file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
+    file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
+    file << ",\"meshes\":[";
+
+    bool first_mesh = true;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        if (!first_mesh)
+        {
+            file << ',';
+        }
+        first_mesh = false;
+        ++meshes_written;
+        file << "{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"origin\":";
+        vec3d(mesh.mOrigin);
+        file << ",\"tiles\":[";
+        bool first_tile = true;
+        for (const auto& t : mesh.mTiles)
+        {
+            const Tile& tile = t.second;
+            if (!tile.mBuilt)
+            {
+                continue;
+            }
+            if (!first_tile)
+            {
+                file << ',';
+            }
+            first_tile = false;
+            ++tiles_written;
+            file << "{\"key\":[" << t.first.mX << ',' << t.first.mY << "],\"min\":";
+            vec3d(tile.mMin);
+            file << ",\"max\":";
+            vec3d(tile.mMax);
+            if (tile.mFaces)
+            {
+                file << ",\"faces\":[";
+                bool first = true;
+                for (const WallFace& f : *tile.mFaces)
+                {
+                    if (!first)
+                    {
+                        file << ',';
+                    }
+                    first = false;
+                    ++faces_written;
+                    file << "{\"min\":";
+                    vec3(f.mMin);
+                    file << ",\"max\":";
+                    vec3(f.mMax);
+                    file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
+                }
+                file << ']';
+            }
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{";
+                const dtNavMesh* nav = mesh.mNav[cls];
+                // Detour x runs along Recast x, which is SL y, so the tile at
+                // this lattice key sits at (mY, mX).
+                const dtMeshTile* dt = nav ? nav->getTileAt(t.first.mY, t.first.mX, 0) : nullptr;
+                file << "\"polys\":[";
+                if (dt && dt->header)
+                {
+                    bool first = true;
+                    for (S32 p = 0; p < dt->header->polyCount; ++p)
+                    {
+                        const dtPoly& poly = dt->polys[p];
+                        if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
+                        {
+                            continue;
+                        }
+                        if (!first)
+                        {
+                            file << ',';
+                        }
+                        first = false;
+                        ++polys_written;
+                        file << "{\"v\":[";
+                        for (S32 v = 0; v < static_cast<S32>(poly.vertCount); ++v)
+                        {
+                            if (v)
+                            {
+                                file << ',';
+                            }
+                            vec3d(mesh.mOrigin + LLVector3d(fromRecast(&dt->verts[poly.verts[v] * 3])));
+                        }
+                        file << "],\"area\":" << static_cast<S32>(areaOf(poly.flags)) << '}';
+                    }
+                }
+                file << "],\"segments\":[";
+                if (tile.mSegments[cls])
+                {
+                    bool first = true;
+                    for (const WallSegment& seg : *tile.mSegments[cls])
+                    {
+                        if (!first)
+                        {
+                            file << ',';
+                        }
+                        first = false;
+                        ++segments_written;
+                        file << "{\"a\":";
+                        vec3d(mesh.mOrigin + LLVector3d(seg.mA));
+                        file << ",\"b\":";
+                        vec3d(mesh.mOrigin + LLVector3d(seg.mB));
+                        file << ",\"kind\":" << static_cast<S32>(seg.mKind) << ",\"value\":" << seg.mValue
+                             << ",\"area\":" << static_cast<S32>(seg.mArea) << '}';
+                    }
+                }
+                file << "],\"links\":[";
+                if (tile.mLinks[cls])
+                {
+                    bool first = true;
+                    for (const DropLink& link : *tile.mLinks[cls])
+                    {
+                        if (!first)
+                        {
+                            file << ',';
+                        }
+                        first = false;
+                        ++links_written;
+                        file << "{\"from\":";
+                        vec3d(mesh.mOrigin + LLVector3d(link.mFrom));
+                        file << ",\"to\":";
+                        vec3d(mesh.mOrigin + LLVector3d(link.mTo));
+                        file << ",\"height\":" << link.mHeight << '}';
+                    }
+                }
+                file << "]}";
+            }
+            file << '}';
+        }
+        file << "]}";
+    }
+    file << "]}\n";
+
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written,
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 void SKNavMesh::refreshOverlay()

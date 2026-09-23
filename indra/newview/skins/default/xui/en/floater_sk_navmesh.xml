@@ -292,6 +292,28 @@
    top_pad="4"
    width="292">
   </text>
+  <button
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="23"
+   width="292"
+   name="export_button"
+   label="Export the navmesh"
+   tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
+  <text
+   name="export_status"
+   height="26"
+   word_wrap="true"
+   use_ellipses="false"
+   type="string"
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   width="292">
+  </text>
   <text
    name="legend_label"
    height="13"

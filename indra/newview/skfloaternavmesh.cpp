@@ -48,6 +48,9 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("mark_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("mark_status")->setValue(SKNavMesh::instance().markUnderCamera());
     });
+    getChild<LLUICtrl>("export_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportAll());
+    });
     buildLegend();
     return true;
 }
