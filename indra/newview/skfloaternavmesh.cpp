@@ -1,6 +1,6 @@
 /**
  * @file skfloaternavmesh.cpp
- * @brief The navmesh console: what the census and the mesh are doing, the overlay's switches, and its legend.
+ * @brief The navmesh console: what the census and the mesh are doing, and the overlay's switches.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -26,14 +26,10 @@
 
 #include "skfloaternavmesh.h"
 
-#include "llscrolllistcell.h"
-#include "llscrolllistctrl.h"
-#include "llscrolllistitem.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
 #include "sknavmesh.h"
-#include "sknavpalette.h"
 #include "skworldcensus.h"
 
 SKFloaterNavMesh::SKFloaterNavMesh(const LLSD& key)
@@ -48,30 +44,7 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("mark_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("mark_status")->setValue(SKNavMesh::instance().markUnderCamera());
     });
-    buildLegend();
     return true;
-}
-
-void SKFloaterNavMesh::buildLegend()
-{
-    LLScrollListCtrl* legend = getChild<LLScrollListCtrl>("legend");
-    legend->deleteAllItems();
-    for (S32 i = 0; i < static_cast<S32>(SKNavSwatch::COUNT); ++i)
-    {
-        const SKNavSwatch swatch = static_cast<SKNavSwatch>(i);
-        LLSD row;
-        row["columns"][0]["column"] = "what";
-        row["columns"][0]["type"] = "text";
-        row["columns"][0]["value"] = getString(skNavSwatchName(swatch));
-        if (LLScrollListItem* item = legend->addElement(row))
-        {
-            // The row wears the colour it describes: reading the legend and
-            // reading the overlay are then the same act.
-            LLColor4 color = skNavSwatchColor(swatch);
-            color.mV[VALPHA] = 1.f;
-            item->getColumn(0)->setColor(color);
-        }
-    }
 }
 
 void SKFloaterNavMesh::onToggleOverlay()

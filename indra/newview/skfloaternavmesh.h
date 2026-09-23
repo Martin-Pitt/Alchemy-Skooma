@@ -1,6 +1,6 @@
 /**
  * @file skfloaternavmesh.h
- * @brief The navmesh console: what the census and the mesh are doing, the overlay's switches, and its legend.
+ * @brief The navmesh console: what the census and the mesh are doing, and the overlay's switches.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -31,11 +31,6 @@
 /**
  * The navmesh's console, after the stock pathfinding view/test floater.
  *
- * The overlay draws a dozen colours and, on its own, explains none of them.
- * The legend here is built from the same table the overlay draws from
- * (@ref sknavpalette.h), so a colour cannot be changed in one place and
- * described wrongly in the other.
- *
  * Every switch but two is an ordinary setting bound in XUI. The two that are
  * not settings are the pipeline's debug masks: Draw the navmesh
  * (@c LLPipeline::RENDER_DEBUG_NAVMESH, the same bit the Develop menu's
@@ -53,7 +48,6 @@ public:
     void draw() override;
 
 private:
-    void buildLegend();
     void onToggleOverlay();
     void onTogglePhysicsShapes();
 

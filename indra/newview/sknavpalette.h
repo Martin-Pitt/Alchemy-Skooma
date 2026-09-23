@@ -1,6 +1,6 @@
 /**
  * @file sknavpalette.h
- * @brief One colour per thing the navmesh overlay draws, named so a legend cannot drift from it.
+ * @brief One colour per thing the navmesh overlay draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,9 +27,7 @@
 
 #include "v4color.h"
 
-/// Everything the navmesh and census overlays draw in a colour of its own. The
-/// console's legend is built from this list, so a colour that changes here
-/// changes there and nowhere else has to be told.
+/// Everything the navmesh and census overlays draw in a colour of its own.
 enum class SKNavSwatch : S32
 {
     GROUND,         ///< walkable terrain
@@ -57,8 +55,5 @@ enum class SKNavSwatch : S32
 /// The swatch at full strength. Overlay passes scale the alpha; the x-ray pass
 /// darkens the colour as well.
 const LLColor4& skNavSwatchColor(SKNavSwatch swatch);
-
-/// The name the console's string table knows it by, e.g. "sk_nav_ground".
-const std::string& skNavSwatchName(SKNavSwatch swatch);
 
 #endif // SK_NAVPALETTE_H

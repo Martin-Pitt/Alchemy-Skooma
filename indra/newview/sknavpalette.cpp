@@ -1,6 +1,6 @@
 /**
  * @file sknavpalette.cpp
- * @brief One colour per thing the navmesh overlay draws, named so a legend cannot drift from it.
+ * @brief One colour per thing the navmesh overlay draws.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -28,43 +28,32 @@
 
 namespace
 {
-    struct Swatch
-    {
-        LLColor4 mColor;
-        std::string mName;
-    };
-
     // Ordered as SKNavSwatch is. Alpha is the strength the thing is drawn at
     // when it is the only pass; the overlay scales it per pass from there.
-    const Swatch PALETTE[static_cast<S32>(SKNavSwatch::COUNT)] = {
-        { LLColor4(0.30f, 0.90f, 0.30f, 0.85f), "sk_nav_ground" },
-        { LLColor4(0.30f, 0.60f, 1.00f, 0.85f), "sk_nav_object" },
-        { LLColor4(0.20f, 0.40f, 0.90f, 0.55f), "sk_nav_submerged" },
-        { LLColor4(0.70f, 0.70f, 0.70f, 0.85f), "sk_nav_other" },
-        { LLColor4(0.15f, 0.85f, 0.95f, 0.70f), "sk_nav_tile_joined" },
-        { LLColor4(1.00f, 0.15f, 0.90f, 0.95f), "sk_nav_tile_open" },
-        { LLColor4(1.00f, 1.00f, 1.00f, 0.90f), "sk_nav_cover_full" },
-        { LLColor4(1.00f, 0.80f, 0.20f, 0.90f), "sk_nav_cover_half" },
-        { LLColor4(0.60f, 0.60f, 0.60f, 0.70f), "sk_nav_cover_low" },
-        { LLColor4(0.55f, 0.75f, 0.95f, 0.45f), "sk_nav_wall_face" },
-        { LLColor4(1.00f, 0.30f, 0.30f, 0.90f), "sk_nav_ledge" },
-        { LLColor4(0.70f, 0.30f, 1.00f, 0.80f), "sk_nav_overhang" },
-        { LLColor4(0.20f, 1.00f, 1.00f, 0.90f), "sk_nav_drop" },
-        { LLColor4(0.20f, 1.00f, 0.20f, 0.60f), "sk_nav_shape_exact" },
-        { LLColor4(0.20f, 0.60f, 1.00f, 0.60f), "sk_nav_shape_hull" },
-        { LLColor4(1.00f, 0.20f, 0.20f, 0.80f), "sk_nav_shape_box" },
-        { LLColor4(1.00f, 0.60f, 0.20f, 0.60f), "sk_nav_shape_render" },
-        { LLColor4(1.00f, 1.00f, 0.20f, 0.80f), "sk_nav_shape_dynamic" },
-        { LLColor4(0.70f, 0.70f, 0.70f, 0.90f), "sk_nav_cluster" },
+    const LLColor4 PALETTE[static_cast<S32>(SKNavSwatch::COUNT)] = {
+        LLColor4(0.30f, 0.90f, 0.30f, 0.85f),
+        LLColor4(0.30f, 0.60f, 1.00f, 0.85f),
+        LLColor4(0.20f, 0.40f, 0.90f, 0.55f),
+        LLColor4(0.70f, 0.70f, 0.70f, 0.85f),
+        LLColor4(0.15f, 0.85f, 0.95f, 0.70f),
+        LLColor4(1.00f, 0.15f, 0.90f, 0.95f),
+        LLColor4(1.00f, 1.00f, 1.00f, 0.90f),
+        LLColor4(1.00f, 0.80f, 0.20f, 0.90f),
+        LLColor4(0.60f, 0.60f, 0.60f, 0.70f),
+        LLColor4(0.55f, 0.75f, 0.95f, 0.45f),
+        LLColor4(1.00f, 0.30f, 0.30f, 0.90f),
+        LLColor4(0.70f, 0.30f, 1.00f, 0.80f),
+        LLColor4(0.20f, 1.00f, 1.00f, 0.90f),
+        LLColor4(0.20f, 1.00f, 0.20f, 0.60f),
+        LLColor4(0.20f, 0.60f, 1.00f, 0.60f),
+        LLColor4(1.00f, 0.20f, 0.20f, 0.80f),
+        LLColor4(1.00f, 0.60f, 0.20f, 0.60f),
+        LLColor4(1.00f, 1.00f, 0.20f, 0.80f),
+        LLColor4(0.70f, 0.70f, 0.70f, 0.90f),
     };
 }
 
 const LLColor4& skNavSwatchColor(SKNavSwatch swatch)
 {
-    return PALETTE[static_cast<S32>(swatch)].mColor;
-}
-
-const std::string& skNavSwatchName(SKNavSwatch swatch)
-{
-    return PALETTE[static_cast<S32>(swatch)].mName;
+    return PALETTE[static_cast<S32>(swatch)];
 }
