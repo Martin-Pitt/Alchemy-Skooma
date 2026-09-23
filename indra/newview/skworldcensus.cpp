@@ -720,6 +720,7 @@ void SKWorldCensus::visitCached(const CachedPart& part)
         // shape turns up, which here is when you get close enough to draw it.
         made->mProvenance = Provenance::BOX;
         made->mShape = Shape::BOX;
+        made->mSolid = true;
         made->mOrigin = part.mOrigin;
         made->mCenter = part.mCenter;
         made->mAxes[0].set(1.f, 0.f, 0.f);
@@ -765,6 +766,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mProvenance = geom.mProvenance;
     rec->mNavRole = roleOf(root->getID());
     rec->mShape = geom.mShape;
+    rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
     rec->mSignature = signature;
     rec->mOrigin = volume->getRegion()->getOriginGlobal();

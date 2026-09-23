@@ -105,6 +105,10 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
     out.mTriangles.clear();
     out.mShape = sknav::Shape::TRIANGLES;
     out.mProvenance = sknav::Provenance::EXACT;
+    // Every shape below is a body the sim collides with as a volume, except a
+    // mesh's own physics mesh, which is a surface it collides with from
+    // either side.
+    out.mSolid = true;
 
     Spec spec = shape.mSpec;
     if (!volume->getVolume())
@@ -143,6 +147,7 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
                         return false;   // the physics mesh is on its way
                     }
                     appendSoup(decomp->mPhysicsShapeMesh.mPositions, out.mTriangles);
+                    out.mSolid = false;
                     break;
                 }
             }
@@ -283,6 +288,7 @@ bool skRenderShapeGeometry(LLVOVolume* volume, SKShapeGeometry& out)
     out.mTriangles.clear();
     out.mShape = sknav::Shape::TRIANGLES;
     out.mProvenance = sknav::Provenance::RENDER;
+    out.mSolid = false;
     const LLVolume* v = volume->getVolume();
     if (!v)
     {
