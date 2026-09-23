@@ -4413,17 +4413,6 @@
             <key>Value</key>
             <real>1.0</real>
         </map>
-        <key>SKNavMinTriangleWidth</key>
-        <map>
-            <key>Comment</key>
-            <string>Metres. A render surface's triangles narrower than this are dropped: a sculpt gets its cut-out pieces by pinching the surface into threads, and a thread has no width, so rasterised it becomes a stripe across the region. 0 keeps every triangle.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.25</real>
-        </map>
         <key>ShowAdvancedHoverTips</key>
         <map>
             <key>Comment</key>
