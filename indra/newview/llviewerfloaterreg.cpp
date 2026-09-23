@@ -597,7 +597,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("legacy_profile", "floater_al_profile_legacy.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterProfileLegacy>);
     LLFloaterReg::add("lightbox", "floater_lightbox_settings.xml", (LLFloaterBuildFunc) &LLFloaterReg::build<ALFloaterLightBox>);
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
-    // <SK:Nexii> navmesh console: overlay switches, status and legend
+    // <SK:Nexii> navmesh console: overlay switches and status
     LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
     // </SK:Nexii>
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);

@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <!-- <SK:Nexii> The navmesh's own console: what the census and the mesh are doing,
-     the overlay's switches, and a legend for the colours it draws. -->
+     and the overlay's switches. -->
 <floater
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
  min_height="600"
  min_width="300"
- height="780"
+ height="620"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -18,27 +18,6 @@
   <floater.string name="mesh_none">Nothing built yet.</floater.string>
   <floater.string name="weather_off">The weather class is not being built; turn it on below to see it.</floater.string>
   <floater.string name="overlay_off">Nothing is switched on; tick a layer below, or Draw the navmesh.</floater.string>
-
-  <!-- One per swatch in sknavpalette.h, keyed by its name there. -->
-  <floater.string name="sk_nav_ground">Ground — walkable terrain</floater.string>
-  <floater.string name="sk_nav_object">Object — walkable surface of a build</floater.string>
-  <floater.string name="sk_nav_submerged">Submerged — walkable, but under water</floater.string>
-  <floater.string name="sk_nav_other">Other — walkable, area class unknown</floater.string>
-  <floater.string name="sk_nav_tile_joined">Tile seam — joined to the next tile</floater.string>
-  <floater.string name="sk_nav_tile_open">Tile seam — nothing joined to it</floater.string>
-  <floater.string name="sk_nav_cover_full">Full cover — taller than your eye height</floater.string>
-  <floater.string name="sk_nav_cover_half">Half cover — you can shoot over it</floater.string>
-  <floater.string name="sk_nav_cover_low">Low wall — too low to take cover behind</floater.string>
-  <floater.string name="sk_nav_wall_face">Wall face — the vertical surface itself, full height</floater.string>
-  <floater.string name="sk_nav_ledge">Ledge — a landable drop over this edge</floater.string>
-  <floater.string name="sk_nav_overhang">Overhang — nothing below within reach</floater.string>
-  <floater.string name="sk_nav_drop">Drop link — where a ledge lands</floater.string>
-  <floater.string name="sk_nav_shape_exact">Census: the object's own triangles</floater.string>
-  <floater.string name="sk_nav_shape_hull">Census: its convex hull</floater.string>
-  <floater.string name="sk_nav_shape_box">Census: its bounding box, shape unknown</floater.string>
-  <floater.string name="sk_nav_shape_render">Census: its rendered shape</floater.string>
-  <floater.string name="sk_nav_shape_dynamic">Census: still moving, left out of the build</floater.string>
-  <floater.string name="sk_nav_cluster">Structure — one colour per cluster</floater.string>
 
   <text
    name="mesh_status_label"
@@ -292,54 +271,26 @@
    top_pad="4"
    width="292">
   </text>
-  <button
-   follows="left|top"
-   layout="topleft"
-   left="12"
-   top_pad="8"
-   height="23"
-   width="292"
-   name="export_button"
-   label="Export the navmesh"
-   tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
-  <text
-   name="export_status"
-   height="26"
-   word_wrap="true"
-   use_ellipses="false"
-   type="string"
-   follows="left|top|right"
-   layout="topleft"
-   left="12"
-   top_pad="4"
-   width="292">
-  </text>
-  <text
-   name="legend_label"
-   height="13"
-   type="string"
-   text_color="LabelTextColor"
-   follows="left|top"
-   layout="topleft"
-   left="12"
-   top_pad="10"
-   width="292">
-    Legend
-  </text>
-  <scroll_list
-   name="legend"
-   follows="left|top|right|bottom"
-   layout="topleft"
-   left="12"
-   top_pad="4"
-   height="150"
-   width="292"
-   draw_heading="false"
-   draw_stripes="false"
-   can_sort="false"
-   column_padding="0">
-    <scroll_list.columns
-     name="what"
-     relative_width="1.0" />
-  </scroll_list>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left="12"
+    top_pad="8"
+    height="23"
+    width="292"
+    name="export_button"
+    label="Export the navmesh"
+    tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
+   <text
+    name="export_status"
+    height="26"
+    word_wrap="true"
+    use_ellipses="false"
+    type="string"
+    follows="left|top|right"
+    layout="topleft"
+    left="12"
+    top_pad="4"
+    width="292">
+   </text>
 </floater>
