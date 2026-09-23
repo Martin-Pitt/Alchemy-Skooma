@@ -28,6 +28,7 @@
 
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "sknavbuild.h"
 
 #include "llagent.h"
 #include "llappviewer.h"
@@ -784,6 +785,19 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             q.scaleVec(scale);
             q = q * rot + pos;
             tris->push_back(q);
+        }
+        // A render surface is a sculpt or a mesh as the eye sees it, and a
+        // sculpt gets its cut-out pieces by pinching the surface into
+        // threads. A thread has no width, and rasterised it becomes a stripe
+        // across the region: drop it, in world units, now that the object's
+        // scale is applied.
+        if (geom.mProvenance == Provenance::RENDER)
+        {
+            static LLCachedControl<F32> min_width(gSavedSettings, "SKNavMinTriangleWidth", 0.25f);
+            sknav::dropThinTriangles(*tris, static_cast<F32>(min_width));
+        }
+        for (const LLVector3& q : *tris)
+        {
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;

@@ -667,6 +667,36 @@ namespace sknav
         }
     }
 
+    void dropThinTriangles(std::vector<LLVector3>& tris, F32 min_width)
+    {
+        if (min_width <= 0.f)
+        {
+            return;
+        }
+        std::vector<LLVector3> kept;
+        kept.reserve(tris.size());
+        for (size_t i = 0; i + 2 < tris.size(); i += 3)
+        {
+            const LLVector3& a = tris[i];
+            const LLVector3& b = tris[i + 1];
+            const LLVector3& c = tris[i + 2];
+            const F32 longest = std::sqrt(std::max({ (b - a).magVecSquared(), (c - b).magVecSquared(),
+                                                     (a - c).magVecSquared() }));
+            // The triangle's height over its longest edge: its narrowest
+            // width, and what a fold leaves behind.
+            const F32 twice_area = ((b - a) % (c - a)).magVec();
+            const F32 width = longest > 1e-6f ? twice_area / longest : 0.f;
+            if (width < min_width)
+            {
+                continue;
+            }
+            kept.push_back(a);
+            kept.push_back(b);
+            kept.push_back(c);
+        }
+        tris.swap(kept);
+    }
+
     TileBuildResult buildTile(const TileBuildInput& input)
     {
         const auto started = std::chrono::steady_clock::now();

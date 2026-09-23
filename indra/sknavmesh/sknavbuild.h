@@ -135,6 +135,14 @@ namespace sknav
     /// Tessellate an analytic record into triangles (mesh-local, given the
     /// mesh origin), or copy its soup. Exposed for tests.
     void emitRecord(const Record& record, const LLVector3d& mesh_origin, std::vector<LLVector3>& out);
+
+    /// Drop triangles too thin to be a surface, in place. A sculpt makes its
+    /// flat pieces by pinching the surface into threads, and a thread is a
+    /// fold with no width: rasterised it becomes a stripe across the region
+    /// and, eroded, a cut. A triangle whose narrowest width is under
+    /// min_width is not something an avatar or a raindrop can stand on.
+    /// Nothing is dropped when min_width is zero or less.
+    void dropThinTriangles(std::vector<LLVector3>& tris, F32 min_width);
 }
 
 #endif // SK_NAVBUILD_H

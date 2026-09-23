@@ -711,4 +711,31 @@ namespace tut
         ensure("ground beside the box is floor", m.nearest(LLVector3(4.f, 4.f, 0.f), snapped, 0.5f) != 0);
         ensure("ground at its height", std::fabs(snapped[1]) < 0.3f);
     }
+
+    // A sculpt's pinched thread is a fold with no width: it is not a surface
+    // and must not become one, while a normal thin surface - a wall - stays.
+    template<> template<>
+    void sknavbuild_object::test<17>()
+    {
+        std::vector<LLVector3> tris = {
+            // A 4 x 4 m floor.
+            LLVector3(0.f, 0.f, 0.f), LLVector3(4.f, 0.f, 0.f), LLVector3(4.f, 4.f, 0.f),
+            LLVector3(0.f, 0.f, 0.f), LLVector3(4.f, 4.f, 0.f), LLVector3(0.f, 4.f, 0.f),
+            // A thread 20 m long and 5 cm wide.
+            LLVector3(10.f, 0.f, 0.f), LLVector3(30.f, 0.f, 0.f), LLVector3(30.f, 0.05f, 0.f),
+            // A wall 2 m wide and 3 m tall, seen edge on in plan.
+            LLVector3(40.f, 0.f, 0.f), LLVector3(42.f, 0.f, 0.f), LLVector3(42.f, 0.f, 3.f),
+        };
+        dropThinTriangles(tris, 0.25f);
+        ensure_equals("the floor and the wall stay", tris.size(), 9u);
+
+        bool thread = false, wall = false;
+        for (const LLVector3& p : tris)
+        {
+            thread = thread || p.mV[VX] > 9.f && p.mV[VX] < 31.f;
+            wall = wall || p.mV[VX] > 39.f;
+        }
+        ensure("the thread is gone", !thread);
+        ensure("the wall is kept", wall);
+    }
 }
