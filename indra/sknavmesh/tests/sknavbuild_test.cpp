@@ -627,4 +627,66 @@ namespace tut
         }
         ensure("no hole along the seam:" + profile, holes == 0);
     }
+
+    // A kerb narrower than the avatar and lower than its climb is stepped
+    // over, so the floor is flat across it and a metre either side; a dais
+    // wide enough to stand on keeps its height. The detail vertices Recast
+    // adds sit at the polygon corners' level, not a cell above them.
+    template<> template<>
+    void sknavbuild_object::test<15>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mCell = 0.125f; // the viewer's cell: the sampling this is about
+        in.mClasses[1] = false;
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 4.f, -0.5f, 10.3f, 28.f, 0.5f));
+        in.mRecords.push_back(box(16.f, 4.f, -0.5f, 18.f, 28.f, 0.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        Mesh m;
+        m.add(r.mData[0]);
+        // The floor's level is its polygon's corners: on flat ground the
+        // detail surface has no business leaving them.
+        F32 ref[3];
+        const dtPolyRef open = m.nearest(LLVector3(5.f, 16.f, 0.f), ref, 0.05f);
+        ensure("open floor", open != 0);
+        const dtMeshTile* tile = nullptr;
+        const dtPoly* poly = nullptr;
+        m.mNav->getTileAndPolyByRefUnsafe(open, &tile, &poly);
+        F32 floor = 1e9f;
+        for (int v = 0; v < poly->vertCount; ++v)
+        {
+            floor = std::min(floor, tile->verts[poly->verts[v] * 3 + 1]);
+        }
+        F32 worst = 0.f;
+        std::string where;
+        for (F32 y = 6.f; y <= 26.01f; y += 0.25f)
+        {
+            for (F32 x = 7.f; x <= 13.31f; x += 0.125f)
+            {
+                F32 snapped[3];
+                const dtPolyRef ref = m.nearest(LLVector3(x, y, 0.f), snapped, 0.05f);
+                ensure("floor under " + llformat("%.2f %.2f", x, y), ref != 0);
+                if (std::fabs(snapped[1] - floor) > worst)
+                {
+                    worst = std::fabs(snapped[1] - floor);
+                    where = llformat("%.2f %.2f -> %.3f (floor %.3f)", x, y, snapped[1], floor);
+                }
+            }
+        }
+        ensure("floor is flat across the kerb: " + where, worst < 0.1f);
+        // Up to the dais the floor stays floor: the detail vertices that
+        // tessellate the edge shared with the dais polygon sit at the floor's
+        // corner height, not a cell above it. The last sample spacing before
+        // the dais is its ramp, which Recast owes to sharing corners.
+        for (F32 x = 13.f; x <= 15.21f; x += 0.125f)
+        {
+            F32 snapped[3];
+            ensure("floor under " + llformat("%.2f", x), m.nearest(LLVector3(x, 16.f, 0.f), snapped, 0.05f) != 0);
+            ensure("floor level " + llformat("%.2f -> %.3f (floor %.3f)", x, snapped[1], floor), std::fabs(snapped[1] - floor) < 0.1f);
+        }
+        F32 top[3];
+        ensure("dais is floor", m.nearest(LLVector3(17.f, 16.f, 0.5f), top, 0.05f) != 0);
+        ensure("dais keeps its height", std::fabs(top[1] - floor - 0.5f) < 0.1f);
+    }
 }

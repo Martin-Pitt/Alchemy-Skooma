@@ -467,6 +467,101 @@ namespace
         }
     }
 
+    /// Walk from a compact span along one direction until the floor drops by
+    /// a step or more in one cell. Reports how far that was and the span it
+    /// dropped to. Fails on losing the connection, on rising past the start,
+    /// or on running out of reach.
+    bool walkToStep(const rcCompactHeightfield& chf, S32 x, S32 z, S32 i, S32 dir, S32 reach, S32 step, S32& dist, S32& low)
+    {
+        const S32 y0 = chf.spans[i].y;
+        S32 prev = y0;
+        for (S32 n = 1; n <= reach; ++n)
+        {
+            const S32 con = rcGetCon(chf.spans[i], dir);
+            if (con == RC_NOT_CONNECTED)
+            {
+                return false;
+            }
+            x += rcGetDirOffsetX(dir);
+            z += rcGetDirOffsetY(dir);
+            i = static_cast<S32>(chf.cells[x + z * chf.width].index) + con;
+            if (chf.areas[i] == RC_NULL_AREA)
+            {
+                return false;
+            }
+            const S32 y = chf.spans[i].y;
+            if (prev - y >= step)
+            {
+                dist = n;
+                low = i;
+                return true;
+            }
+            if (y >= y0 + step)
+            {
+                return false;
+            }
+            prev = y;
+        }
+        return false;
+    }
+
+    /// A kerb, rail or plinth narrower than the agent and lower than its
+    /// climb is stepped over, not stood on, so the floor it stands on is the
+    /// floor beside it. Left in, the detail mesh's samples land on it here
+    /// and miss it there, and every hit lifts a sample's worth of flat floor
+    /// around it into a pyramid. Lower such tops to the higher of the floors
+    /// on either side, and give them that floor's area so they join its
+    /// polygon. Compact heightfield only: the raw one keeps the feature's
+    /// faces for the walls.
+    void flattenNarrowSteps(rcCompactHeightfield& chf, S32 reach, S32 climb)
+    {
+        if (reach <= 0)
+        {
+            return;
+        }
+        const S32 step = 2; // cells: an edge, not a slope
+        std::vector<std::pair<S32, S32>> lowered;
+        for (S32 z = 0; z < chf.height; ++z)
+        {
+            for (S32 x = 0; x < chf.width; ++x)
+            {
+                const rcCompactCell& c = chf.cells[x + z * chf.width];
+                for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA)
+                    {
+                        continue;
+                    }
+                    const S32 y0 = chf.spans[i].y;
+                    for (S32 axis = 0; axis < 2; ++axis)
+                    {
+                        S32 dist[2] = { 0, 0 }, low[2] = { 0, 0 };
+                        if (!walkToStep(chf, x, z, i, axis, reach, step, dist[0], low[0])
+                            || !walkToStep(chf, x, z, i, axis + 2, reach, step, dist[1], low[1])
+                            || dist[0] + dist[1] - 1 > reach)
+                        {
+                            continue;
+                        }
+                        const S32 floor = chf.spans[low[0]].y >= chf.spans[low[1]].y ? low[0] : low[1];
+                        if (y0 - static_cast<S32>(chf.spans[floor].y) <= climb)
+                        {
+                            lowered.emplace_back(i, floor);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for (const auto& [i, floor] : lowered)
+        {
+            rcCompactSpan& s = chf.spans[i];
+            const S32 y = chf.spans[floor].y;
+            s.h = static_cast<unsigned int>(std::min<S32>(0xff, static_cast<S32>(s.h) + static_cast<S32>(s.y) - y));
+            s.y = static_cast<unsigned int>(y);
+            chf.areas[i] = chf.areas[floor];
+        }
+    }
+
     /// The land's surface as a span index at one heightfield cell, or -1 where
     /// the terrain window has no say: outside it, or in the void past a
     /// region's edge. Interpolated on the same two triangles per sample quad
@@ -774,6 +869,7 @@ namespace sknav
                 result.mError = "compact";
                 return result;
             }
+            flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
             if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
                 result.mError = "erode";
