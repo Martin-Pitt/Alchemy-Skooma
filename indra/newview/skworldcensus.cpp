@@ -865,9 +865,23 @@ void SKWorldCensus::renderDebug()
         return;
     }
 
+    // The census covers the whole sim, but the shapes only draw around the
+    // camera, falling away over the last fifth of the range like the mesh
+    // does.
+    static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 reach = range;
+    auto within = [&](const LLVector3d& p) {
+        return dist_vec_squared2D(p, camera) <= reach * reach;
+    };
+
     SKNavOverlayGeom geom;
     for (const RecordPtr& r : snap->mRecords)
     {
+        if (!within((r->mMin + r->mMax) * 0.5))
+        {
+            continue;
+        }
         SKNavSwatch swatch = SKNavSwatch::SHAPE_BOX;
         if (r->mDynamic)
         {
@@ -888,6 +902,10 @@ void SKWorldCensus::renderDebug()
     }
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
+        if (!within((c->mMin + c->mMax) * 0.5))
+        {
+            continue;
+        }
         // A colour per structure, from its id, so the same structure keeps it
         // between scans.
         const U32 h = static_cast<U32>(mix(SEED, c->mId.mData[0] | (c->mId.mData[1] << 8) | (c->mId.mData[2] << 16)));
@@ -899,6 +917,7 @@ void SKWorldCensus::renderDebug()
     {
         return;
     }
+    geom.setFade(gAgent.getPosAgentFromGlobal(camera), static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
 
     SKNavOverlayGeom::bindShader();
     {

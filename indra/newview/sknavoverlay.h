@@ -55,6 +55,10 @@ public:
     /// Width in pixels, and where it is measured from. The ribbon is widened
     /// with distance so that it stays the same width on screen.
     void setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F32 fov_y, S32 viewport_height);
+    /// Full strength out to `fade_from` of `centre` (agent coordinates), then
+    /// falling away to nothing at `radius`. Without a radius nothing falls
+    /// away, which is what the fade defaults to.
+    void setFade(const LLVector3& centre, F32 radius, F32 fade_from);
     void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color);
     /// The twelve edges of an axis-aligned box.
     void box(const LLVector3& min, const LLVector3& max, const LLColor4& color);
@@ -73,6 +77,11 @@ public:
     static void unbindShader();
 
 private:
+    /// Alpha for one vertex: the fade scales it by how far the vertex sits
+    /// from the centre, so a line or a triangle crossing the band blends
+    /// across itself rather than vanishing all at once.
+    F32 faded(F32 alpha, const LLVector3& at) const;
+
     std::vector<LLVector3> mTriVerts;
     std::vector<LLColor4>  mTriColors;
     std::vector<LLVector3> mLineVerts;
@@ -82,6 +91,9 @@ private:
     LLVector3 mCamera;
     F32 mPixelScale = 0.f;                  ///< world units per pixel per metre of depth
     F32 mEdgeWidth = 1.f;
+    LLVector3 mFadeCentre;
+    F32 mFadeRadius = 0.f;                  ///< at this distance and beyond nothing draws
+    F32 mFadeFrom  = 0.f;                   ///< full strength up to here, then the fall
 };
 
 #endif // SK_NAVOVERLAY_H

@@ -233,7 +233,7 @@
    max_val="512"
    min_val="16"
    name="overlay_range"
-   tool_tip="How far from you or your camera the overlay is drawn"
+   tool_tip="How far from your camera the overlay is drawn; its last fifth fades away"
    top_pad="6"
    width="276" />
   <text

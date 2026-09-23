@@ -4092,7 +4092,7 @@
         <key>SKNavOverlayRange</key>
         <map>
             <key>Comment</key>
-            <string>Metres from the agent the navmesh overlay draws polygons.</string>
+            <string>Metres from the camera the navmesh overlay draws, falling away over its last fifth.</string>
             <key>Persist</key>
             <integer>0</integer>
             <key>Type</key>

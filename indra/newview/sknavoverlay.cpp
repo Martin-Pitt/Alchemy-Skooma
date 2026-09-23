@@ -49,6 +49,28 @@ void SKNavOverlayGeom::setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F
     mPixelScale = (viewport_height > 0) ? (2.f * std::tan(fov_y * 0.5f) / static_cast<F32>(viewport_height)) : 0.f;
 }
 
+void SKNavOverlayGeom::setFade(const LLVector3& centre, F32 radius, F32 fade_from)
+{
+    mFadeCentre = centre;
+    mFadeRadius = radius;
+    mFadeFrom = llclamp(fade_from, 0.f, radius);
+}
+
+F32 SKNavOverlayGeom::faded(F32 alpha, const LLVector3& at) const
+{
+    if (mFadeRadius <= 0.f)
+    {
+        return alpha;
+    }
+    const F32 span = mFadeRadius - mFadeFrom;
+    if (span <= 0.f)
+    {
+        return alpha;
+    }
+    const F32 d = std::sqrt(dist_vec_squared2D(at, mFadeCentre));
+    return alpha * llclamp((mFadeRadius - d) / span, 0.f, 1.f);
+}
+
 void SKNavOverlayGeom::edge(const LLVector3& a, const LLVector3& b, const LLColor4& color)
 {
     if (mEdgeWidth <= 1.f || mPixelScale <= 0.f)
@@ -152,7 +174,8 @@ void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
         for (size_t i = 0; i < verts.size(); ++i)
         {
             const LLColor4& c = colors[i];
-            gGL.color4f(c.mV[VRED] * shade, c.mV[VGREEN] * shade, c.mV[VBLUE] * shade, c.mV[VALPHA] * alpha);
+            gGL.color4f(c.mV[VRED] * shade, c.mV[VGREEN] * shade, c.mV[VBLUE] * shade,
+                        faded(c.mV[VALPHA] * alpha, verts[i]));
             gGL.vertex3fv(verts[i].mV);
         }
         gGL.end();
