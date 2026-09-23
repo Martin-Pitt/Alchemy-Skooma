@@ -28,13 +28,32 @@
 
 #include "llglslshader.h"
 #include "llrender.h"
+#include "llvertexbuffer.h"
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
 
 #include <cmath>
 
+namespace
+{
+    /// One uploaded batch. Nothing to draw without a buffer, and
+    /// drawArrays asserts the buffer is the one bound.
+    void drawBatch(const LLPointer<LLVertexBuffer>& vb, U32 mode)
+    {
+        if (vb.isNull() || vb->getNumVerts() == 0)
+        {
+            return;
+        }
+        vb->setBuffer();
+        vb->drawArrays(mode, 0, vb->getNumVerts());
+    }
+}
+
+SKNavOverlayGeom::~SKNavOverlayGeom() = default;
+
 void SKNavOverlayGeom::line(const LLVector3& a, const LLVector3& b, const LLColor4& color)
 {
+    mUploaded = false;
     mLineVerts.push_back(a);
     mLineVerts.push_back(b);
     mLineColors.push_back(color);
@@ -43,6 +62,7 @@ void SKNavOverlayGeom::line(const LLVector3& a, const LLVector3& b, const LLColo
 
 void SKNavOverlayGeom::setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F32 fov_y, S32 viewport_height)
 {
+    mUploaded = false;
     mEdgeWidth = pixels;
     mCamera = camera_agent;
     // How many world units a pixel covers, per metre of depth.
@@ -51,6 +71,7 @@ void SKNavOverlayGeom::setEdgeWidth(F32 pixels, const LLVector3& camera_agent, F
 
 void SKNavOverlayGeom::setFade(const LLVector3& centre, F32 radius, F32 fade_from)
 {
+    mUploaded = false;
     mFadeCentre = centre;
     mFadeRadius = radius;
     mFadeFrom = llclamp(fade_from, 0.f, radius);
@@ -73,6 +94,7 @@ F32 SKNavOverlayGeom::faded(F32 alpha, const LLVector3& at) const
 
 void SKNavOverlayGeom::edge(const LLVector3& a, const LLVector3& b, const LLColor4& color)
 {
+    mUploaded = false;
     if (mEdgeWidth <= 1.f || mPixelScale <= 0.f)
     {
         mEdgeVerts.push_back(a);
@@ -113,6 +135,7 @@ void SKNavOverlayGeom::edge(const LLVector3& a, const LLVector3& b, const LLColo
 
 void SKNavOverlayGeom::tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color)
 {
+    mUploaded = false;
     mTriVerts.push_back(a);
     mTriVerts.push_back(b);
     mTriVerts.push_back(c);
@@ -140,12 +163,64 @@ void SKNavOverlayGeom::box(const LLVector3& min, const LLVector3& max, const LLC
 
 void SKNavOverlayGeom::clear()
 {
+    mUploaded = false;
     mTriVerts.clear();
     mTriColors.clear();
     mLineVerts.clear();
     mLineColors.clear();
     mEdgeVerts.clear();
     mEdgeColors.clear();
+}
+
+void SKNavOverlayGeom::uploadBatch(const std::vector<LLVector3>& verts, const std::vector<LLColor4>& colors, LLPointer<LLVertexBuffer>& vb)
+{
+    if (verts.empty())
+    {
+        vb = nullptr;
+        return;
+    }
+    // What bindShader() binds: gUIProgram reads position, texcoord0 and
+    // diffuse_color, and setBuffer() refuses a buffer missing an attribute
+    // the shader asks for.
+    const U32 mask = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR;
+    if (vb.isNull())
+    {
+        vb = new LLVertexBuffer(mask);
+    }
+    // Same count, same size: allocateBuffer keeps the buffer it has, so a
+    // rebuild that did not change the shape costs a map and a copy.
+    if (!vb->allocateBuffer(static_cast<U32>(verts.size()), 0))
+    {
+        vb = nullptr;
+        return;
+    }
+    LLStrider<LLVector3> positions;
+    LLStrider<LLVector2> texcoords;
+    LLStrider<LLColor4U> vertex_colors;
+    if (!vb->getVertexStrider(positions) || !vb->getTexCoord0Strider(texcoords) || !vb->getColorStrider(vertex_colors))
+    {
+        vb = nullptr;
+        return;
+    }
+    const U32 count = static_cast<U32>(verts.size());
+    for (U32 i = 0; i < count; ++i)
+    {
+        positions[i] = verts[i];
+        // The white texture samples anywhere; the shader reads the coord.
+        texcoords[i] = LLVector2(0.f, 0.f);
+        LLColor4 c = colors[i];
+        c.mV[VALPHA] = faded(c.mV[VALPHA], verts[i]);
+        vertex_colors[i].setVecScaleClamp(c);
+    }
+    vb->unmapBuffer();
+}
+
+void SKNavOverlayGeom::upload()
+{
+    uploadBatch(mTriVerts, mTriColors, mTriVB);
+    uploadBatch(mEdgeVerts, mEdgeColors, mEdgeVB);
+    uploadBatch(mLineVerts, mLineColors, mLineVB);
+    mUploaded = true;
 }
 
 void SKNavOverlayGeom::bindShader()
@@ -165,6 +240,19 @@ void SKNavOverlayGeom::unbindShader()
 
 void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
 {
+    const bool ribboned = mEdgeWidth > 1.f && mPixelScale > 0.f;
+    // Anything scaled is the x-ray pass, and gUIProgram has no batch uniform
+    // to scale a whole draw by, so that pass re-emits the gathered colours as
+    // it always did. At full strength the buffers upload() built are one call
+    // each and nothing per vertex on the CPU.
+    if (mUploaded && shade == 1.f && alpha == 1.f)
+    {
+        drawBatch(mTriVB, LLRender::TRIANGLES);
+        drawBatch(mEdgeVB, ribboned ? LLRender::TRIANGLES : LLRender::LINES);
+        drawBatch(mLineVB, LLRender::LINES);
+        return;
+    }
+
     auto emit = [&](const std::vector<LLVector3>& verts, const std::vector<LLColor4>& colors, U32 mode) {
         if (verts.empty())
         {
@@ -182,7 +270,6 @@ void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
         gGL.flush();
     };
     emit(mTriVerts, mTriColors, LLRender::TRIANGLES);
-    const bool ribboned = mEdgeWidth > 1.f && mPixelScale > 0.f;
     emit(mEdgeVerts, mEdgeColors, ribboned ? LLRender::TRIANGLES : LLRender::LINES);
     emit(mLineVerts, mLineColors, LLRender::LINES);
 }

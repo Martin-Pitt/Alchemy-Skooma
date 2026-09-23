@@ -25,10 +25,13 @@
 #ifndef SK_NAVOVERLAY_H
 #define SK_NAVOVERLAY_H
 
+#include "llpointer.h"
 #include "v3math.h"
 #include "v4color.h"
 
 #include <vector>
+
+class LLVertexBuffer;
 
 /// Debug geometry in agent coordinates, gathered before anything is drawn.
 ///
@@ -37,12 +40,14 @@
 /// only flushes a line batch once its buffer fills, so a run of lines came out
 /// in whichever colour happened to be current at the flush — which moved from
 /// frame to frame, and the overlay flickered. Colour here is per vertex under
-/// `gUIProgram`, and the whole overlay is two draws: fills, then lines over
-/// them. Gathering also lets the x-ray pass re-draw the same geometry without
-/// walking the navmesh a second time.
+/// `gUIProgram`, and the whole overlay is a draw per primitive type: fills,
+/// edges, then lines over them. Gathering also lets the x-ray pass re-draw the
+/// same geometry without walking the navmesh a second time.
 class SKNavOverlayGeom
 {
 public:
+    ~SKNavOverlayGeom();
+
     void line(const LLVector3& a, const LLVector3& b, const LLColor4& color);
     /// An edge of the walkable surface itself, drawn wider than the rest so
     /// the shape of the mesh reads before its annotations do. Built as a
@@ -66,9 +71,17 @@ public:
     bool empty() const { return mTriVerts.empty() && mLineVerts.empty() && mEdgeVerts.empty(); }
     void clear();
 
+    /// Move what was gathered onto the GPU, one buffer per primitive type, so
+    /// that `draw()` at full strength costs one call each instead of a vertex
+    /// at a time. Call after setFade(): the per-vertex fade is applied here.
+    /// The gathered colours stay in memory, because the scaled x-ray pass has
+    /// no batch uniform to scale by under `gUIProgram` and still reads them.
+    void upload();
+
     /// Draw what was gathered: fills, then edges, then the lines over them.
     /// `shade` darkens the colours (the x-ray pass, seen through geometry)
-    /// and `alpha` scales them.
+    /// and `alpha` scales them. Full strength draws the uploaded buffers when
+    /// there are any; a scaled pass is emitted as before.
     void draw(F32 shade = 1.f, F32 alpha = 1.f) const;
 
     /// Bind `gUIProgram` against a white texture with alpha blending, which is
@@ -82,6 +95,10 @@ private:
     /// across itself rather than vanishing all at once.
     F32 faded(F32 alpha, const LLVector3& at) const;
 
+    /// One batch onto the GPU, its colours carrying the fade. An empty batch
+    /// keeps no buffer; one of the same size is rewritten in place.
+    void uploadBatch(const std::vector<LLVector3>& verts, const std::vector<LLColor4>& colors, LLPointer<LLVertexBuffer>& vb);
+
     std::vector<LLVector3> mTriVerts;
     std::vector<LLColor4>  mTriColors;
     std::vector<LLVector3> mLineVerts;
@@ -94,6 +111,14 @@ private:
     LLVector3 mFadeCentre;
     F32 mFadeRadius = 0.f;                  ///< at this distance and beyond nothing draws
     F32 mFadeFrom  = 0.f;                   ///< full strength up to here, then the fall
+
+    /// Whether the buffers below hold exactly what is gathered now; anything
+    /// added or set after upload() makes them stale, and draw() emits from
+    /// the vectors instead.
+    bool mUploaded = false;
+    LLPointer<LLVertexBuffer> mTriVB;
+    LLPointer<LLVertexBuffer> mEdgeVB;
+    LLPointer<LLVertexBuffer> mLineVB;
 };
 
 #endif // SK_NAVOVERLAY_H
