@@ -2379,19 +2379,41 @@ void SKNavMesh::refreshOverlay()
                         }
                         const LLVector3 a = originAgent + fromRecast(&tile->verts[poly.verts[v] * 3]) + lift;
                         const LLVector3 b = originAgent + fromRecast(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3]) + lift;
-                        mOverlay.line(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
+                        // full width, in place of the outline the detail pass skips on
+                        // the tile's border, so the seam is one edge and not two stacked
+                        mOverlay.edge(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
                     }
                 }
 
+                // With the seams shown, an outline edge lying on the tile's border
+                // is the seam's to draw
+                const F32* tb0 = tile->header->bmin;
+                const F32* tb1 = tile->header->bmax;
+                const auto onBorder = [&](const F32* p, const F32* q) {
+                    const F32 eps = 0.01f;
+                    for (int axis : { 0, 2 })
+                    {
+                        for (F32 edge_at : { tb0[axis], tb1[axis] })
+                        {
+                            if (std::fabs(p[axis] - edge_at) < eps && std::fabs(q[axis] - edge_at) < eps)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                };
                 const dtPolyDetail& detail = tile->detailMeshes[p];
                 for (unsigned int t = 0; t < detail.triCount; ++t)
                 {
                     const unsigned char* tri = &tile->detailTris[(detail.triBase + t) * 4];
                     LLVector3 v[3];
+                    const F32* rcs[3];
                     for (int k = 0; k < 3; ++k)
                     {
                         const F32* rc = tri[k] < poly.vertCount ? &tile->verts[poly.verts[tri[k]] * 3]
                                                                 : &tile->detailVerts[(detail.vertBase + tri[k] - poly.vertCount) * 3];
+                        rcs[k] = rc;
                         v[k] = originAgent + fromRecast(rc);
                     }
                     const LLVector3 fill_lift(0.f, 0.f, 0.04f);
@@ -2401,7 +2423,8 @@ void SKNavMesh::refreshOverlay()
                     const LLVector3 lift(0.f, 0.f, 0.06f);
                     for (int k = 0; k < 3; ++k)
                     {
-                        if (dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
+                        if ((dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
+                            && !(show_links && onBorder(rcs[k], rcs[(k + 1) % 3])))
                         {
                             mOverlay.edge(v[k] + lift, v[(k + 1) % 3] + lift, edge);
                         }
