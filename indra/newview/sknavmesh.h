@@ -83,10 +83,29 @@ public:
     /// floor edges the map draws; links are where a floor can be left.
     typedef std::function<void(const LLVector3d& min, const LLVector3d& max, U8 side, U8 area)> WallFaceFn;
     typedef std::function<void(const LLVector3d& a, const LLVector3d& b, sknav::EdgeKind kind, F32 value)> SegmentFn;
-    typedef std::function<void(const LLVector3d& from, const LLVector3d& to, F32 height)> LinkFn;
+    typedef std::function<void(const LLVector3d& from, const LLVector3d& to, F32 height, sknav::LinkKind kind)> LinkFn;
     void wallFacesIn(const LLVector3d& min, const LLVector3d& max, const WallFaceFn& fn) const;
     void segmentsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const SegmentFn& fn) const;
+    /// Drop links from the tiles, then the ladder and elevator links between
+    /// the exits of each span. The span links are a table beside the tiles,
+    /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+
+    /// A ladder's or a working elevator's span with the floors it can be
+    /// boarded or left at, per class, lowest first. Global.
+    struct FeatureSpan
+    {
+        sknav::LinkKind mKind = sknav::LinkKind::LADDER;
+        LLVector3d mMin;                ///< the span's plan and height
+        LLVector3d mMax;
+        std::vector<LLVector3d> mExits[sknav::NUM_CLASSES];
+        std::vector<std::pair<LLVector3d, LLVector3d>> mLinks[sknav::NUM_CLASSES];
+        bool mDirty = true;             ///< a tile it touches published since the exits were found
+    };
+    /// The span a feature's links were built for, by the feature's id (a
+    /// ladder's first root, an elevator's car), or null.
+    const FeatureSpan* featureSpan(const LLUUID& id) const;
+    static LLUUID featureId(const sknav::Feature& feature);
 
     /// The cover a segment ahead of this position gives someone of that eye
     /// height, and how tall it is. False when nothing is within reach.
@@ -258,10 +277,19 @@ private:
     /// and upload it. A quiet mesh and a parked camera cost one signature
     /// compare a frame; renderDebug() then only draws what is cached.
     void refreshOverlay();
+    /// Take the census's ladders and working elevators into mFeatureLinks,
+    /// and find the exits of any span a published tile has touched.
+    void syncFeatureLinks(const SKCensusSnapshotPtr& snap);
+    void findExits(FeatureSpan& span) const;
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
+    /// Span links by region handle, then feature. A tile rebuild would wipe
+    /// anything kept in the tile, so they live here and are found again
+    /// whenever a tile they touch publishes.
+    std::map<U64, std::map<LLUUID, FeatureSpan>> mFeatureLinks;
+    U64 mFeatureStamp = 0;          ///< the census the spans were taken from
     std::unique_ptr<LL::ThreadPool> mWorkers;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;

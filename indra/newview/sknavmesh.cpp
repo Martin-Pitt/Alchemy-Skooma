@@ -1230,6 +1230,17 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    // The floors beside a ladder or a shaft may have moved with the tile.
+    for (auto& region : mFeatureLinks)
+    {
+        for (auto& entry : region.second)
+        {
+            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
+            {
+                entry.second.mDirty = true;
+            }
+        }
+    }
     tileBlip(mesh, tile);
     mRevision++;                    // a published tile is one the overlay redraws
 }
@@ -1345,6 +1356,7 @@ void SKNavMesh::update()
 
     sampleTerrain();
     schedule();
+    syncFeatureLinks(snap);
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1551,10 +1563,164 @@ void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             if (overlapsXY(LLVector3d(llmin(from.mdV[VX], to.mdV[VX]), llmin(from.mdV[VY], to.mdV[VY]), 0.0),
                            LLVector3d(llmax(from.mdV[VX], to.mdV[VX]), llmax(from.mdV[VY], to.mdV[VY]), 0.0), min, max))
             {
-                fn(from, to, link.mHeight);
+                fn(from, to, link.mHeight, link.mKind);
             }
         }
     });
+    for (const auto& region : mFeatureLinks)
+    {
+        for (const auto& entry : region.second)
+        {
+            const FeatureSpan& span = entry.second;
+            if (!overlapsXY(span.mMin, span.mMax, min, max))
+            {
+                continue;
+            }
+            for (const auto& link : span.mLinks[c])
+            {
+                fn(link.first, link.second, static_cast<F32>(link.second.mdV[VZ] - link.first.mdV[VZ]), span.mKind);
+            }
+        }
+    }
+}
+
+const SKNavMesh::FeatureSpan* SKNavMesh::featureSpan(const LLUUID& id) const
+{
+    for (const auto& region : mFeatureLinks)
+    {
+        const auto it = region.second.find(id);
+        if (it != region.second.end())
+        {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+LLUUID SKNavMesh::featureId(const Feature& feature)
+{
+    // A ladder can span linksets and an elevator is its car: the smallest
+    // root is stable between scans whichever order the parts came in.
+    return feature.mRoots.empty() ? LLUUID::null : *std::min_element(feature.mRoots.begin(), feature.mRoots.end());
+}
+
+void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
+{
+    if (snap && snap->mStamp != mFeatureStamp)
+    {
+        mFeatureStamp = snap->mStamp;
+        std::map<U64, std::map<LLUUID, FeatureSpan>> next;
+        for (const Feature& f : snap->mFeatures)
+        {
+            const bool ladder = f.mKind == FeatureKind::LADDER;
+            if (!ladder && !(f.mKind == FeatureKind::ELEVATOR && f.mWorking))
+            {
+                continue;
+            }
+            LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal((f.mMin + f.mMax) * 0.5);
+            if (!region)
+            {
+                continue;
+            }
+            FeatureSpan span;
+            span.mKind = ladder ? LinkKind::LADDER : LinkKind::ELEVATOR;
+            span.mMin = f.mMin;
+            span.mMax = f.mMax;
+            span.mMin.mdV[VZ] = f.mFoot;
+            span.mMax.mdV[VZ] = f.mTop;
+            // A span that has not changed keeps the exits it has, unless a
+            // tile under it has published since.
+            const LLUUID id = featureId(f);
+            const auto old_region = mFeatureLinks.find(region->getHandle());
+            if (old_region != mFeatureLinks.end())
+            {
+                const auto old = old_region->second.find(id);
+                if (old != old_region->second.end() && old->second.mMin == span.mMin && old->second.mMax == span.mMax
+                    && old->second.mKind == span.mKind)
+                {
+                    span = old->second;
+                }
+            }
+            next[region->getHandle()][id] = std::move(span);
+        }
+        // A span the census no longer has, or whose region has gone, goes
+        // with it; the overlay hears of any change.
+        if (next.size() != mFeatureLinks.size()
+            || !std::equal(next.begin(), next.end(), mFeatureLinks.begin(),
+                           [](const auto& a, const auto& b) { return a.first == b.first && a.second.size() == b.second.size(); }))
+        {
+            mRevision++;
+        }
+        mFeatureLinks.swap(next);
+    }
+
+    for (auto& region : mFeatureLinks)
+    {
+        for (auto& entry : region.second)
+        {
+            if (entry.second.mDirty)
+            {
+                findExits(entry.second);
+                entry.second.mDirty = false;
+                mRevision++;
+            }
+        }
+    }
+}
+
+void SKNavMesh::findExits(FeatureSpan& span) const
+{
+    TileBuildInput probe;
+    fillParams(probe);
+    // Every floor of the class beside the span, from within a climb of its
+    // foot to a little over its top, where a ladder's landing usually is:
+    // probed round the span's plan an agent's radius out, every half metre.
+    const F64 above = 1.25;
+    const F64 step = 0.5;
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        span.mExits[cls].clear();
+        span.mLinks[cls].clear();
+        if (!probe.mClasses[cls])
+        {
+            continue;
+        }
+        const F64 climb = probe.mParams[cls].mClimb;
+        const F64 out = probe.mParams[cls].mRadius + 0.05;
+        const F64 x0 = span.mMin.mdV[VX] - out, x1 = span.mMax.mdV[VX] + out;
+        const F64 y0 = span.mMin.mdV[VY] - out, y1 = span.mMax.mdV[VY] + out;
+        const F64 xm = (x0 + x1) * 0.5, ym = (y0 + y1) * 0.5;
+        const LLVector3d ring[8] = { LLVector3d(x0, y0, 0), LLVector3d(xm, y0, 0), LLVector3d(x1, y0, 0), LLVector3d(x1, ym, 0),
+                                     LLVector3d(x1, y1, 0), LLVector3d(xm, y1, 0), LLVector3d(x0, y1, 0), LLVector3d(x0, ym, 0) };
+        std::vector<LLVector3d> found;
+        for (F64 z = span.mMin.mdV[VZ]; z <= span.mMax.mdV[VZ] + above; z += step)
+        {
+            for (const LLVector3d& at : ring)
+            {
+                F32 floor = 0.f;
+                const LLVector3d p(at.mdV[VX], at.mdV[VY], z);
+                if (floorUnder(p, static_cast<AgentClass>(cls), floor) && std::fabs(floor - z) <= climb
+                    && floor >= span.mMin.mdV[VZ] - climb && floor <= span.mMax.mdV[VZ] + above)
+                {
+                    found.emplace_back(at.mdV[VX], at.mdV[VY], floor);
+                }
+            }
+        }
+        std::stable_sort(found.begin(), found.end(), [](const LLVector3d& a, const LLVector3d& b) { return a.mdV[VZ] < b.mdV[VZ]; });
+        for (const LLVector3d& p : found)
+        {
+            if (span.mExits[cls].empty() || p.mdV[VZ] - span.mExits[cls].back().mdV[VZ] > climb)
+            {
+                span.mExits[cls].push_back(p);
+            }
+        }
+        // Consecutive exits both ways: a path may board or leave at any of them.
+        for (size_t i = 1; i < span.mExits[cls].size(); ++i)
+        {
+            span.mLinks[cls].emplace_back(span.mExits[cls][i - 1], span.mExits[cls][i]);
+            span.mLinks[cls].emplace_back(span.mExits[cls][i], span.mExits[cls][i - 1]);
+        }
+    }
 }
 
 bool SKNavMesh::coverAt(const LLVector3d& pos, const LLVector3& dir, AgentClass cls, F32 eye_height,
@@ -2146,6 +2312,7 @@ std::string SKNavMesh::exportAll() const
          << ",\"slope\":" << slope << ",\"cell\":" << cell << '}';
     file << ",\"classes\":[\"avatar\",\"weather\"]";
     file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
+    file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
     file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
     file << ",\"meshes\":[";
 
@@ -2272,7 +2439,7 @@ std::string SKNavMesh::exportAll() const
                         vec3d(mesh.mOrigin + LLVector3d(link.mFrom));
                         file << ",\"to\":";
                         vec3d(mesh.mOrigin + LLVector3d(link.mTo));
-                        file << ",\"height\":" << link.mHeight << '}';
+                        file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
                     }
                 }
                 file << "]}";
@@ -2834,7 +3001,7 @@ void SKNavMesh::refreshOverlay()
         }
 
         const LLColor4 drop = strength(skNavSwatchColor(SKNavSwatch::DROP), 1.f);
-        linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32) {
+        linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32, LinkKind) {
             if (within(from))
             {
                 mOverlay.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);

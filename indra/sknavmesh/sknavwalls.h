@@ -72,12 +72,21 @@ namespace sknav
         U8 mArea = 0;
     };
 
+    /// How a link is travelled.
+    enum class LinkKind : U8
+    {
+        DROP,       ///< off a ledge, down
+        LADDER,     ///< climbed, either way
+        ELEVATOR,   ///< ridden, either way
+    };
+
     /// Where a floor can be left for another: from the edge to the landing.
     struct DropLink
     {
         LLVector3 mFrom;
         LLVector3 mTo;
         F32 mHeight = 0.f;
+        LinkKind mKind = LinkKind::DROP;
     };
 
     /// Recast area and Detour flag for the off-mesh polygon of a drop link.
