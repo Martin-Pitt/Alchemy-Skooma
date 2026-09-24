@@ -132,6 +132,13 @@ namespace sknav
         return LLVector3(rc[2], rc[0], rc[1]);
     }
 
+    /// The padding a tile builds past its edge, in cells. Every pass that
+    /// reads a span's neighbours must see the same cells from both sides of
+    /// a seam, or the two tiles disagree about the floor there: Recast's own
+    /// three, the erosion radius that eats the padding's outer edge, and the
+    /// narrow-step walk of twice the radius that must still fit inside it.
+    S32 borderCells(F32 radius, F32 cell);
+
     /// Run the pipeline. Safe on any thread; touches nothing but the input.
     TileBuildResult buildTile(const TileBuildInput& input);
 

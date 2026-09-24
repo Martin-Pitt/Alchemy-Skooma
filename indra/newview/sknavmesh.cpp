@@ -72,8 +72,8 @@ namespace
     const S32 MAX_TILES_PER_MESH = 1024;
     const S32 MAX_POLYS_PER_TILE = 4096;
 
-    /// How far past a tile geometry and terrain are taken: Recast's border
-    /// (radius cells + 3) for the widest class, plus a metre of terrain grid.
+    /// How far past a tile geometry and terrain are taken: the build's border
+    /// for the widest class, plus a metre of terrain grid.
     F32 padFor(const TileBuildInput& params)
     {
         F32 border = 0.f;
@@ -81,7 +81,7 @@ namespace
         {
             if (params.mClasses[c])
             {
-                border = std::max(border, (std::ceil(params.mParams[c].mRadius / params.mCell) + 3.f) * params.mCell);
+                border = std::max(border, sknav::borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
             }
         }
         return border + 1.f;

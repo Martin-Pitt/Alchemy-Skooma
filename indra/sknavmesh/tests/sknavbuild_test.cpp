@@ -826,4 +826,65 @@ namespace tut
         }
         ensure(llformat("curb adds polygons: watershed %d, slope %d", polys[0], polys[1]), polys[1] <= polys[0]);
     }
+
+    // Tiles build alone, so every pass that reads a span's neighbours must see
+    // the same cells from both sides of a seam. A narrow raised strip along
+    // the seam used to be flattened by one tile and kept by the other, whose
+    // narrow-step walk ran into the eroded edge of its padding, and the
+    // corner the four tiles share came out three cells apart.
+    template<> template<>
+    void sknavbuild_object::test<21>()
+    {
+        for (S32 part = 0; part < 2; ++part)
+        {
+            std::vector<std::pair<LLVector3, S32>> seam; // border vertices, with their tile
+            for (S32 tx = 0; tx < 2; ++tx)
+            {
+                for (S32 ty = 0; ty < 2; ++ty)
+                {
+                    TileBuildInput in = tile(tx, ty);
+                    in.mCell = 0.125f;
+                    in.mPartition = part ? Partition::SLOPE : Partition::WATERSHED;
+                    in.mTerrain = flat(-5.f, 80, -4.f, -4.f);
+                    in.mRecords.push_back(box(20.f, 20.f, 2.5f, 44.f, 44.f, 3.f));
+                    in.mRecords.push_back(box(32.f, 26.f, 3.f, 32.5f, 38.f, 3.4f)); // the strip, along the seam
+                    in.mRecords.push_back(box(33.5f, 30.f, 3.f, 34.5f, 31.f, 5.f));
+                    in.mRecords.push_back(box(29.5f, 33.f, 3.f, 30.5f, 34.f, 5.f));
+                    const TileBuildResult r = buildTile(in);
+                    ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+                    Mesh m;
+                    m.add(r.mData[0]);
+                    const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(ty, tx, 0);
+                    ensure("tile", dt && dt->header);
+                    for (S32 v = 0; v < dt->header->vertCount; ++v)
+                    {
+                        const LLVector3 sl = fromRecast(&dt->verts[v * 3]);
+                        if (std::fabs(sl.mV[VX] - 32.f) < 0.01f || std::fabs(sl.mV[VY] - 32.f) < 0.01f)
+                        {
+                            seam.emplace_back(sl, tx + ty * 2);
+                        }
+                    }
+                }
+            }
+            S32 shared = 0;
+            for (size_t a = 0; a < seam.size(); ++a)
+            {
+                for (size_t b = a + 1; b < seam.size(); ++b)
+                {
+                    const LLVector3& p = seam[a].first;
+                    const LLVector3& q = seam[b].first;
+                    if (seam[a].second == seam[b].second || std::fabs(p.mV[VX] - q.mV[VX]) > 0.01f
+                        || std::fabs(p.mV[VY] - q.mV[VY]) > 0.01f || std::fabs(p.mV[VZ] - q.mV[VZ]) > 1.f)
+                    {
+                        continue;
+                    }
+                    ++shared;
+                    ensure(llformat("partition %d, seam vertex (%.2f, %.2f): tile %d at %.3f, tile %d at %.3f", part,
+                                    p.mV[VX], p.mV[VY], seam[a].second, p.mV[VZ], seam[b].second, q.mV[VZ]),
+                           std::fabs(p.mV[VZ] - q.mV[VZ]) < 0.01f);
+                }
+            }
+            ensure("tiles share seam vertices", shared > 0);
+        }
+    }
 }

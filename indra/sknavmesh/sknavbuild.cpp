@@ -1029,6 +1029,12 @@ namespace
 
 namespace sknav
 {
+    S32 borderCells(F32 radius, F32 cell)
+    {
+        const S32 r = static_cast<S32>(std::ceil(radius / cell));
+        return r + 2 * r + 3;
+    }
+
     void emitRecord(const Record& record, const LLVector3d& mesh_origin, std::vector<LLVector3>& out)
     {
         // F64 until the shift is applied, then F32 in mesh space.
@@ -1176,7 +1182,7 @@ namespace sknav
             cfg.maxVertsPerPoly = 6;
             cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
             cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
-            cfg.borderSize = cfg.walkableRadius + 3;
+            cfg.borderSize = borderCells(p.mRadius, cfg.cs);
             cfg.tileSize = static_cast<int>(input.mTileSize / cfg.cs);
             cfg.width = cfg.tileSize + cfg.borderSize * 2;
             cfg.height = cfg.width;
