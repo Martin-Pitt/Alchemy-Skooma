@@ -71,6 +71,21 @@ namespace sknav
         DYNAMIC,        ///< a mover or a character: never in a cluster
     };
 
+    /// What a part was recognised as by the feature rules (sknavfeatures.h).
+    enum class FeatureKind : U8
+    {
+        NONE,
+        DOOR,       ///< a leaf of a door
+        LADDER,     ///< part of a ladder's span
+        ELEVATOR,   ///< an elevator's car; a feature of this kind is its shaft
+        VEHICLE,    ///< part of a linkset people sit on that moves
+        SEAT,       ///< part of a linkset people sit on that never moves
+    };
+
+    /// The classes a record is left out of, one bit per AgentClass index.
+    constexpr U8 EXCLUDE_AVATAR = 1 << 0;
+    constexpr U8 EXCLUDE_WEATHER = 1 << 1;
+
     /// Analytic shape or triangle soup. Soups are region-local metres.
     enum class Shape : U8 { BOX, SPHERE, CYLINDER, TRIANGLES };
 
