@@ -49,6 +49,7 @@ namespace sknav
         std::string mName;          ///< the prim's own name, empty when not known
         bool mScripted = false;     ///< the leaf's own flag
         bool mTouch = false;
+        F32 mSeeThrough = 0.f;      ///< share of its faces that can be seen through
     };
 
     /// What is known about one linkset. An empty name or description is not
@@ -61,7 +62,8 @@ namespace sknav
         std::string mHover;
         TriState mScripted = TriState::UNKNOWN;
         bool mPhysical = false;
-        bool mEverMoved = false;    ///< this session
+        bool mEverMoved = false;    ///< this session, turning included
+        F32 mTravel = 0.f;          ///< how far it has gone this session, turning not included
         bool mEverCrewed = false;   ///< this session
         bool mWorkingElevator = false;  ///< confirmed a working car earlier this session
         bool mHasBounds = false;    ///< the whole linkset's box, for roots whose parts the census left out
@@ -79,6 +81,10 @@ namespace sknav
         F32 mFootprintOverlap = 0.5f;   ///< share of each plan a ladder piece must have in common
         F32 mDoorLine = 0.5f;       ///< how far apart stacked doors may sit in plan
         F32 mCarReach = 3.f;        ///< how far in front of a door stack a car is looked for
+        F32 mDoorWidthMin = 0.5f;   ///< a door leaf is this wide or wider
+        F32 mDoorWidthMax = 6.f;    ///< and no wider than a gate
+        F32 mDoorConfidence = 0.5f; ///< evidence a leaf needs to be a door
+        F32 mVehicleTravel = 1.f;   ///< how far a crewed linkset must go to be a vehicle
     };
 
     struct Feature
@@ -112,6 +118,10 @@ namespace sknav
 
     /// Case-insensitive substring test.
     bool containsNoCase(const std::string& haystack, const char* needle);
+
+    /// Case-insensitive word test: the needle neither starts nor ends inside
+    /// a word, a camel-case hump and a plural s counting as its edges.
+    bool containsWordNoCase(const std::string& haystack, const char* needle);
 
     const char* featureName(FeatureKind kind);
 }

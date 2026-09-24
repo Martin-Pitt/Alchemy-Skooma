@@ -117,6 +117,7 @@ namespace tut
         FeaturePart right = part(1, 2, 0, 1.06, 0, 0.125, 2.12, 3.0);
         FeaturePart other = part(3, 3, 1.0, 0, 0, 1.125, 1.06, 3.0);
         left.mTouch = right.mTouch = other.mTouch = true;
+        left.mScripted = right.mScripted = other.mScripted = true;
         const std::vector<Feature> f = classifyFeatures({ left, right, other }, { root(1), root(3) }, FeatureParams());
         const auto doors = ofKind(f, FeatureKind::DOOR);
         ensure_equals("two doors", doors.size(), 2u);
@@ -169,6 +170,7 @@ namespace tut
             FeaturePart b = part(10 + storey, 21 + storey * 2, 50.0, 41.06, z, 50.125, 42.12, z + 3.0);
             a.mName = "door2";
             a.mScripted = b.mScripted = true;
+            b.mTouch = true;
             parts.push_back(a);
             parts.push_back(b);
             roots.push_back(root(10 + storey));
@@ -206,6 +208,7 @@ namespace tut
         const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 6, 10, 3), part(2, 2, 20, 0, 0, 21, 1, 1) };
         FeatureRoot tank = root(1);
         tank.mEverCrewed = tank.mEverMoved = true;
+        tank.mTravel = 12.f;
         FeatureRoot chair = root(2);
         chair.mEverCrewed = true;
 
@@ -242,5 +245,126 @@ namespace tut
         ensure("a number on one side only", !hoverShowsHealth("page 2/x"));
         ensure("case-insensitive name", containsNoCase("[Ash] Ladder that works", "ladder"));
         ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER) && excludeFor(FeatureKind::SEAT) == 0);
+    }
+
+    // A door needs a door's width and real evidence: a name, or two of its
+    // own script, touch and motion. A scripted root alone is never enough.
+    template<> template<>
+    void sknavfeatures_object::test<7>()
+    {
+        auto isDoor = [](FeaturePart p, FeatureRoot r) {
+            p.mRoot = r.mRoot;
+            return !ofKind(classifyFeatures({ p }, { r }, FeatureParams()), FeatureKind::DOOR).empty();
+        };
+        const FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
+        FeatureRoot scripted_root = root(1);
+        scripted_root.mScripted = TriState::YES;
+        ensure("a scripted root alone", !isDoor(leaf, scripted_root));
+
+        FeaturePart p = leaf;
+        p.mScripted = true;
+        ensure("its own script alone", !isDoor(p, root(1)));
+        ensure("its own script and a scripted root", !isDoor(p, scripted_root));
+        p.mTouch = true;
+        ensure("script and touch", isDoor(p, root(1)));
+
+        FeatureRoot moved = root(1);
+        moved.mEverMoved = true;
+        p = leaf;
+        p.mTouch = true;
+        ensure("touch and motion", isDoor(p, moved));
+
+        p = leaf;
+        p.mName = "Front Door";
+        ensure("named", isDoor(p, root(1)));
+        ensure("a named wall 10 m wide", !isDoor(part(1, 1, 0, 0, 0, 0.125, 10.0, 3.0), root(1, "door")));
+        ensure("a named post 0.3 m wide", !isDoor(part(1, 1, 0, 0, 0, 0.1, 0.3, 3.0), root(1, "door")));
+        ensure("a named 5 m gate", isDoor(part(1, 1, 0, 0, 0, 0.2, 5.0, 3.0), root(1, "Yard Door")));
+    }
+
+    // A pane mostly seen through is never a door, whatever its evidence and
+    // with no name to call it a window.
+    template<> template<>
+    void sknavfeatures_object::test<8>()
+    {
+        FeaturePart pane = part(1, 1, 0, 0, 0, 0.018, 1.98, 3.15);
+        pane.mScripted = pane.mTouch = true;
+        pane.mSeeThrough = 0.8f;
+        ensure("glass", ofKind(classifyFeatures({ pane }, { root(1) }, FeatureParams()), FeatureKind::DOOR).empty());
+        pane.mSeeThrough = 0.2f;
+        ensure("a door with a small window", ofKind(classifyFeatures({ pane }, { root(1) }, FeatureParams()), FeatureKind::DOOR).size() == 1);
+    }
+
+    // Crewed is a vehicle only once it has travelled or is physical: a swing
+    // turns and a sofa gets nudged, and both stay seats.
+    template<> template<>
+    void sknavfeatures_object::test<9>()
+    {
+        const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 2, 2, 2) };
+        FeatureRoot swing = root(1);
+        swing.mEverCrewed = swing.mEverMoved = true;
+        swing.mTravel = 0.4f;
+        auto kind = [&](const FeatureRoot& r) { return classifyFeatures(parts, { r }, FeatureParams()).front().mKind; };
+        ensure("turned and nudged is a seat", kind(swing) == FeatureKind::SEAT);
+        swing.mTravel = 1.5f;
+        ensure("travelled is a vehicle", kind(swing) == FeatureKind::VEHICLE);
+        swing.mTravel = 0.f;
+        swing.mEverMoved = false;
+        swing.mPhysical = true;
+        ensure("physical is a vehicle", kind(swing) == FeatureKind::VEHICLE);
+    }
+
+    // A working shaft's height is its door stack's wherever the car is, so
+    // the span holds still while the car rides.
+    template<> template<>
+    void sknavfeatures_object::test<10>()
+    {
+        std::vector<FeaturePart> parts;
+        std::vector<FeatureRoot> roots;
+        for (U32 storey = 0; storey < 3; ++storey)
+        {
+            const F64 z = 100.0 + 8.75 * storey;
+            FeaturePart a = part(10 + storey, 20 + storey, 50.0, 40.0, z, 50.125, 41.06, z + 3.0);
+            a.mName = "door";
+            parts.push_back(a);
+            roots.push_back(root(10 + storey));
+        }
+        FeatureRoot car = root(30, "Lift Car");
+        car.mScripted = TriState::YES;
+        roots.push_back(car);
+        for (F64 floor : { 99.0, 108.6, 117.5 })
+        {
+            std::vector<FeaturePart> with_car = parts;
+            with_car.push_back(part(30, 30, 50.2, 39.9, floor, 52.7, 42.4, floor + 4.0));
+            const std::vector<Feature> found = classifyFeatures(with_car, roots, FeatureParams());
+            const auto shafts = ofKind(found, FeatureKind::ELEVATOR);
+            ensure("one working shaft", shafts.size() == 1 && shafts[0]->mWorking);
+            ensure_distance("foot at the lowest door", shafts[0]->mFoot, 100.0, 0.001);
+            ensure_distance("top at the highest door", shafts[0]->mTop, 120.5, 0.001);
+        }
+    }
+
+    // A named linkset's pieces join only where they meet, and a car's name is
+    // matched as a word.
+    template<> template<>
+    void sknavfeatures_object::test<11>()
+    {
+        const std::vector<FeaturePart> parts = {
+            part(1, 1, 0.0, 0.0, 0.0, 0.3, 0.6, 4.0),
+            part(1, 2, 0.0, 0.0, 3.95, 0.3, 0.6, 8.0),
+            part(1, 3, 20.0, 0.0, 0.0, 20.3, 0.6, 4.0),
+        };
+        const std::vector<Feature> found = classifyFeatures(parts, { root(1, "Jacob's Ladder Club") }, FeatureParams());
+        const auto ladders = ofKind(found, FeatureKind::LADDER);
+        ensure_equals("two ladders", ladders.size(), 2u);
+        const Feature& tall = owns(*ladders[0], 1) ? *ladders[0] : *ladders[1];
+        ensure("the stacked pair is one", owns(tall, 2) && !owns(tall, 3));
+
+        ensure("Lift", containsWordNoCase("Lift Car", "lift"));
+        ensure("camel case", containsWordNoCase("SmallOfficeElevator", "elevator"));
+        ensure("plural", containsWordNoCase("elevators", "elevator"));
+        ensure("not forklift", !containsWordNoCase("forklift", "lift"));
+        ensure("not airlift", !containsWordNoCase("Airlift Pad", "lift"));
+        ensure("not shoplifter", !containsWordNoCase("shoplifter", "lift"));
     }
 }

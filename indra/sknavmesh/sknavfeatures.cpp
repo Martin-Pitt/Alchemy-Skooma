@@ -112,9 +112,24 @@ namespace
             && common >= params.mFootprintOverlap * planArea(b.mMin, b.mMax);
     }
 
+    // Two ladder pieces that physically meet: their boxes overlap, within the
+    // stack tolerance, on every axis.
+    bool touching(const FeaturePart& a, const FeaturePart& b, const FeatureParams& params)
+    {
+        for (S32 k = 0; k < 3; ++k)
+        {
+            if (a.mMin.mdV[k] > b.mMax.mdV[k] + params.mStackTolerance || b.mMin.mdV[k] > a.mMax.mdV[k] + params.mStackTolerance)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // A thin upright panel: one axis stands vertical and is at least the class
     // height, and of the other two the thinner is no more than a leaf's
-    // thickness while the wider makes it a panel rather than a post.
+    // thickness while the wider makes it a panel rather than a post, and no
+    // wider than a gate.
     bool thinPanel(const FeaturePart& p, const FeatureParams& params, LLVector3& normal, F32& thickness)
     {
         S32 up = -1;
@@ -133,7 +148,9 @@ namespace
         const S32 thin = p.mHalf.mV[a] <= p.mHalf.mV[b] ? a : b;
         const S32 wide = thin == a ? b : a;
         thickness = 2.f * p.mHalf.mV[thin];
-        if (thickness > params.mThinMax || p.mHalf.mV[wide] < 2.f * p.mHalf.mV[thin])
+        const F32 width = 2.f * p.mHalf.mV[wide];
+        if (thickness > params.mThinMax || p.mHalf.mV[wide] < 2.f * p.mHalf.mV[thin] || width < params.mDoorWidthMin
+            || width > params.mDoorWidthMax)
         {
             return false;
         }
@@ -161,6 +178,38 @@ namespace sknav
                 ++k;
             }
             if (k == n)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool containsWordNoCase(const std::string& haystack, const char* needle)
+    {
+        const size_t n = std::strlen(needle);
+        auto alpha = [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; };
+        auto upper = [](char c) { return std::isupper(static_cast<unsigned char>(c)) != 0; };
+        for (size_t i = 0; n > 0 && i + n <= haystack.size(); ++i)
+        {
+            size_t k = 0;
+            while (k < n && std::tolower(static_cast<unsigned char>(haystack[i + k])) == std::tolower(static_cast<unsigned char>(needle[k])))
+            {
+                ++k;
+            }
+            if (k < n)
+            {
+                continue;
+            }
+            const bool starts = i == 0 || !alpha(haystack[i - 1]) || (upper(haystack[i]) && !upper(haystack[i - 1]));
+            size_t e = i + n;
+            if (e < haystack.size() && (haystack[e] == 's' || haystack[e] == 'S')
+                && (e + 1 == haystack.size() || !alpha(haystack[e + 1]) || upper(haystack[e + 1])))
+            {
+                ++e;
+            }
+            const bool ends = e == haystack.size() || !alpha(haystack[e]) || (upper(haystack[e]) && !upper(haystack[e - 1]));
+            if (starts && ends)
             {
                 return true;
             }
@@ -231,7 +280,8 @@ namespace sknav
         std::vector<bool> claimed(parts.size(), false);
 
         // Vehicles and seats: a linkset someone has sat on this session. Whether
-        // it has moved, or is physical, is what separates the two.
+        // it has gone somewhere, or is physical, is what separates the two: a
+        // swing or a nudged sofa turns or shifts without travelling.
         for (const FeatureRoot& r : roots)
         {
             if (!r.mEverCrewed)
@@ -239,7 +289,8 @@ namespace sknav
                 continue;
             }
             Feature f;
-            f.mKind = (r.mEverMoved || r.mPhysical) ? FeatureKind::VEHICLE : FeatureKind::SEAT;
+            const bool travelled = r.mTravel > params.mVehicleTravel;
+            f.mKind = (travelled || r.mPhysical) ? FeatureKind::VEHICLE : FeatureKind::SEAT;
             f.mConfidence = 1.f;
             f.mRoots.push_back(r.mRoot);
             bool first = true;
@@ -258,7 +309,8 @@ namespace sknav
                     first = false;
                 }
             }
-            f.mEvidence = r.mEverMoved ? "crewed, moved" : (r.mPhysical ? "crewed, physical" : "crewed, never moved");
+            f.mEvidence = travelled ? llformat("crewed, travelled %.0f m", r.mTravel)
+                                    : std::string(r.mPhysical ? "crewed, physical" : "crewed, never travelled");
             if (f.mKind == FeatureKind::VEHICLE)
             {
                 // LBA marks damageable walls as well as vehicles: it is a
@@ -298,11 +350,15 @@ namespace sknav
                 {
                     member[i] = true;
                 }
+                // Named pieces of one linkset join only where they meet: one
+                // build may hold two ladders, or be a club named for one.
                 for (size_t a = 1; a < named.size(); ++a)
                 {
                     for (size_t b = 0; b < a; ++b)
                     {
-                        if (parts[named[a]].mRoot == parts[named[b]].mRoot)
+                        const FeaturePart& pa = parts[named[a]];
+                        const FeaturePart& pb = parts[named[b]];
+                        if (pa.mRoot == pb.mRoot && (stacked(pa, pb, params) || touching(pa, pb, params)))
                         {
                             groups.unite(named[a], named[b]);
                         }
@@ -364,12 +420,13 @@ namespace sknav
         // A root named as an elevator's car is never a door, whatever its cab
         // is built of; whether it is a car is settled by the shaft below.
         auto carName = [](const FeatureRoot* r) {
-            return r && (containsNoCase(r->mName, "elevator") || containsNoCase(r->mName, "lift"));
+            return r && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift"));
         };
 
-        // Doors: a thin upright panel with some evidence it opens. A thin
-        // panel with nothing to say for it is a wall, and one named as a
-        // window is a pane, however door-shaped.
+        // Doors: a door-sized thin upright panel with real evidence it opens,
+        // a name or two of its own script, touch and motion; a scripted root
+        // alone only adds to that. A panel mostly seen through, or named as a
+        // window, is a pane, however door-shaped and whatever else it has.
         struct Leaf
         {
             S32 mPart;
@@ -385,7 +442,7 @@ namespace sknav
             const FeatureRoot* r = rootFacts(p.mRoot);
             LLVector3 normal;
             F32 thickness = 0.f;
-            if (claimed[i] || carName(r) || !thinPanel(p, params, normal, thickness))
+            if (claimed[i] || carName(r) || p.mSeeThrough > 0.5f || !thinPanel(p, params, normal, thickness))
             {
                 continue;
             }
@@ -405,19 +462,23 @@ namespace sknav
             {
                 add(0.5f, "named");
             }
-            if (p.mScripted || (r && r->mScripted == TriState::YES))
+            if (p.mScripted)
             {
                 add(0.25f, "scripted");
             }
+            else if (r && r->mScripted == TriState::YES)
+            {
+                add(0.1f, "root scripted");
+            }
             if (p.mTouch)
             {
-                add(0.15f, "touch");
+                add(0.25f, "touch");
             }
             if (r && r->mEverMoved)
             {
-                add(0.3f, "moved");
+                add(0.25f, "moved");
             }
-            if (evidence.empty())
+            if (confidence < params.mDoorConfidence)
             {
                 continue;
             }
@@ -568,8 +629,10 @@ namespace sknav
                 }
                 // The column is the car's own footprint, not the void walls
                 // bound: two shafts side by side can share one void up top.
-                shaft.mMin.set(cmin.mdV[VX], cmin.mdV[VY], std::min(dmin.mdV[VZ], cmin.mdV[VZ]));
-                shaft.mMax.set(cmax.mdV[VX], cmax.mdV[VY], std::max(dmax.mdV[VZ], cmax.mdV[VZ]));
+                // Its height is the door stack's, which holds still while the
+                // car rides, so the exits are not found again every trip.
+                shaft.mMin.set(cmin.mdV[VX], cmin.mdV[VY], dmin.mdV[VZ]);
+                shaft.mMax.set(cmax.mdV[VX], cmax.mdV[VY], dmax.mdV[VZ]);
                 shaft.mEvidence = llformat("%zu stacked doors, car", entry.second.size());
             }
             else
