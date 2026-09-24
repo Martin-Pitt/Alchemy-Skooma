@@ -622,7 +622,7 @@ namespace
     /// of eight compass directions.
     constexpr S32 SLOPE_CLASSES = 9;
     constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
-    constexpr F32 SLOPE_REACH_M = 0.5f;     ///< half the baseline the gradient is measured over
+    constexpr F32 SLOPE_REACH_M = 0.75f;    ///< each half of the baseline: longer than a tread, so a half always spans a riser
     constexpr F32 SLOPE_FRAGMENT_M2 = 1.f;  ///< smaller patches of one class join their neighbours
 
     /// Walk up to reach spans along a direction; the height and distance of
@@ -650,13 +650,14 @@ namespace
         }
     }
 
-    /// Each span's slope class. The gradient is taken over a metre, not a
+    /// Each span's slope class. The gradient is taken over metres, not a
     /// cell, so a staircase's voxel steps read as the flight's slope and not
     /// as alternating floor and riser. Linden land stays level: its slope is
     /// what contours are for, and splitting it would only cut polygons.
-    void classifySlopes(const rcCompactHeightfield& chf, std::vector<U8>& cls)
+    void classifySlopes(const rcCompactHeightfield& chf, std::vector<U8>& cls, std::vector<U8>& edge)
     {
         cls.assign(chf.spanCount, 0);
+        edge.assign(chf.spanCount, 0);
         const S32 reach = llmax(1, static_cast<S32>(std::lround(SLOPE_REACH_M / chf.cs)));
         const F32 level = std::tan(SLOPE_LEVEL_DEG * DEG_TO_RAD);
         for (S32 z = 0; z < chf.height; ++z)
@@ -670,7 +671,7 @@ namespace
                     {
                         continue;
                     }
-                    F32 g[2] = { 0.f, 0.f };
+                    F32 g[2] = { 0.f, 0.f }, ge[2] = { 0.f, 0.f };
                     for (S32 axis = 0; axis < 2; ++axis)
                     {
                         // Recast directions: 0 -x, 1 +z, 2 +x, 3 -z
@@ -678,18 +679,84 @@ namespace
                         S32 y1 = 0, d1 = 0, y0 = 0, d0 = 0;
                         walkSurface(chf, x, z, i, fwd, reach, y1, d1);
                         walkSurface(chf, x, z, i, back, reach, y0, d0);
-                        if (d0 + d1 > 0)
+                        const F32 yc = static_cast<F32>(chf.spans[i].y);
+                        const F32 gf = d1 ? (y1 - yc) * chf.ch / (d1 * chf.cs) : 0.f;
+                        const F32 gb = d0 ? (yc - y0) * chf.ch / (d0 * chf.cs) : 0.f;
+                        if (d0 && d1)
                         {
-                            g[axis] = (y1 - y0) * chf.ch / ((d0 + d1) * chf.cs);
+                            // both halves must climb the same way: a single
+                            // step or curb rises on one side only, and is a
+                            // floor edge, not a slope
+                            g[axis] = gf * gb > 0.f ? (gf > 0.f ? 1.f : -1.f) * llmin(std::fabs(gf), std::fabs(gb)) : 0.f;
+                            // the rising half alone, for the top and bottom
+                            // of a flight to join it (growSlopes)
+                            ge[axis] = std::fabs(gf) > std::fabs(gb) ? gf : gb;
+                        }
+                        else
+                        {
+                            g[axis] = d1 ? gf : gb; // against a wall only one side is there to read
                         }
                     }
-                    if (g[0] * g[0] + g[1] * g[1] < level * level)
-                    {
-                        continue;
-                    }
-                    const F32 turn = std::atan2(g[1], g[0]) / F_TWO_PI + 1.f;
-                    cls[i] = static_cast<U8>(1 + static_cast<S32>(std::lround(turn * 8.f)) % 8);
+                    const auto classOf = [level](const F32* v) -> U8 {
+                        if (v[0] * v[0] + v[1] * v[1] < level * level)
+                        {
+                            return 0;
+                        }
+                        const F32 turn = std::atan2(v[1], v[0]) / F_TWO_PI + 1.f;
+                        return static_cast<U8>(1 + static_cast<S32>(std::lround(turn * 8.f)) % 8);
+                    };
+                    cls[i] = classOf(g);
+                    edge[i] = cls[i] ? cls[i] : classOf(ge);
                 }
+            }
+        }
+    }
+
+    /// The two-sided test reads the last metre of a flight as level, since
+    /// one half of the baseline is already on the landing. Grow each flight
+    /// back over spans whose rising half alone says the same class, up to a
+    /// half baseline: that restores its top and bottom, while a lone curb,
+    /// which has no two-sided core to grow from, stays level.
+    void growSlopes(const rcCompactHeightfield& chf, const std::vector<U8>& edge, std::vector<U8>& cls)
+    {
+        const S32 reach = llmax(1, static_cast<S32>(std::lround(SLOPE_REACH_M / chf.cs)));
+        for (S32 pass = 0; pass < reach; ++pass)
+        {
+            std::vector<U8> out = cls;
+            bool grew = false;
+            for (S32 z = 0; z < chf.height; ++z)
+            {
+                for (S32 x = 0; x < chf.width; ++x)
+                {
+                    const rcCompactCell& c = chf.cells[x + z * chf.width];
+                    for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
+                    {
+                        if (cls[i] || !edge[i])
+                        {
+                            continue;
+                        }
+                        for (S32 dir = 0; dir < 4; ++dir)
+                        {
+                            const S32 con = rcGetCon(chf.spans[i], dir);
+                            if (con == RC_NOT_CONNECTED)
+                            {
+                                continue;
+                            }
+                            const S32 n = static_cast<S32>(chf.cells[(x + rcGetDirOffsetX(dir)) + (z + rcGetDirOffsetY(dir)) * chf.width].index) + con;
+                            if (cls[n] == edge[i] && chf.areas[n] == chf.areas[i])
+                            {
+                                out[i] = edge[i];
+                                grew = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            cls.swap(out);
+            if (!grew)
+            {
+                break;
             }
         }
     }
@@ -830,8 +897,9 @@ namespace
     /// real area of each code is returned for unfolding after the poly mesh.
     std::vector<U8> foldSlopeAreas(rcCompactHeightfield& chf)
     {
-        std::vector<U8> cls;
-        classifySlopes(chf, cls);
+        std::vector<U8> cls, edge;
+        classifySlopes(chf, cls, edge);
+        growSlopes(chf, edge, cls);
         smoothSlopes(chf, cls);
         absorbSlopeFragments(chf, cls);
         std::vector<U8> real(1, RC_NULL_AREA); // code -> area; code 0 stays null

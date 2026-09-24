@@ -805,4 +805,25 @@ namespace tut
         ensure("polys on the flight", on_flight > 0);
         ensure("polys on the landing", on_landing > 0);
     }
+
+    // A single step within climb is a floor edge, not a slope: the slope
+    // partition gives a curb no band of its own, so the floor either side of
+    // it breaks into no more polygons than the plain watershed makes.
+    template<> template<>
+    void sknavbuild_object::test<19>()
+    {
+        S32 polys[2] = { 0, 0 };
+        for (S32 k = 0; k < 2; ++k)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            in.mPartition = k ? Partition::SLOPE : Partition::WATERSHED;
+            in.mRecords.push_back(box(4.f, 4.f, 0.f, 28.f, 28.f, 0.5f));
+            in.mRecords.push_back(box(4.f, 16.f, 0.5f, 28.f, 28.f, 0.86f)); // a 0.36 m curb across the floor
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            polys[k] = r.mPolys[0];
+        }
+        ensure(llformat("curb adds polygons: watershed %d, slope %d", polys[0], polys[1]), polys[1] <= polys[0]);
+    }
 }
