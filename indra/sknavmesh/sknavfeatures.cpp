@@ -185,7 +185,7 @@ namespace sknav
         return false;
     }
 
-    bool containsWordNoCase(const std::string& haystack, const char* needle)
+    bool containsWordNoCase(const std::string& haystack, const char* needle, bool humps)
     {
         const size_t n = std::strlen(needle);
         auto alpha = [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; };
@@ -201,14 +201,14 @@ namespace sknav
             {
                 continue;
             }
-            const bool starts = i == 0 || !alpha(haystack[i - 1]) || (upper(haystack[i]) && !upper(haystack[i - 1]));
+            const bool starts = i == 0 || !alpha(haystack[i - 1]) || (humps && upper(haystack[i]) && !upper(haystack[i - 1]));
             size_t e = i + n;
             if (e < haystack.size() && (haystack[e] == 's' || haystack[e] == 'S')
                 && (e + 1 == haystack.size() || !alpha(haystack[e + 1]) || upper(haystack[e + 1])))
             {
                 ++e;
             }
-            const bool ends = e == haystack.size() || !alpha(haystack[e]) || (upper(haystack[e]) && !upper(haystack[e - 1]));
+            const bool ends = e == haystack.size() || !alpha(haystack[e]) || (humps && upper(haystack[e]) && !upper(haystack[e - 1]));
             if (starts && ends)
             {
                 return true;
@@ -281,8 +281,10 @@ namespace sknav
 
         // A root named as an elevator's car is never a door or a vehicle,
         // whoever rides it; whether it is a car is settled by the shaft below.
+        // An Elevator Door is a landing's leaf, and a ForkLift no lift.
         auto carName = [](const FeatureRoot* r) {
-            return r && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift"));
+            return r && !containsWordNoCase(r->mName, "door")
+                && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift", false));
         };
 
         // Vehicles and seats: a linkset someone has sat on this session. Whether
@@ -296,7 +298,7 @@ namespace sknav
             }
             Feature f;
             const bool travelled = r.mTravel > params.mVehicleTravel;
-            f.mKind = (travelled || r.mPhysical) ? FeatureKind::VEHICLE : FeatureKind::SEAT;
+            f.mKind = (travelled || r.mPhysical || r.mEverVehicle) ? FeatureKind::VEHICLE : FeatureKind::SEAT;
             f.mConfidence = 1.f;
             f.mRoots.push_back(r.mRoot);
             bool first = true;
@@ -316,7 +318,9 @@ namespace sknav
                 }
             }
             f.mEvidence = travelled ? llformat("crewed, travelled %.0f m", r.mTravel)
-                                    : std::string(r.mPhysical ? "crewed, physical" : "crewed, never travelled");
+                        : r.mPhysical   ? std::string("crewed, physical")
+                        : r.mEverVehicle ? std::string("crewed, a vehicle earlier")
+                                         : std::string("crewed, never travelled");
             if (f.mKind == FeatureKind::VEHICLE)
             {
                 // LBA marks damageable walls as well as vehicles: it is a
@@ -495,7 +499,9 @@ namespace sknav
             {
                 add(0.25f, "touch");
             }
-            if (r && r->mEverMoved)
+            // A root's motion speaks for the root's own prim; a child panel
+            // of a house that was nudged has not opened.
+            if (r && r->mEverMoved && p.mPart == p.mRoot)
             {
                 add(0.25f, "moved");
             }
@@ -635,7 +641,9 @@ namespace sknav
                         have = true;
                     }
                 }
-                if (!scripted || !have || !overlapsPlan(bmin, bmax, smin, smax)
+                // A car is something to stand in, never a panel thin as a leaf.
+                const bool thin = std::min(bmax.mdV[VX] - bmin.mdV[VX], bmax.mdV[VY] - bmin.mdV[VY]) <= params.mThinMax;
+                if (!scripted || !have || thin || !overlapsPlan(bmin, bmax, smin, smax)
                     || std::find(taken_cars.begin(), taken_cars.end(), r.mRoot) != taken_cars.end())
                 {
                     continue;

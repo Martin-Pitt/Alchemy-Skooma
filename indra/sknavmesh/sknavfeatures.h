@@ -65,6 +65,7 @@ namespace sknav
         bool mEverMoved = false;    ///< this session, turning included
         F32 mTravel = 0.f;          ///< how far it has gone this session, turning not included
         bool mEverCrewed = false;   ///< this session
+        bool mEverVehicle = false;  ///< crewed while physical or travelling earlier this session
         bool mWorkingElevator = false;  ///< confirmed a working car earlier this session
         bool mHasBounds = false;    ///< the whole linkset's box, for roots whose parts the census left out
         LLVector3d mMin;
@@ -121,8 +122,8 @@ namespace sknav
     bool containsNoCase(const std::string& haystack, const char* needle);
 
     /// Case-insensitive word test: the needle neither starts nor ends inside
-    /// a word, a camel-case hump and a plural s counting as its edges.
-    bool containsWordNoCase(const std::string& haystack, const char* needle);
+    /// a word, a plural s and, with humps, a camel-case hump counting as its edges.
+    bool containsWordNoCase(const std::string& haystack, const char* needle, bool humps = true);
 
     const char* featureName(FeatureKind kind);
 }

@@ -369,6 +369,16 @@ namespace tut
         ensure("not forklift", !containsWordNoCase("forklift", "lift"));
         ensure("not airlift", !containsWordNoCase("Airlift Pad", "lift"));
         ensure("not shoplifter", !containsWordNoCase("shoplifter", "lift"));
+        ensure("humps off", !containsWordNoCase("ForkLift", "lift", false) && !containsWordNoCase("AirLift", "lift", false));
+        ensure("humps off, a word", containsWordNoCase("Lift Car", "lift", false));
+
+        // A ForkLift or an AirLift someone rode is a vehicle, not a car.
+        FeatureRoot fork = root(1, "ForkLift");
+        fork.mEverCrewed = true;
+        fork.mTravel = 5.f;
+        ensure("ForkLift", ofKind(classifyFeatures({ part(1, 1, 0, 0, 0, 2, 1, 2) }, { fork }, FeatureParams()), FeatureKind::VEHICLE).size() == 1);
+        fork.mName = "AirLift";
+        ensure("AirLift", ofKind(classifyFeatures({ part(1, 1, 0, 0, 0, 2, 1, 2) }, { fork }, FeatureParams()), FeatureKind::VEHICLE).size() == 1);
     }
 
     // Someone riding a car named as an elevator up a storey does not make it
@@ -471,5 +481,68 @@ namespace tut
             const bool one = s->mMin.mdV[VY] < 41.0;
             ensure("each its own car", owns(*s, one ? 31 : 30) && !owns(*s, one ? 30 : 31));
         }
+    }
+
+    // A vehicle seen once stays one: parked non-physical with no travel on
+    // record, it does not fall back to a seat.
+    template<> template<>
+    void sknavfeatures_object::test<16>()
+    {
+        FeatureRoot boat = root(1);
+        boat.mEverCrewed = true;
+        const std::vector<FeaturePart> parts = { part(1, 1, 0, 0, 0, 6, 3, 2) };
+        ensure("a seat until latched", ofKind(classifyFeatures(parts, { boat }, FeatureParams()), FeatureKind::SEAT).size() == 1);
+        boat.mEverVehicle = true;
+        const std::vector<Feature> f = classifyFeatures(parts, { boat }, FeatureParams());
+        ensure("latched, a vehicle", ofKind(f, FeatureKind::VEHICLE).size() == 1 && ofKind(f, FeatureKind::SEAT).empty());
+    }
+
+    // A house root nudged is no evidence for its child panels: they stay walls,
+    // while a root that is itself a panel is moved by its own motion.
+    template<> template<>
+    void sknavfeatures_object::test<17>()
+    {
+        FeatureRoot house = root(1);
+        house.mEverMoved = true;
+        FeaturePart base = part(1, 1, 0, 0, 0, 10, 10, 0.5);
+        FeaturePart panel = part(1, 2, 20, 0, 0, 20.125, 1.06, 3.0);
+        panel.mScripted = true;
+        std::vector<Feature> f = classifyFeatures({ base, panel }, { house }, FeatureParams());
+        ensure("the child panel stays a wall", ofKind(f, FeatureKind::DOOR).empty());
+
+        FeaturePart leaf = part(1, 1, 20, 0, 0, 20.125, 1.06, 3.0);
+        leaf.mScripted = true;
+        f = classifyFeatures({ leaf }, { house }, FeatureParams());
+        ensure("the root's own leaf moved", ofKind(f, FeatureKind::DOOR).size() == 1);
+    }
+
+    // Landing linksets named "Elevator Door" still give leaves and a shaft,
+    // and a thin panel named as a lift nearer the line is never the car.
+    template<> template<>
+    void sknavfeatures_object::test<18>()
+    {
+        std::vector<FeaturePart> parts;
+        std::vector<FeatureRoot> roots;
+        for (U32 storey = 0; storey < 2; ++storey)
+        {
+            const F64 z = 100.0 + 8.75 * storey;
+            FeaturePart a = part(10 + storey, 20 + storey, 50.0, 40.0, z, 50.125, 41.06, z + 3.0);
+            a.mScripted = true;
+            parts.push_back(a);
+            roots.push_back(root(10 + storey, "Elevator Door"));
+        }
+        parts.push_back(part(30, 30, 50.2, 39.9, 100.0, 52.7, 42.4, 104.0));
+        parts.push_back(part(32, 32, 50.3, 40.0, 100.0, 50.4, 41.0, 103.0));
+        for (U32 n : { 30u, 32u })
+        {
+            FeatureRoot car = root(n, n == 30 ? "Elevator" : "Lift");
+            car.mScripted = TriState::YES;
+            roots.push_back(car);
+        }
+        const std::vector<Feature> found = classifyFeatures(parts, roots, FeatureParams());
+        ensure_equals("two landing doors", ofKind(found, FeatureKind::DOOR).size(), 2u);
+        const auto shafts = ofKind(found, FeatureKind::ELEVATOR);
+        ensure("one working shaft", shafts.size() == 1 && shafts[0]->mWorking);
+        ensure("the car, not the panel", owns(*shafts[0], 30) && !owns(*shafts[0], 32));
     }
 }
