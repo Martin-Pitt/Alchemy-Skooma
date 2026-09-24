@@ -117,11 +117,14 @@ public:
     };
     const LinksetFacts* linksetFactsOf(const LLUUID& root) const;
 
-    /// What this session has seen a root do. Kept until logout, across
-    /// region changes: crew get off and a vehicle stays one.
+    /// What this session has seen a root do. Kept across region changes, so
+    /// crew get off and a vehicle stays one; a root that is no feature goes
+    /// once it has been out of sight for ten minutes.
     struct RootHistory
     {
         bool mEverMoved = false;
+        F32 mTravel = 0.f;              ///< metres gone, turning not included
+        F32 mLastSeen = 0.f;
         bool mEverCrewed = false;
         bool mWorkingElevator = false;  ///< it was the car of a working shaft
         sknav::FeatureKind mKind = sknav::FeatureKind::NONE;

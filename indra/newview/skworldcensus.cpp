@@ -62,6 +62,39 @@ namespace
 
     const F32 MOVED_EPSILON = 0.01f;
     const F32 MOVED_ANGLE = 2.f * DEG_TO_RAD;
+    const F32 HISTORY_KEEP_SECONDS = 600.f;
+
+    // The share of a part's faces that can be seen through: a pane of glass
+    // is solid to the sim and told apart from a door only here.
+    F32 seeThrough(const LLViewerObject* object)
+    {
+        const U8 faces = object->getNumTEs();
+        if (faces == 0)
+        {
+            return 0.f;
+        }
+        U32 clear = 0;
+        for (U8 f = 0; f < faces; ++f)
+        {
+            const LLTextureEntry* te = object->getTE(f);
+            if (!te)
+            {
+                continue;
+            }
+            F32 alpha = te->getColor().mV[VALPHA];
+            bool blended = true;
+            if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
+            {
+                alpha *= gltf->mBaseColor.mV[VW];
+                blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
+            }
+            if (te->getID() == IMG_TRANSPARENT || (blended && alpha < 0.95f))
+            {
+                clear++;
+            }
+        }
+        return static_cast<F32>(clear) / faces;
+    }
 
     LLViewerObject* rootOf(LLViewerObject* object)
     {
@@ -389,7 +422,13 @@ void SKWorldCensus::finishScan()
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
     done->mStamp = ++mStamp;
 
-    // Parts and roots not seen for a minute leave the caches.
+    // Parts and roots not seen for a minute leave the caches, and a root's
+    // history ten minutes out of sight unless it made a feature.
+    for (auto it = mHistory.begin(); it != mHistory.end();)
+    {
+        const bool keep = it->second.mKind != FeatureKind::NONE || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
+        it = keep ? std::next(it) : mHistory.erase(it);
+    }
     for (auto it = mParts.begin(); it != mParts.end();)
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mParts.erase(it) : std::next(it);
@@ -410,18 +449,25 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
     // the turn counts as a move too.
     Rest& rest = mRest[root->getID()];
     const F32 turned = 2.f * std::acos(llclamp(std::fabs(dot(rest.mRotation, rot)), 0.f, 1.f));
-    if (!rest.mKnown || dist_vec(rest.mPosition, pos) > MOVED_EPSILON || turned > MOVED_ANGLE)
+    const F64 shifted = rest.mKnown ? dist_vec(rest.mPosition, pos) : 0.0;
+    if (!rest.mKnown || shifted > MOVED_EPSILON || turned > MOVED_ANGLE)
     {
         if (rest.mKnown)
         {
             rest.mMovedAt = gFrameTimeSeconds;
-            mHistory[root->getID()].mEverMoved = true;
+            RootHistory& history = mHistory[root->getID()];
+            history.mEverMoved = true;
+            history.mTravel += static_cast<F32>(shifted);
         }
         rest.mPosition = pos;
         rest.mRotation = rot;
     }
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
+    if (const auto it = mHistory.find(root->getID()); it != mHistory.end())
+    {
+        it->second.mLastSeen = gFrameTimeSeconds;
+    }
     return rest.mMovedAt >= 0.f && gFrameTimeSeconds - rest.mMovedAt < settle;
 }
 
@@ -520,12 +566,6 @@ void SKWorldCensus::visit(LLViewerObject* object)
 
     const NavRole navRole = roleOf(root->getID());
     if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
-    {
-        mRolesWanted = true;
-    }
-    // The same reply names linksets, so one it has not named yet asks again,
-    // still no more often than SKNavRoleRequestSeconds.
-    if (root->getRegion() == gAgent.getRegion() && !mLinksets.count(root->getID()))
     {
         mRolesWanted = true;
     }
@@ -694,6 +734,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
         fp.mScripted = object->flagScripted();
         fp.mTouch = object->flagHandleTouch();
+        fp.mSeeThrough = seeThrough(object);
         mScan.mFeatureParts.push_back(std::move(fp));
     }
 
@@ -941,6 +982,7 @@ void SKWorldCensus::gatherCrew()
         }
         RootHistory& history = mHistory[root->getID()];
         history.mEverCrewed = true;
+        history.mLastSeen = gFrameTimeSeconds;
         history.mCrew.push_back(avatar->getID());
     }
 }
@@ -1012,6 +1054,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
         if (const RootHistory* history = historyOf(id))
         {
             r.mEverMoved = history->mEverMoved;
+            r.mTravel = history->mTravel;
             r.mEverCrewed = history->mEverCrewed;
             r.mWorkingElevator = history->mWorkingElevator;
         }
