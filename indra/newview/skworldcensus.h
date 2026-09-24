@@ -28,6 +28,7 @@
 #include "llsingleton.h"
 #include "llviewerobject.h"
 #include "sknavcluster.h"
+#include "sknavfeatures.h"
 #include "sknavtypes.h"
 
 #include <map>
@@ -49,6 +50,9 @@ struct SKCensusSnapshot
     F64 mRange = 0.0;                           ///< metres from either centre the scan covered
     std::vector<sknav::RecordPtr> mRecords;     ///< static and dynamic alike; clusters skip the dynamic
     sknav::ClusterSet mClusters;
+    /// Doors, ladders, shafts, vehicles and seats among this scan's parts.
+    /// The records carry a part's kind from the scan after.
+    std::vector<sknav::Feature> mFeatures;
 
     struct Stats
     {
@@ -62,6 +66,8 @@ struct SKCensusSnapshot
         U32 mTiny = 0;              ///< parts under SKNavMinShape in every axis: never a record
         U32 mTriangles = 0;
         U32 mRolesKnown = 0;
+        U32 mFeatures = 0;
+        F32 mFeatureMs = 0.f;       ///< the facts gathered and the rules run
         F32 mScanMs = 0.f;          ///< main-thread time the scan took, summed over its slices
         F32 mClusterMs = 0.f;
     } mStats;
@@ -111,6 +117,18 @@ public:
     };
     const LinksetFacts* linksetFactsOf(const LLUUID& root) const;
 
+    /// What this session has seen a root do. Kept until logout, across
+    /// region changes: crew get off and a vehicle stays one.
+    struct RootHistory
+    {
+        bool mEverMoved = false;
+        bool mEverCrewed = false;
+        bool mWorkingElevator = false;  ///< it was the car of a working shaft
+        sknav::FeatureKind mKind = sknav::FeatureKind::NONE;
+        std::vector<LLUUID> mCrew;      ///< seated on it at the last scan
+    };
+    const RootHistory* historyOf(const LLUUID& root) const;
+
     std::string statsLine() const;
 
 private:
@@ -153,6 +171,8 @@ private:
         /// once when the scan begins and emitted as boxes after the live pass.
         std::vector<CachedPart> mCached;
         size_t mCachedIndex = 0;
+        /// Every part recorded this scan, as the feature rules read it.
+        std::vector<sknav::FeaturePart> mFeatureParts;
         F32 mElapsedMs = 0.f;
         bool mActive = false;
     };
@@ -176,7 +196,12 @@ private:
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                            const LLVector3& pos, const LLQuaternion& rot);
+                            const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude);
+    /// Who is sitting on what, into the session history.
+    void gatherCrew();
+    /// The feature rules over the finished scan's parts; the part kinds they
+    /// give are what the next scan records with.
+    void classify(SKCensusSnapshot& snap);
     /// A record into the pending snapshot, counted.
     void take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec);
 
@@ -189,6 +214,13 @@ private:
     std::unordered_map<LLUUID, Rest> mRest;
     std::unordered_map<LLUUID, sknav::NavRole> mRoles;
     std::unordered_map<LLUUID, LinksetFacts> mLinksets;
+    std::unordered_map<LLUUID, RootHistory> mHistory;
+    struct PartFeature
+    {
+        sknav::FeatureKind mKind = sknav::FeatureKind::NONE;
+        U8 mExclude = 0;
+    };
+    std::unordered_map<LLUUID, PartFeature> mPartFeatures;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F32 mRolesRequestedAt = -1.f;

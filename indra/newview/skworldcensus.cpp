@@ -29,8 +29,10 @@
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 
+#include "alobjectproperties.h"
 #include "llagent.h"
 #include "llappviewer.h"
+#include "llcharacter.h"
 #include "llglslshader.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
@@ -42,11 +44,13 @@
 #include "llviewercontrol.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
+#include "llvoavatarself.h"
 #include "llvocache.h"
 #include "llviewershadermgr.h"
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "sknavmesh.h"
 #include "skphysicsshape.h"
 
 #include <algorithm>
@@ -234,6 +238,12 @@ const SKWorldCensus::LinksetFacts* SKWorldCensus::linksetFactsOf(const LLUUID& r
     return it == mLinksets.end() ? nullptr : &it->second;
 }
 
+const SKWorldCensus::RootHistory* SKWorldCensus::historyOf(const LLUUID& root) const
+{
+    const auto it = mHistory.find(root);
+    return it == mHistory.end() ? nullptr : &it->second;
+}
+
 std::vector<U64> SKWorldCensus::regionHandles()
 {
     std::vector<U64> handles;
@@ -313,6 +323,7 @@ void SKWorldCensus::beginScan()
     mScan.mRegions = regionHandles();
     mScan.mCached.clear();
     mScan.mCachedIndex = 0;
+    mScan.mFeatureParts.clear();
     gatherCached();
     mScan.mElapsedMs = 0.f;
     mScan.mActive = true;
@@ -372,6 +383,10 @@ void SKWorldCensus::finishScan()
     done->mStats.mScanMs = mScan.mElapsedMs;
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());
     done->mStats.mRolesKnown = static_cast<U32>(mRoles.size());
+    timer.reset();
+    gatherCrew();
+    classify(*done);
+    done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
     done->mStamp = ++mStamp;
 
     // Parts and roots not seen for a minute leave the caches.
@@ -400,6 +415,7 @@ bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, co
         if (rest.mKnown)
         {
             rest.mMovedAt = gFrameTimeSeconds;
+            mHistory[root->getID()].mEverMoved = true;
         }
         rest.mPosition = pos;
         rest.mRotation = rot;
@@ -530,8 +546,17 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
 
     // The sim's rotation, not the rendered one: llTargetOmega spin is not motion.
-    const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()),
-                                      root->getRotationSim());
+    const bool moving = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()),
+                                     root->getRotationSim());
+    // The kind the feature rules gave the part at the last scan. A vehicle is
+    // out of every class parked or driving, so its rest state says nothing.
+    PartFeature feature;
+    if (const auto fit = mPartFeatures.find(object->getID()); fit != mPartFeatures.end())
+    {
+        feature = fit->second;
+    }
+    const bool excluded = (feature.mExclude & (EXCLUDE_AVATAR | EXCLUDE_WEATHER)) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER);
+    const bool dynamic = moving && !excluded;
 
     // Phantom stays out unless the sim says it is an exclusion volume; a
     // surround stays in whatever its flags, as its rendered shape.
@@ -563,6 +588,9 @@ void SKWorldCensus::visit(LLViewerObject* object)
     sig = mix(sig, phantom);
     sig = mix(sig, surround);
     sig = mix(sig, static_cast<U64>(navRole));
+    // A newly classified leaf must re-record, or its tile never hears of it.
+    sig = mix(sig, static_cast<U64>(feature.mKind));
+    sig = mix(sig, feature.mExclude);
     sig = mix(sig, object->isPhysicsShapeUnknown());
     // Only a surround is built from the rendered volume, so only a surround
     // depends on the loaded LOD. Mixing it in for everything else re-signs
@@ -612,6 +640,18 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
     }
 
+    // A record every class leaves out shapes nothing, so to a tile it is what
+    // it is and not where: a vehicle driving about within a tile never
+    // rebuilds it, and one arriving or leaving still does.
+    U64 record_sig = sig;
+    if (excluded)
+    {
+        record_sig = mix(SEED, *reinterpret_cast<const U64*>(object->getID().mData));
+        record_sig = mix(record_sig, *reinterpret_cast<const U64*>(object->getID().mData + 8));
+        record_sig = mix(record_sig, static_cast<U64>(feature.mKind));
+        record_sig = mix(record_sig, feature.mExclude);
+    }
+
     PartCache& cache = mParts[object->getID()];
     cache.mLastSeen = gFrameTimeSeconds;
     const bool fresh = cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == dynamic;
@@ -623,7 +663,8 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
     else
     {
-        rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, sig, sim_pos, sim_rot);
+        rec = record(volume, root, surround ? Role::SURROUND : Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind,
+                     feature.mExclude);
         if (!rec)
         {
             return;
@@ -634,6 +675,28 @@ void SKWorldCensus::visit(LLViewerObject* object)
     }
     take(snap, rec);
 
+    if (!surround)
+    {
+        FeaturePart fp;
+        fp.mPart = object->getID();
+        fp.mRoot = root->getID();
+        fp.mCenter = object->getRegion()->getOriginGlobal() + LLVector3d(sim_pos);
+        fp.mMin = fp.mCenter - span;
+        fp.mMax = fp.mCenter + span;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            fp.mAxes[k] = axis[k];
+        }
+        fp.mHalf = half;
+        if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(object->getID()))
+        {
+            fp.mName = props->mName;
+        }
+        fp.mScripted = object->flagScripted();
+        fp.mTouch = object->flagHandleTouch();
+        mScan.mFeatureParts.push_back(std::move(fp));
+    }
+
     // A surround's rendered shape is what weather lands on, but where the
     // thing reaches over land it collides like anything else: a 128 m cube
     // rezzed across the region edge is solid over the strip of ground it
@@ -643,7 +706,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         if (!fresh || !cache.mPhysics)
         {
-            cache.mPhysics = record(volume, root, Role::NAV, dynamic, sig, sim_pos, sim_rot);
+            cache.mPhysics = record(volume, root, Role::NAV, dynamic, record_sig, sim_pos, sim_rot, feature.mKind, feature.mExclude);
         }
         if (cache.mPhysics)
         {
@@ -783,7 +846,7 @@ void SKWorldCensus::visitCached(const CachedPart& part)
 }
 
 sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
-                                       const LLVector3& pos, const LLQuaternion& rot)
+                                       const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude)
 {
     SKShapeGeometry geom;
     bool ok = false;
@@ -810,6 +873,8 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mShape = geom.mShape;
     rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
+    rec->mFeature = feature;
+    rec->mExclude = exclude;
     rec->mSignature = signature;
     rec->mOrigin = volume->getRegion()->getOriginGlobal();
 
@@ -851,6 +916,165 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
         rec->mMax = rec->mOrigin + LLVector3d(rec->mCenter + extent);
     }
     return rec;
+}
+
+void SKWorldCensus::gatherCrew()
+{
+    // Avatars never pass the census gate, so crew are read here, once a scan:
+    // whoever sits, on the linkset root of what they sit on.
+    for (auto& entry : mHistory)
+    {
+        entry.second.mCrew.clear();
+    }
+    for (LLCharacter* character : LLCharacter::sInstances)
+    {
+        LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(character);
+        if (!avatar || avatar->isDead() || !avatar->isSitting() || !avatar->getParent())
+        {
+            continue;
+        }
+        const LLViewerObject* seat = static_cast<const LLViewerObject*>(avatar->getParent());
+        const LLViewerObject* root = seat->getRootEdit();
+        if (!root || root->isAvatar())
+        {
+            continue;
+        }
+        RootHistory& history = mHistory[root->getID()];
+        history.mEverCrewed = true;
+        history.mCrew.push_back(avatar->getID());
+    }
+}
+
+void SKWorldCensus::classify(SKCensusSnapshot& snap)
+{
+    FeatureParams params;
+    params.mClassHeight = isAgentAvatarValid() ? llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f) : 2.f;
+
+    // Every root with a part in the scan, and every root that has had crew:
+    // a physical vehicle never passes the gate, and is still one.
+    std::vector<LLUUID> ids;
+    for (const FeaturePart& p : mScan.mFeatureParts)
+    {
+        ids.push_back(p.mRoot);
+    }
+    for (const auto& entry : mHistory)
+    {
+        if (entry.second.mEverCrewed)
+        {
+            ids.push_back(entry.first);
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+
+    std::vector<FeatureRoot> roots;
+    roots.reserve(ids.size());
+    for (const LLUUID& id : ids)
+    {
+        LLViewerObject* object = gObjectList.findObject(id);
+        if (!object || object->isDead())
+        {
+            continue;
+        }
+        FeatureRoot r;
+        r.mRoot = id;
+        // The linkset reply first, the property cache where the reply has
+        // nothing; a name neither has is simply not known.
+        if (const LinksetFacts* facts = linksetFactsOf(id))
+        {
+            r.mName = facts->mName;
+            r.mDescription = facts->mDescription;
+            if (facts->mScriptedKnown)
+            {
+                r.mScripted = facts->mScripted ? TriState::YES : TriState::NO;
+            }
+        }
+        if (r.mName.empty() || r.mDescription.empty())
+        {
+            if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(id))
+            {
+                if (r.mName.empty())
+                {
+                    r.mName = props->mName;
+                }
+                if (r.mDescription.empty())
+                {
+                    r.mDescription = props->mDescription;
+                }
+            }
+        }
+        if (r.mScripted == TriState::UNKNOWN && object->flagScripted())
+        {
+            r.mScripted = TriState::YES;
+        }
+        r.mHover = object->mHudText;
+        r.mPhysical = object->flagUsePhysics();
+        if (const RootHistory* history = historyOf(id))
+        {
+            r.mEverMoved = history->mEverMoved;
+            r.mEverCrewed = history->mEverCrewed;
+            r.mWorkingElevator = history->mWorkingElevator;
+        }
+        if (r.mEverCrewed && object->getRegion())
+        {
+            // The linkset's own box, and how far its bottom is off the floor.
+            LLVector3 lo(1e9f, 1e9f, 1e9f), hi(-1e9f, -1e9f, -1e9f);
+            std::vector<LLViewerObject*> prims { object };
+            for (const LLPointer<LLViewerObject>& child : object->getChildren())
+            {
+                if (!child->isAvatar())
+                {
+                    prims.push_back(child.get());
+                }
+            }
+            for (LLViewerObject* prim : prims)
+            {
+                const LLBBox box = prim->getBoundingBoxAgent();
+                update_min_max(lo, hi, box.getMinAgent());
+                update_min_max(lo, hi, box.getMaxAgent());
+            }
+            r.mHasBounds = true;
+            r.mMin = gAgent.getPosGlobalFromAgent(lo);
+            r.mMax = gAgent.getPosGlobalFromAgent(hi);
+            LLVector3d foot = (r.mMin + r.mMax) * 0.5;
+            foot.mdV[VZ] = r.mMin.mdV[VZ];
+            F32 floor = LLWorld::getInstance()->resolveLandHeightGlobal(foot);
+            F32 built = 0.f;
+            if (SKNavMesh::instanceExists() && SKNavMesh::instance().floorUnder(foot, AgentClass::AVATAR, built)
+                && built <= foot.mdV[VZ] + 0.5)
+            {
+                floor = llmax(floor, built);
+            }
+            r.mClearance = static_cast<F32>(foot.mdV[VZ]) - floor;
+        }
+        roots.push_back(std::move(r));
+    }
+
+    snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
+    snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
+
+    // What the next scan records each part with, and what stays with a root
+    // for the session: a vehicle stays one, a working car stays working.
+    mPartFeatures.clear();
+    for (const Feature& f : snap.mFeatures)
+    {
+        const U8 exclude = excludeFor(f.mKind);
+        for (const LLUUID& part : f.mParts)
+        {
+            mPartFeatures[part] = { f.mKind, exclude };
+        }
+        if (f.mKind == FeatureKind::VEHICLE || f.mKind == FeatureKind::SEAT
+            || (f.mKind == FeatureKind::ELEVATOR && f.mWorking))
+        {
+            for (const LLUUID& root : f.mRoots)
+            {
+                RootHistory& history = mHistory[root];
+                history.mKind = f.mKind;
+                history.mWorkingElevator = history.mWorkingElevator || f.mKind == FeatureKind::ELEVATOR;
+            }
+        }
+    }
+    mScan.mFeatureParts.clear();
 }
 
 void SKWorldCensus::requestRoles()
@@ -929,9 +1153,10 @@ std::string SKWorldCensus::statsLine() const
     {
         largest = std::max(largest, c->mRecords.size());
     }
-    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny), %u tris, %u roles; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms",
+    return llformat("census #%llu: %u objects, %u records (%u cached, %u dynamic, %u surround, %u placeholders, %u from object cache, %u tiny), %u tris, %u roles, %u features; %zu clusters, largest %zu; scan %.1f ms, cluster %.1f ms, features %.1f ms",
                     static_cast<unsigned long long>(mSnapshot->mStamp), s.mObjectsSeen, s.mRecords, s.mCached, s.mDynamic, s.mSurround,
-                    s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs);
+                    s.mPlaceholders, s.mFromObjectCache, s.mTiny, s.mTriangles, s.mRolesKnown, s.mFeatures, mSnapshot->mClusters.mClusters.size(), largest, s.mScanMs, s.mClusterMs,
+                    s.mFeatureMs);
 }
 
 void SKWorldCensus::renderDebug()

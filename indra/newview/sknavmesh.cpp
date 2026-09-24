@@ -695,8 +695,12 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 ground_records.push_back(r);
             }
         }
-        else
+        else if (std::any_of(c->mRecords.begin(), c->mRecords.end(), [](const RecordPtr& r) {
+                     return (r->mExclude & (EXCLUDE_AVATAR | EXCLUDE_WEATHER)) != (EXCLUDE_AVATAR | EXCLUDE_WEATHER);
+                 }))
         {
+            // A flying vehicle alone is a cluster of nothing any class builds:
+            // a mesh for it would only rebuild empty tiles along its track.
             airborne.push_back(c.get());
         }
     }
@@ -1162,6 +1166,10 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     {
         mStats.mLastBuildMs = result->mMillis;
         mStats.mWorstBuildMs = std::max(mStats.mWorstBuildMs, result->mMillis);
+        if (result->mExcludeMillis > 0.f)
+        {
+            mStats.mExcludeMs = result->mExcludeMillis;
+        }
     }
     if (result->mStatus == TileBuildResult::FAILED)
     {
@@ -1373,10 +1381,11 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, %u floats skipped, last %.1f ms, worst %.1f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, %u floats skipped, last %.1f ms, worst %.1f ms, exclusion %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
-                    mStats.mFailures, mStats.mSkipped, mStats.mLastBuildMs, mStats.mWorstBuildMs);
+                    mStats.mFailures, mStats.mSkipped, mStats.mLastBuildMs, mStats.mWorstBuildMs,
+                    mStats.mExcludeMs);
 }
 
 SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const

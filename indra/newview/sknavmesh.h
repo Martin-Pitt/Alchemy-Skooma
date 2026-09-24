@@ -128,6 +128,7 @@ public:
         U32 mLinks = 0;
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
+        F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
     };
     const Stats& stats() const { return mStats; }
 
