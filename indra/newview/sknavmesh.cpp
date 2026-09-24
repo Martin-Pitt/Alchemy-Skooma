@@ -2514,8 +2514,15 @@ std::string SKNavMesh::exportVehicle() const
                         file << ',';
                     }
                     first_attachment = false;
+                    // The worn linkset's own pose in the vehicle's frame: a
+                    // turret turns about its root, and only its rotation says
+                    // which way it pointed when this was taken.
+                    const LLQuaternion worn = attached->getRenderRotation() * inverse;
                     file << "{\"point\":" << point.first << ",\"item\":\"" << attached->getAttachmentItemID()
-                         << "\",\"parts\":";
+                         << "\",\"rootPosition\":";
+                    vec3((attached->getRenderPosition() - origin) * inverse);
+                    file << ",\"rootRotation\":[" << worn.mQ[VX] << ',' << worn.mQ[VY] << ',' << worn.mQ[VZ] << ','
+                         << worn.mQ[VW] << "],\"parts\":";
                     linkset(attached.get());
                     file << '}';
                 }
