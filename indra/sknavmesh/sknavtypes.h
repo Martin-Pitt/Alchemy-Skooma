@@ -85,6 +85,7 @@ namespace sknav
     /// The classes a record is left out of, one bit per AgentClass index.
     constexpr U8 EXCLUDE_AVATAR = 1 << 0;
     constexpr U8 EXCLUDE_WEATHER = 1 << 1;
+    constexpr U8 EXCLUDE_ALL = EXCLUDE_AVATAR | EXCLUDE_WEATHER;
 
     /// Analytic shape or triangle soup. Soups are region-local metres.
     enum class Shape : U8 { BOX, SPHERE, CYLINDER, TRIANGLES };

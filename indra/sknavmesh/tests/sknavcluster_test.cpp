@@ -152,4 +152,23 @@ namespace tut
         s.at(LLVector3d(62, 40, 1), hit);
         ensure("miss outside the box", hit.empty());
     }
+    // A vehicle, left out of every class, is in no cluster: it neither joins
+    // the building it parks against nor stretches a cluster along its track.
+    template<> template<>
+    void sknavcluster_object::test<5>()
+    {
+        std::vector<RecordPtr> records;
+        records.push_back(box(1, 1, 0, 0, 0, 4, 4, 4));
+        records.push_back(box(3, 3, 10, 0, 0, 14, 4, 4));
+        auto vehicle = std::make_shared<Record>(*box(2, 2, 4.2, 0, 0, 9.8, 4, 4));
+        vehicle->mExclude = EXCLUDE_ALL;
+        records.push_back(vehicle);
+        auto door = std::make_shared<Record>(*box(4, 4, 20, 0, 0, 20.1, 1, 2));
+        door->mExclude = EXCLUDE_AVATAR;
+        records.push_back(door);
+        const ClusterSet s = cluster(records, 0.5, 8.0);
+        ensure("the vehicle is in no cluster", holding(s, 2) == nullptr);
+        ensure("the buildings stay apart", holding(s, 1) && holding(s, 3) && holding(s, 1) != holding(s, 3));
+        ensure("a door, left out of one class, is still clustered", holding(s, 4) != nullptr);
+    }
 }

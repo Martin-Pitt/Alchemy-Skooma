@@ -695,12 +695,8 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 ground_records.push_back(r);
             }
         }
-        else if (std::any_of(c->mRecords.begin(), c->mRecords.end(), [](const RecordPtr& r) {
-                     return (r->mExclude & (EXCLUDE_AVATAR | EXCLUDE_WEATHER)) != (EXCLUDE_AVATAR | EXCLUDE_WEATHER);
-                 }))
+        else
         {
-            // A flying vehicle alone is a cluster of nothing any class builds:
-            // a mesh for it would only rebuild empty tiles along its track.
             airborne.push_back(c.get());
         }
     }

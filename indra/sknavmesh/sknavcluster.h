@@ -61,7 +61,8 @@ namespace sknav
         const Cluster* find(const LLUUID& id) const;
     };
 
-    /// Build the clusters of a census snapshot. DYNAMIC records are left out.
+    /// Build the clusters of a census snapshot. DYNAMIC records, and records
+    /// every class leaves out, are left out.
     /// gap is the AABB inflation in metres; tile is the lattice pitch (TILE_M in
     /// the viewer, smaller in tests).
     ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile = TILE_M);

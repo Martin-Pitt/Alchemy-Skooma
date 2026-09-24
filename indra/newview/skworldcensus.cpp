@@ -555,7 +555,7 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         feature = fit->second;
     }
-    const bool excluded = (feature.mExclude & (EXCLUDE_AVATAR | EXCLUDE_WEATHER)) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER);
+    const bool excluded = (feature.mExclude & EXCLUDE_ALL) == EXCLUDE_ALL;
     const bool dynamic = moving && !excluded;
 
     // Phantom stays out unless the sim says it is an exclusion volume; a
@@ -640,9 +640,9 @@ void SKWorldCensus::visit(LLViewerObject* object)
         }
     }
 
-    // A record every class leaves out shapes nothing, so to a tile it is what
-    // it is and not where: a vehicle driving about within a tile never
-    // rebuilds it, and one arriving or leaving still does.
+    // A record every class leaves out shapes nothing and stays out of every
+    // cluster and tile, so it is signed by what it is and not where: a
+    // vehicle driving about keeps its record for the mark and the overlay.
     U64 record_sig = sig;
     if (excluded)
     {

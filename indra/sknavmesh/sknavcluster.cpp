@@ -126,12 +126,13 @@ namespace sknav
     ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile)
     {
         // Static records only, in a stable order so component ids do not depend
-        // on the census's iteration order.
+        // on the census's iteration order. A record no class builds with, a
+        // vehicle, would only re-sign the tiles it drives across.
         std::vector<RecordPtr> live;
         live.reserve(records.size());
         for (const RecordPtr& r : records)
         {
-            if (r && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC)
+            if (r && !r->mDynamic && r->mNavRole != NavRole::DYNAMIC && (r->mExclude & EXCLUDE_ALL) != EXCLUDE_ALL)
             {
                 live.push_back(r);
             }
