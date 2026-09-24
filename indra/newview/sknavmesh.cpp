@@ -33,17 +33,23 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
+#include "llavatarnamecache.h"
+#include "llcallingcard.h"
 #include "llappviewer.h"
 #include "lldate.h"
 #include "lldir.h"
 #include "llfile.h"
+#include "llgltfmaterial.h"
 #include "llglslshader.h"
+#include "llmaterial.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
 #include "llrender.h"
+#include "llselectmgr.h"
 #include "llsurface.h"
 #include "llsurfacepatch.h"
 #include "llviewercamera.h"
+#include "llviewerjointattachment.h"
 #include "llviewercontrol.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
@@ -148,6 +154,66 @@ namespace
             }
         }
         return 0;
+    }
+
+    // How the renderer will blend a face, which is what decides whether it
+    // can be seen through: a PBR material's own mode wins over a legacy
+    // material's, and with neither the face is blended only if its tint or
+    // its texture carries alpha, which only the texture can say.
+    const char* faceAlphaMode(const LLTextureEntry* te)
+    {
+        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
+        {
+            switch (gltf->mAlphaMode)
+            {
+                case LLGLTFMaterial::ALPHA_MODE_BLEND: return "pbr-blend";
+                case LLGLTFMaterial::ALPHA_MODE_MASK: return "pbr-mask";
+                default: return "pbr-opaque";
+            }
+        }
+        const LLMaterialPtr material = te->getMaterialParams();
+        if (material.notNull())
+        {
+            switch (material->getDiffuseAlphaMode())
+            {
+                case LLMaterial::DIFFUSE_ALPHA_MODE_NONE: return "none";
+                case LLMaterial::DIFFUSE_ALPHA_MODE_BLEND: return "blend";
+                case LLMaterial::DIFFUSE_ALPHA_MODE_MASK: return "mask";
+                case LLMaterial::DIFFUSE_ALPHA_MODE_EMISSIVE: return "emissive";
+                default: break;
+            }
+        }
+        return "default";
+    }
+
+    // The PBR base colour's alpha, which multiplies the tint on a PBR face.
+    F32 facePbrAlpha(const LLTextureEntry* te)
+    {
+        const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial();
+        return gltf ? gltf->mBaseColor.mV[VW] : 1.f;
+    }
+
+    S32 linkNumber(const LLViewerObject* object)
+    {
+        // SL numbers the root 1 and its children from 2 in child order.
+        const LLViewerObject* parent = static_cast<const LLViewerObject*>(object->getParent());
+        if (!parent)
+        {
+            return 1;
+        }
+        S32 link = 2;
+        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
+        {
+            if (child.get() == object)
+            {
+                break;
+            }
+            if (!child->isAvatar())
+            {
+                ++link;
+            }
+        }
+        return link;
     }
 }
 
@@ -1588,20 +1654,7 @@ std::string SKNavMesh::markUnderCamera()
     // Where the part sits in its linkset (SL numbers the root 1) and the flags
     // the census gates on, so a door leaf inside a house can be named to its
     // owner without selecting it. Nothing here asks the sim for anything.
-    S32 link = 1;
-    if (LLViewerObject* parent = static_cast<LLViewerObject*>(hit->getParent()))
-    {
-        link = 2;
-        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
-        {
-            if (child.get() == hit)
-            {
-                break;
-            }
-            ++link;
-        }
-    }
-    out << "  link " << link << " of " << (root->numChildren() + 1) << " flags";
+    out << "  link " << linkNumber(hit) << " of " << (root->numChildren() + 1) << " flags";
     if (hit->flagScripted()) out << " scripted";
     if (hit != root && root->flagScripted()) out << " root-scripted";
     if (hit->flagHandleTouch()) out << " touch";
@@ -1632,6 +1685,18 @@ std::string SKNavMesh::markUnderCamera()
     if (!hit->mHudText.empty())
     {
         out << "  hover text \"" << hit->mHudText << "\"\n";
+    }
+
+    // Whether each face can be seen through: a pane of glass and an invisible
+    // hitbox are both solid to the sim and told apart from a wall only here.
+    for (U8 f = 0; f < hit->getNumTEs(); ++f)
+    {
+        if (const LLTextureEntry* te = hit->getTE(f))
+        {
+            out << "  face " << static_cast<S32>(f) << " alpha " << te->getColor().mV[VALPHA] << " pbr alpha "
+                << facePbrAlpha(te) << " mode " << faceAlphaMode(te) << " texture " << te->getID()
+                << (te->getFullbright() ? " fullbright" : "") << "\n";
+        }
     }
 
     // Everything that moves: a door swinging by steps or KFM, a gate turning
@@ -2215,6 +2280,256 @@ std::string SKNavMesh::exportAll() const
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
     return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces (%.1f MB) -> %s", meshes_written,
                     tiles_written, polys_written, segments_written, links_written, faces_written,
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+}
+
+std::string SKNavMesh::exportVehicle() const
+{
+    // The selection first, so a vehicle can be picked in the edit tools; else
+    // whatever the screen centre is on, as the mark casts.
+    LLViewerObject* target = LLSelectMgr::getInstance()->getSelection()->getFirstRootObject(true);
+    if (!target && gViewerWindow)
+    {
+        const LLRect& view = gViewerWindow->getWorldViewRectScaled();
+        target = gViewerWindow->cursorIntersect(view.getCenterX(), view.getCenterY(), 1024.f, nullptr, -1, true,
+                                                false, true, true);
+    }
+    if (!target)
+    {
+        return "select a vehicle, or point the camera at one";
+    }
+    // Pointing at a pilot or at what they wear means the thing they sit on.
+    if (target->isAttachment())
+    {
+        target = target->getAvatar();
+    }
+    while (target && !target->isRoot() && target->getParent())
+    {
+        target = static_cast<LLViewerObject*>(target->getParent());
+    }
+    if (target && target->isAvatar() && target->getParent())
+    {
+        target = static_cast<LLViewerObject*>(target->getParent());
+        while (!target->isRoot() && target->getParent())
+        {
+            target = static_cast<LLViewerObject*>(target->getParent());
+        }
+    }
+    if (!target || target->isAvatar())
+    {
+        return "that is an avatar who is not sitting on anything";
+    }
+    LLViewerObject* root = target;
+
+    const std::string name = llformat("sknav-vehicle-%s.json", root->getID().asString().c_str());
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, name);
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    file << std::setprecision(6);
+
+    // Everything is written in the root's own frame, so a vehicle caught
+    // banked, pitched or upside down still reads as its plan view down -z.
+    const LLVector3 origin = root->getRenderPosition();
+    const LLQuaternion rotation = root->getRenderRotation();
+    const LLQuaternion inverse = ~rotation;
+
+    auto vec3 = [&file](const LLVector3& v) {
+        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
+    };
+    auto text = [&file](const std::string& s) {
+        file << '"';
+        for (char c : s)
+        {
+            if (c == '"' || c == '\\')
+            {
+                file << '\\' << c;
+            }
+            else if (c == '\n')
+            {
+                file << "\\n";
+            }
+            else if (static_cast<unsigned char>(c) >= 0x20)
+            {
+                file << c;
+            }
+        }
+        file << '"';
+    };
+
+    U32 parts_written = 0, triangles_written = 0;
+
+    // One prim: its load state and, per face, how it blends and its
+    // triangles in the root's frame. A rigged mesh follows a skeleton, so its
+    // rest positions would be wrong; it is listed without triangles.
+    auto part = [&](LLViewerObject* object, S32 link) {
+        ++parts_written;
+        file << "{\"id\":\"" << object->getID() << "\",\"link\":" << link;
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(object);
+        const LLVolume* v = volume ? volume->getVolume() : nullptr;
+        const bool rigged = object->isRiggedMesh();
+        file << ",\"rigged\":" << (rigged ? "true" : "false") << ",\"lod\":" << object->getLOD()
+             << ",\"mesh\":" << (volume && volume->isMesh() ? "true" : "false")
+             << ",\"loaded\":" << (v && v->getNumVolumeFaces() > 0 ? "true" : "false") << ",\"scale\":";
+        vec3(object->getScale());
+        file << ",\"faces\":[";
+        const S32 faces = v ? v->getNumVolumeFaces() : 0;
+        const LLVector3 scale = object->getScale();
+        const LLVector3 position = object->getRenderPosition();
+        const LLQuaternion object_rotation = object->getRenderRotation();
+        for (S32 f = 0; f < faces; ++f)
+        {
+            if (f)
+            {
+                file << ',';
+            }
+            const LLTextureEntry* te = object->getTE(static_cast<U8>(f));
+            file << "{\"te\":" << f;
+            if (te)
+            {
+                file << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << facePbrAlpha(te)
+                     << ",\"mode\":\"" << faceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
+                     << "\",\"fullbright\":" << (te->getFullbright() ? "true" : "false");
+            }
+            file << ",\"tris\":[";
+            if (!rigged)
+            {
+                const LLVolumeFace& face = v->getVolumeFace(f);
+                for (S32 i = 0; i < face.mNumIndices; ++i)
+                {
+                    const LLVector4a& p = face.mPositions[face.mIndices[i]];
+                    LLVector3 world(p.getF32ptr());
+                    world.scaleVec(scale);
+                    world = world * object_rotation + position;
+                    const LLVector3 local = (world - origin) * inverse;
+                    if (i)
+                    {
+                        file << ',';
+                    }
+                    file << local.mV[VX] << ',' << local.mV[VY] << ',' << local.mV[VZ];
+                }
+                triangles_written += face.mNumIndices / 3;
+            }
+            file << "]}";
+        }
+        file << "]}";
+    };
+
+    // The linkset's prims in link order: the root, then its children that are
+    // not people sitting on it.
+    auto linkset = [&](LLViewerObject* object) {
+        file << '[';
+        part(object, 1);
+        for (const LLPointer<LLViewerObject>& child : object->getChildren())
+        {
+            if (!child->isAvatar())
+            {
+                file << ',';
+                part(child.get(), linkNumber(child.get()));
+            }
+        }
+        file << ']';
+    };
+
+    // The heading is the root's forward axis flattened onto the ground; the
+    // map turns the outline by that alone.
+    const LLVector3 forward = LLVector3::x_axis * rotation;
+    const LLVector3 up = LLVector3::z_axis * rotation;
+    const F32 heading = std::atan2(forward.mV[VY], forward.mV[VX]) * RAD_TO_DEG;
+
+    file << "{\"format\":\"sknav-vehicle\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
+    file << ",\"root\":\"" << root->getID() << '"';
+    if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root->getID()))
+    {
+        file << ",\"name\":";
+        text(props->mName);
+        file << ",\"description\":";
+        text(props->mDescription);
+    }
+    file << ",\"hover\":";
+    text(root->mHudText);
+    file << ",\"position\":";
+    const LLVector3d global = root->getPositionGlobal();
+    file << '[' << std::setprecision(10) << global.mdV[VX] << ',' << global.mdV[VY] << ',' << global.mdV[VZ] << ']'
+         << std::setprecision(6);
+    file << ",\"rotation\":[" << rotation.mQ[VX] << ',' << rotation.mQ[VY] << ',' << rotation.mQ[VZ] << ','
+         << rotation.mQ[VW] << "],\"up\":";
+    vec3(up);
+    file << ",\"heading\":" << heading << ",\"velocity\":";
+    vec3(root->getVelocity());
+    file << ",\"physical\":" << (root->flagUsePhysics() ? "true" : "false")
+         << ",\"scripted\":" << (root->flagScripted() ? "true" : "false")
+         << ",\"phantom\":" << (root->flagPhantom() ? "true" : "false");
+    file << ",\"parts\":";
+    linkset(root);
+
+    // Everyone sitting anywhere on the linkset, and what each of them wears:
+    // a turret or the whole visible aircraft can be an attachment.
+    file << ",\"crew\":[";
+    bool first_crew = true;
+    std::vector<LLViewerObject*> prims { root };
+    for (const LLPointer<LLViewerObject>& child : root->getChildren())
+    {
+        prims.push_back(child.get());
+    }
+    for (LLViewerObject* prim : prims)
+    {
+        for (const LLPointer<LLViewerObject>& child : prim->getChildren())
+        {
+            LLVOAvatar* avatar = child->isAvatar() ? static_cast<LLVOAvatar*>(child.get()) : nullptr;
+            if (!avatar)
+            {
+                continue;
+            }
+            if (!first_crew)
+            {
+                file << ',';
+            }
+            first_crew = false;
+            LLAvatarName av_name;
+            const bool named = LLAvatarNameCache::get(avatar->getID(), &av_name);
+            file << "{\"id\":\"" << avatar->getID() << "\",\"name\":";
+            text(named ? av_name.getCompleteName() : std::string());
+            file << ",\"self\":" << (avatar->isSelf() ? "true" : "false")
+                 << ",\"friend\":" << (LLAvatarTracker::instance().isBuddy(avatar->getID()) ? "true" : "false");
+            LLNameValue* title = avatar->getNVPair("Title");
+            file << ",\"title\":";
+            text(title && title->getString() ? title->getString() : "");
+            file << ",\"seatLink\":" << linkNumber(prim) << ",\"position\":";
+            vec3((avatar->getRenderPosition() - origin) * inverse);
+            file << ",\"attachments\":[";
+            bool first_attachment = true;
+            for (const auto& point : avatar->mAttachmentPoints)
+            {
+                for (const LLPointer<LLViewerObject>& attached : point.second->mAttachedObjects)
+                {
+                    if (attached.isNull())
+                    {
+                        continue;
+                    }
+                    if (!first_attachment)
+                    {
+                        file << ',';
+                    }
+                    first_attachment = false;
+                    file << "{\"point\":" << point.first << ",\"item\":\"" << attached->getAttachmentItemID()
+                         << "\",\"parts\":";
+                    linkset(attached.get());
+                    file << '}';
+                }
+            }
+            file << "]}";
+        }
+    }
+    file << "]}\n";
+
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
+    return llformat("%u parts, %u triangles (%.1f MB) -> %s", parts_written, triangles_written,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 

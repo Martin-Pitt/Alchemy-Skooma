@@ -47,6 +47,9 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("export_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportAll());
     });
+    getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportVehicle());
+    });
     return true;
 }
 
