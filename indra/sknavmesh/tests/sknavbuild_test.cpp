@@ -1013,4 +1013,21 @@ namespace tut
             }
         }
     }
+    // With WEATHER not built and a record AVATAR leaves out, the faces come
+    // from AVATAR rather than from a class that has no heightfield.
+    template<> template<>
+    void sknavbuild_object::test<24>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mClasses[static_cast<S32>(AgentClass::WEATHER)] = false;
+        in.mWallFaces = true;
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 4.f));
+        auto leaf = std::make_shared<Record>(*box(24.f, 10.f, 0.f, 24.2f, 12.f, 3.f));
+        leaf->mExclude = EXCLUDE_AVATAR;
+        in.mRecords.push_back(leaf);
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("the block's faces", !r.mFaces.empty());
+    }
 }

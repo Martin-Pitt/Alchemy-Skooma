@@ -1307,6 +1307,8 @@ namespace sknav
         // Wall faces come from one class's heightfield, chosen by the input
         // alone: the first that leaves nothing out, else WEATHER, which keeps
         // door leaves and cars, so identical tiles give identical faces.
+        // Without WEATHER the first built class stands in, so a tile keeps its
+        // faces though they may then lack the door leaves it leaves out.
         S32 face_cls = -1;
         for (S32 cls = 0; cls < NUM_CLASSES && face_cls < 0; ++cls)
         {
@@ -1319,6 +1321,10 @@ namespace sknav
         if (face_cls < 0)
         {
             face_cls = static_cast<S32>(AgentClass::WEATHER);
+            for (S32 cls = 0; cls < NUM_CLASSES && !input.mClasses[face_cls]; ++cls)
+            {
+                face_cls = input.mClasses[cls] ? cls : face_cls;
+            }
         }
 
         rcContext ctx(false);
