@@ -49,6 +49,11 @@ enum class SKNavSwatch : S32
     SHAPE_RENDER,   ///< census record taken from the rendered shape
     SHAPE_DYNAMIC,  ///< census record for something still moving
     CLUSTER,        ///< stands in for the per-structure colours, which are hashed
+    FEATURE_DOOR,   ///< a door's leaves
+    FEATURE_LADDER, ///< a ladder's span, and its exits
+    FEATURE_SHAFT,  ///< an elevator's column
+    FEATURE_VEHICLE,    ///< a linkset people sit on that moves
+    CLIMB,          ///< a ladder or elevator link between two exits
     COUNT
 };
 

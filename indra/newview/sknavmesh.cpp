@@ -249,7 +249,7 @@ bool SKNavMesh::overlayActive()
     // boxes all read the built mesh, and none of them needs the surface drawn
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
-        || gSavedSettings.getBOOL("SKNavOverlayCensus");
+        || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures");
 }
 
 bool SKNavMesh::wanted() const
@@ -1862,6 +1862,25 @@ std::string SKNavMesh::markUnderCamera()
         out << "  hover text \"" << hit->mHudText << "\"\n";
     }
 
+    // What the linkset reply says of the root, and what this session has seen
+    // the linkset do: the inputs the feature rules read.
+    SKWorldCensus& census = SKWorldCensus::instance();
+    if (const SKWorldCensus::LinksetFacts* facts = census.linksetFactsOf(root->getID()))
+    {
+        out << "  linkset name \"" << facts->mName << "\" desc \"" << facts->mDescription << "\" scripted "
+            << (facts->mScriptedKnown ? (facts->mScripted ? "yes" : "no") : "unknown") << "\n";
+    }
+    if (const SKWorldCensus::RootHistory* history = census.historyOf(root->getID()))
+    {
+        out << "  session moved " << history->mEverMoved << " crewed " << history->mEverCrewed << " working car "
+            << history->mWorkingElevator << " kind " << featureName(history->mKind) << " crew " << history->mCrew.size();
+        for (const LLUUID& crew : history->mCrew)
+        {
+            out << " " << crew;
+        }
+        out << "\n";
+    }
+
     // Whether each face can be seen through: a pane of glass and an invisible
     // hitbox are both solid to the sim and told apart from a wall only here.
     for (U8 f = 0; f < hit->getNumTEs(); ++f)
@@ -1932,6 +1951,50 @@ std::string SKNavMesh::markUnderCamera()
                 << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ] << ".." << r->mMax.mdV[VZ]
                 << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
             break;
+        }
+    }
+
+    // Any feature the marked part belongs to, or whose span the mark is in.
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const Feature& f : snap->mFeatures)
+        {
+            const bool mine = std::find(f.mParts.begin(), f.mParts.end(), hit->getID()) != f.mParts.end()
+                || std::find(f.mRoots.begin(), f.mRoots.end(), root->getID()) != f.mRoots.end();
+            const bool inside = overlapsXY(f.mMin, f.mMax, mMark, mMark) && mMark.mdV[VZ] >= f.mMin.mdV[VZ] - 1.0
+                && mMark.mdV[VZ] <= f.mMax.mdV[VZ] + 1.0;
+            if (!mine && !inside)
+            {
+                continue;
+            }
+            out << "  feature " << featureName(f.mKind) << " confidence " << f.mConfidence << " (" << f.mEvidence << ") parts "
+                << f.mParts.size() << " roots " << f.mRoots.size() << " x " << f.mMin.mdV[VX] << ".." << f.mMax.mdV[VX] << " y "
+                << f.mMin.mdV[VY] << ".." << f.mMax.mdV[VY] << " z " << f.mMin.mdV[VZ] << ".." << f.mMax.mdV[VZ];
+            if (f.mKind == FeatureKind::LADDER || f.mKind == FeatureKind::ELEVATOR)
+            {
+                out << " span " << f.mFoot << ".." << f.mTop;
+            }
+            if (f.mKind == FeatureKind::ELEVATOR)
+            {
+                out << (f.mWorking ? " working" : " no car") << " doors " << f.mDoors.size();
+            }
+            if (f.mKind == FeatureKind::VEHICLE)
+            {
+                out << (f.mCombat ? " combat" : "") << (f.mAir ? " air" : "");
+            }
+            out << (mine ? " <-- the marked linkset" : "") << "\n";
+            if (const FeatureSpan* span = featureSpan(featureId(f)))
+            {
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    out << "    class " << cls << " exits " << span->mExits[cls].size() << ":";
+                    for (const LLVector3d& exit : span->mExits[cls])
+                    {
+                        out << " " << exit.mdV[VZ];
+                    }
+                    out << " links " << span->mLinks[cls].size() << "\n";
+                }
+            }
         }
     }
 
@@ -2448,14 +2511,72 @@ std::string SKNavMesh::exportAll() const
         }
         file << "]}";
     }
+    file << ']';
+
+    // What the census recognised, with each span's exits and links per class.
+    U32 features_written = 0;
+    file << ",\"features\":[";
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const Feature& f : snap->mFeatures)
+        {
+            if (features_written++)
+            {
+                file << ',';
+            }
+            file << "{\"kind\":\"" << featureName(f.mKind) << "\",\"confidence\":" << f.mConfidence << ",\"evidence\":\""
+                 << f.mEvidence << "\",\"min\":";
+            vec3d(f.mMin);
+            file << ",\"max\":";
+            vec3d(f.mMax);
+            file << ",\"foot\":" << f.mFoot << ",\"top\":" << f.mTop << ",\"working\":" << (f.mWorking ? "true" : "false")
+                 << ",\"combat\":" << (f.mCombat ? "true" : "false") << ",\"air\":" << (f.mAir ? "true" : "false") << ",\"roots\":[";
+            for (size_t i = 0; i < f.mRoots.size(); ++i)
+            {
+                file << (i ? ",\"" : "\"") << f.mRoots[i] << '"';
+            }
+            file << "],\"parts\":[";
+            for (size_t i = 0; i < f.mParts.size(); ++i)
+            {
+                file << (i ? ",\"" : "\"") << f.mParts[i] << '"';
+            }
+            file << ']';
+            if (const FeatureSpan* span = featureSpan(featureId(f)))
+            {
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{\"exits\":[";
+                    for (size_t i = 0; i < span->mExits[cls].size(); ++i)
+                    {
+                        if (i)
+                        {
+                            file << ',';
+                        }
+                        vec3d(span->mExits[cls][i]);
+                    }
+                    file << "],\"links\":[";
+                    for (size_t i = 0; i < span->mLinks[cls].size(); ++i)
+                    {
+                        file << (i ? "," : "") << "{\"from\":";
+                        vec3d(span->mLinks[cls][i].first);
+                        file << ",\"to\":";
+                        vec3d(span->mLinks[cls][i].second);
+                        file << ",\"kind\":" << static_cast<S32>(span->mKind) << '}';
+                    }
+                    file << "]}";
+                }
+            }
+            file << '}';
+        }
+    }
     file << "]}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
@@ -3001,10 +3122,12 @@ void SKNavMesh::refreshOverlay()
         }
 
         const LLColor4 drop = strength(skNavSwatchColor(SKNavSwatch::DROP), 1.f);
-        linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32, LinkKind) {
+        const LLColor4 climb_link = strength(skNavSwatchColor(SKNavSwatch::CLIMB), 1.f);
+        linksIn(qmin, qmax, agent_class, [&](const LLVector3d& from, const LLVector3d& to, F32, LinkKind kind) {
             if (within(from))
             {
-                mOverlay.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift, drop);
+                mOverlay.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to) + lift,
+                              kind == LinkKind::DROP ? drop : climb_link);
             }
         });
     }

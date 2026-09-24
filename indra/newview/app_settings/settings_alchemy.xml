@@ -4221,6 +4221,19 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- <SK:Nexii> Navmesh features overlay -->
+        <key>SKNavOverlayFeatures</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the doors, ladders, elevator shafts and vehicles the census has recognised, with each span's exits.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKNavOverlayEdgeWidth</key>
         <map>
             <key>Comment</key>

@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="655"
+ min_height="678"
  min_width="300"
- height="675"
+ height="698"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -236,6 +236,17 @@
    name="show_census"
    control_name="SKNavOverlayCensus"
    tool_tip="The physics shapes the mesh is built from, and the structure each belongs to. Draws without the navmesh surface"
+   top_pad="4"
+   width="292" />
+  <check_box
+   height="19"
+   label="Doors, ladders, shafts and vehicles"
+   layout="topleft"
+   follows="left|top"
+   left="12"
+   name="show_features"
+   control_name="SKNavOverlayFeatures"
+   tool_tip="What the census has recognised: door leaves, ladder spans with the floors they can be left at, elevator shafts and vehicles"
    top_pad="4"
    width="292" />
   <check_box

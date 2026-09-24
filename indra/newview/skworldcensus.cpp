@@ -1162,8 +1162,9 @@ std::string SKWorldCensus::statsLine() const
 void SKWorldCensus::renderDebug()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKNavOverlayCensus", false);
+    static LLCachedControl<bool> show_features(gSavedSettings, "SKNavOverlayFeatures", false);
     SKCensusSnapshotPtr snap = mSnapshot;
-    if (!show || !snap)
+    if ((!show && !show_features) || !snap)
     {
         return;
     }
@@ -1181,6 +1182,10 @@ void SKWorldCensus::renderDebug()
     SKNavOverlayGeom geom;
     for (const RecordPtr& r : snap->mRecords)
     {
+        if (!show)
+        {
+            break;
+        }
         if (!within((r->mMin + r->mMax) * 0.5))
         {
             continue;
@@ -1205,6 +1210,10 @@ void SKWorldCensus::renderDebug()
     }
     for (const ClusterPtr& c : snap->mClusters.mClusters)
     {
+        if (!show)
+        {
+            break;
+        }
         if (!within((c->mMin + c->mMax) * 0.5))
         {
             continue;
@@ -1215,6 +1224,39 @@ void SKWorldCensus::renderDebug()
         const LLColor4 color(0.3f + 0.7f * ((h & 255) / 255.f), 0.3f + 0.7f * (((h >> 8) & 255) / 255.f),
                              0.3f + 0.7f * (((h >> 16) & 255) / 255.f), skNavSwatchColor(SKNavSwatch::CLUSTER).mV[VALPHA]);
         geom.box(gAgent.getPosAgentFromGlobal(c->mMin), gAgent.getPosAgentFromGlobal(c->mMax), color);
+    }
+    // What the feature rules recognised, as boxes, and a tick at each floor
+    // a span can be boarded or left at. Seats are a label, not a glyph.
+    for (const Feature& f : snap->mFeatures)
+    {
+        if (!show_features || !within((f.mMin + f.mMax) * 0.5))
+        {
+            continue;
+        }
+        SKNavSwatch swatch;
+        switch (f.mKind)
+        {
+            case FeatureKind::DOOR: swatch = SKNavSwatch::FEATURE_DOOR; break;
+            case FeatureKind::LADDER: swatch = SKNavSwatch::FEATURE_LADDER; break;
+            case FeatureKind::ELEVATOR: swatch = SKNavSwatch::FEATURE_SHAFT; break;
+            case FeatureKind::VEHICLE: swatch = SKNavSwatch::FEATURE_VEHICLE; break;
+            default: continue;
+        }
+        const LLColor4 color = skNavSwatchColor(swatch);
+        geom.box(gAgent.getPosAgentFromGlobal(f.mMin), gAgent.getPosAgentFromGlobal(f.mMax), color);
+        if (f.mKind != FeatureKind::LADDER && f.mKind != FeatureKind::ELEVATOR)
+        {
+            continue;
+        }
+        if (const SKNavMesh::FeatureSpan* span = SKNavMesh::instance().featureSpan(SKNavMesh::featureId(f)))
+        {
+            for (const LLVector3d& exit : span->mExits[static_cast<S32>(AgentClass::AVATAR)])
+            {
+                const LLVector3 p = gAgent.getPosAgentFromGlobal(exit) + LLVector3(0.f, 0.f, 0.05f);
+                geom.line(p - LLVector3(0.3f, 0.f, 0.f), p + LLVector3(0.3f, 0.f, 0.f), color);
+                geom.line(p - LLVector3(0.f, 0.3f, 0.f), p + LLVector3(0.f, 0.3f, 0.f), color);
+            }
+        }
     }
     if (geom.empty())
     {
