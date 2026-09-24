@@ -81,14 +81,22 @@ namespace
             {
                 continue;
             }
+            // A face set to blend is glass whatever its tint, as the mark's
+            // alpha mode reads it.
             F32 alpha = te->getColor().mV[VALPHA];
             bool blended = true;
+            bool blend_mode = false;
             if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
             {
                 alpha *= gltf->mBaseColor.mV[VW];
                 blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
+                blend_mode = blended;
             }
-            if (te->getID() == IMG_TRANSPARENT || (blended && alpha < 0.95f))
+            else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
+            {
+                blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND;
+            }
+            if (te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f))
             {
                 clear++;
             }
