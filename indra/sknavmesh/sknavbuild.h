@@ -83,7 +83,7 @@ namespace sknav
         F32 mZMin = 0.f;                    ///< mesh-local z range the tile rasterises
         F32 mZMax = 0.f;
         F32 mCell = CELL_M;
-        Partition mPartition = Partition::WATERSHED;
+        Partition mPartition = Partition::SLOPE;
         F32 mDetailSampleCells = 6.f;       ///< 0 leaves the polygons untouched
         F32 mDetailMaxErrorCells = 2.f;
         F32 mWallMinHeight = 0.5f;          ///< shorter faces are a slope's terracing, not a wall

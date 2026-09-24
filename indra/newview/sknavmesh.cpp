@@ -294,7 +294,7 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
     static LLCachedControl<F32> dropSpacing(gSavedSettings, "SKNavDropSpacing", 2.f);
 
-    static LLCachedControl<U32> partition(gSavedSettings, "SKNavPartition", 0);
+    static LLCachedControl<U32> partition(gSavedSettings, "SKNavPartition", 3);
     static LLCachedControl<F32> detail(gSavedSettings, "SKNavDetailSample", 6.f);
     static LLCachedControl<F32> wallMin(gSavedSettings, "SKNavWallMinHeight", 0.5f);
 
