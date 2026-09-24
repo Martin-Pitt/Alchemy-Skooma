@@ -245,7 +245,7 @@ namespace sknav
         switch (kind)
         {
             case FeatureKind::DOOR: return EXCLUDE_AVATAR;
-            case FeatureKind::ELEVATOR: return EXCLUDE_AVATAR;
+            case FeatureKind::ELEVATOR: return EXCLUDE_ALL;     // a riding car must rebuild nothing
             case FeatureKind::VEHICLE: return EXCLUDE_AVATAR | EXCLUDE_WEATHER;
             default: return 0;
         }
@@ -279,12 +279,18 @@ namespace sknav
         };
         std::vector<bool> claimed(parts.size(), false);
 
+        // A root named as an elevator's car is never a door or a vehicle,
+        // whoever rides it; whether it is a car is settled by the shaft below.
+        auto carName = [](const FeatureRoot* r) {
+            return r && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift"));
+        };
+
         // Vehicles and seats: a linkset someone has sat on this session. Whether
         // it has gone somewhere, or is physical, is what separates the two: a
         // swing or a nudged sofa turns or shifts without travelling.
         for (const FeatureRoot& r : roots)
         {
-            if (!r.mEverCrewed)
+            if (!r.mEverCrewed || carName(&r))
             {
                 continue;
             }
@@ -391,9 +397,24 @@ namespace sknav
                         }
                     }
                 }
+                // A lone piece is a ladder only if it is shaped like one: a
+                // wall in a build named for a ladder is not something to climb.
+                std::map<S32, S32> group_size;
+                for (S32 i : members)
+                {
+                    group_size[groups.find(i)]++;
+                }
                 std::map<S32, Feature> ladders;
                 for (S32 i : members)
                 {
+                    const FeaturePart& p = parts[i];
+                    const F64 w = p.mMax.mdV[VX] - p.mMin.mdV[VX], d = p.mMax.mdV[VY] - p.mMin.mdV[VY];
+                    const bool climber = w <= params.mLadderFootprint && d <= params.mLadderFootprint
+                        && p.mMax.mdV[VZ] - p.mMin.mdV[VZ] >= std::max(w, d);
+                    if (group_size[groups.find(i)] < 2 && !climber)
+                    {
+                        continue;
+                    }
                     Feature& f = ladders[groups.find(i)];
                     const bool first = f.mParts.empty();
                     f.mKind = FeatureKind::LADDER;
@@ -416,12 +437,6 @@ namespace sknav
                 }
             }
         }
-
-        // A root named as an elevator's car is never a door, whatever its cab
-        // is built of; whether it is a car is settled by the shaft below.
-        auto carName = [](const FeatureRoot* r) {
-            return r && (containsWordNoCase(r->mName, "elevator") || containsWordNoCase(r->mName, "lift"));
-        };
 
         // Doors: a door-sized thin upright panel with real evidence it opens,
         // a name or two of its own script, touch and motion; a scripted root
@@ -458,9 +473,15 @@ namespace sknav
                 confidence += weight;
                 evidence += evidence.empty() ? why : std::string(", ") + why;
             };
-            if (containsNoCase(p.mName, "door") || containsNoCase(root_name, "door"))
+            // The linkset's name speaks for the whole build, so an Outdoor Cafe
+            // or a house with doors needs one more sign before a panel is one.
+            if (containsWordNoCase(p.mName, "door"))
             {
                 add(0.5f, "named");
+            }
+            else if (containsWordNoCase(root_name, "door"))
+            {
+                add(0.25f, "linkset named");
             }
             if (p.mScripted)
             {
@@ -562,6 +583,7 @@ namespace sknav
         {
             shafts[stacks.find(static_cast<S32>(a))].push_back(static_cast<S32>(first_door + a));
         }
+        std::vector<LLUUID> taken_cars;
         for (const auto& entry : shafts)
         {
             if (entry.second.size() < 2)
@@ -581,11 +603,16 @@ namespace sknav
             // Where a car could be: the door line swept a few metres either
             // way along the doors' normal, since which side the column is on
             // is what the car says.
+            // Swept from the stack's centre line, not its box, since leaves
+            // sliding open reach into the next shaft over.
             const LLVector3d reach(std::fabs(shaft.mNormal.mV[VX]) * params.mCarReach, std::fabs(shaft.mNormal.mV[VY]) * params.mCarReach, 0.0);
-            const LLVector3d smin = dmin - reach, smax = dmax + reach;
+            const LLVector3d line = (dmin + dmax) * 0.5;
+            const LLVector3d smin = line - reach, smax = line + reach;
 
-            // A working elevator needs a scripted car named as one in the column.
+            // A working elevator needs a scripted car named as one in the
+            // column, the nearest the door line that no other shaft has taken.
             const FeatureRoot* car = nullptr;
+            F64 car_dist = 0.0;
             LLVector3d cmin, cmax;
             std::vector<S32> car_parts;
             for (const FeatureRoot& r : roots)
@@ -608,18 +635,25 @@ namespace sknav
                         have = true;
                     }
                 }
-                if (scripted && have && overlapsPlan(bmin, bmax, smin, smax))
+                if (!scripted || !have || !overlapsPlan(bmin, bmax, smin, smax)
+                    || std::find(taken_cars.begin(), taken_cars.end(), r.mRoot) != taken_cars.end())
+                {
+                    continue;
+                }
+                const F64 dist = std::hypot(0.5 * (bmin.mdV[VX] + bmax.mdV[VX]) - line.mdV[VX], 0.5 * (bmin.mdV[VY] + bmax.mdV[VY]) - line.mdV[VY]);
+                if (!car || dist < car_dist)
                 {
                     car = &r;
+                    car_dist = dist;
                     cmin = bmin;
                     cmax = bmax;
                     car_parts = mine;
-                    break;
                 }
             }
             if (car)
             {
                 shaft.mWorking = true;
+                taken_cars.push_back(car->mRoot);
                 shaft.mConfidence = 1.f;
                 shaft.mRoots.push_back(car->mRoot);
                 for (S32 i : car_parts)

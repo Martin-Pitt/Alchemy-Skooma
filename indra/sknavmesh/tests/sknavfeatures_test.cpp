@@ -244,7 +244,8 @@ namespace tut
         ensure("not a fraction of words", !hoverShowsHealth("on/off"));
         ensure("a number on one side only", !hoverShowsHealth("page 2/x"));
         ensure("case-insensitive name", containsNoCase("[Ash] Ladder that works", "ladder"));
-        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER) && excludeFor(FeatureKind::SEAT) == 0);
+        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER) && excludeFor(FeatureKind::SEAT) == 0
+               && excludeFor(FeatureKind::ELEVATOR) == EXCLUDE_ALL);
     }
 
     // A door needs a door's width and real evidence: a name, or two of its
@@ -279,7 +280,9 @@ namespace tut
         ensure("named", isDoor(p, root(1)));
         ensure("a named wall 10 m wide", !isDoor(part(1, 1, 0, 0, 0, 0.125, 10.0, 3.0), root(1, "door")));
         ensure("a named post 0.3 m wide", !isDoor(part(1, 1, 0, 0, 0, 0.1, 0.3, 3.0), root(1, "door")));
-        ensure("a named 5 m gate", isDoor(part(1, 1, 0, 0, 0, 0.2, 5.0, 3.0), root(1, "Yard Door")));
+        FeaturePart gate = part(1, 1, 0, 0, 0, 0.2, 5.0, 3.0);
+        gate.mTouch = true;
+        ensure("a named 5 m gate", isDoor(gate, root(1, "Yard Door")));
     }
 
     // A pane mostly seen through is never a door, whatever its evidence and
@@ -366,5 +369,107 @@ namespace tut
         ensure("not forklift", !containsWordNoCase("forklift", "lift"));
         ensure("not airlift", !containsWordNoCase("Airlift Pad", "lift"));
         ensure("not shoplifter", !containsWordNoCase("shoplifter", "lift"));
+    }
+
+    // Someone riding a car named as an elevator up a storey does not make it
+    // a vehicle: it stays the shaft's car.
+    template<> template<>
+    void sknavfeatures_object::test<12>()
+    {
+        std::vector<FeaturePart> parts;
+        std::vector<FeatureRoot> roots;
+        for (U32 storey = 0; storey < 2; ++storey)
+        {
+            const F64 z = 100.0 + 8.75 * storey;
+            FeaturePart a = part(10 + storey, 20 + storey, 50.0, 40.0, z, 50.125, 41.06, z + 3.0);
+            a.mName = "door";
+            parts.push_back(a);
+            roots.push_back(root(10 + storey));
+        }
+        parts.push_back(part(30, 30, 50.2, 39.9, 108.6, 52.7, 42.4, 112.6));
+        FeatureRoot car = root(30, "Elevator");
+        car.mScripted = TriState::YES;
+        car.mEverCrewed = car.mEverMoved = true;
+        car.mTravel = 8.75f;
+        roots.push_back(car);
+        const std::vector<Feature> found = classifyFeatures(parts, roots, FeatureParams());
+        ensure("not a vehicle", ofKind(found, FeatureKind::VEHICLE).empty() && ofKind(found, FeatureKind::SEAT).empty());
+        const auto shafts = ofKind(found, FeatureKind::ELEVATOR);
+        ensure("the shaft's car", shafts.size() == 1 && shafts[0]->mWorking && owns(*shafts[0], 30));
+    }
+
+    // A linkset's name holding "door" is not a door by itself: not inside
+    // another word, and as a word only with one more sign of its own.
+    template<> template<>
+    void sknavfeatures_object::test<13>()
+    {
+        auto isDoor = [](FeaturePart p, FeatureRoot r) {
+            p.mRoot = r.mRoot;
+            return !ofKind(classifyFeatures({ p }, { r }, FeatureParams()), FeatureKind::DOOR).empty();
+        };
+        FeaturePart wall = part(1, 1, 0, 0, 0, 0.2, 4.0, 3.0);
+        ensure("Outdoor Cafe", !isDoor(wall, root(1, "Outdoor Cafe")));
+        ensure("House w/ doors", !isDoor(wall, root(1, "House w/ doors")));
+        wall.mTouch = true;
+        ensure("Outdoor Cafe, touched", !isDoor(wall, root(1, "Outdoor Cafe")));
+        ensure("Door Set, touched", isDoor(wall, root(1, "Door Set")));
+        wall.mTouch = false;
+        wall.mName = "Indoor Pool Wall";
+        ensure("a leaf named Indoor", !isDoor(wall, root(1)));
+    }
+
+    // A lone piece of a build named for a ladder is a ladder only if it is
+    // shaped like one; a wall there joins floors to nothing.
+    template<> template<>
+    void sknavfeatures_object::test<14>()
+    {
+        const FeaturePart wall = part(1, 1, 10.0, 10.0, 20.0, 10.3, 18.0, 24.0);
+        const FeaturePart rungs = part(1, 2, 30.0, 10.0, 20.0, 30.3, 10.6, 24.0);
+        const std::vector<Feature> found = classifyFeatures({ wall, rungs }, { root(1, "Ladder Club") }, FeatureParams());
+        const auto ladders = ofKind(found, FeatureKind::LADDER);
+        ensure_equals("one ladder", ladders.size(), 1u);
+        ensure("the thin one, not the wall", owns(*ladders[0], 2) && !owns(*ladders[0], 1));
+    }
+
+    // Twin shafts 3 m apart: with one stack's leaves slid open its box reaches
+    // the other car, and each shaft still takes its own, the nearer one.
+    template<> template<>
+    void sknavfeatures_object::test<15>()
+    {
+        std::vector<FeaturePart> parts;
+        std::vector<FeatureRoot> roots;
+        for (U32 storey = 0; storey < 2; ++storey)
+        {
+            const F64 z = 100.0 + 8.75 * storey;
+            // Shaft one, open: its leaves' box runs 2.12 m either side of 41.06.
+            FeaturePart a = part(10 + storey, 20 + storey, 50.0, 38.94, z, 50.125, 43.18, z + 3.0);
+            // Shaft two, closed, on the line 3 m over.
+            FeaturePart b = part(12 + storey, 22 + storey, 50.0, 43.3, z, 50.125, 44.82, z + 3.0);
+            a.mName = b.mName = "door";
+            parts.push_back(a);
+            parts.push_back(b);
+            roots.push_back(root(10 + storey));
+            roots.push_back(root(12 + storey));
+        }
+        // Car two first in root order, its near edge 1.75 m from door one's
+        // line; before both, a car of the next column back, in reach of line one.
+        parts.push_back(part(29, 29, 52.9, 39.9, 100.0, 55.4, 42.2, 104.0));
+        parts.push_back(part(30, 30, 50.2, 42.81, 100.0, 52.7, 45.31, 104.0));
+        parts.push_back(part(31, 31, 50.2, 39.9, 100.0, 52.7, 42.2, 104.0));
+        for (U32 n : { 29u, 30u, 31u })
+        {
+            FeatureRoot car = root(n, "Elevator");
+            car.mScripted = TriState::YES;
+            roots.push_back(car);
+        }
+        const std::vector<Feature> found = classifyFeatures(parts, roots, FeatureParams());
+        const auto shafts = ofKind(found, FeatureKind::ELEVATOR);
+        ensure_equals("two shafts", shafts.size(), 2u);
+        for (const Feature* s : shafts)
+        {
+            ensure("both work", s->mWorking);
+            const bool one = s->mMin.mdV[VY] < 41.0;
+            ensure("each its own car", owns(*s, one ? 31 : 30) && !owns(*s, one ? 30 : 31));
+        }
     }
 }

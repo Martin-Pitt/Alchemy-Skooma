@@ -85,6 +85,7 @@ namespace sknav
         F32 mDoorWidthMax = 6.f;    ///< and no wider than a gate
         F32 mDoorConfidence = 0.5f; ///< evidence a leaf needs to be a door
         F32 mVehicleTravel = 1.f;   ///< how far a crewed linkset must go to be a vehicle
+        F32 mLadderFootprint = 1.f; ///< a lone ladder piece is no wider than this on either plan axis
     };
 
     struct Feature
