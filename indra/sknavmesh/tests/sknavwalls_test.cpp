@@ -246,4 +246,29 @@ namespace tut
         }
         ensure(llformat("faces stop at the block's top: %.2f", highest), std::fabs(highest - 2.f) < 0.3f);
     }
+    // Faces do not depend on which class built first: a block the avatar
+    // class leaves out, as it does a door leaf, still shows its sides beside
+    // one it keeps.
+    template<> template<>
+    void sknavwalls_object::test<8>()
+    {
+        TileBuildInput in = tile();
+        auto block = std::make_shared<Record>(*box(12.f, 12.f, 0.f, 20.f, 20.f, 2.f));
+        block->mExclude = EXCLUDE_AVATAR;
+        in.mRecords.push_back(block);
+        // A block both classes keep, so the avatar class has faces of its own.
+        in.mRecords.push_back(box(2.f, 2.f, 0.f, 6.f, 6.f, 2.f));
+        const TileBuildResult r = buildTile(in);
+        ensure_equals("built: " + r.mError, static_cast<int>(r.mStatus), static_cast<int>(TileBuildResult::SUCCESS));
+        F32 area = 0.f;
+        for (const WallFace& f : r.mFaces)
+        {
+            if (f.mMin.mV[VX] > 10.f && f.mMax.mV[VX] < 22.f && f.mMin.mV[VY] > 10.f && f.mMax.mV[VY] < 22.f)
+            {
+                const LLVector3 size = f.mMax - f.mMin;
+                area += std::max(size.mV[VX], size.mV[VY]) * size.mV[VZ];
+            }
+        }
+        ensure(llformat("the left-out block has face area %.1f", area), area > 32.f);
+    }
 }

@@ -1304,6 +1304,23 @@ namespace sknav
             return result;
         }
 
+        // Wall faces come from one class's heightfield, chosen by the input
+        // alone: the first that leaves nothing out, else WEATHER, which keeps
+        // door leaves and cars, so identical tiles give identical faces.
+        S32 face_cls = -1;
+        for (S32 cls = 0; cls < NUM_CLASSES && face_cls < 0; ++cls)
+        {
+            const U8 bit = static_cast<U8>(1u << cls);
+            if (input.mClasses[cls] && std::none_of(excluded.begin(), excluded.end(), [bit](const Excluded& e) { return (e.mClasses & bit) != 0; }))
+            {
+                face_cls = cls;
+            }
+        }
+        if (face_cls < 0)
+        {
+            face_cls = static_cast<S32>(AgentClass::WEATHER);
+        }
+
         rcContext ctx(false);
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
@@ -1477,17 +1494,16 @@ namespace sknav
                 mem.dmesh->verts[v * 3 + 1] -= cfg.ch;
             }
             result.mPolys[cls] = mem.pmesh->npolys;
+            // Walls come off the same heightfield, before it goes: the faces
+            // from the one class chosen above, the floor edges and the drops
+            // per class.
+            if (input.mWallFaces && cls == face_cls)
+            {
+                extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
+            }
             if (mem.pmesh->npolys == 0)
             {
                 continue;
-            }
-
-            // Walls come off the same heightfield, before it goes: the faces
-            // once (span geometry is the same for every class), the floor
-            // edges and the drops per class.
-            if (input.mWallFaces && result.mFaces.empty())
-            {
-                extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
             }
             if (input.mEdges[cls])
             {
