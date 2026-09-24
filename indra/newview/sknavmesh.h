@@ -102,8 +102,8 @@ public:
         std::vector<std::pair<LLVector3d, LLVector3d>> mLinks[sknav::NUM_CLASSES];
         bool mDirty = true;             ///< a tile it touches published since the exits were found
     };
-    /// The span a feature's links were built for, by the feature's id (a
-    /// ladder's first root, an elevator's car), or null.
+    /// The span a feature's links were built for, by the feature's id (the
+    /// smallest of its roots, which for an elevator is its car), or null.
     const FeatureSpan* featureSpan(const LLUUID& id) const;
     static LLUUID featureId(const sknav::Feature& feature);
 

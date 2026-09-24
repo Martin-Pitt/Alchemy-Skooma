@@ -137,6 +137,13 @@ namespace
         }
     };
 
+    // Two span corners the same within a few centimetres.
+    bool sameSpan(const LLVector3d& a, const LLVector3d& b)
+    {
+        return std::fabs(a.mdV[VX] - b.mdV[VX]) <= 0.05 && std::fabs(a.mdV[VY] - b.mdV[VY]) <= 0.05
+            && std::fabs(a.mdV[VZ] - b.mdV[VZ]) <= 0.05;
+    }
+
     /// The lattice origin a mesh gets: the tile corner at or below the point, z zero.
     LLVector3d latticeOrigin(const LLVector3d& p)
     {
@@ -1574,7 +1581,8 @@ void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             }
             for (const auto& link : span.mLinks[c])
             {
-                fn(link.first, link.second, static_cast<F32>(link.second.mdV[VZ] - link.first.mdV[VZ]), span.mKind);
+                // Positive like a drop's: which way it goes is from and to.
+                fn(link.first, link.second, static_cast<F32>(std::fabs(link.second.mdV[VZ] - link.first.mdV[VZ])), span.mKind);
             }
         }
     }
@@ -1624,15 +1632,16 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
             span.mMax = f.mMax;
             span.mMin.mdV[VZ] = f.mFoot;
             span.mMax.mdV[VZ] = f.mTop;
-            // A span that has not changed keeps the exits it has, unless a
-            // tile under it has published since.
+            // A span that has not changed, within a few centimetres of a car
+            // settling, keeps the exits it has, unless a tile under it has
+            // published since.
             const LLUUID id = featureId(f);
             const auto old_region = mFeatureLinks.find(region->getHandle());
             if (old_region != mFeatureLinks.end())
             {
                 const auto old = old_region->second.find(id);
-                if (old != old_region->second.end() && old->second.mMin == span.mMin && old->second.mMax == span.mMax
-                    && old->second.mKind == span.mKind)
+                if (old != old_region->second.end() && old->second.mKind == span.mKind
+                    && sameSpan(old->second.mMin, span.mMin) && sameSpan(old->second.mMax, span.mMax))
                 {
                     span = old->second;
                 }
@@ -1641,9 +1650,14 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
         }
         // A span the census no longer has, or whose region has gone, goes
         // with it; the overlay hears of any change.
-        if (next.size() != mFeatureLinks.size()
-            || !std::equal(next.begin(), next.end(), mFeatureLinks.begin(),
-                           [](const auto& a, const auto& b) { return a.first == b.first && a.second.size() == b.second.size(); }))
+        auto same_region = [](const auto& a, const auto& b) {
+            return a.first == b.first
+                && std::equal(a.second.begin(), a.second.end(), b.second.begin(), b.second.end(), [](const auto& x, const auto& y) {
+                       return x.first == y.first && x.second.mKind == y.second.mKind && x.second.mMin == y.second.mMin
+                           && x.second.mMax == y.second.mMax;
+                   });
+        };
+        if (!std::equal(next.begin(), next.end(), mFeatureLinks.begin(), mFeatureLinks.end(), same_region))
         {
             mRevision++;
         }
@@ -1868,7 +1882,7 @@ std::string SKNavMesh::markUnderCamera()
     }
     if (const SKWorldCensus::RootHistory* history = census.historyOf(root->getID()))
     {
-        out << "  session moved " << history->mEverMoved << " crewed " << history->mEverCrewed << " working car "
+        out << "  session moved " << history->mEverMoved << " travelled " << history->mTravel << " m crewed " << history->mEverCrewed << " working car "
             << history->mWorkingElevator << " kind " << featureName(history->mKind) << " crew " << history->mCrew.size();
         for (const LLUUID& crew : history->mCrew)
         {
