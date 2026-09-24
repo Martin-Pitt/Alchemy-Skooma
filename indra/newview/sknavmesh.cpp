@@ -29,6 +29,7 @@
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 
+#include "alobjectproperties.h"
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
@@ -1584,6 +1585,61 @@ std::string SKNavMesh::markUnderCamera()
         << (root->flagPhantom() ? " phantom" : "") << (root->flagUsePhysics() ? " physical" : "")
         << (root->flagObjectPermanent() ? " permanent" : "") << (root->isLocalOnly() ? " local" : "") << "\n";
 
+    // Where the part sits in its linkset (SL numbers the root 1) and the flags
+    // the census gates on, so a door leaf inside a house can be named to its
+    // owner without selecting it. Nothing here asks the sim for anything.
+    S32 link = 1;
+    if (LLViewerObject* parent = static_cast<LLViewerObject*>(hit->getParent()))
+    {
+        link = 2;
+        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
+        {
+            if (child.get() == hit)
+            {
+                break;
+            }
+            ++link;
+        }
+    }
+    out << "  link " << link << " of " << (root->numChildren() + 1) << " flags";
+    if (hit->flagScripted()) out << " scripted";
+    if (hit != root && root->flagScripted()) out << " root-scripted";
+    if (hit->flagHandleTouch()) out << " touch";
+    if (hit->flagTakesMoney()) out << " money";
+    if (hit->flagVolumeDetect()) out << " volume-detect";
+    if (hit->flagCharacter()) out << " character";
+    if (hit->flagTemporaryOnRez()) out << " temp-on-rez";
+    if (hit->flagInventoryEmpty()) out << " inventory-empty";
+    if (hit->flagAllowInventoryAdd()) out << " inventory-drop";
+    if (hit->flagIncludeInSearch()) out << " search";
+    out << "\n";
+
+    // Any name already in hand: the property cache holds what a hover, a
+    // selection or the Scene Explorer has asked for, and a script that set a
+    // NameValue leaves it on the object. Both are free; neither is requested.
+    if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(hit->getID()))
+    {
+        out << "  props name \"" << props->mName << "\" desc \"" << props->mDescription << "\" creator "
+            << props->mCreatorId << (props->mHasFullData ? " (full)" : " (family only)") << "\n";
+    }
+    if (LLNameValue* name_value = hit->getNVPair("Name"))
+    {
+        if (char* text = name_value->getString())
+        {
+            out << "  name value \"" << text << "\"\n";
+        }
+    }
+    if (!hit->mHudText.empty())
+    {
+        out << "  hover text \"" << hit->mHudText << "\"\n";
+    }
+
+    // Everything that moves: a door swinging by steps or KFM, a gate turning
+    // on its axis, and the sim-versus-rendered rotation the two disagree on.
+    out << "  motion velocity " << hit->getVelocity() << " acceleration " << hit->getAcceleration() << " angular "
+        << hit->getAngularVelocity() << " omega time " << hit->getRotTime() << " s\n";
+    out << "  rotation sim " << hit->getRotationSim() << " render " << hit->getRotationRegion() << "\n";
+
     // What the shared resolver says this object's shape is, and which of the
     // three sources the census can take it from: a decomposition, the physics
     // mesh the sim actually collides with, or the base hull that covers the
@@ -1780,6 +1836,50 @@ std::string SKNavMesh::markUnderCamera()
             out << "  tri over the mark z " << o.mMin << ".." << o.mMax << " normal z " << o.mNormalZ << " footprint "
                 << o.mWidth << " x " << o.mDepth << " m provenance " << o.mProvenance << " root " << o.mRoot << "\n";
         }
+
+        // The vertical profile of what is over the mark: a ladder, a stair of
+        // thin ledges or a sliced-up wall reads as a stack of small horizontal
+        // surfaces on a vertical face. Printing the count, the spacing and the
+        // footprints makes a marked sample in the wild a number to compare
+        // with the next one instead of a squint at the list above.
+        std::vector<F32> levels;
+        S32 vertical = 0;
+        F32 widest = 0.f;
+        F32 deepest = 0.f;
+        for (const OverTri& o : over)
+        {
+            if (o.mMax < mMark.mdV[VZ] - 0.5)
+            {
+                continue;
+            }
+            if (std::fabs(o.mNormalZ) > 0.7f)
+            {
+                levels.push_back(o.mMin);
+                widest = llmax(widest, o.mWidth);
+                deepest = llmax(deepest, o.mDepth);
+            }
+            else if (std::fabs(o.mNormalZ) < 0.3f)
+            {
+                ++vertical;
+            }
+        }
+        std::sort(levels.begin(), levels.end());
+        levels.erase(std::unique(levels.begin(), levels.end(),
+                                 [](F32 a, F32 b) { return std::fabs(a - b) < 0.05f; }),
+                     levels.end());
+        if (levels.size() >= 2)
+        {
+            std::vector<F32> gaps;
+            for (size_t i = 1; i < levels.size(); ++i)
+            {
+                gaps.push_back(levels[i] - levels[i - 1]);
+            }
+            std::sort(gaps.begin(), gaps.end());
+            out << "  step profile " << levels.size() << " horizontal surfaces z " << levels.front() << ".."
+                << levels.back() << " spacing " << gaps.front() << "/" << gaps[gaps.size() / 2] << "/" << gaps.back()
+                << " m (min/median/max) footprints up to " << widest << " x " << deepest << " m, " << vertical
+                << " vertical\n";
+        }
     }
 
     // And what the navmesh built from it.
@@ -1917,8 +2017,19 @@ std::string SKNavMesh::markUnderCamera()
     }
 
     LL_INFOS("SKNavDump") << out.str() << LL_ENDL;
-    return llformat("marked %.1f, %.1f, %.1f - the rest is in the log under SKNavDump", mMark.mdV[VX], mMark.mdV[VY],
-                    mMark.mdV[VZ]);
+    // The console keeps the two UUIDs and any name already in hand: that is
+    // what makes a marked door or ladder findable in another tool without
+    // opening the log.
+    std::string label = hit->getID().asString();
+    if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(hit->getID()))
+    {
+        if (!props->mName.empty())
+        {
+            label += " \"" + props->mName + "\"";
+        }
+    }
+    return llformat("marked %.1f, %.1f, %.1f - object %s root %s - the rest is in the log under SKNavDump",
+                    mMark.mdV[VX], mMark.mdV[VY], mMark.mdV[VZ], label.c_str(), root->getID().asString().c_str());
 }
 
 std::string SKNavMesh::exportAll() const
