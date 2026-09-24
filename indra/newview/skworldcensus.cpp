@@ -423,10 +423,12 @@ void SKWorldCensus::finishScan()
     done->mStamp = ++mStamp;
 
     // Parts and roots not seen for a minute leave the caches, and a root's
-    // history ten minutes out of sight unless it made a feature.
+    // history ten minutes out of sight unless it is a vehicle or a working
+    // car; a seat is cheap to find again.
     for (auto it = mHistory.begin(); it != mHistory.end();)
     {
-        const bool keep = it->second.mKind != FeatureKind::NONE || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
+        const bool keep = it->second.mVehicle || it->second.mWorkingElevator
+            || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
         it = keep ? std::next(it) : mHistory.erase(it);
     }
     for (auto it = mParts.begin(); it != mParts.end();)
@@ -1051,12 +1053,20 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
         }
         r.mHover = object->mHudText;
         r.mPhysical = object->flagUsePhysics();
-        if (const RootHistory* history = historyOf(id))
+        if (const auto h = mHistory.find(id); h != mHistory.end())
         {
-            r.mEverMoved = history->mEverMoved;
-            r.mTravel = history->mTravel;
-            r.mEverCrewed = history->mEverCrewed;
-            r.mWorkingElevator = history->mWorkingElevator;
+            RootHistory& history = h->second;
+            r.mEverMoved = history.mEverMoved;
+            r.mTravel = history.mTravel;
+            r.mEverCrewed = history.mEverCrewed;
+            r.mWorkingElevator = history.mWorkingElevator;
+            // A physical root never passes the gate, so its travel stays
+            // nil; latched here it stays a vehicle once parked non-physical.
+            if (r.mEverCrewed && (r.mPhysical || r.mTravel > params.mVehicleTravel))
+            {
+                history.mVehicle = true;
+            }
+            r.mEverVehicle = history.mVehicle;
         }
         if (r.mEverCrewed && object->getRegion())
         {

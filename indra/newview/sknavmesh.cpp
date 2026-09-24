@@ -1882,7 +1882,7 @@ std::string SKNavMesh::markUnderCamera()
     }
     if (const SKWorldCensus::RootHistory* history = census.historyOf(root->getID()))
     {
-        out << "  session moved " << history->mEverMoved << " travelled " << history->mTravel << " m crewed " << history->mEverCrewed << " working car "
+        out << "  session moved " << history->mEverMoved << " travelled " << history->mTravel << " m crewed " << history->mEverCrewed << " vehicle " << history->mVehicle << " working car "
             << history->mWorkingElevator << " kind " << featureName(history->mKind) << " crew " << history->mCrew.size();
         for (const LLUUID& crew : history->mCrew)
         {
