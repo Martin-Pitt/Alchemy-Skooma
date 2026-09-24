@@ -827,6 +827,46 @@ namespace tut
         ensure(llformat("curb adds polygons: watershed %d, slope %d", polys[0], polys[1]), polys[1] <= polys[0]);
     }
 
+    // A smooth surface that turns as it climbs - an arched bridge, a curved
+    // ramp - is one slope to the partition however far it turns in all: only
+    // a real change of slope is an edge, so it adds a few polygons for the
+    // crown and the ends, not a boundary at every compass step.
+    template<> template<>
+    void sknavbuild_object::test<20>()
+    {
+        std::vector<LLVector3> tris;
+        auto q = [&](const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d) {
+            tris.insert(tris.end(), { a, b, c, a, c, d });
+        };
+        const S32 n = 32;
+        for (S32 k = 0; k < n; ++k)
+        {
+            // the bridge: 4 m wide, 16 m long, 2 m high at the crown
+            const F32 y0 = 2.f + 16.f * k / n, y1 = 2.f + 16.f * (k + 1) / n;
+            const F32 z0 = 2.f * std::sin(F_PI * k / n), z1 = 2.f * std::sin(F_PI * (k + 1) / n);
+            q(LLVector3(4.f, y0, z0), LLVector3(8.f, y0, z0), LLVector3(8.f, y1, z1), LLVector3(4.f, y1, z1));
+            // the ramp: a quarter turn round (22, 10), 6 to 9 m out, 3 m of climb
+            const F32 a0 = F_PI_BY_TWO * k / n, a1 = F_PI_BY_TWO * (k + 1) / n;
+            const F32 h0 = 3.f * k / n, h1 = 3.f * (k + 1) / n;
+            const LLVector3 c(22.f, 10.f, 0.f);
+            q(c + LLVector3(6.f * std::cos(a0), 6.f * std::sin(a0), h0), c + LLVector3(9.f * std::cos(a0), 9.f * std::sin(a0), h0),
+              c + LLVector3(9.f * std::cos(a1), 9.f * std::sin(a1), h1), c + LLVector3(6.f * std::cos(a1), 6.f * std::sin(a1), h1));
+        }
+        S32 polys[2] = { 0, 0 };
+        for (S32 k = 0; k < 2; ++k)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(-5.f);
+            in.mCell = 0.125f; // the viewer's: coarser cells quantise a gentle slope into noise
+            in.mPartition = k ? Partition::SLOPE : Partition::WATERSHED;
+            in.mRecords.push_back(soup(tris, Provenance::EXACT));
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            polys[k] = r.mPolys[0];
+        }
+        ensure(llformat("smooth slopes split: watershed %d, slope %d polygons", polys[0], polys[1]), polys[1] <= polys[0] + 2);
+    }
+
     // Tiles build alone, so every pass that reads a span's neighbours must see
     // the same cells from both sides of a seam. A narrow raised strip along
     // the seam used to be flattened by one tile and kept by the other, whose
