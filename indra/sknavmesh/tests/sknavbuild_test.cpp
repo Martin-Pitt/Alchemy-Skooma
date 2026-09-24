@@ -942,6 +942,8 @@ namespace tut
             LLVector3(20.f, 20.f, up), LLVector3(44.f, 20.f, down), LLVector3(44.f, 44.f, up),
             LLVector3(20.f, 20.f, down), LLVector3(44.f, 44.f, up), LLVector3(20.f, 44.f, up),
         };
+        for (S32 solid = 0; solid < 2; ++solid)
+        {
         F32 lo = 1e9f, hi = -1e9f;
         for (S32 tx = 0; tx < 2; ++tx)
         {
@@ -951,7 +953,9 @@ namespace tut
                 in.mCell = 0.125f;
                 in.mZMin = 2640.f + 3.375f * (tx + ty); // tiles start their heightfields at different heights
                 in.mZMax = 2660.f;
-                in.mRecords.push_back(soup(floor, Provenance::EXACT));
+                // the same floor as a surface, and as the top of a solid body, whose
+                // inside is filled by our own code rather than Recast's rasteriser
+                in.mRecords.push_back(solid ? box(20.f, 20.f, z - 0.75f, 44.f, 44.f, z) : soup(floor, Provenance::EXACT));
                 const TileBuildResult r = buildTile(in);
                 ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
                 Mesh m;
@@ -966,6 +970,7 @@ namespace tut
                 }
             }
         }
-        ensure(llformat("the floor's vertices span %.4f..%.4f", lo, hi), hi - lo < 0.01f);
+        ensure(llformat("%s: the floor's vertices span %.4f..%.4f", solid ? "solid" : "surface", lo, hi), hi - lo < 0.01f);
+        }
     }
 }
