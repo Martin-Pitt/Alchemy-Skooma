@@ -94,7 +94,11 @@ namespace
             }
             else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
             {
-                blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND;
+                // A legacy material defaults to blend, so an opaque door with a
+                // normal map reads as blended; only a texture with alpha is glass.
+                const LLViewerTexture* image = object->getTEImage(f);
+                blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
+                             image->getComponents() == 4;
             }
             if (te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f))
             {
