@@ -758,4 +758,51 @@ namespace tut
         ensure("the roof is floor", m.nearest(LLVector3(11.f, 16.f, 4.f), snapped, 0.5f) != 0);
         ensure("roof at its height", std::fabs(snapped[1] - 4.f) < 0.3f);
     }
+
+    // The slope partition splits a flight from its landing: no polygon runs
+    // from the steps onto the level top, so the line where the flight tops
+    // out is a polygon edge rather than something a fan of slivers crosses.
+    template<> template<>
+    void sknavbuild_object::test<18>()
+    {
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mPartition = Partition::SLOPE;
+        // twelve 0.25 m steps on 0.4 m treads up the y axis, then a landing
+        for (S32 k = 0; k < 12; ++k)
+        {
+            in.mRecords.push_back(box(12.f, 8.f + k * 0.4f, 0.f, 15.f, 20.f, (k + 1) * 0.25f));
+        }
+        const F32 top = 8.f + 12 * 0.4f;
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(0, 0, 0);
+        ensure("tile", dt && dt->header);
+        S32 on_flight = 0, on_landing = 0;
+        for (S32 p = 0; p < dt->header->polyCount; ++p)
+        {
+            const dtPoly& poly = dt->polys[p];
+            F32 ymin = 1e9f, ymax = -1e9f, zmin = 1e9f, xmid = 0.f;
+            for (S32 v = 0; v < poly.vertCount; ++v)
+            {
+                const LLVector3 sl = fromRecast(&dt->verts[poly.verts[v] * 3]);
+                ymin = llmin(ymin, sl.mV[VY]);
+                ymax = llmax(ymax, sl.mV[VY]);
+                zmin = llmin(zmin, sl.mV[VZ]);
+                xmid += sl.mV[VX] / poly.vertCount;
+            }
+            if (xmid < 12.f || xmid > 15.f || zmin < 0.2f)
+            {
+                continue; // the ground around the stair
+            }
+            ensure(llformat("poly %d spans the top of the flight: y %.2f..%.2f", p, ymin, ymax),
+                   ymax <= top + 0.5f || ymin >= top - 0.5f);
+            ++(ymax <= top + 0.5f ? on_flight : on_landing);
+        }
+        ensure("polys on the flight", on_flight > 0);
+        ensure("polys on the landing", on_landing > 0);
+    }
 }

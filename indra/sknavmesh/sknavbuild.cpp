@@ -618,6 +618,254 @@ namespace
         }
     }
 
+    /// Slope classes for the slope partition: level, or climbing towards one
+    /// of eight compass directions.
+    constexpr S32 SLOPE_CLASSES = 9;
+    constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
+    constexpr F32 SLOPE_REACH_M = 0.5f;     ///< half the baseline the gradient is measured over
+    constexpr F32 SLOPE_FRAGMENT_M2 = 1.f;  ///< smaller patches of one class join their neighbours
+
+    /// Walk up to reach spans along a direction; the height and distance of
+    /// the last one reached. Stops where the floor loses its connection.
+    void walkSurface(const rcCompactHeightfield& chf, S32 x, S32 z, S32 i, S32 dir, S32 reach, S32& y, S32& dist)
+    {
+        y = chf.spans[i].y;
+        dist = 0;
+        for (S32 n = 1; n <= reach; ++n)
+        {
+            const S32 con = rcGetCon(chf.spans[i], dir);
+            if (con == RC_NOT_CONNECTED)
+            {
+                return;
+            }
+            x += rcGetDirOffsetX(dir);
+            z += rcGetDirOffsetY(dir);
+            i = static_cast<S32>(chf.cells[x + z * chf.width].index) + con;
+            if (chf.areas[i] == RC_NULL_AREA)
+            {
+                return;
+            }
+            y = chf.spans[i].y;
+            dist = n;
+        }
+    }
+
+    /// Each span's slope class. The gradient is taken over a metre, not a
+    /// cell, so a staircase's voxel steps read as the flight's slope and not
+    /// as alternating floor and riser. Linden land stays level: its slope is
+    /// what contours are for, and splitting it would only cut polygons.
+    void classifySlopes(const rcCompactHeightfield& chf, std::vector<U8>& cls)
+    {
+        cls.assign(chf.spanCount, 0);
+        const S32 reach = llmax(1, static_cast<S32>(std::lround(SLOPE_REACH_M / chf.cs)));
+        const F32 level = std::tan(SLOPE_LEVEL_DEG * DEG_TO_RAD);
+        for (S32 z = 0; z < chf.height; ++z)
+        {
+            for (S32 x = 0; x < chf.width; ++x)
+            {
+                const rcCompactCell& c = chf.cells[x + z * chf.width];
+                for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA || chf.areas[i] == sknav::AREA_GROUND)
+                    {
+                        continue;
+                    }
+                    F32 g[2] = { 0.f, 0.f };
+                    for (S32 axis = 0; axis < 2; ++axis)
+                    {
+                        // Recast directions: 0 -x, 1 +z, 2 +x, 3 -z
+                        const S32 fwd = axis == 0 ? 2 : 1, back = axis == 0 ? 0 : 3;
+                        S32 y1 = 0, d1 = 0, y0 = 0, d0 = 0;
+                        walkSurface(chf, x, z, i, fwd, reach, y1, d1);
+                        walkSurface(chf, x, z, i, back, reach, y0, d0);
+                        if (d0 + d1 > 0)
+                        {
+                            g[axis] = (y1 - y0) * chf.ch / ((d0 + d1) * chf.cs);
+                        }
+                    }
+                    if (g[0] * g[0] + g[1] * g[1] < level * level)
+                    {
+                        continue;
+                    }
+                    const F32 turn = std::atan2(g[1], g[0]) / F_TWO_PI + 1.f;
+                    cls[i] = static_cast<U8>(1 + static_cast<S32>(std::lround(turn * 8.f)) % 8);
+                }
+            }
+        }
+    }
+
+    /// One pass of a majority filter over each span and its four neighbours,
+    /// so a flight measured right on a compass boundary does not flicker
+    /// between two classes. A tie keeps the span's own class.
+    void smoothSlopes(const rcCompactHeightfield& chf, std::vector<U8>& cls)
+    {
+        std::vector<U8> out = cls;
+        for (S32 z = 0; z < chf.height; ++z)
+        {
+            for (S32 x = 0; x < chf.width; ++x)
+            {
+                const rcCompactCell& c = chf.cells[x + z * chf.width];
+                for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA || chf.areas[i] == sknav::AREA_GROUND)
+                    {
+                        continue;
+                    }
+                    S32 votes[SLOPE_CLASSES] = {};
+                    ++votes[cls[i]];
+                    for (S32 dir = 0; dir < 4; ++dir)
+                    {
+                        const S32 con = rcGetCon(chf.spans[i], dir);
+                        if (con == RC_NOT_CONNECTED)
+                        {
+                            continue;
+                        }
+                        const S32 n = static_cast<S32>(chf.cells[(x + rcGetDirOffsetX(dir)) + (z + rcGetDirOffsetY(dir)) * chf.width].index) + con;
+                        if (chf.areas[n] == chf.areas[i])
+                        {
+                            ++votes[cls[n]];
+                        }
+                    }
+                    S32 best = cls[i];
+                    for (S32 k = 0; k < SLOPE_CLASSES; ++k)
+                    {
+                        if (votes[k] > votes[best])
+                        {
+                            best = k;
+                        }
+                    }
+                    out[i] = static_cast<U8>(best);
+                }
+            }
+        }
+        cls.swap(out);
+    }
+
+    /// Patches of one class smaller than a square metre take the class they
+    /// share the most border with: region building never merges across
+    /// areas, so each would otherwise stay a sliver polygon of its own.
+    void absorbSlopeFragments(const rcCompactHeightfield& chf, std::vector<U8>& cls)
+    {
+        const S32 min_spans = static_cast<S32>(SLOPE_FRAGMENT_M2 / (chf.cs * chf.cs));
+        std::vector<S32> cellOf(chf.spanCount);
+        for (S32 z = 0; z < chf.height; ++z)
+        {
+            for (S32 x = 0; x < chf.width; ++x)
+            {
+                const rcCompactCell& c = chf.cells[x + z * chf.width];
+                for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
+                {
+                    cellOf[i] = x + z * chf.width;
+                }
+            }
+        }
+        std::vector<U8> seen(chf.spanCount, 0);
+        std::vector<S32> patch, stack;
+        for (S32 s = 0; s < chf.spanCount; ++s)
+        {
+            if (seen[s] || chf.areas[s] == RC_NULL_AREA)
+            {
+                continue;
+            }
+            patch.clear();
+            stack.assign(1, s);
+            seen[s] = 1;
+            S32 border[SLOPE_CLASSES] = {};
+            while (!stack.empty())
+            {
+                const S32 i = stack.back();
+                stack.pop_back();
+                patch.push_back(i);
+                const S32 x = cellOf[i] % chf.width, z = cellOf[i] / chf.width;
+                for (S32 dir = 0; dir < 4; ++dir)
+                {
+                    const S32 con = rcGetCon(chf.spans[i], dir);
+                    if (con == RC_NOT_CONNECTED)
+                    {
+                        continue;
+                    }
+                    const S32 n = static_cast<S32>(chf.cells[(x + rcGetDirOffsetX(dir)) + (z + rcGetDirOffsetY(dir)) * chf.width].index) + con;
+                    if (chf.areas[n] != chf.areas[s])
+                    {
+                        continue;
+                    }
+                    if (cls[n] != cls[s])
+                    {
+                        ++border[cls[n]];
+                    }
+                    else if (!seen[n])
+                    {
+                        seen[n] = 1;
+                        stack.push_back(n);
+                    }
+                }
+            }
+            if (static_cast<S32>(patch.size()) >= min_spans)
+            {
+                continue;
+            }
+            S32 best = -1;
+            for (S32 k = 0; k < SLOPE_CLASSES; ++k)
+            {
+                if (border[k] > 0 && (best < 0 || border[k] > border[best]))
+                {
+                    best = k;
+                }
+            }
+            if (best >= 0)
+            {
+                for (const S32 i : patch)
+                {
+                    cls[i] = static_cast<U8>(best);
+                }
+            }
+        }
+    }
+
+    /// The slope partition: fold each span's slope class into its area id, so
+    /// Recast's region building splits a flight from its landing. Regions,
+    /// contours and polygons never cross an area change, and a contour keeps
+    /// a vertex wherever the area changes, so the line where a flight tops out
+    /// becomes a polygon edge instead of being simplified away in plan. The
+    /// real area of each code is returned for unfolding after the poly mesh.
+    std::vector<U8> foldSlopeAreas(rcCompactHeightfield& chf)
+    {
+        std::vector<U8> cls;
+        classifySlopes(chf, cls);
+        smoothSlopes(chf, cls);
+        absorbSlopeFragments(chf, cls);
+        std::vector<U8> real(1, RC_NULL_AREA); // code -> area; code 0 stays null
+        U8 code_of[RC_WALKABLE_AREA + 1][SLOPE_CLASSES] = {};
+        // every area's level code first, so a class that finds the codes used
+        // up can fall back to it
+        for (S32 pass = 0; pass < 2; ++pass)
+        {
+            for (S32 i = 0; i < chf.spanCount; ++i)
+            {
+                const U8 area = chf.areas[i];
+                const U8 k = pass == 0 ? 0 : cls[i];
+                if (area == RC_NULL_AREA || code_of[area][k])
+                {
+                    continue;
+                }
+                if (real.size() < RC_WALKABLE_AREA)
+                {
+                    code_of[area][k] = static_cast<U8>(real.size());
+                    real.push_back(area);
+                }
+            }
+        }
+        for (S32 i = 0; i < chf.spanCount; ++i)
+        {
+            const U8 area = chf.areas[i];
+            if (area != RC_NULL_AREA)
+            {
+                chf.areas[i] = code_of[area][cls[i]] ? code_of[area][cls[i]] : code_of[area][0];
+            }
+        }
+        return real;
+    }
+
     /// The land's surface as a span index at one heightfield cell, or -1 where
     /// the terrain window has no say: outside it, or in the void past a
     /// region's edge. Interpolated on the same two triangles per sample quad
@@ -929,8 +1177,14 @@ namespace sknav
                 return result;
             }
             bool regions = false;
+            std::vector<U8> slope_real;
             switch (input.mPartition)
             {
+                case Partition::SLOPE:
+                    slope_real = foldSlopeAreas(*mem.chf);
+                    regions = rcBuildDistanceField(&ctx, *mem.chf) &&
+                              rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
+                    break;
                 case Partition::MONOTONE:
                     regions = rcBuildRegionsMonotone(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
@@ -958,6 +1212,18 @@ namespace sknav
             {
                 result.mError = "polymesh";
                 return result;
+            }
+            if (!slope_real.empty())
+            {
+                // unfold the slope codes: everything past here reads real areas
+                for (S32 i = 0; i < mem.chf->spanCount; ++i)
+                {
+                    mem.chf->areas[i] = slope_real[mem.chf->areas[i]];
+                }
+                for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+                {
+                    mem.pmesh->areas[i] = slope_real[mem.pmesh->areas[i]];
+                }
             }
             mem.dmesh = rcAllocPolyMeshDetail();
             if (!rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))

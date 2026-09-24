@@ -69,7 +69,10 @@ namespace sknav
     /// monotone never does but favours long thin polygons; layers is Recast's
     /// own suggestion for a tiled mesh. Which reads best on a flat floor is a
     /// question for a real region, so it is a setting rather than a choice.
-    enum class Partition : U8 { WATERSHED, MONOTONE, LAYERS };
+    /// Slope is watershed within slope classes: a flight, its landing and a
+    /// ramp's turns become separate regions, so their polygons meet on the
+    /// lines where the slope changes instead of fanning across them.
+    enum class Partition : U8 { WATERSHED, MONOTONE, LAYERS, SLOPE };
 
     struct TileBuildInput
     {

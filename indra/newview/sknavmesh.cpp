@@ -299,7 +299,7 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> wallMin(gSavedSettings, "SKNavWallMinHeight", 0.5f);
 
     input.mCell = llclamp(static_cast<F32>(cell), 0.05f, 1.f);
-    input.mPartition = static_cast<Partition>(llclamp(static_cast<S32>(partition), 0, 2));
+    input.mPartition = static_cast<Partition>(llclamp(static_cast<S32>(partition), 0, 3));
     input.mDetailSampleCells = llclamp(static_cast<F32>(detail), 0.f, 32.f);
     input.mWallMinHeight = llclamp(static_cast<F32>(wallMin), 0.f, 8.f);
     // The avatar class is as tall as the user's own avatar, rounded up to the
