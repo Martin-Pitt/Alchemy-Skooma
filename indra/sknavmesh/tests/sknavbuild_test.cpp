@@ -973,4 +973,44 @@ namespace tut
         ensure(llformat("%s: the floor's vertices span %.4f..%.4f", solid ? "solid" : "surface", lo, hi), hi - lo < 0.01f);
         }
     }
+    // A record a class leaves out is not there for that class, neither as a
+    // floor nor as an obstacle, and the other class still stands on it. The
+    // solid after it in the soup is still filled.
+    template<> template<>
+    void sknavbuild_object::test<23>()
+    {
+        for (S32 exclude = 0; exclude < 2; ++exclude)
+        {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            auto platform = std::make_shared<Record>(*box(10.f, 10.f, 0.f, 20.f, 20.f, 2.f));
+            platform->mExclude = exclude ? EXCLUDE_AVATAR : 0;
+            in.mRecords.push_back(platform);
+            // A hull floating clear of the ground: walkable from inside too
+            // unless its solid range is filled, so a range renumbered wrong shows.
+            std::vector<LLVector3> body;
+            emitRecord(*box(22.f, 22.f, 1.f, 28.f, 28.f, 5.f), LLVector3d(), body);
+            in.mRecords.push_back(hull(body));
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            for (S32 cls = 0; cls < 2; ++cls)
+            {
+                Mesh m;
+                m.add(r.mData[cls]);
+                F32 at[3];
+                ensure("a floor at the platform", m.nearest(LLVector3(15.f, 15.f, 1.f), at) != 0);
+                const bool left_out = exclude && cls == 0;
+                ensure(llformat("exclude %d class %d: floor at %.2f", exclude, cls, at[1]),
+                       std::fabs(at[1] - (left_out ? 0.f : 2.f)) < 0.4f);
+                ensure("the hull's top", m.nearest(LLVector3(25.f, 25.f, 5.f), at) != 0 && std::fabs(at[1] - 5.f) < 0.4f);
+                // The avatar is too tall for the gap under it, so a floor low
+                // in its plan would be one inside it. Nearest may snap to the
+                // ground outside, whose polygon's bounds reach the query.
+                const bool low = cls == 0 && m.nearest(LLVector3(25.f, 25.f, 2.f), at) != 0 && at[1] < 4.f;
+                const LLVector3 found = fromRecast(at);
+                const bool inside = found.mV[VX] > 22.1f && found.mV[VX] < 27.9f && found.mV[VY] > 22.1f && found.mV[VY] < 27.9f;
+                ensure(llformat("exclude %d: a floor inside the hull at z %.2f", exclude, found.mV[VZ]), !(low && inside));
+            }
+        }
+    }
 }

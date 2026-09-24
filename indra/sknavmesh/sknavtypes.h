@@ -102,6 +102,8 @@ namespace sknav
         Shape mShape = Shape::TRIANGLES;
         bool mDynamic = false;
         bool mSolid = false;        ///< a closed body the sim collides with as a volume: the build fills its inside
+        FeatureKind mFeature = FeatureKind::NONE;
+        U8 mExclude = 0;            ///< EXCLUDE_* bits: classes that build as if it were not there
 
         LLVector3d mOrigin;         ///< region origin, global
         LLVector3 mCenter;          ///< analytic shapes: centre, region-local

@@ -150,6 +150,56 @@ namespace
         S32 ntris() const { return static_cast<S32>(mTris.size() / 3); }
     };
 
+    // A triangle range of the soup a class builds without.
+    struct Excluded
+    {
+        S32 mBegin;
+        S32 mEnd;
+        U8 mClasses;
+    };
+
+    // The soup without the ranges the class leaves out, and the solid ranges
+    // renumbered into it. A solid lies within one record, so it is kept or
+    // dropped whole. Leaving the triangles out is the only way: a triangle
+    // given no area still rasterises as an obstacle.
+    void filterSoup(const Soup& soup, const std::vector<std::pair<S32, S32>>& solids, const std::vector<Excluded>& excluded,
+                    U8 bit, Soup& out, std::vector<std::pair<S32, S32>>& out_solids)
+    {
+        std::vector<S32> removed_before(soup.ntris() + 1, 0);
+        std::vector<U8> drop(soup.ntris(), 0);
+        for (const Excluded& e : excluded)
+        {
+            if (e.mClasses & bit)
+            {
+                std::fill(drop.begin() + e.mBegin, drop.begin() + e.mEnd, 1);
+            }
+        }
+        for (S32 t = 0; t < soup.ntris(); ++t)
+        {
+            removed_before[t + 1] = removed_before[t] + drop[t];
+            if (drop[t])
+            {
+                continue;
+            }
+            const S32 base = out.nverts();
+            for (S32 k = 0; k < 3; ++k)
+            {
+                const F32* v = &soup.mVerts[soup.mTris[t * 3 + k] * 3];
+                out.mVerts.insert(out.mVerts.end(), v, v + 3);
+            }
+            out.mTris.insert(out.mTris.end(), { base, base + 1, base + 2 });
+            out.mAreas.push_back(soup.mAreas[t]);
+            out.mTwoSided.push_back(soup.mTwoSided[t]);
+        }
+        for (const auto& range : solids)
+        {
+            if (range.first < range.second && !drop[range.first])
+            {
+                out_solids.emplace_back(range.first - removed_before[range.first], range.second - removed_before[range.second]);
+            }
+        }
+    }
+
     // Mark walkable by slope, keeping the source area; non-walkable stays
     // RC_NULL_AREA and still rasterises as an obstacle. A double-sided surface
     // is walkable whichever way its winding points: the sim collides with a
@@ -1160,6 +1210,7 @@ namespace sknav
         Soup soup;
         std::vector<LLVector3> tris;
         std::vector<std::pair<S32, S32>> solids;    // triangle ranges of closed bodies
+        std::vector<Excluded> excluded;             // triangle ranges some class builds without
         for (const RecordPtr& r : input.mRecords)
         {
             if (!r)
@@ -1173,6 +1224,10 @@ namespace sknav
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
             soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
+            if (r->mExclude && soup.ntris() > before)
+            {
+                excluded.push_back({ before, soup.ntris(), r->mExclude });
+            }
             // A solid is filled. A decomposition is a set of bodies, not one:
             // its hulls overlap, and a column through two of them would count
             // four crossings and fill none of the middle. Fill each body on
@@ -1297,16 +1352,32 @@ namespace sknav
                 result.mError = "heightfield";
                 return result;
             }
+            // A class that builds without some record gets a soup of its own;
+            // every other class shares the one gathered above.
+            const Soup* class_soup = &soup;
+            const std::vector<std::pair<S32, S32>>* class_solids = &solids;
+            Soup filtered;
+            std::vector<std::pair<S32, S32>> filtered_solids;
+            const U8 bit = static_cast<U8>(1u << cls);
+            if (std::any_of(excluded.begin(), excluded.end(), [bit](const Excluded& e) { return (e.mClasses & bit) != 0; }))
+            {
+                const auto filter_started = std::chrono::steady_clock::now();
+                filterSoup(soup, solids, excluded, bit, filtered, filtered_solids);
+                class_soup = &filtered;
+                class_solids = &filtered_solids;
+                result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
+            }
             std::vector<U8> areas;
-            markWalkable(soup, cfg.walkableSlopeAngle, areas);
-            if (!rcRasterizeTriangles(&ctx, soup.mVerts.data(), soup.nverts(), soup.mTris.data(), areas.data(), soup.ntris(), *mem.hf, cfg.walkableClimb))
+            markWalkable(*class_soup, cfg.walkableSlopeAngle, areas);
+            if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),
+                                      class_soup->ntris(), *mem.hf, cfg.walkableClimb))
             {
                 result.mError = "rasterize";
                 return result;
             }
-            for (const auto& range : solids)
+            for (const auto& range : *class_solids)
             {
-                fillSolid(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
+                fillSolid(*mem.hf, *class_soup, range.first, range.second, cfg.walkableClimb);
             }
             for (const auto& range : cuts)
             {

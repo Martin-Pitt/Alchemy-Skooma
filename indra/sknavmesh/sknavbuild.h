@@ -111,6 +111,7 @@ namespace sknav
         S32 mPolys[NUM_CLASSES] = { 0, 0 };
         S32 mTriangles = 0;                 ///< rasterised
         F32 mMillis = 0.f;
+        F32 mExcludeMillis = 0.f;           ///< of mMillis, building the soups a class leaves records out of
         /// Exposed vertical surfaces of the tile's solids, mesh-local SL metres.
         std::vector<WallFace> mFaces;
         /// Floor edges with what lies beyond them, and where a floor can be left.
