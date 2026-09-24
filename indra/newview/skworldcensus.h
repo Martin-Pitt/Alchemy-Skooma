@@ -99,6 +99,18 @@ public:
     /// The sim's navmesh role for a linkset, when the region has told us.
     sknav::NavRole roleOf(const LLUUID& root) const;
 
+    /// What the region's linkset reply says about a root besides its role.
+    /// Only roots in the agent's region are covered; a missing entry or an
+    /// empty name says nothing either way.
+    struct LinksetFacts
+    {
+        std::string mName;
+        std::string mDescription;
+        bool mScriptedKnown = false;
+        bool mScripted = false;
+    };
+    const LinksetFacts* linksetFactsOf(const LLUUID& root) const;
+
     std::string statsLine() const;
 
 private:
@@ -175,6 +187,7 @@ private:
     std::unordered_map<LLUUID, PartCache> mParts;
     std::unordered_map<LLUUID, Rest> mRest;
     std::unordered_map<LLUUID, sknav::NavRole> mRoles;
+    std::unordered_map<LLUUID, LinksetFacts> mLinksets;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F32 mRolesRequestedAt = -1.f;

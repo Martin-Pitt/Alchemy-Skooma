@@ -227,6 +227,12 @@ sknav::NavRole SKWorldCensus::roleOf(const LLUUID& root) const
     return it == mRoles.end() ? NavRole::UNKNOWN : it->second;
 }
 
+const SKWorldCensus::LinksetFacts* SKWorldCensus::linksetFactsOf(const LLUUID& root) const
+{
+    const auto it = mLinksets.find(root);
+    return it == mLinksets.end() ? nullptr : &it->second;
+}
+
 std::vector<U64> SKWorldCensus::regionHandles()
 {
     std::vector<U64> handles;
@@ -493,6 +499,12 @@ void SKWorldCensus::visit(LLViewerObject* object)
 
     const NavRole navRole = roleOf(root->getID());
     if (root->flagObjectPermanent() && navRole == NavRole::UNKNOWN)
+    {
+        mRolesWanted = true;
+    }
+    // The same reply names linksets, so one it has not named yet asks again,
+    // still no more often than SKNavRoleRequestSeconds.
+    if (root->getRegion() == gAgent.getRegion() && !mLinksets.count(root->getID()))
     {
         mRolesWanted = true;
     }
@@ -851,6 +863,7 @@ void SKWorldCensus::requestRoles()
     {
         // Roles are per region; the old region's linksets are gone with it.
         mRoles.clear();
+        mLinksets.clear();
     }
     mRolesWanted = false;
     mRolesRequestedAt = gFrameTimeSeconds;
@@ -882,6 +895,13 @@ void SKWorldCensus::onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindi
             slot = role;
             changed++;
         }
+        // The reply is the one free source of a linkset's name and whether
+        // its root is scripted, which is what the feature rules read.
+        LinksetFacts& facts = mLinksets[linkset->getUUID()];
+        facts.mName = linkset->getName();
+        facts.mDescription = linkset->getDescription();
+        facts.mScriptedKnown = linkset->hasIsScripted();
+        facts.mScripted = facts.mScriptedKnown && linkset->isScripted();
     }
     if (changed)
     {
