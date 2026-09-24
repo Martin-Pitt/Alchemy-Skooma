@@ -927,4 +927,45 @@ namespace tut
             ensure("tiles share seam vertices", shared > 0);
         }
     }
+
+    // A flat floor on a cell boundary at a real SL height, where a float only
+    // resolves about a quarter of a millimetre and a rotated mesh leaves its
+    // heights a step or so either side. Each tile clips the triangle at its
+    // own cell edges, so unsnapped the floor rounded up a cell in one tile
+    // and not the next.
+    template<> template<>
+    void sknavbuild_object::test<22>()
+    {
+        const F32 z = 2649.f;
+        const F32 up = std::nextafter(z, 3000.f), down = std::nextafter(z, 0.f);
+        const std::vector<LLVector3> floor = {
+            LLVector3(20.f, 20.f, up), LLVector3(44.f, 20.f, down), LLVector3(44.f, 44.f, up),
+            LLVector3(20.f, 20.f, down), LLVector3(44.f, 44.f, up), LLVector3(20.f, 44.f, up),
+        };
+        F32 lo = 1e9f, hi = -1e9f;
+        for (S32 tx = 0; tx < 2; ++tx)
+        {
+            for (S32 ty = 0; ty < 2; ++ty)
+            {
+                TileBuildInput in = tile(tx, ty);
+                in.mCell = 0.125f;
+                in.mZMin = 2640.f + 3.375f * (tx + ty); // tiles start their heightfields at different heights
+                in.mZMax = 2660.f;
+                in.mRecords.push_back(soup(floor, Provenance::EXACT));
+                const TileBuildResult r = buildTile(in);
+                ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+                Mesh m;
+                m.add(r.mData[0]);
+                const dtMeshTile* dt = static_cast<const dtNavMesh*>(m.mNav)->getTileAt(ty, tx, 0);
+                ensure("tile", dt && dt->header);
+                for (S32 v = 0; v < dt->header->vertCount; ++v)
+                {
+                    const F32 h = fromRecast(&dt->verts[v * 3]).mV[VZ];
+                    lo = llmin(lo, h);
+                    hi = llmax(hi, h);
+                }
+            }
+        }
+        ensure(llformat("the floor's vertices span %.4f..%.4f", lo, hi), hi - lo < 0.01f);
+    }
 }
