@@ -125,6 +125,7 @@ private:
     struct Rest
     {
         LLVector3d mPosition;
+        LLQuaternion mRotation;     ///< baseline together with mPosition
         F32 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
         F32 mLastSeen = 0.f;
         bool mKnown = false;
@@ -171,7 +172,7 @@ private:
     void visitCached(const CachedPart& part);
     /// Every cached entry near either centre that has no object of its own.
     void gatherCached();
-    bool classifyRest(LLViewerObject* root, const LLVector3d& pos);
+    bool classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot);
     bool isSurround(LLViewerObject* root, const LLVector3d& mn, const LLVector3d& mx) const;
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,

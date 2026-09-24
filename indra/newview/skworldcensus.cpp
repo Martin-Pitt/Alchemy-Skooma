@@ -57,6 +57,7 @@ namespace
     using namespace sknav;
 
     const F32 MOVED_EPSILON = 0.01f;
+    const F32 MOVED_ANGLE = 2.f * DEG_TO_RAD;
 
     LLViewerObject* rootOf(LLViewerObject* object)
     {
@@ -385,19 +386,23 @@ void SKWorldCensus::finishScan()
     mSnapshot = done;
 }
 
-bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos)
+bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
 {
     static LLCachedControl<F32> settle(gSavedSettings, "SKNavSettleSeconds", 4.f);
     // The baseline moves only when the root is seen to have moved, so a slow
     // drift adds up to a move instead of hiding under the epsilon each frame.
+    // A door swinging on its hinge by steps turns without going anywhere, so
+    // the turn counts as a move too.
     Rest& rest = mRest[root->getID()];
-    if (!rest.mKnown || dist_vec(rest.mPosition, pos) > MOVED_EPSILON)
+    const F32 turned = 2.f * std::acos(llclamp(std::fabs(dot(rest.mRotation, rot)), 0.f, 1.f));
+    if (!rest.mKnown || dist_vec(rest.mPosition, pos) > MOVED_EPSILON || turned > MOVED_ANGLE)
     {
         if (rest.mKnown)
         {
             rest.mMovedAt = gFrameTimeSeconds;
         }
         rest.mPosition = pos;
+        rest.mRotation = rot;
     }
     rest.mLastSeen = gFrameTimeSeconds;
     rest.mKnown = true;
@@ -524,7 +529,9 @@ void SKWorldCensus::visit(LLViewerObject* object)
         return;
     }
 
-    const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()));
+    // The sim's rotation, not the rendered one: llTargetOmega spin is not motion.
+    const bool dynamic = classifyRest(root, root->getRegion()->getOriginGlobal() + LLVector3d(root->getPositionRegion()),
+                                      root->getRotationSim());
 
     // Phantom stays out unless the sim says it is an exclusion volume; a
     // surround stays in whatever its flags, as its rendered shape.
