@@ -338,6 +338,7 @@ U64 SKNavMesh::paramsSignature() const
     h = mixF32(h, probe.mDetailSampleCells);
     h = mixF32(h, probe.mWallMinHeight);
     h = mix(h, probe.mWallFaces);
+    h = mix(h, probe.mAir);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
     {
@@ -361,7 +362,8 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> weatherSlope(gSavedSettings, "SKNavWeatherSlope", 89.f);
     static LLCachedControl<F32> weatherRadius(gSavedSettings, "SKNavWeatherRadius", 0.125f);
     static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
-    static LLCachedControl<bool> weather(gSavedSettings, "SKNavBuildWeather", false);
+    static LLCachedControl<bool> weather_on(gSavedSettings, "SKNavBuildWeather", false);
+    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
     static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
     static LLCachedControl<F32> dropAvatar(gSavedSettings, "SKNavDropMax", 10.f);
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
@@ -387,6 +389,10 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
+    // The air is read off the weather class, so asking for it builds that
+    // class whether or not anything reads its weather.
+    const bool weather = weather_on || air;
+    input.mAir = air;
     input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
     // Weather runs down whatever it lands on, so nearly everything is floor to
     // it. A face that is truly vertical still cannot be a walkable polygon of
@@ -401,9 +407,9 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
                                                              llclamp(static_cast<F32>(weatherSlope), 1.f, 89.9f) };
 
     // Faces are for the weather class's readers, edges and drops for both.
-    input.mWallFaces = walls && weather;
+    input.mWallFaces = walls && weather_on;
     input.mEdges[static_cast<S32>(AgentClass::AVATAR)] = walls;
-    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather;
+    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather_on;
     input.mDropMax[static_cast<S32>(AgentClass::AVATAR)] = dropAvatar;
     input.mDropMax[static_cast<S32>(AgentClass::WEATHER)] = dropWeather;
     input.mDropSpacing = llmax(0.5f, static_cast<F32>(dropSpacing));
@@ -1097,6 +1103,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // The walls of the build before this one describe geometry that has
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
+        tile.mAir.reset();
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             tile.mSegments[cls].reset();
@@ -1142,6 +1149,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+    tile.mAir = result->mAir.empty() ? nullptr : std::make_shared<const AirGrid>(std::move(result->mAir));
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -2291,7 +2299,7 @@ std::string SKNavMesh::exportAll() const
     static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
 
     U32 meshes_written = 0, tiles_written = 0, polys_written = 0, segments_written = 0;
-    U32 links_written = 0, faces_written = 0;
+    U32 links_written = 0, faces_written = 0, airs_written = 0;
 
     file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
     file << ",\"agent\":";
@@ -2354,6 +2362,28 @@ std::string SKNavMesh::exportAll() const
                     file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
                 }
                 file << ']';
+            }
+            if (tile.mAir)
+            {
+                // Per column, row-major along SL y, how many gaps it has; then
+                // every gap as floor, ceiling, flags in height units.
+                const AirGrid& air = *tile.mAir;
+                file << ",\"air\":{\"origin\":";
+                vec3(air.mOrigin);
+                file << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit << ",\"width\":" << air.mWidth
+                     << ",\"height\":" << air.mHeight << ",\"counts\":[";
+                for (S32 i = 0, n = air.mWidth * air.mHeight; i < n; ++i)
+                {
+                    file << (i ? "," : "") << (air.mStart[i + 1] - air.mStart[i]);
+                }
+                file << "],\"gaps\":[";
+                for (size_t i = 0; i < air.mGaps.size(); ++i)
+                {
+                    const AirGap& g = air.mGaps[i];
+                    file << (i ? "," : "") << g.mFloor << ',' << g.mCeiling << ',' << static_cast<S32>(g.mFlags);
+                }
+                file << "]}";
+                ++airs_written;
             }
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
             {
@@ -2500,8 +2530,8 @@ std::string SKNavMesh::exportAll() const
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u air (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, airs_written,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 

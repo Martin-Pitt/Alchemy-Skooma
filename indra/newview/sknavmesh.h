@@ -199,6 +199,7 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
+        std::shared_ptr<const sknav::AirGrid> mAir;     ///< only while SKNavBuildAir is on
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
     };

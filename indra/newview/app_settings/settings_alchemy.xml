@@ -4518,6 +4518,17 @@
             <key>Value</key>
             <real>0.3</real>
         </map>
+        <key>SKNavBuildAir</key>
+        <map>
+            <key>Comment</key>
+            <string>Keep the open air of every navmesh tile (the gaps above each solid, per column) for rooms and enclosure. Builds the weather class, which it is read from.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavBuildWeather</key>
         <map>
             <key>Comment</key>
