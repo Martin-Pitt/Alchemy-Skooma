@@ -86,6 +86,7 @@ namespace sknav
         NavRole mNavRole = NavRole::UNKNOWN;
         Shape mShape = Shape::TRIANGLES;
         bool mDynamic = false;
+        bool mSolid = false;        ///< a closed body the sim collides with as a volume: the build fills its inside
 
         LLVector3d mOrigin;         ///< region origin, global
         LLVector3 mCenter;          ///< analytic shapes: centre, region-local

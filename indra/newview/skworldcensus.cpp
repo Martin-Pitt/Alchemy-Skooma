@@ -595,8 +595,9 @@ void SKWorldCensus::visit(LLViewerObject* object)
 
     PartCache& cache = mParts[object->getID()];
     cache.mLastSeen = gFrameTimeSeconds;
+    const bool fresh = cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == dynamic;
     RecordPtr rec;
-    if (cache.mRecord && cache.mSignature == sig && cache.mRecord->mDynamic == dynamic)
+    if (fresh)
     {
         rec = cache.mRecord;
         snap.mStats.mCached++;
@@ -609,9 +610,31 @@ void SKWorldCensus::visit(LLViewerObject* object)
             return;
         }
         cache.mRecord = rec;
+        cache.mPhysics.reset();
         cache.mSignature = sig;
     }
+    take(snap, rec);
 
+    // A surround's rendered shape is what weather lands on, but where the
+    // thing reaches over land it collides like anything else: a 128 m cube
+    // rezzed across the region edge is solid over the strip of ground it
+    // covers. Its physics shape comes in beside the rendered one, and is the
+    // record the fill makes solid.
+    if (surround && hasPhysics && !phantom)
+    {
+        if (!fresh || !cache.mPhysics)
+        {
+            cache.mPhysics = record(volume, root, Role::NAV, dynamic, sig, sim_pos, sim_rot);
+        }
+        if (cache.mPhysics)
+        {
+            take(snap, cache.mPhysics);
+        }
+    }
+}
+
+void SKWorldCensus::take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec)
+{
     snap.mRecords.push_back(rec);
     if (rec->mDynamic) snap.mStats.mDynamic++;
     if (rec->mRole == Role::SURROUND) snap.mStats.mSurround++;
@@ -720,6 +743,7 @@ void SKWorldCensus::visitCached(const CachedPart& part)
         // shape turns up, which here is when you get close enough to draw it.
         made->mProvenance = Provenance::BOX;
         made->mShape = Shape::BOX;
+        made->mSolid = true;
         made->mOrigin = part.mOrigin;
         made->mCenter = part.mCenter;
         made->mAxes[0].set(1.f, 0.f, 0.f);
@@ -765,6 +789,7 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
     rec->mProvenance = geom.mProvenance;
     rec->mNavRole = roleOf(root->getID());
     rec->mShape = geom.mShape;
+    rec->mSolid = geom.mSolid;
     rec->mDynamic = dynamic;
     rec->mSignature = signature;
     rec->mOrigin = volume->getRegion()->getOriginGlobal();
