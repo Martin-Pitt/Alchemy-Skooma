@@ -112,6 +112,34 @@ namespace sknav
     std::vector<Feature> classifyFeatures(const std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
                                           const FeatureParams& params);
 
+    /// One doorway as the rooms and the map see it: plain values, no viewer
+    /// types. Positions are global.
+    struct DoorEntity
+    {
+        LLUUID mId;                     ///< the smallest leaf part id, stable while the leaves are
+        U64 mRegion = 0;                ///< region handle; set by whoever keys the table by region
+        LLVector3d mMin;                ///< AABB of the leaves
+        LLVector3d mMax;
+        LLVector3d mPlanePoint;         ///< on the leaves' plane, at the sill
+        LLVector3 mNormal;              ///< the leaf's thin axis, horizontal, x (then y) positive
+        F32 mWidth = 0.f;               ///< across the opening, in the plane
+        F32 mHeight = 0.f;
+        F64 mSill = 0.0;                ///< bottom of the leaves
+        bool mDouble = false;
+        std::vector<LLUUID> mLeaves;    ///< sorted
+        F32 mConfidence = 0.f;
+        bool mDamageable = false;       ///< an LBA description or health in the hover text
+        std::string mName;              ///< the leaf's own name, else its linkset's
+    };
+
+    /// A DoorEntity per DOOR feature, sorted by id, whatever order the parts
+    /// came in. Leaves missing from the parts are skipped.
+    std::vector<DoorEntity> buildDoorEntities(const std::vector<Feature>& features, const std::vector<FeaturePart>& parts,
+                                              const std::vector<FeatureRoot>& roots);
+
+    /// An LBA description or health shown in the hover text.
+    bool isDamageable(const FeatureRoot& root);
+
     /// The classes a part of this kind is left out of, as Record::mExclude.
     U8 excludeFor(FeatureKind kind);
 

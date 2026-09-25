@@ -325,7 +325,7 @@ namespace sknav
             {
                 // LBA marks damageable walls as well as vehicles: it is a
                 // property of a vehicle here, never the reason for one.
-                f.mCombat = r.mDescription.compare(0, 6, "LBA.v.") == 0 || hoverShowsHealth(r.mHover);
+                f.mCombat = isDamageable(r);
                 f.mAir = r.mClearance >= params.mAirClearance;
                 if (f.mCombat)
                 {
@@ -688,6 +688,93 @@ namespace sknav
             shaft.mTop = shaft.mMax.mdV[VZ];
             out.push_back(std::move(shaft));
         }
+        return out;
+    }
+
+    bool isDamageable(const FeatureRoot& root)
+    {
+        return root.mDescription.compare(0, 6, "LBA.v.") == 0 || hoverShowsHealth(root.mHover);
+    }
+
+    std::vector<DoorEntity> buildDoorEntities(const std::vector<Feature>& features, const std::vector<FeaturePart>& parts,
+                                              const std::vector<FeatureRoot>& roots)
+    {
+        std::unordered_map<LLUUID, const FeaturePart*> part_of;
+        for (const FeaturePart& p : parts)
+        {
+            part_of[p.mPart] = &p;
+        }
+        std::unordered_map<LLUUID, const FeatureRoot*> root_of;
+        for (const FeatureRoot& r : roots)
+        {
+            root_of[r.mRoot] = &r;
+        }
+
+        std::vector<DoorEntity> out;
+        for (const Feature& f : features)
+        {
+            if (f.mKind != FeatureKind::DOOR)
+            {
+                continue;
+            }
+            std::vector<const FeaturePart*> leaves;
+            for (const LLUUID& id : f.mParts)
+            {
+                if (const auto it = part_of.find(id); it != part_of.end())
+                {
+                    leaves.push_back(it->second);
+                }
+            }
+            if (leaves.empty())
+            {
+                continue;
+            }
+            std::sort(leaves.begin(), leaves.end(), [](const FeaturePart* a, const FeaturePart* b) { return a->mPart < b->mPart; });
+
+            DoorEntity d;
+            d.mId = leaves.front()->mPart;
+            // One sign whichever leaf the classifier met first.
+            d.mNormal = f.mNormal;
+            if (d.mNormal.mV[VX] < -1e-4f || (std::fabs(d.mNormal.mV[VX]) <= 1e-4f && d.mNormal.mV[VY] < 0.f))
+            {
+                d.mNormal = -d.mNormal;
+            }
+            const LLVector3 across(-d.mNormal.mV[VY], d.mNormal.mV[VX], 0.f);
+            // The width from each leaf's own box, not its AABB, so a leaf
+            // turned off the grid is not counted wider than it is.
+            F64 lo = 0.0, hi = 0.0;
+            LLVector3d centre;
+            for (size_t i = 0; i < leaves.size(); ++i)
+            {
+                const FeaturePart& p = *leaves[i];
+                grow(d.mMin, d.mMax, p.mMin, p.mMax, i == 0);
+                F64 reach = 0.0;
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    reach += std::fabs(p.mAxes[k] * across) * p.mHalf.mV[k];
+                }
+                const F64 c = p.mCenter.mdV[VX] * across.mV[VX] + p.mCenter.mdV[VY] * across.mV[VY];
+                lo = i == 0 ? c - reach : std::min(lo, c - reach);
+                hi = i == 0 ? c + reach : std::max(hi, c + reach);
+                centre += p.mCenter;
+                d.mLeaves.push_back(p.mPart);
+                const auto r = root_of.find(p.mRoot);
+                d.mDamageable = d.mDamageable || (r != root_of.end() && isDamageable(*r->second));
+                if (d.mName.empty())
+                {
+                    d.mName = !p.mName.empty() ? p.mName : r != root_of.end() ? r->second->mName : std::string();
+                }
+            }
+            centre *= 1.0 / static_cast<F64>(leaves.size());
+            d.mSill = d.mMin.mdV[VZ];
+            d.mPlanePoint.set(centre.mdV[VX], centre.mdV[VY], d.mSill);
+            d.mWidth = static_cast<F32>(hi - lo);
+            d.mHeight = static_cast<F32>(d.mMax.mdV[VZ] - d.mMin.mdV[VZ]);
+            d.mDouble = leaves.size() > 1;
+            d.mConfidence = f.mConfidence;
+            out.push_back(std::move(d));
+        }
+        std::sort(out.begin(), out.end(), [](const DoorEntity& a, const DoorEntity& b) { return a.mId < b.mId; });
         return out;
     }
 }
