@@ -1,7 +1,7 @@
 # Architecture.md
 
 **Foundation layer:**
-- **llcommon** - Foundation: threading (`LLThread`, `LL::ThreadPool`, `LL::WorkQueue`), logging, string utils, timers, event system (`LLEventPump`), coroutines (`LLCoros`), LLSD (universal data type), `LLSingleton` base class
+- **llcommon** - Foundation: threading (`LLThread`, `LL::ThreadPool`, `LL::WorkQueue`), logging, string utils, timers, event system (`LLEventPump`), coroutines (`LLCoros`), LLSD (universal data type), `LLSingleton` base class, regular expressions (`ALRegex`, over RE2: linear time and no lookaround, so the script editor's find and vim search keep Boost.Regex for their Perl syntax)
 - **llmath** - Math primitives: vectors, matrices, quaternions, bounding boxes. Also includes mikktspace tangent generation and meshoptimizer
 
 **Data/IO layer:**
@@ -11,7 +11,7 @@
 - **llimagej2coj** / **llkdu** - JPEG2000 codec implementations (OpenJPEG open-source, KDU proprietary optional)
 
 **Network layer:**
-- **llcorehttp** - Async HTTP client library (libcurl + OpenSSL + websocketpp). Used pervasively for API calls and asset fetches
+- **llcorehttp** - Async HTTP client library (libcurl + OpenSSL). Used pervasively for API calls and asset fetches. Also the WebSocket server external editors connect to (Boost.Beast)
 - **llmessage** - Network protocol layer for communicating with Second Life servers. Includes UDP message system (`LLMessageSystem`) with template-based message definitions, and `LLAssetStorage` base
 
 **Rendering layer:**
