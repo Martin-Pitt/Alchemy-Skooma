@@ -29,7 +29,7 @@
 #include "alxmldocument.h"
 #include "alxmllayermerge.h"
 #include "alcolorfield.h"
-#include "alflagsfield.h"
+#include "alfollowscontrol.h"
 #include "alpopover.h"
 #include "alquickopen.h"
 #include "aljumpbar.h"
@@ -38,6 +38,7 @@
 #include "alstringmatch.h"
 #include "altabstrip.h"
 #include "alpropertygrid.h"
+#include "alxuifields.h"
 #include "alxuinotes.h"
 #include "alxuischema.h"
 #include "alxuishellbuild.h"
@@ -74,6 +75,8 @@
 #include "llspinctrl.h"
 #include "lltabcontainer.h"
 #include "lltextbox.h"
+#include "alcodeeditor.h"
+#include "alxuiservice.h"
 #include "lltexteditor.h"
 #include "lltimer.h"
 #include "lltoastalertpanel.h"
@@ -228,157 +231,6 @@ namespace
     constexpr S32 ZOOM_LEAST = (S32)(ALCanvasView::MIN_ZOOM * 100.f);
     constexpr S32 ZOOM_MOST = (S32)(ALCanvasView::MAX_ZOOM * 100.f);
 
-
-    // The sections the attribute grid is divided into, in the order an
-    // author reads them: what the thing is, where it is, what it looks
-    // like, what it does, and then everything a tag will take that none of
-    // those cover.
-    enum EAttributeGroup
-    {
-        GROUP_IDENTITY,
-        GROUP_GEOMETRY,
-        GROUP_APPEARANCE,
-        GROUP_BEHAVIOUR,
-        GROUP_OTHER,
-        // Two sections that are not subjects but verdicts: what a file may
-        // write and the viewer throws away, and what a file writes that
-        // nothing declares. Both are worth an author's eye and neither is
-        // worth being mixed in with the fields that work.
-        GROUP_IGNORED,
-        GROUP_UNKNOWN
-    };
-
-    // The vocabulary of the few fields whose values are a list the viewer
-    // holds rather than an enumeration the schema can read. A font is
-    // named in fonts.xml, its size is named there too, and its style is a
-    // set of flags written with bars between them -- none of which an
-    // author should have to remember, and none of which the type system
-    // knows, since all three are strings as far as the block is concerned.
-    void vocabularyFor(ALPropertyGrid::Field& field)
-    {
-        if (!field.values.empty())
-        {
-            return;
-        }
-        if (field.name == "font")
-        {
-            field.values = LLFontGL::getDeclaredFontNames();
-        }
-        else if (field.name == "font.size")
-        {
-            field.values = LLFontGL::getDeclaredSizeNames();
-        }
-        else if (field.name == "font.style")
-        {
-            field.values = { "BOLD", "ITALIC", "UNDERLINE" };
-            field.flags = true;
-            field.noneWord = "NORMAL";
-        }
-        else if (field.name == "layout")
-        {
-            // Which corner an element's numbers are measured from. Two
-            // answers, and the file writes one of them as a word.
-            field.values = { "topleft", "bottomleft" };
-        }
-        else if (field.name == "follows")
-        {
-            // Which edges of its parent the element is tied to: four
-            // answers, written as one word, and drawn as what they do to
-            // it rather than spelled. The order is the one the picture is
-            // drawn in and not the one a file writes them in.
-            field.values = { "left", "top", "right", "bottom" };
-            field.edges = { "left", "bottom", "right", "top" };
-            field.allWord = "all";
-            field.noneWord = "none";
-        }
-    }
-
-    bool oneOf(std::string_view name, std::initializer_list<std::string_view> names)
-    {
-        return std::find(names.begin(), names.end(), name) != names.end();
-    }
-
-    bool builtFrom(std::string_view name, std::initializer_list<std::string_view> words)
-    {
-        return std::any_of(words.begin(), words.end(), [name](std::string_view word)
-        {
-            return name.find(word) != std::string_view::npos;
-        });
-    }
-
-    // Which section a field belongs in. XUI's vocabulary is wide but its
-    // shape is narrow: a fixed handful of names position a widget and a
-    // fixed handful name it, and what is left divides fairly well by the
-    // words the name is built from. A name none of these rules recognise
-    // is left in the last section rather than guessed at, which is what
-    // that section is for.
-    // The heading a name written in the notes belongs under, or nothing
-    // where no one has written one.
-    S32 sectionFromNotes(std::string_view tag, std::string_view name)
-    {
-        const ALXUINotes::Attribute* said = ALXUINotes::get().attribute(tag, name);
-        if (!said || said->section.empty())
-        {
-            return -1;
-        }
-        if (said->section == "identity")   { return GROUP_IDENTITY; }
-        if (said->section == "geometry")   { return GROUP_GEOMETRY; }
-        if (said->section == "appearance") { return GROUP_APPEARANCE; }
-        if (said->section == "behaviour")  { return GROUP_BEHAVIOUR; }
-        if (said->section == "other")      { return GROUP_OTHER; }
-        return -1;
-    }
-
-    // Which heading a name belongs under, guessed from the name. A guess over
-    // a vocabulary is wrong somewhere, and where it is, the notes say so and
-    // are asked first: a short list of corrections beats a longer heuristic.
-    S32 attributeGroupOf(std::string_view name, std::string_view tag = std::string_view())
-    {
-        if (const S32 said = sectionFromNotes(tag, name); said >= 0)
-        {
-            return said;
-        }
-        // A nested leaf belongs where its block belongs: bg_alpha_color
-        // .alpha is a colour and rect.left is a position.
-        const std::string_view head = name.substr(0, name.find('.'));
-
-        if (oneOf(head, { "name", "label", "label_selected", "value", "initial_value", "title",
-                          "short_title", "tool_tip", "help_topic", "filename", "menu_filename",
-                          "class", "type" }))
-        {
-            return GROUP_IDENTITY;
-        }
-        if (oneOf(head, { "left", "right", "top", "bottom", "width", "height", "rect",
-                          "left_pad", "top_pad", "left_delta", "top_delta", "bottom_delta",
-                          "follows", "layout", "orientation", "min_width", "max_width",
-                          "min_height", "max_height", "min_dim", "max_dim", "expanded_min_dim",
-                          "auto_resize", "user_resize", "border_size" }))
-        {
-            return GROUP_GEOMETRY;
-        }
-        if (oneOf(head, { "enabled", "visible", "mouse_opaque", "tab_stop", "tab_group",
-                          "default_tab_group", "read_only", "allow_text_entry", "chrome",
-                          "single_instance", "reuse_instance", "can_close", "can_drag",
-                          "can_minimize", "can_resize", "can_tear_off", "save_rect",
-                          "save_visibility", "focus_root" }))
-        {
-            return GROUP_BEHAVIOUR;
-        }
-        if (builtFrom(head, { "color", "image", "font", "texture", "bg_", "border", "highlight",
-                              "shadow", "style", "halign", "valign" }))
-        {
-            return GROUP_APPEARANCE;
-        }
-        if (builtFrom(head, { "width", "height", "_pad", "pad_", "margin", "spacing", "delta", "dim" }))
-        {
-            return GROUP_GEOMETRY;
-        }
-        if (builtFrom(head, { "callback", "control", "enabled", "visible", "hover", "focus", "commit" }))
-        {
-            return GROUP_BEHAVIOUR;
-        }
-        return GROUP_OTHER;
-    }
 
     // A layout stack gives its children three of their four numbers and
     // reads the fourth from the file: the width of a panel in a stack
@@ -699,8 +551,13 @@ public:
         toContent(x, y);
         if (grabbed())
         {
-            track(x, y);
-            trackDrop(x, y);
+            // Followed only where the pointer went somewhere: the captor is
+            // hovered every frame, and a hit test a frame is for nothing.
+            if (mDrag.moved(x, y))
+            {
+                track(x, y);
+                trackDrop(x, y);
+            }
             setGripCursor(mGrip);
             return true;
         }
@@ -753,6 +610,7 @@ public:
         toContent(x, y);
         if (grabbed())
         {
+            mDrag.moved(x, y);
             track(x, y);
             trackDrop(x, y);
             const S32 grip = mGrip;
@@ -800,7 +658,7 @@ public:
     void onMouseCaptureLost() override
     {
         dropDrag();
-        LLPanel::onMouseCaptureLost();
+        ALCanvasView::onMouseCaptureLost();
     }
 
     void onMouseLeave(S32 x, S32 y, MASK mask) override
@@ -822,7 +680,8 @@ private:
     static constexpr S32 GRIP_SIZE = 7;
     static constexpr S32 ANCHOR_SIZE = 7;
     static constexpr S32 MOVE_GRIP_SIZE = 13;
-    static constexpr S32 DEAD_ZONE = 3;      // a click is not a drag
+    // A click is not a drag: the hand moves a little on the way down.
+    static constexpr S32 DEAD_ZONE = 2;      // pixels either way, past which it is
 
     // The root of a floater preview is the preview window: its corners
     // are the window's own, and dragging its bar is how the window is
@@ -833,9 +692,12 @@ private:
         return view && view != this && mWhich == ALFloaterXUIStudio::PRIMARY;
     }
 
+    // Past the dead zone since the press, however near it the hand has
+    // come back: a drag out and back is a drag that came to nothing, not a
+    // click.
     bool dragging() const
     {
-        return mDelta[EDGE_L] || mDelta[EDGE_B] || mDelta[EDGE_R] || mDelta[EDGE_T];
+        return mDrag.dragging();
     }
 
     // A handle is held: the button went down on one and has not come up.
@@ -850,6 +712,7 @@ private:
     void dropDrag()
     {
         mLetGo = false;
+        mDrag.cancel();
         mGrip = GRIP_NONE;
         mDrop.markDead();
         for (S32& d : mDelta)
@@ -869,8 +732,7 @@ private:
     bool beginDrag(S32 grip, S32 x, S32 y)
     {
         mGrip = grip;
-        mDragX = x;
-        mDragY = y;
+        mDrag.press(x, y);
         for (S32& d : mDelta)
         {
             d = 0;
@@ -1048,9 +910,9 @@ private:
 
     void track(S32 x, S32 y)
     {
-        S32 dx = x - mDragX;
-        S32 dy = y - mDragY;
-        if (!dragging() && llabs(dx) < DEAD_ZONE && llabs(dy) < DEAD_ZONE)
+        S32 dx = x - mDrag.pressX();
+        S32 dy = y - mDrag.pressY();
+        if (!dragging())
         {
             // The hand moves a little on the way down; a click that
             // selects an element is not a move of it.
@@ -1286,8 +1148,7 @@ private:
 
     bool                mLetGo = false;         // a control press on what was selected
     S32                 mGrip = GRIP_NONE;      // the handle the button went down on
-    S32                 mDragX = 0;
-    S32                 mDragY = 0;
+    ALDragGesture       mDrag{ DEAD_ZONE, ALDragGesture::Zone::EitherAxis };
     S32                 mDelta[EDGE_COUNT] = { 0, 0, 0, 0 };
     LLHandle<LLView>    mDrop;                  // the container a held element would land in
     U32                 mDropFrame = 0;         // the frame a drag tool hover last said so
@@ -1379,52 +1240,6 @@ namespace
 {
     constexpr S32 MAX_FIND_ROWS = 500;
 
-    // The follows flags as a file writes them and back, through the one
-    // reader and writer of a set of named bits. The names sit at bits nought
-    // to three here and the flags do not, so the two are mapped.
-    const std::vector<std::string>& followsNames()
-    {
-        static const std::vector<std::string> names = { "left", "right", "top", "bottom" };
-        return names;
-    }
-    constexpr U32 FOLLOWS_BY_BIT[] = { FOLLOWS_LEFT, FOLLOWS_RIGHT, FOLLOWS_TOP, FOLLOWS_BOTTOM };
-
-    std::string followsText(U32 follows)
-    {
-        U32 bits = 0;
-        for (size_t i = 0; i < std::size(FOLLOWS_BY_BIT); ++i)
-        {
-            bits |= (follows & FOLLOWS_BY_BIT[i]) ? (1u << i) : 0u;
-        }
-        return ALFlagsField::write(bits, followsNames(), "all", "none");
-    }
-
-    U32 followsFlags(std::string_view text)
-    {
-        const U32 bits = ALFlagsField::read(text, followsNames(), "all");
-        U32 follows = FOLLOWS_NONE;
-        for (size_t i = 0; i < std::size(FOLLOWS_BY_BIT); ++i)
-        {
-            follows |= (bits & (1u << i)) ? FOLLOWS_BY_BIT[i] : 0u;
-        }
-        return follows;
-    }
-
-    bool isBuilt(ALXUICatalog::Kind kind)
-    {
-        switch (kind)
-        {
-        case ALXUICatalog::Kind::Floater:
-        case ALXUICatalog::Kind::Panel:
-        case ALXUICatalog::Kind::Menu:
-        case ALXUICatalog::Kind::Widget:
-        case ALXUICatalog::Kind::Template:
-            return true;
-        default:
-            return false;
-        }
-    }
-
     S32 countViews(const LLView* view)
     {
         S32 n = 1;
@@ -1433,102 +1248,6 @@ namespace
             n += countViews(child);
         }
         return n;
-    }
-
-    // From the first '<' on a line, the bytes of the element that starts
-    // there: tags open and close it, and comments and declarations are
-    // skipped over.
-    std::string elementTextAt(const std::string& text, S32 line)
-    {
-        size_t pos = 0;
-        for (S32 l = 1; l < line && pos != std::string::npos; ++l)
-        {
-            pos = text.find('\n', pos);
-            if (pos != std::string::npos)
-            {
-                ++pos;
-            }
-        }
-        if (pos == std::string::npos)
-        {
-            return std::string();
-        }
-        const size_t start = text.find('<', pos);
-        if (start == std::string::npos)
-        {
-            return std::string();
-        }
-        S32 depth = 0;
-        size_t i = start;
-        while (i < text.size())
-        {
-            if (text.compare(i, 4, "<!--") == 0)
-            {
-                const size_t end = text.find("-->", i);
-                i = end == std::string::npos ? text.size() : end + 3;
-                continue;
-            }
-            if (text[i] == '<')
-            {
-                const bool closing = i + 1 < text.size() && text[i + 1] == '/';
-                const bool declaration = i + 1 < text.size() && (text[i + 1] == '?' || text[i + 1] == '!');
-                const size_t end = text.find('>', i);
-                if (end == std::string::npos)
-                {
-                    break;
-                }
-                if (!declaration)
-                {
-                    const bool self_closing = end > 0 && text[end - 1] == '/';
-                    if (closing || self_closing)
-                    {
-                        if (!closing)
-                        {
-                            ++depth;
-                        }
-                        --depth;
-                    }
-                    else
-                    {
-                        ++depth;
-                    }
-                    if (depth <= 0)
-                    {
-                        return text.substr(start, end + 1 - start);
-                    }
-                }
-                i = end + 1;
-                continue;
-            }
-            ++i;
-        }
-        return text.substr(start);
-    }
-
-    std::string numbered(const std::string& text, S32 first_line)
-    {
-        std::string out;
-        S32 line = first_line;
-        size_t start = 0;
-        while (start <= text.size())
-        {
-            size_t end = text.find('\n', start);
-            const bool last = end == std::string::npos;
-            if (last)
-            {
-                end = text.size();
-            }
-            out += std::to_string(line++);
-            out += "  ";
-            out += text.substr(start, end - start);
-            out += '\n';
-            if (last)
-            {
-                break;
-            }
-            start = end + 1;
-        }
-        return out;
     }
 
     const char* KIND_FIELDS[] = { "any", "tag", "attribute", "value", "name", "text" };
@@ -1541,29 +1260,6 @@ namespace
         if (value == "name") return ALXUICatalog::Field::Name;
         if (value == "text") return ALXUICatalog::Field::Text;
         return ALXUICatalog::Field::Any;
-    }
-
-    // The tags the UI library registers. A tag the viewer registers is
-    // built by a viewer class, whose constructor is viewer code with the
-    // expectations of viewer code: a notification to attach to, an agent,
-    // a plugin. A shell build cannot meet them, so those tags are shown
-    // from their files and searched, and built only by the viewer.
-    bool isCoreWidgetTag(const std::string& tag)
-    {
-        static const std::set<std::string> core = {
-            "accordion", "accordion_tab", "badge", "button", "chat_editor", "check_box", "combo_box",
-            "console", "container_view", "context_menu", "filter_editor", "flat_list_view", "floater_view",
-            "flyout_button", "folder_view_item", "fs_virtual_trackpad", "icon", "icons_combo_box",
-            "layout_panel", "layout_stack", "line_editor", "loading_indicator", "locate", "menu",
-            "menu_bar", "menu_button", "menu_item", "menu_item_call", "menu_item_check",
-            "menu_item_separator", "menu_item_tear_off", "multi_slider", "multi_slider_bar", "panel",
-            "progress_bar", "radio_group", "scroll_bar", "scroll_container", "scroll_list",
-            "scrolling_panel_list", "search_editor", "simple_text_editor", "slider", "slider_bar",
-            "spinner", "stat_bar", "stat_view", "sun_moon_trackball", "tab_container", "text", "time",
-            "toggleable_menu", "tool_tip", "toolbar", "tooltip_view", "ui_ctrl", "view", "view_border",
-            "window_shade", "xy_vector"
-        };
-        return core.count(tag) != 0;
     }
 
     // Where the specimen sits in its row, past the label.
@@ -1582,7 +1278,7 @@ namespace
     // with defaults.
     bool galleryTag(const std::string& tag)
     {
-        return isCoreWidgetTag(tag) && ALXUISchema::buildsAlone(tag);
+        return ALXUICatalog::isCoreWidgetTag(tag) && ALXUISchema::buildsAlone(tag);
     }
 }
 
@@ -1729,7 +1425,25 @@ bool ALFloaterXUIStudio::postBuild()
         });
     mLayout = getChild<LLScrollListCtrl>("layout");
     mSourceLayers = getChild<LLTextBox>("source_layers");
-    mSourceText = getChild<LLTextEditor>("source_text");
+    mSourceText = getChild<ALCodeEditor>("source_text");
+    // The source as an editor: what could go here from the schema, what
+    // this is, and what is typed put into the document once it pauses.
+    mSourceText->setCompletionProvider([this](const ALTextPos& at, std::string_view prefix, std::vector<ALCodeEditor::Completion>& out) {
+        ALXUIService::complete(mSourceText->document(), at, prefix, out);
+    });
+    mSourceText->setHoverProvider([this](const ALTextPos& at, std::string_view, std::string& text) {
+        text = ALXUIService::hover(mSourceText->document(), at);
+        return !text.empty();
+    });
+    mSourceText->onTextChanged([this]() { onSourceTyped(); });
+    mSourceText->onCaretMoved([this]() { onSourceCaret(); });
+    mSourceLayerList->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        if (LLScrollListItem* item = mSourceLayerList->getFirstSelected())
+        {
+            mSourceChosen = item->getValue().asString();
+            refreshSource(selectedView());
+        }
+    });
     mBindings = getChild<LLScrollListCtrl>("bindings");
     mState = getChild<LLScrollListCtrl>("state");
     mSelectionFindings = getChild<LLScrollListCtrl>("selection_findings");
@@ -2079,7 +1793,9 @@ void ALFloaterXUIStudio::draw()
         refreshTreeSuffixes();
         fillFindings();
         fillTranslation();
+        decorateSource();
     }
+    pumpSource();
     if (mReloadPending)
     {
         mReloadPending = false;
@@ -2172,8 +1888,9 @@ bool ALFloaterXUIStudio::handleKeyHere(KEY key, MASK mask)
     // Between the two places an element is worked on: the outline, where it
     // is found and moved in the tree, and the canvas, where it is dragged
     // and its handles are. Control and tab rather than tab, because tab
-    // belongs to the field the developer is typing in.
-    if (key == KEY_TAB && mask == MASK_CONTROL)
+    // belongs to the field the developer is typing in; the Mac's own
+    // Control key there, Command-Tab being the system's.
+    if (key == KEY_TAB && (mask == MASK_CONTROL || mask == MASK_MAC_CONTROL))
     {
         ALXUICanvas* canvas = mCanvases[PRIMARY];
         const bool on_canvas = canvas && canvas->getVisible() && gFocusMgr.childHasKeyboardFocus(canvas);
@@ -4427,7 +4144,7 @@ bool ALFloaterXUIStudio::applyLive(const ALXUISelection::path_t& path,
     }
     else if (name == "follows")
     {
-        view->setFollows(followsFlags(value));
+        view->setFollows(ALFollowsControl::followsFlags(value));
         done = true;
     }
     else if (ALXUIEdit::isGeometryAttribute(name))
@@ -5222,7 +4939,7 @@ void ALFloaterXUIStudio::showPreview(S32 which)
         widget_tag = mFile.substr(mFile.rfind('/') + 1);
         widget_tag = widget_tag.substr(0, widget_tag.size() - 4);
     }
-    const bool viewer_widget = !widget_tag.empty() && !isCoreWidgetTag(widget_tag);
+    const bool viewer_widget = !widget_tag.empty() && !ALXUICatalog::isCoreWidgetTag(widget_tag);
     // A template is built from nothing but its tag, and a tag that wants a
     // model, a parent or children it is not given asserts in its own
     // building rather than showing anything.
@@ -5232,7 +4949,7 @@ void ALFloaterXUIStudio::showPreview(S32 which)
     // notifications.xml is a file of templates rather than a view tree; it
     // is built once one of them has been chosen on the Notifications tab.
     const bool notification = entry->kind == ALXUICatalog::Kind::Notifications && !mNotification.empty();
-    if ((!isBuilt(entry->kind) && !notification) || viewer_widget || template_alone)
+    if ((!ALXUICatalog::isBuilt(entry->kind) && !notification) || viewer_widget || template_alone)
     {
         if (which == PRIMARY)
         {
@@ -5937,7 +5654,7 @@ void ALFloaterXUIStudio::toggleFollows(S32 edge)
         return;
     }
 
-    const std::string text = followsText(view->getFollows() ^ flags[edge]);
+    const std::string text = ALFollowsControl::followsText(view->getFollows() ^ flags[edge]);
     if (!held->setAttribute(mSelection.selection(), "follows", text))
     {
         setStatus(held->error());
@@ -6370,17 +6087,17 @@ S32 ALFloaterXUIStudio::lintOneFile(const ALXUICatalog::Entry& entry)
     // alone survives: a folder view item made with no model to show
     // asserts in its own postBuild.
     std::string widget_tag;
-    bool buildable = isBuilt(entry.kind);
+    bool buildable = ALXUICatalog::isBuilt(entry.kind);
     if (entry.kind == ALXUICatalog::Kind::Widget)
     {
         widget_tag = entry.rootTag;
-        buildable = buildable && isCoreWidgetTag(widget_tag);
+        buildable = buildable && ALXUICatalog::isCoreWidgetTag(widget_tag);
     }
     else if (entry.kind == ALXUICatalog::Kind::Template)
     {
         widget_tag = entry.name.substr(entry.name.rfind('/') + 1);
         widget_tag = widget_tag.substr(0, widget_tag.size() - 4);
-        buildable = buildable && isCoreWidgetTag(widget_tag) && ALXUISchema::buildsAlone(widget_tag);
+        buildable = buildable && ALXUICatalog::isCoreWidgetTag(widget_tag) && ALXUISchema::buildsAlone(widget_tag);
     }
     if (!buildable)
     {
@@ -8480,6 +8197,7 @@ bool ALFloaterXUIStudio::redo()
 
 bool ALFloaterXUIStudio::undoEdit()
 {
+    flushSourceEdit();
     // What is about to be put back, asked before it is, since afterwards the
     // step has moved to the other stack. The set's last action rather than
     // the active document's last step: they differ whenever the last edit
@@ -8507,6 +8225,7 @@ bool ALFloaterXUIStudio::undoEdit()
 
 bool ALFloaterXUIStudio::redoEdit()
 {
+    flushSourceEdit();
     if (!mDocuments.redo())
     {
         return false;
@@ -8960,10 +8679,10 @@ void ALFloaterXUIStudio::refreshAttributes(LLView* view)
         }
         // What a field does outranks what its name suggests: an attribute
         // that is thrown away is not a position however it is spelled.
-        field.group = field.ignored ? GROUP_IGNORED
-                    : field.unknown ? GROUP_UNKNOWN
-                                    : attributeGroupOf(name, declared ? declared->name : std::string_view());
-        vocabularyFor(field);
+        field.group = field.ignored ? ALXUIFields::IGNORED
+                    : field.unknown ? ALXUIFields::UNKNOWN
+                                    : ALXUIFields::sectionOf(name, declared ? declared->name : std::string_view());
+        ALXUIFields::vocabularyFor(field);
         // A field drawn as a picture is drawn in the proportions of the
         // element it is about: a rect and the rect it sits in, which are
         // the same coordinates.
@@ -9006,7 +8725,7 @@ void ALFloaterXUIStudio::refreshAttributes(LLView* view)
         field.source = layerLabel(PRIMARY, from ? from->layer : 0);
         field.authored = true;
         field.kind = ALParamType::STRING;
-        field.group = attributeGroupOf(field.name, declared ? declared->name : std::string_view());
+        field.group = ALXUIFields::sectionOf(field.name, declared ? declared->name : std::string_view());
         written.insert(field.name);
         fields.push_back(std::move(field));
     }
@@ -9031,9 +8750,9 @@ void ALFloaterXUIStudio::refreshAttributes(LLView* view)
             field.values = attribute.values;
             field.type = attribute.type;
             field.ignored = attribute.ignored;
-            field.group = field.ignored ? GROUP_IGNORED
-                                        : attributeGroupOf(field.name, declared->name);
-            vocabularyFor(field);
+            field.group = field.ignored ? ALXUIFields::IGNORED
+                                        : ALXUIFields::sectionOf(field.name, declared->name);
+            ALXUIFields::vocabularyFor(field);
             fields.push_back(std::move(field));
         }
     }
@@ -9715,7 +9434,7 @@ void ALFloaterXUIStudio::refreshLayout(LLView* view)
     {
         add("LayoutBoundingRect", rect_of(view->getBoundingRect()));
     }
-    add("LayoutFollows", followsText(view->getFollows()));
+    add("LayoutFollows", ALFollowsControl::followsText(view->getFollows()));
 
     const ALXUICatalog::Layer* layer = nullptr;
     pugi::xml_node element = authoredElement(layer);
@@ -9782,17 +9501,14 @@ void ALFloaterXUIStudio::elementIn(const ALXUICatalog::Layer& layer, const ALXUI
 void ALFloaterXUIStudio::refreshSource(LLView* view)
 {
     mSourceLayers->setText(std::string());
-    mSourceText->setText(std::string());
     mSourcePath.clear();
     mSourceLine = 0;
     fillSourceLayers();
-    if (!view)
-    {
-        return;
-    }
     const ALXUICatalog::Entry* entry = mCatalog.find(mFile);
     if (!entry)
     {
+        mSourceShown.clear();
+        mSourceText->setText(std::string());
         return;
     }
     const Preview& pv = mPreviews[PRIMARY];
@@ -9801,31 +9517,298 @@ void ALFloaterXUIStudio::refreshSource(LLView* view)
     // A layer held as a document is read from the document: the disk is
     // what it was before the edits, and the lines have moved since.
     std::string layers_text;
-    std::string text;
+    std::string chosen_path;
+    S32         chosen_line = 0;
+    std::string first_path;
     for (const ALXUICatalog::Layer* layer : mCatalog.layersFor(*entry, pv.skin, pv.language))
     {
+        if (first_path.empty())
+        {
+            first_path = layer->path;
+        }
         pugi::xml_node node;
         S32 line = 0;
-        elementIn(*layer, mSelection.selection(), node, line);
+        if (view)
+        {
+            elementIn(*layer, mSelection.selection(), node, line);
+        }
         if (!layers_text.empty())
         {
             layers_text += "   ";
         }
         layers_text += layerName(*layer) + ": " + (node ? std::to_string(line) : getString("LayerMissing"));
-        if (!node)
+        if (node)
+        {
+            mSourcePath = layer->path;
+            mSourceLine = line;
+        }
+        if (layer->path == mSourceChosen)
+        {
+            chosen_path = layer->path;
+            chosen_line = node ? line : 0;
+        }
+    }
+    mSourceLayers->setText(layers_text);
+    // The file shown: the one chosen, else the last layer that writes the
+    // element, else the file's first.
+    if (chosen_path.empty())
+    {
+        chosen_path = mSourcePath.empty() ? first_path : mSourcePath;
+        chosen_line = mSourcePath.empty() ? 0 : mSourceLine;
+    }
+    showSourceFile(chosen_path, chosen_line);
+}
+
+void ALFloaterXUIStudio::showSourceFile(const std::string& path, S32 line)
+{
+    if (path.empty())
+    {
+        mSourceShown.clear();
+        mSourceText->setText(std::string());
+        return;
+    }
+    ALXUIEdit* document = mDocuments.find(path);
+    std::string text = document ? document->text() : LLFile::getContents(path);
+    // What was typed into this file and does not parse yet stands in for
+    // the document's text until it does.
+    if (const auto draft = mSourceDrafts.find(path); draft != mSourceDrafts.end())
+    {
+        text = draft->second;
+    }
+    if (mSourceShown != path || (!mSourceEditPending && mSourceText->text() != text))
+    {
+        // Leaving a file: what was typed and not yet taken is taken, or
+        // kept as a draft where it does not parse.
+        if (mSourceEditPending && !mSourceShown.empty())
+        {
+            flushSourceEdit();
+            if (mSourceEditPending)
+            {
+                mSourceDrafts[mSourceShown] = mSourceText->text();
+                mSourceEditPending          = false;
+            }
+        }
+        const bool      same   = mSourceShown == path;
+        const ALTextPos caret  = mSourceText->caret();
+        const S32       scroll = mSourceText->scrollY();
+        mSourceSyncing         = true;
+        mSourceText->setText(text);
+        mSourceSyncing = false;
+        mSourceShown   = path;
+        if (same)
+        {
+            mSourceText->setCaret(mSourceText->document().clamp(caret));
+            mSourceText->setScrollY(scroll);
+        }
+        if (mSourceDrafts.count(path))
+        {
+            // Shown as the draft it is: taken once it parses.
+            mSourceEditPending = true;
+            mSourceEditTimer.reset();
+            mSourceEditTimer.setTimerExpirySec(REREAD_SECONDS);
+        }
+    }
+    mSourceText->setReadOnly(false);
+    // The element's line in sight, when it was the tree that chose it
+    // rather than the caret.
+    if (line > 0 && !mSourceCaretPending && !sourceEditorFocused())
+    {
+        mSourceText->goToLine(line - 1);
+    }
+    decorateSource();
+}
+
+void ALFloaterXUIStudio::decorateSource()
+{
+    if (mSourceShown.empty())
+    {
+        return;
+    }
+    static const LLUIColor error_color   = LLUIColorTable::instance().getColor("CodeMarkError", LLColor4::red);
+    static const LLUIColor warning_color = LLUIColorTable::instance().getColor("CodeMarkWarning", LLColor4::yellow);
+    static const LLUIColor note_color    = LLUIColorTable::instance().getColor("CodeMarkNote", LLColor4::blue);
+    const ALTextDocument&                 text = mSourceText->document();
+    std::vector<ALCodeEditor::Decoration> decorations;
+    mSourceText->clearMarks();
+    auto squiggle = [&](S32 line, S32 column, const std::string& message, ALXUILint::Severity severity) {
+        if (line < 0 || line >= text.lineCount())
+        {
+            return;
+        }
+        const std::string& row   = text.line(line);
+        S32                begin = 0;
+        while (begin < static_cast<S32>(row.size()) && (row[begin] == ' ' || row[begin] == '\t'))
+        {
+            ++begin;
+        }
+        S32 end = static_cast<S32>(row.size());
+        while (end > begin && (row[end - 1] == ' ' || row[end - 1] == '\t' || row[end - 1] == '\r'))
+        {
+            --end;
+        }
+        if (column > begin && column < end)
+        {
+            begin = column;
+        }
+        if (end <= begin)
+        {
+            end = begin + 1;
+        }
+        ALCodeEditor::Decoration d;
+        d.range   = ALTextRange(ALTextPos(line, begin), ALTextPos(line, end));
+        d.message = message;
+        d.color   = severity == ALXUILint::Severity::Error ? error_color.get() : severity == ALXUILint::Severity::Warning ? warning_color.get() : note_color.get();
+        decorations.push_back(std::move(d));
+        const ALCodeEditor::Mark mark = severity == ALXUILint::Severity::Error ? ALCodeEditor::Mark::Error
+                                        : severity == ALXUILint::Severity::Warning ? ALCodeEditor::Mark::Warning
+                                                                                    : ALCodeEditor::Mark::Note;
+        if (static_cast<U8>(mark) > static_cast<U8>(mSourceText->markAt(line)))
+        {
+            mSourceText->setMark(line, mark);
+        }
+    };
+    // Whether the text parses at all, first: a parse error is the one
+    // finding the lint cannot make, since there is nothing to lint.
+    ALTextPos   where;
+    std::string message;
+    if (!ALXUIService::parses(mSourceText->text(), where, message))
+    {
+        squiggle(where.line, where.column, message, ALXUILint::Severity::Error);
+    }
+    // Then what the lint said of this file's elements: each finding on
+    // the line its element starts on in the layer shown, where that layer
+    // writes the element; a finding that names a layer rather than an
+    // element -- a layer applied to nothing -- on the line it names.
+    ALXUIEdit* shown = mDocuments.find(mSourceShown);
+    for (const ALXUILint::Finding* f : mFindingStore.select(ALXUIFindings::Query()).found)
+    {
+        if (!f->file.empty() && f->file != mFile && f->file != mSourceShown)
         {
             continue;
         }
-        const std::string* held = mDocuments.textFor(layer->path);
-        const std::string file_text = held ? *held : LLFile::getContents(layer->path);
-        text += "--- " + layer->path + ":" + std::to_string(line) + "\n";
-        text += numbered(elementTextAt(file_text, line), line);
-        text += "\n";
-        mSourcePath = layer->path;
-        mSourceLine = line;
+        S32 line = 0;
+        if (shown && !f->path.empty())
+        {
+            if (const pugi::xml_node node = shown->resolve(f->path))
+            {
+                line = shown->lineOf(node);
+            }
+        }
+        else if (f->file == mSourceShown || (f->path.empty() && mSourceShown == mSourcePath))
+        {
+            line = f->line;
+        }
+        if (line <= 0)
+        {
+            continue;
+        }
+        squiggle(line - 1, 0, f->message, f->severity);
     }
-    mSourceLayers->setText(layers_text);
-    mSourceText->setText(text);
+    mSourceText->setDecorations(std::move(decorations));
+}
+
+void ALFloaterXUIStudio::onSourceTyped()
+{
+    if (mSourceSyncing || mSourceShown.empty())
+    {
+        return;
+    }
+    // Taken into the document once the typing pauses, as the file is
+    // read again once the property grid's typing pauses.
+    mSourceEditPending = true;
+    mSourceEditTimer.reset();
+    mSourceEditTimer.setTimerExpirySec(REREAD_SECONDS);
+    decorateSource();
+}
+
+void ALFloaterXUIStudio::onSourceCaret()
+{
+    if (mSourceSyncing || mSourceShown.empty() || !sourceEditorFocused())
+    {
+        return;
+    }
+    mSourceCaretPending = true;
+}
+
+void ALFloaterXUIStudio::flushSourceEdit()
+{
+    if (!mSourceEditPending)
+    {
+        return;
+    }
+    ALXUIEdit* document = mDocuments.open(mSourceShown);
+    if (!document)
+    {
+        mSourceEditPending = false;
+        return;
+    }
+    const std::string text = mSourceText->text();
+    LLStringUtil::format_map_t args;
+    args["[FILE]"] = fileNameOf(mSourceShown);
+    // Text that does not parse is not the document's yet: the last text
+    // that did stays in force, the tree and the preview with it, and the
+    // editor keeps what was typed until it parses. Still pending, so the
+    // next pause tries again.
+    ALTextPos   where;
+    std::string message;
+    if (!ALXUIService::parses(text, where, message))
+    {
+        args["[LINE]"]    = std::to_string(where.line + 1);
+        args["[MESSAGE]"] = message;
+        setStatus(getString("SourceEditedBroken", args), true);
+        mSourceEditTimer.reset();
+        mSourceEditTimer.setTimerExpirySec(REREAD_SECONDS * 4.f);
+        return;
+    }
+    mSourceEditPending = false;
+    mSourceDrafts.erase(mSourceShown);
+    if (text == document->text())
+    {
+        return;
+    }
+    document->setSource(text);
+    documentChanged(getString("SourceEdited", args));
+}
+
+void ALFloaterXUIStudio::pumpSource()
+{
+    if (mSourceEditPending && mSourceEditTimer.hasExpired())
+    {
+        flushSourceEdit();
+    }
+    // The document moved on under the editor -- an edit from the tree, an
+    // undo, a reload -- and the editor is in sight: its text follows.
+    if (!mSourceEditPending && !mSourceShown.empty() && mSourceText->isInVisibleChain() && mSourceSyncTimer.hasExpired())
+    {
+        mSourceSyncTimer.reset();
+        mSourceSyncTimer.setTimerExpirySec(0.25f);
+        if (const ALXUIEdit* document = mDocuments.find(mSourceShown); document && document->text() != mSourceText->text())
+        {
+            showSourceFile(mSourceShown, 0);
+        }
+    }
+    if (mSourceCaretPending)
+    {
+        mSourceCaretPending = false;
+        // The element the caret is on, chosen in the tree, from the text
+        // as the document has it -- a text still being typed may not
+        // parse, and then the last parse stands.
+        if (ALXUIEdit* document = mDocuments.find(mSourceShown))
+        {
+            ALXUIEdit::path_t path;
+            if (document->elementAtLine(mSourceText->caret().line + 1, path) && path != mSelection.selection())
+            {
+                mSourceCaretPending = true;  // so that the selection's own refresh keeps the caret where it is
+                mSelection.select(path);
+                mSourceCaretPending = false;
+            }
+        }
+    }
+}
+
+bool ALFloaterXUIStudio::sourceEditorFocused() const
+{
+    return mSourceText && gFocusMgr.childHasKeyboardFocus(mSourceText);
 }
 
 void ALFloaterXUIStudio::refreshBindings(LLView* view)
