@@ -604,4 +604,91 @@ namespace tut
         ensure("same leaves", one[0].mLeaves == two[0].mLeaves);
         ensure("same normal", one[0].mNormal == two[0].mNormal);
     }
+
+    // The shut leaf and the same leaf swung open about a hinge at y = 0.
+    FeaturePart shutLeaf(U32 n, F64 y0 = 0.0)
+    {
+        FeaturePart p = part(1, n, 0, y0, 0, 0.125, y0 + 1.06, 3.0);
+        p.mScripted = p.mTouch = true;
+        return p;
+    }
+
+    FeaturePart openLeaf(U32 n)
+    {
+        FeaturePart p = part(1, n, 0, -0.125, 0, 1.06, 0, 3.0);
+        p.mScripted = p.mTouch = true;
+        return p;
+    }
+
+    std::vector<DoorEntity> doorsNow(const std::vector<FeaturePart>& parts, LeafHistories& h)
+    {
+        const std::vector<FeatureRoot> roots = { root(1) };
+        return buildDoorEntities(classifyFeatures(parts, roots, FeatureParams()), parts, roots, &h);
+    }
+
+    // A leaf seen open briefly and then shut keeps the shut plane, even when
+    // looked at while open; while it swings the plane is not known.
+    template<> template<>
+    void sknavfeatures_object::test<22>()
+    {
+        LeafHistories h;
+        F32 t = 0.f;
+        for (; t <= 10.f; t += 1.f)
+        {
+            observeLeaf(h[id(1)], shutLeaf(1), t);
+        }
+        observeLeaf(h[id(1)], openLeaf(1), t);
+        std::vector<DoorEntity> d = doorsNow({ openLeaf(1) }, h);
+        ensure("swinging: plane unknown", d.size() == 1 && !d[0].mPlaneKnown);
+        t += 1.f;
+        observeLeaf(h[id(1)], openLeaf(1), t);
+        t += 1.f;
+        observeLeaf(h[id(1)], openLeaf(1), t);
+        d = doorsNow({ openLeaf(1) }, h);
+        ensure("resting open: plane known", d.size() == 1 && d[0].mPlaneKnown);
+        ensure("the shut plane", d[0].mNormal.mV[VX] > 0.99f && std::fabs(d[0].mPlanePoint.mdV[VX] - 0.0625) < 1e-4);
+        ensure("the shut box", d[0].mMax.mdV[VX] < 0.2 && d[0].mMax.mdV[VY] > 1.0);
+    }
+
+    // A double door with one leaf standing open is still one cut: one plane
+    // and the width of both leaves shut.
+    template<> template<>
+    void sknavfeatures_object::test<23>()
+    {
+        LeafHistories h;
+        for (F32 t = 0.f; t <= 10.f; t += 1.f)
+        {
+            observeLeaf(h[id(1)], shutLeaf(1), t);
+            observeLeaf(h[id(2)], shutLeaf(2, 1.06), t);
+        }
+        // Leaf 1 swings open and rests there briefly; the classifier still
+        // sees two leaves, but not side by side, so it is given them apart.
+        for (F32 t = 11.f; t <= 13.f; t += 1.f)
+        {
+            observeLeaf(h[id(1)], openLeaf(1), t);
+            observeLeaf(h[id(2)], shutLeaf(2, 1.06), t);
+        }
+        std::vector<Feature> features = { Feature() };
+        features[0].mKind = FeatureKind::DOOR;
+        features[0].mParts = { id(1), id(2) };
+        features[0].mNormal.set(0.f, 1.f, 0.f);
+        const std::vector<FeaturePart> parts = { openLeaf(1), shutLeaf(2, 1.06) };
+        const std::vector<DoorEntity> d = buildDoorEntities(features, parts, { root(1) }, &h);
+        ensure("one door", d.size() == 1 && d[0].mDouble && d[0].mPlaneKnown);
+        ensure_approximately_equals("both leaves wide", d[0].mWidth, 2.12f, 8);
+        ensure("one plane at the doorway", d[0].mNormal.mV[VX] > 0.99f && std::fabs(d[0].mPlanePoint.mdV[VX] - 0.0625) < 1e-4);
+    }
+
+    // A double door keeps its id while one leaf drops out and comes back.
+    template<> template<>
+    void sknavfeatures_object::test<24>()
+    {
+        LeafHistories h;
+        std::vector<DoorEntity> d = doorsNow({ shutLeaf(9), shutLeaf(4, 1.06) }, h);
+        ensure("pair named for its smallest leaf", d.size() == 1 && d[0].mId == id(4));
+        d = doorsNow({ shutLeaf(9) }, h);
+        ensure("the leaf left keeps the id", d.size() == 1 && d[0].mId == id(4));
+        d = doorsNow({ shutLeaf(9), shutLeaf(4, 1.06) }, h);
+        ensure("and the pair again", d.size() == 1 && d[0].mId == id(4) && d[0].mDouble);
+    }
 }
