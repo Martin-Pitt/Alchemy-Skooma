@@ -53,6 +53,8 @@ struct SKCensusSnapshot
     /// Doors, ladders, shafts, vehicles and seats among this scan's parts.
     /// The records carry a part's kind from the scan after.
     std::vector<sknav::Feature> mFeatures;
+    /// A DoorEntity per DOOR feature, built while the parts' names were at hand.
+    std::vector<sknav::DoorEntity> mDoors;
 
     struct Stats
     {

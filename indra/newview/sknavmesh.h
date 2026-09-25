@@ -107,6 +107,12 @@ public:
     const FeatureSpan* featureSpan(const LLUUID& id) const;
     static LLUUID featureId(const sknav::Feature& feature);
 
+    /// The census's doors whose box meets this one, global. Main thread only:
+    /// the rooms pass copies the doors overlapping its tiles into its job
+    /// input and never reads the live table from a worker.
+    typedef std::function<void(const sknav::DoorEntity& door)> DoorFn;
+    void doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const;
+
     /// The cover a segment ahead of this position gives someone of that eye
     /// height, and how tall it is. False when nothing is within reach.
     bool coverAt(const LLVector3d& pos, const LLVector3& dir, sknav::AgentClass cls, F32 eye_height,
@@ -278,6 +284,9 @@ private:
     /// whenever a tile they touch publishes.
     std::map<U64, std::map<LLUUID, FeatureSpan>> mFeatureLinks;
     U64 mFeatureStamp = 0;          ///< the census the spans were taken from
+    /// Doors by region handle, swapped whole from each new census; a region
+    /// that has gone drops out with the next one.
+    std::map<U64, std::vector<sknav::DoorEntity>> mFeatureDoors;
     std::unique_ptr<LL::ThreadPool> mWorkers;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;

@@ -1129,6 +1129,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
 
     snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
     snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
+    snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots);
 
     // What the next scan records each part with, and what stays with a root
     // for the session: a vehicle stays one, a working car stays working.

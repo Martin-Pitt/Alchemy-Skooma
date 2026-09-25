@@ -1523,6 +1523,20 @@ LLUUID SKNavMesh::featureId(const Feature& feature)
     return feature.mRoots.empty() ? LLUUID::null : *std::min_element(feature.mRoots.begin(), feature.mRoots.end());
 }
 
+void SKNavMesh::doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const
+{
+    for (const auto& region : mFeatureDoors)
+    {
+        for (const DoorEntity& door : region.second)
+        {
+            if (overlapsXY(door.mMin, door.mMax, min, max) && door.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= door.mMax.mdV[VZ])
+            {
+                fn(door);
+            }
+        }
+    }
+}
+
 void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
 {
     if (snap && snap->mStamp != mFeatureStamp)
@@ -1577,6 +1591,17 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
             mRevision++;
         }
         mFeatureLinks.swap(next);
+
+        std::map<U64, std::vector<DoorEntity>> doors;
+        for (const DoorEntity& door : snap->mDoors)
+        {
+            if (LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(door.mPlanePoint))
+            {
+                DoorEntity& d = doors[region->getHandle()].emplace_back(door);
+                d.mRegion = region->getHandle();
+            }
+        }
+        mFeatureDoors.swap(doors);
     }
 
     for (auto& region : mFeatureLinks)
