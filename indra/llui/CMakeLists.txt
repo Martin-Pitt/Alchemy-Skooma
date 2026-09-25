@@ -6,6 +6,7 @@ target_sources(
   llui
   PRIVATE
     alangledial.cpp
+    aldraggesture.cpp
     alcornerfield.cpp
     aloffsetpad.cpp
     alpanefolds.cpp
@@ -124,13 +125,35 @@ target_sources(
     alhistorylist.cpp
     alimagefield.cpp
     aljumpbar.cpp
+    alpanelist.cpp
     alpopover.cpp
     alquickopen.cpp
     alscopebar.cpp
     alsettingrow.cpp
     alspecimenlist.cpp
     alstudiofloater.cpp
+    alsurface.cpp
+    alcodeeditor.cpp
+    alcompletionmodel.cpp
+    alfixlistmodel.cpp
+    alsnippetsession.cpp
+    alfindbar.cpp
+    alkeymap.cpp
+    alvimkeymap.cpp
+    alxuiservice.cpp
+    alchoicelist.cpp
+    aloutputview.cpp
+    alsyntaxgrammar.cpp
+    alsyntaxhighlighter.cpp
     altabstrip.cpp
+    altextdocument.cpp
+    altextlayout.cpp
+    altextsearch.cpp
+    altextview.cpp
+    altextundo.cpp
+    alnotecarditems.cpp
+    alscripttheme.cpp
+    alscriptsnippets.cpp
     alfollowscontrol.cpp
     alfontfield.cpp
     alcolorpicker.cpp
@@ -138,8 +161,8 @@ target_sources(
     alxuicatalog.cpp
     alxuidiagnostics.cpp
     alxuiedit.cpp
+    alxuifields.cpp
     alxuidocuments.cpp
-    alxuifindings.cpp
     alxuilint.cpp
     alxuinotes.cpp
     alxuioverlay.cpp
@@ -154,6 +177,7 @@ target_sources(
     FILE_SET HEADERS
       FILES
         alangledial.h
+        aldraggesture.h
         alcornerfield.h
         aloffsetpad.h
         alpanefolds.h
@@ -288,15 +312,40 @@ target_sources(
         alhistorylist.h
         alimagefield.h
         aljumpbar.h
+        alpanelist.h
         alpopover.h
         alquickopen.h
+        alsaid.h
+        altextchars.h
         alscopebar.h
         alsettingrow.h
         alspecimenlist.h
         alstudiofloater.h
+        alsurface.h
         alundostack.h
         alstringmatch.h
+        alcodeeditor.h
+        alcompletionmodel.h
+        alfixlistmodel.h
+        alsnippetsession.h
+        alfindings.h
+        alfindbar.h
+        alkeymap.h
+        alvimkeymap.h
+        alxuiservice.h
+        alchoicelist.h
+        aloutputview.h
+        alsyntaxgrammar.h
+        alsyntaxhighlighter.h
         altabstrip.h
+        altextdocument.h
+        altextlayout.h
+        altextsearch.h
+        altextview.h
+        altextundo.h
+        alnotecarditems.h
+        alscripttheme.h
+        alscriptsnippets.h
         alfollowscontrol.h
         alfontfield.h
         alcolorpicker.h
@@ -304,6 +353,7 @@ target_sources(
         alxuicatalog.h
         alxuidiagnostics.h
         alxuiedit.h
+        alxuifields.h
         alxuidocuments.h
         alxuifindings.h
         alxuilint.h
@@ -387,11 +437,23 @@ if(AL_BUILD_TESTS)
   )
   al_add_test(llchatautocompletemodel UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(llurlmatch UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(altextdocument UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(altextundo UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
+  al_add_test(alnotecarditems UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(alscriptsnippets UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(
+    alsyntaxhighlighter
+    UNIT
+    PROJECT llui
+    SOURCES alsyntaxgrammar.cpp altextdocument.cpp
+    LIBRARIES ${test_libs}
+  )
 
   set(test_libs llui ${test_libs})
   foreach(
     test
     llstatbar
+    lltextparser
     llview
     lluistring
     llxuiparser
@@ -431,6 +493,7 @@ if(AL_BUILD_TESTS)
     aldockpanel
     alpanefolds
     alangledial
+    aldraggesture
     aloffsetpad
     alemptystate
     alxuifill
@@ -440,13 +503,17 @@ if(AL_BUILD_TESTS)
     alxuicatalog
     alxuilint
     alxuiedit
+    alfindbar
     alhistorylist
     alpopover
     alscopebar
     aljumpbar
+    alpanelist
     alspecimenlist
     altabstrip
     alquickopen
+    alstudiofloater
+    alxuifields
     alxuischema
     alxuiselection
     alxuisourcemap
@@ -455,6 +522,20 @@ if(AL_BUILD_TESTS)
     alcolorsheet
     lluicolortable
     alundostack
+    alsyntaxgrammars
+    altextlayout
+    altextsearch
+    altextview
+    alcodeeditor
+    alcompletionmodel
+    alfixlistmodel
+    alsnippetsession
+    alscripttheme
+    alvimkeymap
+    alxuiservice
+    aloutputview
+    alchoicelist
+    llurlregistry
   )
     al_add_test(
       ${test}

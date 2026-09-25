@@ -1079,6 +1079,63 @@ namespace tut
                       std::string("no bar here [MISSING] -=[Stylized Name]=-"));
     }
 
+    template<> template<>
+    void string_index_object_t::test<48>()
+    {
+        set_test_name("format over two maps reads the first's value where both have a key, as a merge with the first kept would");
+
+        LLStringUtil::format_map_t first;
+        first["[APP]"] = "Alchemy";
+        first["[BOTH]"] = "first";
+        first["[BARE]"] = "bracketed in the first";
+        first["datetime"] = "0";
+        LLStringUtil::format_map_t second;
+        second["[NAME]"] = "Rye";
+        second["[BOTH]"] = "second";
+        second["BARE"] = "bare in the second";
+        second["[COUNT]"] = "3.14159";
+
+        // A bare key is found before a bracketed one whichever map has it,
+        // as the merge's one lookup order had it.
+        const char* const text = "[APP] for [NAME]: [BOTH], [BARE], [COUNT,number,2], [MISSING]";
+        std::string       s(text);
+        ensure_equals("five put in", 5, LLStringUtil::format(s, first, second));
+        ensure_equals("from either, the first first, a number formatted, what neither has left", s,
+                      std::string("Alchemy for Rye: first, bare in the second, 3.14, [MISSING]"));
+
+        // The same as the merge would give.
+        LLStringUtil::format_map_t merged = first;
+        merged.insert(second.begin(), second.end());
+        std::string m(text);
+        LLStringUtil::format(m, merged);
+        ensure_equals("as the merge", s, m);
+
+        // The maps the other way about: the second's value where both have
+        // the key.
+        std::string r("[BOTH]");
+        ensure_equals("one put in", 1, LLStringUtil::format(r, second, first));
+        ensure_equals("the other first", r, std::string("second"));
+
+        std::string plain("nothing bracketed");
+        ensure_equals("nothing to do", 0, LLStringUtil::format(plain, first, second));
+        ensure_equals("and nothing done", plain, std::string("nothing bracketed"));
+
+        // A map over an LLSD map, as a notification's substitutions under
+        // the defaults: the map first, the LLSD where the map has nothing,
+        // and a datetime the LLSD lacks counted from the epoch as the LLSD
+        // form has always had it.
+        LLSD sd;
+        sd["NAME"] = "Rye";
+        sd["[BOTH]"] = "the notification's";
+        std::string over("[APP] for [NAME]: [BOTH]");
+        ensure_equals("three put in", 3, LLStringUtil::format(over, first, sd));
+        ensure_equals("the map first, the LLSD after", over, std::string("Alchemy for Rye: first"));
+        LLSD not_a_map;
+        std::string alone("[APP] [NAME]");
+        ensure_equals("with no LLSD map, the map alone", 1, LLStringUtil::format(alone, first, not_a_map));
+        ensure_equals("what the map had", alone, std::string("Alchemy [NAME]"));
+    }
+
     // Both views replaceString takes are allowed to point into the string it is
     // replacing into, and both are read after a replace that can have moved the
     // buffer under them. Taking them by value used to make that safe without
