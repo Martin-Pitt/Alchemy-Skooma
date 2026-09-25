@@ -57,7 +57,8 @@
 // menu bar instead. Keys the popover and its content do not take go home
 // to the floater the anchor was in, the way a pane out in a window of its
 // own sends them (ALPanelFloater), so a window's own shortcuts still answer
-// while one of its popovers has the keyboard.
+// while one of its popovers has the keyboard. And it is that window's
+// dependent: it closes when the window does, however the window went.
 class ALPopover : public LLFloater
 {
 public:
@@ -71,6 +72,17 @@ public:
     // whole of it and there is no bar to drag it by.
     static ALPopover* show(LLView* anchor, LLPanel* content,
                            const std::string& title = LLStringUtil::null);
+    // Over the anchor instead: centred on it a little below its top,
+    // where a prompt over a window goes, as a quick open does.
+    static ALPopover* showOver(LLView* anchor, LLPanel* content,
+                               const std::string& title = LLStringUtil::null);
+    // Beside a rect of the screen rather than beside the anchor's own: what
+    // is on a zoomed or panned canvas, whose place only the canvas can say
+    // (ALCanvasView::screenRectOf), or the pointer. The anchor is still
+    // what it is about -- the window keys go home to, and that it closes
+    // with.
+    static ALPopover* showAt(const LLRect& screen, LLView* anchor, LLPanel* content,
+                             const std::string& title = LLStringUtil::null);
 
     // What a popover this size is built from: no close box, no minimise,
     // no tear-off, nothing saved, and a size a person may change only
@@ -92,13 +104,20 @@ public:
     // above it where under would run off the bottom, and shoved back on
     // screen where a side would run off, then shown and given the keyboard.
     void openBeside(const LLView* anchor);
+    // The same beside a rect of the screen, for the anchor.
+    void openBeside(const LLRect& screen, const LLView* anchor);
+    // Opened over the anchor: centred on it, its top a little below the
+    // anchor's, shoved back on screen where it would run off.
+    void openOver(const LLView* anchor);
 
     // Gone, having settled: what a caller calls when the thing in it has been
-    // chosen. The closed signal says it was not escaped.
-    void settle();
+    // chosen, and what a return key does. The closed signal says it was
+    // not escaped. A popover with more to note about settling than that
+    // overrides it, and is reached however the settling came.
+    virtual void settle();
 
     // Gone, keeping nothing.
-    void escape();
+    virtual void escape();
 
     // Told as it goes: true where it was escaped, so a caller that applies on
     // close knows to apply nothing.
@@ -123,10 +142,19 @@ protected:
     ALPopover(const LLFloater::Params& p);
 
 private:
+    // The window the anchor is in, adopted as where keys go home to.
+    void adopt(const LLView* anchor);
+    void openAt(LLRect where);
+
+    // Closed from the keyboard, the keyboard back where it was when it
+    // opened, where nothing else has taken it: not the world's.
+    void giveKeysBack();
+
     bool                mEscaped = false;
     bool                mSaidSo = false;    // the signal is sent once
     closed_signal_t     mClosed;
     LLHandle<LLFloater> mHome;
+    LLHandle<LLView>    mKeysBefore;
     // What paramsRemembered was asked for, and so what the size is kept as.
     std::string         mSizeKind;
 };
