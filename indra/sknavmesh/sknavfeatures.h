@@ -28,6 +28,7 @@
 #include "sknavtypes.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace sknav
@@ -111,6 +112,62 @@ namespace sknav
     /// doors and the shafts their stacks make; a part belongs to one feature.
     std::vector<Feature> classifyFeatures(const std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
                                           const FeatureParams& params);
+
+    /// One doorway as the rooms and the map see it: plain values, no viewer
+    /// types. Positions are global.
+    struct DoorEntity
+    {
+        LLUUID mId;                     ///< the smallest leaf part id, stable while the leaves are
+        U64 mRegion = 0;                ///< region handle; set by whoever keys the table by region
+        LLVector3d mMin;                ///< AABB of the leaves where they rest shut, or as they are when that is not known
+        LLVector3d mMax;
+        LLVector3d mPlanePoint;         ///< on the leaves' plane, at the sill
+        bool mPlaneKnown = true;        ///< false while a leaf moves or has no rest pose: use the AABB only
+        LLVector3 mNormal;              ///< the leaf's thin axis, horizontal, x (then y) positive
+        F32 mWidth = 0.f;               ///< across the opening, in the plane
+        F32 mHeight = 0.f;
+        F64 mSill = 0.0;                ///< bottom of the leaves
+        bool mDouble = false;
+        std::vector<LLUUID> mLeaves;    ///< sorted
+        F32 mConfidence = 0.f;
+        bool mDamageable = false;       ///< an LBA description or health in the hover text
+        std::string mName;              ///< the leaf's own name, else its linkset's
+    };
+
+    /// Where one door leaf has come to rest this session. A door rests shut
+    /// most of the time, so the pose it has spent longest at is its doorway.
+    struct LeafHistory
+    {
+        std::vector<FeaturePart> mRests;    ///< distinct still poses, first seen first
+        std::vector<F32> mDwell;            ///< seconds spent at each
+        FeaturePart mLast;                  ///< the pose at the last look
+        bool mSeen = false;
+        bool mMoving = false;               ///< it had moved since the look before
+        bool mEverMoved = false;
+        F32 mLastSeen = 0.f;
+        LLUUID mDoor;                       ///< the door id it was last given, kept for the session
+    };
+
+    /// One look at a leaf at time now. Poses within the tolerance, in metres
+    /// at the leaf's corners, are one pose.
+    void observeLeaf(LeafHistory& history, const FeaturePart& pose, F32 now, F32 tolerance = 0.02f);
+
+    /// The pose that stands for the doorway: the current one for a leaf that
+    /// has never moved, else the rest it has spent longest at. False while it
+    /// moves or before any rest is known.
+    bool doorwayPose(const LeafHistory& history, FeaturePart& out);
+
+    typedef std::unordered_map<LLUUID, LeafHistory> LeafHistories;
+
+    /// A DoorEntity per DOOR feature, sorted by id, whatever order the parts
+    /// came in. Leaves missing from the parts are skipped. A leaf with no
+    /// history is taken as never having moved; the ids come from the
+    /// histories' mDoor where a leaf has one, which this writes back.
+    std::vector<DoorEntity> buildDoorEntities(const std::vector<Feature>& features, const std::vector<FeaturePart>& parts,
+                                              const std::vector<FeatureRoot>& roots, LeafHistories* histories = nullptr);
+
+    /// An LBA description or health shown in the hover text.
+    bool isDamageable(const FeatureRoot& root);
 
     /// The classes a part of this kind is left out of, as Record::mExclude.
     U8 excludeFor(FeatureKind kind);

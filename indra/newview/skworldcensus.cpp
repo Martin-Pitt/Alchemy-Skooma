@@ -55,6 +55,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace
 {
@@ -442,6 +443,10 @@ void SKWorldCensus::finishScan()
         const bool keep = it->second.mVehicle || it->second.mWorkingElevator
             || gFrameTimeSeconds - it->second.mLastSeen <= HISTORY_KEEP_SECONDS;
         it = keep ? std::next(it) : mHistory.erase(it);
+    }
+    for (auto it = mLeaves.begin(); it != mLeaves.end();)
+    {
+        it = (gFrameTimeSeconds - it->second.mLastSeen > HISTORY_KEEP_SECONDS) ? mLeaves.erase(it) : std::next(it);
     }
     for (auto it = mParts.begin(); it != mParts.end();)
     {
@@ -1129,6 +1134,24 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
 
     snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
     snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
+    // A leaf is watched from the scan it is first a door, and stays watched
+    // while it swings, when the rules may not call it one.
+    std::unordered_set<LLUUID> leaves;
+    for (const Feature& f : snap.mFeatures)
+    {
+        if (f.mKind == FeatureKind::DOOR)
+        {
+            leaves.insert(f.mParts.begin(), f.mParts.end());
+        }
+    }
+    for (const FeaturePart& p : mScan.mFeatureParts)
+    {
+        if (leaves.count(p.mPart) || mLeaves.count(p.mPart))
+        {
+            observeLeaf(mLeaves[p.mPart], p, gFrameTimeSeconds);
+        }
+    }
+    snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
 
     // What the next scan records each part with, and what stays with a root
     // for the session: a vehicle stays one, a working car stays working.

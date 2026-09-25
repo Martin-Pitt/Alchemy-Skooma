@@ -53,6 +53,8 @@ struct SKCensusSnapshot
     /// Doors, ladders, shafts, vehicles and seats among this scan's parts.
     /// The records carry a part's kind from the scan after.
     std::vector<sknav::Feature> mFeatures;
+    /// A DoorEntity per DOOR feature, built while the parts' names were at hand.
+    std::vector<sknav::DoorEntity> mDoors;
 
     struct Stats
     {
@@ -225,6 +227,8 @@ private:
         U8 mExclude = 0;
     };
     std::unordered_map<LLUUID, PartFeature> mPartFeatures;
+    /// Where each door leaf has rested this session, and the door id it was given.
+    sknav::LeafHistories mLeaves;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F32 mRolesRequestedAt = -1.f;

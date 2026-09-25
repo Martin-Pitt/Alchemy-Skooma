@@ -1531,6 +1531,20 @@ LLUUID SKNavMesh::featureId(const Feature& feature)
     return feature.mRoots.empty() ? LLUUID::null : *std::min_element(feature.mRoots.begin(), feature.mRoots.end());
 }
 
+void SKNavMesh::doorsIn(const LLVector3d& min, const LLVector3d& max, const DoorFn& fn) const
+{
+    for (const auto& region : mFeatureDoors)
+    {
+        for (const DoorEntity& door : region.second)
+        {
+            if (overlapsXY(door.mMin, door.mMax, min, max) && door.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= door.mMax.mdV[VZ])
+            {
+                fn(door);
+            }
+        }
+    }
+}
+
 void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
 {
     if (snap && snap->mStamp != mFeatureStamp)
@@ -1585,6 +1599,17 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
             mRevision++;
         }
         mFeatureLinks.swap(next);
+
+        std::map<U64, std::vector<DoorEntity>> doors;
+        for (const DoorEntity& door : snap->mDoors)
+        {
+            if (LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(door.mPlanePoint))
+            {
+                DoorEntity& d = doors[region->getHandle()].emplace_back(door);
+                d.mRegion = region->getHandle();
+            }
+        }
+        mFeatureDoors.swap(doors);
     }
 
     for (auto& region : mFeatureLinks)
@@ -1969,6 +1994,10 @@ std::string SKNavMesh::markUnderCamera()
                 << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
                 << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << " part "
                 << shape_type(r, false) << " root " << shape_type(r, true);
+            if (r->mFeature != FeatureKind::NONE)
+            {
+                out << " feature " << static_cast<S32>(r->mFeature) << " exclude " << static_cast<S32>(r->mExclude);
+            }
             if (covers)
             {
                 out << " <-- covers the mark";
@@ -2118,6 +2147,24 @@ std::string SKNavMesh::markUnderCamera()
         }
     }
 
+    // The door the mark is on, or within half a metre of.
+    {
+        const LLVector3d near_mark(0.5, 0.5, 0.5);
+        S32 doors = 0;
+        doorsIn(mMark - near_mark, mMark + near_mark, [&](const DoorEntity& d) {
+            const bool leaf = std::find(d.mLeaves.begin(), d.mLeaves.end(), hit->getID()) != d.mLeaves.end();
+            out << "door " << d.mId << (leaf ? " (marked leaf)" : "") << " width " << d.mWidth << " height " << d.mHeight
+                << " sill " << d.mSill << " normal " << d.mNormal << (d.mPlaneKnown ? "" : " (plane unknown)") << (d.mDouble ? " double" : " single") << " leaves "
+                << d.mLeaves.size() << " confidence " << d.mConfidence << (d.mDamageable ? " damageable" : "") << " name \""
+                << d.mName << "\"\n";
+            ++doors;
+        });
+        if (!doors)
+        {
+            out << "no door entity at the mark\n";
+        }
+    }
+
     // And what the navmesh built from it.
     for (const auto& entry : mMeshes)
     {
@@ -2155,7 +2202,25 @@ std::string SKNavMesh::markUnderCamera()
                 << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
                 << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
                 << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
-                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0);
+            if (r->mFeature != FeatureKind::NONE)
+            {
+                out << " feature " << static_cast<S32>(r->mFeature) << " exclude " << static_cast<S32>(r->mExclude);
+            }
+            out << "\n";
+        }
+        // Whether the tile was built with the marked part, and as what: a
+        // doorway that does not connect is a leaf the build did not leave out.
+        const auto marked = std::find_if(tile.mRecords.begin(), tile.mRecords.end(),
+                                         [&](const RecordPtr& r) { return r->mPart == hit->getID(); });
+        if (marked == tile.mRecords.end())
+        {
+            out << "    marked part not in this tile\n";
+        }
+        else
+        {
+            out << "    marked part in this tile, feature " << static_cast<S32>((*marked)->mFeature) << " exclude "
+                << static_cast<S32>((*marked)->mExclude) << "\n";
         }
         if (tile.mFaces)
         {
@@ -2524,14 +2589,58 @@ std::string SKNavMesh::exportAll() const
             file << '}';
         }
     }
+    file << ']';
+
+    // The door table as the rooms pass would read it. Names are anyone's
+    // text, so they are escaped.
+    U32 doors_written = 0;
+    file << ",\"doors\":[";
+    for (const auto& region : mFeatureDoors)
+    {
+        for (const DoorEntity& d : region.second)
+        {
+            if (doors_written++)
+            {
+                file << ',';
+            }
+            file << "{\"id\":\"" << d.mId << "\",\"region\":" << d.mRegion << ",\"min\":";
+            vec3d(d.mMin);
+            file << ",\"max\":";
+            vec3d(d.mMax);
+            file << ",\"plane\":";
+            vec3d(d.mPlanePoint);
+            file << ",\"planeKnown\":" << (d.mPlaneKnown ? "true" : "false") << ",\"normal\":";
+            vec3(d.mNormal);
+            file << ",\"width\":" << d.mWidth << ",\"height\":" << d.mHeight << ",\"sill\":" << d.mSill
+                 << ",\"double\":" << (d.mDouble ? "true" : "false") << ",\"confidence\":" << d.mConfidence
+                 << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"";
+            for (const char c : d.mName)
+            {
+                if (c == '"' || c == '\\')
+                {
+                    file << '\\' << c;
+                }
+                else if (static_cast<unsigned char>(c) >= 0x20)
+                {
+                    file << c;
+                }
+            }
+            file << "\",\"leaves\":[";
+            for (size_t i = 0; i < d.mLeaves.size(); ++i)
+            {
+                file << (i ? ",\"" : "\"") << d.mLeaves[i] << '"';
+            }
+            file << "]}";
+        }
+    }
     file << "]}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u air (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, airs_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, doors_written, airs_written,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 

@@ -159,6 +159,63 @@ namespace
         normal.normVec();
         return true;
     }
+
+    // Two leaves side by side in one plane, touching: one double door.
+    bool sideBySide(const FeaturePart& pa, const LLVector3& na, F32 ta, const FeaturePart& pb, const LLVector3& nb, F32 tb)
+    {
+        if (std::fabs(na * nb) < 0.98f)
+        {
+            return false;
+        }
+        const LLVector3 d(pb.mCenter - pa.mCenter);
+        const F32 off_plane = std::fabs(d * na);
+        const LLVector3d slack(0.05, 0.05, 0.05);
+        const F64 shared_z = std::min(pa.mMax.mdV[VZ], pb.mMax.mdV[VZ]) - std::max(pa.mMin.mdV[VZ], pb.mMin.mdV[VZ]);
+        const F64 shorter = std::min(pa.mMax.mdV[VZ] - pa.mMin.mdV[VZ], pb.mMax.mdV[VZ] - pb.mMin.mdV[VZ]);
+        return off_plane <= 0.1f + std::max(ta, tb) && overlapsPlan(pa.mMin - slack, pa.mMax + slack, pb.mMin, pb.mMax)
+            && shared_z >= 0.5 * shorter;
+    }
+
+    // The thinner of a leaf's two lying axes, flattened; zero for a leaf
+    // with no axis standing up.
+    LLVector3 thinAxis(const FeaturePart& p)
+    {
+        S32 up = -1;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            if (std::fabs(p.mAxes[k].mV[VZ]) >= 0.95f)
+            {
+                up = k;
+            }
+        }
+        if (up < 0)
+        {
+            return LLVector3::zero;
+        }
+        const S32 a = (up + 1) % 3, b = (up + 2) % 3;
+        LLVector3 n = p.mAxes[p.mHalf.mV[a] <= p.mHalf.mV[b] ? a : b];
+        n.mV[VZ] = 0.f;
+        n.normVec();
+        return n;
+    }
+
+    // Two poses of one leaf are one when its centre and every half axis,
+    // and so every corner, lie within the tolerance.
+    bool samePose(const FeaturePart& a, const FeaturePart& b, F32 tolerance)
+    {
+        if (dist_vec(a.mCenter, b.mCenter) > tolerance)
+        {
+            return false;
+        }
+        for (S32 k = 0; k < 3; ++k)
+        {
+            if (dist_vec(a.mAxes[k] * a.mHalf.mV[k], b.mAxes[k] * b.mHalf.mV[k]) > tolerance)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 }
 
 namespace sknav
@@ -325,7 +382,7 @@ namespace sknav
             {
                 // LBA marks damageable walls as well as vehicles: it is a
                 // property of a vehicle here, never the reason for one.
-                f.mCombat = r.mDescription.compare(0, 6, "LBA.v.") == 0 || hoverShowsHealth(r.mHover);
+                f.mCombat = isDamageable(r);
                 f.mAir = r.mClearance >= params.mAirClearance;
                 if (f.mCombat)
                 {
@@ -518,19 +575,8 @@ namespace sknav
         {
             for (size_t b = a + 1; b < leaves.size(); ++b)
             {
-                const FeaturePart& pa = parts[leaves[a].mPart];
-                const FeaturePart& pb = parts[leaves[b].mPart];
-                if (std::fabs(leaves[a].mNormal * leaves[b].mNormal) < 0.98f)
-                {
-                    continue;
-                }
-                const LLVector3 d(pb.mCenter - pa.mCenter);
-                const F32 off_plane = std::fabs(d * leaves[a].mNormal);
-                const LLVector3d slack(0.05, 0.05, 0.05);
-                const F64 shared_z = std::min(pa.mMax.mdV[VZ], pb.mMax.mdV[VZ]) - std::max(pa.mMin.mdV[VZ], pb.mMin.mdV[VZ]);
-                const F64 shorter = std::min(pa.mMax.mdV[VZ] - pa.mMin.mdV[VZ], pb.mMax.mdV[VZ] - pb.mMin.mdV[VZ]);
-                if (off_plane <= 0.1f + std::max(leaves[a].mThickness, leaves[b].mThickness)
-                    && overlapsPlan(pa.mMin - slack, pa.mMax + slack, pb.mMin, pb.mMax) && shared_z >= 0.5 * shorter)
+                if (sideBySide(parts[leaves[a].mPart], leaves[a].mNormal, leaves[a].mThickness, parts[leaves[b].mPart],
+                               leaves[b].mNormal, leaves[b].mThickness))
                 {
                     pairs.unite(static_cast<S32>(a), static_cast<S32>(b));
                 }
@@ -689,5 +735,263 @@ namespace sknav
             out.push_back(std::move(shaft));
         }
         return out;
+    }
+
+    bool isDamageable(const FeatureRoot& root)
+    {
+        return root.mDescription.compare(0, 6, "LBA.v.") == 0 || hoverShowsHealth(root.mHover);
+    }
+
+    std::vector<DoorEntity> buildDoorEntities(const std::vector<Feature>& features, const std::vector<FeaturePart>& parts,
+                                              const std::vector<FeatureRoot>& roots, LeafHistories* histories)
+    {
+        std::unordered_map<LLUUID, const FeaturePart*> part_of;
+        for (const FeaturePart& p : parts)
+        {
+            part_of[p.mPart] = &p;
+        }
+        std::unordered_map<LLUUID, const FeatureRoot*> root_of;
+        for (const FeatureRoot& r : roots)
+        {
+            root_of[r.mRoot] = &r;
+        }
+
+        // The classifier pairs leaves as they stand, so a double door with a
+        // leaf open comes as two doors; paired again where the leaves rest,
+        // falling back to where they stand, it is one doorway.
+        std::vector<Feature> doors;
+        std::vector<FeaturePart> rest_of;       // per leaf, all doors' leaves in order
+        std::vector<S32> door_of_leaf;
+        for (const Feature& f : features)
+        {
+            if (f.mKind != FeatureKind::DOOR)
+            {
+                continue;
+            }
+            for (const LLUUID& id : f.mParts)
+            {
+                const auto it = part_of.find(id);
+                if (it == part_of.end())
+                {
+                    continue;
+                }
+                FeaturePart pose = *it->second;
+                if (histories)
+                {
+                    const auto h = histories->find(id);
+                    if (h != histories->end() && h->second.mSeen && !doorwayPose(h->second, pose))
+                    {
+                        pose = *it->second;
+                    }
+                }
+                rest_of.push_back(pose);
+                door_of_leaf.push_back(static_cast<S32>(doors.size()));
+            }
+            doors.push_back(f);
+        }
+        Groups joined(doors.size());
+        for (size_t a = 0; a < rest_of.size(); ++a)
+        {
+            for (size_t b = a + 1; b < rest_of.size(); ++b)
+            {
+                const LLVector3 na = thinAxis(rest_of[a]), nb = thinAxis(rest_of[b]);
+                if (door_of_leaf[a] != door_of_leaf[b] && !na.isExactlyZero() && !nb.isExactlyZero()
+                    && sideBySide(rest_of[a], na, 2.f * std::min(rest_of[a].mHalf.mV[0], std::min(rest_of[a].mHalf.mV[1], rest_of[a].mHalf.mV[2])),
+                                  rest_of[b], nb, 2.f * std::min(rest_of[b].mHalf.mV[0], std::min(rest_of[b].mHalf.mV[1], rest_of[b].mHalf.mV[2]))))
+                {
+                    joined.unite(door_of_leaf[a], door_of_leaf[b]);
+                }
+            }
+        }
+        for (size_t i = 0; i < doors.size(); ++i)
+        {
+            const size_t g = static_cast<size_t>(joined.find(static_cast<S32>(i)));
+            if (g != i)
+            {
+                doors[g].mParts.insert(doors[g].mParts.end(), doors[i].mParts.begin(), doors[i].mParts.end());
+                doors[g].mConfidence = std::max(doors[g].mConfidence, doors[i].mConfidence);
+                doors[i].mParts.clear();
+            }
+        }
+
+        std::vector<DoorEntity> out;
+        for (const Feature& f : doors)
+        {
+            if (f.mParts.empty())
+            {
+                continue;
+            }
+            std::vector<const FeaturePart*> leaves;
+            for (const LLUUID& id : f.mParts)
+            {
+                if (const auto it = part_of.find(id); it != part_of.end())
+                {
+                    leaves.push_back(it->second);
+                }
+            }
+            if (leaves.empty())
+            {
+                continue;
+            }
+            std::sort(leaves.begin(), leaves.end(), [](const FeaturePart* a, const FeaturePart* b) { return a->mPart < b->mPart; });
+
+            DoorEntity d;
+            d.mId = leaves.front()->mPart;
+            // Each leaf where the doorway is: an open leaf lies across the
+            // room, so the plane comes from where it rests shut.
+            std::vector<FeaturePart> poses;
+            for (const FeaturePart* p : leaves)
+            {
+                FeaturePart pose = *p;
+                if (histories)
+                {
+                    const auto h = histories->find(p->mPart);
+                    if (h != histories->end() && h->second.mSeen && !doorwayPose(h->second, pose))
+                    {
+                        pose = *p;
+                        d.mPlaneKnown = false;
+                    }
+                }
+                pose.mPart = p->mPart;
+                pose.mRoot = p->mRoot;
+                pose.mName = p->mName;
+                poses.push_back(std::move(pose));
+            }
+            // One sign whichever leaf the classifier met first.
+            d.mNormal = f.mNormal;
+            if (const LLVector3 n = thinAxis(poses.front()); !n.isExactlyZero())
+            {
+                d.mNormal = n;
+            }
+            if (d.mNormal.mV[VX] < -1e-4f || (std::fabs(d.mNormal.mV[VX]) <= 1e-4f && d.mNormal.mV[VY] < 0.f))
+            {
+                d.mNormal = -d.mNormal;
+            }
+            const LLVector3 across(-d.mNormal.mV[VY], d.mNormal.mV[VX], 0.f);
+            // The width from each leaf's own box, not its AABB, so a leaf
+            // turned off the grid is not counted wider than it is.
+            F64 lo = 0.0, hi = 0.0;
+            LLVector3d centre;
+            for (size_t i = 0; i < poses.size(); ++i)
+            {
+                const FeaturePart& p = poses[i];
+                grow(d.mMin, d.mMax, p.mMin, p.mMax, i == 0);
+                F64 reach = 0.0;
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    reach += std::fabs(p.mAxes[k] * across) * p.mHalf.mV[k];
+                }
+                const F64 c = p.mCenter.mdV[VX] * across.mV[VX] + p.mCenter.mdV[VY] * across.mV[VY];
+                lo = i == 0 ? c - reach : std::min(lo, c - reach);
+                hi = i == 0 ? c + reach : std::max(hi, c + reach);
+                centre += p.mCenter;
+                d.mLeaves.push_back(p.mPart);
+                const auto r = root_of.find(p.mRoot);
+                d.mDamageable = d.mDamageable || (r != root_of.end() && isDamageable(*r->second));
+                if (d.mName.empty())
+                {
+                    d.mName = !p.mName.empty() ? p.mName : r != root_of.end() ? r->second->mName : std::string();
+                }
+            }
+            centre *= 1.0 / static_cast<F64>(leaves.size());
+            d.mSill = d.mMin.mdV[VZ];
+            d.mPlanePoint.set(centre.mdV[VX], centre.mdV[VY], d.mSill);
+            d.mWidth = static_cast<F32>(hi - lo);
+            d.mHeight = static_cast<F32>(d.mMax.mdV[VZ] - d.mMin.mdV[VZ]);
+            d.mDouble = leaves.size() > 1;
+            d.mConfidence = f.mConfidence;
+            out.push_back(std::move(d));
+        }
+        std::sort(out.begin(), out.end(), [](const DoorEntity& a, const DoorEntity& b) { return a.mId < b.mId; });
+
+        // A door keeps the id it was first given while any of its leaves
+        // does, so a leaf of a pair dropping out does not rename the door.
+        if (histories)
+        {
+            std::vector<LLUUID> used;
+            for (DoorEntity& d : out)
+            {
+                LLUUID sticky;
+                for (const LLUUID& leaf : d.mLeaves)
+                {
+                    const auto h = histories->find(leaf);
+                    if (h != histories->end() && h->second.mDoor.notNull()
+                        && std::find(used.begin(), used.end(), h->second.mDoor) == used.end() && (sticky.isNull() || h->second.mDoor < sticky))
+                    {
+                        sticky = h->second.mDoor;
+                    }
+                }
+                if (sticky.notNull())
+                {
+                    d.mId = sticky;
+                }
+                used.push_back(d.mId);
+                for (const LLUUID& leaf : d.mLeaves)
+                {
+                    (*histories)[leaf].mDoor = d.mId;
+                }
+            }
+            std::sort(out.begin(), out.end(), [](const DoorEntity& a, const DoorEntity& b) { return a.mId < b.mId; });
+        }
+        return out;
+    }
+
+    void observeLeaf(LeafHistory& history, const FeaturePart& pose, F32 now, F32 tolerance)
+    {
+        if (!history.mSeen)
+        {
+            history.mSeen = true;
+            history.mRests.assign(1, pose);
+            history.mDwell.assign(1, 0.f);
+        }
+        else if (samePose(history.mLast, pose, tolerance))
+        {
+            // Still since the last look: the time between counts for this rest.
+            history.mMoving = false;
+            size_t i = 0;
+            while (i < history.mRests.size() && !samePose(history.mRests[i], pose, tolerance))
+            {
+                ++i;
+            }
+            if (i == history.mRests.size())
+            {
+                if (history.mRests.size() >= 8)
+                {
+                    // The briefest rest makes way for the new one.
+                    i = std::min_element(history.mDwell.begin(), history.mDwell.end()) - history.mDwell.begin();
+                    history.mRests[i] = pose;
+                    history.mDwell[i] = 0.f;
+                }
+                else
+                {
+                    history.mRests.push_back(pose);
+                    history.mDwell.push_back(0.f);
+                }
+            }
+            history.mDwell[i] += std::max(0.f, now - history.mLastSeen);
+        }
+        else
+        {
+            history.mMoving = true;
+            history.mEverMoved = true;
+        }
+        history.mLast = pose;
+        history.mLastSeen = now;
+    }
+
+    bool doorwayPose(const LeafHistory& history, FeaturePart& out)
+    {
+        if (!history.mSeen || history.mMoving || history.mRests.empty())
+        {
+            return false;
+        }
+        if (!history.mEverMoved)
+        {
+            out = history.mLast;
+            return true;
+        }
+        const size_t i = std::max_element(history.mDwell.begin(), history.mDwell.end()) - history.mDwell.begin();
+        out = history.mRests[i];
+        return true;
     }
 }
