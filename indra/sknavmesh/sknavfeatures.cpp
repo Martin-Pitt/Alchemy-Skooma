@@ -160,6 +160,22 @@ namespace
         return true;
     }
 
+    // Two leaves side by side in one plane, touching: one double door.
+    bool sideBySide(const FeaturePart& pa, const LLVector3& na, F32 ta, const FeaturePart& pb, const LLVector3& nb, F32 tb)
+    {
+        if (std::fabs(na * nb) < 0.98f)
+        {
+            return false;
+        }
+        const LLVector3 d(pb.mCenter - pa.mCenter);
+        const F32 off_plane = std::fabs(d * na);
+        const LLVector3d slack(0.05, 0.05, 0.05);
+        const F64 shared_z = std::min(pa.mMax.mdV[VZ], pb.mMax.mdV[VZ]) - std::max(pa.mMin.mdV[VZ], pb.mMin.mdV[VZ]);
+        const F64 shorter = std::min(pa.mMax.mdV[VZ] - pa.mMin.mdV[VZ], pb.mMax.mdV[VZ] - pb.mMin.mdV[VZ]);
+        return off_plane <= 0.1f + std::max(ta, tb) && overlapsPlan(pa.mMin - slack, pa.mMax + slack, pb.mMin, pb.mMax)
+            && shared_z >= 0.5 * shorter;
+    }
+
     // The thinner of a leaf's two lying axes, flattened; zero for a leaf
     // with no axis standing up.
     LLVector3 thinAxis(const FeaturePart& p)
@@ -559,19 +575,8 @@ namespace sknav
         {
             for (size_t b = a + 1; b < leaves.size(); ++b)
             {
-                const FeaturePart& pa = parts[leaves[a].mPart];
-                const FeaturePart& pb = parts[leaves[b].mPart];
-                if (std::fabs(leaves[a].mNormal * leaves[b].mNormal) < 0.98f)
-                {
-                    continue;
-                }
-                const LLVector3 d(pb.mCenter - pa.mCenter);
-                const F32 off_plane = std::fabs(d * leaves[a].mNormal);
-                const LLVector3d slack(0.05, 0.05, 0.05);
-                const F64 shared_z = std::min(pa.mMax.mdV[VZ], pb.mMax.mdV[VZ]) - std::max(pa.mMin.mdV[VZ], pb.mMin.mdV[VZ]);
-                const F64 shorter = std::min(pa.mMax.mdV[VZ] - pa.mMin.mdV[VZ], pb.mMax.mdV[VZ] - pb.mMin.mdV[VZ]);
-                if (off_plane <= 0.1f + std::max(leaves[a].mThickness, leaves[b].mThickness)
-                    && overlapsPlan(pa.mMin - slack, pa.mMax + slack, pb.mMin, pb.mMax) && shared_z >= 0.5 * shorter)
+                if (sideBySide(parts[leaves[a].mPart], leaves[a].mNormal, leaves[a].mThickness, parts[leaves[b].mPart],
+                               leaves[b].mNormal, leaves[b].mThickness))
                 {
                     pairs.unite(static_cast<S32>(a), static_cast<S32>(b));
                 }
@@ -751,10 +756,68 @@ namespace sknav
             root_of[r.mRoot] = &r;
         }
 
-        std::vector<DoorEntity> out;
+        // The classifier pairs leaves as they stand, so a double door with a
+        // leaf open comes as two doors; paired again where the leaves rest,
+        // falling back to where they stand, it is one doorway.
+        std::vector<Feature> doors;
+        std::vector<FeaturePart> rest_of;       // per leaf, all doors' leaves in order
+        std::vector<S32> door_of_leaf;
         for (const Feature& f : features)
         {
             if (f.mKind != FeatureKind::DOOR)
+            {
+                continue;
+            }
+            for (const LLUUID& id : f.mParts)
+            {
+                const auto it = part_of.find(id);
+                if (it == part_of.end())
+                {
+                    continue;
+                }
+                FeaturePart pose = *it->second;
+                if (histories)
+                {
+                    const auto h = histories->find(id);
+                    if (h != histories->end() && h->second.mSeen && !doorwayPose(h->second, pose))
+                    {
+                        pose = *it->second;
+                    }
+                }
+                rest_of.push_back(pose);
+                door_of_leaf.push_back(static_cast<S32>(doors.size()));
+            }
+            doors.push_back(f);
+        }
+        Groups joined(doors.size());
+        for (size_t a = 0; a < rest_of.size(); ++a)
+        {
+            for (size_t b = a + 1; b < rest_of.size(); ++b)
+            {
+                const LLVector3 na = thinAxis(rest_of[a]), nb = thinAxis(rest_of[b]);
+                if (door_of_leaf[a] != door_of_leaf[b] && !na.isExactlyZero() && !nb.isExactlyZero()
+                    && sideBySide(rest_of[a], na, 2.f * std::min(rest_of[a].mHalf.mV[0], std::min(rest_of[a].mHalf.mV[1], rest_of[a].mHalf.mV[2])),
+                                  rest_of[b], nb, 2.f * std::min(rest_of[b].mHalf.mV[0], std::min(rest_of[b].mHalf.mV[1], rest_of[b].mHalf.mV[2]))))
+                {
+                    joined.unite(door_of_leaf[a], door_of_leaf[b]);
+                }
+            }
+        }
+        for (size_t i = 0; i < doors.size(); ++i)
+        {
+            const size_t g = static_cast<size_t>(joined.find(static_cast<S32>(i)));
+            if (g != i)
+            {
+                doors[g].mParts.insert(doors[g].mParts.end(), doors[i].mParts.begin(), doors[i].mParts.end());
+                doors[g].mConfidence = std::max(doors[g].mConfidence, doors[i].mConfidence);
+                doors[i].mParts.clear();
+            }
+        }
+
+        std::vector<DoorEntity> out;
+        for (const Feature& f : doors)
+        {
+            if (f.mParts.empty())
             {
                 continue;
             }

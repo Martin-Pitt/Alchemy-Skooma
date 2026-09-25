@@ -691,4 +691,34 @@ namespace tut
         d = doorsNow({ shutLeaf(9), shutLeaf(4, 1.06) }, h);
         ensure("and the pair again", d.size() == 1 && d[0].mId == id(4) && d[0].mDouble);
     }
+
+    // The classifier sees a double door with one leaf standing open as two
+    // doors; their rest poses make it one doorway again, under the pair's id.
+    template<> template<>
+    void sknavfeatures_object::test<25>()
+    {
+        LeafHistories h;
+        std::vector<DoorEntity> d = doorsNow({ shutLeaf(1), shutLeaf(2, 1.06) }, h);
+        ensure("shut: one pair", d.size() == 1 && d[0].mId == id(1));
+        for (F32 t = 0.f; t <= 10.f; t += 1.f)
+        {
+            observeLeaf(h[id(1)], shutLeaf(1), t);
+            observeLeaf(h[id(2)], shutLeaf(2, 1.06), t);
+        }
+        for (F32 t = 11.f; t <= 13.f; t += 1.f)
+        {
+            observeLeaf(h[id(1)], openLeaf(1), t);
+            observeLeaf(h[id(2)], shutLeaf(2, 1.06), t);
+        }
+        const std::vector<FeaturePart> parts = { openLeaf(1), shutLeaf(2, 1.06) };
+        const std::vector<FeatureRoot> roots = { root(1) };
+        const std::vector<Feature> features = classifyFeatures(parts, roots, FeatureParams());
+        ensure_equals("the classifier sees two doors", ofKind(features, FeatureKind::DOOR).size(), 2u);
+        d = buildDoorEntities(features, parts, roots, &h);
+        ensure_equals("one entity", d.size(), 1u);
+        ensure("the pair's id, both leaves", d[0].mId == id(1) && d[0].mDouble && d[0].mLeaves.size() == 2);
+        ensure_approximately_equals("both leaves wide", d[0].mWidth, 2.12f, 8);
+        ensure("one plane at the doorway", d[0].mPlaneKnown && d[0].mNormal.mV[VX] > 0.99f
+                                               && std::fabs(d[0].mPlanePoint.mdV[VX] - 0.0625) < 1e-4);
+    }
 }
