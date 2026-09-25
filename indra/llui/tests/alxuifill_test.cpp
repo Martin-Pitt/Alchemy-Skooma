@@ -24,6 +24,13 @@
 
 #include "linden_common.h"
 
+#include "../alcodeeditor.h"
+#include "../aldockpanel.h"
+#include "../aljumpbar.h"
+#include "../aloutputview.h"
+#include "../alpanelist.h"
+#include "../alscopebar.h"
+#include "../altabstrip.h"
 #include "../llfloater.h"
 #include "../lllayoutstack.h"
 #include "../llresizebar.h"
@@ -54,6 +61,28 @@ namespace tut
     struct alxuifill_data
     {
         ll_test::HeadlessUI& ui = ll_test::HeadlessUI::get();
+
+        // The studio's own widgets, made reachable: a static library links
+        // a widget's registrar only with the object file that holds its
+        // block, and a tag nothing registered builds nothing, which leaves
+        // a page short of a child and the rule below reading it wrongly.
+        alxuifill_data()
+        {
+            ALCodeEditor::Params editor;
+            ALDockPanel::Params  dock;
+            ALJumpBar::Params    jump;
+            ALOutputView::Params output;
+            ALPaneList::Params   pane;
+            ALScopeBar::Params   scope;
+            ALTabStrip::Params   tabs;
+            (void)editor.name;
+            (void)dock.name;
+            (void)jump.name;
+            (void)output.name;
+            (void)pane.name;
+            (void)scope.name;
+            (void)tabs.name;
+        }
 
         // A file built the way the studio builds one to look at it: as a
         // child of a panel, so nothing it does reaches the floater view.
@@ -231,6 +260,59 @@ namespace tut
             report += "\n  " + gap;
         }
         ensure("every stack fills what it is in:" + report, gaps.empty());
+        stage->die();
+    }
+
+    // Script Studio: a strip of tabs, the editor, and a band of problems
+    // under it, all in one stack that is the whole window between its menu
+    // bar and its status line.
+    template<> template<>
+    void alxuifill_object::test<3>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+
+        LLPanel* stage = nullptr;
+        LLFloater* floater = build("floater_script_studio.xml", stage);
+        ensure("the script studio window builds", floater != nullptr);
+
+        std::vector<std::string> gaps;
+        ensureFills("floater_script_studio.xml", floater, gaps);
+
+        std::string report;
+        for (const std::string& gap : gaps)
+        {
+            report += "\n  " + gap;
+        }
+        ensure("every stack fills what it is in:" + report, gaps.empty());
+
+        LLLayoutStack* main = floater->findChild<LLLayoutStack>("main_stack", true);
+        ensure("the window is a stack", main != nullptr);
+        ensure("the band of problems is in it", main->findChild<LLLayoutPanel>("bottom_panel", true) != nullptr);
+        LLLayoutPanel* editor = main->findChild<LLLayoutPanel>("editor_host", true);
+        ensure("the editor is in it", editor != nullptr);
+        // The bar between the band and what is above it belongs to the panel
+        // above the boundary -- the strip under the editor, since the
+        // breadcrumb moved there -- so it is that panel's bar that drags
+        // the band.
+        LLLayoutPanel* above = nullptr;
+        for (LLView* child : *main->getChildList())
+        {
+            if (LLLayoutPanel* panel = child->as<LLLayoutPanel>())
+            {
+                if (panel->getName() == "bottom_panel")
+                {
+                    break;
+                }
+                above = panel;
+            }
+        }
+        ensure("something sits above the band", above != nullptr);
+        ensure("and the band can be dragged from " + above->getName(),
+               above->getResizeBar() && above->getResizeBar()->getVisible());
+
         stage->die();
     }
 }

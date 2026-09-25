@@ -26,7 +26,11 @@
 
 #include "alquickopen.h"
 
+#include "alsaid.h"
+#include "alsurface.h"
+
 #include "lllineeditor.h"
+#include "llrender2dutils.h"
 #include "llscrolllistctrl.h"
 #include "lluictrlfactory.h"
 
@@ -38,6 +42,10 @@ namespace
 {
     constexpr S32 FIELD_HEIGHT = 24;
     constexpr S32 GAP = 4;
+    // The inset from the frame, once there is one.
+    constexpr S32 INSET = 6;
+    // The list's own border, which LLScrollListCtrl keeps to itself.
+    constexpr S32 BORDER = 2;
 
     // What each degree of meaning it is worth. The gaps are wide because
     // these are kinds and not amounts: no number of scattered letters adds up
@@ -48,6 +56,9 @@ namespace
     constexpr S32 SCORE_WORD_START  = 2000;
     constexpr S32 SCORE_RUN         = 1000;
     constexpr S32 SCORE_SCATTERED   = 100;
+    // The most scattered letters are worth: with the shortest label, the
+    // soonest finish.
+    constexpr S32 SCORE_SCATTERED_MOST = SCORE_SCATTERED + 200;
     // What the other words a candidate answers to score below what its
     // label would for the same match: a tier. A label that answers is
     // still what was typed, and the words are how else it is known.
@@ -161,16 +172,20 @@ S32 ALQuickOpen::score(std::string_view label, std::string_view query)
         }
     }
 
+    // The two that are worth less the further in they are found keep to
+    // their own tier however far that is: a run never sinks to scattered
+    // letters, and scattered letters never to nothing -- a long line of
+    // history is still an answer.
     if (const size_t at = lowered.find(wanted); at != std::string::npos)
     {
         // A run anywhere, worth less the further in it starts.
-        return SCORE_RUN + brevity - (S32)at;
+        return llmax(SCORE_SCATTERED_MOST + 1, SCORE_RUN + brevity - (S32)llmin(at, (size_t)SCORE_RUN));
     }
 
     size_t reach = 0;
     if (inOrder(lowered, wanted, reach))
     {
-        return SCORE_SCATTERED + brevity - (S32)reach;
+        return llmax(1, SCORE_SCATTERED + brevity - (S32)llmin(reach, (size_t)SCORE_SCATTERED_MOST));
     }
     return 0;
 }
@@ -208,7 +223,7 @@ std::vector<size_t> ALQuickOpen::rank(const std::vector<Candidate>& candidates,
 
 ALQuickOpen::Params::Params()
 :   placeholder("placeholder"),
-    rows("rows", 12)
+    rows("rows", 100)
 {
 }
 
@@ -230,6 +245,9 @@ ALQuickOpen::ALQuickOpen(const Params& p)
     // already, and clicking away after typing chose the top match. Return
     // still commits, through LLPanel::handleKeyHere.
     fp.commit_on_focus_lost = false;
+    // The placeholder says what to type, and the field has the keyboard
+    // from the start: it stays until something is typed.
+    fp.show_label_focused = true;
     mField = LLUICtrlFactory::create<LLLineEditor>(fp);
     mField->setKeystrokeCallback([this](LLLineEditor* editor, void*)
     {
@@ -275,19 +293,64 @@ void ALQuickOpen::setQuery(const std::string& query)
         mField->setText(query);
     }
     fill();
+    mQueryChanged(mQuery);
+}
+
+void ALQuickOpen::setPrefix(const std::string& prefix)
+{
+    mPrefix = prefix;
+    fill();
+}
+
+std::string_view ALQuickOpen::matched() const
+{
+    std::string_view query(mQuery);
+    if (!mPrefix.empty() && query.compare(0, mPrefix.size(), mPrefix) == 0)
+    {
+        query.remove_prefix(mPrefix.size());
+        query.remove_prefix(std::min(query.size(), query.find_first_not_of(' ')));
+    }
+    return query;
+}
+
+void ALQuickOpen::setHint(const std::string& hint)
+{
+    mFreeform = true;
+    mHint     = hint;
+    fill();
 }
 
 void ALQuickOpen::fill()
 {
-    mRanked = rank(mCandidates, mQuery);
-    // As many as were asked for: the answer meant is at the top, and a
-    // list of seven hundred rows made again on every letter typed is
-    // what the ranking exists to spare.
-    if (mRows > 0 && mRanked.size() > (size_t)mRows)
+    if (mFreeform)
+    {
+        // The one row, saying what return does; chosen, so return takes it.
+        mRanked.clear();
+        mList->deleteAllItems();
+        mList->setCommentText(LLStringUtil::null);
+        LLSD row;
+        row["value"]                = mQuery;
+        row["columns"][0]["column"] = "label";
+        row["columns"][0]["value"]  = mHint;
+        mList->addElement(row);
+        // Not chosen: return takes what was typed whatever the list says
+        // (`chooseSelected`), and a chosen row draws a band inset within
+        // the list, which is a box of its own width under the field's.
+        return;
+    }
+    const std::string_view asked = matched();
+    mRanked                      = rank(mCandidates, asked);
+    // As many as were asked for while something is typed: the answer
+    // meant is at the top, and a list of seven hundred rows made again on
+    // every letter typed is what the ranking exists to spare. With nothing
+    // typed the list is being browsed, and all of it is there to scroll.
+    if (mRows > 0 && !asked.empty() && mRanked.size() > (size_t)mRows)
     {
         mRanked.resize((size_t)mRows);
     }
     mList->deleteAllItems();
+    // Nothing to choose says so, rather than being an empty box.
+    mList->setCommentText(mRanked.empty() && !asked.empty() ? alSaid("QuickOpenNone", "Nothing matches") : LLStringUtil::null);
     for (size_t at : mRanked)
     {
         LLSD row;
@@ -307,12 +370,47 @@ void ALQuickOpen::fill()
     }
 }
 
-void ALQuickOpen::chooseSelected()
+void ALQuickOpen::chooseSelected(bool hold)
 {
-    if (const LLScrollListItem* item = mList->getFirstSelected())
+    chose_signal_t& signal = hold && !mChoseToHold.empty() ? mChoseToHold : mChose;
+    if (mFreeform)
     {
-        mChose(item->getValue().asString());
+        signal(mQuery);
     }
+    else if (const LLScrollListItem* item = mList->getFirstSelected())
+    {
+        signal(item->getValue().asString());
+    }
+}
+
+void ALQuickOpen::setColors(const LLColor4& background, const LLColor4& ink)
+{
+    auto between = [&](F32 how) { return ALSurface::shade(background, ink, how); };
+    const LLColor4 ground = between(0.f);
+    const LLColor4 faint  = between(0.45f);
+    const LLColor4 lit    = between(0.2f);
+    const LLColor4 dim    = between(0.7f);
+    mThemed = true;
+    mGround = ALSurface::ground(background, ink);
+    mInk    = ink;
+    mInk.mV[VALPHA] = 1.f;
+    setBackgroundVisible(false);
+    layout();
+    mField->setBgColor(ground);
+    mField->setFgColor(ink);
+    mField->setCursorColor(ink);
+    mField->setTentativeFgColor(faint);
+    mField->setHighlightColor(lit);
+    mList->setBackgroundVisible(true);
+    mList->setBgWriteableColor(ground);
+    mList->setReadOnlyBgColor(ground);
+    mList->setBgStripeColor(ground);
+    mList->setBgSelectedColor(lit);
+    mList->setHighlightedColor(between(0.12f));
+    mList->setHoveredColor(between(0.12f));
+    mList->setFgUnselectedColor(ink);
+    mList->setFgSelectedColor(ink);
+    mList->setFgDisableColor(dim);
 }
 
 void ALQuickOpen::takeFocus()
@@ -329,6 +427,22 @@ void ALQuickOpen::takeFocus()
 // exists to avoid.
 bool ALQuickOpen::handleKeyHere(KEY key, MASK mask)
 {
+    // Escape is for whatever holds the list -- a popover, which puts back
+    // what was previewed and gives the keyboard back where it was. The
+    // panel's own Escape only lets go of the keyboard, which the popover
+    // took for a look away, leaving the preview and the keyboard with
+    // nothing: the arrows then walked the avatar.
+    if (key == KEY_ESCAPE && mask == MASK_NONE)
+    {
+        return false;
+    }
+    if (key == KEY_RETURN && mask == MASK_SHIFT)
+    {
+        // The panel's own Return asks for no shift; this one the field
+        // leaves alone.
+        chooseSelected(true);
+        return true;
+    }
     if ((key == KEY_UP || key == KEY_DOWN) && mask == MASK_NONE && mList->getItemCount() > 0)
     {
         const S32 at = mList->getFirstSelectedIndex();
@@ -340,6 +454,35 @@ bool ALQuickOpen::handleKeyHere(KEY key, MASK mask)
     return LLPanel::handleKeyHere(key, mask);
 }
 
+// static
+S32 ALQuickOpen::heightForRows(S32 rows)
+{
+    // A row is what a list made as this one's is makes of one text row:
+    // measured on such a list each time, since the faces change size
+    // under the UI's scale, so that whatever the skin gives the list --
+    // its face, its padding -- is what is counted. A list is cheap; a
+    // popover asks once.
+    S32 row = -1;
+    {
+        LLScrollListCtrl::Params lp(LLUICtrlFactory::getDefaultParams<LLScrollListCtrl>());
+        lp.name         = "measure";
+        lp.rect         = LLRect(0, 100, 100, 0);
+        lp.draw_heading = false;
+        LLScrollListCtrl* list = LLUICtrlFactory::create<LLScrollListCtrl>(lp);
+        LLScrollListColumn::Params column;
+        column.name = "label";
+        list->addColumn(column);
+        LLSD item;
+        item["columns"][0]["column"] = "label";
+        item["columns"][0]["value"]  = "Xg";
+        list->addElement(item);
+        // What one row needs, its border included.
+        row = llmax(8, list->getRequiredRect().getHeight() - 2 * BORDER);
+        delete list;
+    }
+    return 2 * INSET + FIELD_HEIGHT + GAP + 2 * BORDER + llmax(1, rows) * row;
+}
+
 void ALQuickOpen::layout()
 {
     if (!mField || !mList)
@@ -348,8 +491,41 @@ void ALQuickOpen::layout()
     }
     const S32 width = getRect().getWidth();
     const S32 height = getRect().getHeight();
-    mField->setShape(LLRect(0, height, width, height - FIELD_HEIGHT));
-    mList->setShape(LLRect(0, height - FIELD_HEIGHT - GAP, width, 0));
+    const S32 in = mThemed ? INSET : 0;
+    mField->setShape(LLRect(in, height - in, width - in, height - in - FIELD_HEIGHT));
+    mList->setShape(LLRect(in, height - in - FIELD_HEIGHT - GAP, width - in, in));
+}
+
+void ALQuickOpen::draw()
+{
+    const F32    alpha = getDrawContext().mAlpha;
+    const LLRect local = getLocalRect();
+    if (mThemed)
+    {
+        // The card: its ground, and a frame in a quarter of the ink as
+        // the find bar's.
+        gl_rect_2d(local, mGround % alpha, true);
+        gl_rect_2d(local, ALSurface::frame(mInk, alpha), false);
+    }
+    LLPanel::draw();
+    if (mThemed)
+    {
+        // The boxes inside, drawn over their own grounds rather than
+        // under them: a frame outside a child's rect loses the edge the
+        // child paints over, and one inside its rect is the same width
+        // as the box below it to the pixel, which two frames drawn a
+        // pixel apart are not. The field's is the heavier of the two,
+        // being where the typing goes, and is said as a multiple of the
+        // one frame weight so that it cannot drift away from it.
+        if (mField)
+        {
+            gl_rect_2d(mField->getRect(), mInk % (1.4f * ALSurface::FRAME * alpha), false);
+        }
+        if (mList)
+        {
+            gl_rect_2d(mList->getRect(), ALSurface::frame(mInk, alpha), false);
+        }
+    }
 }
 
 void ALQuickOpen::reshape(S32 width, S32 height, bool called_from_parent)
