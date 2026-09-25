@@ -271,9 +271,19 @@ bool skPhysicsShapeGeometry(LLVOVolume* volume, const SKPhysicsShape& shape, SKS
             // never builds; the faces at a fixed detail are the closest stable
             // stand-in. The loaded volume would make the shape follow the
             // camera, rebuilding every tile the sculpt reaches.
+            // The fixed-detail volume is shared and only sculpted by whatever
+            // draws at that detail, so it can hold a lower-resolution texture
+            // or none; a partial sculpt warps, so fall back to the loaded one.
             LLVolume* phys = LLPrimitive::sVolumeManager->refVolume(params, physicsDetail(scale));
             out.mProvenance = sknav::Provenance::RENDER;
-            appendFaces(phys, out.mTriangles);
+            if (phys->getSculptLevel() == 0)
+            {
+                appendFaces(phys, out.mTriangles);
+            }
+            else if (volume->getVolume()->getSculptLevel() == 0)
+            {
+                appendFaces(volume->getVolume(), out.mTriangles);
+            }
             LLPrimitive::sVolumeManager->unrefVolume(phys);
             break;
         }
