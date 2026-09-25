@@ -48,6 +48,7 @@ namespace
     const S32 CYLINDER_SIDES = 16;
     const S32 SPHERE_RINGS = 6;
     const S32 SPHERE_SEGMENTS = 12;
+    const F32 HEIGHT_SNAP = 1024.f;  ///< vertex heights snap to 1/1024 m, exact in binary
 
     void tri(std::vector<LLVector3>& out, const LLVector3& a, const LLVector3& b, const LLVector3& c)
     {
@@ -128,6 +129,14 @@ namespace
                 for (S32 k = 0; k < 3; ++k)
                 {
                     toRecast(tris[i + k], p);
+                    // Heights are SL heights, where a float resolves a quarter of a
+                    // millimetre, and a rotated mesh leaves a flat floor a step or so
+                    // either side of its height. On a cell boundary that noise rounds
+                    // the floor up a cell in one tile and not in the next, since
+                    // each clips the triangle at its own cell edges. Snapped to a
+                    // millimetre grid a flat surface is exactly flat, and clipping
+                    // it gives the same height in every tile.
+                    p[1] = std::round(p[1] * HEIGHT_SNAP) / HEIGHT_SNAP;
                     mVerts.insert(mVerts.end(), p, p + 3);
                     under = under && tris[i + k].mV[VZ] < water;
                 }
@@ -1015,57 +1024,6 @@ namespace
         return real;
     }
 
-    /// Recast gives a contour vertex the height of the cells its own region
-    /// reaches around the corner, and the poly mesh welds vertices a cell or
-    /// two apart to whichever contour it met first. Where several regions
-    /// meet at a tile's corner that order is the tile's own, so two tiles can
-    /// put the vertex they share a cell apart and tilt every polygon fanning
-    /// into it. Settle each border vertex from the four cells around its
-    /// corner alone, which both tiles hold alike in their padding: climb from
-    /// its height through the spans there, a step within climb at a time, to
-    /// the highest one reached.
-    void levelSeamVertices(rcPolyMesh& pmesh, const rcCompactHeightfield& chf, S32 climb)
-    {
-        const S32 bs = pmesh.borderSize;
-        const S32 size_x = chf.width - 2 * bs, size_z = chf.height - 2 * bs;
-        for (S32 v = 0; v < pmesh.nverts; ++v)
-        {
-            unsigned short* p = &pmesh.verts[v * 3];
-            if (p[0] != 0 && p[0] != size_x && p[2] != 0 && p[2] != size_z)
-            {
-                continue;
-            }
-            const S32 cx = p[0] + bs, cz = p[2] + bs;
-            S32 y = p[1];
-            for (bool rose = true; rose;)
-            {
-                rose = false;
-                for (S32 dz = -1; dz <= 0; ++dz)
-                {
-                    for (S32 dx = -1; dx <= 0; ++dx)
-                    {
-                        const S32 x = cx + dx, z = cz + dz;
-                        if (x < 0 || z < 0 || x >= chf.width || z >= chf.height)
-                        {
-                            continue;
-                        }
-                        const rcCompactCell& c = chf.cells[x + z * chf.width];
-                        for (S32 i = static_cast<S32>(c.index), ni = static_cast<S32>(c.index + c.count); i < ni; ++i)
-                        {
-                            const S32 sy = chf.spans[i].y;
-                            if (sy > y && sy - y <= climb)
-                            {
-                                y = sy;
-                                rose = true;
-                            }
-                        }
-                    }
-                }
-            }
-            p[1] = static_cast<unsigned short>(y);
-        }
-    }
-
     /// The land's surface as a span index at one heightfield cell, or -1 where
     /// the terrain window has no say: outside it, or in the void past a
     /// region's edge. Interpolated on the same two triangles per sample quad
@@ -1419,7 +1377,6 @@ namespace sknav
                 result.mError = "polymesh";
                 return result;
             }
-            levelSeamVertices(*mem.pmesh, *mem.chf, cfg.walkableClimb);
             if (!slope_real.empty())
             {
                 // unfold the slope codes: everything past here reads real areas
