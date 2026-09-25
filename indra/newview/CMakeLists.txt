@@ -45,6 +45,17 @@ if(AL_BUILD_VIEWER)
     "${CMAKE_CURRENT_SOURCE_DIR}/app_settings/keywords_lua_default.xml"
     COPYONLY
   )
+  # The rest of the definitions, for the analyzers: the Luau type
+  # definitions, their documentation and the LSL builtins, laid out as the
+  # install step lays them out, so that a build-tree run finds them in the
+  # same place an installed viewer does.
+  foreach(definition builtins.txt secondlife.d.luau secondlife.docs.json)
+    configure_file(
+      "${LSL_DEFINITIONS_DIR}/${definition}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/app_settings/syntax_default/${definition}"
+      COPYONLY
+    )
+  endforeach()
 
   find_package(unofficial-alchemy-fonts CONFIG REQUIRED)
   message(VERBOSE "Copying fonts from ${ALCHEMY_FONTS_DIR}")
@@ -158,7 +169,27 @@ if(AL_BUILD_VIEWER)
     alfloatertransactionlog.cpp
     alsceneexplorerpredicate.cpp
     alscopedata.cpp
+    alscriptanalysis.cpp
+    alscriptexplorermodel.cpp
+    alscriptexplorerpane.cpp
+    alscriptexplorertree.cpp
+    alfloaterscriptpreferences.cpp
+    alscriptkeymap.cpp
+    alscriptmodules.cpp
+    alscriptnotecardtab.cpp
+    alscriptnotecardworld.cpp
+    alscriptoutputpane.cpp
+    alscriptpreprocessor.cpp
+    alscriptproblemspane.cpp
+    alscriptsaveflow.cpp
+    alscriptsearch.cpp
+    alscriptsearchpane.cpp
+    alscriptstudiodoc.cpp
+    alscriptstudiosave.cpp
+    alscriptweightspane.cpp
+    alscriptworkspace.cpp
     alterrainsurfacemaps.cpp
+    alfloaterscriptstudio.cpp
     alfloaterwebprofile.cpp
     alfloaterxuilibrary.cpp
     alfloaterxuistudio.cpp
@@ -947,8 +978,27 @@ if(AL_BUILD_VIEWER)
     alfloatertransactionlog.h
     alsceneexplorerpredicate.h
     alscopedata.h
+    alscriptanalysis.h
+    alscriptexplorermodel.h
+    alscriptexplorerpane.h
+    alscriptexplorertree.h
+    alfloaterscriptpreferences.h
+    alscriptkeymap.h
+    alscriptmodules.h
+    alscriptnotecardtab.h
+    alscriptoutputpane.h
+    alscriptpreprocessor.h
+    alscriptproblemspane.h
+    alscriptsaveflow.h
+    alscriptsearch.h
+    alscriptsearchpane.h
+    alscriptstudiodoc.h
+    alscriptstudioservices.h
+    alscriptweightspane.h
+    alscriptworkspace.h
     alterrainsurfacemaps.h
     altexturetable.h
+    alfloaterscriptstudio.h
     alfloaterwebprofile.h
     alfloaterxuilibrary.h
     alfloaterxuistudio.h
@@ -1924,6 +1974,7 @@ if(AL_BUILD_VIEWER)
     ${AL_VIEWER_BINARY_NAME}
     PRIVATE
       al::flags
+      alscript
       llaudio
       llcharacter
       llimage
@@ -2370,6 +2421,94 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     LIBRARIES ${test_libs}
     SOURCES tests/llviewertexture_stub.cpp
+  )
+
+  # A notecard's items in its Script Studio tab, over a fake of the
+  # viewer's side and the studio's own window.
+  al_add_test(
+    alscriptnotecardtab
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # What the Script Studio's explorer lists, and the rows it makes of them,
+  # with nothing of the world.
+  al_add_test(
+    alscriptexplorermodel
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+  )
+
+  # The explorer's rows shown as the inventory's folder view, from the source
+  # tree's skins and fonts.
+  al_add_test(
+    alscriptexplorertree
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptexplorermodel.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's Output tab over the studio's own window, the
+  # window's side faked.
+  al_add_test(
+    alscriptoutputpane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's Problems tab over the studio's own window, the
+  # window's side faked, and a tab's problems gathered for it.
+  al_add_test(
+    alscriptproblemspane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's Search tab over the studio's own window, the
+  # window's side faked; and what Replace All does with a script found.
+  al_add_test(
+    alscriptsearchpane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptsearch.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Whole saves of a Script Studio tab through where they stand and where
+  # they go, with nothing of the viewer.
+  al_add_test(alscriptsaveflow UNIT PROJECT ${test_project} LIBRARIES llui alscript ${test_libs})
+
+  # A Script Studio tab's own logic, and the fake of the window's services
+  # the units split out of the window are tested with.
+  al_add_test(
+    alscriptstudiodoc
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptsaveflow.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's Weights tab over the studio's own window, from the
+  # source tree's skins and fonts as llui's widget tests have them.
+  al_add_test(
+    alscriptweightspane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
   al_add_test(cppfeatures PROJECT ${test_project} LIBRARIES ${test_libs})

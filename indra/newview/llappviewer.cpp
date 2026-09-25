@@ -86,6 +86,7 @@
 #include "llviewermessage.h"
 #include "llviewerobjectlist.h"
 #include "llworldmap.h"
+#include "llavataractions.h"
 #include "llmutelist.h"
 #include "llviewerhelp.h"
 #include "lluicolortable.h"
@@ -134,6 +135,7 @@
 
 // Linden library includes
 #include "llavatarnamecache.h"
+#include "alregex.h"
 #include "alxmlmergelog.h"
 #include "lldiriterator.h"
 #include "llexperiencecache.h"
@@ -169,7 +171,6 @@
 // Third party library includes
 #include <boost/bind.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/regex.hpp>
 #include <boost/throw_exception.hpp>
 #include <chrono>
 
@@ -973,6 +974,14 @@ bool LLAppViewer::init()
     LLUrlAction::setOpenURLInternalCallback(boost::bind(&LLWeb::loadURLInternal, _1, LLStringUtil::null, LLStringUtil::null, false));
     LLUrlAction::setOpenURLExternalCallback(boost::bind(&LLWeb::loadURLExternal, _1, true, LLStringUtil::null));
     LLUrlAction::setExecuteSLURLCallback(&LLURLDispatcher::dispatchFromTextEditor);
+    // And with what a URL's menu asks of the viewer: whether the agent
+    // is a friend, the object blocked, the object near enough to zoom to.
+    LLUrlAction::setIsFriendCallback(&LLAvatarActions::isFriend);
+    LLUrlAction::setIsObjectBlockedCallback([](const LLUUID& id, const std::string& name) { return LLMuteList::getInstance()->isMuted(id, name, 0); });
+    LLUrlAction::setIsObjectReachableCallback([](const LLUUID& id) {
+        LLViewerObject* object = gObjectList.findObject(id);
+        return object && object->isReachable();
+    });
 
     // Let code in llui access the viewer help floater
     LLUI::getInstance()->mHelpImpl = LLViewerHelp::getInstance();
@@ -3789,8 +3798,10 @@ LLSD LLAppViewer::getViewerInfo() const
         info["POSITION_LOCAL"] = ll_sd_from_vector3(gAgent.getPosAgentFromGlobal(pos));
         info["REGION"] = region->getName();
 
-        boost::regex regex("\\.(secondlife|lindenlab)\\..*");
-        info["HOSTNAME"] = boost::regex_replace(region->getSimHostName(), regex, "");
+        static const ALRegex grid_domain("\\.(secondlife|lindenlab)\\..*");
+        std::string host_name = region->getSimHostName();
+        grid_domain.replaceAll(host_name, "");
+        info["HOSTNAME"] = host_name;
         info["SERVER_VERSION"] = gLastVersionChannel;
         LLSLURL slurl;
         LLAgentUI::buildSLURL(slurl);
