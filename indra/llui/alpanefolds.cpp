@@ -30,9 +30,12 @@
 #include "llfloater.h"
 #include "lllayoutstack.h"
 
+#include <algorithm>
+
 void ALPaneFolds::bind(LLView* window, std::vector<Pane> panes)
 {
     mPanes.clear();
+    mStacks.clear();
 
     for (Pane& pane : panes)
     {
@@ -40,6 +43,17 @@ void ALPaneFolds::bind(LLView* window, std::vector<Pane> panes)
 
         bound.mRegion = window->findChildView(pane.mPanel, true);
         bound.mPanel = ALViewType::as<LLLayoutPanel>(bound.mRegion);
+        // A drag on the stack's bars ended: the region's size is worth
+        // keeping now rather than at the window's close. One connection a
+        // stack, however many regions sit in it.
+        if (LLLayoutStack* stack = bound.mPanel ? ALViewType::as<LLLayoutStack>(bound.mPanel->getParent()) : nullptr)
+        {
+            const bool known = std::any_of(mPanes.begin(), mPanes.end(), [stack](const Bound& b) { return b.mPanel && b.mPanel->getParent() == stack; });
+            if (!known)
+            {
+                mStacks.emplace_back(stack->onResizeDone([this]() { mChanged(); }));
+            }
+        }
         bound.mButton = pane.mButton.empty() ? nullptr : window->findChild<LLButton>(pane.mButton, true);
         // Everything the region holds, moved into a pane of its own that
         // fills it: the tree gains a level and every name in it is where it
@@ -89,13 +103,32 @@ void ALPaneFolds::toggle(std::string_view pane)
 // A region the person is not using gives its room to the one that grows.
 // A folded region keeps everything it holds: what goes is the room, so
 // coming back costs nothing and loses no selection.
+//
+// A region out in a window of its own left its room folded behind it, and
+// that room is not the region: unfolding it would open an empty band in
+// the window, and the region is showing already. Its window is brought
+// forward instead, and folding it puts it back, folded.
 void ALPaneFolds::setCollapsed(std::string_view pane, bool collapsed)
 {
     const Bound* bound = find(pane);
     LLLayoutStack* stack = bound && bound->mPanel ? bound->mPanel->getParentAs<LLLayoutStack>() : nullptr;
 
+    if (bound && bound->mDock && bound->mDock->poppedOut())
+    {
+        if (!collapsed)
+        {
+            if (LLFloater* floater = bound->mDock->getParentByType<LLFloater>())
+            {
+                floater->setVisibleAndFrontmost(false);
+            }
+            return;
+        }
+        bound->mDock->dock();
+    }
+
     if (!stack)
     {
+        refreshButtons();
         return;
     }
 
@@ -107,7 +140,7 @@ bool ALPaneFolds::collapsed(std::string_view pane) const
 {
     const Bound* bound = find(pane);
 
-    return bound && bound->mPanel && bound->mPanel->isCollapsed();
+    return bound && bound->mPanel && bound->mPanel->isCollapsed() && !(bound->mDock && bound->mDock->poppedOut());
 }
 
 S32 ALPaneFolds::dim(std::string_view pane) const
@@ -188,6 +221,23 @@ void ALPaneFolds::dockAll()
     }
 }
 
+void ALPaneFolds::putBackOut()
+{
+    bool moved = false;
+    for (const Bound& bound : mPanes)
+    {
+        if (bound.mDock && bound.mDock->outAtQuit() && !bound.mDock->poppedOut())
+        {
+            bound.mDock->popOut();
+            moved = true;
+        }
+    }
+    if (moved)
+    {
+        refreshButtons();
+    }
+}
+
 // Pressed in while the region is showing, so a row of them reads as a
 // list of what is on screen rather than a list of what is hidden.
 void ALPaneFolds::refreshButtons()
@@ -196,7 +246,7 @@ void ALPaneFolds::refreshButtons()
     {
         if (bound.mButton)
         {
-            bound.mButton->setToggleState(!(bound.mPanel && bound.mPanel->isCollapsed()));
+            bound.mButton->setToggleState(!collapsed(bound.mPane.mKey));
         }
     }
 }
@@ -219,7 +269,9 @@ void ALPaneFolds::save(LLSD& state) const
             continue;
         }
 
-        state["out_" + bound.mPane.mKey] = bound.mDock->poppedOut();
+        // Out, or put back only because the viewer was quitting: the next
+        // session finds it where this one had it.
+        state["out_" + bound.mPane.mKey] = bound.mDock->poppedOut() || bound.mDock->outAtQuit();
 
         const LLRect r = bound.mDock->floatingRect();
 
