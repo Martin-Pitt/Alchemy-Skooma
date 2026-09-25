@@ -32,9 +32,12 @@
 #include "llfocusmgr.h"
 #include "llmenugl.h"
 #include "lltextbox.h"
+#include "lltimer.h"
 #include "llui.h"
 #include "lluicolortable.h"
 #include "lluictrlfactory.h"
+
+#include <memory>
 
 ALStudioFloater::ALStudioFloater(const LLSD& key, std::string state_setting)
 :   LLFloater(key),
@@ -115,21 +118,30 @@ void ALStudioFloater::showHistory(ALHistoryList* list, std::vector<ALHistoryList
     }
 }
 
-void ALStudioFloater::quickOpen(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder,
-                                const std::string& title, std::function<void(const std::string&)> chose,
-                                LLView* anchor, S32 width)
+ALQuickOpen* ALStudioFloater::quickOpen(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder,
+                                        const std::string& title, std::function<void(const std::string&)> chose,
+                                        LLView* anchor, S32 width, S32 height, std::function<void()> escaped,
+                                        std::function<void(const std::string&)> hold, std::function<void()> left)
 {
     // Asked for again while it is up -- the same key pressed twice -- it is
-    // what was typed that is wanted back, not a fresh field.
+    // what was typed that is wanted back, not a fresh field, and the answer
+    // goes to whoever asked last. Another question is asked afresh: the
+    // list up answers whoever asked it, and a command picked from a list
+    // of symbols is a jump to the first symbol. A freeform one is another
+    // question whatever it asks.
+    const std::string question = title + "\n" + placeholder;
     if (LLView* up = mQuickPopover.get())
     {
-        if (ALQuickOpen* quick = up->findChild<ALQuickOpen>("quick_open"))
+        ALQuickOpen* quick   = up->findChild<ALQuickOpen>("quick_open");
+        ALPopover*   popover = ALViewType::as<ALPopover>(up);
+        if (quick && popover && !quick->freeform() && question == mQuickQuestion)
         {
             quick->setCandidates(std::move(candidates));
+            answerQuickOpen(popover, quick, std::move(chose), std::move(escaped), std::move(hold), std::move(left));
             quick->takeFocus();
-            return;
+            return quick;
         }
-        if (ALPopover* popover = ALViewType::as<ALPopover>(up))
+        if (popover)
         {
             popover->escape();
         }
@@ -145,37 +157,83 @@ void ALStudioFloater::quickOpen(std::vector<ALQuickOpen::Candidate> candidates, 
 
     ALQuickOpen::Params qp(LLUICtrlFactory::getDefaultParams<ALQuickOpen>());
     qp.name = "quick_open";
-    qp.rect = LLRect(0, HEIGHT, width > 0 ? width : WIDTH, 0);
+    qp.rect = LLRect(0, height > 0 ? height : HEIGHT, width > 0 ? width : WIDTH, 0);
     qp.placeholder = placeholder;
     ALQuickOpen* quick = LLUICtrlFactory::create<ALQuickOpen>(qp);
     quick->setCandidates(std::move(candidates));
 
-    // The popover takes the content, and takes it even when it cannot show.
-    ALPopover* popover = ALPopover::show(anchor ? anchor : this, quick, title);
+    // The popover takes the content, and takes it even when it cannot
+    // show. Over the top of the anchor, centred, which is where a person
+    // typing a name into a window looks.
+    ALPopover* popover = ALPopover::showOver(anchor ? anchor : this, quick, title);
     if (!popover)
     {
-        return;
+        return nullptr;
     }
-    mQuickPopover = popover->getHandle();
-    LLHandle<ALPopover> held = popover->getDerivedHandle<ALPopover>();
-    quick->onChose([held, chose = std::move(chose)](const std::string& value)
+    mQuickPopover  = popover->getHandle();
+    mQuickQuestion = question;
+    answerQuickOpen(popover, quick, std::move(chose), std::move(escaped), std::move(hold), std::move(left));
+    quick->takeFocus();
+    return quick;
+}
+
+void ALStudioFloater::answerQuickOpen(ALPopover* popover, ALQuickOpen* quick, std::function<void(const std::string&)> chose,
+                                      std::function<void()> escaped, std::function<void(const std::string&)> hold,
+                                      std::function<void()> left)
+{
+    // Whether an answer came: gone without one, whoever asked is told how
+    // -- escaped, and what it previewed is put back; looked away from, and
+    // what it previewed stands. Not put back there: the look away is a
+    // click, on the editor as often as not, and a view put back under the
+    // click lands it on another line than the one it was aimed at.
+    const auto          answered = std::make_shared<bool>(false);
+    LLHandle<ALPopover> held     = popover->getDerivedHandle<ALPopover>();
+    const auto          settled  = [held, answered]()
     {
         // Settled first, so the keyboard comes back to the window before
         // what was chosen is acted on -- a choice that puts the keyboard
         // somewhere needs it back to give.
+        *answered = true;
         if (ALPopover* up = held.get())
         {
             up->settle();
         }
+    };
+    mQuickChose = quick->onChose([settled, chose = std::move(chose)](const std::string& value)
+    {
+        settled();
         chose(value);
     });
-    popover->onClosed([this](bool) { mQuickPopover.markDead(); });
-    quick->takeFocus();
+    mQuickHold.disconnect();
+    if (hold)
+    {
+        mQuickHold = quick->onChoseToHold([settled, hold = std::move(hold)](const std::string& value) {
+            settled();
+            hold(value);
+        });
+    }
+    const LLHandle<LLFloater> home = getHandle();
+    mQuickClosed = popover->onClosed([home, answered, escaped = std::move(escaped), left = std::move(left)](bool was_escaped) {
+        if (ALStudioFloater* studio = ALViewType::as<ALStudioFloater>(home.get()))
+        {
+            studio->mQuickPopover.markDead();
+        }
+        if (was_escaped && escaped)
+        {
+            escaped();
+        }
+        else if (!was_escaped && !*answered && left)
+        {
+            left();
+        }
+    });
 }
 
 void ALStudioFloater::setStatus(const std::string& text, bool failure)
 {
-    static const LLUIColor normal = LLUIColorTable::instance().getColor("TextFgColor", LLColor4::white);
+    // The text box's own ink: the field's, TextFgColor, is black in a skin
+    // whose fields are light, and the status line is on the panel.
+    static const LLUIColor normal = LLUIColorTable::instance().getColor("LabelTextColor", LLColor4::white);
     static const LLUIColor alarm = LLUIColorTable::instance().getColor("LtOrange", LLColor4::yellow);
 
     if (mStatus)
@@ -183,6 +241,9 @@ void ALStudioFloater::setStatus(const std::string& text, bool failure)
         mStatus->setColor(failure ? alarm : normal);
         mStatus->setText(text);
     }
+    mStatusSaidAt  = LLTimer::getTotalSeconds();
+    mStatusFailure = failure;
+    mStatusQuiet   = text.empty();
 }
 
 // Before anything else: a pane left in a window this one does not own
@@ -197,6 +258,16 @@ void ALStudioFloater::onClose(bool app_quitting)
 void ALStudioFloater::draw()
 {
     rememberShape();
+    // What the status line said, gone quiet once it is old: a quarter of a
+    // minute for news, a minute for a failure, which is read later.
+    constexpr F64 NEWS_SECONDS    = 15.0;
+    constexpr F64 FAILURE_SECONDS = 60.0;
+    if (mStatus && !mStatusQuiet && LLTimer::getTotalSeconds() - mStatusSaidAt > (mStatusFailure ? FAILURE_SECONDS : NEWS_SECONDS))
+    {
+        static const LLUIColor quiet = LLUIColorTable::instance().getColor("LabelDisabledColor", LLColor4::grey);
+        mStatus->setColor(quiet);
+        mStatusQuiet = true;
+    }
     LLFloater::draw();
 }
 
@@ -238,14 +309,19 @@ void ALStudioFloater::rememberShape()
 
 void ALStudioFloater::saveState()
 {
+    if (mStateSetting.empty())
+    {
+        return;
+    }
     LLSD state;
     writeState(state);
     // Which regions are folded, how big each is, and which are out in
     // windows of their own and where; a folded region remembers the size
     // it unfolds to.
     mFolds.save(state);
-    // And the window itself, left, bottom, right, top.
-    const LLRect r = getRect();
+    // And the window itself, left, bottom, right, top: as it opens, which
+    // while it is minimized is not the title bar it is drawn as.
+    const LLRect r = isMinimized() && !getExpandedRect().isEmpty() ? getExpandedRect() : getRect();
     state["rect"] = LLSD::emptyArray();
     state["rect"].append(r.mLeft);
     state["rect"].append(r.mBottom);
@@ -253,6 +329,10 @@ void ALStudioFloater::saveState()
     state["rect"].append(r.mTop);
     mShapeRect = r;
     mShapeDims = mFolds.dims();
+    // What the next open puts back is the shape as it is now, not as it
+    // was when the state was read: a window closed and opened again
+    // stays where it was left.
+    mRestoredRect = r;
     if (LLControlGroup* settings = LLUI::getInstance()->getSettingGroup("config"))
     {
         settings->setLLSD(mStateSetting, state);
@@ -261,6 +341,10 @@ void ALStudioFloater::saveState()
 
 void ALStudioFloater::loadState()
 {
+    if (mStateSetting.empty())
+    {
+        return;
+    }
     LLControlGroup* settings = LLUI::getInstance()->getSettingGroup("config");
     const LLSD state = settings ? settings->getLLSD(mStateSetting) : LLSD();
     if (!state.isMap())
