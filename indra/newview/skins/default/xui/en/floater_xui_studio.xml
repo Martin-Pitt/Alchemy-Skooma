@@ -103,8 +103,8 @@
     <floater.string name="GutterTitle">[ATTR], layer by layer</floater.string>
     <floater.string name="GutterLayer">Layer</floater.string>
     <floater.string name="GutterSays">Says</floater.string>
-    <floater.string name="GutterWriteHere">Write here</floater.string>
-    <floater.string name="GutterListTip">Every layer of this file, and what each says about [ATTR]; a dot marks the one the merge takes. Choose a layer and press Write here to give it the value in force.</floater.string>
+    <floater.string name="GutterWriteHere">Write Here</floater.string>
+    <floater.string name="GutterListTip">Every layer of this file, and what each says about [ATTR]; a dot marks the one the merge takes. Choose a layer and press Write Here to give it the value in force.</floater.string>
     <floater.string name="GutterForceTip">A dot marks the layer whose value is in force</floater.string>
     <floater.string name="GutterLayerTip">The skin and the language the layer belongs to, in the order they are merged</floater.string>
     <floater.string name="GutterSaysTip">What this layer writes for [ATTR], or nothing where it does not write it</floater.string>
@@ -214,6 +214,8 @@
     <floater.string name="EditNoNestedFile">This element does not name a file of its own.</floater.string>
     <floater.string name="EditNestedMissing">[FILE] is named here but is not in the catalog.</floater.string>
     <floater.string name="LayerMissing">-</floater.string>
+    <floater.string name="SourceEdited">Source edited: [FILE]</floater.string>
+    <floater.string name="SourceEditedBroken">[FILE] does not parse yet (line [LINE]: [MESSAGE]); the last text that did stays in force until it does</floater.string>
     <floater.string name="Yes">yes</floater.string>
     <floater.string name="No">no</floater.string>
     <floater.string name="LayoutSize">size</floater.string>
@@ -546,7 +548,7 @@
             </menu_item_call>
             <menu_item_separator layout="topleft" />
             <menu_item_call
-             label="Colour Settings"
+             label="Color Settings"
              layout="topleft"
              name="colors">
                 <menu_item_call.on_click function="XUIStudio.Menu" parameter="colors" />
@@ -1463,7 +1465,7 @@
                  left_pad="8"
                  menu_filename="menu_xui_studio_backdrop.xml"
                  name="canvas_backdrop"
-                 tool_tip="What is behind the preview: nothing, a pattern that shows what a translucent window does to what is under it, a checkerboard that shows what is transparent, the colour of a window, or a light grey"
+                 tool_tip="What is behind the preview: nothing, a pattern that shows what a translucent window does to what is under it, a checkerboard that shows what is transparent, the color of a window, or a light grey"
                  top_delta="0"
                  width="26" />
                 <check_box
@@ -1788,7 +1790,7 @@
                                 <button
                                  follows="left|top"
                                  height="22"
-                                 label="Repair file"
+                                 label="Repair File"
                                  layout="topleft"
                                  left_pad="12"
                                  name="translate_repair_file"
@@ -1798,7 +1800,7 @@
                                 <button
                                  follows="left|top"
                                  height="22"
-                                 label="Repair language"
+                                 label="Repair Language"
                                  layout="topleft"
                                  left_pad="4"
                                  name="translate_repair_all"
@@ -1808,7 +1810,7 @@
                                 <button
                                  follows="left|top"
                                  height="22"
-                                 label="Repair roots"
+                                 label="Repair Roots"
                                  layout="topleft"
                                  left_pad="4"
                                  name="translate_repair_roots"
@@ -1818,11 +1820,11 @@
                                 <button
                                  follows="left|top"
                                  height="22"
-                                 label="Remove orphans"
+                                 label="Remove Orphans"
                                  layout="topleft"
                                  left_pad="12"
                                  name="translate_remove_orphans"
-                                 tool_tip="Take out of every file of this language each value written for something the base no longer has: an element of a lost name, an element with no name, an attribute the base's element does not carry. What the base has moved is left for Repair, and what it has at more than one path is left for you."
+                                 tool_tip="Take out of every file of this language each value written for something the base no longer has: an element of a lost name, an element with no name, an attribute the base's element does not carry. What the base has moved is left for Repair File, and what it has at more than one path is left for you."
                                  top_delta="0"
                                  width="110" />
                                 <text
@@ -2018,6 +2020,7 @@
                      tool_tip="Everything done to the files this tool has open, with a mark where the present is"
                      width="742">
                         <history_list
+                         start_label="The files as they were opened"
                          empty_headline="Nothing done yet."
                          empty_sentence="Edits show up here as you make them, newest first. Double-click one to put the files back the way they were just after it."
                          follows="all"
@@ -2280,7 +2283,7 @@
                             <button
                              follows="top|right"
                              height="20"
-                             label="Open in editor"
+                             label="Open in Editor"
                              layout="topleft"
                              left_pad="4"
                              name="jump_btn"
@@ -2335,7 +2338,7 @@
                             <button
                              follows="left|top"
                              height="22"
-                             label="Write here"
+                             label="Write Here"
                              layout="topleft"
                              left="0"
                              name="write_override"
@@ -2348,7 +2351,7 @@
                              layout="topleft"
                              left_pad="6"
                              name="override_field"
-                             tool_tip="The field the list below is about, and what Write here writes: the value in force, into the layer chosen there"
+                             tool_tip="The field the list below is about, and what Write Here writes: the value in force, into the layer chosen there"
                              top_delta="4"
                              use_ellipses="true"
                              width="380" />
@@ -2360,16 +2363,15 @@
                          min_dim="60"
                          name="source_text_panel"
                          width="478">
-                            <text_editor
+                            <code_editor
                              follows="all"
                              font="Monospace"
                              height="240"
-                             ignore_tab="false"
                              layout="topleft"
                              left="0"
                              name="source_text"
-                             tool_tip="The element as each layer of the file writes it, in the order they are merged"
-                             read_only="true"
+                             tool_tip="The layer's file as it stands, to edit: what is typed goes into the document once the typing pauses, the tree and the preview following; the schema completes tags, attributes and values, and the findings on this file are marked"
+                             syntax="xml"
                              top="0"
                              width="476"
                              word_wrap="false" />
