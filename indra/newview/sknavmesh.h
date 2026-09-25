@@ -128,9 +128,12 @@ public:
     /// The selected linkset, or the one under the screen centre, with everyone
     /// seated on it and their attachments, as triangles in the root's own frame
     /// with each face's transparency: raw input for working out a vehicle's
-    /// outline on the mini-map. Written beside the navmesh export; returns a
-    /// line for the console.
-    std::string exportVehicle() const;
+    /// outline on the mini-map. Its surroundings go with it in world axes: the
+    /// census records' collision triangles within reach and the visible faces
+    /// of their linksets, the navmesh's own input for replaying a build
+    /// offline. Written beside the navmesh export; returns a line for the
+    /// console.
+    std::string exportObject() const;
 
     struct Stats
     {
