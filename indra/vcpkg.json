@@ -6,6 +6,7 @@
     "alchemy-fonts",
     "apr",
     "boost-asio",
+    "boost-beast",
     "boost-circular-buffer",
     "boost-dll",
     "boost-fiber",
@@ -100,6 +101,7 @@
       ]
     },
     "pugixml",
+    "re2",
     {
       "name": "sdl3",
       "features": [
@@ -139,6 +141,8 @@
     "secondlife-emoji-shortcodes",
     "simdjson",
     "simdutf",
+    "slua",
+    "tailslide",
     "tinyexr",
     "tinygltf",
     "v-hacd",
@@ -146,7 +150,6 @@
       "name": "vlc-bin",
       "platform": "windows | osx"
     },
-    "websocketpp",
     "xxhash",
     "zlib"
   ],
