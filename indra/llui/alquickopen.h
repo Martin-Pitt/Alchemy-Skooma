@@ -47,6 +47,10 @@ class LLScrollListCtrl;
 //
 // The candidates are the caller's, and so is what choosing one does. This
 // holds no list of files, no history and no idea what it is opening.
+//
+// Or, freeform: what is typed is the answer itself -- a line number, a new
+// name -- and the one row under the field says what return will do with
+// it, told again by the caller as the typing changes.
 class ALQuickOpen : public LLPanel
 {
 public:
@@ -55,7 +59,9 @@ public:
     struct Params : public LLInitParam::Block<Params, LLPanel::Params>
     {
         Optional<std::string> placeholder;
-        Optional<S32>         rows;       // how many to offer at once
+        // How many to offer at once while something is typed; with nothing
+        // typed, every candidate, which is browsing.
+        Optional<S32>         rows;
         Params();
     };
 
@@ -79,6 +85,26 @@ public:
     void setQuery(const std::string& query);
     const std::string& query() const { return mQuery; }
 
+    // What a query begins with to say which list it is asked of -- the
+    // `>` before a command, as in Visual Studio Code -- and so is not
+    // matched against the candidates: taken off, with the blanks after it,
+    // before ranking, where the query begins with it. Who asked changes the
+    // candidates as the query comes to begin with it or no longer does.
+    void setPrefix(const std::string& prefix);
+
+    // Freeform from here on: the candidates are put aside, the one row
+    // says this, and return sends what was typed. Say it again as the
+    // query changes, since what return will do has changed with it.
+    void setHint(const std::string& hint);
+    bool freeform() const { return mFreeform; }
+
+    // The query, as it changes under the keys or by setQuery.
+    typedef boost::signals2::signal<void(const std::string&)> query_signal_t;
+    boost::signals2::connection onQueryChanged(const query_signal_t::slot_type& cb)
+    {
+        return mQueryChanged.connect(cb);
+    }
+
     // The ranking, in order, best first: by the label, or by the other
     // words a tier down. Public because it is the whole of this widget
     // and the only part worth testing without a screen.
@@ -89,20 +115,40 @@ public:
     // match at all. Exposed for the same reason.
     static S32 score(std::string_view label, std::string_view query);
 
+    // How tall to make one that is to show so many rows under its field
+    // with nothing to scroll: what a freeform question, whose one row is
+    // its hint, asks for.
+    static S32 heightForRows(S32 rows);
+
     // The field, focused, and whatever is in it selected: opening this is
     // asking for something, and the last thing asked for is a poor start on
     // the next one.
     void takeFocus();
 
-    // Return, or a row chosen. Nothing is sent for a query that matched
-    // nothing, since there is nothing to send.
+    // The colours of what it is over -- an editor's ground and ink -- on
+    // its field, its list and its own back, so that it reads as part of
+    // that rather than of the skin.
+    void setColors(const LLColor4& background, const LLColor4& ink);
+
+    // Return, or a row chosen; the query itself when freeform. Nothing is
+    // sent for a query that matched nothing, since there is nothing to
+    // send.
     typedef boost::signals2::signal<void(const std::string&)> chose_signal_t;
     boost::signals2::connection onChose(const chose_signal_t::slot_type& cb)
     {
         return mChose.connect(cb);
     }
+    // Shift-Return: the row chosen to be held rather than taken -- for a
+    // caller with a second thing to do with a pick, as vim's window puts
+    // the line up to edit where Return runs it. Without a listener,
+    // Shift-Return is Return.
+    boost::signals2::connection onChoseToHold(const chose_signal_t::slot_type& cb)
+    {
+        return mChoseToHold.connect(cb);
+    }
 
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    void draw() override;
     bool handleKeyHere(KEY key, MASK mask) override;
 
 protected:
@@ -111,15 +157,28 @@ protected:
 
 private:
     void fill();
-    void chooseSelected();
+    void chooseSelected(bool hold = false);
     void layout();
 
     std::vector<Candidate>  mCandidates;
     std::vector<size_t>     mRanked;
     std::string             mQuery;
     std::string             mPlaceholder;
+    std::string             mPrefix;
+    // The query as it is matched: less the prefix it begins with.
+    std::string_view        matched() const;
     S32                     mRows;
+    bool                    mFreeform = false;
+    std::string             mHint;
+    // Given colours of its own: framed in them, its parts inset from the
+    // frame, so that it reads as a card over the text and not as more
+    // of the text.
+    bool                    mThemed = false;
+    LLColor4                mGround;
+    LLColor4                mInk;
     LLLineEditor*           mField = nullptr;
     LLScrollListCtrl*       mList = nullptr;
     chose_signal_t          mChose;
+    chose_signal_t          mChoseToHold;
+    query_signal_t          mQueryChanged;
 };
