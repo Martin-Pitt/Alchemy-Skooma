@@ -115,7 +115,6 @@ public:
         U32 mInFlight = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
-        U32 mSkipped = 0;       ///< grounded records left out as floating debris (floatsClear)
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
@@ -205,17 +204,6 @@ private:
     /// that one mesh holds the ground, the walls that block it and the floors
     /// that lead off it; anything clear of the ground gets a mesh to itself.
     bool grounded(const sknav::Cluster& cluster) const;
-    /// Whether a grounded record hangs clear of every walkable surface and is
-    /// too small in plan ever to be walked on: it cannot become a floor and
-    /// never meets the ground, so the region's mesh has nothing to hear from
-    /// it and the tiles it hangs over need not re-sign. The surface is what
-    /// is actually there to walk on - the built mesh, whatever it stands on,
-    /// since the land people walk on is mesh and prim built over the sim's
-    /// heightfield, and the heightfield alone is only the cheapest first
-    /// answer. A record over a tile that has never been built is left out
-    /// until that surface exists; it joins on its own the scan after.
-    /// Exclusion volumes stay in.
-    bool floatsClear(const sknav::Record& record) const;
     static U64 recordSignature(const std::vector<sknav::RecordPtr>& records);
     /// Work out what a tile is built from, note why it moved away from what
     /// was built, and keep the old signature to tell the next move by.
