@@ -2559,14 +2559,58 @@ std::string SKNavMesh::exportAll() const
             file << '}';
         }
     }
+    file << ']';
+
+    // The door table as the rooms pass would read it. Names are anyone's
+    // text, so they are escaped.
+    U32 doors_written = 0;
+    file << ",\"doors\":[";
+    for (const auto& region : mFeatureDoors)
+    {
+        for (const DoorEntity& d : region.second)
+        {
+            if (doors_written++)
+            {
+                file << ',';
+            }
+            file << "{\"id\":\"" << d.mId << "\",\"region\":" << d.mRegion << ",\"min\":";
+            vec3d(d.mMin);
+            file << ",\"max\":";
+            vec3d(d.mMax);
+            file << ",\"plane\":";
+            vec3d(d.mPlanePoint);
+            file << ",\"normal\":";
+            vec3(d.mNormal);
+            file << ",\"width\":" << d.mWidth << ",\"height\":" << d.mHeight << ",\"sill\":" << d.mSill
+                 << ",\"double\":" << (d.mDouble ? "true" : "false") << ",\"confidence\":" << d.mConfidence
+                 << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"";
+            for (const char c : d.mName)
+            {
+                if (c == '"' || c == '\\')
+                {
+                    file << '\\' << c;
+                }
+                else if (static_cast<unsigned char>(c) >= 0x20)
+                {
+                    file << c;
+                }
+            }
+            file << "\",\"leaves\":[";
+            for (size_t i = 0; i < d.mLeaves.size(); ++i)
+            {
+                file << (i ? ",\"" : "\"") << d.mLeaves[i] << '"';
+            }
+            file << "]}";
+        }
+    }
     file << "]}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, doors_written,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
