@@ -1,0 +1,298 @@
+/**
+ * @file tests/altextdocument_test.cpp
+ * @brief The document behind the text view.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Rye <rye@alchemyviewer.org>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "linden_common.h"
+
+#include "../altextdocument.h"
+
+#include "../altextchars.h"
+
+#include "../test/lltut.h"
+
+#include <string>
+#include <vector>
+
+namespace tut
+{
+    struct altextdocument_data
+    {
+        std::vector<ALTextDocument::Edit> heard;
+
+        void listen(ALTextDocument& doc)
+        {
+            doc.onChanged([this](const ALTextDocument::Edit& edit) { heard.push_back(edit); });
+        }
+    };
+
+    typedef test_group<altextdocument_data> altextdocument_group;
+    typedef altextdocument_group::object    altextdocument_object;
+    altextdocument_group                    altextdocument_instance("altextdocument");
+
+    template<> template<>
+    void altextdocument_object::test<1>()
+    {
+        set_test_name("an empty document is one empty line");
+        ALTextDocument doc;
+        ensure_equals("one line", doc.lineCount(), 1);
+        ensure("empty", doc.empty());
+        ensure_equals("no text", doc.text(), std::string());
+        ensure_equals("no bytes", doc.byteCount(), size_t(0));
+        ensure("end is start", doc.end() == doc.start());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<2>()
+    {
+        set_test_name("line endings arrive as anything and leave as LF");
+        ALTextDocument doc("one\r\ntwo\rthree\nfour");
+        ensure_equals("four lines", doc.lineCount(), 4);
+        ensure_equals("second", doc.line(1), std::string("two"));
+        ensure_equals("third", doc.line(2), std::string("three"));
+        ensure_equals("joined with LF", doc.text(), std::string("one\ntwo\nthree\nfour"));
+        ensure_equals("bytes", doc.byteCount(), doc.text().size());
+        ensure("end", doc.end() == ALTextPos(3, 4));
+        ensure_equals("a line past the end is empty", doc.line(9), std::string());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<3>()
+    {
+        set_test_name("an insert in a line is one edit, heard once");
+        ALTextDocument doc("hello world");
+        listen(doc);
+        const U32 before = doc.version();
+        ALTextDocument::Edit edit = doc.insert(ALTextPos(0, 5), ",");
+        ensure_equals("text", doc.text(), std::string("hello, world"));
+        ensure("range is where it went", edit.range == ALTextRange(ALTextPos(0, 5), ALTextPos(0, 5)));
+        ensure_equals("nothing removed", edit.removed, std::string());
+        ensure_equals("inserted", edit.inserted, std::string(","));
+        ensure("ends after the comma", edit.endAfter() == ALTextPos(0, 6));
+        ensure("version moved", doc.version() > before);
+        ensure_equals("heard once", heard.size(), size_t(1));
+        ensure_equals("heard the same", heard.front().inserted, std::string(","));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<4>()
+    {
+        set_test_name("inserting line breaks splits, removing across lines joins, and the inverse puts it back");
+        ALTextDocument doc("abcd");
+        ALTextDocument::Edit split = doc.insert(ALTextPos(0, 2), "1\n22\n");
+        ensure_equals("three lines", doc.lineCount(), 3);
+        ensure_equals("text", doc.text(), std::string("ab1\n22\ncd"));
+        ensure("ends at the start of the last line", split.endAfter() == ALTextPos(2, 0));
+        ensure("range after", split.rangeAfter() == ALTextRange(ALTextPos(0, 2), ALTextPos(2, 0)));
+
+        ALTextDocument::Edit joined = doc.remove(ALTextRange(ALTextPos(0, 3), ALTextPos(2, 1)));
+        ensure_equals("joined", doc.text(), std::string("ab1d"));
+        ensure_equals("removed what spanned the lines", joined.removed, std::string("\n22\nc"));
+
+        doc.replace(joined.inverse().range, joined.inverse().inserted);
+        ensure_equals("put back", doc.text(), std::string("ab1\n22\ncd"));
+        doc.replace(split.inverse().range, split.inverse().inserted);
+        ensure_equals("and back again", doc.text(), std::string("abcd"));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<5>()
+    {
+        set_test_name("a replacement over several lines, and a range given backwards");
+        ALTextDocument doc("one\ntwo\nthree\nfour");
+        ALTextDocument::Edit edit = doc.replace(ALTextRange(ALTextPos(2, 3), ALTextPos(0, 2)), "X\nY");
+        ensure_equals("text", doc.text(), std::string("onX\nYee\nfour"));
+        ensure("range normalised", edit.range == ALTextRange(ALTextPos(0, 2), ALTextPos(2, 3)));
+        ensure_equals("removed", edit.removed, std::string("e\ntwo\nthr"));
+        ensure_equals("text of a range", doc.text(ALTextRange(ALTextPos(0, 1), ALTextPos(1, 2))), std::string("nX\nYe"));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<6>()
+    {
+        set_test_name("an edit that changes nothing moves nothing");
+        ALTextDocument doc("abc");
+        listen(doc);
+        const U32 before = doc.version();
+        ALTextDocument::Edit edit = doc.remove(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 1)));
+        ensure("nothing", edit.nothing());
+        ensure_equals("version still", doc.version(), before);
+        ensure("nobody told", heard.empty());
+        ensure("clamped past the end", doc.insert(ALTextPos(7, 7), "").nothing());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<7>()
+    {
+        set_test_name("offsets and positions agree");
+        ALTextDocument doc("ab\n\ncde");
+        ensure_equals("start", doc.offsetOf(ALTextPos(0, 0)), size_t(0));
+        ensure_equals("past the first break", doc.offsetOf(ALTextPos(1, 0)), size_t(3));
+        ensure_equals("into the last", doc.offsetOf(ALTextPos(2, 2)), size_t(6));
+        ensure("back", doc.posAt(6) == ALTextPos(2, 2));
+        ensure("the empty line", doc.posAt(3) == ALTextPos(1, 0));
+        ensure("a break's own offset is the line end before it", doc.posAt(2) == ALTextPos(0, 2));
+        ensure("past everything is the end", doc.posAt(99) == doc.end());
+        // The whole text is kept between edits and follows them.
+        ensure_equals("the whole", doc.wholeText(), std::string("ab\n\ncde"));
+        ensure("the line starts", doc.lineStarts() == std::vector<size_t>({ 0, 3, 4 }));
+        doc.insert(ALTextPos(0, 2), "X\nY");
+        ensure_equals("the whole after an edit", doc.wholeText(), std::string("abX\nY\n\ncde"));
+        ensure("the starts after it", doc.lineStarts() == std::vector<size_t>({ 0, 4, 6, 7 }));
+        ensure("and the offsets", doc.offsetOf(ALTextPos(3, 1)) == 8 && doc.posAt(8) == ALTextPos(3, 1));
+        // Patched in place, whatever the edit's shape: lines taken out,
+        // put in, and the end of the text.
+        doc.replace(ALTextRange(ALTextPos(0, 1), ALTextPos(2, 0)), "");
+        ensure_equals("lines taken out", doc.wholeText(), std::string("a\ncde"));
+        ensure("the starts follow", doc.lineStarts() == std::vector<size_t>({ 0, 2 }));
+        doc.append("\nf");
+        ensure_equals("appended", doc.wholeText(), std::string("a\ncde\nf"));
+        ensure("the starts again", doc.lineStarts() == std::vector<size_t>({ 0, 2, 6 }));
+        ensure_equals("as made afresh", doc.wholeText(), doc.text());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<8>()
+    {
+        set_test_name("clusters: a combining mark stays with its base, and lines join up");
+        // e + combining acute, then z.
+        ALTextDocument doc("e\xCC\x81z\nq");
+        ensure("next from the start clears the cluster", doc.nextCluster(ALTextPos(0, 0)) == ALTextPos(0, 3));
+        ensure("clamp inside the cluster goes back", doc.clamp(ALTextPos(0, 2)) == ALTextPos(0, 0));
+        ensure("prev from after z", doc.prevCluster(ALTextPos(0, 4)) == ALTextPos(0, 3));
+        ensure("prev from the cluster's end", doc.prevCluster(ALTextPos(0, 3)) == ALTextPos(0, 0));
+        ensure("next at a line end is the next line", doc.nextCluster(ALTextPos(0, 4)) == ALTextPos(1, 0));
+        ensure("prev at a line start is the line before's end", doc.prevCluster(ALTextPos(1, 0)) == ALTextPos(0, 4));
+        ensure("nowhere past the end", doc.nextCluster(ALTextPos(1, 1)) == ALTextPos(1, 1));
+        ensure("nowhere before the start", doc.prevCluster(ALTextPos(0, 0)) == ALTextPos(0, 0));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<9>()
+    {
+        set_test_name("words: along a line and over its end");
+        ALTextDocument doc("hello world\nnext");
+        const ALTextPos one = doc.nextWord(ALTextPos(0, 0));
+        ensure("forward moves", one > ALTextPos(0, 0) && one <= ALTextPos(0, 6));
+        ensure("the word under the caret", doc.wordAt(ALTextPos(0, 2)) == ALTextRange(ALTextPos(0, 0), ALTextPos(0, 5)));
+        ensure("forward at the line end crosses", doc.nextWord(ALTextPos(0, 11)) == ALTextPos(1, 0));
+        ensure("back at a line start crosses", doc.prevWord(ALTextPos(1, 0)) == ALTextPos(0, 11));
+        const ALTextPos back = doc.prevWord(ALTextPos(0, 11));
+        ensure("back moves", back < ALTextPos(0, 11) && back >= ALTextPos(0, 5));
+        ensure("forward at the very end stays", doc.nextWord(ALTextPos(1, 4)) == ALTextPos(1, 4));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<10>()
+    {
+        set_test_name("display columns count graphemes and reach tab stops");
+        ALTextDocument doc("\tab\te\xCC\x81");
+        ensure_equals("a tab is the next stop", doc.displayColumn(ALTextPos(0, 1), 4), 4);
+        ensure_equals("then one per grapheme", doc.displayColumn(ALTextPos(0, 3), 4), 6);
+        ensure_equals("a second tab", doc.displayColumn(ALTextPos(0, 4), 4), 8);
+        ensure_equals("a cluster is one column", doc.displayColumn(ALTextPos(0, 7), 4), 9);
+        ensure("back to the byte", doc.posAtDisplayColumn(0, 4, 4) == ALTextPos(0, 1));
+        ensure("into a tab is the tab", doc.posAtDisplayColumn(0, 2, 4) == ALTextPos(0, 0));
+        ensure("past the end is the end", doc.posAtDisplayColumn(0, 40, 4) == ALTextPos(0, 7));
+        ensure("column six", doc.posAtDisplayColumn(0, 6, 4) == ALTextPos(0, 3));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<11>()
+    {
+        set_test_name("a stretch replaced by the same text changes nothing: nothing heard, the version still, answered as nothing");
+        ALTextDocument doc("one two");
+        listen(doc);
+        const U32            before = doc.version();
+        ALTextDocument::Edit same   = doc.replace(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7)), "two");
+        ensure("nothing", same.nothing());
+        ensure_equals("the version still", doc.version(), before);
+        ensure("nobody told", heard.empty());
+        ensure_equals("the text as it was", doc.text(), std::string("one two"));
+        ensure("and a different text is an edit", !doc.replace(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7)), "Two").nothing() && heard.size() == 1);
+    }
+
+    template<> template<>
+    void altextdocument_object::test<12>()
+    {
+        set_test_name("a log: text arrives at the end and the oldest lines go");
+        ALTextDocument doc;
+        doc.append("one\ntwo");
+        doc.append("\nthree");
+        ensure_equals("three lines", doc.lineCount(), 3);
+        ALTextDocument::Edit gone = doc.removeFirstLines(2);
+        ensure_equals("one left", doc.text(), std::string("three"));
+        ensure_equals("what went", gone.removed, std::string("one\ntwo\n"));
+        ensure("everything can go", doc.removeFirstLines(5).removed == "three" && doc.empty());
+        ensure("nothing to go", doc.removeFirstLines(0).nothing());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<13>()
+    {
+        set_test_name("a stretch an edit lands in grows and shrinks with it, rather than going as a link would");
+        const ALTextRange scope(ALTextPos(0, 4), ALTextPos(1, 3));
+        ALTextDocument    doc("one two three\nfour five");
+        // Inside it, longer: the end moves on by what grew.
+        ALTextDocument::Edit grew = doc.replace(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7)), "TWO!!");
+        ensure("grown", grew.stretched(scope) == ALTextRange(ALTextPos(0, 4), ALTextPos(1, 3)));
+        ensure("its end on the next line as it was", grew.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 13))) == ALTextRange(ALTextPos(0, 4), ALTextPos(0, 15)));
+        // Before it: both ends move along.
+        doc.setText("one two three");
+        ALTextDocument::Edit before = doc.insert(ALTextPos(0, 0), "zero ");
+        ensure("moved along", before.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7))) == ALTextRange(ALTextPos(0, 9), ALTextPos(0, 12)));
+        // At its start: within it; at its end: not.
+        doc.setText("one two three");
+        ALTextDocument::Edit at_start = doc.insert(ALTextPos(0, 4), "x");
+        ensure("put at its start, within it", at_start.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7))) == ALTextRange(ALTextPos(0, 4), ALTextPos(0, 8)));
+        doc.setText("one two three");
+        ALTextDocument::Edit at_end = doc.insert(ALTextPos(0, 7), "x");
+        ensure("put at its end, not", at_end.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7))) == ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7)));
+        // Over its end: its end past what went in.
+        doc.setText("one two three");
+        ALTextDocument::Edit over = doc.replace(ALTextRange(ALTextPos(0, 6), ALTextPos(0, 9)), "O\nTH");
+        ensure("its end past what went in", over.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7))) == ALTextRange(ALTextPos(0, 4), ALTextPos(1, 2)));
+        // Over its start: its start where what was replaced began.
+        doc.setText("one two three");
+        ALTextDocument::Edit cut = doc.remove(ALTextRange(ALTextPos(0, 2), ALTextPos(0, 5)));
+        ensure("its start where the cut began", cut.stretched(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7))) == ALTextRange(ALTextPos(0, 2), ALTextPos(0, 4)));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<14>()
+    {
+        set_test_name("tabs to the stops from a column, one column a character; and a replacement in the case of what it replaces, past ASCII");
+        S32 column = 0;
+        ensure_equals("to the first stop", alExpandTabs("\tx", column, 4), std::string("    x"));
+        ensure_equals("counted on", column, 5);
+        ensure_equals("from where it had reached", alExpandTabs("\ty", column, 4), std::string("   y"));
+        column = 1;
+        ensure_equals("a character of two bytes is one column", alExpandTabs("\xC3\xA9\t|", column, 4), std::string("\xC3\xA9  |"));
+
+        ensure_equals("all capitals", alInCaseOf("\xC3\x89LAN", "hello"), std::string("HELLO"));
+        ensure_equals("capitalised", alInCaseOf("\xC3\x89lan", "hello"), std::string("Hello"));
+        ensure_equals("all small, and what goes in lowered past ASCII too", alInCaseOf("world", "\xC3\x89LAN"), std::string("\xC3\xA9lan"));
+        ensure_equals("raised past ASCII", alInCaseOf("WORLD", "\xC3\xA9lan"), std::string("\xC3\x89LAN"));
+        ensure_equals("mixed stays as written", alInCaseOf("wOrLd", "Hello"), std::string("Hello"));
+        ensure_equals("no letters stays as written", alInCaseOf("123", "Hello"), std::string("Hello"));
+    }
+}
