@@ -26,6 +26,8 @@
 
 #include "../alpopover.h"
 
+#include "../llfocusmgr.h"
+#include "../lllineeditor.h"
 #include "../llpanel.h"
 #include "../lluictrlfactory.h"
 
@@ -292,5 +294,150 @@ namespace tut
         ensure_equals("another kind is not told", other->getRect().getWidth(), 200);
         other->closeFloater();
         over->die();
+    }
+    // A popover is its window's dependent: the window closing takes it,
+    // however the window went, and one that has already gone is not
+    // touched when the window goes after it.
+    template<> template<>
+    void alpopover_object::test<8>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        const auto home = []() {
+            LLFloater::Params fp(LLFloater::getDefaultParams());
+            fp.name            = "home";
+            fp.rect            = LLRect(100, 500, 500, 100);
+            fp.save_rect       = false;
+            fp.save_visibility = false;
+            LLFloater* made    = new LLFloater(LLSD(), fp);
+            made->openFloater();
+            return made;
+        };
+
+        LLFloater* window = home();
+        LLPanel*   over   = anchor();
+        window->addChild(over);
+        ALPopover*        popover = ALPopover::show(over, content());
+        std::vector<bool> said;
+        popover->onClosed([&said](bool escaped) { said.push_back(escaped); });
+        ensure("its window's dependent", popover->getDependee() == window);
+        window->closeFloater();
+        ensure("gone with its window", popover->isDead());
+        ensure_equals("said so once", said.size(), 1u);
+        ensure("and not as escaped: nobody pressed escape", !said.front());
+
+        // Gone first: the window closing after it finds nothing of it.
+        LLFloater* again = home();
+        LLPanel*   under = anchor();
+        again->addChild(under);
+        ALPopover* first = ALPopover::show(under, content());
+        first->escape();
+        ensure("gone", first->isDead());
+        again->closeFloater();
+        ensure("and the window closed after it", again->isDead());
+    }
+
+    // Beside a rect of the screen given for it -- where something on a
+    // zoomed canvas is drawn -- rather than beside the anchor's own rect,
+    // and still the dependent of the anchor's window.
+    template<> template<>
+    void alpopover_object::test<9>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLPanel*     over   = anchor();
+        const LLRect screen(300, 260, 380, 240);
+        ALPopover*   popover = ALPopover::showAt(screen, over, content(160, 90));
+        ensure("opens", popover != nullptr && popover->getVisible());
+        const LLRect where = popover->getRect();
+        ensure_equals("its left with the rect's", where.mLeft, screen.mLeft);
+        ensure_equals("hung from the rect's bottom", where.mTop, screen.mBottom);
+        ensure("not the anchor's", where.mLeft != over->calcScreenRect().mLeft);
+        popover->closeFloater();
+        ensure("no anchor, no popover", ALPopover::showAt(screen, nullptr, content()) == nullptr);
+        over->die();
+    }
+
+    // Quiet as a menu is, and closed from the keyboard with nothing else
+    // taking it -- no window over which to hand it back -- it gives the
+    // keyboard back to what had it, not to the world.
+    template<> template<>
+    void alpopover_object::test<10>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLPanel*              over = anchor();
+        LLLineEditor::Params  lp(LLUICtrlFactory::getDefaultParams<LLLineEditor>());
+        lp.name               = "field";
+        lp.rect               = LLRect(0, 20, 120, 0);
+        LLLineEditor* field   = LLUICtrlFactory::create<LLLineEditor>(lp);
+        over->addChild(field);
+        field->setFocus(true);
+        ensure("the field has the keyboard", gFocusMgr.getKeyboardFocus() == field);
+        ALPopover* popover = ALPopover::showOver(over, content(), "Go to line");
+        ensure("shown", popover != nullptr);
+        ensure("silent", popover->getSoundFlags() == LLView::SILENT);
+        ensure("it has the keyboard", gFocusMgr.getKeyboardFocus() != field);
+        popover->escape();
+        ensure("the keyboard back in the field", gFocusMgr.getKeyboardFocus() == field);
+        gFocusMgr.setKeyboardFocus(nullptr);
+        over->die();
+    }
+
+    // Over a window with more in it than what had the keyboard -- a field
+    // before it in the tab order, say -- escape and return each give the
+    // keyboard back to what had it: the window taking it as its dependent
+    // closes puts it on its first control, which is not where the keys were,
+    // and the arrows there move the avatar.
+    template<> template<>
+    void alpopover_object::test<11>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLFloater::Params fp(LLFloater::getDefaultParams());
+        fp.name            = "home";
+        fp.rect            = LLRect(100, 500, 500, 100);
+        fp.save_rect       = false;
+        fp.save_visibility = false;
+        LLFloater* window  = new LLFloater(LLSD(), fp);
+        window->openFloater();
+        const auto field = [window](const char* name, S32 bottom) {
+            LLLineEditor::Params lp(LLUICtrlFactory::getDefaultParams<LLLineEditor>());
+            lp.name           = name;
+            lp.rect           = LLRect(10, bottom + 20, 130, bottom);
+            LLLineEditor* one = LLUICtrlFactory::create<LLLineEditor>(lp);
+            window->addChild(one);
+            return one;
+        };
+        LLLineEditor* first = field("first", 300);
+        LLLineEditor* typed = field("typed", 200);
+        (void)first;
+        for (const bool escaping : { true, false })
+        {
+            typed->setFocus(true);
+            ensure("the second field has the keyboard", gFocusMgr.getKeyboardFocus() == typed);
+            ALPopover* popover = ALPopover::showOver(window, content(), "Go to line");
+            ensure("shown", popover != nullptr);
+            ensure("it has the keyboard", gFocusMgr.getKeyboardFocus() != typed);
+            if (escaping)
+            {
+                popover->escape();
+            }
+            else
+            {
+                popover->settle();
+            }
+            ensure(escaping ? "escaped: the keyboard back where it was" : "settled: the keyboard back where it was", gFocusMgr.getKeyboardFocus() == typed);
+        }
+        gFocusMgr.setKeyboardFocus(nullptr);
+        window->closeFloater();
     }
 }
