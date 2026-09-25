@@ -48,6 +48,7 @@ namespace
         r->mAxes[0].set(1, 0, 0);
         r->mAxes[1].set(0, 1, 0);
         r->mAxes[2].set(0, 0, 1);
+        r->mSolid = true;
         r->mMin.set(x0, y0, z0);
         r->mMax.set(x1, y1, z1);
         return r;
@@ -59,6 +60,7 @@ namespace
         auto r = std::make_shared<Record>();
         r->mShape = Shape::TRIANGLES;
         r->mProvenance = provenance;
+        r->mSolid = provenance == Provenance::HULL || provenance == Provenance::BASE_HULL;
         r->mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
         r->mMin.set(1e9, 1e9, 1e9);
         r->mMax.set(-1e9, -1e9, -1e9);
@@ -710,5 +712,50 @@ namespace tut
         ensure("roof at its height", std::fabs(snapped[1] - 3.f) < 0.3f);
         ensure("ground beside the box is floor", m.nearest(LLVector3(4.f, 4.f, 0.f), snapped, 0.5f) != 0);
         ensure("ground at its height", std::fabs(snapped[1]) < 0.3f);
+    }
+
+    // A solid with a tunnel through it, as a hollow prim on its side or a
+    // hull-less physics prim arrives: one closed surface. The fill takes the
+    // column's crossings in pairs, so the tunnel floor is a floor under a
+    // roof and the solid either side of it is filled to the top.
+    template<> template<>
+    void sknavbuild_object::test<17>()
+    {
+        // Outer 8..24 x 8..24, z -0.5..4; tunnel along y at x 14..18, z 0.5..3.
+        std::vector<LLVector3> tris;
+        auto q = [&](F32 ax, F32 ay, F32 az, F32 bx, F32 by, F32 bz, F32 cx, F32 cy, F32 cz, F32 dx, F32 dy, F32 dz) {
+            const LLVector3 a(ax, ay, az), b(bx, by, bz), c(cx, cy, cz), d(dx, dy, dz);
+            tris.insert(tris.end(), { a, b, c, a, c, d });
+        };
+        q(8, 8, 4, 24, 8, 4, 24, 24, 4, 8, 24, 4);                  // top
+        q(8, 8, -0.5f, 8, 24, -0.5f, 24, 24, -0.5f, 24, 8, -0.5f);  // bottom
+        q(8, 8, -0.5f, 8, 24, -0.5f, 8, 24, 4, 8, 8, 4);            // -x side
+        q(24, 8, -0.5f, 24, 8, 4, 24, 24, 4, 24, 24, -0.5f);        // +x side
+        for (F32 y : { 8.f, 24.f })                                 // the ends, minus the tunnel mouth
+        {
+            q(8, y, -0.5f, 14, y, -0.5f, 14, y, 4, 8, y, 4);        // left of the mouth
+            q(18, y, -0.5f, 24, y, -0.5f, 24, y, 4, 18, y, 4);      // right of it
+            q(14, y, -0.5f, 18, y, -0.5f, 18, y, 0.5f, 14, y, 0.5f); // below it
+            q(14, y, 3, 18, y, 3, 18, y, 4, 14, y, 4);              // above it
+        }
+        q(14, 8, 0.5f, 18, 8, 0.5f, 18, 24, 0.5f, 14, 24, 0.5f);    // tunnel floor
+        q(14, 8, 3, 14, 24, 3, 18, 24, 3, 18, 8, 3);                // tunnel ceiling
+        q(14, 8, 0.5f, 14, 24, 0.5f, 14, 24, 3, 14, 8, 3);          // tunnel walls
+        q(18, 8, 0.5f, 18, 8, 3, 18, 24, 3, 18, 24, 0.5f);
+
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(hull(tris));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+
+        Mesh m;
+        m.add(r.mData[0]);
+        F32 snapped[3];
+        ensure("tunnel floor is floor", m.nearest(LLVector3(16.f, 16.f, 0.5f), snapped, 0.5f) != 0);
+        ensure("at the tunnel floor's height", std::fabs(snapped[1] - 0.5f) < 0.3f);
+        ensure("no floor in the solid beside the tunnel", m.nearest(LLVector3(11.f, 16.f, 0.f), snapped, 0.5f) == 0);
+        ensure("the roof is floor", m.nearest(LLVector3(11.f, 16.f, 4.f), snapped, 0.5f) != 0);
+        ensure("roof at its height", std::fabs(snapped[1] - 4.f) < 0.3f);
     }
 }

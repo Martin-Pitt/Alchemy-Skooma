@@ -163,17 +163,6 @@ namespace
         }
     }
 
-    /// Recast rasterises surfaces, so a closed body arrives hollow: the floor
-    /// it stands on stays walkable inside it with the body's own roof as
-    /// headroom, and the navmesh offers a storey inside every solid object.
-    /// A convex body is exactly the span between its lowest and highest
-    /// surface in each column, so fill that in and the inside is gone.
-    ///
-    /// A column counts as covered when the body's surface passes over its
-    /// centre. A body too narrow to cover any centre is therefore not filled,
-    /// which costs nothing: such a body has no interior column to be hollow,
-    /// and the side faces that rasterise across its cells already make it
-    /// solid there.
     /// The height range a closed body covers in each column of its footprint:
     /// mLo and mHi, indexed from (mX0, mZ0) over mW by mH cells, FLT_MAX and
     /// -FLT_MAX where the body does not pass over a column's centre.
@@ -261,58 +250,141 @@ namespace
         }
     }
 
-    /// Every body here is one the sim collides with as a solid - a prim's own
-    /// box, sphere or cylinder, or a hull the census took from the asset the
-    /// sim reads - so it is filled whatever it covers: a surface inside it is
-    /// another record's, or the terrain, and no avatar stands there.
-    void fillConvex(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
+    /// Recast rasterises surfaces, so a closed body arrives hollow: the floor
+    /// it stands on stays walkable inside it with the body's own roof as
+    /// headroom, and the navmesh offers a storey inside every solid object.
+    /// Every body filled here is one the sim collides with as a volume - a
+    /// prim, a hull, a sculpt's hull - so its inside is filled whatever it
+    /// holds: a surface in there is another record's, or the terrain, and no
+    /// avatar stands on it.
+    ///
+    /// The inside is what the column's centre crosses an odd number of
+    /// surfaces to reach, so the crossings are taken in pairs from the bottom
+    /// up. A convex body is one pair. A box with a tunnel through it is two,
+    /// and the tunnel's floor stays a floor; a hollow prim's hollow is open
+    /// the same way. Facing is never consulted: a hull's winding is whatever
+    /// the decomposition left it, and the count is the same either way.
+    /// A column the body only touches is odd, and is filled from its lowest
+    /// crossing to its highest, which is what a convex body would have been.
+    void fillSolid(rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end, S32 climb)
     {
-        // Havok pads every convex shape by 5 cm, so two solids leave a 10 cm
-        // gap; the census's hulls carry none and read small at their edges,
-        // which leaves a navmesh gap the sim does not have.
-        const F32 pad = 0.05f;
-        BodyExtent body;
-        bodyExtent(hf, soup, tri_begin, tri_end, body, pad);
-        if (body.mW <= 0 || body.mH <= 0)
+        if (tri_end <= tri_begin)
         {
             return;
         }
-        const S32 x0 = body.mX0, z0 = body.mZ0, w = body.mW, h = body.mH;
-        const S32 x1 = x0 + w - 1, z1 = z0 + h - 1;
-        const std::vector<F32>& lo = body.mLo;
-        const std::vector<F32>& hi = body.mHi;
+        F32 bmin[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, bmax[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (S32 t = tri_begin * 3; t < tri_end * 3; ++t)
+        {
+            const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+            for (S32 k = 0; k < 3; ++k)
+            {
+                bmin[k] = std::min(bmin[k], v[k]);
+                bmax[k] = std::max(bmax[k], v[k]);
+            }
+        }
+        const S32 x0 = std::max(0, static_cast<S32>(std::floor((bmin[0] - hf.bmin[0]) / hf.cs)));
+        const S32 x1 = std::min(hf.width - 1, static_cast<S32>(std::floor((bmax[0] - hf.bmin[0]) / hf.cs)));
+        const S32 z0 = std::max(0, static_cast<S32>(std::floor((bmin[2] - hf.bmin[2]) / hf.cs)));
+        const S32 z1 = std::min(hf.height - 1, static_cast<S32>(std::floor((bmax[2] - hf.bmin[2]) / hf.cs)));
+        if (x1 < x0 || z1 < z0)
+        {
+            return;
+        }
+        const S32 w = x1 - x0 + 1;
+
+        // Every surface crossing, by column then height.
+        struct Hit
+        {
+            S32 mColumn;
+            F32 mY;
+            bool operator<(const Hit& o) const { return mColumn < o.mColumn || (mColumn == o.mColumn && mY < o.mY); }
+        };
+        std::vector<Hit> hits;
+        // A centre on a shared edge is inside both triangles; the two crossings
+        // it yields sit at one height and are merged below. The tolerance keeps
+        // a centre a rounding error outside both from being in neither.
+        const F32 eps = 1e-4f;
+        for (S32 t = tri_begin; t < tri_end; ++t)
+        {
+            const F32* a = &soup.mVerts[soup.mTris[t * 3] * 3];
+            const F32* b = &soup.mVerts[soup.mTris[t * 3 + 1] * 3];
+            const F32* c = &soup.mVerts[soup.mTris[t * 3 + 2] * 3];
+            const F32 d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+            if (std::fabs(d) < 1e-9f)
+            {
+                continue;   // vertical: the column crosses it nowhere; the faces it joins count
+            }
+            const S32 tx0 = std::max(x0, static_cast<S32>(std::floor((std::min(std::min(a[0], b[0]), c[0]) - hf.bmin[0]) / hf.cs)));
+            const S32 tx1 = std::min(x1, static_cast<S32>(std::floor((std::max(std::max(a[0], b[0]), c[0]) - hf.bmin[0]) / hf.cs)));
+            const S32 tz0 = std::max(z0, static_cast<S32>(std::floor((std::min(std::min(a[2], b[2]), c[2]) - hf.bmin[2]) / hf.cs)));
+            const S32 tz1 = std::min(z1, static_cast<S32>(std::floor((std::max(std::max(a[2], b[2]), c[2]) - hf.bmin[2]) / hf.cs)));
+            for (S32 cz = tz0; cz <= tz1; ++cz)
+            {
+                for (S32 cx = tx0; cx <= tx1; ++cx)
+                {
+                    const F32 px = hf.bmin[0] + (cx + 0.5f) * hf.cs;
+                    const F32 pz = hf.bmin[2] + (cz + 0.5f) * hf.cs;
+                    const F32 l0 = ((b[2] - c[2]) * (px - c[0]) + (c[0] - b[0]) * (pz - c[2])) / d;
+                    const F32 l1 = ((c[2] - a[2]) * (px - c[0]) + (a[0] - c[0]) * (pz - c[2])) / d;
+                    const F32 l2 = 1.f - l0 - l1;
+                    if (l0 < -eps || l1 < -eps || l2 < -eps)
+                    {
+                        continue;
+                    }
+                    hits.push_back({ (cz - z0) * w + (cx - x0), l0 * a[1] + l1 * b[1] + l2 * c[1] });
+                }
+            }
+        }
+        std::sort(hits.begin(), hits.end());
 
         rcContext ctx(false);
-        for (S32 cz = z0; cz <= z1; ++cz)
+        auto fill = [&](S32 column, F32 lo, F32 hi)
         {
-            for (S32 cx = x0; cx <= x1; ++cx)
+            const F32 top = std::min(hi, hf.bmax[1]);
+            const F32 bottom = std::max(lo, hf.bmin[1]);
+            if (top <= bottom)
             {
-                const size_t i = static_cast<size_t>(cz - z0) * w + (cx - x0);
-                if (lo[i] > hi[i])
+                return;
+            }
+            // Spans are cell counts in an unsigned short and Recast caps
+            // them; a megaprim reaching a kilometre would otherwise wrap.
+            S32 smin = static_cast<S32>(std::floor((bottom - hf.bmin[1]) / hf.ch));
+            S32 smax = static_cast<S32>(std::ceil((top - hf.bmin[1]) / hf.ch));
+            smin = llclamp(smin, 0, RC_SPAN_MAX_HEIGHT);
+            smax = llclamp(smax, 0, RC_SPAN_MAX_HEIGHT);
+            if (smax <= smin)
+            {
+                return;
+            }
+            // The fill carries no area: it is the inside of something, never
+            // a floor. Merging keeps the surfaces' own area, so the body's
+            // roof stays walkable.
+            rcAddSpan(&ctx, hf, x0 + column % w, z0 + column / w, static_cast<unsigned short>(smin),
+                      static_cast<unsigned short>(smax), RC_NULL_AREA, climb);
+        };
+        // The same surface met at a shared edge or vertex is one crossing.
+        const F32 same = 1e-3f;
+        std::vector<F32> column;
+        size_t i = 0;
+        while (i < hits.size())
+        {
+            const S32 at = hits[i].mColumn;
+            column.clear();
+            for (; i < hits.size() && hits[i].mColumn == at; ++i)
+            {
+                if (column.empty() || hits[i].mY - column.back() > same)
                 {
-                    continue;
+                    column.push_back(hits[i].mY);
                 }
-                const F32 top = std::min(hi[i], hf.bmax[1]);
-                const F32 bottom = std::max(lo[i], hf.bmin[1]);
-                if (top <= bottom)
-                {
-                    continue;
-                }
-                // Spans are cell counts in an unsigned short and Recast caps
-                // them; a megaprim reaching a kilometre would otherwise wrap.
-                S32 smin = static_cast<S32>(std::floor((bottom - hf.bmin[1]) / hf.ch));
-                S32 smax = static_cast<S32>(std::ceil((top - hf.bmin[1]) / hf.ch));
-                smin = llclamp(smin, 0, RC_SPAN_MAX_HEIGHT);
-                smax = llclamp(smax, 0, RC_SPAN_MAX_HEIGHT);
-                if (smax <= smin)
-                {
-                    continue;
-                }
-                // The fill carries no area: it is the inside of something, never
-                // a floor. Merging keeps the surfaces' own area, so the body's
-                // roof stays walkable.
-                rcAddSpan(&ctx, hf, cx, cz, static_cast<unsigned short>(smin),
-                          static_cast<unsigned short>(smax), RC_NULL_AREA, climb);
+            }
+            if (column.size() % 2)
+            {
+                fill(at, column.front(), column.back());
+                continue;
+            }
+            for (size_t k = 0; k + 1 < column.size(); k += 2)
+            {
+                fill(at, column[k], column[k + 1]);
             }
         }
     }
@@ -675,48 +747,45 @@ namespace sknav
         // Gather the soup in Recast space.
         Soup soup;
         std::vector<LLVector3> tris;
-        std::vector<std::pair<S32, S32>> convex;    // triangle ranges of closed bodies
+        std::vector<std::pair<S32, S32>> solids;    // triangle ranges of closed bodies
         for (const RecordPtr& r : input.mRecords)
         {
             if (!r)
             {
                 continue;
             }
-            // A hull is a convex solid the sim collides with from either side:
-            // mark it walkable whichever way its triangles wind, and fill it,
-            // because the sim collides with the whole body and not just the
-            // surface the decomposition happened to hand back.
+            // A hull is a solid the sim collides with from either side: mark
+            // it walkable whichever way its triangles wind.
             const bool hull = r->mProvenance == Provenance::HULL || r->mProvenance == Provenance::BASE_HULL;
             tris.clear();
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
             soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
-            // A decomposition is a set of convex bodies, not one: a door frame
-            // is a sill, two posts and a lintel, and their union filled from
-            // its lowest to its highest surface walls off the opening they
-            // exist to leave. Fill each body on its own. A record whose
-            // bodies are not told apart arrives as one range and is filled as
-            // one, which is what its whole shape has always meant.
+            // A solid is filled. A decomposition is a set of bodies, not one:
+            // its hulls overlap, and a column through two of them would count
+            // four crossings and fill none of the middle. Fill each body on
+            // its own. A record whose bodies are not told apart arrives as one
+            // range and is filled as one closed surface.
             S32 pieces = 0;
             for (const S32 count : r->mConvexTris)
             {
                 pieces += count;
             }
-            if (hull && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
+            if (r->mSolid && r->mConvexTris.size() > 1 && pieces == soup.ntris() - before)
             {
                 S32 at = before;
                 for (const S32 count : r->mConvexTris)
                 {
                     if (count > 0)
                     {
-                        convex.emplace_back(at, at + count);
+                        solids.emplace_back(at, at + count);
                     }
                     at += count;
                 }
             }
-            else if (r->mShape != Shape::TRIANGLES || hull)
+            else if (r->mSolid)
             {
-                convex.emplace_back(before, soup.ntris());
+                solids.emplace_back(before, soup.ntris());
             }
         }
         // An exclusion volume is a cut, not a shape: its triangles never enter
@@ -823,9 +892,9 @@ namespace sknav
                 result.mError = "rasterize";
                 return result;
             }
-            for (const auto& range : convex)
+            for (const auto& range : solids)
             {
-                fillConvex(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
+                fillSolid(*mem.hf, soup, range.first, range.second, cfg.walkableClimb);
             }
             for (const auto& range : cuts)
             {

@@ -52,8 +52,10 @@ public:
     // step before rather than adding one, through `join(last, step)`,
     // which folds what the new step covers that the old did not. The next
     // label given names the step, either way.
+    // True where the oldest step was forgotten to make room: whoever
+    // counts steps from the bottom -- a saved mark -- counts one fewer.
     template <typename Join>
-    void note(Step step, std::string_view key, F64 now, F64 window, Join&& join)
+    bool note(Step step, std::string_view key, F64 now, F64 window, Join&& join)
     {
         const bool same_run = !key.empty() && key == mLastKey && now - mLastTime < window && !mUndo.empty();
         if (same_run)
@@ -71,7 +73,9 @@ public:
         if (mUndo.size() > mDepth)
         {
             mUndo.erase(mUndo.begin());
+            return true;
         }
+        return false;
     }
 
     // What the last change was called, said once: the first label after a
@@ -86,6 +90,11 @@ public:
     }
     // A frame later is something else.
     void closeLabel() { mLabelPending = false; }
+
+    // The next change is a step of its own whatever its key: what a caller
+    // says when it knows a run has ended -- the caret moved, a word was
+    // finished -- and the key and the window would not.
+    void breakRun() { mLastKey.clear(); }
 
     bool canUndo() const { return !mUndo.empty(); }
     bool canRedo() const { return !mRedo.empty(); }
@@ -121,9 +130,14 @@ public:
     void pushUndo(Step step) { mUndo.push_back(std::move(step)); }
     void pushRedo(Step step) { mRedo.push_back(std::move(step)); }
 
-    // Everything done, oldest first, and how many are in force: the steps
-    // back, then the steps forward in the order they would be taken.
+    // Everything done, and how many are in force: the steps back, oldest
+    // first, the last the next to be taken back; and the steps forward,
+    // likewise the last the next to be taken -- the reverse of the order
+    // they would be taken in.
     const std::vector<Step>& undone() const { return mUndo; }
+    // The newest step back, for its caller to say more about it; there
+    // must be one.
+    Step&                    newest() { return mUndo.back(); }
     const std::vector<Step>& redone() const { return mRedo; }
     size_t inForce() const { return mUndo.size(); }
     // The label of the next step back and of the next step forward, or
@@ -137,6 +151,23 @@ public:
         mRedo.clear();
         mLabelPending = false;
         mLastKey.clear();
+    }
+
+    // Both stacks put back whole, as they were written somewhere: the
+    // oldest steps back past the depth forgotten. How many were forgotten,
+    // for whoever counts steps from the bottom.
+    size_t restore(std::vector<Step> undo, std::vector<Step> redo)
+    {
+        clear();
+        size_t dropped = 0;
+        if (undo.size() > mDepth)
+        {
+            dropped = undo.size() - mDepth;
+            undo.erase(undo.begin(), undo.begin() + static_cast<std::ptrdiff_t>(dropped));
+        }
+        mUndo = std::move(undo);
+        mRedo = std::move(redo);
+        return dropped;
     }
 
 private:

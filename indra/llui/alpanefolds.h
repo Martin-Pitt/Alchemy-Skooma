@@ -75,7 +75,9 @@ public:
     // in a pane that can leave.
     void bind(LLView* window, std::vector<Pane> panes);
 
-    // A region by its key or its panel's name.
+    // A region by its key or its panel's name. A region out in a window
+    // of its own is showing, whatever became of the room it left: folding
+    // it puts it back folded, and unfolding it brings its window forward.
     void toggle(std::string_view pane);
     void setCollapsed(std::string_view pane, bool collapsed);
     bool collapsed(std::string_view pane) const;
@@ -92,6 +94,10 @@ public:
     bool out(std::string_view pane) const;
     void toggleOut(std::string_view pane);
     void dockAll();
+    // Out again, every region its window put back only because the viewer
+    // was quitting: what a window does when the quit it was holding up is
+    // called off.
+    void putBackOut();
     // The window a region is out in, or null while it is home.
     LLFloater* window(std::string_view pane) const;
 
@@ -102,7 +108,8 @@ public:
     void save(LLSD& state) const;
     void load(const LLSD& state);
 
-    // A region folded or unfolded, from a button or a call.
+    // A region folded or unfolded, from a button or a call; or a drag on
+    // its stack's bars ended, its size worth keeping now.
     typedef boost::signals2::signal<void()> changed_signal_t;
     boost::signals2::connection onChanged(const changed_signal_t::slot_type& cb) { return mChanged.connect(cb); }
 
@@ -122,4 +129,6 @@ private:
 
     std::vector<Bound> mPanes;
     changed_signal_t mChanged;
+    // To the stacks the regions sit in, for their bars.
+    std::vector<boost::signals2::scoped_connection> mStacks;
 };

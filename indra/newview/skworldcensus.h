@@ -106,6 +106,7 @@ private:
     {
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
+        sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
         F32 mLastSeen = 0.f;
     };
 
@@ -163,6 +164,8 @@ private:
     /// One record from one part, at the sim-side transform the caller signed.
     sknav::RecordPtr record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
                             const LLVector3& pos, const LLQuaternion& rot);
+    /// A record into the pending snapshot, counted.
+    void take(SKCensusSnapshot& snap, const sknav::RecordPtr& rec);
 
     void requestRoles();
     void onRoles(U32 request, S32 status, std::shared_ptr<LLPathfindingObjectList> list);

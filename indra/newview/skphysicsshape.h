@@ -62,6 +62,11 @@ struct SKShapeGeometry
     /// posts and lintel is not a body - filled as one it walls off the
     /// opening they exist to leave. Empty means one body.
     std::vector<S32> mConvexTris;
+    /// The geometry closes a body the sim collides with as a volume - a prim,
+    /// a hull, a sculpt's hull - rather than a surface it collides with from
+    /// either side, which is what a mesh's physics mesh is. The build fills
+    /// a solid's inside so no floor is offered there.
+    bool mSolid = false;
 };
 
 /// The physics geometry for a classified shape. Asks the mesh repository for
