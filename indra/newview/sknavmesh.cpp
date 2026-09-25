@@ -525,76 +525,6 @@ bool SKNavMesh::grounded(const Cluster& cluster) const
     return static_cast<F32>(cluster.mMin.mdV[VZ]) - land <= margin;
 }
 
-bool SKNavMesh::floatsClear(const sknav::Record& record) const
-{
-    // The sim takes the navmesh out of an exclusion volume whatever its size
-    // or height; everything else here is a judgement about walking.
-    if (record.mNavRole == sknav::NavRole::EXCLUSION_VOLUME)
-    {
-        return false;
-    }
-    if (!LLWorld::instanceExists())
-    {
-        return false;
-    }
-    static LLCachedControl<F32> margin(gSavedSettings, "SKNavFloatMargin", 0.5f);
-    static LLCachedControl<F32> shelf(gSavedSettings, "SKNavFloatShelf", 1.f);
-    // A plan narrower than a shelf cannot carry a surface worth a drop link;
-    // the erosion would take most of it back anyway. The world AABB, so a
-    // rotated part is judged by the span it actually covers. Cheapest test
-    // first: most parts this throws out early are wide ones.
-    if (record.mMax.mdV[VX] - record.mMin.mdV[VX] >= shelf
-        || record.mMax.mdV[VY] - record.mMin.mdV[VY] >= shelf)
-    {
-        return false;
-    }
-    LLVector3d foot = (record.mMin + record.mMax) * 0.5;
-    foot.mdV[VZ] = record.mMin.mdV[VZ];
-    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(foot);
-    if (region)
-    {
-        // The heightfield first, as the cheapest answer: right where nothing
-        // is built over it, wrong wherever the land people walk on is mesh
-        // and prim standing on the heightfield - which the built mesh knows
-        // instead, asked below.
-        const F32 land = LLWorld::getInstance()->resolveLandHeightGlobal(foot);
-        if (record.mMin.mdV[VZ] - land <= margin)
-        {
-            // It meets the ground: an obstacle at walking height, however small.
-            return false;
-        }
-        // The tile under it has never been built: no surface exists there to
-        // meet, and this part is not why the tile will be built. Leave it
-        // out; the scan after the tile publishes puts it back if the surface
-        // there reaches it. Without this the first build-out pays a query
-        // per part into meshes that hold nothing.
-        const auto mit = mMeshes.find(region->getRegionID());
-        if (mit != mMeshes.end())
-        {
-            const Mesh& mesh = *mit->second;
-            const TileKey key{ tileIndex(foot.mdV[VX]) - tileIndex(mesh.mOrigin.mdV[VX]),
-                               tileIndex(foot.mdV[VY]) - tileIndex(mesh.mOrigin.mdV[VY]) };
-            const auto tit = mesh.mTiles.find(key);
-            if (tit == mesh.mTiles.end() || !tit->second.mBuilt)
-            {
-                return true;
-            }
-        }
-    }
-    // What is actually under it to meet: the nearest walkable polygon of any
-    // built mesh, whatever that surface stands on. Asked at the record's
-    // foot, so the surface a part rests on is the one found, not one metres
-    // over a tall thin record's middle.
-    F32 z = 0.f;
-    if (floorUnder(foot, AgentClass::AVATAR, z) && record.mMin.mdV[VZ] - z <= margin)
-    {
-        // It meets a built floor: an obstacle or a shelf at walking height.
-        return false;
-    }
-    // Hanging clear of every walkable surface, and too small ever to be one.
-    return true;
-}
-
 void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 {
     const U64 params = paramsSignature();
@@ -602,7 +532,6 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     fillParams(probe);
     const F32 pad = padFor(probe);
     const U64 world_stamp = worldStamp();
-    mStats.mSkipped = 0;
 
     // Grounded structures are meshed with the region they stand in, so that
     // one mesh holds the ground, the walls that block it and the floors that
@@ -614,20 +543,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     {
         if (grounded(*c))
         {
-            for (const RecordPtr& r : c->mRecords)
-            {
-                // A part hanging in the air, too small ever to be walked on,
-                // used to cost every tile it hung over a rebuild for a sliver
-                // the erosion was going to take back. Leave it out; if it
-                // later settles onto the ground it comes back as an ordinary
-                // record and the tile re-signs once, for something that lasts.
-                if (floatsClear(*r))
-                {
-                    mStats.mSkipped++;
-                    continue;
-                }
-                ground_records.push_back(r);
-            }
+            ground_records.insert(ground_records.end(), c->mRecords.begin(), c->mRecords.end());
         }
         else
         {
@@ -1307,10 +1223,10 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, %u floats skipped, last %.1f ms, worst %.1f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
-                    mStats.mFailures, mStats.mSkipped, mStats.mLastBuildMs, mStats.mWorstBuildMs);
+                    mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs);
 }
 
 SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const
