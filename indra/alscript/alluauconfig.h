@@ -1,0 +1,75 @@
+/**
+ * @file alluauconfig.h
+ * @brief What a .luaurc says, as far as a require needs it: its aliases and its mode.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Rye <rye@alchemyviewer.org>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
+
+// A `.luaurc`, read by Luau's own parser so that what it takes is what
+// Luau takes: the aliases, each a name and the path it stands for, which
+// is relative to where the file is unless it is absolute, so that
+// `require("@lib/util")` reads as `./lib/util` from beside the file; the
+// language mode; which lints are on and which are errors; and the
+// globals the script may use without declaring. In the world a
+// `.luaurc` is a notecard so named in the script's folder or the nearest
+// folder above it, or an item so named in its object; on disk it is the
+// file so named in the script's directory or the nearest above.
+struct ALLuauConfig
+{
+    ALLuauConfig();
+
+    // By name, in lower case, as Luau matches them.
+    std::map<std::string, std::string> aliases;
+    // "strict", "nonstrict" or "nocheck", or empty where it does not say.
+    std::string mode;
+    // The lints on, and the ones that are errors, as Luau's masks of
+    // its warning codes: Luau's defaults unless the file says.
+    uint64_t lints      = 0;
+    uint64_t fatalLints = 0;
+    // Every lint an error.
+    bool lintErrors = false;
+    // Names the script may use as globals without declaring them.
+    std::vector<std::string> globals;
+
+    // False, with Luau's own word on what is wrong, for text that is not
+    // a configuration. What the file does not say is the base's, where
+    // one is given -- a scripter's own choice of lints and mode, which a
+    // `.luaurc` overrides key by key -- else Luau's defaults.
+    static bool parse(std::string_view text, ALLuauConfig& out, std::string& error, const ALLuauConfig* base = nullptr);
+
+    // Every lint by the name a `.luaurc` gives it, in Luau's order, and
+    // the bit of the masks above that one is.
+    static const std::vector<std::string>& lintNames();
+    static uint64_t                        lintBit(std::string_view name);
+
+    // The alias a require name starts with -- `@lib/util` names `lib`,
+    // in lower case -- and what follows it; false where the name has none.
+    static bool aliasOf(std::string_view name, std::string& alias, std::string& rest);
+    // Whether a path is absolute: from a root, on any platform.
+    static bool absolute(std::string_view path);
+};
