@@ -72,9 +72,48 @@ ALPopover* ALPopover::show(LLView* anchor, LLPanel* content, const std::string& 
 }
 
 // static
+ALPopover* ALPopover::showAt(const LLRect& screen, LLView* anchor, LLPanel* content, const std::string& title)
+{
+    if (!anchor || !content)
+    {
+        delete content;
+        return nullptr;
+    }
+
+    const LLRect wanted = content->getRect();
+    ALPopover* popover = new ALPopover(paramsFor(wanted.getWidth(), wanted.getHeight(), title));
+    content->setOrigin(0, 0);
+    content->setFollows(FOLLOWS_ALL);
+    popover->addChild(content);
+    popover->openBeside(screen, anchor);
+    return popover;
+}
+
+// static
+ALPopover* ALPopover::showOver(LLView* anchor, LLPanel* content, const std::string& title)
+{
+    if (!anchor || !content)
+    {
+        delete content;
+        return nullptr;
+    }
+
+    const LLRect wanted = content->getRect();
+    ALPopover* popover = new ALPopover(paramsFor(wanted.getWidth(), wanted.getHeight(), title));
+    content->setOrigin(0, 0);
+    content->setFollows(FOLLOWS_ALL);
+    popover->addChild(content);
+    popover->openOver(anchor);
+    return popover;
+}
+
+// static
 LLFloater::Params ALPopover::paramsFor(S32 width, S32 height, const std::string& title, bool resizable)
 {
     LLFloater::Params p(LLFloater::getDefaultParams());
+    // A part of the window it is over, which comes and goes as a menu does:
+    // not a window of its own, to be heard opening and closing.
+    p.sound_flags = LLView::SILENT;
     p.can_close = false;
     p.can_minimize = false;
     p.can_resize = resizable;
@@ -108,49 +147,112 @@ LLFloater::Params ALPopover::paramsRemembered(const std::string& kind, S32 width
 // whole of is a panel that has not opened. A side off the screen is put
 // back on it for the same reason, which is what the floater view does for
 // every window it holds.
-void ALPopover::openBeside(const LLView* anchor)
+void ALPopover::adopt(const LLView* anchor)
 {
-    if (anchor)
+    // Where keys go: the window the anchor is in, or the anchor itself
+    // where it is one.
+    const LLFloater* home = ALViewType::as<LLFloater>(anchor);
+    if (!home)
     {
-        // Where keys go: the window the anchor is in, or the anchor itself
-        // where it is one.
-        const LLFloater* home = ALViewType::as<LLFloater>(anchor);
-        if (!home)
-        {
-            home = anchor->getParentByType<LLFloater>();
-        }
-        if (home && home != this)
-        {
-            mHome = home->getHandle();
-        }
-
-        const LLRect screen = anchor->calcScreenRect();
-        LLRect where = getRect();
-        where.setLeftTopAndSize(screen.mLeft, screen.mBottom, where.getWidth(), where.getHeight());
-        if (where.mBottom < 0)
-        {
-            where.translate(0, screen.getHeight() + where.getHeight());
-        }
-        setRect(where);
+        home = anchor->getParentByType<LLFloater>();
     }
+    if (home && home != this)
+    {
+        mHome = home->getHandle();
+    }
+}
+
+void ALPopover::openAt(LLRect where)
+{
+    // One of its home's dependents, and so gone when its home goes: a
+    // popover left over a window that has closed is about nothing. Its
+    // home put away or minimised hides it, and it goes as the keyboard
+    // leaves it. Before it is placed, since the placing is its own.
+    if (LLFloater* home = mHome.get())
+    {
+        home->addDependentFloater(this, /*reposition*/ false);
+    }
+    setRect(where);
     if (gFloaterView && getParent() == gFloaterView)
     {
         gFloaterView->adjustToFitScreen(this, false);
     }
+    if (LLView* keys = dynamic_cast<LLView*>(gFocusMgr.getKeyboardFocus()); keys && keys != this && !keys->hasAncestor(this))
+    {
+        mKeysBefore = keys->getHandle();
+    }
     openFloater();
     setFocus(true);
+}
+
+void ALPopover::openBeside(const LLView* anchor)
+{
+    if (!anchor)
+    {
+        openAt(getRect());
+        return;
+    }
+    openBeside(anchor->calcScreenRect(), anchor);
+}
+
+void ALPopover::openBeside(const LLRect& screen, const LLView* anchor)
+{
+    LLRect where = getRect();
+    if (anchor)
+    {
+        adopt(anchor);
+    }
+    where.setLeftTopAndSize(screen.mLeft, screen.mBottom, where.getWidth(), where.getHeight());
+    if (where.mBottom < 0)
+    {
+        where.translate(0, screen.getHeight() + where.getHeight());
+    }
+    openAt(where);
+}
+
+void ALPopover::openOver(const LLView* anchor)
+{
+    constexpr S32 BELOW_TOP = 12;
+    LLRect where = getRect();
+    if (anchor)
+    {
+        adopt(anchor);
+        const LLRect screen = anchor->calcScreenRect();
+        where.setLeftTopAndSize(screen.getCenterX() - where.getWidth() / 2, screen.mTop - BELOW_TOP, where.getWidth(), where.getHeight());
+    }
+    openAt(where);
 }
 
 void ALPopover::settle()
 {
     mEscaped = false;
     closeFloater();
+    giveKeysBack();
 }
 
 void ALPopover::escape()
 {
     mEscaped = true;
     closeFloater();
+    giveKeysBack();
+}
+
+void ALPopover::giveKeysBack()
+{
+    if (gFocusMgr.getKeyboardFocus())
+    {
+        // Taken by what was chosen, or by the window it was over.
+        return;
+    }
+    LLView* before = mKeysBefore.get();
+    if (before && before->isInEnabledChain() && before->isInVisibleChain())
+    {
+        before->setFocus(true);
+    }
+    else if (LLFloater* home = mHome.get(); home && home->getVisible())
+    {
+        home->setFocus(true);
+    }
 }
 
 void ALPopover::onClose(bool app_quitting)

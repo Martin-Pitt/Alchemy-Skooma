@@ -17,7 +17,9 @@ endif()
 target_sources(
   llcommon
   PRIVATE
+    alfilewrite.cpp
     alparamtype.cpp
+    alregex.cpp
     apply.cpp
     commoncontrol.cpp
     indra_constants.cpp
@@ -115,7 +117,9 @@ target_sources(
   PUBLIC
     FILE_SET HEADERS
       FILES
+        alfilewrite.h
         alparamtype.h
+        alregex.h
         alsimd.h
         always_return.h
         apply.h
@@ -204,7 +208,6 @@ target_sources(
         llqueuedthread.h
         llrand.h
         llrefcount.h
-        llregex.h
         llregistry.h
         llrun.h
         llsafehandle.h
@@ -279,7 +282,7 @@ target_link_libraries(
     ll::simdutf
     ll::fmt
     Threads::Threads
-  PRIVATE ll::fastfloat ll::icu
+  PRIVATE ll::fastfloat ll::icu ll::re2
 )
 
 if(AL_BUILD_TESTS)
@@ -287,6 +290,8 @@ if(AL_BUILD_TESTS)
   # files could not stand alone. Every test here links the library.
   foreach(
     test
+    alfilewrite
+    alregex
     apply
     bitpack
     classic_callback
@@ -405,4 +410,8 @@ if(AL_BUILD_TESTS)
 
   # Skip precompiled header for tests that need special handling
   set_source_files_properties(tests/llsd_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
+
+  # The viewer's own patterns under Boost.Regex and under RE2, side by side,
+  # over the text each is run on.
+  al_add_bench(alregex PROJECT llcommon LIBRARIES llcommon)
 endif()
