@@ -26,7 +26,9 @@
 
 #include "aldeferredrebuild.h"
 #include "llpanel.h"
+#include "v4color.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,14 +74,47 @@ public:
         // value it stands for. Empty leaves the crumb a plain button.
         std::vector<std::pair<std::string, std::string> > alternatives;
         std::string toolTip;
+        friend bool operator==(const Crumb& a, const Crumb& b)
+        {
+            return a.label == b.label && a.value == b.value && a.alternatives == b.alternatives && a.toolTip == b.toolTip;
+        }
     };
 
+    // The path, and the bar built again for it -- but for the same path
+    // said again, which is what a caller does whenever its reasons for
+    // asking move, and which would close a crumb's list under the person
+    // choosing from it.
     void setPath(std::vector<Crumb> crumbs);
     const std::vector<Crumb>& path() const { return mCrumbs; }
 
     // Said past the end of the path, in the quiet ink: not a step, so not
     // something to click.
     void setTrailer(const std::string& text);
+
+    // The same, in pieces, of which the ones with a value may be pressed:
+    // what the words say about the path is sometimes a way somewhere --
+    // the caret's line is where Go to Line starts, a count of problems
+    // is the list of them. A piece with no value is only said.
+    struct TrailerPart
+    {
+        std::string text;
+        std::string value;
+        std::string toolTip;
+        // Said in a colour of its own, where it is a warning; the quiet
+        // ink otherwise.
+        std::optional<LLColor4> color;
+        friend bool operator==(const TrailerPart& a, const TrailerPart& b)
+        {
+            return a.text == b.text && a.value == b.value && a.toolTip == b.toolTip && a.color == b.color;
+        }
+    };
+    void setTrailer(std::vector<TrailerPart> parts);
+
+    typedef boost::signals2::signal<void(const std::string&)> trailer_signal_t;
+    boost::signals2::connection onTrailerChosen(const trailer_signal_t::slot_type& cb)
+    {
+        return mTrailerChosen.connect(cb);
+    }
 
     // A step chosen: the crumb it was chosen on, and the value chosen there.
     // Pressing a crumb chooses its own value, which is going there; opening
@@ -108,11 +143,25 @@ private:
     size_t folded() const;
     S32 widthOf(const Crumb& crumb) const;
     void chose(size_t at, std::string value);
+    void choseTrailer(std::string value);
+    // The trailer's pieces given their words and their places, right up
+    // against the far edge: what a change of words alone asks for, which
+    // is every move of a caret, and needs nothing built again.
+    void layTrailer();
 
     std::vector<Crumb>      mCrumbs;
     std::vector<LLView*>    mParts;
-    LLTextBox*              mTrailer = nullptr;
+    LLView*                 mTrailer = nullptr;
+    std::vector<LLTextBox*> mTrailerPieces;
+    // Where the path ended, and how many crumbs it folded, when it was
+    // built: what the trailer's room starts from, and what a trailer of
+    // another width would have to fold again.
+    S32                     mPathEnd = 0;
+    size_t                  mFolded  = 0;
+    std::vector<TrailerPart> mTrailerParts;
+    // The pieces run together, which is what the room is measured by.
     std::string             mTrailerText;
     chose_signal_t          mChose;
+    trailer_signal_t        mTrailerChosen;
     ALDeferredRebuild       mRebuild;
 };
