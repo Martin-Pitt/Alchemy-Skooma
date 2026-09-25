@@ -1,0 +1,123 @@
+/**
+ * @file alluauconfig_test.cpp
+ * @brief A .luaurc read for its aliases and its mode.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Rye <rye@alchemyviewer.org>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "linden_common.h"
+
+#include "../alluauconfig.h"
+
+#include "../test/lltut.h"
+
+namespace tut
+{
+    struct alluauconfig_data
+    {
+    };
+
+    typedef test_group<alluauconfig_data> alluauconfig_group;
+    typedef alluauconfig_group::object    alluauconfig_object;
+    alluauconfig_group                    alluauconfig_instance("alluauconfig");
+
+    template<> template<>
+    void alluauconfig_object::test<1>()
+    {
+        set_test_name("aliases come out by lower-case name with their paths, and the mode where it is said");
+        ALLuauConfig config;
+        std::string  error;
+        ensure("parses: " + error, ALLuauConfig::parse("{\n  \"languageMode\": \"strict\",\n  \"aliases\": { \"Lib\": \"./lib\", \"shared\": \"../shared\", \"abs\": \"/opt/lua\" }\n}\n", config, error));
+        ensure_equals("three aliases", config.aliases.size(), size_t(3));
+        ensure_equals("by lower-case name", config.aliases["lib"], std::string("./lib"));
+        ensure_equals("a path up", config.aliases["shared"], std::string("../shared"));
+        ensure_equals("an absolute one", config.aliases["abs"], std::string("/opt/lua"));
+        ensure_equals("the mode", config.mode, std::string("strict"));
+        ensure("no mode where none is said", ALLuauConfig::parse("{ \"aliases\": {} }", config, error) && config.mode.empty());
+        ensure("not a configuration", !ALLuauConfig::parse("{ \"aliases\": 3 }", config, error) && !error.empty());
+        ensure("nor an alias Luau refuses", !ALLuauConfig::parse("{ \"aliases\": { \"bad name\": \"x\" } }", config, error));
+    }
+
+    template<> template<>
+    void alluauconfig_object::test<2>()
+    {
+        set_test_name("a require name's alias is what follows the @ up to the slash, and absolute paths are known on both platforms");
+        std::string alias, rest;
+        ensure("found", ALLuauConfig::aliasOf("@Lib/util/strings", alias, rest));
+        ensure_equals("lower case", alias, std::string("lib"));
+        ensure_equals("the rest", rest, std::string("util/strings"));
+        ensure("the alias alone", ALLuauConfig::aliasOf("@lib", alias, rest) && alias == "lib" && rest.empty());
+        ensure("not without the @", !ALLuauConfig::aliasOf("lib/util", alias, rest));
+        ensure("not an empty one", !ALLuauConfig::aliasOf("@/util", alias, rest));
+        ensure("absolute on posix", ALLuauConfig::absolute("/opt/lua"));
+        ensure("absolute on windows", ALLuauConfig::absolute("C:\\lua") && ALLuauConfig::absolute("c:/lua"));
+        ensure("relative", !ALLuauConfig::absolute("./lib") && !ALLuauConfig::absolute("lib"));
+    }
+    template<> template<>
+    void alluauconfig_object::test<3>()
+    {
+        set_test_name("the lints and the globals come out as Luau reads them, the lints as its defaults where the file says nothing");
+        ALLuauConfig config;
+        std::string  error;
+        const ALLuauConfig defaults;
+        ensure("parses: " + error, ALLuauConfig::parse("{\n  \"lint\": { \"LocalUnused\": false, \"LocalShadow\": true },\n  \"globals\": [\"Alchemy\", \"grid\"]\n}\n", config, error));
+        ensure_equals("two globals", config.globals.size(), size_t(2));
+        ensure_equals("in order", config.globals[0], std::string("Alchemy"));
+        // LocalUnused is code 7 and LocalShadow code 4 in Luau's numbering;
+        // the second is off by default.
+        ensure("LocalUnused off", (config.lints & (1ull << 7)) == 0);
+        ensure("LocalShadow on", (config.lints & (1ull << 4)) != 0);
+        ensure("the rest as they were", (config.lints & ~((1ull << 7) | (1ull << 4))) == (defaults.lints & ~((1ull << 7) | (1ull << 4))));
+        ensure("none fatal, not every lint an error", config.fatalLints == 0 && !config.lintErrors);
+        ensure("said nothing: the defaults", ALLuauConfig::parse("{}", config, error) && config.lints == defaults.lints && config.fatalLints == 0 && config.globals.empty());
+        ensure("every lint an error where asked", ALLuauConfig::parse("{ \"lintErrors\": true }", config, error) && config.lintErrors);
+    }
+
+    template<> template<>
+    void alluauconfig_object::test<4>()
+    {
+        set_test_name("a .luaurc over a scripter's own lints and mode overrides only what it says");
+        const uint64_t unused   = ALLuauConfig::lintBit("LocalUnused");
+        const uint64_t function = ALLuauConfig::lintBit("FunctionUnused");
+        const uint64_t shadow   = ALLuauConfig::lintBit("LocalShadow");
+        ensure("the lints have bits", unused && function && shadow && unused != function);
+        ensure("an unknown lint has none", ALLuauConfig::lintBit("NoSuchLint") == 0);
+        ensure("every lint is named", ALLuauConfig::lintNames().size() > 20 && ALLuauConfig::lintNames().front() == "UnknownGlobal");
+
+        ALLuauConfig base;
+        base.lints &= ~unused;          // the scripter turned it off
+        base.fatalLints |= shadow;      // and made this one an error
+        base.mode = "strict";
+        ALLuauConfig config;
+        std::string  error;
+        ensure("an empty file", ALLuauConfig::parse("{}", config, error, &base));
+        ensure("keeps the lints off", (config.lints & unused) == 0 && (config.lints & function) != 0);
+        ensure("and the errors", (config.fatalLints & shadow) != 0);
+        ensure_equals("and the mode", config.mode, std::string("strict"));
+
+        ensure("a file saying one lint", ALLuauConfig::parse("{ \"lint\": { \"LocalUnused\": true, \"FunctionUnused\": false }, \"languageMode\": \"nonstrict\" }", config, error, &base));
+        ensure("turns that one on", (config.lints & unused) != 0);
+        ensure("and that one off", (config.lints & function) == 0);
+        ensure("the rest as the scripter had them", (config.fatalLints & shadow) != 0);
+        ensure_equals("its mode over theirs", config.mode, std::string("nonstrict"));
+
+        ensure("without a base, Luau's defaults", ALLuauConfig::parse("{}", config, error) && (config.lints & unused) != 0 && config.mode.empty());
+    }
+}
