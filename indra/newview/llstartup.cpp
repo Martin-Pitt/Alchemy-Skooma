@@ -141,7 +141,7 @@
 #include "lllocationhistory.h"
 #include "llgltfmateriallist.h"
 #include "llimageworker.h"
-#include "llregex.h"
+#include "alregex.h"
 
 #include "llloginflags.h"
 #include "llmd5.h"
@@ -213,6 +213,8 @@
 #include "llpanelgroupnotices.h"
 #include "llparcel.h"
 #include "llpreview.h"
+#include "alfloaterscriptstudio.h"
+#include "alscriptworkspace.h"
 #include "llpreviewscript.h"
 #include "llproxy.h"
 #include "llproductinforequest.h"
@@ -2753,6 +2755,10 @@ bool idle_startup()
 
         LLAppViewer::instance()->handleLoginComplete();
 
+        // What Script Studio kept of a session that ended before its scripts
+        // were saved, offered back now the world is in.
+        ALFloaterScriptStudio::offerRecovery();
+
         LLAgentPicksInfo::getInstance()->requestNumberOfPicks();
 
         do_startup_frame();
@@ -2944,10 +2950,10 @@ void uninstall_nsis_if_required()
 void validate_release_notes_coro(const std::string url)
 {
     LLVersionInfo& versionInfo(LLVersionInfo::instance());
-    const boost::regex version_regex(R"(\b\d+\.\d+\.\d+\.\d+\b)");
+    static const ALRegex version_regex(R"(\b\d+\.\d+\.\d+\.\d+\b)");
 
     if (url.find(versionInfo.getVersion()) == std::string::npos // has no our build version
-        && ll_regex_search(url, version_regex)) // has any version
+        && version_regex.search(url)) // has any version
     {
         LL_INFOS() << "Received release notes url \"" << url << "\" wwith mismatching build, falling back to locally generated url" << LL_ENDL;
         // Updater only provides notes for a most recent version, if it is not
@@ -3129,7 +3135,7 @@ void register_viewer_callbacks(LLMessageSystem* msg)
     msg->setHandlerFuncFast(_PREHASH_CoarseLocationUpdate,      LLWorld::processCoarseUpdate);
     msg->setHandlerFuncFast(_PREHASH_ReplyTaskInventory,        LLViewerObject::processTaskInv);
     msg->setHandlerFuncFast(_PREHASH_DerezContainer,            process_derez_container);
-    msg->setHandlerFuncFast(_PREHASH_ScriptRunningReply,        LLLiveLSLEditor::processScriptRunningReply);
+    msg->setHandlerFuncFast(_PREHASH_ScriptRunningReply,        ALScriptWorkspace::processScriptRunningReply);
 
     msg->setHandlerFuncFast(_PREHASH_DeRezAck,                  process_derez_ack);
 
