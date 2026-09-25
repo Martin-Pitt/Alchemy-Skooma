@@ -692,6 +692,12 @@ void SKWorldCensus::visit(LLViewerObject* object)
             const LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
             sig = mix(sig, decomp ? 1 + decomp->mMesh.size() * 4 + decomp->mPhysicsShapeMesh.mPositions.size() + decomp->mBaseHullMesh.mPositions.size() : 0);
         }
+        // A sculpt's texture arriving replaces the stretched placeholder, so
+        // its level has to move the signature or the placeholder never leaves.
+        else if (volume->isSculpted())
+        {
+            sig = mix(sig, static_cast<U64>(v->getSculptLevel() + 3));
+        }
     }
 
     // A record every class leaves out shapes nothing and stays out of every
@@ -903,6 +909,12 @@ void SKWorldCensus::visitCached(const CachedPart& part)
 sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root, sknav::Role role, bool dynamic, U64 signature,
                                        const LLVector3& pos, const LLQuaternion& rot, sknav::FeatureKind feature, U8 exclude)
 {
+    // An unloaded sculpt is a placeholder sphere stretched over its whole
+    // scale; a megasculpty's would floor the region, so it waits for level 0.
+    if (volume->isSculpted() && !volume->isMesh() && (!volume->getVolume() || volume->getVolume()->getSculptLevel() != 0))
+    {
+        return nullptr;
+    }
     SKShapeGeometry geom;
     bool ok = false;
     if (role == Role::SURROUND)
