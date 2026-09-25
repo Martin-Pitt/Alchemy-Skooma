@@ -227,6 +227,8 @@ private:
         U8 mExclude = 0;
     };
     std::unordered_map<LLUUID, PartFeature> mPartFeatures;
+    /// Where each door leaf has rested this session, and the door id it was given.
+    sknav::LeafHistories mLeaves;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
     F32 mRolesRequestedAt = -1.f;

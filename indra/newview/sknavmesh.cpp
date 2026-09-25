@@ -2146,7 +2146,7 @@ std::string SKNavMesh::markUnderCamera()
         doorsIn(mMark - near_mark, mMark + near_mark, [&](const DoorEntity& d) {
             const bool leaf = std::find(d.mLeaves.begin(), d.mLeaves.end(), hit->getID()) != d.mLeaves.end();
             out << "door " << d.mId << (leaf ? " (marked leaf)" : "") << " width " << d.mWidth << " height " << d.mHeight
-                << " sill " << d.mSill << " normal " << d.mNormal << (d.mDouble ? " double" : " single") << " leaves "
+                << " sill " << d.mSill << " normal " << d.mNormal << (d.mPlaneKnown ? "" : " (plane unknown)") << (d.mDouble ? " double" : " single") << " leaves "
                 << d.mLeaves.size() << " confidence " << d.mConfidence << (d.mDamageable ? " damageable" : "") << " name \""
                 << d.mName << "\"\n";
             ++doors;
@@ -2579,7 +2579,7 @@ std::string SKNavMesh::exportAll() const
             vec3d(d.mMax);
             file << ",\"plane\":";
             vec3d(d.mPlanePoint);
-            file << ",\"normal\":";
+            file << ",\"planeKnown\":" << (d.mPlaneKnown ? "true" : "false") << ",\"normal\":";
             vec3(d.mNormal);
             file << ",\"width\":" << d.mWidth << ",\"height\":" << d.mHeight << ",\"sill\":" << d.mSill
                  << ",\"double\":" << (d.mDouble ? "true" : "false") << ",\"confidence\":" << d.mConfidence
