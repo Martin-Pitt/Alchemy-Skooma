@@ -1986,6 +1986,10 @@ std::string SKNavMesh::markUnderCamera()
                 << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
                 << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << " part "
                 << shape_type(r, false) << " root " << shape_type(r, true);
+            if (r->mFeature != FeatureKind::NONE)
+            {
+                out << " feature " << static_cast<S32>(r->mFeature) << " exclude " << static_cast<S32>(r->mExclude);
+            }
             if (covers)
             {
                 out << " <-- covers the mark";
@@ -2135,6 +2139,24 @@ std::string SKNavMesh::markUnderCamera()
         }
     }
 
+    // The door the mark is on, or within half a metre of.
+    {
+        const LLVector3d near_mark(0.5, 0.5, 0.5);
+        S32 doors = 0;
+        doorsIn(mMark - near_mark, mMark + near_mark, [&](const DoorEntity& d) {
+            const bool leaf = std::find(d.mLeaves.begin(), d.mLeaves.end(), hit->getID()) != d.mLeaves.end();
+            out << "door " << d.mId << (leaf ? " (marked leaf)" : "") << " width " << d.mWidth << " height " << d.mHeight
+                << " sill " << d.mSill << " normal " << d.mNormal << (d.mDouble ? " double" : " single") << " leaves "
+                << d.mLeaves.size() << " confidence " << d.mConfidence << (d.mDamageable ? " damageable" : "") << " name \""
+                << d.mName << "\"\n";
+            ++doors;
+        });
+        if (!doors)
+        {
+            out << "no door entity at the mark\n";
+        }
+    }
+
     // And what the navmesh built from it.
     for (const auto& entry : mMeshes)
     {
@@ -2172,7 +2194,25 @@ std::string SKNavMesh::markUnderCamera()
                 << static_cast<S32>(r->mShape) << " role " << static_cast<S32>(r->mRole) << " nav "
                 << static_cast<S32>(r->mNavRole) << (r->mDynamic ? " moving" : "") << " x " << r->mMin.mdV[VX] << ".."
                 << r->mMax.mdV[VX] << " y " << r->mMin.mdV[VY] << ".." << r->mMax.mdV[VY] << " z " << r->mMin.mdV[VZ]
-                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0) << "\n";
+                << ".." << r->mMax.mdV[VZ] << " tris " << (r->mTriangles ? r->mTriangles->size() / 3 : 0);
+            if (r->mFeature != FeatureKind::NONE)
+            {
+                out << " feature " << static_cast<S32>(r->mFeature) << " exclude " << static_cast<S32>(r->mExclude);
+            }
+            out << "\n";
+        }
+        // Whether the tile was built with the marked part, and as what: a
+        // doorway that does not connect is a leaf the build did not leave out.
+        const auto marked = std::find_if(tile.mRecords.begin(), tile.mRecords.end(),
+                                         [&](const RecordPtr& r) { return r->mPart == hit->getID(); });
+        if (marked == tile.mRecords.end())
+        {
+            out << "    marked part not in this tile\n";
+        }
+        else
+        {
+            out << "    marked part in this tile, feature " << static_cast<S32>((*marked)->mFeature) << " exclude "
+                << static_cast<S32>((*marked)->mExclude) << "\n";
         }
         if (tile.mFaces)
         {
