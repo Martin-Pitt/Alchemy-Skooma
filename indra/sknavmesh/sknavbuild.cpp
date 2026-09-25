@@ -1507,6 +1507,10 @@ namespace sknav
             {
                 extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
             }
+            if (input.mAir && cls == static_cast<S32>(AgentClass::WEATHER))
+            {
+                extractAir(*mem.hf, cfg.borderSize, result.mAir);
+            }
             if (mem.pmesh->npolys == 0)
             {
                 continue;
