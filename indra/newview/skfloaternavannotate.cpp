@@ -177,6 +177,7 @@ void SKFloaterNavAnnotate::refreshSelection()
 void SKFloaterNavAnnotate::draw()
 {
     SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    annotator.checkTool();
     if (annotator.revision() != mRevision)
     {
         mRevision = annotator.revision();

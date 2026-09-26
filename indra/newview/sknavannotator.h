@@ -71,7 +71,9 @@ public:
     sknav::Mark* find(U32 id) { return mMarks.find(id); }
     void remove(U32 id);
     void clear();
-    void select(U32 id) { mSelected = id; }
+    void select(U32 id);
+    /// Drop the mode when another tool has taken over from ours.
+    void checkTool();
     U32 selected() const { return mSelected; }
     /// Something about the marks changed; a list shown of them is stale.
     void touch() { ++mRevision; }
@@ -88,6 +90,7 @@ public:
 private:
     void commit(sknav::Mark mark);
     void syncLabels();
+    void syncTool();
 
     sknav::MarkSet mMarks;
     sknav::Mark mPending;

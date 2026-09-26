@@ -34,6 +34,8 @@
 #include "llhudtext.h"
 #include "llrender.h"
 #include "llregionhandle.h"
+#include "llfocusmgr.h"
+#include "lltoolfocus.h"
 #include "lltoolmgr.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
@@ -165,19 +167,37 @@ void SKNavAnnotator::setMode(Mode mode)
     {
         return;
     }
-    const bool was_active = mMode != Mode::NONE;
     mMode = mode;
     cancel();
     mHasHover = false;
-    if (mode != Mode::NONE && !was_active)
-    {
-        LLToolMgr::getInstance()->setTransientTool(SKToolNavAnnotate::getInstance());
-    }
-    else if (mode == Mode::NONE && was_active)
-    {
-        LLToolMgr::getInstance()->clearTransientTool();
-    }
     touch();
+    syncTool();
+}
+
+void SKNavAnnotator::syncTool()
+{
+    // Other tools replace a transient one without a word, so ask rather than remember.
+    LLToolMgr* tools = LLToolMgr::getInstance();
+    const bool ours = tools->getCurrentTool() == SKToolNavAnnotate::getInstance();
+    if (mMode != Mode::NONE && !ours)
+    {
+        tools->setTransientTool(SKToolNavAnnotate::getInstance());
+    }
+    else if (mMode == Mode::NONE && ours)
+    {
+        tools->clearTransientTool();
+    }
+}
+
+void SKNavAnnotator::checkTool()
+{
+    if (mMode != Mode::NONE && LLToolMgr::getInstance()->getCurrentTool() != SKToolNavAnnotate::getInstance())
+    {
+        mMode = Mode::NONE;
+        cancel();
+        mHasHover = false;
+        touch();
+    }
 }
 
 void SKNavAnnotator::setHover(bool valid, const LLVector3d& at)
@@ -238,6 +258,15 @@ void SKNavAnnotator::remove(U32 id)
         {
             mSelected = 0;
         }
+        touch();
+    }
+}
+
+void SKNavAnnotator::select(U32 id)
+{
+    if (id != mSelected)
+    {
+        mSelected = id;
         touch();
     }
 }
@@ -365,6 +394,8 @@ std::string SKNavAnnotator::exportCapture()
     const std::string stamp = now.toHTTPDateString("%Y%m%dT%H%M%SZ");
     const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknav-capture-" + stamp + ".json");
     const std::string png = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknav-capture-" + stamp + ".png");
+    // The snapshot renders a frame of its own, so the hover cross is gone by then.
+    mHasHover = false;
 
     // The world as it looks now, marks included, without the floaters over it.
     const bool shot = gViewerWindow->saveSnapshot(png, gViewerWindow->getWindowWidthRaw(), gViewerWindow->getWindowHeightRaw(),
@@ -457,6 +488,13 @@ bool SKToolNavAnnotate::pick(S32 x, S32 y, LLVector3d& out) const
 
 bool SKToolNavAnnotate::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    // A transient tool hides the Alt override, so hand alt-cam on; it captures the drag.
+    if (mask & MASK_ALT)
+    {
+        return LLToolCamera::getInstance()->handleMouseDown(x, y, mask);
+    }
+    // Off the button just pressed, so Enter and Esc reach the tool.
+    gFocusMgr.setKeyboardFocus(nullptr);
     LLVector3d at;
     if (pick(x, y, at))
     {
@@ -472,12 +510,22 @@ bool SKToolNavAnnotate::handleMouseUp(S32 x, S32 y, MASK mask)
 
 bool SKToolNavAnnotate::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
-    SKNavAnnotator::instance().finish();
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    if (annotator.mode() != SKNavAnnotator::Mode::LINE)
+    {
+        return handleMouseDown(x, y, mask);
+    }
+    annotator.finish();
     return true;
 }
 
 bool SKToolNavAnnotate::handleHover(S32 x, S32 y, MASK mask)
 {
+    if (mask & MASK_ALT)
+    {
+        SKNavAnnotator::instance().setHover(false, LLVector3d());
+        return LLToolCamera::getInstance()->handleHover(x, y, mask);
+    }
     LLVector3d at;
     const bool hit = pick(x, y, at);
     SKNavAnnotator::instance().setHover(hit, at);
@@ -512,6 +560,5 @@ void SKToolNavAnnotate::handleSelect()
 
 void SKToolNavAnnotate::handleDeselect()
 {
-    // Alt-cam steps in over the tool too, so only the hover goes here.
     SKNavAnnotator::instance().setHover(false, LLVector3d());
 }
