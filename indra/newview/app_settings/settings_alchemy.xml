@@ -4419,6 +4419,28 @@
             <key>Value</key>
             <string>All</string>
         </map>
+        <key>SKNavAnnotateBoxHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Height in metres a new navmesh annotation box rises from its lower corner.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKNavAnnotateMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres an annotation capture reaches past its marks on every side.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

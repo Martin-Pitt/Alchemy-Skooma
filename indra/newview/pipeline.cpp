@@ -109,6 +109,7 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
+#include "sknavannotator.h" // <SK:Nexii> navmesh annotations
 #include "sknavmesh.h" // <SK:Nexii> navmesh overlay
 #include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
@@ -10549,6 +10550,12 @@ void LLPipeline::renderFinalize()
     {
         SKWorldCensus::instance().renderDebug();
         SKNavMesh::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on
+    if (SKNavAnnotator::instanceExists())
+    {
+        SKNavAnnotator::instance().render();
     }
     // </SK:Nexii>
 

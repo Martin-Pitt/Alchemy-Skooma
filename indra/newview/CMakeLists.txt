@@ -931,6 +931,7 @@ if(AL_BUILD_VIEWER)
     rlvenvironment.cpp
     skphysicsshape.cpp
     skfloaternavmesh.cpp
+    sknavannotator.cpp
     sknavmesh.cpp
     sknavoverlay.cpp
     sknavpalette.cpp
@@ -1740,6 +1741,7 @@ if(AL_BUILD_VIEWER)
     rlvcommon.h
     skphysicsshape.h
     skfloaternavmesh.h
+    sknavannotator.h
     sknavmesh.h
     sknavoverlay.h
     sknavpalette.h
