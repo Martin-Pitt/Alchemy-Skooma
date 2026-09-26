@@ -26,6 +26,7 @@
 
 #include "skfloaternavmesh.h"
 
+#include "llfloaterreg.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
@@ -50,6 +51,7 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportVehicle());
     });
+    getChild<LLUICtrl>("annotate_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_nav_annotate"); });
     return true;
 }
 

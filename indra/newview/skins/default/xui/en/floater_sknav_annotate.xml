@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SK:Nexii> Navmesh annotations: marks placed in the world where the
+     navmesh is wrong, exported with what the navmesh holds around them. -->
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="true"
+ min_height="420"
+ min_width="320"
+ height="460"
+ layout="topleft"
+ name="floater_sknav_annotate"
+ save_rect="true"
+ single_instance="true"
+ title="Navmesh annotations"
+ width="340">
+  <text
+   name="tool_label"
+   height="13"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top="24"
+   width="316">
+    Place: click a surface. Enter or double-click ends a line, Esc cancels.
+  </text>
+  <button
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="6"
+   height="23"
+   width="100"
+   is_toggle="true"
+   name="tool_point"
+   label="Point"
+   tool_tip="Click a surface to drop a point" />
+  <button
+   follows="left|top"
+   layout="topleft"
+   left_pad="8"
+   top_delta="0"
+   height="23"
+   width="100"
+   is_toggle="true"
+   name="tool_line"
+   label="Line"
+   tool_tip="Click a vertex at a time; Enter or a double-click ends the line" />
+  <button
+   follows="left|top"
+   layout="topleft"
+   left_pad="8"
+   top_delta="0"
+   height="23"
+   width="100"
+   is_toggle="true"
+   name="tool_box"
+   label="Box"
+   tool_tip="Click two opposite floor corners; the box rises from the lower one" />
+  <text
+   name="type_label"
+   height="13"
+   type="string"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   width="40">
+    Type
+  </text>
+  <combo_box
+   follows="left|top"
+   layout="topleft"
+   left_pad="4"
+   top_delta="-4"
+   height="22"
+   width="150"
+   name="type_combo"
+   tool_tip="The type new marks get, and the selected mark's">
+    <combo_box.item label="Missed opening" name="missed_opening" value="0" />
+    <combo_box.item label="Wrong" name="wrong" value="1" />
+    <combo_box.item label="Merge" name="merge" value="2" />
+    <combo_box.item label="Split" name="split" value="3" />
+    <combo_box.item label="Stair" name="stair" value="4" />
+    <combo_box.item label="Window" name="window" value="5" />
+    <combo_box.item label="Indoor" name="indoor" value="6" />
+    <combo_box.item label="Outdoor" name="outdoor" value="7" />
+    <combo_box.item label="Sheltered" name="sheltered" value="8" />
+    <combo_box.item label="Note" name="note" value="9" />
+  </combo_box>
+  <spinner
+   follows="left|top"
+   layout="topleft"
+   left_pad="8"
+   top_delta="0"
+   height="22"
+   width="110"
+   label="Height"
+   label_width="42"
+   decimal_digits="1"
+   increment="0.5"
+   min_val="0.1"
+   max_val="100"
+   name="box_height"
+   tool_tip="The selected box's height in metres" />
+  <line_editor
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="22"
+   width="316"
+   max_length_bytes="1024"
+   commit_on_focus_lost="true"
+   name="mark_text"
+   label="Note for the selected mark"
+   tool_tip="The selected mark's note; Enter keeps it" />
+  <scroll_list
+   follows="all"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="210"
+   width="316"
+   draw_heading="true"
+   multi_select="false"
+   name="marks_list">
+    <scroll_list.columns name="id" label="#" width="30" />
+    <scroll_list.columns name="kind" label="Kind" width="45" />
+    <scroll_list.columns name="type" label="Type" width="100" />
+    <scroll_list.columns name="text" label="Note" />
+  </scroll_list>
+  <button
+   follows="left|bottom"
+   layout="topleft"
+   left="12"
+   top_pad="6"
+   height="23"
+   width="100"
+   name="delete_button"
+   label="Delete"
+   tool_tip="Remove the selected mark" />
+  <button
+   follows="left|bottom"
+   layout="topleft"
+   left_pad="8"
+   top_delta="0"
+   height="23"
+   width="100"
+   name="clear_button"
+   label="Clear"
+   tool_tip="Remove every mark" />
+  <button
+   follows="left|bottom"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="23"
+   width="316"
+   name="export_button"
+   label="Export capture"
+   tool_tip="Write the marks, the camera and what the navmesh and census hold around them to sknav-capture-&lt;time&gt;.json in the logs folder, with a screenshot beside it" />
+  <text
+   name="export_status"
+   height="40"
+   word_wrap="true"
+   use_ellipses="false"
+   type="string"
+   follows="left|bottom|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   width="316">
+  </text>
+</floater>

@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="678"
+ min_height="709"
  min_width="300"
- height="698"
+ height="729"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -326,4 +326,14 @@
     top_pad="4"
     width="292">
    </text>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left="12"
+    top_pad="8"
+    height="23"
+    width="292"
+    name="annotate_button"
+    label="Annotate the navmesh..."
+    tool_tip="Mark in the world where the navmesh is wrong, and export the marks with what the navmesh holds around them" />
 </floater>
