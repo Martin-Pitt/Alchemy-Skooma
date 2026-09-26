@@ -33,6 +33,7 @@
 #include "threadpool.h"
 
 #include <functional>
+#include <iosfwd>
 #include <map>
 #include <memory>
 #include <string>
@@ -138,6 +139,11 @@ public:
     /// line for the console.
     std::string exportVehicle() const;
 
+    /// What the navmesh and the census hold in a box, as members of an open
+    /// JSON object: surroundings, tiles, doors and features, each in the form
+    /// the other exports use. Returns a line of counts.
+    std::string writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const;
+
     struct Stats
     {
         U32 mMeshes = 0;
@@ -226,6 +232,24 @@ private:
         F32 mLastSeen = 0.f;
         ~Mesh();
     };
+
+    struct ExportCounts
+    {
+        U32 mTiles = 0;
+        U32 mPolys = 0;
+        U32 mSegments = 0;
+        U32 mLinks = 0;
+        U32 mFaces = 0;
+        U32 mAirs = 0;
+        U32 mFeatures = 0;
+        U32 mDoors = 0;
+    };
+    /// One tile as a JSON object, shared by every export so their formats
+    /// cannot drift. Features and doors are written as members, leading
+    /// comma included, and only those meeting the box when one is given.
+    void writeTile(std::ostream& file, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile, ExportCounts& counts) const;
+    void writeFeatures(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
+    void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
 
     bool wanted() const;
     /// The pool the tile builds run on, created on first use. A pool of its

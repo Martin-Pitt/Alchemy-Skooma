@@ -26,6 +26,7 @@
 
 #include "sknavmesh.h"
 
+#include "sknavannotate.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 
@@ -101,6 +102,36 @@ namespace
     bool overlapsXY(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
     {
         return !(amin.mdV[VX] > bmax.mdV[VX] || bmin.mdV[VX] > amax.mdV[VX] || amin.mdV[VY] > bmax.mdV[VY] || bmin.mdV[VY] > amax.mdV[VY]);
+    }
+
+    bool overlaps3D(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
+    {
+        return overlapsXY(amin, amax, bmin, bmax) && !(amin.mdV[VZ] > bmax.mdV[VZ] || bmin.mdV[VZ] > amax.mdV[VZ]);
+    }
+
+    /// Whether a triangle about a box's centre reaches into the box.
+    bool withinHalf(const LLVector3* tri, const LLVector3d& half)
+    {
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            const F32 lo = llmin(tri[0].mV[axis], llmin(tri[1].mV[axis], tri[2].mV[axis]));
+            const F32 hi = llmax(tri[0].mV[axis], llmax(tri[1].mV[axis], tri[2].mV[axis]));
+            if (hi < -half.mdV[axis] || lo > half.mdV[axis])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void writeVec3d(std::ostream& file, const LLVector3d& v)
+    {
+        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
+    }
+
+    void writeVec3(std::ostream& file, const LLVector3& v)
+    {
+        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
     }
 
     /// The records each lattice tile can see, bucketed by the cells their
@@ -2333,222 +2364,156 @@ std::string SKNavMesh::markUnderCamera()
                     mMark.mdV[VX], mMark.mdV[VY], mMark.mdV[VZ], label.c_str(), root->getID().asString().c_str());
 }
 
-std::string SKNavMesh::exportAll() const
+void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& key, const Tile& tile, ExportCounts& counts) const
 {
-    // Written straight to the file rather than through an LLSD tree: a built
-    // region is hundreds of thousands of numbers, and holding them as LLSD
-    // first would stall the main thread for seconds before a byte landed.
-    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknavmesh-export.json");
-    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
+    ++counts.mTiles;
+    file << "{\"key\":[" << key.mX << ',' << key.mY << "],\"min\":";
+    writeVec3d(file, tile.mMin);
+    file << ",\"max\":";
+    writeVec3d(file, tile.mMax);
+    if (tile.mFaces)
     {
-        return llformat("could not write %s", path.c_str());
-    }
-    file << std::setprecision(10);
-
-    auto vec3d = [&file](const LLVector3d& v) {
-        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
-    };
-    auto vec3 = [&file](const LLVector3& v) {
-        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
-    };
-
-    F32 height = 2.f;
-    if (isAgentAvatarValid())
-    {
-        height = llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f);
-    }
-    static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
-    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
-    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
-    static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
-
-    U32 meshes_written = 0, tiles_written = 0, polys_written = 0, segments_written = 0;
-    U32 links_written = 0, faces_written = 0, airs_written = 0;
-
-    file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
-    file << ",\"agent\":";
-    vec3d(gAgent.getPositionGlobal());
-    file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb
-         << ",\"slope\":" << slope << ",\"cell\":" << cell << '}';
-    file << ",\"classes\":[\"avatar\",\"weather\"]";
-    file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
-    file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
-    file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
-    file << ",\"meshes\":[";
-
-    bool first_mesh = true;
-    for (const auto& entry : mMeshes)
-    {
-        const Mesh& mesh = *entry.second;
-        if (!first_mesh)
+        file << ",\"faces\":[";
+        bool first = true;
+        for (const WallFace& f : *tile.mFaces)
         {
-            file << ',';
-        }
-        first_mesh = false;
-        ++meshes_written;
-        file << "{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"origin\":";
-        vec3d(mesh.mOrigin);
-        file << ",\"tiles\":[";
-        bool first_tile = true;
-        for (const auto& t : mesh.mTiles)
-        {
-            const Tile& tile = t.second;
-            if (!tile.mBuilt)
-            {
-                continue;
-            }
-            if (!first_tile)
+            if (!first)
             {
                 file << ',';
             }
-            first_tile = false;
-            ++tiles_written;
-            file << "{\"key\":[" << t.first.mX << ',' << t.first.mY << "],\"min\":";
-            vec3d(tile.mMin);
+            first = false;
+            ++counts.mFaces;
+            file << "{\"min\":";
+            writeVec3(file, f.mMin);
             file << ",\"max\":";
-            vec3d(tile.mMax);
-            if (tile.mFaces)
+            writeVec3(file, f.mMax);
+            file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
+        }
+        file << ']';
+    }
+    if (tile.mAir)
+    {
+        // Per column, row-major along SL y, how many gaps it has; then
+        // every gap as floor, ceiling, flags in height units.
+        const AirGrid& air = *tile.mAir;
+        file << ",\"air\":{\"origin\":";
+        writeVec3(file, air.mOrigin);
+        file << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit << ",\"width\":" << air.mWidth
+             << ",\"height\":" << air.mHeight << ",\"counts\":[";
+        for (S32 i = 0, n = air.mWidth * air.mHeight; i < n; ++i)
+        {
+            file << (i ? "," : "") << (air.mStart[i + 1] - air.mStart[i]);
+        }
+        file << "],\"gaps\":[";
+        for (size_t i = 0; i < air.mGaps.size(); ++i)
+        {
+            const AirGap& g = air.mGaps[i];
+            file << (i ? "," : "") << g.mFloor << ',' << g.mCeiling << ',' << static_cast<S32>(g.mFlags);
+        }
+        file << "]}";
+        ++counts.mAirs;
+    }
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{";
+        const dtNavMesh* nav = mesh.mNav[cls];
+        // Detour x runs along Recast x, which is SL y, so the tile at
+        // this lattice key sits at (mY, mX).
+        const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+        file << "\"polys\":[";
+        if (dt && dt->header)
+        {
+            bool first = true;
+            for (S32 p = 0; p < dt->header->polyCount; ++p)
             {
-                file << ",\"faces\":[";
-                bool first = true;
-                for (const WallFace& f : *tile.mFaces)
+                const dtPoly& poly = dt->polys[p];
+                if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
                 {
-                    if (!first)
+                    continue;
+                }
+                if (!first)
+                {
+                    file << ',';
+                }
+                first = false;
+                ++counts.mPolys;
+                file << "{\"v\":[";
+                for (S32 v = 0; v < static_cast<S32>(poly.vertCount); ++v)
+                {
+                    if (v)
                     {
                         file << ',';
                     }
-                    first = false;
-                    ++faces_written;
-                    file << "{\"min\":";
-                    vec3(f.mMin);
-                    file << ",\"max\":";
-                    vec3(f.mMax);
-                    file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
+                    writeVec3d(file, mesh.mOrigin + LLVector3d(fromRecast(&dt->verts[poly.verts[v] * 3])));
                 }
-                file << ']';
+                file << "],\"area\":" << static_cast<S32>(areaOf(poly.flags)) << '}';
             }
-            if (tile.mAir)
+        }
+        file << "],\"segments\":[";
+        if (tile.mSegments[cls])
+        {
+            bool first = true;
+            for (const WallSegment& seg : *tile.mSegments[cls])
             {
-                // Per column, row-major along SL y, how many gaps it has; then
-                // every gap as floor, ceiling, flags in height units.
-                const AirGrid& air = *tile.mAir;
-                file << ",\"air\":{\"origin\":";
-                vec3(air.mOrigin);
-                file << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit << ",\"width\":" << air.mWidth
-                     << ",\"height\":" << air.mHeight << ",\"counts\":[";
-                for (S32 i = 0, n = air.mWidth * air.mHeight; i < n; ++i)
+                if (!first)
                 {
-                    file << (i ? "," : "") << (air.mStart[i + 1] - air.mStart[i]);
+                    file << ',';
                 }
-                file << "],\"gaps\":[";
-                for (size_t i = 0; i < air.mGaps.size(); ++i)
-                {
-                    const AirGap& g = air.mGaps[i];
-                    file << (i ? "," : "") << g.mFloor << ',' << g.mCeiling << ',' << static_cast<S32>(g.mFlags);
-                }
-                file << "]}";
-                ++airs_written;
+                first = false;
+                ++counts.mSegments;
+                file << "{\"a\":";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(seg.mA));
+                file << ",\"b\":";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(seg.mB));
+                file << ",\"kind\":" << static_cast<S32>(seg.mKind) << ",\"value\":" << seg.mValue
+                     << ",\"area\":" << static_cast<S32>(seg.mArea) << '}';
             }
-            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+        }
+        file << "],\"links\":[";
+        if (tile.mLinks[cls])
+        {
+            bool first = true;
+            for (const DropLink& link : *tile.mLinks[cls])
             {
-                file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{";
-                const dtNavMesh* nav = mesh.mNav[cls];
-                // Detour x runs along Recast x, which is SL y, so the tile at
-                // this lattice key sits at (mY, mX).
-                const dtMeshTile* dt = nav ? nav->getTileAt(t.first.mY, t.first.mX, 0) : nullptr;
-                file << "\"polys\":[";
-                if (dt && dt->header)
+                if (!first)
                 {
-                    bool first = true;
-                    for (S32 p = 0; p < dt->header->polyCount; ++p)
-                    {
-                        const dtPoly& poly = dt->polys[p];
-                        if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
-                        {
-                            continue;
-                        }
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++polys_written;
-                        file << "{\"v\":[";
-                        for (S32 v = 0; v < static_cast<S32>(poly.vertCount); ++v)
-                        {
-                            if (v)
-                            {
-                                file << ',';
-                            }
-                            vec3d(mesh.mOrigin + LLVector3d(fromRecast(&dt->verts[poly.verts[v] * 3])));
-                        }
-                        file << "],\"area\":" << static_cast<S32>(areaOf(poly.flags)) << '}';
-                    }
+                    file << ',';
                 }
-                file << "],\"segments\":[";
-                if (tile.mSegments[cls])
-                {
-                    bool first = true;
-                    for (const WallSegment& seg : *tile.mSegments[cls])
-                    {
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++segments_written;
-                        file << "{\"a\":";
-                        vec3d(mesh.mOrigin + LLVector3d(seg.mA));
-                        file << ",\"b\":";
-                        vec3d(mesh.mOrigin + LLVector3d(seg.mB));
-                        file << ",\"kind\":" << static_cast<S32>(seg.mKind) << ",\"value\":" << seg.mValue
-                             << ",\"area\":" << static_cast<S32>(seg.mArea) << '}';
-                    }
-                }
-                file << "],\"links\":[";
-                if (tile.mLinks[cls])
-                {
-                    bool first = true;
-                    for (const DropLink& link : *tile.mLinks[cls])
-                    {
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++links_written;
-                        file << "{\"from\":";
-                        vec3d(mesh.mOrigin + LLVector3d(link.mFrom));
-                        file << ",\"to\":";
-                        vec3d(mesh.mOrigin + LLVector3d(link.mTo));
-                        file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
-                    }
-                }
-                file << "]}";
+                first = false;
+                ++counts.mLinks;
+                file << "{\"from\":";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(link.mFrom));
+                file << ",\"to\":";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(link.mTo));
+                file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
             }
-            file << '}';
         }
         file << "]}";
     }
-    file << ']';
+    file << '}';
+}
 
+void SKNavMesh::writeFeatures(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const
+{
     // What the census recognised, with each span's exits and links per class.
-    U32 features_written = 0;
     file << ",\"features\":[";
     if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
     {
         for (const Feature& f : snap->mFeatures)
         {
-            if (features_written++)
+            if (min && max && !overlaps3D(f.mMin, f.mMax, *min, *max))
+            {
+                continue;
+            }
+            if (counts.mFeatures++)
             {
                 file << ',';
             }
             file << "{\"kind\":\"" << featureName(f.mKind) << "\",\"confidence\":" << f.mConfidence << ",\"evidence\":\""
                  << f.mEvidence << "\",\"min\":";
-            vec3d(f.mMin);
+            writeVec3d(file, f.mMin);
             file << ",\"max\":";
-            vec3d(f.mMax);
+            writeVec3d(file, f.mMax);
             file << ",\"foot\":" << f.mFoot << ",\"top\":" << f.mTop << ",\"working\":" << (f.mWorking ? "true" : "false")
                  << ",\"combat\":" << (f.mCombat ? "true" : "false") << ",\"air\":" << (f.mAir ? "true" : "false") << ",\"roots\":[";
             for (size_t i = 0; i < f.mRoots.size(); ++i)
@@ -2572,15 +2537,15 @@ std::string SKNavMesh::exportAll() const
                         {
                             file << ',';
                         }
-                        vec3d(span->mExits[cls][i]);
+                        writeVec3d(file, span->mExits[cls][i]);
                     }
                     file << "],\"links\":[";
                     for (size_t i = 0; i < span->mLinks[cls].size(); ++i)
                     {
                         file << (i ? "," : "") << "{\"from\":";
-                        vec3d(span->mLinks[cls][i].first);
+                        writeVec3d(file, span->mLinks[cls][i].first);
                         file << ",\"to\":";
-                        vec3d(span->mLinks[cls][i].second);
+                        writeVec3d(file, span->mLinks[cls][i].second);
                         file << ",\"kind\":" << static_cast<S32>(span->mKind) << '}';
                     }
                     file << "]}";
@@ -2590,42 +2555,37 @@ std::string SKNavMesh::exportAll() const
         }
     }
     file << ']';
+}
 
+void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const
+{
     // The door table as the rooms pass would read it. Names are anyone's
     // text, so they are escaped.
-    U32 doors_written = 0;
     file << ",\"doors\":[";
     for (const auto& region : mFeatureDoors)
     {
         for (const DoorEntity& d : region.second)
         {
-            if (doors_written++)
+            if (min && max && !overlaps3D(d.mMin, d.mMax, *min, *max))
+            {
+                continue;
+            }
+            if (counts.mDoors++)
             {
                 file << ',';
             }
             file << "{\"id\":\"" << d.mId << "\",\"region\":" << d.mRegion << ",\"min\":";
-            vec3d(d.mMin);
+            writeVec3d(file, d.mMin);
             file << ",\"max\":";
-            vec3d(d.mMax);
+            writeVec3d(file, d.mMax);
             file << ",\"plane\":";
-            vec3d(d.mPlanePoint);
+            writeVec3d(file, d.mPlanePoint);
             file << ",\"planeKnown\":" << (d.mPlaneKnown ? "true" : "false") << ",\"normal\":";
-            vec3(d.mNormal);
+            writeVec3(file, d.mNormal);
             file << ",\"width\":" << d.mWidth << ",\"height\":" << d.mHeight << ",\"sill\":" << d.mSill
                  << ",\"double\":" << (d.mDouble ? "true" : "false") << ",\"confidence\":" << d.mConfidence
-                 << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"";
-            for (const char c : d.mName)
-            {
-                if (c == '"' || c == '\\')
-                {
-                    file << '\\' << c;
-                }
-                else if (static_cast<unsigned char>(c) >= 0x20)
-                {
-                    file << c;
-                }
-            }
-            file << "\",\"leaves\":[";
+                 << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"" << jsonEscape(d.mName)
+                 << "\",\"leaves\":[";
             for (size_t i = 0; i < d.mLeaves.size(); ++i)
             {
                 file << (i ? ",\"" : "\"") << d.mLeaves[i] << '"';
@@ -2633,14 +2593,172 @@ std::string SKNavMesh::exportAll() const
             file << "]}";
         }
     }
-    file << "]}\n";
+    file << ']';
+}
+
+std::string SKNavMesh::writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const
+{
+    ExportCounts counts;
+    const LLVector3d center = (min + max) * 0.5;
+    const LLVector3d half = (max - min) * 0.5;
+
+    // The census records in the box, as the object export writes its
+    // surroundings: triangles about the centre, one flat array per record.
+    U32 records = 0;
+    file << ",\"surroundings\":{\"center\":";
+    writeVec3d(file, center);
+    file << ",\"half\":";
+    writeVec3d(file, half);
+    file << ",\"records\":[";
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        std::vector<LLVector3> tris;
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            if (!overlaps3D(r->mMin, r->mMax, min, max))
+            {
+                continue;
+            }
+            tris.clear();
+            sknav::emitRecord(*r, center, tris);
+            bool first_tri = true;
+            for (size_t t = 0; t + 2 < tris.size(); t += 3)
+            {
+                if (!withinHalf(&tris[t], half))
+                {
+                    continue;
+                }
+                if (first_tri)
+                {
+                    file << (records ? "," : "") << "{\"root\":\"" << r->mRoot << "\",\"part\":\"" << r->mPart
+                         << "\",\"role\":" << static_cast<S32>(r->mRole) << ",\"provenance\":" << static_cast<S32>(r->mProvenance)
+                         << ",\"navRole\":" << static_cast<S32>(r->mNavRole) << ",\"shape\":" << static_cast<S32>(r->mShape)
+                         << ",\"solid\":" << (r->mSolid ? "true" : "false") << ",\"exclude\":" << static_cast<S32>(r->mExclude)
+                         << ",\"tris\":[";
+                    ++records;
+                }
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    const LLVector3& p = tris[t + k];
+                    file << (first_tri && !k ? "" : ",") << p.mV[VX] << ',' << p.mV[VY] << ',' << p.mV[VZ];
+                }
+                first_tri = false;
+            }
+            if (!first_tri)
+            {
+                file << "]}";
+            }
+        }
+    }
+    file << "]}";
+
+    // Every built tile the box reaches, in whichever mesh, in exportAll's form.
+    file << ",\"tiles\":[";
+    bool first = true;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        for (const auto& t : mesh.mTiles)
+        {
+            if (!t.second.mBuilt || !overlapsXY(t.second.mMin, t.second.mMax, min, max))
+            {
+                continue;
+            }
+            file << (first ? "" : ",") << "{\"mesh\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false")
+                 << ",\"origin\":";
+            writeVec3d(file, mesh.mOrigin);
+            file << ",\"tile\":";
+            writeTile(file, mesh, t.first, t.second, counts);
+            file << '}';
+            first = false;
+        }
+    }
+    file << ']';
+    writeDoors(file, &min, &max, counts);
+    writeFeatures(file, &min, &max, counts);
+
+    return llformat("%u records, %u tiles, %u polys, %u doors, %u features", records, counts.mTiles, counts.mPolys, counts.mDoors,
+                    counts.mFeatures);
+}
+
+std::string SKNavMesh::exportAll() const
+{
+    // Written straight to the file rather than through an LLSD tree: a built
+    // region is hundreds of thousands of numbers, and holding them as LLSD
+    // first would stall the main thread for seconds before a byte landed.
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknavmesh-export.json");
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    file << std::setprecision(10);
+
+    F32 height = 2.f;
+    if (isAgentAvatarValid())
+    {
+        height = llclamp(gAgentAvatarp->mBodySize.mV[VZ], 1.f, 3.f);
+    }
+    static LLCachedControl<F32> cell(gSavedSettings, "SKNavCell", 0.125f);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
+    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+    static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
+
+    U32 meshes_written = 0;
+    ExportCounts counts;
+
+    file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
+    file << ",\"agent\":";
+    writeVec3d(file, gAgent.getPositionGlobal());
+    file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb
+         << ",\"slope\":" << slope << ",\"cell\":" << cell << '}';
+    file << ",\"classes\":[\"avatar\",\"weather\"]";
+    file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
+    file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
+    file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
+    file << ",\"meshes\":[";
+
+    bool first_mesh = true;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        if (!first_mesh)
+        {
+            file << ',';
+        }
+        first_mesh = false;
+        ++meshes_written;
+        file << "{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"origin\":";
+        writeVec3d(file, mesh.mOrigin);
+        file << ",\"tiles\":[";
+        bool first_tile = true;
+        for (const auto& t : mesh.mTiles)
+        {
+            if (!t.second.mBuilt)
+            {
+                continue;
+            }
+            if (!first_tile)
+            {
+                file << ',';
+            }
+            first_tile = false;
+            writeTile(file, mesh, t.first, t.second, counts);
+        }
+        file << "]}";
+    }
+    file << ']';
+
+    writeFeatures(file, nullptr, nullptr, counts);
+    writeDoors(file, nullptr, nullptr, counts);
+    file << "}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
     return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, doors_written, airs_written,
+                    counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
