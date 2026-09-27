@@ -133,6 +133,11 @@ public:
     /// (mode 2), from the coarse answers. Agent coordinates.
     void gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const;
 
+    /// Fill each space's floor near the camera in a colour of its own, from
+    /// the coarse answers, and draw its portals: doors red, stairs lime,
+    /// openings cyan, dashed without a lintel. Agent coordinates.
+    void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const;
+
     /// A tile's per-gap answers as a JSON member, leading comma included,
     /// when the view holds answers for exactly this air.
     void writeTile(std::ostream& file, const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air) const;

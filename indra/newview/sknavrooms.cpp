@@ -657,9 +657,24 @@ std::string SKNavRooms::statsLine() const
     {
         stages += llformat("%s%s %.0f", s ? ", " : "", EnclosurePass::stageName(s), mLastStageMs[s]);
     }
-    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps",
+    U32 spaces = 0, portals = 0;
+    for (const auto& entry : mMeshes)
+    {
+        if (entry.second.mRooms)
+        {
+            spaces += static_cast<U32>(entry.second.mRooms->mSpaces.size());
+            portals += static_cast<U32>(entry.second.mRooms->mPortals.size());
+        }
+    }
+    std::string space_stages;
+    for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
+    {
+        space_stages += llformat("%s%s %.0f", s ? ", " : "", SpacesPass::stageName(s), mLastSpaceStageMs[s]);
+    }
+    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s)",
                     meshes, mPasses, mCancelled, in_flight, mLastMs, stages.c_str(), mLastWallMs,
-                    gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps));
+                    gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
+                    portals, mLastSpacesMs, space_stages.c_str());
 }
 
 void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
@@ -731,6 +746,152 @@ void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera,
     }
 }
 
+void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const
+{
+    if (!mView)
+    {
+        return;
+    }
+    const F64 reach2 = reach * reach;
+    for (const SKNavWorldView::Mesh& m : mView->meshes())
+    {
+        if (!m.mRooms)
+        {
+            continue;
+        }
+        const std::vector<U32>& ids = m.mProduct->mSpaceIds;
+        for (const TileEnclosure& t : m.mProduct->mTiles)
+        {
+            const CoarseAir& c = t.mCoarse;
+            const F64 side = c.mCells * t.mCell;
+            const LLVector3d tile_min = m.mOrigin + LLVector3d(t.mOrigin);
+            const LLVector3d tile_centre = tile_min + LLVector3d(t.mWidth * t.mCell * 0.5, t.mHeight * t.mCell * 0.5, 0.0);
+            const F64 half = t.mWidth * t.mCell * 0.75;
+            if (dist_vec_squared2D(tile_centre, camera) > (reach + half) * (reach + half))
+            {
+                continue;
+            }
+            for (S32 cy = 0; cy < c.mHeight; ++cy)
+            {
+                for (S32 cx = 0; cx < c.mWidth; ++cx)
+                {
+                    const LLVector3d corner = tile_min + LLVector3d(cx * side, cy * side, 0.0);
+                    if (dist_vec_squared2D(corner + LLVector3d(side * 0.5, side * 0.5, 0.0), camera) > reach2)
+                    {
+                        continue;
+                    }
+                    const S32 cell = cx + cy * c.mWidth;
+                    for (U32 i = c.mStart[cell]; i < c.mStart[cell + 1]; ++i)
+                    {
+                        const CoarseGap& g = c.mGaps[i];
+                        if (!g.mSpace || g.mSpace > ids.size())
+                        {
+                            continue;
+                        }
+                        // A pastel per space id, the same from pass to pass.
+                        const U64 h = mix(SEED, ids[g.mSpace - 1]);
+                        const LLColor4 color(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
+                                             0.35f + 0.6f * (((h >> 16) & 255) / 255.f), opaque ? 1.f : 0.45f);
+                        const F64 z = corner.mdV[VZ] + g.mFloor * t.mUnit + 0.06;
+                        const F32 inset = static_cast<F32>(side * 0.04);
+                        const LLVector3 a = gAgent.getPosAgentFromGlobal(LLVector3d(corner.mdV[VX], corner.mdV[VY], z)) + LLVector3(inset, inset, 0.f);
+                        const F32 s = static_cast<F32>(side) - 2.f * inset;
+                        geom.tri(a, a + LLVector3(s, 0.f, 0.f), a + LLVector3(s, s, 0.f), color);
+                        geom.tri(a, a + LLVector3(s, s, 0.f), a + LLVector3(0.f, s, 0.f), color);
+                    }
+                }
+            }
+        }
+        for (const Portal& p : m.mRooms->mPortals)
+        {
+            const LLVector3d a = m.mOrigin + LLVector3d(p.mA) + LLVector3d(0.0, 0.0, 0.15);
+            const LLVector3d b = m.mOrigin + LLVector3d(p.mB) + LLVector3d(0.0, 0.0, 0.15);
+            if (dist_vec_squared2D((a + b) * 0.5, camera) > reach2)
+            {
+                continue;
+            }
+            const SKNavSwatch swatch = p.mKind == PortalKind::DOOR
+                                           ? SKNavSwatch::PORTAL_DOOR
+                                           : (p.mKind == PortalKind::STAIR ? SKNavSwatch::PORTAL_STAIR : SKNavSwatch::PORTAL_OPENING);
+            LLColor4 color = skNavSwatchColor(swatch);
+            if (opaque)
+            {
+                color.mV[VALPHA] = 1.f;
+            }
+            const LLVector3 pa = gAgent.getPosAgentFromGlobal(a), pb = gAgent.getPosAgentFromGlobal(b);
+            if (p.mKind != PortalKind::OPENING || p.lintel())
+            {
+                geom.edge(pa, pb, color);
+                continue;
+            }
+            // Dashed: an opening with nothing over it.
+            const F32 len = dist_vec(pa, pb);
+            const LLVector3 dir = len > 0.f ? (pb - pa) / len : LLVector3::zero;
+            for (F32 d = 0.f; d < len; d += 0.5f)
+            {
+                geom.edge(pa + dir * d, pa + dir * llmin(d + 0.3f, len), color);
+            }
+        }
+    }
+}
+
+void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
+{
+    if (!mView)
+    {
+        return;
+    }
+    for (const SKNavWorldView::Mesh& m : mView->meshes())
+    {
+        if (m.mId != mesh || !m.mRooms)
+        {
+            continue;
+        }
+        static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
+        auto vec = [&file](const LLVector3d& v) { file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']'; };
+        const F64 oz = m.mOrigin.mdV[VZ];
+        file << ",\"spaces\":[";
+        for (size_t i = 0; i < m.mRooms->mSpaces.size(); ++i)
+        {
+            const Space& s = m.mRooms->mSpaces[i];
+            file << (i ? "," : "") << "{\"index\":" << i << ",\"id\":" << s.mId << ",\"bucket\":\"" << buckets[static_cast<S32>(s.mBucket)]
+                 << "\",\"min\":";
+            vec(m.mOrigin + LLVector3d(s.mMin));
+            file << ",\"max\":";
+            vec(m.mOrigin + LLVector3d(s.mMax));
+            file << ",\"centre\":";
+            vec(m.mOrigin + LLVector3d(s.mCentre));
+            file << ",\"area\":" << s.mFloorArea << ",\"volume\":" << s.mVolume << ",\"surface\":" << s.mSurface << ",\"mfp\":" << s.mMeanFreePath
+                 << ",\"ceiling\":[" << s.mCeilingMin + oz << ',' << s.mCeilingMean + oz << ',' << s.mCeilingMax + oz << "],\"floor\":["
+                 << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"e\":["
+                 << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
+                 << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false")
+                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";
+            for (size_t k = 0; k < s.mPortals.size(); ++k)
+            {
+                file << (k ? "," : "") << s.mPortals[k];
+            }
+            file << "]}";
+        }
+        file << "],\"portals\":[";
+        for (size_t i = 0; i < m.mRooms->mPortals.size(); ++i)
+        {
+            const Portal& p = m.mRooms->mPortals[i];
+            file << (i ? "," : "") << "{\"kind\":\"" << portalKindName(p.mKind) << "\",\"spaces\":[" << p.mSpaces[0] << ',' << p.mSpaces[1]
+                 << "],\"a\":";
+            vec(m.mOrigin + LLVector3d(p.mA));
+            file << ",\"b\":";
+            vec(m.mOrigin + LLVector3d(p.mB));
+            file << ",\"normal\":[" << p.mNormal.mV[VX] << ',' << p.mNormal.mV[VY] << "],\"width\":" << p.mWidth << ",\"sill\":" << p.mSill + oz
+                 << ",\"head\":" << (p.lintel() ? p.mHead + oz : 0.0) << ",\"lintel\":" << (p.lintel() ? "true" : "false")
+                 << ",\"walled\":" << (p.walled() ? "true" : "false") << ",\"cues\":" << static_cast<S32>(p.mCues) << ",\"door\":\"" << p.mDoor
+                 << "\"}";
+        }
+        file << ']';
+        return;
+    }
+}
+
 void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey& key, const TileAirPtr& air) const
 {
     if (!mView || !air)
@@ -749,7 +910,7 @@ void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey
             return;
         }
         std::vector<U8> blob;
-        blob.reserve(t->mGaps.size() * 5);
+        blob.reserve(t->mGaps.size() * 7);
         for (const GapEnclosure& g : t->mGaps)
         {
             blob.push_back(g.mS);
@@ -757,10 +918,12 @@ void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey
             blob.push_back(g.mD);
             blob.push_back(g.mBucket);
             blob.push_back(g.mFlags);
+            blob.push_back(static_cast<U8>(g.mSpace & 0xff));
+            blob.push_back(static_cast<U8>(g.mSpace >> 8));
         }
         file << ",\"enclosure\":{\"generation\":" << m.mProduct->mGeneration
-             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
-                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1}},\"blob\":\""
+             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\",\"space\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
+                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1},\"space\":\"u16, index + 1 into the mesh's spaces, 0 for none\"},\"blob\":\""
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
         return;
     }

@@ -58,6 +58,9 @@ enum class SKNavSwatch : S32
     ENCLOSURE_SHELTERED,    ///< under cover, not far in
     ENCLOSURE_INDOORS,      ///< far from the sky and from the way out
     ENCLOSURE_UNKNOWN,      ///< air nothing reached: no answer
+    PORTAL_DOOR,            ///< a space's threshold at a door
+    PORTAL_STAIR,           ///< where a flight meets a floor
+    PORTAL_OPENING,         ///< any other opening; dashed without a lintel
     COUNT
 };
 

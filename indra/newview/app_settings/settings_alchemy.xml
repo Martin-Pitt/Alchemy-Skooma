@@ -4838,6 +4838,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKNavOverlaySpaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Fill the floor of each space the rooms pass cut in a colour of its own, and draw its portals: doors red, stairs lime, openings cyan, dashed where nothing is over them. Needs SKNavBuildAir.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavOverlayFeatures</key>
         <map>
             <key>Comment</key>

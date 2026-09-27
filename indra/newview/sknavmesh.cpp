@@ -296,7 +296,7 @@ bool SKNavMesh::overlayActive()
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
-        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0;
+        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces");
 }
 
 bool SKNavMesh::wanted() const
@@ -3150,7 +3150,9 @@ std::string SKNavMesh::exportAll() const
             first_tile = false;
             writeTile(file, mesh, t.first, t.second, counts);
         }
-        file << "]}";
+        file << ']';
+        mRooms->writeSpaces(file, mesh.mId);
+        file << '}';
     }
     file << ']';
 
@@ -3433,6 +3435,7 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
     static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
+    static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -3498,7 +3501,8 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
     key = mix(key, static_cast<U64>(show_enclosure));
-    key = mix(key, show_enclosure ? mRooms->revision() : 0ull);
+    key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? 1ull : 0ull);
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -3527,6 +3531,10 @@ void SKNavMesh::refreshOverlay()
     mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
     // Floors tinted by how enclosed their air is; a layer of its own, like the walls.
     mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
+    if (show_spaces)
+    {
+        mRooms->gatherSpaces(mOverlay, camera, reach, opaque);
+    }
 
     for (const auto& entry : mMeshes)
     {
