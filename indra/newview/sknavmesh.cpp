@@ -35,6 +35,7 @@
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
 #include "llavatarnamecache.h"
+#include "llbase64.h"
 #include "llcallingcard.h"
 #include "llappviewer.h"
 #include "lldate.h"
@@ -1180,7 +1181,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
-    tile.mAir = result->mAir.empty() ? nullptr : std::make_shared<const AirGrid>(std::move(result->mAir));
+    tile.mAir = result->mAir;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -2393,24 +2394,16 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
     }
     if (tile.mAir)
     {
-        // Per column, row-major along SL y, how many gaps it has; then
-        // every gap as floor, ceiling, flags in height units.
-        const AirGrid& air = *tile.mAir;
+        // The distilled records, packed little-endian and base64'd; the
+        // layout names each section and record so a reader needs no code.
+        const TileAir& air = *tile.mAir;
+        const std::vector<U8> blob = packTileAir(air);
         file << ",\"air\":{\"origin\":";
         writeVec3(file, air.mOrigin);
         file << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit << ",\"width\":" << air.mWidth
-             << ",\"height\":" << air.mHeight << ",\"counts\":[";
-        for (S32 i = 0, n = air.mWidth * air.mHeight; i < n; ++i)
-        {
-            file << (i ? "," : "") << (air.mStart[i + 1] - air.mStart[i]);
-        }
-        file << "],\"gaps\":[";
-        for (size_t i = 0; i < air.mGaps.size(); ++i)
-        {
-            const AirGap& g = air.mGaps[i];
-            file << (i ? "," : "") << g.mFloor << ',' << g.mCeiling << ',' << static_cast<S32>(g.mFlags);
-        }
-        file << "]}";
+             << ",\"height\":" << air.mHeight << ",\"top_cell\":" << air.mTopCell << ",\"top_width\":" << air.mTopWidth
+             << ",\"top_height\":" << air.mTopHeight << ",\"layout\":" << tileAirLayout(air) << ",\"blob\":\""
+             << LLBase64::encode(blob.data(), blob.size()) << "\"}";
         ++counts.mAirs;
     }
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)

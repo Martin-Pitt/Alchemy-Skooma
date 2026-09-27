@@ -27,6 +27,7 @@
 #include "../test/lltut.h"
 
 #include "../sknavair.h"
+#include "../sknavairdistil.h"
 #include "../sknavbuild.h"
 
 #include "Recast.h"
@@ -156,27 +157,42 @@ namespace tut
         in.mRecords.push_back(slab(3.f, 3.25f));
         TileBuildResult out = buildTile(in);
         ensure("built", out.mStatus == TileBuildResult::SUCCESS);
-        ensure("air came back", !out.mAir.empty());
-        const S32 ix = static_cast<S32>((16.f - out.mAir.mOrigin.mV[VX]) / out.mAir.mCell);
-        const S32 iy = static_cast<S32>((16.f - out.mAir.mOrigin.mV[VY]) / out.mAir.mCell);
-        std::string dump;
-        for (U32 i = 0; i < out.mAir.count(ix, iy); ++i)
+        ensure("air came back", out.mAir && out.mAirBuilt);
+        const TileAir& air = *out.mAir;
+        const S32 ix = static_cast<S32>((16.f - air.mOrigin.mV[VX]) / air.mCell);
+        const S32 iy = static_cast<S32>((16.f - air.mOrigin.mV[VY]) / air.mCell);
+        const AirLeaf* leaf = nullptr;
+        for (const AirLeaf& l : air.mLeaves)
         {
-            const AirGap& d = out.mAir.gaps(ix, iy)[i];
-            dump += llformat(" [%.2f %.2f %d]", out.mAir.height(d.mFloor), out.mAir.height(d.mCeiling), d.mFlags);
+            const S32 s = 1 << l.mLevel;
+            if (ix >= l.mX && ix < l.mX + s && iy >= l.mY && iy < l.mY + s)
+            {
+                leaf = &l;
+            }
         }
-        ensure_equals("floor gap and roof gap:" + dump, out.mAir.count(ix, iy), 2u);
-        const AirGap* g = out.mAir.gaps(ix, iy);
+        ensure("a leaf covers the middle", leaf != nullptr);
+        std::string dump;
+        const auto height = [&air](U16 u) { return air.mOrigin.mV[VZ] + u * air.mUnit; };
+        for (U32 i = 0; i < leaf->mGapCount; ++i)
+        {
+            const AirGap& d = air.mGaps[leaf->mFirstGap + i];
+            dump += llformat(" [%.2f %.2f %d]", height(d.mFloor), height(d.mCeiling), d.mFlags);
+        }
+        ensure_equals("floor gap and roof gap:" + dump, static_cast<U32>(leaf->mGapCount), 2u);
+        const AirGap* g = &air.mGaps[leaf->mFirstGap];
         // A top rasterises up to a unit high: Recast rounds span tops up.
-        const F32 floor = out.mAir.height(g[0].mFloor);
-        ensure("floor at the slab top:" + dump, floor > 0.5f - 0.01f && floor < 0.5f + out.mAir.mUnit + 0.01f);
-        ensure("ceiling at the roof:" + dump, std::fabs(out.mAir.height(g[0].mCeiling) - 3.f) < 0.01f);
+        const F32 floor = height(g[0].mFloor);
+        ensure("floor at the slab top:" + dump, floor > 0.5f - 0.01f && floor < 0.5f + air.mUnit + 0.01f);
+        ensure("ceiling at the roof:" + dump, std::fabs(height(g[0].mCeiling) - 3.f) < 0.01f);
         ensure("under the roof is closed", !(g[0].mFlags & AirGap::OPEN));
-        ensure("over the roof is open", (g[1].mFlags & AirGap::OPEN) != 0);
+        ensure("over the roof is open", (g[1].mFlags & AirGap::OPEN) != 0 && g[1].mCeiling == AIR_CEILING_OPEN);
+        ensure("over the roof is the column's own sky", (g[1].mFlags & AirGap::OWN_SKY) != 0 && !(g[0].mFlags & AirGap::OWN_SKY));
+        ensure_equals("standing on an object", static_cast<S32>(g[0].area()), static_cast<S32>(AREA_OBJECT));
 
         in.mAir = false;
-        ensure("no air unless asked", buildTile(in).mAir.empty());
+        ensure("no air unless asked", !buildTile(in).mAir && !buildTile(in).mAirBuilt);
     }
+
     template<> template<>
     void sknavair_object::test<4>()
     {

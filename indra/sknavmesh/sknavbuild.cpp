@@ -1205,6 +1205,8 @@ namespace sknav
     {
         const auto started = std::chrono::steady_clock::now();
         TileBuildResult result;
+        // An empty tile has no air to keep, which is an answer too.
+        result.mAirBuilt = input.mAir && input.mClasses[static_cast<S32>(AgentClass::WEATHER)];
 
         // Gather the soup in Recast space.
         Soup soup;
@@ -1351,6 +1353,11 @@ namespace sknav
             cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
             cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
             cfg.borderSize = borderCells(p.mRadius, cfg.cs);
+            const bool air = input.mAir && cls == static_cast<S32>(AgentClass::WEATHER);
+            if (air)
+            {
+                cfg.borderSize = std::max(cfg.borderSize, input.mAirPad);
+            }
             cfg.tileSize = static_cast<int>(input.mTileSize / cfg.cs);
             cfg.width = cfg.tileSize + cfg.borderSize * 2;
             cfg.height = cfg.width;
@@ -1507,9 +1514,10 @@ namespace sknav
             {
                 extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
             }
-            if (input.mAir && cls == static_cast<S32>(AgentClass::WEATHER))
+            if (air)
             {
-                extractAir(*mem.hf, cfg.borderSize, result.mAir);
+                const S32 overlap = static_cast<S32>(std::ceil(0.5f / cfg.ch));
+                result.mAir = buildTileAir(*mem.hf, cfg.borderSize, input.mAirPad, cfg.walkableClimb, overlap);
             }
             if (mem.pmesh->npolys == 0)
             {
