@@ -529,7 +529,7 @@ void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera,
                         }
                         else
                         {
-                            const EnclosureBucket b = enclosureBucket(g.mE / 255.f, EnclosureBucket::UNKNOWN, 0.f);
+                            const EnclosureBucket b = static_cast<EnclosureBucket>(g.mBucket);
                             color = b == EnclosureBucket::OUTDOORS ? outdoors : (b == EnclosureBucket::INDOORS ? indoors : sheltered);
                         }
                         if (opaque)

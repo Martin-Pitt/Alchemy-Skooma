@@ -211,17 +211,31 @@ namespace
         out.mCeiling = ceiling == AIR_CEILING_OPEN ? 1e30f : t.mOrigin.mV[VZ] + ceiling * t.mUnit;
     }
 
-    U8 coarseBucket(const CoarseGap& g)
+    /// The bucket a previous answer gave the coarse gap at a mesh-local point
+    /// whose floor is within tol of z: what hysteresis holds to once the air
+    /// under it has been rebuilt.
+    EnclosureBucket previousBucket(const TileEnclosure* t, F32 x, F32 y, F32 z, F32 tol)
     {
-        if (g.mD == ENCLOSURE_D_UNKNOWN)
+        if (!t || t->mCell <= 0.f)
         {
-            return static_cast<U8>(EnclosureBucket::UNKNOWN);
+            return EnclosureBucket::UNKNOWN;
         }
-        if (g.mFlags & ENCLOSURE_SEALED)
+        const CoarseAir& c = t->mCoarse;
+        const S32 cx = static_cast<S32>(std::floor((x - t->mOrigin.mV[VX]) / t->mCell)) / c.mCells;
+        const S32 cy = static_cast<S32>(std::floor((y - t->mOrigin.mV[VY]) / t->mCell)) / c.mCells;
+        if (cx < 0 || cy < 0 || cx >= c.mWidth || cy >= c.mHeight)
         {
-            return static_cast<U8>(EnclosureBucket::INDOORS);
+            return EnclosureBucket::UNKNOWN;
         }
-        return static_cast<U8>(enclosureBucket(g.mE / 255.f, EnclosureBucket::UNKNOWN, 0.f));
+        const S32 cell = cx + cy * c.mWidth;
+        for (U32 i = c.mStart[cell]; i < c.mStart[cell + 1]; ++i)
+        {
+            if (std::fabs(t->mOrigin.mV[VZ] + c.mGaps[i].mFloor * t->mUnit - z) <= tol)
+            {
+                return static_cast<EnclosureBucket>(c.mGaps[i].mBucket);
+            }
+        }
+        return EnclosureBucket::UNKNOWN;
     }
 
     /// Visit the gaps over a mesh-local (x, y), detail first, coarse when the tile has no detail.
@@ -271,7 +285,7 @@ namespace
         {
             const CoarseGap& g = c.mGaps[i];
             Enclosure out;
-            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, coarseBucket(g), g.mSpace, g.mFlags, out);
+            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, g.mBucket, g.mSpace, g.mFlags, out);
             fn(out, g.mFloor, g.mCeiling, *t);
         }
     }
@@ -759,6 +773,7 @@ namespace sknav
         out.mAir = in.mTiles[t].mAir;
         out.mGaps.resize(a.mGaps.size());
         const GapEnclosure* previous = previousGaps(in.mPrevious, in.mTiles[t]);
+        const TileEnclosure* previous_tile = in.mPrevious ? in.mPrevious->tile(out.mKey) : nullptr;
         for (const AirLeaf& leaf : a.mLeaves)
         {
             const F64 area = static_cast<F64>(1 << leaf.mLevel) * (1 << leaf.mLevel) * a.mCell * a.mCell;
@@ -792,7 +807,12 @@ namespace sknav
                     ++mProduct->mSealedGaps;
                     continue;
                 }
-                const EnclosureBucket prev = previous ? static_cast<EnclosureBucket>(previous[g].mBucket) : EnclosureBucket::UNKNOWN;
+                // The same air: its own last bucket. Rebuilt air: the last one of the metre it stands in.
+                const F32 half = (1 << leaf.mLevel) * 0.5f * a.mCell;
+                const EnclosureBucket prev = previous ? static_cast<EnclosureBucket>(previous[g].mBucket)
+                                                      : previousBucket(previous_tile, a.mOrigin.mV[VX] + leaf.mX * a.mCell + half,
+                                                                       a.mOrigin.mV[VY] + leaf.mY * a.mCell + half,
+                                                                       a.mOrigin.mV[VZ] + a.mGaps[g].mFloor * a.mUnit, p.mClimbM);
                 e.mBucket = static_cast<U8>(enclosureBucket(ev, prev, p.mHysteresis));
             }
         }
@@ -803,6 +823,7 @@ namespace sknav
         const TileAir& a = air(t);
         TileEnclosure& out = mProduct->mTiles[t];
         CoarseAir& c = out.mCoarse;
+        const TileEnclosure* previous_tile = mInput->mPrevious ? mInput->mPrevious->tile(out.mKey) : nullptr;
         c.mCells = std::max(1, static_cast<S32>(std::lround(1.f / a.mCell)));
         c.mWidth = (a.mWidth + c.mCells - 1) / c.mCells;
         c.mHeight = (a.mHeight + c.mCells - 1) / c.mCells;
@@ -875,6 +896,12 @@ namespace sknav
                 g.mE = static_cast<U8>(std::lround(e / known));
                 g.mD = static_cast<U8>(std::lround(d / known));
                 g.mFlags = sealed * 2.f >= known ? ENCLOSURE_SEALED : 0;
+                const S32 cell_index = static_cast<S32>(parts[i].mCell);
+                const F32 x = a.mOrigin.mV[VX] + ((cell_index % c.mWidth) + 0.5f) * c.mCells * a.mCell;
+                const F32 y = a.mOrigin.mV[VY] + ((cell_index / c.mWidth) + 0.5f) * c.mCells * a.mCell;
+                const EnclosureBucket prev = previousBucket(previous_tile, x, y, a.mOrigin.mV[VZ] + floor * a.mUnit, params().mClimbM);
+                g.mBucket = static_cast<U8>((g.mFlags & ENCLOSURE_SEALED) ? EnclosureBucket::INDOORS
+                                                                          : enclosureBucket(g.mE / 255.f, prev, params().mHysteresis));
             }
             while (cell < parts[i].mCell)
             {

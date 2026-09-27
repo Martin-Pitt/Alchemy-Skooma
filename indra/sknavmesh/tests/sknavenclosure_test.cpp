@@ -391,6 +391,51 @@ namespace tut
         }
         ensure("some gaps sat in the band", held > 0);
         ensure("some left it", left > 0);
+
+        // Rebuilt air, the same shape under new records: the metre's last bucket holds it.
+        for (TileEnclosure& t : previous->mTiles)
+        {
+            for (CoarseGap& g : t.mCoarse.mGaps)
+            {
+                g.mBucket = static_cast<U8>(EnclosureBucket::INDOORS);
+            }
+        }
+        auto rebuilt = s.input(1);
+        rebuilt->mPrevious = previous;
+        const EnclosureProductPtr third = computeEnclosure(rebuilt);
+        ensure("new air", third->mTiles[0].mAir != first->mTiles[0].mAir);
+        U32 kept = 0;
+        for (const GapEnclosure& g : third->mTiles[0].mGaps)
+        {
+            const F32 e = g.mE / 255.f;
+            if (g.mD != ENCLOSURE_D_UNKNOWN && e > 0.705f && e <= 0.745f)
+            {
+                ensure("held across the rebuild", g.mBucket == static_cast<U8>(EnclosureBucket::INDOORS));
+                ++kept;
+            }
+        }
+        ensure("some held", kept > 0);
+        // The coarse buckets hold the same way: against a previous generation
+        // that read every metre SHELTERED, those just past 0.75 stay so.
+        for (TileEnclosure& t : previous->mTiles)
+        {
+            for (CoarseGap& g : t.mCoarse.mGaps)
+            {
+                g.mBucket = static_cast<U8>(EnclosureBucket::SHELTERED);
+            }
+        }
+        const EnclosureProductPtr fourth = computeEnclosure(rebuilt);
+        U32 coarse_held = 0;
+        for (const CoarseGap& g : fourth->mTiles[0].mCoarse.mGaps)
+        {
+            const F32 e = g.mE / 255.f;
+            if (g.mD != ENCLOSURE_D_UNKNOWN && e > 0.755f && e <= 0.795f)
+            {
+                ensure("a coarse bucket holds too", g.mBucket == static_cast<U8>(EnclosureBucket::SHELTERED));
+                ++coarse_held;
+            }
+        }
+        ensure("some coarse gaps sat in the band", coarse_held > 0);
     }
 
     template<> template<>

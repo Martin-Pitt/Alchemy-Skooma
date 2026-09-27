@@ -82,6 +82,7 @@ namespace sknav
         U8 mE = 0;
         U8 mD = ENCLOSURE_D_UNKNOWN;
         U8 mFlags = 0;              ///< ENCLOSURE_SEALED when most of its known air is
+        U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);   ///< of its mean e, with the same hysteresis
     };
 
     struct CoarseAir
