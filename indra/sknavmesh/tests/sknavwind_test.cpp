@@ -226,6 +226,47 @@ namespace tut
     }
 
     template<> template<>
+    void sknavwind_object::test<10>()
+    {
+        set_test_name("a portal's normal runs from its first space into its second, and a draught follows the wind");
+        Scene s = twoRooms();
+        s.wall(10.f, 2.f, 10.25f, 5.f);
+        s.wall(10.f, 6.f, 10.25f, 10.f);
+        s.box(10.f, 5.f, 10.25f, 6.f, 2.2f, 3.f, false);
+        const Wind w(s.input(1));
+        ensure("portals", !w.mRooms->mPortals.empty());
+        for (const Portal& p : w.mRooms->mPortals)
+        {
+            const LLVector3 n = p.mNormal * 0.75f;
+            Enclosure a, b;
+            ensure("air both sides", w.mEnc->enclosureAt(p.mCentre - n + LLVector3(0.f, 0.f, 0.5f), a) &&
+                                         w.mEnc->enclosureAt(p.mCentre + n + LLVector3(0.f, 0.f, 0.5f), b));
+            ensure_equals("behind is the first", static_cast<U32>(a.mSpace), p.mSpaces[0] + 1);
+            ensure_equals("ahead is the second", static_cast<U32>(b.mSpace), p.mSpaces[1] + 1);
+        }
+        // Where a draught turns the air inside the west door, it runs along the door: in or out with the wind, in along the wall.
+        auto sign = [&w](F32 heading) {
+            const WindSlabPtr e = w.slab(heading);
+            const F32 rad = heading * DEG_TO_RAD;
+            S32 in = 0, out = 0;
+            for (F32 x = 2.25f; x < 4.5f; x += 0.5f)
+            {
+                const WindCell* c = e->at(x, 5.5f);
+                if ((c->mFlags & WindCell::DRAUGHT) && c->deflection().length() > 0.1f)
+                {
+                    const F32 fx = (LLVector2(std::cos(rad), std::sin(rad)) + c->deflection()).mV[VX];
+                    in += fx > 0.5f ? 1 : 0;
+                    out += fx < -0.5f ? 1 : 0;
+                }
+            }
+            return in && !out ? 1 : (out && !in ? -1 : 0);
+        };
+        ensure_equals("in, with the wind", sign(45.f), 1);
+        ensure_equals("out, with the wind", sign(135.f), -1);
+        ensure_equals("in from the open side, along the wall", sign(90.f), 1);
+    }
+
+    template<> template<>
     void sknavwind_object::test<9>()
     {
         set_test_name("replay a mesh's air into wind, when a file is named");

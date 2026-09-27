@@ -633,6 +633,7 @@ namespace sknav
                 // With the wind along the portal, air still moves from the open side in.
                 const LLVector2 dir = d > 0.2f ? nrm : d < -0.2f ? -nrm : (sa > sb ? nrm : -nrm);
                 const F32 strength = params.mDraughtSpeed * (0.4f + 0.6f * std::fabs(d));
+                const U32 inner = sa > sb ? p.mSpaces[1] : p.mSpaces[0];
                 const F32 reach = p.mWidth * 0.5f + params.mDraughtReachM;
                 const S32 r = static_cast<S32>(std::ceil(reach / cell));
                 const S32 cx = ci % w, cy = ci / w;
@@ -654,10 +655,11 @@ namespace sknav
                         }
                         WindCell& c = slab->mCells[i];
                         c.mFlags |= WindCell::DRAUGHT;
-                        if (v > speed[i])
+                        // On the sheltered side the air runs through the portal, at least at the draught's speed.
+                        if (sp == inner + 1 || v > speed[i])
                         {
-                            speed[i] = v;
-                            put(c, v, dir - wd);
+                            speed[i] = std::max(speed[i], v);
+                            put(c, speed[i], dir - wd);
                         }
                     }
                 }
