@@ -220,6 +220,7 @@ private:
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
         sknav::TileAirPtr mAir;         ///< only while SKNavBuildAir is on
+        U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
     };
@@ -260,6 +261,11 @@ private:
     void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
 
     bool wanted() const;
+    /// Whether a processing product is demanded, which builds WEATHER and
+    /// keeps the navmesh running with no overlay: for now, the air.
+    static bool processDemanded();
+    /// Whether a tile is near enough the camera to build its air eagerly.
+    static bool inAirRadius(const Tile& tile);
     /// Bring the sky map in line with the published tiles' air.
     void syncSkyMap();
     /// The pool the tile builds run on, created on first use. A pool of its

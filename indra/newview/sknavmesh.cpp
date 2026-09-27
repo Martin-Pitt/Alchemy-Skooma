@@ -295,7 +295,22 @@ bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive());
+    return enabled && (always || overlayActive() || processDemanded());
+}
+
+bool SKNavMesh::processDemanded()
+{
+    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
+    return air;
+}
+
+bool SKNavMesh::inAirRadius(const Tile& tile)
+{
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
+    const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
+    return dx * dx + dy * dy <= static_cast<F64>(radius) * radius;
 }
 
 LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
@@ -395,7 +410,6 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> weatherRadius(gSavedSettings, "SKNavWeatherRadius", 0.125f);
     static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
     static LLCachedControl<bool> weather_on(gSavedSettings, "SKNavBuildWeather", false);
-    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
     static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
     static LLCachedControl<F32> dropAvatar(gSavedSettings, "SKNavDropMax", 10.f);
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
@@ -423,6 +437,7 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
     // The air is read off the weather class, so asking for it builds that
     // class whether or not anything reads its weather.
+    const bool air = processDemanded();
     const bool weather = weather_on || air;
     input.mAir = air;
     input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
@@ -1026,6 +1041,13 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
+    // Air is built eagerly near the camera; a tile further out keeps any it
+    // has, and without it needs WEATHER only if weather itself is on.
+    if (input->mAir && !tile.mAir && !inAirRadius(tile))
+    {
+        input->mAir = false;
+        input->mClasses[static_cast<S32>(AgentClass::WEATHER)] = gSavedSettings.getBOOL("SKNavBuildWeather");
+    }
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
     // tile past the region's edge is standing on land another region meshes.
@@ -1136,6 +1158,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
         tile.mAir.reset();
+        tile.mAirBuilt = signature;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             tile.mSegments[cls].reset();
@@ -1181,7 +1204,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
-    tile.mAir = result->mAir;
+    tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
+    tile.mAirBuilt = result->mAirBuilt ? signature : 0;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -1230,13 +1254,16 @@ void SKNavMesh::schedule()
     // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const bool air = processDemanded();
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
         for (auto& t : mesh.mTiles)
         {
             Tile& tile = t.second;
-            if (tile.mInFlight || tile.mSignature == tile.mBuilt)
+            // A built tile near the camera without its air is built again for it.
+            const bool air_due = air && tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
+            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
             {
                 continue;
             }

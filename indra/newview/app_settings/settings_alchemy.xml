@@ -4540,12 +4540,34 @@
             <key>Value</key>
             <real>0.3</real>
         </map>
+        <key>SKNavAirBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Memory the navmesh's detailed air may hold before the least recently near tiles give theirs up, in MB.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <key>SKNavAirRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the camera within which navmesh tiles build their air eagerly. Tiles further out keep what they have.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>128.0</real>
+        </map>
         <key>SKNavBuildAir</key>
         <map>
             <key>Comment</key>
-            <string>Keep the open air of every navmesh tile (the gaps above each solid, per column) for rooms and enclosure. Builds the weather class, which it is read from.</string>
+            <string>Keep the open air of navmesh tiles near the camera (the gaps above each solid, per column, distilled) for rooms and enclosure. Builds the weather class, which it is read from, and runs the navmesh without the overlay.</string>
             <key>Persist</key>
-            <integer>0</integer>
+            <integer>1</integer>
             <key>Type</key>
             <string>Boolean</string>
             <key>Value</key>
