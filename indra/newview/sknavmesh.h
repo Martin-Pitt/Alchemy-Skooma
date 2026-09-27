@@ -29,6 +29,7 @@
 #include "sknavbuild.h"
 #include "sknavoverlay.h"
 #include "sknavskymap.h"
+#include "sknavtilecache.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
@@ -94,6 +95,12 @@ public:
     /// the exits of each span. The span links are a table beside the tiles,
     /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+    /// Stair flights whose footprint meets the box, with the mesh origin
+    /// their mesh-local positions are relative to. A flight across a tile
+    /// seam comes once, as the copy of the tile holding its footprint's
+    /// centroid, with that tile's polys.
+    typedef std::function<void(const LLVector3d& origin, const sknav::Flight& flight)> FlightFn;
+    void flightsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const FlightFn& fn) const;
 
     /// A ladder's or a working elevator's span with the floors it can be
     /// boarded or left at, per class, lowest first. Global.
@@ -172,6 +179,13 @@ public:
         U32 mLinks = 0;
         U32 mAirTiles = 0;
         size_t mAirBytes = 0;
+        U32 mAirEvicted = 0;    ///< tiles whose detail went to disk for the budget
+        U64 mDiskBytes = 0;
+        U32 mDiskEntries = 0;
+        U32 mDiskLoads = 0;     ///< builds answered from disk
+        U32 mDiskRebuilds = 0;  ///< builds that looked on disk and found nothing usable
+        U32 mDiskCorrupt = 0;   ///< of those, entries that were there but refused
+        F32 mDiskLoadMs = 0.f;  ///< the last load, read and unpack
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
         F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
@@ -230,9 +244,14 @@ private:
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
         sknav::TileAirPtr mAir;         ///< only while SKNavBuildAir is on
+        sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
+        U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
+        bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
+        F64 mNearness = 0.0;            ///< camera nearness over time, for the air budget
         U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
     };
 
     struct Mesh
@@ -302,7 +321,13 @@ private:
     static bool dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
-    void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
+    void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
+                 U64 content_key = 0, bool loaded = false);
+    /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.
+    std::shared_ptr<sknav::TileDiskCache> diskCache();
+    /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently
+    /// near first, spilling to disk what is not there already.
+    void evictAir();
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
     /// What the region's land looks like now, over all its patches. A tile's
@@ -339,6 +364,7 @@ private:
     /// that has gone drops out with the next one.
     std::map<U64, std::vector<sknav::DoorEntity>> mFeatureDoors;
     std::unique_ptr<LL::ThreadPool> mWorkers;
+    std::shared_ptr<sknav::TileDiskCache> mDiskCache;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;

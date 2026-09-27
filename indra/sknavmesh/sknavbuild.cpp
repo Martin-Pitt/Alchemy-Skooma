@@ -29,8 +29,8 @@
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
+#include "sknavflights.h"
 #include "sknavwalls.h"
-#include "v2math.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -681,35 +681,7 @@ namespace
         }
     }
 
-    constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
-    constexpr F32 SLOPE_REACH_M = 0.75f;    ///< each half of the baseline: longer than a tread, so a half always spans a riser
-    constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< neighbours climbing further apart than this are different slopes
     constexpr F32 SLOPE_FRAGMENT_M2 = 1.f;  ///< smaller patches join the neighbour they share most border with
-
-    /// Walk up to reach spans along a direction; the height and distance of
-    /// the last one reached. Stops where the floor loses its connection.
-    void walkSurface(const rcCompactHeightfield& chf, S32 x, S32 z, S32 i, S32 dir, S32 reach, S32& y, S32& dist)
-    {
-        y = chf.spans[i].y;
-        dist = 0;
-        for (S32 n = 1; n <= reach; ++n)
-        {
-            const S32 con = rcGetCon(chf.spans[i], dir);
-            if (con == RC_NOT_CONNECTED)
-            {
-                return;
-            }
-            x += rcGetDirOffsetX(dir);
-            z += rcGetDirOffsetY(dir);
-            i = static_cast<S32>(chf.cells[x + z * chf.width].index) + con;
-            if (chf.areas[i] == RC_NULL_AREA)
-            {
-                return;
-            }
-            y = chf.spans[i].y;
-            dist = n;
-        }
-    }
 
     /// Visit each span with its cell coordinates.
     template <typename Fn> void eachSpan(const rcCompactHeightfield& chf, Fn&& fn)
@@ -738,161 +710,14 @@ namespace
         return static_cast<S32>(chf.cells[(x + rcGetDirOffsetX(dir)) + (z + rcGetDirOffsetY(dir)) * chf.width].index) + con;
     }
 
-    /// Each span's gradient, rise over run in the heightfield's x and z. It
-    /// is measured over metres, not a cell, so a staircase's voxel steps read
-    /// as the flight's slope and not as alternating floor and riser; and both
-    /// halves of the baseline must climb the same way, so a single step or
-    /// curb, which rises on one side only, reads level. The rising half alone
-    /// goes in edge, for the ends of a flight to rejoin it. Linden land stays
-    /// level: its slope is what contours are for.
-    void measureSlopes(const rcCompactHeightfield& chf, std::vector<LLVector2>& grad, std::vector<LLVector2>& edge)
+    /// The slope partition's codes arrive rasterised; a patch of one code
+    /// smaller than SLOPE_FRAGMENT_M2 is a sliver where regions overlap or a
+    /// triangle clipped at a cell, and joins the neighbour of the same area
+    /// that it shares most border with, smallest first, so a chain of
+    /// slivers folds into the patch it hangs off. A flight's code is kept
+    /// whatever its size, since a short flight is smaller than a sliver.
+    void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real, const std::vector<Flight>& flights)
     {
-        grad.assign(chf.spanCount, LLVector2::zero);
-        edge.assign(chf.spanCount, LLVector2::zero);
-        const S32 reach = llmax(1, static_cast<S32>(std::lround(SLOPE_REACH_M / chf.cs)));
-        eachSpan(chf, [&](S32 x, S32 z, S32 i) {
-            if (chf.areas[i] == RC_NULL_AREA || chf.areas[i] == sknav::AREA_GROUND)
-            {
-                return;
-            }
-            LLVector2 g, ge;
-            for (S32 axis = 0; axis < 2; ++axis)
-            {
-                // Recast directions: 0 -x, 1 +z, 2 +x, 3 -z
-                const S32 fwd = axis == 0 ? 2 : 1, back = axis == 0 ? 0 : 3;
-                S32 y1 = 0, d1 = 0, y0 = 0, d0 = 0;
-                walkSurface(chf, x, z, i, fwd, reach, y1, d1);
-                walkSurface(chf, x, z, i, back, reach, y0, d0);
-                const F32 yc = static_cast<F32>(chf.spans[i].y);
-                const F32 gf = d1 ? (y1 - yc) * chf.ch / (d1 * chf.cs) : 0.f;
-                const F32 gb = d0 ? (yc - y0) * chf.ch / (d0 * chf.cs) : 0.f;
-                if (d0 && d1)
-                {
-                    g.mV[axis] = gf * gb > 0.f ? (gf > 0.f ? 1.f : -1.f) * llmin(std::fabs(gf), std::fabs(gb)) : 0.f;
-                    ge.mV[axis] = std::fabs(gf) > std::fabs(gb) ? gf : gb;
-                }
-                else
-                {
-                    g.mV[axis] = d1 ? gf : gb; // against a wall only one side is there to read
-                    ge.mV[axis] = g.mV[axis];
-                }
-            }
-            grad[i] = g;
-            edge[i] = ge;
-        });
-    }
-
-    /// Heights come in whole cells, so over a half baseline a gentle slope
-    /// rises one cell or two and its measured gradient flickers between level
-    /// and twice its size, swinging its direction with it. Average each
-    /// span's gradient with its neighbours' a few times over, about a metre,
-    /// before anything is decided from it; a curb, which the two-sided test
-    /// already reads level, stays near zero.
-    void smoothGradients(const rcCompactHeightfield& chf, std::vector<LLVector2>& grad)
-    {
-        const S32 passes = llmax(1, static_cast<S32>(std::lround(1.f / chf.cs)));
-        std::vector<LLVector2> out(grad.size());
-        for (S32 pass = 0; pass < passes; ++pass)
-        {
-            eachSpan(chf, [&](S32 x, S32 z, S32 i) {
-                LLVector2 sum = grad[i];
-                S32 n = 1;
-                for (S32 dir = 0; dir < 4; ++dir)
-                {
-                    const S32 m = neighbourOf(chf, x, z, i, dir);
-                    if (m >= 0 && chf.areas[m] == chf.areas[i])
-                    {
-                        sum += grad[m];
-                        ++n;
-                    }
-                }
-                out[i] = sum / static_cast<F32>(n);
-            });
-            grad.swap(out);
-        }
-    }
-
-    /// Below the level threshold a gradient is exactly zero from here on.
-    void levelOff(std::vector<LLVector2>& grad)
-    {
-        const F32 level = std::tan(SLOPE_LEVEL_DEG * DEG_TO_RAD);
-        for (LLVector2& g : grad)
-        {
-            if (g.lengthSquared() < level * level)
-            {
-                g.setZero();
-            }
-        }
-    }
-
-    bool sameSlope(const LLVector2& a, const LLVector2& b)
-    {
-        static const F32 turn = std::cos(SLOPE_TURN_DEG * DEG_TO_RAD);
-        const bool la = a.isExactlyZero(), lb = b.isExactlyZero();
-        if (la || lb)
-        {
-            return la && lb;
-        }
-        return a * b >= turn * a.length() * b.length();
-    }
-
-    /// The two-sided test reads the last metre of a flight as level, since
-    /// one half of the baseline is already on the landing. Grow each slope
-    /// back over level spans whose rising half alone agrees with it, up to a
-    /// half baseline: that restores a flight's top and bottom, while a lone
-    /// curb, which has no two-sided core to grow from, stays level.
-    void growSlopes(const rcCompactHeightfield& chf, const std::vector<LLVector2>& edge, std::vector<LLVector2>& grad)
-    {
-        const S32 reach = llmax(1, static_cast<S32>(std::lround(SLOPE_REACH_M / chf.cs)));
-        for (S32 pass = 0; pass < reach; ++pass)
-        {
-            std::vector<LLVector2> out = grad;
-            bool grew = false;
-            eachSpan(chf, [&](S32 x, S32 z, S32 i) {
-                if (!grad[i].isExactlyZero() || edge[i].isExactlyZero())
-                {
-                    return;
-                }
-                for (S32 dir = 0; dir < 4; ++dir)
-                {
-                    const S32 n = neighbourOf(chf, x, z, i, dir);
-                    if (n >= 0 && chf.areas[n] == chf.areas[i] && !grad[n].isExactlyZero() && sameSlope(grad[n], edge[i]))
-                    {
-                        out[i] = edge[i];
-                        grew = true;
-                        return;
-                    }
-                }
-            });
-            grad.swap(out);
-            if (!grew)
-            {
-                break;
-            }
-        }
-    }
-
-    /// The slope partition: fold each span's slope patch into its area id,
-    /// so Recast's region building splits a flight from its landing. Regions,
-    /// contours and polygons never cross an area change, and a contour keeps
-    /// a vertex wherever the area changes, so the line where a flight tops out
-    /// becomes a polygon edge instead of being simplified away in plan.
-    ///
-    /// A patch is a run of connected spans that are all level, or all
-    /// climbing with neighbours never turning more than SLOPE_TURN_DEG apart,
-    /// so a curved ramp or an arched bridge is one patch however far it turns
-    /// in all, and only a real change of slope is an edge. Patches get codes
-    /// so that no two that touch share one; the real area of each code is
-    /// returned for unfolding after the poly mesh.
-    std::vector<U8> foldSlopeAreas(rcCompactHeightfield& chf)
-    {
-        std::vector<LLVector2> grad, edge;
-        measureSlopes(chf, grad, edge);
-        smoothGradients(chf, grad);
-        levelOff(grad);
-        levelOff(edge);
-        growSlopes(chf, edge, grad);
-
         std::vector<S32> cellOf(chf.spanCount);
         eachSpan(chf, [&](S32 x, S32 z, S32 i) { cellOf[i] = x + z * chf.width; });
         const auto neighbours = [&](S32 i, auto&& fn) {
@@ -907,9 +732,9 @@ namespace
             }
         };
 
-        // patches, by flood fill
         std::vector<S32> patch(chf.spanCount, -1);
         std::vector<S32> size;
+        std::vector<U8> codeOf;
         std::vector<S32> stack;
         for (S32 s = 0; s < chf.spanCount; ++s)
         {
@@ -919,6 +744,7 @@ namespace
             }
             const S32 id = static_cast<S32>(size.size());
             size.push_back(0);
+            codeOf.push_back(chf.areas[s]);
             patch[s] = id;
             stack.assign(1, s);
             while (!stack.empty())
@@ -927,7 +753,7 @@ namespace
                 stack.pop_back();
                 ++size[id];
                 neighbours(i, [&](S32 n) {
-                    if (patch[n] < 0 && chf.areas[n] == chf.areas[i] && sameSlope(grad[i], grad[n]))
+                    if (patch[n] < 0 && chf.areas[n] == chf.areas[i])
                     {
                         patch[n] = id;
                         stack.push_back(n);
@@ -937,7 +763,6 @@ namespace
         }
         const S32 npatch = static_cast<S32>(size.size());
 
-        // shared border between patches of one area
         std::vector<std::map<S32, S32>> border(npatch);
         for (S32 i = 0; i < chf.spanCount; ++i)
         {
@@ -946,20 +771,19 @@ namespace
                 continue;
             }
             neighbours(i, [&](S32 n) {
-                if (patch[n] != patch[i] && chf.areas[n] == chf.areas[i])
+                if (patch[n] != patch[i] && real[chf.areas[n]] == real[chf.areas[i]])
                 {
                     ++border[patch[i]][patch[n]];
                 }
             });
         }
 
-        // fragments join the neighbour they share most border with; smallest
-        // first, so a chain of slivers folds into the patch it hangs off
         const S32 min_spans = static_cast<S32>(SLOPE_FRAGMENT_M2 / (chf.cs * chf.cs));
         std::vector<S32> into(npatch);
+        std::vector<S32> order(npatch);
         for (S32 p = 0; p < npatch; ++p)
         {
-            into[p] = p;
+            into[p] = order[p] = p;
         }
         const auto root = [&](S32 p) {
             while (into[p] != p)
@@ -968,15 +792,15 @@ namespace
             }
             return p;
         };
-        std::vector<S32> order(npatch);
-        for (S32 p = 0; p < npatch; ++p)
-        {
-            order[p] = p;
-        }
         std::sort(order.begin(), order.end(), [&](S32 a, S32 b) { return size[a] < size[b]; });
+        std::vector<U8> keep(real.size(), 0);
+        for (const Flight& f : flights)
+        {
+            keep[f.mCode] = 1;
+        }
         for (const S32 p : order)
         {
-            if (size[root(p)] >= min_spans)
+            if (size[root(p)] >= min_spans || keep[codeOf[p]])
             {
                 continue;
             }
@@ -995,83 +819,13 @@ namespace
                 into[root(p)] = best;
             }
         }
-
-        // colour the merged patches so that touching ones differ, then give
-        // each (area, colour) pair its own code
-        std::vector<std::set<S32>> touch(npatch);
-        for (S32 p = 0; p < npatch; ++p)
-        {
-            for (const auto& [q, n] : border[p])
-            {
-                if (root(p) != root(q))
-                {
-                    touch[root(p)].insert(root(q));
-                    touch[root(q)].insert(root(p));
-                }
-            }
-        }
-        std::vector<S32> colour(npatch, -1);
-        std::vector<U8> areaOfPatch(npatch, RC_NULL_AREA);
         for (S32 i = 0; i < chf.spanCount; ++i)
         {
             if (patch[i] >= 0)
             {
-                areaOfPatch[root(patch[i])] = chf.areas[i];
+                chf.areas[i] = codeOf[root(patch[i])];
             }
         }
-        std::vector<U8> real(1, RC_NULL_AREA); // code -> area; code 0 stays null
-        std::map<std::pair<U8, S32>, U8> code_of;
-        std::vector<U8> code(npatch, 0);
-        for (S32 p = 0; p < npatch; ++p)
-        {
-            if (root(p) != p || areaOfPatch[p] == RC_NULL_AREA)
-            {
-                continue;
-            }
-            std::set<S32> used;
-            for (const S32 q : touch[p])
-            {
-                used.insert(colour[q]);
-            }
-            S32 c = 0;
-            while (used.count(c))
-            {
-                ++c;
-            }
-            colour[p] = c;
-            auto it = code_of.find({ areaOfPatch[p], c });
-            if (it == code_of.end())
-            {
-                U8 k = 0;
-                if (real.size() < RC_WALKABLE_AREA)
-                {
-                    k = static_cast<U8>(real.size());
-                    real.push_back(areaOfPatch[p]);
-                }
-                else
-                {
-                    // out of codes: share one of the same area, which only costs a boundary
-                    for (const auto& [key, v] : code_of)
-                    {
-                        if (key.first == areaOfPatch[p])
-                        {
-                            k = v;
-                            break;
-                        }
-                    }
-                }
-                it = code_of.emplace(std::make_pair(areaOfPatch[p], c), k).first;
-            }
-            code[p] = it->second;
-        }
-        for (S32 i = 0; i < chf.spanCount; ++i)
-        {
-            if (patch[i] >= 0)
-            {
-                chf.areas[i] = code[root(patch[i])];
-            }
-        }
-        return real;
     }
 
     /// The land's surface as a span index at one heightfield cell, or -1 where
@@ -1330,6 +1084,8 @@ namespace sknav
         }
 
         rcContext ctx(false);
+        std::unique_ptr<SlopePartition> shared_slopes;
+        F32 shared_climb = 0.f;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             if (!input.mClasses[cls])
@@ -1399,6 +1155,49 @@ namespace sknav
             }
             std::vector<U8> areas;
             markWalkable(*class_soup, cfg.walkableSlopeAngle, areas);
+            // The slope partition splits the soup into regions before it is
+            // rasterised: each walkable triangle goes in as its region's code
+            // and comes back out as its area once the poly mesh is built.
+            SlopePartition slopes;
+            if (input.mPartition == Partition::SLOPE)
+            {
+                const auto partition = [&](const Soup& from, const std::vector<U8>& walkable) {
+                    std::vector<LLVector3> sl(from.nverts());
+                    for (S32 v = 0; v < from.nverts(); ++v)
+                    {
+                        sl[v] = fromRecast(&from.mVerts[v * 3]);
+                    }
+                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb);
+                };
+                if (class_soup == &soup)
+                {
+                    // Classes on the shared soup share one partition, taken at
+                    // the most permissive slope of them; each masks out what
+                    // it cannot walk.
+                    if (!shared_slopes || shared_climb != p.mClimb)
+                    {
+                        F32 widest = 0.f;
+                        for (S32 c = 0; c < NUM_CLASSES; ++c)
+                        {
+                            widest = input.mClasses[c] ? llmax(widest, input.mParams[c].mSlope) : widest;
+                        }
+                        std::vector<U8> walkable;
+                        markWalkable(soup, widest, walkable);
+                        shared_slopes = std::make_unique<SlopePartition>(partition(soup, walkable));
+                        shared_climb = p.mClimb;
+                    }
+                    slopes = *shared_slopes;
+                    for (size_t t = 0; t < areas.size(); ++t)
+                    {
+                        slopes.mCodes[t] = areas[t] ? slopes.mCodes[t] : 0;
+                    }
+                }
+                else
+                {
+                    slopes = partition(*class_soup, areas);
+                }
+                areas = slopes.mCodes;
+            }
             if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),
                                       class_soup->ntris(), *mem.hf, cfg.walkableClimb))
             {
@@ -1435,6 +1234,17 @@ namespace sknav
                 result.mError = "compact";
                 return result;
             }
+            if (!slopes.mReal.empty())
+            {
+                // the walls and the air read real areas off the heightfield
+                for (S32 c = 0; c < mem.hf->width * mem.hf->height; ++c)
+                {
+                    for (rcSpan* s = mem.hf->spans[c]; s; s = s->next)
+                    {
+                        s->area = slopes.mReal[s->area];
+                    }
+                }
+            }
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
             if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
@@ -1442,11 +1252,10 @@ namespace sknav
                 return result;
             }
             bool regions = false;
-            std::vector<U8> slope_real;
             switch (input.mPartition)
             {
                 case Partition::SLOPE:
-                    slope_real = foldSlopeAreas(*mem.chf);
+                    mergeFragments(*mem.chf, slopes.mReal, slopes.mFlights);
                     regions = rcBuildDistanceField(&ctx, *mem.chf) &&
                               rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
@@ -1478,16 +1287,33 @@ namespace sknav
                 result.mError = "polymesh";
                 return result;
             }
-            if (!slope_real.empty())
+            if (!slopes.mReal.empty())
             {
-                // unfold the slope codes: everything past here reads real areas
+                // each flight's polys by their code, then unfold the codes:
+                // everything past here reads real areas
+                std::vector<LLVector3> centroids(mem.pmesh->npolys);
+                for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+                {
+                    const unsigned short* poly = &mem.pmesh->polys[i * mem.pmesh->nvp * 2];
+                    S32 nv = 0;
+                    for (; nv < mem.pmesh->nvp && poly[nv] != RC_MESH_NULL_IDX; ++nv)
+                    {
+                        const unsigned short* v = &mem.pmesh->verts[poly[nv] * 3];
+                        const F32 rc[3] = { mem.pmesh->bmin[0] + v[0] * mem.pmesh->cs, mem.pmesh->bmin[1] + v[1] * mem.pmesh->ch,
+                                            mem.pmesh->bmin[2] + v[2] * mem.pmesh->cs };
+                        centroids[i] += fromRecast(rc);
+                    }
+                    centroids[i] /= static_cast<F32>(llmax(nv, 1));
+                }
+                mapFlightPolys(slopes.mFlights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), p.mClimb);
+                result.mFlights[cls] = std::move(slopes.mFlights);
                 for (S32 i = 0; i < mem.chf->spanCount; ++i)
                 {
-                    mem.chf->areas[i] = slope_real[mem.chf->areas[i]];
+                    mem.chf->areas[i] = slopes.mReal[mem.chf->areas[i]];
                 }
                 for (S32 i = 0; i < mem.pmesh->npolys; ++i)
                 {
-                    mem.pmesh->areas[i] = slope_real[mem.pmesh->areas[i]];
+                    mem.pmesh->areas[i] = slopes.mReal[mem.pmesh->areas[i]];
                 }
             }
             mem.dmesh = rcAllocPolyMeshDetail();

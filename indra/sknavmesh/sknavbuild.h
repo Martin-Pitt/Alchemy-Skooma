@@ -26,6 +26,7 @@
 #define SK_NAVBUILD_H
 
 #include "sknavairdistil.h"
+#include "sknavflights.h"
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
@@ -129,6 +130,8 @@ namespace sknav
         /// The distilled air, null when there is none; mAirBuilt says it was asked for.
         TileAirPtr mAir;
         bool mAirBuilt = false;
+        /// Stair flights and the polys they produced, when the partition is SLOPE.
+        std::vector<Flight> mFlights[NUM_CLASSES];
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,

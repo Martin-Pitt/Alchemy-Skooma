@@ -340,6 +340,117 @@ LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
     return LL::WorkQueue::getInstance("NavMesh");
 }
 
+std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
+{
+    static LLCachedControl<U32> cap_mb(gSavedSettings, "SKNavDiskCacheMB", 2048);
+    if (!cap_mb)
+    {
+        return nullptr;
+    }
+    const U64 cap = static_cast<U64>(cap_mb) * 1048576;
+    if (!mDiskCache)
+    {
+        mDiskCache = std::make_shared<TileDiskCache>(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "sknav"), cap);
+        // Indexing a full folder is slow; until it is done a lookup misses.
+        if (LL::WorkQueue::ptr_t workers = workerQueue())
+        {
+            std::shared_ptr<TileDiskCache> cache = mDiskCache;
+            workers->post([cache]() { cache->index(); });
+        }
+    }
+    else
+    {
+        mDiskCache->setCap(cap);
+    }
+    return mDiskCache;
+}
+
+void SKNavMesh::evictAir()
+{
+    static LLCachedControl<U32> budget_mb(gSavedSettings, "SKNavAirBudgetMB", 512);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
+
+    struct Held
+    {
+        Mesh* mMesh;
+        TileKey mKey;
+        Tile* mTile;
+    };
+    std::vector<Held> held;
+    std::vector<EvictionCandidate> candidates;
+    for (auto& entry : mMeshes)
+    {
+        for (auto& t : entry.second->mTiles)
+        {
+            Tile& tile = t.second;
+            const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
+            const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
+            const F64 distance = std::sqrt(dx * dx + dy * dy);
+            tile.mNearness = accumulateNearness(tile.mNearness, distance, radius, dt);
+            if (tile.mAir && !tile.mInFlight)
+            {
+                held.push_back({ entry.second.get(), t.first, &tile });
+                candidates.push_back({ tile.mAir->bytes(), tile.mNearness, distance });
+            }
+        }
+    }
+    const std::vector<size_t> out = chooseEvictions(candidates, static_cast<size_t>(budget_mb) * 1048576, 1.5 * radius);
+    if (out.empty())
+    {
+        return;
+    }
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    LL::WorkQueue::ptr_t workers = cache ? workerQueue() : nullptr;
+    for (size_t i : out)
+    {
+        Mesh& mesh = *held[i].mMesh;
+        Tile& tile = *held[i].mTile;
+        // Spill what is not on disk yet: the products as published, packed on a worker.
+        if (workers && tile.mContentKey && !cache->contains(tile.mContentKey))
+        {
+            auto snap = std::make_shared<TileBuildResult>();
+            snap->mStatus = TileBuildResult::SUCCESS;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                snap->mPolys[cls] = tile.mPolys[cls];
+                const dtMeshTile* dt_tile = mesh.mNav[cls] ? mesh.mNav[cls]->getTileAt(held[i].mKey.mY, held[i].mKey.mX, 0) : nullptr;
+                if (dt_tile && dt_tile->data && dt_tile->dataSize > 0)
+                {
+                    snap->mData[cls].assign(dt_tile->data, dt_tile->data + dt_tile->dataSize);
+                }
+                if (tile.mSegments[cls])
+                {
+                    snap->mSegments[cls] = *tile.mSegments[cls];
+                }
+                if (tile.mLinks[cls])
+                {
+                    snap->mLinks[cls] = *tile.mLinks[cls];
+                }
+                if (tile.mFlights[cls])
+                {
+                    snap->mFlights[cls] = *tile.mFlights[cls];
+                }
+            }
+            if (tile.mFaces)
+            {
+                snap->mFaces = *tile.mFaces;
+            }
+            snap->mMillis = tile.mMillis;
+            snap->mAir = tile.mAir;
+            snap->mAirBuilt = true;
+            const U64 content_key = tile.mContentKey;
+            workers->post([cache, snap, content_key]() { cache->store(content_key, packTileProduct(*snap, content_key)); });
+        }
+        tile.mAirCoarse = coarseAir(*tile.mAir);
+        tile.mAir.reset();
+        tile.mAirBuilt = 0;         // back within the radius, it is asked for again and found on disk
+        mStats.mAirEvicted++;
+    }
+    mRevision++;                    // the sky map takes the coarse tops in place of the detail
+}
+
 void SKNavMesh::cleanupSingleton()
 {
     // Join the pool before the singleton dies: a job in flight carries this
@@ -1120,10 +1231,70 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    // A stored product Detour refused last time is built afresh, and overwritten.
+    const bool skip_load = tile.mDiskRefused;
+    tile.mDiskRefused = false;
+    struct Outcome
+    {
+        std::shared_ptr<TileBuildResult> mResult;
+        U64 mKey = 0;
+        bool mLooked = false;
+        bool mLoaded = false;
+        bool mCorrupt = false;
+        F32 mLoadMs = 0.f;
+    };
     const bool posted = main_queue->postTo(
         workers,
-        [input]() { return std::make_shared<TileBuildResult>(buildTile(*input)); },
-        [this, id, generation, key, signature](std::shared_ptr<TileBuildResult> result) { publish(id, generation, key, signature, result); });
+        [input, cache, skip_load]()
+        {
+            auto out = std::make_shared<Outcome>();
+            // What the tile is built from, keyed so the same world finds it on disk
+            // next session; hashed here, since a big mesh's triangles are not cheap.
+            const U64 content_key = tileContentKey(*input);
+            out->mKey = content_key;
+            if (cache && !skip_load)
+            {
+                out->mLooked = true;
+                LLTimer timer;
+                std::vector<U8> bytes;
+                if (cache->load(content_key, bytes))
+                {
+                    auto loaded = std::make_shared<TileBuildResult>();
+                    if (unpackTileProduct(bytes.data(), bytes.size(), content_key, *loaded))
+                    {
+                        out->mResult = loaded;
+                        out->mLoaded = true;
+                        out->mLoadMs = timer.getElapsedTimeF32() * 1000.f;
+                        loaded->mMillis = out->mLoadMs;     // what this tile cost now, not when it was built
+                        return out;
+                    }
+                    // Damaged or written by another version: gone, and built afresh.
+                    cache->erase(content_key);
+                    out->mCorrupt = true;
+                }
+            }
+            out->mResult = std::make_shared<TileBuildResult>(buildTile(*input));
+            if (cache && out->mResult->mStatus != TileBuildResult::FAILED)
+            {
+                cache->store(content_key, packTileProduct(*out->mResult, content_key));
+            }
+            return out;
+        },
+        [this, id, generation, key, signature](std::shared_ptr<Outcome> out)
+        {
+            if (out->mLoaded)
+            {
+                mStats.mDiskLoads++;
+                mStats.mDiskLoadMs = out->mLoadMs;
+            }
+            else if (out->mLooked)
+            {
+                mStats.mDiskRebuilds++;
+                mStats.mDiskCorrupt += out->mCorrupt ? 1 : 0;
+            }
+            publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded);
+        });
     if (posted)
     {
         tile.mInFlight = true;
@@ -1132,8 +1303,10 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     return posted;
 }
 
-void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result)
+void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result,
+                        U64 content_key, bool loaded)
 {
+    bool refused = false;
     mInFlight = std::max(0, mInFlight - 1);
     const auto it = mMeshes.find(mesh_id);
     if (it == mMeshes.end() || it->second->mGeneration != generation)
@@ -1170,11 +1343,14 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
         tile.mAir.reset();
+        tile.mAirCoarse.reset();
+        tile.mContentKey = 0;
         tile.mAirBuilt = signature;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             tile.mSegments[cls].reset();
             tile.mLinks[cls].reset();
+            tile.mFlights[cls].reset();
         }
         tile.mBuilt = signature;    // do not retry the same input
         tile.mCause = CAUSE_FAILED;
@@ -1211,6 +1387,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
                 dtFree(copy);
                 tile.mPolys[cls] = 0;
                 mStats.mFailures++;
+                refused = loaded;
                 LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
             }
         }
@@ -1218,13 +1395,25 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
     tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
     tile.mAirBuilt = result->mAirBuilt ? signature : 0;
+    // A tile rebuilt without its air keeps the tops it had only while its input holds.
+    if (tile.mAir || tile.mBuilt != signature)
+    {
+        tile.mAirCoarse.reset();
+    }
+    tile.mContentKey = refused ? 0 : content_key;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
         tile.mLinks[cls] = std::make_shared<const std::vector<DropLink>>(std::move(result->mLinks[cls]));
+        tile.mFlights[cls] = result->mFlights[cls].empty() ? nullptr : std::make_shared<const std::vector<Flight>>(std::move(result->mFlights[cls]));
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    if (refused)
+    {
+        tile.mBuilt = 0;            // scheduled again, and built rather than loaded
+        tile.mDiskRefused = true;
+    }
     // The floors beside a ladder or a shaft may have moved with the tile.
     for (auto& region : mFeatureLinks)
     {
@@ -1327,6 +1516,7 @@ void SKNavMesh::update()
             for (auto& t : entry.second->mTiles)
             {
                 t.second.mAir.reset();
+                t.second.mAirCoarse.reset();
                 t.second.mAirBuilt = 0;
             }
         }
@@ -1369,6 +1559,7 @@ void SKNavMesh::update()
     }
 
     sampleTerrain();
+    evictAir();
     schedule();
     syncFeatureLinks(snap);
     if (mSkyRevision != mRevision)
@@ -1387,6 +1578,8 @@ void SKNavMesh::update()
     mStats.mAirTiles = 0;
     mStats.mAirBytes = 0;
     mStats.mInFlight = mInFlight;
+    mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
+    mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
     for (const auto& entry : mMeshes)
     {
         for (const auto& t : entry.second->mTiles)
@@ -1420,11 +1613,14 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB, sky %u cells %.1f MB",
+    const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
-                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0)
+                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
+                    looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
            + "; " + mRooms->statsLine();
 }
 
@@ -1453,18 +1649,20 @@ void SKNavMesh::syncSkyMap()
         const Mesh& mesh = *entry.second;
         for (const auto& t : mesh.mTiles)
         {
-            if (!t.second.mAir)
+            // An evicted tile's tops still say what stands over it.
+            const TileAirPtr& tile_air = t.second.mAir ? t.second.mAir : t.second.mAirCoarse;
+            if (!tile_air)
             {
                 continue;
             }
             const U64 key = skyContributor(mesh.mId, t.first);
             const auto old = mSkyTiles.find(key);
-            if (old == mSkyTiles.end() || old->second != t.second.mAir)
+            if (old == mSkyTiles.end() || old->second != tile_air)
             {
-                const TileAir& air = *t.second.mAir;
+                const TileAir& air = *tile_air;
                 mSkyMap.set(key, mesh.mOrigin + LLVector3d(air.mOrigin), air);
             }
-            seen[key] = t.second.mAir;
+            seen[key] = tile_air;
         }
     }
     for (const auto& old : mSkyTiles)
@@ -1624,6 +1822,58 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
             }
         }
     });
+}
+
+void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    struct Pick
+    {
+        LLVector3d mOrigin;
+        const Flight* mFlight;
+        bool mHome;
+    };
+    std::map<std::pair<LLUUID, U64>, Pick> picks;
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mFlights[c])
+        {
+            return;
+        }
+        for (const Flight& f : *tile.mFlights[c])
+        {
+            LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+            for (const LLVector2& p : f.mFootprint)
+            {
+                lo.set(llmin(lo.mV[0], p.mV[0]), llmin(lo.mV[1], p.mV[1]));
+                hi.set(llmax(hi.mV[0], p.mV[0]), llmax(hi.mV[1], p.mV[1]));
+            }
+            if (!overlapsXY(mesh.mOrigin + LLVector3d(lo.mV[0], lo.mV[1], 0.0), mesh.mOrigin + LLVector3d(hi.mV[0], hi.mV[1], 0.0), min, max))
+            {
+                continue;
+            }
+            LLVector2 mid;
+            for (const LLVector2& p : f.mFootprint)
+            {
+                mid += p / static_cast<F32>(f.mFootprint.size());
+            }
+            const LLVector3d centre = mesh.mOrigin + LLVector3d(mid.mV[0], mid.mV[1], 0.0);
+            const bool home = centre.mdV[VX] >= tile.mMin.mdV[VX] && centre.mdV[VX] < tile.mMax.mdV[VX] &&
+                              centre.mdV[VY] >= tile.mMin.mdV[VY] && centre.mdV[VY] < tile.mMax.mdV[VY];
+            auto it = picks.find({ mesh.mId, f.mKey });
+            if (it == picks.end())
+            {
+                picks.emplace(std::make_pair(mesh.mId, f.mKey), Pick { mesh.mOrigin, &f, home });
+            }
+            else if (home && !it->second.mHome)
+            {
+                it->second = { mesh.mOrigin, &f, home };
+            }
+        }
+    });
+    for (const auto& entry : picks)
+    {
+        fn(entry.second.mOrigin, *entry.second.mFlight);
+    }
 }
 
 void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const LinkFn& fn) const
@@ -2599,6 +2849,48 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
                 file << ",\"to\":";
                 writeVec3d(file, mesh.mOrigin + LLVector3d(link.mTo));
                 file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
+            }
+        }
+        file << "],\"flights\":[";
+        if (tile.mFlights[cls])
+        {
+            bool first = true;
+            for (const Flight& f : *tile.mFlights[cls])
+            {
+                if (!first)
+                {
+                    file << ',';
+                }
+                first = false;
+                file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"rise\":" << f.mRise << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
+                     << mesh.mOrigin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh.mOrigin.mdV[VX] - f.mPlane[1] * mesh.mOrigin.mdV[VY]
+                     << "],\"treads\":[";
+                for (size_t i = 0; i < f.mTreads.size(); ++i)
+                {
+                    const FlightTread& t = f.mTreads[i];
+                    file << (i ? "," : "") << "{\"z\":" << mesh.mOrigin.mdV[VZ] + t.mZ << ",\"rise\":" << t.mRise << ",\"going\":" << t.mGoing
+                         << ",\"nosing\":[";
+                    writeVec3d(file, mesh.mOrigin + LLVector3d(t.mNosingA));
+                    file << ',';
+                    writeVec3d(file, mesh.mOrigin + LLVector3d(t.mNosingB));
+                    file << "]}";
+                }
+                file << "],\"top\":[";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(f.mTopNosingA));
+                file << ',';
+                writeVec3d(file, mesh.mOrigin + LLVector3d(f.mTopNosingB));
+                file << "],\"footprint\":[";
+                for (size_t i = 0; i < f.mFootprint.size(); ++i)
+                {
+                    file << (i ? "," : "") << '[' << mesh.mOrigin.mdV[VX] + f.mFootprint[i].mV[0] << ','
+                         << mesh.mOrigin.mdV[VY] + f.mFootprint[i].mV[1] << ']';
+                }
+                file << "],\"polys\":[";
+                for (size_t i = 0; i < f.mPolys.size(); ++i)
+                {
+                    file << (i ? "," : "") << f.mPolys[i];
+                }
+                file << "]}";
             }
         }
         file << "]}";
