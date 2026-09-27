@@ -348,6 +348,12 @@ std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
     if (!mDiskCache)
     {
         mDiskCache = std::make_shared<TileDiskCache>(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "sknav"), cap);
+        // Indexing a full folder is slow; until it is done a lookup misses.
+        if (LL::WorkQueue::ptr_t workers = workerQueue())
+        {
+            std::shared_ptr<TileDiskCache> cache = mDiskCache;
+            workers->post([cache]() { cache->index(); });
+        }
     }
     else
     {
@@ -1217,12 +1223,14 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
-    // What the tile is built from, keyed so the same world finds it on disk next session.
-    const U64 content_key = tileContentKey(*input);
     const std::shared_ptr<TileDiskCache> cache = diskCache();
+    // A stored product Detour refused last time is built afresh, and overwritten.
+    const bool skip_load = tile.mDiskRefused;
+    tile.mDiskRefused = false;
     struct Outcome
     {
         std::shared_ptr<TileBuildResult> mResult;
+        U64 mKey = 0;
         bool mLooked = false;
         bool mLoaded = false;
         bool mCorrupt = false;
@@ -1230,10 +1238,14 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     };
     const bool posted = main_queue->postTo(
         workers,
-        [input, content_key, cache]()
+        [input, cache, skip_load]()
         {
             auto out = std::make_shared<Outcome>();
-            if (cache)
+            // What the tile is built from, keyed so the same world finds it on disk
+            // next session; hashed here, since a big mesh's triangles are not cheap.
+            const U64 content_key = tileContentKey(*input);
+            out->mKey = content_key;
+            if (cache && !skip_load)
             {
                 out->mLooked = true;
                 LLTimer timer;
@@ -1246,6 +1258,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                         out->mResult = loaded;
                         out->mLoaded = true;
                         out->mLoadMs = timer.getElapsedTimeF32() * 1000.f;
+                        loaded->mMillis = out->mLoadMs;     // what this tile cost now, not when it was built
                         return out;
                     }
                     // Damaged or written by another version: gone, and built afresh.
@@ -1260,7 +1273,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             }
             return out;
         },
-        [this, id, generation, key, signature, content_key](std::shared_ptr<Outcome> out)
+        [this, id, generation, key, signature](std::shared_ptr<Outcome> out)
         {
             if (out->mLoaded)
             {
@@ -1272,7 +1285,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                 mStats.mDiskRebuilds++;
                 mStats.mDiskCorrupt += out->mCorrupt ? 1 : 0;
             }
-            publish(id, generation, key, signature, out->mResult, content_key);
+            publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded);
         });
     if (posted)
     {
@@ -1283,8 +1296,9 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
 }
 
 void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result,
-                        U64 content_key)
+                        U64 content_key, bool loaded)
 {
+    bool refused = false;
     mInFlight = std::max(0, mInFlight - 1);
     const auto it = mMeshes.find(mesh_id);
     if (it == mMeshes.end() || it->second->mGeneration != generation)
@@ -1364,6 +1378,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
                 dtFree(copy);
                 tile.mPolys[cls] = 0;
                 mStats.mFailures++;
+                refused = loaded;
                 LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
             }
         }
@@ -1376,7 +1391,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     {
         tile.mAirCoarse.reset();
     }
-    tile.mContentKey = content_key;
+    tile.mContentKey = refused ? 0 : content_key;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -1384,6 +1399,11 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    if (refused)
+    {
+        tile.mBuilt = 0;            // scheduled again, and built rather than loaded
+        tile.mDiskRefused = true;
+    }
     // The floors beside a ladder or a shaft may have moved with the tile.
     for (auto& region : mFeatureLinks)
     {

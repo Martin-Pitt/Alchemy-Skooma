@@ -230,6 +230,7 @@ private:
         sknav::TileAirPtr mAir;         ///< only while SKNavBuildAir is on
         sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
         U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
+        bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
         F64 mNearness = 0.0;            ///< camera nearness over time, for the air budget
         U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
@@ -304,7 +305,7 @@ private:
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
-                 U64 content_key = 0);
+                 U64 content_key = 0, bool loaded = false);
     /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.
     std::shared_ptr<sknav::TileDiskCache> diskCache();
     /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently
