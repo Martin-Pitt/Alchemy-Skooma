@@ -27,6 +27,7 @@
 
 #include "lluuid.h"
 #include "sknavenclosure.h"
+#include "sknavspaces.h"
 #include "threadpool.h"
 #include "v3dmath.h"
 
@@ -56,7 +57,18 @@ public:
         LLVector3d mMin;        ///< the footprint of its tiles, global
         LLVector3d mMax;
         sknav::EnclosureProductPtr mProduct;
+        sknav::RoomsProductPtr mRooms;
     };
+
+    /// A space: its mesh and its id there.
+    struct SpaceId
+    {
+        LLUUID mMesh;
+        U32 mId = 0;
+        bool operator==(const SpaceId& o) const { return mMesh == o.mMesh && mId == o.mId; }
+    };
+    typedef std::function<void(const Mesh& mesh, const sknav::Space& space)> SpaceFn;
+    typedef std::function<void(const Mesh& mesh, const sknav::Portal& portal)> PortalFn;
 
     /// Moves whenever a mesh's answers change.
     U64 revision() const { return mRevision; }
@@ -64,6 +76,15 @@ public:
     /// The gap holding pos, over every mesh: an answer beats UNKNOWN, and
     /// the higher floor wins among answers. False where no mesh has air.
     bool enclosureAt(const LLVector3d& pos, sknav::Enclosure& out) const;
+
+    /// The space holding pos, as enclosureAt finds its gap; false in none.
+    bool spaceAt(const LLVector3d& pos, SpaceId& out) const;
+    /// A space by id, or null. Its positions are relative to its mesh's origin.
+    const sknav::Space* space(const SpaceId& id, const Mesh** mesh_out = nullptr) const;
+    /// Spaces whose box, and portals whose centre, meet the global box.
+    void spacesIn(const LLVector3d& min, const LLVector3d& max, const SpaceFn& fn) const;
+    void portalsIn(const LLVector3d& min, const LLVector3d& max, const PortalFn& fn) const;
+    void portalsOf(const SpaceId& id, const PortalFn& fn) const;
 
     /// The top of the highest solid over a point, from the sky map; false
     /// when nothing stands there.
@@ -115,6 +136,8 @@ public:
     /// A tile's per-gap answers as a JSON member, leading comma included,
     /// when the view holds answers for exactly this air.
     void writeTile(std::ostream& file, const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air) const;
+    /// A mesh's spaces and portals as JSON members, leading comma included, global.
+    void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
 
 private:
     struct Job;
@@ -125,6 +148,7 @@ private:
         LLVector3d mMin;
         LLVector3d mMax;
         U64 mAirSignature = 0;
+        U64 mDoorSignature = 0;             ///< the doors and lifts over it
         bool mDirty = false;
         bool mInFlight = false;
         F64 mChanged = 0.0;                 ///< when its air last moved
@@ -132,6 +156,7 @@ private:
         U32 mReruns = 0;                    ///< neighbour-driven re-runs since its air last moved
         std::shared_ptr<std::atomic<U64>> mLatest;
         sknav::EnclosureProductPtr mProduct;
+        sknav::RoomsProductPtr mRooms;
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);
@@ -139,6 +164,7 @@ private:
     void finish(const std::shared_ptr<Job>& job);
     void rebuildView();
     bool touches(const MeshState& a, const MeshState& b) const;
+    static std::vector<std::pair<LLVector3d, LLVector3d>> lifts(const LLVector3d& min, const LLVector3d& max);
 
     std::map<LLUUID, MeshState> mMeshes;
     std::unique_ptr<LL::ThreadPool> mThread;
@@ -146,6 +172,7 @@ private:
     std::shared_ptr<const sknav::SkyMap> mSky;
     U64 mSkyVersion = ~0ull;
     U64 mSeenRevision = ~0ull;
+    U64 mSeenFeatures = ~0ull;
     SKNavWorldViewPtr mView;
     U64 mViewRevision = 0;
     bool mViewDirty = false;
@@ -154,6 +181,8 @@ private:
     F32 mLastMs = 0.f;
     F32 mLastWallMs = 0.f;
     F32 mLastStageMs[sknav::EnclosurePass::NUM_STAGES] = {};
+    F32 mLastSpacesMs = 0.f;
+    F32 mLastSpaceStageMs[sknav::SpacesPass::NUM_STAGES] = {};
     U32 mPasses = 0;
     U32 mCancelled = 0;
 };

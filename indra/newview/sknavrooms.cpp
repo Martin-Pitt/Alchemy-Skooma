@@ -32,6 +32,7 @@
 #include "sknavmesh.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "skworldcensus.h"
 #include "workqueue.h"
 
 #include <chrono>
@@ -55,6 +56,8 @@ struct SKNavRooms::Job
     U64 mGeneration = 0;
     std::shared_ptr<std::atomic<U64>> mLatest;
     std::unique_ptr<EnclosurePass> mPass;
+    std::shared_ptr<const RoomsInput> mRoomsInput;
+    std::unique_ptr<SpacesPass> mSpaces;        ///< once the enclosure pass is done
     std::chrono::steady_clock::time_point mPosted;
     bool mCancelled = false;
 };
@@ -86,6 +89,111 @@ bool SKNavWorldView::enclosureAt(const LLVector3d& pos, Enclosure& out) const
         }
     }
     return found;
+}
+
+bool SKNavWorldView::spaceAt(const LLVector3d& pos, SpaceId& out) const
+{
+    // The gap enclosureAt would answer from, and its mesh.
+    const Mesh* best = nullptr;
+    Enclosure found;
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mProduct || pos.mdV[VX] < m.mMin.mdV[VX] || pos.mdV[VY] < m.mMin.mdV[VY] || pos.mdV[VX] >= m.mMax.mdV[VX] ||
+            pos.mdV[VY] >= m.mMax.mdV[VY])
+        {
+            continue;
+        }
+        Enclosure e;
+        if (!m.mProduct->enclosureAt(LLVector3(pos - m.mOrigin), e))
+        {
+            continue;
+        }
+        e.mFloor += static_cast<F32>(m.mOrigin.mdV[VZ]);
+        const bool known = e.mBucket != EnclosureBucket::UNKNOWN, had = best && found.mBucket != EnclosureBucket::UNKNOWN;
+        if (!best || (known && !had) || (known == had && e.mFloor > found.mFloor))
+        {
+            found = e;
+            best = &m;
+        }
+    }
+    if (!best || !found.mSpaceId)
+    {
+        return false;
+    }
+    out.mMesh = best->mId;
+    out.mId = found.mSpaceId;
+    return true;
+}
+
+const Space* SKNavWorldView::space(const SpaceId& id, const Mesh** mesh_out) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (m.mId == id.mMesh && m.mRooms)
+        {
+            const Space* s = m.mRooms->byId(id.mId);
+            if (s && mesh_out)
+            {
+                *mesh_out = &m;
+            }
+            return s;
+        }
+    }
+    return nullptr;
+}
+
+void SKNavWorldView::spacesIn(const LLVector3d& min, const LLVector3d& max, const SpaceFn& fn) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mRooms)
+        {
+            continue;
+        }
+        for (const Space& s : m.mRooms->mSpaces)
+        {
+            const LLVector3d lo = m.mOrigin + LLVector3d(s.mMin), hi = m.mOrigin + LLVector3d(s.mMax);
+            if (lo.mdV[VX] <= max.mdV[VX] && hi.mdV[VX] >= min.mdV[VX] && lo.mdV[VY] <= max.mdV[VY] && hi.mdV[VY] >= min.mdV[VY] &&
+                lo.mdV[VZ] <= max.mdV[VZ] && hi.mdV[VZ] >= min.mdV[VZ])
+            {
+                fn(m, s);
+            }
+        }
+    }
+}
+
+void SKNavWorldView::portalsIn(const LLVector3d& min, const LLVector3d& max, const PortalFn& fn) const
+{
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mRooms)
+        {
+            continue;
+        }
+        for (const Portal& p : m.mRooms->mPortals)
+        {
+            const LLVector3d c = m.mOrigin + LLVector3d(p.mCentre);
+            if (c.mdV[VX] >= min.mdV[VX] && c.mdV[VX] <= max.mdV[VX] && c.mdV[VY] >= min.mdV[VY] && c.mdV[VY] <= max.mdV[VY] &&
+                c.mdV[VZ] >= min.mdV[VZ] && c.mdV[VZ] <= max.mdV[VZ])
+            {
+                fn(m, p);
+            }
+        }
+    }
+}
+
+void SKNavWorldView::portalsOf(const SpaceId& id, const PortalFn& fn) const
+{
+    const Mesh* m = nullptr;
+    const Space* s = space(id, &m);
+    if (!s)
+    {
+        return;
+    }
+    for (U32 p : s->mPortals)
+    {
+        fn(*m, m->mRooms->mPortals[p]);
+    }
 }
 
 bool SKNavWorldView::topOfWorld(const LLVector3d& xy, F64& top) const
@@ -156,6 +264,24 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
 
 // ---------------------------------------------------------------- the scheduler
 
+std::vector<std::pair<LLVector3d, LLVector3d>> SKNavRooms::lifts(const LLVector3d& min, const LLVector3d& max)
+{
+    // Elevator shafts from the census: each is a space of its own.
+    std::vector<std::pair<LLVector3d, LLVector3d>> out;
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const Feature& f : snap->mFeatures)
+        {
+            if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= min.mdV[VX] && f.mMin.mdV[VX] <= max.mdV[VX] &&
+                f.mMax.mdV[VY] >= min.mdV[VY] && f.mMin.mdV[VY] <= max.mdV[VY])
+            {
+                out.emplace_back(f.mMin, f.mMax);
+            }
+        }
+    }
+    return out;
+}
+
 SKNavRooms::SKNavRooms()
     : mAlive(std::make_shared<bool>(true))
 {
@@ -193,9 +319,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
-    if (navmesh.mRevision != mSeenRevision)
+    if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
     {
         mSeenRevision = navmesh.mRevision;
+        mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
         for (const auto& entry : navmesh.mMeshes)
         {
@@ -223,9 +350,24 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             MeshState& state = mMeshes[mesh.mId];
             state.mId = mesh.mId;
             state.mOrigin = mesh.mOrigin;
-            if (state.mAirSignature != sig)
+            // The doors and lifts over it cut its spaces too.
+            U64 doors = SEED;
+            if (sig != SEED)
+            {
+                const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
+                navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
+                    doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
+                                static_cast<U64>(d.mWidth * 100.f));
+                });
+                for (const auto& lift : lifts(dlo, dhi))
+                {
+                    doors = mixF64(mixF64(doors, lift.first.mdV[VX]), lift.second.mdV[VY]);
+                }
+            }
+            if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
                 state.mAirSignature = sig;
+                state.mDoorSignature = doors;
                 state.mMin = lo;
                 state.mMax = hi;
                 state.mDirty = true;
@@ -268,6 +410,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 if (state.mProduct)
                 {
                     state.mProduct.reset();
+                    state.mRooms.reset();
                     mViewDirty = true;
                 }
                 continue;
@@ -344,6 +487,17 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     job->mGeneration = state.mGeneration;
     job->mLatest = state.mLatest;
     job->mPass = std::make_unique<EnclosurePass>(input);
+    // Doors and lifts copied by value: the worker never reads the live tables.
+    auto rooms = std::make_shared<RoomsInput>();
+    rooms->mGeneration = state.mGeneration;
+    rooms->mMeshKey = mix(SEED, state.mId.getCRC32());
+    rooms->mMeshOrigin = mesh.mOrigin;
+    rooms->mPrevious = state.mRooms;
+    rooms->mParams.mWalkHeadM = input->mParams.mWalkHeadM;
+    const LLVector3d dlo(state.mMin.mdV[VX], state.mMin.mdV[VY], -1e9), dhi(state.mMax.mdV[VX], state.mMax.mdV[VY], 1e9);
+    navmesh.doorsIn(dlo, dhi, [&rooms](const DoorEntity& d) { rooms->mDoors.push_back(d); });
+    rooms->mLifts = lifts(dlo, dhi);
+    job->mRoomsInput = rooms;
     job->mPosted = std::chrono::steady_clock::now();
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
@@ -378,7 +532,19 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
         return;
     }
     const auto start = std::chrono::steady_clock::now();
-    while (!job->mPass->step(CHUNK_STEP))
+    auto step = [&job]() {
+        if (!job->mPass->done())
+        {
+            job->mPass->step(CHUNK_STEP);
+            return false;
+        }
+        if (!job->mSpaces)
+        {
+            job->mSpaces = std::make_unique<SpacesPass>(job->mRoomsInput, job->mPass->takeProduct());
+        }
+        return job->mSpaces->step(CHUNK_STEP);
+    };
+    while (!step())
     {
         if (std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - start).count() >= CHUNK_MS)
         {
@@ -416,7 +582,7 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     state.mInFlight = false;
-    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mPass->done())
+    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mSpaces || !job->mSpaces->done())
     {
         ++mCancelled;
         return;     // superseded: the state is dirty again and posts anew once settled
@@ -429,8 +595,14 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     {
         mLastStageMs[s] = job->mPass->stageMillis(s);
     }
+    mLastSpacesMs = job->mSpaces->product()->mMillis;
+    for (S32 s = 0; s < SpacesPass::NUM_STAGES; ++s)
+    {
+        mLastSpaceStageMs[s] = job->mSpaces->stageMillis(s);
+    }
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     state.mProduct = product;
+    state.mRooms = job->mSpaces->product();
     mViewDirty = true;
     if (!moved)
     {
@@ -459,7 +631,7 @@ void SKNavRooms::rebuildView()
         const MeshState& s = entry.second;
         if (s.mProduct)
         {
-            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct });
+            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms });
         }
     }
     mView = view;
