@@ -214,6 +214,41 @@ namespace
         return s;
     }
 
+    RecordPtr boxRecord(F32 x0, F32 y0, F32 z0, F32 x1, F32 y1, F32 z1)
+    {
+        auto r = std::make_shared<Record>();
+        r->mShape = Shape::BOX;
+        r->mCenter.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+        r->mHalf.set((x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2);
+        r->mAxes[0].set(1, 0, 0);
+        r->mAxes[1].set(0, 1, 0);
+        r->mAxes[2].set(0, 0, 1);
+        r->mSolid = true;
+        r->mMin.set(x0, y0, z0);
+        r->mMax.set(x1, y1, z1);
+        return r;
+    }
+
+    /// Flat land under tile (0, 0), both classes, the weather class unshrunk.
+    TileBuildInput stairTile()
+    {
+        TileBuildInput in;
+        in.mZMin = -1.f;
+        in.mZMax = 6.f;
+        in.mCell = 0.25f;
+        in.mPartition = Partition::SLOPE;
+        in.mClasses[1] = true;
+        in.mParams[1].mHeight = 0.5f;
+        in.mParams[1].mRadius = 0.f;
+        TerrainWindow t;
+        t.mOrigin.set(-2.f, -2.f, 0.f);
+        t.mWidth = t.mHeight = 37;
+        t.mZ.assign(37 * 37, 0.f);
+        t.mWater = -10.f;
+        in.mTerrain = t;
+        return in;
+    }
+
     std::vector<size_t> treadCounts(const SlopePartition& p)
     {
         std::vector<size_t> n;
@@ -462,36 +497,13 @@ namespace tut
     void sknavflights_object::test<11>()
     {
         set_test_name("a tile build publishes the flight with the polys it produced");
-        TileBuildInput in;
-        in.mZMin = -1.f;
-        in.mZMax = 6.f;
-        in.mCell = 0.25f;
-        in.mPartition = Partition::SLOPE;
-        TerrainWindow t;
-        t.mOrigin.set(-2.f, -2.f, 0.f);
-        t.mWidth = t.mHeight = 37;
-        t.mZ.assign(37 * 37, 0.f);
-        t.mWater = -10.f;
-        in.mTerrain = t;
+        TileBuildInput in = stairTile();
         // eight 0.25 m steps on 0.3 m treads along x, from 10 m, then a landing
-        const auto box = [](F32 x0, F32 y0, F32 z0, F32 x1, F32 y1, F32 z1) {
-            auto r = std::make_shared<Record>();
-            r->mShape = Shape::BOX;
-            r->mCenter.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-            r->mHalf.set((x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2);
-            r->mAxes[0].set(1, 0, 0);
-            r->mAxes[1].set(0, 1, 0);
-            r->mAxes[2].set(0, 0, 1);
-            r->mSolid = true;
-            r->mMin.set(x0, y0, z0);
-            r->mMax.set(x1, y1, z1);
-            return r;
-        };
         for (S32 k = 1; k <= 8; ++k)
         {
-            in.mRecords.push_back(box(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
         }
-        in.mRecords.push_back(box(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
+        in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
         ensure_equals("one flight", r.mFlights[0].size(), 1u);
@@ -505,4 +517,22 @@ namespace tut
         ensure_equals("the other partitions publish none", buildTile([&] { TileBuildInput w = in; w.mPartition = Partition::WATERSHED; return w; }()).mFlights[0].size(), 0u);
     }
 
+    template<> template<>
+    void sknavflights_object::test<12>()
+    {
+        set_test_name("a short narrow flight is smaller than a sliver and still survives");
+        TileBuildInput in = stairTile();
+        // three 0.25 m steps on 0.3 m treads, 0.9 m wide, then a landing
+        for (S32 k = 1; k <= 3; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 15.5f, 0.f, 10.f + k * 0.3f, 16.4f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(10.9f, 13.f, 0.f, 15.f, 19.f, 1.f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        const S32 w = static_cast<S32>(AgentClass::WEATHER);
+        ensure_equals("one flight", r.mFlights[w].size(), 1u);
+        ensure_equals("three treads", r.mFlights[w][0].mTreads.size(), 3u);
+        ensure("polys", !r.mFlights[w][0].mPolys.empty());
+    }
 }

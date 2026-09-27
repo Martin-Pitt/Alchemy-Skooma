@@ -714,8 +714,9 @@ namespace
     /// smaller than SLOPE_FRAGMENT_M2 is a sliver where regions overlap or a
     /// triangle clipped at a cell, and joins the neighbour of the same area
     /// that it shares most border with, smallest first, so a chain of
-    /// slivers folds into the patch it hangs off.
-    void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real)
+    /// slivers folds into the patch it hangs off. A flight's code is kept
+    /// whatever its size, since a short flight is smaller than a sliver.
+    void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real, const std::vector<Flight>& flights)
     {
         std::vector<S32> cellOf(chf.spanCount);
         eachSpan(chf, [&](S32 x, S32 z, S32 i) { cellOf[i] = x + z * chf.width; });
@@ -792,9 +793,14 @@ namespace
             return p;
         };
         std::sort(order.begin(), order.end(), [&](S32 a, S32 b) { return size[a] < size[b]; });
+        std::vector<U8> keep(real.size(), 0);
+        for (const Flight& f : flights)
+        {
+            keep[f.mCode] = 1;
+        }
         for (const S32 p : order)
         {
-            if (size[root(p)] >= min_spans)
+            if (size[root(p)] >= min_spans || keep[codeOf[p]])
             {
                 continue;
             }
@@ -1211,7 +1217,7 @@ namespace sknav
             switch (input.mPartition)
             {
                 case Partition::SLOPE:
-                    mergeFragments(*mem.chf, slopes.mReal);
+                    mergeFragments(*mem.chf, slopes.mReal, slopes.mFlights);
                     regions = rcBuildDistanceField(&ctx, *mem.chf) &&
                               rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
