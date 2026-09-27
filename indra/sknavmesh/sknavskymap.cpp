@@ -116,6 +116,38 @@ namespace sknav
         return true;
     }
 
+    bool SkyMap::skyOpenAbove(const LLVector3d& pos, F32 reach, U64 ignore) const
+    {
+        const auto it = mCells.find(cellKey(static_cast<S64>(std::floor(pos.mdV[VX])), static_cast<S64>(std::floor(pos.mdV[VY]))));
+        if (it == mCells.end())
+        {
+            return true;
+        }
+        for (const Interval& i : it->second)
+        {
+            if (i.mContributor != ignore && i.mBottom > pos.mdV[VZ] && i.mBottom - pos.mdV[VZ] <= reach)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool SkyMap::topAt(F64 x, F64 y, F64& top) const
+    {
+        const auto it = mCells.find(cellKey(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y))));
+        if (it == mCells.end() || it->second.empty())
+        {
+            return false;
+        }
+        top = it->second.front().mTop;
+        for (const Interval& i : it->second)
+        {
+            top = std::max(top, i.mTop);
+        }
+        return true;
+    }
+
     size_t SkyMap::bytes() const
     {
         size_t n = sizeof(SkyMap);

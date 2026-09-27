@@ -55,6 +55,11 @@ namespace sknav
 
         /// No solid starts above pos within reach metres, and pos is not inside one.
         bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const;
+        /// No solid but ignore's starts above pos within reach: a tile's own
+        /// air already knows what stands over it.
+        bool skyOpenAbove(const LLVector3d& pos, F32 reach, U64 ignore) const;
+        /// The top of the highest solid over (x, y); false when there is none.
+        bool topAt(F64 x, F64 y, F64& top) const;
 
         /// Bumped on every change, for readers holding derived results.
         U64 version() const { return mVersion; }
