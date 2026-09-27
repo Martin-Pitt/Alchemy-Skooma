@@ -31,6 +31,7 @@
 #include <climits>
 #include <cmath>
 #include <map>
+#include <unordered_map>
 
 namespace
 {
@@ -41,6 +42,7 @@ namespace
     constexpr F32 SKY_COVER_HEADROOM_M = 4.5f;  ///< under a lower ceiling a gap's own roof covers it without asking
     constexpr F32 SKY_COVER_EYE_M = 1.5f;       ///< the sky is judged from this far over the floor
     constexpr F32 SKY_COVER_OPEN_MIN = 0.05f;   ///< under this share of open sky a gap is not seeded
+    constexpr F32 TILE_TOP_PAD_M = 3.f;         ///< a tile's air runs this far over its highest solid
     constexpr S32 FLOOR_SLACK = 2;           ///< a read may sit this many units under a floor, which reads high
 
     enum EdgeFlags : U8
@@ -717,6 +719,21 @@ namespace sknav
         }
         const EnclosureParams& p = params();
         const F32 cell = mHalfCellM * 2.f;
+        // A tile's height range ends TILE_TOP_PAD_M over its highest solid (finishTileInput), where its open air leaves it.
+        std::unordered_map<const TileEnclosure*, F32> tops;
+        auto openTop = [&tops](const TileEnclosure& nt) {
+            auto it = tops.find(&nt);
+            if (it == tops.end())
+            {
+                F32 top = -1e30f;
+                for (const TopInterval& i : nt.mAir ? nt.mAir->mTop : std::vector<TopInterval>())
+                {
+                    top = std::max(top, nt.mOrigin.mV[VZ] + i.mTop * nt.mUnit);
+                }
+                it = tops.emplace(&nt, top > -1e29f ? top + TILE_TOP_PAD_M : 1e30f).first;
+            }
+            return it->second;
+        };
         for (size_t t = 0; t < in.mTiles.size(); ++t)
         {
             const TileAir& a = air(t);
@@ -756,21 +773,17 @@ namespace sknav
                     {
                         const F32 lx = static_cast<F32>(probes[k].mX - nb.mMeshOrigin.mdV[VX]);
                         const F32 ly = static_cast<F32>(probes[k].mY - nb.mMeshOrigin.mdV[VY]);
-                        visitGaps(*nb.mProduct, lx, ly, [&](const Enclosure& e, U16, U16, const TileEnclosure&) {
+                        visitGaps(*nb.mProduct, lx, ly, [&](const Enclosure& e, U16, U16, const TileEnclosure& nt) {
                             const F64 base_z = in.mMeshOrigin.mdV[VZ] + a.mOrigin.mV[VZ];
                             const F64 nb_floor = nb.mMeshOrigin.mdV[VZ] + e.mFloor;
-                            const F64 nb_ceil = e.mCeiling > 1e29f ? 1e30 : nb.mMeshOrigin.mdV[VZ] + e.mCeiling;
+                            // Open air is known only to the top of its own tile: above that another mesh's solids may stand.
+                            const F64 nb_ceil = nb.mMeshOrigin.mdV[VZ] + (e.mCeiling > 1e29f ? openTop(nt) : e.mCeiling);
                             for (U32 i = 0; i < leaf.mGapCount; ++i)
                             {
                                 const U32 n = mBase[t] + leaf.mFirstGap + i;
                                 const F64 floor = base_z + (mFloor[n] - mZOffset[t]) * a.mUnit;
                                 const F64 ceil = mCeil[n] >= OPEN_TOP ? 1e30 : base_z + (mCeil[n] - mZOffset[t]) * a.mUnit;
                                 if (std::min(ceil, nb_ceil) - std::max(floor, nb_floor) < a.mUnit)
-                                {
-                                    continue;
-                                }
-                                // Over the same ground, air bounded by neither this floor nor this ceiling does not know this mesh's solids.
-                                if (probes[k].mCost == 0 && std::abs(floor - nb_floor) > p.mCarryRiseM && std::abs(std::min(ceil, 1e9) - std::min(nb_ceil, 1e9)) > p.mCarryRiseM)
                                 {
                                     continue;
                                 }
