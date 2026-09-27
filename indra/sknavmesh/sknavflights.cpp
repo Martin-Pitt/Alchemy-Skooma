@@ -466,7 +466,7 @@ namespace
 namespace sknav
 {
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb)
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes)
     {
         SlopePartition out;
         Partitioner P;
@@ -719,25 +719,25 @@ namespace sknav
                 keys.insert({ areas[t], P.mPart[t] ? colour[out.mRegion[t]] : 0 });
             }
         }
+        // Each area's first code is reserved before any colour gets one, so
+        // running out only ever shares a code within an area.
         out.mReal.assign(1, 0);
         std::map<std::pair<U8, S32>, U8> code_of;
+        std::map<U8, U8> last_of;
+        std::set<U8> pending;
         for (const auto& k : keys)
         {
-            if (out.mReal.size() < 63)
+            pending.insert(k.first);
+        }
+        for (const auto& k : keys)
+        {
+            const bool first_of_area = pending.erase(k.first) > 0;
+            if (first_of_area || static_cast<S32>(out.mReal.size() + pending.size()) < max_codes)
             {
-                code_of[k] = static_cast<U8>(out.mReal.size());
+                last_of[k.first] = static_cast<U8>(out.mReal.size());
                 out.mReal.push_back(k.first);
             }
-            else
-            {
-                // out of codes: share the area's last one, which only costs a boundary
-                U8 last = 0;
-                for (size_t c = 1; c < out.mReal.size(); ++c)
-                {
-                    last = out.mReal[c] == k.first ? static_cast<U8>(c) : last;
-                }
-                code_of[k] = last;
-            }
+            code_of[k] = last_of[k.first];
         }
         out.mCodes.assign(n, 0);
         for (S32 t = 0; t < n; ++t)

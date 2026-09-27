@@ -79,9 +79,10 @@ namespace sknav
     /// triangle). areas holds each triangle's area, 0 where it is not
     /// walkable; only triangles of the partitioned area are split into
     /// regions, the rest keep one code per area. A two-sided triangle is
-    /// walkable whichever way it faces.
+    /// walkable whichever way it faces. Codes run from 1 to below max_codes;
+    /// every area keeps one of its own however many colours want one.
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb);
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes = 63);
 
     /// Give each flight the polys that its code produced over its footprint.
     /// centroids and codes are per poly, in the poly mesh's order; flights

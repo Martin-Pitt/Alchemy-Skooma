@@ -553,4 +553,30 @@ namespace tut
         }
         ensure("two flights of eight", treadCounts(s.partition()) == std::vector<size_t>({ 8, 8 }));
     }
+
+    template<> template<>
+    void sknavflights_object::test<14>()
+    {
+        set_test_name("running out of codes shares them within an area, and never loses one");
+        Soup s = midflight();
+        const size_t objects = s.mT.size() / 3;
+        s.box(20, -2, -0.5f, 24, 2, 0);  // stands in for submerged ground
+        const size_t n = s.mT.size() / 3;
+        std::vector<U8> areas(n, 0), two(n, 0);
+        for (size_t t = 0; t < n; ++t)
+        {
+            LLVector3 nn = (s.mV[s.mT[t * 3 + 1]] - s.mV[s.mT[t * 3]]) % (s.mV[s.mT[t * 3 + 2]] - s.mV[s.mT[t * 3]]);
+            nn.normVec();
+            areas[t] = nn.mV[VZ] > 0.5f ? (t < objects ? OBJECT : 3) : 0;
+        }
+        const SlopePartition p = partitionSlopes(s.mV, s.mT, areas, two, OBJECT, 0.75f, 3);
+        ensure_equals("two codes and null", p.mReal.size(), 3u);
+        for (size_t t = 0; t < n; ++t)
+        {
+            if (areas[t])
+            {
+                ensure_equals("each triangle keeps its area", p.mReal[p.mCodes[t]], areas[t]);
+            }
+        }
+    }
 }
