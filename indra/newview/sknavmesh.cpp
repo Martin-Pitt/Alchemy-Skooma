@@ -2777,6 +2777,7 @@ std::string SKNavMesh::exportCensus() const
     census.mRange = snap->mRange;
     fillParams(census.mParams);
     census.mAirRadius = air_radius;
+    census.mBuildWeather = gSavedSettings.getBOOL("SKNavBuildWeather");
     census.mClusterGap = gap;
     census.mGroundedMargin = grounded_margin;
     census.mVoidMargin = void_margin;

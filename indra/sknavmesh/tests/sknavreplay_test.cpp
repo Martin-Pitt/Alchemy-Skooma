@@ -339,6 +339,29 @@ namespace tut
     }
 
     template<> template<>
+    void sknavreplay_object::test<5>()
+    {
+        set_test_name("past the air radius a tile builds no air, as in the viewer, unless air is asked for everywhere");
+        CensusFile c = scene();
+        c.mAirRadius = 50.f;                    // the skybox is some 74 m from the camera
+        const LLUUID skybox = c.mRecords.back()->mRoot;
+        ReplayResult near_only, everywhere;
+        replayCensus(c, ReplayOptions(), near_only);
+        ReplayOptions all;
+        all.mAir = AirMode::EVERYWHERE;
+        replayCensus(c, all, everywhere);
+        const ReplayTile& far_tile = meshOf(near_only, skybox)->mTiles.begin()->second;
+        ensure("no air past the radius", !far_tile.mResult->mAirBuilt && !far_tile.mInput->mClasses[1]);
+        ensure("the region's tiles keep theirs", meshOf(near_only, id(900))->mTiles.at(TileKey{ 0, 0 }).mResult->mAirBuilt);
+        ensure("air everywhere when asked", meshOf(everywhere, skybox)->mTiles.begin()->second.mResult->mAirBuilt);
+        c.mBuildWeather = true;
+        ReplayResult weather;
+        replayCensus(c, ReplayOptions(), weather);
+        const ReplayTile& w = meshOf(weather, skybox)->mTiles.begin()->second;
+        ensure("WEATHER still built when it is on", !w.mInput->mAir && w.mInput->mClasses[1]);
+    }
+
+    template<> template<>
     void sknavreplay_object::test<4>()
     {
         set_test_name("replay a census file into a navmesh export, when one is named");
@@ -355,6 +378,10 @@ namespace tut
         if (!rounds.empty())
         {
             options.mRounds = std::stoi(rounds);
+        }
+        if (LLStringUtil::getenv("SKNAV_REPLAY_AIR") == "everywhere")
+        {
+            options.mAir = AirMode::EVERYWHERE;
         }
         ReplayResult r;
         replayCensus(c, options, r);

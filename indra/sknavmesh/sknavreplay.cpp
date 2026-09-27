@@ -99,6 +99,25 @@ namespace sknav
                    a.mAirMin.mdV[VY] <= b.mAirMax.mdV[VY] + 1.0 && b.mAirMin.mdV[VY] <= a.mAirMax.mdV[VY] + 1.0;
         }
 
+        /// SKNavMesh::inAirRadius: the tile's footprint within the radius of the camera.
+        bool inAirRadius(const CensusFile& census, const LLVector3d& tmin, const LLVector3d& tmax)
+        {
+            const LLVector3d& camera = census.mCamera;
+            const F64 dx = std::max({ tmin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tmax.mdV[VX] });
+            const F64 dy = std::max({ tmin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tmax.mdV[VY] });
+            return dx * dx + dy * dy <= static_cast<F64>(census.mAirRadius) * census.mAirRadius;
+        }
+
+        /// The viewer's launch: air near the camera, and past it WEATHER only if it is built for itself.
+        void applyAirMode(const CensusFile& census, const ReplayOptions& options, ReplayTile& tile, TileBuildInput& input)
+        {
+            if (options.mAir == AirMode::RADIUS && input.mAir && !inAirRadius(census, tile.mMin, tile.mMax))
+            {
+                input.mAir = false;
+                input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = census.mBuildWeather;
+            }
+        }
+
         bool hasAir(const ReplayMesh& m)
         {
             return m.mAirMin.mdV[VX] <= m.mAirMax.mdV[VX];
@@ -220,6 +239,7 @@ namespace sknav
                 input->mTileX = lt.mKey.mX;
                 input->mTileY = lt.mKey.mY;
                 input->mTileSize = static_cast<F32>(TILE_M);
+                applyAirMode(census, options, tile, *input);
                 finishTileInput(lt.mRecords, mesh->mOrigin, *input);
                 tile.mInput = input;
             }
@@ -257,6 +277,7 @@ namespace sknav
                     censusTerrain(census, mesh->mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
                     terrain_ms += since(t1);
                 }
+                applyAirMode(census, options, tile, *input);
                 finishTileInput(lt.mRecords, mesh->mOrigin, *input);
                 tile.mInput = input;
             }

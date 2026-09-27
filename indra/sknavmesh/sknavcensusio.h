@@ -94,6 +94,7 @@ namespace sknav
         /// per-tile fields (origin, index, z range, records, terrain) are unset.
         TileBuildInput mParams;
         F32 mAirRadius = 128.f;     ///< tiles further from the camera build their air only on demand
+        bool mBuildWeather = false; ///< SKNavBuildWeather: WEATHER is built past the air radius too
         F64 mClusterGap = 0.5;
         F32 mGroundedMargin = 5.f;
         F32 mVoidMargin = 256.f;

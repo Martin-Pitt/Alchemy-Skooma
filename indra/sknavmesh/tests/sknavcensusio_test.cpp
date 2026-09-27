@@ -68,6 +68,7 @@ namespace
         c.mParams.mEdges[0] = true;
         c.mParams.mDropMax[1] = 20.f;
         c.mAirRadius = 96.f;
+        c.mBuildWeather = true;
         c.mClusterGap = 0.45;
         c.mGroundedMargin = 4.f;
         c.mVoidMargin = 128.f;
@@ -251,6 +252,7 @@ namespace tut
         ensure_equals("sealed", back.mEnclosure.mSealedIndoors, c.mEnclosure.mSealedIndoors);
         ensure_equals("gap", back.mClusterGap, c.mClusterGap);
         ensure_equals("air radius", back.mAirRadius, c.mAirRadius);
+        ensure("build weather", back.mBuildWeather);
         ensure_equals("void margin", back.mVoidMargin, c.mVoidMargin);
         ensure("camera", back.mCamera == c.mCamera);
         ensure_equals("stamp", back.mStamp, c.mStamp);

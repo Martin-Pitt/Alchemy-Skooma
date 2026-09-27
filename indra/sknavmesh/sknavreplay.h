@@ -42,8 +42,15 @@ class dtNavMesh;
 
 namespace sknav
 {
+    /// Which tiles build their air. RADIUS is the viewer's rule: a tile further
+    /// than the census's air radius from its camera builds no air, and WEATHER
+    /// only when SKNavBuildWeather was on. EVERYWHERE builds air in every
+    /// tile, for offline experiments; it no longer matches a navmesh export.
+    enum class AirMode : U8 { RADIUS, EVERYWHERE };
+
     struct ReplayOptions
     {
+        AirMode mAir = AirMode::RADIUS;
         S32 mThreads = 0;       ///< tile builds at once; 0 is one per core
         /// Enclosure passes per mesh. The first runs every mesh alone; each
         /// after runs the meshes that touch another with its neighbours'

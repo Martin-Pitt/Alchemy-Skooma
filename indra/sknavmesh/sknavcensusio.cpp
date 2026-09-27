@@ -340,7 +340,7 @@ namespace sknav
         out << "]}";
 
         const EnclosureParams& e = c.mEnclosure;
-        out << ",\"settings\":{\"air_radius\":" << c.mAirRadius << ",\"cluster_gap\":" << c.mClusterGap << ",\"grounded_margin\":" << c.mGroundedMargin
+        out << ",\"settings\":{\"air_radius\":" << c.mAirRadius << ",\"build_weather\":" << boolText(c.mBuildWeather) << ",\"cluster_gap\":" << c.mClusterGap << ",\"grounded_margin\":" << c.mGroundedMargin
             << ",\"void_margin\":" << c.mVoidMargin << "},\"enclosure\":{\"sky_decay\":" << e.mSkyDecayM << ",\"depth_full\":" << e.mDepthFullM
             << ",\"climb\":" << e.mClimbM << ",\"walk_head\":" << e.mWalkHeadM << ",\"walk_overlap\":" << e.mWalkOverlapM
             << ",\"carry_overlap\":" << e.mCarryOverlapM << ",\"carry_rise\":" << e.mCarryRiseM << ",\"sky_reach\":" << e.mSkyReachM
@@ -568,6 +568,7 @@ namespace sknav
         if (rd.member(doc, "settings", se))
         {
             c.mAirRadius = rd.f32(se, "air_radius");
+            c.mBuildWeather = rd.flag(se, "build_weather");
             c.mClusterGap = rd.num(se, "cluster_gap");
             c.mGroundedMargin = rd.f32(se, "grounded_margin");
             c.mVoidMargin = rd.f32(se, "void_margin");
