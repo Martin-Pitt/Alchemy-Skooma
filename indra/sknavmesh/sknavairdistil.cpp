@@ -149,6 +149,10 @@ namespace sknav
                 {
                     Block& b = l0.mBlocks[ix + iy * w];
                     const U32 count = grid.count(ix, iy);
+                    if (count > 0xff)
+                    {
+                        LL_WARNS_ONCE("SKNav") << "an air column has " << count << " gaps; keeping the lowest 255" << LL_ENDL;
+                    }
                     b.mLeaf = true;
                     b.mMerge = count <= 0xff;
                     b.mCount = static_cast<U8>(std::min<U32>(count, 0xff));
@@ -360,7 +364,7 @@ namespace sknav
                 const S32 ix = along_y ? (side == TileAir::SIDE_NEG_X ? 0 : w - 1) : i;
                 const S32 iy = along_y ? i : (side == TileAir::SIDE_NEG_Y ? 0 : h - 1);
                 const AirGap* g = grid.gaps(ix, iy);
-                for (U32 k = 0; k < grid.count(ix, iy); ++k)
+                for (U32 k = 0; k < std::min<U32>(grid.count(ix, iy), 0xff); ++k)
                 {
                     strip.mGaps.push_back(record(g[k]));
                 }

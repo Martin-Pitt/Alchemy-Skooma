@@ -380,4 +380,29 @@ namespace tut
         cover(air, leaf_of);
         ensure("a crawlspace at a wall merges", air.mLeaves[leaf_of[0 + 40 * g.mWidth]].mLevel > 0);
     }
+
+    template<> template<>
+    void sknavairdistil_object::test<8>()
+    {
+        set_test_name("a column of more than 255 gaps is capped alike in its leaf and its seam");
+        AirGrid g;
+        g.mCell = g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = 2;
+        g.mStart = { 0, 0, 0, 0, 0 };
+        for (S32 i = 0; i < 300; ++i)
+        {
+            AirGap gap;
+            gap.mFloor = static_cast<U16>(i * 10);
+            gap.mCeiling = static_cast<U16>(i * 10 + 5);
+            gap.mClear = 1;
+            g.mGaps.push_back(gap);
+        }
+        g.mStart = { 0, 300, 300, 300, 300 };
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        airSeams(g, air);
+        ensure_equals("leaf capped", static_cast<U32>(air.mLeaves[0].mGapCount), 255u);
+        ensure_equals("seam capped", air.mSeams[TileAir::SIDE_NEG_X].count(0), 255u);
+        ensure_equals("seam along y capped", air.mSeams[TileAir::SIDE_NEG_Y].count(0), 255u);
+    }
 }
