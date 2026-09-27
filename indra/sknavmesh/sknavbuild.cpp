@@ -1082,6 +1082,8 @@ namespace sknav
         }
 
         rcContext ctx(false);
+        std::unique_ptr<SlopePartition> shared_slopes;
+        F32 shared_climb = 0.f;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             if (!input.mClasses[cls])
@@ -1152,12 +1154,41 @@ namespace sknav
             SlopePartition slopes;
             if (input.mPartition == Partition::SLOPE)
             {
-                std::vector<LLVector3> sl(class_soup->nverts());
-                for (S32 v = 0; v < class_soup->nverts(); ++v)
+                const auto partition = [&](const Soup& from, const std::vector<U8>& walkable) {
+                    std::vector<LLVector3> sl(from.nverts());
+                    for (S32 v = 0; v < from.nverts(); ++v)
+                    {
+                        sl[v] = fromRecast(&from.mVerts[v * 3]);
+                    }
+                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb);
+                };
+                if (class_soup == &soup)
                 {
-                    sl[v] = fromRecast(&class_soup->mVerts[v * 3]);
+                    // Classes on the shared soup share one partition, taken at
+                    // the most permissive slope of them; each masks out what
+                    // it cannot walk.
+                    if (!shared_slopes || shared_climb != p.mClimb)
+                    {
+                        F32 widest = 0.f;
+                        for (S32 c = 0; c < NUM_CLASSES; ++c)
+                        {
+                            widest = input.mClasses[c] ? llmax(widest, input.mParams[c].mSlope) : widest;
+                        }
+                        std::vector<U8> walkable;
+                        markWalkable(soup, widest, walkable);
+                        shared_slopes = std::make_unique<SlopePartition>(partition(soup, walkable));
+                        shared_climb = p.mClimb;
+                    }
+                    slopes = *shared_slopes;
+                    for (size_t t = 0; t < areas.size(); ++t)
+                    {
+                        slopes.mCodes[t] = areas[t] ? slopes.mCodes[t] : 0;
+                    }
                 }
-                slopes = partitionSlopes(sl, class_soup->mTris, areas, class_soup->mTwoSided, AREA_OBJECT, p.mClimb);
+                else
+                {
+                    slopes = partition(*class_soup, areas);
+                }
                 areas = slopes.mCodes;
             }
             if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),

@@ -592,4 +592,45 @@ namespace tut
         ensure_equals("of its own area", p.mReal[code], OBJECT);
         ensure_equals("the stair is unchanged", p.mFlights.size(), 1u);
     }
+
+    // Timing for a large soup: SKNAV_FLIGHTS_TIME names a replay file, whose
+    // first soup is built as tile (0, 0) for both classes, 16 m in from its
+    // corner; the milliseconds go to "<file>.time".
+    template<> template<>
+    void sknavflights_object::test<16>()
+    {
+        set_test_name("time a tile build of a large soup, when one is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_FLIGHTS_TIME");
+        if (path.empty())
+        {
+            return;
+        }
+        std::ifstream in(path);
+        std::string word;
+        in >> word >> word;
+        auto tris = std::make_shared<std::vector<LLVector3>>();
+        F32 v[3];
+        while (in >> v[0] >> v[1] >> v[2])
+        {
+            tris->emplace_back(v[0] + 16.f, v[1] + 16.f, v[2]);
+        }
+        auto r = std::make_shared<Record>();
+        r->mShape = Shape::TRIANGLES;
+        r->mTriangles = tris;
+        r->mMin.set(0, 0, -100);
+        r->mMax.set(32, 32, 100);
+        TileBuildInput tin = stairTile();
+        tin.mCell = 0.125f;
+        tin.mZMin = -20.f;
+        tin.mZMax = 40.f;
+        tin.mParams[0].mSlope = 74.f;
+        tin.mParams[1].mSlope = 89.f;
+        tin.mRecords.push_back(r);
+        std::ofstream out(path + ".time");
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const TileBuildResult res = buildTile(tin);
+            out << res.mMillis << " ms, " << res.mTriangles << " triangles, " << res.mFlights[0].size() << " flights\n";
+        }
+    }
 }
