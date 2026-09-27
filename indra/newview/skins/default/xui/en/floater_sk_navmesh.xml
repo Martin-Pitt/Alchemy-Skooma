@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="709"
+ min_height="735"
  min_width="300"
- height="729"
+ height="755"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -148,6 +148,21 @@
    tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile. Part of the surface, so it needs Draw the navmesh"
    top_pad="4"
    width="292" />
+  <combo_box
+   control_name="SKNavOverlayEnclosure"
+   follows="left|top"
+   height="20"
+   label="Enclosure"
+   layout="topleft"
+   left="12"
+   name="overlay_enclosure"
+   tool_tip="Tint the floors by how enclosed their air is, from the rooms pass: blue outdoors, amber sheltered, red indoors, grey where nothing answered. By e shades between them. Needs the air built (SKNavBuildAir)"
+   top_pad="6"
+   width="292">
+    <combo_box.item label="Enclosure: off" value="0" name="enclosure_off" />
+    <combo_box.item label="Enclosure: by indoorness (e)" value="1" name="enclosure_e" />
+    <combo_box.item label="Enclosure: by bucket" value="2" name="enclosure_bucket" />
+  </combo_box>
   <check_box
    height="19"
    label="X-ray vision"

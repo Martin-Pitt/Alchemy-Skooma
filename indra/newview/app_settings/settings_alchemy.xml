@@ -4584,6 +4584,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKNavRoomsSettleMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a navmesh mesh's air must stay unchanged before its enclosure pass runs, so a burst of tile builds costs one pass.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>500</integer>
+        </map>
         <key>SKNavBuildWeather</key>
         <map>
             <key>Comment</key>
@@ -4783,6 +4794,17 @@
             <integer>0</integer>
         </map>
         <!-- <SK:Nexii> Navmesh features overlay -->
+        <key>SKNavOverlayEnclosure</key>
+        <map>
+            <key>Comment</key>
+            <string>Tint the floors of the navmesh's air by how enclosed they are: 0 off, 1 by indoorness e, 2 by bucket (outdoors, sheltered, indoors; grey where nothing answered). Needs SKNavBuildAir.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavOverlayFeatures</key>
         <map>
             <key>Comment</key>

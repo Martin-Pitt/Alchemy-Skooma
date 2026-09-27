@@ -29,6 +29,7 @@
 #include "sknavannotate.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "sknavrooms.h"
 
 #include "alobjectproperties.h"
 #include "DetourNavMesh.h"
@@ -271,6 +272,7 @@ SKNavMesh::Mesh::~Mesh()
 }
 
 SKNavMesh::SKNavMesh()
+    : mRooms(std::make_unique<SKNavRooms>())
 {
 }
 
@@ -293,7 +295,8 @@ bool SKNavMesh::overlayActive()
     // boxes all read the built mesh, and none of them needs the surface drawn
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
-        || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures");
+        || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
+        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0;
 }
 
 bool SKNavMesh::wanted() const
@@ -346,6 +349,7 @@ void SKNavMesh::cleanupSingleton()
         mWorkers->close();
         mWorkers.reset();
     }
+    mRooms->close();
 }
 
 bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
@@ -1372,6 +1376,7 @@ void SKNavMesh::update()
         syncSkyMap();
         mSkyRevision = mRevision;
     }
+    mRooms->update(*this);
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1419,7 +1424,23 @@ std::string SKNavMesh::statsLine() const
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
-                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0);
+                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0)
+           + "; " + mRooms->statsLine();
+}
+
+std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
+{
+    return mRooms->view();
+}
+
+U64 SKNavMesh::skyContributor(const LLUUID& mesh, const TileKey& key)
+{
+    U64 id = SEED;
+    for (U8 b : mesh.mData)
+    {
+        id = mix(id, b);
+    }
+    return mix(mix(id, static_cast<U32>(key.mX)), static_cast<U32>(key.mY));
 }
 
 void SKNavMesh::syncSkyMap()
@@ -1430,18 +1451,13 @@ void SKNavMesh::syncSkyMap()
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
-        U64 id = SEED;
-        for (U8 b : mesh.mId.mData)
-        {
-            id = mix(id, b);
-        }
         for (const auto& t : mesh.mTiles)
         {
             if (!t.second.mAir)
             {
                 continue;
             }
-            const U64 key = mix(mix(id, static_cast<U32>(t.first.mX)), static_cast<U32>(t.first.mY));
+            const U64 key = skyContributor(mesh.mId, t.first);
             const auto old = mSkyTiles.find(key);
             if (old == mSkyTiles.end() || old->second != t.second.mAir)
             {
@@ -2508,6 +2524,7 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
              << ",\"top_height\":" << air.mTopHeight << ",\"layout\":" << tileAirLayout(air) << ",\"blob\":\""
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
         ++counts.mAirs;
+        mRooms->writeTile(file, mesh.mId, key, tile.mAir);
     }
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
@@ -3123,6 +3140,7 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
+    static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -3187,6 +3205,8 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
+    key = mix(key, static_cast<U64>(show_enclosure));
+    key = mix(key, show_enclosure ? mRooms->revision() : 0ull);
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -3213,6 +3233,8 @@ void SKNavMesh::refreshOverlay()
     // where the camera is now; the fade waits for upload() and bakes there.
     mOverlay.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), camera_agent, fov_y, viewport_height);
     mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
+    // Floors tinted by how enclosed their air is; a layer of its own, like the walls.
+    mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
 
     for (const auto& entry : mMeshes)
     {

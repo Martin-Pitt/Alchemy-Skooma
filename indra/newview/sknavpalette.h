@@ -54,6 +54,10 @@ enum class SKNavSwatch : S32
     FEATURE_SHAFT,  ///< an elevator's column
     FEATURE_VEHICLE,    ///< a linkset people sit on that moves
     CLIMB,          ///< a ladder or elevator link between two exits
+    ENCLOSURE_OUTDOORS,     ///< a floor under open sky, or near it
+    ENCLOSURE_SHELTERED,    ///< under cover, not far in
+    ENCLOSURE_INDOORS,      ///< far from the sky and from the way out
+    ENCLOSURE_UNKNOWN,      ///< air nothing reached: no answer
     COUNT
 };
 

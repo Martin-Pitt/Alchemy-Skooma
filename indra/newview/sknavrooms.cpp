@@ -47,11 +47,6 @@ namespace
     constexpr U32 CHUNK_STEP = 4096;        ///< work between clock reads
     constexpr U32 MAX_RERUNS = 3;           ///< neighbour-driven re-runs per wave
     const char* const QUEUE_NAME = "SKNavRooms";
-
-    LLColor4 lerp(const LLColor4& a, const LLColor4& b, F32 t)
-    {
-        return a + (b - a) * t;
-    }
 }
 
 struct SKNavRooms::Job
@@ -335,7 +330,8 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     job->mPass = std::make_unique<EnclosurePass>(input);
     job->mPosted = std::chrono::steady_clock::now();
     std::weak_ptr<bool> alive = mAlive;
-    const bool posted = LL::WorkQueue::getInstance(QUEUE_NAME)->post([this, job, alive]() {
+    const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
+    const bool posted = queue && queue->post([this, job, alive]() {
         if (!alive.expired())
         {
             runChunk(job);
@@ -372,7 +368,8 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job)
         if (std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - start).count() >= CHUNK_MS)
         {
             // Yield, so a newer generation can cancel this one between chunks.
-            const bool posted = LL::WorkQueue::getInstance(QUEUE_NAME)->post([this, job, alive]() {
+            const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
+            const bool posted = queue && queue->post([this, job, alive]() {
                 if (!alive.expired())
                 {
                     runChunk(job);

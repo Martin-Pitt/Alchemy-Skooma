@@ -43,6 +43,8 @@
 class dtNavMesh;
 class dtNavMeshQuery;
 class LLViewerRegion;
+class SKNavRooms;
+class SKNavWorldView;
 
 /// Main thread only. Every mesh has its own F64 origin on the global 32 m
 /// lattice; tile indices are relative to it and may be negative when a
@@ -127,6 +129,12 @@ public:
 
     std::string statsLine() const;
 
+    /// The enclosure answers over every mesh, as of the last pass to land
+    /// (sknavrooms.h). Main thread; the view itself is readable anywhere.
+    std::shared_ptr<const SKNavWorldView> view() const;
+    /// The key a tile's air gives the sky map under.
+    static U64 skyContributor(const LLUUID& mesh, const sknav::TileKey& key);
+
     /// Cast from the middle of the screen, mark what it hits, and write down
     /// everything the census and the navmesh know there. Returns a line for
     /// the console; the report itself goes to the log under SKNavDump.
@@ -171,6 +179,8 @@ public:
     const Stats& stats() const { return mStats; }
 
 private:
+    friend class SKNavRooms;
+
     /// Why a tile needed building, for the update blip. A record beats the
     /// land and both beat the parameters, because a signature that moved with
     /// all three moved for the most specific reason.
@@ -341,6 +351,7 @@ private:
     bool mAirWanted = false;
     LLVector3d mMark;
     bool mHasMark = false;
+    std::unique_ptr<SKNavRooms> mRooms;
 
     /// A counter over what the debug overlay draws: bumped whenever a tile
     /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps

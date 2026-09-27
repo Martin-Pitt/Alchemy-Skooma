@@ -936,6 +936,7 @@ if(AL_BUILD_VIEWER)
     sknavmesh.cpp
     sknavoverlay.cpp
     sknavpalette.cpp
+    sknavrooms.cpp
     skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
@@ -1747,6 +1748,7 @@ if(AL_BUILD_VIEWER)
     sknavmesh.h
     sknavoverlay.h
     sknavpalette.h
+    sknavrooms.h
     skworldcensus.h
     rlvdefines.h
     rlveffects.h
