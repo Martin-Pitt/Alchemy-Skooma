@@ -163,6 +163,10 @@ namespace sknav
         WindParams mParams;
     };
 
+    /// The viewer's bands: 1.5 m over the ground, where people and grass
+    /// are, and 10 m over it, above walls and fences but among roofs and trees.
+    std::vector<WindLevel> defaultWindBands();
+
     /// Every slab of a mesh, one field or slab per step.
     class WindPass
     {

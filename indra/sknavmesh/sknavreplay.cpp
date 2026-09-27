@@ -1,0 +1,549 @@
+/**
+ * @file sknavreplay.cpp
+ * @brief A census replayed headless: clusters, meshes and tiles, the tile builds, then enclosure, spaces and wind per mesh.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "linden_common.h"
+
+#include "sknavreplay.h"
+
+#include "sknavexport.h"
+#include "sknavlayout.h"
+
+#include "llformat.h"
+
+#include "DetourAlloc.h"
+#include "DetourNavMesh.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <iomanip>
+#include <ostream>
+#include <set>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
+
+namespace sknav
+{
+    namespace
+    {
+        typedef std::chrono::steady_clock Clock;
+
+        F64 since(Clock::time_point t0)
+        {
+            return std::chrono::duration<F64, std::milli>(Clock::now() - t0).count();
+        }
+
+        /// The land under a point, from the nearest sample: good enough to
+        /// ground a cluster the viewer's export did not.
+        bool landUnder(const CensusFile& census, F64 x, F64 y, F32& z)
+        {
+            const CensusRegion* r = census.regionAt(x, y);
+            if (!r || !r->mSamples)
+            {
+                return false;
+            }
+            const S32 ix = std::clamp(static_cast<S32>(std::lround(x - r->mOrigin.mdV[VX] - r->mPhase)), 0, r->mSamples - 1);
+            const S32 iy = std::clamp(static_cast<S32>(std::lround(y - r->mOrigin.mdV[VY] - r->mPhase)), 0, r->mSamples - 1);
+            z = r->mZ[static_cast<size_t>(iy) * r->mSamples + ix];
+            return true;
+        }
+
+        bool groundedFallback(const CensusFile& census, const Cluster& c)
+        {
+            const LLVector3d corners[5] = {
+                c.mMin,
+                LLVector3d(c.mMax.mdV[VX], c.mMin.mdV[VY], 0.0),
+                LLVector3d(c.mMin.mdV[VX], c.mMax.mdV[VY], 0.0),
+                c.mMax,
+                (c.mMin + c.mMax) * 0.5,
+            };
+            F32 land = -1e9f;
+            for (const LLVector3d& p : corners)
+            {
+                F32 z;
+                if (landUnder(census, p.mdV[VX], p.mdV[VY], z))
+                {
+                    land = std::max(land, z);
+                }
+            }
+            return static_cast<F32>(c.mMin.mdV[VZ]) - land <= census.mGroundedMargin;
+        }
+
+        bool touches(const ReplayMesh& a, const ReplayMesh& b)
+        {
+            // A metre of slack: meshes whose tiles only meet at an edge still hand air across it.
+            return a.mAirMin.mdV[VX] <= b.mAirMax.mdV[VX] + 1.0 && b.mAirMin.mdV[VX] <= a.mAirMax.mdV[VX] + 1.0 &&
+                   a.mAirMin.mdV[VY] <= b.mAirMax.mdV[VY] + 1.0 && b.mAirMin.mdV[VY] <= a.mAirMax.mdV[VY] + 1.0;
+        }
+
+        bool hasAir(const ReplayMesh& m)
+        {
+            return m.mAirMin.mdV[VX] <= m.mAirMax.mdV[VX];
+        }
+
+        LLUUID featureId(const Feature& feature)
+        {
+            return feature.mRoots.empty() ? LLUUID::null : *std::min_element(feature.mRoots.begin(), feature.mRoots.end());
+        }
+    }
+
+    ReplayMesh::~ReplayMesh()
+    {
+        for (dtNavMesh*& nav : mNav)
+        {
+            if (nav)
+            {
+                dtFreeNavMesh(nav);
+                nav = nullptr;
+            }
+        }
+    }
+
+    void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out)
+    {
+        out = ReplayResult();
+
+        // Clusters, and the viewer's against ours.
+        Clock::time_point t0 = Clock::now();
+        out.mClusters = cluster(census.mRecords, census.mClusterGap);
+        out.mStages.emplace_back("cluster", since(t0));
+        std::unordered_map<const Record*, U32> index;
+        for (size_t i = 0; i < census.mRecords.size(); ++i)
+        {
+            index[census.mRecords[i].get()] = static_cast<U32>(i);
+        }
+        std::map<LLUUID, const CensusCluster*> theirs;
+        for (const CensusCluster& c : census.mClusters)
+        {
+            theirs[c.mId] = &c;
+        }
+        std::set<LLUUID> seen;
+        for (const ClusterPtr& c : out.mClusters.mClusters)
+        {
+            seen.insert(c->mId);
+            const auto it = theirs.find(c->mId);
+            if (it == theirs.end())
+            {
+                ++out.mClustersOnlyReplay;
+                out.mClusterNotes.push_back("only the replay has " + c->mId.asString());
+                continue;
+            }
+            std::vector<U32> mine;
+            for (const RecordPtr& r : c->mRecords)
+            {
+                mine.push_back(index[r.get()]);
+            }
+            std::vector<U32> other = it->second->mRecords;
+            std::sort(mine.begin(), mine.end());
+            std::sort(other.begin(), other.end());
+            if (mine == other)
+            {
+                ++out.mClustersSame;
+            }
+            else
+            {
+                ++out.mClustersDiffer;
+                out.mClusterNotes.push_back(llformat("%s: %zu members here, %zu in the viewer", c->mId.asString().c_str(), mine.size(), other.size()));
+            }
+        }
+        for (const CensusCluster& c : census.mClusters)
+        {
+            if (!seen.count(c.mId))
+            {
+                ++out.mClustersOnlyViewer;
+                out.mClusterNotes.push_back("only the viewer has " + c.mId.asString());
+            }
+        }
+
+        // Meshes and tiles, as SKNavMesh::reconcile lays them out.
+        t0 = Clock::now();
+        const TileBuildInput& params = census.mParams;
+        const F32 pad = tilePad(params);
+        std::map<LLUUID, std::unique_ptr<ReplayMesh>> meshes;
+        std::vector<RecordPtr> ground_records;
+        std::vector<const Cluster*> airborne;
+        for (const ClusterPtr& c : out.mClusters.mClusters)
+        {
+            const auto it = theirs.find(c->mId);
+            const bool grounded = it != theirs.end() ? it->second->mGrounded : groundedFallback(census, *c);
+            if (grounded)
+            {
+                ground_records.insert(ground_records.end(), c->mRecords.begin(), c->mRecords.end());
+            }
+            else
+            {
+                airborne.push_back(c.get());
+            }
+        }
+        std::vector<LaidTile> laid;
+        for (const Cluster* c : airborne)
+        {
+            auto mesh = std::make_unique<ReplayMesh>();
+            mesh->mId = c->mId;
+            mesh->mOrigin = latticeOrigin(c->mMin);
+            layAirborne(*c, mesh->mOrigin, pad, laid);
+            for (LaidTile& lt : laid)
+            {
+                ReplayTile& tile = mesh->mTiles[lt.mKey];
+                tile.mKey = lt.mKey;
+                tile.mMin = meshTileMin(mesh->mOrigin, lt.mKey);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
+                tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
+                auto input = std::make_shared<TileBuildInput>(params);
+                input->mRecords.clear();
+                input->mCuts.clear();
+                input->mMeshOrigin = mesh->mOrigin;
+                input->mTileX = lt.mKey.mX;
+                input->mTileY = lt.mKey.mY;
+                input->mTileSize = static_cast<F32>(TILE_M);
+                finishTileInput(lt.mRecords, mesh->mOrigin, *input);
+                tile.mInput = input;
+            }
+            meshes[mesh->mId] = std::move(mesh);
+        }
+        F64 terrain_ms = 0.0;
+        for (const CensusRegion& region : census.mRegions)
+        {
+            auto mesh = std::make_unique<ReplayMesh>();
+            mesh->mId = region.mId;
+            mesh->mTerrain = true;
+            mesh->mOrigin = latticeOrigin(region.mOrigin);
+            layRegion(region.mOrigin, region.mWidth, mesh->mOrigin, ground_records, pad, census.mVoidMargin,
+                      [&census](const LLVector3d& p) { return census.regionAt(p.mdV[VX], p.mdV[VY]) != nullptr; }, laid);
+            for (LaidTile& lt : laid)
+            {
+                ReplayTile& tile = mesh->mTiles[lt.mKey];
+                tile.mKey = lt.mKey;
+                tile.mOverLand = lt.mOverLand;
+                tile.mMin = meshTileMin(mesh->mOrigin, lt.mKey);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = region.mLandMin;
+                tile.mMax.mdV[VZ] = region.mLandMax;
+                auto input = std::make_shared<TileBuildInput>(params);
+                input->mRecords.clear();
+                input->mCuts.clear();
+                input->mMeshOrigin = mesh->mOrigin;
+                input->mTileX = lt.mKey.mX;
+                input->mTileY = lt.mKey.mY;
+                input->mTileSize = static_cast<F32>(TILE_M);
+                // Only a region's own land is in its mesh; the void past it has none.
+                if (lt.mOverLand)
+                {
+                    const Clock::time_point t1 = Clock::now();
+                    censusTerrain(census, mesh->mOrigin, tile.mMin, tile.mMax, pad, input->mTerrain);
+                    terrain_ms += since(t1);
+                }
+                finishTileInput(lt.mRecords, mesh->mOrigin, *input);
+                tile.mInput = input;
+            }
+            meshes[mesh->mId] = std::move(mesh);
+        }
+        out.mStages.emplace_back("layout", since(t0) - terrain_ms);
+        out.mStages.emplace_back("terrain", terrain_ms);
+
+        // Every tile, on every core.
+        t0 = Clock::now();
+        std::vector<ReplayTile*> jobs;
+        for (auto& m : meshes)
+        {
+            for (auto& t : m.second->mTiles)
+            {
+                jobs.push_back(&t.second);
+            }
+        }
+        std::atomic<size_t> next{ 0 };
+        const S32 threads = options.mThreads > 0 ? options.mThreads : std::max(1, static_cast<S32>(std::thread::hardware_concurrency()));
+        std::vector<std::thread> pool;
+        for (S32 k = 0; k < threads; ++k)
+        {
+            pool.emplace_back([&jobs, &next]() {
+                for (size_t i = next++; i < jobs.size(); i = next++)
+                {
+                    jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput));
+                }
+            });
+        }
+        for (std::thread& t : pool)
+        {
+            t.join();
+        }
+        out.mStages.emplace_back("build", since(t0));
+
+        // Published as SKNavMesh::publish does: Detour tiles, and the air to the sky map.
+        t0 = Clock::now();
+        auto sky = std::make_shared<SkyMap>();
+        for (auto& m : meshes)
+        {
+            ReplayMesh& mesh = *m.second;
+            mesh.mAirMin.set(1e300, 1e300, 0.0);
+            mesh.mAirMax.set(-1e300, -1e300, 0.0);
+            for (auto& t : mesh.mTiles)
+            {
+                const TileBuildResult& r = *t.second.mResult;
+                ++out.mTiles;
+                out.mEmpty += r.mStatus == TileBuildResult::EMPTY ? 1 : 0;
+                if (r.mStatus == TileBuildResult::FAILED)
+                {
+                    ++out.mFailed;
+                    continue;
+                }
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    const std::vector<U8>& data = r.mData[cls];
+                    if (data.empty())
+                    {
+                        continue;
+                    }
+                    if (!mesh.mNav[cls] && !(mesh.mNav[cls] = allocMeshNav()))
+                    {
+                        continue;
+                    }
+                    unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
+                    std::memcpy(copy, data.data(), data.size());
+                    if (!dtStatusSucceed(mesh.mNav[cls]->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
+                    {
+                        dtFree(copy);
+                    }
+                }
+                if (r.mAirBuilt && r.mAir)
+                {
+                    sky->set(skyContributor(mesh.mId, t.first), mesh.mOrigin + LLVector3d(r.mAir->mOrigin), *r.mAir);
+                    mesh.mAirMin.mdV[VX] = std::min(mesh.mAirMin.mdV[VX], t.second.mMin.mdV[VX]);
+                    mesh.mAirMin.mdV[VY] = std::min(mesh.mAirMin.mdV[VY], t.second.mMin.mdV[VY]);
+                    mesh.mAirMax.mdV[VX] = std::max(mesh.mAirMax.mdV[VX], t.second.mMax.mdV[VX]);
+                    mesh.mAirMax.mdV[VY] = std::max(mesh.mAirMax.mdV[VY], t.second.mMax.mdV[VY]);
+                }
+            }
+        }
+        out.mSky = sky;
+        for (auto& m : meshes)
+        {
+            out.mMeshes.push_back(std::move(m.second));
+        }
+        out.mStages.emplace_back("publish", since(t0));
+
+        // Enclosure and spaces per mesh with air, as SKNavRooms::post sets them up.
+        F64 enclosure_ms = 0.0, spaces_ms = 0.0;
+        for (S32 round = 0; round < std::max(1, options.mRounds); ++round)
+        {
+            std::vector<EnclosureProductPtr> before;
+            for (const auto& m : out.mMeshes)
+            {
+                before.push_back(m->mEnclosure);
+            }
+            for (size_t i = 0; i < out.mMeshes.size(); ++i)
+            {
+                ReplayMesh& mesh = *out.mMeshes[i];
+                if (!hasAir(mesh))
+                {
+                    continue;
+                }
+                auto input = std::make_shared<EnclosureInput>();
+                bool neighboured = false;
+                for (size_t k = 0; k < out.mMeshes.size(); ++k)
+                {
+                    if (k != i && before[k] && hasAir(*out.mMeshes[k]) && touches(mesh, *out.mMeshes[k]))
+                    {
+                        input->mNeighbours.push_back({ out.mMeshes[k]->mOrigin, before[k] });
+                        neighboured = true;
+                    }
+                }
+                if (round > 0 && !neighboured)
+                {
+                    continue;
+                }
+                input->mGeneration = static_cast<U64>(round) + 1;
+                input->mMeshOrigin = mesh.mOrigin;
+                input->mSky = sky;
+                input->mPrevious = mesh.mEnclosure;
+                input->mParams = census.mEnclosure;
+                for (const auto& t : mesh.mTiles)
+                {
+                    const TileBuildResult& r = *t.second.mResult;
+                    if (r.mStatus != TileBuildResult::FAILED && r.mAirBuilt && r.mAir && !r.mAir->mLeaves.empty())
+                    {
+                        input->mTiles.push_back({ t.first, r.mAir, skyContributor(mesh.mId, t.first) });
+                    }
+                }
+                Clock::time_point t1 = Clock::now();
+                EnclosurePass pass(input);
+                while (!pass.step(1u << 30))
+                {
+                }
+                std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
+                enclosure_ms += since(t1);
+
+                auto rooms = std::make_shared<RoomsInput>();
+                rooms->mGeneration = input->mGeneration;
+                rooms->mMeshKey = mix(SEED, mesh.mId.getCRC32());
+                rooms->mMeshOrigin = mesh.mOrigin;
+                rooms->mPrevious = mesh.mRooms;
+                rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
+                const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
+                for (const DoorEntity& d : census.mDoors)
+                {
+                    if (overlapsXY(d.mMin, d.mMax, dlo, dhi) && d.mMin.mdV[VZ] <= dhi.mdV[VZ] && dlo.mdV[VZ] <= d.mMax.mdV[VZ])
+                    {
+                        rooms->mDoors.push_back(d);
+                    }
+                }
+                for (const Feature& f : census.mFeatures)
+                {
+                    if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= dlo.mdV[VX] && f.mMin.mdV[VX] <= dhi.mdV[VX] &&
+                        f.mMax.mdV[VY] >= dlo.mdV[VY] && f.mMin.mdV[VY] <= dhi.mdV[VY])
+                    {
+                        rooms->mLifts.emplace_back(f.mMin, f.mMax);
+                    }
+                }
+                t1 = Clock::now();
+                SpacesPass spaces(rooms, product);
+                while (!spaces.step(1u << 30))
+                {
+                }
+                spaces_ms += since(t1);
+                mesh.mEnclosure = product;
+                mesh.mRooms = spaces.product();
+            }
+        }
+        out.mStages.emplace_back("enclosure", enclosure_ms);
+        out.mStages.emplace_back("spaces", spaces_ms);
+
+        t0 = Clock::now();
+        for (const auto& m : out.mMeshes)
+        {
+            if (!m->mEnclosure || !m->mRooms)
+            {
+                continue;
+            }
+            auto input = std::make_shared<WindInput>();
+            input->mGeneration = m->mEnclosure->mGeneration;
+            input->mEnclosure = m->mEnclosure;
+            input->mRooms = m->mRooms;
+            input->mBands = defaultWindBands();
+            WindPass pass(input);
+            while (!pass.step())
+            {
+            }
+            m->mWind = pass.product();
+        }
+        out.mStages.emplace_back("wind", since(t0));
+    }
+
+    void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result)
+    {
+        file << std::setprecision(10);
+        const ClassParams& avatar = census.mParams.mParams[static_cast<S32>(AgentClass::AVATAR)];
+        writeExportHeader(file, census.mExported, census.mAgent, avatar.mHeight, avatar.mRadius, avatar.mClimb, avatar.mSlope, census.mParams.mCell);
+        ExportCounts counts;
+        bool first_mesh = true;
+        for (const auto& m : result.mMeshes)
+        {
+            const ReplayMesh& mesh = *m;
+            file << (first_mesh ? "" : ",") << "{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"origin\":["
+                 << mesh.mOrigin.mdV[VX] << ',' << mesh.mOrigin.mdV[VY] << ',' << mesh.mOrigin.mdV[VZ] << "],\"tiles\":[";
+            first_mesh = false;
+            bool first_tile = true;
+            for (const auto& t : mesh.mTiles)
+            {
+                const TileBuildResult& r = *t.second.mResult;
+                TileExport tile;
+                tile.mKey = t.first;
+                tile.mMin = t.second.mMin;
+                tile.mMax = t.second.mMax;
+                if (r.mStatus != TileBuildResult::FAILED)
+                {
+                    tile.mFaces = &r.mFaces;
+                    tile.mAir = r.mAirBuilt ? r.mAir : nullptr;
+                    if (tile.mAir && mesh.mEnclosure)
+                    {
+                        tile.mEnclosure = mesh.mEnclosure->tile(t.first);
+                        tile.mEnclosureGeneration = mesh.mEnclosure->mGeneration;
+                    }
+                    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                    {
+                        tile.mSegments[cls] = &r.mSegments[cls];
+                        tile.mLinks[cls] = &r.mLinks[cls];
+                        tile.mFlights[cls] = &r.mFlights[cls];
+                    }
+                }
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    tile.mNav[cls] = mesh.mNav[cls];
+                }
+                file << (first_tile ? "" : ",");
+                first_tile = false;
+                writeExportTile(file, mesh.mOrigin, tile, counts);
+            }
+            file << ']';
+            if (mesh.mRooms)
+            {
+                writeExportSpaces(file, mesh.mOrigin, *mesh.mRooms, mesh.mWind.get());
+            }
+            file << '}';
+        }
+        file << ']';
+
+        std::map<LLUUID, const CensusSpan*> spans;
+        for (const CensusSpan& s : census.mSpans)
+        {
+            spans[s.mId] = &s;
+        }
+        file << ",\"features\":[";
+        for (size_t i = 0; i < census.mFeatures.size(); ++i)
+        {
+            const Feature& f = census.mFeatures[i];
+            const auto it = spans.find(featureId(f));
+            const CensusSpan* span = it != spans.end() ? it->second : nullptr;
+            file << (i ? "," : "");
+            writeExportFeature(file, f, span ? span->mKind : LinkKind::LADDER, span ? span->mExits : nullptr, span ? span->mLinks : nullptr);
+        }
+        file << "],\"doors\":[";
+        for (size_t i = 0; i < census.mDoors.size(); ++i)
+        {
+            file << (i ? "," : "");
+            writeExportDoor(file, census.mDoors[i]);
+        }
+        file << "]}\n";
+    }
+
+    std::string replaySummary(const ReplayResult& result)
+    {
+        std::ostringstream out;
+        out << result.mMeshes.size() << " meshes, " << result.mTiles << " tiles (" << result.mEmpty << " empty, " << result.mFailed << " failed)\n";
+        out << "clusters: " << result.mClustersSame << " same, " << result.mClustersDiffer << " differ, " << result.mClustersOnlyViewer
+            << " only in the viewer, " << result.mClustersOnlyReplay << " only in the replay\n";
+        for (const std::string& note : result.mClusterNotes)
+        {
+            out << "  " << note << '\n';
+        }
+        for (const auto& stage : result.mStages)
+        {
+            out << stage.first << ": " << std::fixed << std::setprecision(1) << stage.second << " ms\n";
+        }
+        return out.str();
+    }
+}

@@ -736,6 +736,14 @@ namespace sknav
         return mState->mProduct;
     }
 
+    std::vector<WindLevel> defaultWindBands()
+    {
+        WindLevel low, high;
+        low.mOffsetM = 1.5f;
+        high.mOffsetM = 10.f;
+        return { low, high };
+    }
+
     WindProductPtr computeWind(std::shared_ptr<const WindInput> input)
     {
         WindPass pass(std::move(input));

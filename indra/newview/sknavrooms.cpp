@@ -30,6 +30,7 @@
 #include "llbase64.h"
 #include "llthread.h"
 #include "llviewercontrol.h"
+#include "sknavexport.h"
 #include "sknavmesh.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
@@ -276,16 +277,6 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
 
 namespace
 {
-    /// 1.5 m over the ground, where people and grass are, and 10 m over it,
-    /// above walls and fences but among roofs and trees.
-    std::vector<WindLevel> windBands()
-    {
-        WindLevel low, high;
-        low.mOffsetM = 1.5f;
-        high.mOffsetM = 10.f;
-        return { low, high };
-    }
-
     F32 wrapHeading(F32 deg)
     {
         deg = std::fmod(deg, 360.f);
@@ -898,7 +889,7 @@ void SKNavRooms::postWind(MeshState& state)
     input->mGeneration = state.mGeneration;
     input->mEnclosure = state.mProduct;
     input->mRooms = state.mRooms;
-    input->mBands = windBands();
+    input->mBands = defaultWindBands();
     auto job = std::make_shared<WindJob>();
     job->mId = state.mId;
     job->mGeneration = state.mGeneration;
@@ -1216,91 +1207,19 @@ void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
     }
     for (const SKNavWorldView::Mesh& m : mView->meshes())
     {
-        if (m.mId != mesh || !m.mRooms)
+        if (m.mId == mesh && m.mRooms)
         {
-            continue;
+            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get());
+            return;
         }
-        static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
-        auto vec = [&file](const LLVector3d& v) { file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']'; };
-        const F64 oz = m.mOrigin.mdV[VZ];
-        file << ",\"spaces\":[";
-        for (size_t i = 0; i < m.mRooms->mSpaces.size(); ++i)
-        {
-            const Space& s = m.mRooms->mSpaces[i];
-            file << (i ? "," : "") << "{\"index\":" << i << ",\"id\":" << s.mId << ",\"bucket\":\"" << buckets[static_cast<S32>(s.mBucket)]
-                 << "\",\"min\":";
-            vec(m.mOrigin + LLVector3d(s.mMin));
-            file << ",\"max\":";
-            vec(m.mOrigin + LLVector3d(s.mMax));
-            file << ",\"centre\":";
-            vec(m.mOrigin + LLVector3d(s.mCentre));
-            file << ",\"area\":" << s.mFloorArea << ",\"volume\":" << s.mVolume << ",\"surface\":" << s.mSurface << ",\"mfp\":" << s.mMeanFreePath
-                 << ",\"ceiling\":[" << s.mCeilingMin + oz << ',' << s.mCeilingMean + oz << ',' << s.mCeilingMax + oz << "],\"floor\":["
-                 << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"e\":["
-                 << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
-                 << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false")
-                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";
-            for (size_t k = 0; k < s.mPortals.size(); ++k)
-            {
-                file << (k ? "," : "") << s.mPortals[k];
-            }
-            file << "]}";
-        }
-        file << "],\"portals\":[";
-        for (size_t i = 0; i < m.mRooms->mPortals.size(); ++i)
-        {
-            const Portal& p = m.mRooms->mPortals[i];
-            file << (i ? "," : "") << "{\"kind\":\"" << portalKindName(p.mKind) << "\",\"spaces\":[" << p.mSpaces[0] << ',' << p.mSpaces[1]
-                 << "],\"a\":";
-            vec(m.mOrigin + LLVector3d(p.mA));
-            file << ",\"b\":";
-            vec(m.mOrigin + LLVector3d(p.mB));
-            file << ",\"normal\":[" << p.mNormal.mV[VX] << ',' << p.mNormal.mV[VY] << "],\"width\":" << p.mWidth << ",\"sill\":" << p.mSill + oz
-                 << ",\"head\":" << (p.lintel() ? p.mHead + oz : 0.0) << ",\"lintel\":" << (p.lintel() ? "true" : "false")
-                 << ",\"walled\":" << (p.walled() ? "true" : "false") << ",\"cues\":" << static_cast<S32>(p.mCues) << ",\"door\":\"" << p.mDoor
-                 << "\"}";
-        }
-        file << ']';
-        if (m.mWind && !m.mWind->mSlabs.empty())
-        {
-            // Per band its heights, per slab its cells: factor, deflection x and y, flags, a byte each.
-            const WindProduct& w = *m.mWind;
-            file << ",\"wind\":{\"headings\":" << WIND_HEADINGS << ",\"ms\":" << w.mMillis << ",\"bands\":[";
-            for (size_t b = 0; b < w.mBands.size(); ++b)
-            {
-                const WindSlabPtr s = w.slab(0, static_cast<S32>(b));
-                std::vector<F32> z;
-                if (s && s->mZ)
-                {
-                    z = *s->mZ;
-                    for (F32& v : z)
-                    {
-                        v += static_cast<F32>(oz);
-                    }
-                }
-                file << (b ? "," : "") << "{\"offset\":" << w.mBands[b].mOffsetM << ",\"absolute\":" << (w.mBands[b].mAbsolute ? "true" : "false")
-                     << ",\"z\":\"" << LLBase64::encode(reinterpret_cast<const U8*>(z.data()), z.size() * sizeof(F32)) << "\"}";
-            }
-            file << "],\"slabs\":[";
-            for (size_t i = 0; i < w.mSlabs.size(); ++i)
-            {
-                const WindSlab& s = *w.mSlabs[i];
-                file << (i ? "," : "") << "{\"heading\":" << windHeadingDeg(s.mHeading) << ",\"band\":" << s.mBand << ",\"origin\":["
-                     << m.mOrigin.mdV[VX] + s.mOrigin.mV[VX] << ',' << m.mOrigin.mdV[VY] + s.mOrigin.mV[VY] << "],\"cell\":" << s.mCell
-                     << ",\"width\":" << s.mWidth << ",\"height\":" << s.mHeight << ",\"cells\":\""
-                     << LLBase64::encode(reinterpret_cast<const U8*>(s.mCells.data()), s.mCells.size() * sizeof(WindCell)) << "\"}";
-            }
-            file << "]}";
-        }
-        return;
     }
 }
 
-void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey& key, const TileAirPtr& air) const
+const TileEnclosure* SKNavRooms::enclosureTile(const LLUUID& mesh, const TileKey& key, const TileAirPtr& air, U64& generation) const
 {
     if (!mView || !air)
     {
-        return;
+        return nullptr;
     }
     for (const SKNavWorldView::Mesh& m : mView->meshes())
     {
@@ -1311,24 +1230,10 @@ void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey
         const TileEnclosure* t = m.mProduct->tile(key);
         if (!t || t->mAir != air || t->mGaps.size() != air->mGaps.size())
         {
-            return;
+            return nullptr;
         }
-        std::vector<U8> blob;
-        blob.reserve(t->mGaps.size() * 7);
-        for (const GapEnclosure& g : t->mGaps)
-        {
-            blob.push_back(g.mS);
-            blob.push_back(g.mE);
-            blob.push_back(g.mD);
-            blob.push_back(g.mBucket);
-            blob.push_back(g.mFlags);
-            blob.push_back(static_cast<U8>(g.mSpace & 0xff));
-            blob.push_back(static_cast<U8>(g.mSpace >> 8));
-        }
-        file << ",\"enclosure\":{\"generation\":" << m.mProduct->mGeneration
-             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\",\"space\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
-                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1},\"space\":\"u16, index + 1 into the mesh's spaces, 0 for none\"},\"blob\":\""
-             << LLBase64::encode(blob.data(), blob.size()) << "\"}";
-        return;
+        generation = m.mProduct->mGeneration;
+        return t;
     }
+    return nullptr;
 }

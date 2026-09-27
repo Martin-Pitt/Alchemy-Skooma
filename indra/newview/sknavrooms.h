@@ -185,9 +185,9 @@ public:
     /// twice it. Agent coordinates.
     void gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const;
 
-    /// A tile's per-gap answers as a JSON member, leading comma included,
-    /// when the view holds answers for exactly this air.
-    void writeTile(std::ostream& file, const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air) const;
+    /// A tile's per-gap answers, when the view holds answers for exactly
+    /// this air, with the generation of the pass that gave them; else null.
+    const sknav::TileEnclosure* enclosureTile(const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air, U64& generation) const;
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
     void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
 

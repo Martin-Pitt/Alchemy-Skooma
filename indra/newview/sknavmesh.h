@@ -27,6 +27,7 @@
 
 #include "llsingleton.h"
 #include "sknavbuild.h"
+#include "sknavexport.h"
 #include "sknavoverlay.h"
 #include "sknavskymap.h"
 #include "sknavtilecache.h"
@@ -278,17 +279,7 @@ private:
         ~Mesh();
     };
 
-    struct ExportCounts
-    {
-        U32 mTiles = 0;
-        U32 mPolys = 0;
-        U32 mSegments = 0;
-        U32 mLinks = 0;
-        U32 mFaces = 0;
-        U32 mAirs = 0;
-        U32 mFeatures = 0;
-        U32 mDoors = 0;
-    };
+    typedef sknav::ExportCounts ExportCounts;
     /// One tile as a JSON object, shared by every export so their formats
     /// cannot drift. Features and doors are written as members, leading
     /// comma included, and only those meeting the box when one is given.
