@@ -51,6 +51,8 @@ namespace
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
+    constexpr F32 WALL_END_REACH = 2.5f;    ///< facing wall ends this many agent heights apart may hold a cut
+    constexpr F32 WALL_END_RUN_M = 0.5f;    ///< a wall runs this far behind its end, or it is a post
     constexpr S32 STAIR_END_UNITS = 2;      ///< a floor this close to a tread it meets is at an end of the flight
 
     enum Stage : S32
@@ -543,6 +545,8 @@ namespace sknav
         void buildCells();
         void transform();
         void cutSeeds(size_t b);
+        void wallEnds();
+        U32 mWallEndCuts = 0;
         void number();
         void unite(U32 a, U32 b);
         void edges();
@@ -799,6 +803,199 @@ namespace sknav
         for (TileInfo& ti : mTiles)
         {
             std::vector<U32>().swap(ti.mColStart);
+        }
+    }
+
+    void SpacesPass::State::wallEnds()
+    {
+        // Walls that stop in open air make no saddle for the watershed to
+        // cut at: pair up facing wall ends, score the gap between them as
+        // any cut is scored, and where it is a portal sever the floor across
+        // it, so the regions either side seed apart.
+        struct End
+        {
+            LLVector2 mP;
+            LLVector2 mT;       ///< pointing past the wall's end, into the gap
+            S32 mFloor;
+        };
+        const F32 reach = WALL_END_REACH * params().mWalkHeadM;
+        const S32 run_cells = static_cast<S32>(std::lround(WALL_END_RUN_M / mCell));
+        std::vector<End> ends;
+        const size_t n = mCells.size();
+        for (U32 c = 0; c < n; ++c)
+        {
+            const Cell& cell = mCells[c];
+            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c])
+            {
+                continue;
+            }
+            const TileInfo& ti = mTiles[cell.mTile];
+            for (S32 d = 0; d < 4; ++d)
+            {
+                if (mSide[c * 4 + d] != SIDE_WALL ||
+                    !blocked(cell.mTile, cell.mX + DX[d], cell.mY + DY[d], cell.mFloor + mClimb, cell.mFloor + static_cast<S32>(std::lround(2.f / mUnit))))
+                {
+                    continue;
+                }
+                // Along the wall both ways: the wall ends where the next cell has none on that side.
+                for (S32 t = 0; t < 4; ++t)
+                {
+                    if (DX[t] * DX[d] + DY[t] * DY[d] != 0)
+                    {
+                        continue;
+                    }
+                    const U32 next = mLink[c * 4 + t];
+                    if (next == NONE || mSide[next * 4 + d] == SIDE_WALL)
+                    {
+                        continue;
+                    }
+                    // And runs on behind it far enough to be a wall, not a post.
+                    S32 len = 0;
+                    const S32 back = t ^ 1;
+                    for (U32 k = c; k != NONE && len < run_cells && mSide[k * 4 + d] == SIDE_WALL; k = mLink[k * 4 + back])
+                    {
+                        ++len;
+                    }
+                    if (len < run_cells)
+                    {
+                        continue;
+                    }
+                    End e;
+                    e.mP.set(cellX(ti, cell.mX) + (DX[d] + DX[t]) * 0.5f * mCell, cellY(ti, cell.mY) + (DY[d] + DY[t]) * 0.5f * mCell);
+                    e.mT.set(static_cast<F32>(DX[t]), static_cast<F32>(DY[t]));
+                    e.mFloor = cell.mFloor;
+                    ends.push_back(e);
+                }
+            }
+        }
+        std::unordered_map<U64, std::vector<U32>> grid;
+        auto key = [reach](const LLVector2& p) {
+            return (static_cast<U64>(static_cast<U32>(static_cast<S32>(std::floor(p.mV[VX] / reach)))) << 32) |
+                   static_cast<U32>(static_cast<S32>(std::floor(p.mV[VY] / reach)));
+        };
+        for (U32 i = 0; i < ends.size(); ++i)
+        {
+            grid[key(ends[i].mP)].push_back(i);
+        }
+        Probe pr;
+        std::vector<std::pair<F32, std::pair<U32, U32>>> pairs;
+        for (U32 i = 0; i < ends.size(); ++i)
+        {
+            const End& a = ends[i];
+            const S32 gx = static_cast<S32>(std::floor(a.mP.mV[VX] / reach)), gy = static_cast<S32>(std::floor(a.mP.mV[VY] / reach));
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    const auto it = grid.find((static_cast<U64>(static_cast<U32>(gx + dx)) << 32) | static_cast<U32>(gy + dy));
+                    if (it == grid.end())
+                    {
+                        continue;
+                    }
+                    for (U32 j : it->second)
+                    {
+                        const End& b = ends[j];
+                        const LLVector2 ab = b.mP - a.mP;
+                        const F32 len = ab.length();
+                        if (j <= i || len < 0.5f || len > reach || std::abs(a.mFloor - b.mFloor) > mClimb ||
+                            ab * a.mT < 0.7f * len || -(ab * b.mT) < 0.7f * len)
+                        {
+                            continue;
+                        }
+                        pairs.push_back({ len, { i, j } });
+                    }
+                }
+            }
+        }
+        // Nearest pairs first; an end serves one cut.
+        std::sort(pairs.begin(), pairs.end());
+        std::vector<bool> used(ends.size(), false);
+        for (const auto& pq : pairs)
+        {
+            const End& a = ends[pq.second.first];
+            const End& b = ends[pq.second.second];
+            if (used[pq.second.first] || used[pq.second.second])
+            {
+                continue;
+            }
+            Run r;
+            r.mA = a.mP;
+            r.mB = b.mP;
+            r.mD = b.mP - a.mP;
+            r.mWidth = r.mD.normVec();
+            r.mN.set(-r.mD.mV[VY], r.mD.mV[VX]);
+            r.mC = (a.mP + b.mP) * 0.5f;
+            r.mFloor = std::min(a.mFloor, b.mFloor);
+            r.mKey = mix(mix(mix(SEED, 0x5741ll), static_cast<U64>(std::lround(r.mC.mV[VX] * 8.f))), static_cast<U64>(std::lround(r.mC.mV[VY] * 8.f)));
+            // Floor all the way across.
+            bool open = true;
+            for (F32 t = mCell; t < r.mWidth - mCell * 0.5f && open; t += mCell)
+            {
+                const LLVector2 q = r.mA + r.mD * t;
+                open = probe(q.mV[VX], q.mV[VY], r.mFloor, mClimb, pr);
+            }
+            // Doors cut where their leaves are; this is for what has none.
+            const Scored cut = open ? score(r) : Scored();
+            if (!cut.mPortal || cut.mKind != PortalKind::OPENING)
+            {
+                continue;
+            }
+            used[pq.second.first] = used[pq.second.second] = true;
+            ++mWallEndCuts;
+            // Sever the links crossing the segment, from the cells along it.
+            std::vector<U32> near_cells;
+            for (F32 t = 0.f; t <= r.mWidth; t += mCell * 0.5f)
+            {
+                for (F32 side : { -1.f, 0.f, 1.f })
+                {
+                    const LLVector2 q = r.mA + r.mD * t + r.mN * (side * mCell);
+                    TileKey k;
+                    k.mX = tileIndex(q.mV[VX]);
+                    k.mY = tileIndex(q.mV[VY]);
+                    const auto it = mTileIndex.find(k);
+                    if (it == mTileIndex.end() || !mTiles[it->second].mWork)
+                    {
+                        continue;
+                    }
+                    const TileInfo& ti = mTiles[it->second];
+                    const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
+                    const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
+                    if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
+                    {
+                        continue;
+                    }
+                    const S32 col = ix + iy * ti.mAir->mWidth;
+                    for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+                    {
+                        if (std::abs(mCells[c].mFloor - r.mFloor) <= mClimb)
+                        {
+                            near_cells.push_back(c);
+                        }
+                    }
+                }
+            }
+            for (U32 c : near_cells)
+            {
+                const Cell& cell = mCells[c];
+                const TileInfo& ti = mTiles[cell.mTile];
+                const LLVector2 pc(cellX(ti, cell.mX), cellY(ti, cell.mY));
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    const U32 o = mLink[c * 4 + d];
+                    if (o == NONE)
+                    {
+                        continue;
+                    }
+                    const LLVector2 po(pc.mV[VX] + DX[d] * mCell, pc.mV[VY] + DY[d] * mCell);
+                    const F32 sc = (pc - r.mA) * r.mN, so = (po - r.mA) * r.mN;
+                    const F32 along = ((pc + po) * 0.5f - r.mA) * r.mD;
+                    if ((sc < 0.f) != (so < 0.f) && along >= 0.f && along <= r.mWidth)
+                    {
+                        mLink[c * 4 + d] = NONE;
+                        mLink[o * 4 + (d ^ 1)] = NONE;
+                    }
+                }
+            }
         }
     }
 
@@ -1092,6 +1289,8 @@ namespace sknav
             const F64 frac = comp_drops[id] / std::max(1.0, comp_open[id]);
             mAvatar[c] = frac < 0.5 && (comp_area[id] >= p.mAvatarAreaM2 || comp_edge[id]) ? 1 : 0;
         }
+
+        wallEnds();
 
         // The watershed over the clearance, off flights: descend its levels,
         // grow the regions there are into what each level exposes, then seed
