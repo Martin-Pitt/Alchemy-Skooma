@@ -66,13 +66,17 @@ namespace
         void wall(F32 x0, F32 y0, F32 x1, F32 y1, F32 z1 = 3.f) { box(x0, y0, x1, y1, 0.f, z1, false); }
 
         /// A flight up +x from x0, treads 0.25 m high, onto z_top.
-        void flight(F32 x0, F32 x1, F32 y0, F32 y1, F32 z_top)
+        void flight(F32 x0, F32 x1, F32 y0, F32 y1, F32 z_top) { flight(x0, x1, y0, y1, 0.f, z_top); }
+
+        /// A flight from z0 at x0 to z1 at x1, either way along x.
+        void flight(F32 x0, F32 x1, F32 y0, F32 y1, F32 z0, F32 z1)
         {
-            const S32 n = static_cast<S32>(std::lround(z_top / 0.25f));
+            const S32 n = static_cast<S32>(std::lround((z1 - z0) / 0.25f));
             const F32 going = (x1 - x0) / n;
             for (S32 k = 1; k <= n; ++k)
             {
-                box(x0 + (k - 1) * going, y0, x0 + k * going, y1, 0.f, 0.25f * k, true, true);
+                const F32 a = x0 + (k - 1) * going, b = x0 + k * going;
+                box(std::min(a, b), y0, std::max(a, b), y1, 0.f, z0 + 0.25f * k, true, true);
             }
         }
 
@@ -205,6 +209,24 @@ namespace
                 }
             }
             return out;
+        }
+
+        /// Every flight has a stair portal at each of its ends.
+        bool flightsLinked() const
+        {
+            bool any = false;
+            for (const Space& sp : mRooms->mSpaces)
+            {
+                if (sp.mFlight)
+                {
+                    any = true;
+                    if (count(&sp, PortalKind::STAIR) < 2)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return any;
         }
 
         U32 count(const Space* s, PortalKind kind) const
@@ -536,6 +558,66 @@ namespace tut
         ensure_equals("with its id", still->mId, hall->mId);
         const Space* kept = again.at(40.f, 23.f);
         ensure("the other hall untouched", kept && kept == again.at(31.f, 23.f) && kept->mId == other->mId);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<13>()
+    {
+        set_test_name("a switchback stair with a landing between its flights leaves neither flight an island");
+        Scene s;
+        s.flight(8.f, 14.f, 1.f, 3.f, 0.f, 1.75f);
+        s.box(14.f, 1.f, 17.f, 6.f, 0.f, 1.75f);                // the landing
+        s.wall(8.f, 3.f, 14.f, 4.f, 5.f);
+        s.flight(14.f, 8.f, 4.f, 6.f, 1.75f, 3.25f);
+        s.box(4.f, 4.f, 8.f, 8.f, 3.f, 3.25f);                  // the floor it climbs to
+        const Result r = run(s.input(1));
+        const Space* landing = r.at(15.5f, 3.5f, 2.2f);
+        ensure("a landing", landing != nullptr && !landing->mFlight);
+        ensure("every flight linked at both ends", r.flightsLinked());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<14>()
+    {
+        set_test_name("a flight wider than a stair portal's run still meets its floors");
+        Scene s;
+        s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);
+        s.flight(12.f, 20.f, 0.f, 8.f, 0.f, 3.25f);
+        const Result r = run(s.input(1));
+        ensure("linked", r.flightsLinked());
+        ensure("to the deck", !r.between(r.at(16.f, 4.f, 2.9f), r.at(24.f, 4.f, 3.75f)).empty());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<15>()
+    {
+        set_test_name("a flight across a tile seam meets both its floors");
+        Scene s;
+        s.box(36.f, 0.f, 44.f, 8.f, 3.f, 3.25f);
+        s.flight(28.f, 36.f, 1.f, 3.f, 0.f, 3.25f);
+        const Result r = run(s.input(2));
+        ensure("linked", r.flightsLinked());
+        ensure("to the deck", !r.between(r.at(34.f, 2.f, 2.8f), r.at(40.f, 4.f, 3.75f)).empty());
+        ensure("to the ground", !r.between(r.at(29.f, 2.f, 0.8f), r.at(20.f, 4.f)).empty());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<16>()
+    {
+        set_test_name("a floor that meets a flight only along its side is still linked to it");
+        Scene s;
+        s.box(20.f, 0.f, 28.f, 8.f, 3.f, 3.25f);
+        s.flight(12.f, 20.f, 1.f, 3.f, 0.f, 3.25f);
+        s.box(13.f, 3.f, 16.f, 6.f, 0.f, 1.25f);                // a gallery beside the flight's middle
+        s.wall(12.75f, 3.f, 13.f, 6.25f, 4.f);
+        s.wall(16.f, 3.f, 16.25f, 6.25f, 4.f);
+        s.wall(12.75f, 6.f, 16.25f, 6.25f, 4.f);
+        const Result r = run(s.input(1));
+        const Space* gallery = r.at(14.5f, 5.f, 1.75f);
+        const Space* stair = r.at(16.f, 2.f, 2.9f);
+        ensure("found", gallery && stair && stair->mFlight && gallery != stair);
+        const std::vector<const Portal*> p = r.between(gallery, stair);
+        ensure("linked by a stair portal", !p.empty() && p[0]->mKind == PortalKind::STAIR);
     }
 
     template<> template<>

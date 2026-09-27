@@ -50,9 +50,8 @@ namespace
     constexpr F32 LIFT_REACH_M = 3.f;
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
-    constexpr F32 STAIR_RUN_MAX_M = 6.f;    ///< a stair portal no wider than this
     constexpr U32 STAIR_RUN_EDGES = 3;
-    constexpr S32 STAIR_END_UNITS = 2;      ///< a flight's cells this close to its lowest or highest floor are its ends
+    constexpr S32 STAIR_END_UNITS = 2;      ///< a floor this close to a tread it meets is at an end of the flight
 
     enum Stage : S32
     {
@@ -181,6 +180,7 @@ namespace
         U32 mEdges = 0;
         bool mFlight = false;
         U64 mKey = 0;
+        std::vector<U32> mIds;  ///< its edges
     };
 
     struct Scored
@@ -1612,6 +1612,7 @@ namespace sknav
             std::nth_element(floors.begin(), floors.begin() + floors.size() / 2, floors.end());
             r.mFloor = floors[floors.size() / 2];
             r.mKey = key;
+            r.mIds = ids;
             out.push_back(r);
         }
         return out;
@@ -1812,19 +1813,11 @@ namespace sknav
         {
             mPortals.clear();
             mPortalDoor.clear();
-            // Each region's floor range, for a flight's ends.
-            std::vector<S32> lo(total, INT_MAX), hi(total, INT_MIN);
             std::vector<bool> flight(total, false);
             for (U32 s = 0; s < total; ++s)
             {
                 const U32 r = mRegions.find(s);
-                const SeedStats& st = mTiles[mSeeds[s].mTile].mRooms.mStats[mSeeds[s].mLocal];
                 flight[r] = flight[r] || mSeeds[s].mFlight;
-                if (mSeeds[s].mFlight && st.mCells)
-                {
-                    lo[r] = std::min(lo[r], st.mFloorMin);
-                    hi[r] = std::max(hi[r], st.mFloorMax);
-                }
             }
             keyed.clear();
             for (U32 i = 0; i < mEdges.size(); ++i)
@@ -1864,34 +1857,48 @@ namespace sknav
                 }
                 if (flight[g.mU] != flight[g.mV])
                 {
-                    // Where a flight meets a floor at its bottom or its top, not along its sides.
+                    // Each contact where a flight meets a floor at an end of its
+                    // own, not along its sides: the floor lies at or past the
+                    // flight's lowest or highest tread there. Switchbacks,
+                    // landings and seams give a flight several.
                     const U32 st = flight[g.mU] ? g.mU : g.mV;
-                    for (S32 end = 0; end < 2; ++end)
+                    const std::vector<Run> contacts = runs(group, g.mU);
+                    bool made = false;
+                    const Run* best = nullptr;
+                    for (const Run& r : contacts)
                     {
-                        std::vector<U32> sel;
-                        for (U32 id : group)
+                        S32 fs_lo = INT_MAX, fs_hi = INT_MIN;
+                        std::vector<S32> floor_side;
+                        for (U32 id : r.mIds)
                         {
                             const Edge& e = mEdges[id];
-                            const S32 f = mRegions.find(e.mA) == st ? e.mFloorA : e.mFloorB;
-                            if (std::abs(f - (end == 0 ? lo[st] : hi[st])) <= STAIR_END_UNITS)
-                            {
-                                sel.push_back(id);
-                            }
+                            const bool a_flight = mRegions.find(e.mA) == st;
+                            const S32 fs = a_flight ? e.mFloorA : e.mFloorB;
+                            fs_lo = std::min(fs_lo, fs);
+                            fs_hi = std::max(fs_hi, fs);
+                            floor_side.push_back(a_flight ? e.mFloorB : e.mFloorA);
                         }
-                        if (sel.size() < STAIR_RUN_EDGES)
+                        std::nth_element(floor_side.begin(), floor_side.begin() + floor_side.size() / 2, floor_side.end());
+                        const S32 ff = floor_side[floor_side.size() / 2];
+                        if (!best || r.mEdges > best->mEdges)
+                        {
+                            best = &r;
+                        }
+                        if (r.mEdges < STAIR_RUN_EDGES || (ff > fs_lo + 1 && ff < fs_hi - 1) || (fs_lo == fs_hi && std::abs(ff - fs_lo) > STAIR_END_UNITS))
                         {
                             continue;
                         }
-                        for (const Run& r : runs(sel, g.mU))
-                        {
-                            if (r.mEdges < STAIR_RUN_EDGES || r.mWidth > STAIR_RUN_MAX_M)
-                            {
-                                continue;
-                            }
-                            Scored s = score(r);
-                            s.mCues &= ~CUE_DOOR;
-                            makePortal(r, s, PortalKind::STAIR, g.mU, g.mV);
-                        }
+                        Scored s = score(r);
+                        s.mCues &= ~CUE_DOOR;
+                        makePortal(r, s, PortalKind::STAIR, g.mU, g.mV);
+                        made = true;
+                    }
+                    if (!made && best)
+                    {
+                        // No clear end: the likeliest contact still links it.
+                        Scored s = score(*best);
+                        s.mCues = static_cast<U8>((s.mCues & ~CUE_DOOR) | CUE_WEAK);
+                        makePortal(*best, s, PortalKind::STAIR, g.mU, g.mV);
                     }
                     continue;
                 }

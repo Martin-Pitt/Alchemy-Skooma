@@ -47,6 +47,7 @@ namespace sknav
         CUE_E_STEP = 1 << 2,        ///< indoorness differs across it
         CUE_DOOR = 1 << 3,          ///< a door's aperture lies on it
         CUE_SYNTHETIC = 1 << 4,     ///< a door leaf that splits the air on its own
+        CUE_WEAK = 1 << 5,          ///< a stair contact with no clear end, kept so no flight is an island
     };
 
     struct SpaceParams
