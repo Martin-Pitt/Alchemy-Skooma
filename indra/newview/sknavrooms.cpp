@@ -308,6 +308,10 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     input->mMeshOrigin = mesh.mOrigin;
     input->mSky = mSky;
     input->mPrevious = state.mProduct;
+    // Feet need an avatar's headroom: a slab void between storeys is not a floor.
+    sknav::TileBuildInput build;
+    navmesh.fillParams(build);
+    input->mParams.mWalkHeadM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mHeight;
     for (const auto& t : mesh.mTiles)
     {
         if (t.second.mAir && !t.second.mAir->mLeaves.empty())
