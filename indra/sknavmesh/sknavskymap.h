@@ -61,6 +61,11 @@ namespace sknav
         /// No solid but ignore's starts above pos within reach: a tile's own
         /// air already knows what stands over it.
         bool skyOpenAbove(const LLVector3d& pos, F32 reach, U64 ignore) const;
+        /// The share of a horizontal spot's sky, cosine-weighted, hidden by the
+        /// lowest solid over each column within radius: a disc of radius r at
+        /// height h hides r^2 / (r^2 + h^2), so what is small and high hides
+        /// little and what is broad and low nearly all. Read from columns, no rays.
+        F32 coverAbove(const LLVector3d& pos, F32 radius) const;
         /// The top of the highest solid over (x, y); false when there is none.
         bool topAt(F64 x, F64 y, F64& top) const;
 

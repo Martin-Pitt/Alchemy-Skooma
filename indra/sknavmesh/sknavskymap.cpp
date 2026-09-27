@@ -169,6 +169,53 @@ namespace sknav
         return true;
     }
 
+    F32 SkyMap::coverAbove(const LLVector3d& pos, F32 radius) const
+    {
+        // Annuli widening outwards, sampled at their middle radius.
+        static const F32 EDGES[] = { 0.f, 0.5f, 1.f, 1.5f, 2.5f, 3.5f, 5.f, 7.f, 9.5f, 13.f, 17.5f, 23.f, 30.f, 40.f, 52.f, 68.f };
+        constexpr S32 AZIMUTHS = 12;
+        const F64 z = pos.mdV[VZ];
+        // The height of the lowest solid starting above pos, over the column holding (x, y); 0 for none.
+        auto lowest = [&](F64 x, F64 y) {
+            const std::vector<Interval>* cell = find(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y)));
+            F64 h = 0.0;
+            if (cell)
+            {
+                for (const Interval& i : *cell)
+                {
+                    if (i.mBottom > z && (h == 0.0 || i.mBottom - z < h))
+                    {
+                        h = i.mBottom - z;
+                    }
+                }
+            }
+            return h;
+        };
+        auto disc = [](F64 r, F64 h) { return r * r / (r * r + h * h); };
+        F64 cover = 0.0;
+        const F64 h0 = lowest(pos.mdV[VX], pos.mdV[VY]);
+        if (h0 > 0.0)
+        {
+            cover += disc(EDGES[1], h0);
+        }
+        for (size_t k = 1; k + 1 < sizeof(EDGES) / sizeof(EDGES[0]) && EDGES[k] < radius; ++k)
+        {
+            const F64 a = EDGES[k], b = std::min<F64>(EDGES[k + 1], radius), r = 0.5 * (a + b);
+            const S32 n = k < 3 ? AZIMUTHS / 2 : AZIMUTHS;
+            for (S32 j = 0; j < n; ++j)
+            {
+                // Stagger alternate rings so spokes do not line up.
+                const F64 ang = (j + 0.5 * (k & 1)) * (6.283185307179586 / n);
+                const F64 h = lowest(pos.mdV[VX] + r * std::cos(ang), pos.mdV[VY] + r * std::sin(ang));
+                if (h > 0.0)
+                {
+                    cover += (disc(b, h) - disc(a, h)) / n;
+                }
+            }
+        }
+        return static_cast<F32>(std::min(cover, 1.0));
+    }
+
     bool SkyMap::topAt(F64 x, F64 y, F64& top) const
     {
         const std::vector<Interval>* cell = find(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y)));

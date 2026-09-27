@@ -31,6 +31,7 @@
 #include <climits>
 #include <cmath>
 #include <map>
+#include <unordered_map>
 
 namespace
 {
@@ -38,6 +39,9 @@ namespace
 
     constexpr U32 INF = 0xffffffffu;
     constexpr S32 OPEN_TOP = INT_MAX / 4;    ///< an open ceiling, in global units
+    constexpr F32 SKY_COVER_HEADROOM_M = 4.5f;  ///< under a lower ceiling a gap's own roof covers it without asking
+    constexpr F32 SKY_COVER_EYE_M = 1.5f;       ///< the sky is judged from this far over the floor
+    constexpr F32 SKY_COVER_OPEN_MIN = 0.05f;   ///< under this share of open sky a gap is not seeded
     constexpr S32 FLOOR_SLACK = 2;           ///< a read may sit this many units under a floor, which reads high
 
     enum EdgeFlags : U8
@@ -438,6 +442,7 @@ namespace sknav
         std::vector<U32> mCarrySeed;    ///< the walkable gap a carried depth came from
         S32 mCarryRise = 0;
         std::vector<std::pair<U32, U32>> mWalkSeeds;     ///< from neighbouring meshes, kept for the depth flood
+        std::vector<std::pair<U32, U32>> mSkyWalkSeeds;  ///< walkable gaps under some sky, at the depth their cover starts them
 
         const EnclosureParams& params() const { return mInput->mParams; }
         const TileAir& air(size_t t) const { return *mInput->mTiles[t].mAir; }
@@ -960,11 +965,12 @@ namespace sknav
             case STAGE_SKY:
                 if (!mStarted)
                 {
+                    const EnclosureParams& p = params();
                     std::vector<std::pair<U32, U32>> seeds;
+                    std::unordered_map<U64, F32> covers;
                     for (size_t t = 0; t < tiles; ++t)
                     {
                         const TileAir& a = air(t);
-                        const U64 own = in.mTiles[t].mSkyContributor;
                         for (const AirLeaf& leaf : a.mLeaves)
                         {
                             const F64 s = (1 << leaf.mLevel) * 0.5 * a.mCell;
@@ -973,18 +979,46 @@ namespace sknav
                             for (U32 i = 0; i < leaf.mGapCount; ++i)
                             {
                                 const AirGap& g = a.mGaps[leaf.mFirstGap + i];
-                                if (!(g.mFlags & AirGap::OWN_SKY))
+                                const bool own_sky = (g.mFlags & AirGap::OWN_SKY) != 0;
+                                const F32 headroom = g.mCeiling == AIR_CEILING_OPEN ? 1e6f : (g.mCeiling - g.mFloor) * a.mUnit;
+                                if (!own_sky && (!in.mSky || headroom < SKY_COVER_HEADROOM_M))
                                 {
                                     continue;
                                 }
-                                const LLVector3d at(x, y, in.mMeshOrigin.mdV[VZ] + a.mOrigin.mV[VZ] + g.mFloor * a.mUnit);
-                                if (in.mSky && !in.mSky->skyOpenAbove(at, params().mSkyReachM, own))
+                                // The sky a standing head sees, less what the solids over it hide.
+                                F32 cover = 0.f;
+                                if (in.mSky)
+                                {
+                                    const F32 head = std::min(SKY_COVER_EYE_M, headroom * 0.5f);
+                                    const F64 z = in.mMeshOrigin.mdV[VZ] + a.mOrigin.mV[VZ] + g.mFloor * a.mUnit + head;
+                                    // Neighbouring leaves share a metre and nearly a height: one read serves them all.
+                                    const U64 key = (static_cast<U64>(static_cast<S64>(std::floor(x)) & 0xfffff) << 44) |
+                                                    (static_cast<U64>(static_cast<S64>(std::floor(y)) & 0xfffff) << 24) |
+                                                    (static_cast<U64>(static_cast<S64>(std::floor(z * 0.5))) & 0xffffff);
+                                    const auto hit = covers.find(key);
+                                    if (hit != covers.end())
+                                    {
+                                        cover = hit->second;
+                                    }
+                                    else
+                                    {
+                                        cover = in.mSky->coverAbove(LLVector3d(x, y, z), p.mSkyReachM);
+                                        covers.emplace(key, cover);
+                                        budget -= 16;
+                                    }
+                                }
+                                if (cover > 1.f - SKY_COVER_OPEN_MIN)
                                 {
                                     continue;
                                 }
+                                // Seeded as far out as its hidden sky: S starts at the open share, and D at that share of full depth.
                                 const U32 n = mBase[t] + leaf.mFirstGap + i;
                                 mNodeFlags[n] |= NODE_SKY;
-                                seeds.emplace_back(0, n);
+                                seeds.emplace_back(static_cast<U32>(std::lround(-p.mSkyDecayM * std::log(1.f - cover) / mHalfCellM)), n);
+                                if (mNodeFlags[n] & NODE_WALK)
+                                {
+                                    mSkyWalkSeeds.emplace_back(static_cast<U32>(std::lround(cover * p.mDepthFullM / mHalfCellM)), n);
+                                }
                             }
                         }
                     }
@@ -1002,13 +1036,8 @@ namespace sknav
                 {
                     std::vector<std::pair<U32, U32>> seeds;
                     seeds.swap(mWalkSeeds);
-                    for (U32 n = 0; n < mNodeFlags.size(); ++n)
-                    {
-                        if ((mNodeFlags[n] & NODE_WALK) && (mNodeFlags[n] & NODE_SKY))
-                        {
-                            seeds.emplace_back(0, n);
-                        }
-                    }
+                    seeds.insert(seeds.end(), mSkyWalkSeeds.begin(), mSkyWalkSeeds.end());
+                    std::vector<std::pair<U32, U32>>().swap(mSkyWalkSeeds);
                     mFlood.begin(std::move(seeds));
                     mStarted = true;
                 }

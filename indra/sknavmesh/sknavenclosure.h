@@ -48,7 +48,7 @@ namespace sknav
         F32 mWalkOverlapM = 1.f;    ///< and links to one sharing this much air
         F32 mCarryOverlapM = 0.5f;  ///< depth carries into unwalkable air sharing this much, at any step
         F32 mCarryRiseM = 2.f;      ///< and whose floor is within this of the walkable floor it came from
-        F32 mSkyReachM = 50.f;      ///< a solid of another mesh starting this far above still shelters
+        F32 mSkyReachM = 50.f;      ///< solids overhead out to this far sideways hide a gap's sky
         F32 mHysteresis = 0.05f;    ///< a bucket holds until e is this far past its edge
         /// Walkable air no walkable path reaches from outside reads INDOORS,
         /// flagged sealed with D at its cap, rather than UNKNOWN.
@@ -152,7 +152,7 @@ namespace sknav
         {
             TileKey mKey;
             TileAirPtr mAir;
-            U64 mSkyContributor = 0;    ///< what the tile gave the sky map, which does not shelter itself
+            U64 mSkyContributor = 0;    ///< what the tile gave the sky map
         };
         /// A neighbouring mesh's last answers, read one generation late.
         struct Neighbour
