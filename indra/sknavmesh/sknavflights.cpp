@@ -67,6 +67,26 @@ namespace
         S32 mB;
     };
 
+    struct WeldKey
+    {
+        S64 mX, mY, mZ;
+        bool operator==(const WeldKey& o) const { return mX == o.mX && mY == o.mY && mZ == o.mZ; }
+    };
+
+    struct WeldHash
+    {
+        size_t operator()(const WeldKey& k) const
+        {
+            U64 h = 1469598103934665603ull;
+            for (const S64 v : { k.mX, k.mY, k.mZ })
+            {
+                h = (h ^ static_cast<U64>(v)) * 1099511628211ull;
+                h ^= h >> 29;
+            }
+            return static_cast<size_t>(h);
+        }
+    };
+
     struct Partitioner
     {
         std::vector<V3> mV;             // welded
@@ -130,13 +150,13 @@ namespace
                    const std::vector<U8>& two_sided, U8 part_area)
         {
             // weld on the millimetre, across the whole soup
-            std::unordered_map<U64, S32> key;
+            std::unordered_map<WeldKey, S32, WeldHash> key;
             std::vector<S32> remap(verts.size());
             for (size_t i = 0; i < verts.size(); ++i)
             {
                 const S64 kx = std::llround(verts[i].mV[VX] * 1000.0), ky = std::llround(verts[i].mV[VY] * 1000.0),
                           kz = std::llround(verts[i].mV[VZ] * 1000.0);
-                const U64 k = (static_cast<U64>(kx & 0x1fffff) << 42) | (static_cast<U64>(ky & 0x1fffff) << 21) | static_cast<U64>(kz & 0x1fffff);
+                const WeldKey k { kx, ky, kz };
                 auto it = key.find(k);
                 if (it == key.end())
                 {

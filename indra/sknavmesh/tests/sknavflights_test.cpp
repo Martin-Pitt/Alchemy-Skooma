@@ -535,4 +535,22 @@ namespace tut
         ensure_equals("three treads", r.mFlights[w][0].mTreads.size(), 3u);
         ensure("polys", !r.mFlights[w][0].mPolys.empty());
     }
+
+    template<> template<>
+    void sknavflights_object::test<13>()
+    {
+        set_test_name("the weld tells apart points a power of two millimetres apart");
+        Soup s = straight();
+        const Soup other = straight();
+        const S32 base = static_cast<S32>(s.mV.size());
+        for (const LLVector3& v : other.mV)
+        {
+            s.mV.push_back(v + LLVector3(2097.152f, 0.f, 0.f));
+        }
+        for (const S32 i : other.mT)
+        {
+            s.mT.push_back(base + i);
+        }
+        ensure("two flights of eight", treadCounts(s.partition()) == std::vector<size_t>({ 8, 8 }));
+    }
 }
