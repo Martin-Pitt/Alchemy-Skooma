@@ -153,6 +153,13 @@ public:
     /// console with the counts, the size and the full path.
     std::string exportAll() const;
 
+    /// What every tile is built from, to logs/sknav-census-<UTC>.json:
+    /// the census's records, clusters, doors, features and spans, each
+    /// region's land as the terrain windows sample it, and the build
+    /// parameters, so the build replays offline (sknavcensusio.h). Returns
+    /// a line for the console with the counts, the size and the full path.
+    std::string exportCensus() const;
+
     /// The selected linkset, or the one under the screen centre, with everyone
     /// seated on it and their attachments, as triangles in the root's own frame
     /// with each face's transparency: raw input for working out a vehicle's

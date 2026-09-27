@@ -27,6 +27,7 @@
 #include "sknavmesh.h"
 
 #include "sknavannotate.h"
+#include "sknavcensusio.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
 #include "sknavrooms.h"
@@ -68,6 +69,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <set>
@@ -3168,6 +3170,127 @@ std::string SKNavMesh::exportAll() const
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
     return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air (%.1f MB) -> %s", meshes_written,
                     counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+}
+
+std::string SKNavMesh::exportCensus() const
+{
+    SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
+    if (!snap || !LLWorld::instanceExists())
+    {
+        return "no census yet";
+    }
+    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
+    static LLCachedControl<F32> grounded_margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+    static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
+
+    CensusFile census;
+    census.mExported = LLDate::now().asString();
+    census.mStamp = snap->mStamp;
+    census.mAgent = gAgent.getPositionGlobal();
+    census.mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    census.mRange = snap->mRange;
+    fillParams(census.mParams);
+    census.mAirRadius = air_radius;
+    census.mClusterGap = gap;
+    census.mGroundedMargin = grounded_margin;
+    census.mVoidMargin = void_margin;
+    // As the rooms pass sets them up.
+    census.mEnclosure.mWalkHeadM = census.mParams.mParams[static_cast<S32>(AgentClass::AVATAR)].mHeight;
+    census.mEnclosure.mSealedIndoors = sealed;
+
+    // Every window samples on whole metres from its padded corner, and every
+    // corner is on the lattice: one phase covers all of a region's windows.
+    const F32 pad = padFor(census.mParams);
+    const F64 phase = std::ceil(static_cast<F64>(pad)) - pad;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        CensusRegion r;
+        r.mId = region->getRegionID();
+        r.mHandle = region->getHandle();
+        r.mOrigin = region->getOriginGlobal();
+        r.mName = region->getName();
+        r.mWidth = region->getWidth();
+        r.mWater = region->getWaterHeight();
+        LLSurface& land = region->getLand();
+        r.mLandMin = land.getMinZ();
+        r.mLandMax = land.getMaxZ();
+        r.mPhase = static_cast<F32>(phase);
+        r.mSamples = static_cast<S32>(std::ceil(r.mWidth - phase));
+        r.mZ.resize(static_cast<size_t>(r.mSamples) * r.mSamples);
+        for (S32 y = 0; y < r.mSamples; ++y)
+        {
+            for (S32 x = 0; x < r.mSamples; ++x)
+            {
+                const LLVector3d p(r.mOrigin.mdV[VX] + phase + x, r.mOrigin.mdV[VY] + phase + y, 0.0);
+                r.mZ[static_cast<size_t>(y) * r.mSamples + x] = land.resolveHeightGlobal(p);
+            }
+        }
+        census.mRegions.push_back(std::move(r));
+    }
+
+    census.mRecords = snap->mRecords;
+    std::unordered_map<const Record*, U32> index;
+    for (size_t i = 0; i < census.mRecords.size(); ++i)
+    {
+        index[census.mRecords[i].get()] = static_cast<U32>(i);
+    }
+    for (const ClusterPtr& c : snap->mClusters.mClusters)
+    {
+        CensusCluster cl;
+        cl.mId = c->mId;
+        cl.mGrounded = grounded(*c);
+        for (const RecordPtr& r : c->mRecords)
+        {
+            const auto found = index.find(r.get());
+            if (found != index.end())
+            {
+                cl.mRecords.push_back(found->second);
+            }
+        }
+        census.mClusters.push_back(std::move(cl));
+    }
+    census.mFeatures = snap->mFeatures;
+    for (const auto& region : mFeatureDoors)
+    {
+        census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
+    }
+    for (const auto& region : mFeatureLinks)
+    {
+        for (const auto& entry : region.second)
+        {
+            CensusSpan s;
+            s.mId = entry.first;
+            s.mKind = entry.second.mKind;
+            s.mMin = entry.second.mMin;
+            s.mMax = entry.second.mMax;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                s.mExits[cls] = entry.second.mExits[cls];
+                s.mLinks[cls] = entry.second.mLinks[cls];
+            }
+            census.mSpans.push_back(std::move(s));
+        }
+    }
+
+    const std::time_t now = std::time(nullptr);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%SZ", std::gmtime(&now));
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sknav-census-%s.json", stamp));
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    writeCensus(file, census);
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features (%.1f MB) -> %s", census.mRecords.size(),
+                    census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 

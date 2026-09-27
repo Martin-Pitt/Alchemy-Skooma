@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="735"
+ min_height="796"
  min_width="300"
- height="755"
+ height="816"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -309,6 +309,28 @@
     tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
    <text
     name="export_status"
+    height="26"
+    word_wrap="true"
+    use_ellipses="false"
+    type="string"
+    follows="left|top|right"
+    layout="topleft"
+    left="12"
+    top_pad="4"
+    width="292">
+   </text>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left="12"
+    top_pad="8"
+    height="23"
+    width="292"
+    name="export_census_button"
+    label="Export the census"
+    tool_tip="Write what every tile is built from - the census's records, clusters, doors and features, each region's land and the build parameters - to sknav-census-&lt;time&gt;.json in the logs folder, so the build can be replayed offline" />
+   <text
+    name="export_census_status"
     height="26"
     word_wrap="true"
     use_ellipses="false"
