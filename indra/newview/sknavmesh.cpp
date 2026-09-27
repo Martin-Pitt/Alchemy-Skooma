@@ -70,6 +70,7 @@
 #include "workqueue.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
@@ -2758,8 +2759,12 @@ std::string SKNavMesh::exportAll() const
 
 std::string SKNavMesh::exportCensus() const
 {
+    if (!SKWorldCensus::instanceExists() || !LLWorld::instanceExists())
+    {
+        return "the census is not running";
+    }
     SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
-    if (!snap || !LLWorld::instanceExists())
+    if (!snap)
     {
         return "no census yet";
     }
@@ -2769,6 +2774,7 @@ std::string SKNavMesh::exportCensus() const
     static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
     static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
 
+    LLTimer timer;
     CensusFile census;
     census.mExported = LLDate::now().asString();
     census.mStamp = snap->mStamp;
@@ -2859,10 +2865,13 @@ std::string SKNavMesh::exportCensus() const
         }
     }
 
-    const std::time_t now = std::time(nullptr);
+    // Milliseconds in the name, so two exports in one second both survive.
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t secs = std::chrono::system_clock::to_time_t(now);
+    const S32 millis = static_cast<S32>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
     char stamp[32];
-    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%SZ", std::gmtime(&now));
-    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sknav-census-%s.json", stamp));
+    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", std::gmtime(&secs));
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sknav-census-%s.%03dZ.json", stamp, millis));
     llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!file.is_open())
     {
@@ -2872,10 +2881,12 @@ std::string SKNavMesh::exportCensus() const
     const std::streamoff bytes = file.tellp();
     file.close();
 
-    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features (%.1f MB) -> %s", census.mRecords.size(),
+    // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
+    const F32 ms = timer.getElapsedTimeF32() * 1000.f;
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features (%.1f MB, %.0f ms) -> %s", census.mRecords.size(),
                     census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 
 std::string SKNavMesh::exportVehicle() const

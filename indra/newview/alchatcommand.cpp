@@ -302,7 +302,9 @@ bool ALChatCommand::parseCommand(std::string data)
         else if (cmd == SKNAV_CENSUS_TRIGGER)
         {
             LLSD args;
-            args["MESSAGE"] = SKNavMesh::instance().exportCensus();
+            // Never start the navmesh just to ask it: nothing running, nothing to export.
+            args["MESSAGE"] = SKNavMesh::instanceExists() ? SKNavMesh::instance().exportCensus()
+                                                          : std::string("The navmesh is not running: turn it on to export its census.");
             LLNotificationsUtil::add("SystemMessageTip", args);
             return true;
         }
