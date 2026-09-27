@@ -13,6 +13,7 @@ target_sources(
     sknavairdistil.cpp
     sknavannotate.cpp
     sknavbuild.cpp
+    sknavcensusio.cpp
     sknavcluster.cpp
     sknavenclosure.cpp
     sknavfeatures.cpp
@@ -33,6 +34,7 @@ target_sources(
         sknavairdistil.h
         sknavannotate.h
         sknavbuild.h
+        sknavcensusio.h
         sknavcluster.h
         sknavenclosure.h
         sknavfeatures.h
@@ -73,6 +75,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavenclosure PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavcensusio PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
