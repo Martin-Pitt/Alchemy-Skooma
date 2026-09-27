@@ -26,6 +26,7 @@
 #define SK_NAVBUILD_H
 
 #include "sknavair.h"
+#include "sknavflights.h"
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
@@ -122,6 +123,8 @@ namespace sknav
         std::vector<WallSegment> mSegments[NUM_CLASSES];
         std::vector<DropLink> mLinks[NUM_CLASSES];
         AirGrid mAir;
+        /// Stair flights and the polys they produced, when the partition is SLOPE.
+        std::vector<Flight> mFlights[NUM_CLASSES];
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
