@@ -27,6 +27,7 @@
 #include "../test/lltut.h"
 
 #include "../sknavairdistil.h"
+#include "../sknavskymap.h"
 
 #include "Recast.h"
 
@@ -262,7 +263,7 @@ namespace tut
     template<> template<>
     void sknavairdistil_object::test<5>()
     {
-        set_test_name("solid tops merge per metre");
+        set_test_name("solid tops merge per metre, and the sky map forgets a roof that is gone");
         rcContext ctx(false);
         rcHeightfield* hf = rcAllocHeightfield();
         const F32 bmin[3] = { 0.f, 0.f, 0.f };
@@ -293,6 +294,33 @@ namespace tut
         ensure_equals("roofed cell: ground and roof", air.mTopStart[1] - air.mTopStart[0], 2u);
         ensure_equals("roof merged down to its lowest bottom", air.mTop[air.mTopStart[0] + 1].mBottom, 20);
         ensure_equals("open cell: ground only", air.mTopStart[2] - air.mTopStart[1], 1u);
+
+        SkyMap sky;
+        const LLVector3d tile(1000.0, 2000.0, 30.0);
+        sky.set(7, tile, air);
+        const LLVector3d under(1000.5, 2000.5, 31.5), beside(1001.5, 2000.5, 31.5), over(1000.5, 2000.5, 36.0);
+        ensure("under the roof is covered", !sky.skyOpenAt(under));
+        ensure("beside it is open", sky.skyOpenAt(beside));
+        ensure("above the roof is open", sky.skyOpenAt(over));
+        ensure("beyond reach is open", sky.skyOpenAt(under - LLVector3d(0, 0, 60.0), 50.f));
+        const U64 v = sky.version();
+
+        // A second tile's roof over the same cell, then the first republished roofless.
+        TileAir other = air;
+        sky.set(8, tile + LLVector3d(0, 0, 10.0), other);
+        TileAir bare = air;
+        bare.mTop.erase(bare.mTop.begin() + 1);
+        for (size_t i = 1; i < bare.mTopStart.size(); ++i)
+        {
+            bare.mTopStart[i] -= 1;
+        }
+        sky.set(7, tile, bare);
+        ensure("the other tile's roof still covers", !sky.skyOpenAt(under));
+        sky.remove(8);
+        ensure("a deleted roof is forgotten", sky.skyOpenAt(under));
+        ensure("changes are versioned", sky.version() > v);
+        sky.remove(7);
+        ensure_equals("nothing left", sky.cells(), static_cast<size_t>(0));
     }
 
     template<> template<>

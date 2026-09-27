@@ -28,6 +28,7 @@
 #include "llsingleton.h"
 #include "sknavbuild.h"
 #include "sknavoverlay.h"
+#include "sknavskymap.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
@@ -119,6 +120,11 @@ public:
     bool coverAt(const LLVector3d& pos, const LLVector3& dir, sknav::AgentClass cls, F32 eye_height,
                  sknav::Cover& cover_out, F32& height_out, F32 reach = 1.f) const;
 
+    /// No solid of any published tile's air starts above pos within reach:
+    /// the region sky map, which forgets a roof as soon as its tile does.
+    bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const { return mSkyMap.skyOpenAt(pos, reach); }
+    const sknav::SkyMap& skyMap() const { return mSkyMap; }
+
     std::string statsLine() const;
 
     /// Cast from the middle of the screen, mark what it hits, and write down
@@ -156,6 +162,8 @@ public:
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
+        U32 mAirTiles = 0;
+        size_t mAirBytes = 0;
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
         F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
@@ -252,6 +260,8 @@ private:
     void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
 
     bool wanted() const;
+    /// Bring the sky map in line with the published tiles' air.
+    void syncSkyMap();
     /// The pool the tile builds run on, created on first use. A pool of its
     /// own, so the builds neither queue behind nor starve the viewer's shared
     /// work: they are pure and independent, one per core.
@@ -319,6 +329,9 @@ private:
     Stats mStats;
     F32 mLastLog = 0.f;
     bool mDemanding = false;
+    sknav::SkyMap mSkyMap;
+    std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
+    U64 mSkyRevision = 0;
     LLVector3d mMark;
     bool mHasMark = false;
 

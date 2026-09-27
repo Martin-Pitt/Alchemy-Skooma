@@ -1316,6 +1316,11 @@ void SKNavMesh::update()
     sampleTerrain();
     schedule();
     syncFeatureLinks(snap);
+    if (mSkyRevision != mRevision)
+    {
+        syncSkyMap();
+        mSkyRevision = mRevision;
+    }
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1323,12 +1328,19 @@ void SKNavMesh::update()
     mStats.mFaces = 0;
     mStats.mSegments = 0;
     mStats.mLinks = 0;
+    mStats.mAirTiles = 0;
+    mStats.mAirBytes = 0;
     mStats.mInFlight = mInFlight;
     for (const auto& entry : mMeshes)
     {
         for (const auto& t : entry.second->mTiles)
         {
             mStats.mTiles++;
+            if (t.second.mAir)
+            {
+                mStats.mAirTiles++;
+                mStats.mAirBytes += t.second.mAir->bytes();
+            }
             if (t.second.mBuilt)
             {
                 mStats.mTilesBuilt++;
@@ -1352,10 +1364,50 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB, sky %u cells %.1f MB",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
-                    mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs);
+                    mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
+                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0);
+}
+
+void SKNavMesh::syncSkyMap()
+{
+    // A contributor is a tile of a mesh. Its air is replaced whole on every
+    // publish, so a pointer that moved is a tile to hand over again.
+    std::map<U64, TileAirPtr> seen;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        U64 id = SEED;
+        for (U8 b : mesh.mId.mData)
+        {
+            id = mix(id, b);
+        }
+        for (const auto& t : mesh.mTiles)
+        {
+            if (!t.second.mAir)
+            {
+                continue;
+            }
+            const U64 key = mix(mix(id, static_cast<U32>(t.first.mX)), static_cast<U32>(t.first.mY));
+            const auto old = mSkyTiles.find(key);
+            if (old == mSkyTiles.end() || old->second != t.second.mAir)
+            {
+                const TileAir& air = *t.second.mAir;
+                mSkyMap.set(key, mesh.mOrigin + LLVector3d(air.mOrigin), air);
+            }
+            seen[key] = t.second.mAir;
+        }
+    }
+    for (const auto& old : mSkyTiles)
+    {
+        if (!seen.count(old.first))
+        {
+            mSkyMap.remove(old.first);
+        }
+    }
+    mSkyTiles.swap(seen);
 }
 
 SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const
