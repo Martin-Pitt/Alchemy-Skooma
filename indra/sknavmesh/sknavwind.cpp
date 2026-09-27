@@ -535,7 +535,7 @@ namespace sknav
                 F32 sum = 0.f;
                 for (F32 sgn : { 1.f, -1.f })
                 {
-                    F32 free = params.mWidthReachM;
+                    F32 span = params.mWidthReachM;
                     for (F32 s = cell; s <= params.mWidthReachM + 1e-3f;)
                     {
                         const S32 j = index(px + sgn * pp.mV[VX] * s, py + sgn * pp.mV[VY] * s);
@@ -545,12 +545,12 @@ namespace sknav
                         }
                         if (blocked(j))
                         {
-                            free = s;
+                            span = s;
                             break;
                         }
                         s += skip(f.mReach[j]) * cell;
                     }
-                    sum += free;
+                    sum += span;
                 }
                 width[i] = sum;
                 weight[i] = 1.f;

@@ -62,6 +62,15 @@ struct SKNavRooms::Job
     bool mCancelled = false;
 };
 
+struct SKNavRooms::WindJob
+{
+    LLUUID mId;
+    U64 mGeneration = 0;
+    std::shared_ptr<std::atomic<U64>> mLatest;
+    std::unique_ptr<WindPass> mPass;
+    bool mCancelled = false;
+};
+
 // ---------------------------------------------------------------- the view
 
 bool SKNavWorldView::enclosureAt(const LLVector3d& pos, Enclosure& out) const
@@ -262,6 +271,215 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
     }
 }
 
+// ---------------------------------------------------------------- wind
+
+namespace
+{
+    /// 1.5 m over the ground, where people and grass are, and 10 m over it,
+    /// above walls and fences but among roofs and trees.
+    std::vector<WindLevel> windBands()
+    {
+        WindLevel low, high;
+        low.mOffsetM = 1.5f;
+        high.mOffsetM = 10.f;
+        return { low, high };
+    }
+
+    F32 wrapHeading(F32 deg)
+    {
+        deg = std::fmod(deg, 360.f);
+        return deg < 0.f ? deg + 360.f : deg;
+    }
+}
+
+SKNavWind::SKNavWind(SKNavWorldViewPtr view)
+    : mView(std::move(view))
+{
+}
+
+U64 SKNavWind::revision() const
+{
+    return mView ? mView->revision() : 0;
+}
+
+const SKNavWorldView::Mesh* SKNavWind::meshAt(const LLVector3d& pos, S32* cell) const
+{
+    // The mesh whose ground is highest under the point without being above
+    // it: a skybox's own floor rather than the terrain far below.
+    const SKNavWorldView::Mesh* best = nullptr;
+    F64 best_ground = 0.0;
+    S32 best_cell = -1;
+    if (!mView)
+    {
+        return nullptr;
+    }
+    for (const SKNavWorldView::Mesh& m : mView->meshes())
+    {
+        if (!m.mWind || m.mWind->mBands.empty())
+        {
+            continue;
+        }
+        const WindSlabPtr s = m.mWind->slab(0, 0);
+        if (!s || !s->mZ)
+        {
+            continue;
+        }
+        const WindCell* c = s->at(static_cast<F32>(pos.mdV[VX] - m.mOrigin.mdV[VX]), static_cast<F32>(pos.mdV[VY] - m.mOrigin.mdV[VY]));
+        if (!c || (c->mFlags & WindCell::UNSEEN))
+        {
+            continue;
+        }
+        const S32 i = static_cast<S32>(c - s->mCells.data());
+        const F64 ground = (*s->mZ)[i] + m.mOrigin.mdV[VZ] - m.mWind->mBands[0].mOffsetM;
+        const bool under = ground <= pos.mdV[VZ] + 0.5, best_under = best && best_ground <= pos.mdV[VZ] + 0.5;
+        if (!best || (under && (!best_under || ground > best_ground)) || (!under && !best_under && ground < best_ground))
+        {
+            best = &m;
+            best_ground = ground;
+            best_cell = i;
+        }
+    }
+    if (cell)
+    {
+        *cell = best_cell;
+    }
+    return best;
+}
+
+WindSlabPtr SKNavWind::slab(S32 heading, const LLVector3d& min, const LLVector3d& max, LLVector3d* origin) const
+{
+    const LLVector3d centre((min.mdV[VX] + max.mdV[VX]) * 0.5, (min.mdV[VY] + max.mdV[VY]) * 0.5, min.mdV[VZ]);
+    S32 cell = -1;
+    const SKNavWorldView::Mesh* m = meshAt(centre, &cell);
+    if (!m)
+    {
+        return nullptr;
+    }
+    const F32 want = static_cast<F32>(min.mdV[VZ] - m->mOrigin.mdV[VZ]) + 1.5f;
+    S32 band = 0;
+    F32 best = std::numeric_limits<F32>::max();
+    for (S32 b = 0; b < static_cast<S32>(m->mWind->mBands.size()); ++b)
+    {
+        const WindSlabPtr s = m->mWind->slab(heading, b);
+        if (s && s->mZ && cell >= 0 && std::fabs((*s->mZ)[cell] - want) < best)
+        {
+            best = std::fabs((*s->mZ)[cell] - want);
+            band = b;
+        }
+    }
+    if (origin)
+    {
+        *origin = m->mOrigin;
+    }
+    return m->mWind->slab(heading, band);
+}
+
+bool SKNavWind::sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) const
+{
+    S32 cell = -1;
+    const SKNavWorldView::Mesh* m = meshAt(pos, &cell);
+    if (!m || cell < 0)
+    {
+        return false;
+    }
+    const WindProduct& w = *m->mWind;
+    const F32 at = wrapHeading(heading_deg) / (360.f / WIND_HEADINGS);
+    const S32 h0 = static_cast<S32>(at) % WIND_HEADINGS, h1 = (h0 + 1) % WIND_HEADINGS;
+    const F32 th = at - std::floor(at);
+    // The bands around the point, by their heights at its cell.
+    const F32 z = static_cast<F32>(pos.mdV[VZ] - m->mOrigin.mdV[VZ]);
+    const S32 bands = static_cast<S32>(w.mBands.size());
+    S32 b0 = 0, b1 = 0;
+    F32 tb = 0.f;
+    for (S32 b = 0; b < bands; ++b)
+    {
+        const WindSlabPtr s = w.slab(h0, b);
+        if (!s || !s->mZ || (*s->mZ)[cell] > z)
+        {
+            continue;
+        }
+        b0 = b1 = b;
+        tb = 0.f;
+        const WindSlabPtr n = b + 1 < bands ? w.slab(h0, b + 1) : nullptr;
+        if (n && n->mZ && (*n->mZ)[cell] > z)
+        {
+            const F32 lo = (*s->mZ)[cell], hi = (*n->mZ)[cell];
+            b1 = b + 1;
+            tb = (z - lo) / (hi - lo);
+        }
+    }
+    F32 f[4];
+    LLVector2 d[4];
+    U8 fl[4];
+    const S32 hs[4] = { h0, h1, h0, h1 }, bs[4] = { b0, b0, b1, b1 };
+    for (S32 k = 0; k < 4; ++k)
+    {
+        const WindCell& c = w.slab(hs[k], bs[k])->mCells[cell];
+        f[k] = (c.mFlags & WindCell::BLOCKED) ? 0.f : c.factor();
+        d[k] = c.deflection();
+        fl[k] = c.mFlags;
+    }
+    out.mFactor = lerp(lerp(f[0], f[1], th), lerp(f[2], f[3], th), tb);
+    out.mDeflect = lerp(lerp(d[0], d[1], th), lerp(d[2], d[3], th), tb);
+    out.mFlags = fl[(th < 0.5f ? 0 : 1) + (tb < 0.5f ? 0 : 2)];
+    return true;
+}
+
+void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const
+{
+    if (!mView)
+    {
+        return;
+    }
+    const S32 heading = static_cast<S32>(std::lround(wrapHeading(heading_deg) / (360.f / WIND_HEADINGS))) % WIND_HEADINGS;
+    const F32 rad = windHeadingDeg(heading) * DEG_TO_RAD;
+    const LLVector2 along(std::cos(rad), std::sin(rad));
+    const LLColor4 calm(0.15f, 0.2f, 0.9f, 0.9f), stream(0.1f, 0.9f, 0.9f, 0.9f), gust(1.f, 0.9f, 0.1f, 0.9f);
+    const F64 reach2 = reach * reach;
+    constexpr S32 STRIDE = 4;       // an arrow every 2 m
+    for (const SKNavWorldView::Mesh& m : mView->meshes())
+    {
+        const WindSlabPtr s = m.mWind ? m.mWind->slab(heading, 0) : nullptr;
+        if (!s || !s->mZ)
+        {
+            continue;
+        }
+        for (S32 y = STRIDE / 2; y < s->mHeight; y += STRIDE)
+        {
+            for (S32 x = STRIDE / 2; x < s->mWidth; x += STRIDE)
+            {
+                const S32 i = x + y * s->mWidth;
+                const WindCell& c = s->mCells[i];
+                if (c.mFlags & (WindCell::BLOCKED | WindCell::UNSEEN))
+                {
+                    continue;
+                }
+                const LLVector3d at = m.mOrigin + LLVector3d(s->mOrigin.mV[VX] + (x + 0.5) * s->mCell, s->mOrigin.mV[VY] + (y + 0.5) * s->mCell,
+                                                             (*s->mZ)[i]);
+                if (dist_vec_squared2D(at, camera) > reach2)
+                {
+                    continue;
+                }
+                const F32 f = c.factor();
+                LLColor4 color = f < 1.f ? lerp(calm, stream, f) : lerp(stream, gust, llmin(f - 1.f, 1.f));
+                if (opaque)
+                {
+                    color.mV[VALPHA] = 1.f;
+                }
+                LLVector2 dir = along + c.deflection();
+                dir.normalize();
+                const F32 len = 0.3f + 0.6f * llmin(f, 2.f);
+                const LLVector3 p = gAgent.getPosAgentFromGlobal(at);
+                const LLVector3 d(dir.mV[VX], dir.mV[VY], 0.f), side(-dir.mV[VY], dir.mV[VX], 0.f);
+                const LLVector3 tail = p - d * (len * 0.5f), tip = p + d * (len * 0.5f);
+                geom.line(tail, tip, color);
+                geom.line(tip, tip - d * 0.25f + side * 0.15f, color);
+                geom.line(tip, tip - d * 0.25f - side * 0.15f, color);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- the scheduler
 
 std::vector<std::pair<LLVector3d, LLVector3d>> SKNavRooms::lifts(const LLVector3d& min, const LLVector3d& max)
@@ -411,11 +629,29 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mProduct.reset();
                     state.mRooms.reset();
+                    state.mWind.reset();
+                    state.mWindDirty = false;
                     mViewDirty = true;
                 }
                 continue;
             }
             post(state, navmesh);
+        }
+    }
+
+    // Wind follows the rooms: a mesh whose spaces landed builds its slabs next.
+    static LLCachedControl<bool> wind(gSavedSettings, "SKNavWind", true);
+    for (auto& entry : mMeshes)
+    {
+        MeshState& state = entry.second;
+        if (!wind && state.mWind)
+        {
+            state.mWind.reset();
+            mViewDirty = true;
+        }
+        if (wind && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
+        {
+            postWind(state);
         }
     }
 
@@ -603,6 +839,7 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     state.mProduct = product;
     state.mRooms = job->mSpaces->product();
+    state.mWindDirty = true;
     mViewDirty = true;
     if (!moved)
     {
@@ -620,6 +857,99 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     }
 }
 
+void SKNavRooms::postWind(MeshState& state)
+{
+    if (!mThread)
+    {
+        return;
+    }
+    auto input = std::make_shared<WindInput>();
+    input->mGeneration = state.mGeneration;
+    input->mEnclosure = state.mProduct;
+    input->mRooms = state.mRooms;
+    input->mBands = windBands();
+    auto job = std::make_shared<WindJob>();
+    job->mId = state.mId;
+    job->mGeneration = state.mGeneration;
+    job->mLatest = state.mLatest;
+    job->mPass = std::make_unique<WindPass>(input);
+    std::weak_ptr<bool> alive = mAlive;
+    const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
+    const bool posted = queue && queue->post([this, job, alive]() {
+        if (!alive.expired())
+        {
+            runWind(job, alive);
+        }
+    });
+    if (posted)
+    {
+        state.mWindDirty = false;
+        state.mWindInFlight = true;
+    }
+}
+
+void SKNavRooms::runWind(const std::shared_ptr<WindJob>& job, const std::weak_ptr<bool>& alive)
+{
+    // On the rooms thread: a band's field or one slab per step, yielding between chunks like the passes.
+    auto land = [this, job, alive]() {
+        LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, job, alive]() {
+            if (!alive.expired())
+            {
+                finishWind(job);
+            }
+        });
+    };
+    if (job->mLatest->load() != job->mGeneration)
+    {
+        job->mCancelled = true;
+        land();
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    while (!job->mPass->step())
+    {
+        if (std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - start).count() >= CHUNK_MS)
+        {
+            const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
+            const bool posted = queue && queue->post([this, job, alive]() {
+                if (!alive.expired())
+                {
+                    runWind(job, alive);
+                }
+            });
+            if (!posted)
+            {
+                job->mCancelled = true;
+                land();
+            }
+            return;
+        }
+    }
+    land();
+}
+
+void SKNavRooms::finishWind(const std::shared_ptr<WindJob>& job)
+{
+    const auto it = mMeshes.find(job->mId);
+    if (it == mMeshes.end() || it->second.mLatest != job->mLatest)
+    {
+        return;
+    }
+    MeshState& state = it->second;
+    state.mWindInFlight = false;
+    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mPass->done())
+    {
+        return;     // its air moved: the rooms land again, and the wind follows them
+    }
+    const WindProductPtr product = job->mPass->product();
+    ++mWindPasses;
+    mLastWindMs = product->mMillis;
+    mLastWindBytes = product->bytes();
+    state.mWind = product;
+    mViewDirty = true;
+}
+
+
 void SKNavRooms::rebuildView()
 {
     mViewDirty = false;
@@ -631,10 +961,11 @@ void SKNavRooms::rebuildView()
         const MeshState& s = entry.second;
         if (s.mProduct)
         {
-            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms });
+            view->mMeshes.push_back({ s.mId, s.mOrigin, s.mMin, s.mMax, s.mProduct, s.mRooms, s.mWind });
         }
     }
     mView = view;
+    mWind = std::make_shared<SKNavWind>(view);
 }
 
 std::string SKNavRooms::statsLine() const
@@ -671,10 +1002,21 @@ std::string SKNavRooms::statsLine() const
     {
         space_stages += llformat("%s%s %.0f", s ? ", " : "", SpacesPass::stageName(s), mLastSpaceStageMs[s]);
     }
-    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s)",
+    U32 winds = 0;
+    size_t wind_bytes = 0;
+    for (const auto& entry : mMeshes)
+    {
+        if (entry.second.mWind)
+        {
+            ++winds;
+            wind_bytes += entry.second.mWind->bytes();
+        }
+    }
+    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps; %u spaces and %u portals, last %.0f ms (%s); wind slabs over %u meshes, %.1f MB, %u builds, last %.0f ms for %.1f MB",
                     meshes, mPasses, mCancelled, in_flight, mLastMs, stages.c_str(), mLastWallMs,
                     gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps), spaces,
-                    portals, mLastSpacesMs, space_stages.c_str());
+                    portals, mLastSpacesMs, space_stages.c_str(), winds, wind_bytes / 1048576.0, mWindPasses, mLastWindMs,
+                    mLastWindBytes / 1048576.0);
 }
 
 void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
@@ -888,6 +1230,37 @@ void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
                  << "\"}";
         }
         file << ']';
+        if (m.mWind && !m.mWind->mSlabs.empty())
+        {
+            // Per band its heights, per slab its cells: factor, deflection x and y, flags, a byte each.
+            const WindProduct& w = *m.mWind;
+            file << ",\"wind\":{\"headings\":" << WIND_HEADINGS << ",\"ms\":" << w.mMillis << ",\"bands\":[";
+            for (size_t b = 0; b < w.mBands.size(); ++b)
+            {
+                const WindSlabPtr s = w.slab(0, static_cast<S32>(b));
+                std::vector<F32> z;
+                if (s && s->mZ)
+                {
+                    z = *s->mZ;
+                    for (F32& v : z)
+                    {
+                        v += static_cast<F32>(oz);
+                    }
+                }
+                file << (b ? "," : "") << "{\"offset\":" << w.mBands[b].mOffsetM << ",\"absolute\":" << (w.mBands[b].mAbsolute ? "true" : "false")
+                     << ",\"z\":\"" << LLBase64::encode(reinterpret_cast<const U8*>(z.data()), z.size() * sizeof(F32)) << "\"}";
+            }
+            file << "],\"slabs\":[";
+            for (size_t i = 0; i < w.mSlabs.size(); ++i)
+            {
+                const WindSlab& s = *w.mSlabs[i];
+                file << (i ? "," : "") << "{\"heading\":" << windHeadingDeg(s.mHeading) << ",\"band\":" << s.mBand << ",\"origin\":["
+                     << m.mOrigin.mdV[VX] + s.mOrigin.mV[VX] << ',' << m.mOrigin.mdV[VY] + s.mOrigin.mV[VY] << "],\"cell\":" << s.mCell
+                     << ",\"width\":" << s.mWidth << ",\"height\":" << s.mHeight << ",\"cells\":\""
+                     << LLBase64::encode(reinterpret_cast<const U8*>(s.mCells.data()), s.mCells.size() * sizeof(WindCell)) << "\"}";
+            }
+            file << "]}";
+        }
         return;
     }
 }

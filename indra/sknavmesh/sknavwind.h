@@ -94,6 +94,7 @@ namespace sknav
 
     constexpr F32 WIND_FACTOR_UNIT = 1.f / 120.f;
     constexpr F32 WIND_DEFLECT_UNIT = 1.f / 60.f;
+    static_assert(sizeof(WindCell) == 4, "slabs are exported cell by cell");
 
     /// What every heading of one band shares: the obstacles and the air at the slab.
     struct WindField

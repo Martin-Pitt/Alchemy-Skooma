@@ -28,6 +28,7 @@
 #include "lluuid.h"
 #include "sknavenclosure.h"
 #include "sknavspaces.h"
+#include "sknavwind.h"
 #include "threadpool.h"
 #include "v3dmath.h"
 
@@ -58,6 +59,7 @@ public:
         LLVector3d mMax;
         sknav::EnclosureProductPtr mProduct;
         sknav::RoomsProductPtr mRooms;
+        sknav::WindProductPtr mWind;    ///< null until its slabs are built
     };
 
     /// A space: its mesh and its id there.
@@ -108,6 +110,43 @@ private:
 };
 typedef std::shared_ptr<const SKNavWorldView> SKNavWorldViewPtr;
 
+/// Wind near the camera, from each mesh's slabs: 16 headings by height
+/// band, each a speed factor and a deflection per 0.5 m cell. Immutable,
+/// like the view it reads, so any thread may hold one. A heading is where
+/// the wind blows toward, in degrees counter-clockwise from east. Beyond
+/// the slabs there is no answer, and the caller uses its own wind.
+class SKNavWind
+{
+public:
+    struct Sample
+    {
+        F32 mFactor = 1.f;          ///< of the free stream's speed
+        LLVector2 mDeflect;         ///< the local wind blows along the heading plus this, normalised
+        U8 mFlags = 0;              ///< sknav::WindCell's
+    };
+
+    explicit SKNavWind(SKNavWorldViewPtr view);
+
+    /// Moves with the view, whenever a mesh's slabs change.
+    U64 revision() const;
+
+    /// The slab of one heading bucket over the box: from the mesh standing
+    /// under the box's centre, in the band nearest 1.5 m above the box's
+    /// bottom. Its positions are relative to the mesh's origin, given back
+    /// in origin. Null where no mesh has slabs.
+    sknav::WindSlabPtr slab(S32 heading, const LLVector3d& min, const LLVector3d& max, LLVector3d* origin = nullptr) const;
+
+    /// The wind at a point for a heading, between the two nearest buckets
+    /// and the two bands around the point. False where no slab covers it.
+    bool sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) const;
+
+private:
+    const SKNavWorldView::Mesh* meshAt(const LLVector3d& pos, S32* cell = nullptr) const;
+
+    SKNavWorldViewPtr mView;
+};
+typedef std::shared_ptr<const SKNavWind> SKNavWindPtr;
+
 /// Schedules the enclosure pass. A mesh whose air changed is marked dirty,
 /// and once it has been quiet for SKNavRoomsSettleMs its tiles' air and the
 /// sky map are snapshotted and handed to a queue of its own, one pass per
@@ -126,6 +165,7 @@ public:
     void close();
 
     SKNavWorldViewPtr view() const { return mView; }
+    SKNavWindPtr wind() const { return mWind; }
     U64 revision() const { return mView ? mView->revision() : 0; }
     std::string statsLine() const;
 
@@ -138,14 +178,20 @@ public:
     /// openings cyan, dashed without a lintel. Agent coordinates.
     void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const;
 
+    /// Arrows over the lowest wind band near the camera for a heading,
+    /// coloured by speed factor: blue calm, cyan the free stream, yellow
+    /// twice it. Agent coordinates.
+    void gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const;
+
     /// A tile's per-gap answers as a JSON member, leading comma included,
     /// when the view holds answers for exactly this air.
     void writeTile(std::ostream& file, const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air) const;
-    /// A mesh's spaces and portals as JSON members, leading comma included, global.
+    /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
     void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
 
 private:
     struct Job;
+    struct WindJob;
     struct MeshState
     {
         LLUUID mId;
@@ -162,9 +208,15 @@ private:
         std::shared_ptr<std::atomic<U64>> mLatest;
         sknav::EnclosureProductPtr mProduct;
         sknav::RoomsProductPtr mRooms;
+        sknav::WindProductPtr mWind;
+        bool mWindDirty = false;            ///< its rooms landed since its slabs were built
+        bool mWindInFlight = false;
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);
+    void postWind(MeshState& state);
+    void runWind(const std::shared_ptr<WindJob>& job, const std::weak_ptr<bool>& alive);
+    void finishWind(const std::shared_ptr<WindJob>& job);
     void runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<bool>& alive);
     void finish(const std::shared_ptr<Job>& job);
     void rebuildView();
@@ -179,6 +231,7 @@ private:
     U64 mSeenRevision = ~0ull;
     U64 mSeenFeatures = ~0ull;
     SKNavWorldViewPtr mView;
+    SKNavWindPtr mWind;
     U64 mViewRevision = 0;
     bool mViewDirty = false;
 
@@ -190,6 +243,9 @@ private:
     F32 mLastSpaceStageMs[sknav::SpacesPass::NUM_STAGES] = {};
     U32 mPasses = 0;
     U32 mCancelled = 0;
+    F32 mLastWindMs = 0.f;
+    size_t mLastWindBytes = 0;
+    U32 mWindPasses = 0;
 };
 
 #endif // SK_NAVROOMS_H

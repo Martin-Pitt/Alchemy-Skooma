@@ -57,6 +57,7 @@
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
+#include "llwind.h"
 #include "llviewershadermgr.h"
 #include "llvoavatarself.h"
 #include "llvovolume.h"
@@ -296,7 +297,8 @@ bool SKNavMesh::overlayActive()
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
-        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces");
+        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
+        || gSavedSettings.getBOOL("SKNavOverlayWind");
 }
 
 bool SKNavMesh::wanted() const
@@ -3436,6 +3438,8 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
     static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
     static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
+    static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
+    static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -3503,6 +3507,20 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, static_cast<U64>(show_enclosure));
     key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
+    // The wind layer shows one heading: the setting's, or the region's wind where the camera is.
+    F32 heading = wind_heading;
+    if (show_wind && heading < 0.f)
+    {
+        heading = 0.f;
+        if (LLViewerRegion* region = gAgent.getRegion())
+        {
+            const LLVector3 v = region->mWind.getVelocity(region->getPosRegionFromGlobal(camera));
+            heading = v.lengthSquared() > 1e-6f ? std::atan2(v.mV[VY], v.mV[VX]) * RAD_TO_DEG : 0.f;
+        }
+    }
+    const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
+    key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
+    key = mix(key, show_wind ? mRooms->revision() : 0ull);
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -3534,6 +3552,10 @@ void SKNavMesh::refreshOverlay()
     if (show_spaces)
     {
         mRooms->gatherSpaces(mOverlay, camera, reach, opaque);
+    }
+    if (show_wind)
+    {
+        mRooms->gatherWind(mOverlay, camera, reach, wind_bucket * (360.f / sknav::WIND_HEADINGS), opaque);
     }
 
     for (const auto& entry : mMeshes)
