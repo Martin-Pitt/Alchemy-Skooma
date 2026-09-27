@@ -1511,6 +1511,13 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
 void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const
 {
     const S32 c = static_cast<S32>(cls);
+    struct Pick
+    {
+        LLVector3d mOrigin;
+        const Flight* mFlight;
+        bool mHome;
+    };
+    std::map<std::pair<LLUUID, U64>, Pick> picks;
     forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
         if (!tile.mFlights[c])
         {
@@ -1524,12 +1531,33 @@ void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentCla
                 lo.set(llmin(lo.mV[0], p.mV[0]), llmin(lo.mV[1], p.mV[1]));
                 hi.set(llmax(hi.mV[0], p.mV[0]), llmax(hi.mV[1], p.mV[1]));
             }
-            if (overlapsXY(mesh.mOrigin + LLVector3d(lo.mV[0], lo.mV[1], 0.0), mesh.mOrigin + LLVector3d(hi.mV[0], hi.mV[1], 0.0), min, max))
+            if (!overlapsXY(mesh.mOrigin + LLVector3d(lo.mV[0], lo.mV[1], 0.0), mesh.mOrigin + LLVector3d(hi.mV[0], hi.mV[1], 0.0), min, max))
             {
-                fn(mesh.mOrigin, f);
+                continue;
+            }
+            LLVector2 mid;
+            for (const LLVector2& p : f.mFootprint)
+            {
+                mid += p / static_cast<F32>(f.mFootprint.size());
+            }
+            const LLVector3d centre = mesh.mOrigin + LLVector3d(mid.mV[0], mid.mV[1], 0.0);
+            const bool home = centre.mdV[VX] >= tile.mMin.mdV[VX] && centre.mdV[VX] < tile.mMax.mdV[VX] &&
+                              centre.mdV[VY] >= tile.mMin.mdV[VY] && centre.mdV[VY] < tile.mMax.mdV[VY];
+            auto it = picks.find({ mesh.mId, f.mKey });
+            if (it == picks.end())
+            {
+                picks.emplace(std::make_pair(mesh.mId, f.mKey), Pick { mesh.mOrigin, &f, home });
+            }
+            else if (home && !it->second.mHome)
+            {
+                it->second = { mesh.mOrigin, &f, home };
             }
         }
     });
+    for (const auto& entry : picks)
+    {
+        fn(entry.second.mOrigin, *entry.second.mFlight);
+    }
 }
 
 void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const LinkFn& fn) const
@@ -2525,7 +2553,7 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
                     file << ',';
                 }
                 first = false;
-                file << "{\"rise\":" << f.mRise << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
+                file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"rise\":" << f.mRise << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
                      << mesh.mOrigin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh.mOrigin.mdV[VX] - f.mPlane[1] * mesh.mOrigin.mdV[VY]
                      << "],\"treads\":[";
                 for (size_t i = 0; i < f.mTreads.size(); ++i)

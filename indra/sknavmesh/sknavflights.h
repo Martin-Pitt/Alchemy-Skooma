@@ -57,6 +57,7 @@ namespace sknav
         std::vector<LLVector2> mFootprint;  ///< convex hull of the treads in plan, counter-clockwise
         F32 mZMin = 0.f;
         F32 mZMax = 0.f;
+        U64 mKey = 0;                       ///< from its bottom and top nosings: the same in every tile it crosses
         U8 mCode = 0;                       ///< the area code its treads rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced
     };

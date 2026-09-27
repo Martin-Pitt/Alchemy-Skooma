@@ -633,4 +633,34 @@ namespace tut
             out << res.mMillis << " ms, " << res.mTriangles << " triangles, " << res.mFlights[0].size() << " flights\n";
         }
     }
+
+    template<> template<>
+    void sknavflights_object::test<17>()
+    {
+        set_test_name("a flight across a tile seam has one key in both tiles");
+        std::set<U64> keys;
+        size_t copies = 0;
+        for (S32 tx = 0; tx < 2; ++tx)
+        {
+            TileBuildInput in = stairTile();
+            in.mTileX = tx;
+            in.mTerrain.mWidth = 70;
+            in.mTerrain.mZ.assign(70 * 37, 0.f);
+            // eight 0.25 m steps on 0.3 m treads along x, across x = 32
+            for (S32 k = 1; k <= 8; ++k)
+            {
+                in.mRecords.push_back(boxRecord(30.8f + (k - 1) * 0.3f, 14.f, 0.f, 30.8f + k * 0.3f, 18.f, k * 0.25f));
+            }
+            in.mRecords.push_back(boxRecord(33.2f, 12.f, 0.f, 37.f, 20.f, 2.25f));
+            const TileBuildResult r = buildTile(in);
+            ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+            for (const Flight& f : r.mFlights[0])
+            {
+                keys.insert(f.mKey);
+                ++copies;
+            }
+        }
+        ensure_equals("a copy in each tile", copies, 2u);
+        ensure_equals("one key", keys.size(), 1u);
+    }
 }

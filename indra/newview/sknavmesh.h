@@ -93,7 +93,8 @@ public:
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
     /// Stair flights whose footprint meets the box, with the mesh origin
     /// their mesh-local positions are relative to. A flight across a tile
-    /// seam comes once per tile, each with that tile's polys.
+    /// seam comes once, as the copy of the tile holding its footprint's
+    /// centroid, with that tile's polys.
     typedef std::function<void(const LLVector3d& origin, const sknav::Flight& flight)> FlightFn;
     void flightsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const FlightFn& fn) const;
 

@@ -813,6 +813,16 @@ namespace sknav
             f.mZMax = f.mTreads.back().mZ + static_cast<F32>(up.mDz);
             f.mFootprint = hull(pts[root]);
             f.mCode = out.mCodes[first[root]];
+            // welded nosings quantised to the centimetre, so each tile's copy hashes alike
+            U64 key = 1469598103934665603ull;
+            for (const LLVector3& p : { (f.mTreads.front().mNosingA + f.mTreads.front().mNosingB) * 0.5f, (f.mTopNosingA + f.mTopNosingB) * 0.5f })
+            {
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    key = (key ^ static_cast<U64>(std::llround(p.mV[k] * 100.f))) * 1099511628211ull;
+                }
+            }
+            f.mKey = key;
 
             // least squares z = a x + b y + c through the nosings' midpoints
             std::vector<LLVector3> mids;
