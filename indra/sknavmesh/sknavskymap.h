@@ -28,6 +28,7 @@
 #include "sknavairdistil.h"
 #include "v3dmath.h"
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -36,7 +37,9 @@ namespace sknav
     /// Solid intervals per global 1 m cell, each owned by the tile that
     /// contributed it. A cell is rebuilt from its current contributors on
     /// every change, so a roof whose tile is republished without it, or
-    /// removed, is forgotten. Not thread-safe.
+    /// removed, is forgotten. Not thread-safe, but a copy is cheap and
+    /// independent: cells live in 32 m blocks shared copy-on-write, so a
+    /// snapshot for a worker costs a pointer per block.
     class SkyMap
     {
     public:
@@ -63,15 +66,26 @@ namespace sknav
 
         /// Bumped on every change, for readers holding derived results.
         U64 version() const { return mVersion; }
-        size_t cells() const { return mCells.size(); }
+        size_t cells() const { return mCellCount; }
         size_t bytes() const;
 
     private:
         static U64 cellKey(S64 x, S64 y) { return (static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y); }
+        static U64 blockKey(S64 x, S64 y) { return cellKey(x >> BLOCK_SHIFT, y >> BLOCK_SHIFT); }
+        const std::vector<Interval>* find(S64 x, S64 y) const;
         void drop(U64 contributor);
 
-        std::unordered_map<U64, std::vector<Interval>> mCells;
-        std::unordered_map<U64, std::vector<U64>> mContributors;   ///< the cells each contributor touches
+        static constexpr S32 BLOCK_SHIFT = 5;
+        struct Block
+        {
+            std::unordered_map<U64, std::vector<Interval>> mCells;
+        };
+        /// Mutated only through a block this map alone holds.
+        Block& writable(S64 x, S64 y);
+
+        std::unordered_map<U64, std::shared_ptr<Block>> mBlocks;
+        std::unordered_map<U64, std::shared_ptr<const std::vector<U64>>> mContributors;   ///< the cells each contributor touches
+        size_t mCellCount = 0;
         U64 mVersion = 0;
     };
 }

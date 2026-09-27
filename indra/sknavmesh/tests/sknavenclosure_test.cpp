@@ -498,3 +498,32 @@ namespace tut
         ensure("the top one does not", at(p, 15.75f, 11.f, 12.5f).mBucket == EnclosureBucket::UNKNOWN);
     }
 }
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<14>()
+    {
+        set_test_name("a sky map copy is a snapshot: later changes to the original leave it alone");
+        TileAir roof;
+        roof.mCell = CELL;
+        roof.mUnit = UNIT;
+        roof.mTopCell = 2;
+        roof.mTopWidth = roof.mTopHeight = 32;
+        roof.mTopStart.assign(32 * 32 + 1, 0);
+        for (S32 c = 0; c < 32 * 32; ++c)
+        {
+            roof.mTop.push_back({ 80, 88 });
+            roof.mTopStart[c + 1] = static_cast<U32>(roof.mTop.size());
+        }
+        SkyMap live;
+        live.set(1, LLVector3d(0.0, 0.0, 0.0), roof);
+        const SkyMap snapshot = live;
+        live.remove(1);
+        live.set(2, LLVector3d(32.0, 0.0, 0.0), roof);
+        ensure("the live map forgot the roof", live.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
+        ensure("the snapshot kept it", !snapshot.skyOpenAt(LLVector3d(5.0, 5.0, 1.0)));
+        ensure("and never saw the new one", snapshot.skyOpenAt(LLVector3d(37.0, 5.0, 1.0)));
+        ensure_equals("cells", snapshot.cells(), static_cast<size_t>(32 * 32));
+    }
+}
