@@ -338,6 +338,7 @@ private:
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
+    bool mAirWanted = false;
     LLVector3d mMark;
     bool mHasMark = false;
 

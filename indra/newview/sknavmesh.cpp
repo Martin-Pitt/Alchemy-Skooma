@@ -1314,6 +1314,22 @@ void SKNavMesh::update()
         }
         mDemanding = want;
     }
+    // Air switched off: drop what the tiles hold and what they gave the sky map.
+    const bool air = processDemanded();
+    if (mAirWanted && !air)
+    {
+        for (auto& entry : mMeshes)
+        {
+            for (auto& t : entry.second->mTiles)
+            {
+                t.second.mAir.reset();
+                t.second.mAirBuilt = 0;
+            }
+        }
+        syncSkyMap();
+        mRevision++;
+    }
+    mAirWanted = air;
     if (!want || !LLWorld::instanceExists() || !gAgent.getRegion())
     {
         return;
