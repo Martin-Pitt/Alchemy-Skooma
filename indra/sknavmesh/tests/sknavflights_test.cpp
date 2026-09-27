@@ -579,4 +579,17 @@ namespace tut
             }
         }
     }
+
+    template<> template<>
+    void sknavflights_object::test<15>()
+    {
+        set_test_name("a needle the weld collapses keeps its area");
+        Soup s = straight();
+        s.tri(LLVector3(10.f, 0.f, 0.f), LLVector3(12.f, 0.f, 0.f), LLVector3(11.f, 0.0004f, 0.f));
+        const SlopePartition p = s.partition();
+        const U8 code = p.mCodes.back();
+        ensure("the needle has a code", code != 0);
+        ensure_equals("of its own area", p.mReal[code], OBJECT);
+        ensure_equals("the stair is unchanged", p.mFlights.size(), 1u);
+    }
 }

@@ -718,6 +718,10 @@ namespace sknav
             {
                 keys.insert({ areas[t], P.mPart[t] ? colour[out.mRegion[t]] : 0 });
             }
+            else if (areas[t] && !P.mValid[t])
+            {
+                keys.insert({ areas[t], 0 });
+            }
         }
         // Each area's first code is reserved before any colour gets one, so
         // running out only ever shares a code within an area.
@@ -745,6 +749,11 @@ namespace sknav
             if (grp[t] >= 0)
             {
                 out.mCodes[t] = code_of[{ areas[t], P.mPart[t] ? colour[out.mRegion[t]] : 0 }];
+            }
+            else if (areas[t] && !P.mValid[t])
+            {
+                // a needle the weld collapsed still rasterises, as its own area
+                out.mCodes[t] = code_of[{ areas[t], 0 }];
             }
         }
 
