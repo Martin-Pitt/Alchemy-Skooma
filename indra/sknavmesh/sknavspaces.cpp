@@ -538,6 +538,8 @@ namespace sknav
 
         void prepare();
         void runBatch(size_t b);
+        bool recut();
+        S32 mRecuts = 0;
         void buildCells();
         void transform();
         void cutSeeds(size_t b);
@@ -798,6 +800,68 @@ namespace sknav
         {
             std::vector<U32>().swap(ti.mColStart);
         }
+    }
+
+    bool SpacesPass::State::recut()
+    {
+        // A clean ring tile whose kept seeds split its edge where the cut
+        // just saw one basin, or join what it saw as two, would make the
+        // seam disagree from pass to pass: cut it again with the rest.
+        if (mRecuts >= 2 || mBatches.empty())
+        {
+            return false;
+        }
+        std::vector<U32> stale;
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileInfo& ti = mTiles[t];
+            if (ti.mDirty || !ti.mWork)
+            {
+                continue;
+            }
+            std::unordered_map<U32, S32> seed_label;
+            std::unordered_map<S32, U32> label_seed;
+            bool agrees = true;
+            for (const auto& entry : mShadow[0])
+            {
+                if ((entry.first >> 32) != t)
+                {
+                    continue;
+                }
+                const U32 seed = ti.mRooms.mSeeds[static_cast<U32>(entry.first)];
+                const auto a = seed_label.emplace(seed, entry.second).first;
+                const auto b = label_seed.emplace(entry.second, seed).first;
+                if (!seed || a->second != entry.second || b->second != seed)
+                {
+                    agrees = false;
+                    break;
+                }
+            }
+            if (!agrees)
+            {
+                stale.push_back(t);
+            }
+        }
+        if (stale.empty())
+        {
+            return false;
+        }
+        ++mRecuts;
+        for (U32 t : stale)
+        {
+            mTiles[t].mDirty = true;
+            mBatches[0].push_back(t);
+            ++mProduct->mDirtyTiles;
+        }
+        for (TileInfo& ti : mTiles)
+        {
+            ti.mBatch = -1;
+            ti.mSeedLabels.clear();
+        }
+        mShadow[0].clear();
+        mLabelBase = 0;
+        mBatch = 0;
+        return true;
     }
 
     void SpacesPass::State::buildCells()
@@ -2876,12 +2940,11 @@ namespace sknav
                 prepare();
                 break;
             case STAGE_BATCHES:
-                // One block of moved tiles a step.
                 if (mBatch < mBatches.size())
                 {
                     runBatch(mBatch++);
                 }
-                if (mBatch < mBatches.size())
+                if (mBatch < mBatches.size() || recut())
                 {
                     return false;
                 }

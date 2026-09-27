@@ -552,12 +552,43 @@ namespace tut
             }
         }
         const Result again = run(in, rooms);
-        ensure_equals("one tile cut again", again.mRooms->mDirtyTiles, 1u);
+        ensure("the moved tile and at most a ring tile cut again", again.mRooms->mDirtyTiles >= 1 && again.mRooms->mDirtyTiles <= 2);
         const Space* still = again.at(70.f, 8.f);
         ensure("still one space", still && still == again.at(63.f, 8.f));
         ensure_equals("with its id", still->mId, hall->mId);
         const Space* kept = again.at(40.f, 23.f);
         ensure("the other hall untouched", kept && kept == again.at(31.f, 23.f) && kept->mId == other->mId);
+
+        // Rebuilt again and again, the seam neither doubles a portal nor moves an id.
+        const size_t portals = still->mPortals.size();
+        RoomsProductPtr last = again.mRooms;
+        for (S32 k = 0; k < 4; ++k)
+        {
+            Scene t = s;
+            if (k & 1)
+            {
+                t.box(85.f, 20.f, 86.f, 21.f, 0.f, 1.f, false);
+            }
+            auto next_rooms = std::make_shared<RoomsInput>();
+            next_rooms->mPrevious = last;
+            std::shared_ptr<EnclosureInput> next_in = t.input(3);
+            for (EnclosureInput::Tile& tile : next_in->mTiles)
+            {
+                const RoomsTile* was = last->tile(tile.mKey);
+                if (tile.mKey.mX < 2 && was)
+                {
+                    tile.mAir = was->mAir;
+                }
+            }
+            const Result round = run(next_in, next_rooms);
+            const Space* h = round.at(70.f, 8.f);
+            ensure("one space each time", h && h == round.at(63.f, 8.f));
+            ensure_equals("the same id each time", h->mId, hall->mId);
+            ensure_equals("no portal doubled", h->mPortals.size(), portals);
+            const Space* o = round.at(40.f, 23.f);
+            ensure("the other hall holds", o && o->mId == other->mId);
+            last = round.mRooms;
+        }
     }
 
     template<> template<>
