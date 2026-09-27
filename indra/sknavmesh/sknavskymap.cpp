@@ -175,19 +175,24 @@ namespace sknav
         /// outwards: a column's lowest solid starting above pos hides the band
         /// of zenith its annulus spans (a disc of radius r at height h hides
         /// r^2 / (r^2 + h^2)), and a column standing through pos's height is a
-        /// wall hiding everything under its top's elevation, on that spoke.
+        /// wall hiding the sky under its top's elevation, over the part of the
+        /// spoke's wedge it spans, read along two directions across it. roof, when asked, gets the share
+        /// the solids overhead hide alone.
         template<typename AT>
-        F32 cover(const AT& at, const LLVector3d& pos, F32 radius)
+        F32 cover(const AT& at, const LLVector3d& pos, F32 radius, F32* roof)
         {
             static const F32 EDGES[] = { 0.5f, 1.f, 1.5f, 2.5f, 3.5f, 5.f, 7.f, 10.f, 14.f, 20.f, 28.f, 40.f, 56.f };
             constexpr S32 RINGS = sizeof(EDGES) / sizeof(EDGES[0]) - 1;
-            constexpr S32 SPOKES = 8;
-            static F32 dirs[SPOKES][2];
+            constexpr S32 SPOKES = 16;
+            constexpr S32 SUBS = 2;     // wall directions across each spoke's wedge, so a wall hides only the part it spans
+            constexpr F64 WEDGE = 6.283185307179586 / SPOKES;
+            static F32 dirs[SPOKES * SUBS][2];
             static const bool init = [] {
-                for (S32 j = 0; j < SPOKES; ++j)
+                for (S32 j = 0; j < SPOKES * SUBS; ++j)
                 {
-                    dirs[j][0] = std::cos(j * 6.2831853f / SPOKES);
-                    dirs[j][1] = std::sin(j * 6.2831853f / SPOKES);
+                    const F64 ang = (j / SUBS) * WEDGE + ((j % SUBS + 0.5) / SUBS - 0.5) * WEDGE;
+                    dirs[j][0] = static_cast<F32>(std::cos(ang));
+                    dirs[j][1] = static_cast<F32>(std::sin(ang));
                 }
                 return true;
             }();
@@ -208,7 +213,7 @@ namespace sknav
                         }
                         else if (i.mTop > z)
                         {
-                            wall = i.mTop - z;
+                            wall = std::max(wall, i.mTop - z);
                         }
                     }
                 }
@@ -217,41 +222,69 @@ namespace sknav
             F64 wall = 0.0;
             const F64 h0 = read(pos.mdV[VX], pos.mdV[VY], wall);
             const F64 c0 = h0 > 0.0 ? disc(EDGES[0], h0) : 0.0;     // the column overhead, the same on every spoke
-            F64 total = c0;
+            F64 total = c0, over = c0;
+            // Past OUTER one read per spoke: walls there are far enough for its wedge to be their measure.
+            constexpr F64 OUTER = 14.0;
             for (S32 j = 0; j < SPOKES; ++j)
             {
                 F64 lo[RINGS], hi[RINGS];
                 S32 n = 0;
-                F64 horizon = 1.0;      // sin^2 of the zenith angle past which a wall hides the sky
+                F64 low[SUBS] = {};     // per wall direction, the share of its sky the walls on it hide, from the horizon up
+                const S32 mid = j * SUBS;    // the first wall direction carries the overhead reads too
                 for (S32 k = 0; k < RINGS && EDGES[k] < radius; ++k)
                 {
                     const F64 a = EDGES[k], b = std::min<F64>(EDGES[k + 1], radius), r = 0.5 * (a + b);
-                    const F64 h = read(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1], wall);
-                    if (wall > 0.0)
+                    F64 w[SUBS];
+                    const F64 h = read(pos.mdV[VX] + r * dirs[mid][0], pos.mdV[VY] + r * dirs[mid][1], w[0]);
+                    // Near the middle the wedge is under a column wide: one read speaks for it all.
+                    const bool single = r * WEDGE < 1.5 || a >= OUTER;
+                    for (S32 q = 1; q < SUBS; ++q)
                     {
-                        horizon = std::min(horizon, disc(r, wall));
+                        w[q] = w[0];
+                        if (!single)
+                        {
+                            read(pos.mdV[VX] + r * dirs[j * SUBS + q][0], pos.mdV[VY] + r * dirs[j * SUBS + q][1], w[q]);
+                        }
                     }
                     if (h > 0.0)
                     {
                         lo[n] = disc(a, h);
                         hi[n++] = disc(b, h);
                     }
+                    for (S32 q = 0; q < SUBS; ++q)
+                    {
+                        if (w[q] > 0.0)
+                        {
+                            low[q] = std::max(low[q], 1.0 - disc(r, w[q]));
+                        }
+                    }
                 }
-                horizon = std::max(horizon, c0);
-                F64 spoke = 1.0 - horizon;
+                F64 low_mean = 0.0;
+                for (S32 q = 0; q < SUBS; ++q)
+                {
+                    low_mean += low[q] / SUBS;
+                }
+                const F64 horizon = std::max(1.0 - low_mean, c0);
+                F64 spoke = 1.0 - horizon, roofed = 0.0;
                 for (S32 i = 0; i < n; ++i)
                 {
                     spoke += std::max(0.0, std::min(hi[i], horizon) - std::max(lo[i], c0));
+                    roofed += std::max(0.0, hi[i] - std::max(lo[i], c0));
                 }
                 total += std::min(spoke, 1.0 - c0) / SPOKES;
+                over += std::min(roofed, 1.0 - c0) / SPOKES;
+            }
+            if (roof)
+            {
+                *roof = static_cast<F32>(std::min(over, 1.0));
             }
             return static_cast<F32>(std::min(total, 1.0));
         }
     }
 
-    F32 SkyMap::coverAbove(const LLVector3d& pos, F32 radius) const
+    F32 SkyMap::coverAbove(const LLVector3d& pos, F32 radius, F32* roof) const
     {
-        return cover([this](S64 x, S64 y) { return find(x, y); }, pos, radius);
+        return cover([this](S64 x, S64 y) { return find(x, y); }, pos, radius, roof);
     }
 
     SkyView::SkyView(const SkyMap& map, F64 x0, F64 y0, F64 x1, F64 y1)
@@ -274,14 +307,14 @@ namespace sknav
         }
     }
 
-    F32 SkyView::coverAbove(const LLVector3d& pos, F32 radius) const
+    F32 SkyView::coverAbove(const LLVector3d& pos, F32 radius, F32* roof) const
     {
         return cover(
             [this](S64 x, S64 y) {
                 const S64 i = x - mX0, j = y - mY0;
                 return i >= 0 && j >= 0 && i < mWidth && j < mHeight ? mCells[i + j * mWidth] : mMap->find(x, y);
             },
-            pos, radius);
+            pos, radius, roof);
     }
 
     bool SkyMap::topAt(F64 x, F64 y, F64& top) const
