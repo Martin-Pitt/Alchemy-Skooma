@@ -1,6 +1,6 @@
 /**
  * @file skfloaternavannotate.cpp
- * @brief Navmesh annotations: the placing tools, the session's marks and the capture export.
+ * @brief Navmesh annotations: the type buttons that arm the placing tool, and the session's marks.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,15 +27,57 @@
 #include "skfloaternavannotate.h"
 
 #include "llbutton.h"
-#include "llcombobox.h"
 #include "lllineeditor.h"
+#include "llpanel.h"
 #include "llscrolllistctrl.h"
-#include "llspinctrl.h"
-#include "llviewercontrol.h"
+#include "lluictrlfactory.h"
 
 using sknav::Mark;
+using sknav::MarkGroup;
 using sknav::MarkKind;
 using sknav::MarkType;
+
+namespace
+{
+    struct TypeLabel
+    {
+        const char* mLabel;
+        const char* mTip;
+    };
+
+    // In MarkType order; the key comes from the type, so the two cannot drift.
+    const TypeLabel TYPE_LABELS[] = {
+        { "Opening", "A missed opening: a way through the navmesh did not find" },
+        { "Portal", "A wrong portal: a way through where there is none" },
+        { "Door", "A door" },
+        { "Window", "A window" },
+        { "Stair", "A stair" },
+        { "Ramp", "A ramp" },
+        { "Ladder", "A ladder" },
+        { "Elevator", "An elevator" },
+        { "Ledge", "A ledge or a drop" },
+        { "Indoor", "Indoors" },
+        { "Sheltered", "Sheltered: covered but open to the outside" },
+        { "Outdoor", "Outdoors" },
+        { "Street", "A street: a line along it, or a box over it" },
+        { "Bridge", "A bridge" },
+        { "Balcony", "A balcony" },
+        { "Courtyard", "A courtyard" },
+        { "Water", "Water: a pool or prim water" },
+        { "Walkable", "Floor the navmesh missed" },
+        { "Not walk", "Floor the navmesh has that should not be walkable" },
+        { "Merge", "Spaces that should be one" },
+        { "Split", "A space that should be two" },
+        { "Note", "Anything else; say what in the note" },
+    };
+    static_assert(sizeof(TYPE_LABELS) / sizeof(TYPE_LABELS[0]) == static_cast<size_t>(MarkType::COUNT), "a label per type");
+
+    constexpr S32 GRID_COLUMNS = 4;
+    constexpr S32 GRID_GAP = 5;
+    constexpr S32 ROW_HEIGHT = 22;
+    constexpr S32 ROW_GAP = 3;
+    constexpr S32 GROUP_GAP = 8;
+}
 
 SKFloaterNavAnnotate::SKFloaterNavAnnotate(const LLSD& key)
     : LLFloater(key)
@@ -44,13 +86,7 @@ SKFloaterNavAnnotate::SKFloaterNavAnnotate(const LLSD& key)
 
 bool SKFloaterNavAnnotate::postBuild()
 {
-    using Mode = SKNavAnnotator::Mode;
-    getChild<LLUICtrl>("tool_point")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onTool(Mode::POINT); });
-    getChild<LLUICtrl>("tool_line")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onTool(Mode::LINE); });
-    getChild<LLUICtrl>("tool_box")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onTool(Mode::BOX); });
-    getChild<LLUICtrl>("type_combo")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onType(); });
     getChild<LLUICtrl>("mark_text")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onText(); });
-    getChild<LLUICtrl>("box_height")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onHeight(); });
     mList = getChild<LLScrollListCtrl>("marks_list");
     mList->setCommitCallback([this](LLUICtrl*, const LLSD&) { onSelect(); });
     getChild<LLUICtrl>("delete_button")->setCommitCallback([](LLUICtrl*, const LLSD&) {
@@ -58,28 +94,50 @@ bool SKFloaterNavAnnotate::postBuild()
         annotator.remove(annotator.selected());
     });
     getChild<LLUICtrl>("clear_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { SKNavAnnotator::instance().clear(); });
-    getChild<LLUICtrl>("export_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
-        getChild<LLUICtrl>("export_status")->setValue(SKNavAnnotator::instance().exportCapture());
-    });
-    getChild<LLUICtrl>("type_combo")->setValue(static_cast<S32>(SKNavAnnotator::instance().newType()));
-    getChild<LLUICtrl>("box_height")->setValue(gSavedSettings.getF32("SKNavAnnotateBoxHeight"));
+    buildTypeGrid();
     return true;
+}
+
+void SKFloaterNavAnnotate::buildTypeGrid()
+{
+    // A button per type, one click to pick, each group starting a row of its own.
+    LLPanel* grid = getChild<LLPanel>("type_grid");
+    const S32 width = (grid->getRect().getWidth() - (GRID_COLUMNS - 1) * GRID_GAP) / GRID_COLUMNS;
+    S32 top = grid->getRect().getHeight();
+    S32 column = 0;
+    MarkGroup group = MarkGroup::OPENING;
+    for (S32 t = 0; t < static_cast<S32>(MarkType::COUNT); ++t)
+    {
+        const MarkType type = static_cast<MarkType>(t);
+        if (t > 0 && (column == GRID_COLUMNS || sknav::markTypeGroup(type) != group))
+        {
+            top -= ROW_HEIGHT + (sknav::markTypeGroup(type) != group ? GROUP_GAP : ROW_GAP);
+            column = 0;
+        }
+        group = sknav::markTypeGroup(type);
+        LLButton::Params p;
+        p.name = sknav::markTypeName(type);
+        p.label = llformat("%c  %s", sknav::markTypeKey(type), TYPE_LABELS[t].mLabel);
+        p.tool_tip = llformat("%s. A %s; key %c", TYPE_LABELS[t].mTip, sknav::markKindName(sknav::markTypeKind(type)),
+                              sknav::markTypeKey(type));
+        p.rect = LLRect(column * (width + GRID_GAP), top, column * (width + GRID_GAP) + width, top - ROW_HEIGHT);
+        p.follows.flags = FOLLOWS_LEFT | FOLLOWS_TOP;
+        p.is_toggle = true;
+        p.commit_callback.function = [type](LLUICtrl*, const LLSD&) { SKNavAnnotator::instance().pickType(type); };
+        LLButton* button = LLUICtrlFactory::create<LLButton>(p);
+        grid->addChild(button);
+        mTypeButtons[t] = button;
+        ++column;
+    }
 }
 
 void SKFloaterNavAnnotate::onClose(bool app_quitting)
 {
     if (!app_quitting)
     {
-        SKNavAnnotator::instance().setMode(SKNavAnnotator::Mode::NONE);
+        SKNavAnnotator::instance().arm(false);
     }
     LLFloater::onClose(app_quitting);
-}
-
-void SKFloaterNavAnnotate::onTool(SKNavAnnotator::Mode mode)
-{
-    SKNavAnnotator& annotator = SKNavAnnotator::instance();
-    // A second press on the tool that is down puts it away.
-    annotator.setMode(annotator.mode() == mode ? SKNavAnnotator::Mode::NONE : mode);
 }
 
 void SKFloaterNavAnnotate::onSelect()
@@ -89,19 +147,6 @@ void SKFloaterNavAnnotate::onSelect()
     refreshSelection();
 }
 
-void SKFloaterNavAnnotate::onType()
-{
-    SKNavAnnotator& annotator = SKNavAnnotator::instance();
-    const S32 value = llclamp(getChild<LLUICtrl>("type_combo")->getValue().asInteger(), 0, static_cast<S32>(MarkType::COUNT) - 1);
-    const MarkType type = static_cast<MarkType>(value);
-    annotator.setNewType(type);
-    if (Mark* mark = annotator.find(annotator.selected()))
-    {
-        mark->mType = type;
-        annotator.touch();
-    }
-}
-
 void SKFloaterNavAnnotate::onText()
 {
     SKNavAnnotator& annotator = SKNavAnnotator::instance();
@@ -109,23 +154,6 @@ void SKFloaterNavAnnotate::onText()
     {
         mark->mText = getChild<LLUICtrl>("mark_text")->getValue().asString();
         annotator.touch();
-    }
-}
-
-void SKFloaterNavAnnotate::onHeight()
-{
-    SKNavAnnotator& annotator = SKNavAnnotator::instance();
-    const F32 height = static_cast<F32>(getChild<LLUICtrl>("box_height")->getValue().asReal());
-    Mark* mark = annotator.find(annotator.selected());
-    if (mark && mark->mKind == MarkKind::BOX)
-    {
-        mark->mHeight = height;
-        annotator.touch();
-    }
-    else
-    {
-        // With no box selected, the height is the one the next box gets.
-        gSavedSettings.setF32("SKNavAnnotateBoxHeight", height);
     }
 }
 
@@ -163,13 +191,14 @@ void SKFloaterNavAnnotate::refreshSelection()
         text->setValue(mark ? mark->mText : std::string());
     }
     text->setEnabled(mark != nullptr);
-    if (mark)
+    // The selected mark's type when there is one, else the one the next mark gets.
+    const MarkType shown = mark ? mark->mType : annotator.newType();
+    for (S32 t = 0; t < static_cast<S32>(MarkType::COUNT); ++t)
     {
-        getChild<LLUICtrl>("type_combo")->setValue(static_cast<S32>(mark->mType));
-    }
-    if (mark && mark->mKind == MarkKind::BOX)
-    {
-        getChild<LLUICtrl>("box_height")->setValue(mark->mHeight);
+        if (mTypeButtons[t])
+        {
+            mTypeButtons[t]->setToggleState(static_cast<MarkType>(t) == shown);
+        }
     }
     getChild<LLUICtrl>("delete_button")->setEnabled(mark != nullptr);
 }
@@ -183,11 +212,14 @@ void SKFloaterNavAnnotate::draw()
         mRevision = annotator.revision();
         refreshList();
     }
-    const SKNavAnnotator::Mode mode = annotator.mode();
-    getChild<LLButton>("tool_point")->setToggleState(mode == SKNavAnnotator::Mode::POINT);
-    getChild<LLButton>("tool_line")->setToggleState(mode == SKNavAnnotator::Mode::LINE);
-    getChild<LLButton>("tool_box")->setToggleState(mode == SKNavAnnotator::Mode::BOX);
+    std::string status = getString("status_idle");
+    if (annotator.armed())
+    {
+        const MarkType type = annotator.newType();
+        status = getString(sknav::markTypeKind(type) == MarkKind::LINE ? "status_line" : "status_point");
+        LLStringUtil::replaceString(status, "[TYPE]", TYPE_LABELS[static_cast<S32>(type)].mLabel);
+    }
+    getChild<LLUICtrl>("tool_status")->setValue(status);
     getChild<LLUICtrl>("clear_button")->setEnabled(!annotator.marks().empty());
-    getChild<LLUICtrl>("export_button")->setEnabled(!annotator.marks().empty());
     LLFloater::draw();
 }

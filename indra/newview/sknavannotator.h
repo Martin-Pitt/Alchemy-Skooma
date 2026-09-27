@@ -1,6 +1,6 @@
 /**
  * @file sknavannotator.h
- * @brief In-world navmesh annotations: the session's marks, the tool that places them, their drawing and the capture export.
+ * @brief In-world navmesh annotations: the session's marks, the tool that places them, and their drawing.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -31,6 +31,7 @@
 #include "sknavannotate.h"
 
 #include <map>
+#include <ostream>
 #include <string>
 
 class LLHUDText;
@@ -42,21 +43,15 @@ class SKNavAnnotator : public LLSingleton<SKNavAnnotator>
     ~SKNavAnnotator() override;
 
 public:
-    enum class Mode : U8
-    {
-        NONE = 0,
-        POINT,
-        LINE,
-        BOX
-    };
+    /// Arm the placing tool with the current type, or put it away. Armed,
+    /// the annotation tool is in front of the current one.
+    void arm(bool on);
+    bool armed() const { return mArmed; }
 
-    /// Pick a placing tool, or none. Any tool puts the annotation tool in
-    /// front of the current one; none gives the previous one back.
-    void setMode(Mode mode);
-    Mode mode() const { return mMode; }
-
-    /// The type and note new marks are given.
-    void setNewType(sknav::MarkType type) { mNewType = type; }
+    /// A type button or its key. With a mark selected, a type of the same
+    /// shape retypes it. Otherwise the type sticks for the marks placed next
+    /// and arms the tool with its shape; picked again, it puts the tool away.
+    void pickType(sknav::MarkType type);
     sknav::MarkType newType() const { return mNewType; }
 
     /// A surface hit under the cursor, and a click on it.
@@ -72,7 +67,7 @@ public:
     void remove(U32 id);
     void clear();
     void select(U32 id);
-    /// Drop the mode when another tool has taken over from ours.
+    /// Disarm when another tool has taken over from ours.
     void checkTool();
     U32 selected() const { return mSelected; }
     /// Something about the marks changed; a list shown of them is stale.
@@ -83,9 +78,8 @@ public:
     /// world pass after the navmesh overlay.
     void render();
 
-    /// Write the capture bundle and its screenshot to the logs folder, and
-    /// return a line for the console.
-    std::string exportCapture();
+    /// The marks as an export's "marks" member, each vertex with its region.
+    void writeMarks(std::ostream& out) const;
 
 private:
     void commit(sknav::Mark mark);
@@ -94,7 +88,7 @@ private:
 
     sknav::MarkSet mMarks;
     sknav::Mark mPending;
-    Mode mMode = Mode::NONE;
+    bool mArmed = false;
     sknav::MarkType mNewType = sknav::MarkType::MISSED_OPENING;
     U32 mSelected = 0;
     U32 mRevision = 0;

@@ -27,6 +27,7 @@
 #include "sknavmesh.h"
 
 #include "sknavannotate.h"
+#include "sknavannotator.h"
 #include "sknavcensusio.h"
 #include "sknavexport.h"
 #include "sknavlayout.h"
@@ -85,21 +86,6 @@ namespace
     bool overlaps3D(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
     {
         return overlapsXY(amin, amax, bmin, bmax) && !(amin.mdV[VZ] > bmax.mdV[VZ] || bmin.mdV[VZ] > amax.mdV[VZ]);
-    }
-
-    /// Whether a triangle about a box's centre reaches into the box.
-    bool withinHalf(const LLVector3* tri, const LLVector3d& half)
-    {
-        for (S32 axis = 0; axis < 3; ++axis)
-        {
-            const F32 lo = llmin(tri[0].mV[axis], llmin(tri[1].mV[axis], tri[2].mV[axis]));
-            const F32 hi = llmax(tri[0].mV[axis], llmax(tri[1].mV[axis], tri[2].mV[axis]));
-            if (hi < -half.mdV[axis] || lo > half.mdV[axis])
-            {
-                return false;
-            }
-        }
-        return true;
     }
 
     void writeVec3d(std::ostream& file, const LLVector3d& v)
@@ -239,13 +225,7 @@ bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive() || processDemanded());
-}
-
-bool SKNavMesh::processDemanded()
-{
-    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
-    return air;
+    return enabled && (always || overlayActive());
 }
 
 bool SKNavMesh::inAirRadius(const Tile& tile)
@@ -485,14 +465,11 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
-    // The air is read off the weather class, so asking for it builds that
-    // class whether or not anything reads its weather.
-    const bool air = processDemanded();
-    const bool weather = weather_on || air;
-    input.mAir = air;
+    // The air is read off the weather class, so the navmesh always builds that class.
+    input.mAir = true;
     static LLCachedControl<F32> airMinGap(gSavedSettings, "SKNavAirMinGap", 0.5f);
     input.mAirMinGap = llclamp(static_cast<F32>(airMinGap), 0.f, 4.f);
-    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
+    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
     // Weather runs down whatever it lands on, so nearly everything is floor to
     // it. A face that is truly vertical still cannot be a walkable polygon of
     // a heightfield - it has no top - which is what the wall faces are for.
@@ -1273,7 +1250,6 @@ void SKNavMesh::schedule()
     // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    const bool air = processDemanded();
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -1281,7 +1257,7 @@ void SKNavMesh::schedule()
         {
             Tile& tile = t.second;
             // A built tile near the camera without its air is built again for it.
-            const bool air_due = air && tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
+            const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
             if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
             {
                 continue;
@@ -1325,23 +1301,6 @@ void SKNavMesh::update()
         }
         mDemanding = want;
     }
-    // Air switched off: drop what the tiles hold and what they gave the sky map.
-    const bool air = processDemanded();
-    if (mAirWanted && !air)
-    {
-        for (auto& entry : mMeshes)
-        {
-            for (auto& t : entry.second->mTiles)
-            {
-                t.second.mAir.reset();
-                t.second.mAirCoarse.reset();
-                t.second.mAirBuilt = 0;
-            }
-        }
-        syncSkyMap();
-        mRevision++;
-    }
-    mAirWanted = air;
     if (!want || !LLWorld::instanceExists() || !gAgent.getRegion())
     {
         return;
@@ -2615,91 +2574,6 @@ void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVe
     file << ']';
 }
 
-std::string SKNavMesh::writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const
-{
-    ExportCounts counts;
-    const LLVector3d center = (min + max) * 0.5;
-    const LLVector3d half = (max - min) * 0.5;
-
-    // The census records in the box, as the object export writes its
-    // surroundings: triangles about the centre, one flat array per record.
-    U32 records = 0;
-    file << ",\"surroundings\":{\"center\":";
-    writeVec3d(file, center);
-    file << ",\"half\":";
-    writeVec3d(file, half);
-    file << ",\"records\":[";
-    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
-    {
-        std::vector<LLVector3> tris;
-        for (const RecordPtr& r : snap->mRecords)
-        {
-            if (!overlaps3D(r->mMin, r->mMax, min, max))
-            {
-                continue;
-            }
-            tris.clear();
-            sknav::emitRecord(*r, center, tris);
-            bool first_tri = true;
-            for (size_t t = 0; t + 2 < tris.size(); t += 3)
-            {
-                if (!withinHalf(&tris[t], half))
-                {
-                    continue;
-                }
-                if (first_tri)
-                {
-                    file << (records ? "," : "") << "{\"root\":\"" << r->mRoot << "\",\"part\":\"" << r->mPart
-                         << "\",\"role\":" << static_cast<S32>(r->mRole) << ",\"provenance\":" << static_cast<S32>(r->mProvenance)
-                         << ",\"navRole\":" << static_cast<S32>(r->mNavRole) << ",\"shape\":" << static_cast<S32>(r->mShape)
-                         << ",\"solid\":" << (r->mSolid ? "true" : "false") << ",\"exclude\":" << static_cast<S32>(r->mExclude)
-                         << ",\"tris\":[";
-                    ++records;
-                }
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    const LLVector3& p = tris[t + k];
-                    file << (first_tri && !k ? "" : ",") << p.mV[VX] << ',' << p.mV[VY] << ',' << p.mV[VZ];
-                }
-                first_tri = false;
-            }
-            if (!first_tri)
-            {
-                file << "]}";
-            }
-        }
-    }
-    file << "]}";
-
-    // Every built tile the box reaches, in whichever mesh, in exportAll's form.
-    file << ",\"tiles\":[";
-    bool first = true;
-    for (const auto& entry : mMeshes)
-    {
-        const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
-        {
-            if (!t.second.mBuilt || !overlapsXY(t.second.mMin, t.second.mMax, min, max))
-            {
-                continue;
-            }
-            file << (first ? "" : ",") << "{\"mesh\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false")
-                 << ",\"origin\":";
-            writeVec3d(file, mesh.mOrigin);
-            file << ",\"tile\":";
-            writeTile(file, mesh, t.first, t.second, counts);
-            file << '}';
-            first = false;
-        }
-    }
-    file << ']';
-    writeDoors(file, &min, &max, counts);
-    writeFeatures(file, &min, &max, counts);
-
-    return llformat("%u records, %u tiles, %u polys, %u doors, %u features", records, counts.mTiles, counts.mPolys, counts.mDoors,
-                    counts.mFeatures);
-}
-
 std::string SKNavMesh::exportAll() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
@@ -2763,15 +2637,17 @@ std::string SKNavMesh::exportAll() const
 
     writeFeatures(file, nullptr, nullptr, counts);
     writeDoors(file, nullptr, nullptr, counts);
+    file << ',';
+    SKNavAnnotator::instance().writeMarks(file);
     file << "}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air (%.1f MB) -> %s", meshes_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks (%.1f MB) -> %s", meshes_written,
                     counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+                    SKNavAnnotator::instance().marks().marks().size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 std::string SKNavMesh::exportCensus() const
@@ -2860,6 +2736,7 @@ std::string SKNavMesh::exportCensus() const
         census.mClusters.push_back(std::move(cl));
     }
     census.mFeatures = snap->mFeatures;
+    census.mMarks = SKNavAnnotator::instance().marks().marks();
     for (const auto& region : mFeatureDoors)
     {
         census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
@@ -2901,8 +2778,9 @@ std::string SKNavMesh::exportCensus() const
     // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
     const F32 ms = timer.getElapsedTimeF32() * 1000.f;
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features (%.1f MB, %.0f ms) -> %s", census.mRecords.size(),
-                    census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks (%.1f MB, %.0f ms) -> %s",
+                    census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+                    census.mMarks.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 
