@@ -591,6 +591,25 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<21>()
+    {
+        set_test_name("the walls of a roofless well hide the low sky, and a dense view reads as the map does");
+        Scene s;
+        s.box(12.f, 12.f, 20.f, 13.f, 0.f, 10.f, false);
+        s.box(12.f, 19.f, 20.f, 20.f, 0.f, 10.f, false);
+        s.box(12.f, 12.f, 13.f, 20.f, 0.f, 10.f, false);
+        s.box(19.f, 12.f, 20.f, 20.f, 0.f, 10.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const LLVector3d mid(16.5, 16.5, 2.0);
+        const F32 walled = in->mSky->coverAbove(mid, 50.f);
+        ensure("most of the sky is behind the walls", walled > 0.6f && walled < 0.95f);
+        ensure("outside the well the sky is open", in->mSky->coverAbove(LLVector3d(4.5, 4.5, 2.0), 50.f) < 0.1f);
+        const SkyView view(*in->mSky, -40.0, -40.0, 72.0, 72.0);
+        ensure("the view agrees", std::fabs(view.coverAbove(mid, 50.f) - walled) < 1e-5f);
+    }
+
+    template<> template<>
     void sknavrooms_object::test<12>()
     {
         set_test_name("replay a mesh's air through both passes, when a file is named");
