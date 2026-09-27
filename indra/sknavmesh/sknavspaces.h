@@ -65,6 +65,7 @@ namespace sknav
         F32 mSliverShare = 0.1f;
         F32 mOutdoorS = 0.5f;       ///< spaces this open to the sky join across openings
         F32 mWalledL = 0.6f;        ///< unless one side is this walled
+        F32 mOutdoorCover = 0.3f;   ///< or either hides this share of its sky overhead
         F32 mIndoorL = 0.4f;        ///< a space less walled than this is at most SHELTERED
         F32 mAvatarAreaM2 = 2.f;    ///< a floor smaller than this seeds no space
         F32 mHysteresis = 0.05f;    ///< a space's bucket holds until its mean e is this far past its edge
@@ -114,6 +115,7 @@ namespace sknav
         F32 mFloorMax = 0.f;
         F32 mElongation = 1.f;
         F32 mSMean = 0.f;
+        F32 mCoverMean = 0.f;       ///< share of the sky hidden overhead, floor-weighted
         F32 mEMean = 0.f;
         F32 mEMin = 0.f;
         F32 mEMax = 0.f;
