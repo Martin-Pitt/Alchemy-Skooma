@@ -63,7 +63,7 @@ namespace sknav
     /// One gap's answer, parallel to its TileAir's gaps.
     struct GapEnclosure
     {
-        U16 mSpace = 0;             ///< reserved for the rooms pass
+        U16 mSpace = 0;             ///< the product's space + 1, 0 for none (sknavspaces.h)
         U8 mS = 0;                  ///< S in 1/255
         U8 mE = 0;                  ///< e in 1/255
         U8 mD = ENCLOSURE_D_UNKNOWN; ///< depth in ENCLOSURE_D_UNIT_M
@@ -77,7 +77,7 @@ namespace sknav
     {
         U16 mFloor = 0;
         U16 mCeiling = 0;           ///< AIR_CEILING_OPEN when nothing is above
-        U16 mSpace = 0;             ///< reserved for the rooms pass
+        U16 mSpace = 0;             ///< the space most of its floor is in, + 1
         U8 mS = 0;
         U8 mE = 0;
         U8 mD = ENCLOSURE_D_UNKNOWN;
@@ -101,7 +101,8 @@ namespace sknav
         F32 mD = 0.f;
         F32 mE = 0.f;
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
-        U16 mSpace = 0;
+        U16 mSpace = 0;             ///< the product's space + 1, 0 for none
+        U32 mSpaceId = 0;           ///< that space's id, stable within its mesh
         bool mSealed = false;       ///< INDOORS because no way in was found, D at its cap
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
@@ -134,6 +135,7 @@ namespace sknav
         U32 mSealedGaps = 0;
         F32 mMillis = 0.f;                     ///< worker time over all chunks
         U64 mSummary = 0;                      ///< hash of the coarse answers, what neighbours read
+        std::vector<U32> mSpaceIds;            ///< per space the spaces pass cut, its id
 
         const TileEnclosure* tile(const TileKey& key) const;
         /// The gap holding pos: detail where the tile has it, else coarse.
@@ -189,6 +191,9 @@ namespace sknav
         static const char* stageName(S32 stage);
         static constexpr S32 NUM_STAGES = 6;
         EnclosureProductPtr product() const;
+        /// The product before anyone shares it, for the spaces pass to write
+        /// each gap's space into.
+        std::shared_ptr<EnclosureProduct> takeProduct();
 
     private:
         struct State;

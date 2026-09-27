@@ -239,6 +239,11 @@ namespace
     }
 
     /// Visit the gaps over a mesh-local (x, y), detail first, coarse when the tile has no detail.
+    void spaceId(const EnclosureProduct& p, Enclosure& out)
+    {
+        out.mSpaceId = out.mSpace && out.mSpace <= p.mSpaceIds.size() ? p.mSpaceIds[out.mSpace - 1] : 0;
+    }
+
     template<typename FN>
     void visitGaps(const EnclosureProduct& p, F32 x, F32 y, FN fn)
     {
@@ -270,6 +275,7 @@ namespace
                 const GapEnclosure& e = t->mGaps[l.mFirstGap + i];
                 Enclosure out;
                 fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mBucket, e.mSpace, e.mFlags, out);
+                spaceId(p, out);
                 fn(out, g.mFloor, g.mCeiling, *t);
             }
             return;
@@ -286,6 +292,7 @@ namespace
             const CoarseGap& g = c.mGaps[i];
             Enclosure out;
             fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, g.mBucket, g.mSpace, g.mFlags, out);
+            spaceId(p, out);
             fn(out, g.mFloor, g.mCeiling, *t);
         }
     }
@@ -1157,6 +1164,11 @@ namespace sknav
     }
 
     EnclosureProductPtr EnclosurePass::product() const
+    {
+        return done() ? mState->mProduct : nullptr;
+    }
+
+    std::shared_ptr<EnclosureProduct> EnclosurePass::takeProduct()
     {
         return done() ? mState->mProduct : nullptr;
     }
