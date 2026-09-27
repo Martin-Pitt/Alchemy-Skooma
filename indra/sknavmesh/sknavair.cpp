@@ -101,20 +101,27 @@ namespace sknav
         {
             for (S32 ix = 0; ix < w; ++ix)
             {
-                const U32 base = grid.mStart[ix + iy * w];
-                for (U32 i = 0; i < grid.count(ix, iy); ++i)
+                const U32 base = grid.mStart[ix + iy * w], count = grid.count(ix, iy);
+                for (S32 d = 0; d < 4; ++d)
                 {
-                    const AirGap& g = grid.mGaps[base + i];
-                    for (S32 d = 0; d < 4; ++d)
+                    const S32 nx = ix + dx[d], ny = iy + dy[d];
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h)
                     {
-                        const S32 nx = ix + dx[d], ny = iy + dy[d];
-                        if (nx < 0 || ny < 0 || nx >= w || ny >= h)
+                        continue;   // off the grid: unknown, not a wall
+                    }
+                    // Both columns run lowest floor first, so the neighbours
+                    // within climb of each gap are a window that only moves up.
+                    const U32 nbase = grid.mStart[nx + ny * w], ncount = grid.count(nx, ny);
+                    U32 lo = 0;
+                    for (U32 i = 0; i < count; ++i)
+                    {
+                        const AirGap& g = grid.mGaps[base + i];
+                        while (lo < ncount && grid.mGaps[nbase + lo].mFloor + climb < g.mFloor)
                         {
-                            continue;   // off the grid: unknown, not a wall
+                            ++lo;
                         }
                         S32 best = NONE, best_step = 0;
-                        const U32 nbase = grid.mStart[nx + ny * w];
-                        for (U32 j = 0; j < grid.count(nx, ny); ++j)
+                        for (U32 j = lo; j < ncount && grid.mGaps[nbase + j].mFloor <= g.mFloor + climb; ++j)
                         {
                             const AirGap& o = grid.mGaps[nbase + j];
                             const S32 step = std::abs(static_cast<S32>(o.mFloor) - static_cast<S32>(g.mFloor));

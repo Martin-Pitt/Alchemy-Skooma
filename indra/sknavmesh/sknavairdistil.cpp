@@ -333,7 +333,8 @@ namespace sknav
                     out.mLeaves.push_back(leaf);
                 }
             }
-        }
+        }        out.mLeaves.shrink_to_fit();
+        out.mGaps.shrink_to_fit();
     }
 
     void airSeams(const AirGrid& grid, TileAir& out)
