@@ -165,6 +165,9 @@ namespace sknav
         std::shared_ptr<const SkyMap> mSky;
         EnclosureProductPtr mPrevious;
         std::vector<Neighbour> mNeighbours;
+        /// Tiles whose detail was evicted: their last coarse answers stand
+        /// as they were, without the detail, until the detail comes back.
+        std::vector<TileEnclosure> mKept;
         EnclosureParams mParams;
     };
 

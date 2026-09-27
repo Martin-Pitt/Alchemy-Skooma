@@ -604,3 +604,29 @@ namespace tut
         ensure_equals("cells", snapshot.cells(), static_cast<size_t>(32 * 32));
     }
 }
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<16>()
+    {
+        set_test_name("an evicted tile keeps answering from its coarse product");
+        Scene s;
+        s.room(36.f, 4.f, 48.f, 16.f);
+        s.mSolids[0].mX1 = 37.f;
+        s.box(38.f, 4.f, 48.f, 4.5f, 0.f, 3.f, false);
+        s.box(37.f, 4.f, 38.f, 4.5f, 2.25f, 3.f, false);
+        auto in = s.input(2);
+        const EnclosureProductPtr first = computeEnclosure(in);
+        // Tile 1's detail goes; the pass runs again on tile 0 alone.
+        in->mPrevious = first;
+        in->mKept.push_back(*first->tile(in->mTiles[1].mKey));
+        in->mTiles.pop_back();
+        const EnclosureProductPtr second = computeEnclosure(in);
+        const TileEnclosure* kept = second->tile(first->mTiles[1].mKey);
+        ensure("kept", kept != nullptr);
+        ensure("without its detail", !kept->mAir && kept->mGaps.empty());
+        ensure("still INDOORS in the room", at(second, 46.f, 14.f).mBucket == EnclosureBucket::INDOORS);
+        ensure("and the live tile still answers", at(second, 10.f, 10.f).mBucket == EnclosureBucket::OUTDOORS);
+    }
+}

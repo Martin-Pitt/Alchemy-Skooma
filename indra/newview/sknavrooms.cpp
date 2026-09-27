@@ -320,6 +320,16 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
         {
             input->mTiles.push_back({ t.first, t.second.mAir, SKNavMesh::skyContributor(mesh.mId, t.first) });
         }
+        else if (!t.second.mAir && t.second.mAirCoarse && state.mProduct)
+        {
+            // Evicted: answer from the coarse product, which lets the detail go.
+            if (const TileEnclosure* kept = state.mProduct->tile(t.first))
+            {
+                input->mKept.push_back(*kept);
+                input->mKept.back().mAir.reset();
+                input->mKept.back().mGaps.clear();
+            }
+        }
     }
     for (const auto& other : mMeshes)
     {

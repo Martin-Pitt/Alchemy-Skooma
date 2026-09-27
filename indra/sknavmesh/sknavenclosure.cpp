@@ -1121,6 +1121,17 @@ namespace sknav
                     total += ms;
                 }
                 s.mProduct->mMillis = static_cast<F32>(total);
+                for (const TileEnclosure& kept : s.mInput->mKept)
+                {
+                    if (!s.mProduct->tile(kept.mKey))
+                    {
+                        s.mProduct->mTiles.push_back(kept);
+                        s.mProduct->mTiles.back().mAir.reset();
+                        s.mProduct->mTiles.back().mGaps.clear();
+                    }
+                }
+                std::sort(s.mProduct->mTiles.begin(), s.mProduct->mTiles.end(),
+                          [](const TileEnclosure& a, const TileEnclosure& b) { return a.mKey < b.mKey; });
                 // Nothing reads the graph again.
                 std::vector<GraphArc>().swap(s.mArcs);
                 std::vector<U32>().swap(s.mStart);
