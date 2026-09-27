@@ -38,6 +38,7 @@ namespace sknav
     constexpr S32 AIR_MAX_LEVEL = 4;            ///< a level-4 leaf is 16 cells, 2 m at 0.125 m
     constexpr U16 AIR_HEIGHT_MAX = 8191;        ///< heights are 13 bits, 1023.9 m at 0.125 m
     constexpr U16 AIR_CEILING_OPEN = 0xffff;    ///< a distilled ceiling with nothing above in the tile
+    constexpr F32 AIR_PASS_M = 1.f;             ///< a closed, unwalkable gap lower than this is no way through
 
     /// A square block of 2^mLevel cells whose gaps agree, from (mX, mY) in
     /// cells of the tile. Its gaps are mGapCount records from mFirstGap.
@@ -95,7 +96,7 @@ namespace sknav
 
     /// Merge the fine grid into leaves of up to AIR_MAX_LEVEL. A block
     /// merges when every column has the same gaps with equal flags, floors
-    /// and ceilings each within climb, and no gap touching a wall; leaves
+    /// and ceilings each within climb, and no usable gap (walkable, open or AIR_PASS_M tall) touching a wall; leaves
     /// that touch differ by at most one level. A merged gap keeps the highest
     /// floor, the lowest ceiling and the least clearance of those it replaced.
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out);
@@ -108,9 +109,10 @@ namespace sknav
     void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out);
 
     /// Everything a tile's air is built from its WEATHER heightfield: gaps
-    /// read pad_cells past the tile so clearance is exact on it, then the
-    /// distil, seams and tops. Null when the tile has no air.
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap);
+    /// read pad_cells past the tile so clearance is exact on it, slivers
+    /// under min_gap units folded away, then the distil, seams and tops.
+    /// Null when the tile has no air.
+    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

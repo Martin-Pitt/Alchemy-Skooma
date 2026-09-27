@@ -249,4 +249,24 @@ namespace tut
         ensure_equals("column moved with the crop", static_cast<S32>(c.gaps(1, 0)[0].mFloor), 7);
         ensure("origin moved a cell", std::fabs(c.mOrigin.mV[VX] - 0.125f) < 1e-5f && std::fabs(c.mOrigin.mV[VY] - 0.125f) < 1e-5f);
     }
+
+    template<> template<>
+    void sknavair_object::test<7>()
+    {
+        set_test_name("slivers fold into the solid, and stop reading as walls");
+        AirGrid g = flatGrid(3, 1);
+        // Column 1 gets a one-unit sliver under its gap, between two stacked prims.
+        AirGap sliver;
+        sliver.mFloor = 0;
+        sliver.mCeiling = 1;
+        g.mGaps.insert(g.mGaps.begin() + 1, sliver);
+        g.mGaps[2].mFloor = 2;
+        g.mStart = { 0, 1, 3, 4 };
+        foldSlivers(g, 4);
+        ensure_equals("the sliver is gone", g.count(1, 0), 1u);
+        ensure_equals("the gap above it stays", static_cast<S32>(g.gaps(1, 0)[0].mFloor), 2);
+        ensure_equals("the others are untouched", g.count(2, 0), 1u);
+        computeClearance(g, 6, 4);
+        ensure("no wall left beside it", g.gaps(0, 0)[0].mClear > 0 || g.gaps(2, 0)[0].mClear > 0);
+    }
 }

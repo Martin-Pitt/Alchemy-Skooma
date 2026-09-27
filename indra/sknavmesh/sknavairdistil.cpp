@@ -29,6 +29,7 @@
 #include "Recast.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <sstream>
 
@@ -132,6 +133,7 @@ namespace sknav
             return;
         }
 
+        const S32 pass = static_cast<S32>(std::ceil(AIR_PASS_M / std::max(grid.mUnit, 1e-3f)));
         // Level 0 is the grid itself; each level above merges 2 x 2 blocks
         // of the one below when all four may merge and agree with each other.
         Level levels[AIR_MAX_LEVEL + 1];
@@ -154,12 +156,14 @@ namespace sknav
                     const AirGap* g = grid.gaps(ix, iy);
                     for (U32 i = 0; i < b.mCount; ++i)
                     {
+                        // Only air something can use makes a wall matter.
+                        const bool passable = (g[i].mFlags & (AirGap::WALKABLE | AirGap::OPEN)) || g[i].mCeiling - g[i].mFloor >= pass;
                         GapAgg a;
                         a.mFloorMin = a.mFloorMax = clipHeight(g[i].mFloor);
                         a.mCeilMin = a.mCeilMax = clipHeight(g[i].mCeiling);
                         a.mFlags = g[i].mFlags;
                         a.mClear = g[i].mClear;
-                        b.mMerge = b.mMerge && g[i].mClear > 0;  // a gap touching a wall stays fine
+                        b.mMerge = b.mMerge && (g[i].mClear > 0 || !passable);  // a usable gap touching a wall stays fine
                         l0.mGaps.push_back(a);
                     }
                 }
@@ -409,7 +413,7 @@ namespace sknav
         }
     }
 
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap)
+    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap)
     {
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
         AirGrid padded, grid;
@@ -418,6 +422,7 @@ namespace sknav
         {
             return nullptr;
         }
+        foldSlivers(padded, min_gap);
         computeClearance(padded, climb, overlap);
         cropAir(padded, pad, grid);
         if (grid.empty())

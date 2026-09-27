@@ -386,6 +386,7 @@ U64 SKNavMesh::paramsSignature() const
     h = mixF32(h, probe.mWallMinHeight);
     h = mix(h, probe.mWallFaces);
     h = mix(h, probe.mAir);
+    h = mixF32(h, probe.mAirMinGap);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
     {
@@ -440,6 +441,8 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     const bool air = processDemanded();
     const bool weather = weather_on || air;
     input.mAir = air;
+    static LLCachedControl<F32> airMinGap(gSavedSettings, "SKNavAirMinGap", 0.5f);
+    input.mAirMinGap = llclamp(static_cast<F32>(airMinGap), 0.f, 4.f);
     input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
     // Weather runs down whatever it lands on, so nearly everything is floor to
     // it. A face that is truly vertical still cannot be a walkable polygon of

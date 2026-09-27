@@ -1517,7 +1517,8 @@ namespace sknav
             if (air)
             {
                 const S32 overlap = static_cast<S32>(std::ceil(0.5f / cfg.ch));
-                result.mAir = buildTileAir(*mem.hf, cfg.borderSize, input.mAirPad, cfg.walkableClimb, overlap);
+                result.mAir = buildTileAir(*mem.hf, cfg.borderSize, input.mAirPad, cfg.walkableClimb, overlap,
+                                          static_cast<S32>(std::ceil(input.mAirMinGap / cfg.ch)));
             }
             if (mem.pmesh->npolys == 0)
             {

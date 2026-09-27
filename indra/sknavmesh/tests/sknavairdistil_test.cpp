@@ -164,7 +164,9 @@ namespace tut
                 {
                     for (U32 k = 0; k < l.mGapCount; ++k)
                     {
-                        ensure("no merged cell touches a wall" + at, g.gaps(ix, iy)[k].mClear > 0);
+                        const AirGap& fine = g.gaps(ix, iy)[k];
+                        const bool usable = (fine.mFlags & (AirGap::WALKABLE | AirGap::OPEN)) || fine.mCeiling - fine.mFloor >= 8;
+                        ensure("no merged usable cell touches a wall" + at, fine.mClear > 0 || !usable);
                     }
                 }
             }
@@ -343,5 +345,39 @@ namespace tut
         ensure_equals("second leaf's x", static_cast<S32>(blob[10] | (blob[11] << 8)), static_cast<S32>(l.mX));
         ensure_equals("second leaf's first gap", static_cast<U32>(blob[16] | (blob[17] << 8) | (blob[18] << 16) | (blob[19] << 24)), l.mFirstGap);
         ensure("layout names the sections", tileAirLayout(air).find("\"seam_pos_y\"") != std::string::npos);
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<7>()
+    {
+        set_test_name("a low closed gap walled in does not keep its block fine");
+        AirGrid g = room();
+        // Under a 2 m block of open floor, a 0.5 m crawlspace walled at one corner.
+        for (S32 iy = 32; iy < 48; ++iy)
+        {
+            for (S32 ix = 0; ix < 16; ++ix)
+            {
+                AirGap& gap = g.mGaps[g.mStart[ix + iy * g.mWidth]];
+                gap.mFlags = AirGap::OPEN | AirGap::OWN_SKY;
+                gap.mClear = (ix == 0 && iy == 40) ? 0 : gap.mClear;
+            }
+        }
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        std::vector<S32> leaf_of;
+        cover(air, leaf_of);
+        ensure("an open gap at a wall stays fine", air.mLeaves[leaf_of[0 + 40 * g.mWidth]].mLevel == 0);
+        for (S32 iy = 32; iy < 48; ++iy)
+        {
+            for (S32 ix = 0; ix < 16; ++ix)
+            {
+                AirGap& gap = g.mGaps[g.mStart[ix + iy * g.mWidth]];
+                gap.mFlags = 0;
+                gap.mCeiling = gap.mFloor + 4;
+            }
+        }
+        distilAir(g, CLIMB, air);
+        cover(air, leaf_of);
+        ensure("a crawlspace at a wall merges", air.mLeaves[leaf_of[0 + 40 * g.mWidth]].mLevel > 0);
     }
 }

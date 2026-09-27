@@ -4551,6 +4551,17 @@
             <key>Value</key>
             <integer>512</integer>
         </map>
+        <key>SKNavAirMinGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Closed gaps of the navmesh's air lower than this, in metres, are folded into the solid around them: slivers between stacked prims are not air anything moves through.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
         <key>SKNavAirRadius</key>
         <map>
             <key>Comment</key>

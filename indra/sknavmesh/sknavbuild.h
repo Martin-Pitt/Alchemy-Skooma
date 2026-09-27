@@ -107,6 +107,8 @@ namespace sknav
         /// Cells WEATHER reads past the tile when it keeps the air, so the
         /// clearance on the tile is exact; AVATAR's heightfield never grows.
         S32 mAirPad = 16;
+        /// Closed gaps lower than this are folded into the solid around them.
+        F32 mAirMinGap = 0.5f;
     };
 
     struct TileBuildResult

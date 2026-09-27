@@ -104,6 +104,11 @@ namespace sknav
     /// grid padded by CLEAR_MAX past a tile gives exact values on the tile.
     void computeClearance(AirGrid& grid, S32 climb, S32 overlap);
 
+    /// Fold every closed gap shorter than min_height units into the solid
+    /// around it: slivers between stacked or overlapping prims are no air
+    /// anything moves through, and would read as walls to their neighbours.
+    void foldSlivers(AirGrid& grid, S32 min_height);
+
     /// The grid with pad columns taken off every side.
     void cropAir(const AirGrid& in, S32 pad, AirGrid& out);
 }

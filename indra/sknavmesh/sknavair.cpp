@@ -187,6 +187,27 @@ namespace sknav
         }
     }
 
+    void foldSlivers(AirGrid& grid, S32 min_height)
+    {
+        size_t at = 0;
+        U32 begin = 0;
+        for (size_t c = 0; c + 1 < grid.mStart.size(); ++c)
+        {
+            const U32 end = grid.mStart[c + 1];
+            for (U32 i = begin; i < end; ++i)
+            {
+                const AirGap& g = grid.mGaps[i];
+                if ((g.mFlags & AirGap::OPEN) || static_cast<S32>(g.mCeiling) - static_cast<S32>(g.mFloor) >= min_height)
+                {
+                    grid.mGaps[at++] = g;
+                }
+            }
+            begin = end;
+            grid.mStart[c + 1] = static_cast<U32>(at);
+        }
+        grid.mGaps.resize(at);
+    }
+
     void cropAir(const AirGrid& in, S32 pad, AirGrid& out)
     {
         out.mCell = in.mCell;
