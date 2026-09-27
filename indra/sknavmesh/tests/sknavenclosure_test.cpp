@@ -503,10 +503,9 @@ namespace tut
     template<> template<>
     void sknavenclosure_object::test<11>()
     {
-        set_test_name("another mesh's solid overhead shelters; the tile's own does not");
+        set_test_name("a solid overhead hides the share of sky its size and height give it, whoever published it");
         Scene s;
         auto in = s.input(1);
-        in->mTiles[0].mSkyContributor = 1;
         // A platform 10 m up over x, y 8 to 16, as another tile's solid tops.
         TileAir platform;
         platform.mCell = CELL;
@@ -529,13 +528,16 @@ namespace tut
         sky->set(2, LLVector3d(0.0, 0.0, -1.0), platform);
         in->mSky = sky;
         const EnclosureProductPtr p = computeEnclosure(in);
-        ensure("sheltered under it", at(p, 12.1f, 12.1f).mS < 0.5f);
-        ensure("open beside it", at(p, 2.f, 2.f).mS == 1.f);
+        // An 8 m square 8.5 m over a standing head hides about a fifth of the sky.
+        const Enclosure under = at(p, 12.1f, 12.1f);
+        ensure("partly sheltered under it", under.mS < 0.9f && under.mS > 0.65f);
+        ensure("but OUTDOORS", under.mBucket == EnclosureBucket::OUTDOORS);
+        ensure("open beside it", at(p, 2.f, 2.f).mS > 0.9f);
 
         auto own = std::make_shared<SkyMap>();
         own->set(1, LLVector3d(0.0, 0.0, -1.0), platform);
         in->mSky = own;
-        ensure("its own solid is already in its air", at(computeEnclosure(in), 12.1f, 12.1f).mS == 1.f);
+        ensure("the same whoever published it", std::fabs(at(computeEnclosure(in), 12.1f, 12.1f).mS - under.mS) < 0.01f);
     }
 }
 

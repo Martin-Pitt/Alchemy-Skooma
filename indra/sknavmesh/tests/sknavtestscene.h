@@ -166,6 +166,45 @@ namespace sknav_test
             return air;
         }
 
+        /// Every tile's solids published to a sky map in 1 m columns, as the viewer does.
+        void addSky(EnclosureInput& in) const
+        {
+            auto sky = std::make_shared<SkyMap>();
+            for (size_t i = 0; i < in.mTiles.size(); ++i)
+            {
+                const EnclosureInput::Tile& t = in.mTiles[i];
+                TileAir tops;
+                tops.mCell = CELL;
+                tops.mUnit = UNIT;
+                tops.mTopCell = static_cast<S32>(1.f / CELL);
+                tops.mTopWidth = tops.mTopHeight = 32;
+                tops.mTopStart.assign(32 * 32 + 1, 0);
+                for (S32 ty = 0; ty < 32; ++ty)
+                {
+                    for (S32 tx = 0; tx < 32; ++tx)
+                    {
+                        const F32 x = t.mKey.mX * 32.f + tx + 0.5f, y = t.mKey.mY * 32.f + ty + 0.5f;
+                        std::vector<TopInterval> runs;
+                        if (x >= mGround[0] && y >= mGround[1] && x < mGround[2] && y < mGround[3])
+                        {
+                            runs.push_back({ 0, static_cast<U16>(1.f / UNIT) });
+                        }
+                        for (const Solid& sd : mSolids)
+                        {
+                            if (x >= sd.mX0 + mShift && x < sd.mX1 + mShift && y >= sd.mY0 && y < sd.mY1)
+                            {
+                                runs.push_back({ static_cast<U16>((sd.mZ0 + 1.f) / UNIT), static_cast<U16>((sd.mZ1 + 1.f) / UNIT) });
+                            }
+                        }
+                        tops.mTop.insert(tops.mTop.end(), runs.begin(), runs.end());
+                        tops.mTopStart[tx + ty * 32 + 1] = static_cast<U32>(tops.mTop.size());
+                    }
+                }
+                sky->set(i + 1, LLVector3d(t.mKey.mX * 32.0, t.mKey.mY * 32.0, -1.0), tops);
+            }
+            in.mSky = sky;
+        }
+
         std::shared_ptr<EnclosureInput> input(S32 tiles_x, S32 tiles_y = 1) const
         {
             auto in = std::make_shared<EnclosureInput>();

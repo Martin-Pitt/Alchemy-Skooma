@@ -498,6 +498,99 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<17>()
+    {
+        set_test_name("ground under a small platform far overhead is OUTDOORS");
+        Scene s;
+        s.box(13.f, 13.f, 19.f, 19.f, 30.f, 30.5f);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(16.1f, 16.1f, 0.5f), e));
+        ensure("hardly any sky hidden", e.mS > 0.9f);
+        ensure("OUTDOORS at the gap", e.mBucket == EnclosureBucket::OUTDOORS);
+        ensure("OUTDOORS as a space", r.at(16.1f, 16.1f)->mBucket == EnclosureBucket::OUTDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<18>()
+    {
+        set_test_name("ground under a large low roof has almost no sky");
+        Scene s;
+        s.box(2.f, 2.f, 62.f, 62.f, 5.f, 5.25f);
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+        ensure("the sky is hidden", e.mS < 0.05f);
+        ensure("INDOORS by e", e.mE > 0.75f);
+    }
+
+    /// A 60 m roof on posts at 3 m, with walls on the given sides of north, east, south, west.
+    Result roofOnPosts(bool walls[4])
+    {
+        Scene s;
+        s.mGround[0] = 2.f;
+        s.mGround[1] = 2.f;
+        s.mGround[2] = 62.f;
+        s.mGround[3] = 62.f;
+        s.box(2.5f, 2.5f, 61.5f, 61.5f, 3.f, 3.25f);
+        for (F32 px : { 2.5f, 61.25f })
+        {
+            for (F32 py : { 2.5f, 61.25f })
+            {
+                s.box(px, py, px + 0.25f, py + 0.25f, 0.f, 3.f, false);
+            }
+        }
+        if (walls[0])
+        {
+            s.box(2.5f, 61.f, 61.5f, 61.5f, 0.f, 3.f, false);
+        }
+        if (walls[1])
+        {
+            s.box(61.f, 2.5f, 61.5f, 61.5f, 0.f, 3.f, false);
+        }
+        if (walls[2])
+        {
+            s.box(2.5f, 2.5f, 61.5f, 3.f, 0.f, 3.f, false);
+        }
+        if (walls[3])
+        {
+            s.box(2.5f, 2.5f, 3.f, 61.5f, 0.f, 3.f, false);
+        }
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        return run(in);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<19>()
+    {
+        set_test_name("under a roof on posts, sky map and all, is SHELTERED");
+        bool walls[4] = { false, false, false, false };
+        const Result r = roofOnPosts(walls);
+        const Space* under = r.at(32.f, 32.f);
+        ensure("a space", under != nullptr);
+        ensure("deep enough to read as INDOORS by e alone", under->mEMean > 0.75f);
+        ensure("SHELTERED", under->mBucket == EnclosureBucket::SHELTERED);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<20>()
+    {
+        set_test_name("a roof with one wall and three open sides is SHELTERED");
+        bool walls[4] = { true, false, false, false };
+        const Result r = roofOnPosts(walls);
+        const Space* under = r.at(32.f, 32.f);
+        ensure("a space", under != nullptr);
+        ensure("deep enough to read as INDOORS by e alone", under->mEMean > 0.75f);
+        ensure("a quarter walled", under->mL > 0.15f && under->mL < 0.45f);
+        ensure("SHELTERED", under->mBucket == EnclosureBucket::SHELTERED);
+    }
+
+    template<> template<>
     void sknavrooms_object::test<12>()
     {
         set_test_name("replay a mesh's air through both passes, when a file is named");
