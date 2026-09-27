@@ -164,8 +164,10 @@ public:
     /// Join the queue; nothing lands after this.
     void close();
 
-    SKNavWorldViewPtr view() const { return mView; }
-    SKNavWindPtr wind() const { return mWind; }
+    /// Main thread only, as mView and mWind are swapped there. What they hand
+    /// out is immutable, so a worker may be given it and keep it.
+    SKNavWorldViewPtr view() const;
+    SKNavWindPtr wind() const;
     U64 revision() const { return mView ? mView->revision() : 0; }
     std::string statsLine() const;
 
@@ -211,6 +213,8 @@ private:
         sknav::WindProductPtr mWind;
         bool mWindDirty = false;            ///< its rooms landed since its slabs were built
         bool mWindInFlight = false;
+        F64 mWindChanged = 0.0;             ///< when its answers last moved
+        U32 mEvicted = 0;                   ///< tiles whose detail the air cache let go
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);

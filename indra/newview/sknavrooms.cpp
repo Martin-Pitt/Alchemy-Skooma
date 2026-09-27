@@ -28,6 +28,7 @@
 
 #include "llagent.h"
 #include "llbase64.h"
+#include "llthread.h"
 #include "llviewercontrol.h"
 #include "sknavmesh.h"
 #include "sknavoverlay.h"
@@ -292,6 +293,18 @@ namespace
     }
 }
 
+SKNavWorldViewPtr SKNavRooms::view() const
+{
+    llassert(on_main_thread());
+    return mView;
+}
+
+SKNavWindPtr SKNavRooms::wind() const
+{
+    llassert(on_main_thread());
+    return mWind;
+}
+
 SKNavWind::SKNavWind(SKNavWorldViewPtr view)
     : mView(std::move(view))
 {
@@ -546,11 +559,13 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         {
             const SKNavMesh::Mesh& mesh = *entry.second;
             U64 sig = SEED;
+            U32 evicted = 0;
             LLVector3d lo(1e300, 1e300, 0.0), hi(-1e300, -1e300, 0.0);
             for (const auto& t : mesh.mTiles)
             {
                 if (!t.second.mAir)
                 {
+                    evicted += t.second.mAirCoarse ? 1 : 0;
                     continue;
                 }
                 sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)),
@@ -582,6 +597,14 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                     doors = mixF64(mixF64(doors, lift.first.mdV[VX]), lift.second.mdV[VY]);
                 }
             }
+            // Slabs are built over detailed air: when the cache evicts some, they go with it.
+            if (evicted > state.mEvicted && state.mWind)
+            {
+                state.mWind.reset();
+                state.mWindDirty = true;
+                mViewDirty = true;
+            }
+            state.mEvicted = evicted;
             if (state.mAirSignature != sig || state.mDoorSignature != doors)
             {
                 state.mAirSignature = sig;
@@ -641,6 +664,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
 
     // Wind follows the rooms: a mesh whose spaces landed builds its slabs next.
     static LLCachedControl<bool> wind(gSavedSettings, "SKNavWind", true);
+    static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 3000);
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
@@ -649,7 +673,9 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             state.mWind.reset();
             mViewDirty = true;
         }
-        if (wind && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
+        // A mesh still streaming in lands its rooms again and again: wait for it to be quiet.
+        const bool quiet = !state.mDirty && !state.mInFlight && (now - state.mWindChanged) * 1000.0 >= wind_settle_ms;
+        if (wind && quiet && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
         {
             postWind(state);
         }
@@ -839,7 +865,12 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     const bool moved = !state.mProduct || state.mProduct->mSummary != product->mSummary;
     state.mProduct = product;
     state.mRooms = job->mSpaces->product();
-    state.mWindDirty = true;
+    // Only answers that moved, or none yet, are worth a new set of slabs.
+    if (moved || !state.mWind)
+    {
+        state.mWindDirty = true;
+        state.mWindChanged = LLTimer::getTotalSeconds();
+    }
     mViewDirty = true;
     if (!moved)
     {
