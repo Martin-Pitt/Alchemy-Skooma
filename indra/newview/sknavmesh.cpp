@@ -92,6 +92,11 @@ namespace
                 border = std::max(border, sknav::borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
             }
         }
+        // WEATHER reads its air past the tile, and a seam column there needs its ground.
+        if (params.mAir)
+        {
+            border = std::max(border, params.mAirPad * params.mCell);
+        }
         return border + 1.f;
     }
 
