@@ -663,4 +663,75 @@ namespace tut
         ensure_equals("a copy in each tile", copies, 2u);
         ensure_equals("one key", keys.size(), 1u);
     }
+
+    template<> template<>
+    void sknavflights_object::test<18>()
+    {
+        set_test_name("a flight marks the treads on its plane, not the floor under it");
+        AirGrid g;
+        g.mOrigin.set(0.f, 0.f, 0.f);
+        g.mCell = 0.125f;
+        g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = 32;
+        g.mStart.assign(32 * 32 + 1, 0);
+        for (S32 i = 0; i < 32 * 32; ++i)
+        {
+            const F32 x = (i % 32 + 0.5f) * 0.125f;
+            // A floor in the flight's height range but well under its plane.
+            AirGap under;
+            under.mFloor = 14;
+            under.mCeiling = 15;
+            under.mFlags = AirGap::WALKABLE;
+            AirGap tread;
+            tread.mFloor = static_cast<U16>(std::lround((2.f + 0.25f * x) / 0.125f));
+            tread.mCeiling = 100;
+            tread.mFlags = AirGap::WALKABLE | AirGap::OPEN;
+            g.mGaps.push_back(under);
+            g.mGaps.push_back(tread);
+            g.mStart[i + 1] = static_cast<U32>(g.mGaps.size());
+        }
+        Flight f;
+        f.mFootprint = { LLVector2(0.f, 0.f), LLVector2(4.f, 0.f), LLVector2(4.f, 2.f), LLVector2(0.f, 2.f) };
+        f.mPlane[0] = 0.25f;
+        f.mPlane[2] = 2.f;
+        f.mZMin = 2.f;
+        f.mZMax = 3.f;
+        f.mRise = 0.125f;
+        markFlights(g, { f });
+        ensure("a tread inside", (g.gaps(10, 4)[1].mFlags & AirGap::FLIGHT) != 0);
+        ensure("not the floor under it", (g.gaps(10, 4)[0].mFlags & AirGap::FLIGHT) == 0);
+        ensure("not outside the footprint", (g.gaps(10, 20)[1].mFlags & AirGap::FLIGHT) == 0);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<19>()
+    {
+        set_test_name("a tile's air marks its flight's treads, and nothing else");
+        TileBuildInput in = stairTile();
+        in.mAir = true;
+        for (S32 k = 1; k <= 8; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 16.f, 20.f, 2.25f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        ensure("a flight", !r.mFlights[0].empty() || !r.mFlights[1].empty());
+        ensure("air", r.mAir != nullptr);
+        U32 marked = 0, stray = 0;
+        for (const AirLeaf& leaf : r.mAir->mLeaves)
+        {
+            const F32 x = r.mAir->mOrigin.mV[VX] + (leaf.mX + 0.5f) * r.mAir->mCell;
+            for (U32 i = 0; i < leaf.mGapCount; ++i)
+            {
+                if (r.mAir->mGaps[leaf.mFirstGap + i].mFlags & AirGap::FLIGHT)
+                {
+                    ++marked;
+                    stray += x < 9.5f || x > 13.f ? 1 : 0;
+                }
+            }
+        }
+        ensure("treads marked", marked > 0);
+        ensure_equals("nothing off the stair", stray, 0u);
+    }
 }

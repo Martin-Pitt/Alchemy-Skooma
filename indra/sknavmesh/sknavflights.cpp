@@ -893,4 +893,58 @@ namespace sknav
         }
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
     }
+
+    void markFlights(AirGrid& grid, const std::vector<Flight>& flights)
+    {
+        for (const Flight& f : flights)
+        {
+            if (f.mFootprint.size() < 3)
+            {
+                continue;
+            }
+            F32 x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+            for (const LLVector2& p : f.mFootprint)
+            {
+                x0 = std::min(x0, p.mV[VX]);
+                y0 = std::min(y0, p.mV[VY]);
+                x1 = std::max(x1, p.mV[VX]);
+                y1 = std::max(y1, p.mV[VY]);
+            }
+            const S32 ix0 = std::max(0, static_cast<S32>(std::floor((x0 - grid.mOrigin.mV[VX]) / grid.mCell)));
+            const S32 iy0 = std::max(0, static_cast<S32>(std::floor((y0 - grid.mOrigin.mV[VY]) / grid.mCell)));
+            const S32 ix1 = std::min(grid.mWidth - 1, static_cast<S32>(std::floor((x1 - grid.mOrigin.mV[VX]) / grid.mCell)));
+            const S32 iy1 = std::min(grid.mHeight - 1, static_cast<S32>(std::floor((y1 - grid.mOrigin.mV[VY]) / grid.mCell)));
+            const size_t n = f.mFootprint.size();
+            for (S32 iy = iy0; iy <= iy1; ++iy)
+            {
+                for (S32 ix = ix0; ix <= ix1; ++ix)
+                {
+                    const LLVector2 p(grid.mOrigin.mV[VX] + (ix + 0.5f) * grid.mCell, grid.mOrigin.mV[VY] + (iy + 0.5f) * grid.mCell);
+                    bool inside = true;
+                    for (size_t k = 0; k < n && inside; ++k)
+                    {
+                        const LLVector2 edge = f.mFootprint[(k + 1) % n] - f.mFootprint[k], to = p - f.mFootprint[k];
+                        inside = edge.mV[VX] * to.mV[VY] - edge.mV[VY] * to.mV[VX] >= 0.f;
+                    }
+                    if (!inside)
+                    {
+                        continue;
+                    }
+                    const F32 plane = f.mPlane[0] * p.mV[VX] + f.mPlane[1] * p.mV[VY] + f.mPlane[2];
+                    const U32 base = grid.mStart[ix + iy * grid.mWidth];
+                    for (U32 i = 0; i < grid.count(ix, iy); ++i)
+                    {
+                        AirGap& g = grid.mGaps[base + i];
+                        const F32 z = grid.height(g.mFloor);
+                        // A tread stands off the fitted plane by up to half a riser.
+                        if ((g.mFlags & AirGap::WALKABLE) && z >= f.mZMin - 0.25f && z <= f.mZMax + 0.25f &&
+                            std::fabs(z - plane) <= std::max(0.5f, f.mRise))
+                        {
+                            g.mFlags |= AirGap::FLIGHT;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -417,7 +417,8 @@ namespace sknav
         }
     }
 
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap)
+    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
+                            const std::vector<Flight>* flights)
     {
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
         AirGrid padded, grid;
@@ -427,6 +428,10 @@ namespace sknav
             return nullptr;
         }
         foldSlivers(padded, min_gap);
+        if (flights)
+        {
+            markFlights(padded, *flights);
+        }
         computeClearance(padded, climb, overlap);
         cropAir(padded, pad, grid);
         if (grid.empty())

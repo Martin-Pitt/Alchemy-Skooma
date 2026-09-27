@@ -26,6 +26,7 @@
 #define SK_NAVAIRDISTIL_H
 
 #include "sknavair.h"
+#include "sknavflights.h"
 
 #include <memory>
 #include <string>
@@ -110,9 +111,10 @@ namespace sknav
 
     /// Everything a tile's air is built from its WEATHER heightfield: gaps
     /// read pad_cells past the tile so clearance is exact on it, slivers
-    /// under min_gap units folded away, then the distil, seams and tops.
-    /// Null when the tile has no air.
-    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap);
+    /// under min_gap units folded away, the treads of any flights marked,
+    /// then the distil, seams and tops. Null when the tile has no air.
+    TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
+                            const std::vector<Flight>* flights = nullptr);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

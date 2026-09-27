@@ -25,6 +25,7 @@
 #ifndef SK_NAVFLIGHTS_H
 #define SK_NAVFLIGHTS_H
 
+#include "sknavair.h"
 #include "v2math.h"
 #include "v3math.h"
 
@@ -89,6 +90,11 @@ namespace sknav
     /// centroids and codes are per poly, in the poly mesh's order; flights
     /// that got none are dropped.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
+
+    /// Mark FLIGHT on the walkable gaps a flight's treads stand for: inside
+    /// its footprint, with the floor on its plane. The grid and the flights
+    /// share a frame.
+    void markFlights(AirGrid& grid, const std::vector<Flight>& flights);
 }
 
 #endif // SK_NAVFLIGHTS_H
