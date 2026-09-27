@@ -484,8 +484,8 @@ namespace sknav
 
         std::vector<TileInfo> mTiles;
         std::map<TileKey, U32> mTileIndex;
-        /// Tiles whose air moved, in blocks of 2 x 2 tiles cut together, so
-        /// the cells held at once stay bounded however much of a mesh moved.
+        /// Tiles whose air moved, cut together with the ring round them;
+        /// a tile a cut sees a seam to disagree with is cut again.
         std::vector<std::vector<U32>> mBatches;
         size_t mBatch = 0;
         S32 mLabelBase = 0;             ///< watershed labels are numbered across batches
@@ -727,23 +727,19 @@ namespace sknav
                 }
             }
         }
-        // Tiles whose air moved, in 2 x 2 blocks of the lattice.
-        std::map<TileKey, std::vector<U32>> blocks;
+        // Every tile whose air moved is cut in one go, with the ring round them.
+        std::vector<U32> dirty;
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
-            if (!mTiles[t].mDirty)
+            if (mTiles[t].mDirty)
             {
-                continue;
+                dirty.push_back(t);
+                ++mProduct->mDirtyTiles;
             }
-            TileKey block;
-            block.mX = mTiles[t].mKey.mX >> 1;
-            block.mY = mTiles[t].mKey.mY >> 1;
-            blocks[block].push_back(t);
-            ++mProduct->mDirtyTiles;
         }
-        for (auto& b : blocks)
+        if (!dirty.empty())
         {
-            mBatches.push_back(std::move(b.second));
+            mBatches.push_back(std::move(dirty));
         }
         mShadow.resize(mBatches.size());
         mDoors = doorSpans(in.mDoors, in.mMeshOrigin);
@@ -806,6 +802,15 @@ namespace sknav
 
     void SpacesPass::State::buildCells()
     {
+        size_t gaps = 0;
+        for (const TileInfo& ti : mTiles)
+        {
+            for (const AirLeaf& leaf : ti.mWork ? ti.mAir->mLeaves : std::vector<AirLeaf>())
+            {
+                gaps += static_cast<size_t>(leaf.mGapCount) << (2 * leaf.mLevel);
+            }
+        }
+        mCells.reserve(gaps);
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
             TileInfo& ti = mTiles[t];
@@ -893,8 +898,11 @@ namespace sknav
         const F32 cap = params().mClearMaxM;
         mDist.assign(n, std::numeric_limits<F32>::max());
         mNearest.assign(n, LLVector2());
-        typedef std::pair<F32, U32> Item;
-        std::priority_queue<Item, std::vector<Item>, std::greater<Item>> queue;
+        // Dial's buckets at a sixteenth of a cell: the order is exact to
+        // well under a cell, and a push is a push_back.
+        const F32 step = mCell / 16.f;
+        std::vector<std::vector<U32>> buckets(static_cast<size_t>(cap / step) + 2);
+        auto bucket = [&](F32 d) { return std::min(buckets.size() - 1, static_cast<size_t>(d / step)); };
         for (U32 c = 0; c < n; ++c)
         {
             const Cell& cell = mCells[c];
@@ -905,17 +913,17 @@ namespace sknav
                 {
                     mNearest[c].set(cellX(ti, cell.mX) + DX[d] * 0.5f * mCell, cellY(ti, cell.mY) + DY[d] * 0.5f * mCell);
                     mDist[c] = 0.5f * mCell;
-                    queue.emplace(mDist[c], c);
+                    buckets[bucket(mDist[c])].push_back(c);
                     break;
                 }
             }
         }
-        while (!queue.empty())
+        for (size_t b = 0; b < buckets.size(); ++b)
         {
-            const Item top = queue.top();
-            queue.pop();
-            const U32 c = top.second;
-            if (top.first > mDist[c])
+            for (size_t i = 0; i < buckets[b].size(); ++i)
+            {
+            const U32 c = buckets[b][i];
+            if (bucket(mDist[c]) != b)
             {
                 continue;
             }
@@ -933,9 +941,11 @@ namespace sknav
                 {
                     mDist[o] = dd;
                     mNearest[o] = mNearest[c];
-                    queue.emplace(dd, o);
+                    buckets[std::max(b, bucket(dd))].push_back(o);
                 }
             }
+            }
+            std::vector<U32>().swap(buckets[b]);
         }
         for (F32& d : mDist)
         {
@@ -1159,12 +1169,13 @@ namespace sknav
         // The block's tiles cut their seeds from the labels: a leaf gap takes
         // the label most of its cells have. Ring tiles note the labels along
         // their edges, for the seams.
-        auto majority = [this](const TileInfo& ti, const AirLeaf& leaf, U32 gap) {
+        std::vector<std::pair<S32, U32>> votes;
+        auto majority = [this, &votes](const TileInfo& ti, const AirLeaf& leaf, U32 gap) {
             const TileAir& a = *ti.mAir;
             const S32 s = 1 << leaf.mLevel;
             S32 best = -1;
             U32 best_votes = 0;
-            std::unordered_map<S32, U32> votes;
+            votes.clear();
             for (S32 y = leaf.mY; y < std::min(a.mHeight, leaf.mY + s); ++y)
             {
                 for (S32 x = leaf.mX; x < std::min(a.mWidth, leaf.mX + s); ++x)
@@ -1174,7 +1185,13 @@ namespace sknav
                     {
                         if (mCells[c].mGap == gap && mLabel[c] >= 0)
                         {
-                            const U32 v = ++votes[mLabel[c]];
+                            auto it = std::find_if(votes.begin(), votes.end(), [&](const std::pair<S32, U32>& v) { return v.first == mLabel[c]; });
+                            if (it == votes.end())
+                            {
+                                votes.emplace_back(mLabel[c], 0);
+                                it = votes.end() - 1;
+                            }
+                            const U32 v = ++it->second;
                             if (v > best_votes || (v == best_votes && mLabel[c] < best))
                             {
                                 best = mLabel[c];
@@ -1221,16 +1238,53 @@ namespace sknav
             rt.mSeeds.assign(a.mGaps.size(), 0);
             ti.mSeedLabels.clear();
             std::unordered_map<S32, U16> local;
-            for (const AirLeaf& leaf : a.mLeaves)
+            // Most gaps see one label: count that, and sort only the rest.
+            std::vector<S32> first(a.mGaps.size(), -1);
+            std::vector<U32> count(a.mGaps.size(), 0);
+            std::vector<std::pair<U32, S32>> others;
+            for (U32 c = ti.mColStart.front(); c < ti.mColStart.back(); ++c)
             {
-                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                const S32 label = mLabel[c];
+                const U32 g = mCells[c].mGap;
+                if (label < 0)
                 {
-                    const U32 gap = leaf.mFirstGap + i;
-                    const S32 best = majority(ti, leaf, gap);
-                    if (best < 0)
+                    continue;
+                }
+                if (first[g] < 0 || first[g] == label)
+                {
+                    first[g] = label;
+                    ++count[g];
+                }
+                else
+                {
+                    others.emplace_back(g, label);
+                }
+            }
+            std::sort(others.begin(), others.end());
+            size_t o = 0;
+            for (U32 gap = 0; gap < a.mGaps.size(); ++gap)
+            {
+                if (first[gap] < 0)
+                {
+                    continue;
+                }
+                S32 best = first[gap];
+                size_t best_n = count[gap];
+                while (o < others.size() && others[o].first == gap)
+                {
+                    size_t j = o;
+                    while (j < others.size() && others[j] == others[o])
                     {
-                        continue;
+                        ++j;
                     }
+                    if (j - o > best_n || (j - o == best_n && others[o].second < best))
+                    {
+                        best = others[o].second;
+                        best_n = j - o;
+                    }
+                    o = j;
+                }
+                {
                     auto it = local.find(best);
                     if (it == local.end())
                     {
@@ -1252,7 +1306,7 @@ namespace sknav
             }
             // What stays true of a seed while its air does: size, shape,
             // walls, flight cells and the raster its space is tracked by.
-            std::map<std::pair<U32, U64>, U32> raster;
+            std::vector<std::pair<U32, U64>> raster;
             for (U32 c = ti.mColStart.front(); c < ti.mColStart.back(); ++c)
             {
                 const Cell& cell = mCells[c];
@@ -1288,11 +1342,18 @@ namespace sknav
                     }
                     st.mWalled += wall ? 1 : 0;
                 }
-                ++raster[std::make_pair(static_cast<U32>(seed), rasterKey(x, y, cell.mFloor * mUnit))];
+                raster.emplace_back(static_cast<U32>(seed), rasterKey(x, y, cell.mFloor * mUnit));
             }
-            for (const auto& r : raster)
+            std::sort(raster.begin(), raster.end());
+            for (size_t i = 0; i < raster.size();)
             {
-                rt.mStats[r.first.first - 1].mRaster.emplace_back(r.first.second, r.second);
+                size_t j = i;
+                while (j < raster.size() && raster[j] == raster[i])
+                {
+                    ++j;
+                }
+                rt.mStats[raster[i].first - 1].mRaster.emplace_back(raster[i].second, static_cast<U32>(j - i));
+                i = j;
             }
         }
         mLabelBase += regions;
