@@ -50,7 +50,6 @@
 #include "llvoavatarself.h"
 #include "llvolume.h"
 #include "llvolumemessage.h"
-#include "sknavmesh.h" // <SK:Nexii> navmesh census export
 
 #include <iterator>
 
@@ -75,7 +74,6 @@ constexpr char COMMAND_SET_HOME[] = "AlchemyChatCommandSetHome";
 constexpr char COMMAND_TELEPORT_TO_CAMERA[] = "AlchemyChatCommandTeleportToCam";
 constexpr char DICE_ROLL_TRIGGER[] = "/droll";
 constexpr char SEND_MENU_TRIGGER[] = "/sendmenu";
-constexpr char SKNAV_CENSUS_TRIGGER[] = "/sknavcensus"; // <SK:Nexii> navmesh census export
 
 struct ConfiguredCommand
 {
@@ -112,7 +110,7 @@ std::vector<ALChatCommand::AutocompleteCommand> ALChatCommand::getAutocompleteCo
     }
 
     std::vector<AutocompleteCommand> commands;
-    commands.reserve(std::size(CONFIGURED_COMMANDS) + 3); // <SK:Nexii> navmesh census export
+    commands.reserve(std::size(CONFIGURED_COMMANDS) + 2);
     for (const ConfiguredCommand& command : CONFIGURED_COMMANDS)
     {
         commands.push_back({
@@ -122,7 +120,6 @@ std::vector<ALChatCommand::AutocompleteCommand> ALChatCommand::getAutocompleteCo
     }
     commands.push_back({ DICE_ROLL_TRIGGER, "Roll a die: [sides]", true });
     commands.push_back({ SEND_MENU_TRIGGER, "Reply to a dialog menu: channel button", true });
-    commands.push_back({ SKNAV_CENSUS_TRIGGER, "Export the navmesh census", false }); // <SK:Nexii> navmesh census export
     return commands;
 }
 
@@ -298,17 +295,6 @@ bool ALChatCommand::parseCommand(std::string data)
             }
             return true;
         }
-        // <SK:Nexii> Navmesh census export: what every tile is built from, for replaying offline.
-        else if (cmd == SKNAV_CENSUS_TRIGGER)
-        {
-            LLSD args;
-            // Never start the navmesh just to ask it: nothing running, nothing to export.
-            args["MESSAGE"] = SKNavMesh::instanceExists() ? SKNavMesh::instance().exportCensus()
-                                                          : std::string("The navmesh is not running: turn it on to export its census.");
-            LLNotificationsUtil::add("SystemMessageTip", args);
-            return true;
-        }
-        // </SK:Nexii>
         else if (cmd == DICE_ROLL_TRIGGER)
         {
             S32 dice_sides;
