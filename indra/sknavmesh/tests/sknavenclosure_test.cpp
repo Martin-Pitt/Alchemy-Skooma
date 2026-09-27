@@ -632,3 +632,27 @@ namespace tut
         ensure("and the live tile still answers", at(second, 10.f, 10.f).mBucket == EnclosureBucket::OUTDOORS);
     }
 }
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<17>()
+    {
+        set_test_name("a closed box high over another mesh's open field takes no sky from the field's air");
+        Scene field;
+        const EnclosureProductPtr a = computeEnclosure(field.input(1));
+        Scene box;
+        box.mGround = false;
+        box.box(4.f, 4.f, 16.f, 16.f, 19.75f, 20.f);
+        box.box(4.f, 4.f, 16.f, 4.5f, 20.f, 23.f, false);
+        box.box(4.f, 15.5f, 16.f, 16.f, 20.f, 23.f, false);
+        box.box(4.f, 4.f, 4.5f, 16.f, 20.f, 23.f, false);
+        box.box(15.5f, 4.f, 16.f, 16.f, 20.f, 23.f, false);
+        box.box(4.f, 4.f, 16.f, 16.f, 23.f, 23.25f);
+        auto in = box.input(1);
+        in->mNeighbours.push_back({ LLVector3d::zero, a });
+        const Enclosure e = at(computeEnclosure(in), 10.f, 10.f, 20.5f);
+        ensure("no sky inside", e.mS < 0.1f);
+        ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+    }
+}
