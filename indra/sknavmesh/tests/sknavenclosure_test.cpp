@@ -640,9 +640,22 @@ namespace tut
     template<> template<>
     void sknavenclosure_object::test<17>()
     {
-        set_test_name("a closed box high over another mesh's open field takes no sky from the field's air");
+        set_test_name("a skybox over a terrain mesh takes no open sky from it: the terrain's air ends over its own top");
         Scene field;
-        const EnclosureProductPtr a = computeEnclosure(field.input(1));
+        auto field_in = field.input(1);
+        // The ground's solid tops, as a built tile carries them: the field's own top is 0.
+        auto tops = std::make_shared<TileAir>(*field_in->mTiles[0].mAir);
+        tops->mTopCell = static_cast<S32>(1.f / CELL);
+        tops->mTopWidth = tops->mTopHeight = 32;
+        tops->mTopStart.assign(32 * 32 + 1, 0);
+        tops->mTop.clear();
+        for (S32 c = 0; c < 32 * 32; ++c)
+        {
+            tops->mTop.push_back({ 0, static_cast<U16>(1.f / UNIT) });
+            tops->mTopStart[c + 1] = static_cast<U32>(tops->mTop.size());
+        }
+        field_in->mTiles[0].mAir = tops;
+        const EnclosureProductPtr a = computeEnclosure(field_in);
         Scene box;
         box.mGround = false;
         box.box(4.f, 4.f, 16.f, 16.f, 19.75f, 20.f);
