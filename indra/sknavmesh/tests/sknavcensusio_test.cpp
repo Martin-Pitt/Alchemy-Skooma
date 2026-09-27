@@ -29,6 +29,10 @@
 #include "../sknavcensusio.h"
 #include "../sknavtilecache.h"
 
+#include "llstring.h"
+
+#include <chrono>
+#include <iostream>
 #include <sstream>
 
 namespace
@@ -333,5 +337,41 @@ namespace tut
         const size_t blob = cut.find("\"blob\":\"") + 8;
         cut.erase(blob, 8);
         ensure("a short records blob", !readCensus(cut, back, &error));
+    }
+
+    template<> template<>
+    void sknavcensusio_object::test<5>()
+    {
+        set_test_name("what writing a large census costs, when asked");
+        if (LLStringUtil::getenv("SKNAV_CENSUS_BENCH").empty())
+        {
+            return;
+        }
+        // 25 regions of land, 20000 records, half of them 200-vertex soups.
+        CensusFile c = sample();
+        const CensusRegion region = c.mRegions[0];
+        c.mRegions.assign(25, region);
+        const RecordPtr box = c.mRecords[0], soup = c.mRecords[3];
+        c.mRecords.clear();
+        for (S32 i = 0; i < 20000; ++i)
+        {
+            auto r = std::make_shared<Record>(i & 1 ? *soup : *box);
+            if (i & 1)
+            {
+                std::vector<LLVector3> v(200);
+                for (S32 k = 0; k < 200; ++k)
+                {
+                    v[k].set(static_cast<F32>(i % 256), static_cast<F32>(k), 0.5f * k);
+                }
+                r->mTriangles = std::make_shared<const std::vector<LLVector3>>(std::move(v));
+                r->mConvexTris.clear();
+            }
+            c.mRecords.push_back(r);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        std::ostringstream out;
+        writeCensus(out, c);
+        const F64 ms = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::cout << "writeCensus: " << ms << " ms for " << out.str().size() / (1024.0 * 1024.0) << " MB" << std::endl;
     }
 }
