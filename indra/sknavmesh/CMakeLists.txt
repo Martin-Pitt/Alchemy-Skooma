@@ -6,11 +6,35 @@
 
 add_library(sknavmesh STATIC)
 
-target_sources(sknavmesh PRIVATE sknavair.cpp sknavairdistil.cpp sknavannotate.cpp sknavbuild.cpp sknavcluster.cpp sknavfeatures.cpp sknavskymap.cpp sknavwalls.cpp)
+target_sources(
+  sknavmesh
+  PRIVATE
+    sknavair.cpp
+    sknavairdistil.cpp
+    sknavannotate.cpp
+    sknavbuild.cpp
+    sknavcluster.cpp
+    sknavfeatures.cpp
+    sknavskymap.cpp
+    sknavtilecache.cpp
+    sknavwalls.cpp
+)
 
 target_sources(
   sknavmesh
-  PUBLIC FILE_SET HEADERS FILES sknavair.h sknavairdistil.h sknavannotate.h sknavbuild.h sknavcluster.h sknavfeatures.h sknavskymap.h sknavtypes.h sknavwalls.h
+  PUBLIC
+    FILE_SET HEADERS
+      FILES
+        sknavair.h
+        sknavairdistil.h
+        sknavannotate.h
+        sknavbuild.h
+        sknavcluster.h
+        sknavfeatures.h
+        sknavskymap.h
+        sknavtilecache.h
+        sknavtypes.h
+        sknavwalls.h
 )
 
 target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::recast)
@@ -25,4 +49,5 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
 endif()
