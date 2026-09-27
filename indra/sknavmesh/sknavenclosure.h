@@ -69,7 +69,7 @@ namespace sknav
         U8 mD = ENCLOSURE_D_UNKNOWN; ///< depth in ENCLOSURE_D_UNIT_M
         U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);
         U8 mFlags = 0;              ///< ENCLOSURE_SEALED
-        U8 mCover = 255;            ///< share of the sky hidden overhead, in 1/255
+        U8 mCover = 0;              ///< share of the sky roofed over, walls aside, in 1/255
     };
 
     /// A 1 m cell's gaps as a far reader needs them, kept when detail is not.
