@@ -135,7 +135,7 @@ private:
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);
-    void runChunk(const std::shared_ptr<Job>& job);
+    void runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<bool>& alive);
     void finish(const std::shared_ptr<Job>& job);
     void rebuildView();
     bool touches(const MeshState& a, const MeshState& b) const;

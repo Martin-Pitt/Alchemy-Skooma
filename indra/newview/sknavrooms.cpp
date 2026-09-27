@@ -338,7 +338,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     const bool posted = queue && queue->post([this, job, alive]() {
         if (!alive.expired())
         {
-            runChunk(job);
+            runChunk(job, alive);
         }
     });
     if (posted)
@@ -348,10 +348,9 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     }
 }
 
-void SKNavRooms::runChunk(const std::shared_ptr<Job>& job)
+void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<bool>& alive)
 {
-    // On the rooms thread.
-    std::weak_ptr<bool> alive = mAlive;
+    // On the rooms thread, which must not touch mAlive: main resets it on close.
     auto land = [this, job, alive]() {
         LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, job, alive]() {
             if (!alive.expired())
@@ -376,7 +375,7 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job)
             const bool posted = queue && queue->post([this, job, alive]() {
                 if (!alive.expired())
                 {
-                    runChunk(job);
+                    runChunk(job, alive);
                 }
             });
             if (!posted)
@@ -398,6 +397,12 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     MeshState& state = it->second;
+    // A mesh removed and re-added restarts its generations: the counter must be the same one too.
+    if (state.mLatest != job->mLatest)
+    {
+        ++mCancelled;
+        return;
+    }
     state.mInFlight = false;
     if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mPass->done())
     {
