@@ -37,6 +37,25 @@ target_sources(
         sknavwalls.h
 )
 
+# The build fingerprint keys the tile cache (sknavfingerprint.cmake).
+file(
+  GLOB sknav_fingerprinted
+  CONFIGURE_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/*.h
+)
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/sknavfingerprint.h
+  COMMAND
+    ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sknavfingerprint.h -P
+    ${CMAKE_CURRENT_SOURCE_DIR}/sknavfingerprint.cmake
+  DEPENDS ${sknav_fingerprinted} ${CMAKE_CURRENT_SOURCE_DIR}/sknavfingerprint.cmake
+  COMMENT "Fingerprinting the navmesh sources"
+)
+target_sources(sknavmesh PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated/sknavfingerprint.h)
+target_include_directories(sknavmesh PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
 target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::recast)
 
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)

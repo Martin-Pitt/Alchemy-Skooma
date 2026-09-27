@@ -310,6 +310,8 @@ namespace tut
             ensure("erased", !cache.contains(3) && !cache.load(3, got));
         }
         TileDiskCache again(dir, 2500);
+        ensure_equals("nothing before the index", again.entries(), size_t(0));
+        again.index();
         ensure_equals("reindexed", again.entries(), size_t(1));
         std::vector<U8> got;
         ensure("reloaded", again.load(1, got) && got == blob);
@@ -328,5 +330,72 @@ namespace tut
         ensure("no leaves or gaps", coarse->mLeaves.empty() && coarse->mGaps.empty() && coarse->mSeams[0].mGaps.empty());
         ensure("tops", coarse->mTopStart == full.mTopStart && coarse->mTop.size() == full.mTop.size() && coarse->mTopCell == 8);
         ensure("grid", coarse->mOrigin == full.mOrigin && coarse->mWidth == full.mWidth);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<8>()
+    {
+        set_test_name("indexing sweeps half-written files and keeps what was stored meanwhile");
+        const std::string dir = scratch("sknavtilecache_index");
+        const std::vector<U8> blob(100, 3);
+        {
+            TileDiskCache first(dir, 1 << 20);
+            first.store(1, blob);
+        }
+        const std::filesystem::path tmp = std::filesystem::path(dir) / "0000000000000001.snt.1a.tmp";
+        std::ofstream(tmp, std::ios::binary) << "half";
+        TileDiskCache cache(dir, 1 << 20);
+        cache.store(2, blob);
+        cache.index();
+        ensure("tmp swept", !std::filesystem::exists(tmp));
+        ensure_equals("found and live", cache.entries(), size_t(2));
+        ensure_equals("bytes", cache.bytes(), U64(200));
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<9>()
+    {
+        set_test_name("a file that cannot be removed yet is removed at a later prune");
+#if LL_WINDOWS
+        const std::string dir = scratch("sknavtilecache_locked");
+        const std::vector<U8> blob(100, 3);
+        TileDiskCache cache(dir, 1 << 20);
+        cache.index();
+        cache.store(1, blob);
+        const std::filesystem::path held = std::filesystem::path(dir) / "0000000000000001.snt";
+        {
+            std::ifstream open_file(held, std::ios::binary);    // Windows will not delete an open file
+            cache.setCap(0);
+            ensure_equals("pending", cache.pendingRemovals(), size_t(1));
+            ensure("still there", std::filesystem::exists(held));
+        }
+        cache.setCap(0);
+        ensure_equals("retried", cache.pendingRemovals(), size_t(0));
+        ensure("gone", !std::filesystem::exists(held));
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+#endif
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<10>()
+    {
+        set_test_name("one bit of input spreads over the whole key");
+        TileBuildInput a = input({});
+        TileBuildInput b = input({});
+        b.mTileX += 1;
+        const U64 d = tileContentKey(a) ^ tileContentKey(b);
+        S32 bits = 0;
+        for (U64 v = d; v; v >>= 1)
+        {
+            bits += v & 1;
+        }
+        ensure("most bits flip", bits > 16);
+        ensure("high half moves", (d >> 32) != 0);
+        // FNV alone leaves a top-bit change in the last input in the top bit.
+        const U64 top = finishKey(mix(SEED, 1ull << 63)) ^ finishKey(mix(SEED, 0));
+        ensure("low half moves on a top-bit change", (top & 0xffffffffull) != 0);
     }
 }

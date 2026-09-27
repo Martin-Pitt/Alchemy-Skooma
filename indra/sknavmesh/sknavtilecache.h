@@ -45,6 +45,10 @@ namespace sknav
     /// flags, shape, region origin, quantised transform, bounds and triangles.
     U64 recordContentKey(const Record& record);
 
+    /// splitmix64's finaliser. FNV only carries a change upwards, so a key
+    /// whose last input moved in its top bits would keep its low bits.
+    U64 finishKey(U64 h);
+
     /// Everything a tile build reads, from the input itself: mesh origin, tile
     /// index, height range, every parameter, the terrain window's samples and
     /// the multiset of record and cut keys, in whatever order they came.
@@ -71,8 +75,11 @@ namespace sknav
     class TileDiskCache
     {
     public:
-        /// Creates the folder and indexes what is already there, oldest first.
+        /// Touches nothing on disk until index() has run.
         TileDiskCache(const std::string& dir, U64 cap_bytes);
+        /// Create the folder, sweep what a crash left half written, and index
+        /// the entries there oldest first. Slow on a big folder: a worker's job.
+        void index();
 
         bool load(U64 key, std::vector<U8>& out);
         bool store(U64 key, const std::vector<U8>& bytes);
@@ -81,6 +88,8 @@ namespace sknav
         void setCap(U64 cap_bytes);
         U64 bytes() const;
         size_t entries() const;
+        /// Files a remove failed on, tried again at the next prune.
+        size_t pendingRemovals() const;
 
     private:
         struct Entry
@@ -89,7 +98,8 @@ namespace sknav
             U64 mUsed = 0;
         };
         std::string pathOf(U64 key) const;
-        void pruneLocked();
+        void pruneLocked(std::vector<std::string>& doomed);
+        void removeFiles(const std::vector<std::string>& paths);
 
         mutable std::mutex mMutex;
         std::string mDir;
@@ -97,6 +107,7 @@ namespace sknav
         U64 mBytes = 0;
         U64 mClock = 0;
         std::unordered_map<U64, Entry> mEntries;
+        std::vector<std::string> mDoomed;
     };
 
     /// Nearness integrated over time with a decay: a tile the camera sits by

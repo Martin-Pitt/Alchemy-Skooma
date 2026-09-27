@@ -25,6 +25,9 @@
 #include "linden_common.h"
 
 #include "sknavtilecache.h"
+#include "sknavfingerprint.h"
+
+#include "DetourNavMesh.h"
 
 #include <algorithm>
 #include <cmath>
@@ -355,6 +358,15 @@ namespace sknav
         }
     }
 
+    U64 finishKey(U64 h)
+    {
+        h ^= h >> 30;
+        h *= 0xbf58476d1ce4e5b9ull;
+        h ^= h >> 27;
+        h *= 0x94d049bb133111ebull;
+        return h ^ (h >> 31);
+    }
+
     U64 recordContentKey(const Record& record)
     {
         U64 h = SEED;
@@ -399,9 +411,15 @@ namespace sknav
         return h;
     }
 
+    // Whoever adds a field to TileBuildInput keys it below, then updates this size.
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 232, "a new TileBuildInput field must go into tileContentKey");
+
     U64 tileContentKey(const TileBuildInput& input)
     {
+        // The format, Detour's tile layout and this build's own algorithms.
         U64 h = mix(SEED, TILE_PRODUCT_VERSION);
+        h = mix(h, static_cast<U64>(DT_NAVMESH_VERSION));
+        h = mix(h, SKNAV_BUILD_FINGERPRINT);
         // The mesh origin is on the lattice, so exact; the product is relative to it.
         h = mixF64(h, input.mMeshOrigin.mdV[VX]);
         h = mixF64(h, input.mMeshOrigin.mdV[VY]);
@@ -447,7 +465,7 @@ namespace sknav
 
         h = mixKeys(h, input.mRecords);
         h = mixKeys(h, input.mCuts);
-        return h;
+        return finishKey(h);
     }
 
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key)
@@ -669,9 +687,13 @@ namespace sknav
 
     TileDiskCache::TileDiskCache(const std::string& dir, U64 cap_bytes) : mDir(dir), mCap(cap_bytes)
     {
+    }
+
+    void TileDiskCache::index()
+    {
         namespace fs = std::filesystem;
         std::error_code ec;
-        const fs::path root = pathFromUtf8(dir);
+        const fs::path root = pathFromUtf8(mDir);
         fs::create_directories(root, ec);
         struct Found
         {
@@ -680,9 +702,16 @@ namespace sknav
             fs::file_time_type mTime;
         };
         std::vector<Found> found;
+        std::vector<std::string> leftovers;
         for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
         {
             const fs::path& p = it->path();
+            // A write a crash cut short never got renamed into place.
+            if (p.extension() == ".tmp")
+            {
+                leftovers.push_back(mDir + "/" + p.filename().string());
+                continue;
+            }
             if (p.extension() != ".snt")
             {
                 continue;
@@ -698,15 +727,32 @@ namespace sknav
             }
             found.push_back({ key, bytes, it->last_write_time(e2) });
         }
+        removeFiles(leftovers);
         // The oldest file was the least recently used last session.
         std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.mTime < b.mTime; });
-        std::lock_guard<std::mutex> lock(mMutex);
-        for (const Found& f : found)
+        std::vector<std::string> doomed;
         {
-            mEntries[f.mKey] = { f.mBytes, ++mClock };
-            mBytes += f.mBytes;
+            std::lock_guard<std::mutex> lock(mMutex);
+            // Anything stored while this ran is newer than what was found.
+            std::unordered_map<U64, Entry> live;
+            live.swap(mEntries);
+            mBytes = 0;
+            for (const Found& f : found)
+            {
+                if (!live.count(f.mKey))
+                {
+                    mEntries[f.mKey] = { f.mBytes, ++mClock };
+                    mBytes += f.mBytes;
+                }
+            }
+            for (const auto& e : live)
+            {
+                mEntries[e.first] = { e.second.mBytes, ++mClock };
+                mBytes += e.second.mBytes;
+            }
+            pruneLocked(doomed);
         }
-        pruneLocked();
+        removeFiles(doomed);
     }
 
     std::string TileDiskCache::pathOf(U64 key) const
@@ -758,6 +804,10 @@ namespace sknav
         std::snprintf(suffix, sizeof(suffix), ".%zx.tmp", std::hash<std::thread::id>()(std::this_thread::get_id()));
         const fs::path tmp = pathFromUtf8(path + suffix);
         {
+            std::error_code dir_ec;
+            fs::create_directories(pathFromUtf8(mDir), dir_ec);     // index() may not have run yet
+        }
+        {
             std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
             if (!file || !file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()))
             {
@@ -773,12 +823,16 @@ namespace sknav
             fs::remove(tmp, ec);
             return false;
         }
-        std::lock_guard<std::mutex> lock(mMutex);
-        Entry& e = mEntries[key];
-        mBytes = mBytes - e.mBytes + bytes.size();
-        e.mBytes = bytes.size();
-        e.mUsed = ++mClock;
-        pruneLocked();
+        std::vector<std::string> doomed;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            Entry& e = mEntries[key];
+            mBytes = mBytes - e.mBytes + bytes.size();
+            e.mBytes = bytes.size();
+            e.mUsed = ++mClock;
+            pruneLocked(doomed);
+        }
+        removeFiles(doomed);
         return true;
     }
 
@@ -793,8 +847,7 @@ namespace sknav
                 mEntries.erase(it);
             }
         }
-        std::error_code ec;
-        std::filesystem::remove(pathFromUtf8(pathOf(key)), ec);
+        removeFiles({ pathOf(key) });
     }
 
     bool TileDiskCache::contains(U64 key) const
@@ -805,9 +858,13 @@ namespace sknav
 
     void TileDiskCache::setCap(U64 cap_bytes)
     {
-        std::lock_guard<std::mutex> lock(mMutex);
-        mCap = cap_bytes;
-        pruneLocked();
+        std::vector<std::string> doomed;
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            mCap = cap_bytes;
+            pruneLocked(doomed);
+        }
+        removeFiles(doomed);
     }
 
     U64 TileDiskCache::bytes() const
@@ -822,8 +879,17 @@ namespace sknav
         return mEntries.size();
     }
 
-    void TileDiskCache::pruneLocked()
+    size_t TileDiskCache::pendingRemovals() const
     {
+        std::lock_guard<std::mutex> lock(mMutex);
+        return mDoomed.size();
+    }
+
+    void TileDiskCache::pruneLocked(std::vector<std::string>& doomed)
+    {
+        // Files a remove failed on before are tried again with every prune.
+        doomed.insert(doomed.end(), mDoomed.begin(), mDoomed.end());
+        mDoomed.clear();
         if (mBytes <= mCap)
         {
             return;
@@ -844,8 +910,25 @@ namespace sknav
             const auto it = mEntries.find(o.second);
             mBytes -= it->second.mBytes;
             mEntries.erase(it);
+            doomed.push_back(pathOf(o.second));
+        }
+    }
+
+    void TileDiskCache::removeFiles(const std::vector<std::string>& paths)
+    {
+        std::vector<std::string> failed;
+        for (const std::string& path : paths)
+        {
             std::error_code ec;
-            std::filesystem::remove(pathFromUtf8(pathOf(o.second)), ec);
+            if (!std::filesystem::remove(pathFromUtf8(path), ec) && ec)
+            {
+                failed.push_back(path);
+            }
+        }
+        if (!failed.empty())
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            mDoomed.insert(mDoomed.end(), failed.begin(), failed.end());
         }
     }
 
