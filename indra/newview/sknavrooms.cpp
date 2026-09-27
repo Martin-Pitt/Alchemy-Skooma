@@ -312,6 +312,8 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     sknav::TileBuildInput build;
     navmesh.fillParams(build);
     input->mParams.mWalkHeadM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mHeight;
+    static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
+    input->mParams.mSealedIndoors = sealed;
     for (const auto& t : mesh.mTiles)
     {
         if (t.second.mAir && !t.second.mAir->mLeaves.empty())
@@ -455,7 +457,7 @@ void SKNavRooms::rebuildView()
 
 std::string SKNavRooms::statsLine() const
 {
-    U64 gaps = 0, unknown = 0;
+    U64 gaps = 0, unknown = 0, sealed = 0;
     U32 meshes = 0, in_flight = 0;
     for (const auto& entry : mMeshes)
     {
@@ -465,6 +467,7 @@ std::string SKNavRooms::statsLine() const
             ++meshes;
             gaps += entry.second.mProduct->mGapCount;
             unknown += entry.second.mProduct->mUnknownGaps;
+            sealed += entry.second.mProduct->mSealedGaps;
         }
     }
     std::string stages;
@@ -472,9 +475,9 @@ std::string SKNavRooms::statsLine() const
     {
         stages += llformat("%s%s %.0f", s ? ", " : "", EnclosurePass::stageName(s), mLastStageMs[s]);
     }
-    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% of %llu gaps",
+    return llformat("enclosure: %u meshes, %u passes (%u dropped, %u running), last %.0f ms on the thread (%s), %.0f ms posted to landed, unknown %.1f%% and sealed %.1f%% of %llu gaps",
                     meshes, mPasses, mCancelled, in_flight, mLastMs, stages.c_str(), mLastWallMs,
-                    gaps ? 100.0 * unknown / gaps : 0.0, static_cast<unsigned long long>(gaps));
+                    gaps ? 100.0 * unknown / gaps : 0.0, gaps ? 100.0 * sealed / gaps : 0.0, static_cast<unsigned long long>(gaps));
 }
 
 void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
@@ -564,17 +567,18 @@ void SKNavRooms::writeTile(std::ostream& file, const LLUUID& mesh, const TileKey
             return;
         }
         std::vector<U8> blob;
-        blob.reserve(t->mGaps.size() * 4);
+        blob.reserve(t->mGaps.size() * 5);
         for (const GapEnclosure& g : t->mGaps)
         {
             blob.push_back(g.mS);
             blob.push_back(g.mE);
             blob.push_back(g.mD);
             blob.push_back(g.mBucket);
+            blob.push_back(g.mFlags);
         }
         file << ",\"enclosure\":{\"generation\":" << m.mProduct->mGeneration
-             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
-                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"]},\"blob\":\""
+             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
+                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1}},\"blob\":\""
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
         return;
     }

@@ -50,10 +50,15 @@ namespace sknav
         F32 mCarryRiseM = 2.f;      ///< and whose floor is within this of the walkable floor it came from
         F32 mSkyReachM = 50.f;      ///< a solid of another mesh starting this far above still shelters
         F32 mHysteresis = 0.05f;    ///< a bucket holds until e is this far past its edge
+        /// Walkable air no walkable path reaches from outside reads INDOORS,
+        /// flagged sealed with D at its cap, rather than UNKNOWN.
+        bool mSealedIndoors = true;
     };
 
     constexpr U8 ENCLOSURE_D_UNKNOWN = 0xff;
     constexpr F32 ENCLOSURE_D_UNIT_M = 0.25f;
+    constexpr U8 ENCLOSURE_D_DEEP = ENCLOSURE_D_UNKNOWN - 1;   ///< the cap, what a sealed gap reads
+    constexpr U8 ENCLOSURE_SEALED = 1 << 0;                     ///< reached from a sealed floor, not from outside
 
     /// One gap's answer, parallel to its TileAir's gaps.
     struct GapEnclosure
@@ -63,6 +68,7 @@ namespace sknav
         U8 mE = 0;                  ///< e in 1/255
         U8 mD = ENCLOSURE_D_UNKNOWN; ///< depth in ENCLOSURE_D_UNIT_M
         U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);
+        U8 mFlags = 0;              ///< ENCLOSURE_SEALED
     };
 
     /// A 1 m cell's gaps as a far reader needs them, kept when detail is not.
@@ -75,6 +81,7 @@ namespace sknav
         U8 mS = 0;
         U8 mE = 0;
         U8 mD = ENCLOSURE_D_UNKNOWN;
+        U8 mFlags = 0;              ///< ENCLOSURE_SEALED when most of its known air is
     };
 
     struct CoarseAir
@@ -94,6 +101,7 @@ namespace sknav
         F32 mE = 0.f;
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
         U16 mSpace = 0;
+        bool mSealed = false;       ///< INDOORS because no way in was found, D at its cap
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
     };
@@ -122,6 +130,7 @@ namespace sknav
         U32 mUnknownGaps = 0;
         F64 mArea = 0.0;                       ///< m² of gap floor, summed over gaps
         F64 mUnknownArea = 0.0;
+        U32 mSealedGaps = 0;
         F32 mMillis = 0.f;                     ///< worker time over all chunks
         U64 mSummary = 0;                      ///< hash of the coarse answers, what neighbours read
 

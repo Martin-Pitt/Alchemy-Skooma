@@ -51,6 +51,7 @@ namespace
     {
         NODE_WALK = 1 << 0,
         NODE_SKY = 1 << 1,
+        NODE_SEALED = 1 << 2,   ///< walkable, but no walkable path from outside reached it
     };
 
     enum Stage : S32
@@ -198,8 +199,9 @@ namespace
         return t && t->mAir == tile.mAir && t->mGaps.size() == tile.mAir->mGaps.size() ? t->mGaps.data() : nullptr;
     }
 
-    void fillEnclosure(const TileEnclosure& t, U16 floor, U16 ceiling, U8 s, U8 e, U8 d, U8 bucket, U16 space, Enclosure& out)
+    void fillEnclosure(const TileEnclosure& t, U16 floor, U16 ceiling, U8 s, U8 e, U8 d, U8 bucket, U16 space, U8 flags, Enclosure& out)
     {
+        out.mSealed = (flags & ENCLOSURE_SEALED) != 0;
         out.mS = s / 255.f;
         out.mE = e / 255.f;
         out.mD = d == ENCLOSURE_D_UNKNOWN ? 0.f : d * ENCLOSURE_D_UNIT_M;
@@ -214,6 +216,10 @@ namespace
         if (g.mD == ENCLOSURE_D_UNKNOWN)
         {
             return static_cast<U8>(EnclosureBucket::UNKNOWN);
+        }
+        if (g.mFlags & ENCLOSURE_SEALED)
+        {
+            return static_cast<U8>(EnclosureBucket::INDOORS);
         }
         return static_cast<U8>(enclosureBucket(g.mE / 255.f, EnclosureBucket::UNKNOWN, 0.f));
     }
@@ -249,7 +255,7 @@ namespace
                 const AirGap& g = t->mAir->mGaps[l.mFirstGap + i];
                 const GapEnclosure& e = t->mGaps[l.mFirstGap + i];
                 Enclosure out;
-                fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mBucket, e.mSpace, out);
+                fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mBucket, e.mSpace, e.mFlags, out);
                 fn(out, g.mFloor, g.mCeiling, *t);
             }
             return;
@@ -265,7 +271,7 @@ namespace
         {
             const CoarseGap& g = c.mGaps[i];
             Enclosure out;
-            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, coarseBucket(g), g.mSpace, out);
+            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, coarseBucket(g), g.mSpace, g.mFlags, out);
             fn(out, g.mFloor, g.mCeiling, *t);
         }
     }
@@ -725,7 +731,7 @@ namespace sknav
                                     const F32 d = -p.mSkyDecayM * std::log(e.mS);
                                     sky.emplace_back(static_cast<U32>(std::lround(d / mHalfCellM)) + probes[k].mCost, n);
                                 }
-                                if ((mNodeFlags[n] & NODE_WALK) && e.mBucket != EnclosureBucket::UNKNOWN &&
+                                if ((mNodeFlags[n] & NODE_WALK) && e.mBucket != EnclosureBucket::UNKNOWN && !e.mSealed &&
                                     std::abs(floor - nb_floor) <= p.mClimbM)
                                 {
                                     walk.emplace_back(static_cast<U32>(std::lround(e.mD / mHalfCellM)) + probes[k].mCost, n);
@@ -776,8 +782,16 @@ namespace sknav
                 }
                 const F32 d = mDwalk[n] * mHalfCellM;
                 const F32 ev = enclosureE(s, d, p.mDepthFullM);
-                e.mD = static_cast<U8>(std::min<S32>(ENCLOSURE_D_UNKNOWN - 1, std::lround(d / ENCLOSURE_D_UNIT_M)));
+                e.mD = static_cast<U8>(std::min<S32>(ENCLOSURE_D_DEEP, std::lround(d / ENCLOSURE_D_UNIT_M)));
                 e.mE = quantise(ev);
+                if (mCarrySeed[n] != INF && (mNodeFlags[mCarrySeed[n]] & NODE_SEALED))
+                {
+                    e.mD = ENCLOSURE_D_DEEP;
+                    e.mFlags = ENCLOSURE_SEALED;
+                    e.mBucket = static_cast<U8>(EnclosureBucket::INDOORS);
+                    ++mProduct->mSealedGaps;
+                    continue;
+                }
                 const EnclosureBucket prev = previous ? static_cast<EnclosureBucket>(previous[g].mBucket) : EnclosureBucket::UNKNOWN;
                 e.mBucket = static_cast<U8>(enclosureBucket(ev, prev, p.mHysteresis));
             }
@@ -832,7 +846,7 @@ namespace sknav
         {
             // Gaps whose floors sit within a climb of the lowest are one coarse gap.
             size_t j = i;
-            F32 area = 0.f, s = 0.f, e = 0.f, d = 0.f, known = 0.f;
+            F32 area = 0.f, s = 0.f, e = 0.f, d = 0.f, known = 0.f, sealed = 0.f;
             U16 floor = parts[i].mFloor, ceiling = 0;
             while (j < parts.size() && parts[j].mCell == parts[i].mCell && parts[j].mFloor <= parts[i].mFloor + mClimb)
             {
@@ -846,6 +860,7 @@ namespace sknav
                 if (ge.mD != ENCLOSURE_D_UNKNOWN)
                 {
                     known += w;
+                    sealed += (ge.mFlags & ENCLOSURE_SEALED) ? w : 0.f;
                     e += w * ge.mE;
                     d += w * ge.mD;
                 }
@@ -859,6 +874,7 @@ namespace sknav
             {
                 g.mE = static_cast<U8>(std::lround(e / known));
                 g.mD = static_cast<U8>(std::lround(d / known));
+                g.mFlags = sealed * 2.f >= known ? ENCLOSURE_SEALED : 0;
             }
             while (cell < parts[i].mCell)
             {
@@ -974,8 +990,15 @@ namespace sknav
                     // Unwalkable air takes the walkable depth beside it plus the way there.
                     std::vector<std::pair<U32, U32>> seeds;
                     mCarrySeed.assign(mNodeFlags.size(), INF);
+                    // A floor with no walkable way from outside is as deep as depth goes.
+                    const U32 deep = static_cast<U32>(std::lround(ENCLOSURE_D_DEEP * ENCLOSURE_D_UNIT_M / mHalfCellM));
                     for (U32 n = 0; n < mNodeFlags.size(); ++n)
                     {
+                        if (params().mSealedIndoors && (mNodeFlags[n] & NODE_WALK) && mDwalk[n] == INF)
+                        {
+                            mDwalk[n] = deep;
+                            mNodeFlags[n] |= NODE_SEALED;
+                        }
                         if ((mNodeFlags[n] & NODE_WALK) && mDwalk[n] != INF)
                         {
                             seeds.emplace_back(mDwalk[n], n);
@@ -1006,6 +1029,7 @@ namespace sknav
                                 mFloor[n] - mCeil[below] <= mClimb)
                             {
                                 mDwalk[n] = mDwalk[below];
+                                mCarrySeed[n] = mCarrySeed[below];
                             }
                         }
                     }

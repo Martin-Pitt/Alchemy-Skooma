@@ -245,18 +245,46 @@ namespace tut
     template<> template<>
     void sknavenclosure_object::test<4>()
     {
-        set_test_name("a room with only a window is UNKNOWN, never OUTDOORS");
+        set_test_name("a room with only a window is INDOORS and sealed, or UNKNOWN with sealing off, never OUTDOORS");
         Scene s;
         s.room(4.f, 4.f, 16.f, 16.f);
         s.mSolids[1].mX1 = 9.f;
         s.box(11.f, 15.5f, 16.f, 16.f, 0.f, 3.f, false);
         s.box(9.f, 15.5f, 11.f, 16.f, 0.f, 1.f, false);
         s.box(9.f, 15.5f, 11.f, 16.f, 2.f, 3.f, false);
-        const EnclosureProductPtr p = computeEnclosure(s.input(1));
+        s.box(6.f, 6.f, 8.f, 7.f, 0.f, 1.f, false);             // a desk, whose air is carried from the sealed floor
+        auto in = s.input(1);
+        const EnclosureProductPtr p = computeEnclosure(in);
         const Enclosure e = at(p, 10.f, 10.f);
-        ensure("UNKNOWN", e.mBucket == EnclosureBucket::UNKNOWN);
+        ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+        ensure("sealed", e.mSealed);
+        ensure_equals("as deep as depth goes", e.mD, ENCLOSURE_D_DEEP * ENCLOSURE_D_UNIT_M);
         ensure("some light", e.mS > 0.f);
-        ensure("counted", p->mUnknownGaps > 0);
+        ensure("the desk's air too", at(p, 7.f, 6.5f, 1.5f).mSealed);
+        ensure("counted as sealed", p->mSealedGaps > 0 && p->mUnknownGaps == 0);
+        ensure("a room with a way in is not sealed", !at(p, 25.f, 25.f).mSealed);
+
+        in->mParams.mSealedIndoors = false;
+        const EnclosureProductPtr off = computeEnclosure(in);
+        ensure("UNKNOWN with sealing off", at(off, 10.f, 10.f).mBucket == EnclosureBucket::UNKNOWN);
+        ensure("counted", off->mUnknownGaps > 0);
+    }
+
+    template<> template<>
+    void sknavenclosure_object::test<15>()
+    {
+        set_test_name("closed air over no walkable floor stays UNKNOWN");
+        Scene s;
+        s.box(4.f, 4.f, 12.f, 12.f, 0.f, 2.f, false);           // a hollow block: unwalkable floor, closed lid
+        s.box(4.f, 4.f, 12.f, 12.f, 4.f, 4.5f, false);
+        s.box(4.f, 4.f, 12.f, 4.5f, 2.f, 4.f, false);
+        s.box(4.f, 11.5f, 12.f, 12.f, 2.f, 4.f, false);
+        s.box(4.f, 4.f, 4.5f, 12.f, 2.f, 4.f, false);
+        s.box(11.5f, 4.f, 12.f, 12.f, 2.f, 4.f, false);
+        const EnclosureProductPtr p = computeEnclosure(s.input(1));
+        const Enclosure e = at(p, 8.f, 8.f, 3.f);
+        ensure("UNKNOWN", e.mBucket == EnclosureBucket::UNKNOWN);
+        ensure("not sealed", !e.mSealed);
     }
 
     template<> template<>
@@ -412,11 +440,15 @@ namespace tut
         in->mTiles.erase(std::remove_if(in->mTiles.begin(), in->mTiles.end(), [](const EnclosureInput::Tile& t) { return t.mKey.mX != 1; }),
                          in->mTiles.end());
         const EnclosureProductPtr alone = computeEnclosure(in);
-        ensure("alone the hall floor is UNKNOWN", at(alone, 40.f, 9.5f).mBucket == EnclosureBucket::UNKNOWN);
+        ensure("alone the hall reads sealed", at(alone, 40.f, 9.5f).mSealed);
+        in->mNeighbours.push_back({ LLVector3d::zero, alone });
+        ensure("a sealed neighbour is no way in", at(computeEnclosure(in), 40.f, 9.5f).mSealed);
+        in->mNeighbours.clear();
         in->mNeighbours.push_back({ LLVector3d::zero, a });
         const EnclosureProductPtr joined = computeEnclosure(in);
         const Enclosure e = at(joined, 40.f, 9.5f);
-        ensure("with the field beside it, INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+        ensure("with the field beside it, reached", !e.mSealed);
+        ensure("and INDOORS", e.mBucket == EnclosureBucket::INDOORS);
         ensure("about 8 m in", e.mD > 6.f && e.mD < 11.f);
     }
 }
