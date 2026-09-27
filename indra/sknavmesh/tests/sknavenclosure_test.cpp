@@ -537,7 +537,9 @@ namespace tut
         auto own = std::make_shared<SkyMap>();
         own->set(1, LLVector3d(0.0, 0.0, -1.0), platform);
         in->mSky = own;
-        ensure("the same whoever published it", std::fabs(at(computeEnclosure(in), 12.1f, 12.1f).mS - under.mS) < 0.01f);
+        const Enclosure mine = at(computeEnclosure(in), 12.1f, 12.1f);
+        ensure("the tile's own solid counts too", mine.mS < 0.9f);
+        ensure("the same whoever published it", std::fabs(mine.mS - under.mS) < 0.01f);
     }
 }
 

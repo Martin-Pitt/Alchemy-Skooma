@@ -300,6 +300,7 @@ namespace tut
         ensure("a space", under != nullptr);
         ensure("deep enough to read as INDOORS by e alone", under->mEMean > 0.75f);
         ensure("hardly walled", under->mL < 0.4f);
+        ensure("no sky map, no cover", under->mCoverMean == 0.f);
         ensure("SHELTERED", under->mBucket == EnclosureBucket::SHELTERED);
     }
 
@@ -500,15 +501,16 @@ namespace tut
     template<> template<>
     void sknavrooms_object::test<17>()
     {
-        set_test_name("ground under a small platform far overhead is OUTDOORS");
+        set_test_name("ground under a small platform far overhead, beside a tall wall, is OUTDOORS though the wall hides much sky");
         Scene s;
         s.box(13.f, 13.f, 19.f, 19.f, 30.f, 30.5f);
+        s.box(20.f, 0.f, 21.f, 32.f, 0.f, 36.f, false);
         auto in = s.input(1);
         s.addSky(*in);
         const Result r = run(in);
         Enclosure e;
         ensure("read", r.mEnc->enclosureAt(LLVector3(16.1f, 16.1f, 0.5f), e));
-        ensure("hardly any sky hidden", e.mS > 0.9f);
+        ensure("the wall hides much of the sky", e.mS < 0.8f);
         ensure("OUTDOORS at the gap", e.mBucket == EnclosureBucket::OUTDOORS);
         ensure("OUTDOORS as a space", r.at(16.1f, 16.1f)->mBucket == EnclosureBucket::OUTDOORS);
     }
@@ -605,8 +607,57 @@ namespace tut
         const F32 walled = in->mSky->coverAbove(mid, 50.f);
         ensure("most of the sky is behind the walls", walled > 0.6f && walled < 0.95f);
         ensure("outside the well the sky is open", in->mSky->coverAbove(LLVector3d(4.5, 4.5, 2.0), 50.f) < 0.1f);
+        Scene pole;
+        pole.box(16.f, 3.f, 17.f, 4.f, 0.f, 36.f, false);
+        auto pin = pole.input(1);
+        pole.addSky(*pin);
+        ensure("a thin pole 12 m off hides a sliver, not its wedge", pin->mSky->coverAbove(LLVector3d(4.5, 4.5, 2.0), 50.f) < 0.04f);
         const SkyView view(*in->mSky, -40.0, -40.0, 72.0, 72.0);
         ensure("the view agrees", std::fabs(view.coverAbove(mid, 50.f) - walled) < 1e-5f);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<22>()
+    {
+        set_test_name("a street between towers stays OUTDOORS with the sky map, though the towers hide most of its sky");
+        Scene s;
+        s.box(0.f, 0.f, 12.f, 32.f, 0.f, 36.f, false);
+        s.box(20.f, 0.f, 32.f, 32.f, 0.f, 36.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(16.f, 16.f, 0.5f), e));
+        ensure("the towers hide most of the sky", e.mS < 0.5f);
+        ensure("OUTDOORS at the gap", e.mBucket == EnclosureBucket::OUTDOORS);
+        const Space* street = r.at(16.f, 16.f);
+        ensure("a space", street != nullptr);
+        ensure("nothing roofs it", street->mCoverMean < 0.05f);
+        ensure("OUTDOORS as a space", street->mBucket == EnclosureBucket::OUTDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<23>()
+    {
+        set_test_name("two yards on a terrace join through a doorway in the tall wall between them, its shadow on the sky no bar");
+        Scene s;
+        s.mGround[0] = 2.f;
+        s.mGround[1] = 2.f;
+        s.mGround[2] = 18.f;
+        s.mGround[3] = 10.f;
+        s.box(9.75f, 0.f, 10.f, 5.f, 0.f, 36.f, false);
+        s.box(9.75f, 6.f, 10.f, 32.f, 0.f, 36.f, false);
+        s.box(9.75f, 5.f, 10.f, 6.f, 2.2f, 36.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        const Space* west = r.at(6.f, 6.f);
+        const Space* east = r.at(14.f, 6.f);
+        ensure("spaces", west && east);
+        Enclosure e;
+        ensure("walls hide much of the sky by them", r.mEnc->enclosureAt(LLVector3(10.5f, 8.f, 0.5f), e) && e.mS < 0.9f);
+        ensure("one space", west == east);
+        ensure("OUTDOORS", west->mBucket == EnclosureBucket::OUTDOORS);
     }
 
     template<> template<>

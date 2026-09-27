@@ -183,15 +183,16 @@ namespace sknav_test
                 {
                     for (S32 tx = 0; tx < 32; ++tx)
                     {
-                        const F32 x = t.mKey.mX * 32.f + tx + 0.5f, y = t.mKey.mY * 32.f + ty + 0.5f;
+                        // Any solid touching the metre counts, as the viewer's tops take every span under it.
+                        const F32 x = t.mKey.mX * 32.f + tx, y = t.mKey.mY * 32.f + ty;
                         std::vector<TopInterval> runs;
-                        if (x >= mGround[0] && y >= mGround[1] && x < mGround[2] && y < mGround[3])
+                        if (x + 1.f > mGround[0] && y + 1.f > mGround[1] && x < mGround[2] && y < mGround[3])
                         {
                             runs.push_back({ 0, static_cast<U16>(1.f / UNIT) });
                         }
                         for (const Solid& sd : mSolids)
                         {
-                            if (x >= sd.mX0 + mShift && x < sd.mX1 + mShift && y >= sd.mY0 && y < sd.mY1)
+                            if (x + 1.f > sd.mX0 + mShift && x < sd.mX1 + mShift && y + 1.f > sd.mY0 && y < sd.mY1)
                             {
                                 runs.push_back({ static_cast<U16>((sd.mZ0 + 1.f) / UNIT), static_cast<U16>((sd.mZ1 + 1.f) / UNIT) });
                             }
