@@ -337,6 +337,107 @@ LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
     return LL::WorkQueue::getInstance("NavMesh");
 }
 
+std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
+{
+    static LLCachedControl<U32> cap_mb(gSavedSettings, "SKNavDiskCacheMB", 2048);
+    if (!cap_mb)
+    {
+        return nullptr;
+    }
+    const U64 cap = static_cast<U64>(cap_mb) * 1048576;
+    if (!mDiskCache)
+    {
+        mDiskCache = std::make_shared<TileDiskCache>(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "sknav"), cap);
+    }
+    else
+    {
+        mDiskCache->setCap(cap);
+    }
+    return mDiskCache;
+}
+
+void SKNavMesh::evictAir()
+{
+    static LLCachedControl<U32> budget_mb(gSavedSettings, "SKNavAirBudgetMB", 512);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
+
+    struct Held
+    {
+        Mesh* mMesh;
+        TileKey mKey;
+        Tile* mTile;
+    };
+    std::vector<Held> held;
+    std::vector<EvictionCandidate> candidates;
+    for (auto& entry : mMeshes)
+    {
+        for (auto& t : entry.second->mTiles)
+        {
+            Tile& tile = t.second;
+            const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
+            const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
+            const F64 distance = std::sqrt(dx * dx + dy * dy);
+            tile.mNearness = accumulateNearness(tile.mNearness, distance, radius, dt);
+            if (tile.mAir && !tile.mInFlight)
+            {
+                held.push_back({ entry.second.get(), t.first, &tile });
+                candidates.push_back({ tile.mAir->bytes(), tile.mNearness, distance });
+            }
+        }
+    }
+    const std::vector<size_t> out = chooseEvictions(candidates, static_cast<size_t>(budget_mb) * 1048576, 1.5 * radius);
+    if (out.empty())
+    {
+        return;
+    }
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    LL::WorkQueue::ptr_t workers = cache ? workerQueue() : nullptr;
+    for (size_t i : out)
+    {
+        Mesh& mesh = *held[i].mMesh;
+        Tile& tile = *held[i].mTile;
+        // Spill what is not on disk yet: the products as published, packed on a worker.
+        if (workers && tile.mContentKey && !cache->contains(tile.mContentKey))
+        {
+            auto snap = std::make_shared<TileBuildResult>();
+            snap->mStatus = TileBuildResult::SUCCESS;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                snap->mPolys[cls] = tile.mPolys[cls];
+                const dtMeshTile* dt_tile = mesh.mNav[cls] ? mesh.mNav[cls]->getTileAt(held[i].mKey.mY, held[i].mKey.mX, 0) : nullptr;
+                if (dt_tile && dt_tile->data && dt_tile->dataSize > 0)
+                {
+                    snap->mData[cls].assign(dt_tile->data, dt_tile->data + dt_tile->dataSize);
+                }
+                if (tile.mSegments[cls])
+                {
+                    snap->mSegments[cls] = *tile.mSegments[cls];
+                }
+                if (tile.mLinks[cls])
+                {
+                    snap->mLinks[cls] = *tile.mLinks[cls];
+                }
+            }
+            if (tile.mFaces)
+            {
+                snap->mFaces = *tile.mFaces;
+            }
+            snap->mMillis = tile.mMillis;
+            snap->mAir = tile.mAir;
+            snap->mAirBuilt = true;
+            const U64 content_key = tile.mContentKey;
+            workers->post([cache, snap, content_key]() { cache->store(content_key, packTileProduct(*snap, content_key)); });
+        }
+        tile.mAirCoarse = coarseAir(*tile.mAir);
+        tile.mAir.reset();
+        tile.mAirBuilt = 0;         // back within the radius, it is asked for again and found on disk
+        mStats.mAirEvicted++;
+    }
+    mRevision++;                    // the sky map takes the coarse tops in place of the detail
+}
+
 void SKNavMesh::cleanupSingleton()
 {
     // Join the pool before the singleton dies: a job in flight carries this
@@ -1116,10 +1217,63 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
+    // What the tile is built from, keyed so the same world finds it on disk next session.
+    const U64 content_key = tileContentKey(*input);
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    struct Outcome
+    {
+        std::shared_ptr<TileBuildResult> mResult;
+        bool mLooked = false;
+        bool mLoaded = false;
+        bool mCorrupt = false;
+        F32 mLoadMs = 0.f;
+    };
     const bool posted = main_queue->postTo(
         workers,
-        [input]() { return std::make_shared<TileBuildResult>(buildTile(*input)); },
-        [this, id, generation, key, signature](std::shared_ptr<TileBuildResult> result) { publish(id, generation, key, signature, result); });
+        [input, content_key, cache]()
+        {
+            auto out = std::make_shared<Outcome>();
+            if (cache)
+            {
+                out->mLooked = true;
+                LLTimer timer;
+                std::vector<U8> bytes;
+                if (cache->load(content_key, bytes))
+                {
+                    auto loaded = std::make_shared<TileBuildResult>();
+                    if (unpackTileProduct(bytes.data(), bytes.size(), content_key, *loaded))
+                    {
+                        out->mResult = loaded;
+                        out->mLoaded = true;
+                        out->mLoadMs = timer.getElapsedTimeF32() * 1000.f;
+                        return out;
+                    }
+                    // Damaged or written by another version: gone, and built afresh.
+                    cache->erase(content_key);
+                    out->mCorrupt = true;
+                }
+            }
+            out->mResult = std::make_shared<TileBuildResult>(buildTile(*input));
+            if (cache && out->mResult->mStatus != TileBuildResult::FAILED)
+            {
+                cache->store(content_key, packTileProduct(*out->mResult, content_key));
+            }
+            return out;
+        },
+        [this, id, generation, key, signature, content_key](std::shared_ptr<Outcome> out)
+        {
+            if (out->mLoaded)
+            {
+                mStats.mDiskLoads++;
+                mStats.mDiskLoadMs = out->mLoadMs;
+            }
+            else if (out->mLooked)
+            {
+                mStats.mDiskRebuilds++;
+                mStats.mDiskCorrupt += out->mCorrupt ? 1 : 0;
+            }
+            publish(id, generation, key, signature, out->mResult, content_key);
+        });
     if (posted)
     {
         tile.mInFlight = true;
@@ -1128,7 +1282,8 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     return posted;
 }
 
-void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result)
+void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result,
+                        U64 content_key)
 {
     mInFlight = std::max(0, mInFlight - 1);
     const auto it = mMeshes.find(mesh_id);
@@ -1166,6 +1321,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
         tile.mAir.reset();
+        tile.mAirCoarse.reset();
+        tile.mContentKey = 0;
         tile.mAirBuilt = signature;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
@@ -1214,6 +1371,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
     tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
     tile.mAirBuilt = result->mAirBuilt ? signature : 0;
+    // A tile rebuilt without its air keeps the tops it had only while its input holds.
+    if (tile.mAir || tile.mBuilt != signature)
+    {
+        tile.mAirCoarse.reset();
+    }
+    tile.mContentKey = content_key;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -1323,6 +1486,7 @@ void SKNavMesh::update()
             for (auto& t : entry.second->mTiles)
             {
                 t.second.mAir.reset();
+                t.second.mAirCoarse.reset();
                 t.second.mAirBuilt = 0;
             }
         }
@@ -1365,6 +1529,7 @@ void SKNavMesh::update()
     }
 
     sampleTerrain();
+    evictAir();
     schedule();
     syncFeatureLinks(snap);
     if (mSkyRevision != mRevision)
@@ -1382,6 +1547,8 @@ void SKNavMesh::update()
     mStats.mAirTiles = 0;
     mStats.mAirBytes = 0;
     mStats.mInFlight = mInFlight;
+    mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
+    mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
     for (const auto& entry : mMeshes)
     {
         for (const auto& t : entry.second->mTiles)
@@ -1415,11 +1582,14 @@ void SKNavMesh::update()
 
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB, sky %u cells %.1f MB",
+    const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
-                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0);
+                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
+                    looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs);
 }
 
 void SKNavMesh::syncSkyMap()
@@ -1437,18 +1607,20 @@ void SKNavMesh::syncSkyMap()
         }
         for (const auto& t : mesh.mTiles)
         {
-            if (!t.second.mAir)
+            // An evicted tile's tops still say what stands over it.
+            const TileAirPtr& tile_air = t.second.mAir ? t.second.mAir : t.second.mAirCoarse;
+            if (!tile_air)
             {
                 continue;
             }
             const U64 key = mix(mix(id, static_cast<U32>(t.first.mX)), static_cast<U32>(t.first.mY));
             const auto old = mSkyTiles.find(key);
-            if (old == mSkyTiles.end() || old->second != t.second.mAir)
+            if (old == mSkyTiles.end() || old->second != tile_air)
             {
-                const TileAir& air = *t.second.mAir;
+                const TileAir& air = *tile_air;
                 mSkyMap.set(key, mesh.mOrigin + LLVector3d(air.mOrigin), air);
             }
-            seen[key] = t.second.mAir;
+            seen[key] = tile_air;
         }
     }
     for (const auto& old : mSkyTiles)
