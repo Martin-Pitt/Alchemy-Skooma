@@ -483,4 +483,18 @@ namespace tut
         ensure("it reads as its own storey does", under.mBucket == at(p, 16.f, 16.f, 5.5f).mBucket);
     }
 
+    template<> template<>
+    void sknavenclosure_object::test<13>()
+    {
+        set_test_name("depth carried into unwalkable air does not climb a facade");
+        Scene s;
+        // Steps too narrow to stand on, a metre higher every half metre.
+        for (S32 k = 1; k <= 12; ++k)
+        {
+            s.box(10.f + 0.5f * (k - 1), 10.f, 10.f + 0.5f * k, 12.f, 0.f, static_cast<F32>(k), false);
+        }
+        const EnclosureProductPtr p = computeEnclosure(s.input(1));
+        ensure("the first step carries the street's depth", at(p, 10.25f, 11.f, 1.5f).mBucket != EnclosureBucket::UNKNOWN);
+        ensure("the top one does not", at(p, 15.75f, 11.f, 12.5f).mBucket == EnclosureBucket::UNKNOWN);
+    }
 }

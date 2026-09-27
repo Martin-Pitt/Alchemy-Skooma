@@ -110,8 +110,10 @@ namespace
         }
 
         /// True when the flood is done.
-        template<typename ADMIT>
-        bool step(std::vector<U32>& dist, const std::vector<U32>& start, const std::vector<GraphArc>& arcs, U8 mask, ADMIT admit, S64& budget)
+        /// admit(from, to) filters a step; reached(from, to) hears of each that lowered a distance.
+        template<typename ADMIT, typename REACHED>
+        bool step(std::vector<U32>& dist, const std::vector<U32>& start, const std::vector<GraphArc>& arcs, U8 mask, ADMIT admit, REACHED reached,
+                  S64& budget)
         {
             while (budget > 0)
             {
@@ -150,7 +152,7 @@ namespace
                     for (U32 a = start[n]; a < start[n + 1]; ++a)
                     {
                         const GraphArc& arc = arcs[a];
-                        if (!(arc.mFlags & mask) || !admit(arc.mTo))
+                        if (!(arc.mFlags & mask) || !admit(n, arc.mTo))
                         {
                             continue;
                         }
@@ -158,6 +160,7 @@ namespace
                         if (nd < dist[arc.mTo])
                         {
                             dist[arc.mTo] = nd;
+                            reached(n, arc.mTo);
                             mBuckets[nd % NUM_BUCKETS].push_back(arc.mTo);
                             ++mQueued;
                         }
@@ -405,6 +408,8 @@ namespace sknav
         std::vector<U32> mDwalk;
         std::vector<S32> mLeafMap;      ///< scratch: fine cell to leaf, one tile at a time
         Flood mFlood;
+        std::vector<U32> mCarrySeed;    ///< the walkable gap a carried depth came from
+        S32 mCarryRise = 0;
         std::vector<std::pair<U32, U32>> mWalkSeeds;     ///< from neighbouring meshes, kept for the depth flood
 
         const EnclosureParams& params() const { return mInput->mParams; }
@@ -445,6 +450,7 @@ namespace sknav
         mWalkHead = static_cast<S32>(std::lround(p.mWalkHeadM / unit));
         mWalkOverlap = static_cast<S32>(std::lround(p.mWalkOverlapM / unit));
         mCarryOverlap = static_cast<S32>(std::lround(p.mCarryOverlapM / unit));
+        mCarryRise = static_cast<S32>(std::lround(p.mCarryRiseM / unit));
         mHalfCellM = cell * 0.5f;
         mNodeLeaf.resize(nodes);
         mNodeTile.resize(nodes);
@@ -936,7 +942,7 @@ namespace sknav
                     mFlood.begin(std::move(seeds));
                     mStarted = true;
                 }
-                if (!mFlood.step(mDsky, mStart, mArcs, EDGE_SKY, [](U32) { return true; }, budget))
+                if (!mFlood.step(mDsky, mStart, mArcs, EDGE_SKY, [](U32, U32) { return true; }, [](U32, U32) {}, budget))
                 {
                     return false;
                 }
@@ -956,7 +962,8 @@ namespace sknav
                     mFlood.begin(std::move(seeds));
                     mStarted = true;
                 }
-                if (!mFlood.step(mDwalk, mStart, mArcs, EDGE_WALK, [this](U32 n) { return (mNodeFlags[n] & NODE_WALK) != 0; }, budget))
+                if (!mFlood.step(mDwalk, mStart, mArcs, EDGE_WALK, [this](U32, U32 n) { return (mNodeFlags[n] & NODE_WALK) != 0; }, [](U32, U32) {},
+                                 budget))
                 {
                     return false;
                 }
@@ -966,17 +973,24 @@ namespace sknav
                 {
                     // Unwalkable air takes the walkable depth beside it plus the way there.
                     std::vector<std::pair<U32, U32>> seeds;
+                    mCarrySeed.assign(mNodeFlags.size(), INF);
                     for (U32 n = 0; n < mNodeFlags.size(); ++n)
                     {
                         if ((mNodeFlags[n] & NODE_WALK) && mDwalk[n] != INF)
                         {
                             seeds.emplace_back(mDwalk[n], n);
+                            mCarrySeed[n] = n;
                         }
                     }
                     mFlood.begin(std::move(seeds));
                     mStarted = true;
                 }
-                if (!mFlood.step(mDwalk, mStart, mArcs, EDGE_CARRY, [this](U32 n) { return !(mNodeFlags[n] & NODE_WALK); }, budget))
+                if (!mFlood.step(mDwalk, mStart, mArcs, EDGE_CARRY,
+                                 [this](U32 from, U32 to) {
+                                     // Not up a facade or a shaft: only so far from the floor it started on.
+                                     return !(mNodeFlags[to] & NODE_WALK) && std::abs(mFloor[to] - mFloor[mCarrySeed[from]]) <= mCarryRise;
+                                 },
+                                 [this](U32 from, U32 to) { mCarrySeed[to] = mCarrySeed[from]; }, budget))
                 {
                     return false;
                 }

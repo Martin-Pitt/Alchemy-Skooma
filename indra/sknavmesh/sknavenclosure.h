@@ -47,6 +47,7 @@ namespace sknav
         F32 mWalkHeadM = 1.f;       ///< a walkable gap at least this tall carries feet
         F32 mWalkOverlapM = 1.f;    ///< and links to one sharing this much air
         F32 mCarryOverlapM = 0.5f;  ///< depth carries into unwalkable air sharing this much, at any step
+        F32 mCarryRiseM = 2.f;      ///< and whose floor is within this of the walkable floor it came from
         F32 mSkyReachM = 50.f;      ///< a solid of another mesh starting this far above still shelters
         F32 mHysteresis = 0.05f;    ///< a bucket holds until e is this far past its edge
     };
