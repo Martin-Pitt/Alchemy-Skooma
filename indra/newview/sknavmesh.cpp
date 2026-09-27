@@ -1139,6 +1139,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         {
             tile.mSegments[cls].reset();
             tile.mLinks[cls].reset();
+            tile.mFlights[cls].reset();
         }
         tile.mBuilt = signature;    // do not retry the same input
         tile.mCause = CAUSE_FAILED;
@@ -1185,6 +1186,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
         tile.mLinks[cls] = std::make_shared<const std::vector<DropLink>>(std::move(result->mLinks[cls]));
+        tile.mFlights[cls] = result->mFlights[cls].empty() ? nullptr : std::make_shared<const std::vector<Flight>>(std::move(result->mFlights[cls]));
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
@@ -1501,6 +1503,30 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
                            LLVector3d(llmax(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VY], b.mdV[VY]), 0.0), min, max))
             {
                 fn(a, b, seg.mKind, seg.mValue);
+            }
+        }
+    });
+}
+
+void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mFlights[c])
+        {
+            return;
+        }
+        for (const Flight& f : *tile.mFlights[c])
+        {
+            LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+            for (const LLVector2& p : f.mFootprint)
+            {
+                lo.set(llmin(lo.mV[0], p.mV[0]), llmin(lo.mV[1], p.mV[1]));
+                hi.set(llmax(hi.mV[0], p.mV[0]), llmax(hi.mV[1], p.mV[1]));
+            }
+            if (overlapsXY(mesh.mOrigin + LLVector3d(lo.mV[0], lo.mV[1], 0.0), mesh.mOrigin + LLVector3d(hi.mV[0], hi.mV[1], 0.0), min, max))
+            {
+                fn(mesh.mOrigin, f);
             }
         }
     });
@@ -2486,6 +2512,48 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
                 file << ",\"to\":";
                 writeVec3d(file, mesh.mOrigin + LLVector3d(link.mTo));
                 file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
+            }
+        }
+        file << "],\"flights\":[";
+        if (tile.mFlights[cls])
+        {
+            bool first = true;
+            for (const Flight& f : *tile.mFlights[cls])
+            {
+                if (!first)
+                {
+                    file << ',';
+                }
+                first = false;
+                file << "{\"rise\":" << f.mRise << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
+                     << mesh.mOrigin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh.mOrigin.mdV[VX] - f.mPlane[1] * mesh.mOrigin.mdV[VY]
+                     << "],\"treads\":[";
+                for (size_t i = 0; i < f.mTreads.size(); ++i)
+                {
+                    const FlightTread& t = f.mTreads[i];
+                    file << (i ? "," : "") << "{\"z\":" << mesh.mOrigin.mdV[VZ] + t.mZ << ",\"rise\":" << t.mRise << ",\"going\":" << t.mGoing
+                         << ",\"nosing\":[";
+                    writeVec3d(file, mesh.mOrigin + LLVector3d(t.mNosingA));
+                    file << ',';
+                    writeVec3d(file, mesh.mOrigin + LLVector3d(t.mNosingB));
+                    file << "]}";
+                }
+                file << "],\"top\":[";
+                writeVec3d(file, mesh.mOrigin + LLVector3d(f.mTopNosingA));
+                file << ',';
+                writeVec3d(file, mesh.mOrigin + LLVector3d(f.mTopNosingB));
+                file << "],\"footprint\":[";
+                for (size_t i = 0; i < f.mFootprint.size(); ++i)
+                {
+                    file << (i ? "," : "") << '[' << mesh.mOrigin.mdV[VX] + f.mFootprint[i].mV[0] << ','
+                         << mesh.mOrigin.mdV[VY] + f.mFootprint[i].mV[1] << ']';
+                }
+                file << "],\"polys\":[";
+                for (size_t i = 0; i < f.mPolys.size(); ++i)
+                {
+                    file << (i ? "," : "") << f.mPolys[i];
+                }
+                file << "]}";
             }
         }
         file << "]}";

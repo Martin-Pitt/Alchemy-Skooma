@@ -91,6 +91,11 @@ public:
     /// the exits of each span. The span links are a table beside the tiles,
     /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+    /// Stair flights whose footprint meets the box, with the mesh origin
+    /// their mesh-local positions are relative to. A flight across a tile
+    /// seam comes once per tile, each with that tile's polys.
+    typedef std::function<void(const LLVector3d& origin, const sknav::Flight& flight)> FlightFn;
+    void flightsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const FlightFn& fn) const;
 
     /// A ladder's or a working elevator's span with the floors it can be
     /// boarded or left at, per class, lowest first. Global.
@@ -214,6 +219,7 @@ private:
         std::shared_ptr<const sknav::AirGrid> mAir;     ///< only while SKNavBuildAir is on
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
     };
 
     struct Mesh
