@@ -53,7 +53,7 @@ namespace sknav
         void remove(U64 contributor);
         bool has(U64 contributor) const { return mContributors.count(contributor) != 0; }
 
-        /// No solid starts above pos within reach metres.
+        /// No solid starts above pos within reach metres, and pos is not inside one.
         bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const;
 
         /// Bumped on every change, for readers holding derived results.

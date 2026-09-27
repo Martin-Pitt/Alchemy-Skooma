@@ -58,6 +58,7 @@ namespace sknav
     void SkyMap::set(U64 contributor, const LLVector3d& tile_min, const TileAir& air)
     {
         drop(contributor);
+        // Tiles are unrotated and start on whole metres, so each top cell is one global metre cell.
         const F64 metres = air.mTopCell * air.mCell;
         std::vector<U64>& touched = mContributors[contributor];
         for (S32 ty = 0; ty < air.mTopHeight; ++ty)
@@ -106,7 +107,8 @@ namespace sknav
         }
         for (const Interval& i : it->second)
         {
-            if (i.mBottom > pos.mdV[VZ] && i.mBottom - pos.mdV[VZ] <= reach)
+            const bool inside = i.mBottom <= pos.mdV[VZ] && i.mTop > pos.mdV[VZ];
+            if (inside || (i.mBottom > pos.mdV[VZ] && i.mBottom - pos.mdV[VZ] <= reach))
             {
                 return false;
             }

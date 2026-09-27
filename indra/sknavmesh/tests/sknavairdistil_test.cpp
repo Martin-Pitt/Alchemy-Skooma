@@ -304,6 +304,7 @@ namespace tut
         ensure("under the roof is covered", !sky.skyOpenAt(under));
         ensure("beside it is open", sky.skyOpenAt(beside));
         ensure("above the roof is open", sky.skyOpenAt(over));
+        ensure("inside the roof is not", !sky.skyOpenAt(LLVector3d(1000.5, 2000.5, 35.2)));
         ensure("beyond reach is open", sky.skyOpenAt(under - LLVector3d(0, 0, 60.0), 50.f));
         const U64 v = sky.version();
 
