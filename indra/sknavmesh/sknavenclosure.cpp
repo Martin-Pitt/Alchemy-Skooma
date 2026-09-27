@@ -980,25 +980,18 @@ namespace sknav
                 {
                     return false;
                 }
-                // Else the walkable gap below it in its own column.
+                // Else the walkable gap straight below it, through no more than a climb of solid.
                 for (size_t t = 0; t < tiles; ++t)
                 {
                     for (const AirLeaf& leaf : air(t).mLeaves)
                     {
-                        U32 below = INF;
-                        for (U32 i = 0; i < leaf.mGapCount; ++i)
+                        for (U32 i = 1; i < leaf.mGapCount; ++i)
                         {
-                            const U32 n = mBase[t] + leaf.mFirstGap + i;
-                            if (mNodeFlags[n] & NODE_WALK)
+                            const U32 n = mBase[t] + leaf.mFirstGap + i, below = n - 1;
+                            if (!(mNodeFlags[n] & NODE_WALK) && mDwalk[n] == INF && (mNodeFlags[below] & NODE_WALK) && mDwalk[below] != INF &&
+                                mFloor[n] - mCeil[below] <= mClimb)
                             {
-                                if (mDwalk[n] != INF)
-                                {
-                                    below = mDwalk[n];
-                                }
-                            }
-                            else if (mDwalk[n] == INF)
-                            {
-                                mDwalk[n] = below;
+                                mDwalk[n] = mDwalk[below];
                             }
                         }
                     }

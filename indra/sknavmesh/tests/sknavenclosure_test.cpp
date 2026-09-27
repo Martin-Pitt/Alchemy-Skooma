@@ -461,3 +461,26 @@ namespace tut
         ensure("its own solid is already in its air", at(computeEnclosure(in), 12.1f, 12.1f).mS == 1.f);
     }
 }
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<12>()
+    {
+        set_test_name("air under a desk on a sealed storey does not take the street's depth through the floor");
+        Scene s;
+        s.box(8.f, 8.f, 24.f, 24.f, 4.f, 5.f);                  // the storey's floor slab over an open arcade
+        s.box(8.f, 8.f, 24.f, 8.5f, 5.f, 8.f, false);
+        s.box(8.f, 23.5f, 24.f, 24.f, 5.f, 8.f, false);
+        s.box(8.f, 8.f, 8.5f, 24.f, 5.f, 8.f, false);
+        s.box(23.5f, 8.f, 24.f, 24.f, 5.f, 8.f, false);
+        s.box(8.f, 8.f, 24.f, 24.f, 8.f, 8.25f);
+        s.box(9.f, 9.f, 11.f, 10.f, 5.75f, 6.f, false);         // a desk top, 0.75 m of air under it
+        const EnclosureProductPtr p = computeEnclosure(s.input(1));
+        const Enclosure under = at(p, 9.6f, 9.6f, 5.3f);
+        ensure("the arcade below has an answer", at(p, 9.6f, 9.6f).mBucket != EnclosureBucket::UNKNOWN);
+        ensure("under the desk is not outdoors", under.mBucket != EnclosureBucket::OUTDOORS);
+        ensure("it reads as its own storey does", under.mBucket == at(p, 16.f, 16.f, 5.5f).mBucket);
+    }
+
+}
