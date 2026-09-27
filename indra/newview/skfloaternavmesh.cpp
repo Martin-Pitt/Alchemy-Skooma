@@ -52,7 +52,7 @@ bool SKFloaterNavMesh::postBuild()
         getChild<LLUICtrl>("export_census_status")->setValue(SKNavMesh::instance().exportCensus());
     });
     getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
-        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportVehicle());
+        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportObject());
     });
     getChild<LLUICtrl>("annotate_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_nav_annotate"); });
     return true;

@@ -349,8 +349,8 @@
     height="23"
     width="292"
     name="export_vehicle_button"
-    label="Export a vehicle and its crew"
-    tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-vehicle-&lt;id&gt;.json in the logs folder: triangles in the vehicle's own frame and each face's transparency" />
+    label="Export an object and its surroundings"
+    tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-object-&lt;id&gt;.json in the logs folder: triangles in the object's own frame and each face's transparency, plus the navmesh's collision input and the visible faces within 16 m of the point, in world axes" />
    <text
     name="export_vehicle_status"
     height="26"
