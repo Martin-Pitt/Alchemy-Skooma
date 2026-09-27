@@ -57,7 +57,7 @@ namespace sknav
         F32 mDraughtReachM = 2.f;   ///< past its half width
         F32 mDraughtSpeed = 0.5f;   ///< at its centre, wind square on
         F32 mCourtS = 0.5f;         ///< an outdoor space this open to the sky
-        F32 mCourtL = 0.6f;         ///< and this walled is a courtyard
+        F32 mCourtL = 0.6f;         ///< and this much of its edge at the slab solid is a courtyard
         F32 mCourtAreaM2 = 16.f;
         F32 mCourtDamp = 0.5f;
         F32 mSwirl = 0.35f;         ///< the courtyard's turn, in free-stream units
@@ -79,7 +79,7 @@ namespace sknav
         enum : U8
         {
             BLOCKED = 1 << 0,       ///< solid at the slab
-            NO_DATA = 1 << 1,       ///< no detailed air here
+            UNSEEN = 1 << 1,       ///< no detailed air here
             INDOORS = 1 << 2,
             COURTYARD = 1 << 3,
             DRAUGHT = 1 << 4,       ///< near a portal between sides that differ in S
@@ -104,7 +104,7 @@ namespace sknav
         S32 mHeight = 0;
         WindLevel mLevel;
         std::vector<F32> mZ;        ///< the slab's mesh-local height per cell
-        std::vector<U8> mFlags;     ///< WindCell BLOCKED, NO_DATA, INDOORS, COURTYARD
+        std::vector<U8> mFlags;     ///< WindCell BLOCKED, UNSEEN, INDOORS, COURTYARD
         std::vector<F32> mSolid;    ///< metres of solid above the slab, on blocked cells
         std::vector<F32> mReach;    ///< a lower bound, in cells, on the distance to a blocked cell
         std::vector<U16> mSpace;    ///< the slab's gap's space + 1

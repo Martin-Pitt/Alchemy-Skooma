@@ -377,26 +377,12 @@ namespace sknav
 
         f->mFlags.assign(n, 0);
         f->mSpace.assign(n, 0);
-        std::vector<bool> court(rooms ? rooms->mSpaces.size() : 0, false);
-        if (rooms)
-        {
-            for (size_t i = 0; i < rooms->mSpaces.size(); ++i)
-            {
-                const Space& s = rooms->mSpaces[i];
-                court[i] = s.mBucket != EnclosureBucket::INDOORS && s.mSMean > params.mCourtS && s.mL >= params.mCourtL &&
-                           s.mFloorArea >= params.mCourtAreaM2;
-                if (court[i])
-                {
-                    f->mCourt.push_back(static_cast<U32>(i));
-                }
-            }
-        }
         for (size_t i = 0; i < n; ++i)
         {
             U8& fl = f->mFlags[i];
             if (!covered[i])
             {
-                fl = WindCell::NO_DATA;
+                fl = WindCell::UNSEEN;
                 continue;
             }
             if (solid[i] >= params.mBlockedShare * covered[i] || !repTile[i])
@@ -414,9 +400,71 @@ namespace sknav
                 {
                     fl |= WindCell::INDOORS;
                 }
-                if (ge.mSpace && ge.mSpace - 1u < court.size() && court[ge.mSpace - 1])
+            }
+        }
+
+        // Courtyards: open spaces whose edge at the slab is mostly solid.
+        if (rooms)
+        {
+            const size_t spaces = rooms->mSpaces.size();
+            std::vector<U32> cells(spaces, 0), edge(spaces, 0), walled(spaces, 0);
+            std::vector<F32> top(spaces, 0.f);      ///< summed over walled edge cells: the wall's top
+            for (S32 y = 0; y < h; ++y)
+            {
+                for (S32 x = 0; x < w; ++x)
                 {
-                    fl |= WindCell::COURTYARD;
+                    const size_t i = x + static_cast<size_t>(y) * w;
+                    const U32 sp = f->mSpace[i];
+                    if (!sp || sp > spaces || (f->mFlags[i] & WindCell::BLOCKED))
+                    {
+                        continue;
+                    }
+                    ++cells[sp - 1];
+                    bool is_edge = false, is_wall = false;
+                    F32 wall_top = 0.f;
+                    const S32 nb[4][2] = { { x - 1, y }, { x + 1, y }, { x, y - 1 }, { x, y + 1 } };
+                    for (const auto& q : nb)
+                    {
+                        const bool in = q[0] >= 0 && q[1] >= 0 && q[0] < w && q[1] < h;
+                        const size_t j = in ? q[0] + static_cast<size_t>(q[1]) * w : 0;
+                        if (!in || f->mSpace[j] != sp)
+                        {
+                            is_edge = true;
+                            if (in && (f->mFlags[j] & WindCell::BLOCKED))
+                            {
+                                is_wall = true;
+                                wall_top = std::max(wall_top, f->mZ[j] + f->mSolid[j]);
+                            }
+                        }
+                    }
+                    edge[sp - 1] += is_edge ? 1 : 0;
+                    walled[sp - 1] += is_wall ? 1 : 0;
+                    top[sp - 1] += is_wall ? wall_top : 0.f;
+                }
+            }
+            std::vector<bool> court(spaces, false);
+            for (size_t k = 0; k < spaces; ++k)
+            {
+                const Space& s = rooms->mSpaces[k];
+                if (s.mBucket == EnclosureBucket::INDOORS || s.mSMean <= params.mCourtS || !walled[k] ||
+                    walled[k] < params.mCourtL * edge[k] || cells[k] * cell * cell < params.mCourtAreaM2)
+                {
+                    continue;
+                }
+                // Narrow enough to lie in its walls' lee: a walled plaza wider than that is open ground.
+                const F32 wall = top[k] / walled[k] - s.mFloorMin;
+                const F32 lee = std::min(params.mLeePerHeight * std::max(wall, params.mLeeMinHeightM), params.mLeeCapM);
+                court[k] = 2.f * std::min(s.mHalf.mV[0], s.mHalf.mV[1]) <= lee;
+                if (court[k])
+                {
+                    f->mCourt.push_back(static_cast<U32>(k));
+                }
+            }
+            for (size_t i = 0; i < n; ++i)
+            {
+                if (f->mSpace[i] && f->mSpace[i] <= spaces && court[f->mSpace[i] - 1] && !(f->mFlags[i] & WindCell::BLOCKED))
+                {
+                    f->mFlags[i] |= WindCell::COURTYARD;
                 }
             }
         }
@@ -600,12 +648,16 @@ namespace sknav
                         }
                         const F32 dist = LLVector2(ox + (x + 0.5f) * cell - p.mCentre.mV[VX], oy + (y + 0.5f) * cell - p.mCentre.mV[VY]).length();
                         const F32 v = strength * (1.f - dist / reach);
-                        if (dist < reach && v > speed[i])
+                        if (dist >= reach)
+                        {
+                            continue;
+                        }
+                        WindCell& c = slab->mCells[i];
+                        c.mFlags |= WindCell::DRAUGHT;
+                        if (v > speed[i])
                         {
                             speed[i] = v;
-                            WindCell& c = slab->mCells[i];
                             put(c, v, dir - wd);
-                            c.mFlags |= WindCell::DRAUGHT;
                         }
                     }
                 }

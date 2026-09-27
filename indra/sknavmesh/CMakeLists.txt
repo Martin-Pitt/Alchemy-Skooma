@@ -21,6 +21,7 @@ target_sources(
     sknavspaces.cpp
     sknavtilecache.cpp
     sknavwalls.cpp
+    sknavwind.cpp
 )
 
 target_sources(
@@ -41,6 +42,7 @@ target_sources(
         sknavtilecache.h
         sknavtypes.h
         sknavwalls.h
+        sknavwind.h
 )
 
 # The build fingerprint keys the tile cache (sknavfingerprint.cmake).
@@ -78,4 +80,5 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
 endif()

@@ -34,6 +34,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <sstream>
 
 namespace
 {
@@ -152,6 +153,7 @@ namespace tut
     {
         set_test_name("a doorway between open and closed sides draughts");
         Scene s = twoRooms();
+        s.wall(10.f, 2.f, 10.25f, 10.f);
         const Wind w(s.input(1));
         const WindSlabPtr e = w.slab(0.f);
         const WindCell* c = e->at(2.75f, 5.5f);
@@ -203,9 +205,10 @@ namespace tut
     template<> template<>
     void sknavwind_object::test<8>()
     {
-        set_test_name("a band follows the ground, and a pass builds every heading");
+        set_test_name("a band over a mesh with no terrain stands on its lowest floor");
         Scene s;
-        s.box(0.f, 0.f, 64.f, 32.f, 0.f, 4.f);      // a raised ground, as terrain
+        s.box(0.f, 0.f, 64.f, 32.f, 0.f, 4.f);      // a platform with no terrain under it
+        s.wall(30.f, 0.f, 30.5f, 32.f, 7.f);
         s.mGround[2] = 0.f;
         auto in = std::make_shared<WindInput>();
         const Wind w(s.input(2));
@@ -218,6 +221,8 @@ namespace tut
         ensure("heading wraps", e && e->mHeading == 0);
         const WindCell* c = e->at(40.f, 16.f);
         ensure("open air above the platform", c && !(c->mFlags & WindCell::BLOCKED));
+        ensure("a wall on it", (e->at(30.25f, 16.f)->mFlags & WindCell::BLOCKED) != 0);
+        ensure("sheltered behind it", e->at(34.f, 16.f)->factor() < 0.5f);
     }
 
     template<> template<>
@@ -233,7 +238,7 @@ namespace tut
         std::shared_ptr<EnclosureInput> enc_in;
         std::shared_ptr<RoomsInput> rooms;
         std::vector<LLVector3d> points;
-        ensure("read a replay file", readReplay(path, enc_in, rooms, points));
+        ensure("read a replay file", readReplay(path, enc_in, rooms, points, true));
         const LLVector3d origin = enc_in->mMeshOrigin;
         EnclosurePass pass(enc_in);
         while (!pass.step(1u << 30))
@@ -245,8 +250,31 @@ namespace tut
         level.mAbsolute = true;
         level.mZ = static_cast<F32>(std::stod(LLStringUtil::getenv("SKNAV_WIND_Z")) - origin.mdV[VZ]);
         const auto t0 = std::chrono::steady_clock::now();
-        const WindFieldPtr f = buildWindField(*enc, r.get(), level, WindParams());
+        WindFieldPtr f = buildWindField(*enc, r.get(), level, WindParams());
         const auto t1 = std::chrono::steady_clock::now();
+        // SKNAV_WIND_CLIP "x0 y0 x1 y1", global: nothing outside stands, as in an oracle's window.
+        const std::string clip = LLStringUtil::getenv("SKNAV_WIND_CLIP");
+        if (!clip.empty())
+        {
+            F64 b[4];
+            std::istringstream(clip) >> b[0] >> b[1] >> b[2] >> b[3];
+            auto cut = std::make_shared<WindField>(*f);
+            for (S32 y = 0; y < cut->mHeight; ++y)
+            {
+                for (S32 x = 0; x < cut->mWidth; ++x)
+                {
+                    const F64 gx = origin.mdV[VX] + cut->mOrigin.mV[VX] + (x + 0.5) * cut->mCell;
+                    const F64 gy = origin.mdV[VY] + cut->mOrigin.mV[VY] + (y + 0.5) * cut->mCell;
+                    if (gx < b[0] || gy < b[1] || gx >= b[2] || gy >= b[3])
+                    {
+                        const size_t i = x + static_cast<size_t>(y) * cut->mWidth;
+                        cut->mFlags[i] = WindCell::UNSEEN;
+                        cut->mSolid[i] = 0.f;
+                    }
+                }
+            }
+            f = cut;
+        }
         std::ofstream out(path + ".wind.bin", std::ios::binary);
         auto put = [&out](const auto& v) { out.write(reinterpret_cast<const char*>(&v), sizeof(v)); };
         const F64 ox = f->mOrigin.mV[VX] + origin.mdV[VX], oy = f->mOrigin.mV[VY] + origin.mdV[VY];
