@@ -191,6 +191,7 @@ namespace sknav
         constexpr U32 TAG_SEGMENTS[NUM_CLASSES] = { tag('S', 'E', 'G', '0'), tag('S', 'E', 'G', '1') };
         constexpr U32 TAG_LINKS[NUM_CLASSES] = { tag('L', 'N', 'K', '0'), tag('L', 'N', 'K', '1') };
         constexpr U32 TAG_AIR = tag('A', 'I', 'R', ' ');
+        constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0'), tag('F', 'L', 'T', '1') };
 
         constexpr size_t GAP_BYTES = 8;
 
@@ -532,6 +533,43 @@ namespace sknav
                 w.pod(static_cast<U8>(l.mKind));
             }
             w.close(s);
+
+            s = w.open(TAG_FLIGHTS[c]);
+            w.pod(static_cast<U32>(result.mFlights[c].size()));
+            for (const Flight& f : result.mFlights[c])
+            {
+                w.pod(f.mKey);
+                w.pod(f.mCode);
+                w.pod(f.mRise);
+                w.pod(f.mPlane[0]);
+                w.pod(f.mPlane[1]);
+                w.pod(f.mPlane[2]);
+                w.pod(f.mZMin);
+                w.pod(f.mZMax);
+                w.vec(f.mTopNosingA);
+                w.vec(f.mTopNosingB);
+                w.pod(static_cast<U32>(f.mTreads.size()));
+                for (const FlightTread& t : f.mTreads)
+                {
+                    w.pod(t.mZ);
+                    w.vec(t.mNosingA);
+                    w.vec(t.mNosingB);
+                    w.pod(t.mRise);
+                    w.pod(t.mGoing);
+                }
+                w.pod(static_cast<U32>(f.mFootprint.size()));
+                for (const LLVector2& p : f.mFootprint)
+                {
+                    w.pod(p.mV[0]);
+                    w.pod(p.mV[1]);
+                }
+                w.pod(static_cast<U32>(f.mPolys.size()));
+                for (const U16 p : f.mPolys)
+                {
+                    w.pod(p);
+                }
+            }
+            w.close(s);
         }
 
         if (result.mAir)
@@ -619,6 +657,35 @@ namespace sknav
                         sec.pod(g.mArea);
                         ok = ok && kind <= static_cast<U8>(EdgeKind::OVERHANG);
                         g.mKind = static_cast<EdgeKind>(kind);
+                    }
+                }
+                else if (t == TAG_FLIGHTS[c])
+                {
+                    ok = sec.count(n, 77);
+                    res.mFlights[c].resize(ok ? n : 0);
+                    for (Flight& f : res.mFlights[c])
+                    {
+                        U32 m = 0;
+                        ok = ok && sec.pod(f.mKey) && sec.pod(f.mCode) && sec.pod(f.mRise) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
+                             sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax) && sec.vec(f.mTopNosingA) && sec.vec(f.mTopNosingB) &&
+                             sec.count(m, 36);
+                        f.mTreads.resize(ok ? m : 0);
+                        for (FlightTread& t : f.mTreads)
+                        {
+                            ok = ok && sec.pod(t.mZ) && sec.vec(t.mNosingA) && sec.vec(t.mNosingB) && sec.pod(t.mRise) && sec.pod(t.mGoing);
+                        }
+                        ok = ok && sec.count(m, 8);
+                        f.mFootprint.resize(ok ? m : 0);
+                        for (LLVector2& p : f.mFootprint)
+                        {
+                            ok = ok && sec.pod(p.mV[0]) && sec.pod(p.mV[1]);
+                        }
+                        ok = ok && sec.count(m, 2);
+                        f.mPolys.resize(ok ? m : 0);
+                        for (U16& p : f.mPolys)
+                        {
+                            ok = ok && sec.pod(p);
+                        }
                     }
                 }
                 else if (t == TAG_LINKS[c])

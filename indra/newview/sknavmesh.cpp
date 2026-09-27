@@ -425,6 +425,10 @@ void SKNavMesh::evictAir()
                 {
                     snap->mLinks[cls] = *tile.mLinks[cls];
                 }
+                if (tile.mFlights[cls])
+                {
+                    snap->mFlights[cls] = *tile.mFlights[cls];
+                }
             }
             if (tile.mFaces)
             {
