@@ -33,6 +33,7 @@
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -226,6 +227,65 @@ namespace sknav_test
             return in;
         }
     };
+
+    /// Every space, portal and gap's space, floats to the bit.
+    inline std::string dumpRooms(const EnclosureProduct& enc, const RoomsProduct& rooms)
+    {
+        std::ostringstream o;
+        o << std::hexfloat;
+        auto v3 = [&o](const LLVector3& v) { o << v.mV[0] << ',' << v.mV[1] << ',' << v.mV[2] << ';'; };
+        for (const Space& sp : rooms.mSpaces)
+        {
+            o << "S" << sp.mId << ',' << static_cast<S32>(sp.mBucket) << ',' << sp.mLift << sp.mFlight << sp.mFrozen << ';';
+            v3(sp.mMin);
+            v3(sp.mMax);
+            v3(sp.mCentre);
+            v3(sp.mAnchor);
+            o << sp.mAxis.mV[0] << ',' << sp.mAxis.mV[1] << ',' << sp.mHalf.mV[0] << ',' << sp.mHalf.mV[1] << ';';
+            for (F32 f : { sp.mFloorArea, sp.mVolume, sp.mSurface, sp.mMeanFreePath, sp.mCeilingMin, sp.mCeilingMean, sp.mCeilingMax, sp.mOpenShare,
+                           sp.mFloorMin, sp.mFloorMax, sp.mElongation, sp.mSMean, sp.mCoverMean, sp.mEMean, sp.mEMin, sp.mEMax, sp.mL, sp.mUnknown })
+            {
+                o << f << ',';
+            }
+            for (U32 p : sp.mPortals)
+            {
+                o << 'p' << p;
+            }
+            for (const auto& c : sp.mRaster)
+            {
+                o << 'r' << c.first << ':' << c.second;
+            }
+            o << '\n';
+        }
+        for (const Portal& p : rooms.mPortals)
+        {
+            o << "P" << static_cast<S32>(p.mKind) << ',' << p.mSpaces[0] << ',' << p.mSpaces[1] << ',' << static_cast<S32>(p.mCues) << ',' << p.mDoor
+              << ',' << p.mCrossMesh << ';';
+            v3(p.mCentre);
+            v3(p.mNormal);
+            v3(p.mA);
+            v3(p.mB);
+            o << p.mWidth << ',' << p.mSill << ',' << p.mHead << '\n';
+        }
+        for (const TileEnclosure& te : enc.mTiles)
+        {
+            o << "T" << te.mKey.mX << ',' << te.mKey.mY << ':';
+            for (const GapEnclosure& g : te.mGaps)
+            {
+                o << g.mSpace << ',';
+            }
+            for (const CoarseGap& g : te.mCoarse.mGaps)
+            {
+                o << 'c' << g.mSpace;
+            }
+            o << '\n';
+        }
+        for (U32 id : enc.mSpaceIds)
+        {
+            o << 'i' << id;
+        }
+        return o.str();
+    }
 
     /// Two 8 x 8 m rooms sharing a wall at x = 10, roofed, with a door out of the west one.
     Scene twoRooms()

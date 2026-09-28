@@ -113,6 +113,9 @@ namespace sknav
     /// clusters -> meshes and tiles -> terrain -> buildTile -> enclosure -> spaces -> wind.
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out);
 
+    /// A mesh's rooms input as the replay gives it: its doors, lifts and last product.
+    std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation);
+
     /// The result in the viewer's navmesh export format, so its readers work unchanged.
     void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result);
 

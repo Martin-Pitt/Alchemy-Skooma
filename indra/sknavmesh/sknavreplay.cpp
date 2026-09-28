@@ -446,28 +446,7 @@ namespace sknav
                 std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
                 enclosure_ms += since(t1);
 
-                auto rooms = std::make_shared<RoomsInput>();
-                rooms->mGeneration = input->mGeneration;
-                rooms->mMeshKey = mix(SEED, mesh.mId.getCRC32());
-                rooms->mMeshOrigin = mesh.mOrigin;
-                rooms->mPrevious = mesh.mRooms;
-                rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
-                const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
-                for (const DoorEntity& d : census.mDoors)
-                {
-                    if (overlapsXY(d.mMin, d.mMax, dlo, dhi) && d.mMin.mdV[VZ] <= dhi.mdV[VZ] && dlo.mdV[VZ] <= d.mMax.mdV[VZ])
-                    {
-                        rooms->mDoors.push_back(d);
-                    }
-                }
-                for (const Feature& f : census.mFeatures)
-                {
-                    if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= dlo.mdV[VX] && f.mMin.mdV[VX] <= dhi.mdV[VX] &&
-                        f.mMax.mdV[VY] >= dlo.mdV[VY] && f.mMin.mdV[VY] <= dhi.mdV[VY])
-                    {
-                        rooms->mLifts.emplace_back(f.mMin, f.mMax);
-                    }
-                }
+                const std::shared_ptr<RoomsInput> rooms = replayRoomsInput(census, mesh, input->mGeneration);
                 t1 = Clock::now();
                 SpacesPass spaces(rooms, product);
                 while (!spaces.step(1u << 30))
@@ -526,6 +505,33 @@ namespace sknav
             m->mWind = pass.product();
         }
         out.mStages.emplace_back("wind", since(t0));
+    }
+
+    std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation)
+    {
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mGeneration = generation;
+        rooms->mMeshKey = mix(SEED, mesh.mId.getCRC32());
+        rooms->mMeshOrigin = mesh.mOrigin;
+        rooms->mPrevious = mesh.mRooms;
+        rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
+        const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
+        for (const DoorEntity& d : census.mDoors)
+        {
+            if (overlapsXY(d.mMin, d.mMax, dlo, dhi) && d.mMin.mdV[VZ] <= dhi.mdV[VZ] && dlo.mdV[VZ] <= d.mMax.mdV[VZ])
+            {
+                rooms->mDoors.push_back(d);
+            }
+        }
+        for (const Feature& f : census.mFeatures)
+        {
+            if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= dlo.mdV[VX] && f.mMin.mdV[VX] <= dhi.mdV[VX] && f.mMax.mdV[VY] >= dlo.mdV[VY] &&
+                f.mMin.mdV[VY] <= dhi.mdV[VY])
+            {
+                rooms->mLifts.emplace_back(f.mMin, f.mMax);
+            }
+        }
+        return rooms;
     }
 
     void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result)

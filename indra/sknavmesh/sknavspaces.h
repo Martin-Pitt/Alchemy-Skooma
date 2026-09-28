@@ -161,6 +161,9 @@ namespace sknav
         U16 mSeedB = 0;
     };
 
+    /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
+    struct MergeMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -173,6 +176,8 @@ namespace sknav
         U32 mSeeds = 0;
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
+        U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        std::shared_ptr<const MergeMemo> mMemo;
 
         /// The space with this id, or null.
         const Space* byId(U32 id) const;

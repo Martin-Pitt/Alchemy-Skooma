@@ -30,6 +30,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <queue>
 #include <set>
@@ -55,6 +56,8 @@ namespace
     constexpr F32 WALL_END_REACH = 2.5f;    ///< facing wall ends this many agent heights apart may hold a cut
     constexpr F32 WALL_END_RUN_M = 0.5f;    ///< a wall runs this far behind its end, or it is a post
     constexpr S32 STAIR_END_UNITS = 2;      ///< a floor this close to a tread it meets is at an end of the flight
+    constexpr F32 SCORE_REACH_M = 2.5f;     ///< a cut's probes land no further than this from it
+    constexpr F32 MEMO_BLOCK_SHARE = 0.5f;  ///< a pass cutting more of its mesh's tiles than this reads no memo
 
     enum Stage : S32
     {
@@ -397,10 +400,65 @@ namespace
         }
         return out;
     }
+
+    /// Two 64-bit chains in which every input bit reaches every output bit: what a memo entry is trusted by.
+    struct MemoKey
+    {
+        U64 mA = SEED;
+        U64 mB = 0x9e3779b97f4a7c15ull;
+
+        void feed(U64 v)
+        {
+            mA = spread(mA ^ spread(v + 0x2545f4914f6cdd1dull));
+            mB = spread(mB + ((v << 29) | (v >> 35)) * 0xff51afd7ed558ccdull);
+        }
+        void feed(F32 f)
+        {
+            U32 bits;
+            std::memcpy(&bits, &f, sizeof(bits));
+            feed(static_cast<U64>(bits));
+        }
+        void feed(const LLVector2& v)
+        {
+            feed(v.mV[VX]);
+            feed(v.mV[VY]);
+        }
+    };
 }
 
 namespace sknav
 {
+    struct MergeMemo
+    {
+        struct Runs
+        {
+            U64 mCheck = 0;
+            std::vector<Run> mRuns;     ///< mIds are positions in the group, mKey unset
+        };
+        struct Score
+        {
+            U64 mCheck = 0;
+            Scored mScored;
+        };
+        U64 mContext = 0;               ///< parameters and doors: a memo made under others is not read
+        std::unordered_map<U64, Runs> mRuns;
+        std::unordered_map<U64, Score> mScores;
+
+        size_t bytes() const
+        {
+            size_t n = sizeof(MergeMemo) + mScores.size() * (sizeof(Score) + 2 * sizeof(U64));
+            for (const auto& r : mRuns)
+            {
+                n += sizeof(Runs) + 2 * sizeof(U64) + r.second.mRuns.capacity() * sizeof(Run);
+                for (const Run& run : r.second.mRuns)
+                {
+                    n += run.mIds.capacity() * sizeof(U32);
+                }
+            }
+            return n;
+        }
+    };
+
     const char* portalKindName(PortalKind kind)
     {
         switch (kind)
@@ -444,7 +502,7 @@ namespace sknav
                 n += sizeof(SeedStats) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
             }
         }
-        return n;
+        return n + (mMemo ? mMemo->bytes() : 0);
     }
 
     struct SpacesPass::State
@@ -524,6 +582,10 @@ namespace sknav
         std::vector<Portal> mPortals;   ///< spaces hold region roots until the spaces stage
         std::vector<S32> mPortalDoor;   ///< per portal, its door span, or -1
         std::unordered_map<U64, Scored> mScored;
+        const MergeMemo* mOldMemo = nullptr;    ///< the last pass's, when this one may read it
+        std::shared_ptr<MergeMemo> mMemo;       ///< what this pass used, for the next
+        std::vector<U64> mTileKey;              ///< per tile, its air and indoorness, as a score reads them
+        std::vector<MemoKey> mEdgeKey;          ///< per edge, what its runs read of it
         std::vector<LLVector3> mOldPortals;
         /// Old portals and doors by the square metre cells they reach, so a cut scores against those near it only.
         std::unordered_map<U64, std::vector<U32>> mOldGrid;
@@ -570,6 +632,9 @@ namespace sknav
         void merge();
         std::vector<Run> runs(const std::vector<U32>& edge_ids, U32 ru) const;
         Scored score(const Run& run);
+        Scored scoreFresh(const Run& run, bool relaxed);
+        bool relaxedAt(const Run& run) const;
+        void memoContext();
         void spaces();
         void ids();
         bool runStage();
@@ -818,6 +883,66 @@ namespace sknav
                     mDoorGrid[gridKey(x, y)].push_back(i);
                 }
             }
+        }
+        memoContext();
+    }
+
+    void SpacesPass::State::memoContext()
+    {
+        // What any score or run reads besides its own cut and tiles: the parameters and the doors.
+        MemoKey context;
+        F32 values[sizeof(SpaceParams) / sizeof(F32)];
+        static_assert(sizeof(SpaceParams) == sizeof(values), "SpaceParams holds F32s only");
+        std::memcpy(values, &params(), sizeof(values));
+        for (F32 v : values)
+        {
+            context.feed(v);
+        }
+        context.feed(mCell);
+        context.feed(mUnit);
+        context.feed(static_cast<U64>(mDoors.size()));
+        for (const DoorSpan& d : mDoors)
+        {
+            for (const LLVector2& v : { d.mA, d.mB, d.mC, d.mD, d.mN })
+            {
+                context.feed(v);
+            }
+            context.feed(d.mLo);
+            context.feed(d.mHi);
+            context.feed(d.mWidth);
+            U64 id[2];
+            std::memcpy(id, d.mId.mData, sizeof(id));
+            context.feed(id[0]);
+            context.feed(id[1]);
+        }
+        mMemo = std::make_shared<MergeMemo>();
+        mMemo->mContext = context.mA;
+        // A tile as probes read it: its air, and whether and how indoors each gap is.
+        mTileKey.assign(mTiles.size(), 0);
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            MemoKey k;
+            k.feed(static_cast<U64>(reinterpret_cast<uintptr_t>(mTiles[t].mAir.get())));
+            const std::vector<GapEnclosure>& gaps = mEnc->mTiles[mTiles[t].mEnc].mGaps;
+            k.feed(static_cast<U64>(gaps.size()));
+            U64 word = 0;
+            for (size_t g = 0; g < gaps.size(); ++g)
+            {
+                word = (word << 16) | (gaps[g].mD == ENCLOSURE_D_UNKNOWN ? 0x100u : 0u) | gaps[g].mE;
+                if ((g & 3) == 3)
+                {
+                    k.feed(word);
+                    word = 0;
+                }
+            }
+            k.feed(word);
+            mTileKey[t] = k.mA;
+        }
+        // A tile's air is who it is: the last pass's product holds every air its memo names, so none is reused.
+        const RoomsProductPtr& prev = mInput->mPrevious;
+        if (prev && prev->mMemo && prev->mMemo->mContext == mMemo->mContext && mProduct->mDirtyTiles <= MEMO_BLOCK_SHARE * mTiles.size())
+        {
+            mOldMemo = prev->mMemo.get();
         }
     }
 
@@ -1360,7 +1485,6 @@ namespace sknav
         }
 
         wallEnds();
-
         // The watershed over the clearance, off flights: descend its levels,
         // grow the regions there are into what each level exposes, then seed
         // new ones from what is left.
@@ -2077,21 +2201,14 @@ namespace sknav
         return out;
     }
 
-    Scored SpacesPass::State::score(const Run& run)
+    bool SpacesPass::State::relaxedAt(const Run& run) const
     {
-        const auto hit = mScored.find(run.mKey);
-        if (hit != mScored.end())
-        {
-            return hit->second;
-        }
-        const SpaceParams& p = params();
-        const F32 fz = run.mFloor * mUnit;
         // A portal stood here last time: hold it with thresholds relaxed.
-        bool relaxed = false;
+        const F32 fz = run.mFloor * mUnit;
         const S32 gx = static_cast<S32>(std::floor(run.mC.mV[VX])), gy = static_cast<S32>(std::floor(run.mC.mV[VY]));
-        for (S32 dy = -1; dy <= 1 && !relaxed; ++dy)
+        for (S32 dy = -1; dy <= 1; ++dy)
         {
-            for (S32 dx = -1; dx <= 1 && !relaxed; ++dx)
+            for (S32 dx = -1; dx <= 1; ++dx)
             {
                 const auto it = mOldGrid.find(gridKey(gx + dx, gy + dy));
                 if (it == mOldGrid.end())
@@ -2101,14 +2218,75 @@ namespace sknav
                 for (U32 i : it->second)
                 {
                     const LLVector3& q = mOldPortals[i];
-                    if (std::fabs(q.mV[VZ] - fz) <= p.mClimbM && dist_vec(LLVector2(q.mV[VX], q.mV[VY]), run.mC) <= 0.5f)
+                    if (std::fabs(q.mV[VZ] - fz) <= params().mClimbM && dist_vec(LLVector2(q.mV[VX], q.mV[VY]), run.mC) <= 0.5f)
                     {
-                        relaxed = true;
-                        break;
+                        return true;
                     }
                 }
             }
         }
+        return false;
+    }
+
+    Scored SpacesPass::State::score(const Run& run)
+    {
+        const auto hit = mScored.find(run.mKey);
+        if (hit != mScored.end())
+        {
+            return hit->second;
+        }
+        const bool relaxed = relaxedAt(run);
+        // The cut, and every tile its probes can reach: all a score reads besides the doors.
+        MemoKey key;
+        key.feed(static_cast<U64>(static_cast<U32>(run.mFloor)) | (static_cast<U64>(run.mFlight) << 32) | (static_cast<U64>(relaxed) << 33));
+        key.feed(run.mC);
+        key.feed(run.mA);
+        key.feed(run.mB);
+        key.feed(run.mD);
+        key.feed(run.mN);
+        key.feed(run.mWidth);
+        const F32 x0 = std::min(std::min(run.mA.mV[VX], run.mB.mV[VX]), run.mC.mV[VX]) - SCORE_REACH_M;
+        const F32 x1 = std::max(std::max(run.mA.mV[VX], run.mB.mV[VX]), run.mC.mV[VX]) + SCORE_REACH_M;
+        const F32 y0 = std::min(std::min(run.mA.mV[VY], run.mB.mV[VY]), run.mC.mV[VY]) - SCORE_REACH_M;
+        const F32 y1 = std::max(std::max(run.mA.mV[VY], run.mB.mV[VY]), run.mC.mV[VY]) + SCORE_REACH_M;
+        for (S32 ky = tileIndex(y0); ky <= tileIndex(y1); ++ky)
+        {
+            for (S32 kx = tileIndex(x0); kx <= tileIndex(x1); ++kx)
+            {
+                TileKey k;
+                k.mX = kx;
+                k.mY = ky;
+                const U32 t = tileAt(k);
+                key.feed(t == NONE ? 0 : mTileKey[t]);
+            }
+        }
+        Scored out;
+        const MergeMemo::Score* old = nullptr;
+        if (mOldMemo)
+        {
+            const auto it = mOldMemo->mScores.find(key.mA);
+            old = it != mOldMemo->mScores.end() && it->second.mCheck == key.mB ? &it->second : nullptr;
+        }
+        if (old)
+        {
+            out = old->mScored;
+            ++mProduct->mReused;
+        }
+        else
+        {
+            out = scoreFresh(run, relaxed);
+        }
+        MergeMemo::Score& kept = mMemo->mScores[key.mA];
+        kept.mCheck = key.mB;
+        kept.mScored = out;
+        mScored[run.mKey] = out;
+        return out;
+    }
+
+    Scored SpacesPass::State::scoreFresh(const Run& run, bool relaxed)
+    {
+        const SpaceParams& p = params();
+        const F32 fz = run.mFloor * mUnit;
         const F32 drop = relaxed ? p.mRelaxed : p.mLintelDropM;
         const F32 step = relaxed ? p.mRelaxed : p.mEStep;
 
@@ -2247,13 +2425,23 @@ namespace sknav
             out.mPortal = true;
             out.mKind = PortalKind::OPENING;
         }
-        mScored[run.mKey] = out;
         return out;
     }
 
     void SpacesPass::State::merge()
     {
         edges();
+        mEdgeKey.resize(mEdges.size());
+        for (size_t i = 0; i < mEdges.size(); ++i)
+        {
+            const Edge& e = mEdges[i];
+            MemoKey& k = mEdgeKey[i];
+            k = MemoKey();
+            k.feed(e.mCellA);
+            k.feed(e.mCellB);
+            k.feed(static_cast<U64>(static_cast<U32>(e.mFloorA)) | (static_cast<U64>(static_cast<U32>(e.mFloorB)) << 32));
+            k.feed(static_cast<U64>(e.mFlight));
+        }
         // Across a seam between batches, one side's watershed saw the other:
         // where it ran on into it, the two are one basin.
         for (const Edge& e : mEdges)
@@ -2324,7 +2512,50 @@ namespace sknav
             Memo& m = memo[h];
             m.mRu = ru;
             m.mIds = group;
-            m.mRuns = runs(group, ru);
+            // Runs read their edges and which side of each is ru's, nothing else.
+            MemoKey key;
+            key.feed(static_cast<U64>(group.size()));
+            for (U32 id : group)
+            {
+                const U64 first = mRegions.find(mEdges[id].mA) == ru ? 1 : 0;
+                key.feed(mEdgeKey[id].mA ^ first);
+                key.feed(mEdgeKey[id].mB);
+            }
+            const MergeMemo::Runs* old = nullptr;
+            if (mOldMemo)
+            {
+                const auto hit = mOldMemo->mRuns.find(key.mA);
+                old = hit != mOldMemo->mRuns.end() && hit->second.mCheck == key.mB ? &hit->second : nullptr;
+            }
+            if (old)
+            {
+                m.mRuns = old->mRuns;
+                for (Run& r : m.mRuns)
+                {
+                    r.mKey = SEED;
+                    for (U32& id : r.mIds)
+                    {
+                        id = group[id];
+                        r.mKey = mix(r.mKey, id);
+                    }
+                }
+                ++mProduct->mReused;
+            }
+            else
+            {
+                m.mRuns = runs(group, ru);
+            }
+            MergeMemo::Runs& kept = mMemo->mRuns[key.mA];
+            kept.mCheck = key.mB;
+            kept.mRuns = m.mRuns;
+            for (Run& r : kept.mRuns)
+            {
+                r.mKey = 0;
+                for (U32& id : r.mIds)
+                {
+                    id = static_cast<U32>(std::lower_bound(group.begin(), group.end(), id) - group.begin());
+                }
+            }
             return m.mRuns;
         };
         for (S32 round = 0; round < MERGE_ROUNDS; ++round)
@@ -3503,6 +3734,7 @@ namespace sknav
                 c.mGaps[k].mSpace = static_cast<U16>(std::min<U32>(best, 0xffff));
             }
         }
+        mProduct->mMemo = mMemo;
         mEnc->mSpaceIds.resize(out.size());
         for (size_t i = 0; i < out.size(); ++i)
         {

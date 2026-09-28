@@ -35,6 +35,7 @@
 
 #include "llstring.h"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <regex>
@@ -359,6 +360,94 @@ namespace tut
         replayCensus(c, ReplayOptions(), weather);
         const ReplayTile& w = meshOf(weather, skybox)->mTiles.begin()->second;
         ensure("WEATHER still built when it is on", !w.mInput->mAir && w.mInput->mClasses[1]);
+    }
+
+    template<> template<>
+    void sknavreplay_object::test<6>()
+    {
+        set_test_name("each tile of a census's largest mesh rebuilt, as it was and with floor lost, reading the memo is the pass reading none, when a file is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_VERIFY");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayResult r;
+        replayCensus(c, ReplayOptions(), r);
+        const ReplayMesh* big = nullptr;
+        size_t most = 0;
+        for (const auto& m : r.mMeshes)
+        {
+            size_t n = 0;
+            for (const TileEnclosure& te : m->mEnclosure ? m->mEnclosure->mTiles : std::vector<TileEnclosure>())
+            {
+                n += te.mAir && !te.mAir->mLeaves.empty() ? 1 : 0;
+            }
+            if (m->mRooms && n > most)
+            {
+                most = n;
+                big = m.get();
+            }
+        }
+        ensure("a mesh with spaces", big != nullptr);
+        const std::string limit = LLStringUtil::getenv("SKNAV_REPLAY_VERIFY_TILES");
+        const size_t cap = limit.empty() ? most : static_cast<size_t>(std::stoul(limit));
+        auto bare = std::make_shared<RoomsProduct>(*big->mRooms);
+        bare->mMemo.reset();
+        typedef std::chrono::steady_clock Clock;
+        auto ms = [](Clock::time_point t) { return std::chrono::duration<F64, std::milli>(Clock::now() - t).count(); };
+        size_t checked = 0;
+        U64 reused = 0;
+        F64 memo_ms = 0.0, bare_ms = 0.0;
+        for (size_t i = 0; i < big->mEnclosure->mTiles.size() && checked < cap; ++i)
+        {
+            const TileEnclosure& te = big->mEnclosure->mTiles[i];
+            if (!te.mAir || te.mAir->mLeaves.empty())
+            {
+                continue;
+            }
+            for (S32 lost = 0; lost < 2; ++lost)
+            {
+                // The same air under a new pointer, as a rebuild that moved nothing
+                // gives; or with the floor of the tile's middle 4 m square gone.
+                auto fresh = std::make_shared<TileAir>(*te.mAir);
+                if (lost)
+                {
+                    const S32 half = static_cast<S32>(2.f / fresh->mCell), mx = fresh->mWidth / 2, my = fresh->mHeight / 2;
+                    for (const AirLeaf& leaf : fresh->mLeaves)
+                    {
+                        if (leaf.mX >= mx - half && leaf.mX < mx + half && leaf.mY >= my - half && leaf.mY < my + half)
+                        {
+                            for (U32 k = 0; k < leaf.mGapCount; ++k)
+                            {
+                                fresh->mGaps[leaf.mFirstGap + k].mFlags &= static_cast<U8>(~AirGap::WALKABLE);
+                            }
+                        }
+                    }
+                }
+                auto enc_memo = std::make_shared<EnclosureProduct>(*big->mEnclosure);
+                enc_memo->mTiles[i].mAir = fresh;
+                auto enc_bare = std::make_shared<EnclosureProduct>(*enc_memo);
+                const std::shared_ptr<RoomsInput> in_memo = replayRoomsInput(c, *big, 99);
+                const std::shared_ptr<RoomsInput> in_bare = replayRoomsInput(c, *big, 99);
+                in_bare->mPrevious = bare;
+                Clock::time_point t0 = Clock::now();
+                const RoomsProductPtr with_memo = computeSpaces(in_memo, enc_memo);
+                memo_ms += ms(t0);
+                t0 = Clock::now();
+                const RoomsProductPtr without = computeSpaces(in_bare, enc_bare);
+                bare_ms += ms(t0);
+                std::cout << "tile " << te.mKey.mX << "," << te.mKey.mY << (lost ? " lost" : " same") << ": " << with_memo->mMillis << " ms reading the memo ("
+                          << with_memo->mReused << " reused), " << without->mMillis << " ms without" << std::endl;
+                ensure("the incremental pass is the full pass", sknav_test::dumpRooms(*enc_memo, *with_memo) == sknav_test::dumpRooms(*enc_bare, *without));
+                reused += with_memo->mReused;
+            }
+            ++checked;
+        }
+        std::cout << checked << " of " << most << " tiles twice, " << reused << " reused, " << memo_ms << " ms reading the memo, " << bare_ms
+                  << " ms without" << std::endl;
     }
 
     template<> template<>

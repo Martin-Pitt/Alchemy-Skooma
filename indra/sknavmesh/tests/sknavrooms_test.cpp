@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+#include <functional>
 
 namespace
 {
@@ -149,6 +150,109 @@ namespace
         }
         r.mRooms = computeSpaces(rooms_in, r.mEnc);
         return r;
+    }
+
+    std::string dump(const Result& r)
+    {
+        return dumpRooms(*r.mEnc, *r.mRooms);
+    }
+
+    /// The rooms pass over a scene whose moved tile alone has new air, once
+    /// reading the last pass's memo and once not: the two must agree. A
+    /// pass with nothing moved runs first, so portals stand where the last
+    /// pass put them, as they do in the viewer. Alter changes the enclosure
+    /// product before the spaces pass reads it.
+    void incrementalIsFull(const Scene& before, const Scene& after, S32 tiles_x, S32 tiles_y, const TileKey& moved,
+                           const std::vector<DoorEntity>& doors_before, const std::vector<DoorEntity>& doors_after, U32& reused,
+                           const std::function<void(EnclosureProduct&)>& alter = nullptr)
+    {
+        auto kept = [](std::shared_ptr<EnclosureInput> in, const RoomsProductPtr& last, const TileKey& moved_key) {
+            for (EnclosureInput::Tile& t : in->mTiles)
+            {
+                const RoomsTile* was = last->tile(t.mKey);
+                if (was && !(t.mKey == moved_key))
+                {
+                    t.mAir = was->mAir;
+                }
+            }
+            return in;
+        };
+        auto spaces = [&alter](const std::shared_ptr<EnclosureInput>& in, const std::vector<DoorEntity>& doors, const RoomsProductPtr& previous, bool change) {
+            EnclosurePass pass(in);
+            while (!pass.step(1u << 30))
+            {
+            }
+            Result r;
+            r.mEnc = pass.takeProduct();
+            if (alter && change)
+            {
+                alter(*r.mEnc);
+            }
+            auto rooms = std::make_shared<RoomsInput>();
+            rooms->mDoors = doors;
+            rooms->mPrevious = previous;
+            r.mRooms = computeSpaces(rooms, r.mEnc);
+            return r;
+        };
+        TileKey nowhere;
+        nowhere.mX = nowhere.mY = -99;
+        const Result first = spaces(before.input(tiles_x, tiles_y), doors_before, nullptr, false);
+        const Result settled = spaces(kept(before.input(tiles_x, tiles_y), first.mRooms, nowhere), doors_before, first.mRooms, false);
+        std::shared_ptr<EnclosureInput> in = kept(after.input(tiles_x, tiles_y), settled.mRooms, moved);
+        const Result incremental = spaces(in, doors_after, settled.mRooms, true);
+        auto bare = std::make_shared<RoomsProduct>(*settled.mRooms);
+        bare->mMemo.reset();
+        const Result full = spaces(in, doors_after, bare, true);
+        tut::ensure_equals("no memo read without one", full.mRooms->mReused, 0u);
+        tut::ensure("the incremental pass is the full pass", dump(incremental) == dump(full));
+        reused = incremental.mRooms->mReused;
+    }
+
+    /// A roofed corridor across three tiles with a room off it between each
+    /// pair of partitions, a doorway into each, and doorways between rooms
+    /// where a partition has one. Doorways are 1 m wide under a lintel,
+    /// unless unroofed; a partition at x < 0 is left out.
+    Scene rowOfRooms(const std::vector<F32>& partitions, const std::vector<F32>& through, F32 unroofed = -1.f)
+    {
+        Scene s;
+        s.wall(20.f, 4.f, 76.f, 4.25f);
+        s.wall(20.f, 27.75f, 76.f, 28.f);
+        s.wall(20.f, 4.f, 20.25f, 28.f);
+        s.wall(75.75f, 4.f, 76.f, 28.f);
+        auto lintel = [&s, unroofed](F32 x0, F32 y0, F32 x1, F32 y1) {
+            if (std::fabs(x0 - unroofed) > 0.01f)
+            {
+                s.box(x0, y0, x1, y1, 2.2f, 3.f, false);
+            }
+        };
+        F32 x = 20.f;
+        for (F32 d : { 25.f, 35.f, 45.f, 55.f, 65.f, 72.f })
+        {
+            s.wall(x, 13.75f, d, 14.f);
+            lintel(d, 13.75f, d + 1.f, 14.f);
+            x = d + 1.f;
+        }
+        s.wall(x, 13.75f, 76.f, 14.f);
+        for (size_t i = 0; i < partitions.size(); ++i)
+        {
+            const F32 p = partitions[i];
+            if (p < 0.f)
+            {
+                continue;
+            }
+            if (std::find(through.begin(), through.end(), p) != through.end())
+            {
+                s.wall(p, 14.f, p + 0.25f, 20.f);
+                lintel(p, 20.f, p + 0.25f, 21.f);
+                s.wall(p, 21.f, p + 0.25f, 28.f);
+            }
+            else
+            {
+                s.wall(p, 14.f, p + 0.25f, 28.f);
+            }
+        }
+        s.box(20.f, 4.f, 76.f, 28.f, 3.f, 3.25f);
+        return s;
     }
 
     DoorEntity door(F32 x, F32 y, F32 nx, F32 ny, F32 width, F32 sill = 0.f, F32 height = 2.2f)
@@ -852,6 +956,93 @@ namespace tut
         {
             ensure("every flight space has a stair portal", !sp.mFlight || r.count(&sp, PortalKind::STAIR) > 0);
         }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<28>()
+    {
+        set_test_name("a pass reading the last one's memo is the pass that reads none: a doorway appears, a wall goes, a lintel goes, nothing moves");
+        const std::vector<F32> partitions = { 30.f, 40.f, 50.f, 60.f, 70.f };
+        TileKey moved;
+        moved.mX = 1;
+        moved.mY = 0;
+        const std::vector<DoorEntity> none;
+        U32 reused = 0;
+        incrementalIsFull(rowOfRooms(partitions, { 40.f }), rowOfRooms(partitions, { 40.f, 50.f }), 3, 1, moved, none, none, reused);
+        ensure("a doorway appears: the rest reused", reused > 0);
+        incrementalIsFull(rowOfRooms(partitions, { 40.f }), rowOfRooms({ 30.f, -1.f, 50.f, 60.f, 70.f }, {}), 3, 1, moved, none, none, reused);
+        ensure("a wall goes: the rest reused", reused > 0);
+        incrementalIsFull(rowOfRooms(partitions, {}), rowOfRooms(partitions, {}, 55.f), 3, 1, moved, none, none, reused);
+        ensure("a lintel goes: the rest reused", reused > 0);
+        incrementalIsFull(rowOfRooms(partitions, { 40.f }), rowOfRooms(partitions, { 40.f }), 3, 1, moved, none, none, reused);
+        ensure("nothing moves: the rest reused", reused > 0);
+        // A door the census finds changes what every cut near a door reads: nothing is reused.
+        incrementalIsFull(rowOfRooms(partitions, {}), rowOfRooms(partitions, {}), 3, 1, moved, none, { door(45.5f, 13.875f, 0.f, 1.f, 1.f) }, reused);
+        ensure_equals("a door appears: nothing reused", reused, 0u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<29>()
+    {
+        set_test_name("a memo is read only where its keys hold: a region's root moves across the mesh, indoorness moves in a tile whose air did not");
+        TileKey moved;
+        moved.mX = 1;
+        moved.mY = 0;
+        const std::vector<DoorEntity> none;
+        U32 reused = 0;
+        // Two rooms wholly in the last tile, a doorway between them; the second
+        // joins a room in the moved tile when the wall between them goes, so
+        // the pair's first region is now the other one.
+        auto strips = [](F32 wall_top) {
+            Scene s = rowOfRooms({ 30.f, 40.f, 50.f, -1.f, -1.f }, {});
+            s.wall(63.75f, 14.f, 64.f, wall_top);
+            s.wall(64.f, 20.75f, 69.f, 21.f);
+            s.box(69.f, 20.75f, 70.f, 21.f, 2.2f, 3.f, false);
+            s.wall(70.f, 20.75f, 76.f, 21.f);
+            return s;
+        };
+        incrementalIsFull(strips(28.f), strips(21.f), 3, 1, moved, none, none, reused);
+        ensure("a root moves: the rest reused", reused > 0);
+        // A doorway just past the seam, a lintel over it: a ceiling lowered on
+        // the moved tile's side, within reach of its probes, takes the lintel away.
+        auto seam = [](bool lowered) {
+            Scene s = rowOfRooms({ 30.f, 40.f, 50.f, 64.5f, 70.f }, { 64.5f });
+            if (lowered)
+            {
+                s.box(61.f, 14.f, 64.f, 28.f, 2.3f, 3.f, false);
+            }
+            return s;
+        };
+        incrementalIsFull(seam(false), seam(true), 3, 1, moved, none, none, reused);
+        ensure("a ceiling moves: the rest reused", reused > 0);
+        // An opening with jambs and no lintel, in the last tile: indoorness alone decides it.
+        Scene s = rowOfRooms({ 30.f, 40.f, 50.f, 60.f, -1.f }, {});
+        s.wall(67.5f, 14.f, 67.75f, 20.f);
+        s.wall(67.5f, 21.f, 67.75f, 28.f);
+        TileKey nowhere;
+        nowhere.mX = nowhere.mY = -99;
+        incrementalIsFull(s, s, 3, 1, nowhere, none, none, reused, [](EnclosureProduct& enc) {
+            for (TileEnclosure& te : enc.mTiles)
+            {
+                if (!te.mAir || te.mKey.mX != 2)
+                {
+                    continue;
+                }
+                for (const AirLeaf& leaf : te.mAir->mLeaves)
+                {
+                    if (te.mAir->mOrigin.mV[VX] + leaf.mX * te.mAir->mCell >= 67.5f)
+                    {
+                        continue;
+                    }
+                    for (U32 i = 0; i < leaf.mGapCount; ++i)
+                    {
+                        te.mGaps[leaf.mFirstGap + i].mE = 0;
+                        te.mGaps[leaf.mFirstGap + i].mD = 0;
+                    }
+                }
+            }
+        });
+        ensure("indoorness moves: the rest reused", reused > 0);
     }
 
     template<> template<>
