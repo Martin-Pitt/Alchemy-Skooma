@@ -29,11 +29,13 @@
 #include "alkeychord.h"
 
 #include "alobjectproperties.h"
+#include "alpanefolds.h"
 #include "alscriptexplorertree.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptstudioservices.h"
 #include "llagent.h"
 #include "llbutton.h"
+#include "llclipboard.h"
 #include "llfiltereditor.h"
 #include "llfloaterreg.h"
 #include "llcompilequeue.h"
@@ -51,6 +53,7 @@
 #include "llviewermenu.h"
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
+#include "llviewerregion.h"
 #include "roles_constants.h"
 
 #include <algorithm>
@@ -87,20 +90,16 @@ namespace
     }
 
     // The legacy queues over whole prims, which walk their contents and
-    // report in a window of their own: every script recompiled for a
-    // target ("auto" for what each compiles for now), reset, started or
-    // stopped. Each prim comes with a name for the report. A recompile
-    // leaves a script `running` knows to be stopped stopped, by prim and
-    // item; the rest run after it, as the queue always had it.
+    // report in a window of their own: every script reset, started or
+    // stopped. Each prim comes with a name for the report. A recompile is
+    // the window's own (ALScriptRecompile).
     enum class Queue : U8
     {
-            Recompile,
             Reset,
             Start,
             Stop
         };
-        bool startQueue(Queue kind, const std::vector<std::pair<LLUUID, std::string>>& prims, const std::string& target, std::string& error,
-                        std::map<std::pair<LLUUID, LLUUID>, bool> running = {})
+        bool startQueue(Queue kind, const std::vector<std::pair<LLUUID, std::string>>& prims, std::string& error)
         {
         // Only the objects RLVa lets be changed; none, and why.
         std::vector<std::pair<LLUUID, std::string>> allowed;
@@ -122,8 +121,8 @@ namespace
             error = refused.empty() ? LLTrans::getString("WorkspaceNothingToDo") : refused;
             return false;
         }
-        const char* name  = kind == Queue::Recompile ? "compile_queue" : kind == Queue::Reset ? "reset_queue" : kind == Queue::Start ? "start_queue" : "stop_queue";
-        const char* title = kind == Queue::Recompile ? "CompileQueueTitle" : kind == Queue::Reset ? "ResetQueueTitle" : kind == Queue::Start ? "RunQueueTitle" : "NotRunQueueTitle";
+        const char* name  = kind == Queue::Reset ? "reset_queue" : kind == Queue::Start ? "start_queue" : "stop_queue";
+        const char* title = kind == Queue::Reset ? "ResetQueueTitle" : kind == Queue::Start ? "RunQueueTitle" : "NotRunQueueTitle";
         LLUUID      id;
         id.generate();
         LLFloaterScriptQueue* queue = LLFloaterReg::getTypedInstance<LLFloaterScriptQueue>(name, LLSD(id));
@@ -132,8 +131,6 @@ namespace
             error = LLTrans::getString("WorkspaceQueueCannotOpen");
             return false;
         }
-        queue->setCompileTarget(target.empty() ? std::string("auto") : target);
-        queue->setKnownRunning(std::move(running));
         for (const auto& [prim, prim_name] : allowed)
         {
             queue->addObject(prim, prim_name);
@@ -232,14 +229,17 @@ bool ALScriptExplorerPane::postBuild()
     // A filter looks through what is folded too: what a large linkset's
     // folded prims hold is asked for once there is one.
     mFilter->setCommitCallback([this](LLUICtrl*, const LLSD&) {
-        if (mFilter->getText().empty())
-        {
-            fill();
-        }
-        else
+        // The first letter asks what folded prims hold, which the filter
+        // looks through; each letter after it, and letting it go, only
+        // fills again from what is listed.
+        const bool filtering = !mFilter->getText().empty();
+        if (filtering && !std::exchange(mFiltering, true))
         {
             relist();
+            return;
         }
+        mFiltering = filtering;
+        fillWhenSeen();
     });
     for (const char* action : { "open", "start", "stop", "reset", "refresh" })
     {
@@ -332,7 +332,7 @@ void ALScriptExplorerPane::pump()
     // run, names -- put in the list once, however many answers there were,
     // and not at every frame while a linkset's answers stream in.
     const F64 now = LLTimer::getTotalSeconds();
-    if (mStale && now >= mFilled + EXPLORER_FILL)
+    if (mStale && now >= mFilled + EXPLORER_FILL && ALPaneFolds::inSight(this))
     {
         fill();
     }
@@ -376,12 +376,14 @@ void ALScriptExplorerPane::relist(bool refetch, bool from_region)
         }
         LLViewerObject* root = rootOf(object);
         Model::Seen     seen;
-        seen.prims.push_back({ root->getID(), ALScriptWorkspace::objectName(root, LLStringUtil::null) });
+        seen.position        = root->getPositionGlobal();
+        seen.region          = root->getRegion() ? root->getRegion()->getName() : std::string();
+        seen.prims.push_back({ root->getID(), ALScriptWorkspace::objectName(root, LLStringUtil::null), root->permModify() });
         for (const LLPointer<LLViewerObject>& child : root->getChildren())
         {
             if (child && !child->isAvatar())
             {
-                seen.prims.push_back({ child->getID(), ALScriptWorkspace::objectName(child, LLStringUtil::null) });
+                seen.prims.push_back({ child->getID(), ALScriptWorkspace::objectName(child, LLStringUtil::null), child->permModify() });
             }
         }
         return seen;
@@ -397,7 +399,7 @@ void ALScriptExplorerPane::relist(bool refetch, bool from_region)
     }
     listing.unnamed = mServices->words("ObjectUnnamed");
     mModel.list(listing);
-    fill();
+    fillWhenSeen();
     std::string filter = mFilter->getText();
     LLStringUtil::trim(filter);
     // What each prim listed holds, asked of the index, which asks where it
@@ -499,16 +501,32 @@ void ALScriptExplorerPane::fill()
     // What a row is -- an object, a prim, a script -- is its icon, and a
     // script's state and an object out of sight follow its name, as the
     // inventory's worn items say so.
-    const auto said = [this](const std::string& word) { return " (" + mServices->words(word) + ")"; };
-    const auto look = [&](const Model::Row& row) {
+    // The words every row of a kind says, looked up once for all of them.
+    const auto        said        = [this](const std::string& word) { return " (" + mServices->words(word) + ")"; };
+    const std::string pinned_mark = mServices->words("PinnedMark");
+    const std::string away        = said("KindAway");
+    const std::string coming      = mServices->words("ObjectNameComing");
+    const std::string unknown     = said("StateUnknown");
+    const std::string running_yes = said("RunningYes");
+    const std::string running_no  = said("RunningNo");
+    const std::string no_modify   = said("NoModifyMark");
+    const std::string no_copy     = said("NoCopyMark");
+    const auto        look        = [&](const Model::Row& row) {
         ALScriptExplorerTree::Look out;
         switch (row.kind)
         {
             case Model::Row::Kind::Object:
-                out.label  = (row.pinned ? mServices->words("PinnedMark") : LLStringUtil::null) + row.name;
-                out.suffix = row.present ? LLStringUtil::null : said("KindAway");
+            {
+                // Away, where it was last: its pin keeps the place.
+                LLStringUtil::format_map_t where;
+                where["[REGION]"] = row.region;
+                out.label  = (row.pinned ? pinned_mark : LLStringUtil::null) + row.name;
+                out.suffix = row.present         ? LLStringUtil::null
+                             : row.region.empty() ? away
+                                                  : " (" + mServices->words("KindAwayIn", where) + ")";
                 out.icon   = row.many ? "Inv_Object_Multi" : "Inv_Object";
                 break;
+            }
             case Model::Row::Kind::Empties:
             {
                 LLStringUtil::format_map_t args;
@@ -518,15 +536,30 @@ void ALScriptExplorerPane::fill()
                 break;
             }
             case Model::Row::Kind::Prim:
-                out.label = row.name.empty() ? mServices->words("ObjectNameComing") : row.name;
-                out.icon  = "Studio_Prim";
+            {
+                // By its link number, as llGetLinkName and the rest take it.
+                LLStringUtil::format_map_t args;
+                args["[LINK]"] = std::to_string(row.link);
+                args["[NAME]"] = row.name.empty() ? coming : row.name;
+                out.label      = mServices->words("PrimLinked", args);
+                out.icon       = "Studio_Prim";
                 break;
+            }
             case Model::Row::Kind::Item:
                 out.label = row.name;
                 if (row.script)
                 {
                     const std::optional<bool> running = knownRunning(row.ref);
-                    out.suffix = said(!running ? "StateUnknown" : *running ? "RunningYes" : "RunningNo");
+                    out.suffix = !running ? unknown : *running ? running_yes : running_no;
+                }
+                // What the agent may not do with it, as the inventory says.
+                if (row.noModify)
+                {
+                    out.suffix += no_modify;
+                }
+                if (row.noCopy)
+                {
+                    out.suffix += no_copy;
                 }
                 out.icon = row.script ? (row.lua ? "Inv_Script_Luau" : "Inv_Script")
                            : row.name == ".luaurc" || row.name == ".lslrc" ? "Studio_Config"
@@ -548,6 +581,18 @@ void ALScriptExplorerPane::fill()
         }
     }
     refreshButtons();
+}
+
+void ALScriptExplorerPane::fillWhenSeen()
+{
+    if (ALPaneFolds::inSight(this))
+    {
+        fill();
+    }
+    else
+    {
+        mStale = true;
+    }
 }
 
 void ALScriptExplorerPane::refreshButtons()
@@ -668,8 +713,13 @@ void ALScriptExplorerPane::explore(const LLUUID& root)
     }
     mWindow->showExplorer();
     // Open, whatever it was: what it holds is what it was asked to show.
+    // Filled now, seen or not, for its row to be chosen.
     mModel.fold(root, false, false);
     relist();
+    if (mStale)
+    {
+        fill();
+    }
     LLSD row;
     row["root"] = root;
     mTree->choose(row, false);
@@ -691,34 +741,74 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     {
         return !rows.empty();
     }
+    // What the agent may do: a prim changed -- put in, taken out, run --
+    // only where it may modify it; an item read only where it may copy it,
+    // and a script where it may modify it too.
+    auto changeable = [this](const Choice& row) { return mModel.primModifiable(row.prim); };
+    auto readable   = [this](const Choice& row) {
+        const std::optional<ALScriptWorkspace::Item> item = mModel.itemAt(row.ref());
+        return !item || gAgent.isGodlike() || (item->copy && (item->modify || !item->script));
+    };
+    auto itemChangeable = [this](const Choice& row) {
+        const std::optional<ALScriptWorkspace::Item> item = mModel.itemAt(row.ref());
+        return !item || item->modify;
+    };
     if (action == "open")
     {
-        return any([](const Choice& row) { return row.isItem(); });
+        return any([&](const Choice& row) { return row.isItem() && readable(row); });
     }
     if (action == "new_lsl" || action == "new_lua" || action == "new_notecard")
     {
-        // One prim to put it in.
-        return rows.size() == 1 && present(rows.front()) &&
+        // One prim to put it in, which may be changed.
+        return rows.size() == 1 && present(rows.front()) && changeable(rows.front()) &&
                (action != "new_lua" || ALScriptWorkspace::luaEnabled(ALScriptRef(rows.front().prim, LLUUID::null)));
     }
     if (action == "rename")
     {
-        // A script or notecard; or a prim or an object, which is in sight.
-        return rows.size() == 1 && (rows.front().isItem() || present(rows.front()));
+        // A script or notecard; or a prim or an object, which is in sight:
+        // each one the agent may change.
+        const Choice& row = rows.size() == 1 ? rows.front() : Choice();
+        return rows.size() == 1 && (row.isItem() || present(row)) && changeable(row) && (!row.isItem() || itemChangeable(row));
     }
     if (action == "delete")
     {
-        return !rows.empty() && !any([](const Choice& row) { return !row.isItem(); });
+        return !rows.empty() && !any([&](const Choice& row) { return !row.isItem() || !changeable(row); });
     }
-    if (action == "start" || action == "stop" || action == "reset" || action == "restart" || action == "recompile")
+    if (action == "recompile_lsl_luau" && !any([](const Choice& row) { return ALScriptWorkspace::luaEnabled(ALScriptRef(row.prim, LLUUID::null)); }))
     {
-        // Scripts, or whole prims and objects, which the queues walk;
-        // restart is one script at a time.
-        return any([&](const Choice& row) { return present(row) && (row.script || (action != "restart" && !row.isItem())); });
+        // Only where the region runs Luau.
+        return false;
     }
-    if (action == "teleport" || action == "zoom")
+    if (action == "start" || action == "stop" || action == "reset" || action == "restart" || action == "recompile" || action == "recompile_mono" ||
+        action == "recompile_lsl2" || action == "recompile_lsl_luau")
+    {
+        // Scripts, or whole prims and objects, whose scripts are walked;
+        // restart is one script at a time. Each in a prim the agent may
+        // change, and a script recompiled one it may read.
+        const bool recompiling = action.rfind("recompile", 0) == 0;
+        return any([&](const Choice& row) {
+            return present(row) && changeable(row) && (row.script || (action != "restart" && !row.isItem())) &&
+                   (!recompiling || !row.isItem() || readable(row));
+        });
+    }
+    if (action == "teleport")
+    {
+        // In sight, or away with the place its pin kept.
+        const Model::Pin* pin = rows.size() == 1 ? mModel.pinOf(rows.front().root) : nullptr;
+        return rows.size() == 1 && (present(rows.front()) || (pin && pin->position));
+    }
+    if (action == "zoom" || action == "edit_in_world")
     {
         return rows.size() == 1 && present(rows.front());
+    }
+    if (action == "copy_key")
+    {
+        return !rows.empty();
+    }
+    if (action == "describe")
+    {
+        // A script or notecard the agent may change, in a prim it may.
+        return rows.size() == 1 && rows.front().isItem() && changeable(rows.front()) && itemChangeable(rows.front());
     }
     if (action == "check")
     {
@@ -769,9 +859,13 @@ void ALScriptExplorerPane::act(const std::string& action)
     {
         remove(rows);
     }
-    else if (action == "recompile")
+    else if (action == "recompile" || action == "recompile_mono" || action == "recompile_lsl2" || action == "recompile_lsl_luau")
     {
-        recompile(rows);
+        // Each as it compiles now, or every LSL script for one target.
+        recompile(rows, action == "recompile_mono"       ? "mono"
+                        : action == "recompile_lsl2"     ? "lsl2"
+                        : action == "recompile_lsl_luau" ? "lsl-luau"
+                                                         : "auto");
     }
     else if (action == "start" || action == "stop" || action == "reset" || action == "restart")
     {
@@ -809,6 +903,23 @@ void ALScriptExplorerPane::act(const std::string& action)
                 handle_zoom_to_object(object->getID());
             }
         }
+        else if (const Model::Pin* pin = mModel.pinOf(rows.front().root); action == "teleport" && pin && pin->position)
+        {
+            // Away: where its pin last saw it.
+            gAgent.teleportViaLocation(*pin->position);
+        }
+    }
+    else if (action == "copy_key")
+    {
+        copyKeys(rows);
+    }
+    else if (action == "edit_in_world")
+    {
+        editInWorld(rows.front());
+    }
+    else if (action == "describe")
+    {
+        describe(rows.front());
     }
     else if (action == "pin")
     {
@@ -863,7 +974,7 @@ void ALScriptExplorerPane::run(const std::string& action, const std::vector<Choi
                           : action == "stop" ? Queue::Stop
                                              : Queue::Reset;
         std::string error;
-        if (!startQueue(kind, prims, LLStringUtil::null, error))
+        if (!startQueue(kind, prims, error))
         {
             mServices->report(error, true);
         }
@@ -899,6 +1010,76 @@ void ALScriptExplorerPane::showMenu(S32 x, S32 y)
     mMenu = menu->getHandle();
     menu->show(x, y);
     LLMenuGL::showPopup(mTree, menu, x, y);
+}
+
+// --- keys, the build tools, descriptions ----------------------------------------------
+
+void ALScriptExplorerPane::copyKeys(const std::vector<Choice>& rows)
+{
+    // The key a script names each by: an object's is its root prim's, a
+    // prim's its own, an item's its own; one a line.
+    std::string keys;
+    for (const Choice& row : rows)
+    {
+        const LLUUID key = row.isItem() ? row.item : row.primRow ? row.prim : row.root;
+        keys += (keys.empty() ? "" : "\n") + key.asString();
+    }
+    LLClipboard::instance().copyToClipboard(keys, 0, static_cast<S32>(keys.size()));
+    LLStringUtil::format_map_t args;
+    args["[KEYS]"] = keys;
+    mServices->setStatus(mServices->counted("KeysCopied", static_cast<S32>(rows.size()), args));
+}
+
+void ALScriptExplorerPane::editInWorld(const Choice& row)
+{
+    // The object, or the prim alone -- a prim's row, or an item's in a prim
+    // not the root -- chosen in world and the build tools opened on it, as
+    // the pie menu's Edit does.
+    const bool      prim_only = row.primRow || (row.isItem() && row.prim != row.root);
+    LLViewerObject* object    = gObjectList.findObject(prim_only ? row.prim : row.root);
+    if (!object)
+    {
+        return;
+    }
+    if (std::string refused = ALScriptWorkspace::rlvRefusal(object, LLAssetType::AT_NONE, ALScriptWorkspace::RlvUse::Change); !refused.empty())
+    {
+        mServices->report(refused, true);
+        return;
+    }
+    LLSelectMgr::getInstance()->deselectAll();
+    if (prim_only)
+    {
+        gSavedSettings.setBOOL("EditLinkedParts", true);
+        LLSelectMgr::getInstance()->selectObjectOnly(object);
+    }
+    else
+    {
+        LLSelectMgr::getInstance()->selectObjectAndFamily(object);
+    }
+    handle_object_edit();
+}
+
+void ALScriptExplorerPane::describe(const Choice& row)
+{
+    const std::optional<ALScriptWorkspace::Item> item = mModel.itemAt(row.ref());
+    LLSD args;
+    args["NAME"]                   = row.name;
+    args["DESCRIPTION"]            = item ? item->description : std::string();
+    const LLHandle<LLPanel> handle = getHandle();
+    const ALScriptRef       ref    = row.ref();
+    LLNotificationsUtil::add("ScriptStudioDescribe", args, LLSD(), [handle, ref](const LLSD& notification, const LLSD& response) {
+        ALScriptExplorerPane* pane = ALViewType::as<ALScriptExplorerPane>(handle.get());
+        if (!pane || LLNotificationsUtil::getSelectedOption(notification, response) != 0)
+        {
+            return;
+        }
+        std::string description = response["description"].asString();
+        LLStringUtil::trim(description);
+        if (std::string error; !ALScriptWorkspace::instance().describe(ref, description, error))
+        {
+            pane->mServices->report(error, true);
+        }
+    });
 }
 
 // --- making, renaming, deleting and recompiling ----------------------------------------
@@ -1056,85 +1237,22 @@ void ALScriptExplorerPane::remove(const std::vector<Choice>& rows)
     });
 }
 
-void ALScriptExplorerPane::recompile(const std::vector<Choice>& rows)
+void ALScriptExplorerPane::recompile(const std::vector<Choice>& rows, const std::string& target)
 {
-    // Each script chosen goes up again on its own, for what it compiles
-    // for now; a prim or an object chosen has every script walked by the
-    // compile queue, which reports in a window of its own. A script known
-    // to be stopped stays stopped, which the standard viewer's recompile
-    // does not do; one not known to be either runs after, as there.
-    const LLHandle<LLPanel>                           handle = getHandle();
-    const std::vector<std::pair<LLUUID, std::string>> prims  = mModel.containerPrims(rows);
+    // Each script chosen, and every script of each prim or object chosen,
+    // up again for the target, said in Output as each is and a closed
+    // one's problems listed: the window's recompile, not the legacy queue.
+    const std::vector<std::pair<LLUUID, std::string>> prims = mModel.containerPrims(rows);
+    std::vector<ALScriptRecompile::One>               scripts;
     for (const Choice& row : rows)
     {
-        // A script chosen with its prim is compiled once, by the queue.
-        if (!row.script || Model::walkedByQueue(row, prims))
+        // A script chosen with its prim goes up once, with the prim's.
+        if (row.script && !Model::walkedByQueue(row, prims))
         {
-            continue;
-        }
-        const ALScriptRef          ref  = row.ref();
-        const std::string          name = row.name;
-        LLStringUtil::format_map_t args;
-        args["[NAME]"] = name;
-        // A save of it on its way would have the server's text land over
-        // it: left alone. Changes not saved in a tab are not what compiles:
-        // said so.
-        if (ALScriptWorkspace::instance().saving(ref))
-        {
-            mServices->report(mServices->words("RecompileSkippedSaving", args), true);
-            continue;
-        }
-        if (mWindow->unsavedAnywhere(ref))
-        {
-            mServices->report(mServices->words("RecompileUnsaved", args), true);
-        }
-        mServices->setStatus(mServices->words("Recompiling", args));
-        const std::optional<bool> running = knownRunning(ref);
-        ALScriptWorkspace::instance().recompile(
-            ref, "auto",
-            [handle, ref, name](const ALScriptWorkspace::CompileResult& result) {
-                ALScriptExplorerPane* pane = ALViewType::as<ALScriptExplorerPane>(handle.get());
-                if (!pane || pane->mServices->findDoc(ref))
-                {
-                    // An open script hears of it through the listener, and
-                    // shows what the compiler said.
-                    return;
-                }
-                ALScriptStudioServices&    services = *pane->mServices;
-                LLStringUtil::format_map_t args;
-                args["[NAME]"] = name;
-                if (!result.error.empty())
-                {
-                    args["[ERROR]"] = result.error;
-                    services.report(services.words("SaveFailed", args), true);
-                }
-                else if (result.success)
-                {
-                    services.report(services.words("Compiled", args));
-                }
-                else
-                {
-                    services.report(services.counted("CompileFailed", static_cast<S32>(result.diagnostics.size()), args), true);
-                }
-            },
-            running);
-    }
-    if (!prims.empty())
-    {
-        std::string                               error;
-        std::map<std::pair<LLUUID, LLUUID>, bool> running = ALScriptWorkspace::instance().contentsIndex().runningKnown();
-        for (const ALScriptStudioDoc* doc : mServices->openDocs())
-        {
-            if (!doc->ref.inInventory() && doc->running >= 0)
-            {
-                running[{ doc->ref.object, doc->ref.item }] = doc->running != 0;
-            }
-        }
-        if (!startQueue(Queue::Recompile, prims, "auto", error, std::move(running)))
-        {
-            mServices->report(error, true);
+            scripts.push_back({ row.ref(), row.name, mModel.nameOf(row.root), row.lua });
         }
     }
+    mWindow->recompileScripts(std::move(scripts), prims, target);
 }
 
 // --- dragging out and dropping in --------------------------------------------------------
