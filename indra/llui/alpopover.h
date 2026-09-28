@@ -26,6 +26,8 @@
 
 #include "llfloater.h"
 
+#include <functional>
+#include <memory>
 #include <string>
 
 #include <boost/signals2.hpp>
@@ -65,8 +67,9 @@ public:
     AL_VIEW_TYPE(ALPopover, LLFloater);
 
     // Under `anchor` and left-aligned with it, or above it where under would
-    // be off the bottom of the screen. The popover takes `content`, and takes
-    // its size from it. Null where there is nothing to put it beside.
+    // be off the bottom of the screen and above would not. The popover takes
+    // `content`, and takes its size from it. Null where there is nothing to
+    // put it beside.
     //
     // A title is drawn where one is given; where none is, the panel is the
     // whole of it and there is no bar to drag it by.
@@ -100,9 +103,10 @@ public:
                                               const std::string& title = LLStringUtil::null,
                                               bool resizable = true);
 
-    // Opened beside the anchor: under it with their left edges together,
-    // above it where under would run off the bottom, and shoved back on
-    // screen where a side would run off, then shown and given the keyboard.
+    // Opened beside the anchor as ALPlace::under() puts it -- under it with
+    // their left edges together, above it where under would run off the
+    // bottom and above would not, kept on screen across -- then shown and
+    // given the keyboard.
     void openBeside(const LLView* anchor);
     // The same beside a rect of the screen, for the anchor.
     void openBeside(const LLRect& screen, const LLView* anchor);
@@ -157,4 +161,44 @@ private:
     LLHandle<LLView>    mKeysBefore;
     // What paramsRemembered was asked for, and so what the size is kept as.
     std::string         mSizeKind;
+};
+
+// The one popover a control or a window has up at a time -- a field's, a
+// studio's quick open, a window's own. Opening another closes the one it
+// held; the one held is told of as it goes, while what was picked in it is
+// still there to read; and one let go of says nothing more about the one
+// up now.
+class ALPopoverSlot
+{
+public:
+    typedef std::function<void(bool escaped)> closed_t;
+
+    ALPopoverSlot() = default;
+    ALPopoverSlot(const ALPopoverSlot&)            = delete;
+    ALPopoverSlot& operator=(const ALPopoverSlot&) = delete;
+    // What it holds dies without a word, as drop() has it.
+    ~ALPopoverSlot();
+
+    // What is up, or null.
+    ALPopover* get() const { return mHeld.get(); }
+    bool       isOpen() const { return !mHeld.isDead(); }
+
+    // Holds a popover, open or about to be, and tells `closed` as it goes
+    // -- true where it was escaped. Whatever it held before is escaped
+    // first; an owner closes that before making the next, since the next
+    // takes the keyboard and the one it held settles as it loses it. The
+    // one held already, held again, is only told of to someone new.
+    void hold(ALPopover* popover, closed_t closed = {});
+    // Closes what it holds: escaped, keeping nothing, or settled, keeping
+    // what was picked; told of as it goes either way.
+    void close(bool escape = true);
+    // Lets go of what it holds without a word, the popover dying: for an
+    // owner torn down under it, which is not to be called back.
+    void drop();
+
+private:
+    LLHandle<ALPopover>                mHeld;
+    boost::signals2::scoped_connection mClosed;
+    // Whether the slot is still here after an owner, told, went with it.
+    std::shared_ptr<bool>              mAlive = std::make_shared<bool>(true);
 };

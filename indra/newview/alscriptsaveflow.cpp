@@ -39,6 +39,12 @@ ALScriptSaveFlow::Start ALScriptSaveFlow::ask(bool out_of_reach, bool detached)
         mAgain = true;
         return Start::Queued;
     }
+    // The world's word on its way: the save goes on once it answers, with
+    // whatever the text is by then.
+    if (mStage == Stage::Asking)
+    {
+        return Start::Queued;
+    }
     // Nothing is tried that would only fail.
     if (out_of_reach)
     {
@@ -66,6 +72,23 @@ ALScriptSaveFlow::Route ALScriptSaveFlow::route(const Tab& tab)
     if (tab.file)
     {
         return Route::File;
+    }
+    // The world asked first what the item holds, once for a text: a save
+    // made elsewhere since would be replaced without a word. Let past by
+    // asking again, as the analyzers' errors are.
+    if (tab.askWorld && !letsPast(tab.version, CheckWorld))
+    {
+        if (mWorldVersion != tab.version)
+        {
+            mStage = Stage::Asking;
+            return Route::AskWorld;
+        }
+        if (mWorldMoved)
+        {
+            stoppedBy(tab.version, CheckWorld);
+            stopped();
+            return Route::StoppedByWorld;
+        }
     }
     if (tab.notecard)
     {
@@ -124,26 +147,14 @@ ALScriptSaveFlow::Landed ALScriptSaveFlow::preprocessed(const Run& run)
         // start.
         return Landed::MovedOn;
     }
-    if (run.errors && !letsPast(run.asked, CheckPreprocessor))
-    {
-        stoppedBy(run.asked, CheckPreprocessor);
-        stopped();
-        return Landed::StoppedByErrors;
-    }
-    // An include still on its way is one the upload would go without, its
-    // line dropped from the text: the script as written is not what would
-    // compile.
-    if (run.pending && !letsPast(run.asked, CheckPending))
-    {
-        stoppedBy(run.asked, CheckPending);
-        stopped();
-        return Landed::StoppedByPending;
-    }
+    // Sent whatever it found -- errors, an include that never came: what
+    // it goes up with, or without, is the window's to say as it goes.
     return Landed::Send;
 }
 
-void ALScriptSaveFlow::sent(const ALTextUndo::SavePoint& at, std::optional<ALSourceMap> map, std::vector<LLUUID> items)
+void ALScriptSaveFlow::sent(const ALTextUndo::SavePoint& at, std::optional<ALSourceMap> map, std::vector<LLUUID> items, U64 request)
 {
+    mRequest     = request;
     mStage       = Stage::Sending;
     mFixed       = false;
     mGateVersion = -1;
@@ -155,6 +166,16 @@ void ALScriptSaveFlow::sent(const ALTextUndo::SavePoint& at, std::optional<ALSou
     // text.
     mSentMap   = std::move(map);
     mSentItems = std::move(items);
+}
+
+void ALScriptSaveFlow::worldAnswered(S64 version, bool moved)
+{
+    mWorldVersion = version;
+    mWorldMoved   = moved;
+    if (mStage == Stage::Asking)
+    {
+        mStage = Stage::Idle;
+    }
 }
 
 void ALScriptSaveFlow::stopped()
@@ -173,7 +194,7 @@ void ALScriptSaveFlow::done()
 ALScriptSaveFlow::Landing ALScriptSaveFlow::compiled(const Answer& answer)
 {
     Landing landing;
-    landing.ours = mStage == Stage::Sending;
+    landing.ours = mStage == Stage::Sending && answer.request == mRequest;
     if (landing.ours)
     {
         mStage = Stage::Idle;
