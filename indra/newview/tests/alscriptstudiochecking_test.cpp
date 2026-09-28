@@ -38,6 +38,7 @@
 #include "../test/lltut.h"
 
 #include <algorithm>
+#include <set>
 
 // The lints as a scripter chose them, and the skin's words for a key, are
 // the viewer's settings.
@@ -131,9 +132,19 @@ namespace
             told.push_back(kindOf(result.kind) + " " + doc.id + " " + at(pos));
             labels.push_back(result.hover.label);
         }
+        // Asked for, and made as the window makes them: with the next frame,
+        // or now for what is about to read them.
         void refreshProblems(Doc& doc) override
         {
             told.push_back("problems " + doc.id);
+            waiting.insert(doc.id);
+        }
+        void settleProblems(Doc& doc) override
+        {
+            if (!waiting.erase(doc.id))
+            {
+                return;
+            }
             doc.shown.clear();
             for (const ALScriptProblem& problem : doc.check.analysis)
             {
@@ -172,6 +183,8 @@ namespace
         std::string                         front;
         LLSD                                confirmed;
         std::function<void()>               confirm;
+        // The tabs whose problems are asked for and not made yet.
+        std::set<std::string>               waiting;
     };
 
     ALScriptProblem problem(S32 line, const std::string& message, ALScriptProblem::Severity severity = ALScriptProblem::Severity::Error)
@@ -573,6 +586,8 @@ namespace tut
         doc.file                         = "/lib.lsl";
         doc.editor->setSyntax("lsl");
         ensure("a fragment", checking.lslFragment(doc));
+        ensure("kept for the text it was asked of", doc.check.fragment && doc.check.fragment->first == doc.editor->document().version() &&
+                                                        doc.check.fragment->second);
         checking.ask(doc, Kind::Check, ALTextPos(), ALTextPos());
         ensure("a state put after it", *studio.asks[0].request.text == doc.editor->text() + "\ndefault{state_entry(){}}\n");
         ALScriptProblem unused = problem(0, "helper unused", ALScriptProblem::Severity::Warning);
@@ -798,9 +813,11 @@ namespace tut
         one.fixes                        = { fix("First", 0, 0, 7, "float") };
         checking.ask(doc, Kind::Check, ALTextPos(), ALTextPos());
         studio.asks[0].answered(answer(doc, { one, problem(2, "two") }));
+        ensure("asked for, made with the next frame", studio.waiting.count("a") == 1 && doc.shown.empty());
         std::vector<ALCodeEditor::Fix> fixes;
         checking.fixesOn(doc, 0, fixes);
-        ensure("one", fixes.size() == 1 && fixes[0].title == "First" && fixes[0].edits[0].second == "float");
+        ensure("made first: one", studio.waiting.empty() && fixes.size() == 1 && fixes[0].title == "First" &&
+               fixes[0].edits[0].second == "float");
         const Doc::Shown* shown = checking.shownOf(fixes[0].value);
         ensure("its problem", shown && shown->message == "one");
         fixes.clear();
@@ -1058,5 +1075,60 @@ namespace tut
         };
         ensure_equals("said const", inspect(1, 8, "integer count"), std::string("const integer count"));
         ensure_equals("another name is not", inspect(0, 8, "integer helper"), std::string("integer helper"));
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<18>()
+    {
+        set_test_name("the tab in front checked as soon as it is due; the others one a frame, the one due longest first");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    a        = tab("a");
+        Doc&                    b        = tab("b");
+        Doc&                    c        = tab("c");
+        services.front                   = 2;
+        checking.schedule(a, false);
+        checking.schedule(b, true);
+        checking.schedule(c, true);
+        a.check.analysisDue = 0.5;
+        checking.pump(1.0);
+        std::string asked;
+        for (const auto& one : studio.asks)
+        {
+            asked += one.request.id;
+        }
+        ensure_equals("in front, and the one due longest", asked, std::string("ca"));
+        checking.pump(1.0);
+        ensure("then the next", studio.asks.size() == 3 && studio.asks[2].request.id == "b");
+        checking.pump(1.0);
+        ensure_equals("and none again", studio.asks.size(), size_t(3));
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<19>()
+    {
+        set_test_name("the tip and the inspector ask the same question: the second of a word, as the text stands, told what the first was");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a");
+        checking.ask(doc, Kind::Hover, ALTextPos(0, 8), ALTextPos(0, 8));
+        ensure_equals("the tip asks", studio.asks.size(), size_t(1));
+        ALScriptAnalysis::Result said;
+        said.kind        = Kind::Hover;
+        said.id          = "a";
+        said.version     = version(doc);
+        said.line        = 0;
+        said.column      = 8;
+        said.hover.found = true;
+        said.hover.label = "integer count";
+        studio.asks[0].answered(said);
+        checking.ask(doc, Kind::Inspect, ALTextPos(0, 10), ALTextPos(0, 10));
+        ensure_equals("the inspector, of the same word: not asked", studio.asks.size(), size_t(1));
+        ensure_equals("but told", studio.told.back(), std::string("inspect a 0:10"));
+        ensure_equals("what the tip was", studio.labels.back(), std::string("integer count"));
+        checking.ask(doc, Kind::Inspect, ALTextPos(1, 0), ALTextPos(1, 0));
+        ensure_equals("another word: asked", studio.asks.size(), size_t(2));
+        doc.editor->setCaret(ALTextPos(0, 0));
+        doc.editor->insertText(" ");
+        checking.ask(doc, Kind::Inspect, ALTextPos(0, 10), ALTextPos(0, 10));
+        ensure_equals("typed in since: asked", studio.asks.size(), size_t(3));
     }
 }
