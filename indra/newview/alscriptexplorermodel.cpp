@@ -27,6 +27,7 @@
 #include "alscriptexplorermodel.h"
 
 #include "alstringmatch.h"
+#include "llsdutil_math.h"
 
 #include <algorithm>
 #include <set>
@@ -51,6 +52,12 @@ std::optional<ALScriptExplorerModel::Choice> ALScriptExplorerModel::Choice::of(c
         row.prim = row.root;
     }
     return row;
+}
+
+namespace
+{
+    // How far a pinned object goes before its pin keeps the new place.
+    constexpr F64 PIN_MOVED_METERS = 16.0;
 }
 
 // --- what is listed ----------------------------------------------------------------
@@ -78,9 +85,11 @@ void ALScriptExplorerModel::list(const Listing& listing)
             return already;
         }
         Object one;
-        one.root  = root;
-        one.name  = seen->prims.front().name;
-        one.named = !one.name.empty();
+        one.root     = root;
+        one.name     = seen->prims.front().name;
+        one.named    = !one.name.empty();
+        one.position = seen->position;
+        one.region   = seen->region;
         if (!one.named && listing.nameless)
         {
             one.name = listing.nameless(one.root);
@@ -88,9 +97,10 @@ void ALScriptExplorerModel::list(const Listing& listing)
         for (const Seen::Part& part : seen->prims)
         {
             Prim prim;
-            prim.id    = part.id;
-            prim.name  = part.id == root ? one.name : part.name;
-            prim.named = part.id == root ? one.named : !part.name.empty();
+            prim.id     = part.id;
+            prim.name   = part.id == root ? one.name : part.name;
+            prim.named  = part.id == root ? one.named : !part.name.empty();
+            prim.modify = part.modify;
             one.prims.push_back(std::move(prim));
         }
         if (one.prims.size() > LARGE_LINKSET)
@@ -109,19 +119,30 @@ void ALScriptExplorerModel::list(const Listing& listing)
         mObjects.push_back(std::move(one));
         return &mObjects.back();
     };
-    for (const Pin& pin : mPins)
+    for (Pin& pin : mPins)
     {
         if (Object* object = add(pin.root))
         {
             object->pinned = true;
+            // Its place kept for when it is away: said to be kept where it
+            // is another region's, or has gone far, not at every step.
+            if (object->position &&
+                (!pin.position || pin.region != object->region || (*pin.position - *object->position).magVec() > PIN_MOVED_METERS))
+            {
+                pin.position = object->position;
+                pin.region   = object->region;
+                mPinsChanged = true;
+            }
         }
         else if (!known(pin.root))
         {
             Object away;
-            away.root    = pin.root;
-            away.name    = pin.name.empty() ? listing.unnamed : pin.name;
-            away.pinned  = true;
-            away.present = false;
+            away.root     = pin.root;
+            away.name     = pin.name.empty() ? listing.unnamed : pin.name;
+            away.pinned   = true;
+            away.present  = false;
+            away.position = pin.position;
+            away.region   = pin.region;
             mObjectAt.emplace(away.root, mObjects.size());
             mObjects.push_back(std::move(away));
         }
@@ -347,6 +368,7 @@ std::vector<ALScriptExplorerModel::Row> ALScriptExplorerModel::rows(const std::s
         row.many    = many;
         row.unnamed = object.present && !object.named;
         row.known   = many || object.prims.empty() || mIndex.fetched(object.prims.front().id);
+        row.region  = object.region;
         out.push_back(row);
         // A linkset's prims known to hold nothing, but its root, under one
         // row after the rest, folded until opened: there to drop into, and
@@ -368,8 +390,9 @@ std::vector<ALScriptExplorerModel::Row> ALScriptExplorerModel::rows(const std::s
                 group.empties          = empties;
                 out.push_back(group);
             }
-            for (const Prim& prim : object.prims)
+            for (size_t index = 0; index < object.prims.size(); ++index)
             {
+                const Prim& prim = object.prims[index];
                 if (grouped && holds_nothing(prim) != (pass == 1))
                 {
                     continue;
@@ -395,6 +418,7 @@ std::vector<ALScriptExplorerModel::Row> ALScriptExplorerModel::rows(const std::s
                     line.folded  = filter.empty() && mFoldedPrims.contains(prim.id);
                     line.unnamed = object.present && !prim.named;
                     line.known   = mIndex.fetched(prim.id);
+                    line.link    = static_cast<S32>(index) + 1;
                     out.push_back(line);
                 }
                 for (const Item& item : items)
@@ -416,12 +440,56 @@ std::vector<ALScriptExplorerModel::Row> ALScriptExplorerModel::rows(const std::s
                     line.script          = item.script;
                     line.lua             = item.lua;
                     line.ref             = ALScriptRef(prim.id, item.id);
+                    line.noCopy          = !item.copy;
+                    line.noModify        = !item.modify;
                     out.push_back(line);
                 }
             }
         }
     }
     return out;
+}
+
+std::optional<ALScriptWorkspace::Item> ALScriptExplorerModel::itemAt(const ALScriptRef& ref) const
+{
+    for (const Item& item : mIndex.items(ref.object))
+    {
+        if (item.id == ref.item)
+        {
+            return item;
+        }
+    }
+    return std::nullopt;
+}
+
+bool ALScriptExplorerModel::primModifiable(const LLUUID& prim) const
+{
+    for (const Object& object : mObjects)
+    {
+        for (const Prim& one : object.prims)
+        {
+            if (one.id == prim)
+            {
+                return one.modify;
+            }
+        }
+    }
+    return true;
+}
+
+S32 ALScriptExplorerModel::linkNumber(const LLUUID& prim) const
+{
+    for (const Object& object : mObjects)
+    {
+        for (size_t index = 0; index < object.prims.size(); ++index)
+        {
+            if (object.prims[index].id == prim)
+            {
+                return object.prims.size() > 1 ? static_cast<S32>(index) + 1 : 0;
+            }
+        }
+    }
+    return 0;
 }
 
 // --- folding -----------------------------------------------------------------------
@@ -579,8 +647,21 @@ void ALScriptExplorerModel::togglePinned(const LLUUID& root, const std::string& 
     }
     else
     {
-        mPins.push_back(Pin{ root, name });
+        // With the place it is at, where it is seen.
+        Pin pin{ root, name };
+        if (const Object* object = objectAt(root))
+        {
+            pin.position = object->position;
+            pin.region   = object->region;
+        }
+        mPins.push_back(std::move(pin));
     }
+}
+
+const ALScriptExplorerModel::Pin* ALScriptExplorerModel::pinOf(const LLUUID& root) const
+{
+    const auto found = std::find_if(mPins.begin(), mPins.end(), [&root](const Pin& pin) { return pin.root == root; });
+    return found != mPins.end() ? &*found : nullptr;
 }
 
 void ALScriptExplorerModel::pin(const std::vector<Choice>& rows)
@@ -610,6 +691,11 @@ void ALScriptExplorerModel::saveState(LLSD& state) const
         LLSD one;
         one["id"]   = pin.root;
         one["name"] = pin.name;
+        if (pin.position)
+        {
+            one["position"] = ll_sd_from_vector3d(*pin.position);
+            one["region"]   = pin.region;
+        }
         pinned.append(one);
     }
     state["pinned"] = pinned;
@@ -627,7 +713,13 @@ void ALScriptExplorerModel::readState(const LLSD& state)
         const LLUUID id = (*it)["id"].asUUID();
         if (id.notNull() && !isPinned(id))
         {
-            mPins.push_back(Pin{ id, (*it)["name"].asString() });
+            Pin pin{ id, (*it)["name"].asString() };
+            if ((*it).has("position"))
+            {
+                pin.position = ll_vector3d_from_sd((*it)["position"]);
+                pin.region   = (*it)["region"].asString();
+            }
+            mPins.push_back(std::move(pin));
         }
     }
 }
