@@ -151,6 +151,9 @@ namespace tut
         }
 
         std::string caretText() const { return llformat("%d:%d", editor->caret().line, editor->caret().column); }
+        // A : line run as it is written, which keys() would read <Esc> in
+        // as the key.
+        void ex(const char* line) { vim->takeLine(*editor, ':', line, true); }
 
         // The local point of a column on a line, in the middle of its row.
         void pointOf(S32 line, S32 column, S32& x, S32& y)
@@ -205,7 +208,9 @@ namespace tut
         }
     };
 
-    typedef test_group<alvimkeymap_data> alvimkeymap_group;
+    // More than TUT's fifty a group holds by default, which runs the first
+    // fifty and says nothing of the rest: keep this above the highest test.
+    typedef test_group<alvimkeymap_data, 100> alvimkeymap_group;
     typedef alvimkeymap_group::object    alvimkeymap_object;
     alvimkeymap_group                    alvimkeymap_group_instance("alvimkeymap");
 
@@ -762,6 +767,21 @@ namespace tut
         ensure_equals("%[] under \\v", flat(e.text()), std::string("Z Z Z aaab|"));
         keys(":s/\\va{-2,}/Q/<CR>");
         ensure_equals("{-n,} under \\v is lazy: the fewest", flat(e.text()), std::string("Z Z Z Qab|"));
+        // A place that passes over the first match: the replacement is
+        // still the kept match's own, groups and all.
+        e.setText("foobar foobaz foobaq\n");
+        vim->handleKey(e, KEY_ESCAPE, MASK_NONE);
+        keys("0wve<Esc>:s/\\%Vfoo\\zs\\(ba.\\)/[&\\1]/g<CR>");
+        ensure_equals("\\%V passing over a \\zs match: & and \\1 are the kept one's", flat(e.text()), std::string("foobar foo[bazbaz] foobaq|"));
+        // After a top-level \zs, & is what the match is, and the groups
+        // are counted as they were written, one before the \zs too.
+        e.setText("foobar\n");
+        vim->handleKey(e, KEY_ESCAPE, MASK_NONE);
+        keys(":s/foo\\zsbar/[&]/<CR>");
+        ensure_equals("& after \\zs is the match alone", flat(e.text()), std::string("foo[bar]|"));
+        e.setText("foobar\n");
+        keys(":s/\\(f\\)oo\\zs\\(bar\\)/[\\2\\1&]/<CR>");
+        ensure_equals("a group before \\zs is still \\1", flat(e.text()), std::string("foo[barfbar]|"));
     }
     template<> template<>
     void alvimkeymap_object::test<19>()
@@ -845,11 +865,11 @@ namespace tut
         keys(":%s/x\\nb/Q/c<CR>");
         ensure_equals("the question says how many lines", vim->status(), std::string("replace with Q (over 2 lines) (y/n/a/q/l)?"));
         keys("q");
-        // The lines are run from the last up: the last gathers its edit,
-        // the one before errors.
-        keys(":g/a/s/z/Z/c<CR>");
+        // The lines are run from the top down: the first gathers its
+        // edit, the next errors.
+        keys(":g/a/s/x/X/c<CR>");
         ensure("not asking", vim->mode() == ALVimKeymap::Mode::Normal);
-        ensure_equals("the error, and that nothing was done", vim->message(), std::string("E486: Pattern not found: z -- nothing substituted"));
+        ensure_equals("the error, and that nothing was done", vim->message(), std::string("E486: Pattern not found: x -- nothing substituted"));
         ensure_equals("nothing was", flat(e.text()), std::string("a x|b|a y|a z|"));
     }
     template<> template<>
@@ -922,7 +942,7 @@ namespace tut
         S32           caret = 0;
         std::vector<std::string> items;
         S32                      chosen = -1;
-        vim->hooks().complete = [](ALTextView&, const std::string& command, std::vector<std::string>& out) {
+        vim->hooks().complete = [](ALTextView&, const std::string& command, const std::string&, std::vector<std::string>& out) {
             if (command.empty())
             {
                 out.push_back("write");
@@ -960,8 +980,9 @@ namespace tut
         // An argument: what the command takes, the host's and the
         // keymap's own; a range in front does not confuse the name.
         keys(":%set no<Tab>");
-        ensure("the options starting no", vim->typingLine(line, caret) && line == ":%set noexpandtab" && vim->menu(items, chosen) && items.size() == 5);
-        keys("<Tab><Tab>");
+        ensure("the options starting no",
+               vim->typingLine(line, caret) && line == ":%set noexpandtab" && vim->menu(items, chosen) && items.size() == 8);
+        keys("<Tab><Tab><Tab><Tab>");
         ensure("nonumber among them", vim->typingLine(line, caret) && line == ":%set nonumber");
         // Typing on keeps what is on the line and lets the row go.
         keys("x");
@@ -1341,5 +1362,1164 @@ namespace tut
         composed('x');
         keys("<Esc>");
         ensure_equals("composed in insert mode", flat(e.text()), std::string("x|") + flat(was));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<38>()
+    {
+        set_test_name("r<CR> breaks the line -- one break for a count, indented as a Return would -- and Enter and Tab are what a waiting command takes");
+        make("    one two");
+        keys("0ft");
+        ensure_equals("on the word", caretText(), std::string("0:8"));
+        keys("h");
+        keys("r<CR>");
+        ensure_equals("the space a line break, the new line indented", flat(editor->text()), std::string("    one|    two"));
+        ensure_equals("the caret on its first word", caretText(), std::string("1:4"));
+
+        make("abcdef");
+        keys("l3r<CR>");
+        ensure_equals("three characters, one break", flat(editor->text()), std::string("a|ef"));
+
+        make("a b");
+        keys("lr<Tab>");
+        ensure_equals("a tab for the space", editor->text(), std::string("a\tb"));
+        keys("0f<Tab>");
+        ensure_equals("found by f", caretText(), std::string("0:1"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<39>()
+    {
+        set_test_name("`.` and a macro type an insert's Return, Tab and Backspace again");
+        make("x");
+        keys("ofoo<CR>bar<Esc>");
+        ensure_equals("inserted", flat(editor->text()), std::string("x|foo|bar"));
+        keys(".");
+        ensure_equals("both lines again", flat(editor->text()), std::string("x|foo|bar|foo|bar"));
+
+        make("aaaa");
+        keys("s1<CR>2<Esc>");
+        ensure_equals("substituted", flat(editor->text()), std::string("1|2aaa"));
+        keys("l.");
+        ensure_equals("and again, the break with it", flat(editor->text()), std::string("1|21|2aa"));
+
+        make("pq<BS>");
+        keys("Ayz<BS><Esc>");
+        ensure_equals("a backspace", editor->text(), std::string("pq<BS>y"));
+        keys(".");
+        ensure_equals("typed again", editor->text(), std::string("pq<BS>yy"));
+
+        make("p\nq");
+        keys("qaA!<CR>-<Esc>q");
+        ensure_equals("recorded as typed", flat(editor->text()), std::string("p!|-|q"));
+        keys("G@a");
+        ensure_equals("played with its break", flat(editor->text()), std::string("p!|-|q!|-"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<40>()
+    {
+        set_test_name("gt, gT and Ctrl-^ ask the host for its tabs as :tabnext, :tabprevious and :buffer, with the count");
+        make("a\nb");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("gt3gtgT2gT<C-6>4<C-6>");
+        ensure("each as its command",
+               heard == std::vector<std::string>{ "tabnext|", "tabnext|3", "tabprevious|", "tabprevious|2", "buffer|#", "buffer|4" });
+        heard.clear();
+        keys("dgt");
+        ensure("not after an operator", heard.empty());
+        ensure_equals("nothing changed", flat(editor->text()), std::string("a|b"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<41>()
+    {
+        set_test_name("Tab on the : line tells the host the word typed, which a file's folder is read by");
+        make("x");
+        std::vector<std::string> asked;
+        vim->hooks().complete = [&asked](ALTextView&, const std::string& command, const std::string& typed, std::vector<std::string>& out) {
+            asked.push_back(command + "|" + typed);
+            if (command == "e")
+            {
+                out.push_back("scripts/");
+                out.push_back("other/");
+            }
+        };
+        keys(":e sc<Tab>");
+        ensure("the command and the word", asked == std::vector<std::string>{ "e|sc" });
+        ensure_equals("completed from what it gave", vim->commandLine(), std::string("e scripts/"));
+        keys("<Esc>:e scripts/fo<Tab>");
+        ensure_equals("a folder's word whole", asked.back(), std::string("e|scripts/fo"));
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<42>()
+    {
+        set_test_name("vim's jumps set '' and tell the host where they began: G, gg, %, a search, a mark, a line on the : line; not j, w or an operator's");
+        make("one (x)\ntwo\nthree\nfour");
+        std::vector<ALTextPos> from;
+        vim->hooks().jumped = [&from](ALTextView&, const ALTextPos& at) { from.push_back(at); };
+        keys("G");
+        ensure("G from where it was", from == std::vector<ALTextPos>{ ALTextPos(0, 0) });
+        keys("''");
+        ensure("'' back to it", editor->caret().line == 0 && from.back() == ALTextPos(3, 0));
+        keys("jl");
+        ensure("j and l are no jumps", from.size() == 2);
+        keys("gg");
+        ensure("gg", from.size() == 3 && from.back() == ALTextPos(1, 1));
+        keys("f(%");
+        ensure("%", from.size() == 4 && from.back() == ALTextPos(0, 4) && editor->caret() == ALTextPos(0, 6));
+        keys("/thr<CR>");
+        ensure("a search", from.size() == 5 && editor->caret().line == 2);
+        keys("mak:4<CR>");
+        ensure("a line on the : line", from.size() == 6 && editor->caret().line == 3);
+        keys("'a");
+        ensure("a mark", from.size() == 7 && editor->caret().line == 2);
+        keys("dG");
+        ensure("not an operator's", from.size() == 7);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<43>()
+    {
+        set_test_name("Ctrl-O and Ctrl-I go back and forward, Ctrl-] and gd to the definition, Ctrl-T back from it, Ctrl-G and K: the host's");
+        make("x y");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("<C-o>2<C-o><C-i>");
+        editor->handleKeyHere(']', ALVimKeymap::CONTROL);
+        keys("gd<C-t><C-g>K");
+        ensure("each as the host's",
+               heard == std::vector<std::string>{ "back|", "back|", "back|", "forward|", "tag|", "tag|", "pop|", "file|", "reference|" });
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<44>()
+    {
+        set_test_name(":registers and :marks list what is held and set, as vim lists them, to the host's listing");
+        make("one\n\ttwo three");
+        std::vector<std::string> listed;
+        vim->hooks().listing = [&listed](ALTextView&, const std::string& text) { listed.push_back(text); };
+        keys("yyj\"ayw");
+        keys(":registers<CR>");
+        ensure_equals("one listing", listed.size(), size_t(1));
+        ensure("the heading", listed[0].compare(0, 17, "Type Name Content") == 0);
+        ensure("a yank of lines", listed[0].find("\n  l  \"0   one^J") != std::string::npos);
+        ensure("a named one, of characters, a tab as ^I", listed[0].find("\n  c  \"a   ^I") != std::string::npos);
+        ensure("the last : line", listed[0].find("\n  c  \":   registers") != std::string::npos);
+        keys(":di a<CR>");
+        ensure("only those named", listed[1].find("\"0") == std::string::npos && listed[1].find("\"a") != std::string::npos);
+
+        keys("mb:marks<CR>");
+        ensure_equals("marks", listed[2], std::string("mark line  col file/text\n b      2    0 two three"));
+        keys("G");
+        keys(":marks<CR>");
+        ensure("a jump's", listed[3].find("\n '      2    0 two three") != std::string::npos);
+
+        vim->hooks().listing = nullptr;
+        keys(":reg<CR>");
+        ensure_equals("without a host, the heading said", vim->message(), std::string("Type Name Content"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<45>()
+    {
+        set_test_name("a host's command named with underscores is one name on the : line, typed or completed");
+        make("x");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        vim->hooks().complete = [](ALTextView&, const std::string& command, const std::string&, std::vector<std::string>& out) {
+            if (command.empty())
+            {
+                out.push_back("go_to_line");
+            }
+        };
+        keys(":go_to_line<CR>:save_all!<CR>");
+        ensure("whole, with a bang", heard == std::vector<std::string>{ "go_to_line|", "save_all!|" });
+        keys(":go_<Tab>");
+        ensure_equals("completed from the underscore on", vim->commandLine(), std::string("go_to_line"));
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<46>()
+    {
+        set_test_name("gf runs :find on the name under the caret: a quoted one it is in or before on the line, else the file name around it");
+        make("#include \"lib/util.lsl\"\nlocal m = require('mod') -- x\nsee docs/read_me.txt now\n   \n");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("gf");
+        ensure_equals("the include's, from before it", heard.back(), std::string("find|lib/util.lsl"));
+        keys("fugf");
+        ensure_equals("from inside it", heard.back(), std::string("find|lib/util.lsl"));
+        keys("jgf");
+        ensure_equals("a require's", heard.back(), std::string("find|mod"));
+        keys("j0fdgf");
+        ensure_equals("a path in the text", heard.back(), std::string("find|docs/read_me.txt"));
+        const size_t asked = heard.size();
+        keys("jgf");
+        ensure("nothing there", heard.size() == asked);
+        ensure_equals("said", vim->message(), std::string("E446: No file name under cursor"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<47>()
+    {
+        set_test_name("]d and [d step through the problems as :cnext and :cprevious; grn, grr and gra are the editor's; gO the host's symbols");
+        ALCodeEditor&            e = make("integer count = 1;\ncount = 2;\n");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("]d3]d[d2[dgO");
+        ensure("each as the host's",
+               heard == std::vector<std::string>{ "cnext|", "cnext|3", "cprevious|", "cprevious|2", "go_to_symbol|" });
+        std::vector<ALEditorCommand> asked;
+        e.setSymbolRequest([&asked](ALEditorCommand command, const ALTextRange&) { asked.push_back(command); });
+        keys("grngrr");
+        ensure("rename and the references",
+               asked == std::vector<ALEditorCommand>{ ALEditorCommand::Rename, ALEditorCommand::FindReferences });
+        e.setFixProvider([](S32, std::vector<ALCodeEditor::Fix>& out) {
+            ALCodeEditor::Fix fix;
+            fix.title = "Put it right";
+            out.push_back(fix);
+        });
+        keys("gra");
+        ensure("the fixes at the caret", e.fixesOpen());
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<48>()
+    {
+        set_test_name("gc comments lines as Toggle Comment does: gcc a line, 2gcc two, gc with a motion, gc over a visual selection, and . again");
+        ALCodeEditor& e = make("one;\ntwo;\nthree;\nfour;\n");
+        keys("gcc");
+        ensure("the line", e.document().line(0).compare(0, 2, "//") == 0 && e.document().line(1) == "two;");
+        keys("gcc");
+        ensure_equals("and back", e.document().line(0), std::string("one;"));
+        keys("jgcj");
+        ensure("with a motion, its lines", e.document().line(1).compare(0, 2, "//") == 0 && e.document().line(2).compare(0, 2, "//") == 0 &&
+                                               e.document().line(3) == "four;");
+        keys(".");
+        ensure_equals(". again", flat(e.text()), std::string("one;|two;|three;|four;|"));
+        keys("gg2gcc");
+        ensure("a count", e.document().line(1).compare(0, 2, "//") == 0 && e.document().line(2) == "three;");
+        keys("u");
+        ensure_equals("one step to undo", flat(e.text()), std::string("one;|two;|three;|four;|"));
+        keys("ggVjjgc");
+        ensure("a visual selection's lines",
+               e.document().line(0).compare(0, 2, "//") == 0 && e.document().line(2).compare(0, 2, "//") == 0 && e.document().line(3) == "four;");
+        ensure("visual left", vim->mode() == ALVimKeymap::Mode::Normal);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<49>()
+    {
+        set_test_name("zc zo za zM zR fold the code editor's blocks; zj and zk move between them; [z and ]z to the ends of the one around");
+        ALCodeEditor& e = make("default\n{\n    state_entry()\n    {\n        x();\n    }\n"
+                               "    touch_start(integer n)\n    {\n        y();\n    }\n}\n");
+        keys("3G");
+        keys("zc");
+        ensure("closed", e.isFolded(2));
+        keys("zo");
+        ensure("open", !e.isFolded(2));
+        keys("za");
+        ensure("za closes", e.isFolded(2));
+        keys("za");
+        ensure("and opens", !e.isFolded(2));
+        keys("zM");
+        ensure("every block", e.isFolded(0));
+        keys("zR");
+        ensure("none", !e.isFolded(0) && !e.isFolded(2) && !e.isFolded(6));
+        keys("gg");
+        keys("zj");
+        ensure_equals("zj to the next block's start", e.caret().line, 2);
+        keys("zj");
+        ensure_equals("and the next", e.caret().line, 6);
+        keys("zk");
+        ensure_equals("zk to the end of the one above", e.caret().line, 5);
+        keys("5G]z");
+        ensure_equals("]z the end of the block around", e.caret().line, 5);
+        keys("[z");
+        ensure_equals("[z its start", e.caret().line, 2);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<50>()
+    {
+        set_test_name("]s and [s go to the misspelled words round past the ends; z= puts one right by a count or a pick; zg and no spell check say why");
+        ALCodeEditor& e = make("teh cat\nfine\nsecond teh\n", "text");
+        keys("]s");
+        ensure_equals("no spell check: said", vim->message(), std::string("E756: Spell checking is not enabled"));
+        e.setSpellChecker([](const std::string& word) { return word != "teh"; },
+                          [](const std::string&, std::vector<std::string>& out) {
+                              out.push_back("the");
+                              out.push_back("ten");
+                          });
+        e.setSpellCheck(true);
+        keys("]s");
+        ensure("the next", e.caret() == ALTextPos(2, 7));
+        keys("]s");
+        ensure("round past the end", e.caret() == ALTextPos(0, 0));
+        keys("[s");
+        ensure("and back past the start", e.caret() == ALTextPos(2, 7));
+        keys("2z=");
+        ensure_equals("by a count", e.document().line(2), std::string("second ten"));
+        std::vector<std::string>            offered;
+        std::function<void(size_t)>         chose;
+        vim->hooks().pick = [&](ALTextView&, const std::string&, const std::vector<std::string>& items,
+                                std::function<void(size_t)> chosen) {
+            offered = items;
+            chose   = std::move(chosen);
+        };
+        keys("gg");
+        keys("z=");
+        ensure("offered", offered == std::vector<std::string>{ "the", "ten" });
+        chose(0);
+        ensure_equals("picked", e.document().line(0), std::string("the cat"));
+        keys("z=");
+        ensure_equals("a word spelled right has none", vim->message(), std::string("Sorry, no suggestions"));
+        keys("jzg");
+        ensure_equals("only the viewer's dictionary takes a word", vim->message(), std::string("E764: Cannot add this word"));
+
+        // The one misspelling on the caret's own line, behind it: round the
+        // whole text back to it.
+        e.setText("x teh y teh");
+        e.setCaret(ALTextPos(0, 6));
+        keys("]s");
+        ensure("the next after the caret", e.caret() == ALTextPos(0, 8));
+        keys("]s");
+        ensure("round to its own line's first", e.caret() == ALTextPos(0, 2));
+        keys("[s");
+        ensure("and back round to its last", e.caret() == ALTextPos(0, 8));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<51>()
+    {
+        set_test_name(":set nohlsearch leaves a search's matches unlit, and clears them; :set hlsearch lights them again");
+        ALCodeEditor& e = make("x a x b x\n");
+        keys("/x<CR>");
+        ensure_equals("lit", e.highlights().size(), size_t(3));
+        keys(":set nohls<CR>");
+        ensure("cleared", e.highlights().empty());
+        keys("/x<CR>");
+        ensure("left unlit", e.highlights().empty());
+        keys(":set hlsearch<CR>n");
+        ensure_equals("lit again", e.highlights().size(), size_t(3));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<52>()
+    {
+        set_test_name("gn selects the last search's match here or next, and an operator takes it: cgn then . for the next; gN back");
+        ALCodeEditor& e = make("foo bar foo baz foo\n");
+        keys("/foo<CR>gg");
+        keys("cgnqux<Esc>");
+        ensure_equals("the first changed", e.document().line(0), std::string("qux bar foo baz foo"));
+        keys(".");
+        ensure_equals(". the next", e.document().line(0), std::string("qux bar qux baz foo"));
+        keys("dgn");
+        ensure_equals("dgn the last", e.document().line(0), std::string("qux bar qux baz "));
+        keys("u0gn");
+        ensure("gn: selected",
+               vim->mode() == ALVimKeymap::Mode::Visual && e.selection() == ALTextRange(ALTextPos(0, 16), ALTextPos(0, 19)));
+        keys("<Esc>$gN");
+        ensure("gN: the one it is in, or before", e.selection() == ALTextRange(ALTextPos(0, 16), ALTextPos(0, 19)));
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<53>()
+    {
+        set_test_name("gi inserts again where inserting last stopped, as the ^ mark keeps it through edits above");
+        ALCodeEditor& e = make("abc\ndef\n");
+        keys("A!<Esc>ggyyPG");
+        keys("gi?<Esc>");
+        ensure_equals("where it stopped, moved down a line", flat(e.text()), std::string("abc!|abc!?|def|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<54>()
+    {
+        set_test_name("g* and g# as * and # but not whole words; g_ the last non-blank; gp and gP leave the caret after what they put");
+        ALCodeEditor& e = make("foo foobar foo\n  abc  \nx\n");
+        keys("*");
+        ensure("* whole words only", e.caret() == ALTextPos(0, 11));
+        keys("gg0g*");
+        ensure("g* in foobar too", e.caret() == ALTextPos(0, 4));
+        keys("jg_");
+        ensure("g_ the last non-blank", e.caret() == ALTextPos(1, 4));
+        keys("0dg_");
+        ensure_equals("and an operator's", e.document().line(1), std::string("  "));
+        keys("u");
+        keys("3Gyykgp");
+        ensure("gp: a line put, the caret on the line after it",
+               e.document().line(2) == "x" && e.document().line(3) == "x" && e.caret().line == 3);
+        keys("ggywgP");
+        ensure("gP: characters put, the caret after them", e.document().line(0) == "foo foo foobar foo" && e.caret() == ALTextPos(0, 4));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<55>()
+    {
+        set_test_name("[( [{ ]) ]} go to the bracket the caret is inside of, a count out, across lines; and are an operator's, exclusive");
+        ALCodeEditor& e = make("f(a, g(b), c)\n{\n  x { y }\n  z\n}\n");
+        keys("fb");
+        keys("[(");
+        ensure("the g's", e.caret() == ALTextPos(0, 6));
+        keys("fb2[(");
+        ensure("two out", e.caret() == ALTextPos(0, 1));
+        keys("fb])");
+        ensure("the close after it", e.caret() == ALTextPos(0, 8));
+        keys("0fad])");
+        ensure_equals("up to the close, not it", e.document().line(0), std::string("f()"));
+        keys("3G0fy[{");
+        ensure("an inner brace", e.caret() == ALTextPos(2, 4));
+        keys("j]}");
+        ensure("an outer one, across lines", e.caret() == ALTextPos(4, 0));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<56>()
+    {
+        set_test_name("insert mode's Ctrl-O runs one command of normal mode and inserts again; Ctrl-V puts in the next key as it is");
+        ALCodeEditor& e = make("abc\n");
+        keys("A<C-o>");
+        ensure("one command waits", vim->mode() == ALVimKeymap::Mode::Normal && vim->status().find("-- (insert) --") != std::string::npos);
+        keys("0");
+        ensure("then inserting", vim->mode() == ALVimKeymap::Mode::Insert);
+        keys("X<Esc>");
+        ensure_equals("where the command left it", e.document().line(0), std::string("Xabc"));
+        keys("A<C-o>:s/a/Y/<CR>");
+        ensure("after a : line too", vim->mode() == ALVimKeymap::Mode::Insert && e.document().line(0) == "XYbc");
+        keys("<Esc>");
+
+        make("\n");
+        keys("i<C-v><Tab>x<C-v>u00e9<C-v>(<Esc>");
+        ensure_equals("a tab, an e by its code, a bracket alone", editor->document().line(0), std::string("\tx\xC3\xA9("));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<57>()
+    {
+        set_test_name("the search line lights what is typed so far, as incsearch has it; Escape lets it go; :set noincsearch leaves it alone");
+        ALCodeEditor& e = make("abc\nxyz\nabd\n");
+        keys("/ab");
+        ensure_equals("each match lit as typed", e.highlights().size(), size_t(2));
+        ensure("the caret where it was", e.caret() == ALTextPos(0, 0));
+        keys("c");
+        ensure_equals("fewer as it narrows", e.highlights().size(), size_t(1));
+        keys("<Esc>");
+        ensure("let go of", e.highlights().empty() && e.caret() == ALTextPos(0, 0));
+        keys(":set nois<CR>/ab");
+        ensure("not lit where it is off", e.highlights().empty());
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<58>()
+    {
+        set_test_name("a search's offset: /x/e and e-1 by its end, s+1 and b by its start, +1 lines on; n keeps it, going on from the match");
+        ALCodeEditor& e = make("one foo two\nthree foo four\nfive foo\n");
+        keys("/foo/e<CR>");
+        ensure("its last character", e.caret() == ALTextPos(0, 6));
+        keys("n");
+        ensure("n keeps it, the next match's", e.caret() == ALTextPos(1, 8));
+        keys("N");
+        ensure("N back to the one before", e.caret() == ALTextPos(0, 6));
+        keys("gg/foo/s+1<CR>");
+        ensure("one on from its start", e.caret() == ALTextPos(0, 5));
+        keys("gg/foo/e-1<CR>");
+        ensure("one back from its end", e.caret() == ALTextPos(0, 5));
+        keys("gg/foo/+1<CR>");
+        ensure("the line after it", e.caret() == ALTextPos(1, 0));
+        keys("n");
+        ensure("n: the line after the next", e.caret() == ALTextPos(2, 0));
+        keys("gg//b<CR>");
+        ensure("the last pattern with another offset", e.caret() == ALTextPos(0, 4));
+        keys("gg/foo/s-2<CR>");
+        ensure("two back from its start", e.caret() == ALTextPos(0, 2));
+        keys("n");
+        ensure("n from the match, not from before it", e.caret() == ALTextPos(1, 4));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<59>()
+    {
+        set_test_name(":join, :retab, :undo and :redo, :put, :mark and :k, :left, :right and :center");
+        ALCodeEditor& e = make("a\n  b\n  c\nd\n");
+        keys(":j<CR>");
+        ensure_equals(":j the line and the next", flat(e.text()), std::string("a b|  c|d|"));
+        keys(":u<CR>");
+        ensure_equals(":u", flat(e.text()), std::string("a|  b|  c|d|"));
+        keys(":red<CR>");
+        ensure_equals(":red", flat(e.text()), std::string("a b|  c|d|"));
+        keys(":u<CR>:1,3j!<CR>");
+        ensure_equals(":j! a range, the blanks kept", flat(e.text()), std::string("a  b  c|d|"));
+        keys("u:2j 3<CR>");
+        ensure_equals(":j with a count, from the range's last", flat(e.text()), std::string("a|  b c d|"));
+        keys("u");
+
+        e.setSoftTabs(false);
+        e.setTabWidth(2);
+        keys(":retab<CR>");
+        ensure_equals(":retab: tabs where the tabs are set so", flat(e.text()), std::string("a|\tb|\tc|d|"));
+        keys(":retab 4<CR>");
+        ensure_equals("a width given sets it first", flat(e.text()), std::string("a|  b|  c|d|"));
+        keys("u");
+
+        keys("gg\"xyy:3pu x<CR>");
+        ensure_equals(":put under the line", flat(e.text()), std::string("a|\tb|\tc|a|d|"));
+        keys(":1pu! x<CR>");
+        ensure_equals(":put! above it", flat(e.text()), std::string("a|a|\tb|\tc|a|d|"));
+
+        keys(":4ma q<CR>gg'q");
+        ensure_equals(":mark", e.caret().line, 3);
+        keys(":2k w<CR>gg'w");
+        ensure_equals(":k", e.caret().line, 1);
+
+        make("x\n   yy\n");
+        keys(":%le 2<CR>");
+        ensure_equals(":left", flat(editor->text()), std::string("  x|  yy|"));
+        keys(":2ri 6<CR>");
+        ensure_equals(":right", editor->document().line(1), std::string("    yy"));
+        keys(":2ce 6<CR>");
+        ensure_equals(":center", editor->document().line(1), std::string("  yy"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<60>()
+    {
+        set_test_name("g; and g, go back and on through the change list; '. is the last change; :changes lists them");
+        ALCodeEditor& e = make("a\nb\nc\nd\n");
+        keys("g;");
+        ensure_equals("none yet", vim->message(), std::string("E664: Changelist is empty"));
+        keys("jA!<Esc>3GA?<Esc>gg");
+        keys("g;");
+        ensure_equals("the newest", e.caret().line, 2);
+        keys("g;");
+        ensure_equals("the one before", e.caret().line, 1);
+        keys("g;");
+        ensure_equals("no older", vim->message(), std::string("E662: At start of changelist"));
+        keys("g,");
+        ensure_equals("newer again", e.caret().line, 2);
+        keys("gg'.");
+        ensure_equals("'. the last change's line", e.caret().line, 2);
+        std::vector<std::string> listed;
+        vim->hooks().listing = [&listed](ALTextView&, const std::string& text) { listed.push_back(text); };
+        keys(":changes<CR>");
+        ensure("listed", listed.size() == 1 && listed[0].compare(0, 21, "change line  col text") == 0 &&
+                             listed[0].find("\n>    0     3    1 c?") != std::string::npos);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<61>()
+    {
+        set_test_name("[[ ]] [m ]m go to the host's functions' starts, [] ][ [M ]M their ends; an operator takes them; af and if a function and its body");
+        ALCodeEditor& e = make("integer f(integer x)\n{\n    return x;\n}\ndefault\n{\n    state_entry()\n    {\n        f(1);\n    }\n"
+                               "    touch_start(integer n)\n    {\n        f(2);\n    }\n}\n");
+        e.setFunctionProvider([](std::vector<ALTextRange>& out) {
+            out = { ALTextRange(ALTextPos(10, 4), ALTextPos(13, 5)), ALTextRange(ALTextPos(0, 0), ALTextPos(3, 1)),
+                    ALTextRange(ALTextPos(6, 4), ALTextPos(9, 5)) };
+        });
+        keys("3G]]");
+        ensure("]] the next's start", e.caret() == ALTextPos(6, 4));
+        keys("]m");
+        ensure("]m the same", e.caret() == ALTextPos(10, 4));
+        keys("[[");
+        ensure("[[ back", e.caret() == ALTextPos(6, 4));
+        keys("2[m");
+        ensure("2[m two back", e.caret() == ALTextPos(0, 0));
+        keys("][");
+        ensure("][ its end", e.caret() == ALTextPos(3, 0));
+        keys("][");
+        ensure("and the next's", e.caret() == ALTextPos(9, 4));
+        keys("[]");
+        ensure("[] back", e.caret() == ALTextPos(3, 0));
+        keys("''");
+        ensure("a jump, as vim's are", e.caret() == ALTextPos(9, 4));
+
+        keys("9Gdaf");
+        ensure_equals("daf its lines", flat(e.text()),
+                      std::string("integer f(integer x)|{|    return x;|}|default|{|"
+                                  "    touch_start(integer n)|    {|        f(2);|    }|}|"));
+        keys("u9Gdif");
+        ensure_equals("dif its body, not the brace under its header", flat(e.text()),
+                      std::string("integer f(integer x)|{|    return x;|}|default|{|    state_entry()|    {|    }|"
+                                  "    touch_start(integer n)|    {|        f(2);|    }|}|"));
+        keys("u9Gvaf");
+        ensure("vaf selects its lines", vim->mode() == ALVimKeymap::Mode::VisualLine);
+        keys("<Esc>");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<62>()
+    {
+        set_test_name("mappings: keys that may be the start of one held and shown; typed as they are when what follows makes none, or the time runs out");
+        ALCodeEditor& e = make("abc\n");
+        ex("inoremap jk <Esc>");
+        keys("ijk");
+        ensure("jk left insert mode", vim->mode() == ALVimKeymap::Mode::Normal);
+        ensure_equals("nothing typed", flat(e.text()), std::string("abc|"));
+        keys("ijx");
+        ensure_equals("the j typed after all, then the x", flat(e.text()), std::string("jxabc|"));
+        keys("<Esc>");
+        ex("set timeoutlen=0");
+        keys("Aj");
+        ensure_equals("held, and shown after the mode", vim->status(), std::string("-- INSERT -- j"));
+        ensure_equals("not typed yet", flat(e.text()), std::string("jxabc|"));
+        vim->idle(e);
+        ensure_equals("typed once the time ran out", flat(e.text()), std::string("jxabcj|"));
+        ensure_equals("held no more", vim->status(), std::string("-- INSERT --"));
+        keys("<Esc>");
+        ex("set notimeout");
+        keys("Aj");
+        vim->idle(e);
+        ensure_equals("without the timeout it waits", flat(e.text()), std::string("jxabcj|"));
+        keys("k");
+        ensure("and the rest makes the mapping", vim->mode() == ALVimKeymap::Mode::Normal && flat(e.text()) == "jxabcj|");
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<63>()
+    {
+        set_test_name("mappings: map maps again and noremap does not, the leader, operator-pending's and the : line's own, and one that goes round");
+        ALCodeEditor& e = make("one two\nthree\nfour\n");
+        ex("nmap Q j");
+        ex("nmap W Q");
+        ex("nnoremap E W");
+        keys("W");
+        ensure_equals("W through Q to j", caretText(), std::string("1:0"));
+        keys("ggE");
+        ensure_equals("E is W itself, a WORD on", caretText(), std::string("0:4"));
+        ex("let mapleader = ','");
+        ex("nnoremap <leader>d dd");
+        keys(",");
+        ensure_equals("the leader held and shown", vim->status(), std::string(","));
+        keys("d");
+        ensure_equals("<leader>d is dd", flat(e.text()), std::string("three|four|"));
+        keys("u");
+        ensure_equals("undone as one", flat(e.text()), std::string("one two|three|four|"));
+        keys("gg,x");
+        ensure_equals("a leader nothing follows goes as it is: , then x", flat(e.text()), std::string("ne two|three|four|"));
+        ex("onoremap w iw");
+        keys("jldw");
+        ensure_equals("dw, with w the inner word after an operator", flat(e.text()), std::string("ne two||four|"));
+        ex("cnoremap <C-x> set ic");
+        keys(":<C-x>");
+        std::string line;
+        S32         caret = 0;
+        ensure("the : line's own", vim->typingLine(line, caret) && line == ":set ic");
+        keys("<CR>");
+        ensure("and it ran", vim->shared().ignoreCase);
+        ex("nmap K Kj");
+        keys("ggK");
+        ensure("what starts with its own keys does not map the first again", caretText() == "1:0" && !vim->messageIsError());
+        ex("nmap t dd");
+        keys("ggft");
+        ensure("the character f waits for is taken as it is", flat(e.text()) == "ne two||four|" && caretText() == "0:3");
+        ex("nmap a b");
+        ex("nmap b a");
+        keys("a");
+        ensure("round and round is stopped", vim->message().find("E223") != std::string::npos && vim->messageIsError());
+        ex("nunmap zz");
+        ensure("no such mapping", vim->message().find("E31") != std::string::npos);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<64>()
+    {
+        set_test_name("mappings: a macro records the keys typed and plays them through the mappings; :normal maps them, :normal! not; . repeats what one did");
+        ALCodeEditor& e = make("a\nb\nc\nd\n");
+        ex("inoremap jk <Esc>");
+        keys("qaAxjkq");
+        ensure_equals("typed", flat(e.text()), std::string("ax|b|c|d|"));
+        ensure_equals("the keys as they were typed", vim->registerText('a'), std::string("Axjk"));
+        keys("j@a");
+        ensure("played through the mapping", flat(e.text()) == "ax|bx|c|d|" && vim->mode() == ALVimKeymap::Mode::Normal);
+        ex("nnoremap Q dd");
+        ex("3normal Q");
+        ensure_equals(":normal maps", flat(e.text()), std::string("ax|bx|d|"));
+        ex("1normal! Q");
+        ensure_equals(":normal! does not", flat(e.text()), std::string("ax|bx|d|"));
+        keys("ggQ.");
+        ensure_equals(". does what the mapping did", flat(e.text()), std::string("d|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<65>()
+    {
+        set_test_name(":set takes several options, queries them and toggles them; the view's own set on a view");
+        ALCodeEditor& e = make("x\n");
+        ex("set ic scs tm=300");
+        ensure("all three", vim->shared().ignoreCase && vim->shared().smartCase && vim->shared().timeoutLength == 300);
+        ex("set ic? tm?");
+        ensure_equals("shown", vim->message(), std::string("  ignorecase    timeoutlen=300"));
+        ex("set invic scs!");
+        ensure("toggled", !vim->shared().ignoreCase && !vim->shared().smartCase);
+        ex("set tm=x");
+        ensure("a number wanted", vim->messageIsError() && vim->message().find("E474") != std::string::npos);
+        ex("set clipboard+=unnamed");
+        ensure("added to", vim->shared().unnamedClipboard);
+        ex("set clipboard-=unnamed");
+        ensure("taken from", !vim->shared().unnamedClipboard);
+        std::string shown;
+        std::string error;
+        ensure("tabstop", ALVimKeymap::setViewOption(e, "ts=2", shown, error) && e.getTabWidth() == 2 && error.empty());
+        ensure("shiftwidth shown", ALVimKeymap::setViewOption(e, "sw?", shown, error) && shown == "  shiftwidth=2");
+        ensure("expandtab", ALVimKeymap::setViewOption(e, "noet", shown, error) && !e.getSoftTabs());
+        ensure("out of reach", ALVimKeymap::setViewOption(e, "ts=99", shown, error) && !error.empty() && e.getTabWidth() == 2);
+        ensure("not a view's", !ALVimKeymap::setViewOption(e, "ic", shown, error));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<66>()
+    {
+        set_test_name("a vimrc: mappings, the leader and options taken, the host offered the rest, and what is not understood said by its line");
+        ALVimKeymap::Shared      shared;
+        std::vector<std::string> errors;
+        std::vector<std::string> offered;
+        const auto               host = [&offered](const std::string& option) {
+            offered.push_back(option);
+            return option == "nu";
+        };
+        const char* vimrc = "\" a comment\n"
+                            "set ignorecase smartcase ts=2 et\n"
+                            "let mapleader = \"\\<Space>\"\n"
+                            "nnoremap <leader>w :w<CR>\n"
+                            "inoremap jk <Esc>\n"
+                            "  :set nu\n"
+                            "syntax on\n"
+                            "silent! colorscheme desert\n"
+                            "set tm=300 notimeout\n"
+                            "\n"
+                            "set foo\n"
+                            "noremap Y\n"
+                            "   \\ y$\n";
+        ALVimKeymap::source(shared, vimrc, host, errors);
+        ensure("its options", shared.ignoreCase && shared.smartCase && shared.timeoutLength == 300 && !shared.timeout);
+        ensure("each editor's for the host to set", shared.viewOptions == std::vector<std::string>{ "ts=2", "et" });
+        ensure("the host offered them first, and its own", offered.size() == 4 && offered[2] == "nu" && offered[3] == "foo");
+        const ALVimMappings& maps = shared.mappings;
+        ensure("<leader>w with the leader a space", maps.match(ALVimMappings::NORMAL, maps.keysOf("<Space>w"), true).full != nullptr);
+        ensure("jk", maps.match(ALVimMappings::INSERT, maps.keysOf("jk"), true).full != nullptr);
+        const ALVimMappings::Match y = maps.match(ALVimMappings::VISUAL, maps.keysOf("Y"), true);
+        ensure("a line that goes on with a backslash", y.full && ALVimMappings::shown(y.full->to) == "y$");
+        ensure_equals("two not understood", errors.size(), size_t(2));
+        ensure("by their lines", errors[0].find("line 7:") == 0 && errors[0].find("E492") != std::string::npos &&
+                                     errors[1].find("line 11:") == 0 && errors[1].find("E518") != std::string::npos);
+
+        std::string listing;
+        std::string error;
+        shared.mappings.command("nnoremap", "Q gq", false, listing, error);
+        shared.command.push_back("s/a/b/");
+        errors.clear();
+        ALVimKeymap::source(shared, "nnoremap Z zz\n", host, errors);
+        ensure("read again, what it made before is gone", maps.match(ALVimMappings::INSERT, maps.keysOf("jk"), true).full == nullptr &&
+                                                            maps.match(ALVimMappings::NORMAL, maps.keysOf("Z"), true).full != nullptr);
+        ensure("and the leader vim's", maps.leader() == "\\");
+        ensure("one typed kept", maps.match(ALVimMappings::NORMAL, maps.keysOf("Q"), true).full != nullptr);
+        ensure("and the view's options it no longer sets", shared.viewOptions.empty());
+        const ALVimKeymap::Shared vims;
+        ensure("nor the mode's: those are vim's own again", shared.ignoreCase == vims.ignoreCase && shared.smartCase == vims.smartCase &&
+                                                              shared.timeout == vims.timeout && shared.timeoutLength == vims.timeoutLength);
+        ensure("the lines typed kept", shared.command == std::vector<std::string>{ "s/a/b/" });
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<67>()
+    {
+        set_test_name("surround: ys puts a pair round a motion's stretch, an opening bracket with spaces; ds takes it away, cs changes it; . again");
+        ALCodeEditor& e = make("say hello world\n");
+        keys("wysiw)");
+        ensure_equals("ysiw)", flat(e.text()), std::string("say (hello) world|"));
+        ensure_equals("the caret on the pair's start", caretText(), std::string("0:4"));
+        keys("ds)");
+        ensure_equals("ds)", flat(e.text()), std::string("say hello world|"));
+        keys("ysiw(");
+        ensure_equals("ysiw( has spaces inside", flat(e.text()), std::string("say ( hello ) world|"));
+        keys("ds(");
+        ensure_equals("ds( takes them too", flat(e.text()), std::string("say hello world|"));
+        keys("ysiw\"");
+        keys("cs\"'");
+        ensure_equals("cs\"'", flat(e.text()), std::string("say 'hello' world|"));
+        keys("$ysiw]");
+        ensure_equals("ysiw] on the last word", flat(e.text()), std::string("say 'hello' [world]|"));
+        keys("0.");
+        ensure_equals(". does it again here", flat(e.text()), std::string("[say] 'hello' [world]|"));
+        keys("ysiw");
+        ensure_equals("waiting for the character, said", vim->status(), std::string("ys"));
+        keys("<Esc>");
+        ensure("Escape lets it go", flat(e.text()) == "[say] 'hello' [world]|" && vim->status().empty());
+        keys("0x.");
+        ensure_equals("and the next command is one of its own, for . too", flat(e.text()), std::string("ay] 'hello' [world]|"));
+        keys("ysiwx");
+        ensure_equals("a letter is no pair", flat(e.text()), std::string("ay] 'hello' [world]|"));
+        keys("uuu");
+        ensure_equals("each undone as one step", flat(e.text()), std::string("say 'hello' [world]|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<68>()
+    {
+        set_test_name("surround: a count out, a mark's pair and a tag's taken away; yss the line's text; visual S round lines");
+        ALCodeEditor& e = make("((a) b)\n*bold* and <b>x</b>\n  line text  \none\ntwo\n");
+        keys("ll2ds)");
+        ensure_equals("2ds) the outer pair", flat(e.text()), std::string("(a) b|*bold* and <b>x</b>|  line text  |one|two|"));
+        keys("jlds*");
+        ensure_equals("ds* the marks either side", flat(e.text()), std::string("(a) b|bold and <b>x</b>|  line text  |one|two|"));
+        keys("$Fxdst");
+        ensure_equals("dst the tags", flat(e.text()), std::string("(a) b|bold and x|  line text  |one|two|"));
+        keys("3Gyss)");
+        ensure_equals("yss the line's text, its blanks outside", flat(e.text()), std::string("(a) b|bold and x|  (line text)  |one|two|"));
+        keys("4GVjS{");
+        ensure_equals("visual S round lines, on lines of their own", flat(e.text()),
+                      std::string("(a) b|bold and x|  (line text)  |{|one|two|}|"));
+        keys("2Gcsbx");
+        ensure_equals("no such pair: nothing", flat(e.text()), std::string("(a) b|bold and x|  (line text)  |{|one|two|}|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<69>()
+    {
+        set_test_name("every way into insert mode one step to undo, and none left open once escape leaves it: i a I A o O c C s S R gi and visual c");
+        ALCodeEditor& e = make("one two\nthree four\nfive six\n");
+        for (const char* seq : { "ix<Esc>", "ay<Esc>", "Iz<Esc>", "Aw<Esc>", "onew<Esc>", "Oup<Esc>", "cwX<Esc>", "ccY<Esc>", "CZ<Esc>",
+                                 "sQ<Esc>", "SR<Esc>", "Rab<Esc>", "giT<Esc>", "vlcU<Esc>", "3ihi<Esc>" })
+        {
+            const std::string before = flat(e.text());
+            keys(seq);
+            ensure(std::string(seq) + ": none left open", !e.undoJournal().inGroup());
+            keys("u");
+            ensure_equals(std::string(seq) + ": one step", flat(e.text()), before);
+            keys(seq);
+        }
+        const std::string before_x = flat(e.text());
+        keys("x");
+        keys("u");
+        ensure_equals("a command after is a step of its own", flat(e.text()), before_x);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<70>()
+    {
+        set_test_name("a mapping that feeds itself ends where a key of it fails, or at the keys one draining may feed, with E223");
+        ALCodeEditor& e = make("a\nb\nc\nd\n");
+        ex("nmap j jj");
+        keys("j");
+        ensure_equals("down until j fails on the last line, and back", caretText(), std::string("4:0"));
+        ensure("which is no error", !vim->messageIsError());
+        // One that never fails: an A put in, and itself again.
+        ex("nmap Q iA<Esc>Q");
+        keys("ggQ");
+        ensure("stopped: " + vim->message(), vim->messageIsError() && vim->message().find("E223") != std::string::npos);
+        ensure("having done what it did meanwhile", e.document().line(0).size() > 100);
+        // Stopped wherever the mapping was -- here in insert mode, as vim
+        // leaves it -- and a key typed after goes as typed.
+        keys("<Esc>");
+        ensure("vim takes keys again", vim->mode() == ALVimKeymap::Mode::Normal);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<71>()
+    {
+        set_test_name("a count of a macro stops at the first play whose f fails, and is one step to undo");
+        ALCodeEditor& e = make("a,b\nc,d\ne f\ng,h\n");
+        keys("qa0f,xxjq");
+        ensure_equals("recorded, done once", flat(e.text()), std::string("a|c,d|e f|g,h|"));
+        keys("100@a");
+        ensure_equals("the second play's f found no comma: it and the rest stopped", flat(e.text()), std::string("a|c|e f|g,h|"));
+        keys("u");
+        ensure_equals("undone as one step", flat(e.text()), std::string("a|c,d|e f|g,h|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<72>()
+    {
+        set_test_name("a macro of two hundred commands is one step to undo, and so is :normal over a range");
+        ALCodeEditor& e     = make((std::string(250, 'x') + "\none\ntwo\nthree\n").c_str());
+        std::string   macro = "qa";
+        for (int i = 0; i < 200; ++i)
+        {
+            macro += i % 2 ? "x" : "~";
+        }
+        macro += "q";
+        keys(macro.c_str());
+        const std::string recorded = e.text();
+        keys("0@a");
+        ensure("played", e.text() != recorded);
+        keys("u");
+        ensure_equals("one step back", e.text(), recorded);
+
+        ex("2,4normal Ax");
+        ensure_equals("each line", flat(e.text()).substr(recorded.find('\n')), std::string("|onex|twox|threex|"));
+        keys("u");
+        ensure_equals("one step back", e.text(), recorded);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<73>()
+    {
+        set_test_name("a line picked from q:'s window after vim went, or the tab, does nothing");
+        ALCodeEditor& e = make("one\n");
+        keys(":set number<CR>");
+        std::function<void(const std::string&, bool)> later;
+        const auto hold = [&later](ALTextView&, llwchar, const std::vector<std::string>&, std::function<void(const std::string&, bool)> chosen) {
+            later = std::move(chosen);
+        };
+        vim->hooks().historyWindow = hold;
+        keys("q:");
+        ensure("the window holds the pick", static_cast<bool>(later));
+        e.setModalKeymap(nullptr);
+        vim = nullptr;
+        later("set nonumber", true);
+        ensure("vim gone: nothing", !e.modalKeymap());
+
+        auto keymap = std::make_unique<ALVimKeymap>();
+        vim         = keymap.get();
+        e.setModalKeymap(std::move(keymap));
+        vim->hooks().historyWindow = hold;
+        later                      = nullptr;
+        keys(":set number<CR>q:");
+        ensure("held again", static_cast<bool>(later));
+        editor->die();
+        editor = nullptr;
+        LLMortician::updateClass();
+        later("set nonumber", true);
+        ensure("the tab gone: nothing", true);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<74>()
+    {
+        set_test_name("vim's Control motions: ^H left, ^J and ^N down, ^P up, ^M to the next line's first; ^L nothing; Tab forward in the jumps, indenting nothing");
+        ALCodeEditor&            e = make("one\n  two\nthree\nfour\n");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("gg<C-N>");
+        ensure_equals("^N down", e.caret().line, 1);
+        keys("<C-J>");
+        ensure_equals("^J down", e.caret().line, 2);
+        keys("<C-P>");
+        ensure_equals("^P up", e.caret().line, 1);
+        keys("$<C-H>");
+        ensure_equals("^H left", caretText(), std::string("1:3"));
+        keys("gg<C-M>");
+        ensure_equals("^M to the next line's first character", caretText(), std::string("1:2"));
+        keys("<C-L>");
+        keys("<Tab>");
+        ensure("Tab forward in the jump list", heard.size() == 1 && heard[0] == "forward|");
+        ensure_equals("and nothing indented, nothing changed", flat(e.text()), std::string("one|  two|three|four|"));
+        keys("ggd<C-N>");
+        ensure_equals("an operator takes them as it takes j", flat(e.text()), std::string("three|four|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<75>()
+    {
+        set_test_name("^W and a window command, as the host's tabs; ^W^W as ^Ww; one there is none of taken, and failed");
+        ALCodeEditor&            e = make("a\n");
+        std::vector<std::string> heard;
+        vim->hooks().command = [&heard](ALTextView&, const std::string& name, const std::string& args) {
+            heard.push_back(name + "|" + args);
+            return true;
+        };
+        keys("<C-W>q<C-W><C-W><C-W>W<C-W>o<C-W>n<C-W>p<C-W>c");
+        ensure("each the host's", heard == std::vector<std::string>({ "quit|", "tabnext|", "tabprevious|", "tabonly|", "tabnew|", "buffer|#", "close|" }));
+        heard.clear();
+        keys("<C-W>x");
+        ensure("a split there is none of: nothing asked", heard.empty());
+        ensure("and x not deleting", flat(e.text()) == "a|");
+        keys("<C-W><Esc>x");
+        ensure("Escape lets it go; x is x again", flat(e.text()) == "|" && heard.empty());
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<76>()
+    {
+        set_test_name("a Control letter vim has no use for: on the Mac nobody's, the editor's own under it too; elsewhere the window's");
+        ALCodeEditor& e = make("one two\n");
+        keys("w");
+#if LL_DARWIN
+        ensure("taken", e.handleKeyHere('K', ALVimKeymap::CONTROL));
+        ensure_equals("and the editor's ^K, to the line's end, not done", flat(e.text()), std::string("one two|"));
+        ensure("^S too", e.handleKeyHere('S', ALVimKeymap::CONTROL));
+#else
+        ensure("^S on to the window, which saves", !e.handleKeyHere('S', ALVimKeymap::CONTROL));
+        ensure("^K on to it, before a second key", !e.handleKeyHere('K', ALVimKeymap::CONTROL));
+        ensure_equals("nothing changed", flat(e.text()), std::string("one two|"));
+#endif
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<77>()
+    {
+        set_test_name("vim's search and block lit apart from a name's references: :noh and leaving visual block leave those");
+        ALCodeEditor& e = make("count count\ncount\n");
+        typedef ALCodeEditor::Highlight H;
+        e.setHighlights(H::References, { ALTextRange(ALTextPos(1, 0), ALTextPos(1, 5)) });
+        keys(":set hls<CR>");
+        keys("/count<CR>");
+        ensure("the search lit", !e.highlights(H::Search).empty());
+        keys(":noh<CR>");
+        ensure("put out", e.highlights(H::Search).empty());
+        ensure("the references kept", e.highlights(H::References).size() == 1);
+        keys("gg<C-V>jl");
+        ensure("the block lit", !e.highlights(H::Block).empty());
+        keys("<Esc>");
+        ensure("put out", e.highlights(H::Block).empty());
+        ensure("the references kept still", e.highlights(H::References).size() == 1);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<78>()
+    {
+        set_test_name(":g visits its lines from the top down, a line's mark gone with it; its d, s, > and < go in as one edit, as :s///c's a does and "
+                      "what `.`, a macro and a mapping type");
+        ALCodeEditor& e     = make("a\nb\nc\nd\n");
+        S32           edits = 0;
+        boost::signals2::scoped_connection counting = e.document().onChanged([&edits](const ALTextDocument::Edit&) { ++edits; });
+        keys(":g/^/m0<CR>");
+        ensure_equals("turned over, each line moved to the top in turn", flat(e.text()), std::string("d|c|b|a|"));
+        keys("u");
+        ensure_equals("one step to undo", flat(e.text()), std::string("a|b|c|d|"));
+        keys(":g/^/j<CR>");
+        ensure_equals("joined in pairs: a line joined onto the one above is not visited", flat(e.text()), std::string("a b|c d|"));
+        keys(":g/^/t.<CR>");
+        ensure_equals("each copied below itself once, the copy not visited", flat(e.text()), std::string("a b|a b|c d|c d|"));
+
+        e.setText("x 1\ny\nx 2\nx 3\n");
+        edits = 0;
+        keys(":g/x/d<CR>");
+        ensure_equals("the lines taken out", flat(e.text()), std::string("y|"));
+        ensure_equals("in one edit", edits, 1);
+        ensure_equals("the register holds the last, as one at a time leaves it", vim->registerText('"'), std::string("x 3"));
+        ensure_equals("the one before it in 2", vim->registerText('2'), std::string("x 2"));
+        ensure_equals("said once for the lot", vim->message(), std::string("3 fewer lines"));
+        ensure_equals("the caret where the last went", e.caret().line, 1);
+        keys("u");
+        ensure_equals("one step to undo", flat(e.text()), std::string("x 1|y|x 2|x 3|"));
+
+        e.setText("a\nb\nc");
+        keys(":g/^/d<CR>");
+        ensure_equals("every line, the last with the break before it", flat(e.text()), std::string(""));
+
+        e.setText("x a a\ny a\nx a\n");
+        edits = 0;
+        keys(":g/x/s/a/b/g<CR>");
+        ensure_equals("substituted", flat(e.text()), std::string("x b b|y a|x b|"));
+        ensure_equals("in one edit", edits, 1);
+        ensure_equals("said once for the lot", vim->message(), std::string("3 substitutions on 2 lines"));
+        ensure_equals("the caret on the last line substituted on", e.caret().line, 2);
+        edits = 0;
+        keys(":g/x/s/b/1\\r2/<CR>");
+        ensure_equals("a break put in on each", flat(e.text()), std::string("x 1|2 b|y a|x 1|2|"));
+        ensure_equals("the caret on the last line of the last put in", e.caret().line, 4);
+
+        e.setText("x\ny\nx\n");
+        e.setSoftTabs(true);
+        e.setTabWidth(2);
+        edits = 0;
+        keys(":g/x/><CR>");
+        ensure_equals("shifted in", flat(e.text()), std::string("  x|y|  x|"));
+        ensure_equals("in one edit", edits, 1);
+        edits = 0;
+        keys(":g/x/<<CR>");
+        ensure_equals("and out", flat(e.text()), std::string("x|y|x|"));
+        ensure_equals("in one edit", edits, 1);
+
+        e.setText("a a a\n");
+        keys("gg:s/a/b/gc<CR>");
+        edits = 0;
+        keys("ya");
+        ensure_equals("the rest said yes to at once", flat(e.text()), std::string("b b b|"));
+        ensure_equals("the first, then the rest in one edit", edits, 2);
+        ensure_equals("said", vim->message(), std::string("3 substitutions on 1 line"));
+
+        e.setText("one\ntwo\nthree\n");
+        keys("ggAhello<Esc>j");
+        edits = 0;
+        keys(".");
+        ensure_equals("typed again", flat(e.text()), std::string("onehello|twohello|three|"));
+        ensure_equals("in one edit", edits, 1);
+        keys("ggqaAxyz<Esc>q");
+        edits = 0;
+        keys("jj@a");
+        ensure_equals("played", flat(e.text()), std::string("onehelloxyz|twohello|threexyz|"));
+        ensure_equals("in one edit", edits, 1);
+        ex("inoremap ;h hi there");
+        edits = 0;
+        keys("A;h<Esc>");
+        ensure_equals("mapped", flat(e.text()), std::string("onehelloxyz|twohello|threexyzhi there|"));
+        ensure_equals("in one edit", edits, 1);
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<79>()
+    {
+        set_test_name("the bracket objects and [( pass over a bracket in a string or a comment, as % does");
+        ALCodeEditor& e = make("f(\"(\", x) // )\n");
+        e.setCaret(ALTextPos(0, 7));
+        keys("di(");
+        ensure_equals("inside the call, not the string's bracket", flat(e.text()), std::string("f() // )|"));
+        e.setText("g(a, \"(\", b)\n");
+        vim->handleKey(e, KEY_ESCAPE, MASK_NONE);
+        e.setCaret(ALTextPos(0, 10));
+        keys("[(");
+        ensure("back to the call's bracket", e.caret() == ALTextPos(0, 1));
+        keys("%");
+        ensure("and % to its partner", e.caret() == ALTextPos(0, 11));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<80>()
+    {
+        set_test_name("a line number typed is one shown: under lines counted from 10, 12G, 11gg and :13 go where the gutter says, and :g still finds its own lines");
+        ALCodeEditor& e = make("one\ntwo\nthree\nfour\n");
+        e.setLineNumberBase(10);
+        keys("12G");
+        ensure_equals("12G the second line", e.caret().line, 1);
+        keys("11gg");
+        ensure_equals("11gg the first", e.caret().line, 0);
+        ex("13");
+        ensure_equals(":13 the third", e.caret().line, 2);
+        ex("2");
+        ensure_equals("a number before the first, the first", e.caret().line, 0);
+        ex("g/o/d");
+        ensure_equals(":g deletes the lines it matched, not those the numbers would miss", flat(e.text()), std::string("three|"));
+    }
+
+    template<> template<>
+    void alvimkeymap_object::test<81>()
+    {
+        set_test_name("gI inserts in the first column, before the indent, and . does it again");
+        ALCodeEditor& e = make("    one\n    two\n");
+        e.setCaret(ALTextPos(0, 6));
+        keys("gIx<Esc>");
+        ensure_equals("before the indent", flat(e.text()), std::string("x    one|    two|"));
+        keys("j.");
+        ensure_equals("again on the next line", flat(e.text()), std::string("x    one|x    two|"));
+        keys("0wgI");
+        ensure("in insert mode", vim->inserting());
     }
 }

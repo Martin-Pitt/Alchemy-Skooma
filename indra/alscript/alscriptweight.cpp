@@ -426,6 +426,7 @@ namespace ALScriptWeigh
 {
     ALScriptWeight slua(std::string_view source)
     {
+        LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
         ALScriptWeight weight;
         weight.target = ALScriptWeight::Target::SLua;
         weight.limit  = ALScriptWeight::limitOf(weight.target);
@@ -448,6 +449,7 @@ namespace ALScriptWeigh
 
     ALScriptWeight lslLuau(std::string_view source)
     {
+        LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
         ALScriptWeight weight;
         weight.target = ALScriptWeight::Target::LSLLuau;
         weight.limit  = ALScriptWeight::limitOf(weight.target);
@@ -771,6 +773,7 @@ namespace ALScriptWeigh
 {
     ALScriptWeight lso(std::string_view source)
     {
+        LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
         ALScriptWeight weight;
         weight.target = ALScriptWeight::Target::LSO;
         weight.limit  = ALScriptWeight::limitOf(weight.target);
@@ -869,7 +872,8 @@ namespace
     }
 
     // A string literal's bytes in the user string heap: two a character,
-    // a trailing byte and its length.
+    // a trailing byte and its length. The heap holds each string once,
+    // however many instructions load it.
     size_t userStringBytes(const std::string& rest)
     {
         const size_t open  = rest.find('"');
@@ -956,6 +960,7 @@ namespace ALScriptWeigh
 {
     ALScriptWeight mono(std::string_view source)
     {
+        LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
         ALScriptWeight weight;
         weight.target   = ALScriptWeight::Target::Mono;
         weight.limit    = ALScriptWeight::limitOf(weight.target);
@@ -997,6 +1002,7 @@ namespace ALScriptWeigh
         // was written for as well.
         std::istringstream    cil(compiler.mCIL.str());
         std::set<std::string> referenced;
+        std::set<std::string> strings;
         size_t                shared = MONO_BASE_BYTES;
         ALScriptWeight::Part* method = nullptr;
         ALScriptWeight::Part  globals;
@@ -1077,7 +1083,8 @@ namespace ALScriptWeigh
             const size_t      cut  = line.find(' ');
             const std::string op   = line.substr(0, cut);
             const std::string rest = cut == std::string::npos ? std::string() : line.substr(cut + 1);
-            const size_t      bytes = ilBytes(op, rest) + (op == "ldstr" ? userStringBytes(rest) : 0);
+            // A string is the first load's, whose line and method made it.
+            const size_t      bytes = ilBytes(op, rest) + (op == "ldstr" && strings.insert(rest).second ? userStringBytes(rest) : 0);
             method->bytes += bytes;
             if (source >= 0)
             {

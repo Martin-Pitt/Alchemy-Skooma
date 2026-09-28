@@ -48,7 +48,9 @@ class LLTextBox;
 // in turn, and Space or Return presses the one it is on; and while the
 // bar has the keyboard, Alt with C, W, R or L -- Command and Option with
 // them on a Mac -- turns case, whole words, patterns or the selection on
-// or off, as the modern editors have it.
+// or off, as the modern editors have it; Shift and Return goes back, and
+// Control, Alt and Return -- Command, Option and Return -- replaces every
+// one.
 class ALFindBar : public LLPanel
 {
 public:
@@ -59,7 +61,9 @@ public:
         Params();
     };
 
-    void               setQuery(const std::string& query);
+    // Without `announce`, no change is said: what seeds the bar as it opens.
+
+    void setQuery(const std::string& query, bool announce = true);
     const std::string& query() const { return mQuery; }
     void               setReplacement(const std::string& text);
     std::string        replacement() const;
@@ -74,7 +78,11 @@ public:
 
     // What the view found: which one is current, of how many; or what was
     // wrong with the pattern.
-    void setCount(S32 current, S32 total, const std::string& error);
+    // `capped`: the total is as many as were looked for, and there are more.
+    // `wrapped`: the step to the current one went round the text's end --
+    // on from the top (1) or back from the bottom (-1) -- said until the
+    // count next changes.
+    void setCount(S32 current, S32 total, const std::string& error, bool capped = false, S32 wrapped = 0);
     std::string countSaid() const;
 
     // The colours of the view the bar is over: its glyphs and its count
