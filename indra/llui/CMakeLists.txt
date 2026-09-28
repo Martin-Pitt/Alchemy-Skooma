@@ -9,6 +9,7 @@ target_sources(
     aldraggesture.cpp
     alcornerfield.cpp
     aloffsetpad.cpp
+    alpicturefield.cpp
     alpanefolds.cpp
     fsvirtualtrackpad.cpp
     llaccordionctrl.cpp
@@ -119,6 +120,7 @@ target_sources(
     alcolortablepanel.cpp
     alcolorsheet.cpp
     aldeferredrebuild.cpp
+    aldiffview.cpp
     aldockpanel.cpp
     alemptystate.cpp
     alflagsfield.cpp
@@ -126,6 +128,7 @@ target_sources(
     alimagefield.cpp
     aljumpbar.cpp
     alpanelist.cpp
+    alplace.cpp
     alpopover.cpp
     alquickopen.cpp
     alscopebar.cpp
@@ -133,27 +136,44 @@ target_sources(
     alspecimenlist.cpp
     alstudiofloater.cpp
     alsurface.cpp
+    alcodecards.cpp
     alcodeeditor.cpp
+    albracketindex.cpp
     alcompletionmodel.cpp
+    alfuzzymatch.cpp
     alfixlistmodel.cpp
+    alfoldmodel.cpp
+    alsmartselect.cpp
     alsnippetsession.cpp
     alfindbar.cpp
+    alkeycapture.cpp
+    alkeychord.cpp
     alkeymap.cpp
     alvimkeymap.cpp
+    alvimmappings.cpp
+    alvimpattern.cpp
+    alvimregisters.cpp
     alxuiservice.cpp
     alchoicelist.cpp
     aloutputview.cpp
     alsyntaxgrammar.cpp
     alsyntaxhighlighter.cpp
     altabstrip.cpp
+    altextdiff.cpp
     altextdocument.cpp
+    altextediting.cpp
+    altextfind.cpp
+    altextindent.cpp
     altextlayout.cpp
     altextsearch.cpp
+    altextspelling.cpp
     altextview.cpp
     altextundo.cpp
     alnotecarditems.cpp
     alscripttheme.cpp
     alscriptsnippets.cpp
+    alfieldeditors.cpp
+    alfolderfilter.cpp
     alfollowscontrol.cpp
     alfontfield.cpp
     alcolorpicker.cpp
@@ -180,6 +200,7 @@ target_sources(
         aldraggesture.h
         alcornerfield.h
         aloffsetpad.h
+        alpicturefield.h
         alpanefolds.h
         altextcaret.h
         alviewtype.h
@@ -306,13 +327,16 @@ target_sources(
         alcolortablepanel.h
         alcolorsheet.h
         aldeferredrebuild.h
+        aldiffview.h
         aldockpanel.h
         alemptystate.h
         alflagsfield.h
         alhistorylist.h
+        alkeyshome.h
         alimagefield.h
         aljumpbar.h
         alpanelist.h
+        alplace.h
         alpopover.h
         alquickopen.h
         alsaid.h
@@ -324,28 +348,47 @@ target_sources(
         alsurface.h
         alundostack.h
         alstringmatch.h
+        alcodecards.h
         alcodeeditor.h
+        albracketindex.h
         alcompletionmodel.h
+        alfuzzymatch.h
         alfixlistmodel.h
+        alfoldmodel.h
+        alsmartselect.h
         alsnippetsession.h
         alfindings.h
+        alanchoredranges.h
         alfindbar.h
+        alkeycapture.h
+        alkeychord.h
         alkeymap.h
+        allinetable.h
         alvimkeymap.h
+        alvimmappings.h
+        alvimpattern.h
+        alvimregisters.h
         alxuiservice.h
         alchoicelist.h
         aloutputview.h
         alsyntaxgrammar.h
         alsyntaxhighlighter.h
         altabstrip.h
+        altextdiff.h
         altextdocument.h
+        altextediting.h
+        altextfind.h
+        altextindent.h
         altextlayout.h
         altextsearch.h
+        altextspelling.h
         altextview.h
         altextundo.h
         alnotecarditems.h
         alscripttheme.h
         alscriptsnippets.h
+        alfieldeditors.h
+        alfolderfilter.h
         alfollowscontrol.h
         alfontfield.h
         alcolorpicker.h
@@ -437,6 +480,10 @@ if(AL_BUILD_TESTS)
   )
   al_add_test(llchatautocompletemodel UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(llurlmatch UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(alkeymap UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(altextdiff UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(alanchoredranges PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
+  al_add_test(allinetable PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextdocument UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextundo UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
   al_add_test(alnotecarditems UNIT PROJECT llui LIBRARIES ${test_libs})
@@ -493,6 +540,7 @@ if(AL_BUILD_TESTS)
     aldockpanel
     alpanefolds
     alangledial
+    alcornerfield
     aldraggesture
     aloffsetpad
     alemptystate
@@ -504,8 +552,11 @@ if(AL_BUILD_TESTS)
     alxuilint
     alxuiedit
     alfindbar
+    alfolderfilter
     alhistorylist
+    alplace
     alpopover
+    alkeycapture
     alscopebar
     aljumpbar
     alpanelist
@@ -519,19 +570,33 @@ if(AL_BUILD_TESTS)
     alxuisourcemap
     alxuitreemodel
     alsettingrow
+    alstringmatch
+    alsurface
     alcolorsheet
     lluicolortable
     alundostack
     alsyntaxgrammars
+    altextediting
+    altextfind
+    altextindent
     altextlayout
     altextsearch
+    altextspelling
     altextview
+    alcodecards
     alcodeeditor
+    aldiffview
+    albracketindex
     alcompletionmodel
+    alfuzzymatch
     alfixlistmodel
+    alfoldmodel
     alsnippetsession
     alscripttheme
     alvimkeymap
+    alvimmappings
+    alvimpattern
+    alvimregisters
     alxuiservice
     aloutputview
     alchoicelist
@@ -544,4 +609,14 @@ if(AL_BUILD_TESTS)
       DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
     )
   endforeach()
+
+  # The code editor over 50,000-line scripts: what each change to the edit
+  # pipeline, the highlighter, the layout, the folds or find is measured by.
+  al_add_bench(
+    altextengine
+    PROJECT llui
+    LIBRARIES ${test_libs}
+    INCLUDES ${INDRA_SOURCE_DIR}/test
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
 endif()

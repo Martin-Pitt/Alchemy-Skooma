@@ -30,6 +30,7 @@
 
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -41,8 +42,9 @@ class LLLineEditor;
 class LLTextBox;
 
 // The Script Studio's Search tab: words looked for across the scripts
-// open, one object's contents or every object the explorer lists, said as
-// a sentence -- find `timer` as [text] [ignoring case] in [open scripts] --
+// open, one object's contents or every object the explorer lists, and
+// where asked what each includes, said as a sentence -- find `timer` as
+// [text] [ignoring case] in [open scripts] [and what they include] --
 // each place found a row, with the count of them; and Replace All over
 // them, asked about first. A script open is searched as it stands in its
 // tab, and again a moment after it is typed in; any other as the region
@@ -58,15 +60,19 @@ public:
     class Window
     {
     public:
-        // An object the explorer lists and is in sight: its root, its name,
-        // and what its prims hold.
+        // An object to search, in sight: its root, its name, what its prims
+        // hold, and how many of them did not say what they hold.
         struct Object
         {
             LLUUID                   root;
             std::string              name;
             std::vector<ALScriptRef> items;
+            S32                      unlisted = 0;
         };
-        virtual std::vector<Object> objectsListed() const               = 0;
+        // The objects to search, told once every prim of each has said what
+        // it holds, a large linkset's folded ones among them: `only`, where
+        // it is not null, else every object the explorer lists in sight.
+        virtual void        listObjects(const LLUUID& only, std::function<void(std::vector<Object>)> told) = 0;
         virtual std::string         objectName(const LLUUID& root) const = 0;
         // What a row says an open script is in: its object, by the name it
         // has now; nothing for one in the inventory or on disk.
@@ -91,6 +97,17 @@ public:
         // A place found gone to: shown in its script, the keyboard left in
         // the list to walk on, or taken to the script (`to_editor`).
         virtual void searchResultChosen(const ALScriptSearch::Found& one, const ALTextRange& place, bool to_editor) = 0;
+        // What a script includes and requires, and those in turn, as a
+        // run would find them now -- nothing fetched: each file's
+        // identity, name and text. `file` is a script on disk's path.
+        struct Included
+        {
+            std::string path;
+            std::string name;
+            std::string text;
+        };
+        virtual std::vector<Included> includesOf(const ALScriptRef& ref, const std::string& file, const std::string& name, const std::string& text,
+                                                 bool lua) = 0;
 
     protected:
         ~Window() = default;
@@ -140,8 +157,14 @@ private:
     void buildSentence();
     void onChanged();
     void searchOpen(const Doc& doc);
+    // The objects listed for the search at `generation` searched: each
+    // script as it stands where it is open, else fetched.
+    void searchObjects(U32 generation, const std::vector<Window::Object>& objects);
     void searched(const ALScriptRef& ref, const std::string& name, const std::string& where, const ALTextDocument& text, U32 version,
                   const std::string& doc_id, bool keep_text = false, bool notecard = false);
+    // What a script searched includes, each file once a search, where the
+    // sentence asks for it.
+    void searchIncludes(const ALScriptRef& ref, const std::string& file, const std::string& name, const std::string& text, bool lua);
     // A script's places as rows, after the rest, up to what a list holds;
     // and its rows told what it holds now, in place, where it holds as
     // many places as its rows are -- false where it does not.
@@ -163,4 +186,6 @@ private:
     LLLineEditor*           mReplacement = nullptr;
     LLButton*               mReplace     = nullptr;
     ALScriptSearch          mSearch;
+    // The files included that this search has searched.
+    std::set<std::string>   mIncludesSearched;
 };

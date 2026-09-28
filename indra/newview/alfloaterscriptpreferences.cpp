@@ -26,11 +26,16 @@
 
 #include "alfloaterscriptpreferences.h"
 
+#include "alpanelist.h"
+#include "alsurface.h"
+
 #include "alcodeeditor.h"
 #include "alfloaterscriptstudio.h"
 #include "alscriptanalysis.h"
+#include "alscriptstudiovimrc.h"
+#include "alscriptstudiowords.h"
 #include "alfontfield.h"
-#include "alscriptkeymap.h"
+#include "alpanelscriptkeymap.h"
 #include "llbutton.h"
 #include "llcallbacklist.h"
 #include "llcolorswatch.h"
@@ -50,6 +55,8 @@
 #include "llviewermenufile.h"
 #include "lltexteditor.h"
 #include "llfloaterreg.h"
+#include "llinventorymodel.h"
+#include "llviewerinventory.h"
 #include "alscriptpreprocessor.h"
 
 #include <algorithm>
@@ -67,7 +74,7 @@ namespace
         "ALScriptPreprocOptimizerShrinkNames", "ALScriptPreprocOptimizerAddStrings",
         "ALScriptPreprocOptimizerInlining",     "ALScriptPreprocExtensions",
         "ALScriptPreprocDiskIncludes", "ALScriptPreprocDiskIncludeFolder", "ALScriptPreprocIncludeOrder", "ALScriptPreprocWorldIncludes",
-        "ALScriptStudioTabWidth",    "ALScriptStudioInsertSpaces",
+        "ALScriptStudioTabWidth",    "ALScriptStudioInsertSpaces", "ALScriptStudioDetectIndentation", "ALScriptStudioReindentOnPaste",
         "ALScriptLintLevels",        "ALScriptLuauMode",           "ALScriptLuauSolver",
         "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptStudioAutoClose",
         "ALScriptStudioCaretStyle",  "ALScriptStudioCaretBlink",   "ALScriptStudioHoverCards",  "ALScriptStudioHoverDelay",
@@ -101,7 +108,9 @@ bool ALFloaterScriptPreferences::postBuild()
     mFont        = getChild<ALFontField>("font");
     mSwatches    = getChild<LLPanel>("swatches");
     mPreview     = getChild<ALCodeEditor>("preview");
-    mFolders      = getChild<LLScrollListCtrl>("include_folders");
+    mFolders      = getChild<ALPaneList>("include_folders");
+    // With none, it says so where they would be.
+    mFolders->setEmpty(getString("NoFolder"), LLStringUtil::null);
     mOrder        = getChild<LLScrollListCtrl>("include_order");
     mOrderTip     = mOrder->getToolTip();
     mTemplateLSL  = getChild<ALCodeEditor>("template_lsl");
@@ -121,6 +130,12 @@ bool ALFloaterScriptPreferences::postBuild()
     getChild<LLButton>("add_folder")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onAddIncludeFolder(); });
     getChild<LLButton>("remove_folder")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onRemoveIncludeFolder(); });
     getChild<LLButton>("external_browse")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onBrowseExternalEditor(); });
+    mVimrcNotecard = getChild<LLLineEditor>("vimrc_notecard");
+    getChild<LLButton>("vimrc_edit")->setCommitCallback([](LLUICtrl*, const LLSD&) { ALFloaterScriptStudio::openVimrc(); });
+    getChild<LLButton>("vimrc_clear")->setCommitCallback(
+        [](LLUICtrl*, const LLSD&) { ALScriptStudioVimrc::instance().useNotecard(LLUUID::null); });
+    mVimrcChanged = ALScriptStudioVimrc::instance().onChanged([this]() { refreshVimrc(); });
+    refreshVimrc();
     getChild<LLButton>("scripting_settings")->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("scripting_settings"); });
     getChild<LLButton>("snippet_xml")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         flushSnippets();
@@ -139,17 +154,17 @@ bool ALFloaterScriptPreferences::postBuild()
     mDefines->setCommitCallback([this](LLUICtrl*, const LLSD&) { storeDefines(); });
     mTemplateLSLChanged  = mTemplateLSL->onTextChanged([this]() { storeTemplate(false); });
     mTemplateSLuaChanged = mTemplateSLua->onTextChanged([this]() { storeTemplate(true); });
-    ALFloaterScriptStudio::teachWords(*mTemplateLSL, false);
-    ALFloaterScriptStudio::teachWords(*mTemplateSLua, true);
+    ALScriptStudioWords::teach(*mTemplateLSL, false);
+    ALScriptStudioWords::teach(*mTemplateSLua, true);
     mOrder->setCommitCallback([this](LLUICtrl*, const LLSD&) { storeIncludeOrder(); });
     getChild<LLButton>("order_up")->setCommitCallback([this](LLUICtrl*, const LLSD&) { moveIncludePlace(-1); });
     getChild<LLButton>("order_down")->setCommitCallback([this](LLUICtrl*, const LLSD&) { moveIncludePlace(1); });
     // The editors open, and the ones here, take the typing settings as
     // they change -- by the settings' own signals, so a Cancel reaches
     // them as a click does.
-    for (const char* setting : { "ALScriptStudioTabWidth", "ALScriptStudioInsertSpaces", "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter",
-                                 "ALScriptStudioAcceptOnEnter", "ALScriptStudioAutoClose", "ALScriptStudioCaretStyle", "ALScriptStudioCaretBlink",
-                                 "ALScriptStudioHoverCards", "ALScriptStudioHoverDelay" })
+    for (const char* setting : { "ALScriptStudioTabWidth", "ALScriptStudioInsertSpaces", "ALScriptStudioDetectIndentation", "ALScriptStudioReindentOnPaste",
+                                 "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptStudioAutoClose",
+                                 "ALScriptStudioCaretStyle", "ALScriptStudioCaretBlink", "ALScriptStudioHoverCards", "ALScriptStudioHoverDelay" })
     {
         if (LLControlVariable* control = gSavedSettings.getControl(setting))
         {
@@ -420,6 +435,8 @@ void ALFloaterScriptPreferences::remember()
             mWasSettings[setting] = control->getValue();
         }
     }
+    // The account's, as the notecard is.
+    mWasVimrc = ALScriptStudioVimrc::instance().notecard().asString();
 }
 
 void ALFloaterScriptPreferences::revert()
@@ -444,6 +461,10 @@ void ALFloaterScriptPreferences::revert()
             control->setValue(mWasSettings[setting]);
         }
     }
+    if (ALScriptStudioVimrc::instance().notecard().asString() != mWasVimrc)
+    {
+        ALScriptStudioVimrc::instance().useNotecard(LLUUID(mWasVimrc));
+    }
     // The snippets as they were, where they were changed here.
     for (bool lua : { false, true })
     {
@@ -459,7 +480,7 @@ void ALFloaterScriptPreferences::revert()
 
 bool ALFloaterScriptPreferences::changed() const
 {
-    if (mSnippetsUnsaved)
+    if (mSnippetsUnsaved || ALScriptStudioVimrc::instance().notecard().asString() != mWasVimrc)
     {
         return true;
     }
@@ -740,7 +761,7 @@ void ALFloaterScriptPreferences::refreshPreview()
 {
     const bool lua = mPreviewLang->getValue().asString() == "slua";
     mPreview->setSyntax(lua ? "slua" : "lsl");
-    ALFloaterScriptStudio::teachWords(*mPreview, lua);
+    ALScriptStudioWords::teach(*mPreview, lua);
     mPreview->setText(getString(lua ? "PreviewSLua" : "PreviewLSL"));
     mPreview->setFont(ALFloaterScriptStudio::editorFont());
 }
@@ -787,11 +808,7 @@ void ALFloaterScriptPreferences::refreshIncludeFolder()
         row["columns"][0]["tool_tip"] = folder;
         mFolders->addElement(row);
     }
-    if (mFolders->getItemCount() == 0)
-    {
-        mFolders->setCommentText(getString("NoFolder"));
-    }
-    else if (chosen >= 0)
+    if (chosen >= 0 && mFolders->getItemCount() > 0)
     {
         mFolders->selectNthItem(llmin(chosen, mFolders->getItemCount() - 1));
     }
@@ -807,6 +824,55 @@ void ALFloaterScriptPreferences::onRemoveIncludeFolder()
     std::vector<std::string> folders = ALScriptPreprocessor::includeFolders();
     folders.erase(std::remove(folders.begin(), folders.end(), item->getValue().asString()), folders.end());
     ALScriptPreprocessor::setIncludeFolders(folders);
+}
+
+void ALFloaterScriptPreferences::refreshVimrc()
+{
+    const ALScriptStudioVimrc& vimrc    = ALScriptStudioVimrc::instance();
+    const bool                 notecard = vimrc.notecard().notNull();
+    if (notecard)
+    {
+        const std::string name = vimrc.notecardName();
+        mVimrcNotecard->setText(name.empty() ? getString("VimrcUnknownNotecard") : name);
+    }
+    else
+    {
+        // Empty: the box's label asks for one.
+        mVimrcNotecard->setText(LLStringUtil::null);
+    }
+    getChildView("vimrc_clear")->setEnabled(notecard);
+    LLStringUtil::format_map_t args;
+    args["[PATH]"] = ALScriptStudioVimrc::filePath();
+    LLTextBox* where = getChild<LLTextBox>("vimrc_where");
+    where->setText(!vimrc.error().empty() ? vimrc.error() : getString(notecard ? "VimrcFromNotecard" : "VimrcFromFile", args));
+}
+
+bool ALFloaterScriptPreferences::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data,
+                                                   EAcceptance* accept, std::string& tooltip_msg)
+{
+    S32 local_x = 0;
+    S32 local_y = 0;
+    if (mVimrcNotecard && mVimrcNotecard->isInVisibleChain() && localPointToOtherView(x, y, &local_x, &local_y, mVimrcNotecard) &&
+        mVimrcNotecard->pointInView(local_x, local_y))
+    {
+        // A notecard of the agent's own, a link as what it links to: the
+        // notecard's asset is what changes as it is edited.
+        const LLInventoryItem*       item = static_cast<LLInventoryItem*>(cargo_data);
+        const LLViewerInventoryItem* held = item ? gInventory.getItem(item->getLinkedUUID()) : nullptr;
+        if (cargo_type != DAD_NOTECARD || !held || held->getType() != LLAssetType::AT_NOTECARD)
+        {
+            *accept     = ACCEPT_NO;
+            tooltip_msg = getString("VimrcOnlyNotecards");
+            return true;
+        }
+        *accept = ACCEPT_YES_SINGLE;
+        if (drop)
+        {
+            ALScriptStudioVimrc::instance().useNotecard(held->getUUID());
+        }
+        return true;
+    }
+    return LLFloater::handleDragAndDrop(x, y, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
 }
 
 void ALFloaterScriptPreferences::onBrowseExternalEditor()
@@ -832,7 +898,7 @@ void ALFloaterScriptPreferences::refreshTemplates()
     {
         ALCodeEditor*     editor = lua ? mTemplateSLua : mTemplateLSL;
         const std::string text   = gSavedSettings.getString(lua ? "ALScriptTemplateSLua" : "ALScriptTemplateLSL");
-        if (editor->text() != text)
+        if (editor->wholeText() != text)
         {
             editor->setText(text);
         }
@@ -1019,8 +1085,8 @@ void ALFloaterScriptPreferences::fillSnippets(bool reread)
     const LLSD chosen   = mSnippetList->getFirstSelected() ? mSnippetList->getFirstSelected()->getValue() : LLSD();
     const S32  scrolled = mSnippetList->getScrollPos();
     mSnippetList->deleteAllItems();
-    static const LLUIColor theirs = LLUIColorTable::instance().getColor("LabelDisabledColor", LLColor4::grey);
-    const auto add = [this](const ALScriptSnippets::Snippet& one, bool own, S32 index) {
+    const LLUIColor& theirs = ALSurface::quiet();
+    const auto add = [this, &theirs](const ALScriptSnippets::Snippet& one, bool own, S32 index) {
         LLSD row;
         row["value"]                  = (own ? "own:" : "builtin:") + std::to_string(index);
         row["columns"][0]["column"]   = "name";
@@ -1054,7 +1120,7 @@ void ALFloaterScriptPreferences::fillSnippets(bool reread)
     }
     mSnippetList->setScrollPos(scrolled);
     mSnippetBody->setSyntax(lua ? "slua" : "lsl");
-    ALFloaterScriptStudio::teachWords(*mSnippetBody, lua);
+    ALScriptStudioWords::teach(*mSnippetBody, lua);
     showSnippet();
 }
 
