@@ -29,6 +29,7 @@
 #include "alcodeeditor.h"
 #include "alpanelist.h"
 #include "alscopebar.h"
+#include "alscriptmessages.h"
 #include "alscriptstudioservices.h"
 #include "llbutton.h"
 #include "llfloater.h"
@@ -87,7 +88,11 @@ bool ALScriptSearchPane::postBuild()
     mReplacement->setCommitCallback([this](LLUICtrl*, const LLSD&) { askReplaceAll(); });
     mBar->onChanged([this]() { onChanged(); });
     mResults->setCommitCallback([this](LLUICtrl*, const LLSD&) { choose(false); });
-    mResults->setDoubleClickCallback([this]() { choose(true); });
+    // Return and a double-click go to the place chosen, to type there, and
+    // escape goes back to the script without going anywhere.
+    mResults->setGo([this]() { choose(true); });
+    mResults->setBack([this]() { mServices->revealed(mResults, true); });
+    mResults->setCopyable(true);
     // Sorted by a column's title: a script's places by where they are, and
     // the scripts in the order they were found.
     mResults->setComparison([this](S32 column, const LLScrollListItem* a, const LLScrollListItem* b) {
@@ -167,6 +172,15 @@ void ALScriptSearchPane::buildSentence()
     where.choices = { { mServices->words("SearchOpen"), "open" }, { mServices->words("SearchThisObject"), "object" }, { mServices->words("SearchListed"), "listed" } };
     said.push_back(where);
 
+    // And what they include: the text an #include or a require brings in,
+    // each file once, as its own.
+    ALScopeBar::Segment includes;
+    includes.kind    = ALScopeBar::Segment::Kind::Choice;
+    includes.name    = "includes";
+    includes.toolTip = mServices->words("SearchIncludesTip");
+    includes.choices = { { mServices->words("SearchAlone"), "no" }, { mServices->words("SearchWithIncludes"), "yes" } };
+    said.push_back(includes);
+
     mBar->setSentence(std::move(said));
 }
 
@@ -211,6 +225,30 @@ void ALScriptSearchPane::searchOpen(const Doc& doc)
         return;
     }
     searched(doc.ref, doc.name, mWindow->whereIs(doc), doc.editor->document(), doc.editor->document().version(), doc.id);
+    if (!doc.notecard)
+    {
+        searchIncludes(doc.ref, doc.file, doc.name, doc.editor->text(), doc.language.lua);
+    }
+}
+
+void ALScriptSearchPane::searchIncludes(const ALScriptRef& ref, const std::string& file, const std::string& name, const std::string& text, bool lua)
+{
+    if (mBar->valueOf("includes") != "yes")
+    {
+        return;
+    }
+    for (const Window::Included& one : mWindow->includesOf(ref, file, name, text, lua))
+    {
+        if (mIncludesSearched.insert(one.path).second)
+        {
+            const ALScriptSearch::Kept kept = mSearch.search(ALScriptRef(), one.name, mServices->words("SearchIncluded"), ALTextDocument(one.text), 0,
+                                                             std::string(), false, false, one.path);
+            if (kept == ALScriptSearch::Kept::Added)
+            {
+                addRows(mSearch.found().size() - 1);
+            }
+        }
+    }
 }
 
 void ALScriptSearchPane::run()
@@ -220,6 +258,7 @@ void ALScriptSearchPane::run()
     options.wholeWord     = mBar->valueOf("how") == "word";
     options.regex         = mBar->valueOf("how") == "pattern";
     mSearch.begin(mBar->valueOf("query"), options);
+    mIncludesSearched.clear();
     mResults->deleteAllItems();
     if (mSearch.query().empty())
     {
@@ -254,14 +293,30 @@ void ALScriptSearchPane::run()
         }
         mSearch.setObject(only);
     }
-    const U32 generation = mSearch.generation();
-    for (const Window::Object& object : mWindow->objectsListed())
-    {
-        if (only.notNull() && object.root != only)
+    // Every prim of each object asked what it holds first, which is waited
+    // for as a script's text is.
+    mSearch.asked();
+    const U32               generation = mSearch.generation();
+    const LLHandle<LLPanel> handle     = getHandle();
+    mWindow->listObjects(only, [handle, generation](std::vector<Window::Object> objects) {
+        if (ALScriptSearchPane* pane = ALViewType::as<ALScriptSearchPane>(handle.get()))
         {
-            continue;
+            pane->searchObjects(generation, objects);
         }
+    });
+    settled();
+}
+
+void ALScriptSearchPane::searchObjects(U32 generation, const std::vector<Window::Object>& objects)
+{
+    if (!mSearch.answered(generation))
+    {
+        return;
+    }
+    for (const Window::Object& object : objects)
+    {
         mSearch.over(object.root);
+        mSearch.notListed(object.unlisted);
         for (const ALScriptRef& ref : object.items)
         {
             if (const Doc* doc = mServices->findDoc(ref))
@@ -276,6 +331,10 @@ void ALScriptSearchPane::run()
                 if (there->loaded)
                 {
                     searched(ref, there->name, object.name, there->editor->document(), 0, std::string(), true, there->notecard);
+                    if (!there->notecard)
+                    {
+                        searchIncludes(ref, there->file, there->name, there->editor->text(), there->language.lua);
+                    }
                     continue;
                 }
             }
@@ -298,6 +357,16 @@ void ALScriptSearchPane::fetched(U32 generation, const std::string& where, const
         // A wrapped script is searched as its author wrote it, and that
         // text kept for a replace to work over.
         searched(ref, name, where, ALTextDocument(*text), 0, std::string(), true, notecard);
+        if (!notecard)
+        {
+            searchIncludes(ref, std::string(), name, *text, ALScriptMessages::looksLikeLua(*text));
+        }
+    }
+    else
+    {
+        // Not searched, and counted so: a count that read as complete over
+        // a script not read would pass for having found nothing in it.
+        mSearch.notRead();
     }
     settled();
 }
@@ -320,6 +389,7 @@ void ALScriptSearchPane::searched(const ALScriptRef& ref, const std::string& nam
 
 void ALScriptSearchPane::addRows(size_t index)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     const ALScriptSearch::Found& found = mSearch.found()[index];
     for (size_t i = 0; i < found.places.size(); ++i)
     {
@@ -357,6 +427,7 @@ void ALScriptSearchPane::addRows(size_t index)
 
 void ALScriptSearchPane::refill()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     // The row chosen and the scroll kept, by where the row's place is.
     const S32 scrolled = mResults->getScrollPos();
     // The row chosen, by whose place it is: the numbers a row carries are
@@ -526,10 +597,25 @@ void ALScriptSearchPane::settled()
         mCount->setText(mServices->words("SearchBadPattern"));
         return;
     }
-    const std::string said = mSearch.pending() > 0         ? mServices->words("SearchCounting", args)
-                             : mSearch.hits() > SEARCH_ROWS ? mServices->words("SearchCountCapped", args)
-                             : mSearch.hits() > 0           ? mServices->words("SearchCount", args)
-                                                            : mServices->words("SearchNone", args);
+    std::string said = mSearch.pending() > 0         ? mServices->words("SearchCounting", args)
+                       : mSearch.hits() > SEARCH_ROWS ? mServices->words("SearchCountCapped", args)
+                       : mSearch.hits() > 0           ? mServices->words("SearchCount", args)
+                                                      : mServices->words("SearchNone", args);
+    // What it could not look through, after what it found.
+    std::string missed;
+    if (mSearch.unlisted() > 0)
+    {
+        missed = mServices->counted("SearchUnlisted", mSearch.unlisted());
+    }
+    if (mSearch.unread() > 0)
+    {
+        const std::string unread = mServices->counted("SearchUnread", mSearch.unread());
+        missed = missed.empty() ? unread : mServices->words("SearchBoth", { { "[FIRST]", missed }, { "[SECOND]", unread } });
+    }
+    if (!missed.empty())
+    {
+        said = mServices->words("SearchPassedOver", { { "[SAID]", said }, { "[MISSED]", missed } });
+    }
     mCount->setText(said);
     // The whole of it on the tip, where the slot cuts it; and which object,
     // for a search of one -- the rows say it too, but a search that found

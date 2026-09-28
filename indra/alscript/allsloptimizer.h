@@ -26,11 +26,20 @@
 #pragma once
 
 #include "alscriptproblem.h"
+#include "alscriptweight.h"
 #include "alsourcemap.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
+
+namespace Tailslide
+{
+    class LSLScript;
+    class ScriptAllocator;
+    class ScriptContext;
+}
 
 // The simulator's compilers optimise nothing, so every byte a script
 // saves is saved before upload: this runs over Tailslide's tree after
@@ -59,7 +68,10 @@ public:
     struct Options
     {
         Target target = Target::Mono;
-        // Folding and simplification, on by default.
+        // Folding and simplification, on by default. A rewrite that is
+        // smaller on one target and not on another is made only where it
+        // is smaller (ALLSLCosts): optfloats' integers for Mono, listlength
+        // for LSO, listadd for LSO and Mono.
         bool constfold  = true;
         bool optsigns   = true;
         bool optfloats  = true;
@@ -93,6 +105,18 @@ public:
         // script marked `inline`.
         bool                     inlining = false;
         std::vector<std::string> inlineNames;
+        // With inlining, a function called from more than one place and
+        // not marked is put in place too where the target's compiler says
+        // the script comes out smaller: estimated from what each function
+        // weighs (ALLSLCosts), then the script optimized again with those
+        // in place, both weighed, and the smaller kept. What it costs is a
+        // weighing where there is a function to try, and a second run and
+        // weighing where one is estimated to be worth it.
+        bool                     inlineByCost = true;
+        // Functions put in place where every argument of a call is a
+        // constant, whether inlining is on or not, so that the call folds
+        // to its answer: what the script declared `const`.
+        std::vector<std::string> constFunctions;
     };
 
     struct Result
@@ -113,6 +137,9 @@ public:
         // The run reached its budget and stopped early; what it did
         // stands, and there may have been more to do.
         bool   stoppedEarly = false;
+        // What the text weighs on its target, where the run weighed it to
+        // choose what to put in place; not compiled where it did not.
+        ALScriptWeight weight;
         // The script as given does not parse, or its types do not agree:
         // the errors are the script's own, the compiler's to say, and not
         // something the optimizer did. Not set where the optimizer's own
@@ -123,4 +150,17 @@ public:
     // Needs the builtins loaded through ALLSLService first; without them
     // the run says so and does nothing.
     static Result run(std::string_view source, const Options& options);
+
+    // What a run checks of what it wrote before it gives it back: that it
+    // parses and its types agree. Nothing where it does; where it does not,
+    // the warning the run gives instead, the source going as it was.
+    static std::optional<ALScriptProblem> checkWritten(std::string_view written);
+
+    // The folder alone, over the values of a parsed script's globals, as a
+    // run folds them for `target`: what can be worked out before the script
+    // runs, a pure library call answered, made the constant it comes to,
+    // and nothing else in the script touched. For what `const` globals are
+    // worked out with (ALLSLConsts); the script's symbols and types must be
+    // resolved.
+    static void foldGlobals(Tailslide::LSLScript* script, Tailslide::ScriptAllocator* allocator, Tailslide::ScriptContext* context, Target target);
 };
