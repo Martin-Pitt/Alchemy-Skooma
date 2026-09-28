@@ -176,10 +176,6 @@ public:
     /// console.
     std::string exportObject() const;
 
-    /// What the navmesh and the census hold in a box, as members of an open
-    /// JSON object: surroundings, tiles, doors and features, each in the form
-    /// the other exports use. Returns a line of counts.
-    std::string writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const;
 
     struct Stats
     {
@@ -259,7 +255,7 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
-        sknav::TileAirPtr mAir;         ///< only while SKNavBuildAir is on
+        sknav::TileAirPtr mAir;         ///< within SKNavAirRadius, until evicted
         sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
         U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
         bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
@@ -382,7 +378,6 @@ private:
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
-    bool mAirWanted = false;
     LLVector3d mMark;
     bool mHasMark = false;
     std::unique_ptr<SKNavRooms> mRooms;
