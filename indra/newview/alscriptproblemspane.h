@@ -120,7 +120,7 @@ public:
         // The preferred fix of every problem of a kind made -- of every
         // kind, for none -- once asked.
         virtual void fixAllOfKind(Doc& doc, const std::string& key) = 0;
-        // The tab's problems gathered again.
+        // The tab's problems gathered again, with the next frame.
         virtual void refreshProblems(Doc& doc) = 0;
         // What the script said as it ran let go of, and not listed again
         // when it is next opened.
@@ -159,6 +159,10 @@ public:
     // next check. The list brought to every script's; the last check's let
     // go of.
     void checkedScript(const ALScriptRef& ref, const std::string& name, bool lua, const std::vector<Doc::Shown>& rows, const std::string& where);
+    // What the compiler said of a script no tab holds when the Explorer
+    // recompiled it, beside what a check found: the last recompile's rows
+    // in place of the one's before, none once it compiles clean.
+    void compiledScript(const ALScriptRef& ref, const std::string& name, bool lua, const std::vector<Doc::Shown>& rows, const std::string& where);
     void forgetChecked(const ALScriptRef& ref);
     void clearChecked();
     void showEveryScript();
@@ -166,8 +170,11 @@ public:
 
     // The list filled with a tab's problems, and every open script's
     // where the scope says, the row chosen and the scroll kept through a
-    // refill of the same; with none, only the counts.
+    // refill of the same; with none, only the counts. The counts at once,
+    // the rows only while the list can be seen: out of sight, they are
+    // listed once it comes into sight (pump) or a row is to be chosen.
     void               fill(const Doc* doc);
+    void               pump();
     // Whose problems the list holds; the tab in front where it holds none
     // that is open.
     Doc*               listed();
@@ -200,6 +207,16 @@ public:
 private:
     typedef ALFindings<Doc::Shown, Doc::ProblemTraits> store_t;
 
+    // The rows listed, of what fill counted: no more than ROWS_MOST, the
+    // rest counted in a row of their own. A row holds whose it is and
+    // where the store has it; what it says is the store's.
+    static constexpr S32 ROWS_MOST = 1000;
+    void                 listRows(const Doc* doc);
+    // Where a problem is, as the list says it: its line, and its column as
+    // the status line counts it where the script is open here.
+    std::string whereOf(const Doc* doc, const Doc::Shown& problem) const;
+    // A row's tip, made as the pointer rests on it.
+    std::string tipOf(const LLScrollListItem* item) const;
     // The filters' question of one script's problems, by its id.
     store_t::Query          query(const std::string& id) const;
     std::vector<const Doc*> docsFor(const Doc* doc);
@@ -219,10 +236,23 @@ private:
         std::string             name;
         std::string             where;
         bool                    lua = false;
+        // What a check found and what a recompile's compiler said, and the
+        // two together, which is what is listed.
+        bool                    checked = false;
+        std::vector<Doc::Shown> analysed;
+        std::vector<Doc::Shown> compiled;
         std::vector<Doc::Shown> rows;
     };
+    // The entry for a script, made where there is none; and it listed again
+    // with what it holds now.
+    Checked& checkedEntry(const ALScriptRef& ref, const std::string& name, bool lua, const std::string& where);
+    void     relist(Checked& one);
     // Those listed with the open scripts': not while a tab holds one.
     std::vector<const Checked*> checkedFor();
+    // A row's problem, from the store; null for a heading or one gone.
+    const Doc::Shown* shownOf(const LLSD& value) const;
+    // A script no tab holds, by the store's name for it.
+    const Checked* checkedOf(const std::string& owner) const;
 
     ALScriptStudioServices* mServices = nullptr;
     Window*                 mWindow   = nullptr;
@@ -240,5 +270,8 @@ private:
     // script's keeps the row chosen and the scroll.
     std::string             mShownFor;
     S32                     mHeld = 0;
+    // Whose rows the list holds, and whether they wait for it to be seen.
+    std::string             mRowsFor;
+    bool                    mRowsWanted = false;
     LLHandle<LLContextMenu> mMenu;
 };
