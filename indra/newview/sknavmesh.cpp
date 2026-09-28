@@ -3224,6 +3224,9 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, static_cast<U64>(show_enclosure));
     key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
+    // The spaces layer greys the portals an annotation has crossed out, so
+    // it re-gathers when the marks move.
+    key = mix(key, show_spaces ? SKNavAnnotator::instance().revision() : 0ull);
     // The wind layer shows one heading: the setting's, or the region's wind where the camera is.
     F32 heading = wind_heading;
     if (show_wind && heading < 0.f)
@@ -3268,7 +3271,11 @@ void SKNavMesh::refreshOverlay()
     mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
     if (show_spaces)
     {
-        mRooms->gatherSpaces(mOverlay, camera, reach, opaque);
+        const SKNavAnnotator& annotator = SKNavAnnotator::instance();
+        mRooms->gatherSpaces(mOverlay, camera, reach, opaque,
+                             [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b) {
+                                 return annotator.portalCrossed(mesh, space_a, space_b);
+                             });
     }
     if (show_wind)
     {

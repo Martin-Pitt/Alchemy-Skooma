@@ -177,8 +177,12 @@ public:
 
     /// Fill each space's floor near the camera in a colour of its own, from
     /// the coarse answers, and draw its portals: doors red, stairs lime,
-    /// openings cyan, dashed without a lintel. Agent coordinates.
-    void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const;
+    /// openings cyan, dashed without a lintel. Agent coordinates. Portals
+    /// the filter says are crossed out draw greyed, under the strike the
+    /// annotator draws over them.
+    typedef std::function<bool(const LLUUID& mesh, U32 space_a, U32 space_b)> PortalCrossedFn;
+    void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
+                      const PortalCrossedFn& crossed = {}) const;
 
     /// Arrows over the lowest wind band near the camera for a heading,
     /// coloured by speed factor: blue calm, cyan the free stream, yellow

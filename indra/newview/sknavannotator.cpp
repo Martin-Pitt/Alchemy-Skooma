@@ -40,7 +40,11 @@
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
+#include "sknavmesh.h"
 #include "sknavoverlay.h"
+#include "sknavrooms.h"
+
+#include <utility>
 
 namespace
 {
@@ -71,6 +75,7 @@ namespace
             case MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
             case MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
             case MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
+            case MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
             default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
         }
     }
@@ -122,6 +127,94 @@ namespace
         }
         return label;
     }
+
+    std::pair<U32, U32> portalPairOf(U32 a, U32 b)
+    {
+        return a <= b ? std::make_pair(a, b) : std::make_pair(b, a);
+    }
+
+    // The live portal a crossed mark names: same mesh, the two spaces it
+    // joined either way round, its centre where the mark said, within a
+    // little slack for a pass that has re-cut since. The mesh comes back
+    // too, for the origin the portal's ends are relative to.
+    struct ResolvedPortal
+    {
+        const SKNavWorldView::Mesh* mMesh = nullptr;
+        const Portal* mPortal = nullptr;
+    };
+
+    bool resolvePortal(const Mark& mark, ResolvedPortal& out)
+    {
+        const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+        if (!view)
+        {
+            return false;
+        }
+        const std::pair<U32, U32> pair = mark.portalPair();
+        F64 best = 0.0;
+        for (const SKNavWorldView::Mesh& mesh : view->meshes())
+        {
+            if (mesh.mId != mark.mSpaceMesh || !mesh.mRooms || !mesh.mProduct)
+            {
+                continue;
+            }
+            const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
+            for (const Portal& portal : mesh.mRooms->mPortals)
+            {
+                if (portal.mSpaces[0] >= ids.size() || portal.mSpaces[1] >= ids.size())
+                {
+                    continue;
+                }
+                if (portalPairOf(ids[portal.mSpaces[0]], ids[portal.mSpaces[1]]) != pair)
+                {
+                    continue;
+                }
+                const LLVector3d centre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
+                const F64 d = dist_vec_squared(centre, mark.mPortalCentre);
+                // Two cuts can join the same two spaces; the mark names the
+                // one it sat on, so the nearest wins, within a little slack
+                // for a pass that has re-cut since.
+                if (d > 6.25 || (out.mPortal && d >= best))
+                {
+                    continue;
+                }
+                best = d;
+                out.mMesh = &mesh;
+                out.mPortal = &portal;
+            }
+        }
+        return out.mPortal != nullptr;
+    }
+
+    // A crossed portal: an X across the cut, sized to it, its ends ticked.
+    // A cut the pass has done away with strikes at the click instead, so
+    // the mark stays findable until it is removed.
+    void drawPortal(SKNavOverlayGeom& geom, const Mark& mark, const LLColor4& color)
+    {
+        if (mark.mVerts.empty())
+        {
+            return;
+        }
+        ResolvedPortal resolved;
+        const bool found = resolvePortal(mark, resolved);
+        const LLVector3 a = found ? gAgent.getPosAgentFromGlobal(resolved.mMesh->mOrigin + LLVector3d(resolved.mPortal->mA))
+                                  : agentOf(mark.mVerts.front());
+        const LLVector3 b = found ? gAgent.getPosAgentFromGlobal(resolved.mMesh->mOrigin + LLVector3d(resolved.mPortal->mB)) : a;
+        const LLVector3 centre = (a + b) * 0.5f;
+        const F32 size = llclamp(0.5f * dist_vec(a, b), 0.35f, 1.5f);
+        const F32 k = 0.70710678f * size;
+        geom.edge(centre - LLVector3(k, k, 0.f), centre + LLVector3(k, k, 0.f), color);
+        geom.edge(centre - LLVector3(k, -k, 0.f), centre + LLVector3(k, -k, 0.f), color);
+        if (found)
+        {
+            cross(geom, a, 0.12f, color);
+            cross(geom, b, 0.12f, color);
+        }
+        else
+        {
+            cross(geom, a, 0.3f, color);
+        }
+    }
 }
 
 SKNavAnnotator::SKNavAnnotator() = default;
@@ -143,6 +236,7 @@ void SKNavAnnotator::arm(bool on)
     mArmed = on;
     cancel();
     mHasHover = false;
+    mHoverPortal = HoverPortal();
     touch();
     syncTool();
 }
@@ -169,6 +263,7 @@ void SKNavAnnotator::checkTool()
         mArmed = false;
         cancel();
         mHasHover = false;
+        mHoverPortal = HoverPortal();
         touch();
     }
 }
@@ -177,12 +272,135 @@ void SKNavAnnotator::setHover(bool valid, const LLVector3d& at)
 {
     mHasHover = valid;
     mHover = at;
+    mHoverPortal = HoverPortal();
+}
+
+void SKNavAnnotator::hoverPortal(S32 x, S32 y)
+{
+    mHoverPortal = HoverPortal();
+    if (!mArmed || markTypeKind(mNewType) != MarkKind::PORTAL)
+    {
+        return;
+    }
+    // Only what the spaces layer is drawing can be struck: nothing shown,
+    // nothing to pick.
+    static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
+    if (!show_spaces)
+    {
+        return;
+    }
+    const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+    if (!view)
+    {
+        return;
+    }
+    // The same reach the overlay draws the portals within.
+    static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3d camera_global = gAgent.getPosGlobalFromAgent(camera->getOrigin());
+    const F64 reach = range;
+    // A portal is under the cursor when its drawn run passes within a few
+    // pixels of it. Ends behind the camera would fold back onto the view,
+    // so a run both of whose ends are behind is skipped.
+    static constexpr S32 REACH_PX = 12;
+    S32 best = REACH_PX * REACH_PX;
+    auto inFront = [camera](const LLVector3& agent) { return (agent - camera->getOrigin()) * camera->getAtAxis() > 0.f; };
+    for (const SKNavWorldView::Mesh& mesh : view->meshes())
+    {
+        if (!mesh.mRooms || !mesh.mProduct)
+        {
+            continue;
+        }
+        const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
+        for (const Portal& portal : mesh.mRooms->mPortals)
+        {
+            const LLVector3d a = mesh.mOrigin + LLVector3d(portal.mA) + LLVector3d(0.0, 0.0, 0.15);
+            const LLVector3d b = mesh.mOrigin + LLVector3d(portal.mB) + LLVector3d(0.0, 0.0, 0.15);
+            if (dist_vec_squared2D((a + b) * 0.5, camera_global) > reach * reach)
+            {
+                continue;
+            }
+            const LLVector3 agent_a = gAgent.getPosAgentFromGlobal(a);
+            const LLVector3 agent_b = gAgent.getPosAgentFromGlobal(b);
+            if (!inFront(agent_a) || !inFront(agent_b))
+            {
+                continue;
+            }
+            LLCoordGL pa, pb;
+            camera->projectPosAgentToScreen(agent_a, pa, false);
+            camera->projectPosAgentToScreen(agent_b, pb, false);
+            const S32 dx = pb.mX - pa.mX, dy = pb.mY - pa.mY;
+            const S32 len2 = dx * dx + dy * dy;
+            S32 t = len2 > 0 ? ((x - pa.mX) * dx + (y - pa.mY) * dy) / len2 : 0;
+            t = llclamp(t, 0, 1);
+            const S32 ex = pa.mX + t * dx - x, ey = pa.mY + t * dy - y;
+            const S32 d = ex * ex + ey * ey;
+            if (d < best)
+            {
+                best = d;
+                mHoverPortal.mMesh = mesh.mId;
+                mHoverPortal.mSpaces[0] = portal.mSpaces[0] < ids.size() ? ids[portal.mSpaces[0]] : 0;
+                mHoverPortal.mSpaces[1] = portal.mSpaces[1] < ids.size() ? ids[portal.mSpaces[1]] : 0;
+                mHoverPortal.mCentre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
+                mHoverPortal.mA = a;
+                mHoverPortal.mB = b;
+            }
+        }
+    }
+    mHoverPortal.mValid = mHoverPortal.mSpaces[0] && mHoverPortal.mSpaces[1] && best < REACH_PX * REACH_PX;
+}
+
+bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const
+{
+    const std::pair<U32, U32> pair = portalPairOf(space_a, space_b);
+    for (const Mark& mark : mMarks.marks())
+    {
+        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == mesh && mark.portalPair() == pair)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavAnnotator::togglePortal(const HoverPortal& portal, const LLVector3d& at)
+{
+    const std::pair<U32, U32> pair = portalPairOf(portal.mSpaces[0], portal.mSpaces[1]);
+    for (const Mark& mark : mMarks.marks())
+    {
+        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == portal.mMesh && mark.portalPair() == pair
+            && dist_vec_squared(mark.mPortalCentre, portal.mCentre) < 6.25)
+        {
+            // Struck already: clicking it again lets the cut back.
+            remove(mark.mId);
+            return;
+        }
+    }
+    Mark mark;
+    mark.mKind = MarkKind::PORTAL;
+    mark.mType = MarkType::CROSS;
+    mark.mVerts.push_back(at);
+    mark.mSpaceMesh = portal.mMesh;
+    mark.mSpaceIds[0] = portal.mSpaces[0];
+    mark.mSpaceIds[1] = portal.mSpaces[1];
+    mark.mPortalCentre = portal.mCentre;
+    commit(std::move(mark));
 }
 
 void SKNavAnnotator::click(const LLVector3d& at)
 {
     if (!mArmed)
     {
+        return;
+    }
+    if (markTypeKind(mNewType) == MarkKind::PORTAL)
+    {
+        // Crossing out: the hovered portal toggles, and nothing is half
+        // placed.
+        if (mHoverPortal.mValid)
+        {
+            togglePortal(mHoverPortal, at);
+        }
         return;
     }
     if (mPending.mVerts.empty())
@@ -309,7 +527,15 @@ void SKNavAnnotator::render()
     geom.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mId != mSelected)
+        if (mark.mId == mSelected)
+        {
+            continue;
+        }
+        if (mark.mKind == MarkKind::PORTAL)
+        {
+            drawPortal(geom, mark, typeColor(mark.mType));
+        }
+        else
         {
             drawMark(geom, mark, typeColor(mark.mType));
         }
@@ -320,7 +546,14 @@ void SKNavAnnotator::render()
     bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     if (const Mark* selected = mMarks.find(mSelected))
     {
-        drawMark(bold, *selected, LLColor4::white);
+        if (selected->mKind == MarkKind::PORTAL)
+        {
+            drawPortal(bold, *selected, LLColor4::white);
+        }
+        else
+        {
+            drawMark(bold, *selected, LLColor4::white);
+        }
     }
     if (!mPending.mVerts.empty())
     {
@@ -334,6 +567,11 @@ void SKNavAnnotator::render()
     if (mHasHover && mArmed)
     {
         cross(bold, agentOf(mHover), 0.2f, LLColor4::yellow);
+    }
+    if (mHoverPortal.mValid)
+    {
+        // The portal the cursor is over, over everything, ready to strike.
+        bold.edge(agentOf(mHoverPortal.mA), agentOf(mHoverPortal.mB), LLColor4::white);
     }
 
     SKNavOverlayGeom::bindShader();
@@ -443,6 +681,12 @@ bool SKToolNavAnnotate::handleMouseUp(S32 x, S32 y, MASK mask)
 bool SKToolNavAnnotate::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
     SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    if (markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // A crossed portal toggles once per click; the double click that
+        // followed the first press does nothing.
+        return true;
+    }
     if (markTypeKind(annotator.newType()) != MarkKind::LINE)
     {
         return handleMouseDown(x, y, mask);
@@ -460,7 +704,9 @@ bool SKToolNavAnnotate::handleHover(S32 x, S32 y, MASK mask)
     }
     LLVector3d at;
     const bool hit = pick(x, y, at);
-    SKNavAnnotator::instance().setHover(hit, at);
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    annotator.setHover(hit, at);
+    annotator.hoverPortal(x, y);
     gViewerWindow->setCursor(UI_CURSOR_CROSS);
     return true;
 }

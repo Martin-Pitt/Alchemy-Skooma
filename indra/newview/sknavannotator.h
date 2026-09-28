@@ -74,6 +74,14 @@ public:
     void touch() { ++mRevision; }
     U32 revision() const { return mRevision; }
 
+    /// The portal the cursor is over, while armed to cross out: the nearest
+    /// drawn one to the cursor, by the spaces overlay's own reach. False in
+    /// it when there is none.
+    void hoverPortal(S32 x, S32 y);
+    /// Whether a portal mark crosses the cut between these two spaces of a
+    /// mesh, either way round. What the spaces overlay asks while it draws.
+    bool portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const;
+
     /// Draw the marks, the one being placed and the hover point, in the
     /// world pass after the navmesh overlay.
     void render();
@@ -82,7 +90,18 @@ public:
     void writeMarks(std::ostream& out) const;
 
 private:
+    struct HoverPortal
+    {
+        bool mValid = false;
+        LLUUID mMesh;
+        U32 mSpaces[2] = { 0, 0 };  ///< the two spaces it joins, by stable id
+        LLVector3d mCentre;         ///< the cut's centre, global, at the sill
+        LLVector3d mA;
+        LLVector3d mB;              ///< the cut's ends, global, lifted for drawing
+    };
+
     void commit(sknav::Mark mark);
+    void togglePortal(const HoverPortal& portal, const LLVector3d& at);
     void syncLabels();
     void syncTool();
 
@@ -94,6 +113,7 @@ private:
     U32 mRevision = 0;
     bool mHasHover = false;
     LLVector3d mHover;
+    HoverPortal mHoverPortal;
     std::map<U32, LLPointer<LLHUDText>> mLabels;
     U32 mLabelRevision = 0;
 };

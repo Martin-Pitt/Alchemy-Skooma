@@ -17,6 +17,7 @@
   <floater.string name="status_idle">Pick a type to place it; while placing, the key on each button switches to it. A mark selected below takes a type of its own shape.</floater.string>
   <floater.string name="status_point">Placing [TYPE]: click a surface.</floater.string>
   <floater.string name="status_line">Placing [TYPE]: click along it; Enter or a double-click ends the line, Esc cancels.</floater.string>
+  <floater.string name="status_portal">Placing [TYPE]: hover a portal the Spaces layer draws and click to strike it out; click a struck one to restore it. The Spaces checkbox in the navmesh console must be on.</floater.string>
   <text
    name="tool_status"
    height="26"

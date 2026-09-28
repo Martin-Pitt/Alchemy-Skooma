@@ -1104,7 +1104,8 @@ void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera,
     }
 }
 
-void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque) const
+void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
+                              const PortalCrossedFn& crossed) const
 {
     if (!mView)
     {
@@ -1168,10 +1169,25 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
             {
                 continue;
             }
+            LLColor4 color;
+            if (crossed)
+            {
+                // A portal crossed out by an annotation: greyed, with the
+                // strike the annotator draws over it on top.
+                const std::vector<U32>& ids = m.mProduct->mSpaceIds;
+                if (!ids.empty() && p.mSpaces[0] < ids.size() && p.mSpaces[1] < ids.size()
+                    && crossed(m.mId, ids[p.mSpaces[0]], ids[p.mSpaces[1]]))
+                {
+                    color = LLColor4(0.35f, 0.35f, 0.35f, opaque ? 1.f : 0.3f);
+                    const LLVector3 pa = gAgent.getPosAgentFromGlobal(a), pb = gAgent.getPosAgentFromGlobal(b);
+                    geom.edge(pa, pb, color);
+                    continue;
+                }
+            }
             const SKNavSwatch swatch = p.mKind == PortalKind::DOOR
                                            ? SKNavSwatch::PORTAL_DOOR
                                            : (p.mKind == PortalKind::STAIR ? SKNavSwatch::PORTAL_STAIR : SKNavSwatch::PORTAL_OPENING);
-            LLColor4 color = skNavSwatchColor(swatch);
+            color = skNavSwatchColor(swatch);
             if (opaque)
             {
                 color.mV[VALPHA] = 1.f;

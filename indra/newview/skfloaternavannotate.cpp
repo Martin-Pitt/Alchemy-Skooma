@@ -68,6 +68,7 @@ namespace
         { "Not walk", "Floor the navmesh has that should not be walkable" },
         { "Merge", "Spaces that should be one" },
         { "Split", "A space that should be two" },
+        { "Cross", "A portal the Spaces layer shows that should not be there: hover it, click to cross it out, click again to restore" },
         { "Note", "Anything else; say what in the note" },
     };
     static_assert(sizeof(TYPE_LABELS) / sizeof(TYPE_LABELS[0]) == static_cast<size_t>(MarkType::COUNT), "a label per type");
@@ -216,7 +217,8 @@ void SKFloaterNavAnnotate::draw()
     if (annotator.armed())
     {
         const MarkType type = annotator.newType();
-        status = getString(sknav::markTypeKind(type) == MarkKind::LINE ? "status_line" : "status_point");
+        const MarkKind kind = sknav::markTypeKind(type);
+        status = getString(kind == MarkKind::LINE ? "status_line" : (kind == MarkKind::PORTAL ? "status_portal" : "status_point"));
         LLStringUtil::replaceString(status, "[TYPE]", TYPE_LABELS[static_cast<S32>(type)].mLabel);
     }
     getChild<LLUICtrl>("tool_status")->setValue(status);
