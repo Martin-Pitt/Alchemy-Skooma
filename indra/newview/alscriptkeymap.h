@@ -25,48 +25,76 @@
 #pragma once
 
 #include "alkeymap.h"
-#include "llpanel.h"
-#include "llsetkeybinddialog.h"
+#include "alstudiofloater.h"
+#include "llxmlnode.h"
 
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-class LLLineEditor;
-class LLScrollListCtrl;
-class LLTextBox;
-
 // The keymap every editor of the studio is given: the standard one, with
 // the commands a person rebound as the setting says. A rebound command
 // has only the keys the setting gives it; a command the setting does not
 // name keeps the standard's. The studio's own menu commands -- saving,
 // going to a line, the panes -- are rebound in the same setting, each to
-// one key, since a menu item answers to one.
+// keys of one key or two in turn; the menu shows the first.
 namespace ALScriptKeymap
 {
     typedef std::vector<std::pair<KEY, MASK>> keys_t;
+    typedef std::vector<ALKeyChord>           chords_t;
 
-    // A command of the studio's menus a person may give a key to: the
-    // item's name in the menus, and the key it answers to as standard.
-    struct MenuCommand
-    {
-        const char* item;
-        KEY         key;
-        MASK        mask;
-    };
+    // A command of the studio's menus a person may give keys to: the
+    // item's name in the menus, and a key it answers to as standard --
+    // the studio's own table of keyed commands (ALStudioFloater), which
+    // Script Studio gives its window as well. A command with several keys
+    // as standard is named once for each.
+    using MenuCommand = ALStudioFloater::KeyedCommand;
     const std::vector<MenuCommand>& menuCommands();
+    // Each command of the table once, in its order.
+    const std::vector<std::string>& menuIds();
     // Whether an item is one of them.
     bool                 isMenuCommand(std::string_view item);
-    // Its key: the person's, else the standard; KEY_NONE for none.
-    std::pair<KEY, MASK> menuKey(std::string_view item);
+    // Its keys, each one or two in turn: the person's, else the
+    // standard's; none for none. The first is the one the menu shows.
+    chords_t             menuKeys(std::string_view item);
+    ALKeyChord           menuKey(std::string_view item);
     bool                 isMenuRebound(std::string_view item);
-    // The item's key from now on, KEY_NONE for none; and the standard's
+    // The item's keys from now on, none for none; and the standard's
     // again.
-    void                 rebindMenu(std::string_view item, KEY key, MASK mask);
+    void                 rebindMenu(std::string_view item, const chords_t& keys);
     void                 restoreMenu(std::string_view item);
 
-    ALKeymap current();
+    // A command keys are given to: an editor's, or a menu's by name.
+    struct Owner
+    {
+        ALEditorCommand command = ALEditorCommand::None;
+        std::string     menu;
+    };
+    // The commands but `keeping` whose keys a chord given to it takes:
+    // the editors' command that hears its first key -- the key pressed,
+    // or the first of two -- since the editor has a key before the studio
+    // would wait; and the menus' commands with the same keys, with keys
+    // whose first is the key given (it runs a command of its own now, and
+    // the studio would never wait for a second), or with the first of the
+    // two given as a key of its own. Taken from them where `apply`; named
+    // either way.
+    std::vector<Owner> takeKeys(const Owner& keeping, const ALKeyChord& chord, bool apply);
+
+    // The items of the studio's menu bar as a file has them: each item's
+    // name, and where it is, "View > Scrollbar > Map" -- the names the
+    // Keys tab gives the menus' commands, which are the menus' own.
+    struct MenuItem
+    {
+        std::string id;
+        std::string path;
+    };
+    std::vector<MenuItem> menuItemsIn(const LLXMLNodePtr& root);
+    // The skin's, and its language's, as the studio is built from them.
+    const std::vector<MenuItem>& studioMenuItems();
+
+    // The editors' keymap, built once for each change of the setting.
+    const ALKeymap& current();
     keys_t   keysOf(const ALKeymap& map, ALEditorCommand command);
     bool     isRebound(ALEditorCommand command);
     // The command's keys from now on, in the setting; none unbinds it.
@@ -77,56 +105,5 @@ namespace ALScriptKeymap
     // The keys as a person reads them: "Ctrl+Shift+K", or the several
     // joined.
     std::string describe(const keys_t& keys);
+    std::string describe(const chords_t& keys);
 }
-
-// The keyboard map: every command of the editor, and of the studio's
-// menus, with the keys it answers to, to read, to search, and to change --
-// a key pressed into the viewer's own key dialog -- or put back. A key
-// given to one command is taken from whatever had it, and the panel says
-// which. A tab of the studio's preferences.
-class ALPanelScriptKeymap final : public LLPanel, public LLKeyBindResponderInterface
-{
-public:
-    AL_VIEW_TYPE(ALPanelScriptKeymap, LLPanel);
-
-    ALPanelScriptKeymap();
-    ~ALPanelScriptKeymap() override;
-
-    bool postBuild() override;
-    // The list read from the keymap again: the setting changed under it.
-    void refresh() override { fill(); }
-
-    void onCancelKeyBind() override {}
-    void onDefaultKeyBind(bool all_modes) override;
-    bool onSetKeyBind(EMouseClickType click, KEY key, MASK mask, bool all_modes) override;
-
-private:
-    void fill();
-    void onChange();
-    void onAdd();
-    void onClear();
-    void onRestore();
-    void onRestoreAll();
-    void refreshButtons();
-    // The command of the row chosen: an editor's, or a menu item's by
-    // name; neither where nothing is chosen.
-    struct Chosen
-    {
-        ALEditorCommand command = ALEditorCommand::None;
-        std::string     menu;
-        bool            any() const { return command != ALEditorCommand::None || !menu.empty(); }
-    };
-    Chosen      chosen() const;
-    // What a command is called in the list.
-    std::string nameOf(const Chosen& which) const;
-    // The key taken from every command but this one that answered to it,
-    // and what those were called.
-    std::vector<std::string> takeKey(const Chosen& keeping, KEY key, MASK mask);
-
-    LLLineEditor*     mFilter  = nullptr;
-    LLScrollListCtrl* mList    = nullptr;
-    LLTextBox*        mSaid    = nullptr;
-    Chosen            mEditing;
-    // Whether the key dialog adds to the command's keys or replaces them.
-    bool              mAdding  = false;
-};

@@ -24,9 +24,14 @@
 
 #pragma once
 
+#include "alanchoredranges.h"
 #include "alkeymap.h"
 #include "alsyntaxhighlighter.h"
 #include "altextdocument.h"
+#include "altextediting.h"
+#include "altextfind.h"
+#include "altextindent.h"
+#include "altextspelling.h"
 #include "altextlayout.h"
 #include "altextsearch.h"
 #include "altextundo.h"
@@ -111,6 +116,9 @@ public:
     // The mouse put the caret somewhere, or dragged a selection: the
     // keymap's own idea of where things are is told.
     virtual void mouseChanged(ALTextView& view) {}
+    // Each time the view is drawn: for what waits on time rather than on a
+    // key -- vim's keys held for a mapping, until timeoutlen.
+    virtual void idle(ALTextView& view) {}
 };
 
 class ALTextView : public LLUICtrl, public LLEditMenuHandler, public LLSpellCheckMenuHandler, protected LLPreeditor
@@ -165,6 +173,11 @@ public:
         // Whether a click gives the view the keyboard; a card over an
         // editor leaves it where it was.
         Optional<bool>        takes_focus;
+        // Whether an Escape with nothing here to let go of goes on to the
+        // view it is in, for one that answers it -- a comparison going
+        // back to the text it was made from. Otherwise the view keeps it,
+        // and the keyboard with it.
+        Optional<bool>        pass_escape;
         // Said, dimly, in place of the text while there is none: what
         // will appear here, or what to type.
         Optional<std::string> placeholder;
@@ -182,6 +195,10 @@ public:
     // text, its steps, its saved mark -- where the history is not of it.
     bool        setTextWithHistory(std::string_view text, const LLSD& history);
     std::string text() const { return mDocument.text(); }
+    // The whole text without a copy, kept by the document until the next
+    // edit: for a caller that only reads it, and reads it before anything
+    // is changed.
+    const std::string& wholeText() const { return mDocument.wholeText(); }
     void        setValue(const LLSD& value) override;
     LLSD        getValue() const override;
 
@@ -204,10 +221,35 @@ public:
     bool            isReadOnly() const { return mReadOnly; }
     void            setWordWrap(bool wrap);
     bool            getWordWrap() const { return mWordWrap; }
+    // How the text is indented -- by tabs or by spaces, and how wide a
+    // tab or a level is -- and where that was said: the defaults the view
+    // was given; the text itself, as it was put in whole, where the view
+    // reads it; or chosen for this text -- vim's :set, a pick from the
+    // strip -- which a new text put in keeps.
+    enum class IndentFrom : U8
+    {
+        Defaults,
+        Text,
+        Chosen,
+    };
+    void            setIndentDefaults(S32 tab_width, bool soft_tabs);
+    void            setReadsIndentation(bool reads);
+    bool            readsIndentation() const { return mReadsIndentation; }
+    // Whether lines pasted into a line's indentation are brought to where
+    // they go (ALTextIndent::planPaste), where the grammar indents.
+    void            setReindentsPaste(bool reindents) { mReindentsPaste = reindents; }
+    // Whether Copy and Cut with nothing selected take the caret's whole
+    // line, which a paste with nothing selected then puts in above the
+    // caret's line, as a line.
+    void            setClipsLines(bool clips) { mClipsLines = clips; }
     void            setTabWidth(S32 spaces);
     S32             getTabWidth() const { return mTabWidth; }
-    void            setSoftTabs(bool soft) { mSoftTabs = soft; }
+    void            setSoftTabs(bool soft);
     bool            getSoftTabs() const { return mSoftTabs; }
+    IndentFrom      indentFrom() const { return mIndentFrom; }
+    // What was chosen forgotten: the text's own again, where it says and
+    // the view reads it, else the defaults.
+    void            readIndentation();
     // What is behind the text now -- read-only, focused or neither -- and
     // what the text is drawn in, for whatever draws beside them.
     const LLColor4& backgroundColor() const;
@@ -226,6 +268,10 @@ public:
     // The selection as drawn now: its colour, or a subclass's for a view
     // the keyboard has left.
     virtual LLColor4 selectionDrawColor() const { return mSelectionColor.get(); }
+    // Where a text is part of a larger one, the lines before it: its first
+    // line is shown as this plus one, and a line number typed -- vim's 12G,
+    // :12 -- is one of those shown.
+    virtual S32 lineNumberBase() const { return 0; }
     // How the caret is drawn where a modal keymap does not say -- a line
     // before the character, a block over it, a bar under it -- and whether
     // it blinks.
@@ -334,7 +380,7 @@ public:
     void                             setSubstitutions(std::vector<Substitution> substitutions);
     void                             addSubstitution(Substitution substitution);
     void                             clearSubstitutions() { setSubstitutions({}); }
-    const std::vector<Substitution>& substitutions() const { return mSubstitutions; }
+    const std::vector<Substitution>& substitutions() const { return mSubstitutions.items(); }
     // The one over a position, or null.
     const Substitution*              substitutionAt(const ALTextPos& pos) const;
     // What the stretch at a range shows, changed: a name that arrived.
@@ -347,6 +393,12 @@ public:
     // registry: labelled as it labels it, relabelled when a name arrives,
     // with its tooltip, its underline and its URL. How many were made.
     S32 linkUrlsOn(S32 line, S32 from = 0);
+    // The links linkUrlsOn would make of a line's text, found but not
+    // added, for whoever keeps them to lay again: at `line`, from a
+    // column on. A name that arrives later relabels the view's links to
+    // the URL, and is told to `labelled` where one is given.
+    typedef std::function<void(const std::string& url, const std::string& label)> labelled_t;
+    std::vector<Substitution> urlLinks(const std::string& text, S32 line, S32 from = 0, labelled_t labelled = labelled_t());
 
     // --- styles ----------------------------------------------------------------
 
@@ -372,7 +424,7 @@ public:
     // would overlap one. What a log adds as it grows, a line at a time.
     void                      addStyle(Style style);
     void                      clearStyles() { setStyles({}); }
-    const std::vector<Style>& styles() const { return mStyles; }
+    const std::vector<Style>& styles() const { return mStyles.items(); }
 
     // --- atoms ---------------------------------------------------------------
 
@@ -403,7 +455,7 @@ public:
     void                     setAtoms(std::vector<Atom> atoms);
     void                     addAtom(Atom atom);
     void                     clearAtoms() { setAtoms({}); }
-    const std::vector<Atom>& atoms() const { return mAtoms; }
+    const std::vector<Atom>& atoms() const { return mAtoms.items(); }
     const Atom*              atomAt(const ALTextPos& pos) const;
     ALTextRange              atomRange(const Atom& atom) const { return ALTextRange(atom.at, ALTextPos(atom.at.line, atom.at.column + atom.length)); }
     typedef boost::signals2::signal<void(const Atom&)> atom_signal_t;
@@ -437,8 +489,8 @@ public:
     // Who says whether a word is spelled right, and what it might have
     // been: the viewer's dictionary unless told otherwise, which a test
     // is. Only the dictionary takes a word in or lets one pass.
-    typedef std::function<bool(const std::string& word)>                             spell_checker_t;
-    typedef std::function<void(const std::string& word, std::vector<std::string>& out)> spell_suggester_t;
+    typedef ALTextSpelling::checker_t   spell_checker_t;
+    typedef ALTextSpelling::suggester_t spell_suggester_t;
     void setSpellChecker(spell_checker_t checker, spell_suggester_t suggester = nullptr);
     // The dictionary's suggestions for the misspelling at the caret,
     // gathered again: what the right-click menu offers.
@@ -450,6 +502,33 @@ public:
     bool        misspelledAt(const ALTextPos& pos, ALTextRange* word = nullptr);
     // Everything is checked again: the dictionary changed.
     void        recheckSpelling();
+    // The next misspelled word after a place, or the last before it, line
+    // by line round past the ends to the place's own line again; none
+    // where there is none, or no spell check.
+    std::optional<ALTextRange> misspellingFrom(const ALTextPos& from, bool forward);
+    // Next Misspelling and Previous Misspelling: the word selected, from
+    // the selection's end or its start. False where there is none.
+    bool goToMisspelling(bool forward);
+    // A change worked out over the document (ALTextEditing) made, as one
+    // step to undo, and the selection it says after.
+    void apply(const ALTextEditing::Change& change);
+    // --- the change list --------------------------------------------------------
+
+    // Where the text was changed, oldest first, as vim's change list keeps
+    // them: one a line for changes one after another on it, each sliding
+    // with the text after, the last hundred.
+    const std::vector<ALTextPos>& changes() const { return mChanges; }
+    // Where in it the caret was last taken: its size past the newest.
+    S32 changeAt() const { return mChangeAt; }
+    // The caret to the place of a change so many older (negative) or newer
+    // than where it was last taken: Last Edit Location and vim's g; and g,.
+    // False past either end.
+    bool goToChange(S32 steps);
+
+    // Convert Indentation: the leading blanks of lines first through last
+    // made of spaces, or of tabs as far as they go, at the view's tab
+    // width. False where nothing changed.
+    bool convertIndentation(S32 first, S32 last, bool to_spaces, S32 measured_width = 0);
 
     // --- LLSpellCheckMenuHandler ---------------------------------------------
 
@@ -511,12 +590,12 @@ public:
     const std::vector<ALTextRange>& findMatches()
     {
         settleFind();
-        return mMatches;
+        return mFind.matches();
     }
     S32 findCurrent()
     {
         settleFind();
-        return mMatch;
+        return mFind.current();
     }
     // The next match selected and brought into view, or the one before;
     // round the ends. False with none.
@@ -551,9 +630,9 @@ public:
     void    redo() override;
     bool    canRedo() const override { return !mReadOnly && mUndo.canRedo(); }
     void    cut() override;
-    bool    canCut() const override { return !mReadOnly && hasSelection(); }
+    bool    canCut() const override { return !mReadOnly && (hasSelection() || mClipsLines); }
     void    copy() override;
-    bool    canCopy() const override { return hasSelection(); }
+    bool    canCopy() const override { return hasSelection() || mClipsLines; }
     void    paste() override;
     bool    canPaste() const override;
     void    doDelete() override;
@@ -581,6 +660,10 @@ public:
     bool handleHover(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
     bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override;
+    // Told of the wheel turned with Control held -- Command on a Mac --
+    // by so many steps, up positive: whoever holds the view zooms its
+    // text. Without it, Control and the wheel scroll.
+    void setOnZoomWheel(std::function<void(S32 steps)> zoom) { mZoomWheel = std::move(zoom); }
     bool handleScrollHWheel(S32 x, S32 y, LLScrollDelta delta) override;
     bool handleToolTip(S32 x, S32 y, MASK mask) override;
     bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop, EDragAndDropType cargo_type, void* cargo_data, EAcceptance* accept,
@@ -604,13 +687,6 @@ public:
     // What a tab typed at a place puts in: a tab, or spaces to the next
     // stop where tabs are soft.
     std::string tabText(const ALTextPos& at) const;
-    // The blanks a line begins with.
-    std::string leadingBlanks(S32 line) const;
-    // Where a line that closes a block belongs, by the grammar's rules:
-    // level with the line that opened it -- the bracket it closes, where
-    // a subclass can match one, or else the line above, if that opens a
-    // block, or a level out from it.
-    std::string closingIndent(S32 line);
     // The rect the text is drawn in.
     LLRect textRect() const;
     // The view less the band a modal keymap has under the text: where
@@ -620,6 +696,13 @@ public:
     S32    bandHeight() const;
     // The position under a point of the view, on a cluster boundary.
     ALTextPos posAtLocal(S32 x, S32 y, bool round);
+    // And back: where a place in the text is, local to the view -- its
+    // row, top to bottom, and across, the place itself, as wide as
+    // nothing. For a stretch, its span on the row it begins on, or the
+    // whole of that row where it shows nothing there. What a list, a card
+    // or a tip is put beside.
+    LLRect anchorOf(const ALTextPos& at);
+    LLRect anchorOf(const ALTextRange& range);
     // A drag of the mouse under way -- from its press, or a shift-press
     // from the anchor -- and the characters under its two ends: what a
     // keymap whose caret stands on a character, not between two, takes a
@@ -651,6 +734,13 @@ protected:
     // a list, a card, a view the text holds -- which has the mouse before
     // the text does; or nothing.
     LLView*      overlayAt(S32 x, S32 y) { return childFromPoint(x, y); }
+    // An edit command done -- typed, replaced, undone -- before the caret
+    // is brought into sight: whatever a subclass left for after its edits,
+    // done once rather than at each.
+    virtual void editsDone() {}
+    // The text changed other than by an edit command -- a log laid out
+    // again -- so that the find bar looks for its query again.
+    void         findChanged();
     virtual void drawBeforeRows(const LLRect& text) {}
     virtual void drawRowExtras(S32 line, S32 row, const LLRect& text, S32 screen_top, F32 left, F32 alpha) {}
     // Over every row, still clipped to the text: what floats above the
@@ -668,6 +758,10 @@ protected:
     virtual void revealLine(S32 line) { mLayout.setHidden(line, line, false); }
     virtual bool performFold(ALEditorCommand command) { return false; }
     virtual bool canFold(ALEditorCommand command) const { return false; }
+    // And about the code's structure: the functions a code editor's host
+    // knows of, and a bracket's partner.
+    virtual bool performFunction(ALEditorCommand command) { return false; }
+    virtual bool canFunction(ALEditorCommand command) const { return false; }
     // Whether a click lands where the last one did, which is what makes
     // it the next of a run; and the run armed for a third click, once a
     // subclass has taken a double click as its own.
@@ -707,11 +801,14 @@ protected:
     // beside them.
     S32  screenTopOf(const LLRect& text, S32 line, S32 row);
     void forEachVisibleRow(const LLRect& text, const std::function<void(S32 line, S32 row, S32 screen_top)>& visit);
-    // The lines a selection covers, as commands over whole lines count them.
-    std::pair<S32, S32>  selectedLines() const;
     // Every change goes through here: the document, the journal, the
     // caret, and whoever is listening.
     ALTextDocument::Edit edit(const ALTextRange& range, std::string_view text);
+    // Several stretches replaced as one edit (ALTextDocument::replaceMany),
+    // each at a place of the text as it is, none over another: one
+    // notification to every listener, one edit for the journal, and the
+    // caret put once, at `caret` in the text as it is after.
+    ALTextDocument::Edit editMany(std::vector<std::pair<ALTextRange, std::string>> edits, const ALTextPos& caret);
     void                 afterEdit();
     void                 placeCaret(const ALTextPos& pos, bool extend);
     // The selection put somewhere, anchor and caret at once, told to
@@ -742,17 +839,16 @@ private:
     // first thing on its line: the line brought out to where it belongs;
     // and a word so brought out that goes on into a longer one put back.
     void                 outdentAsTyped(llwchar typed);
-    // A line's blanks put to an indentation, the caret keeping its place;
-    // only ever further out. True where the line moved.
-    bool                 reindentLine(S32 line, const std::string& indent);
-    // An indentation one level in from, or out from, another, in the kind
-    // of blank it is written in.
-    std::string          indentUnit(const std::string& like) const;
-    std::string          outdented(const std::string& indent) const;
-    void                 indentLines(bool in);
-    void                 duplicateLines();
-    void                 moveLines(S32 direction);
-    void                 deleteLines();
+    // What ALTextIndent works a command out with -- the view's tabs, and
+    // the bracket a closing one closes, where a subclass can match one --
+    // and what it or ALTextEditing works out done, as one step to undo.
+    ALTextIndent::Options  editingOptions() const;
+    // Where a word's motion from a place ends: by code's runs where the
+    // grammar is code, by the prose's words otherwise; with `parts`, by a
+    // name's parts too, in either.
+    ALTextPos              wordStep(const ALTextPos& from, bool forward, bool parts) const;
+    ALTextIndent::opener_t openerOf();
+
     void                 allowLanguageInput(bool allow);
     // Whether what an input method composes goes into the text: not in a
     // read-only one, nor while a modal keymap is between its inserting
@@ -779,11 +875,21 @@ private:
     // edits stop coming for a moment, the matches sliding with the text
     // until then; and at once where they are about to be used.
     void refreshFind();
+    // The bar's query or its choices changed.
+    void queryChanged();
+    // The bar told what was found.
+    void findCounted();
     void settleFind()
     {
-        if (mFindStale)
+        if (mFind.isStale())
         {
             refreshFind();
+        }
+        // A worker's matches waited for: whatever asks acts on the text as
+        // it is.
+        if (mFind.searching() && mFind.collect(mDocument, selection().normalised(), true))
+        {
+            findCounted();
         }
     }
     // The map: the lines it shows, hidden ones left out, and how far its
@@ -819,7 +925,6 @@ private:
     // on its glyphs.
     const Substitution* linkAtLocal(S32 x, S32 y);
     const Atom*         atomAtLocal(S32 x, S32 y);
-    void                checkLine(S32 line);
     // The atom whose view has the keyboard, or -1; and the keyboard taken
     // back from a view about to lose its box.
     S32                 focusedAtom() const;
@@ -864,6 +969,7 @@ private:
 
     bool mBgVisible  = true;
     bool mTakesFocus = true;
+    bool mPassEscape = false;
     bool mReadOnly   = false;
     // What the window was last told of the input method.
     bool mLanguageInput = false;
@@ -871,15 +977,20 @@ private:
     // The line a closing word last brought out, where the caret stood
     // after it, and the blanks it had: undone if the next character makes
     // the word a longer one.
-    struct AutoOutdent
-    {
-        S32         line   = -1;
-        S32         column = -1;
-        std::string indent;
-    };
-    AutoOutdent mAutoOutdent;
+    ALTextIndent::AutoOutdent mAutoOutdent;
     bool mSoftTabs  = false;
     S32  mTabWidth  = 4;
+    // What the text is indented by where it says nothing of its own, and
+    // whether a text put in whole is asked.
+    ALTextIndent::Options mIndentDefaults;
+    IndentFrom            mIndentFrom         = IndentFrom::Defaults;
+    bool                  mReadsIndentation   = false;
+    bool                  mReindentsPaste     = false;
+    bool                  mClipsLines         = false;
+    // What the last Copy or Cut of a whole line put on the clipboard, in
+    // any view: pasted as a line while the clipboard still holds it.
+    static std::string    sClippedLine;
+    void                  useIndentation(const ALTextIndent::Options& options, IndentFrom from);
     S32  mHPad      = 4;
     S32  mVPad      = 2;
 
@@ -891,6 +1002,8 @@ private:
     F32          mScrollX  = 0.f;
     // What a wheel moved that did not make a whole pixel yet.
     F32          mWheelRemainder = 0.f;
+    std::function<void(S32)> mZoomWheel;
+    F32          mZoomRemainder = 0.f;
     bool         mSelecting = false;
     // What is selected becomes the primary selection: at once, or, while a
     // drag goes on, once it is let go of.
@@ -940,14 +1053,8 @@ private:
     LLHandle<LLContextMenu> mUrlMenuHandle;
 
     ALFindBar*               mFindBar = nullptr;
-    std::vector<ALTextRange> mMatches;
-    S32                      mMatch = -1;
-    bool                     mFindStale = false;
-    LLFrameTimer             mFindSettle;
-    // The selection the bar was told to stay within, while it is.
-    bool                     mFindInSelection = false;
-    ALTextRange              mFindScope;
-    std::string              mFindError;
+    // What the bar's query found, kept in step with the text.
+    ALTextFind               mFind;
     LLUIColor                mFindMatchColor;
 
     bool             mScrollMap        = false;
@@ -964,6 +1071,14 @@ private:
     S32              mMapLinesCount    = 0;
     std::vector<S32> mRulerMarkLines;
     bool             mRulerMarksValid    = false;
+    // Each pixel row of the ruler's track with a match on it, as last found:
+    // for which matches, which track and which text's height.
+    std::vector<U8> mRulerRows;
+    bool            mRulerRowsValid      = false;
+    U32             mRulerRowsGeneration = 0;
+    S32             mRulerRowsTop        = 0;
+    S32             mRulerRowsHeight     = 0;
+    S32             mRulerRowsTotal      = 0;
     U32              mRulerMarksVersion  = 0;
     U32              mRulerMarksRevision = 0;
 
@@ -973,9 +1088,14 @@ private:
 
     boost::signals2::scoped_connection mDocumentConnection;
     // In order of where they start, none over another.
-    std::vector<Substitution>          mSubstitutions;
-    std::vector<Atom>                  mAtoms;
-    std::vector<Style>                 mStyles;
+    ALAnchoredRanges<Substitution>     mSubstitutions;
+    // An atom is at a place, and over its placeholder's bytes.
+    struct AtomRange
+    {
+        ALTextRange operator()(const Atom& atom) const { return ALTextRange(atom.at, ALTextPos(atom.at.line, atom.at.column + atom.length)); }
+    };
+    ALAnchoredRanges<Atom, AtomRange>  mAtoms;
+    ALAnchoredRanges<Style>            mStyles;
     LLUIColor                          mLinkColor;
     link_signal_t                      mLinkClicked;
     drop_handler_t                     mDropHandler;
@@ -993,21 +1113,13 @@ private:
     // the line changes or the dictionary does; the word at the caret is
     // left alone for a moment after it was typed.
     bool                                    mSpellCheck = false;
-    spell_checker_t                         mSpellChecker;
-    spell_suggester_t                       mSpellSuggester;
-    struct SpellLine
-    {
-        bool                             valid = false;
-        // The line's tokens as they were checked by.
-        U32                              revision = 0;
-        std::vector<std::pair<S32, S32>> words;
-    };
-    std::vector<SpellLine>                  mSpellLines;
+    ALTextSpelling                          mSpelling;
+    // The change list (changes), and where in it the caret was last taken.
+    std::vector<ALTextPos>                  mChanges;
+    S32                                     mChangeAt = 0;
     LLUIColor                               mSpellErrorColor;
     std::string                             mPlaceholder;
     LLFrameTimer                            mSpellTimer;
-    std::vector<std::string>                mSuggestions;
-    ALTextRange                             mSuggestedFor;
     boost::signals2::scoped_connection      mSpellSettingsConnection;
     std::vector<LLVector2>                  mSquiggleScratch;
 };
