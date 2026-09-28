@@ -56,6 +56,7 @@ namespace sknav
         F32 mClimbM = 0.75f;        ///< floors of linked cells within this
         F32 mWalkHeadM = 1.f;       ///< a walkable gap this tall is a floor an avatar stands on
         F32 mWalkOverlapM = 1.f;    ///< and links to one sharing this much air
+        F32 mStairMinRiseM = 0.5f;  ///< a flight's stair portals together must climb this: less is a step, not a staircase
         F32 mClearMaxM = 16.f;      ///< the feature transform reaches no further
         F32 mLintelDropM = 0.3f;    ///< a lintel is this far below the ceiling on both sides
         F32 mEStep = 0.3f;          ///< indoorness this different across a cut is a threshold

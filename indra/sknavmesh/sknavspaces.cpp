@@ -628,6 +628,7 @@ namespace sknav
         void unite(U32 a, U32 b);
         void edges();
         void merge();
+        bool demoteFlatFlights(F32 min_rise);
         std::vector<Run> runs(const std::vector<U32>& edge_ids, U32 ru) const;
         Scored score(const Run& run);
         Scored scoreFresh(const Run& run, bool relaxed);
@@ -2543,6 +2544,62 @@ namespace sknav
         return out;
     }
 
+    bool SpacesPass::State::demoteFlatFlights(F32 min_rise)
+    {
+        // A staircase spans its portals: every stair portal of one flight
+        // region together has to climb min_rise from its foot to its top
+        // exit. A flight whose portals all sit within that is a deck edge or
+        // a rail the agent steps over anyway - its seeds lose the flag and
+        // the rounds run again, so the floors it touched join instead of
+        // staying split around it.
+        std::unordered_set<U32> flying;
+        for (U32 s = 0; s < mSeeds.size(); ++s)
+        {
+            if (mSeeds[s].mFlight)
+            {
+                flying.insert(mRegions.find(s));
+            }
+        }
+        std::unordered_map<U32, std::pair<F32, F32>> span;
+        for (const Portal& q : mPortals)
+        {
+            if (q.mKind != PortalKind::STAIR)
+            {
+                continue;
+            }
+            for (const U32 r : q.mSpaces)
+            {
+                if (!flying.count(r))
+                {
+                    continue;
+                }
+                const auto ins = span.try_emplace(r, q.mSill, q.mSill);
+                ins.first->second.first = std::min(ins.first->second.first, q.mSill);
+                ins.first->second.second = std::max(ins.first->second.second, q.mSill);
+            }
+        }
+        bool demoted = false;
+        for (const U32 r : flying)
+        {
+            const auto hit = span.find(r);
+            // No stair portal at all is the island the linked check strips;
+            // here a flight demotes only when its portals sit at one level.
+            if (hit == span.end() || hit->second.second - hit->second.first >= min_rise)
+            {
+                continue;
+            }
+            for (U32 s = 0; s < mSeeds.size(); ++s)
+            {
+                if (mSeeds[s].mFlight && mRegions.find(s) == r)
+                {
+                    mSeeds[s].mFlight = false;
+                    demoted = true;
+                }
+            }
+        }
+        return demoted;
+    }
+
     void SpacesPass::State::merge()
     {
         edges();
@@ -2783,7 +2840,16 @@ namespace sknav
             }
             if (!merged)
             {
-                break;
+                // The rounds settled. A staircase spans its portals: a flight
+                // whose stair portals all sit within half a metre is a deck
+                // edge or a rail, not a staircase - strip its seeds' flags
+                // and run the rounds again, so the floors it touched join
+                // instead of staying split around it.
+                if (!demoteFlatFlights(params().mStairMinRiseM))
+                {
+                    break;
+                }
+                round = 0;
             }
             mRegions = round_uf;
         }
@@ -2807,8 +2873,7 @@ namespace sknav
         }
 
         // Doors whose leaf splits the air on its own, with no cut on them.
-        std::unordered_set<S32> matched(mPortalDoor.begin(), mPortalDoor.end());
-        for (size_t i = 0; i < mDoors.size(); ++i)
+        std::unordered_set<S32> matched(mPortalDoor.begin(), mPortalDoor.end());        for (size_t i = 0; i < mDoors.size(); ++i)
         {
             if (matched.count(static_cast<S32>(i)))
             {
