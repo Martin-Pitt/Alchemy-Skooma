@@ -95,6 +95,10 @@ public:
         // and the weights the front tab's check weighed along with it; and
         // the targets a weighing is asked for.
         virtual void                                refreshProblems(Doc& doc)                                     = 0;
+        // Those asked for made now, where they wait to be made with the
+        // next frame: what is about to read them -- the fixes -- reads
+        // what the last answer said.
+        virtual void                                settleProblems(Doc& doc)                                      = 0;
         virtual void                                showOutline(Doc& doc)                                         = 0;
         virtual void                                weighed(Doc& doc, const ALScriptAnalysis::Result& result)     = 0;
         virtual std::vector<ALScriptWeight::Target> weightTargets(const Doc& doc)                                 = 0;
@@ -133,7 +137,8 @@ public:
     // to `to`: of what the compiler would see, the expansion asked for
     // first where it is not in hand.
     void ask(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at, const ALTextPos& to);
-    // Each frame, at `now`: the checks that are due sent; and, where the
+    // Each frame, at `now`: the checks that are due sent -- the tab in
+    // front's, and of the others the one due longest -- and, where the
     // preprocessor's settings changed a moment ago, every tab expanded and
     // checked again, the editors taught its words where they changed.
     void pump(F64 now);
@@ -161,7 +166,7 @@ public:
     // The fixes of the problems on a line, as the editor lists them, each
     // with the value that finds it again; none where the text has moved on
     // since the check they were made in. And the problem a value is.
-    void              fixesOn(const Doc& doc, S32 line, std::vector<ALCodeEditor::Fix>& out) const;
+    void              fixesOn(Doc& doc, S32 line, std::vector<ALCodeEditor::Fix>& out);
     const Doc::Shown* shownOf(const LLSD& value) const;
 
     // A check's problems read back through the expansion it was made of to
@@ -173,6 +178,10 @@ public:
                         const std::vector<std::pair<std::string, ALSourceMap>>& module_maps);
 
 private:
+    // What the analyzers said of a word, on the tip under the mouse.
+    void showHover(Doc& doc, const ALScriptAnalysis::Result& said, const ALTextPos& at);
+    // A check asked of a tab now.
+    void askCheck(Doc& doc, F64 now);
     // The expansion asked for, a question waiting on it; and taken.
     void expandFor(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at, const ALTextPos& to);
     void expandedAnswer(const std::string& id, U32 version, const ALPreprocessor::Result& result);

@@ -27,6 +27,7 @@
 #include "alscriptsearchpane.h"
 
 #include "alcodeeditor.h"
+#include "alpanefolds.h"
 #include "alpanelist.h"
 #include "alscopebar.h"
 #include "alscriptmessages.h"
@@ -169,7 +170,10 @@ void ALScriptSearchPane::buildSentence()
     where.kind    = ALScopeBar::Segment::Kind::Choice;
     where.name    = "scope";
     where.toolTip = mServices->words("SearchScopeTip");
-    where.choices = { { mServices->words("SearchOpen"), "open" }, { mServices->words("SearchThisObject"), "object" }, { mServices->words("SearchListed"), "listed" } };
+    where.choices = { { mServices->words("SearchOpen"), "open" },
+                      { mServices->words("SearchThisObject"), "object" },
+                      { mServices->words("SearchListed"), "listed" },
+                      { mServices->words("SearchInventory"), "inventory" } };
     said.push_back(where);
 
     // And what they include: the text an #include or a require brings in,
@@ -278,6 +282,31 @@ void ALScriptSearchPane::run()
         settled();
         return;
     }
+    // The inventory's scripts and notecards: one open here searched as it
+    // stands, one open in another window as it stands there, the rest as
+    // the asset server has them -- or as read for an earlier search.
+    if (scope == "inventory")
+    {
+        const U32         generation = mSearch.generation();
+        const std::string where      = mServices->words("SearchInventoryWhere");
+        for (const Window::InventoryItem& one : mWindow->inventoryItems())
+        {
+            if (const Doc* doc = mServices->findDoc(one.ref))
+            {
+                searchOpen(*doc);
+                continue;
+            }
+            if (const Doc* there = mWindow->openElsewhere(one.ref); there && there->loaded)
+            {
+                searched(one.ref, there->name, where, there->editor->document(), 0, std::string(), true, there->notecard);
+                continue;
+            }
+            mSearch.asked();
+            mWindow->fetchForSearch(one.ref, generation, where);
+        }
+        settled();
+        return;
+    }
     // This object: the active script's, else the one chosen in the
     // explorer; with neither, no object is guessed at, and the count says
     // what would give it one.
@@ -346,27 +375,54 @@ void ALScriptSearchPane::searchObjects(U32 generation, const std::vector<Window:
 }
 
 void ALScriptSearchPane::fetched(U32 generation, const std::string& where, const ALScriptRef& ref, const std::string& name,
-                                 const std::optional<std::string>& text, bool notecard)
+                                 std::shared_ptr<const std::string> text, bool notecard)
+{
+    if (generation != mSearch.generation())
+    {
+        return;
+    }
+    if (!text)
+    {
+        // Not searched, and counted so: a count that read as complete over
+        // a script not read would pass for having found nothing in it.
+        mSearch.answered(generation);
+        mSearch.notRead();
+        settled();
+        return;
+    }
+    // Sought away from the main thread, still counted as to come until
+    // the answer is back.
+    const LLHandle<LLPanel> handle = getHandle();
+    mWindow->matchApart(text, mSearch.query(), mSearch.options(),
+                        [handle, generation, where, ref, name, text, notecard](ALScriptSearch::Matched found) {
+                            if (ALScriptSearchPane* pane = ALViewType::as<ALScriptSearchPane>(handle.get()))
+                            {
+                                pane->matched(generation, where, ref, name, *text, notecard, std::move(found));
+                            }
+                        });
+}
+
+void ALScriptSearchPane::matched(U32 generation, const std::string& where, const ALScriptRef& ref, const std::string& name, const std::string& text,
+                                 bool notecard, ALScriptSearch::Matched found)
 {
     if (!mSearch.answered(generation))
     {
         return;
     }
-    if (text)
+    // A wrapped script is searched as its author wrote it, and that text
+    // kept for a replace to work over.
+    const ALScriptSearch::Kept kept = mSearch.keep(ref, name, where, std::move(found), 0, std::string(), &text, notecard);
+    if (mSearch.badPattern())
     {
-        // A wrapped script is searched as its author wrote it, and that
-        // text kept for a replace to work over.
-        searched(ref, name, where, ALTextDocument(*text), 0, std::string(), true, notecard);
-        if (!notecard)
-        {
-            searchIncludes(ref, std::string(), name, *text, ALScriptMessages::looksLikeLua(*text));
-        }
+        mCount->setToolTip(mSearch.patternError());
     }
-    else
+    else if (kept == ALScriptSearch::Kept::Added)
     {
-        // Not searched, and counted so: a count that read as complete over
-        // a script not read would pass for having found nothing in it.
-        mSearch.notRead();
+        addRows(mSearch.found().size() - 1);
+    }
+    if (!notecard)
+    {
+        searchIncludes(ref, std::string(), name, text, ALScriptMessages::looksLikeLua(text));
     }
     settled();
 }
@@ -493,7 +549,16 @@ void ALScriptSearchPane::typedIn(const Doc& doc)
     {
         return;
     }
-    if (mBar->valueOf("scope") != "open")
+    const std::string scope = mBar->valueOf("scope");
+    if (scope == "inventory")
+    {
+        // One of the inventory's, which the search was over.
+        if (!doc.ref.inInventory() || doc.ref.isNull())
+        {
+            return;
+        }
+    }
+    else if (scope != "open")
     {
         // One of the objects the search was over: the one searched, or
         // those listed when it began -- not any open script's.
@@ -507,7 +572,9 @@ void ALScriptSearchPane::typedIn(const Doc& doc)
 
 void ALScriptSearchPane::pump()
 {
-    if (!mSearch.due(LLTimer::getTotalSeconds()))
+    // Searched again only while the results can be seen, and once they
+    // are: what was typed in meanwhile waits.
+    if (!ALPaneFolds::inSight(this) || !mSearch.due(LLTimer::getTotalSeconds()))
     {
         return;
     }
