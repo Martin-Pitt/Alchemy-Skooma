@@ -144,6 +144,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             return;
         }
         Parts& parts = mParts[std::make_pair(mesh.mId, space.mId)];
+        if (parts.mIndex < 0)
+        {
+            parts.mIndex = static_cast<S32>(mParts.size()) - 1;
+        }
         parts.mSeen = true;
         const U64 signature = signatureOf(space);
         if (parts.mSignature != signature || parts.mParts.empty())
@@ -170,6 +174,8 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             }
             sknav::ProbeSlot slot;
             slot.mKey = candidates.size();
+            slot.mSpace = static_cast<U32>(parts.mIndex);
+            slot.mPart = part.mPart;
             slot.mOrigin = c.mOrigin;
             slot.mRadius = c.mRadius;
             slot.mArea = part.mArea;
@@ -203,7 +209,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     const U32 room = std::max(static_cast<S32>(manager.probeCount()) - 1 - static_cast<S32>(placed.size()), 0);
     const U32 cap = std::min<U32>(max_probes, std::min<U32>(room, LL_MAX_REFLECTION_PROBE_COUNT - 1));
     mCandidates = static_cast<U32>(slots.size());
-    sknav::keepBudget(slots, cap, params.mBudgetHoldM);
+    sknav::budgetProbes(slots, cap, params);
     mOverBudget = mCandidates - static_cast<U32>(slots.size());
 
     // One real move per update, so re-captures are staggered and placed probes are never starved.
@@ -249,6 +255,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
 std::string SKNavRoomProbes::statsLine() const
 {
-    return llformat("room probes %u of %u parts (%u clear of placed, %u over budget), %u created, %u moves, %.2f ms",
+    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, %.2f ms",
                     mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mLastMs);
 }

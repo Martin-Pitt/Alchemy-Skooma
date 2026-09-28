@@ -403,4 +403,73 @@ namespace tut
         ensure_equals("manual probe overrides high grid too", clearRadius(LLVector3(0,0,40), 13.f, {nav, manual}, params), 0.f);
     }
 
+    template<> template<>
+    void sknavprobes_object::test<14>()
+    {
+        set_test_name("a tight budget keeps one sphere per space, crowded ones out");
+        const ProbeParams params;
+        auto slot = [](U32 key, U32 space, U32 part, F32 distance, F32 area, F32 x)
+        {
+            ProbeSlot s;
+            s.mKey = key;
+            s.mSpace = space;
+            s.mPart = part;
+            s.mDistance = distance;
+            s.mArea = area;
+            s.mOrigin.set(x, 0.f, 0.f);
+            return s;
+        };
+        std::vector<ProbeSlot> slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),    // space 0's near small part
+            slot(1, 0, 0, 5.f, 20.f, 12.f),  // and its far large one
+            slot(2, 1, 0, 6.f, 20.f, 5.f),   // space 1 near space 0's kept sphere
+            slot(3, 1, 1, 30.f, 4.f, 40.f),  // and its far one, clear of it
+        };
+        budgetProbes(slots, 3, params); // below twice the candidates, the budget is tight
+        ensure_equals("one per space, the crowded dropped", slots.size(), 2u);
+        ensure("space 0's near part stands", slots[0].mKey == 0ull);
+        ensure("space 1's only clear part stands", slots[1].mKey == 3ull);
+
+        slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),
+            slot(1, 0, 0, 5.f, 20.f, 12.f),
+            slot(2, 1, 0, 6.f, 20.f, 5.f),
+            slot(3, 1, 1, 30.f, 4.f, 40.f),
+        };
+        slots[1].mHeld = true; // a held part outranks its nearer sibling and keeps its ground
+        budgetProbes(slots, 3, params);
+        ensure_equals("the held part kept", slots[0].mKey, 1ull);
+        ensure("the space's other part still out", slots[1].mKey == 3ull);
+
+        slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),
+            slot(1, 0, 0, 5.f, 20.f, 12.f),
+            slot(2, 1, 0, 6.f, 20.f, 5.f),
+            slot(3, 1, 1, 30.f, 4.f, 40.f),
+        };
+        budgetProbes(slots, 8, params); // room for twice the candidates, so every part places
+        ensure_equals("plenty places every part", slots.size(), 4u);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<15>()
+    {
+        set_test_name("a tight budget caps across spaces, the far dropping first");
+        const ProbeParams params;
+        std::vector<ProbeSlot> slots(5);
+        for (U32 i = 0; i < 5; ++i)
+        {
+            slots[i].mKey = i;
+            slots[i].mSpace = i;
+            slots[i].mDistance = 10.f * i;
+            slots[i].mOrigin.set(100.f * i, 0.f, 0.f);
+        }
+        budgetProbes(slots, 2, params);
+        ensure_equals("the cap holds", slots.size(), 2u);
+        ensure("the nearest two kept", slots[0].mKey == 0ull && slots[1].mKey == 1ull);
+    }
+
 }

@@ -36,8 +36,10 @@
 
 class LLReflectionMap;
 
-/// Holds one full probe per part of each walkable space near the camera,
-/// matched to its part by nearest origin, before the residual grid pass. Placed probes
+/// Holds a full probe per walkable space near the camera — its extra parts
+/// only while the probe budget has room for twice the candidates, and never
+/// two spheres closer than the budget's spacing — matched to their parts by
+/// nearest origin, before the residual grid pass. Placed probes
 /// always win: a sphere shrinks clear of their influence or is dropped.
 /// Only at probe level 3, where octree probes exist. Main thread only.
 class SKNavRoomProbes
@@ -63,6 +65,7 @@ private:
         U64 mSignature = 0;
         std::vector<sknav::ProbePart> mParts;
         bool mSeen = false;
+        S32 mIndex = -1;        ///< this space's number within an update, for the budget's per-space rule
     };
 
     std::vector<Held> mHeld;
@@ -72,7 +75,7 @@ private:
     // stats
     U32 mCandidates = 0;
     U32 mClearedOut = 0;    ///< dropped to clear a placed probe
-    U32 mOverBudget = 0;
+    U32 mOverBudget = 0;    ///< candidates the budget dropped: crowded, past one per space, or past the cap
     U32 mMoves = 0;
     U32 mCreated = 0;
     U32 mPlaced = 0;

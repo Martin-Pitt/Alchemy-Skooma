@@ -50,6 +50,8 @@ namespace sknav
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
         F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
         F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
+        F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
+        U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
     };
 
     /// A space's floor seen from above: per cell, its floor height, NaN
@@ -93,6 +95,8 @@ namespace sknav
     struct ProbeSlot
     {
         U64 mKey = 0;
+        U32 mSpace = 0;             ///< the space it belongs to, as the caller numbers them
+        U32 mPart = 0;              ///< the rank of its part in the space, the largest first
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
         F32 mArea = 0.f;
@@ -124,6 +128,13 @@ namespace sknav
     /// Keep at most cap slots, dropping the far and small first; held ones
     /// rank hold_m nearer, so the kept set does not flicker at the edge.
     void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m = 0.f);
+
+    /// The budget a room probe stands in: while the cap holds fewer than twice
+    /// the candidates, one sphere per space at most, each standing mSpacingM
+    /// clear of the last, the far and small dropping first; with room to spare,
+    /// every part places however close. Held ones rank mBudgetHoldM nearer
+    /// throughout, so the kept set does not flicker at either edge.
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params);
 
     /// Pair each new origin with the nearest held one within tolerance, the
     /// closest pairs first and each held one at most once: per origin, the

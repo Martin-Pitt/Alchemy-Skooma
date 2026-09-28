@@ -209,6 +209,21 @@ namespace sknav
             }
             return d;
         }
+
+        /// The budget's rank order: held ones rank hold_m nearer, ties by area.
+        void rankOrder(std::vector<ProbeSlot>& slots, F32 hold_m)
+        {
+            auto rank = [hold_m](const ProbeSlot& s) { return s.mHeld ? s.mDistance - hold_m : s.mDistance; };
+            std::stable_sort(slots.begin(), slots.end(), [&rank](const ProbeSlot& a, const ProbeSlot& b)
+                             {
+                                 const F32 ra = rank(a), rb = rank(b);
+                                 if (ra != rb)
+                                 {
+                                     return ra < rb;
+                                 }
+                                 return a.mArea > b.mArea;
+                             });
+        }
     }
 
     bool FloorPlan::in(S32 x, S32 y) const
@@ -580,20 +595,60 @@ namespace sknav
 
     void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m)
     {
-        auto rank = [hold_m](const ProbeSlot& s) { return s.mHeld ? s.mDistance - hold_m : s.mDistance; };
-        std::stable_sort(slots.begin(), slots.end(), [&rank](const ProbeSlot& a, const ProbeSlot& b)
-                         {
-                             const F32 ra = rank(a), rb = rank(b);
-                             if (ra != rb)
-                             {
-                                 return ra < rb;
-                             }
-                             return a.mArea > b.mArea;
-                         });
+        rankOrder(slots, hold_m);
         if (slots.size() > cap)
         {
             slots.resize(cap);
         }
+    }
+
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params)
+    {
+        if (cap == 0)
+        {
+            slots.clear();
+            return;
+        }
+        rankOrder(slots, params.mBudgetHoldM);
+        // Room for every candidate twice over: the budget is plentiful, so
+        // place them all, however near each other they stand.
+        if (cap >= 2u * static_cast<U32>(slots.size()))
+        {
+            return;
+        }
+        // Tight: one sphere per space at most, and not a second sphere within
+        // mSpacingM of a placed one. The near and large claim the budget first,
+        // held ones ranking nearer, so the kept set does not flicker.
+        std::vector<ProbeSlot> kept;
+        kept.reserve(std::min<size_t>(slots.size(), cap));
+        std::map<U32, U32> per_space;
+        for (const ProbeSlot& s : slots)
+        {
+            if (per_space[s.mSpace] >= params.mMaxPerSpace)
+            {
+                continue;
+            }
+            bool crowded = false;
+            for (const ProbeSlot& k : kept)
+            {
+                if (dist_vec(k.mOrigin, s.mOrigin) < params.mSpacingM)
+                {
+                    crowded = true;
+                    break;
+                }
+            }
+            if (crowded)
+            {
+                continue;
+            }
+            ++per_space[s.mSpace];
+            kept.push_back(s);
+            if (kept.size() == cap)
+            {
+                break;
+            }
+        }
+        slots.swap(kept);
     }
 
     std::vector<S32> matchNearest(const std::vector<LLVector3>& held, const std::vector<LLVector3>& origins, F32 tolerance)
