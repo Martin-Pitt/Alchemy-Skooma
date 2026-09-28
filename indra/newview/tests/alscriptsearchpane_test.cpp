@@ -37,6 +37,7 @@
 #include "../test/lltut.h"
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -64,7 +65,25 @@ namespace
             bool        toEditor = false;
         };
 
-        std::vector<Object> objectsListed() const override { return objects; }
+        // The objects as the test lists them: the one in hand alone where
+        // asked for; told on the spot, or held until the test says.
+        void listObjects(const LLUUID& only, std::function<void(std::vector<Object>)> told) override
+        {
+            std::vector<Object> out;
+            for (const Object& one : objects)
+            {
+                if (only.isNull() || one.root == only)
+                {
+                    out.push_back(one);
+                }
+            }
+            if (holdListing)
+            {
+                heldListing = [told = std::move(told), out]() { told(out); };
+                return;
+            }
+            told(std::move(out));
+        }
         std::string         objectName(const LLUUID& root) const override
         {
             for (const Object& one : objects)
@@ -92,14 +111,25 @@ namespace
         {
             chosen.push_back({ one.doc, place, to_editor });
         }
+        // What each script, by its name, includes; and who was asked about.
+        std::vector<Included> includesOf(const ALScriptRef&, const std::string&, const std::string& name, const std::string&, bool) override
+        {
+            askedIncludes.push_back(name);
+            const auto it = includes.find(name);
+            return it == includes.end() ? std::vector<Included>() : it->second;
+        }
 
         std::vector<Object>      objects;
+        bool                     holdListing = false;
+        std::function<void()>    heldListing;
         LLUUID                   inHand;
         Doc*                     elsewhere = nullptr;
         std::vector<Fetch>       fetches;
         std::vector<std::string> applied;
         std::vector<LLSD>        asked;
         std::vector<Chosen>      chosen;
+        std::map<std::string, std::vector<Included>> includes;
+        std::vector<std::string>                     askedIncludes;
     };
 
     LLUUID fresh()
@@ -188,6 +218,12 @@ namespace tut
         ensure_equals("one script", out.search().found().size(), size_t(1));
         ensure_equals("two places", out.search().found()[0].places.size(), size_t(2));
         ensure_equals("a row each", out.list()->getItemCount(), 2);
+        // The list's keys: return goes to the place chosen, to type there,
+        // escape back to the script; and the rows copy.
+        out.list()->selectFirstItem();
+        ensure("return", out.list()->handleKeyHere(KEY_RETURN, MASK_NONE) && !studio.chosen.empty() && studio.chosen.back().toEditor);
+        ensure("escape", out.list()->handleKeyHere(KEY_ESCAPE, MASK_NONE) && services.reveals.back());
+        ensure("copied", out.list()->handleKeyHere('C', MASK_CONTROL));
         ensure_equals("the line as listed, trimmed", out.search().found()[0].lines[1], std::string("timer two"));
         ensure_equals("counted", counted(), services.words("SearchCount", { { "[HITS]", services.counted("Matches", 2) },
                                                                             { "[FILES]", services.counted("Files", 1) },
@@ -357,5 +393,75 @@ namespace tut
         one.notecard = false;
         one.places.clear();
         ensure("nothing found: skipped", ALScriptSearch::step(one, now) == Step::Skip);
+    }
+
+    template <>
+    template <>
+    void alscriptsearchpane_object::test<6>()
+    {
+        set_test_name("what the scripts include searched too where asked: each file once, as its own, left alone by Replace All");
+        ALScriptSearchPane& out = make();
+        doc("door", "#include \"lib\"\ntimer\n");
+        doc("gate", "#include \"lib\"\n");
+        const std::vector<FakeWindow::Included> lib{ { "disk:/scripts/lib.lsl", "lib.lsl", "timer in lib\n" } };
+        studio.includes["door.lsl"] = lib;
+        studio.includes["gate.lsl"] = lib;
+        find("timer");
+        ensure_equals("alone: the script's own", out.search().found().size(), size_t(1));
+        ensure("nothing asked of what it includes", studio.askedIncludes.empty());
+        out.bar()->setValue("includes", "yes");
+        find("timer");
+        ensure_equals("and the file it includes, once for the two", out.search().found().size(), size_t(2));
+        const ALScriptSearch::Found& found = out.search().found()[1];
+        ensure_equals("by its identity", found.file, std::string("disk:/scripts/lib.lsl"));
+        ensure("said to be included", found.where.find(services.words("SearchIncluded")) != std::string::npos && found.where.find("lib.lsl") != std::string::npos);
+        ensure_equals("a row for its place", out.list()->getItemCount(), 2);
+        ensure("Replace All leaves it", ALScriptSearch::step(found, ALScriptSearch::Now()) == ALScriptSearch::Step::Leave);
+    }
+
+    template <>
+    template <>
+    void alscriptsearchpane_object::test<7>()
+    {
+        set_test_name("an object's scripts searched once its prims have said what they hold; the prims that did not, and a script not read, said with the count");
+        ALScriptSearchPane& out = make();
+        const ALScriptRef   one(fresh(), fresh());
+        const ALScriptRef   two(fresh(), fresh());
+        const LLUUID        root = fresh();
+        ALScriptSearchPane::Window::Object thing;
+        thing.root          = root;
+        thing.name          = "Thing";
+        thing.items         = { one, two };
+        thing.unlisted      = 3;
+        studio.objects      = { thing };
+        studio.inHand       = root;
+        studio.holdListing  = true;
+        find("timer", "object");
+        ensure("nothing fetched while its prims are asked", studio.fetches.empty());
+        ensure_equals("waited for", out.search().pending(), 1);
+        studio.heldListing();
+        ensure_equals("both fetched", studio.fetches.size(), size_t(2));
+        out.fetched(studio.fetches[0].generation, "Thing", one, "one.lsl", std::string("timer\n"), false);
+        out.fetched(studio.fetches[1].generation, "Thing", two, "two.lsl", std::nullopt, false);
+        ensure_equals("none to wait for", out.search().pending(), 0);
+        ensure_equals("one read", out.search().found().size(), size_t(1));
+        const std::string said = services.words("SearchCount", { { "[HITS]", services.counted("Matches", 1) },
+                                                                 { "[FILES]", services.counted("Files", 1) },
+                                                                 { "[SHOWN]", "2000" } });
+        const std::string missed = services.words("SearchBoth", { { "[FIRST]", services.counted("SearchUnlisted", 3) },
+                                                                  { "[SECOND]", services.counted("SearchUnread", 1) } });
+        ensure_equals("what was passed over, after what was found", counted(),
+                      services.words("SearchPassedOver", { { "[SAID]", said }, { "[MISSED]", missed } }));
+
+        // A search begun again lets the held listing go: its answer is an
+        // earlier search's.
+        studio.fetches.clear();
+        find("timer", "object");
+        std::function<void()> first = std::move(studio.heldListing);
+        find("other", "object");
+        first();
+        ensure("the earlier listing dropped", studio.fetches.empty());
+        studio.heldListing();
+        ensure_equals("the later one searched", studio.fetches.size(), size_t(2));
     }
 }

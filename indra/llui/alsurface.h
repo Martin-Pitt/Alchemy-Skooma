@@ -25,6 +25,7 @@
 #pragma once
 
 #include "llrect.h"
+#include "lluicolor.h"
 #include "v4color.h"
 
 // A hover card, a completion list, a signature, the quick-open window, the
@@ -62,6 +63,10 @@ namespace ALSurface
 
     // The band under the row a list is pointing at.
     inline LLColor4 chosen(const LLColor4& paper, const LLColor4& ink) { return shade(paper, ink, CHOSEN); }
+    // The same band for a list with no paper of its own, drawn over
+    // whatever it sits on: the ink at the same weight, which over the paper
+    // comes to the same mix.
+    inline LLColor4 chosenOver(const LLColor4& ink) { return LLColor4(ink.mV[VRED], ink.mV[VGREEN], ink.mV[VBLUE], CHOSEN); }
 
     // The line around it: the ink itself, thinned. A mix would tie the
     // frame to the ground it is drawn against; the ink thinned reads the
@@ -72,4 +77,24 @@ namespace ALSurface
     // is the draw context's, which every caller has and none should have
     // to remember to apply twice.
     void draw(const LLRect& rect, const LLColor4& paper, const LLColor4& ink, F32 alpha);
+
+    // The skin's colours, by what each is in a control -- the other half of
+    // how our controls are drawn. Unlike the recipe above these read the
+    // colour table: a dial or a swatch is drawn in the viewer's theme,
+    // whatever view it sits in. Each control draws them at the alpha it
+    // always has; what is one place is which colour plays which part.
+    //
+    // The ground a picture sits in -- a dial's face, a pad -- and the line
+    // round a swatch or a strip, drawn in the same shade.
+    const LLUIColor& well();
+    // A line round or across a picture: a dial's rim, a pad's grid, the
+    // frame a rule is drawn in.
+    const LLUIColor& rim();
+    // What is moved, marked or set: a dial's handle, a pad's dot, an edge
+    // that is tied.
+    const LLUIColor& handle();
+    // A control's own words, and words that are there to be passed over:
+    // a caption, a value in force that nobody wrote.
+    const LLUIColor& text();
+    const LLUIColor& quiet();
 }
