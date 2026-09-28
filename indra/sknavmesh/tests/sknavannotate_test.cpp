@@ -84,6 +84,12 @@ namespace tut
         ensure("complete", line.complete());
         ensure("a one-vertex line is not", !make(MarkKind::LINE, { LLVector3d() }).complete());
         ensure("a point is one vertex", make(MarkKind::POINT, { LLVector3d() }).complete());
+        Mark portal = make(MarkKind::PORTAL, { LLVector3d(5, 5, 5) });
+        ensure("a portal without its spaces is not", !portal.complete());
+        portal.mSpaceIds[0] = 7;
+        portal.mSpaceIds[1] = 3;
+        ensure("a portal with them is", portal.complete());
+        ensure("the pair is unordered", portal.portalPair() == std::make_pair(U32(3), U32(7)));
     }
 
     template<> template<>
@@ -100,6 +106,15 @@ namespace tut
         far_point.mId = 4;
         far_point.mType = MarkType::MERGE;
         marks.push_back(far_point);
+        Mark crossed = make(MarkKind::PORTAL, { LLVector3d(256004.0, 255750.0, 21.5) });
+        crossed.mId = 5;
+        crossed.mType = MarkType::CROSS;
+        crossed.mSpaceMesh.generate();
+        const std::string mesh_id = crossed.mSpaceMesh.asString();
+        crossed.mSpaceIds[0] = 9;
+        crossed.mSpaceIds[1] = 2;
+        crossed.mPortalCentre.set(256004.5, 255750.5, 21.0);
+        marks.push_back(crossed);
         std::ostringstream out;
         writeMarks(out, marks, [](const LLVector3d& v, MarkPlace& place) {
             if (v.mdV[VX] < 256000.0)
@@ -117,7 +132,10 @@ namespace tut
                                   "\"vertices\":[{\"global\":[256010.5,255754,22],\"region\":\"Sim\",\"regionGrid\":[1000,999],"
                                   "\"local\":[10.5,10,22]},{\"global\":[256012,255756,22],\"region\":\"Sim\",\"regionGrid\":[1000,999],"
                                   "\"local\":[12,12,22]}]},{\"id\":4,\"kind\":\"point\",\"type\":\"merge\",\"text\":\"\",\"created\":0,"
-                                  "\"vertices\":[{\"global\":[1,2,3]}]}]"));
+                                  "\"vertices\":[{\"global\":[1,2,3]}]},{\"id\":5,\"kind\":\"portal\",\"type\":\"crossed\",\"text\":\"\",\"created\":0,"
+                                  "\"mesh\":\"" + mesh_id + "\",\"spaces\":[9,2],\"centre\":[256004.5,255750.5,21],"
+                                  "\"vertices\":[{\"global\":[256004,255750,21.5],\"region\":\"Sim\",\"regionGrid\":[1000,999],"
+                                  "\"local\":[4,6,21.5]}]}]"));
     }
 
     template<> template<>
@@ -127,13 +145,14 @@ namespace tut
         ensure_equals(jsonEscape("a \"door\"\\\n\x01"), std::string("a \\\"door\\\"\\\\\\n\\u0001"));
         const char* names[] = { "missed_opening", "wrong", "door", "window", "stair", "ramp", "ladder", "elevator",
                                 "ledge", "indoor", "sheltered", "outdoor", "street", "bridge", "balcony", "courtyard",
-                                "water", "walkable", "not_walkable", "merge", "split", "note" };
+                                "water", "walkable", "not_walkable", "merge", "split", "crossed", "note" };
         ensure_equals("every type named", sizeof(names) / sizeof(names[0]), static_cast<size_t>(MarkType::COUNT));
         for (S32 t = 0; t < static_cast<S32>(MarkType::COUNT); ++t)
         {
             ensure_equals(names[t], std::string(markTypeName(static_cast<MarkType>(t))), std::string(names[t]));
         }
         ensure_equals(std::string(markKindName(MarkKind::LINE)), std::string("line"));
+        ensure_equals(std::string(markKindName(MarkKind::PORTAL)), std::string("portal"));
     }
 
     template<> template<>
@@ -176,8 +195,9 @@ namespace tut
         {
             line_count += markTypeKind(static_cast<MarkType>(t)) == MarkKind::LINE ? 1 : 0;
         }
-        ensure_equals("the rest are points", line_count, static_cast<S32>(sizeof(lines) / sizeof(lines[0])));
+        ensure_equals("the rest are not lines", line_count, static_cast<S32>(sizeof(lines) / sizeof(lines[0])));
         ensure("a merge is one point where the spaces meet", markTypeKind(MarkType::MERGE) == MarkKind::POINT);
         ensure("a wrong portal is a point near it", markTypeKind(MarkType::WRONG) == MarkKind::POINT);
+        ensure("a crossed portal names the cut", markTypeKind(MarkType::CROSS) == MarkKind::PORTAL);
     }
 }

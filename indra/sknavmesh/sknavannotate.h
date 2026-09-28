@@ -25,12 +25,14 @@
 #ifndef SK_NAVANNOTATE_H
 #define SK_NAVANNOTATE_H
 
+#include "lluuid.h"
 #include "stdtypes.h"
 #include "v3dmath.h"
 #include "v3math.h"
 
 #include <functional>
 #include <ostream>
+#include <utility>
 
 #include <string>
 #include <vector>
@@ -41,6 +43,7 @@ namespace sknav
     {
         POINT = 0,
         LINE,
+        PORTAL,     ///< a portal the spaces pass cut, named by its two spaces
         COUNT
     };
 
@@ -71,6 +74,7 @@ namespace sknav
         NOT_WALKABLE,   ///< floor that should not be
         MERGE,          ///< where two spaces that should be one meet
         SPLIT,          ///< along where a space should be cut in two
+        CROSS,          ///< a portal the spaces pass cut that should not be there
         NOTE,
         COUNT
     };
@@ -104,6 +108,16 @@ namespace sknav
         std::vector<LLVector3d> mVerts;
         std::string mText;
         F64 mCreated = 0.0;     ///< seconds since the epoch
+        // A crossed-out portal (MarkKind::PORTAL) names the cut it strikes:
+        // the mesh whose spaces pass cut it, the stable ids of the two spaces
+        // it joined, and the cut's centre. The vertex stays where the click
+        // landed, for the label and the export.
+        LLUUID mSpaceMesh;
+        U32 mSpaceIds[2] = { 0, 0 };
+        LLVector3d mPortalCentre;
+
+        /// The two space ids of a portal mark, smaller first.
+        std::pair<U32, U32> portalPair() const;
 
         /// The box around the mark's vertices.
         void extent(LLVector3d& min, LLVector3d& max) const;

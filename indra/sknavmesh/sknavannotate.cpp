@@ -38,6 +38,7 @@ namespace sknav
         {
             case MarkKind::POINT: return "point";
             case MarkKind::LINE: return "line";
+            case MarkKind::PORTAL: return "portal";
             default: return "unknown";
         }
     }
@@ -79,6 +80,7 @@ namespace sknav
             { MarkType::NOT_WALKABLE, "not_walkable", MarkGroup::JUDGEMENT, MarkKind::POINT, 'X' },
             { MarkType::MERGE, "merge", MarkGroup::JUDGEMENT, MarkKind::POINT, 'M' },
             { MarkType::SPLIT, "split", MarkGroup::JUDGEMENT, MarkKind::LINE, 'V' },
+            { MarkType::CROSS, "crossed", MarkGroup::JUDGEMENT, MarkKind::PORTAL, 'K' },
             { MarkType::NOTE, "note", MarkGroup::JUDGEMENT, MarkKind::POINT, 'N' },
         };
         static_assert(sizeof(TYPES) / sizeof(TYPES[0]) == static_cast<size_t>(MarkType::COUNT), "a row per type");
@@ -146,12 +148,18 @@ namespace sknav
         }
     }
 
+    std::pair<U32, U32> Mark::portalPair() const
+    {
+        return std::minmax(mSpaceIds[0], mSpaceIds[1]);
+    }
+
     bool Mark::complete() const
     {
         switch (mKind)
         {
             case MarkKind::POINT: return mVerts.size() == 1;
             case MarkKind::LINE: return mVerts.size() >= 2;
+            case MarkKind::PORTAL: return mVerts.size() == 1 && mSpaceIds[0] && mSpaceIds[1];
             default: return false;
         }
     }
@@ -195,6 +203,15 @@ namespace sknav
             const Mark& mark = marks[m];
             out << (m ? "," : "") << "{\"id\":" << mark.mId << ",\"kind\":\"" << markKindName(mark.mKind) << "\",\"type\":\""
                 << markTypeName(mark.mType) << "\",\"text\":\"" << jsonEscape(mark.mText) << "\",\"created\":" << mark.mCreated;
+            if (mark.mKind == MarkKind::PORTAL)
+            {
+                // Which cut this strikes: the mesh, the two spaces it joined
+                // and where the cut sat, so a reader of the same export can
+                // find it among the portals it wrote.
+                out << ",\"mesh\":\"" << mark.mSpaceMesh.asString() << "\",\"spaces\":[" << mark.mSpaceIds[0] << ','
+                    << mark.mSpaceIds[1] << "],\"centre\":[" << mark.mPortalCentre.mdV[VX] << ','
+                    << mark.mPortalCentre.mdV[VY] << ',' << mark.mPortalCentre.mdV[VZ] << ']';
+            }
             out << ",\"vertices\":[";
             for (size_t i = 0; i < mark.mVerts.size(); ++i)
             {
