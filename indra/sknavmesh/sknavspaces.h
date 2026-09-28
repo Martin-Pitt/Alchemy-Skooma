@@ -97,7 +97,7 @@ namespace sknav
     {
         U32 mId = 0;                ///< stable within the mesh while the space stays where it is
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
-        LLVector3 mMin;             ///< floor plan and floor to highest ceiling
+        LLVector3 mMin;             ///< floor plan and floor to highest ceiling, and every gap it holds
         LLVector3 mMax;
         LLVector3 mCentre;          ///< of the floor, at the lowest floor
         LLVector2 mAxis;            ///< the floor's long axis

@@ -89,6 +89,41 @@ namespace
             return any;
         }
 
+        /// Gaps whose floor lies outside their space's bounds.
+        U32 outOfBounds() const
+        {
+            U32 n = 0;
+            for (const TileEnclosure& te : mEnc->mTiles)
+            {
+                if (!te.mAir)
+                {
+                    continue;
+                }
+                const TileAir& a = *te.mAir;
+                const S32 zoff = static_cast<S32>(std::lround(a.mOrigin.mV[VZ] / a.mUnit));
+                for (const AirLeaf& leaf : a.mLeaves)
+                {
+                    const F32 x0 = a.mOrigin.mV[VX] + leaf.mX * a.mCell, y0 = a.mOrigin.mV[VY] + leaf.mY * a.mCell;
+                    const F32 side = (1 << leaf.mLevel) * a.mCell;
+                    for (U32 i = 0; i < leaf.mGapCount; ++i)
+                    {
+                        const U16 s = te.mGaps[leaf.mFirstGap + i].mSpace;
+                        if (!s)
+                        {
+                            continue;
+                        }
+                        const Space& sp = mRooms->mSpaces[s - 1];
+                        const F32 z = (a.mGaps[leaf.mFirstGap + i].mFloor + zoff) * a.mUnit;
+                        n += x0 < sp.mMin.mV[VX] || y0 < sp.mMin.mV[VY] || x0 + side > sp.mMax.mV[VX] || y0 + side > sp.mMax.mV[VY] ||
+                                     z < sp.mMin.mV[VZ] - 1e-3f || z > sp.mMax.mV[VZ] + 1e-3f
+                                 ? 1
+                                 : 0;
+                    }
+                }
+            }
+            return n;
+        }
+
         U32 count(const Space* s, PortalKind kind) const
         {
             U32 n = 0;
@@ -775,6 +810,30 @@ namespace tut
         const Result again = field(first.mRooms, mid);
         ensure("the moved tile and at most its four neighbours cut again", again.mRooms->mDirtyTiles >= 1 && again.mRooms->mDirtyTiles <= 5);
         ensure_equals("the same spaces", again.mRooms->mSpaces.size(), first.mRooms->mSpaces.size());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<26>()
+    {
+        set_test_name("a roof joins the room under it across a thin slab, not across a thick one, and every space's bounds hold its gaps");
+        Scene s = twoRooms();
+        // A solid block beside the rooms, its top flush with their roof, and a
+        // tower over a small room whose roof lies 4 m of solid above its ceiling.
+        s.box(18.f, 2.f, 22.f, 10.f, 0.f, 3.25f);
+        s.wall(24.f, 2.f, 30.f, 2.25f);
+        s.wall(24.f, 7.75f, 30.f, 8.f);
+        s.wall(24.f, 2.f, 24.25f, 8.f);
+        s.wall(29.75f, 2.f, 30.f, 8.f);
+        s.box(24.f, 2.f, 30.f, 8.f, 3.f, 7.f);
+        s.box(24.f, 2.f, 30.f, 8.f, 7.f, 7.25f);
+        const Result r = run(s.input(1));
+        const Space* west = r.at(6.f, 6.f);
+        const Space* tower = r.at(27.f, 5.f);
+        ensure("rooms found", west && tower);
+        ensure("the thin roof is the room's", r.at(6.f, 6.f, 3.5f) == west);
+        ensure("the roof over the block joins the roof beside it", r.at(20.f, 6.f, 3.5f) == r.at(16.f, 6.f, 3.5f) && r.at(20.f, 6.f, 3.5f));
+        ensure("the tower's top is not the room 4 m below", r.at(27.f, 5.f, 7.5f) != tower);
+        ensure_equals("no gap outside its space's bounds", r.outOfBounds(), 0u);
     }
 
     template<> template<>

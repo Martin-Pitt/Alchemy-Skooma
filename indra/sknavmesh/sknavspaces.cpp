@@ -48,6 +48,7 @@ namespace
     constexpr F32 OPEN_HEIGHT_M = 20.f;     ///< what an open ceiling counts for in a volume
     constexpr F32 LIFT_TALL_M = 5.f;        ///< a shaft behind a door has this much headroom
     constexpr F32 LIFT_REACH_M = 3.f;
+    constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
@@ -3054,7 +3055,115 @@ namespace sknav
             }
         }
 
-        // Air over no avatar floor joins the space of the floor below it.
+        // Air over no avatar floor, furniture tops, seats and roofs, joins the
+        // space around it, or else the one below across a thin solid; a floor
+        // on a solid thicker than that is a level of its own.
+        const S32 slab = static_cast<S32>(std::lround(CARRY_SLAB_M / mUnit));
+        std::vector<std::vector<U32>> leaf_of(mTiles.size());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            leaf_of[t].resize(a.mGaps.size());
+            for (U32 l = 0; l < a.mLeaves.size(); ++l)
+            {
+                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
+                {
+                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
+                }
+            }
+        }
+        // Calls fn(tile, gap) for every floor gap a step from gap g of tile t.
+        auto around = [&](U32 t, U32 g, const std::function<void(U32, U32)>& fn) {
+            const TileAir& a = air(t);
+            const AirLeaf& leaf = a.mLeaves[leaf_of[t][g]];
+            const S32 f = floorOf(t, a.mGaps[g]), c = ceilOf(t, a.mGaps[g]);
+            const S32 sz = 1 << leaf.mLevel;
+            for (S32 d = 0; d < 4; ++d)
+            {
+                for (S32 k = 0; k < sz; ++k)
+                {
+                    const S32 x = DX[d] > 0 ? leaf.mX + sz : DX[d] < 0 ? leaf.mX - 1 : leaf.mX + k;
+                    const S32 y = DY[d] > 0 ? leaf.mY + sz : DY[d] < 0 ? leaf.mY - 1 : leaf.mY + k;
+                    U32 u;
+                    S32 bx, by;
+                    if (resolve(t, x, y, u, bx, by) != 0)
+                    {
+                        continue;
+                    }
+                    const S32 lb = mTiles[u].mLeafMap[bx + by * air(u).mWidth];
+                    if (lb < 0)
+                    {
+                        continue;
+                    }
+                    const AirLeaf& ol = air(u).mLeaves[lb];
+                    for (U32 j = 0; j < ol.mGapCount; ++j)
+                    {
+                        const AirGap& o = air(u).mGaps[ol.mFirstGap + j];
+                        const S32 fo = floorOf(u, o);
+                        if (floorGap(u, o) && std::abs(fo - f) <= mClimb && std::min(c, ceilOf(u, o)) - std::max(f, fo) >= mWalkOverlap)
+                        {
+                            fn(u, ol.mFirstGap + j);
+                        }
+                    }
+                }
+            }
+        };
+        // Floors with no space take the space of a floor they step onto, spreading out a ring at a time.
+        auto spread = [&]() {
+            std::vector<std::pair<U32, U32>> ring, next;
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                const TileAir& a = air(t);
+                for (U32 g = 0; g < a.mGaps.size(); ++g)
+                {
+                    if (!mGapSpace[t][g] && floorGap(t, a.mGaps[g]))
+                    {
+                        ring.emplace_back(t, g);
+                    }
+                }
+            }
+            while (!ring.empty())
+            {
+                std::vector<std::pair<std::pair<U32, U32>, U32>> took;
+                for (const auto& tg : ring)
+                {
+                    if (mGapSpace[tg.first][tg.second])
+                    {
+                        continue;
+                    }
+                    U32 best = 0;
+                    around(tg.first, tg.second, [&](U32 u, U32 o) {
+                        const U32 so = mGapSpace[u][o];
+                        if (so && (!best || so < best))
+                        {
+                            best = so;
+                        }
+                    });
+                    if (best)
+                    {
+                        took.emplace_back(tg, best);
+                    }
+                }
+                next.clear();
+                for (const auto& tk : took)
+                {
+                    mGapSpace[tk.first.first][tk.first.second] = tk.second;
+                }
+                for (const auto& tk : took)
+                {
+                    around(tk.first.first, tk.first.second, [&](U32 u, U32 o) {
+                        if (!mGapSpace[u][o])
+                        {
+                            next.emplace_back(u, o);
+                        }
+                    });
+                }
+                std::sort(next.begin(), next.end());
+                next.erase(std::unique(next.begin(), next.end()), next.end());
+                ring.swap(next);
+            }
+        };
+        spread();
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
             const TileAir& a = air(t);
@@ -3065,14 +3174,35 @@ namespace sknav
                 for (U32 i = 0; i < leaf.mGapCount; ++i)
                 {
                     U32& s = gs[leaf.mFirstGap + i];
-                    if (s)
-                    {
-                        below = s;
-                    }
-                    else
+                    if (!s && below && floorOf(t, a.mGaps[leaf.mFirstGap + i]) - ceilOf(t, a.mGaps[leaf.mFirstGap + i - 1]) <= slab)
                     {
                         s = below;
                     }
+                    below = s;
+                }
+            }
+        }
+        spread();
+
+        // Bounds over every gap a space holds, now that all have joined.
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                const F32 x0 = a.mOrigin.mV[VX] + leaf.mX * mCell, y0 = a.mOrigin.mV[VY] + leaf.mY * mCell;
+                const F32 side = (1 << leaf.mLevel) * mCell;
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const U32 s = mGapSpace[t][leaf.mFirstGap + i];
+                    if (!s)
+                    {
+                        continue;
+                    }
+                    Space& sp = out[s - 1];
+                    const F32 z = floorOf(t, a.mGaps[leaf.mFirstGap + i]) * mUnit;
+                    sp.mMin.set(std::min(sp.mMin.mV[VX], x0), std::min(sp.mMin.mV[VY], y0), std::min(sp.mMin.mV[VZ], z));
+                    sp.mMax.set(std::max(sp.mMax.mV[VX], x0 + side), std::max(sp.mMax.mV[VY], y0 + side), std::max(sp.mMax.mV[VZ], z));
                 }
             }
         }
