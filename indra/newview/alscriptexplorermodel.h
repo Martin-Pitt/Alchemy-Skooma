@@ -26,6 +26,7 @@
 
 #include "alscriptcontentsindex.h"
 #include "alscriptworkspace.h"
+#include "v3dmath.h"
 #include "llsd.h"
 #include "lluuid.h"
 
@@ -65,6 +66,8 @@ public:
         std::string name;
         // The name is the prim's own, not a stand-in until it is heard.
         bool        named = false;
+        // Whether the agent may change it: put in it, take out, run.
+        bool        modify = true;
     };
     // A pinned object stays listed when it is neither selected nor holding
     // a script open, and across sessions; one that is not around is listed
@@ -77,11 +80,19 @@ public:
         bool              pinned  = false;
         bool              present = true;
         std::vector<Prim> prims;
+        // Where its root is, in the grid, and the region's name: as seen,
+        // or as its pin kept it while it is away.
+        std::optional<LLVector3d> position;
+        std::string               region;
     };
+    // An object pinned: by its root, with the name and the place it had
+    // when it was last seen, which Teleport To goes to while it is away.
     struct Pin
     {
-        LLUUID      root;
-        std::string name;
+        LLUUID                    root;
+        std::string               name;
+        std::optional<LLVector3d> position;
+        std::string               region;
     };
 
     // What a row chosen stands for: an object, a prim of one, or a script
@@ -113,8 +124,12 @@ public:
         {
             LLUUID      id;
             std::string name;
+            bool        modify = true;
         };
         std::vector<Part> prims;
+        // Where its root is, in the grid, and the region's name.
+        std::optional<LLVector3d> position;
+        std::string               region;
     };
     // What the objects in hand are listed from.
     struct Listing
@@ -201,6 +216,14 @@ public:
     // --- whether scripts run -------------------------------------------------------
 
     std::optional<bool> knownRunning(const ALScriptRef& ref) const { return mIndex.running(ref); }
+    // An item as its prim last said it; none where it has not.
+    std::optional<ALScriptWorkspace::Item> itemAt(const ALScriptRef& ref) const;
+    // Whether the agent may change a prim, as far as it was seen; one not
+    // seen, yes.
+    bool                primModifiable(const LLUUID& prim) const;
+    // A prim's link number, as a script gives it; 0 for one alone or not
+    // seen.
+    S32                 linkNumber(const LLUUID& prim) const;
     // What is known of the listed prims' scripts let go of, for them to be
     // asked again.
     void                forgetRunning();
@@ -239,6 +262,14 @@ public:
         bool        script  = false;
         bool        lua     = false;
         ALScriptRef ref;
+        // A prim's link number, as a script gives it: 1 for the root of a
+        // linkset, 2 and on for the rest in link order, 0 for a prim alone.
+        S32         link = 0;
+        // An item the agent may not copy, or not change.
+        bool        noCopy   = false;
+        bool        noModify = false;
+        // An object's region, where it is known: where one away was last.
+        std::string region;
     };
     // The rows through a filter: an item whose name has its letters, and
     // what holds it; an object or a prim whose name has them, with all it
@@ -297,6 +328,8 @@ public:
     // Every object among the rows pinned if the first is not, else let go.
     void pin(const std::vector<Choice>& rows);
     const std::vector<Pin>& pins() const { return mPins; }
+    // An object's pin, where it has one.
+    const Pin*              pinOf(const LLUUID& root) const;
     void saveState(LLSD& state) const;
     void readState(const LLSD& state);
 
