@@ -166,6 +166,10 @@ public:
     bool mGridPlacementChecked = false;
     LLVector3d mGridOrigin;
     F32 mGridRadius = 0.f;
+    // The census scan (SKCensusSnapshot::mStamp) the grid placement's solid
+    // test last ran against: a probe already tested against the scan that is
+    // current keeps that answer until either the scan or its anchor changes.
+    U64 mGridCensusStamp = 0;
     // </SK:Nexii>
 
     // occlusion culling state

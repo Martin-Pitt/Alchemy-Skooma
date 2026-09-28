@@ -35,6 +35,7 @@
 #include <vector>
 
 class LLReflectionMap;
+struct SKCensusSnapshot;
 
 /// Holds a full probe per walkable space near the camera — its extra parts
 /// only while the probe budget has room for twice the candidates, and never
@@ -71,6 +72,11 @@ private:
     std::vector<Held> mHeld;
     std::map<std::pair<LLUUID, U32>, Parts> mParts;
     F64 mNextUpdate = 0.0;
+    // The census's solid bodies as a tile lattice for the candidates' point
+    // tests, rebuilt only when the census publishes a new scan;
+    // mSolidsCensus is the scan it was built from.
+    sknav::SolidLattice mSolids;
+    std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
 
     // stats
     U32 mCandidates = 0;

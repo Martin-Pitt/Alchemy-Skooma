@@ -30,12 +30,33 @@
 
 #include "v3math.h"
 
+#include <unordered_map>
 #include <vector>
 
 namespace sknav
 {
     /// True only inside a known closed collision body, never a placeholder AABB.
     bool probeInsideSolid(const Record& record, const LLVector3d& position);
+
+    /// The solid records of one census scan, bucketed by the lattice tiles
+    /// their global AABBs cover, with the oversized few -- spanning more than
+    /// a screen of tiles -- kept separate, where every point test reaches
+    /// them. A point test is one hash and the records of a single tile.
+    /// Holds its records by counted handle: rebuilding from a new scan lets
+    /// the old scan's records go.
+    class SolidLattice
+    {
+    public:
+        void clear();
+        /// Re-derive from the given records, dropping whatever was held.
+        void rebuild(const std::vector<RecordPtr>& records);
+        /// Whether the point lies inside any solid record's volume.
+        bool contains(const LLVector3d& p) const;
+
+    private:
+        std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mTiles;
+        std::vector<RecordPtr> mLarge;
+    };
 
     struct ProbeParams
     {

@@ -31,6 +31,7 @@
 
 #include "llreflectionmapmanager.h"
 
+#include <chrono>
 #include <vector>
 
 #include "llviewercamera.h"
@@ -180,10 +181,15 @@ static void touch_default_probe(LLReflectionMap* probe)
 }
 
 LLReflectionMapManager::LLReflectionMapManager()
+: mSolids(new sknav::SolidLattice)
 {
     mDynamicProbeCount = LL_MAX_REFLECTION_PROBE_COUNT;
     initCubeFree();
 }
+
+// Defined here, where the forward-declared SolidLattice and census snapshot
+// the members hold are complete types.
+LLReflectionMapManager::~LLReflectionMapManager() = default;
 
 void LLReflectionMapManager::initCubeFree()
 {
@@ -947,6 +953,7 @@ void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
 
 void LLReflectionMapManager::updateCensusPlacement()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census placement");
     const auto census = SKWorldCensus::instance().snapshot();
     if (mRenderReflectionProbeLevel < 2)
     {
@@ -958,8 +965,10 @@ void LLReflectionMapManager::updateCensusPlacement()
         mNextCensusPlacement = gFrameTimeSeconds + 1.0;
         mNavRoomsDirty = false;
     }
+    const U64 census_stamp = census ? census->mStamp : 0;
     if (!refresh && std::all_of(mProbes.begin(), mProbes.end(), [&](const auto& probe)
-        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms || probe->mGridPlacementChecked; }))
+        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms ||
+                 (probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp); }))
     {
         return;
     }
@@ -995,38 +1004,34 @@ void LLReflectionMapManager::updateCensusPlacement()
     }
     // A lattice broad phase keeps the fine shape tests local, even for a
     // census containing thousands of parts. Very large bodies stay separate.
-    std::map<sknav::TileKey, std::vector<const sknav::Record*>> solids;
-    std::vector<const sknav::Record*> large;
-    if (census)
+    // It is derived from one scan and rebuilt only when a new scan publishes:
+    // a refresh that finds the same scan reuses it, instead of re-indexing
+    // every record every time.
     {
-        for (const auto& record : census->mRecords)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census lattice");
+        if (census != mSolidsCensus)
         {
-            if (!record->mSolid || record->mRole != sknav::Role::NAV || record->mProvenance == sknav::Provenance::BOX) continue;
-            const auto lo = sknav::tileOf(record->mMin), hi = sknav::tileOf(record->mMax);
-            if ((static_cast<S64>(hi.mX) - lo.mX + 1) * (static_cast<S64>(hi.mY) - lo.mY + 1) > 4096)
+            mSolidsCensus = census;
+            if (census)
             {
-                large.push_back(record.get());
-                continue;
+                mSolids->rebuild(census->mRecords);
             }
-            for (S32 y = lo.mY; y <= hi.mY; ++y)
-                for (S32 x = lo.mX; x <= hi.mX; ++x)
-                    solids[{x, y}].push_back(record.get());
+            else
+            {
+                mSolids->clear();
+            }
         }
     }
-    auto solid = [&](const LLVector3d& p)
-    {
-        for (const auto* record : large)
-            if (sknav::probeInsideSolid(*record, p)) return true;
-        const auto found = solids.find(sknav::tileOf(p));
-        if (found != solids.end())
-            for (const auto* record : found->second)
-                if (sknav::probeInsideSolid(*record, p)) return true;
-        return false;
-    };
+    // Re-testing a probe against the census can sweep a whole triangle soup,
+    // and a new scan marks every grid probe for re-test at once. Bound the
+    // time the sweep takes per frame; the rest carries over. mProbes is
+    // distance sorted, so the nearest probes are re-tested first.
+    constexpr F32 SOLID_CHECK_BUDGET_MS = 2.f;
+    const auto solid_checks_started = std::chrono::steady_clock::now();
     for (auto& probe : mProbes)
     {
         if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms) continue;
-        if (!refresh && probe->mGridPlacementChecked) continue;
+        if (!refresh && probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp) continue;
         const LLVector3 old(probe->mOrigin.getF32ptr());
         if (!probe->mGridPlacementChecked)
         {
@@ -1035,15 +1040,15 @@ void LLReflectionMapManager::updateCensusPlacement()
             probe->mGridRadius = probe->mRadius;
             probe->mGridPlacementChecked = true;
         }
-        else if (!probe->mComplete)
+        else if (refresh && !probe->mComplete)
         {
             // A capture still pending on a probe whose surroundings changed: re-nudge
-            // toward empty space and re-anchor the demand. Reaching this branch implies
-            // refresh -- unchecked probes are the only others that get past the skips.
-            // autoAdjustOrigin re-derives the radius from the octree, so a nudge that
-            // settles where it started restores the cleared radius the pass below
-            // applies; only a real move re-anchors, and the changed block below then
-            // aborts any capture the move tore out from under.
+            // toward empty space and re-anchor the demand. Only a refresh reaches this
+            // branch: without one, the pass is here solely for probes the census has
+            // not answered yet. autoAdjustOrigin re-derives the radius from the octree,
+            // so a nudge that settles where it started restores the cleared radius the
+            // pass below applies; only a real move re-anchors, and the changed block
+            // below then aborts any capture the move tore out from under.
             const LLVector3 placed(probe->mOrigin.getF32ptr());
             const F32 placed_radius = probe->mRadius;
             probe->autoAdjustOrigin();
@@ -1051,6 +1056,8 @@ void LLReflectionMapManager::updateCensusPlacement()
             {
                 probe->mGridOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
                 probe->mGridRadius = probe->mRadius;
+                // The solid answer was for where it stood; the move re-opens the question.
+                probe->mGridCensusStamp = census_stamp - 1;
             }
             else
             {
@@ -1060,7 +1067,19 @@ void LLReflectionMapManager::updateCensusPlacement()
         }
         LLVector3 chosen = gAgent.getPosAgentFromGlobal(probe->mGridOrigin);
         F32 radius = probe->mGridRadius;
-        const bool blocked = solid(probe->mGridOrigin);
+        bool blocked = probe->mBlockedByCensus;
+        if (probe->mGridCensusStamp != census_stamp)
+        {
+            const F32 elapsed = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - solid_checks_started).count();
+            if (elapsed <= SOLID_CHECK_BUDGET_MS)
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census solid test");
+                blocked = mSolids->contains(probe->mGridOrigin);
+                probe->mGridCensusStamp = census_stamp;
+            }
+            // Over budget: the stamp stays behind and the test retries next
+            // frame, while the radius share below still runs.
+        }
         // Full probes have already claimed their space and their slots. The
         // second pass only covers what remains, including high/unwalkable air.
         radius = sknav::clearRadius(chosen, radius, full_probes, params);

@@ -131,6 +131,68 @@ namespace sknav
 
     namespace
     {
+        // A record reaching over more lattice tiles than this is kept apart
+        // rather than copied into each: the map would carry it by the
+        // thousand for bodies a point test reaches from anywhere anyway.
+        constexpr S64 SOLID_MAX_TILES = 4096;
+    }
+
+    void SolidLattice::clear()
+    {
+        mTiles.clear();
+        mLarge.clear();
+    }
+
+    void SolidLattice::rebuild(const std::vector<RecordPtr>& records)
+    {
+        clear();
+        for (const RecordPtr& record : records)
+        {
+            if (!record->mSolid || record->mRole != Role::NAV || record->mProvenance == Provenance::BOX)
+            {
+                continue;
+            }
+            const TileKey lo = tileOf(record->mMin), hi = tileOf(record->mMax);
+            if ((static_cast<S64>(hi.mX) - lo.mX + 1) * (static_cast<S64>(hi.mY) - lo.mY + 1) > SOLID_MAX_TILES)
+            {
+                mLarge.push_back(record);
+                continue;
+            }
+            for (S32 y = lo.mY; y <= hi.mY; ++y)
+            {
+                for (S32 x = lo.mX; x <= hi.mX; ++x)
+                {
+                    mTiles[TileKey{ x, y }].push_back(record);
+                }
+            }
+        }
+    }
+
+    bool SolidLattice::contains(const LLVector3d& p) const
+    {
+        for (const RecordPtr& record : mLarge)
+        {
+            if (probeInsideSolid(*record, p))
+            {
+                return true;
+            }
+        }
+        const auto found = mTiles.find(tileOf(p));
+        if (found != mTiles.end())
+        {
+            for (const RecordPtr& record : found->second)
+            {
+                if (probeInsideSolid(*record, p))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    namespace
+    {
         struct Rect
         {
             S32 mX = 0, mY = 0, mW = 0, mH = 0;

@@ -305,6 +305,7 @@ namespace tut
         ensure("nearest never churns more", by_nearest <= by_key);
         ensure("and churns less here", by_nearest < by_key);
     }
+
     template<> template<>
     void sknavprobes_object::test<10>()
     {
@@ -472,4 +473,41 @@ namespace tut
         ensure("the nearest two kept", slots[0].mKey == 0ull && slots[1].mKey == 1ull);
     }
 
+    template<> template<>
+    void sknavprobes_object::test<16>()
+    {
+        set_test_name("the solid lattice answers by tile, the oversized bodies apart");
+
+        auto box = [](bool solid, F32 cx, F32 cy, F32 cz, F32 hx, F32 hy, F32 hz)
+        {
+            std::shared_ptr<Record> r = std::make_shared<Record>();
+            r->mSolid = solid;
+            r->mShape = Shape::BOX;
+            r->mCenter.set(cx, cy, cz);
+            r->mAxes[0] = LLVector3::x_axis;
+            r->mAxes[1] = LLVector3::y_axis;
+            r->mAxes[2] = LLVector3::z_axis;
+            r->mHalf.set(hx, hy, hz);
+            r->mMin.set(cx - hx, cy - hy, cz - hz);
+            r->mMax.set(cx + hx, cy + hy, cz + hz);
+            return r;
+        };
+
+        std::vector<RecordPtr> records;
+        records.push_back(box(true, 4.f, 4.f, 1.f, 4.f, 4.f, 1.f));
+        // Reaching over more than a screen of 32 m tiles: kept separate, and
+        // reached by every point test.
+        records.push_back(box(true, 2100.f, 2100.f, 1.f, 1100.f, 1100.f, 1.f));
+        records.push_back(box(false, 20.f, 4.f, 1.f, 2.f, 4.f, 1.f));
+
+        SolidLattice lattice;
+        lattice.rebuild(records);
+        ensure("inside the small solid", lattice.contains(LLVector3d(4.f, 4.f, 1.f)));
+        ensure("outside every solid", !lattice.contains(LLVector3d(40.f, 40.f, 1.f)));
+        ensure("a body that is not solid is invisible", !lattice.contains(LLVector3d(20.f, 4.f, 1.f)));
+        ensure("the oversized one answers anywhere in it", lattice.contains(LLVector3d(2100.f, 2100.f, 1.f)));
+
+        lattice.rebuild({});
+        ensure("a rebuild from nothing empties it", !lattice.contains(LLVector3d(4.f, 4.f, 1.f)));
+    }
 }

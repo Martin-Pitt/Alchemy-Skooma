@@ -32,8 +32,16 @@
 #include "llcubemap.h"
 #include "aluniformbuffer.h"
 
+#include <memory>
+
 class LLSpatialGroup;
 class LLViewerObject;
+
+struct SKCensusSnapshot;
+namespace sknav
+{
+    class SolidLattice;
+}
 
 // number of reflection probes to keep in vram
 #define LL_MAX_REFLECTION_PROBE_COUNT 256
@@ -115,6 +123,7 @@ public:
 
     // allocate an environment map of the given resolution
     LLReflectionMapManager();
+    ~LLReflectionMapManager();
 
     // release any GL state
     void cleanup();
@@ -324,6 +333,11 @@ private:
     bool mNavRoomsDirty = false;
     void updateCensusPlacement();
     F64 mNextCensusPlacement = 0.0;
+    // The census's solid bodies as a tile lattice for the grid placement's
+    // point tests, rebuilt only when the census publishes a new scan.
+    // mSolidsCensus is the scan it was built from.
+    std::unique_ptr<sknav::SolidLattice> mSolids;
+    std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
     // </SK:Nexii>
 };
 
