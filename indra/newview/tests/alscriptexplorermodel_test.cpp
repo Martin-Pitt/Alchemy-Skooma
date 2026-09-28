@@ -512,4 +512,80 @@ namespace tut
         ensure_equals("named by its root", model.nameOf(big), std::string("Big"));
         ensure("present", model.present(big) && !model.present(id(203)));
     }
+
+    template<> template<>
+    void alscriptexplorermodel_object::test<12>()
+    {
+        set_test_name("a prim by its link number, an item by what the agent may not do with it, a prim by whether it may be changed");
+        const LLUUID house = object(10, "House", 3);
+        world[house].prims[2].modify = false;
+        const LLUUID lone = object(40, "Lone");
+        selected = { house, lone };
+        list();
+        ask(false, false);
+        ALScriptWorkspace::Contents contents;
+        contents.prim    = id(11);
+        contents.fetched = true;
+        ALScriptWorkspace::Item locked;
+        locked.id     = id(2000);
+        locked.name   = "locked.lsl";
+        locked.modify = false;
+        locked.copy   = false;
+        contents.items.push_back(locked);
+        feed(contents);
+
+        const std::vector<Model::Row> all = model.rows(std::string());
+        const Model::Row*             hinge = rowNamed(all, "House.1");
+        ensure("the second prim is link 2", hinge && hinge->kind == Model::Row::Kind::Prim && hinge->link == 2);
+        const Model::Row* latch = rowNamed(all, "House.2");
+        ensure("the third, 3", latch && latch->link == 3);
+        ensure_equals("the root is link 1", model.linkNumber(house), 1);
+        ensure_equals("a prim alone is 0", model.linkNumber(lone), 0);
+        const Model::Row* item = rowNamed(all, "locked.lsl");
+        ensure("no modify, no copy", item && item->noModify && item->noCopy);
+        ensure("found by its ref", model.itemAt(ALScriptRef(id(11), id(2000))).has_value() && !model.itemAt(ALScriptRef(id(11), id(2000)))->modify);
+        ensure("a prim the agent may not change", !model.primModifiable(id(12)) && model.primModifiable(id(11)));
+        ensure("one not seen, yes", model.primModifiable(id(99)));
+    }
+
+    template<> template<>
+    void alscriptexplorermodel_object::test<13>()
+    {
+        set_test_name("a pin keeps the place its object was last seen at, and the region's name, across sessions, for one away");
+        const LLUUID house = object(10, "House");
+        world[house].position = LLVector3d(256000.0 + 10.0, 256000.0 + 20.0, 30.0);
+        world[house].region   = "Ahern";
+        selected              = { house };
+        list();
+        std::vector<Model::Choice> rows(1);
+        rows[0].root = house;
+        rows[0].prim = house;
+        model.pin(rows);
+        const Model::Pin* pin = model.pinOf(house);
+        ensure("pinned with its place", pin && pin->position && pin->position->mdV[VZ] == 30.0 && pin->region == "Ahern");
+
+        // Moved a little: kept as it was; far, or to another region: kept anew.
+        world[house].position = LLVector3d(256000.0 + 12.0, 256000.0 + 20.0, 30.0);
+        list();
+        ensure("a step is no new place", !model.takePinsChanged() && model.pinOf(house)->position->mdV[VX] == 256010.0);
+        world[house].position = LLVector3d(256000.0 + 100.0, 256000.0 + 20.0, 30.0);
+        world[house].region   = "Morris";
+        list();
+        ensure("far, and elsewhere: kept, and said", model.takePinsChanged() && model.pinOf(house)->region == "Morris");
+
+        // Across sessions, and away.
+        LLSD state;
+        model.saveState(state);
+        Model again(index);
+        again.readState(state);
+        ensure("read back", again.pinOf(house) && again.pinOf(house)->position && again.pinOf(house)->region == "Morris");
+        world.clear();
+        selected.clear();
+        Model::Listing listing;
+        listing.seen    = [](const LLUUID&) -> std::optional<Model::Seen> { return std::nullopt; };
+        listing.unnamed = "(unnamed)";
+        again.list(listing);
+        const std::vector<Model::Row> all = again.rows(std::string());
+        ensure("listed away, with its region", !all.empty() && !all[0].present && all[0].region == "Morris");
+    }
 }
