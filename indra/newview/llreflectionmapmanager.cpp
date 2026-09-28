@@ -473,8 +473,16 @@ void LLReflectionMapManager::update()
             }
 
             probe->mInsideManualProbe = eclipsed;
+
         }
     }
+
+    // <SK:Nexii> Navmesh rooms probes
+    if (mNavRoomsDirty)
+    {
+        updateNavRoomsSuppression();
+    }
+    // </SK:Nexii>
 
     // Update distance to camera for all probes.
     //
@@ -697,6 +705,7 @@ void LLReflectionMapManager::refreshSettings()
     mRenderReflectionProbeLevel = gSavedSettings.getS32("RenderReflectionProbeLevel");
     mRenderReflectionProbeCount = gSavedSettings.getU32("RenderReflectionProbeCount");
     mRenderReflectionProbeDynamicAllocation = gSavedSettings.getS32("RenderReflectionProbeDynamicAllocation");
+    mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
     cleanupQueryPool();
 }
 
@@ -721,6 +730,7 @@ LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
     if (group)
     {
         probe->mOrigin = group->getOctreeNode()->getCenter();
+        mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
     }
 
     if (gCubeSnapshot)
@@ -886,6 +896,69 @@ LLReflectionMap* LLReflectionMapManager::registerViewerObject(LLViewerObject* vo
     return probe;
 }
 
+// <SK:Nexii> Navmesh rooms probes
+LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& origin, F32 radius)
+{
+    LLReflectionMap* probe = addProbe();
+    if (probe)
+    {
+        probe->mNavRooms = true;
+        probe->mOrigin.load3(origin.mV);
+        probe->mRadius = radius;
+    }
+    return probe;
+}
+
+void LLReflectionMapManager::setNavRoomsVolumes(const std::vector<std::pair<LLVector3, LLVector3>>& boxes)
+{
+    if (boxes != mNavRoomsVolumes)
+    {
+        mNavRoomsVolumes = boxes;
+        mNavRoomsDirty = true;
+    }
+}
+
+void LLReflectionMapManager::updateNavRoomsSuppression()
+{
+    mNavRoomsDirty = false;
+
+    // Slack in whichever direction keeps the current state, as for the manual eclipse above.
+    const F32 HYSTERESIS = 0.5f;
+    const bool active = mRenderReflectionProbeLevel >= 3;
+    for (auto& probe : mProbes)
+    {
+        bool suppressed = false;
+        if (active && probe->mGroup)
+        {
+            const F32 margin = probe->mSuppressedByNavRooms ? HYSTERESIS : -HYSTERESIS;
+            const LLVector3 o(probe->mOrigin.getF32ptr());
+            for (const auto& box : mNavRoomsVolumes)
+            {
+                if (o.mV[0] >= box.first.mV[0] - margin && o.mV[1] >= box.first.mV[1] - margin && o.mV[2] >= box.first.mV[2] - margin &&
+                    o.mV[0] <= box.second.mV[0] + margin && o.mV[1] <= box.second.mV[1] + margin && o.mV[2] <= box.second.mV[2] + margin)
+                {
+                    suppressed = true;
+                    break;
+                }
+            }
+        }
+        probe->mSuppressedByNavRooms = suppressed;
+    }
+}
+
+void LLReflectionMapManager::getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const
+{
+    placed.clear();
+    for (const auto& probe : mProbes)
+    {
+        if (probe->mViewerObject && !probe->mViewerObject->isDead() && probe->isRelevant())
+        {
+            placed.push_back(probe);
+        }
+    }
+}
+// </SK:Nexii>
+
 S32 LLReflectionMapManager::allocateCubeIndex()
 {
     if (!mCubeFree.empty())
@@ -948,6 +1021,7 @@ void LLReflectionMapManager::doProbeUpdate()
         if (isRadiancePass())
         {
             mUpdatingProbe->mComplete = true;
+            mNavRoomsDirty = mNavRoomsDirty || mUpdatingProbe->mGroup != nullptr; // <SK:Nexii> Navmesh rooms probes: its origin has settled
             mUpdatingProbe = nullptr;
             mRadiancePass = false;
         }
@@ -1294,6 +1368,15 @@ void LLReflectionMapManager::shift(const LLVector4a& offset)
             probe->mNeighborOrigin.add(offset);
         }
     }
+
+    // <SK:Nexii> Navmesh rooms probes: the replaced volumes ride the same shift.
+    const LLVector3 delta(offset.getF32ptr());
+    for (auto& box : mNavRoomsVolumes)
+    {
+        box.first += delta;
+        box.second += delta;
+    }
+    // </SK:Nexii>
 }
 
 void LLReflectionMapManager::updateNeighbors(LLReflectionMap* probe)

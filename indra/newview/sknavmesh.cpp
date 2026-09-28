@@ -32,6 +32,7 @@
 #include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "sknavroomprobes.h"
 #include "sknavrooms.h"
 
 #include "alobjectproperties.h"
@@ -207,7 +208,8 @@ SKNavMesh::Mesh::~Mesh()
 }
 
 SKNavMesh::SKNavMesh()
-    : mRooms(std::make_unique<SKNavRooms>())
+    : mRooms(std::make_unique<SKNavRooms>()),
+      mRoomProbes(std::make_unique<SKNavRoomProbes>())
 {
 }
 
@@ -397,6 +399,7 @@ void SKNavMesh::cleanupSingleton()
         mWorkers.reset();
     }
     mRooms->close();
+    mRoomProbes->clear();
 }
 
 bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
@@ -1386,6 +1389,7 @@ void SKNavMesh::update()
         mSkyRevision = mRevision;
     }
     mRooms->update(*this);
+    mRoomProbes->update(mRooms->view());
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1439,7 +1443,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine();
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const

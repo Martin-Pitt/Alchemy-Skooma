@@ -20,6 +20,7 @@ target_sources(
     sknavfeatures.cpp
     sknavflights.cpp
     sknavlayout.cpp
+    sknavprobes.cpp
     sknavreplay.cpp
     sknavskymap.cpp
     sknavspaces.cpp
@@ -44,6 +45,7 @@ target_sources(
         sknavfeatures.h
         sknavflights.h
         sknavlayout.h
+        sknavprobes.h
         sknavreplay.h
         sknavskymap.h
         sknavspaces.h
@@ -88,6 +90,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavprobes PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavreplay PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
