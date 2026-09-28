@@ -60,6 +60,7 @@ namespace
             toEditor.push_back(to_editor);
         }
         std::string problemIcon(const Doc&, const std::string& include) const override { return include.empty() ? "Inv_Script" : "Studio_File"; }
+        std::string scriptIcon(bool lua, const std::string& include) const override { return include.empty() ? (lua ? "Inv_Script_Luau" : "Inv_Script") : "Studio_File"; }
         bool        applyFix(Doc& doc, const ALScriptFix& fix, U32) override
         {
             fixed.push_back(doc.id + ":" + fix.title);
@@ -67,6 +68,7 @@ namespace
         }
         void fixAllOfKind(Doc& doc, const std::string& key) override { kinds.push_back(doc.id + ":" + key); }
         void refreshProblems(Doc& doc) override { refreshed.push_back(doc.id); }
+        void runtimeCleared(Doc& doc) override { cleared.push_back(doc.id); }
         bool isLint(bool, const std::string& id) const override { return lints.count(id) > 0; }
         ALScriptLints::Level lintLevel(bool, const std::string& id) const override
         {
@@ -84,6 +86,7 @@ namespace
         std::vector<std::string>                    fixed;
         std::vector<std::string>                    kinds;
         std::vector<std::string>                    refreshed;
+        std::vector<std::string>                    cleared;
         std::set<std::string>                       lints;
         std::map<std::string, ALScriptLints::Level> levels;
     };
@@ -164,7 +167,7 @@ namespace tut
                 text += "line " + std::to_string(i) + "\n";
             }
             d.editor->setText(text);
-            d.analysisVersion = d.editor->document().version();
+            d.check.analysisVersion = d.editor->document().version();
             return d;
         }
 
@@ -244,13 +247,13 @@ namespace tut
         d.problems.push_back({ 2, 0, true, std::string(), "ERROR", "the compiler's own" });
         // The analyzers, of the text as it stands: that error, a lint with
         // a fix, and a note in an include.
-        d.analysis.push_back(problem(S::Parser, V::Error, 6, "syntax error, unexpected"));
+        d.check.analysis.push_back(problem(S::Parser, V::Error, 6, "syntax error, unexpected"));
         ALScriptProblem lint = problem(S::Lint, V::Warning, 4, "a local shadows another");
         lint.code            = "LocalShadow";
         lint.key             = "shadow";
         lint.fixes.push_back(fix("Rename it", true, true, 4));
-        d.analysis.push_back(lint);
-        d.analysis.push_back(problem(S::Lint, V::Note, 1, "in the include", "disk:/scripts/lib.lsl"));
+        d.check.analysis.push_back(lint);
+        d.check.analysis.push_back(problem(S::Lint, V::Note, 1, "in the include", "disk:/scripts/lib.lsl"));
         // What it said as it ran, three times; and the weight, over.
         d.runtime.push_back({ 8, -1, std::string(), "Math Error", 3 });
         ALScriptWeight weight;
@@ -258,8 +261,8 @@ namespace tut
         weight.total    = 70000;
         weight.limit    = 65536;
         weight.estimate = true;
-        d.weight        = weight;
-        d.weightVersion = d.editor->document().version();
+        d.weighing.weight        = weight;
+        d.weighing.version = d.editor->document().version();
 
         ALScriptProblemsPane::Made made = gather(d);
         std::vector<std::string> messages;
@@ -303,9 +306,9 @@ namespace tut
         using V                   = ALScriptProblem::Severity;
         Doc& door                 = doc("door");
         Doc& lamp                 = doc("lamp");
-        door.analysis             = { problem(S::Parser, V::Error, 1, "door error"), problem(S::Lint, V::Warning, 3, "door warning"),
+        door.check.analysis       = { problem(S::Parser, V::Error, 1, "door error"), problem(S::Lint, V::Warning, 3, "door warning"),
                                       problem(S::Lint, V::Note, 5, "door note") };
-        lamp.analysis             = { problem(S::Parser, V::Error, 2, "lamp error") };
+        lamp.check.analysis       = { problem(S::Parser, V::Error, 2, "lamp error") };
         gather(lamp);
         gather(door);
         out.fill(&door);
@@ -326,6 +329,7 @@ namespace tut
         window.find<LLFilterEditor>("problems_filter")->setText(std::string("NOTE"));
         window.find<LLFilterEditor>("problems_filter")->onCommit();
         ensure_equals("the words, in either case", shown(), "|door note|#" + services.counted("ProblemsHidden", 2));
+        ensure("rows to show: nothing said over them", !out.list()->saysEmpty());
         window.find<LLFilterEditor>("problems_filter")->setText(std::string());
         window.find<LLFilterEditor>("problems_filter")->onCommit();
 
@@ -337,7 +341,7 @@ namespace tut
         ensure_equals("four to list", out.held(), 4);
         // Another script's problems gathered again: listed, since every
         // one's are.
-        lamp.analysis.push_back(problem(S::Lint, V::Warning, 7, "lamp warning"));
+        lamp.check.analysis.push_back(problem(S::Lint, V::Warning, 7, "lamp warning"));
         gather(lamp);
         ensure("the new one listed", shown().find("lamp warning") != std::string::npos);
         pick("problems_scope", "this");
@@ -351,6 +355,13 @@ namespace tut
         LLSD state;
         out.saveState(state);
         ensure_equals("the scope kept", state["problem_scope"].asString(), std::string("this"));
+
+        // A script with nothing wrong with it says so where the rows would be.
+        Doc& clean = doc("clean");
+        gather(clean);
+        out.fill(&clean);
+        ensure("nothing listed, said", out.list()->saysEmpty()
+                                           && out.list()->emptyWords() == services.words("NoProblemsIn", { { "[NAME]", "clean.lsl" } }));
     }
 
     template <>
@@ -361,7 +372,7 @@ namespace tut
         ALScriptProblemsPane& out = make();
         Doc&                  d   = doc("door");
         d.problems.push_back({ 1, 0, true, std::string(), "ERROR", "compiler first" });
-        d.analysis = { problem(ALScriptProblem::Source::Lint, ALScriptProblem::Severity::Warning, 0, "a warning before"),
+        d.check.analysis = { problem(ALScriptProblem::Source::Lint, ALScriptProblem::Severity::Warning, 0, "a warning before"),
                        problem(ALScriptProblem::Source::Parser, ALScriptProblem::Severity::Error, 5, "parser later") };
         gather(d);
         out.fill(&d);
@@ -377,6 +388,12 @@ namespace tut
         ensure_equals("a row walked to", studio.chosen.back().line, 0);
         ensure("the keyboard left in the list", !studio.toEditor.back());
         ensure_equals("whose it is", studio.chosen.back().doc, std::string("door"));
+
+        // The list's keys: return goes there to type, escape back to the
+        // script without going.
+        ensure("return", out.list()->handleKeyHere(KEY_RETURN, MASK_NONE) && studio.chosen.back().line == 0 && studio.toEditor.back());
+        const size_t gone = studio.chosen.size();
+        ensure("escape", out.list()->handleKeyHere(KEY_ESCAPE, MASK_NONE) && services.reveals.back() && studio.chosen.size() == gone);
     }
 
     template <>
@@ -397,7 +414,7 @@ namespace tut
         two.message         = "shadowed twice";
         two.fixes           = { fix("Rename", true, true, 6) };
         ALScriptProblem plain = problem(ALScriptProblem::Source::Parser, ALScriptProblem::Severity::Error, 8, "no lint");
-        d.analysis            = { one, two, plain };
+        d.check.analysis      = { one, two, plain };
         gather(d);
         out.fill(&d);
 
@@ -438,6 +455,170 @@ namespace tut
         ensure("run-time errors to let go of", out.enabled("clear_runtime"));
         out.act("clear_runtime");
         ensure("let go of", d.runtime.empty());
+        ensure("and not recalled when it is opened again", studio.cleared == std::vector<std::string>{ d.id });
         ensure_equals("and the tab's problems gathered again", studio.refreshed.size(), size_t(1));
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<5>()
+    {
+        set_test_name("the compiler's error a line from the analyzer's is the same error said once; the compiler's said to be as of the last save once the text has changed");
+        make();
+        Doc& d = doc("door");
+        using S = ALScriptProblem::Source;
+        using V = ALScriptProblem::Severity;
+        // The analyzer at the missing `;`, the compiler at what came after.
+        d.problems.push_back({ 7, 0, true, std::string(), "ERROR", "syntax error" });
+        d.problems.push_back({ 2, 0, true, std::string(), "ERROR", "far from any" });
+        d.check.analysis.push_back(problem(S::Parser, V::Error, 6, "Missing ';'"));
+        d.check.analysisVersion = d.editor->document().version();
+        ALScriptProblemsPane::Made made = gather(d);
+        std::vector<std::string> messages;
+        for (const Doc::Shown& row : made.rows)
+        {
+            messages.push_back(row.message);
+        }
+        ensure("the one a line after said once", std::find(messages.begin(), messages.end(), "syntax error") == messages.end());
+        ensure("one further off kept", std::find(messages.begin(), messages.end(), "far from any") != messages.end());
+        // Typed in since the save: what the compiler said is of the text
+        // as it was.
+        d.editor->insertText("x");
+        made = gather(d);
+        bool marked = false;
+        for (const Doc::Shown& row : made.rows)
+        {
+            marked |= row.message == "far from any " + services.words("CompilerAsSaved");
+        }
+        ensure("as of the last save", marked);
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<6>()
+    {
+        set_test_name("an LSL lint says its name, which a NOLINT comment turns it off by; an error says no number; the origins offer the weight");
+        make();
+        Doc& d = doc("door");
+        using S = ALScriptProblem::Source;
+        using V = ALScriptProblem::Severity;
+        ALScriptProblem unused = problem(S::Lint, V::Warning, 2, "declared but never used");
+        unused.key             = "LSLDeclaredButNotUsed";
+        unused.code            = "20009";
+        ALScriptProblem wrong  = problem(S::Types, V::Error, 3, "type mismatch");
+        wrong.code             = "10002";
+        d.check.analysis       = { unused, wrong };
+        d.check.analysisVersion = d.editor->document().version();
+        ALScriptProblemsPane::Made made = gather(d);
+        bool named = false, numbered = false;
+        for (const Doc::Shown& row : made.rows)
+        {
+            named |= row.message == "declared but never used [DeclaredButNotUsed]";
+            numbered |= row.message.find("10002") != std::string::npos;
+        }
+        ensure("the lint named", named);
+        ensure("the error no number", !numbered);
+        LLComboBox* origins = window.find<LLComboBox>("problems_origin");
+        ensure("the origins offer the weight", origins && origins->selectByValue(LLSD(services.words("OriginWeight"))));
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<7>()
+    {
+        set_test_name("code past four fifths of its target's limit is a warning that says what is left to run in; not before the optimizer, nor under");
+        make();
+        Doc& d = doc("door");
+        ALScriptWeight weight;
+        weight.target      = ALScriptWeight::Target::LSO;
+        weight.total       = 14 * 1024;
+        weight.limit       = 16 * 1024;
+        d.weighing.weight  = weight;
+        d.weighing.version = d.editor->document().version();
+        d.weighing.exact   = true;
+        const auto weights = [&](const ALScriptProblemsPane::Made& made) {
+            std::vector<Doc::Shown> rows;
+            std::copy_if(made.rows.begin(), made.rows.end(), std::back_inserter(rows), [&](const Doc::Shown& row) { return row.origin == services.words("OriginWeight"); });
+            return rows;
+        };
+        std::vector<Doc::Shown> rows = weights(gather(d));
+        ensure_equals("near: one row", rows.size(), size_t(1));
+        ensure("a warning", rows[0].level == Doc::Level::Warning);
+        ensure("what is left", rows[0].message == services.words("WeightNear", { { "[SIZE]", "14.0" }, { "[LIMIT]", "16" }, { "[LEFT]", "2.0" }, { "[TARGET]", "LSO" } }));
+        d.weighing.exact = false;
+        ensure("before the optimizer, nothing", weights(gather(d)).empty());
+        d.weighing.exact            = true;
+        d.weighing.weight->total    = 12 * 1024;
+        ensure("at three quarters, nothing", weights(gather(d)).empty());
+        d.weighing.weight->total    = 17 * 1024;
+        rows = weights(gather(d));
+        ensure("over: the over row alone", rows.size() == 1 && rows[0].message.find("more than") != std::string::npos);
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<8>()
+    {
+        set_test_name("a problem in code the preprocessor made is listed under that name, not marked on the source's line of its number");
+        make();
+        Doc& d = doc("door");
+        ALScriptProblem made_here = problem(ALScriptProblem::Source::Parser, ALScriptProblem::Severity::Error, 1, "in a switch's jump table", Doc::GENERATED);
+        d.check.analysis          = { made_here };
+        d.check.analysisVersion   = d.editor->document().version();
+        const ALScriptProblemsPane::Made made = gather(d);
+        ensure_equals("one row", made.rows.size(), size_t(1));
+        ensure_equals("named so", made.rows[0].fileName, services.words("InGeneratedCode"));
+        ensure("no mark, no squiggle", made.marks.empty() && made.decorations.empty());
+    }
+
+    template<> template<>
+    void alscriptproblemspane_object::test<9>()
+    {
+        set_test_name("a script no tab holds, which an object's check reached, is listed after the open ones under its name, chosen by its item, and gives way to its tab");
+        make();
+        Doc& d           = doc("door");
+        d.check.analysis = { problem(ALScriptProblem::Source::Parser, ALScriptProblem::Severity::Error, 1, "in the open one") };
+        gather(d);
+        LLUUID object, item;
+        object.generate();
+        item.generate();
+        const ALScriptRef closed(object, item);
+        Doc::Shown        row;
+        row.line      = 3;
+        row.column    = 1;
+        row.hasColumn = true;
+        row.level     = Doc::Level::Warning;
+        row.origin    = "Lint";
+        row.message   = "in the closed one";
+        pane->checkedScript(closed, "hinge.lsl", false, { row }, "House");
+        pane->showEveryScript();
+        const std::string listed  = shown();
+        const std::string heading = "#" + services.words("ProblemsChecked", { { "[NAME]", "hinge.lsl" }, { "[OBJECT]", "House" } });
+        ensure("the open one's, then the closed one's under its name and object: " + listed,
+               listed.find("in the open one") < listed.find(heading) && listed.find(heading) < listed.find("in the closed one") &&
+                   listed.find("in the closed one") != std::string::npos);
+        ensure_equals("counted with the rest", pane->held(), 2);
+
+        // Chosen by its item and name, with no tab.
+        const std::vector<LLScrollListItem*> rows = list()->getAllData();
+        S32 at = -1;
+        for (size_t i = 0; i < rows.size(); ++i)
+        {
+            at = rows[i]->getValue().has("checked") ? static_cast<S32>(i) : at;
+        }
+        ensure("a row of it", at >= 0);
+        list()->selectNthItem(at);
+        pane->choose(false);
+        ensure("chosen", !studio.chosen.empty());
+        const ALScriptProblemsPane::Place& place = studio.chosen.back();
+        ensure("by its item, with no tab", place.ref == closed && place.name == "hinge.lsl" && place.doc.empty() && place.line == 3);
+
+        // Opened, its tab says; a new check lets the last one's go.
+        pane->forgetChecked(closed);
+        ensure("given way", shown().find("in the closed one") == std::string::npos && pane->held() == 1);
+        pane->checkedScript(closed, "hinge.lsl", false, { row }, "House");
+        ensure_equals("back", pane->checkedCount(), size_t(1));
+        pane->clearChecked();
+        ensure("let go of", pane->checkedCount() == 0 && shown().find("in the closed one") == std::string::npos);
     }
 }

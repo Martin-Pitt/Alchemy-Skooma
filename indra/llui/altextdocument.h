@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "allinetable.h"
 #include "stdtypes.h"
 
 #include <boost/signals2.hpp>
@@ -99,9 +100,60 @@ public:
         ALTextRange range;
         std::string removed;
         std::string inserted;
+        // Where the inserted text ends, worked out once where the edit is
+        // made -- by the document, before any listener hears of it --
+        // rather than again by every listener and for every range it
+        // slides. Kept only while `endKept`: whoever changes the edit
+        // afterwards keeps it again. An edit made by hand works it out
+        // each time it is asked.
+        ALTextPos   keptEnd;
+        bool        endKept = false;
+        // The stretches a batch replaced (replaceMany), in order and none
+        // over another: each as it was, and as it is after. `range` is then
+        // the whole of the text from the first to the last, and what lies
+        // between them is untouched -- which is what a position or a line
+        // kept beside the text asks by. Empty for an edit of one stretch.
+        struct Part
+        {
+            ALTextRange before;
+            ALTextRange after;
+        };
+        std::vector<Part> parts;
 
         // Where the inserted text ends, in the text as it is after.
-        ALTextPos   endAfter() const;
+        ALTextPos   endAfter() const { return endKept ? keptEnd : workOutEnd(); }
+        void        keepEnd() { keepEnd(workOutEnd()); }
+        void        keepEnd(const ALTextPos& end)
+        {
+            keptEnd = end;
+            endKept = true;
+            keptSpans.clear();
+        }
+        // How many line breaks went in: the lines the edit made, less one.
+        S32         breaksInserted() const { return endAfter().line - range.begin.line; }
+        // The lines replaced, as they were, and how many were made: one run
+        // for an edit of one stretch; for a batch, one for each run of its
+        // stretches that share lines. Whether the last line replaced is
+        // kept whole -- what went in ended in a line break at its start,
+        // as a line put in above it does -- for rows that belong to it.
+        struct LineSpan
+        {
+            S32  first       = 0;
+            S32  last        = 0;
+            S32  made        = 1;
+            bool lastKept    = false;
+            // Where in its first line the run began.
+            S32  firstColumn = 0;
+            // How many lines this run and those before it added (or took,
+            // below zero): what a line after it moves by.
+            S32  shiftAfter  = 0;
+        };
+        // Worked out once, however many listeners ask: whoever changes the
+        // edit afterwards keeps its end again, which lets them go.
+        const std::vector<LineSpan>& lineSpans() const;
+        // What lineSpans() worked out; public only so that an edit is still
+        // made from its range and texts in braces.
+        mutable std::vector<LineSpan> keptSpans;
         ALTextRange rangeAfter() const { return ALTextRange(range.begin, endAfter()); }
         Edit        inverse() const;
         bool        nothing() const { return removed.empty() && inserted.empty(); }
@@ -121,6 +173,21 @@ public:
         // range's start, or past what went in, for its end. Text put right
         // at the range's start is within it; right at its end, not.
         ALTextRange stretched(const ALTextRange& range) const;
+        // A place kept beside the text -- a mark -- as a keeper of marks has
+        // it: before what was replaced it stays, inside it lands where that
+        // began, after it moves along. For a batch, by the stretch it is in
+        // or the ones before it.
+        ALTextPos placed(const ALTextPos& pos) const;
+        // Where a line is after, or -1 for one the edit replaced: one of a
+        // run of lines, a line typed in included, is not the line it was.
+        S32       lineAfter(S32 line) const;
+
+    private:
+        ALTextPos workOutEnd() const;
+        // Where a position between a batch's stretches goes: moved along by
+        // the last that ended at or before it. One a stretch put in right
+        // at it pushes only where `pushed`.
+        ALTextPos mapped(const ALTextPos& pos, bool pushed) const;
     };
 
     typedef boost::signals2::signal<void(const Edit&)> changed_signal_t;
@@ -156,6 +223,15 @@ public:
     // nothing for nothing, or a stretch for the same text -- is answered as
     // nothing, without moving the version or telling anyone.
     Edit replace(ALTextRange range, std::string_view text);
+    // The same, as a batch's: replacing `range` with `text` is what the
+    // parts did, and the edit says so (undo and redo, putting a batch back).
+    Edit replace(ALTextRange range, std::string_view text, std::vector<Edit::Part> parts);
+    // Several stretches replaced at once, each at a place of the text as it
+    // is now, none over another -- two stretches put in at one place keep
+    // the order given -- as one edit of the text from the first to the
+    // last, which carries each as a part: one notification, one step to
+    // undo, and every line and position between them kept.
+    Edit replaceMany(std::vector<std::pair<ALTextRange, std::string>> edits);
     Edit insert(const ALTextPos& at, std::string_view text) { return replace(ALTextRange(at, at), text); }
     Edit remove(const ALTextRange& range) { return replace(range, std::string_view()); }
 
@@ -187,6 +263,13 @@ public:
     ALTextPos   nextWord(ALTextPos pos) const;
     ALTextPos   prevWord(ALTextPos pos) const;
     ALTextRange wordAt(ALTextPos pos) const;
+    // A word along as code reads one: past a run of a name's characters,
+    // or of other marks, and the blanks after it, going forward; back over
+    // blanks and the run before them. `ll.Say` is three. With `parts`, a
+    // name's parts too -- `Set` and `Pos` in `llSetPos`. Across a line end
+    // as the words above.
+    ALTextPos   nextCodeWord(ALTextPos pos, bool parts = false) const;
+    ALTextPos   prevCodeWord(ALTextPos pos, bool parts = false) const;
 
     // A byte offset into text(), and back.
     size_t    offsetOf(ALTextPos pos) const;
@@ -205,7 +288,7 @@ private:
     ALTextPos   clampBytes(ALTextPos pos) const;
     ALTextRange clampBytes(const ALTextRange& range) const;
 
-    std::vector<std::string> mLines;
+    ALLineTable<std::string> mLines;
     U32                      mVersion = 0;
     changed_signal_t         mChanged;
     // The whole text and its line starts as of a version; good while
