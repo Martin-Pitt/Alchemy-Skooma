@@ -56,6 +56,9 @@ namespace sknav
         /// after runs the meshes that touch another with its neighbours'
         /// answers and its own last ones, as the viewer's re-runs do.
         S32 mRounds = 2;
+        /// Rounds after the first rebuild this many tiles of every mesh, as
+        /// though their air had moved, and run every mesh, neighboured or not.
+        U32 mDirtyTiles = 0;
     };
 
     struct ReplayTile

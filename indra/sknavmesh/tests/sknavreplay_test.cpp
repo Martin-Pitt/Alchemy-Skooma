@@ -379,6 +379,11 @@ namespace tut
         {
             options.mRounds = std::stoi(rounds);
         }
+        const std::string dirty = LLStringUtil::getenv("SKNAV_REPLAY_DIRTY");
+        if (!dirty.empty())
+        {
+            options.mDirtyTiles = static_cast<U32>(std::stoi(dirty));
+        }
         if (LLStringUtil::getenv("SKNAV_REPLAY_AIR") == "everywhere")
         {
             options.mAir = AirMode::EVERYWHERE;
