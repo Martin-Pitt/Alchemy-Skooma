@@ -129,6 +129,30 @@ namespace sknav
         std::vector<std::pair<U64, U32>> mRaster;
     };
 
+    /// A floor cell of a plan: its minimum corner, in metres of the frame
+    /// the plan lives in, at the floor z the cell holds.
+    struct PlanCell
+    {
+        F32 mX = 0.f;
+        F32 mY = 0.f;
+        F32 mZ = 0.f;
+    };
+
+    /// One straight run of a plan's boundary, from one cell corner to
+    /// another, the plan's cells on its left, at the floor z it ran along.
+    struct PlanEdge
+    {
+        F32 mX0 = 0.f, mY0 = 0.f, mX1 = 0.f, mY1 = 0.f;
+        F32 mZ = 0.f;
+    };
+
+    /// The outline of a set of floor cells `cell` metres wide: every side
+    /// no cell of the set stands across, chained into closed loops, runs at
+    /// one floor merged into one edge each. Cells repeated keep their lowest
+    /// floor; where two cells of the set touch only at a corner the outline
+    /// pinches and the loops part there.
+    std::vector<PlanEdge> tracePlan(const std::vector<PlanCell>& cells, F32 cell);
+
     /// A tile's seeds, kept for the next pass: a tile whose air did not move
     /// keeps them rather than cutting them again.
     struct SeedStats

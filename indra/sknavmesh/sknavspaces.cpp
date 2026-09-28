@@ -3238,4 +3238,183 @@ namespace sknav
         }
         return pass.product();
     }
+
+    namespace
+    {
+        U64 cornerKey(S32 x, S32 y)
+        {
+            return (static_cast<U64>(static_cast<S64>(x) + (1ll << 20)) << 21) |
+                   static_cast<U64>(static_cast<S64>(y) + (1ll << 20));
+        }
+
+        S32 cornerX(U64 key) { return static_cast<S32>(static_cast<S64>(key >> 21) - (1ll << 20)); }
+
+        S32 cornerY(U64 key) { return static_cast<S32>(static_cast<S64>(key & 0x1fffff) - (1ll << 20)); }
+
+        /// The four ways an edge runs, by the corner it steps to: +X, +Y, -X, -Y.
+        U8 dirOf(U64 from, U64 to)
+        {
+            const S64 d = static_cast<S64>(to) - static_cast<S64>(from);
+            return d == (1ll << 21) ? 0 : d == 1ll ? 1 : d == -(1ll << 21) ? 2 : 3;
+        }
+
+        struct TraceEdge
+        {
+            U64 mFrom = 0;
+            U64 mTo = 0;
+            F32 mZ = 0.f;
+        };
+    }
+
+    std::vector<PlanEdge> tracePlan(const std::vector<PlanCell>& cells, F32 cell)
+    {
+        std::vector<PlanEdge> out;
+        if (cells.empty() || cell <= 0.f)
+        {
+            return out;
+        }
+        // The plan on its lattice, a column's repeats keeping the lowest floor.
+        struct Cell
+        {
+            S32 mX, mY;
+            F32 mZ;
+        };
+        std::vector<Cell> plan;
+        plan.reserve(cells.size());
+        for (const PlanCell& c : cells)
+        {
+            plan.push_back({ static_cast<S32>(std::lround(c.mX / cell)), static_cast<S32>(std::lround(c.mY / cell)), c.mZ });
+        }
+        std::sort(plan.begin(), plan.end(), [](const Cell& a, const Cell& b)
+                  {
+                      return a.mY != b.mY ? a.mY < b.mY : (a.mX != b.mX ? a.mX < b.mX : a.mZ < b.mZ);
+                  });
+        plan.erase(std::unique(plan.begin(), plan.end(), [](const Cell& a, const Cell& b)
+                   { return a.mX == b.mX && a.mY == b.mY; }), plan.end());
+        const auto on_plan = [&plan](S32 x, S32 y)
+        {
+            size_t lo = 0, hi = plan.size();
+            while (lo < hi)
+            {
+                const size_t mid = lo + (hi - lo) / 2;
+                const Cell& c = plan[mid];
+                if (c.mY < y || (c.mY == y && c.mX < x))
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+            return lo < plan.size() && plan[lo].mY == y && plan[lo].mX == x;
+        };
+
+        // Every side no cell of the plan stands across, as a directed edge
+        // with the plan on its left, so chains close into loops.
+        std::vector<TraceEdge> edges;
+        edges.reserve(plan.size() * 2);
+        for (const Cell& c : plan)
+        {
+            if (!on_plan(c.mX, c.mY - 1))
+            {
+                edges.push_back({ cornerKey(c.mX, c.mY), cornerKey(c.mX + 1, c.mY), c.mZ });
+            }
+            if (!on_plan(c.mX + 1, c.mY))
+            {
+                edges.push_back({ cornerKey(c.mX + 1, c.mY), cornerKey(c.mX + 1, c.mY + 1), c.mZ });
+            }
+            if (!on_plan(c.mX, c.mY + 1))
+            {
+                edges.push_back({ cornerKey(c.mX + 1, c.mY + 1), cornerKey(c.mX, c.mY + 1), c.mZ });
+            }
+            if (!on_plan(c.mX - 1, c.mY))
+            {
+                edges.push_back({ cornerKey(c.mX, c.mY + 1), cornerKey(c.mX, c.mY), c.mZ });
+            }
+        }
+        std::sort(edges.begin(), edges.end(), [](const TraceEdge& a, const TraceEdge& b)
+                  { return a.mFrom != b.mFrom ? a.mFrom < b.mFrom : a.mTo < b.mTo; });
+        std::vector<U8> used(edges.size(), 0);
+        const auto next_from = [&](U64 from, U32& next) -> bool
+        {
+            const auto begin = std::lower_bound(edges.begin(), edges.end(), from,
+                                                [](const TraceEdge& e, U64 k) { return e.mFrom < k; });
+            for (auto it = begin; it != edges.end() && it->mFrom == from; ++it)
+            {
+                const U32 i = static_cast<U32>(it - edges.begin());
+                if (!used[i])
+                {
+                    next = i;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        std::vector<U32> loop;
+        for (size_t s = 0; s < edges.size(); ++s)
+        {
+            if (used[s])
+            {
+                continue;
+            }
+            loop.clear();
+            U32 cur = static_cast<U32>(s);
+            const U64 start = edges[s].mFrom;
+            while (true)
+            {
+                used[cur] = 1;
+                loop.push_back(cur);
+                const U64 to = edges[cur].mTo;
+                if (to == start)
+                {
+                    break;
+                }
+                U32 next;
+                if (!next_from(to, next))
+                {
+                    break;
+                }
+                cur = next;
+            }
+            // Start where the direction changes, so no run wraps the ends of
+            // the loop, then merge the edges that run on straight at one floor.
+            const size_t n = loop.size();
+            size_t at = 0;
+            for (size_t k = 0; k < n; ++k)
+            {
+                const TraceEdge& a = edges[loop[(k + n - 1) % n]];
+                const TraceEdge& b = edges[loop[k]];
+                if (a.mTo != b.mFrom || dirOf(a.mFrom, a.mTo) != dirOf(b.mFrom, b.mTo) || std::fabs(a.mZ - b.mZ) > 1e-4f)
+                {
+                    at = k;
+                    break;
+                }
+            }
+            for (size_t k = 0; k < n;)
+            {
+                const TraceEdge& e = edges[loop[(at + k) % n]];
+                const U8 dir = dirOf(e.mFrom, e.mTo);
+                F32 x0 = static_cast<F32>(cornerX(e.mFrom)) * cell, y0 = static_cast<F32>(cornerY(e.mFrom)) * cell;
+                F32 x1 = static_cast<F32>(cornerX(e.mTo)) * cell, y1 = static_cast<F32>(cornerY(e.mTo)) * cell;
+                const F32 z = e.mZ;
+                size_t run = 1;
+                while (run < n)
+                {
+                    const TraceEdge& f = edges[loop[(at + k + run) % n]];
+                    if (dirOf(f.mFrom, f.mTo) != dir || std::fabs(f.mZ - z) > 1e-4f)
+                    {
+                        break;
+                    }
+                    x1 = static_cast<F32>(cornerX(f.mTo)) * cell;
+                    y1 = static_cast<F32>(cornerY(f.mTo)) * cell;
+                    ++run;
+                }
+                out.push_back({ x0, y0, x1, y1, z });
+                k += run;
+            }
+        }
+        return out;
+    }
 }

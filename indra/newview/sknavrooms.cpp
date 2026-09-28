@@ -1119,15 +1119,32 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
     const F64 reach2 = reach * reach;
     for (const SKNavWorldView::Mesh& m : mView->meshes())
     {
-        if (!m.mRooms)
+        if (!m.mRooms || !m.mProduct)
         {
             continue;
         }
         const std::vector<U32>& ids = m.mProduct->mSpaceIds;
+        // The space floor of every coarse cell in reach: which space, where
+        // its floor lies, and the cell's corner. Tiles read past their bounds
+        // to be exact at the seams, so the same cell arrives twice and is
+        // taken once; a storey's floor, half a metre away or more, is its own.
+        struct Flat
+        {
+            U64 mKey;       ///< the cell on the mesh's global coarse lattice, packed
+            U16 mSpace;     ///< the product's space + 1
+            F32 mX, mY;     ///< the cell's min corner, mesh-local
+            F32 mZ;         ///< its floor, mesh-local
+            F32 mSide;      ///< the coarse cell's side
+        };
+        std::vector<Flat> flats;
         for (const TileEnclosure& t : m.mProduct->mTiles)
         {
             const CoarseAir& c = t.mCoarse;
             const F64 side = c.mCells * t.mCell;
+            if (side <= 0.0)
+            {
+                continue;
+            }
             const LLVector3d tile_min = m.mOrigin + LLVector3d(t.mOrigin);
             const LLVector3d tile_centre = tile_min + LLVector3d(t.mWidth * t.mCell * 0.5, t.mHeight * t.mCell * 0.5, 0.0);
             const F64 half = t.mWidth * t.mCell * 0.75;
@@ -1135,6 +1152,8 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
             {
                 continue;
             }
+            const S32 gx0 = static_cast<S32>(std::lround(t.mOrigin.mV[VX] / side));
+            const S32 gy0 = static_cast<S32>(std::lround(t.mOrigin.mV[VY] / side));
             for (S32 cy = 0; cy < c.mHeight; ++cy)
             {
                 for (S32 cx = 0; cx < c.mWidth; ++cx)
@@ -1152,18 +1171,65 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                         {
                             continue;
                         }
-                        // A pastel per space id, the same from pass to pass.
-                        const U64 h = mix(SEED, ids[g.mSpace - 1]);
-                        const LLColor4 color(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
-                                             0.35f + 0.6f * (((h >> 16) & 255) / 255.f), opaque ? 1.f : 0.45f);
-                        const F64 z = corner.mdV[VZ] + g.mFloor * t.mUnit + 0.06;
-                        const F32 inset = static_cast<F32>(side * 0.04);
-                        const LLVector3 a = gAgent.getPosAgentFromGlobal(LLVector3d(corner.mdV[VX], corner.mdV[VY], z)) + LLVector3(inset, inset, 0.f);
-                        const F32 s = static_cast<F32>(side) - 2.f * inset;
-                        geom.tri(a, a + LLVector3(s, 0.f, 0.f), a + LLVector3(s, s, 0.f), color);
-                        geom.tri(a, a + LLVector3(s, s, 0.f), a + LLVector3(0.f, s, 0.f), color);
+                        Flat f;
+                        f.mKey = (static_cast<U64>(gx0 + cx + (1 << 20)) << 21) | static_cast<U64>(gy0 + cy + (1 << 20));
+                        f.mSpace = g.mSpace;
+                        f.mX = static_cast<F32>((gx0 + cx) * side);
+                        f.mY = static_cast<F32>((gy0 + cy) * side);
+                        f.mZ = static_cast<F32>(t.mOrigin.mV[VZ] + g.mFloor * t.mUnit);
+                        f.mSide = static_cast<F32>(side);
+                        flats.push_back(f);
                     }
                 }
+            }
+        }
+        std::sort(flats.begin(), flats.end(), [](const Flat& a, const Flat& b)
+                  {
+                      return a.mKey != b.mKey ? a.mKey < b.mKey : (a.mSpace != b.mSpace ? a.mSpace < b.mSpace : a.mZ < b.mZ);
+                  });
+        flats.erase(std::unique(flats.begin(), flats.end(), [](const Flat& a, const Flat& b)
+                    { return a.mKey == b.mKey && a.mSpace == b.mSpace && std::fabs(a.mZ - b.mZ) < 0.5f; }), flats.end());
+
+        // One flush square per cell and floor: neighbours of the same space
+        // and floor meet edge to edge, so the floor reads as one shape and
+        // not as tiles.
+        for (const Flat& f : flats)
+        {
+            // A pastel per space id, the same from pass to pass.
+            const U64 h = mix(SEED, ids[f.mSpace - 1]);
+            const LLColor4 color(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
+                                 0.35f + 0.6f * (((h >> 16) & 255) / 255.f), opaque ? 1.f : 0.45f);
+            const LLVector3 a = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(f.mX, f.mY, f.mZ + 0.06));
+            geom.tri(a, a + LLVector3(f.mSide, 0.f, 0.f), a + LLVector3(f.mSide, f.mSide, 0.f), color);
+            geom.tri(a, a + LLVector3(f.mSide, f.mSide, 0.f), a + LLVector3(0.f, f.mSide, 0.f), color);
+        }
+
+        // The outline each space's cells trace, over its fill a little above
+        // it, so the space reads as one polygon; spaces standing side by side
+        // lift theirs by slightly different amounts, so a border they share
+        // does not flicker between them.
+        std::map<U16, std::vector<sknav::PlanCell>> plans;
+        std::map<U16, F32> sides;
+        for (const Flat& f : flats)
+        {
+            std::vector<sknav::PlanCell>& cells = plans[f.mSpace];
+            if (cells.empty())
+            {
+                sides[f.mSpace] = f.mSide;
+            }
+            cells.push_back({ f.mX, f.mY, f.mZ });
+        }
+        for (const auto& entry : plans)
+        {
+            const U64 h = mix(SEED, ids[entry.first - 1]);
+            const LLColor4 color(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
+                                 0.35f + 0.6f * (((h >> 16) & 255) / 255.f), opaque ? 1.f : 0.9f);
+            const F32 lift = 0.09f + 0.01f * static_cast<F32>(h % 3);
+            for (const sknav::PlanEdge& e : sknav::tracePlan(entry.second, sides[entry.first]))
+            {
+                const LLVector3 a = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(e.mX0, e.mY0, e.mZ + lift));
+                const LLVector3 b = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(e.mX1, e.mY1, e.mZ + lift));
+                geom.edge(a, b, color);
             }
         }
         for (const Portal& p : m.mRooms->mPortals)

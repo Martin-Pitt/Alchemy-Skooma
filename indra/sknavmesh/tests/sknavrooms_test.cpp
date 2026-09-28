@@ -728,4 +728,78 @@ namespace tut
         }
         out << "]}\n";
     }
+
+    template<> template<>
+    void sknavrooms_object::test<24>()
+    {
+        set_test_name("an L of cells traces the six runs of its outline");
+        const std::vector<PlanCell> cells = { { 0.f, 0.f, 3.f }, { 1.f, 0.f, 3.f }, { 2.f, 0.f, 3.f }, { 0.f, 1.f, 3.f },
+                                              { 0.f, 0.f, 5.f } };   // a repeated column keeps its lowest floor
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("six runs", edges.size(), 6u);
+        for (const PlanEdge& e : edges)
+        {
+            ensure("all at the lowest floor", std::fabs(e.mZ - 3.f) < 1e-4f);
+        }
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the bottom runs on", has(0.f, 0.f, 3.f, 0.f));
+        ensure("the right stands", has(3.f, 0.f, 3.f, 1.f));
+        ensure("the notch's far side runs back", has(3.f, 1.f, 1.f, 1.f));
+        ensure("the notch's inner side stands", has(1.f, 1.f, 1.f, 2.f));
+        ensure("the top runs back", has(1.f, 2.f, 0.f, 2.f));
+        ensure("the left runs down to the start", has(0.f, 2.f, 0.f, 0.f));
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<25>()
+    {
+        set_test_name("a plan with a hole, a slope and a pinch traces them apart");
+        std::vector<PlanCell> cells;
+        for (S32 y = 0; y < 3; ++y)
+        {
+            for (S32 x = 0; x < 3; ++x)
+            {
+                if (x != 1 || y != 1)
+                {
+                    cells.push_back({ F32(x), F32(y), 3.f });
+                }
+            }
+        }
+        for (S32 x = 5; x < 8; ++x)
+        {
+            cells.push_back({ F32(x), 6.f, 3.f + 0.2f * (x - 5) });   // a slope, one floor a step
+        }
+        cells.push_back({ 10.f, 10.f, 3.f });
+        cells.push_back({ 11.f, 11.f, 3.f });   // two cells touching at a corner only
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("the ring's four, the hole's four, the slope's eight, the pinch's eight",
+                      edges.size(), 24u);
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1, F32 z)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f && std::fabs(e.mZ - z) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the ring's bottom is one run", has(0.f, 0.f, 3.f, 0.f, 3.f));
+        ensure("the hole's edge runs with the ring on its left", has(2.f, 1.f, 1.f, 1.f, 3.f));
+        ensure("the slope steps at each floor", has(6.f, 6.f, 7.f, 6.f, 3.2f));
+        ensure("the pinch's second cell stands alone", has(11.f, 11.f, 12.f, 11.f, 3.f));
+    }
 }
