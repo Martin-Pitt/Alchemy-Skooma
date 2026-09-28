@@ -26,7 +26,9 @@
 
 #include "alcodeeditor.h"
 
+#include "alplace.h"
 #include "alsaid.h"
+#include "alsmartselect.h"
 #include "alsurface.h"
 
 #include "altextchars.h"
@@ -55,6 +57,22 @@ static LLDefaultChildRegistry::Register<ALCodeEditor> r("code_editor");
 
 namespace
 {
+    // What is left to do as a scope ends, whichever way it ends.
+    template <typename F>
+    struct AtScopeEnd
+    {
+        F f;
+        ~AtScopeEnd() { f(); }
+    };
+    template <typename F>
+    AtScopeEnd<F> atScopeEnd(F f)
+    {
+        return AtScopeEnd<F>{ std::move(f) };
+    }
+}
+
+namespace
+{
     const S32 GUTTER_PAD  = 6;
     const S32 MARK_SIZE   = 6;
     const S32 MARK_INSET  = 3;
@@ -74,57 +92,17 @@ namespace
     // What a line's problems offer, as the gutter keeps it.
     const U8  FIXES_ANY          = 1;
     const U8  FIXES_CHANGE       = 2;
-    const S32    SIGNATURE_PAD   = 6;
+    // How long the caret rests on a name before its other places are lit.
+    const F32 OCCURRENCES_REST   = 0.25f;
 
     const char* const MARK_COLOR_NAMES[] = { "TextFgColor", "CodeMarkNote", "CodeMarkWarning", "CodeMarkError", "CodeMarkRuntime" };
     static_assert(sizeof(MARK_COLOR_NAMES) / sizeof(MARK_COLOR_NAMES[0]) == static_cast<size_t>(ALCodeEditor::Mark::COUNT), "every mark has a colour");
 
-    // The bracket a character is, if any: its partner, and which way to look.
-    bool bracketOf(char c, char& partner, bool& opens)
-    {
-        switch (c)
-        {
-            case '(': partner = ')'; opens = true;  return true;
-            case '[': partner = ']'; opens = true;  return true;
-            case '{': partner = '}'; opens = true;  return true;
-            case ')': partner = '('; opens = false; return true;
-            case ']': partner = '['; opens = false; return true;
-            case '}': partner = '{'; opens = false; return true;
-            default:  return false;
-        }
-    }
-
+    // What a string or a comment is made of.
     bool quiet(ALSyntaxKind kind)
     {
         return kind == ALSyntaxKind::String || kind == ALSyntaxKind::Comment || kind == ALSyntaxKind::DocComment ||
                kind == ALSyntaxKind::Escape || kind == ALSyntaxKind::AttributeValue;
-    }
-
-    // A line with nothing but whitespace, or nothing.
-    std::string_view trimmed(const std::string& line)
-    {
-        size_t begin = line.find_first_not_of(" \t\r");
-        if (begin == std::string::npos)
-        {
-            return std::string_view();
-        }
-        size_t end = line.find_last_not_of(" \t\r");
-        return std::string_view(line).substr(begin, end - begin + 1);
-    }
-
-    // What closes a block on a line of its own, and so belongs to the
-    // block above it.
-    bool closesBlock(std::string_view text)
-    {
-        static const char* const CLOSERS[] = { "}", "};", "})", "});", "end", "end)", "end,", "end);", ")", ");", "]", "],", "];" };
-        for (const char* closer : CLOSERS)
-        {
-            if (text == closer)
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     ALSyntaxKind kindOfTable(std::string_view table)
@@ -161,6 +139,7 @@ ALCodeEditor::Params::Params()
 
 ALCodeEditor::ALCodeEditor(const Params& p)
 :   ALTextView(p),
+    mBracketIndex(&highlighter()),
     mShowLineNumbers(p.show_line_numbers),
     mShowFoldMarkers(p.show_fold_markers),
     mHighlightCurrentLine(p.highlight_current_line),
@@ -194,19 +173,42 @@ ALCodeEditor::ALCodeEditor(const Params& p)
     mMarks.assign(document().lineCount(), Mark::None);
     mFixable.assign(document().lineCount(), 0);
     mEditConnection    = document().onChanged([this](const ALTextDocument::Edit& edit) { onEdit(edit); });
+    mBracketIndex.attach(&document());
+    // Copy and Cut with nothing selected take the line, as code editors do.
+    setClipsLines(true);
     layout().setInlayProvider([this](S32 line, std::vector<ALTextLayout::Inlay>& out) { provideInlays(line, out); });
     mChangedConnection = onTextChanged([this]() {
         if (completionOpen())
         {
             refreshCompletion();
         }
+        // What was lit may be another name now.
+        clearHighlights(Highlight::Occurrences);
+        mOccurrencesDue = true;
+        mOccurrencesRest.reset();
         // Stepped back to the saved text: nothing is changed since.
         if (!isDirty())
         {
             std::fill(mChanged.begin(), mChanged.end(), 0);
         }
     });
-    mCaretConnection = onCaretMoved([this]() { dropPlaceholdersLeft(); });
+    mCaretConnection = onCaretMoved([this]() {
+        dropPlaceholdersLeft();
+        // The parameter the caret is at, worked out here rather than asked
+        // for again: the call's commas before it.
+        if (mCards.signature() && mSignatureOpen.line >= 0 && signatureShown())
+        {
+            mCards.setSignatureActive(argumentAt(mSignatureOpen, caret()));
+        }
+        // The name lit again once the caret rests; put out now if it has
+        // left it.
+        mOccurrencesDue = true;
+        mOccurrencesRest.reset();
+        if (!highlights(Highlight::Occurrences).empty() && (hasSelection() || !highlighted(Highlight::Occurrences, caret())))
+        {
+            clearHighlights(Highlight::Occurrences);
+        }
+    });
 
     // The list of completions, made once and shown when there is
     // something to choose; a child, so it draws over the text and goes
@@ -252,108 +254,122 @@ ALCodeEditor::ALCodeEditor(const Params& p)
     addChild(mFixList);
 }
 
-ALCodeEditor::~ALCodeEditor() = default;
+ALCodeEditor::~ALCodeEditor()
+{
+    // The layout outlives this part of the editor, and asks the provider
+    // about this part's inlays.
+    layout().setInlayProvider(nullptr);
+    clearHandlers();
+}
+
+void ALCodeEditor::clearHandlers()
+{
+    mProvider          = nullptr;
+    mCompletionRequest = nullptr;
+    mHover             = nullptr;
+    mHoverRequest      = nullptr;
+    mSignatureRequest  = nullptr;
+    mSymbolRequest     = nullptr;
+    mLinkRequest       = nullptr;
+    mFixProvider       = nullptr;
+    mFunctionProvider  = nullptr;
+    mFixHandler        = nullptr;
+    mFixesShown        = nullptr;
+    mActionRequest     = nullptr;
+    mCardLinkHandler   = nullptr;
+    setDropHandler(nullptr);
+}
 
 // --- marks and decorations ---------------------------------------------------
 
 void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     hideCard();
-    const S32 first = llclamp(edit.range.begin.line, 0, static_cast<S32>(mMarks.size()));
-    const S32 last  = llclamp(edit.range.end.line, first, static_cast<S32>(mMarks.size()) - 1);
-    const S32 made  = 1 + static_cast<S32>(std::count(edit.inserted.begin(), edit.inserted.end(), '\n'));
-    if (first < static_cast<S32>(mMarks.size()))
-    {
-        mMarks.erase(mMarks.begin() + first, mMarks.begin() + last + 1);
-    }
-    mMarks.insert(mMarks.begin() + first, made, Mark::None);
-    mMarks.resize(document().lineCount(), Mark::None);
+    // Numbers and tints were for the text they were given with.
+    mLineNumbers.clear();
+    mLineTints.clear();
+    // Each run of lines an edit replaced -- one, or a batch's several.
+    const std::vector<ALTextDocument::Edit::LineSpan>& spans = edit.lineSpans();
+    const S32                                         lines = document().lineCount();
+    mMarks.applySpans(spans, lines, Mark::None, Mark::None);
     // What the problems there offered goes with them: a check says again.
-    mFixable.resize(llmax(mFixable.size(), static_cast<size_t>(last + 1)), 0);
-    if (first < static_cast<S32>(mFixable.size()))
-    {
-        mFixable.erase(mFixable.begin() + first, mFixable.begin() + last + 1);
-    }
-    mFixable.insert(mFixable.begin() + first, made, 0);
-    mFixable.resize(document().lineCount(), 0);
+    mFixable.applySpans(spans, lines, 0, 0);
     closeFixes();
-    // What is known of bracket depth below the edit is known no more.
-    mDepthValid = llmin(mDepthValid, first);
     // The lines the edit touched are changed until the next save.
-    mChanged.resize(llmax(mChanged.size(), static_cast<size_t>(last + 1)), 0);
-    mChanged.erase(mChanged.begin() + first, mChanged.begin() + last + 1);
-    mChanged.insert(mChanged.begin() + first, made, 1);
-    mChanged.resize(document().lineCount(), 0);
-    slideAsides(edit, made);
+    mChanged.applySpans(spans, lines, 1, 0);
+    slideAsides(spans);
 
     // Decorations and highlights after the edit move along with the text;
     // the ones it cut into go.
-    const S32         delta   = made - (last - first + 1);
     const ALTextRange removed = edit.range.normalised();
-    mDecorations.erase(std::remove_if(mDecorations.begin(), mDecorations.end(), [&](Decoration& d) { return !edit.slide(d.range); }), mDecorations.end());
-    mHighlights.erase(std::remove_if(mHighlights.begin(), mHighlights.end(), [&](ALTextRange& r) { return !edit.slide(r); }), mHighlights.end());
-    mSemantics.erase(std::remove_if(mSemantics.begin(), mSemantics.end(), [&](SemanticToken& t) { return !edit.slide(t.range); }), mSemantics.end());
+    mDecorations.apply(edit);
+    for (auto& layer : mHighlights)
+    {
+        layer.apply(edit);
+    }
+    mSemantics.apply(edit);
     // An inlay moves with the text it stands by: one before the text at
     // its position stays put when something is typed there, since what
     // is typed is the start of that text; one after the text before it
     // moves along, since what is typed extends that text. An edit that
     // takes the position with it takes the inlay.
-    mInlays.erase(std::remove_if(mInlays.begin(), mInlays.end(),
-                                 [&](InlayHint& h) {
-                                     if (removed.empty())
-                                     {
-                                         if (removed.begin < h.at || (removed.begin == h.at && !h.before))
-                                         {
-                                             h.at = edit.slidPast(h.at);
-                                         }
-                                         return false;
-                                     }
-                                     if (removed.end <= h.at)
-                                     {
-                                         h.at = edit.slidPast(h.at);
-                                         return false;
-                                     }
-                                     return !(h.at <= removed.begin);
-                                 }),
-                  mInlays.end());
+    mInlays.apply(
+        edit,
+        [&removed](InlayHint& h, const ALTextDocument::Edit& e) {
+            if (removed.empty())
+            {
+                if (removed.begin < h.at || (removed.begin == h.at && !h.before))
+                {
+                    h.at = e.slidPast(h.at);
+                }
+                return true;
+            }
+            if (removed.end <= h.at)
+            {
+                h.at = e.slidPast(h.at);
+                return true;
+            }
+            return h.at <= removed.begin;
+        },
+        [](InlayHint&) {});
     // The stops of a snippet or a call being filled in move with the text.
     mSnippet.slide(edit);
+    // So does the bracket of the call whose signature is shown; one the
+    // edit took goes, and the call with it.
+    if (mSignatureOpen.line >= 0)
+    {
+        const ALTextRange taken = edit.range.normalised();
+        if (taken.end <= mSignatureOpen)
+        {
+            mSignatureOpen = edit.slidPast(mSignatureOpen);
+        }
+        else if (taken.begin <= mSignatureOpen)
+        {
+            mSignatureOpen = ALTextPos(-1, -1);
+            hideSignature();
+        }
+    }
 
     // A closer typing put in moves with the text before it, and goes with
     // an edit that takes it.
-    mAutoClosed.erase(std::remove_if(mAutoClosed.begin(), mAutoClosed.end(),
-                                     [&](ALTextPos& at) {
-                                         if (removed.end <= at)
-                                         {
-                                             at = edit.slidPast(at);
-                                             return false;
-                                         }
-                                         return !(at < removed.begin);
-                                     }),
-                      mAutoClosed.end());
+    mAutoClosed.apply(
+        edit,
+        [&removed](ALTextPos& at, const ALTextDocument::Edit& e) {
+            if (removed.end <= at)
+            {
+                at = e.slidPast(at);
+                return true;
+            }
+            return at < removed.begin;
+        },
+        [](ALTextPos&) {});
 
-    // Folds slide the same way. One that starts on the edit's first line
-    // stays: typing on a block's first line is not opening the block. One
-    // on its last line stays too where the edit ended at that line's start
-    // and left it a line of its own -- whole lines taken from above a
-    // folded block -- and moves up with it.
-    const bool last_kept = last > first && removed.end.column == 0 &&
-                           (edit.inserted.empty() ? removed.begin.column == 0 : edit.inserted.back() == '\n');
-    mFolded.erase(std::remove_if(mFolded.begin(), mFolded.end(),
-                                 [&](S32 start) { return start > first && (start < last || (start == last && !last_kept)); }),
-                  mFolded.end());
-    for (S32& start : mFolded)
-    {
-        if (start > last || (start == last && last_kept))
-        {
-            start += delta;
-        }
-    }
-    mRegionsValid = false;
-    if (!mFolded.empty())
-    {
-        applyFolds();
-    }
+    // Folds slide the same way (ALFoldModel::edited), and are hidden again
+    // once the command is done.
+    const bool folded = !mFolds.folded().empty();
+    mFolds.edited(edit, document().lineCount());
+    mFoldsDirty = mFoldsDirty || folded || !mFolds.folded().empty();
 }
 
 void ALCodeEditor::setMark(S32 line, Mark mark)
@@ -476,23 +492,120 @@ bool ALCodeEditor::changesAt(S32 line) const
 
 void ALCodeEditor::setDecorations(std::vector<Decoration> decorations)
 {
-    mDecorations = std::move(decorations);
+    for (size_t i = 0; i < decorations.size(); ++i)
+    {
+        decorations[i].order = static_cast<U32>(i);
+    }
+    mDecorations.assign(std::move(decorations));
 }
 
-void ALCodeEditor::setHighlights(std::vector<ALTextRange> ranges)
+std::vector<const ALCodeEditor::Decoration*> ALCodeEditor::decorationsOn(S32 line) const
 {
-    mHighlights = std::move(ranges);
-    for (ALTextRange& range : mHighlights)
+    std::vector<const Decoration*> out;
+    const auto                     on = mDecorations.onLine(line);
+    for (auto it = on.first; it != on.second; ++it)
+    {
+        out.push_back(&*it);
+    }
+    std::sort(out.begin(), out.end(), [](const Decoration* a, const Decoration* b) { return a->order < b->order; });
+    return out;
+}
+
+void ALCodeEditor::setHighlights(Highlight layer, std::vector<ALTextRange> ranges)
+{
+    for (ALTextRange& range : ranges)
     {
         range = range.normalised();
     }
+    mHighlights[static_cast<size_t>(layer)].assign(std::move(ranges));
 }
 
-bool ALCodeEditor::highlighted(const ALTextPos& at) const
+void ALCodeEditor::clearHighlights()
 {
-    for (const ALTextRange& range : mHighlights)
+    for (auto& layer : mHighlights)
     {
-        if (range.begin <= at && at <= range.end)
+        layer.clear();
+    }
+}
+
+std::vector<ALTextRange> ALCodeEditor::highlights() const
+{
+    std::vector<ALTextRange> out;
+    for (const auto& layer : mHighlights)
+    {
+        out.insert(out.end(), layer.begin(), layer.end());
+    }
+    return out;
+}
+
+void ALCodeEditor::setLightsOccurrences(bool lights)
+{
+    mLightsOccurrences = lights;
+    if (!lights)
+    {
+        clearHighlights(Highlight::Occurrences);
+    }
+}
+
+void ALCodeEditor::lightOccurrences()
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    mOccurrencesDue = false;
+    clearHighlights(Highlight::Occurrences);
+    const ALTextRange name = identifierAtCaret();
+    if (!mLightsOccurrences || hasSelection() || name.empty())
+    {
+        return;
+    }
+    // Not the name as a string or a comment says it.
+    const auto in_code = [this](S32 line, S32 column) {
+        for (const ALSyntaxToken& token : highlighter().tokens(line))
+        {
+            if (token.begin <= column && column < token.end)
+            {
+                return token.kind != ALSyntaxKind::String && token.kind != ALSyntaxKind::Escape && token.kind != ALSyntaxKind::Comment &&
+                       token.kind != ALSyntaxKind::DocComment;
+            }
+        }
+        return true;
+    };
+    if (!in_code(name.begin.line, name.begin.column))
+    {
+        return;
+    }
+    const std::string word  = document().text(name);
+    const S32         first = firstVisibleLine();
+    const S32         last  = lastVisibleLine();
+    const S32         span  = llmax(1, last - first + 1);
+    mOccurrencesFirst       = llmax(0, first - span);
+    mOccurrencesLast        = llmin(document().lineCount() - 1, last + span);
+    std::vector<ALTextRange> lit;
+    for (S32 line = mOccurrencesFirst; line <= mOccurrencesLast; ++line)
+    {
+        const std::string& text = document().line(line);
+        for (size_t at = text.find(word); at != std::string::npos; at = text.find(word, at + word.size()))
+        {
+            const size_t end = at + word.size();
+            if ((at > 0 && alIdentifierByte(text[at - 1])) || (end < text.size() && alIdentifierByte(text[end])) ||
+                !in_code(line, static_cast<S32>(at)))
+            {
+                continue;
+            }
+            lit.emplace_back(ALTextPos(line, static_cast<S32>(at)), ALTextPos(line, static_cast<S32>(end)));
+        }
+    }
+    if (lit.size() > 1)
+    {
+        setHighlights(Highlight::Occurrences, std::move(lit));
+    }
+}
+
+bool ALCodeEditor::highlighted(Highlight layer, const ALTextPos& at) const
+{
+    const auto on = mHighlights[static_cast<size_t>(layer)].onLine(at.line);
+    for (auto it = on.first; it != on.second; ++it)
+    {
+        if (it->begin <= at && at <= it->end)
         {
             return true;
         }
@@ -510,11 +623,11 @@ bool ALCodeEditor::matchingBrackets(ALTextPos& open, ALTextPos& close)
     char partner = 0;
     bool opens   = false;
     ALTextPos from;
-    if (at.column > 0 && bracketOf(line[at.column - 1], partner, opens))
+    if (at.column > 0 && ALBracketIndex::bracketOf(line[at.column - 1], partner, opens))
     {
         from = ALTextPos(at.line, at.column - 1);
     }
-    else if (at.column < static_cast<S32>(line.size()) && bracketOf(line[at.column], partner, opens))
+    else if (at.column < static_cast<S32>(line.size()) && ALBracketIndex::bracketOf(line[at.column], partner, opens))
     {
         from = at;
     }
@@ -537,91 +650,9 @@ bool ALCodeEditor::closerOpenedAt(const ALTextPos& closer, ALTextPos& opener)
     return matchBracketAt(closer, opener) && opener < closer;
 }
 
-bool ALCodeEditor::matchBracketAt(const ALTextPos& from, ALTextPos& match)
+bool ALCodeEditor::matchBracketAt(const ALTextPos& from, ALTextPos& match, S32 lines)
 {
-    const ALTextDocument& doc  = document();
-    const std::string&    line = doc.line(from.line);
-    char                  c = 0, partner = 0;
-    bool                  opens = false;
-    if (from.column < 0 || from.column >= static_cast<S32>(line.size()) || !bracketOf(line[from.column], partner, opens))
-    {
-        return false;
-    }
-    c = line[from.column];
-
-    // A line's bytes walked with a cursor over its tokens, which are in
-    // order, so that whether a byte is inside a string or a comment
-    // costs the tokens once per line rather than once per byte.
-    S32 depth = 0;
-    if (opens)
-    {
-        for (S32 l = from.line; l < doc.lineCount(); ++l)
-        {
-            const std::string&                text   = doc.line(l);
-            const std::vector<ALSyntaxToken>& tokens = highlighter().tokens(l);
-            size_t                            t      = 0;
-            for (S32 i = (l == from.line ? from.column : 0); i < static_cast<S32>(text.size()); ++i)
-            {
-                if (text[i] != c && text[i] != partner)
-                {
-                    continue;
-                }
-                while (t < tokens.size() && tokens[t].end <= i)
-                {
-                    ++t;
-                }
-                if (t < tokens.size() && tokens[t].begin <= i && quiet(tokens[t].kind))
-                {
-                    if (l == from.line && i == from.column)
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                depth += (text[i] == c) ? 1 : -1;
-                if (depth == 0)
-                {
-                    match = ALTextPos(l, i);
-                    return true;
-                }
-            }
-        }
-    }
-    else
-    {
-        for (S32 l = from.line; l >= 0; --l)
-        {
-            const std::string&                text   = doc.line(l);
-            const std::vector<ALSyntaxToken>& tokens = highlighter().tokens(l);
-            size_t                            t      = tokens.size();
-            for (S32 i = (l == from.line ? from.column : static_cast<S32>(text.size()) - 1); i >= 0; --i)
-            {
-                if (text[i] != c && text[i] != partner)
-                {
-                    continue;
-                }
-                while (t > 0 && tokens[t - 1].begin > i)
-                {
-                    --t;
-                }
-                if (t > 0 && tokens[t - 1].end > i && quiet(tokens[t - 1].kind))
-                {
-                    if (l == from.line && i == from.column)
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                depth += (text[i] == c) ? 1 : -1;
-                if (depth == 0)
-                {
-                    match = ALTextPos(l, i);
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+    return mBracketIndex.match(from, match, lines);
 }
 
 // --- colours -----------------------------------------------------------------
@@ -756,7 +787,7 @@ S32 ALCodeEditor::gutterWidth() const
     if (mShowLineNumbers)
     {
         S32 digits = 1;
-        for (S32 n = document().lineCount(); n >= 10; n /= 10)
+        for (S32 n = document().lineCount() + mLineNumberBase; n >= 10; n /= 10)
         {
             ++digits;
         }
@@ -837,9 +868,14 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
         {
             // The caret's line in the text's own ink, the rest quieter;
             // counted from the caret's line where that is asked for.
-            const S32 shown = mRelativeLineNumbers && line != caret_line ? std::abs(line - caret_line) : line + 1;
-            font->renderUTF8(std::to_string(shown), 0, static_cast<F32>(numbers_right), static_cast<F32>(screen_top - ascent),
-                             line == caret_line ? lit : ink, LLFontGL::RIGHT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+            const S32 shown = !mLineNumbers.empty()                    ? (line < static_cast<S32>(mLineNumbers.size()) ? mLineNumbers[static_cast<size_t>(line)] : 0)
+                              : mRelativeLineNumbers && line != caret_line ? std::abs(line - caret_line)
+                                                                           : line + 1 + mLineNumberBase;
+            if (shown > 0)
+            {
+                font->renderUTF8(std::to_string(shown), 0, static_cast<F32>(numbers_right), static_cast<F32>(screen_top - ascent),
+                                 line == caret_line ? lit : ink, LLFontGL::RIGHT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+            }
             const Mark mark = markAt(line);
             if (line == caret_line && fixableAt(line) && !isReadOnly())
             {
@@ -900,7 +936,7 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
     }
     // The headers pinned over the text have their numbers pinned over
     // the gutter, on the same band.
-    const std::vector<S32> pinned = stickyLines();
+    const std::vector<S32> pinned = stickyLines(true);
     if (!pinned.empty() && mShowLineNumbers)
     {
         const S32    rows = static_cast<S32>(pinned.size());
@@ -910,65 +946,11 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
         for (S32 i = 0; i < rows; ++i)
         {
             const S32 line  = pinned[static_cast<size_t>(i)];
-            const S32 shown_number = mRelativeLineNumbers && line != caret_line ? std::abs(line - caret_line) : line + 1;
+            const S32 shown_number = mRelativeLineNumbers && line != caret_line ? std::abs(line - caret_line) : line + 1 + mLineNumberBase;
             font->renderUTF8(std::to_string(shown_number), 0, static_cast<F32>(numbers_right), static_cast<F32>(text.mTop - i * row_h - ascent), ink,
                              LLFontGL::RIGHT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
         }
     }
-}
-
-// --- brackets by depth --------------------------------------------------------------
-
-namespace
-{
-    // Whether a byte is a bracket, and which way it faces.
-    S32 bracketDelta(char c)
-    {
-        switch (c)
-        {
-            case '(': case '[': case '{': return 1;
-            case ')': case ']': case '}': return -1;
-            default: return 0;
-        }
-    }
-}
-
-S32 ALCodeEditor::bracketDepthBefore(S32 line)
-{
-    const S32 count = document().lineCount();
-    if (line <= 0 || line > count)
-    {
-        return 0;
-    }
-    mDepthBefore.resize(static_cast<size_t>(count) + 1, 0);
-    if (mDepthValid == 0)
-    {
-        mDepthBefore[0] = 0;
-        mDepthValid     = 1;
-    }
-    // Carried on from the last line known, over what the grammar calls
-    // punctuation or an operator; a bracket in a string or a comment is
-    // none.
-    for (S32 l = mDepthValid - 1; l < line; ++l)
-    {
-        S32                               depth  = mDepthBefore[static_cast<size_t>(l)];
-        const std::string&                text   = document().line(l);
-        const std::vector<ALSyntaxToken>& tokens = highlighter().tokens(l);
-        for (const ALSyntaxToken& token : tokens)
-        {
-            if (token.kind != ALSyntaxKind::Punctuation && token.kind != ALSyntaxKind::Operator)
-            {
-                continue;
-            }
-            for (S32 b = token.begin; b < token.end && b < static_cast<S32>(text.size()); ++b)
-            {
-                depth = llmax(0, depth + bracketDelta(text[static_cast<size_t>(b)]));
-            }
-        }
-        mDepthBefore[static_cast<size_t>(l) + 1] = depth;
-        mDepthValid                             = l + 2;
-    }
-    return mDepthBefore[static_cast<size_t>(line)];
 }
 
 void ALCodeEditor::tintRow(S32 line, const ALTextLayout::Line& laid, const ALTextLayout::Row& row, F32 alpha, std::vector<LLColor4U>& colors)
@@ -978,7 +960,7 @@ void ALCodeEditor::tintRow(S32 line, const ALTextLayout::Line& laid, const ALTex
     // one is not that name.
     if (!mSemantics.empty())
     {
-        auto first = std::lower_bound(mSemantics.begin(), mSemantics.end(), line, [](const SemanticToken& t, S32 l) { return t.range.end.line < l; });
+        auto first = mSemantics.onLine(line).first;
         if (first != mSemantics.end() && first->range.begin.line <= line)
         {
             const std::vector<ALSyntaxToken>& grammar = highlighter().tokens(line);
@@ -1022,31 +1004,21 @@ void ALCodeEditor::tintRow(S32 line, const ALTextLayout::Line& laid, const ALTex
     {
         return;
     }
-    // The depth at each bracket of the line, then the row's glyphs that
-    // are brackets in their depth's colour.
-    const std::string&                text   = document().line(line);
-    const std::vector<ALSyntaxToken>& tokens = highlighter().tokens(line);
-    S32                               depth  = bracketDepthBefore(line);
-    std::vector<std::pair<S32, S32>>  at;
-    for (const ALSyntaxToken& token : tokens)
+    // The depth at each bracket of the line that is code, then the row's
+    // glyphs that are brackets in their depth's colour.
+    S32                              depth = mBracketIndex.depthBefore(line);
+    std::vector<std::pair<S32, S32>> at;
+    for (const auto& [column, c] : mBracketIndex.bracketsOn(line))
     {
-        if (token.kind != ALSyntaxKind::Punctuation && token.kind != ALSyntaxKind::Operator)
+        if (c == '(' || c == '[' || c == '{')
         {
-            continue;
+            at.emplace_back(column, depth);
+            ++depth;
         }
-        for (S32 b = token.begin; b < token.end && b < static_cast<S32>(text.size()); ++b)
+        else
         {
-            const S32 delta = bracketDelta(text[static_cast<size_t>(b)]);
-            if (delta > 0)
-            {
-                at.emplace_back(b, depth);
-                ++depth;
-            }
-            else if (delta < 0)
-            {
-                depth = llmax(0, depth - 1);
-                at.emplace_back(b, depth);
-            }
+            depth = llmax(0, depth - 1);
+            at.emplace_back(column, depth);
         }
     }
     if (at.empty())
@@ -1072,8 +1044,7 @@ void ALCodeEditor::tintRow(S32 line, const ALTextLayout::Line& laid, const ALTex
 
 void ALCodeEditor::setSemanticTokens(std::vector<SemanticToken> tokens)
 {
-    std::stable_sort(tokens.begin(), tokens.end(), [](const SemanticToken& a, const SemanticToken& b) { return a.range.begin < b.range.begin; });
-    mSemantics = std::move(tokens);
+    mSemantics.assign(std::move(tokens));
 }
 
 void ALCodeEditor::setInlayHints(std::vector<InlayHint> hints)
@@ -1093,7 +1064,7 @@ void ALCodeEditor::setInlayHints(std::vector<InlayHint> hints)
     while (was < mInlays.size() || now < hints.size())
     {
         const S32 line = llmin(was < mInlays.size() ? mInlays[was].at.line : S32_MAX, now < hints.size() ? hints[now].at.line : S32_MAX);
-        same_line(mInlays, was, line, old_line);
+        same_line(mInlays.items(), was, line, old_line);
         same_line(hints, now, line, new_line);
         bool changed = old_line.size() != new_line.size();
         for (size_t k = 0; !changed && k < old_line.size(); ++k)
@@ -1105,7 +1076,7 @@ void ALCodeEditor::setInlayHints(std::vector<InlayHint> hints)
             layout().invalidateLine(line);
         }
     }
-    mInlays = std::move(hints);
+    mInlays.assign(std::move(hints));
 }
 
 namespace
@@ -1135,9 +1106,22 @@ void ALCodeEditor::provideInlays(S32 line, std::vector<ALTextLayout::Inlay>& out
         inlay.column = it->at.column;
         inlay.width  = inlayWidth(*it);
         inlay.before = it->before;
-        inlay.id     = static_cast<S32>(it - mInlays.begin());
+        // Which of the line's own it is: what stays true while the line's
+        // layout does (see ALTextLayout::Inlay).
+        inlay.id     = static_cast<S32>(it - first);
         out.push_back(inlay);
     }
+}
+
+S32 ALCodeEditor::inlayIndexOf(S32 line, S32 id) const
+{
+    if (id < 0)
+    {
+        return -1;
+    }
+    const auto first = std::lower_bound(mInlays.begin(), mInlays.end(), line, [](const InlayHint& h, S32 l) { return h.at.line < l; });
+    const auto it    = first + std::min<std::ptrdiff_t>(id, mInlays.end() - first);
+    return it != mInlays.end() && it->at.line == line ? static_cast<S32>(it - mInlays.begin()) : -1;
 }
 
 S32 ALCodeEditor::inlayAtLocal(S32 x, S32 y)
@@ -1168,7 +1152,8 @@ S32 ALCodeEditor::inlayAtLocal(S32 x, S32 y)
     for (size_t k = r.glyphBegin; k < r.glyphEnd; ++k)
     {
         const ALTextLayout::Glyph& glyph = laid.glyphs[k];
-        if (glyph.inlay < 0 || glyph.inlay >= static_cast<S32>(mInlays.size()))
+        const S32                  index = inlayIndexOf(line, glyph.inlay);
+        if (index < 0)
         {
             continue;
         }
@@ -1176,7 +1161,7 @@ S32 ALCodeEditor::inlayAtLocal(S32 x, S32 y)
         const F32 x1 = glyph.pen - r.xStart + glyph.advance - INLAY_GAP;
         if (x_rel >= x0 && x_rel < x1)
         {
-            return glyph.inlay;
+            return index;
         }
     }
     return -1;
@@ -1251,33 +1236,43 @@ S32 ALCodeEditor::noteAtLocal(S32 x, S32 y)
     return noteBoxOf(line, text).pointInRect(x, y) ? line : -1;
 }
 
-void ALCodeEditor::slideAsides(const ALTextDocument::Edit& edit, S32 made)
+void ALCodeEditor::slideAsides(const std::vector<ALTextDocument::Edit::LineSpan>& spans)
 {
     if (mAsides.empty())
     {
         return;
     }
-    const ALTextRange range = edit.range.normalised();
-    const S32         first = llmax(0, range.begin.line);
-    const S32         last  = llmax(first, range.end.line);
-    mAsides.resize(llmax(mAsides.size(), static_cast<size_t>(last + 1)));
-    const Aside from_first = mAsides[static_cast<size_t>(first)];
-    const Aside from_last  = mAsides[static_cast<size_t>(last)];
-    mAsides.erase(mAsides.begin() + first, mAsides.begin() + last + 1);
-    mAsides.insert(mAsides.begin() + first, static_cast<size_t>(made), Aside());
-    // What is left of a line keeps its heat and its note: the line the
-    // edit begins inside -- typed in, or broken in two -- or, where the
-    // edit begins at a line's start, the line it ends in, pushed down by
-    // the lines made above it or pulled up over the lines taken.
-    if (range.begin.column > 0)
+    mAsides.resize(llmax(mAsides.size(), static_cast<size_t>(llmax(spans.back().last, 0) + 1)));
+    // What is left of a line keeps its heat and its note: the line a run
+    // begins inside -- typed in, or broken in two -- or, where it begins
+    // at a line's start, the line it ends in, pushed down by the lines
+    // made above it or pulled up over the lines taken; each where it is
+    // once the runs before it have moved it.
+    std::vector<std::pair<S32, Aside>> keep;
+    keep.reserve(spans.size());
+    S32 shift = 0;
+    for (const ALTextDocument::Edit::LineSpan& span : spans)
     {
-        mAsides[static_cast<size_t>(first)] = from_first;
+        const S32 first = llmax(0, span.first);
+        const S32 last  = llmax(first, span.last);
+        if (span.firstColumn > 0)
+        {
+            keep.emplace_back(first + shift, mAsides[static_cast<size_t>(first)]);
+        }
+        else
+        {
+            keep.emplace_back(first + shift + span.made - 1, mAsides[static_cast<size_t>(last)]);
+        }
+        shift += span.made - (last - first + 1);
     }
-    else
+    mAsides.applySpans(spans, llmax(document().lineCount(), 0), Aside(), Aside());
+    for (const auto& [row, aside] : keep)
     {
-        mAsides[static_cast<size_t>(first + made - 1)] = from_last;
+        if (row >= 0 && row < static_cast<S32>(mAsides.size()))
+        {
+            mAsides[static_cast<size_t>(row)] = aside;
+        }
     }
-    mAsides.resize(static_cast<size_t>(llmax(document().lineCount(), 0)));
 }
 
 bool ALCodeEditor::writeInlay(S32 index)
@@ -1293,12 +1288,12 @@ bool ALCodeEditor::writeInlay(S32 index)
     }
     // The text says it now, so the hint goes; an insertion at a hint's
     // place would only slide it along.
-    std::vector<InlayHint> kept = mInlays;
+    std::vector<InlayHint> kept = mInlays.items();
     mInlays.erase(mInlays.begin() + index);
     layout().invalidateLine(hint.at.line);
     if (!replaceAll({ { ALTextRange(hint.at, hint.at), hint.insert } }))
     {
-        mInlays = std::move(kept);
+        mInlays.assign(std::move(kept));
         layout().invalidateLine(hint.at.line);
         return false;
     }
@@ -1308,7 +1303,7 @@ bool ALCodeEditor::writeInlay(S32 index)
 
 // --- headers pinned at the top ------------------------------------------------------
 
-std::vector<S32> ALCodeEditor::stickyLines()
+std::vector<S32> ALCodeEditor::stickyLines(bool fresh)
 {
     std::vector<S32> lines;
     if (!mStickyHeaders)
@@ -1316,14 +1311,24 @@ std::vector<S32> ALCodeEditor::stickyLines()
         return lines;
     }
     // The first row on screen, and the blocks around its line that start
-    // above it: their first lines, outermost first, the innermost few.
-    const S32 top_line = posAtLocal(textRect().mLeft, textRect().mTop - 1, false).line;
-    ensureRegions();
-    for (const FoldRegion& region : mRegions)
+    // above it: their first lines, outermost first, the innermost few --
+    // kept for as long as the text, the top line and the folds are.
+    if (mStickyValid && !fresh)
     {
-        if (region.start < top_line && region.end >= top_line && !isFolded(region.start))
+        return mSticky;
+    }
+    const S32 top_line = posAtLocal(textRect().mLeft, textRect().mTop - 1, false).line;
+    if (mStickyValid && mStickyVersion == document().version() && mStickyTop == top_line && mStickyFolded == mFolds.folded())
+    {
+        return mSticky;
+    }
+    // The blocks open there, walked back from it: nothing below the top
+    // line is read for them.
+    for (const S32 start : folds().openAt(document(), getTabWidth(), top_line, 8))
+    {
+        if (!isFolded(start))
         {
-            lines.push_back(region.start);
+            lines.push_back(start);
         }
     }
     // Nested blocks start later: the list is already outer to inner; the
@@ -1332,6 +1337,11 @@ std::vector<S32> ALCodeEditor::stickyLines()
     {
         lines.erase(lines.begin(), lines.end() - 3);
     }
+    mSticky        = lines;
+    mStickyVersion = document().version();
+    mStickyTop     = top_line;
+    mStickyFolded  = mFolds.folded();
+    mStickyValid   = true;
     return lines;
 }
 
@@ -1347,7 +1357,7 @@ S32 ALCodeEditor::coveredAbove(S32 local_x)
 
 void ALCodeEditor::drawAfterRows(const LLRect& text)
 {
-    const std::vector<S32> lines = stickyLines();
+    const std::vector<S32> lines = stickyLines(true);
     if (lines.empty())
     {
         return;
@@ -1385,6 +1395,17 @@ void ALCodeEditor::drawBeforeRows(const LLRect& text)
     {
         mBrackets.matched = false;
         mBrackets.caret   = ALTextPos(-1, -1);
+    }
+    // A tint behind each line that has one, under everything else.
+    if (!mLineTints.empty())
+    {
+        const S32 row_h = layout().rowHeight();
+        forEachVisibleRow(text, [&](S32 line, S32, S32 screen_top) {
+            if (line < static_cast<S32>(mLineTints.size()) && mLineTints[static_cast<size_t>(line)].mV[VALPHA] > 0.f)
+            {
+                gl_rect_2d(text.mLeft, screen_top, text.mRight, screen_top - row_h, mLineTints[static_cast<size_t>(line)] % alpha);
+            }
+        });
     }
     if (mHighlightCurrentLine && keyboardOnText() && !hasSelection())
     {
@@ -1447,36 +1468,9 @@ std::string ALCodeEditor::foldBoxText(S32 line)
     return hidden > 0 ? "... " + std::to_string(hidden) : std::string("...");
 }
 
-S32 ALCodeEditor::indentOf(S32 line) const
+S32 ALCodeEditor::indentOf(S32 line)
 {
-    const S32 count = document().lineCount();
-    for (S32 l = line; l < count && l < line + 200; ++l)
-    {
-        const std::string& text = document().line(l);
-        S32                columns = 0;
-        bool               blank   = true;
-        for (char c : text)
-        {
-            if (c == ' ')
-            {
-                ++columns;
-            }
-            else if (c == '\t')
-            {
-                columns += getTabWidth() - columns % getTabWidth();
-            }
-            else
-            {
-                blank = false;
-                break;
-            }
-        }
-        if (!blank)
-        {
-            return columns;
-        }
-    }
-    return 0;
+    return folds().indentOf(document(), getTabWidth(), line);
 }
 
 std::vector<ALCodeEditor::Blank> ALCodeEditor::blanksOn(S32 line, S32 within_from, S32 within_to) const
@@ -1665,15 +1659,32 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
             }
         }
     }
-    if (!mHighlights.empty())
+    const LLColor4 wash = highlightColor() % alpha;
+    for (size_t index = 0; index < mHighlights.size(); ++index)
     {
-        const LLColor4 wash = highlightColor() % alpha;
-        for (const ALTextRange& range : mHighlights)
+        // The name's other places more lightly: they are only what is
+        // written alike, lit without being asked for.
+        const LLColor4 ink = index == static_cast<size_t>(Highlight::Occurrences) ? wash % 0.5f : wash;
+        const auto     on  = mHighlights[index].onLine(line);
+        for (auto it = on.first; it != on.second; ++it)
         {
             F32 x0, x1;
-            if (spanOnRow(line, row, range, x0, x1))
+            if (spanOnRow(line, row, *it, x0, x1))
             {
-                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, wash);
+                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, ink);
+            }
+        }
+    }
+    // The places of a text being changed at once, as its stop is.
+    if (mSnippet.live())
+    {
+        for (const ALSnippetSession::Mirror& mirror : mSnippet.mirrors())
+        {
+            F32 x0, x1;
+            if (mirror.range.begin.line <= line && line <= mirror.range.end.line && spanOnRow(line, row, mirror.range, x0, x1))
+            {
+                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, highlightColor() % alpha);
+                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, mBracketMatchColor.get() % alpha, false);
             }
         }
     }
@@ -1699,11 +1710,12 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
             for (size_t k = r.glyphBegin; k < r.glyphEnd && font; ++k)
             {
                 const ALTextLayout::Glyph& glyph = laid.glyphs[k];
-                if (glyph.inlay < 0 || glyph.inlay >= static_cast<S32>(mInlays.size()))
+                const S32                  index = inlayIndexOf(line, glyph.inlay);
+                if (index < 0)
                 {
                     continue;
                 }
-                const InlayHint& hint = mInlays[static_cast<size_t>(glyph.inlay)];
+                const InlayHint& hint = mInlays[static_cast<size_t>(index)];
                 const F32        x0   = left + glyph.pen - r.xStart + INLAY_GAP;
                 const F32        x1   = left + glyph.pen - r.xStart + glyph.advance - INLAY_GAP;
                 if (x1 <= static_cast<F32>(text.mLeft) || x0 >= static_cast<F32>(text.mRight))
@@ -1721,8 +1733,8 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
     // A line through what is deprecated.
     if (!mSemantics.empty())
     {
-        auto first = std::lower_bound(mSemantics.begin(), mSemantics.end(), line, [](const SemanticToken& t, S32 l) { return t.range.end.line < l; });
-        for (auto it = first; it != mSemantics.end() && it->range.begin.line <= line; ++it)
+        const auto on = mSemantics.onLine(line);
+        for (auto it = on.first; it != on.second; ++it)
         {
             F32 x0, x1;
             if (it->strike && spanOnRow(line, row, it->range, x0, x1))
@@ -1732,9 +1744,11 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
             }
         }
     }
-    for (const Decoration& d : mDecorations)
+    const auto decorated = mDecorations.onLine(line);
+    for (auto it = decorated.first; it != decorated.second; ++it)
     {
-        F32 x0, x1;
+        const Decoration& d = *it;
+        F32               x0, x1;
         if (!spanOnRow(line, row, d.range, x0, x1))
         {
             continue;
@@ -1788,173 +1802,145 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
 
 void ALCodeEditor::ensureRegions()
 {
-    if (mRegionsValid && mRegionsVersion == document().version())
-    {
-        return;
-    }
-    mRegions.clear();
-    const S32        count = document().lineCount();
-    const S32        tab   = getTabWidth();
-    std::vector<S32> indent(count, -1);
-    for (S32 l = 0; l < count; ++l)
-    {
-        const std::string& line  = document().line(l);
-        S32                n     = 0;
-        bool               blank = true;
-        for (char c : line)
-        {
-            if (c == ' ')
-            {
-                ++n;
-            }
-            else if (c == '\t')
-            {
-                n = (n / tab + 1) * tab;
-            }
-            else if (c != '\r')
-            {
-                blank = false;
-                break;
-            }
-        }
-        indent[l] = blank ? -1 : n;
-    }
-    // A block is a line and the deeper lines after it, with a line of
-    // nothing going with whichever side keeps the block whole, and the
-    // closer on the line after -- a brace, an `end` -- taken as part of it.
-    std::vector<S32> end_of(count, -1);
-    for (S32 l = 0; l < count; ++l)
-    {
-        if (indent[l] < 0)
-        {
-            continue;
-        }
-        S32 end = l;
-        S32 k   = l + 1;
-        for (; k < count; ++k)
-        {
-            if (indent[k] < 0)
-            {
-                continue;
-            }
-            if (indent[k] > indent[l])
-            {
-                end = k;
-            }
-            else
-            {
-                break;
-            }
-        }
-        if (end == l)
-        {
-            continue;
-        }
-        if (k < count && indent[k] == indent[l] && closesBlock(trimmed(document().line(k))))
-        {
-            end = k;
-        }
-        end_of[l] = end;
-    }
-    // A brace on a line of its own is its header's: `default` and the
-    // `{` under it fold as one block, from the header.
-    for (S32 l = 0; l < count; ++l)
-    {
-        if (end_of[l] < 0 || trimmed(document().line(l)) != "{")
-        {
-            continue;
-        }
-        S32 header = l - 1;
-        while (header >= 0 && indent[header] < 0)
-        {
-            --header;
-        }
-        if (header >= 0 && indent[header] == indent[l] && end_of[header] < 0)
-        {
-            end_of[header] = end_of[l];
-            end_of[l]      = -1;
-        }
-    }
-    for (S32 l = 0; l < count; ++l)
-    {
-        if (end_of[l] > l)
-        {
-            mRegions.push_back(FoldRegion{ l, end_of[l] });
-        }
-    }
-    mRegionsVersion = document().version();
-    mRegionsValid   = true;
+    folds().regions(document(), getTabWidth());
 }
 
 const std::vector<ALCodeEditor::FoldRegion>& ALCodeEditor::foldRegions()
 {
-    ensureRegions();
-    return mRegions;
+    return folds().regions(document(), getTabWidth());
 }
 
 const ALCodeEditor::FoldRegion* ALCodeEditor::regionStartingAt(S32 line)
 {
-    ensureRegions();
-    const auto it = std::lower_bound(mRegions.begin(), mRegions.end(), line,
-                                     [](const FoldRegion& region, S32 l) { return region.start < l; });
-    return (it != mRegions.end() && it->start == line) ? &*it : nullptr;
+    return folds().startingAt(document(), getTabWidth(), line);
 }
 
 const ALCodeEditor::FoldRegion* ALCodeEditor::regionAround(S32 line)
 {
-    ensureRegions();
-    // The innermost: of those that hold the line, the one that starts last.
-    const FoldRegion* found = nullptr;
-    for (const FoldRegion& region : mRegions)
-    {
-        if (region.start >= line)
-        {
-            break;
-        }
-        if (region.end >= line)
-        {
-            found = &region;
-        }
-    }
-    return found;
+    return folds().around(document(), getTabWidth(), line);
 }
 
 bool ALCodeEditor::isFolded(S32 line) const
 {
-    return std::binary_search(mFolded.begin(), mFolded.end(), line);
+    return mFolds.isFolded(line);
+}
+
+void ALCodeEditor::settleFolds()
+{
+    if (mFoldsDirty)
+    {
+        applyFolds();
+    }
 }
 
 void ALCodeEditor::applyFolds()
 {
-    ensureRegions();
-    layout().setHidden(0, document().lineCount() - 1, false);
-    // A fold whose block is gone is gone with it.
-    mFolded.erase(std::remove_if(mFolded.begin(), mFolded.end(), [&](S32 start) { return regionStartingAt(start) == nullptr; }), mFolded.end());
-    for (S32 start : mFolded)
+    mFoldsDirty = false;
+    // Only what changed: the lines no longer folded away shown, the lines
+    // folded away now hidden.
+    std::vector<std::pair<S32, S32>> hidden = folds().hidden(document(), getTabWidth());
+    if (hidden == mHiddenByFolds && !mHiddenByFolds.empty())
     {
-        const FoldRegion* region = regionStartingAt(start);
-        layout().setHidden(region->start + 1, region->end, true);
+        return;
     }
+    const S32 last_line = document().lineCount() - 1;
+    for (const auto& [first, last] : mHiddenByFolds)
+    {
+        if (first <= last_line)
+        {
+            layout().setHidden(first, llmin(last, last_line), false);
+        }
+    }
+    for (const auto& [first, last] : hidden)
+    {
+        layout().setHidden(first, last, true);
+    }
+    mHiddenByFolds.swap(hidden);
+}
+
+ALFoldModel& ALCodeEditor::folds()
+{
+    // Told the grammar's syntax again where the grammar has changed: code
+    // by its brackets and its block words; prose, and no grammar, by
+    // indentation.
+    const ALSyntaxGrammar* grammar = highlighter().grammar().get();
+    if (grammar != mFoldGrammar)
+    {
+        mFoldGrammar = grammar;
+        mFolds.setLineComment(grammar ? grammar->lineComment() : std::string());
+        if (grammar && !grammar->prose())
+        {
+            mFolds.setSyntax([this](S32 line, std::vector<ALFoldModel::Block>& out) { foldBlocksOn(line, out); },
+                             [this](S32 line) { return highlighter().revision(line); });
+        }
+        else
+        {
+            mFolds.setSyntax(nullptr, nullptr);
+        }
+    }
+    return mFolds;
+}
+
+void ALCodeEditor::foldBlocksOn(S32 line, std::vector<ALFoldModel::Block>& out)
+{
+    typedef ALFoldModel::Event Event;
+    // The brackets that are code.
+    for (const auto& [column, c] : mBracketIndex.bracketsOn(line))
+    {
+        out.push_back({ column, (c == '(' || c == '[' || c == '{') ? Event::Open : Event::Close });
+    }
+    // And the grammar's block words, where it has them, as code.
+    const ALSyntaxGrammar* grammar = highlighter().grammar().get();
+    if (!grammar || (grammar->foldWords().opens.empty() && grammar->foldWords().closes.empty()))
+    {
+        return;
+    }
+    const ALSyntaxGrammar::FoldWords& words = grammar->foldWords();
+    const std::string&                text  = document().line(line);
+    const auto in = [](const std::vector<std::string>& list, std::string_view word) { return std::find(list.begin(), list.end(), word) != list.end(); };
+    bool joined = false;
+    for (const ALSyntaxToken& token : highlighter().tokens(line))
+    {
+        if (token.kind == ALSyntaxKind::String || token.kind == ALSyntaxKind::Comment || token.kind == ALSyntaxKind::DocComment ||
+            token.end > static_cast<S32>(text.size()))
+        {
+            continue;
+        }
+        const std::string_view word(text.data() + token.begin, static_cast<size_t>(token.end - token.begin));
+        if (in(words.middles, word))
+        {
+            out.push_back({ token.begin, Event::Middle });
+            joined = in(words.joined, word);
+        }
+        else if (in(words.opens, word))
+        {
+            // `elseif x then`: the elseif opened it.
+            if (!joined)
+            {
+                out.push_back({ token.begin, Event::Open });
+            }
+            joined = false;
+        }
+        else if (in(words.closes, word))
+        {
+            out.push_back({ token.begin, Event::Close });
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const ALFoldModel::Block& a, const ALFoldModel::Block& b) { return a.column < b.column; });
 }
 
 bool ALCodeEditor::foldAt(S32 line)
 {
-    const FoldRegion* region = regionStartingAt(line);
-    if (!region)
-    {
-        region = regionAround(line);
-    }
-    if (!region || isFolded(region->start))
+    const std::optional<FoldRegion> chosen = folds().fold(document(), getTabWidth(), line);
+    if (!chosen)
     {
         return false;
     }
-    const FoldRegion chosen = *region;
-    mFolded.insert(std::upper_bound(mFolded.begin(), mFolded.end(), chosen.start), chosen.start);
     // The caret cannot stay in what is folded away.
     const ALTextRange sel = selection().normalised();
-    if ((sel.begin.line > chosen.start && sel.begin.line <= chosen.end) || (sel.end.line > chosen.start && sel.end.line <= chosen.end))
+    if ((sel.begin.line > chosen->start && sel.begin.line <= chosen->end) || (sel.end.line > chosen->start && sel.end.line <= chosen->end))
     {
-        setCaret(document().lineEnd(chosen.start));
+        setCaret(document().lineEnd(chosen->start));
     }
     applyFolds();
     return true;
@@ -1962,42 +1948,17 @@ bool ALCodeEditor::foldAt(S32 line)
 
 bool ALCodeEditor::unfoldAt(S32 line)
 {
-    S32 start = -1;
-    if (isFolded(line))
-    {
-        start = line;
-    }
-    else
-    {
-        // The innermost folded block around the line -- which, since a
-        // folded block's lines are hidden, is the one whose first line
-        // this is a descendant of.
-        for (S32 folded : mFolded)
-        {
-            const FoldRegion* region = regionStartingAt(folded);
-            if (region && region->start < line && line <= region->end)
-            {
-                start = folded;
-            }
-        }
-    }
-    if (start < 0)
+    if (!folds().unfold(document(), getTabWidth(), line))
     {
         return false;
     }
-    mFolded.erase(std::remove(mFolded.begin(), mFolded.end(), start), mFolded.end());
     applyFolds();
     return true;
 }
 
 void ALCodeEditor::foldAll()
 {
-    ensureRegions();
-    mFolded.clear();
-    for (const FoldRegion& region : mRegions)
-    {
-        mFolded.push_back(region.start);
-    }
+    folds().foldAll(document(), getTabWidth());
     applyFolds();
     if (layout().hidden(caret().line))
     {
@@ -2007,24 +1968,13 @@ void ALCodeEditor::foldAll()
 
 void ALCodeEditor::unfoldAll()
 {
-    mFolded.clear();
+    mFolds.unfoldAll();
     applyFolds();
 }
 
 void ALCodeEditor::revealLine(S32 line)
 {
-    // Every folded block the line is inside opens.
-    bool changed = false;
-    for (S32 i = static_cast<S32>(mFolded.size()) - 1; i >= 0; --i)
-    {
-        const FoldRegion* region = regionStartingAt(mFolded[i]);
-        if (!region || (region->start < line && line <= region->end))
-        {
-            mFolded.erase(mFolded.begin() + i);
-            changed = true;
-        }
-    }
-    if (changed)
+    if (folds().reveal(document(), getTabWidth(), line))
     {
         applyFolds();
     }
@@ -2053,6 +2003,187 @@ bool ALCodeEditor::performFold(ALEditorCommand command)
     }
 }
 
+std::vector<ALTextRange> ALCodeEditor::functions() const
+{
+    std::vector<ALTextRange> out;
+    if (mFunctionProvider)
+    {
+        mFunctionProvider(out);
+    }
+    std::sort(out.begin(), out.end(), [](const ALTextRange& a, const ALTextRange& b) { return a.begin < b.begin; });
+    return out;
+}
+
+std::optional<ALTextRange> ALCodeEditor::functionFrom(const ALTextPos& at, bool forward, bool ends) const
+{
+    // The nearest start, or end, past the place that way.
+    std::optional<ALTextRange> best;
+    for (const ALTextRange& one : functions())
+    {
+        const ALTextPos mark = ends ? one.end : one.begin;
+        const bool      past = forward ? at < mark : mark < at;
+        const ALTextPos kept = best ? (ends ? best->end : best->begin) : mark;
+        if (past && (!best || (forward ? mark < kept : kept < mark)))
+        {
+            best = one;
+        }
+    }
+    return best;
+}
+
+std::optional<ALTextRange> ALCodeEditor::functionAround(const ALTextRange& range) const
+{
+    // The one holding it that starts last, not the stretch itself.
+    std::optional<ALTextRange> best;
+    for (const ALTextRange& one : functions())
+    {
+        const bool holds = !(range.begin < one.begin) && !(one.end < range.end) && !(one == range);
+        if (holds && (!best || best->begin < one.begin || (best->begin == one.begin && one.end < best->end)))
+        {
+            best = one;
+        }
+    }
+    return best;
+}
+
+bool ALCodeEditor::performFunction(ALEditorCommand command)
+{
+    if (command == ALEditorCommand::SelectNextOccurrence)
+    {
+        return selectNextOccurrence();
+    }
+    if (command == ALEditorCommand::ChangeAllOccurrences)
+    {
+        return changeAllOccurrences();
+    }
+    if (command == ALEditorCommand::ExpandSelection)
+    {
+        const ALTextRange                was   = selection();
+        const std::optional<ALTextRange> grown = grownSelection();
+        if (!grown)
+        {
+            return false;
+        }
+        // Kept to go back through, while nothing else has moved it.
+        if (mGrownFrom.empty() || !(was == mGrownTo))
+        {
+            mGrownFrom.clear();
+        }
+        mGrownFrom.push_back(was);
+        setSelection(*grown);
+        mGrownTo = selection();
+        scrollToCaret();
+        return true;
+    }
+    if (command == ALEditorCommand::ShrinkSelection)
+    {
+        if (!canFunction(command))
+        {
+            return false;
+        }
+        const ALTextRange back = mGrownFrom.back();
+        mGrownFrom.pop_back();
+        setSelection(back);
+        mGrownTo = selection();
+        scrollToCaret();
+        return true;
+    }
+    if (command == ALEditorCommand::GoToMatchingBracket)
+    {
+        ALTextPos to;
+        if (!bracketToGoTo(to))
+        {
+            return false;
+        }
+        setCaret(to);
+        scrollToCaret();
+        return true;
+    }
+    if (command == ALEditorCommand::SelectFunction)
+    {
+        // The innermost around the selection; again, the one around that.
+        const std::optional<ALTextRange> around = functionAround(selection().normalised());
+        if (!around)
+        {
+            return false;
+        }
+        setSelection(*around);
+        scrollToCaret();
+        return true;
+    }
+    const std::optional<ALTextRange> to = functionFrom(caret(), command == ALEditorCommand::NextFunction, false);
+    if (!to)
+    {
+        return false;
+    }
+    setCaret(to->begin);
+    scrollToCaret();
+    return true;
+}
+
+bool ALCodeEditor::bracketToGoTo(ALTextPos& to)
+{
+    // The partner of the bracket under the caret, or else just before it,
+    // the caret put on the partner, so that going again comes back; else
+    // the closer of the innermost pair around the caret, of whichever
+    // kind opens nearest. Asked for, so as far as it takes.
+    const ALTextPos    at      = caret();
+    const std::string& line    = document().line(at.line);
+    char               partner = 0;
+    bool               opens   = false;
+    if (at.column < static_cast<S32>(line.size()) && ALBracketIndex::bracketOf(line[at.column], partner, opens) &&
+        mBracketIndex.match(at, to, ALBracketIndex::ANYWHERE))
+    {
+        return true;
+    }
+    if (at.column > 0 && ALBracketIndex::bracketOf(line[at.column - 1], partner, opens) &&
+        mBracketIndex.match(ALTextPos(at.line, at.column - 1), to, ALBracketIndex::ANYWHERE))
+    {
+        return true;
+    }
+    ALTextPos nearest(-1, -1);
+    for (const char opener : { '(', '[', '{' })
+    {
+        ALTextPos found;
+        if (mBracketIndex.enclosing(at, opener, 1, found, ALBracketIndex::ANYWHERE) && (nearest.line < 0 || nearest < found))
+        {
+            nearest = found;
+        }
+    }
+    return nearest.line >= 0 && mBracketIndex.match(nearest, to, ALBracketIndex::ANYWHERE);
+}
+
+bool ALCodeEditor::canFunction(ALEditorCommand command) const
+{
+    if (command == ALEditorCommand::GoToMatchingBracket || command == ALEditorCommand::ExpandSelection)
+    {
+        return true;
+    }
+    if (command == ALEditorCommand::SelectNextOccurrence || command == ALEditorCommand::ChangeAllOccurrences)
+    {
+        return !isReadOnly();
+    }
+    if (command == ALEditorCommand::ShrinkSelection)
+    {
+        return !mGrownFrom.empty() && selection() == mGrownTo;
+    }
+    if (!mFunctionProvider)
+    {
+        return false;
+    }
+    if (command == ALEditorCommand::SelectFunction)
+    {
+        return functionAround(selection().normalised()).has_value();
+    }
+    return functionFrom(caret(), command == ALEditorCommand::NextFunction, false).has_value();
+}
+
+std::optional<ALTextRange> ALCodeEditor::grownSelection()
+{
+    const ALSyntaxGrammar* grammar = highlighter().grammar().get();
+    return ALSmartSelect::grow(document(), highlighter(), mBracketIndex, selection(), grammar ? grammar->memberSeparators() : std::string_view("."));
+}
+
 bool ALCodeEditor::canFold(ALEditorCommand command) const
 {
     ALCodeEditor* self = const_cast<ALCodeEditor*>(this);
@@ -2068,11 +2199,11 @@ bool ALCodeEditor::canFold(ALEditorCommand command) const
             return region && !isFolded(region->start);
         }
         case ALEditorCommand::Unfold:
-            return !mFolded.empty();
+            return !mFolds.folded().empty();
         case ALEditorCommand::FoldAll:
-            return mFolded.size() < self->foldRegions().size();
+            return mFolds.folded().size() < self->foldRegions().size();
         case ALEditorCommand::UnfoldAll:
-            return !mFolded.empty();
+            return !mFolds.folded().empty();
         default:
             return false;
     }
@@ -2100,6 +2231,8 @@ void ALCodeEditor::closeCompletion()
 {
     hideCompletionList();
     mCompletionModel.close();
+    mCompletionAsked = false;
+    mCompletionMoved = false;
 }
 
 S32 ALCodeEditor::chosenCompletion() const
@@ -2136,34 +2269,44 @@ void ALCodeEditor::refreshCompletion()
     const std::string prefix = wordBeforeCaret();
     const ALTextPos   at     = caret();
     const ALTextPos   start(at.line, at.column - static_cast<S32>(prefix.size()));
-    // After `ll.` the members of `ll` are wanted: the head is put before
-    // the prefix for whoever answers by whole names, and taken off what
-    // they answer.
+    // After `ll.` the members of `ll` are wanted -- after `obj:` in SLua,
+    // its methods: the head is put before the prefix for whoever answers
+    // by whole names, and taken off what they answer.
     std::string head;
-    if (start.column >= 2 && document().line(start.line)[start.column - 1] == '.')
+    char        separator = '.';
+    if (start.column >= 2)
     {
-        const ALTextRange before = identifierAt(ALTextPos(start.line, start.column - 2));
-        if (!before.empty() && before.end.column == start.column - 1)
+        const std::string members = highlighter().grammar() ? highlighter().grammar()->memberSeparators() : std::string(".");
+        const char        before  = document().line(start.line)[start.column - 1];
+        const ALTextRange name    = identifierAt(ALTextPos(start.line, start.column - 2));
+        if (members.find(before) != std::string::npos && !name.empty() && name.end.column == start.column - 1)
         {
-            head = document().text(before);
+            head      = document().text(name);
+            separator = before;
         }
     }
-    if ((prefix.empty() && head.empty()) || hasSelection())
+    if ((prefix.empty() && head.empty() && !mCompletionAsked) || hasSelection())
     {
         closeCompletion();
         return;
     }
-    const std::string       asked = head.empty() ? prefix : head + "." + prefix;
-    std::vector<Completion> answered;
-    if (mProvider)
+    const std::string asked = head.empty() ? prefix : head + separator + prefix;
+    // What there is to choose from, asked for once while one identifier is
+    // typed, and narrowed as it grows.
+    if (!mCompletionModel.pooled(start, head, prefix))
     {
-        mProvider(at, asked, answered);
+        std::vector<Completion> answered;
+        if (mProvider)
+        {
+            mProvider(at, asked, answered);
+        }
+        else
+        {
+            vocabularyCompletions(asked, answered);
+        }
+        mCompletionModel.pool(start, at, prefix, head, separator, std::move(answered), document());
     }
-    else
-    {
-        vocabularyCompletions(asked, answered);
-    }
-    const bool fresh = mCompletionModel.narrow(start, at, prefix, head, std::move(answered), document());
+    const bool fresh = mCompletionModel.narrow(start, at, prefix);
     if (fresh && mCompletionRequest)
     {
         mCompletionRequest(start, prefix);
@@ -2174,9 +2317,14 @@ void ALCodeEditor::refreshCompletion()
         return;
     }
     // The same list again, an answer joined to it, keeps what was chosen
-    // in it; a list for more typed starts from the best.
-    const bool again = mCompletionModel.relisted(asked);
-    listCompletions(completionOpen() && again);
+    // in it; a list for more typed starts from the best, not moved through.
+    const bool same  = mCompletionModel.relisted(asked);
+    const bool again = completionOpen() && same;
+    if (!again)
+    {
+        mCompletionMoved = false;
+    }
+    listCompletions(again);
 }
 
 // static
@@ -2264,6 +2412,7 @@ void ALCodeEditor::hideCompletionDoc()
     {
         mCompletionDoc->setVisible(false);
     }
+    mCompletionDocFor.clear();
 }
 
 ALTextView* ALCodeEditor::sideBox()
@@ -2317,33 +2466,7 @@ void ALCodeEditor::placeSideBox(const LLRect& list)
         box.layout().line(line);
     }
     const S32 height = llmin(box.layout().totalHeight() + 2 * (SIDE_PAD - 2) + 2, llmax(list.getHeight(), 200));
-    LLRect    rect;
-    if (list.mRight + 2 + width <= local.mRight)
-    {
-        rect = LLRect(list.mRight + 2, list.mTop, list.mRight + 2 + width, list.mTop - height);
-    }
-    else if (list.mLeft - 2 - width >= local.mLeft)
-    {
-        rect = LLRect(list.mLeft - 2 - width, list.mTop, list.mLeft - 2, list.mTop - height);
-    }
-    else if (list.mBottom - 2 - height >= local.mBottom)
-    {
-        rect = LLRect(list.mLeft, list.mBottom - 2, list.mLeft + width, list.mBottom - 2 - height);
-    }
-    else
-    {
-        rect = LLRect(list.mLeft, list.mTop + 2 + height, list.mLeft + width, list.mTop + 2);
-    }
-    // Kept within the view, top and bottom.
-    if (rect.mBottom < local.mBottom)
-    {
-        rect.translate(0, local.mBottom - rect.mBottom);
-    }
-    if (rect.mTop > local.mTop)
-    {
-        rect.translate(0, local.mTop - rect.mTop);
-    }
-    box.setShape(rect);
+    box.setShape(ALPlace::beside(list, width, height, local, 2));
     box.setVisible(true);
 }
 
@@ -2351,20 +2474,27 @@ void ALCodeEditor::showCompletionDoc()
 {
     const S32 index = chosenCompletion();
     const std::vector<Completion>& completions = mCompletionModel.list();
-    if (index < 0 || index >= static_cast<S32>(completions.size()) || completions[index].documentation.empty())
+    if (index < 0 || index >= static_cast<S32>(completions.size()) || !completions[index].documentation || completions[index].documentation->empty())
     {
         hideCompletionDoc();
         return;
     }
-    const Completion& c   = completions[index];
-    ALTextView&       box = *sideBox();
+    const Completion& c = completions[index];
     // Its declaration as code, then what it does in the reading face.
     std::string says = c.detail.empty() ? c.text : c.detail;
     if (c.deprecated)
     {
         says += "\n" + deprecatedNote();
     }
-    says += "\n" + c.documentation;
+    says += "\n" + *c.documentation;
+    // The same row chosen as the list is made again -- a letter more
+    // typed, an answer joined to it -- beside a list where it was: the box
+    // as it stands, not lexed and read for links again.
+    if (mCompletionDoc && mCompletionDoc->getVisible() && says == mCompletionDocFor && mCompletionList->getRect() == mCompletionDocBeside)
+    {
+        return;
+    }
+    ALTextView& box = *sideBox();
     box.setText(says);
     std::vector<ALTextView::Style> styles;
     styleAsCode(box, 0, styles, c.text, c.kind);
@@ -2382,6 +2512,8 @@ void ALCodeEditor::showCompletionDoc()
         box.linkUrlsOn(line);
     }
     placeSideBox(mCompletionList->getRect());
+    mCompletionDocFor    = says;
+    mCompletionDocBeside = mCompletionList->getRect();
 }
 
 void ALCodeEditor::supplyCompletions(const ALTextPos& at, std::vector<Completion> more)
@@ -2403,26 +2535,9 @@ void ALCodeEditor::placeCompletion()
 
 void ALCodeEditor::placeListAt(ALChoiceList& list, const ALTextPos& at, S32 rows, S32 width)
 {
-    const LLRect text   = textRect();
-    const LLRect local  = getLocalRect();
-    const S32    row_h  = layout().rowHeight();
-    S32          row;
-    const F32    x      = layout().xOf(at.line, at.column, &row);
-    const S32    top    = screenTopOf(text, at.line, row);
-    const S32    height = list.heightFor(rows);
-    S32          left   = static_cast<S32>(static_cast<F32>(text.mLeft) - scrollX() + x);
-    left                = llclamp(left, local.mLeft, llmax(local.mLeft, local.mRight - width));
-    LLRect rect;
-    if (top - row_h - height >= local.mBottom || top + height > local.mTop)
-    {
-        // Under the row, or over it where under would run off the bottom.
-        rect = LLRect(left, top - row_h, left + width, top - row_h - height);
-    }
-    else
-    {
-        rect = LLRect(left, top + height, left + width, top);
-    }
-    list.setShape(rect);
+    // Under the row, or over it where under would run off the bottom;
+    // across, within the view.
+    list.setShape(ALPlace::under(anchorOf(at), width, list.heightFor(rows), getLocalRect()));
 }
 
 // --- quick fixes -----------------------------------------------------------------
@@ -2435,6 +2550,12 @@ bool ALCodeEditor::fixesOpen() const
 void ALCodeEditor::closeFixes()
 {
     const bool was = fixesOpen();
+    // Nothing shown, listed or awaited: nothing to close, which is what
+    // nearly every edit finds.
+    if (!was && !mFixListModel.awaited() && mFixListModel.line() < 0 && mFixListModel.fixes().empty())
+    {
+        return;
+    }
     if (mFixList)
     {
         mFixList->setVisible(false);
@@ -2451,12 +2572,16 @@ void ALCodeEditor::closeFixes()
 bool ALCodeEditor::openFixes(S32 line)
 {
     closeFixes();
-    if (!mFixProvider || isReadOnly() || line < 0 || line >= document().lineCount())
+    if (isReadOnly() || line < 0 || line >= document().lineCount())
     {
         return false;
     }
     std::vector<Fix> fixes;
-    mFixProvider(line, fixes);
+    if (mFixProvider)
+    {
+        mFixProvider(line, fixes);
+    }
+    spellingFixes(line, fixes);
     if (fixes.empty())
     {
         return false;
@@ -2586,6 +2711,21 @@ void ALCodeEditor::takeFix(S32 index)
     const LLSD value   = fixes[index].value;
     const bool nothing = ALFixListModel::isNothing(fixes[index]);
     closeFixes();
+    // The dictionary's, made here: the word at the caret put right, or
+    // taken into it.
+    if (value.isMap() && (value.has("spelling") || value.has("spelling_add")))
+    {
+        refreshSuggestions();
+        if (value.has("spelling"))
+        {
+            replaceWithSuggestion(static_cast<U32>(value["spelling"].asInteger()));
+        }
+        else
+        {
+            addToDictionary();
+        }
+        return;
+    }
     if (mFixHandler && !nothing)
     {
         mFixHandler(value);
@@ -2607,18 +2747,77 @@ bool ALCodeEditor::quickFix()
     return true;
 }
 
+void ALCodeEditor::spellingFixes(S32 line, std::vector<Fix>& fixes)
+{
+    // The misspelled word at the caret, where the list is its line's: the
+    // dictionary's first few words for it, and it taken in.
+    ALTextRange word;
+    if (caret().line != line || !misspelledAt(caret(), &word))
+    {
+        return;
+    }
+    refreshSuggestions();
+    const U32 count = llmin(getSuggestionCount(), U32(5));
+    for (U32 i = 0; i < count; ++i)
+    {
+        Fix fix;
+        fix.title = alSaid("CodeFixSpelling", "Change to \"[WORD]\"", { { "[WORD]", getSuggestion(i) } });
+        fix.edits.emplace_back(word, getSuggestion(i));
+        fix.value = LLSD().with("spelling", static_cast<S32>(i));
+        fixes.push_back(std::move(fix));
+    }
+    if (canAddToDictionary())
+    {
+        Fix fix;
+        fix.title    = alSaid("CodeFixAddWord", "Add \"[WORD]\" to the dictionary", { { "[WORD]", document().text(word) } });
+        fix.refactor = true;
+        fix.value    = LLSD().with("spelling_add", true);
+        fixes.push_back(std::move(fix));
+    }
+}
+
 bool ALCodeEditor::canQuickFix() const
 {
-    if (!mFixHandler || isReadOnly())
+    if (isReadOnly())
+    {
+        return false;
+    }
+    // A misspelling at the caret has the dictionary's words for it; the
+    // check of a line is kept once made, which is why it is not const.
+    if (const_cast<ALCodeEditor*>(this)->misspelledAt(caret()))
+    {
+        return true;
+    }
+    if (!mFixHandler)
     {
         return false;
     }
     return mActionRequest || (mFixProvider && fixableAt(caret().line));
 }
 
-void ALCodeEditor::openCompletion()
+void ALCodeEditor::openCompletion(bool asked)
 {
+    mCompletionAsked = mCompletionAsked || asked;
     refreshCompletion();
+}
+
+bool ALCodeEditor::returnAccepts() const
+{
+    if (!mAcceptOnEnter || !completionOpen())
+    {
+        return false;
+    }
+    if (mCompletionMoved)
+    {
+        return true;
+    }
+    // Not moved through: taken only where it changes what is typed.
+    const S32 index = mCompletionList->chosen();
+    if (index < 0 || index >= static_cast<S32>(mCompletionModel.list().size()))
+    {
+        return false;
+    }
+    return mCompletionModel.list()[index].text != document().text(mCompletionModel.range());
 }
 
 // --- the name at the caret ---------------------------------------------------------
@@ -2883,6 +3082,10 @@ bool ALCodeEditor::mapMark(S32 line, LLColor4& color) const
 
 bool ALCodeEditor::canSymbol(ALEditorCommand command) const
 {
+    if (command == ALEditorCommand::GoToDefinition && mLinkRequest && !mLinkRequest(caret(), false).empty())
+    {
+        return true;
+    }
     if (!mSymbolRequest || (command == ALEditorCommand::Rename && isReadOnly()))
     {
         return false;
@@ -2897,6 +3100,17 @@ bool ALCodeEditor::performSymbol(ALEditorCommand command)
         return false;
     }
     closeCompletion();
+    // A name that leads somewhere of itself goes there: an include's.
+    if (command == ALEditorCommand::GoToDefinition && mLinkRequest && !mLinkRequest(caret(), true).empty())
+    {
+        return true;
+    }
+    // Asked for by the link, which has gone -- with nobody to ask about a
+    // name, or no name to ask about.
+    if (!mSymbolRequest || identifierAtCaret().empty())
+    {
+        return false;
+    }
     mSymbolRequest(command, identifierAtCaret());
     return true;
 }
@@ -2907,7 +3121,7 @@ bool ALCodeEditor::complete()
     {
         return false;
     }
-    openCompletion();
+    openCompletion(true);
     return true;
 }
 
@@ -3011,7 +3225,7 @@ void ALCodeEditor::insertSnippet(std::string_view body)
     const ALTextPos             at        = std::min(selection.begin, selection.end);
     const std::string&          line      = document().line(at.line);
     const std::string           indent    = line.substr(0, std::min(line.size(), line.find_first_not_of(" \t")));
-    ALSnippetSession::Expansion expanded  = ALSnippetSession::expand(body, at, indent);
+    ALSnippetSession::Expansion expanded  = ALSnippetSession::expand(body, at, indent, ALTextIndent::indentUnit(indent, { getTabWidth(), getSoftTabs() }));
     insertText(expanded.text);
     const ALTextRange landing = expanded.landing;
     if (expanded.stops.empty())
@@ -3026,27 +3240,184 @@ void ALCodeEditor::insertSnippet(std::string_view body)
     setSelection(mSnippet.stops()[0]);
 }
 
-void ALCodeEditor::syncMirrors(S32 index)
+void ALCodeEditor::syncMirrors(S32 index, bool grouped)
 {
-    // From the last to the first, so that none moves one still to do; one
-    // step to undo, and the selection as it was.
+    // As one edit, one step to undo -- or part of the key's -- and the
+    // selection as it was.
     std::string            wanted;
     const std::vector<S32> order = mSnippet.staleMirrors(index, document(), wanted);
     if (order.empty())
     {
         return;
     }
-    const ALTextRange was = selection();
-    undoJournal().beginGroup();
+    const ALTextRange                                was = selection();
+    std::vector<std::pair<ALTextRange, std::string>> edits;
+    edits.reserve(order.size());
     for (const S32 k : order)
     {
-        mSnippet.syncing(k);
-        edit(mSnippet.mirrors()[static_cast<size_t>(k)].range, wanted);
+        edits.emplace_back(mSnippet.mirrors()[static_cast<size_t>(k)].range, wanted);
     }
+    // All of them as one edit.
+    if (grouped)
+    {
+        undoJournal().beginGroup();
+    }
+    mSnippet.syncingAll();
+    editMany(std::move(edits), was.end);
     mSnippet.syncing(-1);
-    undoJournal().endGroup();
+    if (grouped)
+    {
+        undoJournal().endGroup();
+    }
     placeSelection(document().clamp(was.begin), document().clamp(was.end));
     afterEdit();
+}
+
+std::vector<ALTextRange> ALCodeEditor::placesOf(const std::string& wanted, bool whole, const ALTextPos& from, size_t most) const
+{
+    std::vector<ALTextRange> out;
+    const ALTextDocument&    doc   = document();
+    const S32                count = doc.lineCount();
+    if (wanted.empty() || wanted.find('\n') != std::string::npos)
+    {
+        return out;
+    }
+    // Taken already: the stop and its mirrors.
+    const auto taken = [this](const ALTextRange& range) {
+        for (const ALTextRange& stop : mSnippet.stops())
+        {
+            if (range.begin < stop.end && stop.begin < range.end)
+            {
+                return true;
+            }
+        }
+        for (const ALSnippetSession::Mirror& mirror : mSnippet.mirrors())
+        {
+            if (range.begin < mirror.range.end && mirror.range.begin < range.end)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    // Each line once, from `from` round to it again.
+    for (S32 step = 0; step <= count && out.size() < most; ++step)
+    {
+        const S32          line  = (from.line + step) % count;
+        const std::string& text  = doc.line(line);
+        const size_t       start = step == 0 ? static_cast<size_t>(from.column) : 0;
+        const size_t       stop  = step == count ? static_cast<size_t>(from.column) : text.size();
+        for (size_t at = text.find(wanted, start); at != std::string::npos && at + wanted.size() <= stop && out.size() < most;
+             at = text.find(wanted, at + 1))
+        {
+            const size_t end = at + wanted.size();
+            if (whole && ((at > 0 && alIdentifierByte(text[at - 1])) || (end < text.size() && alIdentifierByte(text[end]))))
+            {
+                continue;
+            }
+            const ALTextRange range(ALTextPos(line, static_cast<S32>(at)), ALTextPos(line, static_cast<S32>(end)));
+            if (!taken(range) && std::none_of(out.begin(), out.end(), [&](const ALTextRange& r) { return range.begin < r.end && r.begin < range.end; }))
+            {
+                out.push_back(range);
+            }
+        }
+    }
+    return out;
+}
+
+bool ALCodeEditor::selectNextOccurrence()
+{
+    const ALTextRange taken = selection().normalised();
+    if (taken.empty())
+    {
+        // The name at the caret, to go on from.
+        ALTextRange name = identifierAtCaret();
+        if (name.empty())
+        {
+            name = document().wordAt(caret());
+        }
+        if (name.empty())
+        {
+            return false;
+        }
+        setSelection(name);
+        mOccurrenceName = selection().normalised();
+        return true;
+    }
+    if (taken.begin.line != taken.end.line || isReadOnly())
+    {
+        return false;
+    }
+    const bool going = mSnippet.live() && mSnippet.stops().size() == 1 && mSnippet.stops()[0] == taken;
+    if (!going)
+    {
+        mSnippet.start({ taken }, taken.end);
+        mSnippet.setLive(true);
+    }
+    // After the last place taken, going round: they are taken in turn.
+    const ALTextPos                from = mSnippet.mirrors().empty() ? taken.end : mSnippet.mirrors().back().range.end;
+    const std::vector<ALTextRange> next = placesOf(document().text(taken), taken == mOccurrenceName, from, 1);
+    if (next.empty())
+    {
+        if (!going)
+        {
+            mSnippet.clear();
+        }
+        return false;
+    }
+    mSnippet.addMirror({ 0, next.front() });
+    setSelection(taken);
+    scrollToLine(next.front().begin.line);
+    return true;
+}
+
+bool ALCodeEditor::changeAllOccurrences()
+{
+    ALTextRange taken = selection().normalised();
+    bool        whole = taken == mOccurrenceName;
+    if (taken.empty())
+    {
+        taken = identifierAtCaret();
+        whole = true;
+    }
+    if (taken.empty() || taken.begin.line != taken.end.line || isReadOnly())
+    {
+        return false;
+    }
+    mSnippet.start({ taken }, taken.end);
+    const std::vector<ALTextRange> places = placesOf(document().text(taken), whole, taken.end, 1000);
+    if (places.empty())
+    {
+        mSnippet.clear();
+        return false;
+    }
+    for (const ALTextRange& place : places)
+    {
+        mSnippet.addMirror({ 0, place });
+    }
+    mSnippet.setLive(true);
+    setSelection(taken);
+    return true;
+}
+
+void ALCodeEditor::undo()
+{
+    // A step back is the text as it was, the places with it: nothing to
+    // bring up to what the stop holds.
+    if (mSnippet.live())
+    {
+        clearPlaceholders();
+    }
+    ALTextView::undo();
+}
+
+void ALCodeEditor::redo()
+{
+    if (mSnippet.live())
+    {
+        clearPlaceholders();
+    }
+    ALTextView::redo();
 }
 
 void ALCodeEditor::dropPlaceholdersLeft()
@@ -3108,6 +3479,494 @@ void ALCodeEditor::clearPlaceholders()
     mSnippet.clear();
 }
 
+// --- cards -------------------------------------------------------------------
+
+bool ALCodeEditor::hoverCardAt(S32 x, S32 y)
+{
+    const ALTextPos at = posAtLocal(x, y, false);
+    // A problem under the mouse says what it is, and the word what it is
+    // as well: what is wrong with a call is read against what it takes.
+    ALTextRange                    about;
+    const std::vector<CardProblem> problems = problemsUnder(at, about);
+    std::string                    says;
+    std::vector<CardLink>          links;
+    const ALTextRange              word = identifierAt(at);
+    // A string literal says its own size, anywhere in it -- the space
+    // after its comma as much as the word before -- since what the
+    // analyzer has to say about one is that it is a string, which the
+    // quotes said already.
+    {
+        const ALTextRange literal = stringAt(at);
+        const std::string size    = stringSize(literal);
+        if (!size.empty())
+        {
+            says  = alSaid("CodeStringHead", "string") + "\n" + size;
+            about = about.empty() ? literal : ALTextRange(std::min(about.begin, literal.begin), std::max(about.end, literal.end));
+        }
+    }
+    // The analyzer's word first, where there is one to ask: it tells a
+    // local from a builtin of the same name, and a field from a global.
+    // What the definitions say of the word is said where the analyzer has
+    // nothing, or where there is no analyzer to ask.
+    std::string fallback;
+    const bool  known = says.empty() && mHover && !word.empty() && mHover(at, document().text(word), fallback);
+    mHoverFallback    = known ? fallback : std::string();
+    if (says.empty() && !word.empty())
+    {
+        // What the analyzer said of this word, if it was asked and the
+        // text has not moved on since; else asked now, for an answer
+        // that shows when it comes, or the next time the mouse rests
+        // here.
+        const U32 version = document().version();
+        if (!mHoverRequest)
+        {
+            says = mHoverFallback;
+        }
+        else if (mCards.askedAbout(word, version))
+        {
+            says  = mCards.answer().empty() ? mHoverFallback : mCards.answer();
+            links = mCards.answer().empty() ? std::vector<CardLink>() : mCards.links();
+        }
+        else
+        {
+            mCards.asking(word, version);
+            mHoverRequest(word.begin, document().text(word));
+        }
+        if (!says.empty())
+        {
+            about = about.empty() ? word : ALTextRange(std::min(about.begin, word.begin), std::max(about.end, word.end));
+        }
+    }
+    if (says.empty() && problems.empty())
+    {
+        return false;
+    }
+    showCard(about, says, problems, links);
+    return true;
+}
+
+std::vector<ALCodeEditor::CardProblem> ALCodeEditor::problemsUnder(const ALTextPos& at, ALTextRange& about) const
+{
+    std::vector<CardProblem> problems;
+    for (const Decoration* each : decorationsOn(at.line))
+    {
+        const Decoration& d     = *each;
+        const ALTextRange range = d.range.normalised();
+        if (!d.message.empty() && range.begin <= at && at < range.end)
+        {
+            problems.push_back({ d.message, d.color });
+            about = about.empty() ? range : ALTextRange(std::min(about.begin, range.begin), std::max(about.end, range.end));
+        }
+    }
+    return problems;
+}
+
+// static
+const std::string& ALCodeEditor::deprecatedNote()
+{
+    return ALCodeCards::deprecatedNote();
+}
+
+ALSyntaxKind ALCodeEditor::semanticKindAt(const ALTextPos& at) const
+{
+    auto found = std::upper_bound(mSemantics.begin(), mSemantics.end(), at, [](const ALTextPos& pos, const SemanticToken& t) { return pos < t.range.begin; });
+    if (found == mSemantics.begin())
+    {
+        return ALSyntaxKind::Text;
+    }
+    --found;
+    return found->range.begin <= at && at < found->range.end ? found->kind : ALSyntaxKind::Text;
+}
+
+void ALCodeEditor::styleAsCode(const ALTextView& view, S32 line, std::vector<ALTextView::Style>& styles, std::string_view name, ALSyntaxKind kind)
+{
+    const std::string& text = view.document().line(line);
+    std::vector<ALSyntaxToken> tokens;
+    if (std::shared_ptr<const ALSyntaxGrammar> grammar = highlighter().grammar())
+    {
+        ALSyntaxState state = grammar->initialState();
+        grammar->lexLine(text, state, tokens, highlighter().words());
+    }
+    if (tokens.empty())
+    {
+        ALTextView::Style whole;
+        whole.range = ALTextRange(ALTextPos(line, 0), ALTextPos(line, static_cast<S32>(text.size())));
+        whole.font  = getFont();
+        styles.push_back(whole);
+        return;
+    }
+    // The tokens cover the line without a gap, so each carries the face.
+    for (const ALSyntaxToken& token : tokens)
+    {
+        ALTextView::Style one;
+        one.range = ALTextRange(ALTextPos(line, token.begin), ALTextPos(line, token.end));
+        one.font  = getFont();
+        ALSyntaxKind shown = token.kind;
+        if (shown == ALSyntaxKind::Text && kind != ALSyntaxKind::Text && !name.empty() && std::string_view(text).substr(token.begin, token.end - token.begin) == name)
+        {
+            shown = kind;
+        }
+        if (shown != ALSyntaxKind::Text)
+        {
+            one.color = colorForKind(shown);
+        }
+        styles.push_back(std::move(one));
+    }
+}
+
+void ALCodeEditor::showCard(const ALTextRange& about, const std::string& says, const std::vector<CardProblem>& problems,
+                            const std::vector<CardLink>& links)
+{
+    // The card is one of the studio's small floating things, and they
+    // all have the one look: the ground a shade off the text's own, and
+    // a frame in a quarter of the ink, which `draw` puts on over it.
+    // Taken afresh each time, since the colour table may have moved.
+    const LLColor4         ground    = paint(Paint::Widget);
+    const S32              PAD       = ALCodeCards::PAD;
+    if (!mCard)
+    {
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name        = "hover_card";
+        p.rect        = LLRect(0, 20, ALCodeCards::MAX_WIDTH, 0);
+        p.read_only   = true;
+        p.word_wrap   = true;
+        p.tab_stop    = false;
+        p.takes_focus = false;
+        p.mouse_opaque = true;
+        p.font        = LLFontGL::getFontSansSerif();
+        p.bg_visible  = true;
+        p.bg_color    = ground;
+        p.bg_readonly_color = ground;
+        p.text_readonly_color = textColor();
+        p.h_pad       = PAD;
+        p.v_pad       = PAD - 2;
+        p.context_menu = std::string();
+        mCard         = LLUICtrlFactory::create<ALTextView>(p);
+        mCard->setVisible(false);
+        mCard->onLinkClicked([this](const ALTextView::Substitution& link) {
+            if (!link.url.empty())
+            {
+                LLUrlAction::clickAction(link.url, false);
+                return;
+            }
+            // A fix: made by whoever gave it, and the card goes, being
+            // about a problem the fix is to take away.
+            if (link.value.isMap() && link.value.has("fix"))
+            {
+                const LLSD value = link.value["fix"];
+                hideCard();
+                if (mFixHandler)
+                {
+                    mFixHandler(value);
+                }
+                return;
+            }
+            // A way somewhere the caller gave: gone to, and the card with
+            // it, since it is about where the caret is no longer.
+            if (link.value.isDefined() && mCardLinkHandler)
+            {
+                const LLSD value = link.value;
+                hideCard();
+                mCardLinkHandler(value);
+            }
+        });
+        addChild(mCard);
+    }
+    mCard->setBackgroundColor(ground);
+    mCard->setTextColor(textColor());
+    // What would put the problems right: the fixes of the line they are
+    // on, best first.
+    std::vector<Fix> fixes;
+    if (!problems.empty() && mFixProvider && mFixHandler && !isReadOnly())
+    {
+        mFixProvider(about.begin.line, fixes);
+        ALFixListModel::rank(fixes);
+    }
+    const ALCodeCards::Composition card = ALCodeCards::compose(problems, fixes, says, links);
+    const std::string&             all  = card.text;
+    if (cardShown() && about == mCardAbout && all == mCard->text())
+    {
+        // The mouse resting on again: the card is up already.
+        return;
+    }
+    mCardAbout = about;
+    // The words: each problem in its colour, the head as code, a note
+    // about deprecation in the warning colour, every URL a link.
+    mCard->setText(all);
+    std::vector<ALTextView::Style> styles;
+    for (const auto& [line, problem] : card.problemLines)
+    {
+        ALTextView::Style one;
+        one.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
+        one.color = problems[problem].color;
+        styles.push_back(one);
+    }
+    if (card.headLine >= 0)
+    {
+        // The name in the head coloured as the text colours it where the
+        // analyzer said what it is: a global, a parameter, a function of
+        // the script's own, which the grammar alone does not know.
+        const ALTextRange word = mMouseX >= 0 ? identifierAt(posAtLocal(mMouseX, mMouseY, false)) : identifierAt(about.begin);
+        styleAsCode(*mCard, card.headLine, styles, document().text(word), word.empty() ? ALSyntaxKind::Text : semanticKindAt(word.begin));
+    }
+    const S32 lines = mCard->document().lineCount();
+    for (const S32 line : card.deprecatedLines)
+    {
+        ALTextView::Style note;
+        note.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
+        note.color = markColor(Mark::Warning);
+        styles.push_back(note);
+    }
+    mCard->setStyles(std::move(styles));
+    for (const auto& [line, value] : card.fixLines)
+    {
+        ALTextView::Substitution fix;
+        fix.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
+        fix.link  = true;
+        fix.value = LLSD().with("fix", value);
+        mCard->addSubstitution(std::move(fix));
+    }
+    // The caller's own links, each on the line that says it, below the
+    // head; then every URL.
+    for (const auto& [line, link] : card.linkLines)
+    {
+        ALTextView::Substitution way;
+        way.range   = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
+        way.link    = true;
+        way.tooltip = links[link].tooltip;
+        way.value   = links[link].value;
+        mCard->addSubstitution(std::move(way));
+    }
+    for (S32 line = 0; line < lines; ++line)
+    {
+        mCard->linkUrlsOn(line);
+    }
+    // Its size: as wide as its widest line up to the limit, and as tall
+    // as the lines wrapped at that width come to.
+    const LLRect text  = textRect();
+    const S32    limit = ALCodeCards::widthLimit(text.getWidth());
+    mCard->setShape(LLRect(0, 40, limit, 0));
+    mCard->setWordWrap(false);
+    // Laid out before it is measured: the layout guesses the width of a
+    // line it has not done yet by the width of a space, which is far
+    // narrower than the face the head line is in, and the card would
+    // come out a few characters wide and wrap the one word in it. These
+    // are a handful of lines, not a script.
+    for (S32 line = 0; line < lines; ++line)
+    {
+        mCard->layout().line(line);
+    }
+    const S32 width = ALCodeCards::width(static_cast<S32>(mCard->layout().contentWidth()), limit);
+    mCard->setWordWrap(true);
+    mCard->setShape(LLRect(0, 40, width, 0));
+    for (S32 line = 0; line < lines; ++line)
+    {
+        mCard->layout().line(line);
+    }
+    const S32 height = ALCodeCards::height(mCard->layout().totalHeight());
+    // Where: under the row of what it is about, at its start; above it
+    // where under would run off the bottom; within the text's width.
+    mCardAnchor = anchorOf(about);
+    mCard->setShape(ALCodeCards::place(mCardAnchor, text, width, height));
+    mCard->setVisible(true);
+}
+
+void ALCodeEditor::hideCard()
+{
+    if (mCard && mCard->getVisible())
+    {
+        mCard->setVisible(false);
+    }
+    mCardAnchor = LLRect();
+}
+
+bool ALCodeEditor::cardShown() const
+{
+    return mCard && mCard->getVisible();
+}
+
+void ALCodeEditor::supplyHover(const ALTextPos& at, const std::string& text, std::vector<CardLink> links)
+{
+    // Kept for the word, and shown now if the mouse is still on it.
+    if (!mCards.heard(at, document().version(), text, std::move(links)) || mMouseX < 0 || !textRect().pointInRect(mMouseX, mMouseY))
+    {
+        return;
+    }
+    const ALTextPos   under = posAtLocal(mMouseX, mMouseY, false);
+    const ALTextRange word  = identifierAt(under);
+    if (word != mCards.asked())
+    {
+        return;
+    }
+    ALTextRange                    about;
+    const std::vector<CardProblem> problems = problemsUnder(under, about);
+    // Nothing from the analyzer: what the definitions say, where they say
+    // anything.
+    const std::string& says = text.empty() ? mHoverFallback : text;
+    if (says.empty() && problems.empty())
+    {
+        return;
+    }
+    showCard(about.empty() ? word : ALTextRange(std::min(about.begin, word.begin), std::max(about.end, word.end)), says, problems,
+             text.empty() ? std::vector<CardLink>() : mCards.links());
+}
+
+// --- signature help -------------------------------------------------------------
+
+void ALCodeEditor::showSignature(const ALTextPos& at, Signature signature)
+{
+    if (!typingText())
+    {
+        // An answer that came after a modal keymap stopped inserting.
+        return;
+    }
+    // The call it is about, by its bracket, which it stays shown inside.
+    ALTextPos open;
+    mSignatureOpen = mBracketIndex.enclosing(at, '(', 1, open, ALBracketIndex::NEARBY) ? open : ALTextPos(-1, -1);
+    mCards.showSignature(at, std::move(signature));
+}
+
+void ALCodeEditor::hideSignature()
+{
+    mCards.hideSignature();
+    mSignatureOpen = ALTextPos(-1, -1);
+}
+
+bool ALCodeEditor::signatureShown() const
+{
+    if (!mCards.signature() || mSignatureOpen.line < 0)
+    {
+        return mCards.signatureFor(caret());
+    }
+    // Inside the call's brackets, on whichever of its lines.
+    const ALTextPos at = caret();
+    if (!(mSignatureOpen < at))
+    {
+        return false;
+    }
+    ALTextPos close;
+    return !const_cast<ALBracketIndex&>(mBracketIndex).match(mSignatureOpen, close, ALBracketIndex::NEARBY) || !(close < at);
+}
+
+S32 ALCodeEditor::argumentAt(const ALTextPos& open, const ALTextPos& at)
+{
+    S32 depth  = 0;
+    S32 commas = 0;
+    for (S32 line = open.line; line <= at.line && line < document().lineCount(); ++line)
+    {
+        const std::string& text   = document().line(line);
+        const auto&        tokens = highlighter().tokens(line);
+        size_t             t      = 0;
+        const S32          from   = line == open.line ? open.column + 1 : 0;
+        const S32          to     = line == at.line ? llmin(at.column, static_cast<S32>(text.size())) : static_cast<S32>(text.size());
+        for (S32 i = from; i < to; ++i)
+        {
+            const char c = text[static_cast<size_t>(i)];
+            if (c != ',' && c != '(' && c != ')' && c != '[' && c != ']' && c != '{' && c != '}')
+            {
+                continue;
+            }
+            // Not what a string or a comment says.
+            while (t < tokens.size() && tokens[t].end <= i)
+            {
+                ++t;
+            }
+            if (t < tokens.size() && tokens[t].begin <= i &&
+                (tokens[t].kind == ALSyntaxKind::String || tokens[t].kind == ALSyntaxKind::Comment || tokens[t].kind == ALSyntaxKind::DocComment))
+            {
+                continue;
+            }
+            if (c == ',')
+            {
+                commas += depth == 0 ? 1 : 0;
+            }
+            else
+            {
+                depth += (c == '(' || c == '[' || c == '{') ? 1 : -1;
+            }
+        }
+    }
+    return commas;
+}
+
+void ALCodeEditor::drawSignature(const LLRect& text)
+{
+    const Signature* shown = mCards.signature();
+    if (!shown || shown->label.empty())
+    {
+        return;
+    }
+    const S32        SIGNATURE_PAD = ALCodeCards::SIGNATURE_PAD;
+    const Signature& sig   = *shown;
+    const LLFontGL*  font  = getFont();
+    const F32        alpha = getDrawContext().mAlpha;
+    const S32        line_h = font->getLineHeight();
+    // Which form of the function, of how many, where it has several: Up
+    // and Down go through them.
+    const std::string counter  = sig.overloads.size() > 1 ? llformat("%d/%d  ", sig.overload + 1, static_cast<S32>(sig.overloads.size())) : std::string();
+    const bool        docs     = !sig.documentation.empty() || !counter.empty();
+    const std::string doc_line = counter + sig.documentation.substr(0, sig.documentation.find('\n'));
+    const S32        wanted = llmax(font->getWidth(sig.label), docs ? font->getWidth(doc_line) : 0) + 2 * SIGNATURE_PAD;
+    const S32        height = line_h * (docs ? 2 : 1) + 2 * SIGNATURE_PAD;
+
+    // Above the caret's row, left with the call's column, kept inside the
+    // view; under the row where above would run off the top.
+    const LLRect box  = ALCodeCards::signatureBox(wanted, height, anchorOf(mCards.signatureAt()), getLocalRect());
+    const S32    room = box.getWidth() - 2 * SIGNATURE_PAD;
+
+    const LLColor4 ink    = textColor() % alpha;
+    const LLColor4 active = mBracketMatchColor.get() % alpha;
+    const LLColor4 faint  = lineNumberColor() % alpha;
+    gl_rect_2d(box, paint(Paint::Widget) % alpha, true);
+    gl_rect_2d(box, paint(Paint::WidgetBorder) % alpha, false);
+
+    // The label in three pieces, the active parameter in its own colour.
+    const F32 baseline = static_cast<F32>(box.mTop - SIGNATURE_PAD - llround(font->getAscenderHeight()));
+    S32       begin = -1, end = -1;
+    if (sig.active >= 0 && sig.active < static_cast<S32>(sig.parameters.size()))
+    {
+        begin = sig.parameters[sig.active].first;
+        end   = sig.parameters[sig.active].second;
+    }
+    // Where the label is longer than the room, it is scrolled so that the
+    // parameter being filled in is in the box. The head of a signature is
+    // the part already typed, so it is the part to give up; what runs off
+    // the left edge under the clip reads as more of it being there.
+    const F32 label_w = static_cast<F32>(font->getWidth(sig.label));
+    const F32 through = end > 0 ? static_cast<F32>(font->getWidth(sig.label.substr(0, static_cast<size_t>(end)))) : label_w;
+    const F32 shift   = ALCodeCards::labelShift(label_w, through, static_cast<F32>(room));
+    F32 pen = static_cast<F32>(box.mLeft + SIGNATURE_PAD) - shift;
+    auto piece = [&](S32 from, S32 to, const LLColor4& color) {
+        if (to <= from)
+        {
+            return;
+        }
+        const std::string part = sig.label.substr(from, to - from);
+        font->renderUTF8(part, 0, pen, baseline, color, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+        pen += static_cast<F32>(font->getWidth(part));
+    };
+    {
+        LLLocalClipRect clip(LLRect(box.mLeft + SIGNATURE_PAD, box.mTop - 1, box.mRight - SIGNATURE_PAD, box.mBottom + 1));
+        if (begin >= 0 && end > begin && end <= static_cast<S32>(sig.label.size()))
+        {
+            piece(0, begin, ink);
+            piece(begin, end, active);
+            piece(end, static_cast<S32>(sig.label.size()), ink);
+        }
+        else
+        {
+            piece(0, static_cast<S32>(sig.label.size()), ink);
+        }
+    }
+    if (docs)
+    {
+        // The documentation's first line reads from its own start, so it
+        // ends in an ellipsis rather than being scrolled.
+        font->renderUTF8(doc_line, 0, static_cast<F32>(box.mLeft + SIGNATURE_PAD), baseline - static_cast<F32>(line_h), faint,
+                         LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, room, nullptr, true);
+    }
+}
+
 // --- input -------------------------------------------------------------------
 
 void ALCodeEditor::dropTyping()
@@ -3119,6 +3978,25 @@ void ALCodeEditor::dropTyping()
 
 bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
 {
+    // Every place of a text being changed at once: what the key did, and
+    // the places brought up to it, one step with the typing around it --
+    // but for a step back or forward, which ends it.
+    const ALEditorCommand command = keymap().lookup(key, mask);
+    const bool            live    = mSnippet.live() && command != ALEditorCommand::Undo && command != ALEditorCommand::Redo;
+    if (live)
+    {
+        undoJournal().beginTyping(selection());
+    }
+    const auto keep_up = atScopeEnd([this, live]() {
+        if (live)
+        {
+            if (mSnippet.live())
+            {
+                syncMirrors(mSnippet.at(), false);
+            }
+            undoJournal().endTyping();
+        }
+    });
     hideCard();
     // The fixes listed take the keys that walk them and take one, in any
     // mode a modal keymap is in -- the list was asked for; any other key
@@ -3197,6 +4075,7 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
     if (completionOpen() && modalKeymap() && mask == REAL_CONTROL && (key == 'N' || key == 'P'))
     {
         mCompletionList->moveChoice(key == 'N' ? 1 : -1, true);
+        mCompletionMoved = true;
         return true;
     }
     if (completionOpen() && mask == MASK_NONE)
@@ -3208,18 +4087,22 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
                 return true;
             case KEY_UP:
                 mCompletionList->moveChoice(-1, true);
+                mCompletionMoved = true;
                 return true;
             case KEY_DOWN:
                 mCompletionList->moveChoice(1, true);
+                mCompletionMoved = true;
                 return true;
             case KEY_PAGE_UP:
                 mCompletionList->moveChoice(-COMPLETION_ROWS, false);
+                mCompletionMoved = true;
                 return true;
             case KEY_PAGE_DOWN:
                 mCompletionList->moveChoice(COMPLETION_ROWS, false);
+                mCompletionMoved = true;
                 return true;
             case KEY_RETURN:
-                if (!mAcceptOnEnter)
+                if (!returnAccepts())
                 {
                     // A new line, as the key says; the list goes.
                     closeCompletion();
@@ -3246,14 +4129,30 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
         // when it comes, rather than the shift closing the list under it.
         closeCompletion();
     }
-    if (mSignature && key == KEY_ESCAPE && mask == MASK_NONE)
+    if (mCards.signature() && key == KEY_ESCAPE && mask == MASK_NONE)
     {
         hideSignature();
         return true;
     }
+    // Another form of the function, where it has several.
+    if (mCards.signature() && !completionOpen() && mask == MASK_NONE && (key == KEY_UP || key == KEY_DOWN) && signatureShown() &&
+        mCards.stepOverload(key == KEY_DOWN ? 1 : -1))
+    {
+        return true;
+    }
+    // What a Backspace or a Delete takes: a bracket or a comma changes the
+    // call, which is asked about again; anything else only an argument.
+    char taking = 0;
+    if ((key == KEY_BACKSPACE || key == KEY_DELETE) && mask == MASK_NONE && !hasSelection())
+    {
+        const std::string& line = document().line(caret().line);
+        const S32          at   = key == KEY_BACKSPACE ? caret().column - 1 : caret().column;
+        taking                  = at >= 0 && at < static_cast<S32>(line.size()) ? line[static_cast<size_t>(at)] : 0;
+    }
+    const bool call_changes = hasSelection() || taking == '(' || taking == ',' || taking == ')';
     if (key == KEY_BACKSPACE && mask == MASK_NONE && mAutoClose && deletePair())
     {
-        if (mSignature && mSignatureRequest)
+        if (mCards.signature() && mSignatureRequest && call_changes)
         {
             mSignatureRequest(caret());
         }
@@ -3266,7 +4165,7 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
         dropTyping();
         return taken;
     }
-    if (taken && mSignature && mSignatureRequest && (key == KEY_BACKSPACE || key == KEY_DELETE))
+    if (taken && mCards.signature() && mSignatureRequest && (key == KEY_BACKSPACE || key == KEY_DELETE) && call_changes)
     {
         mSignatureRequest(caret());
     }
@@ -3277,8 +4176,18 @@ bool ALCodeEditor::handleUnicodeCharHere(llwchar uni_char)
 {
     const bool typing   = typingText();
     const bool was_open = completionOpen();
-    const bool paired   = typing && mAutoClose && uni_char < 0x80 && !isReadOnly() && typePair(static_cast<char>(uni_char));
-    if (!paired && !ALTextView::handleUnicodeCharHere(uni_char))
+    // The pair, the character and its outdent one key typed, one with the
+    // typing around it -- and every place of a text being changed at once
+    // brought up to it in the same step.
+    undoJournal().beginTyping(selection());
+    const bool paired = typing && mAutoClose && uni_char < 0x80 && !isReadOnly() && typePair(static_cast<char>(uni_char));
+    const bool typed  = paired || ALTextView::handleUnicodeCharHere(uni_char);
+    if (typed && mSnippet.live())
+    {
+        syncMirrors(mSnippet.at(), false);
+    }
+    undoJournal().endTyping();
+    if (!typed)
     {
         return false;
     }
@@ -3294,7 +4203,10 @@ bool ALCodeEditor::handleUnicodeCharHere(llwchar uni_char)
     // open on its own there, where a Return meant as a new line would
     // otherwise put a call into the comment. Asked for, it still opens.
     const bool prose = mAutoComplete && !was_open && inProse(caret());
-    if (uni_char == '.' && mAutoComplete && !prose && caret().column >= 2 && !identifierAt(ALTextPos(caret().line, caret().column - 2)).empty())
+    // What comes between a name and its member: a dot, and SLua's colon.
+    const std::string members = highlighter().grammar() ? highlighter().grammar()->memberSeparators() : std::string(".");
+    const bool        member  = uni_char < 0x80 && members.find(static_cast<char>(uni_char)) != std::string::npos;
+    if (member && mAutoComplete && !prose && caret().column >= 2 && !identifierAt(ALTextPos(caret().line, caret().column - 2)).empty())
     {
         // A member is coming: what there is to choose from, at once.
         openCompletion();
@@ -3307,8 +4219,10 @@ bool ALCodeEditor::handleUnicodeCharHere(llwchar uni_char)
     {
         openCompletion();
     }
-    // A call begins, moves on to its next argument, or ends.
-    if (mSignatureRequest && (uni_char == '(' || uni_char == ',' || uni_char == ')' || mSignature))
+    // A call begins, moves on to its next argument, or ends: asked again
+    // then, and only then -- within an argument, the parameter shown
+    // follows the caret here.
+    if (mSignatureRequest && (uni_char == '(' || uni_char == ',' || uni_char == ')'))
     {
         mSignatureRequest(caret());
     }
@@ -3336,8 +4250,10 @@ bool ALCodeEditor::typePair(char c)
             {
                 if (close == c)
                 {
+                    // Where the typing goes on from, for the key after.
                     mAutoClosed.erase(put);
                     setCaret(ALTextPos(at.line, at.column + 1));
+                    undoJournal().settle(selection());
                     return true;
                 }
             }
@@ -3357,6 +4273,7 @@ bool ALCodeEditor::typePair(char c)
             insertText(std::string(1, open) + inner + std::string(1, close));
             const ALTextPos end = caret();
             setSelection(ALTextRange(ALTextPos(sel.begin.line, sel.begin.column + 1), ALTextPos(end.line, end.column - 1)));
+            undoJournal().settle(selection());
             return true;
         }
         // Not in a comment or a string, where it is prose; and only before
@@ -3384,7 +4301,8 @@ bool ALCodeEditor::typePair(char c)
         insertText(std::string(1, open) + std::string(1, close));
         const ALTextPos inside(at.line, at.column + 1);
         setCaret(inside);
-        mAutoClosed.push_back(inside);
+        undoJournal().settle(selection());
+        mAutoClosed.insert(inside);
         return true;
     }
     return false;
@@ -3492,7 +4410,7 @@ bool ALCodeEditor::handleMouseDown(S32 x, S32 y, MASK mask)
         }
         return true;
     }
-    if (!mFolded.empty() && text.pointInRect(x, y))
+    if (!mFolds.folded().empty() && text.pointInRect(x, y))
     {
         const S32 line = posAtLocal(x, y, false).line;
         if (isFolded(line) && foldBoxOf(line, text).pointInRect(x, y))
@@ -3503,9 +4421,17 @@ bool ALCodeEditor::handleMouseDown(S32 x, S32 y, MASK mask)
     }
     // Control-click on a name -- Command-click on a Mac -- goes to where it
     // is declared, as in every editor of code.
-    if (mask == MASK_CONTROL && mSymbolRequest && text.pointInRect(x, y))
+    if (mask == MASK_CONTROL && (mSymbolRequest || mLinkRequest) && text.pointInRect(x, y))
     {
-        const ALTextRange word = identifierAt(posAtLocal(x, y, false));
+        const ALTextPos at = posAtLocal(x, y, false);
+        if (mLinkRequest && !mLinkRequest(at, false).empty())
+        {
+            setFocus(true);
+            placeCaret(at, false);
+            mLinkRequest(at, true);
+            return true;
+        }
+        const ALTextRange word = mSymbolRequest ? identifierAt(at) : ALTextRange();
         if (!word.empty())
         {
             setFocus(true);
@@ -3544,8 +4470,9 @@ bool ALCodeEditor::handleToolTip(S32 x, S32 y, MASK mask)
             return ALTextView::handleToolTip(x, y, mask);
         }
         std::vector<CardProblem> problems;
-        for (const Decoration& d : mDecorations)
+        for (const Decoration* each : decorationsOn(line))
         {
+            const Decoration& d     = *each;
             const ALTextRange range = d.range.normalised();
             if (!d.message.empty() && range.begin.line <= line && line <= range.end.line)
             {
@@ -3599,359 +4526,6 @@ bool ALCodeEditor::handleToolTip(S32 x, S32 y, MASK mask)
     return hoverCardAt(x, y) || ALTextView::handleToolTip(x, y, mask);
 }
 
-bool ALCodeEditor::hoverCardAt(S32 x, S32 y)
-{
-    const ALTextPos at = posAtLocal(x, y, false);
-    // A problem under the mouse says what it is, and the word what it is
-    // as well: what is wrong with a call is read against what it takes.
-    ALTextRange                    about;
-    const std::vector<CardProblem> problems = problemsUnder(at, about);
-    std::string                    says;
-    std::vector<CardLink>          links;
-    const ALTextRange              word = identifierAt(at);
-    // A string literal says its own size, anywhere in it -- the space
-    // after its comma as much as the word before -- since what the
-    // analyzer has to say about one is that it is a string, which the
-    // quotes said already.
-    {
-        const ALTextRange literal = stringAt(at);
-        const std::string size    = stringSize(literal);
-        if (!size.empty())
-        {
-            says  = alSaid("CodeStringHead", "string") + "\n" + size;
-            about = about.empty() ? literal : ALTextRange(std::min(about.begin, literal.begin), std::max(about.end, literal.end));
-        }
-    }
-    if (says.empty() && mHover && !word.empty())
-    {
-        if (mHover(at, document().text(word), says))
-        {
-            about = about.empty() ? word : ALTextRange(std::min(about.begin, word.begin), std::max(about.end, word.end));
-        }
-    }
-    if (says.empty() && !word.empty())
-    {
-        // What the analyzer said of this word, if it was asked and the
-        // text has not moved on since; else asked now, for an answer
-        // that shows when it comes, or the next time the mouse rests
-        // here.
-        const U32 version = document().version();
-        if (word == mHoverAsked && version == mHoverAskedVersion)
-        {
-            if (!mHoverAnswer.empty())
-            {
-                says  = mHoverAnswer;
-                links = mHoverLinks;
-                about = about.empty() ? word : ALTextRange(std::min(about.begin, word.begin), std::max(about.end, word.end));
-            }
-        }
-        else if (mHoverRequest)
-        {
-            mHoverAsked        = word;
-            mHoverAskedVersion = version;
-            mHoverAnswer.clear();
-            mHoverLinks.clear();
-            mHoverRequest(word.begin, document().text(word));
-        }
-    }
-    if (says.empty() && problems.empty())
-    {
-        return false;
-    }
-    showCard(about, says, problems, links);
-    return true;
-}
-
-std::vector<ALCodeEditor::CardProblem> ALCodeEditor::problemsUnder(const ALTextPos& at, ALTextRange& about) const
-{
-    std::vector<CardProblem> problems;
-    for (const Decoration& d : mDecorations)
-    {
-        const ALTextRange range = d.range.normalised();
-        if (!d.message.empty() && range.begin <= at && at < range.end)
-        {
-            problems.push_back({ d.message, d.color });
-            about = about.empty() ? range : ALTextRange(std::min(about.begin, range.begin), std::max(about.end, range.end));
-        }
-    }
-    return problems;
-}
-
-// static
-const std::string& ALCodeEditor::deprecatedNote()
-{
-    static const std::string note = alSaid("CodeDeprecated", "(deprecated)");
-    return note;
-}
-
-ALSyntaxKind ALCodeEditor::semanticKindAt(const ALTextPos& at) const
-{
-    auto found = std::upper_bound(mSemantics.begin(), mSemantics.end(), at, [](const ALTextPos& pos, const SemanticToken& t) { return pos < t.range.begin; });
-    if (found == mSemantics.begin())
-    {
-        return ALSyntaxKind::Text;
-    }
-    --found;
-    return found->range.begin <= at && at < found->range.end ? found->kind : ALSyntaxKind::Text;
-}
-
-void ALCodeEditor::styleAsCode(const ALTextView& view, S32 line, std::vector<ALTextView::Style>& styles, std::string_view name, ALSyntaxKind kind)
-{
-    const std::string& text = view.document().line(line);
-    std::vector<ALSyntaxToken> tokens;
-    if (std::shared_ptr<const ALSyntaxGrammar> grammar = highlighter().grammar())
-    {
-        ALSyntaxState state = grammar->initialState();
-        grammar->lexLine(text, state, tokens, highlighter().words());
-    }
-    if (tokens.empty())
-    {
-        ALTextView::Style whole;
-        whole.range = ALTextRange(ALTextPos(line, 0), ALTextPos(line, static_cast<S32>(text.size())));
-        whole.font  = getFont();
-        styles.push_back(whole);
-        return;
-    }
-    // The tokens cover the line without a gap, so each carries the face.
-    for (const ALSyntaxToken& token : tokens)
-    {
-        ALTextView::Style one;
-        one.range = ALTextRange(ALTextPos(line, token.begin), ALTextPos(line, token.end));
-        one.font  = getFont();
-        ALSyntaxKind shown = token.kind;
-        if (shown == ALSyntaxKind::Text && kind != ALSyntaxKind::Text && !name.empty() && std::string_view(text).substr(token.begin, token.end - token.begin) == name)
-        {
-            shown = kind;
-        }
-        if (shown != ALSyntaxKind::Text)
-        {
-            one.color = colorForKind(shown);
-        }
-        styles.push_back(std::move(one));
-    }
-}
-
-void ALCodeEditor::showCard(const ALTextRange& about, const std::string& says, const std::vector<CardProblem>& problems,
-                            const std::vector<CardLink>& links)
-{
-    // The card is one of the studio's small floating things, and they
-    // all have the one look: the ground a shade off the text's own, and
-    // a frame in a quarter of the ink, which `draw` puts on over it.
-    // Taken afresh each time, since the colour table may have moved.
-    const LLColor4         ground    = paint(Paint::Widget);
-    const S32              MAX_WIDTH = 560;
-    const S32              PAD       = 6;
-    if (!mCard)
-    {
-        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
-        p.name        = "hover_card";
-        p.rect        = LLRect(0, 20, MAX_WIDTH, 0);
-        p.read_only   = true;
-        p.word_wrap   = true;
-        p.tab_stop    = false;
-        p.takes_focus = false;
-        p.mouse_opaque = true;
-        p.font        = LLFontGL::getFontSansSerif();
-        p.bg_visible  = true;
-        p.bg_color    = ground;
-        p.bg_readonly_color = ground;
-        p.text_readonly_color = textColor();
-        p.h_pad       = PAD;
-        p.v_pad       = PAD - 2;
-        p.context_menu = std::string();
-        mCard         = LLUICtrlFactory::create<ALTextView>(p);
-        mCard->setVisible(false);
-        mCard->onLinkClicked([this](const ALTextView::Substitution& link) {
-            if (!link.url.empty())
-            {
-                LLUrlAction::clickAction(link.url, false);
-                return;
-            }
-            // A fix: made by whoever gave it, and the card goes, being
-            // about a problem the fix is to take away.
-            if (link.value.isMap() && link.value.has("fix"))
-            {
-                const LLSD value = link.value["fix"];
-                hideCard();
-                if (mFixHandler)
-                {
-                    mFixHandler(value);
-                }
-                return;
-            }
-            // A way somewhere the caller gave: gone to, and the card with
-            // it, since it is about where the caret is no longer.
-            if (link.value.isDefined() && mCardLinkHandler)
-            {
-                const LLSD value = link.value;
-                hideCard();
-                mCardLinkHandler(value);
-            }
-        });
-        addChild(mCard);
-    }
-    mCard->setBackgroundColor(ground);
-    mCard->setTextColor(textColor());
-    // The problems, a line or more each, then a blank line, then what the
-    // word is, its first line the head.
-    std::string                                 all;
-    std::vector<std::pair<S32, const LLColor4*>> problem_lines;
-    S32                                         line_count = 0;
-    for (const CardProblem& problem : problems)
-    {
-        if (!all.empty())
-        {
-            all += "\n";
-        }
-        all += problem.message;
-        const S32 made = 1 + static_cast<S32>(std::count(problem.message.begin(), problem.message.end(), '\n'));
-        for (S32 i = 0; i < made; ++i)
-        {
-            problem_lines.emplace_back(line_count++, &problem.color);
-        }
-    }
-    // What would put them right, each a link on a line of its own under
-    // them that makes it: the fixes of the line they are on.
-    std::vector<std::pair<S32, LLSD>> fix_lines;
-    if (!problems.empty() && mFixProvider && mFixHandler && !isReadOnly())
-    {
-        std::vector<Fix> fixes;
-        mFixProvider(about.begin.line, fixes);
-        ALFixListModel::rank(fixes);
-        for (const Fix& fix : fixes)
-        {
-            LLStringUtil::format_map_t args;
-            args["[TITLE]"] = fix.title;
-            all += "\n" + alSaid("CodeFixLink", "Fix: [TITLE]", args);
-            fix_lines.emplace_back(line_count++, fix.value);
-        }
-    }
-    S32 head_line = -1;
-    if (!says.empty())
-    {
-        if (!all.empty())
-        {
-            all += "\n\n";
-            line_count += 1;
-        }
-        head_line = line_count;
-        all += says;
-    }
-    if (cardShown() && about == mCardAbout && all == mCard->text())
-    {
-        // The mouse resting on again: the card is up already.
-        return;
-    }
-    mCardAbout = about;
-    // The words: each problem in its colour, the head as code, a note
-    // about deprecation in the warning colour, every URL a link.
-    mCard->setText(all);
-    std::vector<ALTextView::Style> styles;
-    for (const auto& [line, color] : problem_lines)
-    {
-        ALTextView::Style one;
-        one.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
-        one.color = *color;
-        styles.push_back(one);
-    }
-    if (head_line >= 0)
-    {
-        // The name in the head coloured as the text colours it where the
-        // analyzer said what it is: a global, a parameter, a function of
-        // the script's own, which the grammar alone does not know.
-        const ALTextRange word = mMouseX >= 0 ? identifierAt(posAtLocal(mMouseX, mMouseY, false)) : identifierAt(about.begin);
-        styleAsCode(*mCard, head_line, styles, document().text(word), word.empty() ? ALSyntaxKind::Text : semanticKindAt(word.begin));
-    }
-    const S32 lines = mCard->document().lineCount();
-    for (S32 line = head_line + 1; line < lines && head_line >= 0; ++line)
-    {
-        if (mCard->document().line(line).find(deprecatedNote()) != std::string::npos)
-        {
-            ALTextView::Style note;
-            note.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
-            note.color = markColor(Mark::Warning);
-            styles.push_back(note);
-        }
-    }
-    mCard->setStyles(std::move(styles));
-    for (const auto& [line, value] : fix_lines)
-    {
-        ALTextView::Substitution fix;
-        fix.range = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
-        fix.link  = true;
-        fix.value = LLSD().with("fix", value);
-        mCard->addSubstitution(std::move(fix));
-    }
-    // The caller's own links, each on the line that says it, below the
-    // head; then every URL.
-    for (const CardLink& link : links)
-    {
-        for (S32 line = llmax(0, head_line + 1); line < lines; ++line)
-        {
-            if (mCard->document().line(line) == link.line)
-            {
-                ALTextView::Substitution way;
-                way.range   = ALTextRange(ALTextPos(line, 0), mCard->document().lineEnd(line));
-                way.link    = true;
-                way.tooltip = link.tooltip;
-                way.value   = link.value;
-                mCard->addSubstitution(std::move(way));
-                break;
-            }
-        }
-    }
-    for (S32 line = 0; line < lines; ++line)
-    {
-        mCard->linkUrlsOn(line);
-    }
-    // Its size: as wide as its widest line up to the limit, and as tall
-    // as the lines wrapped at that width come to.
-    const LLRect text  = textRect();
-    const S32    limit = llmin(MAX_WIDTH, llmax(80, text.getWidth() - 2 * PAD));
-    mCard->setShape(LLRect(0, 40, limit, 0));
-    mCard->setWordWrap(false);
-    // Laid out before it is measured: the layout guesses the width of a
-    // line it has not done yet by the width of a space, which is far
-    // narrower than the face the head line is in, and the card would
-    // come out a few characters wide and wrap the one word in it. These
-    // are a handful of lines, not a script.
-    for (S32 line = 0; line < lines; ++line)
-    {
-        mCard->layout().line(line);
-    }
-    const S32 widest = static_cast<S32>(mCard->layout().contentWidth()) + 2 * PAD + 2;
-    mCard->setWordWrap(true);
-    const S32 width = llmin(limit, llmax(40, widest));
-    mCard->setShape(LLRect(0, 40, width, 0));
-    for (S32 line = 0; line < lines; ++line)
-    {
-        mCard->layout().line(line);
-    }
-    const S32 height = mCard->layout().totalHeight() + 2 * (PAD - 2) + 2;
-    // Where: under the row of what it is about, at its start; above it
-    // where under would run off the bottom; within the text's width.
-    S32       row;
-    layout().xOf(about.begin.line, about.begin.column, &row);
-    const S32 top   = screenTopOf(text, about.begin.line, row);
-    const S32 row_h = layout().rowHeightOf(about.begin.line, row);
-    F32       x0, x1;
-    mCardAnchor = LLRect(text.mLeft, top, text.mRight, top - row_h);
-    if (spanOnRow(about.begin.line, row, about, x0, x1) && !about.empty())
-    {
-        const F32 left     = static_cast<F32>(text.mLeft) - scrollX();
-        mCardAnchor.mLeft  = static_cast<S32>(left + x0);
-        mCardAnchor.mRight = static_cast<S32>(left + x1);
-    }
-    S32 x = llclamp(mCardAnchor.mLeft, text.mLeft, llmax(text.mLeft, text.mRight - width));
-    S32 y = mCardAnchor.mBottom - 2;
-    if (y - height < text.mBottom && mCardAnchor.mTop + 2 + height <= text.mTop)
-    {
-        y = mCardAnchor.mTop + 2 + height;
-    }
-    mCard->setShape(LLRect(x, y, x + width, y - height));
-    mCard->setVisible(true);
-}
-
 bool ALCodeEditor::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
 {
     // A list of fixes is about a row the scroll takes away.
@@ -3971,44 +4545,6 @@ bool ALCodeEditor::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     hideCard();
     mWheeled = true;
     return ALTextView::handleScrollWheel(x, y, delta);
-}
-
-void ALCodeEditor::hideCard()
-{
-    if (mCard && mCard->getVisible())
-    {
-        mCard->setVisible(false);
-    }
-    mCardAnchor = LLRect();
-}
-
-bool ALCodeEditor::cardShown() const
-{
-    return mCard && mCard->getVisible();
-}
-
-void ALCodeEditor::supplyHover(const ALTextPos& at, const std::string& text, std::vector<CardLink> links)
-{
-    if (text.empty() || mHoverAsked.empty() || at != mHoverAsked.begin || document().version() != mHoverAskedVersion)
-    {
-        return;
-    }
-    // Kept for the word, and shown now if the mouse is still on it.
-    mHoverAnswer = text;
-    mHoverLinks  = std::move(links);
-    if (mMouseX < 0 || !textRect().pointInRect(mMouseX, mMouseY))
-    {
-        return;
-    }
-    const ALTextPos   under = posAtLocal(mMouseX, mMouseY, false);
-    const ALTextRange word  = identifierAt(under);
-    if (word != mHoverAsked)
-    {
-        return;
-    }
-    ALTextRange                    about;
-    const std::vector<CardProblem> problems = problemsUnder(under, about);
-    showCard(about.empty() ? word : ALTextRange(std::min(about.begin, word.begin), std::max(about.end, word.end)), text, problems, mHoverLinks);
 }
 
 bool ALCodeEditor::handleDoubleClick(S32 x, S32 y, MASK mask)
@@ -4108,130 +4644,28 @@ void ALCodeEditor::onMouseLeave(S32 x, S32 y, MASK mask)
     ALTextView::onMouseLeave(x, y, mask);
 }
 
-// --- signature help -------------------------------------------------------------
-
-void ALCodeEditor::showSignature(const ALTextPos& at, Signature signature)
-{
-    if (!typingText())
-    {
-        // An answer that came after a modal keymap stopped inserting.
-        return;
-    }
-    mSignature   = std::move(signature);
-    mSignatureAt = at;
-}
-
-void ALCodeEditor::hideSignature()
-{
-    mSignature.reset();
-}
-
-bool ALCodeEditor::signatureShown() const
-{
-    return mSignature && caret().line == mSignatureAt.line && !(caret() < mSignatureAt);
-}
-
-void ALCodeEditor::drawSignature(const LLRect& text)
-{
-    if (!mSignature || mSignature->label.empty())
-    {
-        return;
-    }
-    const Signature& sig   = *mSignature;
-    const LLFontGL*  font  = getFont();
-    const F32        alpha = getDrawContext().mAlpha;
-    const S32        row_h = layout().rowHeight();
-    const S32        line_h = font->getLineHeight();
-    const bool       docs  = !sig.documentation.empty();
-    const std::string doc_line = docs ? sig.documentation.substr(0, sig.documentation.find('\n')) : std::string();
-    const S32        wanted = llmax(font->getWidth(sig.label), docs ? font->getWidth(doc_line) : 0) + 2 * SIGNATURE_PAD;
-    const S32        height = line_h * (docs ? 2 : 1) + 2 * SIGNATURE_PAD;
-
-    // Above the caret's row, left with the call's column, kept inside the
-    // view; under the row where above would run off the top.
-    S32       row;
-    const F32 x    = layout().xOf(mSignatureAt.line, mSignatureAt.column, &row);
-    const S32 top  = screenTopOf(text, mSignatureAt.line, row);
-    const LLRect local = getLocalRect();
-    // No wider than the view. A box sized to a signature longer than the
-    // window ran off the right edge and was cut there by the view's own
-    // rect, silently -- and a call with a long list of parameters is the
-    // one whose signature was worth reading.
-    const S32 width = llmin(wanted, llmax(4 * SIGNATURE_PAD, local.getWidth()));
-    const S32 room  = width - 2 * SIGNATURE_PAD;
-    S32       left = llclamp(static_cast<S32>(static_cast<F32>(text.mLeft) - scrollX() + x), local.mLeft, llmax(local.mLeft, local.mRight - width));
-    LLRect    box  = (top + height <= local.mTop) ? LLRect(left, top + height, left + width, top)
-                                                  : LLRect(left, top - row_h, left + width, top - row_h - height);
-
-    const LLColor4 ink    = textColor() % alpha;
-    const LLColor4 active = mBracketMatchColor.get() % alpha;
-    const LLColor4 faint  = lineNumberColor() % alpha;
-    gl_rect_2d(box, paint(Paint::Widget) % alpha, true);
-    gl_rect_2d(box, paint(Paint::WidgetBorder) % alpha, false);
-
-    // The label in three pieces, the active parameter in its own colour.
-    const F32 baseline = static_cast<F32>(box.mTop - SIGNATURE_PAD - llround(font->getAscenderHeight()));
-    S32       begin = -1, end = -1;
-    if (sig.active >= 0 && sig.active < static_cast<S32>(sig.parameters.size()))
-    {
-        begin = sig.parameters[sig.active].first;
-        end   = sig.parameters[sig.active].second;
-    }
-    // Where the label is longer than the room, it is scrolled so that the
-    // parameter being filled in is in the box. The head of a signature is
-    // the part already typed, so it is the part to give up; what runs off
-    // the left edge under the clip reads as more of it being there.
-    const F32 label_w = static_cast<F32>(font->getWidth(sig.label));
-    F32       shift   = 0.f;
-    if (label_w > static_cast<F32>(room))
-    {
-        const F32 through = end > 0 ? static_cast<F32>(font->getWidth(sig.label.substr(0, static_cast<size_t>(end)))) : label_w;
-        shift = llclamp(through - static_cast<F32>(room), 0.f, label_w - static_cast<F32>(room));
-    }
-    F32 pen = static_cast<F32>(box.mLeft + SIGNATURE_PAD) - shift;
-    auto piece = [&](S32 from, S32 to, const LLColor4& color) {
-        if (to <= from)
-        {
-            return;
-        }
-        const std::string part = sig.label.substr(from, to - from);
-        font->renderUTF8(part, 0, pen, baseline, color, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-        pen += static_cast<F32>(font->getWidth(part));
-    };
-    {
-        LLLocalClipRect clip(LLRect(box.mLeft + SIGNATURE_PAD, box.mTop - 1, box.mRight - SIGNATURE_PAD, box.mBottom + 1));
-        if (begin >= 0 && end > begin && end <= static_cast<S32>(sig.label.size()))
-        {
-            piece(0, begin, ink);
-            piece(begin, end, active);
-            piece(end, static_cast<S32>(sig.label.size()), ink);
-        }
-        else
-        {
-            piece(0, static_cast<S32>(sig.label.size()), ink);
-        }
-    }
-    if (docs)
-    {
-        // The documentation's first line reads from its own start, so it
-        // ends in an ellipsis rather than being scrolled.
-        font->renderUTF8(doc_line, 0, static_cast<F32>(box.mLeft + SIGNATURE_PAD), baseline - static_cast<F32>(line_h), faint,
-                         LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, room, nullptr, true);
-    }
-}
-
 void ALCodeEditor::draw()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    // Edits made outside a command -- the whole text set -- fold again here.
+    settleFolds();
     // A signature is about a call on the caret's line; anywhere else it
     // is stale. (The placeholders are let go of as the caret leaves their
     // lines, where it moves: dropPlaceholdersLeft.)
-    if (mSignature && !signatureShown())
+    if (mCards.signature() && !signatureShown())
     {
         hideSignature();
     }
     // A closer put in is typed over only on its own line.
-    mAutoClosed.erase(std::remove_if(mAutoClosed.begin(), mAutoClosed.end(), [this](const ALTextPos& at) { return at.line != caret().line; }),
-                      mAutoClosed.end());
+    mAutoClosed.eraseIf([this](const ALTextPos& at) { return at.line != caret().line; });
+    // The name under the caret lit once the caret has rested, and again
+    // where the view has scrolled past the lines it was lit over.
+    if (mLightsOccurrences &&
+        ((mOccurrencesDue && mOccurrencesRest.getElapsedTimeF32() >= OCCURRENCES_REST) ||
+         (!highlights(Highlight::Occurrences).empty() && (firstVisibleLine() < mOccurrencesFirst || lastVisibleLine() > mOccurrencesLast))))
+    {
+        lightOccurrences();
+    }
     // The mouse rested long enough on the text: its card, once.
     if (mHoverCards && mHoverDelay >= 0.f && !mHoverTried && !mWheeled && mMouseX >= 0 && mMouseRest.getElapsedTimeF32() >= mHoverDelay && !cardShown() &&
         textRect().pointInRect(mMouseX, mMouseY) && !(mCompletionList && mCompletionList->getVisible() && mCompletionList->getRect().pointInRect(mMouseX, mMouseY)))
@@ -4240,7 +4674,7 @@ void ALCodeEditor::draw()
         hoverCardAt(mMouseX, mMouseY);
     }
     ALTextView::draw();
-    if (mSignature)
+    if (mCards.signature())
     {
         drawSignature(textRect());
     }

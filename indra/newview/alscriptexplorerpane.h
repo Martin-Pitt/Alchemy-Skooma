@@ -72,6 +72,8 @@ public:
         virtual void itemDeleted(const ALScriptRef& ref) = 0;
         // Whether an item is open with unsaved changes in any of them.
         virtual bool unsavedAnywhere(const ALScriptRef& ref) const = 0;
+        // Every script of an object checked, its problems listed.
+        virtual void checkScripts(const LLUUID& root) = 0;
 
     protected:
         ~Window() = default;
@@ -96,7 +98,8 @@ public:
     void pump();
     // The objects in hand listed again, and what each prim holds asked
     // where it is not known or has changed -- of every prim where `refetch`.
-    void relist(bool refetch = false);
+    // `from_region` asks every prim's region, not the objects' copies.
+    void relist(bool refetch = false, bool from_region = false);
     // A script's row, chosen and in view, with the explorer in sight and
     // the keyboard in it: what holds it unfolded first, and the filter let
     // go of where it hides the row.
@@ -104,6 +107,8 @@ public:
     // An object pinned, so that it stays listed once it is no longer
     // selected in world; in sight; and chosen, so that the buttons act on it.
     void explore(const LLUUID& root);
+    // The keyboard to the list, to walk it: the Explorer's key, and F6.
+    void takeKeyboard();
 
     // The rows chosen, in the tree's order.
     std::vector<Choice>   choice() const;
@@ -174,7 +179,7 @@ private:
     Window*                 mWindow   = nullptr;
     ALScriptExplorerTree*   mTree     = nullptr;
     LLFilterEditor*         mFilter   = nullptr;
-    Model                   mModel;
+    Model                   mModel{ ALScriptWorkspace::instance().contentsIndex() };
     LLHandle<LLContextMenu> mMenu;
     // Answers have come that the list does not show yet: it is filled a
     // moment after it was last filled.
@@ -188,6 +193,8 @@ private:
     // When what the prims hold is asked again after a drop, for what the
     // drop sends on its own time: a folder's items, fetched first.
     F64                     mRefetchAt = 0.0;
+    // When it is listed again, after an object it lists came or went.
+    F64                     mPresenceAt = 0.0;
     // What a drag from another prim has dropped so far, sent with its last.
     std::vector<LLUUID>     mTransferring;
     // Names the region said of what the list shows since the last frame.
@@ -197,4 +204,6 @@ private:
     boost::signals2::scoped_connection mPropertiesConnection;
     boost::signals2::scoped_connection mSelectionConnection;
     boost::signals2::scoped_connection mRunningConnection;
+    boost::signals2::scoped_connection mHeardConnection;
+    boost::signals2::scoped_connection mPresenceConnection;
 };

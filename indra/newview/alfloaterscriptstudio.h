@@ -30,8 +30,27 @@
 #include "alscriptoutputpane.h"
 #include "alscriptproblemspane.h"
 #include "alscriptsearchpane.h"
+#include "alscriptstudiocommands.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudiorecovery.h"
+#include "alscriptstudiosaving.h"
+#include "alscriptstudiovim.h"
+#include "alscriptexternaleditor.h"
+#include "alscriptstudiofiles.h"
+#include "alscriptstudioweighing.h"
+#include "alscriptstudiowords.h"
+#include "alscriptstudioorphans.h"
+#include "alscriptnavigation.h"
+#include "alscriptlookup.h"
+#include "alscriptobjectcheck.h"
+#include "alscriptreferencespane.h"
+#include "alscriptoutlinepane.h"
+#include "alscriptcrumbsbar.h"
+#include "alscriptinspectorpane.h"
+#include "alscriptstudiocaret.h"
+#include "alscriptstudiochecking.h"
+#include "alscriptstudioplaces.h"
 #include "alfindings.h"
 #include "aloutputview.h"
 #include "alscriptanalysis.h"
@@ -43,7 +62,6 @@
 #include "alsourcemap.h"
 #include "alstudiofloater.h"
 #include "alvimkeymap.h"
-#include "lllivefile.h"
 
 #include "llstl.h"
 
@@ -71,6 +89,7 @@ class LLComboBox;
 class LLFilterEditor;
 class LLLayoutPanel;
 class LLLineEditor;
+class LLMenuItemGL;
 class LLPanel;
 class LLScrollListCtrl;
 class LLContextMenu;
@@ -94,7 +113,15 @@ class LLViewerObject;
 // with the author's source in a tab beside it. Its regions fold and come
 // out as any studio's do.
 class ALFloaterScriptStudio final : public ALStudioFloater, public ALScriptStudioServices, public ALScriptOutputPane::Window, public ALScriptProblemsPane::Window,
-                                    public ALScriptSearchPane::Window, public ALScriptExplorerPane::Window
+                                    public ALScriptSearchPane::Window, public ALScriptExplorerPane::Window, public ALScriptStudioRecovery::Window,
+                                    public ALScriptStudioSaving::Window, public ALScriptStudioVim::Window,
+                                    public ALScriptExternalEditor::Window, public ALScriptStudioFiles::Window,
+                                    public ALScriptStudioWeighing::Window, public ALScriptStudioOrphans::Window,
+                                    public ALScriptNoticeBar::Window, public ALScriptNavigation::Window, public ALScriptLookup::Window,
+                                    public ALScriptReferencesPane::Window, public ALScriptOutlinePane::Window,
+                                    public ALScriptCrumbsBar::Window, public ALScriptInspectorPane::Window,
+                                    public ALScriptStudioCaret::Window, public ALScriptStudioChecking::Window,
+                                    public ALScriptObjectCheck::Window
 {
     friend class LLFloaterReg;
 
@@ -113,6 +140,10 @@ public:
     // the XML they are kept in: made with an example in it where there is
     // none yet. What is saved there is offered at once.
     static void editSnippets(bool lua);
+    // The vimrc opened in the studio to be edited: the notecard where one
+    // is the vimrc, else the file, made with a few lines saying what it
+    // takes where there is none yet.
+    static void openVimrc();
     // The studio, with this object pinned in its explorer and chosen
     // there: what the build tool's Explore in IDE button means when no
     // external editor is listening.
@@ -126,10 +157,12 @@ public:
     // does, shows the text as saved. A tab with unsaved changes takes
     // the text as one more step to undo, so that nothing typed is lost.
     // The asset the save made, where the saver knows it.
-    static void savedElsewhere(const ALScriptRef& ref, const std::string& text, const LLUUID& asset_id = LLUUID::null);
     // A script or notecard gone from its object, so that a tab holding
     // it goes too.
     static void itemRemoved(const ALScriptRef& ref);
+    // Whether a script is open with changes not saved, in any of the
+    // studio's windows: what a recompile of the server's text leaves out.
+    static bool unsavedIn(const ALScriptRef& ref);
     // Whether this is the main window, which keeps the state and is
     // hidden rather than destroyed when closed; the others are the
     // scripts popped out into windows of their own, gone when closed.
@@ -145,8 +178,6 @@ public:
     void closeFloater(bool app_quitting = false) override;
     void onClose(bool app_quitting) override;
     void draw() override;
-    bool handleKeyHere(KEY key, MASK mask) override;
-    bool handleMouseDown(S32 x, S32 y, MASK mask) override;
     bool undo() override;
     bool redo() override;
 
@@ -165,35 +196,27 @@ public:
     bool moveActiveTo(ALFloaterScriptStudio* window);
     // The next script closed on the way to closing the window, or the
     // window closed once none is left.
-    void continueClosing();
+    void continueClosing() override;
     // The options every editor shares -- font, keys, wrap, gutter, map --
     // put on all of them again, when a setting behind one changes; and
     // on every studio open, which the preferences ask for.
     void        applyEditorOptions();
     static void refreshAll();
 
-    // A word of the language, as the region defines it: what colours and
-    // completes.
-    struct Vocab
-    {
-        std::string  text;
-        std::string  detail;
-        std::string  tooltip;
-        ALSyntaxKind kind = ALSyntaxKind::Text;
-        bool         deprecated = false;
-    };
-    static const std::vector<Vocab>& vocabulary(bool lua);
-    // Built again on the next ask: the definitions changed.
-    static void forgetVocabulary();
-    // The region's words put in an editor's tables, so that they colour:
-    // what the studio's editors and the preferences' preview share.
-    static void teachWords(ALCodeEditor& editor, bool lua);
+    // A word of the language, as the region defines it (ALScriptStudioWords).
+    typedef ALScriptStudioWords::Vocab Vocab;
     // The typing settings put on an editor: tabs, completion, pairs, the
     // caret, the hover card. The studio's editors and the preferences'
     // preview share them.
     static void applyTypingOptions(ALCodeEditor& editor);
-    // The font the settings name, or the monospace default.
+    // The font the settings name, or the monospace default, zoomed as the
+    // text has been, within MIN_TEXT_POINTS and MAX_TEXT_POINTS.
     static const LLFontGL* editorFont();
+    static constexpr F32   MIN_TEXT_POINTS = 6.f;
+    static constexpr F32   MAX_TEXT_POINTS = 48.f;
+    // The text a step larger, or smaller, every window's; none, as the
+    // size chosen. Said in points.
+    void zoomText(S32 steps);
 
 private:
     ALFloaterScriptStudio(const LLSD& key);
@@ -205,38 +228,17 @@ private:
     // The problems of every open script, in the store all the studios'
     // findings live in, keyed by the script's id; the pane lists the
     // active script's through its filters.
-    // The compiler's and the run's problems moved along with an edit; and
-    // the outline, until the next check says it again.
-    void                slideProblems(Doc& doc, const ALTextDocument::Edit& edit);
-    void                slideOutline(Doc& doc, const ALTextDocument::Edit& edit);
     // The caret to the next problem of the script after it, or the one
     // before, round past the ends, with what it says in a card.
     void                goToProblem(Doc& doc, S32 direction);
-    // What a comment says is wanted dropped from the script's problems,
-    // and a comment that would say so offered for every lint left.
-    void                noLint(Doc& doc);
-    // A name the script does not know given what a module in reach gives:
-    // a SLua global a require, where a module is so named or exports it;
-    // an LSL name an `#include`, where an include declares it
-    // (ALScriptModules). Put in at the top; preferred where it is the one
-    // offered.
-    void                offerImports(Doc& doc);
-    // A fix made, as one step to undo, and the script checked again at
-    // once; refused where the text has moved on since `version`, the one
-    // it was made over, whose places it is in.
-    bool                applyFix(Doc& doc, const ALScriptFix& fix, U32 version) override;
+    // The script's own problems' places, each once and in order; the caret
+    // taken to one; and to one by its number (ALScriptStudioVim::Window).
+    std::vector<ALTextPos> problemPlaces(const Doc& doc) const;
+    void                   goToProblemAt(Doc& doc, const ALTextPos& to);
+    bool                   goToProblemNumber(Doc& doc, S32 number) override;
+    // A fix made, the script checked again (ALScriptStudioChecking).
+    bool                applyFix(Doc& doc, const ALScriptFix& fix, U32 version) override { return mChecking.applyFix(doc, fix, version); }
     using FixPick = Doc::FixPick;
-    // The preferred fix of every problem picked, made as one step, once
-    // asked; and made, the asking done. True where anything was made.
-    void                askFixAll(Doc& doc, const FixPick& pick);
-    bool                fixAll(Doc& doc, const FixPick& pick);
-    // The problem a row of the pane is, in its script's list, where its
-    // fixes are.
-    const Doc::Shown*   shownOf(const LLSD& value) const;
-    // The fixes of the problems on a line, as the editor lists them, each
-    // with the value that finds it again; none where the text has moved on
-    // since the check they were made in.
-    void                fixesOn(const Doc& doc, S32 line, std::vector<ALCodeEditor::Fix>& out) const;
     // The keymap's keys beside the menu's editor commands that have none.
     void                showEditorKeys();
 
@@ -247,14 +249,6 @@ private:
     // the scripter's own (ALScriptSnippets).
     typedef ALScriptSnippets::Snippet Snippet;
     static const std::vector<Snippet>& snippets(bool lua) { return ALScriptSnippets::all(lua); }
-    // Whether a position of an LSL script is straight inside a state,
-    // where an event's handler goes.
-    static bool                 inStateBody(ALCodeEditor& editor, const ALTextPos& at);
-    // The grammar a file that is no script is read with: XML, JSON, text.
-    static std::string          textSyntaxOf(const std::string& path);
-    // A word of the vocabulary as a completion: a function with its
-    // call, an event as a handler to fill in, a constant as itself.
-    ALCodeEditor::Completion completionFor(const Vocab& word, bool lua) const;
     // The Insert menu: snippets, functions, events or constants picked
     // by name and put in at the caret.
     void insertFromLibrary(const std::string& what);
@@ -290,29 +284,24 @@ private:
     // The strip filled from the docs, and the toolbar put right. Both
     // are asked for on every keystroke; each does its work only when
     // what it shows has actually changed since the last.
-    void   fillTabs();
-    void   refreshToolbar();
+    void   fillTabs() override;
+    void   refreshToolbar() override;
     // The strip under the editor's right-hand words: the caret's place,
     // what is selected, and how many problems the script has.
-    void   refreshTrailer(Doc& doc);
-    // What a save of a script would send, measured again where the text or
-    // its expansion has changed since: the text as it stands, or wrapped
-    // with the analyzers' expansion where the preprocessor runs -- before
-    // the optimizer and the compression a save adds, near enough to say
-    // how near the limit it is. The save measures what it sends exactly.
-    void   measureAsset(Doc& doc);
-    // The vim mode's : commands the mode does not answer itself, and
-    // its = over lines; and its mode and its words shown as they change.
-    bool vimCommand(ALTextView& view, const std::string& name, const std::string& args);
-    // q: q/ and q?: the lines entered, in a quick-open over the editor,
-    // the one picked going back onto the line.
-    void vimHistoryWindow(ALTextView& view, llwchar kind, const std::vector<std::string>& history, std::function<void(const std::string&, bool run)> chosen);
-    void vimFormat(ALTextView& view, S32 first, S32 last);
-    // The words Tab completes on the : line: the studio's command names,
-    // its :set options, :history's kinds.
-    void vimComplete(ALTextView& view, const std::string& command, std::vector<std::string>& out);
-    void pumpVim();
-    Doc* docOf(const ALTextView& view);
+    void   refreshTrailer(Doc& doc) override { mCrumbsBar->showTrailer(doc); }
+    // What vim (ALScriptStudioVim) asks of the window: an entry in the
+    // Output tab and the tab in sight, and a line picked from a list over
+    // the editors.
+    void output(const ALOutputView::Entry& entry) override;
+    void showOutput() override;
+    void reorderTabs(const std::vector<std::string>& order) override;
+    bool readFile(const std::string& path, std::string& text) override;
+    bool writeFile(const std::string& path, const std::string& text) override;
+    std::vector<std::string> fileFolders(const Doc& doc) const override;
+    void jumpedFrom(Doc& doc, const ALTextView& view, const ALTextPos& from) override;
+    void pickLine(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title, S32 rows,
+                  std::function<void(const std::string& line)> chosen, std::function<void(const std::string& line)> shifted,
+                  std::function<void()> cancelled) override;
     // The tab pressed with the right button: a menu about it.
     void   showTabMenu(const std::string& value, S32 x, S32 y);
     // A tab torn off the strip and let go of at a point of the screen: into
@@ -327,14 +316,18 @@ private:
     // The documents in the order the tabs were dragged into.
     void   onTabsReordered(const std::vector<std::string>& order);
     // How many errors and warnings a script shows.
-    void   problemCounts(const Doc& doc, S32& errors, S32& warnings) const;
+    void   problemCounts(const Doc& doc, S32& errors, S32& warnings) const override;
 
     ALCodeEditor*             makeEditor(const std::string& id, bool read_only);
+    // What an editor of the studio's is made with: its colours by the
+    // table's names, the studio's settings.
+    ALCodeEditor::Params      editorParams(const std::string& id, bool read_only) const;
     // The options every editor shares, put on one.
-    void                      applyEditorOptions(ALCodeEditor& editor) const;
+    void                      applyEditorOptions(ALCodeEditor& editor);
     // The expanded text put in the document's other editor, which is shown
     // once there is one where the tab asked for it.
-    void                      showExpanded(Doc& doc, const std::string& text);
+    void                      showExpanded(Doc& doc, const std::string& text) override;
+    void                      runningKnown(Doc& doc) override;
     // The other editor gone, where what it holds is of no text the
     // script is now, and the source shown in its place.
     void                      dropExpanded(Doc& doc);
@@ -357,81 +350,45 @@ private:
     // The region's words for colouring and completing, and the analyzer
     // behind completion, hover and signature help.
     void                      teachEditor(Doc& doc);
-    void                      askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at) { askAnalyzer(doc, kind, at, at); }
-    // The refactors are asked about a stretch, from `at` to `to`.
-    void                      askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at, const ALTextPos& to);
-    // `expansion` is the expansion the question was asked over, or zero
-    // for the text as it stands.
-    void                      answered(const ALScriptAnalysis::Result& result, U32 expansion);
-    // The refactors at the caret, kept on the Doc and handed to the editor
-    // to join the fixes it lists.
-    void                      actionsAnswered(Doc& doc, const ALScriptAnalysis::Result& result, U32 expansion);
-    // What a script is weighed for: its compile target's, where there is a
-    // weigher for it; nothing for a notecard or an include.
-    std::optional<ALScriptWeight::Target> weightTarget(const Doc& doc) const;
-    // The script weighed a moment after its check, of what a save would
-    // compile as nearly as the check has it; and the answer kept.
-    void                      weigh(Doc& doc);
-    void                      weighed(Doc& doc, const ALScriptAnalysis::Result& result);
-    // What a preprocessor's run made to be sent -- optimized, compressed,
-    // every include in; or the text as written where it is off -- weighed
-    // as it is, after every run: `sent` is what was weighed, however many
-    // runs have come since.
-    void                      weighSent(Doc& doc);
-    void                      weighedSent(Doc& doc, const ALScriptAnalysis::Result& result, const Doc::Expanded& sent);
-    // What a save sends weighed as it goes, not before it: over its
-    // target's limit it is said, once the weight is known, and goes up
-    // anyway -- the numbers assume how the region compiles, and are not
-    // its word.
-    void                      weighForSave(Doc& doc);
-    void                      warnOverWeight(Doc& doc);
-    // The targets a script is weighed for: its own; and for an LSL script
-    // in front while the Weights tab is looked at, the other two beside it.
-    std::vector<ALScriptWeight::Target> weighedTargets(const Doc& doc) const;
-    // What the text weighs while it is the text saved, kept for the Weights
-    // tab to count from.
-    void                      keepSavedWeights(Doc& doc);
-    // What the script's own target's code weighs, put beside its text as
-    // the view asks: each part's bytes after the line it is declared on,
-    // and each line's heat in the gutter. Only of a weight of the text as
-    // it stands; what is there already slides with the edits until then.
-    void                      showWeightsInEditor(Doc& doc);
-    // What each fix and refactor listed would make the script weigh, said
-    // after it in the list: its edits made to a copy of what the analyzers
-    // read, and the copies weighed beside that for the script's own target
-    // on the analyzer's thread, the words put in when they come. A copy is
-    // of the expansion where the preprocessor runs, a fix's edits taken
-    // into it (ALScriptFixes::intoExpansion); false for a fix whose edits
-    // cannot be, or overlap.
-    void                      weighFixes(Doc& doc, U32 shown, const std::vector<ALCodeEditor::Fix>& fixes);
-    bool                      editedCopy(const Doc& doc, const std::vector<std::pair<ALTextRange, std::string>>& edits, std::string& out) const;
+    void askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at) override { mChecking.ask(doc, kind, at, at); }
+    // What checking asks of the window (ALScriptStudioChecking::Window):
+    // the settings every question carries, an answer that is another
+    // unit's, the outline shown, the targets weighed for, a run for a
+    // save, the editor in front, and whether to make many fixes at once.
+    void askingOptions(ALScriptAnalysis::Request& request) const override;
+    void answeredElsewhere(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at) override;
+    void showOutline(Doc& doc) override { mOutlinePane->show(doc); }
+    std::vector<ALScriptWeight::Target> weightTargets(const Doc& doc) override { return mWeighing.targets(doc); }
+    void weighed(Doc& doc, const ALScriptAnalysis::Result& result) override { mWeighing.weighed(doc, result); }
+    bool inspectorShown() const override;
+    void                                preprocessForSave(Doc& doc) override { mSaving.preprocess(doc); }
+    ALCodeEditor&                       editorInFront(Doc& doc) override { return sourceInFront(doc); }
+    void                                confirmFixAll(const LLSD& args, std::function<void()> yes) override;
+    // Weighing (ALScriptStudioWeighing): saving's calls to it, and what
+    // it asks of the window.
+    std::optional<ALScriptWeight::Target> weightTarget(const Doc& doc) const override { return mWeighing.target(doc); }
+    void                                  weigh(Doc& doc) override { mWeighing.weigh(doc); }
+    void                                  weighSent(Doc& doc) override { mWeighing.weighSent(doc); }
+    void                                  keepSavedWeights(Doc& doc) override { mWeighing.keepSaved(doc); }
+    void                                  askWeights(Doc& doc) override { askAnalyzer(doc, ALScriptAnalysis::Kind::Weigh, ALTextPos()); }
+    void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)> answered) override;
+    bool optimizing() const override;
+    std::string programVersion() const override;
+    bool        weightNotes() const override { return mWeightNotes; }
+    bool        weightHeat() const override { return mWeightHeat; }
+    void        warnOverWeight(Doc& doc) override { mSaving.warnOverWeight(doc); }
+    ALScriptWeightsPane* weightsPane() override { return mWeightsPane; }
 
     // The preprocessor: whether it applies to a script; its run over the
     // text as it stands, for the analyzers, with the way back; and its
     // run ahead of a save, fetching includes, then the upload in the
     // envelope. Positions the analyzers answer with are mapped back to
     // the source, and what falls in an include is listed by its file.
-    bool                          preprocessed(const Doc& doc) const;
-    // The expansion of the text as it stands, asked for where it is not
-    // in hand: it is a thread's work now, so a question that needs it
-    // waits on the Doc and is asked again when it comes.
-    void                          expandFor(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at, const ALTextPos& to);
-    void                          expandedAnswer(const std::string& id, U32 version, const ALPreprocessor::Result& result);
-    // Without the source where only where the script is matters.
-    ALScriptPreprocessor::Request preprocessRequest(const Doc& doc, bool with_source = true) const;
-    // A run of the preprocessor over the text as it stands, fetching its
-    // includes; none where one is on its way already. A save waiting on it
-    // goes on when it answers (ALScriptSaveFlow::preprocessed).
-    void                          preprocess(Doc& doc);
-    void                          preprocessedAnswer(const std::string& id, U32 version, const ALPreprocessor::Result& result);
-    // What a run made, uploaded: in the envelope with the source as
-    // written, or as written alone where the run was switched off.
-    void                          sendPreprocessed(Doc& doc, const Doc::Expanded& sent);
-    // The text sent to be saved and compiled, with the map it was expanded
-    // through where it was.
-    void                          upload(Doc& doc, const std::string& text, const ALSourceMap* map = nullptr);
-    static S32                    mapSpan(const ALSourceMap& map, ALScriptSpan& span);
-    std::string                   includeName(const Doc& doc, const std::string& path) const;
+    bool                          preprocessed(const Doc& doc) const override { return mChecking.preprocessed(doc); }
+    // A run of it over the text as it stands, fetching its includes, for
+    // saving (ALScriptStudioSaving::preprocess).
+    void                          runPreprocessor(const Doc& doc, std::function<void(const ALPreprocessor::Result&)> answer) override;
+    std::string includeName(const Doc& doc, const std::string& path) const override { return mChecking.includeName(doc, path); }
     void                          chooseIncludeFolder();
     // A file on disk opened in a tab of its own, or brought forward, at
     // a place in it where one is given; read as the language its
@@ -440,87 +397,92 @@ private:
     // Opened in this window whatever another has open: where a tab is
     // being moved here from it.
     void                          openFileHere(const std::string& path, bool lua, S32 line = -1, S32 column = -1, S32 length = 0);
-    // A file's text written back where it came from; the scripts that
-    // include it are expanded again.
-    void                          saveFile(Doc& doc);
+    // A file's text written back where it came from, and the file watched
+    // for changes made outside the studio (ALScriptStudioFiles).
+    void                          saveFile(Doc& doc) override { mFiles.write(doc); }
+    void                          watchFile(Doc& doc) override { mFiles.watch(doc); }
     // A file's text is what is on disk now, however it got there: the
     // editor is clean, and the scripts that include it are expanded again.
-    void                          fileSettled(Doc& doc);
-    // The file watched for changes made outside the studio: taken in
-    // where the editor is clean, told of where it is not.
-    void                          watchFile(Doc& doc);
-    void                          fileChangedOutside(const std::string& id, const std::string& file);
-    // A file chosen from disk, opened in a tab of its own.
-    void                          openFileFromDisk();
-    // The inspector's words about the symbol at the caret: the text, with
-    // every URL in it a link, and the line it says the symbol is
-    // declared on a link to the place, where it says one -- in the
-    // script, or in the include it was declared in. The lines given are
-    // code, styled as the active script's editor would colour them.
-    struct Declared
-    {
-        // As a link's value: where to go.
-        LLSD        value() const;
-        S32         line   = -1;
-        S32         column = -1;
-        // The include it is in, by identity and by name; empty for the
-        // script itself.
-        std::string path;
-        std::string name;
-    };
-    void                          showSymbol(const std::string& text, const Declared& declared, const std::vector<S32>& code_lines);
-    void                          showSymbol(const std::string& text) { showSymbol(text, Declared(), {}); }
-    Declared                      declaredOf(const Doc& doc, const ALScriptAnalysis::Result& result) const;
+    void                          fileSettled(Doc& doc) override;
+    // The files' asks of the window: the viewer's pickers, the question
+    // over a file changed outside, a save that did not go, a file written
+    // that the studio reads, a tab become another file, Open Recent.
+    void                          pickFilesToOpen(bool several, std::function<void(const std::vector<std::string>& files)> chosen) override;
+    void pickFileToSave(const std::string& name, std::function<void(const std::vector<std::string>& files)> chosen) override;
+    void askReload(const Doc& doc, std::function<void(bool reload)> answered) override;
+    void saveStopped(Doc& doc) override;
+    void fileWritten(const std::string& path) override;
+    void becomeFile(Doc& doc, const std::string& path) override;
+    LLMenuGL* recentMenu() override;
+    void      recentChanged() override { saveState(); }
+    // Where the analyzer says a name is declared (ALScriptPlaces), as the
+    // hover card and the inspector say it.
+    typedef ALScriptPlaces::Declared Declared;
     // A line of an include as it reads -- in its tab where it is open,
     // else as the preprocessor last read it -- untrimmed; false where
     // neither has it.
-    bool                          sourceLine(const std::string& path, S32 line, std::string& out) const;
-    // A place's line as the pane lists it: trimmed, with where the name
-    // stands in what is left.
-    static void                   placeText(Doc::Place& place, const std::string& line);
+    bool                          sourceLine(const std::string& path, S32 line, std::string& out) const override;
 
     void loaded(const ALScriptWorkspace::Loaded& answer);
     // The caret to the line, or the stretch, asked for before the text had
     // loaded, once it has.
     void goToPending(Doc& doc);
-    void takeCarriedText(Doc& doc);
+    void takeCarriedText(Doc& doc) override;
+    void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                 const std::string& right_title) override;
+    void endCompare(Doc& doc) override;
+    // The tab's text against the text it was last saved as; asked again,
+    // the source back.
+    void compareWithSaved();
     // A notecard's items (ALScriptNotecardTab), made for a tab loaded or
     // kept as a notecard, afresh where `fresh`.
     ALScriptNotecardTab& notecardItems(Doc& doc, bool fresh = false);
-    void save(Doc& doc);
-    // A save the author asked for: past the one check that stopped the last
-    // save of the same text, and then a save.
-    void saveAsked(Doc& doc);
-    // The save asked for while the last was on its way, made now where
-    // anything is still unsaved; true where one is under way again.
-    bool sendQueuedSave(Doc& doc);
-    void saveAll();
-    void compiled(const ALScriptWorkspace::CompileResult& result);
-    void compiledHere(const ALScriptWorkspace::CompileResult& result);
+    // What saving (ALScriptStudioSaving) asks of the window: how saves go,
+    // as the settings say; a tab tidied, its text sent, what is kept of it
+    // against a crash written again, and the Problems tab shown.
+    ALScriptStudioSaving::Options saveOptions() const override;
+    void tidy(Doc& doc, bool fix, bool format, bool trim) override;
+    bool send(const Doc& doc, const std::string& text, const ALScriptWorkspace::SaveOptions& options, std::string& error) override;
+    bool sendNotecard(const Doc& doc, const std::string& text, const std::vector<LLPointer<LLInventoryItem>>& items, std::string& error,
+                      U64 request) override;
+    U64  newRequest() override;
+    void keepForRecovery(Doc& doc) override;
+    void takeLoaded(Doc& doc, const std::string& text) override;
+    void worldAsset(const Doc& doc, std::function<void(std::optional<LLUUID>)> told) override;
+    void takeCarried(Doc& doc) override { takeCarriedText(doc); }
+    void showProblems() override;
+    void selectFirstError(bool checkers_only) override;
     // A row, a reference, a place found, an outline entry chosen: the
     // place shown in its script, and the keyboard left in the list to walk
     // on through it; or, asked for with return or a double-click, taken
     // to the script to type there. Tabs opened on the way leave the panes
     // on what they were listing.
     void problemChosen(const ALScriptProblemsPane::Place& place, bool to_editor) override;
-    void revealed(LLUICtrl* list, bool to_editor) override;
-    // A place, by the identity of the script or file it is in, in one that
-    // is not open, chosen by walking the list: opened a moment later as a
-    // preview, if the list is still on it, rather than a tab for every row
-    // passed -- each fetched from the region. True where it is put off.
-    bool deferOpen(ALPaneList* list, const std::string& path);
-    void pumpSettle();
-    // The preview in hand let go of, for the next; and one held.
-    void closePreview();
-    void holdPreview(Doc& doc);
-    // The places found moved with an edit to the script they are in, as the
-    // problems are; gone where the edit touched the name.
-    void slidePlaces(Doc& doc, const ALTextDocument::Edit& edit);
+    // Every script of the object with `root` checked, those no tab holds
+    // listed in Problems with the open scripts' (ALScriptObjectCheck); and
+    // what the check asks of the window.
+    void checkObject(const LLUUID& root);
+    void listScripts(const LLUUID& root, std::function<void(ALScriptObjectCheck::Window::Listed)> told) override;
+    bool isOpen(const ALScriptRef& ref) override;
+    void read(const ALScriptRef& ref, std::function<void(std::optional<ALScriptObjectCheck::Window::Read>)> told) override;
+    bool preprocessing() const override;
+    bool luauConfig(const ALScriptPreprocessor::Request& root, ALLuauConfig& config) const override;
+    void scriptChecked(const ALScriptObjectCheck::Script& script) override;
+    void objectChecked(const ALScriptObjectCheck::Done& done) override;
+    // Navigation (ALScriptNavigation): the services' and saving's calls to
+    // it, and what it asks of the window.
+    void revealed(LLUICtrl* list, bool to_editor) override { mNavigation.revealed(list, to_editor); }
+    void holdPreview(Doc& doc) override { mNavigation.holdPreview(doc); }
+    void showPlace(Doc& doc, Doc::View view, const ALTextPos& at) override;
+    bool pathOpen(const std::string& path) const override;
+    void choosePreview(ALPaneList* list) override;
+    bool workedFrom(const Doc& doc) const override;
+    void focusDoc(Doc& doc) override { focusShown(doc); }
     // What an include is, as a mark: a file on disk, a notecard, a script.
     const char* includeImage(const std::string& path, bool lua) const;
     // Where a hover or the inspector says a name was declared, gone to: in
     // the script, or in the include.
-    void goToDeclared(const LLSD& value);
+    void goToDeclared(const LLSD& value) override;
     // What is wrong at a place of a script, in the card the mouse would
     // bring up there.
     void showProblemCard(Doc& doc, const ALTextPos& at);
@@ -535,97 +497,89 @@ private:
     // try again, save a copy, export.
     void report(const std::string& text, bool failure = false, const Doc* doc = nullptr, const std::vector<std::string>& actions = {}) override;
 
-    // The analyzers: a check is due a moment after the last keystroke,
-    // sent from draw, answered whenever the worker gets to it, and kept
-    // only if the text has not moved on.
-    void scheduleAnalysis(Doc& doc, bool now = false);
-    // An LSL file on disk with no default state: an include's functions
-    // and globals, which the parser takes for no script at all until a
-    // state is put after them, and whose declarations are for others.
-    bool lslFragment(const Doc& doc) const;
-    void pumpAnalysis();
-    // The preprocessor's settings changed, here or in the preferences:
-    // every script expanded and checked again, a moment after the last.
-    void pumpPreprocessor();
-    void requestAnalysis(Doc& doc);
-    void analysed(const ALScriptAnalysis::Result& result);
-    // A parse error on a preprocessor's word, with its transform off, told
-    // so: over the problems in the source's places.
-    void explainTransformWords(Doc& doc);
+    // The analyzers (ALScriptStudioChecking): a check is due a moment
+    // after the last keystroke, sent from draw, answered whenever the
+    // worker gets to it, and kept only if the text has not moved on.
+    void scheduleAnalysis(Doc& doc, bool now = false) override { mChecking.schedule(doc, now); }
+    bool lslFragment(const Doc& doc) const override { return mChecking.lslFragment(doc); }
     // The marks, the squiggles and the pane, from the compiler's problems
     // and the analyzer's together.
     void refreshProblems(Doc& doc) override;
+    void runtimeCleared(Doc& doc) override;
     // The rest of what the Problems tab asks of the window
     // (ALScriptProblemsPane::Window).
     void                 problemCountsChanged() override { refreshBottomTabs(); }
     void                 problemFiltersChanged() override { saveState(); }
     std::string          problemIcon(const Doc& doc, const std::string& include) const override;
+    std::string          scriptIcon(bool lua, const std::string& include) const override;
     void                 fixAllOfKind(Doc& doc, const std::string& key) override;
     bool                 isLint(bool lua, const std::string& id) const override;
     ALScriptLints::Level lintLevel(bool lua, const std::string& id) const override;
     void                 setLintLevel(bool lua, const std::string& id, ALScriptLints::Level level) override;
     void                 showLintSettings() override;
 
-    // The name at the caret: asked about on a key or a menu item, and
-    // answered by going there, lighting its places, or asking for a new
-    // name and putting it everywhere as one step.
-    void askSymbol(Doc& doc, ALEditorCommand command, const ALTextRange& word);
-    // `at` is where the question was about in the source, which the
-    // result's own place is not where the analyzer read the expansion.
-    void symbolAnswered(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at);
-    // A name looked for beyond the script: in every other script of the
-    // object that includes the script declaring it, or is that script,
-    // each expanded as the compiler would see it and asked where the
-    // name stands, then answered together -- the places listed, or the
-    // new name asked for and put in every script, the ones not open
-    // opened with the change unsaved.
+    // The name at the caret (ALScriptStudioCaret): a jump noted, a walk
+    // down a list over, a place gone to, the lookup started, the bar's
+    // path and the inspector's problems.
+    void noteJump() override { mNavigation.noteJump(); }
+    void keyboardInText() override { mNavigation.walked(); }
+    void goTo(Doc& doc, const ALTextRange& range) override;
     void startLookup(Doc& doc, ALEditorCommand command, const ALScriptReferences& refs, bool has_definition, const std::string& home_path,
-                     const ALScriptSpan& definition, std::vector<Doc::Place> places, U32 version);
-    void lookupCandidate(const std::string& id, U32 generation, const ALScriptRef& ref, const std::string& name, const LLUUID& asset_id,
-                         const std::string& text);
-    void lookupExpanded(const std::string& id, U32 generation, const ALScriptRef& ref, const std::string& name, const std::string& source,
-                        const ALPreprocessor::Result& result);
-    void lookupAnswered(const std::string& id, U32 generation, const ALScriptRef& ref, const std::string& name, const ALSourceMap& map,
-                        const std::string& source, const std::string& expanded, const ALScriptAnalysis::Result& result);
-    void lookupSettled(Doc& doc);
-    static void addPlace(Doc::Lookup& lookup, Doc::Place place);
-    // The new name asked for in a popover over the window, with a row
-    // saying what return will do as it is typed, and put everywhere as
-    // one step if the text has not moved on.
-    void askNewName(Doc& doc);
-    void renameTo(const std::string& id, U32 generation, const std::string& new_name);
-    void applyPendingEdits(Doc& doc) override;
-    // The script handed to an external editor: written to a file under
-    // the temp folder and watched, so that the editor's saves are taken
-    // as the text and saved from here; the bridge told, so that VS Code
-    // can subscribe to it and hear the compiler; and the editor launched
-    // -- VS Code itself under tight integration, else the command the
-    // ExternalEditor setting gives. A save made here writes the file
-    // again, and what the compiler says goes in a log beside it, as the
-    // old editor did. Closing the tab ends it.
-    void               editExternally(Doc& doc);
-    // `settled` where the file was seen empty and is asked about again, to
-    // take it as empty if it still is.
-    void               externalChanged(const std::string& id, const std::string& file, bool settled = false);
-    void               syncExternal(Doc& doc);
-    // What the external editor saved, put in as one step to undo and
-    // saved from here.
-    void               takeExternal(Doc& doc, const std::string& text);
-    void               logExternal(Doc& doc, const ALScriptWorkspace::CompileResult& result);
-    void               stopExternal(Doc& doc);
-    static std::string externalFileName(const Doc& doc);
-    // The places last found, whichever tab is in front: following them
-    // opens other scripts, and the list stays what it was.
-    void fillReferences();
-    void onReferenceChosen(bool to_editor);
-    // The Weights tab: whether it is looked at; the script in front's
-    // weights put in it; and a part chosen there, gone to.
-    bool weightsShown() const;
-    void refreshWeights();
+                     const ALScriptSpan& definition, std::vector<Doc::Place> places, U32 version) override
+    {
+        mLookup.start(doc, command, refs, has_definition, home_path, definition, std::move(places), version);
+    }
+    void showPath(Doc& doc) override { mCrumbsBar->showPath(doc); }
+    bool showProblemsAt(Doc& doc, const ALTextPos& at) override;
+    // A name looked for beyond the script (ALScriptLookup): the object's
+    // other scripts in its language, read as the region has them and
+    // expanded; the places found shown; the new name asked for in a
+    // popover over the window, with a row saying what return will do as
+    // it is typed.
+    void candidates(const Doc& doc, std::function<void(ALScriptLookup::Candidates)> told) override;
+    void loadSource(const ALScriptRef& ref, std::function<void(const LLUUID& asset, const std::optional<std::string>& source)> loaded) override;
+    void expand(ALScriptPreprocessor::Request request, std::function<void(const ALPreprocessor::Result&)> expanded) override;
+    void showFound(Doc& doc, const ALScriptLookup::Found& found) override;
+    void askNewName(Doc& doc, std::function<std::string(const std::string& typed)> hint, std::function<void(const std::string& name)> chosen,
+                    std::function<void(const std::string& name)> previewed) override;
+    void previewRename(Doc& doc, const ALScriptLookup::Found& found, const std::string& new_name, const std::string& said,
+                       std::function<void(const std::vector<size_t>& kept)> apply) override;
+    void applyPendingEdits(Doc& doc) override { mLookup.applyPendingEdits(doc); }
+    // The script handed to an external editor (ALScriptExternalEditor):
+    // saving's calls to it, a save from outside run here, and the bridge
+    // and the editor's launch, which are the window's -- VS Code itself
+    // under tight integration, else the command the ExternalEditor setting
+    // gives.
+    void        syncExternal(Doc& doc) override { mExternal.sync(doc); }
+    void        logExternal(Doc& doc, const ALScriptWorkspace::CompileResult& result) override { mExternal.log(doc, result); }
+    void        save(Doc& doc) override;
+    std::string bridgeId(const Doc& doc) const override;
+    std::shared_ptr<ALScriptTempFiles::Claim> holdCopy(const std::string& path) override;
+    bool        subscribe(Doc& doc) override;
+    void        unsubscribe(const Doc& doc) override;
+    void        startEditor(Doc& doc, const std::string& file, bool on_disk) override;
+    // The places last found, whichever tab is in front (the References
+    // tab): following them opens other scripts, and the list stays what
+    // it was.
+    void referenceChosen(const ALScriptReferencesPane::Found& found, const Doc::Place& place, bool to_editor) override;
+    void referencesCounted() override { refreshBottomTabs(); }
+    // The Weights tab: whether it is looked at; and a part chosen there,
+    // gone to.
+    bool weightsShown() const override;
     void onWeightChosen(bool to_editor);
     // A place in an include opened in a tab of its own where the include
     // is a script or a notecard in the world; one on disk is only named.
-    void openIncludeAt(const std::string& path, const std::string& name, S32 line, S32 column, S32 length);
+    void openIncludeAt(const std::string& path, const std::string& name, S32 line, S32 column, S32 length) override;
+    // The file an include or a module the script names is, opened: the one
+    // the last run of the preprocessor found, else one on disk where the
+    // preprocessor would look. An include's, a module's, or either. False
+    // where it is nowhere known.
+    bool openIncluded(Doc& doc, const std::string& name, std::optional<bool> require) override;
+    // Vim's vimrc: its text and where it is, opened here to be edited; and
+    // every editor's options set again once it is read.
+    std::string vimrc(std::string& whence) override;
+    void        editVimrc() override;
+    void        refreshEditors() override { applyEditorOptions(); }
     // A line, or line:column, typed into the same popover, the editor
     // showing the line as it is typed and going back on escape.
     void goToLine();
@@ -659,59 +613,74 @@ private:
     std::vector<ALQuickOpen::Candidate> paletteScripts(std::vector<GoTo>& targets);
     boost::signals2::scoped_connection mQuickModeConnection;
 
-    // The outline and the breadcrumb, from what the check said the script
-    // declares; the inspector, from what is at the caret, a moment after
-    // it has settled.
-    void        pumpCaret();
-    void        inspected(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at);
-    // What is squiggled under a position, from the checkers and the
-    // compiler, each with what it says; empty where nothing is.
-    std::string problemsAt(const Doc& doc, const ALTextPos& at) const;
-    void        refreshOutline(Doc& doc);
-    // The outline's row for the innermost symbol the caret is in, chosen
-    // without going anywhere, and scrolled to where it is out of sight.
-    void        followCaretInOutline(Doc& doc);
-    // An outline row's arrow, under a point of the list; and a symbol
-    // folded shut or opened, by its row.
-    bool        outlineArrowAt(S32 x, S32 y, size_t& index);
-    void        foldOutline(size_t index, std::optional<bool> folded = std::nullopt);
-    void        refreshBreadcrumb(Doc& doc);
+    // The outline (ALScriptOutlinePane): shown, which the bar at the
+    // bottom is told of; a symbol chosen, gone to; its sort kept.
+    void        outlineShown(Doc& doc) override { mCrumbsBar->showPath(doc); }
+    void        outlineChosen(Doc& doc, const ALScriptOutlineEntry& entry, bool to_editor) override;
+    void        outlineSortChanged() override { saveState(); }
+    // The bar under the editor (ALScriptCrumbsBar): its path moved, which
+    // the outline follows; a step chosen, gone to; a word past the path
+    // pressed -- the caret's place opens Go to Line, the counts the
+    // problems, the view the other view; and vim's word.
+    void        pathChanged(Doc& doc) override { mOutlinePane->followCaret(doc); }
+    void        crumbChosen(Doc& doc, std::optional<ALTextRange> at) override;
+    void        trailerChosen(const std::string& value) override;
+    std::string vimBanner() const override { return mVim.banner(); }
     // A script's tab, its window's title and the bar called what it is now
     // called: renamed here, in the inventory, or found so when opened again.
     void        renameDoc(Doc& doc, const std::string& name);
     // Whether a script may move between windows now: not while a save of it
     // is on its way, which is said.
     bool        movable(const Doc& doc);
-    // The words past the breadcrumb: where the caret is, what is
-    // selected, how many problems; the caret's place opens Go to Line and
-    // the counts the problems.
-    void        onTrailerChosen(const std::string& value);
-    void        onCrumbChosen(size_t at, const std::string& value);
-    // An outline entry as a picker's value, and back: by where it was and
-    // what it is called, so that an outline made again while a list is up
-    // -- a check answering -- still finds it, or nothing.
-    static std::string outlineValue(const Doc& doc, size_t index);
-    static size_t      outlineEntryOf(const Doc& doc, const std::string& value);
-    void        onOutlineChosen(bool to_editor);
     // A bottom tab shown; and the keyboard put in its list, where asked.
     void        showBottom(const char* tab, bool focus = false);
+    // The window's regions, in the order F6 goes round them: whether each
+    // is shown (in the window or out of it), whether the keyboard is in it,
+    // and the keyboard given to it -- its list, the text in front, the
+    // tab's own control.
+    enum class Region : U8
+    {
+        Explorer,
+        Editor,
+        Bottom,
+        Inspector,
+        COUNT
+    };
+    bool        regionShown(Region region) const;
+    bool        regionHasKeys(Region region) const;
+    void        focusRegion(Region region);
+    // The next region shown after the one with the keyboard, or the one
+    // before; from none, the text.
+    void        cycleRegion(S32 direction);
+    // What a region's key does: shown and given the keyboard, or, from its
+    // key when it has the keyboard already, folded, the keyboard back to
+    // the text. From the menu, with the mouse, the check mark folds it.
+    void        regionKey(bool showing, bool has_keys, const std::function<void()>& show, const std::function<void()>& fold);
     std::string kindName(ALScriptSymbolKind kind) const;
 
     // What scripts say, from the workspace: listed in the Output tab, and
     // a run-time error in a script that is open marked on its line.
     void runtimeEvent(const ALScriptWorkspace::RuntimeEvent& event);
+    // A line of code the preprocessor made, shown in the Preprocessed view.
+    void showGenerated(Doc& doc, S32 line, S32 column);
+    static ALScriptStudioDoc::RuntimeProblem runtimeProblemOf(const ALScriptWorkspace::RuntimeEvent& event);
+    // Whether a run-time error's line waits for the map what runs is read
+    // back by; and a tab's own, said while it was closed, taken as it loads.
+    bool holdsRuntime(const Doc& doc) const;
+    void recallRuntime(Doc& doc);
     // What the Output tab asks of the window (ALScriptOutputPane::Window).
     bool outputInSight() const override;
     void outputUnreadChanged() override { refreshBottomTabs(); }
     bool ownsObject(const LLUUID& root) const override;
     void outputAction(Doc& doc, const std::string& action) override;
     void outputShowDoc(Doc& doc, bool problems) override;
-    void outputGoTo(const ALScriptRef& ref, const std::string& name, S32 line, S32 column) override;
+    void outputGoTo(const ALScriptRef& ref, const std::string& name, S32 line, S32 column, bool running) override;
     void outputGoToInclude(const std::string& file, const std::string& file_name, S32 line, S32 column) override;
 
     // What the explorer asks of the window (ALScriptExplorerPane::Window).
     void showExplorer() override;
     void explorerPinsChanged() override { saveState(); }
+    void checkScripts(const LLUUID& root) override { checkObject(root); }
     void itemRenamed(const ALScriptRef& ref, const std::string& name) override;
     void itemDeleted(const ALScriptRef& ref) override;
     bool unsavedAnywhere(const ALScriptRef& ref) const override;
@@ -727,7 +696,7 @@ private:
     // what arrives after another search has begun is dropped.
     void findInFiles();
     // What the Search tab asks of the window (ALScriptSearchPane::Window).
-    std::vector<ALScriptSearchPane::Window::Object> objectsListed() const override;
+    void listObjects(const LLUUID& only, std::function<void(std::vector<ALScriptSearchPane::Window::Object>)> told) override;
     std::string                                     objectName(const LLUUID& root) const override;
     std::string                                     whereIs(const Doc& doc) const override;
     LLUUID                                          objectInHand() const override;
@@ -736,6 +705,8 @@ private:
     void fetchForSearch(const ALScriptRef& ref, U32 generation, const std::string& where) override;
     void confirmReplaceAll(const LLSD& args, std::function<void()> yes) override;
     void searchResultChosen(const ALScriptSearch::Found& one, const ALTextRange& place, bool to_editor) override;
+    std::vector<ALScriptSearchPane::Window::Included> includesOf(const ALScriptRef& ref, const std::string& file, const std::string& name,
+                                                                 const std::string& text, bool lua) override;
     // Where to go in a script once it is open, or now.
     void goToPlace(const ALScriptRef& ref, const std::string& name, S32 line, S32 column, S32 length) override;
 
@@ -743,56 +714,42 @@ private:
     // the vocabulary shown with its declaration, the keyword file's
     // words about it and a link to its wiki page; F1 for the word at the
     // caret, or any word picked by name.
-    void        showReference(const Vocab& word, bool lua);
+    void        showReference(const Vocab& word, bool lua) override;
     void        reference(Doc& doc);
     void        browseReference();
-    static const Vocab* vocabWord(bool lua, std::string_view name);
-    static std::string helpUrl(bool lua, const std::string& word);
 
     // The formatter over the text as it stands, or the lines selected:
     // every line put right as one step to undo, the caret keeping its
     // place.
-    void format(Doc& doc, bool selection_only);
+    void format(Doc& doc, bool selection_only) override;
     // The blanks at every line's end taken away, as one step to undo.
     void trimTrailing(Doc& doc);
 
-    // The errors the analyzers found in the text as they last checked it,
-    // and the preprocessor in the expansion they read: what holds a save,
-    // where saves are held on them.
-    S32  checkerErrors(const Doc& doc) const;
-    void reportOverWeight(const Doc& doc, const ALScriptWeight& weight);
-
-    // Copy, from whichever list or editor has the keyboard; and a
-    // right-click menu on a list for the same.
+    // Copy, from whichever list or editor has the keyboard.
     static LLEditMenuHandler* focusedEditHandler();
-    void                      listMenuFor(LLScrollListCtrl* list);
-    void                      showListMenu(LLScrollListCtrl* list, S32 x, S32 y);
 
-    void closeDocument(std::string_view id);
+    void closeDocument(std::string_view id) override;
     void closeDocumentAnswered(const std::string& id, S32 option);
     // The quit's question about what is unsaved: saved, kept to be opened
     // again next time, let go of, or the quit called off.
     void quitAnswered(S32 option);
     // Several tabs closed at once -- the others, all of them, `:qa` -- the
     // unsaved among them asked about in one question, not one each.
-    void closeMany(const std::vector<std::string>& ids);
+    void closeMany(const std::vector<std::string>& ids) override;
+    // Close Others, Close Saved and Close All, about the tab `keep` is.
+    void closeTabs(std::string_view which, const Doc* keep);
     // A close of the window, or of several tabs, that is waited on no
     // longer; and a quit waiting on it called off.
-    void stopClosing();
+    void stopClosing() override;
     // Whether the viewer is quitting on this window's answer.
-    bool quittingOnUs() const;
+    bool quittingOnUs() const override;
     // A tab let go of: its unsaved text set aside among the discarded,
     // where it can be had back for a while, unless it is kept -- moved to
     // another window, kept for next time, or kept as the viewer goes.
     void letGoOf(size_t index, bool keep = false);
-    // A save that did not go through -- refused over errors, failed, or
-    // compiled with errors: a close waiting on it waits no longer, and a
-    // window closing stops, the tab left for the author to look at.
-    void saveStopped(Doc& doc);
-    // A tab saved to be closed once its save comes back: where the save
-    // cannot begin, the tab is left as it was, and a close waiting on it
-    // stops -- rather than closing at whatever save comes next.
-    void saveToClose(const std::string& id);
+    void letGoOf(Doc& doc) override;
+    // A tab saved, and closed once its save comes back.
+    void saveToClose(const std::string& id) override;
     // The window's close, with several scripts unsaved, asked about all of
     // them at once: saved, let go of, or the window kept.
     void closeWindowAnswered(S32 option);
@@ -802,89 +759,57 @@ private:
     // inventory has it, with the scripter's template in it.
     void newInventoryScript(bool lua);
 
-    // Recovery. The store for this account, made on first asking, and the
-    // session every entry this process writes is under.
-    static ALScriptRecoveryStore* recoveryStore();
-    // A tab's text as an entry of the store.
-    ALScriptRecoveryEntry recoveryEntryOf(const Doc& doc) const;
-    // The tab's unsaved text written now, in the state given; a clean tab's
-    // entry forgotten, and an entry it took up let go of. False where what
-    // is unsaved could not be written.
-    bool keepForRecovery(Doc& doc, ALScriptRecoveryEntry::State state = ALScriptRecoveryEntry::State::Unsaved);
-    // The same as typing goes: the unsaved text handed to the store's own
-    // thread to write, which says at the next pause where it could not.
-    void keepForRecoverySoon(Doc& doc);
-    // What the tab holds unsaved put straight among the discarded, and
-    // this session's entry for it gone once it is. False where it could
-    // not be written, and nothing changed.
-    bool setAside(Doc& doc);
-    // Written a moment after the first change since the last writing,
-    // whatever is typed meanwhile; a tab gone clean forgotten at once.
-    void scheduleRecovery(Doc& doc);
-    // Due writings, a lost connection, and what holds each tab, looked at
-    // a few times a second, whether the window is shown or not.
+    // Due writings of what is unsaved, a lost connection, and what holds
+    // each tab, looked at a few times a second, whether the window is shown
+    // or not.
     void pumpRecovery();
-    void checkOrphans();
-    Doc::Orphan orphanOf(const Doc& doc) const;
-    // What a tab holding a kept text is where its script could not be
-    // loaded, by why: one that may not be changed, one that could not be
-    // loaded, or one whose item or object is gone or out of sight.
-    Doc::Orphan failedAs(const Doc& doc, ALScriptWorkspace::Loaded::Failure failure) const;
-    // A detached tab's item loaded under it now that it is in reach, what
-    // it holds carried over with its history; or loaded again after a load
-    // that failed, where a person asks or the next try is due.
-    void reattach(Doc& doc);
+    // The orphans (ALScriptStudioOrphans): recovery's and saving's calls to
+    // them, and what they ask of the window -- what is in reach of a tab,
+    // which is the world's; its place; its script loaded; the notice; and
+    // the notice's actions.
+    Doc::Orphan failedAs(const Doc& doc, ALScriptWorkspace::Loaded::Failure failure) const override;
+    void        reattach(Doc& doc) override { mOrphans.reattach(doc); }
+    ALScriptStudioOrphans::Reach reach(const Doc& doc) override;
+    void                         refreshPlace(Doc& doc) override;
+    void                         loadScript(const ALScriptRef& ref) override;
+    ALScriptNoticeBar*           noticeBar() override { return mNoticeBar; }
+    void                         saveCopyToFile() override { mFiles.saveCopy(); }
+    void                         saveAgain(Doc& doc) override { mSaving.saveAsked(doc); }
+    void                         takeUpRecovery(Doc& doc, const ALScriptRecoveryEntry& entry) override { mRecovery.takeUp(doc, entry); }
+    void                         discardRecovery(const ALScriptRecoveryEntry& entry) override;
+    void                         noticeAction(const std::string& action) override { mOrphans.noticeAction(action); }
     // The window, of all of them, that has a script or a file open.
     static ALFloaterScriptStudio* holderOf(const ALScriptRef& ref, const std::string& file);
     // The studio window the keyboard was last in, while it is open: where a
     // script opened from outside -- the inventory, an object -- goes, as a
     // script window used to open over the last one.
     static ALFloaterScriptStudio* lastWorkedIn();
-    // An entry put back: into the tab that has its script or file, opened
-    // where it is not, or into a tab of its own where what it came from
-    // is gone.
-    void recoverEntry(const ALScriptRecoveryEntry& entry);
-    void takeUpEntry(Doc& doc, const ALScriptRecoveryEntry& entry);
-    // A kept text put back with its undo history and its caret, where the
-    // history fits the text; false, and nothing changed, where it does not.
-    bool restoreHistory(Doc& doc, const ALScriptRecoveryEntry& entry);
-    void openOrphan(const ALScriptRecoveryEntry& entry, Doc::Orphan orphan);
+    void openOrphan(const ALScriptRecoveryEntry& entry, Doc::Orphan orphan) override;
     // A tab made to hold a kept text with nothing loaded under it: unsaved,
     // with whatever its script or file was.
-    void becomeOrphan(Doc& doc, const ALScriptRecoveryEntry& entry, Doc::Orphan orphan);
-    // File > Recover Unsaved Changes: what earlier sessions left and what
-    // was discarded lately, to open or to discard.
-    void showRecovery();
+    void becomeOrphan(Doc& doc, const ALScriptRecoveryEntry& entry, Doc::Orphan orphan) override;
+    // What recovery asks of the window (ALScriptStudioRecovery::Window).
+    bool recoverElsewhere(const ALScriptRecoveryEntry& entry) override;
+    Doc* openFileTab(const std::string& path, bool lua) override;
+    bool scriptInHand(const ALScriptRef& ref) const override;
+    void activate(Doc& doc) override;
+    void tabsChanged() override;
+    void pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
+              std::function<void(const std::string& value)> chosen, std::function<void(const std::string& value)> dropped) override;
     // What a tab needs from the moment it is made: its text's changes
     // heard, its places slid.
     void wireDoc(Doc& doc);
-    // The notice over the editor, for the tab in front, and what its
-    // buttons do.
-    void refreshNotice();
-    void onNoticeAction(const std::string& action);
+    // The notice over the editor, for the tab in front.
+    void refreshNotice() override { mOrphans.refreshNotice(); }
     // What a tab holds saved as a new item in the inventory -- a script or
     // a notecard, its items with it -- and the tab closed once it is.
-    void saveCopyToInventory(Doc& doc);
+    void saveCopyToInventory(Doc& doc) override;
     // Revert to Saved, asked about where something would be lost; and
     // whether there is anything to read again.
     void askRevert(Doc& doc);
-    bool revertible(const Doc& doc) const;
-    // The places jumped from, to go back to and forward again: a place in
-    // a tab by its id. Walking a pane's list is one jump, from where the
-    // caret was before the walk began.
-    struct NavPlace
-    {
-        std::string doc;
-        ALTextPos   at;
-        // Which of the tab's views the place is in: a line gone to in
-        // the expansion is gone back to there.
-        Doc::View   view = Doc::View::Source;
-    };
-    void noteJump(bool walking = false);
-    // A place to go back to, the way forward from it gone: once for a line,
-    // and the fifty latest.
-    void rememberPlace(const NavPlace& place);
-    void goBack(bool forward);
+    bool revertible(const Doc& doc) const override;
+    // A place jumped from, to go back to and forward again (ALNavHistory).
+    typedef ALNavHistory::Place NavPlace;
     // The editor commands' keys as the keymap has them, and the menus'
     // own as a person rebound them, on the menus and the tips that say
     // them.
@@ -892,12 +817,29 @@ private:
     void refreshKeyTips();
     // Edit > Undo and Redo named for the step they take, where it has one.
     void refreshUndoLabels();
-    // A name that a rename may not take: one of the language's own.
-    bool reservedName(const Doc& doc, const std::string& name) const;
-    void onMenuAction(const LLSD& param);
-    bool onMenuEnable(const LLSD& param);
-    bool onMenuCheck(const LLSD& param);
+    // The window's own commands in the table, by the menu that gives them;
+    // a unit split out of the window registers its own. An editor's own
+    // command, on the view in front: `changes` for one that changes the
+    // text, which a tab that may not be changed cannot do.
+    void addCommands();
+    // The keys the window answers to: the menus' commands, and the tab and
+    // line keys no menu shows.
+    void addKeys();
+    // The menus' commands at the keys a person gave them.
+    std::vector<ALKeyChord> keysOf(const KeyedCommand& command) const override;
+    UndoKey                 undoKeyOf(KEY key, MASK mask) const override;
+    void addFileCommands();
+    void addEditCommands();
+    void addInsertCommands();
+    void addGoCommands();
+    void addViewCommands();
+    void addBuildCommands();
+    void addHelpCommands();
+    void addEditorCommand(const std::string& name, ALEditorCommand command, bool changes);
     void onCompileTarget();
+    // The tab's script read as the other language from here: its grammar,
+    // its words, its checks; what was made of it as the one it was, gone.
+    void readAs(Doc& doc, bool lua);
     void onRunning();
     // The strip's experience, for the script in front: shown where it has
     // one or the agent has any to give it.
@@ -905,44 +847,23 @@ private:
     void refreshExperience();
     void onExperience();
     void onReset();
-    void revert(Doc& doc);
-    void loadFromFile();
-    void saveToFile();
-    // The pickers' answers, for the tab each was asked from, by its id.
-    void fileChosenToLoad(const std::string& id, const std::vector<std::string>& files);
-    void fileChosenToSave(const std::string& id, const std::vector<std::string>& files);
-    // A disk tab saved under another name: the tab is that file from
-    // then on, in the language its name says.
-    void saveFileAs();
-    void fileChosenToSaveAs(const std::string& id, const std::vector<std::string>& files);
-    // What a file's name says it holds: an LSL or a Lua script, or, with
-    // neither extension, what it was asked for as, else plain text.
-    struct FileLanguage
-    {
-        bool script = false;
-        bool lua    = false;
-        // Whether the name said anything: it has an extension.
-        bool said   = false;
-    };
-    static FileLanguage languageOfFile(const std::string& path, bool lua_hint);
-    // The document's language set by it, the editor taught or untaught.
-    void                speakFileLanguage(Doc& doc, const FileLanguage& language);
-    // The files opened from disk lately, newest first, under File ▸
-    // Open Recent; kept with the state. The scripts and notecards opened
-    // from the world and the inventory lately, beside them.
-    void noteRecentFile(const std::string& path);
-    void noteRecentScript(const Doc& doc);
-    void fillRecentMenu();
-    // The marks: what a document is, on its tab; what a symbol's kind
-    // is, in the outline -- by texture name, as a scroll list wants it.
-    static const char* imageNameOf(const Doc& doc);
-    static const char* imageNameOf(ALScriptSymbolKind kind);
+    void revert(Doc& doc) override;
+    // What a file's name says it holds (ALScriptStudioFiles); the
+    // document's language set by it, the editor taught or untaught.
+    typedef ALScriptStudioFiles::Language FileLanguage;
+    void                                  speakFileLanguage(Doc& doc, const FileLanguage& language);
 
     // The tabs open, as the state keeps them: an item by its object and
     // id, a file by its path, and which is in front.
     LLSD openTabs() const;
     void writeState(LLSD& state) const override;
     void readState(const LLSD& state) override;
+    // The View menu's options, vim's among them: kept in the state, and
+    // taken by a window popped out of another -- which keeps no state of
+    // its own -- from the one it came out of, before its first tab.
+    void writeViewOptions(LLSD& state) const;
+    void readViewOptions(const LLSD& state);
+    void takeViewOptions(const ALFloaterScriptStudio& from);
 
     std::vector<std::unique_ptr<Doc>>  mDocs;
     size_t                             mActive = NONE;
@@ -975,13 +896,6 @@ private:
     // another name: the index, its editors' names, and whatever holds it
     // by its id, the panes and the history, told.
     void                               rekeyDoc(Doc& doc, const std::string& id);
-    std::vector<std::string>           mRecentFiles;
-    struct Recent
-    {
-        ALScriptRef ref;
-        std::string name;
-    };
-    std::vector<Recent>                mRecentScripts;
     // The tabs open when the state was last written, opened again once the
     // window is built; and those whose object or item was not in hand yet,
     // opened once it is, until a while after.
@@ -1013,32 +927,27 @@ private:
     void                               restoreTabs(const LLSD& open);
     void                               restoreWindows(const LLSD& windows);
     void                               reopenKept();
-    // The places jumped from and back from, and whether a pane's list is
-    // being walked, which is one jump however many rows it passes.
-    std::vector<NavPlace>              mBack;
-    std::vector<NavPlace>              mForward;
-    bool                               mWalking = false;
     // The tips that say a menu item's keys, as the skin wrote them, to be
     // said again when a key is rebound.
+    // The menu bar's items by name, found once.
+    boost::unordered_flat_map<std::string, LLMenuItemGL*, ll::string_hash, std::equal_to<>> mMenuItems;
+    LLMenuItemGL*                                                                           menuItem(std::string_view id) const;
     std::vector<std::pair<std::string, std::vector<std::string>>> mKeyTips;
     std::map<std::string, std::string> mKeyTipTexts;
     // What Edit > Undo and Redo were last named for.
     std::string                        mUndoSaid;
     std::string                        mRedoSaid;
     // The notice over the editor.
-    LLLayoutPanel*                     mNoticePanel  = nullptr;
-    LLTextBox*                         mNoticeText   = nullptr;
-    LLButton*                          mNoticeFirst  = nullptr;
-    LLButton*                          mNoticeSecond = nullptr;
-    std::string                        mNoticeActions[2];
+    ALScriptNoticeBar*                 mNoticeBar = nullptr;
     // Whether the connection was seen lost; and when what holds each tab
     // was last looked at.
     bool                               mOffline        = false;
     F64                                mOrphansChecked = 0.0;
     // What the editors' vim keymaps share: the : and / lines entered in
     // any of them, and the settings a :set changes.
-    std::shared_ptr<ALVimKeymap::Shared> mVimShared = std::make_shared<ALVimKeymap::Shared>();
     bool                               mWordWrap    = false;
+    // A comparison shown inline rather than side by side.
+    bool mCompareInline = false;
     bool                               mLineNumbers = true;
     bool                               mIndentGuides    = true;
     // Where the blanks are drawn as marks; under the selection to begin
@@ -1063,7 +972,6 @@ private:
     // and what it says in the status line, and w, q and the rest
     // answered here.
     bool                               mVimMode      = false;
-    std::string                        mVimBanner;
     bool                               mStickyHeaders   = true;
     // The scrollbar as a map: whether, how wide, whether it previews the
     // lines under the mouse, and on which side.
@@ -1077,81 +985,56 @@ private:
     // carry a sentence, and it was the one showing nothing at all.
     ALEmptyState*                      mNoDocs        = nullptr;
     ALTabStrip*                        mTabs          = nullptr;
-    ALJumpBar*                         mBreadcrumb    = nullptr;
+    ALScriptCrumbsBar*                 mCrumbsBar     = nullptr;
     LLTabContainer*                    mBottomTabs    = nullptr;
     ALScriptProblemsPane*              mProblemsPane = nullptr;
-    ALPaneList*                        mReferences    = nullptr;
-    ALPaneList*                        mOutline       = nullptr;
-    ALTextView*                        mSymbol        = nullptr;
+    ALScriptReferencesPane*            mReferencesPane = nullptr;
+    ALScriptOutlinePane*               mOutlinePane    = nullptr;
+    ALScriptInspectorPane*             mInspectorPane = nullptr;
     // Held while a pane's row is followed into a tab, so that the panes
     // go on listing what they were rather than the tab's.
     S32                                mHoldPanes       = 0;
-    // The places the last Find References found, and what was looked up
-    // from where: the script's own places are its, whichever is in front.
-    struct References
-    {
-        std::string             from;
-        std::string             fromName;
-        std::string             name;
-        std::vector<Doc::Place> places;
-        bool                    hasDefinition = false;
-        std::string             home;
-        ALScriptSpan            definition;
-    };
-    References                         mFound;
-    // Whether an edit has moved the places since the list was filled.
-    bool                               mPlacesStale    = false;
-    LLTextBox*                         mReferencesHead = nullptr;
-    LLFilterEditor*                    mOutlineFilter  = nullptr;
-    // What the outline's rows last said, and whose they were: a check
-    // that changes none of it leaves the list as it is.
-    std::vector<std::string>           mOutlineSaid;
-    LLComboBox*                        mOutlineSort    = nullptr;
-    // Each outline entry's key -- the names down to it -- and whether it
-    // holds others, as the rows were last made.
-    std::vector<std::string>           mOutlineKeys;
-    std::vector<bool>                  mOutlineParents;
-    // A preview being opened, and a place chosen in a list that is to be
-    // opened as one once the list has stayed on it.
-    S32                                mOpenPreview = 0;
-    bool                               mSettled     = false;
-    ALPaneList*                        mSettleList  = nullptr;
-    LLSD                               mSettleValue;
-    F64                                mSettleDue   = 0.0;
-    std::string                        mTrailerLineTip;
-    std::string                        mTrailerProblemsTip;
-    std::string                        mTrailerSourceTip;
-    std::string                        mTrailerExpandedTip;
+    // Whether the trailer last said a check is out, for the tab in front.
+    bool                               mTrailerChecking = false;
     ALScriptOutputPane*                mOutputPane = nullptr;
     ALScriptSearchPane*                mSearchPane    = nullptr;
-    // The Weights tab, and whether it was looked at last frame and has
-    // been told of everything since: it is filled while it is looked at.
-    // The fix list last shown, to be weighed a frame later -- once the
-    // refactors a quick fix asked for have joined it, where they are coming,
-    // so that the weighing does not keep them waiting on the analyzer's
-    // thread.
-    struct FixesToWeigh
-    {
-        std::string                    id;
-        U32                            shown = 0;
-        std::vector<ALCodeEditor::Fix> fixes;
-    };
-    std::optional<FixesToWeigh>        mFixesToWeigh;
+    // The Weights tab, and its list of parts.
     ALScriptWeightsPane*               mWeightsPane = nullptr;
     ALPaneList*                        mWeightsParts      = nullptr;
-    bool                               mWeightsWereShown  = false;
-    bool                               mWeightsStale      = true;
-    // Which lookup across scripts the answers arriving belong to.
-    U32                                mLookupGeneration = 0;
     ALScriptExplorerPane*              mExplorerPane  = nullptr;
+    // What each of the menus' items does, whether it can, and whether it
+    // is on, by the item's name.
+    ALScriptStudioCommands             mCommands;
+    // What is unsaved in the tabs, kept against the viewer going.
+    ALScriptStudioRecovery             mRecovery{ *this, *this };
+    // Saving and compiling the tabs.
+    ALScriptStudioSaving               mSaving{ *this, *this };
+    // The window's side of vim, over its editors.
+    ALScriptStudioVim                  mVim{ *this, mCommands, *this };
+    // Its tabs held open in an editor outside.
+    ALScriptExternalEditor             mExternal{ *this, *this };
+    // Its files on disk, and the recent lists.
+    ALScriptStudioFiles                mFiles{ *this, *this };
+    // What its scripts weigh.
+    ALScriptStudioWeighing             mWeighing{ *this, *this };
+    // Its tabs whose script is gone or out of reach, and the notice.
+    ALScriptStudioOrphans              mOrphans{ *this, *this };
+    // The places gone from, and the previews a list opens as it is walked.
+    ALScriptNavigation                 mNavigation{ *this, *this };
+    // Its names looked up across the object's scripts, and renamed.
+    ALScriptLookup                     mLookup{ *this, *this };
+    // Every script of an object checked, and what it is called while it is.
+    ALScriptObjectCheck                mObjectCheck{ *this, *this };
+    std::string                        mCheckingWhere;
+    S32                                mCheckedErrors   = 0;
+    S32                                mCheckedWarnings = 0;
+    // The name at its caret, and the caret watched.
+    ALScriptStudioCaret                mCaret{ *this, *this };
+    // Its checking: the analyzers asked and answered, and fixes.
+    ALScriptStudioChecking             mChecking{ *this, *this };
     LLHandle<LLContextMenu>            mTabMenuHandle;
     bool                               mMain = true;
-    // Whose path the bar at the bottom shows, so that a tab come to the
-    // front is shown there whatever its own path was when last shown.
-    std::string                        mCrumbsShownFor;
     bool                               mClosingWindow = false;
-    LLHandle<LLContextMenu>            mListMenuHandle;
-    LLScrollListCtrl*                  mListMenuFor   = nullptr;
     LLComboBox*                        mCompileTarget = nullptr;
     LLCheckBoxCtrl*                    mRunning       = nullptr;
     LLComboBox*                        mExperience    = nullptr;
@@ -1169,15 +1052,13 @@ private:
     LLButton*                          mFormatButton  = nullptr;
     LLButton*                          mExpandedButton = nullptr;
     boost::signals2::scoped_connection mCompiledConnection;
+    boost::signals2::scoped_connection mSavedConnection;
     boost::signals2::scoped_connection mDefinitionsConnection;
+    // The vimrc changed: read again into this window's vim.
+    boost::signals2::scoped_connection mVimrcConnection;
     // The settings the window follows as they change: the lints and the
     // Luau mode, the preprocessor's, vim's clipboard.
     std::vector<boost::signals2::scoped_connection> mSettingConnections;
-    // When every script is expanded and checked again after the
-    // preprocessor's settings changed, or zero; and whether the
-    // transforms' words are coloured again with it.
-    F64                                mPreprocessorDue   = 0.0;
-    bool                               mPreprocessorWords = false;
     boost::signals2::scoped_connection mRuntimeConnection;
     boost::signals2::scoped_connection mRunningConnection;
 };
