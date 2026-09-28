@@ -569,8 +569,6 @@ namespace sknav
         std::vector<U32> mLink;         ///< 4 per cell
         std::vector<U8> mSide;          ///< 4 per cell
         std::vector<F32> mDist;
-        std::vector<LLVector2> mNearest;
-        std::vector<LLVector2> mPos;    ///< per cell, its centre
         std::vector<U8> mAvatar;
         std::vector<S32> mLabel;
 
@@ -982,8 +980,6 @@ namespace sknav
         std::vector<U32>().swap(mLink);
         std::vector<U8>().swap(mSide);
         std::vector<F32>().swap(mDist);
-        std::vector<LLVector2>().swap(mNearest);
-        std::vector<LLVector2>().swap(mPos);
         std::vector<U8>().swap(mAvatar);
         std::vector<S32>().swap(mLabel);
         for (TileInfo& ti : mTiles)
@@ -1298,50 +1294,80 @@ namespace sknav
         }
         const size_t n = mCells.size();
         mProduct->mCells += static_cast<U32>(n);
-        mPos.resize(n);
-        for (U32 c = 0; c < n; ++c)
-        {
-            const TileInfo& ti = mTiles[mCells[c].mTile];
-            mPos[c].set(cellX(ti, mCells[c].mX), cellY(ti, mCells[c].mY));
-        }
         mLink.assign(n * 4, NONE);
         mSide.assign(n * 4, SIDE_WALL);
-        for (U32 c = 0; c < n; ++c)
+        // A column's neighbour columns once for all its cells: most lie in its own tile.
+        for (U32 t = 0; t < mTiles.size(); ++t)
         {
-            const Cell& cell = mCells[c];
-            for (S32 d = 0; d < 4; ++d)
+            const TileInfo& ti = mTiles[t];
+            if (!ti.mWork)
             {
-                U32 t;
-                S32 x, y;
-                const S32 r = resolve(cell.mTile, cell.mX + DX[d], cell.mY + DY[d], t, x, y);
-                if (r == -2 || (r == 0 && !mTiles[t].mWork))
+                continue;
+            }
+            const S32 w = ti.mAir->mWidth, h = ti.mAir->mHeight;
+            for (S32 iy = 0; iy < h; ++iy)
+            {
+                for (S32 ix = 0; ix < w; ++ix)
                 {
-                    mSide[c * 4 + d] = SIDE_UNKNOWN;
-                    continue;
-                }
-                if (r != 0)
-                {
-                    continue;
-                }
-                const TileInfo& ti = mTiles[t];
-                const S32 col = x + y * ti.mAir->mWidth;
-                U32 best = NONE;
-                S32 best_step = 0;
-                for (U32 o = ti.mColStart[col]; o < ti.mColStart[col + 1]; ++o)
-                {
-                    const Cell& other = mCells[o];
-                    const S32 step = std::abs(other.mFloor - cell.mFloor);
-                    const S32 overlap = std::min(other.mCeil, cell.mCeil) - std::max(other.mFloor, cell.mFloor);
-                    if (step <= mClimb && overlap >= mWalkOverlap && (best == NONE || step < best_step))
+                    const U32 c0 = ti.mColStart[ix + iy * w], c1 = ti.mColStart[ix + iy * w + 1];
+                    if (c0 == c1)
                     {
-                        best = o;
-                        best_step = step;
+                        continue;
                     }
-                }
-                if (best != NONE)
-                {
-                    mLink[c * 4 + d] = best;
-                    mSide[c * 4 + d] = SIDE_LINKED;
+                    for (S32 d = 0; d < 4; ++d)
+                    {
+                        const S32 nx = ix + DX[d], ny = iy + DY[d];
+                        U32 o0, o1;
+                        if (nx >= 0 && ny >= 0 && nx < w && ny < h)
+                        {
+                            o0 = ti.mColStart[nx + ny * w];
+                            o1 = ti.mColStart[nx + ny * w + 1];
+                        }
+                        else
+                        {
+                            U32 u;
+                            S32 x, y;
+                            const S32 r = resolve(t, nx, ny, u, x, y);
+                            if (r == -2 || (r == 0 && !mTiles[u].mWork))
+                            {
+                                for (U32 c = c0; c < c1; ++c)
+                                {
+                                    mSide[c * 4 + d] = SIDE_UNKNOWN;
+                                }
+                                continue;
+                            }
+                            if (r != 0)
+                            {
+                                continue;
+                            }
+                            const TileInfo& ui = mTiles[u];
+                            const S32 col = x + y * ui.mAir->mWidth;
+                            o0 = ui.mColStart[col];
+                            o1 = ui.mColStart[col + 1];
+                        }
+                        for (U32 c = c0; c < c1; ++c)
+                        {
+                            const Cell& cell = mCells[c];
+                            U32 best = NONE;
+                            S32 best_step = 0;
+                            for (U32 o = o0; o < o1; ++o)
+                            {
+                                const Cell& other = mCells[o];
+                                const S32 step = std::abs(other.mFloor - cell.mFloor);
+                                const S32 overlap = std::min(other.mCeil, cell.mCeil) - std::max(other.mFloor, cell.mFloor);
+                                if (step <= mClimb && overlap >= mWalkOverlap && (best == NONE || step < best_step))
+                                {
+                                    best = o;
+                                    best_step = step;
+                                }
+                            }
+                            if (best != NONE)
+                            {
+                                mLink[c * 4 + d] = best;
+                                mSide[c * 4 + d] = SIDE_LINKED;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1353,8 +1379,20 @@ namespace sknav
         // nearest side where floor stops, and hands it on while that is nearer.
         const size_t n = mCells.size();
         const F32 cap = params().mClearMaxM;
-        mDist.assign(n, std::numeric_limits<F32>::max());
-        mNearest.assign(n, LLVector2());
+        // What a relaxation reads and writes of a cell, together: the propagation's order scatters it over the mesh.
+        struct Near
+        {
+            LLVector2 mPos;
+            LLVector2 mNearest;
+            F32 mDist;
+        };
+        std::vector<Near> cells(n);
+        for (U32 c = 0; c < n; ++c)
+        {
+            const TileInfo& ti = mTiles[mCells[c].mTile];
+            cells[c].mPos.set(cellX(ti, mCells[c].mX), cellY(ti, mCells[c].mY));
+            cells[c].mDist = std::numeric_limits<F32>::max();
+        }
         // Dial's buckets at a sixteenth of a cell: the order is exact to
         // well under a cell, and a push is a push_back.
         const F32 step = mCell / 16.f;
@@ -1368,9 +1406,9 @@ namespace sknav
             {
                 if (mSide[c * 4 + d] == SIDE_WALL)
                 {
-                    mNearest[c].set(cellX(ti, cell.mX) + DX[d] * 0.5f * mCell, cellY(ti, cell.mY) + DY[d] * 0.5f * mCell);
-                    mDist[c] = 0.5f * mCell;
-                    buckets[bucket(mDist[c])].push_back(c);
+                    cells[c].mNearest.set(cellX(ti, cell.mX) + DX[d] * 0.5f * mCell, cellY(ti, cell.mY) + DY[d] * 0.5f * mCell);
+                    cells[c].mDist = 0.5f * mCell;
+                    buckets[bucket(cells[c].mDist)].push_back(c);
                     break;
                 }
             }
@@ -1379,32 +1417,35 @@ namespace sknav
         {
             for (size_t i = 0; i < buckets[b].size(); ++i)
             {
-            const U32 c = buckets[b][i];
-            if (bucket(mDist[c]) != b)
-            {
-                continue;
-            }
-            for (S32 d = 0; d < 4; ++d)
-            {
-                const U32 o = mLink[c * 4 + d];
-                if (o == NONE)
+                const U32 c = buckets[b][i];
+                const Near& from = cells[c];
+                if (bucket(from.mDist) != b)
                 {
                     continue;
                 }
-                const F32 dd = dist_vec(mPos[o], mNearest[c]);
-                if (dd < mDist[o] - 1e-6f && dd <= cap)
+                for (S32 d = 0; d < 4; ++d)
                 {
-                    mDist[o] = dd;
-                    mNearest[o] = mNearest[c];
-                    buckets[std::max(b, bucket(dd))].push_back(o);
+                    const U32 o = mLink[c * 4 + d];
+                    if (o == NONE)
+                    {
+                        continue;
+                    }
+                    Near& to = cells[o];
+                    const F32 dd = dist_vec(to.mPos, from.mNearest);
+                    if (dd < to.mDist - 1e-6f && dd <= cap)
+                    {
+                        to.mDist = dd;
+                        to.mNearest = from.mNearest;
+                        buckets[std::max(b, bucket(dd))].push_back(o);
+                    }
                 }
-            }
             }
             std::vector<U32>().swap(buckets[b]);
         }
-        for (F32& d : mDist)
+        mDist.resize(n);
+        for (U32 c = 0; c < n; ++c)
         {
-            d = std::min(d, cap);
+            mDist[c] = std::min(cells[c].mDist, cap);
         }
     }
 
@@ -1437,40 +1478,71 @@ namespace sknav
                 const U32 k = stack.back();
                 stack.pop_back();
                 comp_area[id] += cell_area;
-                const Cell& cell = mCells[k];
                 for (S32 d = 0; d < 4; ++d)
                 {
                     const U32 o = mLink[k * 4 + d];
-                    if (o != NONE)
+                    if (o != NONE && comp[o] == NONE)
                     {
-                        if (comp[o] == NONE)
+                        comp[o] = id;
+                        stack.push_back(o);
+                    }
+                }
+            }
+        }
+        // Each side with no floor to step to: past the cells held, or open, and a drop when the floor beyond is well below.
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileInfo& ti = mTiles[t];
+            if (!ti.mWork)
+            {
+                continue;
+            }
+            const S32 w = ti.mAir->mWidth, h = ti.mAir->mHeight;
+            for (S32 iy = 0; iy < h; ++iy)
+            {
+                for (S32 ix = 0; ix < w; ++ix)
+                {
+                    const U32 c0 = ti.mColStart[ix + iy * w], c1 = ti.mColStart[ix + iy * w + 1];
+                    for (S32 d = 0; d < 4 && c0 < c1; ++d)
+                    {
+                        U32 u = NONE;
+                        S32 x, y;
+                        const AirGap* g = nullptr;
+                        U32 count = 0;
+                        for (U32 k = c0; k < c1; ++k)
                         {
-                            comp[o] = id;
-                            stack.push_back(o);
-                        }
-                        continue;
-                    }
-                    if (mSide[k * 4 + d] == SIDE_UNKNOWN)
-                    {
-                        comp_edge[id] = true;
-                        continue;
-                    }
-                    comp_open[id] += 1.0;
-                    U32 t;
-                    S32 x, y;
-                    if (resolve(cell.mTile, cell.mX + DX[d], cell.mY + DY[d], t, x, y) != 0)
-                    {
-                        continue;   // the mesh's edge ends open ground as a wall or void does
-                    }
-                    U32 count;
-                    const AirGap* g = column(t, x, y, count);
-                    for (U32 i = 0; i < count; ++i)
-                    {
-                        const S32 f = floorOf(t, g[i]);
-                        if (f <= cell.mFloor - 1 && ceilOf(t, g[i]) >= cell.mFloor + 14)
-                        {
-                            comp_drops[id] += f < cell.mFloor - mClimb ? 1.0 : 0.0;
-                            break;
+                            if (mLink[k * 4 + d] != NONE)
+                            {
+                                continue;
+                            }
+                            const U32 id = comp[k];
+                            if (mSide[k * 4 + d] == SIDE_UNKNOWN)
+                            {
+                                comp_edge[id] = true;
+                                continue;
+                            }
+                            comp_open[id] += 1.0;
+                            if (u == NONE)
+                            {
+                                if (resolve(t, ix + DX[d], iy + DY[d], u, x, y) != 0)
+                                {
+                                    u = NONE - 1;   // the mesh's edge ends open ground as a wall or void does
+                                }
+                                else
+                                {
+                                    g = column(u, x, y, count);
+                                }
+                            }
+                            const S32 floor = mCells[k].mFloor;
+                            for (U32 i = 0; i < count; ++i)
+                            {
+                                const S32 f = floorOf(u, g[i]);
+                                if (f <= floor - 1 && ceilOf(u, g[i]) >= floor + 14)
+                                {
+                                    comp_drops[id] += f < floor - mClimb ? 1.0 : 0.0;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -1488,23 +1560,32 @@ namespace sknav
         // The watershed over the clearance, off flights: descend its levels,
         // grow the regions there are into what each level exposes, then seed
         // new ones from what is left.
-        mLabel.assign(n, -1);
-        std::vector<U8> is_ground(n);
-        std::vector<U32> level(n);
+        // What the watershed reads of a neighbour, together: its growth scatters over the mesh.
+        struct Shed
+        {
+            S32 mLabel;
+            F32 mDist;
+            U32 mStamp;
+            U16 mLevel;
+            U8 mGround;
+        };
+        std::vector<Shed> shed(n);
         for (U32 c = 0; c < n; ++c)
         {
-            is_ground[c] = mAvatar[c] && !mCells[c].mFlight;
-            level[c] = static_cast<U32>(mDist[c] / CLEAR_UNIT_M);
+            shed[c].mLabel = -1;
+            shed[c].mDist = mDist[c];
+            shed[c].mStamp = NONE;
+            shed[c].mLevel = static_cast<U16>(static_cast<U32>(mDist[c] / CLEAR_UNIT_M));
+            shed[c].mGround = mAvatar[c] && !mCells[c].mFlight;
         }
-        auto ground = [&is_ground](U32 c) { return is_ground[c] != 0; };
         std::vector<std::vector<U32>> levels;
         for (U32 c = 0; c < n; ++c)
         {
-            if (!ground(c))
+            if (!shed[c].mGround)
             {
                 continue;
             }
-            const size_t lv = level[c];
+            const size_t lv = shed[c].mLevel;
             if (levels.size() <= lv)
             {
                 levels.resize(lv + 1);
@@ -1512,7 +1593,6 @@ namespace sknav
             levels[lv].push_back(c);
         }
         S32 regions = 0;
-        std::vector<U32> stamp(n, NONE);
         std::vector<std::pair<U32, S32>> assign;
         std::vector<U32> frontier, next;
         for (size_t lv = levels.size(); lv-- > 0;)
@@ -1524,7 +1604,7 @@ namespace sknav
                 for (S32 d = 0; d < 4; ++d)
                 {
                     const U32 o = mLink[c * 4 + d];
-                    if (o != NONE && mLabel[o] >= 0 && ground(o))
+                    if (o != NONE && shed[o].mLabel >= 0 && shed[o].mGround)
                     {
                         frontier.push_back(c);
                         break;
@@ -1538,7 +1618,7 @@ namespace sknav
                 assign.clear();
                 for (U32 c : frontier)
                 {
-                    if (mLabel[c] >= 0)
+                    if (shed[c].mLabel >= 0)
                     {
                         continue;
                     }
@@ -1547,10 +1627,10 @@ namespace sknav
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = mLink[c * 4 + d];
-                        if (o != NONE && mLabel[o] >= 0 && ground(o) && mDist[o] > best_d)
+                        if (o != NONE && shed[o].mLabel >= 0 && shed[o].mGround && shed[o].mDist > best_d)
                         {
-                            best = mLabel[o];
-                            best_d = mDist[o];
+                            best = shed[o].mLabel;
+                            best_d = shed[o].mDist;
                         }
                     }
                     if (best >= 0)
@@ -1560,18 +1640,23 @@ namespace sknav
                 }
                 for (const auto& a : assign)
                 {
-                    mLabel[a.first] = a.second;
+                    shed[a.first].mLabel = a.second;
                 }
                 next.clear();
+                const U32 mark = static_cast<U32>(step + lv * GROW_STEPS);
                 for (const auto& a : assign)
                 {
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = mLink[a.first * 4 + d];
-                        if (o != NONE && mLabel[o] < 0 && ground(o) && level[o] >= lv &&
-                            stamp[o] != static_cast<U32>(step + lv * GROW_STEPS))
+                        if (o == NONE)
                         {
-                            stamp[o] = static_cast<U32>(step + lv * GROW_STEPS);
+                            continue;
+                        }
+                        Shed& so = shed[o];
+                        if (so.mLabel < 0 && so.mGround && so.mLevel >= lv && so.mStamp != mark)
+                        {
+                            so.mStamp = mark;
                             next.push_back(o);
                         }
                     }
@@ -1580,12 +1665,12 @@ namespace sknav
             }
             for (U32 c : fresh)
             {
-                if (mLabel[c] >= 0)
+                if (shed[c].mLabel >= 0)
                 {
                     continue;
                 }
                 const S32 id = regions++;
-                mLabel[c] = id;
+                shed[c].mLabel = id;
                 stack.assign(1, c);
                 while (!stack.empty())
                 {
@@ -1594,15 +1679,21 @@ namespace sknav
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = mLink[k * 4 + d];
-                        if (o != NONE && mLabel[o] < 0 && ground(o) && level[o] >= lv)
+                        if (o != NONE && shed[o].mLabel < 0 && shed[o].mGround && shed[o].mLevel >= lv)
                         {
-                            mLabel[o] = id;
+                            shed[o].mLabel = id;
                             stack.push_back(o);
                         }
                     }
                 }
             }
         }
+        mLabel.resize(n);
+        for (U32 c = 0; c < n; ++c)
+        {
+            mLabel[c] = shed[c].mLabel;
+        }
+        std::vector<Shed>().swap(shed);
         // Each flight is a region of its own.
         for (U32 c = 0; c < n; ++c)
         {
