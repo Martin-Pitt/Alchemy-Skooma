@@ -78,17 +78,15 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavRoomProbes", true);
     static LLCachedControl<U32> max_probes(gSavedSettings, "SKNavRoomProbesMax", 128);
-    if (!enabled || !view || !LLPipeline::sReflectionProbesEnabled)
+    static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
+    if (!enabled || !view || !LLPipeline::sReflectionProbesEnabled || probe_level < 3)
     {
         clear();
         return;
     }
 
     // A probe only this holds was dropped by the manager, on a teleport or a reset.
-    for (auto it = mHeld.begin(); it != mHeld.end();)
-    {
-        it = it->second.mProbe->getNumRefs() == 1 ? mHeld.erase(it) : std::next(it);
-    }
+    mHeld.erase(std::remove_if(mHeld.begin(), mHeld.end(), [](const Held& h) { return h.mProbe->getNumRefs() == 1; }), mHeld.end());
 
     if (gFrameTimeSeconds < mNextUpdate)
     {
@@ -127,7 +125,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
     struct Candidate
     {
-        Key mKey;
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
         LLVector3 mMin;
@@ -158,7 +155,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
         for (const sknav::ProbePart& part : parts.mParts)
         {
             Candidate c;
-            c.mKey = Key(mesh.mId, space.mId, part.mPart);
             c.mOrigin = origin + part.mOrigin;
             c.mRadius = sknav::clearRadius(c.mOrigin, part.mRadius, placed, params);
             if (c.mRadius <= 0.f)
@@ -183,45 +179,73 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
         it = it->second.mSeen ? std::next(it) : mParts.erase(it);
     }
 
+    // Parts renumbered by a rebuild keep their probes: match by nearest origin.
+    std::vector<LLVector3> held_origins, origins;
+    for (const Held& h : mHeld)
+    {
+        held_origins.push_back(gAgent.getPosAgentFromGlobal(h.mOrigin));
+    }
+    for (const Candidate& c : candidates)
+    {
+        origins.push_back(c.mOrigin);
+    }
+    const std::vector<S32> match = sknav::matchNearest(held_origins, origins, params.mMatchM);
+    for (sknav::ProbeSlot& slot : slots)
+    {
+        slot.mHeld = match[slot.mKey] >= 0;
+    }
+
     // The probe array's cap, less the default probe and every placed one.
     const U32 room = std::max(static_cast<S32>(manager.probeCount()) - 1 - static_cast<S32>(placed.size()), 0);
     const U32 cap = std::min<U32>(max_probes, std::min<U32>(room, LL_MAX_REFLECTION_PROBE_COUNT - 1));
     mCandidates = static_cast<U32>(slots.size());
-    sknav::keepBudget(slots, cap);
+    sknav::keepBudget(slots, cap, params.mBudgetHoldM);
     mOverBudget = mCandidates - static_cast<U32>(slots.size());
 
-    std::map<Key, Held> held;
+    // One real move per update, so re-captures are staggered and placed probes are never starved.
+    bool moved = false;
+    std::vector<Held> held;
     std::vector<std::pair<LLVector3, LLVector3>> volumes;
     for (const sknav::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
-        volumes.emplace_back(c.mMin, c.mMax);
-        auto it = mHeld.find(c.mKey);
-        if (it != mHeld.end())
+        const S32 m = match[slot.mKey];
+        Held h;
+        if (m >= 0)
         {
-            Held h = it->second;
-            const LLVector3 at = gAgent.getPosAgentFromGlobal(h.mOrigin);
-            if (sknav::shouldReplace(at, h.mRadius, c.mOrigin, c.mRadius, params))
+            h = mHeld[m];
+            if (!moved && sknav::shouldReplace(held_origins[m], h.mRadius, c.mOrigin, c.mRadius, params))
             {
+                moved = true;
                 h.mProbe->mOrigin.load3(c.mOrigin.mV);
                 h.mProbe->mRadius = c.mRadius;
-                h.mProbe->mLastUpdateTime = 0.f;    // first in line to re-render
+                h.mProbe->mComplete = false;    // no stale cubemap where it now stands
                 h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
                 h.mRadius = c.mRadius;
+                h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
+                h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
                 ++mMoves;
             }
-            held[c.mKey] = h;
-            continue;
         }
-        Held h;
-        h.mProbe = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
-        if (h.mProbe.isNull())
+        else
         {
-            continue;
+            h.mProbe = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
+            if (h.mProbe.isNull())
+            {
+                continue;
+            }
+            h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
+            h.mRadius = c.mRadius;
+            h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
+            h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
+            ++mCreated;
         }
-        h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
-        h.mRadius = c.mRadius;
-        held[c.mKey] = h;
+        // An octree probe gives way only once its replacement has a cubemap.
+        if (h.mProbe->mComplete)
+        {
+            volumes.emplace_back(gAgent.getPosAgentFromGlobal(h.mMin), gAgent.getPosAgentFromGlobal(h.mMax));
+        }
+        held.push_back(h);
     }
     mHeld.swap(held);
     mPlaced = static_cast<U32>(mHeld.size());
@@ -231,6 +255,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
 std::string SKNavRoomProbes::statsLine() const
 {
-    return llformat("room probes %u of %u parts (%u clear of placed, %u over budget), %u moves, %.2f ms",
-                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mMoves, mLastMs);
+    return llformat("room probes %u of %u parts (%u clear of placed, %u over budget), %u created, %u moves, %.2f ms",
+                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mLastMs);
 }

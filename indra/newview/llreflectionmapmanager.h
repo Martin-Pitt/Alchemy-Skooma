@@ -319,6 +319,10 @@ private:
 
     ReflectionProbeData mProbeData;
 
-    std::vector<std::pair<LLVector3, LLVector3>> mNavRoomsVolumes; // <SK:Nexii> Navmesh rooms probes, agent space
+    // <SK:Nexii> Navmesh rooms probes: the held parts, agent space, and whether the octree probes need testing against them.
+    std::vector<std::pair<LLVector3, LLVector3>> mNavRoomsVolumes;
+    bool mNavRoomsDirty = false;
+    void updateNavRoomsSuppression();
+    // </SK:Nexii>
 };
 

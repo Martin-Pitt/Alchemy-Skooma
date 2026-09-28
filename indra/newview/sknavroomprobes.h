@@ -32,14 +32,15 @@
 
 #include <map>
 #include <string>
-#include <tuple>
+#include <vector>
 
 class LLReflectionMap;
 
 /// Holds one automatic sphere per part of each indoor space near the
-/// camera, keyed (mesh, space id, part), and tells the probe manager which
-/// octree probes those parts replace. Placed probes always win: a sphere
-/// shrinks clear of their influence or is dropped. Main thread only.
+/// camera, matched to its part by nearest origin, and tells the probe
+/// manager which octree probes the finished ones replace. Placed probes
+/// always win: a sphere shrinks clear of their influence or is dropped.
+/// Only at probe level 3, where octree probes exist. Main thread only.
 class SKNavRoomProbes
 {
 public:
@@ -52,12 +53,13 @@ public:
     std::string statsLine() const;
 
 private:
-    typedef std::tuple<LLUUID, U32, U32> Key;
     struct Held
     {
         LLPointer<LLReflectionMap> mProbe;
         LLVector3d mOrigin;
         F32 mRadius = 0.f;
+        LLVector3d mMin;            ///< its part, which it replaces octree probes over once complete
+        LLVector3d mMax;
     };
     struct Parts
     {
@@ -66,7 +68,7 @@ private:
         bool mSeen = false;
     };
 
-    std::map<Key, Held> mHeld;
+    std::vector<Held> mHeld;
     std::map<std::pair<LLUUID, U32>, Parts> mParts;
     F64 mNextUpdate = 0.0;
 
@@ -75,6 +77,7 @@ private:
     U32 mClearedOut = 0;    ///< dropped to clear a placed probe
     U32 mOverBudget = 0;
     U32 mMoves = 0;
+    U32 mCreated = 0;
     U32 mPlaced = 0;
     F32 mLastMs = 0.f;
 };
