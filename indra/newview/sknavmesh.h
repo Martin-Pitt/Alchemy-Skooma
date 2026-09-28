@@ -297,8 +297,14 @@ private:
 
     bool wanted() const;
     /// Whether a processing product is demanded, which builds WEATHER and
-    /// keeps the navmesh running with no overlay: for now, the air.
+    /// keeps the navmesh running with no overlay: the air, by the setting or
+    /// for the reflection probes' rooms.
     static bool processDemanded();
+    /// Whether the reflection probes consume the rooms: room probes on,
+    /// probes enabled, and the probe level that shows the octree's probes
+    /// the rooms replace. Demands the air the rooms are cut from, and the
+    /// census with it.
+    static bool probesDemanded();
     /// Whether a tile is near enough the camera to build its air eagerly.
     static bool inAirRadius(const Tile& tile);
     /// Bring the sky map in line with the published tiles' air.

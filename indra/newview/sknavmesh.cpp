@@ -247,7 +247,16 @@ bool SKNavMesh::wanted() const
 bool SKNavMesh::processDemanded()
 {
     static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
-    return air;
+    return air || probesDemanded();
+}
+
+bool SKNavMesh::probesDemanded()
+{
+    // Mirrors the guards in SKNavRoomProbes::update, which cannot demand
+    // anything itself: it only runs when the navmesh already does.
+    static LLCachedControl<bool> room_probes(gSavedSettings, "SKNavRoomProbes", true);
+    static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
+    return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
 bool SKNavMesh::inAirRadius(const Tile& tile)
