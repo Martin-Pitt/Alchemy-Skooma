@@ -120,4 +120,55 @@ namespace tut
 
         ensure("without a base, Luau's defaults", ALLuauConfig::parse("{}", config, error) && (config.lints & unused) != 0 && config.mode.empty());
     }
+
+    template<> template<>
+    void alluauconfig_object::test<5>()
+    {
+        set_test_name("a file read over another adds its globals to the other's, and its aliases over the other's, as Luau reads a chain of them");
+        ALLuauConfig outer;
+        std::string  error;
+        ensure("the outer file", ALLuauConfig::parse("{ \"globals\": [\"shared\"], \"aliases\": { \"lib\": \"./lib\", \"util\": \"./util\" } }", outer, error));
+        ALLuauConfig inner;
+        ensure("the inner over it", ALLuauConfig::parse("{ \"globals\": [\"mine\"], \"aliases\": { \"lib\": \"./mylib\" } }", inner, error, &outer));
+        ensure("both globals", inner.globals == std::vector<std::string>{ "shared", "mine" });
+        ensure_equals("the nearer alias", inner.aliases["lib"], std::string("./mylib"));
+        ensure_equals("the outer's kept", inner.aliases["util"], std::string("./util"));
+        ALLuauConfig quiet;
+        ensure("one saying nothing of them", ALLuauConfig::parse("{}", quiet, error, &outer));
+        ensure("keeps them", quiet.globals == std::vector<std::string>{ "shared" });
+    }
+
+    template<> template<>
+    void alluauconfig_object::test<6>()
+    {
+        set_test_name("a chain of files, nearest first, read from the top down: the nearest to say a thing wins, and globals add up");
+        const std::string root   = "{ \"languageMode\": \"strict\", \"globals\": [\"a\"], \"lint\": { \"LocalUnused\": false }, "
+                                   "\"aliases\": { \"lib\": \"./rootlib\", \"root\": \"./r\" } }";
+        const std::string broken = "{ not a configuration";
+        const std::string middle = "{ \"globals\": [\"b\"], \"lint\": { \"FunctionUnused\": false }, \"aliases\": { \"lib\": \"./midlib\" } }";
+        const std::string nearby = "{ \"languageMode\": \"nonstrict\", \"globals\": [\"c\"], \"lint\": { \"LocalUnused\": true } }";
+        const std::vector<std::string_view> chain{ nearby, middle, broken, root };
+
+        ALLuauConfig merged;
+        ensure("parsed", ALLuauConfig::parseChain(chain, merged));
+        ensure_equals("the nearest mode", merged.mode, std::string("nonstrict"));
+        ensure("globals from every file, the furthest first", merged.globals == std::vector<std::string>{ "a", "b", "c" });
+        const uint64_t local_unused    = ALLuauConfig::lintBit("LocalUnused");
+        const uint64_t function_unused = ALLuauConfig::lintBit("FunctionUnused");
+        ensure("a lint the root turned off and the nearest on", (merged.lints & local_unused) != 0);
+        ensure("one the middle turned off, off", (merged.lints & function_unused) == 0);
+        ensure_equals("an alias the middle says over the root's", merged.aliases["lib"], std::string("./midlib"));
+        ensure_equals("the root's own kept", merged.aliases["root"], std::string("./r"));
+
+        std::string value;
+        ensure("lib: the middle's, the nearest that says", ALLuauConfig::aliasIn(chain, "lib", value) == std::optional<size_t>(1) && value == "./midlib");
+        ensure("root: the root's", ALLuauConfig::aliasIn(chain, "root", value) == std::optional<size_t>(3) && value == "./r");
+        ensure("an alias none says", !ALLuauConfig::aliasIn(chain, "none", value));
+
+        ALLuauConfig base;
+        base.mode = "strict";
+        ALLuauConfig none;
+        ensure("none that parse is no configuration", !ALLuauConfig::parseChain({ broken }, none, &base));
+        ensure_equals("and leaves the base", none.mode, std::string("strict"));
+    }
 }

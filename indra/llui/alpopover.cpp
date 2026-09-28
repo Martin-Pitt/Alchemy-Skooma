@@ -26,7 +26,10 @@
 
 #include "alpopover.h"
 
+#include "alkeyshome.h"
+#include "alplace.h"
 #include "llpanel.h"
+#include "llstl.h"
 #include "lluictrlfactory.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -34,9 +37,9 @@
 namespace
 {
 // The size each kind of popover was last left at, for the session.
-boost::unordered_flat_map<std::string, std::pair<S32, S32>>& rememberedSizes()
+boost::unordered_flat_map<std::string, std::pair<S32, S32>, ll::string_hash, std::equal_to<>>& rememberedSizes()
 {
-    static boost::unordered_flat_map<std::string, std::pair<S32, S32>> sizes;
+    static boost::unordered_flat_map<std::string, std::pair<S32, S32>, ll::string_hash, std::equal_to<>> sizes;
     return sizes;
 }
 } // namespace
@@ -143,10 +146,10 @@ LLFloater::Params ALPopover::paramsRemembered(const std::string& kind, S32 width
 }
 
 // Under the control, its left edge with the control's, and flipped above it
-// where under would put it off the bottom: a panel a person cannot see the
-// whole of is a panel that has not opened. A side off the screen is put
-// back on it for the same reason, which is what the floater view does for
-// every window it holds.
+// where under would put it off the bottom and above would not (ALPlace): a
+// panel a person cannot see the whole of is a panel that has not opened. A
+// side off the screen is put back on it for the same reason, which is what
+// the floater view does for every window it holds.
 void ALPopover::adopt(const LLView* anchor)
 {
     // Where keys go: the window the anchor is in, or the anchor itself
@@ -197,17 +200,14 @@ void ALPopover::openBeside(const LLView* anchor)
 
 void ALPopover::openBeside(const LLRect& screen, const LLView* anchor)
 {
-    LLRect where = getRect();
     if (anchor)
     {
         adopt(anchor);
     }
-    where.setLeftTopAndSize(screen.mLeft, screen.mBottom, where.getWidth(), where.getHeight());
-    if (where.mBottom < 0)
-    {
-        where.translate(0, screen.getHeight() + where.getHeight());
-    }
-    openAt(where);
+    // The floater view is the screen a popover has; without one, only the
+    // screen's bottom is known.
+    const LLRect bounds = gFloaterView ? gFloaterView->getLocalRect() : LLRect(S32_MIN / 2, S32_MAX / 2, S32_MAX / 2, 0);
+    openAt(ALPlace::under(screen, getRect().getWidth(), getRect().getHeight(), bounds));
 }
 
 void ALPopover::openOver(const LLView* anchor)
@@ -291,13 +291,76 @@ bool ALPopover::handleKeyHere(KEY key, MASK mask)
         settle();
         return true;
     }
-    if (LLFloater::handleKeyHere(key, mask))
+    return ALKeysHome::handle(*this, mHome.get(), key, mask);
+}
+
+// --- the slot ---------------------------------------------------------------------
+
+ALPopoverSlot::~ALPopoverSlot()
+{
+    drop();
+}
+
+void ALPopoverSlot::hold(ALPopover* popover, closed_t closed)
+{
+    if (popover != mHeld.get())
     {
-        return true;
+        close(true);
     }
-    if (LLFloater* home = mHome.get())
+    mClosed.disconnect();
+    mHeld = popover ? popover->getDerivedHandle<ALPopover>() : LLHandle<ALPopover>();
+    if (!popover)
     {
-        return home->handleKeyHere(key, mask);
+        return;
     }
-    return false;
+    mClosed = popover->onClosed([this, closed = std::move(closed)](bool escaped) {
+        // Empty before whoever is told hears it, so that one who opens the
+        // next from here finds nothing up.
+        mHeld.markDead();
+        if (closed)
+        {
+            closed(escaped);
+        }
+    });
+}
+
+void ALPopoverSlot::close(bool escape)
+{
+    ALPopover* popover = mHeld.get();
+    if (!popover)
+    {
+        return;
+    }
+    // The owner told may go, and this slot with it: nothing of it is read
+    // after unless it is still here.
+    const std::weak_ptr<bool> alive = mAlive;
+    if (escape)
+    {
+        popover->escape();
+    }
+    else
+    {
+        popover->settle();
+    }
+    if (alive.expired())
+    {
+        return;
+    }
+    // Emptied as it said so; one that had said so already is let go of
+    // here. Not one the telling opened in its place.
+    if (mHeld.get() == popover)
+    {
+        mClosed.disconnect();
+        mHeld.markDead();
+    }
+}
+
+void ALPopoverSlot::drop()
+{
+    mClosed.disconnect();
+    if (ALPopover* popover = mHeld.get())
+    {
+        popover->die();
+    }
+    mHeld.markDead();
 }

@@ -24,13 +24,12 @@
 
 #pragma once
 
+#include "alpopover.h"
 #include "lluictrl.h"
 
 #include <string>
 
 #include <boost/signals2.hpp>
-
-class ALPopover;
 class LLFontGL;
 class LLLineEditor;
 
@@ -99,6 +98,11 @@ public:
 
     void draw() override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    // The popover from the keyboard, as a combo box opens its list:
+    // Alt-Down or F4, from the field or the name typed in it; and, where
+    // there is no name to type, Return or Space.
+    bool handleKeyHere(KEY key, MASK mask) override;
+    bool handleUnicodeCharHere(llwchar uni_char) override;
 
     ~ALFontField() override;
 
@@ -108,7 +112,6 @@ protected:
 
 private:
     void openPopover();
-    void closePopover();
     // What the popover settled on, written as the three attributes it is.
     void apply(const std::string& name, const std::string& size, const std::string& style);
     void onTextCommit();
@@ -126,5 +129,5 @@ private:
     const LLFontGL*         mFont = nullptr;
     LLLineEditor*           mEditor = nullptr;
     part_signal_t           mPartCommit;
-    LLHandle<ALPopover>     mPopover;
+    ALPopoverSlot           mPopover;
 };

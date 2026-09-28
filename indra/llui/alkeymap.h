@@ -98,6 +98,34 @@ enum class ALEditorCommand : U8
     FindPrevious,
     // What would put right the problem at the caret, offered as a list.
     QuickFix,
+    NextMisspelling,
+    PreviousMisspelling,
+    JoinLines,
+    PreviousChange,
+    NextChange,
+    NextFunction,
+    PreviousFunction,
+    SelectFunction,
+    // To the bracket paired with the one at the caret, or to the closer
+    // of the innermost pair around it.
+    GoToMatchingBracket,
+    // A line under the caret's, or over it, indented where it goes, the
+    // caret on it whatever it was in the middle of; and the caret's line
+    // selected whole, and again the next with it.
+    InsertLineBelow,
+    InsertLineAbove,
+    SelectLine,
+    // By the parts of a name as well as by words: `Set` in `llSetPos`.
+    MoveSubwordLeft,
+    MoveSubwordRight,
+    SelectSubwordLeft,
+    SelectSubwordRight,
+    // The selection grown to what holds it as code reads it, and back.
+    ExpandSelection,
+    ShrinkSelection,
+    // Every place of a text changed at once: the next place taken, or all.
+    SelectNextOccurrence,
+    ChangeAllOccurrences,
     COUNT
 };
 
@@ -133,9 +161,10 @@ public:
     // control-shift-D duplicates one and control-shift-K deletes one,
     // control-shift with a square bracket folds and unfolds,
     // control-space completes, F12 goes to a definition, shift-F12 finds
-    // the references, F2 renames, control-F finds, control-H (and
-    // control-alt-F, since a Mac keeps command-H) replaces, and F3 and
-    // shift-F3 go to the next and the previous match.
+    // the references, F2 renames, control-F finds, control-H (and on a
+    // Mac, which keeps command-H, command-option-F) replaces, and F3 and
+    // shift-F3 go to the next and the previous match. Backspace and Return
+    // held with shift are still Backspace and Return.
     static ALKeymap standard();
 
 private:
