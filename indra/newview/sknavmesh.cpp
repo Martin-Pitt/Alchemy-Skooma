@@ -1298,6 +1298,7 @@ void SKNavMesh::schedule()
 
 void SKNavMesh::update()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - update");
     SKWorldCensus& census = SKWorldCensus::instance();
     const bool want = wanted();
     if (want != mDemanding)
@@ -1330,6 +1331,7 @@ void SKNavMesh::update()
     {
         mCensusStamp = snap->mStamp;
         last = gFrameTimeSeconds;
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile");
         reconcile(snap);
     }
 
@@ -1347,12 +1349,16 @@ void SKNavMesh::update()
         }
     }
 
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sample terrain");
     sampleTerrain();
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air");
     evictAir();
     schedule();
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync feature links");
     syncFeatureLinks(snap);
     if (mSkyRevision != mRevision)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync sky map");
         syncSkyMap();
         mSkyRevision = mRevision;
     }
