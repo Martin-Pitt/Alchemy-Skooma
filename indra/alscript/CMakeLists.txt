@@ -9,7 +9,14 @@ add_library(alscript STATIC)
 target_sources(
   alscript
   PRIVATE
+    aldiskcache.cpp
     aldiskincludes.cpp
+    alincludeidentity.cpp
+    alincludesearch.cpp
+    almodulelook.cpp
+    allslconsts.cpp
+    allslcosts.cpp
+    allsleffects.cpp
     allslinliner.cpp
     almessagemap.cpp
     allsloptimizer.cpp
@@ -19,14 +26,20 @@ target_sources(
     allslexports.cpp
     allslservice.cpp
     allsltraits.cpp
+    allslvalues.cpp
     alpreprocessor.cpp
     alscriptenvelope.cpp
     alscriptfixes.cpp
     alscriptformatter.cpp
     alscriptmessages.cpp
+    alscriptnameindex.cpp
+    alscriptsnapshot.cpp
     alscriptrecovery.cpp
     alscriptweight.cpp
     alscriptstack.cpp
+    alscripttempfiles.cpp
+    alscripttextcache.cpp
+    alselenefilters.cpp
     alsourcemap.cpp
 )
 
@@ -35,7 +48,14 @@ target_sources(
   PUBLIC
     FILE_SET HEADERS
       FILES
+        aldiskcache.h
         aldiskincludes.h
+        alincludeidentity.h
+        alincludesearch.h
+        almodulelook.h
+        allslconsts.h
+        allslcosts.h
+        allsleffects.h
         allslinliner.h
         almessagemap.h
         allsloptimizer.h
@@ -46,17 +66,24 @@ target_sources(
         allslexports.h
         allslservice.h
         allsltraits.h
+        allslvalues.h
         alpreprocessor.h
         alscriptengine.h
         alscriptenvelope.h
         alscriptfixes.h
         alscriptformatter.h
+        alscriptjoblane.h
         alscriptmessages.h
+        alscriptnameindex.h
+        alscriptsnapshot.h
         alscriptrecovery.h
         alscriptproblem.h
         alscriptstack.h
         alscriptsymbol.h
+        alscripttempfiles.h
+        alscripttextcache.h
         alscriptweight.h
+        alselenefilters.h
         alsourcemap.h
 )
 
@@ -113,6 +140,15 @@ if(AL_BUILD_TESTS)
     DEFINES ${definitions_defines}
   )
   al_add_test(aldiskincludes PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(aldiskcache PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alincludeidentity PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alincludesearch PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(almodulelook PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alsourcemap PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscriptjoblane PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscriptnameindex PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscriptsnapshot PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscripttextcache PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptstack PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptenvelope PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(almessagemap PROJECT alscript LIBRARIES alscript llcommon)
@@ -120,6 +156,30 @@ if(AL_BUILD_TESTS)
   al_add_test(alscriptformatter PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptmessages PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptrecovery PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscripttempfiles PROJECT alscript LIBRARIES alscript llcommon)
+  # What LSL may change and the order it runs in, over scripts parsed with
+  # the grid's builtins loaded.
+  al_add_test(
+    allsleffects
+    PROJECT alscript
+    LIBRARIES alscript llcommon ll::tailslide
+    DEFINES ${definitions_defines}
+  )
+  # What LSL forms cost on each target: snippet pairs compiled by
+  # Tailslide, against what the optimizer takes them to cost.
+  al_add_test(
+    allslcosts
+    PROJECT alscript
+    LIBRARIES alscript llcommon
+    DEFINES ${definitions_defines}
+  )
+  # The const keyword over scripts parsed with the grid's builtins loaded.
+  al_add_test(
+    allslconsts
+    PROJECT alscript
+    LIBRARIES alscript llcommon
+    DEFINES ${definitions_defines}
+  )
   # The optimizer's golden files under tests/optimizer/, checked with the
   # grid's builtins loaded.
   al_add_test(
@@ -135,5 +195,14 @@ if(AL_BUILD_TESTS)
     PROJECT alscript
     LIBRARIES alscript llcommon
     DEFINES ${definitions_defines} "AL_ALSCRIPT_TEST_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\""
+  )
+  # The preprocessor, the formatter, the optimizer and one analysis of each
+  # language over big scripts, with the grid's definitions loaded.
+  al_add_bench(
+    alscript
+    PROJECT alscript
+    LIBRARIES alscript llcommon
+    INCLUDES ${INDRA_SOURCE_DIR}/test
+    DEFINES ${definitions_defines}
   )
 endif()

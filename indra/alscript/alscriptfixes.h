@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The fixes the studio offers, made from a problem's words and the text it
@@ -38,6 +39,58 @@
 // a test may apply a fix and check the text again.
 namespace ALScriptFixes
 {
+    // A text's lines, each without its break, and where each begins: found
+    // once for all the fixes offered over one text -- a check's problems,
+    // each offered its own -- rather than once for each.
+    class Lines
+    {
+    public:
+        explicit Lines(std::string_view text) : mText(text)
+        {
+            mStarts.push_back(0);
+            for (size_t i = 0; i < text.size(); ++i)
+            {
+                if (text[i] == '\n')
+                {
+                    mStarts.push_back(i + 1);
+                }
+            }
+        }
+
+        S32              count() const { return static_cast<S32>(mStarts.size()); }
+        std::string_view text() const { return mText; }
+
+        std::string_view line(S32 n) const
+        {
+            if (n < 0 || static_cast<size_t>(n) >= mStarts.size())
+            {
+                return {};
+            }
+            const size_t begin = mStarts[n];
+            size_t       end   = static_cast<size_t>(n) + 1 < mStarts.size() ? mStarts[n + 1] - 1 : mText.size();
+            if (end > begin && mText[end - 1] == '\r')
+            {
+                --end;
+            }
+            return mText.substr(begin, end - begin);
+        }
+
+        // Where a place is in the text, or nothing for a place past its
+        // line's end or past the last line.
+        std::optional<size_t> offsetOf(S32 line, S32 column) const
+        {
+            if (column < 0 || static_cast<size_t>(column) > this->line(line).size() || line < 0 || static_cast<size_t>(line) >= mStarts.size())
+            {
+                return std::nullopt;
+            }
+            return mStarts[line] + static_cast<size_t>(column);
+        }
+
+    private:
+        std::string_view    mText;
+        std::vector<size_t> mStarts;
+    };
+
     // A fix's words, keyed as a problem's are: the English is what a skin
     // without the key shows, and what the tests read. What the services
     // title their own with.
@@ -54,6 +107,9 @@ namespace ALScriptFixes
     // definitions name one, an unused local marked unused -- in the places
     // of `text`, which is what the problems were said of.
     void attach(ALScriptProblems& problems, std::string_view text, bool lua);
+    // The same over lines found once, passing over a problem wholly within
+    // `passedOver` -- an include's lines, whose fixes nobody reads.
+    void attach(ALScriptProblems& problems, const Lines& lines, bool lua, const std::vector<std::pair<S32, S32>>& passedOver);
 
     // How far apart two names are, in edits, case aside: a character put
     // in, taken out or changed, or two side by side swapped.
@@ -64,6 +120,9 @@ namespace ALScriptFixes
     // length; none for a one-character name but the same in another case,
     // and none where nothing is near enough to be what was meant.
     std::vector<std::string> nearestNames(std::string_view word, const std::vector<std::string>& names);
+    // The same among two lists, the second -- a language's builtins --
+    // shared rather than copied into the first; none where null.
+    std::vector<std::string> nearestAmong(std::string_view word, const std::vector<std::string>& names, const std::vector<std::string>* more);
     // The one name nearest `word`, where no other is as near; empty where
     // none is near enough, or several are.
     std::string nearest(std::string_view word, const std::vector<std::string>& names);
@@ -80,6 +139,11 @@ namespace ALScriptFixes
     // A change for each of the names in scope nearest the one a problem
     // is about, preferred where there is one and it is surely meant.
     void offerNames(ALScriptProblem& problem, std::string_view text, const std::string& was, const std::vector<std::string>& names);
+    void offerNames(ALScriptProblem& problem, const Lines& lines, const std::string& was, const std::vector<std::string>& names);
+    // Among two lists of names, the second shared -- a language's builtins
+    // -- rather than copied into the first for each name offered.
+    void offerNames(ALScriptProblem& problem, const Lines& lines, const std::string& was, const std::vector<std::string>& names,
+                    const std::vector<std::string>& more);
     // The fix that takes a declaration nothing uses out of `text`, given
     // where the service's tree says it stands: with the `;` after it and
     // the type word before its name, and the whole of its lines where
@@ -89,12 +153,17 @@ namespace ALScriptFixes
     // The same, titled as `fix` is, for what has no name of its own: code
     // that can never run, a statement that does nothing.
     void offerRemoval(ALScriptProblem& problem, std::string_view text, S32 line, S32 column, S32 endLine, S32 endColumn, ALScriptFix fix);
+    // The same over lines found once, for many.
+    void offerRemoval(ALScriptProblem& problem, const Lines& lines, S32 line, S32 column, S32 endLine, S32 endColumn, const std::string& name);
+    void offerRemoval(ALScriptProblem& problem, const Lines& lines, S32 line, S32 column, S32 endLine, S32 endColumn, ALScriptFix fix);
 
     // What the optimizer did, offered as a change to the source where the
     // source says just what the optimizer read -- blanks aside -- and the
     // change is one expression or one thing removed: the notes of a run
     // over `text`, in its places.
     void attachOptimizer(ALScriptProblem& problem, std::string_view text);
+    // The same over lines found once, for every note of a run.
+    void attachOptimizer(ALScriptProblem& problem, const Lines& lines);
 
     // A problem's fixes taken through a map from the text they were made
     // over to the source, kept only where every edit lands, on one line,
@@ -119,10 +188,12 @@ namespace ALScriptFixes
     // preferred nor safe here: which module is meant, and whether running
     // it is wanted, is the caller's to know.
     void offerRequire(ALScriptProblem& problem, std::string_view text, const std::string& module, bool field);
+    void offerRequire(ALScriptProblem& problem, const Lines& lines, const std::string& module, bool field);
     // The same for LSL: `#include "include"` for a name an include
     // declares -- a function, a global, a macro -- after the directives
     // `text` opens with, else after its comments.
     void offerInclude(ALScriptProblem& problem, std::string_view text, const std::string& include);
+    void offerInclude(ALScriptProblem& problem, const Lines& lines, const std::string& include);
 
     // A name for something a refactor makes in `text`: `base`, else
     // `base2`, `base3` and on -- one that stands nowhere in it as a word,

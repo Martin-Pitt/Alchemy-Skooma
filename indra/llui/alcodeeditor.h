@@ -24,8 +24,13 @@
 
 #pragma once
 
+#include "alanchoredranges.h"
+#include "alcodecards.h"
+#include "albracketindex.h"
 #include "alcompletionmodel.h"
 #include "alfixlistmodel.h"
+#include "alfoldmodel.h"
+#include "allinetable.h"
 #include "alsnippetsession.h"
 #include "altextview.h"
 
@@ -146,9 +151,17 @@ public:
         LLColor4    color;
         // Shown when the mouse rests on it, where there is something to say.
         std::string message;
+        // Where it came among those given, which is the order they are
+        // listed in -- the worst first, as a checker gives them --
+        // whatever order they lie in. Set by setDecorations.
+        U32         order = 0;
     };
     void                           setDecorations(std::vector<Decoration> decorations);
-    const std::vector<Decoration>& decorations() const { return mDecorations; }
+    // In the order they lie in.
+    const std::vector<Decoration>& decorations() const { return mDecorations.items(); }
+    // Those that may lie on a line, in the order they were given: a
+    // caller still asks each whether it does.
+    std::vector<const Decoration*> decorationsOn(S32 line) const;
 
     // A stretch coloured by what an analyzer knows it to be, over what
     // the grammar coloured it: a parameter, a local, a field, a type, a
@@ -161,7 +174,7 @@ public:
         bool         strike = false;
     };
     void                              setSemanticTokens(std::vector<SemanticToken> tokens);
-    const std::vector<SemanticToken>& semanticTokens() const { return mSemantics; }
+    const std::vector<SemanticToken>& semanticTokens() const { return mSemantics.items(); }
 
     // A word shown beside the text without being in it -- a parameter's
     // name before the argument it is given, a type after a name declared
@@ -181,7 +194,7 @@ public:
         std::string insert;
     };
     void                          setInlayHints(std::vector<InlayHint> hints);
-    const std::vector<InlayHint>& inlayHints() const { return mInlays; }
+    const std::vector<InlayHint>& inlayHints() const { return mInlays.items(); }
     // The inlay drawn under a point of the view, by its place among the
     // hints, or -1.
     S32                           inlayAtLocal(S32 x, S32 y);
@@ -221,25 +234,66 @@ public:
     // The line whose note is drawn under a point of the view, or -1.
     S32         noteAtLocal(S32 x, S32 y);
 
-    // The places a name stands, washed over until they are cleared or
-    // the caret leaves them all; an edit slides them as it does the
-    // decorations.
-    void                            setHighlights(std::vector<ALTextRange> ranges);
-    void                            clearHighlights() { mHighlights.clear(); }
-    const std::vector<ALTextRange>& highlights() const { return mHighlights; }
-    // Whether a position is on one of them.
-    bool                            highlighted(const ALTextPos& at) const;
+    // Stretches washed over, each by what lit it, so that one does not
+    // put out another: a search's matches, vim's visual block, the places
+    // a substitution asks about, the places a name stands as found, the
+    // other places the name under the caret stands as written. Each until
+    // it is cleared -- the references also as the caret leaves them all,
+    // the occurrences as it leaves the name; an edit slides them as it
+    // does the decorations.
+    enum class Highlight : U8
+    {
+        Search,
+        Block,
+        Confirm,
+        References,
+        Occurrences,
+        COUNT
+    };
+    void                            setHighlights(Highlight layer, std::vector<ALTextRange> ranges);
+    void                            clearHighlights(Highlight layer) { mHighlights[static_cast<size_t>(layer)].clear(); }
+    void                            clearHighlights();
+    const std::vector<ALTextRange>& highlights(Highlight layer) const { return mHighlights[static_cast<size_t>(layer)].items(); }
+    // Every layer's, in the layers' order.
+    std::vector<ALTextRange>        highlights() const;
+    // Whether a position is on one of a layer's.
+    bool                            highlighted(Highlight layer, const ALTextPos& at) const;
+    // The other places the name under the caret stands lit, washed more
+    // lightly than the rest, once the caret has rested on it: in code --
+    // not in a string or a comment -- on the lines in view and a view's
+    // worth either side, and only where it stands more than once. Put out
+    // as the caret leaves the name, or the text changes. As drawing does
+    // it, or at once.
+    void                            setLightsOccurrences(bool lights);
+    void                            lightOccurrences();
 
     // The bracket the caret is at -- just before it, or under it -- and
     // its match, skipping what is inside strings and comments. False where
-    // the caret is at no bracket, or the bracket has no match.
+    // the caret is at no bracket, or the bracket has no match nearby.
     bool matchingBrackets(ALTextPos& open, ALTextPos& close);
-    // The bracket at a position and its match, likewise; what vim's %
-    // and its bracket objects ask, so that they and the box drawn agree.
-    bool matchBracketAt(const ALTextPos& at, ALTextPos& match);
+    // The bracket at a position and its match, likewise, as far as told;
+    // what vim's % and its bracket objects ask, so that they and the box
+    // drawn agree. All of it is the bracket index's (ALBracketIndex),
+    // which vim asks of directly for the brackets around a place.
+    bool            matchBracketAt(const ALTextPos& at, ALTextPos& match, S32 lines = ALBracketIndex::NEARBY);
+    ALBracketIndex& bracketIndex() { return mBracketIndex; }
 
     void setShowLineNumbers(bool show);
     bool getShowLineNumbers() const { return mShowLineNumbers; }
+    // For a text shown rather than edited -- a side of a diff -- the
+    // number each line shows in the gutter, where its lines are not the
+    // ones counted: none, for a line of 0, which a diff pads with. And a
+    // tint behind each line, the width of the text, none where its alpha
+    // is 0. Each one a line, from the first; an edit clears both.
+    void                         setLineNumbers(std::vector<S32> numbers) { mLineNumbers = std::move(numbers); }
+    // For a text that is part of a larger one -- a script's code under
+    // its envelope, which a runtime error's line counts -- the lines
+    // counted from there: the first shows base + 1.
+    void                         setLineNumberBase(S32 base) { mLineNumberBase = llmax(0, base); }
+    S32                          lineNumberBase() const override { return mLineNumberBase; }
+    void                         setLineTints(std::vector<LLColor4> tints) { mLineTints = std::move(tints); }
+    const std::vector<S32>&      lineNumbers() const { return mLineNumbers; }
+    const std::vector<LLColor4>& lineTints() const { return mLineTints; }
     // Whether a line was changed since the text was last saved: the
     // gutter bars it, and a save clears them all.
     bool lineChanged(S32 line) const;
@@ -312,12 +366,8 @@ public:
     // --- folding ---------------------------------------------------------------
 
     // A block: the line it starts on stays in sight, the lines through
-    // `end` go when it is folded.
-    struct FoldRegion
-    {
-        S32 start = 0;
-        S32 end   = 0;
-    };
+    // `end` go when it is folded (ALFoldModel).
+    typedef ALFoldModel::Region FoldRegion;
     // Every block in the text, by start line, found again when the text
     // has changed.
     const std::vector<FoldRegion>& foldRegions();
@@ -329,6 +379,12 @@ public:
     void unfoldAll();
     // Whether a folded block starts at the line.
     bool isFolded(S32 line) const;
+
+    // How many brackets are open at a line's start, found from the top
+    // once and kept until an edit above it; and at a place of a line. A
+    // bracket in a string or a comment is none.
+    S32 bracketDepthBefore(S32 line) { return mBracketIndex.depthBefore(line); }
+    S32 bracketDepthAt(const ALTextPos& at) { return mBracketIndex.depthAt(at); }
 
     // --- completion --------------------------------------------------------------
 
@@ -354,8 +410,11 @@ public:
     bool completionOpen() const;
     void closeCompletion();
     // Whether the list opens on its own as an identifier is typed, or only
-    // when asked for; after how many letters; and whether Return takes the
-    // chosen one, as Tab does, or starts a new line.
+    // when asked for; after how many letters; and whether Return may take
+    // the chosen one, as Tab does, or always starts a new line. Where it
+    // may, it takes it only once the list has been moved through, or where
+    // taking it changes the text: a word typed out whole and Return is a
+    // new line, not the list's.
     void setAutoComplete(bool on) { mAutoComplete = on; }
     bool getAutoComplete() const { return mAutoComplete; }
     void setCompleteAfter(S32 letters) { mCompleteAfter = llclamp(letters, 1, 9); }
@@ -402,6 +461,12 @@ public:
     // replaceAll. Nothing is asked with the caret on no identifier.
     typedef std::function<void(ALEditorCommand command, const ALTextRange& word)> symbol_request_t;
     void setSymbolRequest(symbol_request_t request) { mSymbolRequest = std::move(request); }
+    // What a place leads to of itself, asked before the identifier there
+    // by Go to Definition and Control-click: an include's name, a
+    // module's, anywhere on the line that names it. The stretch it covers,
+    // or an empty one for nothing; and gone to where `follow`.
+    typedef std::function<ALTextRange(const ALTextPos& at, bool follow)> link_request_t;
+    void setLinkRequest(link_request_t request) { mLinkRequest = std::move(request); }
     // The identifier at a position -- letters, digits and underscores,
     // which is narrower than a word to the document, where a dot between
     // letters joins them as it does in "e.g." -- or an empty range. The
@@ -438,6 +503,18 @@ public:
     // Everything typing puts up let go of at once: the list, the
     // signature and the stops.
     void                            dropTyping();
+
+    // Every place of a text changed at once, until there are several
+    // carets: the selection a stop, and the places that read as it does
+    // its mirrors, brought up as each key is typed and lit while they
+    // are; Escape, Tab, or the caret off the stop's line lets them go.
+    // Select Next Occurrence takes the name at the caret, then adds the
+    // next place after the last one taken, going round; Change All takes
+    // every place at once. A name taken so matches whole names only.
+    bool                            selectNextOccurrence();
+    bool                            changeAllOccurrences();
+    void                            undo() override;
+    void                            redo() override;
     // The names of a signature's parameters, and where their list opens
     // (ALSnippetSession).
     static std::vector<std::string> parameterNames(std::string_view detail, std::string_view name = std::string_view())
@@ -452,6 +529,21 @@ public:
     typedef ALCodeFix Fix;
     typedef std::function<void(S32 line, std::vector<Fix>& out)> fix_provider_t;
     void setFixProvider(fix_provider_t provider) { mFixProvider = std::move(provider); }
+
+    // --- functions -------------------------------------------------------------------
+
+    // The text's functions -- a script's functions and events -- as the host
+    // knows them: each's whole stretch. What Next Function, Previous
+    // Function and Select Function go by, and vim's [[ ]] [m ]m, af and if.
+    typedef std::function<void(std::vector<ALTextRange>& out)> function_provider_t;
+    void setFunctionProvider(function_provider_t provider) { mFunctionProvider = std::move(provider); }
+    // The host's, in order of where they start; none without a host.
+    std::vector<ALTextRange> functions() const;
+    // The start of the next function after a place, or of the last one
+    // before it; or with `ends`, the end.
+    std::optional<ALTextRange> functionFrom(const ALTextPos& at, bool forward, bool ends) const;
+    // The innermost function holding a stretch and more besides.
+    std::optional<ALTextRange> functionAround(const ALTextRange& range) const;
     typedef std::function<void(const LLSD& value)> fix_handler_t;
     void setFixHandler(fix_handler_t handler) { mFixHandler = std::move(handler); }
     // What the problems on a line offer: any fix at all -- a suppression
@@ -467,6 +559,9 @@ public:
     // or a double click takes one. False where the line has none.
     bool                    openFixes(S32 line);
     bool                    fixesOpen() const;
+    // The dictionary's words for the misspelling at the caret, where `line`
+    // is the caret's: fixes the editor makes itself when one is taken.
+    void                    spellingFixes(S32 line, std::vector<Fix>& fixes);
     void                    closeFixes();
     const std::vector<Fix>& fixes() const { return mFixListModel.fixes(); }
     // What a fix would make of the lines it touches, and the preview of it
@@ -506,7 +601,9 @@ public:
 
     // Asked what to say about the word the mouse rests on; answers into
     // `text` and true where there is something. A decoration's message
-    // comes first where the mouse is on one.
+    // comes first where the mouse is on one; and where there is a hover
+    // request, the analyzer's answer comes before this, which is said
+    // where the analyzer answers nothing (supplyHover with no text).
     typedef std::function<bool(const ALTextPos& at, std::string_view word, std::string& text)> hover_provider_t;
     void setHoverProvider(hover_provider_t provider) { mHover = std::move(provider); }
     // Asked when the provider had nothing to say, for an answer that
@@ -516,12 +613,7 @@ public:
     // A line of what a card says that is a way somewhere -- where the word
     // was declared -- by its words: a link on the card that hands its
     // value to the handler, and the card goes.
-    struct CardLink
-    {
-        std::string line;
-        std::string tooltip;
-        LLSD        value;
-    };
+    typedef ALCodeCards::Link CardLink;
     void supplyHover(const ALTextPos& at, const std::string& text, std::vector<CardLink> links = {});
     typedef std::function<void(const LLSD& value)> card_link_t;
     void setCardLinkHandler(card_link_t handler) { mCardLinkHandler = std::move(handler); }
@@ -533,11 +625,7 @@ public:
     // and every URL a link. It stays while the mouse is on what it is
     // about or on the card, and goes with a key, an edit, a scroll or a
     // click elsewhere.
-    struct CardProblem
-    {
-        std::string message;
-        LLColor4    color;
-    };
+    typedef ALCodeCards::Problem CardProblem;
     void        showCard(const ALTextRange& about, const std::string& says, const std::vector<CardProblem>& problems = {},
                          const std::vector<CardLink>& links = {});
     // Whether the mouse resting on the text brings up a card at all, and
@@ -566,25 +654,25 @@ public:
 
     // The call the caret is in, drawn above its row: the label with the
     // parameter the caret is at picked out, and a line of documentation.
-    struct Signature
-    {
-        std::string                          label;
-        // Each parameter's span in the label, in bytes.
-        std::vector<std::pair<S32, S32>>     parameters;
-        S32                                  active = 0;
-        std::string                          documentation;
-    };
+    typedef ALCodeCards::Signature Signature;
     // Asked for the call at the caret when an opening bracket or a comma
     // is typed, and again at every change while one is shown; the answer
     // comes through showSignature, or hideSignature for none.
     typedef std::function<void(const ALTextPos& caret)> signature_request_t;
     void setSignatureRequest(signature_request_t request) { mSignatureRequest = std::move(request); }
+    // Every handler, provider and request a host gave it let go of: for a
+    // host done with it before it goes -- a tab closed, whose editor dies
+    // with the frame -- so that nothing reaches what they held on the way.
+    void clearHandlers();
     void showSignature(const ALTextPos& caret, Signature signature);
     void hideSignature();
+    // Which argument of the call whose bracket opens at `open` a place is
+    // in: the commas of the call's own before it, in code.
+    S32  argumentAt(const ALTextPos& open, const ALTextPos& at);
     // Shown, and still about the call the caret is in: on its line, and
     // not before where it began.
     bool signatureShown() const;
-    const Signature* signature() const { return mSignature ? &*mSignature : nullptr; }
+    const Signature* signature() const { return mCards.signature(); }
 
     void draw() override;
     bool handleKeyHere(KEY key, MASK mask) override;
@@ -610,6 +698,12 @@ protected:
     void revealLine(S32 line) override;
     bool performFold(ALEditorCommand command) override;
     bool canFold(ALEditorCommand command) const override;
+    bool performFunction(ALEditorCommand command) override;
+    // Where Go to Matching Bracket goes, or false for nowhere.
+    bool bracketToGoTo(ALTextPos& to);
+    // What Expand Selection would grow the selection to (ALSmartSelect).
+    std::optional<ALTextRange> grownSelection();
+    bool canFunction(ALEditorCommand command) const override;
     bool complete() override;
     bool signatureHelp() override;
     bool quickFix() override;
@@ -626,18 +720,23 @@ private:
     void drawGutter(const LLRect& text, F32 alpha);
     void drawAfterRows(const LLRect& text) override;
     void tintRow(S32 line, const ALTextLayout::Line& laid, const ALTextLayout::Row& row, F32 alpha, std::vector<LLColor4U>& colors) override;
-    // The depth of brackets open at a line's start, found from the top
-    // and kept until an edit above it.
-    S32  bracketDepthBefore(S32 line);
     // The lines pinned at the top for the view as scrolled now, outer to
     // inner; and the number of rows they take.
-    std::vector<S32> stickyLines();
+    // Worked out afresh as the view is drawn, which reads the lines above
+    // the top anyway; asked for between -- a scroll to the caret, a click
+    // -- as last drawn, so that a batch's edit is not lexed for them.
+    std::vector<S32> stickyLines(bool fresh = false);
     S32              stickyRows();
     // What is drawn over the top of the text: the pinned headers too.
     S32              coveredAbove(S32 local_x) override;
 
     void              ensureRegions();
     void              applyFolds();
+    // The folds hidden again once, after an edit command or before a draw,
+    // rather than inside every edit.
+    void              settleFolds();
+    void              editsDone() override { settleFolds(); }
+    bool              mFoldsDirty = false;
     const FoldRegion* regionStartingAt(S32 line);
     const FoldRegion* regionAround(S32 line);
     // The box drawn after a folded block's first line, in local
@@ -651,10 +750,14 @@ private:
     S32 heatWidth() const;
     // How far a line is indented, in columns; a blank line as the next
     // line that is not, so that the guides run through it.
-    S32 indentOf(S32 line) const;
+    S32 indentOf(S32 line);
 
-    void openCompletion();
+    // The list opened: as typing opens it, or asked for (Control-Space),
+    // when it lists what could go at the caret with nothing typed.
+    void openCompletion(bool asked = false);
     void refreshCompletion();
+    // Whether Return takes the chosen completion (setAcceptOnEnter).
+    bool returnAccepts() const;
     void placeCompletion();
     // A list of so many rows put under the row of a place, at its column,
     // or over it where under would run off the bottom.
@@ -706,6 +809,9 @@ private:
     LLColor4 changedColor() const;
 
     bool mShowLineNumbers      = true;
+    std::vector<S32>      mLineNumbers;
+    S32                   mLineNumberBase = 0;
+    std::vector<LLColor4> mLineTints;
     bool mShowFoldMarkers      = true;
     bool mHighlightCurrentLine = true;
     bool mMatchBrackets        = true;
@@ -716,13 +822,16 @@ private:
     // The closers typing put in, which a closer typed goes over and a
     // Backspace takes with its opener; they move with the edits, and go
     // when the caret leaves their line.
-    std::vector<ALTextPos> mAutoClosed;
+    ALAnchoredRanges<ALTextPos> mAutoClosed;
     bool     mHoverCards = true;
     F32      mHoverDelay = -1.f;
     // How long the mouse has rested, and whether the card was asked for
     // since it last moved.
     LLFrameTimer mMouseRest;
     bool         mHoverTried = false;
+    // What the hover provider said of the word asked about, shown where
+    // the analyzer answers nothing.
+    std::string  mHoverFallback;
     // The wheel turned the text under a still mouse: what it brought
     // there is not what the mouse rested on, and no card or tip comes
     // until the mouse moves.
@@ -745,9 +854,19 @@ private:
     bool      mStickyHeaders       = true;
     LLUIColor mBracketColors[3];
     bool      mBracketColorsSet    = false;
-    // Depth entering each line, valid for the first mDepthValid lines.
-    std::vector<S32> mDepthBefore;
-    S32              mDepthValid = 0;
+    // Where the brackets pair up, and how deep each line starts.
+    ALBracketIndex   mBracketIndex;
+    // Whether the name under the caret is to be lit, since when it is due,
+    // and the lines it was lit over.
+    bool         mLightsOccurrences = true;
+    bool         mOccurrencesDue    = false;
+    LLFrameTimer mOccurrencesRest;
+    S32          mOccurrencesFirst  = 0;
+    S32          mOccurrencesLast   = -1;
+    // What Expand Selection grew the selection from, step by step, to go
+    // back through while the selection is still what it grew to.
+    std::vector<ALTextRange> mGrownFrom;
+    ALTextRange              mGrownTo;
     bool      mGutterColorSet      = false;
     bool      mLineNumberColorSet  = false;
     bool      mCurrentLineColorSet = false;
@@ -763,20 +882,25 @@ private:
 
     boost::signals2::scoped_connection mEditConnection;
     boost::signals2::scoped_connection mChangedConnection;
-    std::vector<Mark>                  mMarks;
+    ALLineTable<Mark>                  mMarks;
     // Moves on as marks are set or cleared, for the ruler's list of them.
     U32                                mMarksRevision = 0;
     // One per line: changed since the last save.
-    std::vector<U8>                    mChanged;
+    ALLineTable<U8>                    mChanged;
     // The mouse over the gutter, and the line it is on there: the fold
     // markers of open blocks show while it is, and the block under it
     // shows its extent.
     bool                               mGutterHover     = false;
     S32                                mGutterHoverLine = -1;
-    std::vector<Decoration>            mDecorations;
-    std::vector<ALTextRange>           mHighlights;
-    std::vector<SemanticToken>         mSemantics;
-    std::vector<InlayHint>             mInlays;
+    ALAnchoredRanges<Decoration>       mDecorations;
+    std::array<ALAnchoredRanges<ALTextRange>, static_cast<size_t>(Highlight::COUNT)> mHighlights;
+    ALAnchoredRanges<SemanticToken>    mSemantics;
+    // An inlay is at a place, not over a range.
+    struct InlayAt
+    {
+        ALTextRange operator()(const InlayHint& hint) const { return ALTextRange(hint.at, hint.at); }
+    };
+    ALAnchoredRanges<InlayHint, InlayAt> mInlays;
     // Beside each line: its heat and its note, and what they say to the
     // mouse; empty until either is set.
     struct Aside
@@ -786,28 +910,47 @@ private:
         std::string note;
         std::string noteTip;
     };
-    std::vector<Aside>                 mAsides;
+    ALLineTable<Aside>                 mAsides;
     bool                               mHeatShown = false;
-    void slideAsides(const ALTextDocument::Edit& edit, S32 made);
+    void slideAsides(const std::vector<ALTextDocument::Edit::LineSpan>& spans);
     // What the layout is told about a line's inlays.
     void provideInlays(S32 line, std::vector<ALTextLayout::Inlay>& out) const;
+    // The hint a line's glyph stands for, by the id provideInlays gave it,
+    // as its place among all the hints; -1 where the line has no such.
+    S32  inlayIndexOf(S32 line, S32 id) const;
     F32  inlayWidth(const InlayHint& hint) const;
 
-    std::vector<FoldRegion> mRegions;
-    U32                     mRegionsVersion = 0;
-    bool                    mRegionsValid   = false;
-    // The start lines of the blocks that are folded, in order.
-    std::vector<S32>        mFolded;
+    // The blocks that fold, and which are folded: by the syntax the
+    // grammar gives -- brackets that are code, and its block words -- and
+    // its line comment's regions, told again when the grammar changes.
+    ALFoldModel             mFolds;
+    const void*             mFoldGrammar = nullptr;
+    ALFoldModel&            folds();
+    void                    foldBlocksOn(S32 line, std::vector<ALFoldModel::Block>& out);
+    // The sticky headers as last worked out: for which text, which top
+    // line and which folds.
+    std::vector<S32>        mSticky;
+    U32                     mStickyVersion = 0;
+    S32                     mStickyTop     = -1;
+    std::vector<S32>        mStickyFolded;
+    bool                    mStickyValid   = false;
+    // The lines last hidden by folds, which a change of them changes only.
+    std::vector<std::pair<S32, S32>> mHiddenByFolds;
 
     completion_provider_t   mProvider;
     completion_request_t    mCompletionRequest;
     hover_provider_t        mHover;
     hover_request_t         mHoverRequest;
     signature_request_t     mSignatureRequest;
+    // The bracket the call shown opens with, or none: the signature stays
+    // while the caret is inside the call, across its lines.
+    ALTextPos               mSignatureOpen{ -1, -1 };
     symbol_request_t        mSymbolRequest;
+    link_request_t          mLinkRequest;
     ALChoiceList*           mCompletionList = nullptr;
     ALTextView*             mCompletionDoc  = nullptr;
     fix_provider_t          mFixProvider;
+    function_provider_t     mFunctionProvider;
     fix_handler_t           mFixHandler;
     ALChoiceList*           mFixList = nullptr;
     // What the list holds (ALFixListModel); who is told each showing of
@@ -816,29 +959,42 @@ private:
     fixes_shown_t           mFixesShown;
     action_request_t        mActionRequest;
     // One per line, as the marks are: what its problems offer.
-    std::vector<U8>         mFixable;
+    ALLineTable<U8>         mFixable;
     // What the list offers, as it narrows (ALCompletionModel).
     ALCompletionModel       mCompletionModel;
+    // Whether the list was asked for, which it lists for with nothing
+    // typed; and whether it has been moved through since it last started
+    // from its best.
+    bool                    mCompletionAsked = false;
+    bool                    mCompletionMoved = false;
+    // What the documentation beside the list shows, and beside what, for
+    // a list made again with the same row chosen to leave it be.
+    std::string             mCompletionDocFor;
+    LLRect                  mCompletionDocBeside;
     // The stops of a snippet or a call being filled in (ALSnippetSession).
     ALSnippetSession         mSnippet;
-    // Each placeholder's mirrors made what it holds.
-    void                     syncMirrors(S32 index);
+    // Each placeholder's mirrors made what it holds: as one step of its
+    // own, or as part of the key being typed.
+    void                     syncMirrors(S32 index, bool grouped = true);
+    // The places after `from` that read as `wanted`, going round, whole
+    // names only where asked, none of the stop's or its mirrors'; at most
+    // `most` of them.
+    std::vector<ALTextRange> placesOf(const std::string& wanted, bool whole, const ALTextPos& from, size_t most) const;
+    // The name Select Next Occurrence took at the caret, whose places are
+    // whole names only.
+    ALTextRange              mOccurrenceName;
     // The placeholders let go of where the caret has left the lines they
     // and where the call or the snippet ends are on.
     void                     dropPlaceholdersLeft();
     boost::signals2::scoped_connection mCaretConnection;
     // The word the analyzer was last asked about, and what it answered,
     // kept for the text at the version it was answered for, so that the
-    // mouse coming back to the word finds the answer waiting.
-    ALTextRange             mHoverAsked;
-    U32                     mHoverAskedVersion = 0;
-    std::string             mHoverAnswer;
-    std::vector<CardLink>   mHoverLinks;
+    // mouse coming back to the word finds the answer waiting; and the
+    // signature shown.
+    ALCodeCards             mCards;
     card_link_t             mCardLinkHandler;
     S32                     mMouseX = -1;
     S32                     mMouseY = -1;
-    std::optional<Signature> mSignature;
-    ALTextPos               mSignatureAt;
     // The card, made the first time it is wanted; what it is about, and
     // that as a rect of the view, which the mouse may rest on as on the
     // card.
