@@ -318,6 +318,12 @@ F32 LLReflectionMap::getNearClip() const
     {
         ret = mViewerObject->getReflectionProbeNearClip();
     }
+    else if (mNavRooms)
+    {
+        // Walkable-space placement needs no obstruction-skipping clip distance.
+        // Keep a positive near plane for the capture projection.
+        ret = MINIMUM_NEAR_CLIP;
+    }
     else if (mGroup)
     {
         ret = mRadius * 0.5f; // default to half radius for automatic object probes
