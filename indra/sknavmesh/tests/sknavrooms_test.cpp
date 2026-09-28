@@ -717,6 +717,67 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<25>()
+    {
+        set_test_name("one tile rebuilt among scattered walls is cut again with its ring, not with the mesh");
+        // Walls of every length strewn about, so basins run on past a ring
+        // tile's far edges, where a cut of the ring alone sees them otherwise.
+        Scene s;
+        U32 lcg = 12345u;
+        auto rnd = [&lcg](F32 lo, F32 hi) {
+            lcg = lcg * 1664525u + 1013904223u;
+            return lo + (hi - lo) * static_cast<F32>(lcg >> 8) / static_cast<F32>(1u << 24);
+        };
+        for (S32 k = 0; k < 24; ++k)
+        {
+            const F32 x = rnd(1.f, 29.f), y = rnd(1.f, 29.f), len = rnd(1.f, 12.f);
+            if (k & 1)
+            {
+                s.wall(x, y, std::min(31.f, x + len), y + 0.25f);
+            }
+            else
+            {
+                s.wall(x, y, x + 0.25f, std::min(31.f, y + len));
+            }
+        }
+        const TileAirPtr one = s.tile(0, 0);
+        auto field = [&one](const RoomsProductPtr& previous, const TileKey& moved) {
+            auto in = std::make_shared<EnclosureInput>();
+            for (S32 ky = 0; ky < 5; ++ky)
+            {
+                for (S32 kx = 0; kx < 5; ++kx)
+                {
+                    EnclosureInput::Tile t;
+                    t.mKey.mX = kx;
+                    t.mKey.mY = ky;
+                    const RoomsTile* was = previous ? previous->tile(t.mKey) : nullptr;
+                    if (was && !(t.mKey == moved))
+                    {
+                        t.mAir = was->mAir;
+                    }
+                    else
+                    {
+                        auto air = std::make_shared<TileAir>(*one);
+                        air->mOrigin.set(kx * 32.f, ky * 32.f, one->mOrigin.mV[VZ]);
+                        t.mAir = air;
+                    }
+                    in->mTiles.push_back(t);
+                }
+            }
+            auto rooms = std::make_shared<RoomsInput>();
+            rooms->mPrevious = previous;
+            return run(in, rooms);
+        };
+        TileKey mid;
+        mid.mX = mid.mY = 2;
+        const Result first = field(nullptr, mid);
+        ensure_equals("every tile cut the first time", first.mRooms->mDirtyTiles, 25u);
+        const Result again = field(first.mRooms, mid);
+        ensure("the moved tile and at most its four neighbours cut again", again.mRooms->mDirtyTiles >= 1 && again.mRooms->mDirtyTiles <= 5);
+        ensure_equals("the same spaces", again.mRooms->mSpaces.size(), first.mRooms->mSpaces.size());
+    }
+
+    template<> template<>
     void sknavrooms_object::test<12>()
     {
         set_test_name("replay a mesh's air through both passes, when a file is named");

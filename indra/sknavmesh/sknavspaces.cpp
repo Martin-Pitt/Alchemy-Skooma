@@ -1551,10 +1551,22 @@ namespace sknav
             const TileAir& a = *ti.mAir;
             if (!ti.mInBlock)
             {
+                // Only the edges it shares with the block make seams with it;
+                // its far edges meet tiles cut when it was.
+                bool facing[4];
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    TileKey k = ti.mKey;
+                    k.mX += DX[d];
+                    k.mY += DY[d];
+                    const U32 o = tileAt(k);
+                    facing[d] = o != NONE && mTiles[o].mInBlock;
+                }
                 for (const AirLeaf& leaf : a.mLeaves)
                 {
                     const S32 s = 1 << leaf.mLevel;
-                    if (leaf.mX > 0 && leaf.mY > 0 && leaf.mX + s < a.mWidth && leaf.mY + s < a.mHeight)
+                    if (!(facing[0] && leaf.mX + s >= a.mWidth) && !(facing[1] && leaf.mX <= 0) && !(facing[2] && leaf.mY + s >= a.mHeight) &&
+                        !(facing[3] && leaf.mY <= 0))
                     {
                         continue;
                     }
