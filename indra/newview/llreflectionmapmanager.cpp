@@ -473,6 +473,24 @@ void LLReflectionMapManager::update()
             }
 
             probe->mInsideManualProbe = eclipsed;
+
+            // <SK:Nexii> Navmesh rooms probes: an octree probe whose origin lies in a room part gives way to its sphere.
+            bool suppressed = false;
+            if (probe->mGroup)
+            {
+                const LLVector3 origin(probe->mOrigin.getF32ptr());
+                for (const auto& box : mNavRoomsVolumes)
+                {
+                    if (origin.mV[0] >= box.first.mV[0] && origin.mV[1] >= box.first.mV[1] && origin.mV[2] >= box.first.mV[2] &&
+                        origin.mV[0] <= box.second.mV[0] && origin.mV[1] <= box.second.mV[1] && origin.mV[2] <= box.second.mV[2])
+                    {
+                        suppressed = true;
+                        break;
+                    }
+                }
+            }
+            probe->mSuppressedByNavRooms = suppressed;
+            // </SK:Nexii>
         }
     }
 
@@ -886,6 +904,37 @@ LLReflectionMap* LLReflectionMapManager::registerViewerObject(LLViewerObject* vo
     return probe;
 }
 
+// <SK:Nexii> Navmesh rooms probes
+LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& origin, F32 radius)
+{
+    LLReflectionMap* probe = addProbe();
+    if (probe)
+    {
+        probe->mNavRooms = true;
+        probe->mOrigin.load3(origin.mV);
+        probe->mRadius = radius;
+    }
+    return probe;
+}
+
+void LLReflectionMapManager::setNavRoomsVolumes(const std::vector<std::pair<LLVector3, LLVector3>>& boxes)
+{
+    mNavRoomsVolumes = boxes;
+}
+
+void LLReflectionMapManager::getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const
+{
+    placed.clear();
+    for (const auto& probe : mProbes)
+    {
+        if (probe->mViewerObject && !probe->mViewerObject->isDead() && probe->isRelevant())
+        {
+            placed.push_back(probe);
+        }
+    }
+}
+// </SK:Nexii>
+
 S32 LLReflectionMapManager::allocateCubeIndex()
 {
     if (!mCubeFree.empty())
@@ -1294,6 +1343,15 @@ void LLReflectionMapManager::shift(const LLVector4a& offset)
             probe->mNeighborOrigin.add(offset);
         }
     }
+
+    // <SK:Nexii> Navmesh rooms probes: the replaced volumes ride the same shift.
+    const LLVector3 delta(offset.getF32ptr());
+    for (auto& box : mNavRoomsVolumes)
+    {
+        box.first += delta;
+        box.second += delta;
+    }
+    // </SK:Nexii>
 }
 
 void LLReflectionMapManager::updateNeighbors(LLReflectionMap* probe)

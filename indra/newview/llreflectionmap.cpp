@@ -393,6 +393,11 @@ bool LLReflectionMap::isRelevant() const
         return false;
     }
 
+    if (mSuppressedByNavRooms) // <SK:Nexii> Navmesh rooms probes: a room part's sphere stands in for this octree probe.
+    {
+        return false;
+    }
+
     if (RenderReflectionProbeLevel == 3)
     { // all automatics are relevant
         return true;
