@@ -71,12 +71,17 @@
     <floater.string name="SearchAnyCase">ignoring case</floater.string>
     <floater.string name="SearchThisCase">matching case</floater.string>
     <floater.string name="SearchIn">in</floater.string>
-    <floater.string name="SearchScopeTip">Where to look: the scripts and notecards open, the contents of this script's object, or of every object the explorer lists</floater.string>
+    <floater.string name="SearchScopeTip">Where to look: the scripts and notecards open, the contents of this script's object, of every object the explorer lists, or every script and notecard in your inventory</floater.string>
     <floater.string name="SearchOpen">open scripts</floater.string>
     <floater.string name="SearchThisObject">this object</floater.string>
     <floater.string name="SearchListed">every object listed</floater.string>
+    <floater.string name="SearchInventory">my inventory</floater.string>
+    <floater.string name="SearchInventoryWhere">Inventory</floater.string>
     <floater.string name="SearchAlone">alone</floater.string>
     <floater.string name="SearchWithIncludes">and what they include</floater.string>
+    <floater.string name="RunningTip">Whether the script runs in its object; a save keeps whatever this says</floater.string>
+    <floater.string name="RunningAsking">Asking the region whether the script runs. A save meanwhile asks first, and keeps whatever it says</floater.string>
+    <floater.string name="RunningPublic">Public objects cannot run scripts: this one is released to the public, with no owner</floater.string>
     <floater.string name="SearchIncludesTip">What an #include or a require brings in, searched too: each file once, as its own, as it is on disk or was last fetched. Replace All leaves those alone, since they are every script's that includes them.</floater.string>
     <floater.string name="SearchIncluded">Included</floater.string>
     <floater.string name="SearchCountTip">How many places were found, in how many scripts</floater.string>
@@ -183,6 +188,8 @@
     <floater.string name="ReferencesFoundB">[COUNT] places where [NAME] stands.</floater.string>
     <floater.string name="LookingAcrossA">Looking for [NAME] across 1 other script of the object...</floater.string>
     <floater.string name="LookingAcrossB">Looking for [NAME] across [COUNT] other scripts of the object...</floater.string>
+    <floater.string name="ReferencesUnlistedA">1 more place, not listed</floater.string>
+    <floater.string name="ReferencesUnlistedB">[COUNT] more places, not listed</floater.string>
     <floater.string name="ReferencesFoundAcrossA">1 place where [NAME] stands, in [FILES] scripts.</floater.string>
     <floater.string name="ReferencesFoundAcrossB">[COUNT] places where [NAME] stands, in [FILES] scripts.</floater.string>
     <floater.string name="LevelError">Error</floater.string>
@@ -284,10 +291,15 @@
     <floater.string name="KindModule">module</floater.string>
     <floater.string name="KindOwnerSay">owner</floater.string>
     <floater.string name="KindError">error</floater.string>
+    <floater.string name="KindSaid">said</floater.string>
+    <floater.string name="KindSaidTo">said to you</floater.string>
+    <floater.string name="KindInstant">IM</floater.string>
     <floater.string name="OriginRuntime">Runtime</floater.string>
     <floater.string name="OriginAny">Every source</floater.string>
     <floater.string name="ProblemsAllHiddenA">The filters hide the 1 problem there is.</floater.string>
     <floater.string name="ProblemsAllHiddenB">The filters hide all [COUNT] problems.</floater.string>
+    <floater.string name="ProblemsUnlistedA">1 more not listed</floater.string>
+    <floater.string name="ProblemsUnlistedB">[COUNT] more not listed</floater.string>
     <floater.string name="ProblemsHiddenA">1 more hidden by the filters</floater.string>
     <floater.string name="ProblemsHiddenB">[COUNT] more hidden by the filters</floater.string>
     <floater.string name="ProblemsCopiedA">1 problem copied.</floater.string>
@@ -462,6 +474,30 @@
     <floater.string name="SavedElsewhereConflict">[NAME] was saved by [WHO] while it had changes here.</floater.string>
     <floater.string name="SavedElsewhereKept">Kept what is here in [NAME]; saving it replaces what was saved elsewhere.</floater.string>
     <floater.string name="SavedByBridge">VS Code</floater.string>
+    <floater.string name="PrimLinked">[LINK]. [NAME]</floater.string>
+    <floater.string name="LinkCompletion">link [LINK]</floater.string>
+    <floater.string name="KindAwayIn">away, in [REGION]</floater.string>
+    <floater.string name="KeysCopiedA">Copied [KEYS]</floater.string>
+    <floater.string name="KeysCopiedB">Copied [COUNT] keys, one a line</floater.string>
+    <floater.string name="NoModifyMark">no modify</floater.string>
+    <floater.string name="NoCopyMark">no copy</floater.string>
+    <floater.string name="ScriptInObject">[NAME] in [OBJECT]</floater.string>
+    <floater.string name="RecompilingMany">Recompiling...</floater.string>
+    <floater.string name="RecompileNothing">There is no script there to recompile.</floater.string>
+    <floater.string name="RecompiledA">Recompiled 1 script [TARGET]</floater.string>
+    <floater.string name="RecompiledB">Recompiled [COUNT] scripts [TARGET]</floater.string>
+    <floater.string name="RecompiledAsTheyAre">as each compiles now</floater.string>
+    <floater.string name="RecompiledForMono">for LSL on Mono</floater.string>
+    <floater.string name="RecompiledForLegacy">for LSL Legacy</floater.string>
+    <floater.string name="RecompiledForLuau">for LSL on Luau</floater.string>
+    <floater.string name="RecompiledCompiledA">1 compiled</floater.string>
+    <floater.string name="RecompiledCompiledB">[COUNT] compiled</floater.string>
+    <floater.string name="RecompiledFailedA">1 did not compile, its problems in Problems</floater.string>
+    <floater.string name="RecompiledFailedB">[COUNT] did not compile, their problems in Problems</floater.string>
+    <floater.string name="RecompiledNotSentA">1 did not go up</floater.string>
+    <floater.string name="RecompiledNotSentB">[COUNT] did not go up</floater.string>
+    <floater.string name="RecompiledSkippedA">1 left alone, a save of it on its way</floater.string>
+    <floater.string name="RecompiledSkippedB">[COUNT] left alone, a save of each on its way</floater.string>
     <floater.string name="RecompileSkippedSaving">[NAME] was not recompiled: a save of it is on its way, which a recompile would land over.</floater.string>
     <floater.string name="RecompileUnsaved">[NAME] has changes not saved here; what recompiles is the server's text, without them.</floater.string>
     <floater.string name="SavedByEditor">another editor</floater.string>
@@ -2019,6 +2055,8 @@
                                 <combo_box.item label="Errors" name="output_kind_error" value="error" />
                                 <combo_box.item label="Owner says" name="output_kind_owner" value="owner" />
                                 <combo_box.item label="Debug channel" name="output_kind_debug" value="debug" />
+                                <combo_box.item label="Said aloud" name="output_kind_said" value="said" />
+                                <combo_box.item label="IMs" name="output_kind_im" value="im" />
                                 <combo_box.item label="Studio" name="output_kind_studio" value="studio" />
                             </combo_box>
                             <filter_editor
