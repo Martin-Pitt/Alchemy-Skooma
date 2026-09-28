@@ -28,6 +28,10 @@
     <floater.string name="PlaceDisk">The folder on disk</floater.string>
     <floater.string name="OrderWorldOff">The places an #include or require is looked for, the first that has it winning; a place unticked is not looked in. The object and inventory are greyed while includes are not taken from them: tick the box above to let them in</floater.string>
     <floater.string name="ThemeNewName">My Theme</floater.string>
+    <floater.string name="VimrcFromFile">Without a notecard, the vimrc is the file [PATH]. It takes :map and its kin, let mapleader and :set.</floater.string>
+    <floater.string name="VimrcFromNotecard">The notecard is the vimrc. It takes :map and its kin, let mapleader and :set.</floater.string>
+    <floater.string name="VimrcUnknownNotecard">(a notecard not in inventory yet)</floater.string>
+    <floater.string name="VimrcOnlyNotecards">Only a notecard in your inventory can be the vimrc</floater.string>
     <floater.string name="HeadingEditor">Editor</floater.string>
     <floater.string name="HeadingSyntax">Syntax</floater.string>
     <floater.string name="NoFolder">No folders: Add... one to look in.</floater.string>
@@ -354,8 +358,30 @@ end</floater.string>
              layout="topleft"
              left="12"
              name="insert_spaces"
-             tool_tip="Tab, a new line and the formatter put spaces to the next stop in; off, a tab character"
+             tool_tip="Tab, a new line and the formatter put spaces to the next stop in; off, a tab character. For a script that does not say its own, where scripts are read for it."
              top_pad="6"
+             width="370" />
+            <check_box
+             control_name="ALScriptStudioDetectIndentation"
+             follows="left|top"
+             height="20"
+             label="Indent each script as it is already indented"
+             layout="topleft"
+             left="12"
+             name="detect_indentation"
+             tool_tip="Tabs or spaces, and how many a level, read from each script's own lines as it opens; the two above are for a script that does not say. The strip under the editor shows what a script is indented by, and changes it for that script alone."
+             top_pad="4"
+             width="370" />
+            <check_box
+             control_name="ALScriptStudioReindentOnPaste"
+             follows="left|top"
+             height="20"
+             label="Indent pasted lines to where they go"
+             layout="topleft"
+             left="12"
+             name="reindent_on_paste"
+             tool_tip="Lines pasted into a line's indentation go to that line's level, or where the line above says, each as far in from the first as it was. One Undo leaves them as they were copied."
+             top_pad="4"
              width="370" />
             <check_box
              control_name="ALScriptStudioAutoClose"
@@ -612,6 +638,58 @@ end</floater.string>
              tool_tip="As vim's clipboard=unnamed: y, d, x and p with no register named go by the clipboard other programs share; off, they stay in the editor, and only &quot;+ and &quot;* reach the clipboard. A named register, &quot;a, never does."
              top_pad="6"
              width="370" />
+            <text
+             follows="left|top"
+             height="16"
+             layout="topleft"
+             left="412"
+             name="vimrc_label"
+             top_pad="10"
+             width="370">
+                Your vimrc, as a notecard:
+            </text>
+            <line_editor
+             enabled="false"
+             follows="left|top"
+             height="22"
+             label="Drop a notecard here"
+             layout="topleft"
+             left="412"
+             max_length_bytes="255"
+             name="vimrc_notecard"
+             tool_tip="Drag a notecard from your inventory here to use it as your vimrc wherever you log in. It is kept on this computer, and fetched again only when it has been changed"
+             top_pad="4"
+             width="230" />
+            <button
+             follows="left|top"
+             height="22"
+             label="Edit"
+             layout="topleft"
+             left_pad="6"
+             name="vimrc_edit"
+             tool_tip="Open the vimrc in Script Studio: the notecard, or else the file, made where there is none yet"
+             top_delta="0"
+             width="64" />
+            <button
+             follows="left|top"
+             height="22"
+             label="Clear"
+             layout="topleft"
+             left_pad="4"
+             name="vimrc_clear"
+             tool_tip="Stop using the notecard: the vimrc file in the settings folder is read again"
+             top_delta="0"
+             width="64" />
+            <text
+             follows="left|top"
+             font="SansSerifSmall"
+             height="30"
+             layout="topleft"
+             left="412"
+             name="vimrc_where"
+             top_pad="4"
+             width="370"
+             wrap="true" />
         </panel>
         <panel
          follows="all"
@@ -728,6 +806,10 @@ end</floater.string>
              width="370">
                 Includes
             </text>
+            <!-- Includes from the object and the inventory, and the order the
+                 world's places and the disk are looked in, are hidden, and
+                 the world is off, until Linden Lab's own viewer settles how
+                 it takes them. -->
             <check_box
              control_name="ALScriptPreprocWorldIncludes"
              follows="left|top"
@@ -738,6 +820,7 @@ end</floater.string>
              name="preproc_world"
              tool_tip="An #include or a require may name a script or a notecard in the object the script is in, or anywhere in your inventory. Off, a script opened from somebody else's object cannot pull your own scripts into itself, and only the folders on disk below are looked in"
              top_pad="6"
+             visible="false"
              width="370" />
             <check_box
              control_name="ALScriptPreprocDiskIncludes"
@@ -747,10 +830,10 @@ end</floater.string>
              layout="topleft"
              left="12"
              name="preproc_disk"
-             tool_tip="An #include may name a file in the folders below, looked for in order after the object and inventory unless the order below says otherwise. Nothing else on the disk is read, but where a .lslrc or .luaurc on disk points -- and only within its own folder or one below: to reach further, add that folder here. Off, nothing on the disk is read at all"
-             top_pad="2"
+             tool_tip="An #include or a require may name a file in the folders below, looked for from the top; a .luaurc at the top of each gives a script in the world its aliases and settings, an earlier folder's over a later one's. Nothing else on the disk is read, but where a .lslrc or .luaurc on disk points -- and only within its own folder or one below: to reach further, add that folder here. Off, nothing on the disk is read at all"
+             top_delta="0"
              width="370" />
-            <scroll_list
+            <pane_list
              column_padding="0"
              draw_heading="false"
              follows="left|top"
@@ -759,11 +842,11 @@ end</floater.string>
              left="32"
              multi_select="false"
              name="include_folders"
-             tool_tip="The folders on disk an #include is read from, looked in from the top"
+             tool_tip="The folders on disk an #include or a require is read from, looked in from the top"
              top_pad="4"
              width="260">
-                <scroll_list.columns dynamic_width="true" name="folder" />
-            </scroll_list>
+                <pane_list.columns dynamic_width="true" name="folder" />
+            </pane_list>
             <button
              follows="left|top"
              height="22"
@@ -791,6 +874,7 @@ end</floater.string>
              left="12"
              name="order_label"
              top_pad="12"
+             visible="false"
              width="370">
                 Where an include is looked for, first to last:
             </text>
@@ -805,6 +889,7 @@ end</floater.string>
              name="include_order"
              tool_tip="The places an #include or require is looked for, the first that has it winning; a place unticked is not looked in"
              top_pad="4"
+             visible="false"
              width="220">
                 <scroll_list.columns name="on" type="checkbox" width="22" />
                 <scroll_list.columns dynamic_width="true" name="place" />
@@ -818,6 +903,7 @@ end</floater.string>
              name="order_up"
              tool_tip="Look in the chosen place sooner"
              top_delta="0"
+             visible="false"
              width="70" />
             <button
              follows="left|top"
@@ -828,6 +914,7 @@ end</floater.string>
              name="order_down"
              tool_tip="Look in the chosen place later"
              top_pad="4"
+             visible="false"
              width="70" />
 
             <!-- The right column: what the preprocessor does on a save. -->

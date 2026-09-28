@@ -63,6 +63,9 @@ public:
         // in it.
         std::vector<std::string> lines;
         std::vector<S32>         at;
+        // A file a script includes or requires, searched with it: its
+        // identity (ALScriptPreprocessor's), which it is gone to by.
+        std::string              file;
     };
 
     // --- a search ------------------------------------------------------------------
@@ -78,6 +81,13 @@ public:
     void asked() { ++mPending; }
     bool answered(U32 generation);
     S32  pending() const { return mPending; }
+    // What the search could not look through, said with what it found: a
+    // script whose text could not be read, and prims that did not say what
+    // they hold.
+    void notRead() { ++mUnread; }
+    void notListed(S32 prims) { mUnlisted += prims; }
+    S32  unread() const { return mUnread; }
+    S32  unlisted() const { return mUnlisted; }
 
     // A script's text searched: its places kept where it has any, with
     // the text where `keep_text`, for a replace to work over; in its place
@@ -90,7 +100,7 @@ public:
         Again
     };
     Kept search(const ALScriptRef& ref, const std::string& name, const std::string& where, const ALTextDocument& text, U32 version,
-                const std::string& doc_id, bool keep_text = false, bool notecard = false);
+                const std::string& doc_id, bool keep_text = false, bool notecard = false, const std::string& file = std::string());
     // The pattern did not read, and why: said until the next search.
     bool               badPattern() const { return mBadPattern; }
     const std::string& patternError() const { return mPatternError; }
@@ -141,8 +151,9 @@ public:
     // What Replace All does with it: nothing, a notecard's places or none;
     // its places replaced in its tab, which reads as it did when it was
     // searched; the script opened with the change unsaved; or left alone,
-    // and said so -- typed in since, not to be changed, or a file on disk
-    // closed since, which has no item to open it by.
+    // and said so -- typed in since, not to be changed, a file on disk
+    // closed since, which has no item to open it by, or a file included,
+    // which is every script's that includes it.
     enum class Step : U8
     {
         Skip,
@@ -162,6 +173,8 @@ private:
     ALTextSearchOptions      mOptions;
     U32                      mGeneration = 0;
     S32                      mPending    = 0;
+    S32                      mUnread     = 0;
+    S32                      mUnlisted   = 0;
     S32                      mHits       = 0;
     S32                      mFiles      = 0;
     bool                     mBadPattern = false;
