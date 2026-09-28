@@ -26,6 +26,8 @@
 
 #include "alsnippetsession.h"
 
+#include "altextchars.h"
+
 #include "llstl.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -139,8 +141,42 @@ std::vector<std::string> ALSnippetSession::parameterNames(std::string_view detai
 }
 
 // static
-ALSnippetSession::Expansion ALSnippetSession::expand(std::string_view body, const ALTextPos& at, const std::string& indent)
+ALSnippetSession::Expansion ALSnippetSession::expand(std::string_view body, const ALTextPos& at, const std::string& indent, std::string_view unit)
 {
+    // Each line's own indentation after the first made again in the
+    // text's unit, so that a script indented by tabs gets tabs.
+    std::string own;
+    if (!unit.empty())
+    {
+        own.reserve(body.size());
+        for (size_t from = 0;;)
+        {
+            const size_t           nl   = body.find('\n', from);
+            const std::string_view line = body.substr(from, nl == std::string_view::npos ? std::string_view::npos : nl - from);
+            if (from == 0)
+            {
+                own += line;
+            }
+            else
+            {
+                size_t    lead  = 0;
+                const S32 width = alBlanksWidth(line, BODY_LEVEL, &lead);
+                for (S32 level = 0; level < width / BODY_LEVEL; ++level)
+                {
+                    own += unit;
+                }
+                own.append(static_cast<size_t>(width % BODY_LEVEL), ' ');
+                own += line.substr(lead);
+            }
+            if (nl == std::string_view::npos)
+            {
+                break;
+            }
+            own += '\n';
+            from = nl + 1;
+        }
+        body = own;
+    }
     // Each placeholder's place in the text, by number, with what it held
     // as written.
     struct Place
@@ -291,10 +327,12 @@ void ALSnippetSession::start(std::vector<ALTextRange> stops, const ALTextPos& af
     mMirrors = std::move(mirrors);
     mLanding = landing;
     mSyncing = -1;
+    mLive    = false;
 }
 
 void ALSnippetSession::clear()
 {
+    mLive = false;
     mMirrors.clear();
     mLanding = 0;
     mStops.clear();
@@ -308,12 +346,28 @@ void ALSnippetSession::slide(const ALTextDocument::Edit& edit)
         return;
     }
     const ALTextRange removed = edit.range.normalised();
+    // What a stretch the edit replaced whole became, where one was.
+    const auto replaced = [&edit, &removed](const ALTextRange& range) -> std::optional<ALTextRange> {
+        if (edit.parts.empty())
+        {
+            return removed == range ? std::optional<ALTextRange>(edit.rangeAfter()) : std::nullopt;
+        }
+        const auto part = std::lower_bound(edit.parts.begin(), edit.parts.end(), range.begin,
+                                           [](const ALTextDocument::Edit::Part& p, const ALTextPos& at) { return p.before.begin < at; });
+        return part != edit.parts.end() && part->before == range ? std::optional<ALTextRange>(part->after) : std::nullopt;
+    };
     for (S32 k = 0; k < static_cast<S32>(mMirrors.size());)
     {
-        Mirror& mirror = mMirrors[static_cast<size_t>(k)];
+        Mirror&                          mirror = mMirrors[static_cast<size_t>(k)];
+        const std::optional<ALTextRange> made   = mSyncing == SYNCING_ALL ? replaced(mirror.range) : std::nullopt;
         if (k == mSyncing)
         {
             mirror.range = edit.rangeAfter();
+            ++k;
+        }
+        else if (made)
+        {
+            mirror.range = *made;
             ++k;
         }
         else if (edit.slide(mirror.range))
@@ -332,7 +386,9 @@ void ALSnippetSession::slide(const ALTextDocument::Edit& edit)
     for (S32 i = 0; i < static_cast<S32>(mStops.size());)
     {
         ALTextRange& r = mStops[i];
-        if (i == mAt && r.begin <= removed.begin && removed.end <= r.end)
+        // Typed within the stop being filled in: it grows. (A batch's
+        // stretches are elsewhere: the mirrors made again.)
+        if (edit.parts.empty() && i == mAt && r.begin <= removed.begin && removed.end <= r.end)
         {
             r.end = edit.slidPast(r.end);
             ++i;
@@ -362,7 +418,11 @@ void ALSnippetSession::slide(const ALTextDocument::Edit& edit)
             }
         }
     }
-    if (mAfter.line == removed.end.line || mAfter.line > removed.end.line)
+    if (!edit.parts.empty())
+    {
+        mAfter = edit.slidPast(mAfter);
+    }
+    else if (mAfter.line == removed.end.line || mAfter.line > removed.end.line)
     {
         if (removed.end <= mAfter)
         {
