@@ -1887,8 +1887,10 @@ LLSD LLScriptEditorWSServer::saveScript(LLViewerObject* prim, LLInventoryItem* i
     const std::string item_name = item->getName();
     const LLUUID item_asset = item->getAssetUUID();
     const ALScriptRef ref(prim_id, item_id);
-    const LLViewerInventoryItem* viewer_item = dynamic_cast<const LLViewerInventoryItem*>(item);
-    bool is_running = viewer_item ? viewer_item->getIsRunning() : false;
+    // Whether it runs after: as asked, or as it runs now, which the save
+    // asks the region where it is not known -- not the item's own word,
+    // which only the newer inventory fetch fills in.
+    std::optional<bool> is_running;
     if (params.has("running"))
     {
         is_running = params["running"].asBoolean();
@@ -2593,6 +2595,13 @@ void LLScriptEditorWSServer::sendRuntimeEvent(const ALScriptWorkspace::RuntimeEv
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
 
+    // The protocol's channels: what an object says aloud or in an IM is
+    // the studio's to show, not the bridge's to send.
+    if (event.channel != ALScriptWorkspace::RuntimeEvent::Channel::Debug && event.channel != ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay)
+    {
+        return;
+    }
+
     std::string script_id;
     if (event.item.notNull())
     {
@@ -2631,6 +2640,8 @@ void LLScriptEditorWSServer::sendRuntimeEvent(const ALScriptWorkspace::RuntimeEv
         break;
     case ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay:
         message["channel"] = "owner_say";
+        break;
+    default:
         break;
     }
 
