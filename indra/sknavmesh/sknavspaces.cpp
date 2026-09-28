@@ -485,7 +485,14 @@ namespace sknav
         S32 mWalkOverlap = 8;
 
         std::vector<TileInfo> mTiles;
-        std::map<TileKey, U32> mTileIndex;
+        /// Tile indices over the box of the mesh's keys, NONE where it has none.
+        std::vector<U32> mTileGrid;
+        S32 mGridX = 0, mGridY = 0, mGridW = 0, mGridH = 0;
+        U32 tileAt(const TileKey& k) const
+        {
+            const S32 x = k.mX - mGridX, y = k.mY - mGridY;
+            return x < 0 || y < 0 || x >= mGridW || y >= mGridH ? NONE : mTileGrid[static_cast<size_t>(y) * mGridW + x];
+        }
         /// Tiles whose air moved, cut together with the ring round them;
         /// a tile a cut sees a seam to disagree with is cut again.
         std::vector<std::vector<U32>> mBatches;
@@ -512,6 +519,10 @@ namespace sknav
         std::vector<S32> mPortalDoor;   ///< per portal, its door span, or -1
         std::unordered_map<U64, Scored> mScored;
         std::vector<LLVector3> mOldPortals;
+        /// Old portals and doors by the square metre cells they reach, so a cut scores against those near it only.
+        std::unordered_map<U64, std::vector<U32>> mOldGrid;
+        std::unordered_map<U64, std::vector<U32>> mDoorGrid;
+        static U64 gridKey(S32 x, S32 y) { return (static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y); }
 
         // spaces
         std::vector<U32> mSeedSpace;    ///< per seed, its space + 1
@@ -588,13 +599,13 @@ namespace sknav
         }
         else
         {
-            const auto it = mTileIndex.find(key);
-            if (it == mTileIndex.end())
+            const U32 it = tileAt(key);
+            if (it == NONE)
             {
                 const TileEnclosure* kept = mEnc->tile(key);
                 return kept ? -2 : -1;
             }
-            tile_out = it->second;
+            tile_out = it;
         }
         const TileAir& b = air(tile_out);
         if (ix < 0 || iy < 0 || ix >= b.mWidth || iy >= b.mHeight)
@@ -625,12 +636,11 @@ namespace sknav
         TileKey key;
         key.mX = tileIndex(x);
         key.mY = tileIndex(y);
-        const auto it = mTileIndex.find(key);
-        if (it == mTileIndex.end())
+        const U32 t = tileAt(key);
+        if (t == NONE)
         {
             return false;
         }
-        const U32 t = it->second;
         const TileAir& a = air(t);
         const S32 ix = static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell));
         const S32 iy = static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell));
@@ -710,8 +720,27 @@ namespace sknav
             {
                 ti.mRooms = *prev;
             }
-            mTileIndex[te.mKey] = static_cast<U32>(mTiles.size());
             mTiles.push_back(std::move(ti));
+        }
+        if (!mTiles.empty())
+        {
+            S32 x1 = mTiles[0].mKey.mX, y1 = mTiles[0].mKey.mY;
+            mGridX = x1;
+            mGridY = y1;
+            for (const TileInfo& ti : mTiles)
+            {
+                mGridX = std::min(mGridX, ti.mKey.mX);
+                mGridY = std::min(mGridY, ti.mKey.mY);
+                x1 = std::max(x1, ti.mKey.mX);
+                y1 = std::max(y1, ti.mKey.mY);
+            }
+            mGridW = x1 - mGridX + 1;
+            mGridH = y1 - mGridY + 1;
+            mTileGrid.assign(static_cast<size_t>(mGridW) * mGridH, NONE);
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                mTileGrid[static_cast<size_t>(mTiles[t].mKey.mY - mGridY) * mGridW + (mTiles[t].mKey.mX - mGridX)] = t;
+            }
         }
         mClimb = static_cast<S32>(std::lround(p.mClimbM / mUnit));
         mWalkHead = static_cast<S32>(std::ceil(p.mWalkHeadM / mUnit - 1e-3f));
@@ -755,7 +784,25 @@ namespace sknav
             {
                 if (q.mKind == PortalKind::OPENING)
                 {
+                    mOldGrid[gridKey(static_cast<S32>(std::floor(q.mCentre.mV[VX])), static_cast<S32>(std::floor(q.mCentre.mV[VY])))].push_back(
+                        static_cast<U32>(mOldPortals.size()));
                     mOldPortals.push_back(q.mCentre);
+                }
+            }
+        }
+        const F32 reach = mInput->mParams.mDoorReachM;
+        for (U32 i = 0; i < mDoors.size(); ++i)
+        {
+            const DoorSpan& d = mDoors[i];
+            const S32 x0 = static_cast<S32>(std::floor(std::min(d.mA.mV[VX], d.mB.mV[VX]) - reach));
+            const S32 x1 = static_cast<S32>(std::floor(std::max(d.mA.mV[VX], d.mB.mV[VX]) + reach));
+            const S32 y0 = static_cast<S32>(std::floor(std::min(d.mA.mV[VY], d.mB.mV[VY]) - reach));
+            const S32 y1 = static_cast<S32>(std::floor(std::max(d.mA.mV[VY], d.mB.mV[VY]) + reach));
+            for (S32 y = y0; y <= y1; ++y)
+            {
+                for (S32 x = x0; x <= x1; ++x)
+                {
+                    mDoorGrid[gridKey(x, y)].push_back(i);
                 }
             }
         }
@@ -785,8 +832,8 @@ namespace sknav
                     TileKey k = ti.mKey;
                     k.mX += dx;
                     k.mY += dy;
-                    const auto it = mTileIndex.find(k);
-                    ti.mWork = it != mTileIndex.end() && mTiles[it->second].mInBlock;
+                    const U32 it = tileAt(k);
+                    ti.mWork = it != NONE && mTiles[it].mInBlock;
                 }
             }
         }
@@ -952,12 +999,12 @@ namespace sknav
                     TileKey k;
                     k.mX = tileIndex(q.mV[VX]);
                     k.mY = tileIndex(q.mV[VY]);
-                    const auto it = mTileIndex.find(k);
-                    if (it == mTileIndex.end() || !mTiles[it->second].mWork)
+                    const U32 it = tileAt(k);
+                    if (it == NONE || !mTiles[it].mWork)
                     {
                         continue;
                     }
-                    const TileInfo& ti = mTiles[it->second];
+                    const TileInfo& ti = mTiles[it];
                     const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
                     const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
                     if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
@@ -1711,13 +1758,13 @@ namespace sknav
         {
             for (const SeedLink& l : mInput->mPrevious->mLinks)
             {
-                const auto a = mTileIndex.find(l.mA), b = mTileIndex.find(l.mB);
-                if (a == mTileIndex.end() || b == mTileIndex.end())
+                const U32 a = tileAt(l.mA), b = tileAt(l.mB);
+                if (a == NONE || b == NONE)
                 {
                     continue;
                 }
-                const TileInfo& ta = mTiles[a->second];
-                const TileInfo& tb = mTiles[b->second];
+                const TileInfo& ta = mTiles[a];
+                const TileInfo& tb = mTiles[b];
                 if (ta.mDirty || tb.mDirty || l.mSeedA > ta.mRooms.mStats.size() || l.mSeedB > tb.mRooms.mStats.size())
                 {
                     continue;
@@ -1954,12 +2001,25 @@ namespace sknav
         const F32 fz = run.mFloor * mUnit;
         // A portal stood here last time: hold it with thresholds relaxed.
         bool relaxed = false;
-        for (const LLVector3& q : mOldPortals)
+        const S32 gx = static_cast<S32>(std::floor(run.mC.mV[VX])), gy = static_cast<S32>(std::floor(run.mC.mV[VY]));
+        for (S32 dy = -1; dy <= 1 && !relaxed; ++dy)
         {
-            if (std::fabs(q.mV[VZ] - fz) <= p.mClimbM && dist_vec(LLVector2(q.mV[VX], q.mV[VY]), run.mC) <= 0.5f)
+            for (S32 dx = -1; dx <= 1 && !relaxed; ++dx)
             {
-                relaxed = true;
-                break;
+                const auto it = mOldGrid.find(gridKey(gx + dx, gy + dy));
+                if (it == mOldGrid.end())
+                {
+                    continue;
+                }
+                for (U32 i : it->second)
+                {
+                    const LLVector3& q = mOldPortals[i];
+                    if (std::fabs(q.mV[VZ] - fz) <= p.mClimbM && dist_vec(LLVector2(q.mV[VX], q.mV[VY]), run.mC) <= 0.5f)
+                    {
+                        relaxed = true;
+                        break;
+                    }
+                }
             }
         }
         const F32 drop = relaxed ? p.mRelaxed : p.mLintelDropM;
@@ -2051,8 +2111,29 @@ namespace sknav
             es[k] = count ? static_cast<F32>(sum / count) : std::numeric_limits<F32>::quiet_NaN();
         }
         const bool estep = !std::isnan(es[0]) && !std::isnan(es[1]) && std::fabs(es[0] - es[1]) >= step;
+        // The first door on the cut, of those whose cells the cut crosses.
+        std::vector<U32> near_doors;
+        {
+            const S32 x0 = static_cast<S32>(std::floor(std::min(run.mA.mV[VX], run.mB.mV[VX])));
+            const S32 x1 = static_cast<S32>(std::floor(std::max(run.mA.mV[VX], run.mB.mV[VX])));
+            const S32 y0 = static_cast<S32>(std::floor(std::min(run.mA.mV[VY], run.mB.mV[VY])));
+            const S32 y1 = static_cast<S32>(std::floor(std::max(run.mA.mV[VY], run.mB.mV[VY])));
+            for (S32 y = y0; y <= y1; ++y)
+            {
+                for (S32 x = x0; x <= x1; ++x)
+                {
+                    const auto it = mDoorGrid.find(gridKey(x, y));
+                    if (it != mDoorGrid.end())
+                    {
+                        near_doors.insert(near_doors.end(), it->second.begin(), it->second.end());
+                    }
+                }
+            }
+            std::sort(near_doors.begin(), near_doors.end());
+            near_doors.erase(std::unique(near_doors.begin(), near_doors.end()), near_doors.end());
+        }
         S32 door = -1;
-        for (size_t i = 0; i < mDoors.size(); ++i)
+        for (U32 i : near_doors)
         {
             const DoorSpan& d = mDoors[i];
             if (d.mHi < fz || d.mLo > fz + 2.f)
@@ -2134,6 +2215,31 @@ namespace sknav
         };
         std::vector<std::pair<U64, U32>> keyed;
         std::vector<U32> group;
+        // A pair of regions whose edges a round left alone has the same runs next round.
+        struct Memo
+        {
+            U32 mRu;
+            std::vector<U32> mIds;
+            std::vector<Run> mRuns;
+        };
+        std::unordered_map<U64, Memo> memo;
+        auto groupRuns = [&](U32 ru) -> const std::vector<Run>& {
+            U64 h = mix(SEED, ru);
+            for (U32 id : group)
+            {
+                h = mix(h, id);
+            }
+            const auto it = memo.find(h);
+            if (it != memo.end() && it->second.mRu == ru && it->second.mIds == group)
+            {
+                return it->second.mRuns;
+            }
+            Memo& m = memo[h];
+            m.mRu = ru;
+            m.mIds = group;
+            m.mRuns = runs(group, ru);
+            return m.mRuns;
+        };
         for (S32 round = 0; round < MERGE_ROUNDS; ++round)
         {
             mPortals.clear();
@@ -2187,7 +2293,7 @@ namespace sknav
                     // flight's lowest or highest tread there. Switchbacks,
                     // landings and seams give a flight several.
                     const U32 st = flight[g.mU] ? g.mU : g.mV;
-                    const std::vector<Run> contacts = runs(group, g.mU);
+                    const std::vector<Run>& contacts = groupRuns(g.mU);
                     bool made = false;
                     const Run* best = nullptr;
                     for (const Run& r : contacts)
@@ -2228,7 +2334,7 @@ namespace sknav
                     continue;
                 }
                 bool any = false;
-                for (const Run& r : runs(group, g.mU))
+                for (const Run& r : groupRuns(g.mU))
                 {
                     const Scored s = score(r);
                     if (s.mPortal)
