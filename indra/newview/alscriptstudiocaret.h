@@ -26,6 +26,7 @@
 
 #include "alscriptanalysis.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudioplaces.h"
 #include "alscriptstudiowords.h"
 
 #include <string>
@@ -57,11 +58,11 @@ public:
     {
     public:
         // The analyzers asked about a place of a tab's source; whether
-        // the preprocessor makes what they read; and a line of an include
-        // as it reads, false where it is not had.
-        virtual void askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at)  = 0;
-        virtual bool preprocessed(const Doc& doc) const                                      = 0;
-        virtual bool sourceLine(const std::string& path, S32 line, std::string& out) const = 0;
+        // the preprocessor makes what they read; and an include's lines as
+        // it reads, none where it is not had.
+        virtual void                 askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at) = 0;
+        virtual bool                 preprocessed(const Doc& doc) const                                     = 0;
+        virtual ALScriptPlaces::Lines sourceLines(const std::string& path) const                            = 0;
         // A jump about to be made, for Back to come back from; and the
         // keyboard in the text in front, which ends a walk down a list.
         virtual void noteJump()       = 0;
@@ -77,9 +78,11 @@ public:
         virtual void startLookup(Doc& doc, ALEditorCommand command, const ALScriptReferences& refs, bool has_definition,
                                  const std::string& home_path, const ALScriptSpan& definition, std::vector<Doc::Place> places,
                                  U32 version) = 0;
-        // The caret moved: the bar's path; and what is wrong where it is
-        // shown in the inspector, false where nothing is.
-        virtual void showPath(Doc& doc)                           = 0;
+        // The symbols the caret is in, found (placePath): shown on the bar,
+        // and -- where they changed -- followed by the outline; and what is
+        // wrong where the caret is shown in the inspector, false where
+        // nothing is.
+        virtual void showPath(Doc& doc, bool changed)              = 0;
         virtual bool showProblemsAt(Doc& doc, const ALTextPos& at) = 0;
         // Whether the inspector is out to be read: folded away, what is at
         // the caret is not asked, and is asked as it comes out.
@@ -97,6 +100,11 @@ public:
     void answered(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at);
     // Each frame, at `now`: the tab in front's caret watched.
     void pump(F64 now);
+    // The symbols a tab's caret is in, found once for both of the panes
+    // that show them, and shown: as the caret moves, as the outline is
+    // made again, as the tab comes to the front or is renamed. None while
+    // the expansion is in front, whose lines are not the outline's.
+    void placePath(Doc& doc);
 
 private:
     ALScriptStudioServices& mServices;
