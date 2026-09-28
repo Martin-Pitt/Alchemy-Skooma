@@ -25,6 +25,8 @@
 #include "linden_common.h"
 
 #include "../alluauservice.h"
+#include "../alluauconfig.h"
+#include "../alselenefilters.h"
 
 #include "../test/lltut.h"
 
@@ -46,7 +48,7 @@ namespace tut
 
         alluauservice_data()
         {
-            std::ifstream in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.d.luau", std::ios::binary);
+            llifstream in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.d.luau", std::ios::binary);
             std::stringstream text;
             text << in.rdbuf();
             definitions = text.str();
@@ -252,7 +254,7 @@ namespace tut
     {
         set_test_name("hover says what a name is, with its documentation, and where a local was bound");
         ensure("definitions loaded: " + error, loaded);
-        std::ifstream in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.docs.json", std::ios::binary);
+        llifstream in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.docs.json", std::ios::binary);
         std::stringstream json;
         json << in.rdbuf();
         std::string docs_error;
@@ -688,5 +690,284 @@ namespace tut
         }
         std::string why;
         service.setNewSolver(newSolver, why);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<24>()
+    {
+        set_test_name("selene's comments: its lints named as Luau's, allowed or denied for the whole file before any code, or for the statement beside");
+        ensure("definitions load: " + error, loaded);
+        const auto read = ALSeleneFilters::read("-- # selene: allow(unused_variable, multiple_statements))");
+        ensure("read leniently, for the whole file", read && read->file && read->action == ALSeleneFilters::Action::Allow && read->lints.size() == 2);
+        ensure("a Luau name stands for itself, selene's for Luau's",
+               ALSeleneFilters::luauLints("LocalUnused") == ALLuauConfig::lintBit("LocalUnused") &&
+                   (ALSeleneFilters::luauLints("unused_variable") & ALLuauConfig::lintBit("FunctionUnused")) != 0);
+        ensure("a check Luau does not make stands for none", ALSeleneFilters::luauLints("almost_swapped") == 0);
+        ensure("not a directive", !ALSeleneFilters::read("-- seleneous: allow(x)") && !ALSeleneFilters::read("-- selene: permit(x)"));
+
+        const auto unused = [&](const std::string& script) {
+            size_t count = 0;
+            for (const ALScriptProblem& p : service.check(script))
+            {
+                count += p.key.compare(0, 19, "LuauLintLocalUnused") == 0 ? 1 : 0;
+            }
+            return count;
+        };
+        ensure_equals("without, both said", unused("local a = 1\nlocal b = 2\n"), size_t(2));
+        ensure_equals("the whole file", unused("-- @file header\n-- # selene: allow(unused_variable)\nlocal a = 1\nlocal b = 2\n"), size_t(0));
+        ensure_equals("after code, nothing: selene refuses a whole file's there", unused("local a = 1\n--# selene: allow(unused_variable)\nlocal b = 2\n"), size_t(2));
+        ensure_equals("the statement beside, not the next", unused("-- selene: allow(unused_variable)\nlocal a = 1\nlocal b = 2\n"), size_t(1));
+        ensure_equals("a whole function beside it",
+                      unused("-- selene: allow(unused_variable)\nlocal function f()\n    local a = 1\nend\nf()\nlocal b = 2\n"), size_t(1));
+        ensure_equals("at a line's end, its statement", unused("local a = 1 -- selene: allow(unused_variable)\nlocal b = 2\n"), size_t(1));
+        bool denied = false;
+        for (const ALScriptProblem& p : service.check("-- selene: deny(unused_variable)\nlocal a = 1\n"))
+        {
+            denied |= p.key.compare(0, 19, "LuauLintLocalUnused") == 0 && p.severity == ALScriptProblem::Severity::Error;
+        }
+        ensure("denied: an error", denied);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<25>()
+    {
+        set_test_name("an overloaded function's signature: every form, the one the arguments fit first shown");
+        ensure("definitions load: " + error, loaded);
+        const std::string       script = "local f: ((n: number) -> ()) & ((a: string, b: string) -> ()) = nil :: any\nf(\"x\", \"y\")\n";
+        const ALScriptSignature sig    = service.signature(script, 1, 7);
+        ensure("found", sig.found);
+        ensure_equals("both forms", sig.overloads.size(), size_t(2));
+        ensure_equals("the second fits two arguments", sig.overload, 1);
+        ensure("shown", sig.label == sig.overloads[1].label && sig.parameters.size() == 2);
+        ensure_equals("at the second argument", sig.active, 1);
+        ensure("one form: none listed", service.signature("local function g(a: number) end\ng(1)\n", 1, 2).overloads.empty());
+    }
+
+    template<> template<>
+    void alluauservice_object::test<26>()
+    {
+        set_test_name("a text is type checked once for its check and once for the questions, in whatever order they come; once for both where it is strict or the solver is the new one");
+        ensure("definitions loaded: " + error, loaded);
+        ALLuauConfig config;
+        service.setConfig(config);
+        const bool   one_slot = service.newSolver();
+        const size_t start    = service.typeChecks();
+        // As the studio asks: a check with the outline, the names and the
+        // hints; then questions and completions in turn, and the check again.
+        const std::string loose = "local function f(a) return a + 1 end\nlocal y = f(2)\nprint(y)\n";
+        const std::string first = said(service.check(loose));
+        service.outline(loose);
+        service.semanticTokens(loose);
+        service.inlayHints(loose, true, true);
+        service.complete(loose, 2, 2);
+        service.hover(loose, 1, 6);
+        service.complete(loose, 2, 2);
+        service.signature(loose, 1, 12);
+        service.references(loose, 1, 6);
+        ensure_equals("nonstrict: the check, and the questions' own", service.typeChecks() - start, size_t(one_slot ? 1 : 2));
+        ensure_equals("the check again, from what it found", said(service.check(loose)), first);
+        ensure_equals("and not checked again", service.typeChecks() - start, size_t(one_slot ? 1 : 2));
+
+        // A script strict by its own comment: its check serves the questions.
+        const std::string strict   = "--!strict\n" + loose;
+        const size_t      before   = service.typeChecks();
+        service.hover(strict, 2, 6);
+        service.check(strict);
+        service.outline(strict);
+        service.inlayHints(strict, true, true);
+        ensure_equals("strict: one check, the question first", service.typeChecks() - before, size_t(1));
+        service.complete(strict, 3, 2);
+        ensure_equals("a completion reads autocomplete's own", service.typeChecks() - before, size_t(one_slot ? 1 : 2));
+        const std::string strict_first = said(service.check(strict));
+        service.hover(strict, 2, 6);
+        ensure_equals("and nothing checked again", service.typeChecks() - before, size_t(one_slot ? 1 : 2));
+        // The hints the questions read are the strict ones either way.
+        // The types a question reads are the strict ones, whatever the
+        // script's mode: a nonstrict check's module knows none of them.
+        const std::string typed       = "local s = string.rep(\"a\", 2)\nlocal n = #s\nprint(n)\n";
+        const auto        loose_hints = service.inlayHints(typed, false, true);
+        const auto        strict_hints = service.inlayHints("--!strict\n" + typed, false, true);
+        ensure_equals("hints read nonstrict", loose_hints.size(), size_t(2));
+        ensure_equals("and strict", strict_hints.size(), size_t(2));
+        ensure("the same", loose_hints[0].text == strict_hints[0].text && loose_hints[1].text == strict_hints[1].text);
+        ensure("the problems of each told apart", said(service.check(loose)) == first && said(service.check(strict)) == strict_first);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<27>()
+    {
+        set_test_name("the same definitions and docs again are the ones in hand: nothing loaded over, and what was checked stands");
+        ensure("definitions loaded: " + error, loaded);
+        const std::string script = "local n: number = 1\nprint(n)\n";
+        service.check(script);
+        const size_t checked = service.typeChecks();
+        std::string  why;
+        ensure("the same again: loaded", service.loadDefinitions(definitions, why) && why.empty());
+        service.check(script);
+        ensure_equals("what was checked stands", service.typeChecks(), checked);
+        const std::string docs = "{\"@sl-slua/global/ll.Say\": {\"documentation\": \"Says it.\", \"learn_more_link\": \"x\"}}";
+        ensure("docs loaded", service.loadDocs(docs, why) && service.hasDocs());
+        ensure("and the same again", service.loadDocs(docs, why) && service.hasDocs());
+        // Other definitions are loaded over, and the script checked again.
+        ensure("others loaded", service.loadDefinitions(definitions + "\ndeclare function extraThing(): number\n", why));
+        service.check(script);
+        ensure("checked again against them", service.typeChecks() > checked);
+        service.loadDefinitions(definitions, why);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<28>()
+    {
+        set_test_name("a local's type is found however deep its scope, and the refactor at a line reads that line's hint as the whole text's has it");
+        ensure("definitions loaded: " + error, loaded);
+        const std::string script = "local a = 1\n"
+                                   "local function f()\n"
+                                   "    local b = \"x\"\n"
+                                   "    if a > 0 then\n"
+                                   "        local c = a + 1\n"
+                                   "        print(b, c)\n"
+                                   "    end\n"
+                                   "end\n"
+                                   "f()\n";
+        const std::vector<ALScriptInlayHint> hints = service.inlayHints(script, false, true);
+        std::string                          all;
+        for (const ALScriptInlayHint& hint : hints)
+        {
+            all += std::to_string(hint.line) + hint.text + ";";
+        }
+        ensure_equals("every local's, at every depth", all, std::string("0: number;2: string;4: number;"));
+        for (const auto& [line, column, type] : { std::tuple{ 0, 6, "number" }, std::tuple{ 2, 10, "string" }, std::tuple{ 4, 14, "number" } })
+        {
+            bool offered = false;
+            for (const ALScriptFix& fix : service.actions(script, line, column, line, column))
+            {
+                offered |= fix.title == std::string("Declare it as '") + type + "'";
+            }
+            ensure("line " + std::to_string(line) + ": declared as " + type, offered);
+        }
+    }
+
+    template<> template<>
+    void alluauservice_object::test<29>()
+    {
+        set_test_name("each script its own module: moving between a few finds each checked as it was left, each with its own configuration");
+        ensure("definitions loaded: " + error, loaded);
+        const std::string a = "local a: number = 1\nprint(a)\n";
+        const std::string b = "local b: string = \"x\"\nprint(b)\n";
+        ALLuauConfig      loose;
+        ALLuauConfig      strict;
+        strict.mode = "strict";
+        service.setDocument("a");
+        service.setConfig(strict);
+        service.check(a);
+        service.setDocument("b");
+        service.setConfig(loose);
+        service.check(b);
+        const size_t both = service.typeChecks();
+        for (int turn = 0; turn < 3; ++turn)
+        {
+            service.setDocument("a");
+            service.setConfig(strict);
+            service.check(a);
+            service.setDocument("b");
+            service.setConfig(loose);
+            service.check(b);
+        }
+        ensure_equals("turn and turn about, each as it was left", service.typeChecks(), both);
+        // Past a few, the one asked of longest ago is let go of.
+        for (const char* other : { "c", "d", "e" })
+        {
+            service.setDocument(other);
+            service.setConfig(loose);
+            service.check(std::string("local ") + other + " = 1\n");
+        }
+        const size_t now = service.typeChecks();
+        service.setDocument("b");
+        service.setConfig(loose);
+        service.check(b);
+        ensure_equals("one of the last few kept", service.typeChecks(), now);
+        service.setDocument("a");
+        service.setConfig(strict);
+        service.check(a);
+        ensure_equals("the one asked of longest ago let go of", service.typeChecks(), now + 1);
+        // The module of no name is apart from them all.
+        service.setDocument("");
+        service.setConfig(loose);
+        service.check(a);
+        ensure_equals("unnamed: its own", service.typeChecks(), now + 2);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<30>()
+    {
+        set_test_name("lines nobody reads -- a module put ahead of the script -- are passed over by the names and the hints");
+        ensure("definitions loaded: " + error, loaded);
+        const std::string text = "local __modules = {}\n"
+                                 "__modules[\"m\"] = (function()\nlocal inner = 1\nreturn inner\nend)()\n"
+                                 "local own = __modules[\"m\"]\nprint(own)\n";
+        service.setPassedOver({ { 1, 4 } });
+        bool in_module = false;
+        for (const ALScriptSemanticToken& token : service.semanticTokens(text))
+        {
+            in_module |= token.span.line >= 1 && token.span.line <= 4;
+        }
+        ensure("no names coloured in the module", !in_module);
+        bool hinted_module = false, hinted_own = false;
+        for (const ALScriptInlayHint& hint : service.inlayHints(text, false, true))
+        {
+            hinted_module |= hint.line >= 1 && hint.line <= 4;
+            hinted_own |= hint.line == 5;
+        }
+        ensure("no hints in the module", !hinted_module);
+        ensure("the script's own hinted", hinted_own);
+        service.setPassedOver({});
+        in_module = false;
+        for (const ALScriptSemanticToken& token : service.semanticTokens(text))
+        {
+            in_module |= token.span.line >= 1 && token.span.line <= 4;
+        }
+        ensure("with nothing passed over, coloured", in_module);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<31>()
+    {
+        set_test_name("a script's requires kept as calls reach its modules, each checked on its own and not again for an edit of the script alone");
+        ensure("definitions loaded: " + error, loaded);
+        ALLuauConfig config;
+        service.setDocument("uses");
+        service.setConfig(config);
+        ALLuauService::Modules modules;
+        modules.modules.push_back(
+            { "disk:/lib/util.luau", "--!strict\nlocal M = {}\nfunction M.twice(n: number): number\n    return n * 2\nend\nlocal bad: number = \"x\"\nreturn M\n" });
+        modules.reaches.push_back({ "", "util", "disk:/lib/util.luau" });
+        service.setModules(modules);
+        const std::string script = "--!strict\nlocal util = require(\"util\")\nlocal s: string = util.twice(2)\n";
+        const ALScriptProblems problems = service.check(script);
+        bool typed = false, module_said = false;
+        for (const ALScriptProblem& problem : problems)
+        {
+            typed |= problem.file.empty() && problem.line == 2;
+            module_said |= problem.file == "disk:/lib/util.luau" && problem.line == 5;
+        }
+        ensure("the module's types reach the script: " + said(problems), typed);
+        ensure("the module's own problem is the module's, in its lines: " + said(problems), module_said);
+        // The script typed in: only the script is checked again.
+        const size_t modules_before = service.modulesChecked();
+        service.check(script + "print(s)\n");
+        ensure_equals("the script alone", service.modulesChecked() - modules_before, size_t(1));
+        // The module changed: it, and the script that requires it.
+        modules.modules[0].text = "local M = {}\nfunction M.twice(n: number): string\n    return tostring(n * 2)\nend\nreturn M\n";
+        service.setModules(modules);
+        const size_t again = service.modulesChecked();
+        const ALScriptProblems now = service.check(script + "print(s)\n");
+        ensure_equals("both", service.modulesChecked() - again, size_t(2));
+        bool still = false;
+        for (const ALScriptProblem& problem : now)
+        {
+            still |= problem.line == 2 && problem.file.empty() && problem.severity == ALScriptProblem::Severity::Error;
+        }
+        ensure("and what it gives now fits: " + said(now), !still);
+        service.setDocument("");
     }
 }

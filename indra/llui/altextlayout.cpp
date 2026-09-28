@@ -26,6 +26,7 @@
 
 #include "altextlayout.h"
 
+#include "altextchars.h"
 #include "llfontfreetype.h"
 #include "llstring.h"
 
@@ -129,27 +130,36 @@ void ALTextLayout::invalidateAll()
 
 void ALTextLayout::onEdit(const ALTextDocument::Edit& edit)
 {
-    const S32 first = llclamp(edit.range.begin.line, 0, static_cast<S32>(mLines.size()));
-    const S32 last  = llclamp(edit.range.end.line, first, static_cast<S32>(mLines.size()) - 1);
-    const S32 made  = 1 + static_cast<S32>(std::count(edit.inserted.begin(), edit.inserted.end(), '\n'));
-    if (first < static_cast<S32>(mLines.size()))
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    const std::vector<ALTextDocument::Edit::LineSpan>& spans      = edit.lineSpans();
+    const S32                                         line_count = mDocument ? mDocument->lineCount() : -1;
+    // The hidden lines among those the edit replaced go with them.
+    S32  hidden_gone = 0;
+    bool moved       = false;
+    for (const ALTextDocument::Edit::LineSpan& span : spans)
     {
-        mLines.erase(mLines.begin() + first, mLines.begin() + last + 1);
-        for (S32 l = first; l <= last; ++l)
+        moved = moved || span.made != span.last - span.first + 1;
+        if (mHiddenCount > 0)
         {
-            mHiddenCount -= mHidden[l] ? 1 : 0;
+            const S32 size  = static_cast<S32>(mHidden.size());
+            const S32 first = llclamp(span.first, 0, size);
+            const S32 last  = llclamp(span.last, first, size - 1);
+            for (S32 l = first; l <= last && l < size; ++l)
+            {
+                hidden_gone += mHidden[l] ? 1 : 0;
+            }
         }
-        mHidden.erase(mHidden.begin() + first, mHidden.begin() + last + 1);
     }
-    mLines.insert(mLines.begin() + first, made, Line());
+    mLines.applySpans(spans, line_count, Line());
     // The lines an edit makes are in sight: somebody is typing there.
-    mHidden.insert(mHidden.begin() + first, made, 0);
-    if (mDocument)
+    mHidden.applySpans(spans, line_count, 0, 0);
+    mHiddenCount -= hidden_gone;
+    // Which lines are hidden changed only where a hidden one went, or the
+    // hidden ones moved: not for a line typed in with none folded.
+    if (hidden_gone > 0 || (mHiddenCount > 0 && moved))
     {
-        mLines.resize(mDocument->lineCount());
-        mHidden.resize(mDocument->lineCount(), 0);
+        ++mHiddenRevision;
     }
-    ++mHiddenRevision;
     mTopsDirty    = true;
     mContentWidth = -1.f;
 }
@@ -469,7 +479,7 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
             inlays_at(piece);
             continue;
         }
-        const F32 stop = (floorf(x / tab_stop) + 1.f) * tab_stop;
+        const F32 stop = alNextTabStop(x, tab_stop);
         out.placed.push_back(LLFontGL::Placed{ nullptr, 0, x * inv_x, 0.f });
         out.glyphs.push_back(Glyph{ static_cast<S32>(at), x * inv_x, (stop - x) * inv_x });
         x     = stop;
