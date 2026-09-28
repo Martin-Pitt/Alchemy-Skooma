@@ -28,6 +28,9 @@
 
 #include "../test/lltut.h"
 
+#include <string>
+#include <vector>
+
 namespace tut
 {
     struct alscriptenvelope_data
@@ -200,6 +203,95 @@ namespace tut
             ensure(c.name + ": reads back", back.has_value());
             ensure_equals(c.name + ": the source", back->source, c.source);
             ensure_equals(c.name + ": the expanded code", back->expanded, envelope.expanded);
+        }
+    }
+
+    template<> template<>
+    void alscriptenvelope_object::test<7>()
+    {
+        set_test_name("a compiled half the source makes now, spacing, comments and an optimizer's leavings aside; and one it does not");
+        const std::string made = "integer g = 3;\nfloat unused = 1.0;\nhelper() { llSay(0, \"a\"); }\n"
+                                 "default\n{\n    state_entry()\n    {\n        g = 4;\n        llSay(0, (string)g);\n    }\n}\n";
+        ensure("itself", ALScriptEnvelope::compiledFrom(made, made, false));
+        ensure("spaced and commented otherwise",
+               ALScriptEnvelope::compiledFrom(made, "// made here\ninteger g=3;float unused=1.0;helper(){llSay(0,\"a\");}"
+                                                    "default{state_entry(){g=4;llSay(0,(string)g);}}", false));
+        ensure("an unused global and function left out",
+               ALScriptEnvelope::compiledFrom(made, "integer g = 3;\ndefault { state_entry() { g = 4; llSay(0, (string)g); } }", false));
+        // 3 is a token the script has elsewhere: changed here, it is
+        // still not what the source makes.
+        ensure("a number changed", !ALScriptEnvelope::compiledFrom(made, "integer g = 3;\ndefault { state_entry() { g = 3; llSay(0, (string)g); } }", false));
+        ensure("a line added",
+               !ALScriptEnvelope::compiledFrom(made, "integer g = 3;\ndefault { state_entry() { g = 4; llSay(0, (string)g); llDie(); } }", false));
+        ensure("a part added", !ALScriptEnvelope::compiledFrom(made, made + "extra() { }\n", false));
+        ensure("in another order", !ALScriptEnvelope::compiledFrom(made, "default { state_entry() { g = 4; llSay(0, (string)g); } }\ninteger g = 3;", false));
+
+        const std::string lua = "local n = 1\nprint(n)\n";
+        ensure("SLua: the same tokens", ALScriptEnvelope::compiledFrom(lua, "local n=1 -- one\nprint(n)", true));
+        ensure("SLua: not", !ALScriptEnvelope::compiledFrom(lua, "local n = 2\nprint(n)\n", true));
+        ensure("SLua: nothing left out", !ALScriptEnvelope::compiledFrom(lua, "local n = 1\n", true));
+
+        ensure("compiled here: told, transformed or not", ALScriptEnvelope::comparable(made, false, true, true));
+        ensure("elsewhere, untransformed: told", ALScriptEnvelope::comparable(made, false, false, false));
+        ensure("elsewhere, transformed: not", !ALScriptEnvelope::comparable(made, false, false, true));
+        ensure("the time asked for: not", !ALScriptEnvelope::comparable("string t = __TIME__;", false, true, false));
+        ensure("who compiled it: not", !ALScriptEnvelope::comparable("local a = __AGENTNAME__", true, true, false));
+        ensure("named in a comment only: told", ALScriptEnvelope::comparable("// built __DATE__\ninteger x;", false, true, false));
+    }
+
+    template<> template<>
+    void alscriptenvelope_object::test<8>()
+    {
+        set_test_name("the line the code begins on in the asset, as the region counts a line it names: the envelope's own before it");
+        for (const bool lua : { true, false })
+        {
+            ALScriptEnvelope envelope;
+            envelope.lua            = lua;
+            envelope.source         = "a\nb\nc";
+            envelope.expanded       = "first\nsecond\n";
+            envelope.compileTarget  = lua ? "luau" : "mono";
+            envelope.programVersion = "Alchemy";
+            envelope.lastCompiled   = "today";
+            const std::string asset = envelope.wrap();
+            std::vector<std::string> lines;
+            for (size_t from = 0;;)
+            {
+                const size_t nl = asset.find('\n', from);
+                lines.push_back(asset.substr(from, nl == std::string::npos ? std::string::npos : nl - from));
+                if (nl == std::string::npos)
+                {
+                    break;
+                }
+                from = nl + 1;
+            }
+            const int at = envelope.codeLine();
+            ensure_equals(std::string(lua ? "SLua" : "LSL") + ": the code's first line there", lines[static_cast<size_t>(at)], std::string("first"));
+            ensure_equals(std::string(lua ? "SLua" : "LSL") + ": after the source's lines and the envelope's own", at, 9);
+        }
+    }
+
+    template<> template<>
+    void alscriptenvelope_object::test<9>()
+    {
+        set_test_name("how long an envelope's asset is, worked out without making it, is how long the asset made is");
+        const char* sources[] = { "", "default { }\n", "a /* b */ c // d\n/*|*/ **// x", "local s = [[x]] .. [==[y]==]\n", "]]=]==]" };
+        for (const bool lua : { false, true })
+        {
+            for (const char* source : sources)
+            {
+                for (const char* target : { "", "mono", "luau" })
+                {
+                    ALScriptEnvelope envelope;
+                    envelope.lua            = lua;
+                    envelope.source         = source;
+                    envelope.expanded       = "expanded\ncode /* here */\n";
+                    envelope.compileTarget  = target;
+                    envelope.programVersion = "Alchemy Test 1.2.3";
+                    envelope.lastCompiled   = "2026-09-27T12:00:00Z";
+                    ensure_equals(std::string(lua ? "SLua " : "LSL ") + "'" + source + "' for '" + target + "'", envelope.wrappedSize(),
+                                  envelope.wrap().size());
+                }
+            }
         }
     }
 }

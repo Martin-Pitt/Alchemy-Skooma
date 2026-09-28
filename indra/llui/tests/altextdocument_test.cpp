@@ -295,4 +295,118 @@ namespace tut
         ensure_equals("mixed stays as written", alInCaseOf("wOrLd", "Hello"), std::string("Hello"));
         ensure_equals("no letters stays as written", alInCaseOf("123", "Hello"), std::string("Hello"));
     }
+
+    template<> template<>
+    void altextdocument_object::test<15>()
+    {
+        set_test_name("an edit knows where it ends as it is made, and where it is told of it says the same as one worked out");
+        ALTextDocument doc("ab\ncd");
+        listen(doc);
+        doc.replace(ALTextRange(ALTextPos(0, 1), ALTextPos(1, 1)), "x\r\nyz\r\n");
+        doc.insert(ALTextPos(0, 0), "q");
+        doc.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)), std::string_view());
+        ensure_equals("three heard", heard.size(), size_t(3));
+        for (const ALTextDocument::Edit& edit : heard)
+        {
+            ensure("kept as it was made", edit.endKept);
+            ALTextDocument::Edit by_hand{ edit.range, edit.removed, edit.inserted };
+            ensure("by hand, not", !by_hand.endKept);
+            ensure("the same end", edit.endAfter() == by_hand.endAfter());
+            ensure_equals("the same breaks", edit.breaksInserted(), by_hand.breaksInserted());
+        }
+        ensure("across the line endings put in, as LF", heard[0].endAfter() == ALTextPos(2, 0));
+        ensure_equals("two breaks", heard[0].breaksInserted(), 2);
+        ensure("one character on", heard[1].endAfter() == ALTextPos(0, 1));
+        ensure("nothing put in ends where it began", heard[2].endAfter() == ALTextPos(0, 0));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<16>()
+    {
+        set_test_name("several stretches replaced as one edit: one notification carrying each, positions between them moved, and back again");
+        ALTextDocument doc("one two\nthree four\nfive six\nseven");
+        listen(doc);
+        typedef ALTextRange R;
+        typedef ALTextPos   P;
+        const ALTextDocument::Edit edit =
+            doc.replaceMany({ { R(P(0, 4), P(0, 7)), "2" }, { R(P(1, 0), P(1, 5)), "3\nTHREE" }, { R(P(2, 5), P(2, 8)), "6" }, { R(P(2, 0), P(2, 4)), "5" } });
+        ensure_equals("the text", doc.text(), std::string("one 2\n3\nTHREE four\n5 6\nseven"));
+        ensure("one notification", heard.size() == 1);
+        ensure("from the first to the last", edit.range == R(P(0, 4), P(2, 8)));
+        const std::vector<ALTextDocument::Edit::Part>& parts = edit.parts;
+        ensure("each in order", parts.size() == 4 && parts[2].before == R(P(2, 0), P(2, 4)));
+        ensure("each as it is after", parts[0].after == R(P(0, 4), P(0, 5)) && parts[1].after == R(P(1, 0), P(2, 5)) && parts[2].after == R(P(3, 0), P(3, 1)) &&
+                                          parts[3].after == R(P(3, 2), P(3, 3)));
+        const std::vector<ALTextDocument::Edit::LineSpan> spans = edit.lineSpans();
+        ensure("a run of lines each, the two sharing one line as one", spans.size() == 3 && spans[1].first == 1 && spans[1].made == 2 && spans[2].first == 2 &&
+                                                                          spans[2].last == 2 && spans[2].made == 1);
+        ensure("a position between them moved", edit.slidPast(P(1, 6)) == P(2, 6));
+        R between(P(2, 4), P(2, 5));
+        ensure("a range between two on one line kept, and moved", edit.slide(between) && between == R(P(3, 1), P(3, 2)));
+        R cut(P(0, 3), P(0, 5));
+        ensure("one a stretch cut through goes", !edit.slide(cut));
+        ensure("the find scope stretched round them", edit.stretched(R(P(0, 5), P(3, 2))) == R(P(0, 4), P(4, 2)));
+        ensure("a mark inside a stretch where it began", edit.placed(P(1, 2)) == P(1, 0) && edit.placed(P(2, 6)) == P(3, 2));
+        ensure("one after them all moved along", edit.placed(P(3, 2)) == P(4, 2));
+        ensure("a line replaced gone, one after them moved", edit.lineAfter(0) == -1 && edit.lineAfter(2) == -1 && edit.lineAfter(3) == 4);
+
+        const ALTextDocument::Edit back = edit.inverse();
+        doc.replace(back.range, back.inserted, back.parts);
+        ensure_equals("put back", doc.text(), std::string("one two\nthree four\nfive six\nseven"));
+        ensure("the stretches with it, the other way round", heard.size() == 2 && heard[1].parts.size() == 4 && heard[1].parts[1].after == R(P(1, 0), P(1, 5)));
+
+        doc.replaceMany({ { R(P(0, 0), P(0, 3)), "a" }, { R(P(0, 2), P(0, 4)), "b" } });
+        ensure_equals("one over another left out", doc.text(), std::string("a two\nthree four\nfive six\nseven"));
+        heard.clear();
+        doc.replaceMany({ { R(P(3, 0), P(3, 0)), "x" } });
+        ensure("one stretch is a plain edit", heard.size() == 1 && heard[0].parts.empty());
+    }
+
+    template<> template<>
+    void altextdocument_object::test<17>()
+    {
+        set_test_name("the next tab stop, in columns and in pixels; and how wide a text's leading blanks are, and how many bytes");
+        ensure_equals("from a stop to the next", alNextTabStop(0, 4), 4);
+        ensure_equals("from inside to the next", alNextTabStop(5, 4), 8);
+        ensure_equals("a width of none taken as one", alNextTabStop(3, 0), 4);
+        ensure_equals("in pixels", alNextTabStop(13.f, 8.f), 16.f);
+        ensure_equals("in pixels, from a stop", alNextTabStop(16.f, 8.f), 24.f);
+        size_t bytes = 0;
+        ensure_equals("spaces, then a tab to its stop", alBlanksWidth("  \tx", 4, &bytes), 4);
+        ensure_equals("three bytes of them", bytes, size_t(3));
+        ensure_equals("a tab, then spaces", alBlanksWidth("\t  x", 4), 6);
+        ensure_equals("nothing blank", alBlanksWidth("x  ", 4, &bytes), 0);
+        ensure_equals("no bytes", bytes, size_t(0));
+        ensure_equals("all blank", alBlanksWidth(" \t", 2, &bytes), 2);
+        ensure_equals("all of it", bytes, size_t(2));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<18>()
+    {
+        set_test_name("words as code reads them: a name's run, a run of marks, the blanks after; and a name's parts");
+        const ALTextDocument doc("ll.Say(0, llSetPos)\n  PRIM_POSITION");
+        std::string stops;
+        for (ALTextPos at(0, 0); at.line == 0 && at.column < 19;)
+        {
+            at = doc.nextCodeWord(at);
+            stops += llformat("%d ", at.column);
+        }
+        ensure_equals("forward, each run's end past its blanks", stops, std::string("2 3 6 7 8 10 18 19 "));
+        ensure("across the line end", doc.nextCodeWord(ALTextPos(0, 19)) == ALTextPos(1, 0));
+        ensure("over the next line's blanks from its start", doc.nextCodeWord(ALTextPos(1, 0)) == ALTextPos(1, 2));
+        stops.clear();
+        for (ALTextPos at(0, 19); at.column > 0;)
+        {
+            at = doc.prevCodeWord(at);
+            stops += llformat("%d ", at.column);
+        }
+        ensure_equals("back, each run's start", stops, std::string("18 10 8 7 6 3 2 0 "));
+        ensure("back across the line start", doc.prevCodeWord(ALTextPos(1, 0)) == ALTextPos(0, 19));
+        ensure("parts forward", doc.nextCodeWord(ALTextPos(0, 10), true) == ALTextPos(0, 12) && doc.nextCodeWord(ALTextPos(0, 12), true) == ALTextPos(0, 15));
+        ensure("parts back", doc.prevCodeWord(ALTextPos(0, 17), true) == ALTextPos(0, 15) && doc.prevCodeWord(ALTextPos(0, 15), true) == ALTextPos(0, 12));
+        ensure("past an underscore", doc.nextCodeWord(ALTextPos(1, 2), true) == ALTextPos(1, 7) && doc.prevCodeWord(ALTextPos(1, 15), true) == ALTextPos(1, 7));
+        const ALTextDocument wide("x\xC3\xA9y + 1");
+        ensure("a character past ASCII kept whole", wide.nextCodeWord(ALTextPos(0, 0)) == ALTextPos(0, 5));
+    }
 }

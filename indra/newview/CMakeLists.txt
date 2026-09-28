@@ -170,22 +170,49 @@ if(AL_BUILD_VIEWER)
     alsceneexplorerpredicate.cpp
     alscopedata.cpp
     alscriptanalysis.cpp
+    alscriptanalyzers.cpp
+    alscriptcontentsindex.cpp
+    alscriptcrumbsbar.cpp
     alscriptexplorermodel.cpp
     alscriptexplorerpane.cpp
     alscriptexplorertree.cpp
+    alscriptexternaleditor.cpp
     alfloaterscriptpreferences.cpp
+    alscriptinspectorpane.cpp
+    alscriptincluderesolver.cpp
+    alscriptinventoryindex.cpp
     alscriptkeymap.cpp
+    alpanelscriptkeymap.cpp
+    alscriptlookup.cpp
+    alscriptobjectcheck.cpp
+    alscriptnavigation.cpp
     alscriptmodules.cpp
+    alscriptnoticebar.cpp
+    alscriptitemdrop.cpp
     alscriptnotecardtab.cpp
     alscriptnotecardworld.cpp
+    alscriptoutlinepane.cpp
     alscriptoutputpane.cpp
     alscriptpreprocessor.cpp
     alscriptproblemspane.cpp
+    alscriptreferencespane.cpp
     alscriptsaveflow.cpp
     alscriptsearch.cpp
     alscriptsearchpane.cpp
+    alscriptstudiocaret.cpp
+    alscriptstudiochecking.cpp
+    alscriptstudiocommands.cpp
     alscriptstudiodoc.cpp
-    alscriptstudiosave.cpp
+    alscriptstudiofileio.cpp
+    alscriptstudiofiles.cpp
+    alscriptstudioorphans.cpp
+    alscriptstudioplaces.cpp
+    alscriptstudiorecovery.cpp
+    alscriptstudiosaving.cpp
+    alscriptstudiovim.cpp
+    alscriptstudiovimrc.cpp
+    alscriptstudioweighing.cpp
+    alscriptstudiowords.cpp
     alscriptweightspane.cpp
     alscriptworkspace.cpp
     alterrainsurfacemaps.cpp
@@ -986,20 +1013,49 @@ if(AL_BUILD_VIEWER)
     alsceneexplorerpredicate.h
     alscopedata.h
     alscriptanalysis.h
+    alscriptanalyzers.h
+    alscriptcontentsindex.h
+    alscriptcrumbsbar.h
     alscriptexplorermodel.h
     alscriptexplorerpane.h
     alscriptexplorertree.h
+    alscriptexternaleditor.h
     alfloaterscriptpreferences.h
+    alscriptinspectorpane.h
+    alscriptincluderesolver.h
+    alscriptinventoryindex.h
+    alscriptjobqueue.h
     alscriptkeymap.h
+    alpanelscriptkeymap.h
+    alscriptlookup.h
+    alscriptobjectcheck.h
+    alscriptnavigation.h
     alscriptmodules.h
+    alscriptnoticebar.h
+    alscriptitemdrop.h
     alscriptnotecardtab.h
+    alscriptoutlinepane.h
     alscriptoutputpane.h
     alscriptpreprocessor.h
     alscriptproblemspane.h
+    alscriptreferencespane.h
     alscriptsaveflow.h
     alscriptsearch.h
     alscriptsearchpane.h
+    alscriptstudiocaret.h
+    alscriptstudiochecking.h
+    alscriptstudiocommands.h
     alscriptstudiodoc.h
+    alscriptstudiofileio.h
+    alscriptstudiofiles.h
+    alscriptstudioorphans.h
+    alscriptstudioplaces.h
+    alscriptstudiorecovery.h
+    alscriptstudiosaving.h
+    alscriptstudiovim.h
+    alscriptstudiovimrc.h
+    alscriptstudioweighing.h
+    alscriptstudiowords.h
     alscriptstudioservices.h
     alscriptweightspane.h
     alscriptworkspace.h
@@ -2438,6 +2494,16 @@ if(AL_BUILD_TESTS)
     SOURCES tests/llviewertexture_stub.cpp
   )
 
+  # An inventory item dropped on a script: its name or its key, over the
+  # studio's own window.
+  al_add_test(
+    alscriptitemdrop
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
   # A notecard's items in its Script Studio tab, over a fake of the
   # viewer's side and the studio's own window.
   al_add_test(
@@ -2448,6 +2514,15 @@ if(AL_BUILD_TESTS)
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
+  # What each prim holds, as one index for every studio window, over a
+  # fake of the world.
+  al_add_test(
+    alscriptcontentsindex
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+  )
+
   # What the Script Studio's explorer lists, and the rows it makes of them,
   # with nothing of the world.
   al_add_test(
@@ -2455,6 +2530,7 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptcontentsindex.cpp
   )
 
   # The explorer's rows shown as the inventory's folder view, from the source
@@ -2464,7 +2540,7 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptexplorermodel.cpp
+    SOURCES alscriptexplorermodel.cpp alscriptcontentsindex.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2501,9 +2577,269 @@ if(AL_BUILD_TESTS)
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
+  # A Script Studio window's unsaved texts kept in a recovery store of the
+  # test's, and taken up again over tabs of their own editors.
+  al_add_test(
+    alscriptstudiorecovery
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptnotecardtab.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's commands by name, with nothing of the window.
+  al_add_test(alscriptstudiocommands UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+
+  # Script Studio's keys: the editors' keymap and the menus' keys, with a
+  # person's changes over them in a setting of the test's.
+  al_add_test(
+    alscriptkeymap
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
   # Whole saves of a Script Studio tab through where they stand and where
   # they go, with nothing of the viewer.
   al_add_test(alscriptsaveflow UNIT PROJECT ${test_project} LIBRARIES llui alscript ${test_libs})
+
+  # Whole saves of Script Studio tabs done -- tidied, checked, preprocessed,
+  # sent, answered -- over the window's side faked.
+  al_add_test(
+    alscriptstudiosaving
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's files on disk, over the window's side faked: languages,
+  # the recent lists, writing, changes outside, loading, Save As.
+  al_add_test(
+    alscriptstudiofiles
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudiofileio.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's navigation: the history of places, back and forward,
+  # and previews opened as a list is walked.
+  al_add_test(
+    alscriptnavigation
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's lookups across scripts, the window's side and the
+  # preprocessor's names faked: the fan-out, answers dropped, renames.
+  al_add_test(
+    alscriptlookup
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudioplaces.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The Script Studio's References tab over the studio's own window, the
+  # window's side faked: listed, slid with edits, chosen, sorted.
+  al_add_test(
+    alscriptreferencespane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's outline over the studio's own window, the window's
+  # side faked: the tree, folds, the filter, sorting, the caret followed.
+  al_add_test(
+    alscriptoutlinepane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's bar under the editor over the studio's own window, the
+  # window's side faked: the path of symbols, the trailer's parts, a step.
+  al_add_test(
+    alscriptcrumbsbar
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's inspector over the studio's own window, the window's
+  # side faked: a name's declaration, words and page, and the problems.
+  al_add_test(
+    alscriptinspectorpane
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudioplaces.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's name at the caret, the window's side faked: definitions
+  # gone to, references read back and asked for, the caret watched.
+  al_add_test(
+    alscriptstudiocaret
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudioplaces.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # What waits for the script analysis thread: the latest of each kind
+  # about each script, by rank, a stale text passed over.
+  al_add_test(alscriptjobqueue PROJECT ${test_project} LIBRARIES llcommon)
+
+  # Each language's analyzer, asked as the analysis thread asks it, over
+  # the grid's own definitions.
+  al_add_test(
+    alscriptanalyzers
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES alscript llui ${test_libs}
+    DEFINES "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\""
+  )
+
+  # Script Studio's checking, the window's side and the viewer's sources
+  # faked: checks due and answered, expansions, imports, lints, fixes.
+  al_add_test(
+    alscriptstudiochecking
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudioplaces.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # A check of every script of an object, the window and the world faked:
+  # the open ones left to their tabs, the rest read, expanded and asked.
+  al_add_test(
+    alscriptobjectcheck
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiochecking.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudioplaces.cpp
+      alscriptstudiowords.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's orphans, the world's reach faked: what a tab has become,
+  # the check, reattaching, and the notice over the editor with its bar.
+  al_add_test(
+    alscriptstudioorphans
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnoticebar.cpp
+      alscriptnotecardtab.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudiorecovery.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's words: the vocabulary from definitions a test gives,
+  # editors taught it, hovers, completions, the Insert menu, the reference.
+  al_add_test(
+    alscriptstudiowords
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's weighing, over the window's side and the analyzers
+  # faked: targets, answers, what a save sends, notes and heat, fixes.
+  al_add_test(
+    alscriptstudioweighing
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptweightspane.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's tabs held open in an editor outside, over the window's
+  # side faked: the copy, its saves taken or held, the log, letting go.
+  al_add_test(
+    alscriptexternaleditor
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES
+      alscriptnotecardtab.cpp
+      alscriptsaveflow.cpp
+      alscriptstudiodoc.cpp
+      alscriptstudiofileio.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # Script Studio's side of vim over the window's commands and its side
+  # faked: the : commands, :set, :history, q:, = and the banner.
+  al_add_test(
+    alscriptstudiovim
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui alscript ${test_libs}
+    SOURCES alscriptstudiocommands.cpp alscriptstudiodoc.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
 
   # A Script Studio tab's own logic, and the fake of the window's services
   # the units split out of the window are tested with.
