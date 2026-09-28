@@ -108,7 +108,9 @@ namespace tut
         }
     };
 
-    typedef test_group<altextview_data> altextview_group;
+    // More than TUT's fifty a group holds by default, which runs the first
+    // fifty and says nothing of the rest: keep this above the highest test.
+    typedef test_group<altextview_data, 100> altextview_group;
     typedef altextview_group::object    altextview_object;
     altextview_group                    altextview_instance("altextview");
 
@@ -404,11 +406,17 @@ namespace tut
         ensure("the first selected", v.selection().normalised() == ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)) && v.findCurrent() == 0);
         key(KEY_F3);
         ensure("F3 goes on", v.selection().normalised() == ALTextRange(ALTextPos(0, 8), ALTextPos(0, 11)));
+        ensure_equals("no going round said", v.findBar()->countSaid(), std::string("2 of 3"));
         key(KEY_F3);
         key(KEY_F3);
         ensure("and round to the first", v.findCurrent() == 0);
+        ensure_equals("going round said, on from the top", v.findBar()->countSaid(), std::string("\xE2\x86\xBB 1 of 3"));
         key(KEY_F3, MASK_SHIFT);
         ensure("shift-F3 goes back round to the last", v.selection().normalised() == ALTextRange(ALTextPos(1, 4), ALTextPos(1, 7)));
+        ensure_equals("and back from the bottom", v.findBar()->countSaid(), std::string("\xE2\x86\xBA 3 of 3"));
+        key(KEY_F3, MASK_SHIFT);
+        ensure_equals("said until the next step", v.findBar()->countSaid(), std::string("2 of 3"));
+        key(KEY_F3);
 
         v.findBar()->setReplacement("1");
         v.findNext(true);  // the first again
@@ -1210,5 +1218,316 @@ namespace tut
         ensure_equals("one the edit cut through goes at once", v.findBar()->countSaid(), std::string("1"));
         ensure("the one left slid with the text", v.findMatches().size() == 2 && v.findMatches().front() == ALTextRange(ALTextPos(0, 7), ALTextPos(0, 10)));
         ensure_equals("looked through when wanted", v.findBar()->countSaid(), std::string("2"));
+    }
+
+    template<> template<>
+    void altextview_object::test<37>()
+    {
+        set_test_name("F7 and Shift-F7 select the next and the previous misspelled word, round past the ends; not with no spell check");
+        ALTextView& v = make("teh one\nfine\nand teh two");
+        ensure("off: not offered", !v.canPerform(ALEditorCommand::NextMisspelling));
+        v.setSpellChecker([](const std::string& word) { return word != "teh"; });
+        v.setSpellCheck(true);
+        ensure("on: offered", v.canPerform(ALEditorCommand::NextMisspelling) && v.canPerform(ALEditorCommand::PreviousMisspelling));
+        v.setCaret(ALTextPos(0, 2));
+        key(KEY_F7);
+        ensure("the next, selected", v.selection() == ALTextRange(ALTextPos(2, 4), ALTextPos(2, 7)));
+        key(KEY_F7);
+        ensure("round past the end", v.selection() == ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        key(KEY_F7, MASK_SHIFT);
+        ensure("back round past the start", v.selection() == ALTextRange(ALTextPos(2, 4), ALTextPos(2, 7)));
+        v.setText("all fine");
+        ensure("none: nothing to go to", !v.perform(ALEditorCommand::NextMisspelling));
+    }
+
+    template<> template<>
+    void altextview_object::test<38>()
+    {
+        set_test_name("Control-J joins the caret's line and the next, or the lines selected; Convert Indentation redoes the lines' blanks");
+        ALTextView& v = make("one\n  two\n  three\nfour");
+        v.setCaret(ALTextPos(0, 1));
+        key('J', MASK_CONTROL);
+        ensure_equals("the next joined on", v.text(), std::string("one two\n  three\nfour"));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(2, 2)));
+        key('J', MASK_CONTROL);
+        ensure_equals("the lines selected", v.text(), std::string("one two three four"));
+        v.undo();
+        ensure_equals("one step back", v.text(), std::string("one two\n  three\nfour"));
+
+        v.setText("\tone\n\t\ttwo");
+        v.setTabWidth(2);
+        ensure("to spaces", v.convertIndentation(0, 1, true) && v.text() == "  one\n    two");
+        ensure("nothing more to do", !v.convertIndentation(0, 1, true));
+        ensure("back to tabs", v.convertIndentation(0, 1, false) && v.text() == "\tone\n\t\ttwo");
+    }
+
+    template<> template<>
+    void altextview_object::test<39>()
+    {
+        set_test_name("the change list: one place a line, sliding with the text; Last Edit Location goes back through it, Next Edit Location on");
+        ALTextView& v = make("zero\none\ntwo\nthree");
+        ensure("nothing yet", v.changes().empty() && !v.canPerform(ALEditorCommand::PreviousChange));
+        v.setCaret(ALTextPos(1, 3));
+        v.insertText("!");
+        v.insertText("?");
+        v.setCaret(ALTextPos(3, 0));
+        v.insertText(">");
+        ensure("one a line, the last place on it", v.changes() == std::vector<ALTextPos>{ ALTextPos(1, 4), ALTextPos(3, 0) });
+        v.setCaret(ALTextPos(0, 0));
+        v.insertText("new\n");
+        ensure("sliding down with a line put in above",
+               v.changes().size() == 3 && v.changes()[0] == ALTextPos(2, 4) && v.changes()[1] == ALTextPos(4, 0));
+        v.setCaret(ALTextPos(4, 3));
+        key(KEY_BACKSPACE, MASK_CONTROL | MASK_SHIFT);
+        ensure("back to the newest", v.caret() == ALTextPos(0, 0));
+        key(KEY_BACKSPACE, MASK_CONTROL | MASK_SHIFT);
+        ensure("and the one before", v.caret() == ALTextPos(4, 0));
+        ensure("Next Edit Location on again", v.perform(ALEditorCommand::NextChange) && v.caret() == ALTextPos(0, 0));
+        ensure("not past the newest", !v.canPerform(ALEditorCommand::NextChange));
+        v.setText("fresh");
+        ensure("a new text, none", v.changes().empty());
+    }
+
+    template<> template<>
+    void altextview_object::test<40>()
+    {
+        set_test_name("a place in the text is anchored on its row at its x, as scrolled; a stretch across its span on its first row, or the whole row where it is empty");
+        ALTextView&  v     = make(("ab\n" + std::string(200, 'x')).c_str(), 200, 100);
+        const LLRect text  = v.textRect();
+        const S32    row_h = v.layout().rowHeight();
+        auto         at    = [&](S32 line, S32 column, F32 scroll) {
+            return static_cast<S32>(static_cast<F32>(text.mLeft) - scroll + v.layout().xOf(line, column));
+        };
+        const S32 second = text.mTop - v.layout().lineTop(1);
+        ensure("at the place, as wide as nothing, on its row",
+               v.anchorOf(ALTextPos(0, 1)) == LLRect(at(0, 1, 0.f), text.mTop, at(0, 1, 0.f), text.mTop - row_h));
+        ensure("on its own line's row", v.anchorOf(ALTextPos(1, 5)) == LLRect(at(1, 5, 0.f), second, at(1, 5, 0.f), second - row_h));
+        ensure("a stretch across its span",
+               v.anchorOf(ALTextRange(ALTextPos(1, 2), ALTextPos(1, 6))) == LLRect(at(1, 2, 0.f), second, at(1, 6, 0.f), second - row_h));
+        ensure("the whole row for an empty one",
+               v.anchorOf(ALTextRange(ALTextPos(1, 2), ALTextPos(1, 2))) == LLRect(text.mLeft, second, text.mRight, second - row_h));
+        v.setScrollX(30.f);
+        ensure_equals("scrolled", v.scrollX(), 30.f);
+        ensure_equals("the place, as scrolled", v.anchorOf(ALTextPos(1, 5)).mLeft, at(1, 5, 30.f));
+        const LLRect span = v.anchorOf(ALTextRange(ALTextPos(1, 2), ALTextPos(1, 6)));
+        ensure("the stretch, as scrolled", span.mLeft == at(1, 2, 30.f) && span.mRight == at(1, 6, 30.f));
+    }
+
+    template<> template<>
+    void altextview_object::test<41>()
+    {
+        set_test_name("a place on a row a box has made taller is anchored on the whole of the row");
+        ALTextView&      v = make("#b\ncd");
+        ALTextView::Atom tall;
+        tall.at     = ALTextPos(0, 0);
+        tall.length = 1;
+        tall.width  = 10;
+        tall.height = 3 * v.layout().rowHeight();
+        v.addAtom(tall);
+        const LLRect text = v.textRect();
+        ensure_equals("the place", v.anchorOf(ALTextPos(0, 1)).getHeight(), 3 * v.layout().rowHeight());
+        ensure_equals("the stretch", v.anchorOf(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 2))).getHeight(), 3 * v.layout().rowHeight());
+        ensure_equals("from the row's top", v.anchorOf(ALTextPos(0, 1)).mTop, text.mTop);
+        ensure_equals("the next line's own", v.anchorOf(ALTextPos(1, 1)).getHeight(), v.layout().rowHeight());
+    }
+
+    template<> template<>
+    void altextview_object::test<42>()
+    {
+        set_test_name("Replace All that changes nothing keeps its matches, and one that does finds them again once settled");
+        ALTextView& v = make("one two one\ntwo one\n");
+        v.showFind(true);
+        v.findBar()->setQuery("one");
+        v.findNext(true);
+        v.findBar()->setReplacement("one");
+        ensure_equals("nothing to change: nothing replaced", v.replaceAllMatches(), 0);
+        ensure_equals("the matches as they were", v.findMatches().size(), size_t(3));
+        ensure_equals("and the current one", v.findCurrent(), 0);
+        v.findBar()->setReplacement("on");
+        ensure_equals("all three", v.replaceAllMatches(), 3);
+        ensure_equals("replaced", v.text(), std::string("on two on\ntwo on\n"));
+        ensure_equals("the query no longer stands anywhere", v.findMatches().size(), size_t(0));
+        v.undo();
+        ensure_equals("undone, found again", v.findMatches().size(), size_t(3));
+    }
+
+    template<> template<>
+    void altextview_object::test<43>()
+    {
+        set_test_name("the whole text is read without a copy, the same text until an edit, and the new one after");
+        ALTextView& v = make("one\ntwo");
+        const std::string& whole = v.wholeText();
+        ensure_equals("the text", whole, v.text());
+        ensure("the same kept text read again", &v.wholeText() == &whole && v.wholeText() == "one\ntwo");
+        v.setCaret(ALTextPos(1, 3));
+        type("!");
+        ensure_equals("after an edit, the text as it is", v.wholeText(), std::string("one\ntwo!"));
+    }
+
+    template<> template<>
+    void altextview_object::test<44>()
+    {
+        set_test_name("Escape lets go of the selection and keeps the keyboard the panel around would take; one passing Escape on keeps it only while it had a selection");
+        ALTextView&      v = make("one two");
+        LLPanel::Params  pp;
+        pp.name          = "around";
+        pp.rect          = LLRect(0, 300, 500, 0);
+        LLPanel* around  = LLUICtrlFactory::create<LLPanel>(pp);
+        around->addChild(&v);
+        v.setFocus(true);
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        ensure("taken", v.handleKey(KEY_ESCAPE, MASK_NONE, false));
+        ensure("the selection let go of", !v.hasSelection());
+        ensure_equals("the caret where it was", v.caret().column, 3);
+        ensure("the keyboard kept", v.hasFocus());
+        ensure("again, with nothing to let go of: kept still", v.handleKey(KEY_ESCAPE, MASK_NONE, false) && v.hasFocus());
+
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name         = "passing";
+        p.rect         = LLRect(0, 100, 400, 0);
+        p.default_text = "three four";
+        p.pass_escape  = true;
+        ALTextView* passing = LLUICtrlFactory::create<ALTextView>(p);
+        around->addChild(passing);
+        passing->setFocus(true);
+        passing->setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 5)));
+        ensure("a selection let go of first", passing->handleKey(KEY_ESCAPE, MASK_NONE, false) && !passing->hasSelection() && passing->hasFocus());
+        passing->handleKey(KEY_ESCAPE, MASK_NONE, false);
+        ensure("then on to the panel, which takes the keyboard away", !passing->hasFocus());
+
+        around->removeChild(&v);
+        around->die();
+    }
+
+    template<> template<>
+    void altextview_object::test<45>()
+    {
+        set_test_name("Backspace and Return held with Shift, as they are half the time in code, still delete and break the line");
+        ALTextView& v = make("CONST");
+        v.setCaret(ALTextPos(0, 5));
+        key(KEY_BACKSPACE, MASK_SHIFT);
+        ensure_equals("deleted", v.text(), std::string("CONS"));
+        key(KEY_RETURN, MASK_SHIFT);
+        ensure_equals("a new line", v.text(), std::string("CONS\n"));
+        ensure_equals("the caret on it", v.caret().line, 1);
+    }
+
+    template<> template<>
+    void altextview_object::test<46>()
+    {
+        set_test_name("Shift-F10 and the Menu key open the menu at the caret, brought into sight; a view with no menu leaves them");
+        std::string many;
+        for (S32 i = 0; i < 200; ++i)
+        {
+            many += "line " + std::to_string(i) + "\n";
+        }
+        ALTextView& v = make(many.c_str());
+        v.setCaret(ALTextPos(190, 2));
+        v.setScrollY(0);
+        ensure("Shift-F10 taken", v.handleKeyHere(KEY_F10, MASK_SHIFT));
+        ensure("the caret brought into sight", v.scrollY() > 0);
+        ensure("the Menu key too", v.handleKeyHere(KEY_CONTEXT_MENU, MASK_NONE));
+        ensure("not F10 alone", !v.handleKeyHere(KEY_F10, MASK_NONE));
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name         = "no_menu";
+        p.rect         = LLRect(0, 100, 200, 0);
+        p.context_menu = std::string();
+        ALTextView* bare = LLUICtrlFactory::create<ALTextView>(p);
+        ensure("no menu: left", !bare->handleKeyHere(KEY_F10, MASK_SHIFT));
+        bare->die();
+    }
+
+    template<> template<>
+    void altextview_object::test<47>()
+    {
+        set_test_name("a family at a size in points of its own, made once and shared; larger as asked; the points a size name is");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        const F32 base = LLFontGL::pointsOf("Monospace", "Monospace");
+        ensure("the size fonts.xml gives", base > 0.f);
+        ensure("none for a size never named", LLFontGL::pointsOf("Monospace", "NoSuchSize") == 0.f);
+        const LLFontGL* bigger = LLFontGL::getFontAtPoints("Monospace", base + 4.f, LLFontGL::NORMAL);
+        const LLFontGL* same   = LLFontGL::getFontAtPoints("Monospace", base + 4.f, LLFontGL::NORMAL);
+        const LLFontGL* smaller = LLFontGL::getFontAtPoints("Monospace", base - 2.f, LLFontGL::NORMAL);
+        ensure("made", bigger && smaller);
+        ensure("once", bigger == same);
+        ensure("larger", bigger->getLineHeight() > smaller->getLineHeight());
+        ensure("named for its points", LLFontGL::pointsOf("Monospace", llformat("%.1fpt", base + 4.f)) == base + 4.f);
+    }
+
+    template<> template<>
+    void altextview_object::test<48>()
+    {
+        set_test_name("indentation read from a text put in whole where the view reads it; chosen for the text, kept through a new one; the defaults where it says nothing");
+        ALTextView& v = make("");
+        ensure("the defaults at first", v.indentFrom() == ALTextView::IndentFrom::Defaults && v.getSoftTabs() && v.getTabWidth() == 4);
+        v.setText("a\n\tb");
+        ensure("not read unless asked", v.indentFrom() == ALTextView::IndentFrom::Defaults && v.getSoftTabs());
+        v.setReadsIndentation(true);
+        ensure("read once asked", v.indentFrom() == ALTextView::IndentFrom::Text && !v.getSoftTabs() && v.getTabWidth() == 4);
+        v.setText("a\n  b\n    c");
+        ensure("a new text read again", v.indentFrom() == ALTextView::IndentFrom::Text && v.getSoftTabs() && v.getTabWidth() == 2);
+        v.setText("a\nb");
+        ensure("saying nothing: the defaults", v.indentFrom() == ALTextView::IndentFrom::Defaults && v.getSoftTabs() && v.getTabWidth() == 4);
+        v.setIndentDefaults(8, false);
+        ensure("new defaults taken", !v.getSoftTabs() && v.getTabWidth() == 8);
+        v.setText("a\n\tb");
+        ensure("a text of tabs takes their width from the defaults", !v.getSoftTabs() && v.getTabWidth() == 8);
+        v.setTabWidth(3);
+        ensure("chosen", v.indentFrom() == ALTextView::IndentFrom::Chosen && v.getTabWidth() == 3);
+        v.setText("a\n  b");
+        ensure("kept through a new text", v.indentFrom() == ALTextView::IndentFrom::Chosen && v.getTabWidth() == 3 && !v.getSoftTabs());
+        v.readIndentation();
+        ensure("forgotten: the text's own again", v.indentFrom() == ALTextView::IndentFrom::Text && v.getSoftTabs() && v.getTabWidth() == 2);
+    }
+
+    template<> template<>
+    void altextview_object::test<49>()
+    {
+        set_test_name("Backspace in a line's indentation takes a level's spaces; elsewhere, one character");
+        ALTextView& v = make("        x = 1;");
+        v.setCaret(ALTextPos(0, 8));
+        key(KEY_BACKSPACE);
+        ensure_equals("a level", v.text(), std::string("    x = 1;"));
+        key(KEY_BACKSPACE);
+        ensure_equals("another", v.text(), std::string("x = 1;"));
+        v.setText("a  b");
+        v.setCaret(ALTextPos(0, 3));
+        key(KEY_BACKSPACE);
+        ensure_equals("within the text, one", v.text(), std::string("a b"));
+    }
+
+    template<> template<>
+    void altextview_object::test<50>()
+    {
+        set_test_name("find: no more matches than a list is any use as, said with a plus; a long text looked through once the query settles, not at each key");
+        std::string many;
+        for (size_t i = 0; i < ALTextFind::LIMIT + 5; ++i)
+        {
+            many += "a\n";
+        }
+        ALTextView& v = make(many.c_str());
+        v.showFind(false);
+        v.findBar()->setQuery("a");
+        ensure_equals("as many as are listed", v.findMatches().size(), ALTextFind::LIMIT);
+        ensure_equals("and more said", v.findBar()->countSaid(), std::to_string(ALTextFind::LIMIT) + "+");
+        v.findBar()->setReplacement("b");
+        ensure_equals("Replace All: every one, not only those listed", v.replaceAllMatches(), static_cast<S32>(ALTextFind::LIMIT + 5));
+        ensure("none left", v.text().find('a') == std::string::npos);
+
+        // Past a script's size: the count waits for the query to settle.
+        std::string big;
+        while (big.size() < 300 * 1024)
+        {
+            big += "one two three four five six seven eight nine ten\n";
+        }
+        v.setText(big);
+        v.findMatches();
+        const std::string before = v.findBar()->countSaid();
+        v.findBar()->setQuery("seven");
+        ensure_equals("not looked through at the key", v.findBar()->countSaid(), before);
+        ensure("looked through once asked for, as a moment later", !v.findMatches().empty() && v.findBar()->countSaid() != before);
     }
 }

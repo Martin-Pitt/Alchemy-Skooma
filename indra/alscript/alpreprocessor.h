@@ -25,10 +25,13 @@
 
 #pragma once
 
+#include "allslconsts.h"
 #include "allsloptimizer.h"
+#include "alscriptenvelope.h"
 #include "alscriptproblem.h"
 #include "alsourcemap.h"
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -125,10 +128,15 @@ public:
         bool                    weigh = false;
         S32  includeDepth = 32;
         // What one run may make of a script -- every token of every file
-        // it opens counts, as well as every token a macro makes -- and how
-        // deep an `#if` expression may nest. A run that reaches either
-        // says so and stops.
+        // it opens counts, as well as every token a macro makes -- in
+        // tokens and in the bytes of their text, and how deep an `#if`
+        // expression may nest. A run that reaches any says so and stops.
+        // The bytes, since a macro that pastes a token to itself doubles
+        // its text and not the tokens: sixteen times what a script may be,
+        // which nothing that can be saved comes near. No one token may be
+        // longer than a script (ALScriptEnvelope::MAX_ASSET_BYTES).
         size_t tokenBudget     = 4u * 1000u * 1000u;
+        size_t byteBudget      = 16u * ALScriptEnvelope::MAX_ASSET_BYTES;
         S32    expressionDepth = 64;
         // How deep macros may be invoked inside the arguments of others,
         // each level of which is a level of the machine's own stack.
@@ -137,6 +145,11 @@ public:
         // transforms that rewrite them, which descend a level for each;
         // a chain of `else if` is no deeper for being long.
         S32    nestingDepth    = 500;
+        // Raised from another thread where what this run makes is no
+        // longer wanted -- the text it expands has moved on, and a run of
+        // the later one is waiting: looked at as the run goes, which then
+        // stops and says so (Result::superseded).
+        const std::atomic<bool>* superseded = nullptr;
         // The predefined macros' values. An empty agent id leaves the
         // agent macros undefined; an empty asset id says NOT_IN_WORLD.
         std::string agentId;
@@ -153,6 +166,12 @@ public:
         // `__TIME__`; zero for now.
         S64  unixTime = 0;
         resolver_t resolve;
+        // SLua: the script and each module a require reaches given apart
+        // as well (Result::apart), for the analyzers -- which check a
+        // module on its own, and the script with its requires as calls, so
+        // that a module nobody changed is not checked again with each
+        // edit of the script. The text stays the bundle a save sends.
+        bool apart = false;
     };
 
     struct Result
@@ -169,6 +188,18 @@ public:
         std::vector<std::string> pending;
         // The paths of what was included, each once, in the order opened.
         std::vector<std::string> includes;
+        // What each #include and require found, as the file asking named
+        // it: that file's identity (empty for the script's own), the name
+        // as written, whether it was a require, and the identity found --
+        // what `includes` lists. Every one, where several ask for the same.
+        struct Resolved
+        {
+            std::string from;
+            std::string name;
+            bool        require = false;
+            std::string path;
+        };
+        std::vector<Resolved> resolved;
         // What the run did, whether asked or by the script's own defines.
         bool usedSwitches   = false;
         bool usedLazyLists  = false;
@@ -176,6 +207,12 @@ public:
         // The functions the script marked `inline`, which the optimizer
         // puts in place wherever they are called.
         std::vector<std::string> inlined;
+        // What the script declared `const`, the keyword taken off: each
+        // name where its declaration names it in the text, and whether it
+        // is a function's. What the word promises is checked in the run
+        // (ALLSLConsts), its errors among the problems.
+        using Const = ALLSLConsts::Declared;
+        std::vector<Const> consts;
         // The optimizer ran and its text is what came out.
         bool optimized     = false;
         // Where it was weighed: what the code came to for its target
@@ -186,6 +223,26 @@ public:
         // The run reached its budget and stopped: the text is as far as
         // it got, and is nothing to compile or analyse.
         bool overran       = false;
+        // It stopped for Options::superseded: nothing in it is anybody's.
+        bool superseded    = false;
+
+        // Where Options::apart asked for it, and there was a require: the
+        // script as the run made it but with its requires left as calls,
+        // and each module it reached the same way, keyed as `resolved`
+        // names what a require found. Each with a map over the same files.
+        struct Piece
+        {
+            std::string key;
+            std::string text;
+            ALSourceMap map;
+        };
+        struct Apart
+        {
+            bool               valid = false;
+            Piece              script;
+            std::vector<Piece> modules;
+        };
+        Apart apart;
 
         bool hasErrors() const;
     };
@@ -194,6 +251,10 @@ public:
     // here: the caller's resolver answers for every include, so a run
     // belongs on whatever thread the caller pleases.
     static Result run(std::string_view source, const Options& options);
+    // What a run that could not finish answers -- one that ran the machine
+    // out of memory, or threw anything else on the way: the source as it
+    // was, mapped to itself, as a run that ran away gives it, and why.
+    static Result failed(std::string_view source, const Options& options, std::string_view why);
 
     // What a run does once the expansion is done: the optimizer over the
     // expanded text, then the compression over whatever that left, each
@@ -233,7 +294,7 @@ public:
     // The transform a line of LSL is written for, by the shape of its
     // first statement: `switch (` and `case ...:` the switch's; `break;`,
     // `break 2;`, `continue;`, `inline f(` and `inline type f(` the
-    // extensions'. A brace on a line of its own is the switch's where the
+    // extensions', and `const` before a type anywhere on the line. A brace on a line of its own is the switch's where the
     // line before it, past blank ones, opens one, since its brace may go
     // on the next. Nothing where the word is a name of the script's own --
     // `case = 1;`, `inline(` -- or the line is none of these. What a parse
@@ -247,6 +308,21 @@ public:
         Extensions
     };
     static Transform transformAt(const std::function<std::string_view(S32)>& line, S32 count, S32 at, std::string& word);
+
+    // Where a script of SLua calls the global `require` with a name, as a
+    // run puts a module in the call's place: the call's stretch, zero-based
+    // and its end past the `)`, and the name. A script that goes up
+    // without a run goes up with each of these as written, and the grid
+    // has no `require` for them to call.
+    struct Required
+    {
+        S32         line      = 0;
+        S32         column    = 0;
+        S32         endLine   = 0;
+        S32         endColumn = 0;
+        std::string name;
+    };
+    static std::vector<Required> requiresIn(std::string_view text);
 
 private:
     // The optimizer alone, which is the first half of `finish`.

@@ -50,7 +50,9 @@ void ALSyntaxHighlighter::wordsChanged()
 
 void ALSyntaxHighlighter::attach(ALTextDocument* document)
 {
-    mConnection.release();
+    // Off the document it followed: release() would only forget the
+    // connection, and the old text's edits would still come here.
+    mConnection.disconnect();
     mDocument = document;
     if (mDocument)
     {
@@ -79,26 +81,18 @@ void ALSyntaxHighlighter::reset()
 
 void ALSyntaxHighlighter::onEdit(const ALTextDocument::Edit& edit)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     // The lines the edit replaced go, and the lines it made come in, dirty;
     // what follows keeps its tokens until the state it starts in is seen
     // to have changed.
-    const S32 first = llclamp(edit.range.begin.line, 0, static_cast<S32>(mLines.size()));
-    const S32 last  = llclamp(edit.range.end.line, first, static_cast<S32>(mLines.size()) - 1);
-    const S32 made  = 1 + static_cast<S32>(std::count(edit.inserted.begin(), edit.inserted.end(), '\n'));
-    if (first < static_cast<S32>(mLines.size()))
-    {
-        mLines.erase(mLines.begin() + first, mLines.begin() + last + 1);
-    }
-    mLines.insert(mLines.begin() + first, made, Line());
-    if (mDocument)
-    {
-        mLines.resize(mDocument->lineCount());
-    }
-    mFirstDirty = llmin(mFirstDirty, first);
+    const std::vector<ALTextDocument::Edit::LineSpan>& spans = edit.lineSpans();
+    mLines.applySpans(spans, mDocument ? mDocument->lineCount() : -1, Line());
+    mFirstDirty = llmin(mFirstDirty, llclamp(spans.front().first, 0, static_cast<S32>(mLines.size())));
 }
 
 void ALSyntaxHighlighter::ensure(S32 line)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     mLastLexed = 0;
     if (!mDocument || !mGrammar || mLines.empty())
     {
@@ -110,10 +104,13 @@ void ALSyntaxHighlighter::ensure(S32 line)
         return;
     }
     std::vector<ALSyntaxToken> fresh;
+    // Each line starts in the state the one before ends in, read where it
+    // is: a copy only for a line lexed anew.
+    const ALSyntaxState initial = mFirstDirty == 0 ? mGrammar->initialState() : ALSyntaxState();
     for (S32 i = mFirstDirty; i <= line; ++i)
     {
-        Line&               entry = mLines[i];
-        const ALSyntaxState start = (i == 0) ? mGrammar->initialState() : mLines[i - 1].end;
+        Line&                entry = mLines[i];
+        const ALSyntaxState& start = (i == 0) ? initial : mLines[i - 1].end;
         if (entry.valid && entry.start == start)
         {
             // Lexes as it did.
