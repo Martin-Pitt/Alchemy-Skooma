@@ -25,7 +25,12 @@
 
 #pragma once
 
+#include "aldiskcache.h"
+#include "alincludeidentity.h"
 #include "aldiskincludes.h"
+#include "alscriptjoblane.h"
+#include "alscriptsnapshot.h"
+#include "alscripttextcache.h"
 #include "alluauconfig.h"
 #include "alpreprocessor.h"
 #include "alscriptworkspace.h"
@@ -33,54 +38,19 @@
 #include "llsingleton.h"
 #include "llstl.h"
 
-namespace LL
-{
-    template <class QUEUE> struct ThreadPoolUsing;
-    class WorkQueue;
-}
+class ALScriptIncludeResolver;
+class ALSerialWorker;
 
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
 
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
-
-// What the preprocessor needs of the viewer to expand one script, taken
-// on the main thread and read on any other: the settings, the agent and
-// the asset as values, and every include the script asked for when it
-// was last expanded, already resolved to its text. So a run over a
-// snapshot touches nothing of the viewer's -- no inventory, no object,
-// no setting, no cache -- and belongs on a thread of its own while the
-// main one draws. What a run asks for that the snapshot does not hold
-// is noted rather than looked up: the main thread resolves those,
-// fetches what is in the world, and takes another snapshot.
-class ALScriptSnapshot
-{
-public:
-    // Expands a script with what the snapshot holds. Any thread.
-    ALPreprocessor::Result run(std::string_view source);
-    // What the last run asked for and the snapshot could not answer,
-    // each once, in the order asked; taken away by the asking.
-    std::vector<ALPreprocessor::Ask> missed() { return std::move(mMissed); }
-
-private:
-    friend class ALScriptPreprocessor;
-    struct Answer
-    {
-        ALPreprocessor::Found   found = ALPreprocessor::Found::No;
-        ALPreprocessor::Include include;
-    };
-    // One key for the three things that decide what a name stands for.
-    static std::string keyOf(const ALPreprocessor::Ask& ask);
-
-    ALPreprocessor::Options                                                          mOptions;
-    boost::unordered_flat_map<std::string, Answer, ll::string_hash, std::equal_to<>> mAnswers;
-    std::vector<ALPreprocessor::Ask>                                                 mMissed;
-};
 
 // The preprocessor as the viewer runs it: the settings for what it does,
 // the agent and the asset for its predefined macros, and its includes
@@ -130,7 +100,14 @@ public:
         // The script's name and asset, for `__SHORTFILE__` and `__ASSETID__`.
         std::string name;
         LLUUID      assetId;
-        std::string source;
+        // The text run, shared rather than copied: a tab's snapshot of its
+        // version, which the questions about it hold too; and read.
+        std::shared_ptr<const std::string> source;
+        const std::string& sourceText() const
+        {
+            static const std::string none;
+            return source ? *source : none;
+        }
         bool        lua = false;
         // What the script compiles for, which the optimizer's arithmetic
         // follows: mono, lsl2 or lsl-luau.
@@ -145,6 +122,9 @@ public:
         // shows them, and not for a compile of many, which would pay two
         // compiles more a script for words nobody reads.
         bool        weigh    = false;
+        // SLua, for the analyzers: the script and its modules apart as
+        // well as bundled (ALPreprocessor::Options::apart).
+        bool        apart    = false;
     };
     typedef std::function<void(const ALPreprocessor::Result&)> callback_t;
 
@@ -178,6 +158,13 @@ public:
     // there is none.
     void fetchConfig(const Request& request, std::function<void()> fetched);
 
+    // What an include's identity starts with: an item in an object, one in
+    // the inventory, a file on disk.
+    static constexpr std::string_view OBJECT_PREFIX    = ALIncludeIdentity::OBJECT;
+    static constexpr std::string_view INVENTORY_PREFIX = ALIncludeIdentity::INVENTORY;
+    static constexpr std::string_view DISK_PREFIX      = ALIncludeIdentity::DISK;
+    // The identity a script's asks are remembered under.
+    static std::string keyOf(const Request& request);
     // An include's identity back to the item it names, or the file; and
     // an item's identity, as the source map would name it.
     static bool        refOf(const std::string& path, ALScriptRef& ref);
@@ -197,6 +184,10 @@ public:
     // Nothing is fetched, so that the fixes may ask about every name a
     // script does not know.
     ALPreprocessor::Found lookUp(const Request& request, const ALPreprocessor::Ask& ask, ALPreprocessor::Include& out);
+    // Every file a script's text includes or requires, and theirs in turn,
+    // as a run would find them now -- nothing fetched, so one in the world
+    // and not in hand is not among them -- each once, in the order met.
+    std::vector<ALPreprocessor::Include> includedBy(const Request& request);
     // The scripts and notecards near a script that may be what it
     // includes or requires and are not in hand, at most `most`: those in
     // its object, those in its inventory folder, then those in the
@@ -220,53 +211,7 @@ public:
 private:
     typedef boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> wanted_t;
     struct Job;
-    // Something an include name could mean, in the order tried.
-    struct Candidate
-    {
-        std::string path;
-        std::string name;
-        ALScriptRef ref;
-        LLUUID      assetId;
-        // A file on disk, read on the spot.
-        std::string file;
-    };
-    // `unknown` says the object's contents have not been listed yet, so
-    // a name not found may still be there; an object asked that did not
-    // answer is not unknown, and holds nothing.
-    std::vector<Candidate> candidatesFor(const ALPreprocessor::Ask& ask, const Request& request, const std::vector<std::string>& alias_folders,
-                                         bool& unknown);
-    // The folders on disk an include asked for may come from: the
-    // scripter's include folders while disk includes are on, and what a
-    // `.lslrc` or `.luaurc` on disk lists -- `alias_folders` being those
-    // the run's aliases have blessed so far. Nothing else, ever.
-    ALDiskIncludes         blessedFor(const ALPreprocessor::Ask& ask, const Request& request, const std::vector<std::string>& alias_folders);
-    // The scripter's own include folders, blessed, while disk includes are
-    // on; nothing otherwise. What a configuration on disk may reach past
-    // its own folder.
-    static ALDiskIncludes  ownFolders();
-    // Every item of a name, from the walk or from the last one.
-    const LLInventoryModel::item_array_t& namedItems(const std::string& name);
-    // Whether an include or a module so named is in the world a script is
-    // in -- its object, the inventory -- whether or not it may be taken.
-    bool                                  inWorld(const Request& request, const std::string& name);
-    // `retry` asks again for what failed before rather than taking the
-    // failure for an answer: what a run's first round does, since an
-    // include that was not there may be there now.
-    // `alias_folders` gathers the folders the aliases of a `.luaurc` on
-    // disk bless, for the rest of a run.
-    ALPreprocessor::Found  resolve(const ALPreprocessor::Ask& ask, ALPreprocessor::Include& out, const Request& request, wanted_t* wanted,
-                                   bool retry, std::vector<std::string>* alias_folders = nullptr);
-    // The `.luaurc` that governs a file, by the file's identity: its own
-    // identity and its text, fetched like an include where it is in the
-    // world. No where there is none.
-    ALPreprocessor::Found  configFor(const std::string& from, const Request& request, wanted_t* wanted, bool retry, std::string& path,
-                                     std::string& text);
-    // An include's text, from the cache or a file; Pending, and wanted,
-    // where it is in the world and not in hand yet.
-    ALPreprocessor::Found  textOf(const Candidate& candidate, wanted_t* wanted, bool retry, std::string& text, std::string& assetId);
     ALPreprocessor::Options optionsFor(const Request& request, bool optimize);
-    // The identity a script's asks are remembered under.
-    static std::string      keyOf(const Request& request);
     // What is in hand for a job, on the main thread: the settings and
     // the agent read off, and every include the script is known to ask
     // for resolved. `wanted` gathers what is in the world and not in
@@ -291,68 +236,21 @@ private:
     void                    optimizeAndFinish(const std::shared_ptr<Job>& job, ALPreprocessor::Result result);
     void                    finish(const std::shared_ptr<Job>& job, ALPreprocessor::Result result);
     void                    ensureWorker();
-    // Work for the worker thread, handed to it one piece at a time so
-    // that what waits can still be put in order: a run's first, then a
-    // check's, and a check whose script is asked to be checked again
-    // while it waits dropped for the later one.
+    // Work for the worker thread, put in order as it waits: a run's
+    // first, then a check's; a check whose script is asked to be checked
+    // again while it waits dropped for the later one, and one under way
+    // told to stop (Job::superseded).
     void                    toWorker(const std::shared_ptr<Job>& job, std::function<void()> work);
-    void                    nextWork();
-    struct Queued
-    {
-        std::shared_ptr<Job>  job;
-        std::string           key;
-        std::function<void()> work;
-    };
-    std::deque<Queued>      mRunsWaiting;
-    std::deque<Queued>      mChecksWaiting;
-    bool                    mWorking = false;
+    // What waits for the worker, on the worker's side.
+    std::shared_ptr<ALScriptJobLane<Job>> mLane = std::make_shared<ALScriptJobLane<Job>>();
     // An include by its identity, loaded into the cache -- or noted as
     // failed -- and `done` called either way.
     void                    fetch(const std::string& path, std::function<void()> done);
 
-    // The texts fetched, by the identity they came under, with how many
-    // bytes they come to: kept for the session so that a check need
-    // wait for nothing, and the oldest let go of past a budget, since a
-    // session that opens a hundred scripts would otherwise hold every
-    // include any of them ever named.
-    struct Cached
-    {
-        LLUUID      assetId;
-        std::string text;
-        U32         used = 0;
-    };
-    boost::unordered_flat_map<std::string, Cached, ll::string_hash, std::equal_to<>> mTexts;
-    U32                                                                             mUse = 0;
-    size_t                                                                          mHeld = 0;
-    // The oldest let go of until what is held is within the budget.
-    void                                                                            trimTexts();
-    wanted_t                                                                        mFailed;
-    // The files on disk a run has admitted, by identity: what the studio
-    // may ask the text of, and nothing else on the disk.
-    wanted_t                                                                        mAdmitted;
-    // What each prim was last said to hold.
-    boost::unordered_flat_map<LLUUID, std::vector<ALScriptWorkspace::Item>>         mContents;
-    // The prims asked what they hold that did not answer -- not in time,
-    // or not in view -- and never had: nothing is looked for in one, and
-    // a run over a script in one says why, until a save asks again and
-    // it answers.
-    boost::unordered_flat_set<LLUUID>                                               mUnanswered;
-    // Every script and notecard of a name, from the last walk of the
-    // inventory for it. The walk is of the whole tree, and a check runs
-    // a moment after every keystroke: a script naming three includes
-    // would otherwise walk the whole inventory three times a keystroke.
-    // What a name stands for changes when the inventory does, which is
-    // all the generation counts; the folders a name gives are weighed
-    // after the walk, so a relative include is still answered afresh.
-    // Every script and notecard in the inventory by name, from one walk
-    // an inventory generation: the fixes ask about each name a script
-    // does not know, and a walk a name would go over the whole inventory
-    // each time.
-    boost::unordered_flat_map<std::string, LLInventoryModel::item_array_t, ll::string_hash, std::equal_to<>> mNamed;
-    std::optional<U32>                                                                                        mNamedFor;
-    struct Watcher;
-    std::unique_ptr<Watcher>                                                        mWatcher;
-    U32                                                                             mInventoryGeneration = 1;
+    // The texts fetched, and what failed to come; and what an include or
+    // a require names, found and read.
+    ALScriptTextCache                                                               mTexts;
+    std::unique_ptr<ALScriptIncludeResolver>                                        mResolver;
     // What each script asked for the last time it was expanded, by the
     // script's identity: a snapshot resolves these before the run goes
     // out, so that a script whose includes have not changed -- which is
@@ -361,7 +259,8 @@ private:
     boost::unordered_flat_map<std::string, std::vector<ALPreprocessor::Ask>, ll::string_hash, std::equal_to<>> mAsked;
     // Where a run happens: one thread, so that two scripts saved at
     // once are expanded one after another rather than fighting over the
-    // builtins.
-    std::unique_ptr<LL::ThreadPoolUsing<LL::WorkQueue>>                              mPool;
+    // builtins. Closed at cleanup, or as the viewer starts to quit, and
+    // kept closed: nothing starts another.
+    std::unique_ptr<ALSerialWorker>                                                  mThread;
     void                                                                            cleanupSingleton() override;
 };
