@@ -26,6 +26,7 @@
 
 #include "alspecimenlist.h"
 
+#include "alsurface.h"
 #include "aldraggesture.h"
 
 #include "alemptystate.h"
@@ -101,6 +102,12 @@ public:
             return true;
         }
         return LLPanel::handleMouseUp(x, y, mask);
+    }
+
+    bool handleDoubleClick(S32 x, S32 y, MASK mask) override
+    {
+        mList.pick(mValue);
+        return true;
     }
 
     // A press that has moved far enough is a drag, and the row lets go of
@@ -508,6 +515,17 @@ void ALSpecimenList::buildRows()
                                                 : (FOLLOWS_LEFT | FOLLOWS_TOP);
             row->addChild(LLUICtrlFactory::create<LLIconCtrl>(ip));
         }
+        else if (!specimen.view && specimen.font)
+        {
+            LLTextBox::Params sp(LLUICtrlFactory::getDefaultParams<LLTextBox>());
+            sp.name          = "sample";
+            sp.initial_value = specimen.sample;
+            sp.rect          = LLRect(INSET + mLabelWidth + 4, mRowHeight - 4, getRect().getWidth() - INSET, 4);
+            sp.font          = specimen.font;
+            sp.follows.flags = FOLLOWS_LEFT | FOLLOWS_TOP | FOLLOWS_RIGHT;
+            sp.mouse_opaque  = false;
+            row->addChild(LLUICtrlFactory::create<LLTextBox>(sp));
+        }
         mRowsPane->addChild(row);
         mRows.push_back(row);
     }
@@ -515,8 +533,11 @@ void ALSpecimenList::buildRows()
 
 bool ALSpecimenList::passes(const Specimen& specimen) const
 {
+    // By the words shown, the heading, or the name the caller knows it by:
+    // a font found by its family as well as by its label.
     return ALStringMatch::containsNoCase(specimen.label, mFilter)
-        || ALStringMatch::containsNoCase(specimen.group, mFilter);
+        || ALStringMatch::containsNoCase(specimen.group, mFilter)
+        || ALStringMatch::containsNoCase(specimen.value, mFilter);
 }
 
 void ALSpecimenList::filter(const std::string& text)
@@ -529,6 +550,12 @@ void ALSpecimenList::choose(const std::string& value)
 {
     setChosen(value);
     mChose(value);
+}
+
+void ALSpecimenList::pick(const std::string& value)
+{
+    choose(value);
+    mPicked(value);
 }
 
 void ALSpecimenList::setChosen(const std::string& value)
@@ -849,11 +876,11 @@ S32 ALSpecimenList::chosenCell() const
 
 void ALSpecimenList::drawCell(const Cell& cell, bool hovered) const
 {
-    static const LLUIColor heading_color = LLUIColorTable::instance().getColor("LabelTextColor", LLColor4::white);
-    static const LLUIColor caption_color = LLUIColorTable::instance().getColor("LabelDisabledColor", LLColor4::grey);
-    static const LLUIColor selected_color = LLUIColorTable::instance().getColor("EmphasisColor", LLColor4::yellow);
+    const LLUIColor& heading_color = ALSurface::text();
+    const LLUIColor& caption_color = ALSurface::quiet();
+    const LLUIColor& selected_color = ALSurface::handle();
     static const LLUIColor hover_color = LLUIColorTable::instance().getColor("DkGray", LLColor4::grey);
-    static const LLUIColor mark_color = LLUIColorTable::instance().getColor("EmphasisColor", LLColor4::yellow);
+    const LLUIColor& mark_color = ALSurface::handle();
     static const LLUIColor broken_color = LLUIColorTable::instance().getColor("LtOrange", LLColor4::red);
 
     const LLFontGL* small = LLFontGL::getFontSansSerifSmall();
@@ -873,7 +900,10 @@ void ALSpecimenList::drawCell(const Cell& cell, bool hovered) const
 
     if (chosen || selected || hovered)
     {
-        gl_rect_2d(box, chosen ? selected_color.get() % 0.35f : selected ? selected_color.get() % 0.18f : hover_color.get(), true);
+        // The chosen one in the band every list of ours chooses with; the
+        // rest of a selection marked as it was.
+        const LLColor4 band = chosen ? ALSurface::chosenOver(heading_color.get()) : selected ? selected_color.get() % 0.18f : hover_color.get();
+        gl_rect_2d(box, band, true);
     }
 
     // The picture, over the strip the name sits in: stretched across the
