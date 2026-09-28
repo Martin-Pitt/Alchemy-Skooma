@@ -34,6 +34,8 @@ void ALScriptSearch::begin(const std::string& query, const ALTextSearchOptions& 
     mQuery      = query;
     mOptions    = options;
     mPending    = 0;
+    mUnread     = 0;
+    mUnlisted   = 0;
     mHits       = 0;
     mFiles      = 0;
     mBadPattern = false;
@@ -56,7 +58,7 @@ bool ALScriptSearch::answered(U32 generation)
 }
 
 ALScriptSearch::Kept ALScriptSearch::search(const ALScriptRef& ref, const std::string& name, const std::string& where, const ALTextDocument& text,
-                                            U32 version, const std::string& doc_id, bool keep_text, bool notecard)
+                                            U32 version, const std::string& doc_id, bool keep_text, bool notecard, const std::string& file)
 {
     std::string                    error;
     const std::vector<ALTextRange> matches = ALTextSearch::matches(text, mQuery, mOptions, nullptr, &error);
@@ -76,6 +78,7 @@ ALScriptSearch::Kept ALScriptSearch::search(const ALScriptRef& ref, const std::s
     found.version  = version;
     found.places   = matches;
     found.notecard = notecard;
+    found.file     = file;
     if (keep_text && !matches.empty())
     {
         found.text = text.text();
@@ -91,7 +94,7 @@ ALScriptSearch::Kept ALScriptSearch::search(const ALScriptRef& ref, const std::s
     // A script searched again as it stands: in its place among the rest.
     for (Found& one : mFound)
     {
-        if ((!doc_id.empty() && one.doc == doc_id) || (doc_id.empty() && !ref.isNull() && one.ref == ref))
+        if ((!doc_id.empty() && one.doc == doc_id) || (doc_id.empty() && !ref.isNull() && one.ref == ref) || (!file.empty() && one.file == file))
         {
             one = std::move(found);
             return Kept::Again;
@@ -184,6 +187,12 @@ ALScriptSearch::Step ALScriptSearch::step(const Found& one, const Now& now)
     if (one.places.empty() || one.notecard)
     {
         return Step::Skip;
+    }
+    if (!one.file.empty())
+    {
+        // Included: every script's that includes it, left to be changed
+        // by hand.
+        return Step::Leave;
     }
     switch (now.at)
     {
