@@ -26,6 +26,8 @@
 
 #pragma once
 
+#include "alscripttempfiles.h"
+#include "alscriptworkspace.h"
 #include "llpreview.h"
 #include "lltabcontainer.h"
 #include "llinventory.h"
@@ -72,6 +74,9 @@ protected:
 
     change_callback_t   mOnChangeCallback;
     bool                mIgnoreNextUpdate;
+    // The copy held while it is watched: Script Studio may hold the same
+    // one, and it goes with whichever lets go last.
+    std::shared_ptr<ALScriptTempFiles::Claim> mHeld;
 };
 
 // Inner, implementation class.  LLPreviewScript and LLLiveLSLEditor each own one of these.
@@ -317,7 +322,9 @@ public:
 
     LLLiveLSLEditor(const LLSD& key);
 
-    static void processScriptRunningReply(LLMessageSystem* msg, void**);
+    // The region's word on whether a script runs, and what it compiles for,
+    // which the workspace says to everyone (ALScriptWorkspace::onRunningState).
+    static void runningHeard(const ALScriptWorkspace::RunningState& state);
 
     virtual void callbackLSLCompileSucceeded(const LLUUID& task_id,
                                             const LLUUID& item_id,
@@ -371,6 +378,8 @@ private:
     void onCompileTargetChanged();
 
     static void finishLSLUpload(LLUUID itemId, LLUUID taskId, LLUUID newAssetId, LLSD response, bool isRunning);
+    // A save that did not go up: said in the error list, as a failed compile.
+    static void failedLSLUpload(const LLUUID& itemId, const LLUUID& taskId, const std::string& reason);
     static void receiveExperienceIds(LLSD result, LLHandle<LLLiveLSLEditor> parent);
 
 private:

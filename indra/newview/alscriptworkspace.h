@@ -33,16 +33,20 @@
 #include "lluuid.h"
 
 #include <boost/signals2.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 
 #include <deque>
 #include <functional>
 #include <memory>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
+class ALScriptContentsIndex;
+class ALScriptTempFiles;
 class LLChat;
 class LLEventTimer;
 class LLInventoryItem;
@@ -148,6 +152,38 @@ public:
 
     // --- saving and compiling ----------------------------------------------
 
+    // What a saved item is: a script, compiled as it goes up, or a notecard.
+    enum class Kind : U8
+    {
+        Script,
+        Notecard
+    };
+    // Who sent a save -- the studio, VS Code through the bridge, a legacy
+    // editor, a queue over an object, a recompile -- and which save it was:
+    // a tab waiting on its own save takes its own answer, not another's for
+    // the same item. A request of zero is given one as it is sent.
+    enum class Origin : U8
+    {
+        Studio,
+        Bridge,
+        Editor,
+        Queue,
+        Recompile
+    };
+    struct Sender
+    {
+        // Constructed rather than initialised in place, to be a default
+        // argument of this class's own functions.
+        Sender(Origin origin_in = Origin::Studio, U64 request_in = 0) : origin(origin_in), request(request_in) {}
+        Origin origin;
+        U64    request;
+    };
+    // A request id to send a save with, for one who must know it first.
+    U64 newRequest() { return ++mNextRequest; }
+    // Whether a save of the item is on its way: a recompile skips it
+    // rather than land the server's text over it.
+    bool saving(const ALScriptRef& ref) const;
+
     // Zero-based line and column, as everything in the studio counts.
     struct Diagnostic
     {
@@ -164,9 +200,12 @@ public:
         ALScriptRef             ref;
         bool                    success = false;
         bool                    running = false;
-        // A notecard saved rather than a script compiled.
-        bool                    notecard = false;
+        // A notecard saved rather than a script compiled; and who sent it.
+        Kind                    kind = Kind::Script;
+        Sender                  sender;
         LLUUID                  newAssetId;
+        // An inventory item the save made anew, where it made one.
+        LLUUID                  newItemId;
         std::vector<Diagnostic> diagnostics;
         // The server's lines as they came.
         std::vector<std::string> messages;
@@ -190,6 +229,7 @@ public:
         // would take it away.
         bool                  running = true;
         std::optional<LLUUID> experience;
+        Sender                sender;
     };
 
     // Uploads and compiles. False, with why and nothing sent, where there
@@ -200,13 +240,37 @@ public:
     // A notecard's text uploaded in its format with the items it carried;
     // the result says it was saved, or why not, the same way.
     bool saveNotecard(const ALScriptRef& ref, const std::string& text, const std::vector<LLPointer<LLInventoryItem>>& embedded,
-                      compile_callback_t callback, std::string& error);
+                      compile_callback_t callback, std::string& error, Sender sender = Sender());
+    // One written out already, in its format with its items, as a text
+    // editor that keeps its own items exports one: the same, its text read
+    // back out of it for those who hear it was saved.
+    bool saveNotecardAsset(const ALScriptRef& ref, const std::string& asset, compile_callback_t callback, std::string& error,
+                           Sender sender = Sender());
+
+    // Something's text saved, whoever sent it: the text as it went up, its
+    // new asset, and who sent it -- a script's whether it compiled or not,
+    // since the text is up either way. Every editor hears it, and takes it
+    // where it holds the item, or asks whose to keep where it has changes
+    // of its own; the sender knows its own by the request.
+    struct Saved
+    {
+        ALScriptRef ref;
+        Kind        kind = Kind::Script;
+        std::string text;
+        LLUUID      asset;
+        Sender      sender;
+        bool        compiled = false;
+    };
+    typedef boost::signals2::signal<void(const Saved&)> saved_signal_t;
+    boost::signals2::connection onSaved(const saved_signal_t::slot_type& slot) { return mSaved.connect(slot); }
 
     // A script's text as it goes up again: expanded afresh from its
     // source where the preprocessor wrapped it or is on, so that its
     // includes are current, and wrapped again; or as it is. The
     // preprocessor's errors, where it found any, are the diagnostics and
-    // nothing goes up.
+    // nothing goes up -- or, `anyway`, it goes up wrapped as the
+    // preprocessor made it, the source safe in the envelope, with its
+    // errors said: a save of someone's work, which always goes up.
     struct Prepared
     {
         std::string             text;
@@ -214,14 +278,15 @@ public:
     };
     typedef std::function<void(const Prepared&)> prepared_callback_t;
     void prepare(const ALScriptRef& ref, const std::string& name, const LLUUID& asset_id, const std::string& text, bool lua,
-                 const std::string& target, prepared_callback_t callback);
+                 const std::string& target, prepared_callback_t callback, bool anyway = false);
 
     // A script fetched, prepared, and uploaded to compile for a target:
     // what was asked, or "auto" for what it compiles for now. What the
     // compiler said reaches the callback and every listener; a script
     // that cannot go up says why in the result's error. It runs after
     // unless `running` says it was known to be stopped.
-    void recompile(const ALScriptRef& ref, const std::string& target, compile_callback_t callback, std::optional<bool> running = std::nullopt);
+    void recompile(const ALScriptRef& ref, const std::string& target, compile_callback_t callback, std::optional<bool> running = std::nullopt,
+                   Sender sender = Sender(Origin::Recompile));
 
     // The server's error strings as diagnostics.
     static std::vector<Diagnostic> parseDiagnostics(const LLSD& errors, bool lua);
@@ -251,14 +316,16 @@ public:
 
     // --- a script in an object -----------------------------------------------
 
-    bool setRunning(const ALScriptRef& ref, bool running);
-    bool reset(const ALScriptRef& ref);
+    // Each false with why where nothing could be sent, which the caller
+    // says: the workspace presents nothing of its own.
+    bool setRunning(const ALScriptRef& ref, bool running, std::string& error);
+    bool reset(const ALScriptRef& ref, std::string& error);
     // Stopped, then set running again once its region says it has stopped:
     // sent back to back, a stop sent again after it went astray could reach
     // the region after the start and leave the script stopped. Asked again
     // while the region says it still runs, and started after a while all
     // the same. False where the stop could not be sent.
-    bool restart(const ALScriptRef& ref);
+    bool restart(const ALScriptRef& ref, std::string& error);
 
     // Whether a script in an object runs and what it compiles for, asked
     // of the region; every listener hears the answer. False where there
@@ -356,8 +423,20 @@ public:
     typedef std::function<void(const Contents&)> contents_callback_t;
     // The scripts and notecards a prim holds, fetched from the region if
     // need be, answered once on the main thread: as not fetched where the
-    // region has not answered within a while.
-    void listContents(const LLUUID& prim, contents_callback_t callback);
+    // region has not answered within a while. `from_region` asks the
+    // region even where the object keeps a copy: after a change the object
+    // hears of only while it is selected -- a drop into it keeps the copy
+    // it had -- or where a person asked.
+    void listContents(const LLUUID& prim, contents_callback_t callback, bool from_region = false);
+    // What every prim asked about holds, as its region last said, and
+    // whether its scripts run: the one index the studio's windows, lookups
+    // and searches read (alscriptcontentsindex.h).
+    ALScriptContentsIndex& contentsIndex() { return *mContentsIndex; }
+    // The copies of scripts written to the temp folder for an editor
+    // outside, whichever window writes one (alscripttempfiles.h): named
+    // alike, held rather than owned, and what a session that crashed left
+    // swept at login.
+    ALScriptTempFiles& tempFiles();
 
     // --- changing what an object holds ---------------------------------------------
 
@@ -386,22 +465,6 @@ public:
     // An item taken out of an object, which is for good, or an inventory
     // item put in the trash.
     bool remove(const ALScriptRef& ref, std::string& error);
-
-    // The legacy queues over whole prims, which walk their contents and
-    // report in a window of their own: every script recompiled for a
-    // target ("auto" for what each compiles for now), reset, started or
-    // stopped. Each prim comes with a name for the report.
-    enum class Queue : U8
-    {
-        Recompile,
-        Reset,
-        Start,
-        Stop
-    };
-    // A recompile leaves a script `running` knows to be stopped stopped,
-    // by prim and item; the rest run after it, as the queue always had it.
-    bool queue(Queue kind, const std::vector<std::pair<LLUUID, std::string>>& prims, const std::string& target, std::string& error,
-               std::map<std::pair<LLUUID, LLUUID>, bool> running = {});
 
     // --- what scripts say ------------------------------------------------------
 
@@ -444,6 +507,11 @@ public:
     void flushRuntime();
     // The last few hundred events, oldest first, for a pane opened late.
     const std::deque<RuntimeEvent>& recentRuntime() const { return mRecent; }
+    // A script's run-time errors among those, since it last compiled or
+    // they were let go of: what a tab opened on it lists, where it was
+    // closed as they were said.
+    std::vector<RuntimeEvent> runtimeErrorsOf(const LLUUID& prim, const LLUUID& item) const;
+    void                      forgetRuntime(const LLUUID& item);
 
     typedef boost::signals2::signal<void(const RuntimeEvent&)> runtime_signal_t;
     boost::signals2::connection onRuntime(const runtime_signal_t::slot_type& slot) { return mRuntime.connect(slot); }
@@ -453,26 +521,45 @@ private:
     struct ContentsListener;
     struct Transfer;
     void startTransfer(const std::shared_ptr<Transfer>& transfer);
-    void transferArrived(const std::shared_ptr<Transfer>& transfer);
+    // What changed that came into the transfer's folder, taken where it is
+    // what the transfer waits for.
+    void transferArrived(const std::shared_ptr<Transfer>& transfer, const std::set<LLUUID>& changed);
     void transferEnd(const std::shared_ptr<Transfer>& transfer);
-    void flushExpiredBurst();
     void deliverRuntime(const Burst& burst);
     void sweepListeners();
 
     struct LoadRequest;
     static void onAssetLoaded(const LLUUID& asset_id, LLAssetType::EType type, void* user_data, S32 status, LLExtStat ext_status);
-    void        deliver(const CompileResult& result, const compile_callback_t& callback);
-    bool        scriptMessage(const ALScriptRef& ref, const char* message, bool running, bool with_running);
+    // An answer handed to its caller and every listener, on the main
+    // coroutine; and, where the text went up, said as saved with it.
+    void        deliver(const CompileResult& result, const compile_callback_t& callback, const std::string* text = nullptr);
+    // A notecard's asset sent, and `text`, its text, said as saved.
+    bool        uploadNotecard(const ALScriptRef& ref, const std::string& buffer, const std::string& text, bool carries,
+                               compile_callback_t callback, std::string& error, Sender sender);
+    bool        scriptMessage(const ALScriptRef& ref, const char* message, bool running, bool with_running, std::string& error);
 
     compiled_signal_t             mCompiled;
+    saved_signal_t                mSaved;
     running_signal_t              mRunningState;
+    U64                           mNextRequest = 0;
+    // The saves on their way, by request, until each is answered.
+    boost::unordered_flat_map<U64, ALScriptRef> mUnderway;
+    std::unique_ptr<ALScriptContentsIndex> mContentsIndex;
+    std::unique_ptr<ALScriptTempFiles>     mTempFiles;
+    // What leaves the object list let go of by the index.
+    boost::signals2::scoped_connection     mPresenceConnection;
     // Shared, so that the timer answering one the object never did can
     // tell whether it is still here.
     std::vector<std::shared_ptr<ContentsListener>> mListeners;
     std::unique_ptr<Burst>        mBurst;
-    std::unique_ptr<LLEventTimer> mBurstTimer;
+    // The one look a gathered error gets, a moment after its first line;
+    // there only while one is being gathered. It lets itself go once it
+    // has looked, and is let go of here where the error goes first.
+    LLEventTimer*                 mBurstTimer = nullptr;
     std::deque<RuntimeEvent>      mRecent;
     runtime_signal_t              mRuntime;
+    // When each script's errors were last let go of, by its item.
+    boost::unordered_flat_map<LLUUID, F64> mRuntimeSince;
     // The one in front is under way; the rest wait for it to end.
     std::vector<std::shared_ptr<Transfer>> mTransfers;
     std::vector<LLUUID>                 mOwnExperiences;
