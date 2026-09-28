@@ -26,122 +26,25 @@
 
 #include "alscriptanalysis.h"
 
-#include "allslservice.h"
-#include "alluauservice.h"
+#include "alscriptanalyzers.h"
 #include "alscriptstack.h"
 #include "llappviewer.h"
 #include "llviewercontrol.h"
-#include "llfile.h"
 #include "llsyntaxid.h"
 #include "alsaid.h"
 #include "lltrans.h"
-#include "threadpool.h"
-#include "workqueue.h"
+#include "alserialworker.h"
 
 #include <algorithm>
-#include <sstream>
+#include <optional>
 
-// What lives on the worker: the two services and what they were loaded
-// from, so that a request whose definitions moved on reloads before it
-// checks.
+// What lives on the worker: each language's analyzer, made the first time
+// a question in its language comes -- a viewer that never opens an SLua
+// script builds no Luau front end.
 struct ALScriptAnalysis::Worker
 {
-    ALLuauService luau;
-    ALLSLService  lsl;
-    std::string   luauDefinitionsPath;
-    std::string   luauDocsPath;
-    U32           luauGeneration = 0;
-    std::string   luauError;
-    bool          lslLoaded = false;
-    std::string   lslError;
-
-    static std::string readWhole(const std::string& path)
-    {
-        std::string text;
-        if (!path.empty())
-        {
-            llifstream in(path, std::ios::in | std::ios::binary);
-            if (in.is_open())
-            {
-                std::ostringstream buffer;
-                buffer << in.rdbuf();
-                text = buffer.str();
-            }
-        }
-        return text;
-    }
-
-    void loadLuau(const std::string& path, const std::string& docs_path, U32 generation)
-    {
-        if (generation == luauGeneration && path == luauDefinitionsPath && docs_path == luauDocsPath)
-        {
-            return;
-        }
-        luauGeneration      = generation;
-        luauDefinitionsPath = path;
-        luauDocsPath        = docs_path;
-        luauError.clear();
-        const std::string source = readWhole(path);
-        if (source.empty())
-        {
-            // Said with a key, for the main thread to put into the
-            // viewer's language; what the engine says is said as it is.
-            luauError = "\x01AnalysisNoLuauDefinitions\x01" + path;
-            return;
-        }
-        std::string error;
-        if (!luau.loadDefinitions(source, error))
-        {
-            luauError = error;
-        }
-        const std::string docs = readWhole(docs_path);
-        if (!docs.empty() && !luau.loadDocs(docs, error))
-        {
-            LL_WARNS("ScriptAnalysis") << "The Luau docs did not load: " << error << LL_ENDL;
-        }
-    }
-
-    // The solver the scripts are checked with: a change builds the front
-    // end again and loads the definitions into it again.
-    void useSolver(bool use_new)
-    {
-        if (luau.newSolver() == use_new)
-        {
-            return;
-        }
-        std::string error;
-        const bool  loaded = luau.setNewSolver(use_new, error);
-        if (!loaded || luau.hasDefinitions())
-        {
-            luauError = error;
-        }
-    }
-
-    // Once for the session, from the first region's builtins: Tailslide
-    // keeps them in a table of the whole process that it adds to and never
-    // replaces, so a region whose LSL has more functions than the first's
-    // is checked against the first's until the viewer starts again.
-    // Luau's front end is the service's own, and is loaded again
-    // (loadLuau).
-    void loadLSL(const std::string& path)
-    {
-        if (lslLoaded)
-        {
-            return;
-        }
-        lslLoaded = true;
-        lslError.clear();
-        if (path.empty())
-        {
-            lslError = "\x01AnalysisNoLSLBuiltins\x01";
-            return;
-        }
-        std::string error;
-        if (!lsl.loadBuiltins(path, error))
-        {
-            lslError = error;
-        }
-    }
+    std::unique_ptr<ALLuauAnalyzer> luau;
+    std::unique_ptr<ALLSLAnalyzer>  lsl;
 };
 
 ALScriptAnalysis::ALScriptAnalysis() = default;
@@ -150,24 +53,25 @@ ALScriptAnalysis::~ALScriptAnalysis() = default;
 
 void ALScriptAnalysis::cleanupSingleton()
 {
+    if (mThread)
     {
-        // A check still running is stopped rather than waited for.
-        const std::lock_guard<std::mutex> lock(mLatestMutex);
-        ALLuauService::cancel(mRunningStop);
-    }
-    if (mPool)
-    {
-        mPool->close();
-        mPool.reset();
+        mThread->close();
     }
 }
 
 void ALScriptAnalysis::ensureStarted()
 {
-    if (!mPool)
+    if (!mThread)
     {
-        mPool = std::make_unique<LL::ThreadPool>("ScriptAnalysis", 1);
-        mPool->start();
+        // What Luau keeps for the whole process, set here on the main
+        // thread before the worker reads it.
+        ALLuauService::setUpProcess();
+        // Closing, a check still running is stopped rather than waited
+        // for, and what waits is passed over.
+        mThread = std::make_unique<ALSerialWorker>("ScriptAnalysis", [this]() {
+            const std::lock_guard<std::mutex> lock(mQueueMutex);
+            ALLuauService::cancel(mRunningStop);
+        });
     }
 }
 
@@ -179,241 +83,230 @@ void ALScriptAnalysis::definitionsChanged()
 void ALScriptAnalysis::ask(Request request, callback_t callback)
 {
     ensureStarted();
+    Job job;
     // The paths are the syntax cache's, which is the main thread's; the
     // worker reads what they name.
-    const std::string luau_path  = request.lua ? LLSyntaxDefCache::instance().getLuauDefinitionsPath() : std::string();
-    const std::string docs_path  = request.lua ? LLSyntaxDefCache::instance().getLuauDocsPath() : std::string();
-    const std::string lsl_path   = request.lua ? std::string() : LLSyntaxDefCache::instance().getLSLBuiltinsPath();
-    const U32         generation = mDefinitionsGeneration;
+    job.luauPath   = request.lua ? LLSyntaxDefCache::instance().getLuauDefinitionsPath() : std::string();
+    job.docsPath   = request.lua ? LLSyntaxDefCache::instance().getLuauDocsPath() : std::string();
+    job.lslPath    = request.lua ? std::string() : LLSyntaxDefCache::instance().getLSLBuiltinsPath();
+    job.generation = mDefinitionsGeneration;
     // The solver and the time limit, which are settings, and so the main
     // thread's to read.
     static LLCachedControl<std::string> solver_setting(gSavedSettings, "ALScriptLuauSolver", "old");
     static LLCachedControl<F32>         seconds_setting(gSavedSettings, "ALScriptLuauCheckSeconds", 5.f);
-    const bool                          new_solver = std::string(solver_setting) == "new";
-    const F32                           seconds    = seconds_setting;
-    // Which check of this script this is: a later one asked for while
-    // this one waits makes it stale, and the worker passes it over. Only
-    // checks are numbered -- a hover or a completion is about a place,
-    // and is cheap.
-    U32 serial = 0;
-    if (request.kind == Kind::Check)
+    job.newSolver = std::string(solver_setting) == "new";
+    job.seconds   = seconds_setting;
+    // What is answered where the thread will not take the job -- the viewer
+    // going -- so that nothing waits on it: nothing found.
+    Result refused;
+    refused.kind    = request.kind;
+    refused.id      = request.id;
+    refused.version = request.version;
+    refused.lua     = request.lua;
+    refused.line    = request.line;
+    refused.column  = request.column;
+    const auto answer = std::make_shared<callback_t>(std::move(callback));
+    job.callback      = answer;
+    // Waiting under the script and the kind of question -- and, for a
+    // weigh, which of its weighs -- in place of what waited there.
+    std::string key = request.id;
+    key += '\x1f';
+    key += static_cast<char>('0' + static_cast<int>(request.kind));
+    if (request.kind == Kind::Weigh)
     {
-        const std::lock_guard<std::mutex> lock(mLatestMutex);
-        serial                    = ++mAskSerial;
-        mLatestCheck[request.id] = serial;
-        // One of this script already running is stopped: its answer
-        // would be thrown away on arrival too.
-        if (mRunningStop && mRunningId == request.id)
+        key += static_cast<char>('0' + static_cast<int>(request.weighing));
+    }
+    // By rank: the front tab's questions, which someone is waiting on, then
+    // its check; weighing; everything else -- background tabs, lookups.
+    const U8 rank = request.kind == Kind::Weigh    ? 2
+                    : !request.front                ? 3
+                    : request.kind == Kind::Check   ? 1
+                                                    : 0;
+    const std::string id      = request.id;
+    const U32         version = request.version;
+    job.request               = std::move(request);
+    {
+        const std::lock_guard<std::mutex> lock(mQueueMutex);
+        if (mQueue.add(key, id, version, rank, std::move(job)))
         {
+            // What runs is answering something no longer wanted.
             ALLuauService::cancel(mRunningStop);
         }
     }
-    mPool->getQueue().post([this, request = std::move(request), callback = std::move(callback), luau_path, docs_path, lsl_path, generation, serial,
-                            new_solver, seconds]() {
-        // What stops this one, where it is an SLua check.
-        ALLuauService::Stop stop;
-        if (serial != 0)
+    if (!mThread->post([this]() { runNext(); }))
+    {
         {
-            const std::lock_guard<std::mutex> lock(mLatestMutex);
-            const auto                        latest = mLatestCheck.find(request.id);
-            if (latest != mLatestCheck.end() && latest->second != serial)
-            {
-                // A newer check of this script is already waiting: this
-                // one's answer would be thrown away on arrival.
-                return;
-            }
-            // The newest, run: nothing is waiting behind it, and the
-            // script is forgotten until it is asked about again, so that
-            // what is kept is what is waiting rather than one entry for
-            // every script ever checked.
-            if (latest != mLatestCheck.end())
-            {
-                mLatestCheck.erase(latest);
-            }
-            if (request.lua)
-            {
-                stop         = ALLuauService::newStop();
-                mRunningId   = request.id;
-                mRunningStop = stop;
-            }
+            const std::lock_guard<std::mutex> lock(mQueueMutex);
+            mQueue.forget(id);
         }
-        // The engines recurse on how the script nests; the pool's thread
-        // has what the platform gives a thread, which on a Mac is half a
-        // megabyte. The work goes on a stack as deep as a script needs.
-        Result result;
-        alScriptOnLargeStack([&]() {
-            if (!mWorker)
-            {
-                mWorker = std::make_unique<Worker>();
-            }
-            result.kind    = request.kind;
-            result.id      = request.id;
-            result.version = request.version;
-            result.lua     = request.lua;
-            result.line    = request.line;
-            result.column  = request.column;
-            if (request.lua)
-            {
-                mWorker->useSolver(new_solver);
-                mWorker->loadLuau(luau_path, docs_path, generation);
-                result.definitionsError = mWorker->luauError;
-                mWorker->luau.setConfig(request.config);
-                mWorker->luau.setTimeLimit(seconds);
-                mWorker->luau.setStop(stop);
-                switch (request.kind)
-                {
-                    case Kind::Check:
-                        result.problems = mWorker->luau.check(request.text);
-                        if (mWorker->luau.stopped())
-                        {
-                            break;
-                        }
-                        result.outline  = mWorker->luau.outline(request.text);
-                        if (request.semantics)
-                        {
-                            result.semantics = mWorker->luau.semanticTokens(request.text);
-                        }
-                        result.hints = mWorker->luau.inlayHints(request.text, request.hintParameters, request.hintTypes);
-                        break;
-                    case Kind::Complete:
-                        result.completions = mWorker->luau.complete(request.text, request.line, request.column);
-                        break;
-                    case Kind::Hover:
-                    case Kind::Inspect:
-                        result.hover = mWorker->luau.hover(request.text, request.line, request.column);
-                        break;
-                    case Kind::Signature:
-                        result.signature = mWorker->luau.signature(request.text, request.line, request.column);
-                        break;
-                    case Kind::References:
-                        result.references = mWorker->luau.references(request.text, request.line, request.column);
-                        break;
-                    case Kind::Actions:
-                        result.actions = mWorker->luau.actions(request.text, request.line, request.column, request.endLine, request.endColumn);
-                        break;
-                    case Kind::Weigh:
-                        if (!request.variants.empty())
-                        {
-                            for (const std::string& variant : request.variants)
-                            {
-                                result.variantTotals.push_back(ALScriptWeigh::slua(variant).total);
-                            }
-                            break;
-                        }
-                        for (const ALScriptWeight::Target target : request.targets)
-                        {
-                            if (target == ALScriptWeight::Target::SLua)
-                            {
-                                result.weights.push_back(ALScriptWeigh::slua(request.text));
-                            }
-                        }
-                        break;
-                }
-            }
-            else
-            {
-                mWorker->loadLSL(lsl_path);
-                result.definitionsError = mWorker->lslError;
-                switch (request.kind)
-                {
-                    case Kind::Check:
-                        result.problems = mWorker->lsl.check(request.text, request.mono);
-                        result.outline  = mWorker->lsl.outline(request.text);
-                        if (request.semantics)
-                        {
-                            result.semantics = mWorker->lsl.semanticTokens(request.text);
-                        }
-                        result.hints = mWorker->lsl.inlayHints(request.text, request.hintParameters);
-                        break;
-                    case Kind::Complete:
-                        result.completions = mWorker->lsl.symbols(request.text, request.line, request.column);
-                        break;
-                    case Kind::Hover:
-                    case Kind::Inspect:
-                        result.hover = mWorker->lsl.hover(request.text, request.line, request.column);
-                        break;
-                    case Kind::Signature:
-                        result.signature = mWorker->lsl.signature(request.text, request.line, request.column);
-                        break;
-                    case Kind::References:
-                        result.references = mWorker->lsl.references(request.text, request.line, request.column);
-                        break;
-                    case Kind::Actions:
-                        result.actions = mWorker->lsl.actions(request.text, request.line, request.column, request.endLine, request.endColumn);
-                        break;
-                    case Kind::Weigh:
-                    {
-                        const auto weigh = [](ALScriptWeight::Target target, const std::string& text) {
-                            return target == ALScriptWeight::Target::LSO       ? ALScriptWeigh::lso(text)
-                                   : target == ALScriptWeight::Target::Mono    ? ALScriptWeigh::mono(text)
-                                   : target == ALScriptWeight::Target::LSLLuau ? ALScriptWeigh::lslLuau(text)
-                                                                               : ALScriptWeight();
-                        };
-                        if (!request.variants.empty() && !request.targets.empty())
-                        {
-                            for (const std::string& variant : request.variants)
-                            {
-                                result.variantTotals.push_back(weigh(request.targets.front(), variant).total);
-                            }
-                            break;
-                        }
-                        for (const ALScriptWeight::Target target : request.targets)
-                        {
-                            if (target != ALScriptWeight::Target::SLua)
-                            {
-                                result.weights.push_back(weigh(target, request.text));
-                            }
-                        }
-                        break;
-                    }
-                }
-                result.parsed     = mWorker->lsl.parsed();
-                result.understood = mWorker->lsl.understood();
-            }
-        });
-        bool stopped = false;
-        if (stop)
+        LLAppViewer::instance()->postToMainCoro([refused = std::move(refused), answer]() { (*answer)(refused); });
+    }
+}
+
+void ALScriptAnalysis::runEngine(std::function<void()> work, std::function<void()> done)
+{
+    ensureStarted();
+    Job job;
+    job.engineWork = std::move(work);
+    job.engineDone = std::move(done);
+    // Each its own: one run's work does not stand in for another's.
+    const std::string key  = "engine:" + std::to_string(++mEngineSerial);
+    auto              then = std::make_shared<std::function<void()>>(job.engineDone);
+    {
+        const std::lock_guard<std::mutex> lock(mQueueMutex);
+        mQueue.add(key, key, 0, 1, std::move(job));
+    }
+    if (!mThread->post([this]() { runNext(); }))
+    {
         {
-            const std::lock_guard<std::mutex> lock(mLatestMutex);
-            if (mRunningStop == stop)
-            {
-                mRunningStop.reset();
-                mRunningId.clear();
-            }
-            if (mWorker)
-            {
-                stopped = mWorker->luau.stopped();
-                mWorker->luau.setStop(nullptr);
-            }
+            const std::lock_guard<std::mutex> lock(mQueueMutex);
+            mQueue.forget(key);
         }
-        if (stopped)
+        LLAppViewer::instance()->postToMainCoro([then]() { (*then)(); });
+    }
+}
+
+void ALScriptAnalysis::forget(const std::string& id)
+{
+    const std::lock_guard<std::mutex> lock(mQueueMutex);
+    mQueue.forget(id);
+}
+
+void ALScriptAnalysis::runNext()
+{
+    // The job as a whole, its definitions loaded included; what it asked
+    // of the service is the zone inside.
+    LL_PROFILE_ZONE_NAMED_CATEGORY_SCRIPTDEV("script analysis job");
+    std::optional<std::pair<std::string, Job>> next;
+    // What stops it, where it is an SLua one.
+    ALLuauService::Stop stop;
+    {
+        const std::lock_guard<std::mutex> lock(mQueueMutex);
+        next = mQueue.take();
+        if (!next)
         {
-            // Stopped for a newer check, which answers in its place.
             return;
         }
-        // The words in the viewer's language, on the main thread, where
-        // the strings are.
-        LLAppViewer::instance()->postToMainCoro([result = std::move(result), callback]() mutable {
-            alTranslateScriptProblems(result.problems);
-            for (ALScriptFix& action : result.actions)
+        if (next->second.request.lua)
+        {
+            stop         = ALLuauService::newStop();
+            mRunningStop = stop;
+        }
+    }
+    const Job& job = next->second;
+    if (job.engineWork)
+    {
+        // No question: the work, on a stack as deep as it needs, and then
+        // whoever waits on it told.
+        try
+        {
+            alScriptOnLargeStack(job.engineWork);
+        }
+        catch (const std::exception& e)
+        {
+            // Whoever gave it answers for what it throws; told, all the same.
+            LL_WARNS("ScriptAnalysis") << "Engine work failed: " << e.what() << LL_ENDL;
+        }
+        {
+            const std::lock_guard<std::mutex> lock(mQueueMutex);
+            mQueue.finished();
+        }
+        LLAppViewer::instance()->postToMainCoro([done = job.engineDone]() { done(); });
+        return;
+    }
+    Result result = run(job, stop);
+    bool       unwanted = false;
+    {
+        const std::lock_guard<std::mutex> lock(mQueueMutex);
+        unwanted = mQueue.superseded();
+        mQueue.finished();
+        if (mRunningStop == stop)
+        {
+            mRunningStop.reset();
+        }
+    }
+    if (stop && mWorker && mWorker->luau)
+    {
+        unwanted = unwanted || mWorker->luau->stopped();
+        mWorker->luau->forgetStop();
+    }
+    if (unwanted)
+    {
+        // Stopped, or asked again while it ran: what was asked since
+        // answers in its place.
+        return;
+    }
+    const std::shared_ptr<callback_t> callback = job.callback;
+    // The words in the viewer's language, on the main thread, where
+    // the strings are.
+    LLAppViewer::instance()->postToMainCoro([result = std::move(result), callback]() mutable {
+        alTranslateScriptProblems(result.problems);
+        for (ALScriptFix& action : result.actions)
+        {
+            action.title = alScriptKeyedWords(action.key, action.args, action.title);
+        }
+        // A definitions error of this code's own carries its key
+        // between the marks, with what it is about after.
+        if (!result.definitionsError.empty() && result.definitionsError[0] == '\x01')
+        {
+            const size_t end = result.definitionsError.find('\x01', 1);
+            if (end != std::string::npos)
             {
-                action.title = alScriptKeyedWords(action.key, action.args, action.title);
+                LLStringUtil::format_map_t args;
+                args["[PATH]"] = result.definitionsError.substr(end + 1);
+                result.definitionsError = LLTrans::getString(result.definitionsError.substr(1, end - 1), args);
             }
-            // A definitions error of this code's own carries its key
-            // between the marks, with what it is about after.
-            if (!result.definitionsError.empty() && result.definitionsError[0] == '\x01')
-            {
-                const size_t end = result.definitionsError.find('\x01', 1);
-                if (end != std::string::npos)
-                {
-                    LLStringUtil::format_map_t args;
-                    args["[PATH]"] = result.definitionsError.substr(end + 1);
-                    result.definitionsError = LLTrans::getString(result.definitionsError.substr(1, end - 1), args);
-                }
-            }
-            callback(result);
-        });
+        }
+        (*callback)(result);
     });
+}
+
+ALScriptAnalysis::Result ALScriptAnalysis::run(const Job& job, const ALLuauService::Stop& stop)
+{
+    const Request& request = job.request;
+    static const std::string NOTHING;
+    const std::string&       text = request.text ? *request.text : NOTHING;
+    ALScriptAnalyzer::Setup  setup;
+    setup.luauPath   = job.luauPath;
+    setup.docsPath   = job.docsPath;
+    setup.lslPath    = job.lslPath;
+    setup.generation = job.generation;
+    setup.newSolver  = job.newSolver;
+    setup.seconds    = job.seconds;
+    setup.stop       = stop;
+    // The engines recurse on how the script nests; the pool's thread has
+    // what the platform gives a thread, which on a Mac is half a megabyte.
+    // The work goes on a stack as deep as a script needs.
+    Result result;
+    alScriptOnLargeStack([&]() {
+        if (!mWorker)
+        {
+            mWorker = std::make_unique<Worker>();
+        }
+        result.kind    = request.kind;
+        result.id      = request.id;
+        result.version = request.version;
+        result.lua     = request.lua;
+        result.line    = request.line;
+        result.column  = request.column;
+        if (request.lua)
+        {
+            if (!mWorker->luau)
+            {
+                mWorker->luau = std::make_unique<ALLuauAnalyzer>();
+            }
+            mWorker->luau->answer(request, text, setup, result);
+        }
+        else
+        {
+            if (!mWorker->lsl)
+            {
+                mWorker->lsl = std::make_unique<ALLSLAnalyzer>();
+            }
+            mWorker->lsl->answer(request, text, setup, result);
+        }
+    });
+    return result;
 }
 
 std::string alScriptKeyedWords(const std::string& key, const std::vector<std::string>& args, const std::string& english)
@@ -571,6 +464,26 @@ namespace ALScriptLints
 
     ALLuauConfig luauBase()
     {
+        // Made once, and again only when a setting it reads changes: every
+        // SLua question asks for it -- each check, hover and signature --
+        // and made afresh it reads the lint levels once a lint.
+        static std::optional<ALLuauConfig> made;
+        static bool                         watching = false;
+        if (!watching)
+        {
+            watching = true;
+            for (const char* name : { "ALScriptLintLevels", "ALScriptLuauMode", "ALScriptLuauSolver" })
+            {
+                if (LLControlVariable* control = gSavedSettings.getControl(name))
+                {
+                    control->getSignal()->connect([](LLControlVariable*, const LLSD&, const LLSD&) { made.reset(); });
+                }
+            }
+        }
+        if (made)
+        {
+            return *made;
+        }
         ALLuauConfig base;
         for (const Lint& lint : all())
         {
@@ -606,6 +519,7 @@ namespace ALScriptLints
         {
             base.mode = gSavedSettings.getString("ALScriptLuauSolver") == "new" ? "strict" : "nonstrict";
         }
+        made = base;
         return base;
     }
 }

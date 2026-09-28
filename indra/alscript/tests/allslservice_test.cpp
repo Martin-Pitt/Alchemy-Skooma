@@ -603,9 +603,9 @@ namespace tut
         // What a grid newer than this viewer may send: a type the engine does
         // not know, a constant it cannot read, blank lines of CR LF and of
         // blanks -- each of which ended the process before.
-        const std::string path = (std::filesystem::temp_directory_path() / ("al_builtins_" + LLUUID::generateNewID().asString() + ".txt")).string();
+        const std::string path = fsyspath(std::filesystem::temp_directory_path() / ("al_builtins_" + LLUUID::generateNewID().asString() + ".txt")).string();
         {
-            std::ofstream out(path, std::ios::binary);
+            llofstream out(path, std::ios::binary);
             out << "// the grid's definitions, as a newer grid might send them\n"
                    "integer llAlchemyProbe(integer a)\n"
                    "\r\n"
@@ -619,7 +619,7 @@ namespace tut
         std::string   why;
         const bool    read = service.loadBuiltins(path, why);
         std::error_code gone;
-        std::filesystem::remove(path, gone);
+        std::filesystem::remove(fsyspath(path), gone);
         ensure("loaded: " + why, read);
         const std::string head = "default\n{\n    state_entry()\n    {\n";
         const std::string tail = "    }\n}\n";
@@ -627,5 +627,135 @@ namespace tut
         ensure_equals("the lines it could read are known: " + said(kept), errors(kept), size_t(0));
         const ALScriptProblems left = service.check(head + "        llAlchemyBadReturn();\n" + tail, true);
         ensure("a line it could not read is not: " + said(left), errors(left) > 0);
+    }
+
+    template<> template<>
+    void allslservice_object::test<18>()
+    {
+        set_test_name("a definitions file under a folder named outside the ANSI code page loads");
+        // The grid's definitions are kept in the cache, under the user's
+        // profile, whose name may be in any script: the path is UTF-8, and
+        // on Windows the engine opened it as the ANSI code page read it.
+        const fsyspath dir = std::filesystem::temp_directory_path() / fsyspath("al_builtins_\xc3\xa9\xe6\x97\xa5_" + LLUUID::generateNewID().asString());
+        std::error_code made;
+        std::filesystem::create_directories(dir, made);
+        ensure("folder made: " + made.message(), !made);
+        const std::string path = fsyspath(dir / "builtins.txt").string();
+        {
+            llofstream out(path, std::ios::binary);
+            out << "integer llAlchemyWide(integer a)\n";
+        }
+        std::string why;
+        const bool  read = service.loadBuiltins(path, why);
+        std::error_code gone;
+        std::filesystem::remove_all(dir, gone);
+        ensure("loaded: " + why, read);
+        const ALScriptProblems kept = service.check("default\n{\n    state_entry()\n    {\n        llOwnerSay((string)llAlchemyWide(1));\n    }\n}\n", true);
+        ensure_equals("what it defines is known: " + said(kept), errors(kept), size_t(0));
+    }
+
+    template<> template<>
+    void allslservice_object::test<19>()
+    {
+        set_test_name("a text that does not parse is mended once whole and once at the caret, however the questions take turns");
+        const std::string broken = "integer count;\ndefault {\n    state_entry() {\n        llSay(0, (string)count\n    }\n}\n";
+        const size_t      before = service.mendings();
+        // What the check asks after it, whole; a call's parameters, at the
+        // caret.
+        service.outline(broken);
+        service.signature(broken, 3, 20);
+        const size_t twice = service.mendings();
+        ensure_equals("one each", twice - before, size_t(2));
+        for (int turn = 0; turn < 3; ++turn)
+        {
+            service.outline(broken);
+            service.signature(broken, 3, 20);
+            service.hover(broken, 3, 20);
+            service.symbols(broken, 3, 20);
+        }
+        ensure_equals("and no more, turn and turn about", service.mendings(), twice);
+        service.signature(broken, 3, 12);
+        ensure_equals("another place is mended again", service.mendings(), twice + 1);
+    }
+
+    template<> template<>
+    void allslservice_object::test<20>()
+    {
+        set_test_name("lines nobody reads -- an include's -- are passed over by the names and the hints, and their problems offered no fixes");
+        // An include's function, unused, then the script's own.
+        const std::string text = "helper(integer count)\n{\n    llOwnerSay((string)count);\n}\n"
+                                 "default\n{\n    state_entry()\n    {\n        integer unused = 1;\n        llOwnerSay(\"x\");\n    }\n}\n";
+        service.setPassedOver({ { 0, 3 } });
+        const ALScriptProblems problems = service.check(text, true);
+        bool helper_said = false, helper_fixed = false, own_fixed = false;
+        for (const ALScriptProblem& problem : problems)
+        {
+            if (problem.line <= 3 && problem.key == "LSLDeclaredButNotUsed")
+            {
+                helper_said  = true;
+                helper_fixed = !problem.fixes.empty();
+            }
+            if (problem.line == 8 && problem.key == "LSLDeclaredButNotUsed")
+            {
+                own_fixed = !problem.fixes.empty();
+            }
+        }
+        ensure("the include's unused function said", helper_said);
+        ensure("but offered nothing", !helper_fixed);
+        ensure("the script's own offered its fix", own_fixed);
+        bool in_include = false;
+        for (const ALScriptSemanticToken& token : service.semanticTokens(text))
+        {
+            in_include |= token.span.line <= 3;
+        }
+        ensure("no names coloured in the include", !in_include);
+        service.setPassedOver({});
+        bool coloured = false;
+        for (const ALScriptSemanticToken& token : service.semanticTokens(text))
+        {
+            coloured |= token.span.line <= 3;
+        }
+        ensure("with nothing passed over, coloured", coloured);
+    }
+
+    template<> template<>
+    void allslservice_object::test<21>()
+    {
+        set_test_name("another region's builtins: what it adds is known after, what both have stays as first loaded, and nothing is said twice");
+        const std::string base = std::string(AL_LSL_DEFINITIONS_DIR) + "/builtins.txt";
+        std::string       error;
+        ensure("the first region's: " + error, service.loadBuiltins(base, error));
+        const std::string script = "default\n{\n    state_entry()\n    {\n        integer n = llBrandNewThing(1);\n        llOwnerSay((string)n);\n    }\n}\n";
+        bool unknown = false;
+        for (const ALScriptProblem& problem : service.check(script))
+        {
+            unknown |= problem.message.find("llBrandNewThing") != std::string::npos;
+        }
+        ensure("not yet known", unknown);
+        // A region with one function more.
+        std::string text;
+        {
+            llifstream in(base, std::ios::in | std::ios::binary);
+            std::ostringstream all;
+            all << in.rdbuf();
+            text = all.str();
+        }
+        const std::string path = (std::filesystem::temp_directory_path() / "alscript-test-builtins-newer.txt").string();
+        {
+            llofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
+            out << text << "integer llBrandNewThing( integer Value )\n";
+        }
+        const bool loaded = service.loadBuiltins(path, error);
+        LLFile::remove(path);
+        ensure("loaded: " + error, loaded);
+        unknown = false;
+        for (const ALScriptProblem& problem : service.check(script))
+        {
+            unknown |= problem.message.find("llBrandNewThing") != std::string::npos;
+        }
+        ensure("known now", !unknown);
+        // Nothing twice: an old one still one declaration.
+        const ALScriptSignature said = service.signature("default { state_entry() { llAbs( } }\n", 0, 32);
+        ensure("an old function as it was", said.found && said.label.find("llAbs") != std::string::npos);
     }
 }
