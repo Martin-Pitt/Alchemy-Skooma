@@ -212,34 +212,33 @@ namespace
         return (kx << 42) | (ky << 21) | kz;
     }
 
-    /// Sum two sorted rasters.
-    void addRaster(std::vector<std::pair<U64, U32>>& into, const std::vector<std::pair<U64, U32>>& from)
+    /// A 64-bit finaliser: every key bit reaches the low bits a table indexes by.
+    U64 spread(U64 x)
     {
-        if (from.empty())
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ull;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebull;
+        return x ^ (x >> 31);
+    }
+
+    /// Sort a raster by key and sum the counts of equal keys.
+    void sumRaster(std::vector<std::pair<U64, U32>>& raster)
+    {
+        std::sort(raster.begin(), raster.end(), [](const std::pair<U64, U32>& a, const std::pair<U64, U32>& b) { return a.first < b.first; });
+        size_t n = 0;
+        for (size_t i = 0; i < raster.size(); ++i)
         {
-            return;
-        }
-        std::vector<std::pair<U64, U32>> out;
-        out.reserve(into.size() + from.size());
-        size_t i = 0, j = 0;
-        while (i < into.size() || j < from.size())
-        {
-            if (j >= from.size() || (i < into.size() && into[i].first < from[j].first))
+            if (n && raster[n - 1].first == raster[i].first)
             {
-                out.push_back(into[i++]);
-            }
-            else if (i >= into.size() || from[j].first < into[i].first)
-            {
-                out.push_back(from[j++]);
+                raster[n - 1].second += raster[i].second;
             }
             else
             {
-                out.emplace_back(into[i].first, into[i].second + from[j].second);
-                ++i;
-                ++j;
+                raster[n++] = raster[i];
             }
         }
-        into.swap(out);
+        raster.resize(n);
     }
 
     F32 pointSegment(const LLVector2& p, const LLVector2& a, const LLVector2& b)
@@ -2539,7 +2538,13 @@ namespace sknav
             a.mCeilMin = std::min(a.mCeilMin, si.mCeilMin);
             a.mCeilMax = std::max(a.mCeilMax, si.mCeilMax);
             a.mOpen += si.mOpenArea;
-            addRaster(out[mSeedSpace[s] - 1].mRaster, st.mRaster);
+            std::vector<std::pair<U64, U32>>& raster = out[mSeedSpace[s] - 1].mRaster;
+            raster.insert(raster.end(), st.mRaster.begin(), st.mRaster.end());
+        }
+        // Each space's seed rasters summed at once: merging them one by one grows with the space's size.
+        for (Space& sp : out)
+        {
+            sumRaster(sp.mRaster);
         }
         for (U32 i = 0; i < nsp; ++i)
         {
@@ -2886,15 +2891,53 @@ namespace sknav
         {
             // Area-weighted overlap on the floor raster: an id stays with the
             // space it covers half of, and on a split with the larger part.
-            std::unordered_map<U64, std::vector<std::pair<U32, U32>>> by_key;
+            // The old rasters in one open-addressed table, each key's entries
+            // chained in space order: a map of vectors costs an allocation per key.
+            struct OldEntry
+            {
+                U32 mSpace;
+                U32 mCount;
+                U32 mNext;
+            };
+            std::vector<OldEntry> entries;
+            size_t n_old = 0;
+            for (const Space& sp : prev->mSpaces)
+            {
+                n_old += sp.mRaster.size();
+            }
+            size_t cap = 16;
+            while (cap < n_old * 2)
+            {
+                cap <<= 1;
+            }
+            std::vector<U64> slot_key(cap, 0);
+            std::vector<U32> slot_head(cap, NONE);
+            auto slotOf = [&](U64 key) {
+                size_t h = static_cast<size_t>(spread(key)) & (cap - 1);
+                while (slot_head[h] != NONE && slot_key[h] != key)
+                {
+                    h = (h + 1) & (cap - 1);
+                }
+                return h;
+            };
+            entries.reserve(n_old);
             std::vector<F64> old_area(prev->mSpaces.size(), 0.0);
             for (U32 i = 0; i < prev->mSpaces.size(); ++i)
             {
                 taken.insert(prev->mSpaces[i].mId);
                 for (const auto& r : prev->mSpaces[i].mRaster)
                 {
-                    by_key[r.first].emplace_back(i, r.second);
                     old_area[i] += r.second;
+                }
+            }
+            for (U32 i = static_cast<U32>(prev->mSpaces.size()); i-- > 0;)
+            {
+                for (const auto& r : prev->mSpaces[i].mRaster)
+                {
+                    const size_t h = slotOf(r.first);
+                    slot_key[h] = r.first;
+                    entries.push_back({ i, r.second, slot_head[h] });
+                    slot_head[h] = static_cast<U32>(entries.size() - 1);
                 }
             }
             struct Pair
@@ -2910,14 +2953,9 @@ namespace sknav
                 for (const auto& r : out[i].mRaster)
                 {
                     new_area[i] += r.second;
-                    const auto it = by_key.find(r.first);
-                    if (it == by_key.end())
+                    for (U32 e = slot_head[slotOf(r.first)]; e != NONE; e = entries[e].mNext)
                     {
-                        continue;
-                    }
-                    for (const auto& o : it->second)
-                    {
-                        inter[o.first] += std::min(r.second, o.second);
+                        inter[entries[e].mSpace] += std::min(r.second, entries[e].mCount);
                     }
                 }
                 for (const auto& o : inter)

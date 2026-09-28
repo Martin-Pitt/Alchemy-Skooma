@@ -661,6 +661,62 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<24>()
+    {
+        set_test_name("the spaces pass grows with the tile count: four times the field costs about four times as much");
+        // A field of posts 2 m apart: a watershed seed between every four,
+        // all one outdoor space. SKNAV_SCALING runs it at 16 and 64 tiles,
+        // where a cost that grows with seeds times the space shows.
+        Scene s;
+        for (S32 j = 0; j < 16; ++j)
+        {
+            for (S32 i = 0; i < 16; ++i)
+            {
+                s.wall(i * 2.f + 0.875f, j * 2.f + 0.875f, i * 2.f + 1.125f, j * 2.f + 1.125f);
+            }
+        }
+        const TileAirPtr one = s.tile(0, 0);
+        auto town = [&one](S32 side) {
+            auto in = std::make_shared<EnclosureInput>();
+            for (S32 ky = 0; ky < side; ++ky)
+            {
+                for (S32 kx = 0; kx < side; ++kx)
+                {
+                    auto air = std::make_shared<TileAir>(*one);
+                    air->mOrigin.set(kx * 32.f, ky * 32.f, one->mOrigin.mV[VZ]);
+                    EnclosureInput::Tile t;
+                    t.mKey.mX = kx;
+                    t.mKey.mY = ky;
+                    t.mAir = air;
+                    in->mTiles.push_back(t);
+                }
+            }
+            EnclosurePass pass(in);
+            while (!pass.step(1u << 30))
+            {
+            }
+            std::shared_ptr<EnclosureProduct> enc = pass.takeProduct();
+            // The best of a few, so a busy machine does not fail it.
+            F64 best = 1e30;
+            RoomsProductPtr rooms;
+            for (S32 k = 0; k < 3; ++k)
+            {
+                const auto t0 = std::chrono::steady_clock::now();
+                rooms = computeSpaces(std::make_shared<RoomsInput>(), enc);
+                best = std::min(best, std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            return std::make_pair(best, rooms);
+        };
+        const S32 side = LLStringUtil::getenv("SKNAV_SCALING").empty() ? 2 : 4;
+        const auto small = town(side), large = town(2 * side);
+        ensure("many seeds, one space", small.second->mSeeds > 64u * side * side && large.second->mSpaces.size() == 1);
+        const F64 ratio = large.first / std::max(small.first, 1e-3);
+        ensure("4x the tiles within 6x the time, not " + std::to_string(ratio) + "x (" + std::to_string(small.first) + " ms, " +
+                   std::to_string(large.first) + " ms)",
+               ratio < 6.0);
+    }
+
+    template<> template<>
     void sknavrooms_object::test<12>()
     {
         set_test_name("replay a mesh's air through both passes, when a file is named");
