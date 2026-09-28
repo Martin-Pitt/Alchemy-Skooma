@@ -354,4 +354,51 @@ namespace tut
         outline->handleMouseDown(x, y, MASK_NONE);
         ensure_equals("chosen by the list", chosen(), 0);
     }
+
+    template<> template<>
+    void alscriptoutlinepane_object::test<7>()
+    {
+        set_test_name("out of sight, only the window told; listed, and the caret followed, once it is seen");
+        ALScriptOutlinePane* outline = pane();
+        Doc&                 doc     = tab("a");
+        window.floater->setVisible(false);
+        outline->show(doc);
+        ensure("told", joined(told().shown) == "a");
+        ensure("not listed", outline->list()->getItemCount() == 0);
+        outline->pump();
+        ensure("nor while unseen", outline->list()->getItemCount() == 0);
+        window.floater->setVisible(true);
+        outline->pump();
+        ensure_equals("seen: listed", rows(), std::string("count, ^default, .touch_start, .state_entry, alpha"));
+
+        window.floater->setVisible(false);
+        doc.caret.crumbPath = { 1, 3 };
+        outline->followCaret(doc);
+        ensure_equals("not followed unseen", chosen(), -1);
+        window.floater->setVisible(true);
+        outline->pump();
+        ensure_equals("followed once seen", chosen(), 3);
+        outline->pump();
+        ensure_equals("and then left be", joined(told().shown), std::string("a, a, a"));
+    }
+
+    template<> template<>
+    void alscriptoutlinepane_object::test<8>()
+    {
+        set_test_name("a symbol added among the others: its row made, the others the same rows where they were, the row chosen kept");
+        ALScriptOutlinePane* outline = pane();
+        Doc&                 doc     = tab("a");
+        outline->show(doc);
+        const std::vector<LLScrollListItem*> before = outline->list()->getAllData();
+        doc.caret.crumbPath                         = { 4 };
+        outline->followCaret(doc);
+        ensure_equals("alpha chosen", chosen(), 4);
+        doc.outline.insert(doc.outline.begin() + 1, entry("beta", ALScriptSymbolKind::Function, 0, 1));
+        doc.caret.crumbPath = { 5 };
+        outline->show(doc);
+        ensure_equals("in its place", rows(), std::string("count, beta, ^default, .touch_start, .state_entry, alpha"));
+        const std::vector<LLScrollListItem*> after = outline->list()->getAllData();
+        ensure("the others the same rows", after.size() == 6 && after[0] == before[0] && after[2] == before[1] && after[5] == before[4]);
+        ensure_equals("alpha still chosen, by its new place", chosen(), 5);
+    }
 }
