@@ -241,13 +241,7 @@ bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive() || processDemanded());
-}
-
-bool SKNavMesh::processDemanded()
-{
-    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
-    return air || probesDemanded();
+    return enabled && (always || overlayActive() || probesDemanded());
 }
 
 bool SKNavMesh::probesDemanded()
