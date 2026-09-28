@@ -161,6 +161,8 @@ public:
     // Grid probes supply irradiance only, after full probes claim coverage.
     bool mIrradianceOnly = false;
     bool mBlockedByCensus = false;
+    // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);
+    // afterwards that pass owns re-nudging and the cleared radius.
     bool mGridPlacementChecked = false;
     LLVector3d mGridOrigin;
     F32 mGridRadius = 0.f;

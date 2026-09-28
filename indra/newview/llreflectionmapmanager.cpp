@@ -696,7 +696,14 @@ void LLReflectionMapManager::update()
         LLReflectionMap* probe = oldestProbe;
         llassert(probe->mCubeIndex != -1);
 
-        probe->autoAdjustOrigin();
+        // <SK:Nexii> Navmesh rooms probes: a probe the census pass has anchored gets its
+        // placement from that pass -- re-deriving it here would reset the radius the pass
+        // cleared and restart the capture on every refresh.
+        if (!probe->mGridPlacementChecked)
+        {
+            probe->autoAdjustOrigin();
+        }
+        // </SK:Nexii>
 
         sUpdateCount++;
         mUpdatingProbe = probe;
@@ -1020,6 +1027,7 @@ void LLReflectionMapManager::updateCensusPlacement()
     {
         if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms) continue;
         if (!refresh && probe->mGridPlacementChecked) continue;
+        const LLVector3 old(probe->mOrigin.getF32ptr());
         if (!probe->mGridPlacementChecked)
         {
             probe->autoAdjustOrigin();
@@ -1027,7 +1035,29 @@ void LLReflectionMapManager::updateCensusPlacement()
             probe->mGridRadius = probe->mRadius;
             probe->mGridPlacementChecked = true;
         }
-        const LLVector3 old(probe->mOrigin.getF32ptr());
+        else if (!probe->mComplete)
+        {
+            // A capture still pending on a probe whose surroundings changed: re-nudge
+            // toward empty space and re-anchor the demand. Reaching this branch implies
+            // refresh -- unchecked probes are the only others that get past the skips.
+            // autoAdjustOrigin re-derives the radius from the octree, so a nudge that
+            // settles where it started restores the cleared radius the pass below
+            // applies; only a real move re-anchors, and the changed block below then
+            // aborts any capture the move tore out from under.
+            const LLVector3 placed(probe->mOrigin.getF32ptr());
+            const F32 placed_radius = probe->mRadius;
+            probe->autoAdjustOrigin();
+            if (dist_vec_squared(LLVector3(probe->mOrigin.getF32ptr()), placed) > 0.0001f)
+            {
+                probe->mGridOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+                probe->mGridRadius = probe->mRadius;
+            }
+            else
+            {
+                probe->mOrigin.load3(placed.mV);
+                probe->mRadius = placed_radius;
+            }
+        }
         LLVector3 chosen = gAgent.getPosAgentFromGlobal(probe->mGridOrigin);
         F32 radius = probe->mGridRadius;
         const bool blocked = solid(probe->mGridOrigin);
