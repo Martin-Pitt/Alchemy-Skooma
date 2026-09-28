@@ -2111,22 +2111,38 @@ namespace sknav
                         {
                             break;
                         }
-                        U32 u;
-                        S32 bx, by;
-                        if (resolve(t, ax + (side == 0), ay + (side == 1), u, bx, by) != 0)
-                        {
-                            continue;
-                        }
-                        U32 nb;
-                        const AirGap* gb = column(u, bx, by, nb);
-                        if (!nb)
+                        U32 u = t;
+                        S32 bx = ax + (side == 0), by = ay + (side == 1);
+                        if ((bx >= a.mWidth || by >= a.mHeight) && resolve(t, bx, by, u, bx, by) != 0)
                         {
                             continue;
                         }
                         const TileInfo& ui = mTiles[u];
                         const S32 lb = ui.mLeafMap[bx + by * ui.mAir->mWidth];
-                        const U32 first_b = ui.mAir->mLeaves[lb].mFirstGap;
+                        if (lb < 0)
+                        {
+                            continue;
+                        }
+                        const AirLeaf& leaf_b = ui.mAir->mLeaves[lb];
+                        const U32 nb = leaf_b.mGapCount, first_b = leaf_b.mFirstGap;
+                        // Within one seed on both sides, as most steps are, there is no edge.
+                        if (nb == 1 && leaf.mGapCount == 1 && u == t && ui.mRooms.mSeeds[first_b] == ti.mRooms.mSeeds[leaf.mFirstGap])
+                        {
+                            continue;
+                        }
+                        const AirGap* gb = &ui.mAir->mGaps[first_b];
                         const LLVector2 ca(cellX(ti, ax), cellY(ti, ay)), cb(cellX(ui, bx), cellY(ui, by));
+                        // Where both columns' gaps rise with their floors, as air's do, only b's within a climb of a's are tried.
+                        bool rising = true;
+                        for (U32 j = 1; j < nb && rising; ++j)
+                        {
+                            rising = gb[j].mFloor > gb[j - 1].mFloor;
+                        }
+                        for (U32 i = 1; i < leaf.mGapCount && rising; ++i)
+                        {
+                            rising = a.mGaps[leaf.mFirstGap + i].mFloor > a.mGaps[leaf.mFirstGap + i - 1].mFloor;
+                        }
+                        U32 j0 = 0;
                         for (U32 i = 0; i < leaf.mGapCount; ++i)
                         {
                             const U32 ga = leaf.mFirstGap + i;
@@ -2137,8 +2153,16 @@ namespace sknav
                             }
                             const AirGap& gap_a = a.mGaps[ga];
                             const S32 fa = floorOf(t, gap_a), ca_top = ceilOf(t, gap_a);
-                            for (U32 j = 0; j < nb; ++j)
+                            while (rising && j0 < nb && floorOf(u, gb[j0]) < fa - mClimb)
                             {
+                                ++j0;
+                            }
+                            for (U32 j = rising ? j0 : 0; j < nb; ++j)
+                            {
+                                if (rising && floorOf(u, gb[j]) > fa + mClimb)
+                                {
+                                    break;
+                                }
                                 const U16 sb = ui.mRooms.mSeeds[first_b + j];
                                 if (!sb)
                                 {
