@@ -502,7 +502,7 @@ namespace sknav
                 n += sizeof(SeedStats) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
             }
         }
-        return n + (mMemo ? mMemo->bytes() : 0);
+        return n + (mMemo ? mMemo->bytes() : 0) + (mDraw ? mDraw->bytes() : 0);
     }
 
     struct SpacesPass::State
@@ -3925,6 +3925,9 @@ namespace sknav
                     total += ms;
                 }
                 s.mProduct->mMillis = static_cast<F32>(total);
+                // The overlay's draw, traced once with the pass and read by
+                // every gather until the next one lands.
+                s.mProduct->mDraw = buildSpacesDraw(*s.mEnc, *s.mProduct);
                 // Nothing reads the cells again.
                 s.mCells.clear();
                 s.mCells.shrink_to_fit();
@@ -4141,5 +4144,114 @@ namespace sknav
             }
         }
         return out;
+    }
+
+    size_t SpacesDraw::bytes() const
+    {
+        size_t total = sizeof(SpacesDraw) + mFills.capacity() * sizeof(Fill) + mSpaces.capacity() * sizeof(SpaceDraw);
+        for (const SpaceDraw& s : mSpaces)
+        {
+            total += s.mOutline.capacity() * sizeof(PlanEdge);
+        }
+        return total;
+    }
+
+    SpacesDrawPtr buildSpacesDraw(const EnclosureProduct& enclosure, const RoomsProduct& rooms)
+    {
+        auto draw = std::make_shared<SpacesDraw>();
+        const std::vector<U32>& ids = enclosure.mSpaceIds;
+        draw->mSpaces.resize(ids.size());
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            // A pastel per space id, the same from pass to pass, and an
+            // outline lift that differs from a neighbour's.
+            const U64 h = mix(SEED, ids[i]);
+            SpaceDraw& sd = draw->mSpaces[i];
+            sd.mColor = LLColor4(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
+                                 0.35f + 0.6f * (((h >> 16) & 255) / 255.f), 1.f);
+            sd.mLift = 0.09f + 0.01f * static_cast<F32>(h % 3);
+        }
+
+        // The space floor of every coarse cell of the mesh: which space,
+        // where its floor lies, and the cell's corner. Tiles read past their
+        // bounds to be exact at the seams, so the same cell arrives twice
+        // and is taken once; a storey's floor, half a metre away or more,
+        // is its own.
+        struct Flat
+        {
+            U64 mKey;       ///< the cell on the mesh's global coarse lattice, packed
+            U32 mSpace;     ///< the product's space index
+            F32 mX, mY;     ///< the cell's min corner, mesh-local
+            F32 mZ;         ///< its floor
+            F32 mSide;      ///< the coarse cell's side
+        };
+        std::vector<Flat> flats;
+        for (const TileEnclosure& t : enclosure.mTiles)
+        {
+            const CoarseAir& c = t.mCoarse;
+            const F64 side = c.mCells * t.mCell;
+            if (side <= 0.0)
+            {
+                continue;
+            }
+            const S32 gx0 = static_cast<S32>(std::lround(t.mOrigin.mV[VX] / side));
+            const S32 gy0 = static_cast<S32>(std::lround(t.mOrigin.mV[VY] / side));
+            for (S32 cy = 0; cy < c.mHeight; ++cy)
+            {
+                for (S32 cx = 0; cx < c.mWidth; ++cx)
+                {
+                    const S32 cell = cx + cy * c.mWidth;
+                    for (U32 i = c.mStart[cell]; i < c.mStart[cell + 1]; ++i)
+                    {
+                        const CoarseGap& g = c.mGaps[i];
+                        if (!g.mSpace || g.mSpace > ids.size())
+                        {
+                            continue;
+                        }
+                        Flat f;
+                        f.mKey = (static_cast<U64>(gx0 + cx + (1 << 20)) << 21) | static_cast<U64>(gy0 + cy + (1 << 20));
+                        f.mSpace = g.mSpace - 1;
+                        f.mX = static_cast<F32>((gx0 + cx) * side);
+                        f.mY = static_cast<F32>((gy0 + cy) * side);
+                        f.mZ = static_cast<F32>(t.mOrigin.mV[VZ] + g.mFloor * t.mUnit);
+                        f.mSide = static_cast<F32>(side);
+                        flats.push_back(f);
+                    }
+                }
+            }
+        }
+        std::sort(flats.begin(), flats.end(), [](const Flat& a, const Flat& b)
+                  {
+                      return a.mKey != b.mKey ? a.mKey < b.mKey : (a.mSpace != b.mSpace ? a.mSpace < b.mSpace : a.mZ < b.mZ);
+                  });
+        flats.erase(std::unique(flats.begin(), flats.end(), [](const Flat& a, const Flat& b)
+                    { return a.mKey == b.mKey && a.mSpace == b.mSpace && std::fabs(a.mZ - b.mZ) < 0.5f; }), flats.end());
+
+        draw->mFills.reserve(flats.size());
+        std::vector<std::vector<PlanCell>> plans(ids.size());
+        std::vector<F32> sides(ids.size(), 0.f);
+        for (const Flat& f : flats)
+        {
+            draw->mFills.push_back({ f.mX, f.mY, f.mZ, f.mSide, f.mSpace });
+            std::vector<PlanCell>& cells = plans[f.mSpace];
+            if (cells.empty() || cells.back().mX != f.mX || cells.back().mY != f.mY)
+            {
+                // The sort put a column's floors together; the plan wants the
+                // column once, at its lowest floor.
+                cells.push_back({ f.mX, f.mY, f.mZ });
+            }
+            if (sides[f.mSpace] <= 0.f)
+            {
+                sides[f.mSpace] = f.mSide;
+            }
+        }
+        for (size_t i = 0; i < plans.size(); ++i)
+        {
+            if (!plans[i].empty())
+            {
+                draw->mSpaces[i].mOutline = tracePlan(plans[i], sides[i]);
+            }
+        }
+        return draw;
     }
 }

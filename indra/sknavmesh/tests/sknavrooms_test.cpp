@@ -1187,4 +1187,42 @@ template<> template<>
         ensure("the slope steps at each floor", has(6.f, 6.f, 7.f, 6.f, 3.2f));
         ensure("the pinch's second cell stands alone", has(11.f, 11.f, 12.f, 11.f, 3.f));
     }
+
+    template<> template<>
+    void sknavrooms_object::test<32>()
+    {
+        set_test_name("the spaces pass leaves the overlay's draw with the product");
+        // The L-shaped room of test 1.
+        Scene s;
+        s.wall(2.f, 2.f, 14.f, 2.25f);
+        s.wall(2.f, 25.75f, 6.f, 26.f);
+        s.wall(2.f, 2.f, 2.25f, 4.f);
+        s.wall(2.f, 5.f, 2.25f, 26.f);
+        s.box(2.f, 4.f, 2.25f, 5.f, 2.2f, 3.f, false);
+        s.wall(13.75f, 2.f, 14.f, 8.f);
+        s.wall(6.f, 7.75f, 14.f, 8.f);
+        s.wall(5.75f, 8.f, 6.f, 26.f);
+        s.box(2.f, 2.f, 14.f, 8.f, 3.f, 3.25f);
+        s.box(2.f, 8.f, 6.f, 26.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        const SpacesDrawPtr draw = r.mRooms->mDraw;
+        ensure("the draw came with the pass", draw != nullptr);
+        ensure_equals("a draw entry per space", draw->mSpaces.size(), r.mEnc->mSpaceIds.size());
+        ensure("the room fills", !draw->mFills.empty());
+        bool outlined = false;
+        for (const SpaceDraw& sd : draw->mSpaces)
+        {
+            outlined = outlined || !sd.mOutline.empty();
+            ensure("full strength until a gather draws it", std::fabs(sd.mColor.mV[VALPHA] - 1.f) < 1e-4f);
+        }
+        ensure("the room's outline traced", outlined);
+        F32 area = 0.f;
+        for (const SpacesDraw::Fill& f : draw->mFills)
+        {
+            ensure("the fill names a space", f.mSpace < draw->mSpaces.size());
+            ensure("the fill sits at a floor", f.mZ > -10.f && f.mZ < 30.f);
+            area += f.mSide * f.mSide;
+        }
+        ensure("the fills cover the room's floor", area > 60.f);
+    }
 }

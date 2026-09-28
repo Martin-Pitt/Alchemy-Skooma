@@ -30,6 +30,7 @@
 #include "sknavflights.h"
 
 #include "v2math.h"
+#include "v4color.h"
 
 #include <functional>
 #include <memory>
@@ -153,6 +154,40 @@ namespace sknav
     /// pinches and the loops part there.
     std::vector<PlanEdge> tracePlan(const std::vector<PlanCell>& cells, F32 cell);
 
+    /// One space's draw: its pastel, the phase its outline lifts by, and the
+    /// outline itself, mesh-local metres.
+    struct SpaceDraw
+    {
+        LLColor4 mColor;            ///< alpha 1; what draws it sets its own
+        F32 mLift = 0.f;            ///< the outline's lift above a fill
+        std::vector<PlanEdge> mOutline;
+    };
+
+    /// What the spaces overlay draws, built once per spaces pass and
+    /// immutable with the product it rides on: a fill per coarse cell and
+    /// floor, and each space's traced outline, all mesh-local. The gathers
+    /// cull and emit it as the camera asks, and trace nothing themselves.
+    struct SpacesDraw
+    {
+        struct Fill
+        {
+            F32 mX = 0.f, mY = 0.f;     ///< the cell's min corner
+            F32 mZ = 0.f;               ///< its floor
+            F32 mSide = 0.f;            ///< the coarse cell's side
+            U32 mSpace = 0;             ///< into mSpaces
+        };
+        std::vector<Fill> mFills;
+        std::vector<SpaceDraw> mSpaces;     ///< with the product's spaces, and mSpaceIds
+        size_t bytes() const;
+    };
+    typedef std::shared_ptr<const SpacesDraw> SpacesDrawPtr;
+
+    /// The overlay's draw for a mesh's spaces, from its products: the fills
+    /// the tiles' coarse gaps hold, deduplicated across the tiles' border
+    /// overlap, and each space's outline traced once.
+    struct RoomsProduct;
+    SpacesDrawPtr buildSpacesDraw(const EnclosureProduct& enclosure, const RoomsProduct& rooms);
+
     /// A tile's seeds, kept for the next pass: a tile whose air did not move
     /// keeps them rather than cutting them again.
     struct SeedStats
@@ -201,6 +236,7 @@ namespace sknav
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
         U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        SpacesDrawPtr mDraw;                ///< what the overlay draws, built once with the pass
         std::shared_ptr<const MergeMemo> mMemo;
 
         /// The space with this id, or null.
