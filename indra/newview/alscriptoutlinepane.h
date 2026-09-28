@@ -71,10 +71,13 @@ public:
 
     // The tab's outline listed, where it is the tab in front: made again
     // only where what the rows say changed, and then with its scroll kept.
+    // Out of sight, only the window told; listed once it is seen (pump).
     void show(Doc& doc);
     // The innermost symbol the caret is in chosen, of the tab in front;
-    // the nearest one shown that holds it where it is folded away.
+    // the nearest one shown that holds it where it is folded away. Out of
+    // sight, once it is seen.
     void followCaret(Doc& doc);
+    void pump();
     // A symbol's fold turned, or opened or shut; left on one with nothing
     // to fold, to what holds it, which is gone to as a row walked to is.
     void fold(size_t index, std::optional<bool> folded = std::nullopt);
@@ -98,11 +101,14 @@ private:
     ALPaneList*              mList     = nullptr;
     LLFilterEditor*          mFilter   = nullptr;
     LLComboBox*              mSort     = nullptr;
-    // What the rows last said, and whose they were: a check that changes
-    // none of it leaves the list as it is.
-    std::vector<std::string> mSaid;
     // Each entry's key -- the names down to it -- and whether it holds
     // others, as the rows were last made.
     std::vector<std::string> mKeys;
     std::vector<bool>        mParents;
+    // Shown or followed out of sight: the tab in front's listed once it is
+    // seen.
+    bool                     mUnseen = false;
+    // Whether the caret was followed while the outline was shown, by way of
+    // the bar at the bottom, which is told first.
+    bool                     mFollowed = false;
 };
