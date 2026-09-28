@@ -1,0 +1,616 @@
+/**
+ * @file altextengine_bench.cpp
+ * @brief The text engine over big scripts: loading, highlighting, an edit at
+ *        the top, finding, folding and wrapping.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Rye <rye@alchemyviewer.org>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+// What the script studio's editor costs over a script of 50,000 lines, LSL
+// and SLua side by side: the code editor as the studio makes it, over the
+// source tree's fonts with no window behind it. A number is milliseconds
+// per operation: the median of five samples, each as many passes as fit in
+// fifty milliseconds (and at least one). Where an operation leaves the text
+// changed, the pass puts it back, and the number is per edit.
+//
+// The output is a table, not a verdict; a number is read against the same
+// row from another build, on the same quiet machine. Every change to the
+// edit pipeline, the highlighter, the layout, the folds or find is measured
+// here before and after. An unoptimised build exits 125, which CTest reads
+// as skipped, since its numbers would say nothing.
+
+#include "linden_common.h"
+
+#include "../alcodeeditor.h"
+#include "../alfindbar.h"
+#include "../alfoldmodel.h"
+#include "../aloutputview.h"
+#include "../alquickopen.h"
+#include "../altextsearch.h"
+#include "../alvimkeymap.h"
+
+#include "alheadlessui_fixture.h"
+#include "albigscript.h"
+
+#include "../llfocusmgr.h"
+#include "../lluictrlfactory.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <string>
+
+class LLAvatarName;
+const std::string gBenchAnonName("Anon");
+const std::string& rlvGetAnonym(const LLAvatarName& av_name)
+{
+    return gBenchAnonName;
+}
+
+// Only an optimised build measures, and only it has a use for these: an
+// unoptimised one would say they are unused.
+#if defined(LL_RELEASE)
+namespace
+{
+    using clock = std::chrono::steady_clock;
+
+    constexpr int LINES = 50000;
+
+    // Everything a row finds feeds this, so nothing is found for nothing.
+    volatile size_t g_sink = 0;
+
+    // Milliseconds per item: `pass` does `count` of them.
+    double ms_per_item(size_t count, const std::function<void()>& pass)
+    {
+        pass();
+        double samples[5];
+        for (double& sample : samples)
+        {
+            size_t          passes = 0;
+            const auto      start  = clock::now();
+            clock::duration elapsed{};
+            do
+            {
+                pass();
+                ++passes;
+                elapsed = clock::now() - start;
+            } while (elapsed < std::chrono::milliseconds(50));
+            sample = std::chrono::duration<double, std::milli>(elapsed).count() / (double(passes) * double(count));
+        }
+        std::sort(samples, samples + 5);
+        return samples[2];
+    }
+
+    // One language's editor, over its big script.
+    struct Subject
+    {
+        const char*   name;
+        const char*   syntax;
+        std::string   text;
+        ALCodeEditor* editor = nullptr;
+        // What opens a block comment at the top of the text, and what it
+        // opens, closed again.
+        const char*   opener;
+    };
+
+    ALCodeEditor* makeEditor(const Subject& s)
+    {
+        ALCodeEditor::Params p(LLUICtrlFactory::getDefaultParams<ALCodeEditor>());
+        p.name         = s.name;
+        p.rect         = LLRect(0, 800, 1000, 0);
+        p.default_text = "";
+        p.syntax       = s.syntax;
+        ALCodeEditor* editor = LLUICtrlFactory::create<ALCodeEditor>(p);
+        editor->setFont(LLFontGL::getFontMonospace());
+        editor->setText(s.text);
+        return editor;
+    }
+
+    S32 lastLine(ALCodeEditor& e) { return e.document().lineCount() - 1; }
+
+    // A character typed at the top of the text and taken away again, both
+    // through the undo journal as a person's edits go.
+    void editAtTop(ALCodeEditor& e, std::string_view what)
+    {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText(what);
+        e.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, static_cast<S32>(what.size()))));
+    }
+
+    // Keys typed as vim sees them: the key, then its character where the
+    // key was not taken; an escape character is Escape.
+    void typeKeys(ALCodeEditor& e, const char* keys)
+    {
+        for (const char* c = keys; *c; ++c)
+        {
+            if (*c == '\x1b')
+            {
+                e.handleKeyHere(KEY_ESCAPE, MASK_NONE);
+            }
+            else if (!e.handleKeyHere(static_cast<KEY>(toupper(static_cast<unsigned char>(*c))), MASK_NONE))
+            {
+                e.handleUnicodeCharHere(static_cast<llwchar>(static_cast<unsigned char>(*c)));
+            }
+        }
+    }
+
+    void row(const char* name, double lsl, double slua, const char* note = "")
+    {
+        std::printf("  %-52s %10.3f %10.3f  %s\n", name, lsl, slua, note);
+    }
+
+    // A row with one number, not one for each language.
+    void rowOne(const char* name, double ms)
+    {
+        std::printf("  %-52s %10.3f\n", name, ms);
+    }
+
+    void countRow(const char* name, size_t lsl, size_t slua)
+    {
+        std::printf("  %-52s %10zu %10zu\n", name, lsl, slua);
+    }
+
+    template <class F>
+    void both(const char* name, Subject (&subjects)[2], size_t count, F&& op)
+    {
+        double ms[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            ALCodeEditor& e = *subjects[i].editor;
+            ms[i]           = ms_per_item(count, [&] { op(subjects[i], e); });
+        }
+        row(name, ms[0], ms[1]);
+    }
+}
+#endif // LL_RELEASE
+
+int main(int, char**)
+{
+#if !defined(LL_RELEASE)
+    std::printf("Skipped: an unoptimised build has no numbers worth reading\n");
+    return 125;
+#else
+    ll_test::HeadlessUI& ui = ll_test::HeadlessUI::get();
+    if (!ui.ok())
+    {
+        std::printf("Skipped: no UI, since LLUI_TEST_APP_DIR does not point at the source tree\n");
+        return 125;
+    }
+
+    Subject subjects[2] = {
+        { "lsl", "lsl", ll_test::bigLSL(LINES), nullptr, "/*" },
+        { "slua", "slua", ll_test::bigSLua(LINES), nullptr, "--[[" },
+    };
+    for (Subject& s : subjects)
+    {
+        s.editor = makeEditor(s);
+    }
+
+    std::printf("altextengine_bench: the code editor over generated scripts (ms per operation)\n");
+    std::printf("\n  %-52s %10s %10s\n", "", "LSL", "SLua");
+    countRow("lines", subjects[0].editor->document().lineCount(), subjects[1].editor->document().lineCount());
+    countRow("bytes", subjects[0].text.size(), subjects[1].text.size());
+
+    std::printf("\nLoading and highlighting\n");
+    both("load: setText", subjects, 1, [](Subject& s, ALCodeEditor& e) { e.setText(s.text); });
+    both("full highlight: every line lexed", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        e.highlighter().wordsChanged();
+        g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+    });
+
+    std::printf("\nAn edit at the top (typed and taken away, through the journal)\n");
+    for (Subject& s : subjects)
+    {
+        s.editor->highlighter().tokens(lastLine(*s.editor));
+    }
+    both("the edit alone, per edit", subjects, 2, [](Subject&, ALCodeEditor& e) { editAtTop(e, "x"); });
+    size_t relexed[2] = {};
+    both("the edit, then the highlight to the end, per edit", subjects, 2, [&](Subject& s, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText("x");
+        g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+        relexed[&s - subjects] = e.highlighter().lastLexed();
+        e.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)));
+        g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+    });
+    countRow("  lines relexed after it (where relexing stops)", relexed[0], relexed[1]);
+    both("a block comment opened at the top, then closed", subjects, 2, [&](Subject& s, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText(s.opener);
+        g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+        relexed[&s - subjects] = e.highlighter().lastLexed();
+        e.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, static_cast<S32>(strlen(s.opener)))));
+        g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+    });
+    countRow("  lines relexed (the first comment's end stops it)", relexed[0], relexed[1]);
+
+    // Only the undo timed: a hundred characters typed at the top as a run,
+    // then taken back in one step.
+    {
+        double ms[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            ALCodeEditor& e = *subjects[i].editor;
+            double        samples[5];
+            for (double& sample : samples)
+            {
+                e.setCaret(ALTextPos(0, 0));
+                for (int c = 0; c < 100; ++c)
+                {
+                    e.handleUnicodeCharHere(static_cast<llwchar>('a' + c % 26));
+                }
+                const auto start = clock::now();
+                e.undo();
+                sample = std::chrono::duration<double, std::milli>(clock::now() - start).count();
+            }
+            std::sort(samples, samples + 5);
+            ms[i] = samples[2];
+        }
+        row("undo of a 100-character typing run", ms[0], ms[1]);
+    }
+
+    // Completion as a word is typed at the end of the script, the list
+    // open: each key narrows it, over the grammar's words, the language's
+    // and the script's own.
+    std::printf("\nCompletion\n");
+    for (Subject& s : subjects)
+    {
+        s.editor->setCaret(s.editor->document().end());
+        s.editor->insertText("\n");
+    }
+    size_t offered[2] = {};
+    both("a word typed and taken back, the list open, per key", subjects, 8, [&](Subject& s, ALCodeEditor& e) {
+        for (const char c : std::string("tota"))
+        {
+            e.handleUnicodeCharHere(static_cast<llwchar>(c));
+        }
+        offered[&s - subjects] = e.completions().size();
+        for (int i = 0; i < 4; ++i)
+        {
+            e.handleKeyHere(KEY_BACKSPACE, MASK_NONE);
+        }
+    });
+    countRow("  offered at four letters", offered[0], offered[1]);
+    for (Subject& s : subjects)
+    {
+        ALCodeEditor& e = *s.editor;
+        e.closeCompletion();
+        e.deleteRange(ALTextRange(e.document().lineEnd(lastLine(e) - 1), e.document().end()));
+    }
+
+    std::printf("\nFinding\n");
+    size_t found[2] = {};
+    both("regex find-all: every call, \\w+\\s*\\(", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        ALTextSearchOptions options;
+        options.regex         = true;
+        options.caseSensitive = true;
+        found[&s - subjects]  = ALTextSearch::matches(e.document(), "\\w+\\s*\\(", options).size();
+        g_sink                = g_sink + found[&s - subjects];
+    });
+    countRow("  matches", found[0], found[1]);
+    both("plain find-all: total", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        ALTextSearchOptions options;
+        found[&s - subjects] = ALTextSearch::matches(e.document(), "total", options).size();
+        g_sink               = g_sink + found[&s - subjects];
+    });
+    countRow("  matches", found[0], found[1]);
+
+    size_t replaced[2] = {};
+    both("Replace All: total for count, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        if (!e.findShown())
+        {
+            e.showFind(true);
+            e.findBar()->setQuery("total");
+            e.findBar()->setReplacement("count");
+        }
+        replaced[&s - subjects] = e.replaceAllMatches();
+        e.undo();
+    });
+    countRow("  replaced", replaced[0], replaced[1]);
+    both("Replace All: (\\w+)\\s*\\( for $1 (, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        e.findBar()->setQuery("(\\w+)\\s*\\(");
+        e.findBar()->setReplacement("$1 (");
+        e.findBar()->findChild<LLUICtrl>("regex")->handleMouseDown(0, 0, MASK_NONE);
+        replaced[&s - subjects] = e.replaceAllMatches();
+        e.findBar()->findChild<LLUICtrl>("regex")->handleMouseDown(0, 0, MASK_NONE);
+        e.undo();
+    });
+    countRow("  replaced", replaced[0], replaced[1]);
+    for (Subject& s : subjects)
+    {
+        s.editor->findBar()->setQuery("total");
+    }
+    // A word typed into the bar a key at a time, the bar open over the text.
+    both("a query typed into the find bar, per key", subjects, 5, [&](Subject&, ALCodeEditor& e) {
+        for (const char* typed : { "t", "to", "tot", "tota", "total" })
+        {
+            e.findBar()->setQuery(typed);
+        }
+    });
+    for (Subject& s : subjects)
+    {
+        g_sink = g_sink + s.editor->findMatches().size();
+    }
+
+    // What lies over the text slides with each edit: every match found,
+    // a squiggle on every other line.
+    std::printf("\nLayers over the text\n");
+    size_t lit[2] = {};
+    for (Subject& s : subjects)
+    {
+        lit[&s - subjects] = s.editor->findMatches().size();
+    }
+    both("an edit at the top, every match of \"total\" lit", subjects, 2, [](Subject&, ALCodeEditor& e) { editAtTop(e, "x"); });
+    countRow("  matches lit", lit[0], lit[1]);
+    for (Subject& s : subjects)
+    {
+        s.editor->hideFind();
+        std::vector<ALCodeEditor::Decoration> squiggles;
+        for (S32 line = 0; line < s.editor->document().lineCount(); line += 2)
+        {
+            ALCodeEditor::Decoration d;
+            d.range = ALTextRange(ALTextPos(line, 0), ALTextPos(line, llmin(4, s.editor->document().lineLength(line))));
+            squiggles.push_back(d);
+        }
+        s.editor->setDecorations(std::move(squiggles));
+    }
+    both("an edit at the top, a squiggle on every other line", subjects, 2, [](Subject&, ALCodeEditor& e) { editAtTop(e, "x"); });
+    for (Subject& s : subjects)
+    {
+        s.editor->setDecorations({});
+    }
+
+    std::printf("\nEvery line at once\n");
+    both("Select All and Tab, then undone", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        e.perform(ALEditorCommand::SelectAll);
+        e.handleKeyHere(KEY_TAB, MASK_NONE);
+        e.undo();
+    });
+
+    // What the crash journal writes as typing goes on: a history of
+    // 3,000 steps, a character typed at the top before each write. As LLSD
+    // built step by step, as it was, and as notation from what each step
+    // was written as the last time.
+    std::printf("\nThe history written against a crash (3,000 steps)\n");
+    for (Subject& s : subjects)
+    {
+        ALCodeEditor& e = *s.editor;
+        e.undoJournal().clear();
+        for (S32 i = 0; i < 3000; ++i)
+        {
+            // Each at a line of its own: a step of its own.
+            e.setCaret(ALTextPos(i * 7 % lastLine(e), 0));
+            e.insertText("x");
+        }
+    }
+    size_t written[2] = {};
+    both("as LLSD, every step built", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText("y");
+        const LLSD history      = e.undoJournal().asLLSD();
+        written[&s - subjects] = history["undo"].size();
+        g_sink                 = g_sink + written[&s - subjects];
+    });
+    both("as notation, from each step's last", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText("y");
+        g_sink = g_sink + e.undoJournal().asNotation().size();
+    });
+    countRow("  steps written", written[0], written[1]);
+    for (Subject& s : subjects)
+    {
+        s.editor->undoJournal().clear();
+    }
+
+    // A bracket left open at the top: its partner looked for as the caret
+    // rests beside it, and the depth the rainbow and the indent read at the
+    // end, each after a character typed and taken away below it.
+    std::printf("\nBrackets (an opener at the top, unmatched)\n");
+    for (Subject& s : subjects)
+    {
+        s.editor->setCaret(ALTextPos(0, 0));
+        s.editor->insertText("(");
+    }
+    both("its partner looked for, per look", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        ALTextPos out;
+        g_sink = g_sink + e.matchBracketAt(ALTextPos(0, 0), out);
+    });
+    both("an edit on the next line, then looked for again", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(1, 0));
+        e.insertText("x");
+        e.deleteRange(ALTextRange(ALTextPos(1, 0), ALTextPos(1, 1)));
+        ALTextPos out;
+        g_sink = g_sink + e.matchBracketAt(ALTextPos(0, 0), out);
+    });
+    both("an edit at the top, then the depth at the end", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 1));
+        e.insertText("x");
+        e.deleteRange(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 2)));
+        g_sink = g_sink + e.bracketDepthAt(e.document().end());
+    });
+    for (Subject& s : subjects)
+    {
+        s.editor->deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)));
+        s.editor->undoJournal().clear();
+    }
+
+    std::printf("\nFolding\n");
+    size_t regions[2] = {};
+    both("fold regions rebuilt", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        ALFoldModel model;
+        regions[&s - subjects] = model.regions(e.document(), e.getTabWidth()).size();
+        g_sink                 = g_sink + regions[&s - subjects];
+    });
+    countRow("  regions", regions[0], regions[1]);
+    both("an edit at the top, then the editor's fold regions", subjects, 1, [&](Subject&, ALCodeEditor& e) {
+        editAtTop(e, "x");
+        g_sink = g_sink + e.foldRegions().size();
+    });
+
+    std::printf("\nLaying out every line\n");
+    const S32 tab   = subjects[0].editor->layout().tabWidth();
+    S32       width = 600;
+    both("unwrapped", subjects, 1, [&](Subject&, ALCodeEditor& e) {
+        ALTextLayout& layout = e.layout();
+        // A tab width either way, so that every pass lays out afresh.
+        layout.setTabWidth(layout.tabWidth() == tab ? tab + 1 : tab);
+        for (S32 line = 0; line < layout.lineCount(); ++line)
+        {
+            g_sink = g_sink + layout.rowCount(line);
+        }
+        g_sink = g_sink + layout.totalHeight();
+    });
+    for (Subject& s : subjects)
+    {
+        s.editor->layout().setTabWidth(tab);
+    }
+    both("wrapped at 600 px", subjects, 1, [&](Subject&, ALCodeEditor& e) {
+        ALTextLayout& layout = e.layout();
+        // One pixel either way, so that every pass lays out afresh.
+        width = width == 600 ? 601 : 600;
+        layout.setWrapWidth(width);
+        for (S32 line = 0; line < layout.lineCount(); ++line)
+        {
+            g_sink = g_sink + layout.rowCount(line);
+        }
+        g_sink = g_sink + layout.totalHeight();
+    });
+
+    // Vim's commands over the lines a :g picks, each line's change one
+    // edit or all of them one; and text typed again by `.`.
+    std::printf("\nVim over every line\n");
+    ALVimKeymap* vims[2] = {};
+    for (Subject& s : subjects)
+    {
+        auto keymap         = std::make_unique<ALVimKeymap>();
+        vims[&s - subjects] = keymap.get();
+        s.editor->setModalKeymap(std::move(keymap));
+    }
+    both(":g/total/s//count/, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "g/total/s//count/", true);
+        e.undo();
+    });
+    both(":%s/\\(\\w\\+\\)\\s*(/\\1 (/g, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "%s/\\(\\w\\+\\)\\s*(/\\1 (/g", true);
+        e.undo();
+    });
+    both(":g/total/>, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "g/total/>", true);
+        e.undo();
+    });
+    both(":g/total/d, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "g/total/d", true);
+        e.undo();
+    });
+    for (Subject& s : subjects)
+    {
+        s.editor->setCaret(ALTextPos(0, 0));
+        typeKeys(*s.editor, "Athe quick brown fox jumps over the lazy dog, the quick brown fox jumps over the lazy dog, and again.\x1b");
+    }
+    both("`.`: a 100-character insert typed again, then undone", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        typeKeys(e, ".");
+        e.undo();
+    });
+
+    for (Subject& s : subjects)
+    {
+        s.editor->die();
+    }
+
+    // The Output pane's log, full: four lanes of 500 entries, every other
+    // one an error and every fourth with a URL in it.
+    std::printf("\nThe Output log (2,000 entries)\n");
+    {
+        ALOutputView::Params p(LLUICtrlFactory::getDefaultParams<ALOutputView>());
+        p.name              = "output";
+        p.rect              = LLRect(0, 800, 1000, 0);
+        p.capacity          = 500;
+        ALOutputView* log   = LLUICtrlFactory::create<ALOutputView>(p);
+        log->setFont(LLFontGL::getFontMonospace());
+        S32        serial   = 0;
+        const auto next_one = [&serial]() {
+            ALOutputView::Entry entry;
+            entry.time   = "12:00:00";
+            entry.source = "Object";
+            entry.kind   = serial % 2 ? "error" : "";
+            entry.lane   = static_cast<U8>(serial % 4);
+            entry.text   = serial % 4 == 0 ? llformat("message %d, see http://example.com/page/%d", serial, serial)
+                                           : llformat("message %d: the quick brown fox jumps over the lazy dog", serial);
+            ++serial;
+            return entry;
+        };
+        for (S32 i = 0; i < 2000; ++i)
+        {
+            log->append(next_one());
+        }
+        rowOne("a filter typed: the errors alone, then all again", ms_per_item(1, [&] {
+                   log->setFilter([](const ALOutputView::Entry& entry) { return entry.kind == "error"; });
+                   log->setFilter(nullptr);
+                   g_sink = g_sink + log->document().lineCount();
+               }));
+        rowOne("an entry past the fill, the oldest let go of", ms_per_item(100, [&] {
+                   for (S32 i = 0; i < 100; ++i)
+                   {
+                       log->append(next_one());
+                   }
+                   g_sink = g_sink + log->document().lineCount();
+               }));
+        log->die();
+    }
+    // Quick Open over the names of a big project, a query typed a letter
+    // at a time and taken back.
+    std::printf("\nQuick Open (2,000 candidates)\n");
+    {
+        ALQuickOpen::Params p(LLUICtrlFactory::getDefaultParams<ALQuickOpen>());
+        p.name              = "quick";
+        p.rect              = LLRect(0, 400, 500, 0);
+        ALQuickOpen* quick  = LLUICtrlFactory::create<ALQuickOpen>(p);
+        std::vector<ALQuickOpen::Candidate> names;
+        for (S32 i = 0; i < 2000; ++i)
+        {
+            ALQuickOpen::Candidate one;
+            one.label  = llformat("%s_%s_%d.xml", i % 3 ? "floater" : "panel", i % 5 ? "script_studio" : "preferences", i);
+            one.detail = "skins/default/xui/en";
+            one.also   = llformat("Script Studio %d", i);
+            one.value  = one.label;
+            names.push_back(std::move(one));
+        }
+        quick->setCandidates(std::move(names));
+        rowOne("a query typed and taken back, per key", ms_per_item(10, [&] {
+                   const std::string query = "flscst";
+                   for (size_t n = 1; n <= query.size(); ++n)
+                   {
+                       quick->setQuery(query.substr(0, n));
+                   }
+                   for (size_t n = query.size() - 1; n > 0; --n)
+                   {
+                       quick->setQuery(query.substr(0, n));
+                   }
+                   quick->setQuery(std::string());
+                   g_sink = g_sink + quick->listed().size();
+               }));
+        quick->die();
+    }
+    std::printf("\n(checksum %zu)\n", static_cast<size_t>(g_sink));
+    return 0;
+#endif
+}
