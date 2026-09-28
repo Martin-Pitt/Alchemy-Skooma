@@ -29,6 +29,7 @@
 #include "../sknavprobes.h"
 
 #include <cmath>
+#include <iostream>
 #include <map>
 
 namespace
@@ -211,5 +212,97 @@ namespace tut
         {
             ensure("capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
         }
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<7>()
+    {
+        set_test_name("new spheres match the nearest held one, each at most once");
+        const std::vector<LLVector3> held = { LLVector3(0.f, 0.f, 1.f), LLVector3(10.f, 0.f, 1.f) };
+        const std::vector<LLVector3> origins = { LLVector3(10.5f, 0.f, 1.f), LLVector3(0.3f, 0.f, 1.f), LLVector3(0.f, 1.f, 1.f), LLVector3(40.f, 0.f, 1.f) };
+        const std::vector<S32> m = matchNearest(held, origins, 4.f);
+        ensure_equals("renumbered first", m[0], 1);
+        ensure_equals("renumbered second", m[1], 0);
+        ensure_equals("a held one is used once", m[2], -1);
+        ensure_equals("too far is new", m[3], -1);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<8>()
+    {
+        set_test_name("a held sphere keeps its place in the budget against a slightly nearer one");
+        std::vector<ProbeSlot> slots(2);
+        slots[0].mKey = 0;
+        slots[0].mDistance = 20.f;
+        slots[0].mHeld = true;
+        slots[1].mKey = 1;
+        slots[1].mDistance = 15.f;
+        keepBudget(slots, 1, 8.f);
+        ensure_equals("held kept", slots[0].mKey, 0ull);
+        slots.resize(2);
+        slots[0].mKey = 0;
+        slots[0].mDistance = 30.f;
+        slots[0].mHeld = true;
+        slots[1].mKey = 1;
+        slots[1].mDistance = 15.f;
+        slots[1].mHeld = false;
+        keepBudget(slots, 1, 8.f);
+        ensure_equals("a much nearer one wins", slots[0].mKey, 1ull);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<9>()
+    {
+        set_test_name("tile rebuilds that renumber parts move few probes");
+        // A hall with an alcove, and a second alcove larger than the first coming and going,
+        // which renumbers the parts; then ragged cells at the edges.
+        std::vector<Room> steps(5);
+        steps[0].box(0.f, 0.f, 10.f, 10.f).box(10.f, 0.f, 16.f, 2.f);
+        steps[1].box(0.f, 0.f, 10.f, 10.f).box(10.f, 0.f, 16.f, 2.f).box(0.f, 10.f, 3.f, 15.f);
+        steps[2].box(0.f, 0.f, 10.f, 10.f).box(10.f, 0.f, 16.f, 2.f);
+        steps[3].box(0.f, 0.f, 10.f, 10.f).box(10.f, 0.f, 16.f, 2.f).box(10.f, 5.f, 10.5f, 6.f);
+        steps[4].box(0.f, 0.f, 10.f, 10.f).box(10.f, 0.f, 16.f, 2.f).box(0.f, 10.f, 3.f, 15.f);
+        const ProbeParams params;
+
+        // Each strategy: count spheres created or moved past the thresholds.
+        auto run = [&](bool nearest)
+        {
+            std::vector<ProbePart> held = spaceProbes(steps[0].space(), params);
+            U32 churn = 0;
+            for (size_t i = 1; i < steps.size(); ++i)
+            {
+                const std::vector<ProbePart> parts = spaceProbes(steps[i].space(), params);
+                std::vector<LLVector3> ho, po;
+                for (const ProbePart& p : held)
+                {
+                    ho.push_back(p.mOrigin);
+                }
+                for (const ProbePart& p : parts)
+                {
+                    po.push_back(p.mOrigin);
+                }
+                const std::vector<S32> m = matchNearest(ho, po, params.mMatchM);
+                std::vector<ProbePart> next;
+                for (size_t k = 0; k < parts.size(); ++k)
+                {
+                    const S32 h = nearest ? m[k] : (k < held.size() ? static_cast<S32>(k) : -1);
+                    if (h < 0 || shouldReplace(held[h].mOrigin, held[h].mRadius, parts[k].mOrigin, parts[k].mRadius, params))
+                    {
+                        ++churn;
+                        next.push_back(parts[k]);
+                    }
+                    else
+                    {
+                        next.push_back(held[h]);
+                    }
+                }
+                held = next;
+            }
+            return churn;
+        };
+        const U32 by_key = run(false), by_nearest = run(true);
+        std::cerr << "rebuild sequence: " << by_key << " regenerations by part index, " << by_nearest << " by nearest origin" << std::endl;
+        ensure("nearest never churns more", by_nearest <= by_key);
+        ensure("and churns less here", by_nearest < by_key);
     }
 }

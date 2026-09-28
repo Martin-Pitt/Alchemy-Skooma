@@ -481,13 +481,15 @@ namespace sknav
         return r < params.mMinRadiusM ? 0.f : r;
     }
 
-    void keepBudget(std::vector<ProbeSlot>& slots, U32 cap)
+    void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m)
     {
-        std::stable_sort(slots.begin(), slots.end(), [](const ProbeSlot& a, const ProbeSlot& b)
+        auto rank = [hold_m](const ProbeSlot& s) { return s.mHeld ? s.mDistance - hold_m : s.mDistance; };
+        std::stable_sort(slots.begin(), slots.end(), [&rank](const ProbeSlot& a, const ProbeSlot& b)
                          {
-                             if (a.mDistance != b.mDistance)
+                             const F32 ra = rank(a), rb = rank(b);
+                             if (ra != rb)
                              {
-                                 return a.mDistance < b.mDistance;
+                                 return ra < rb;
                              }
                              return a.mArea > b.mArea;
                          });
@@ -495,6 +497,40 @@ namespace sknav
         {
             slots.resize(cap);
         }
+    }
+
+    std::vector<S32> matchNearest(const std::vector<LLVector3>& held, const std::vector<LLVector3>& origins, F32 tolerance)
+    {
+        struct Pair
+        {
+            F32 mD;
+            S32 mHeld;
+            S32 mOrigin;
+        };
+        std::vector<Pair> pairs;
+        for (size_t o = 0; o < origins.size(); ++o)
+        {
+            for (size_t h = 0; h < held.size(); ++h)
+            {
+                const F32 d = dist_vec(held[h], origins[o]);
+                if (d <= tolerance)
+                {
+                    pairs.push_back({ d, static_cast<S32>(h), static_cast<S32>(o) });
+                }
+            }
+        }
+        std::stable_sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.mD < b.mD; });
+        std::vector<S32> out(origins.size(), -1);
+        std::vector<U8> used(held.size(), 0);
+        for (const Pair& p : pairs)
+        {
+            if (out[p.mOrigin] < 0 && !used[p.mHeld])
+            {
+                out[p.mOrigin] = p.mHeld;
+                used[p.mHeld] = 1;
+            }
+        }
+        return out;
     }
 
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params)

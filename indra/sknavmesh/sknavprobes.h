@@ -44,6 +44,8 @@ namespace sknav
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
+        F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
+        F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
     };
 
     /// A space's floor seen from above: per cell, its floor height, NaN
@@ -91,6 +93,7 @@ namespace sknav
         F32 mRadius = 0.f;
         F32 mArea = 0.f;
         F32 mDistance = 0.f;        ///< from the camera to the sphere's surface
+        bool mHeld = false;         ///< a probe stands for it already
     };
 
     /// The plan of a space from its raster, the lowest floor per column.
@@ -114,8 +117,14 @@ namespace sknav
     /// probe's influence; zero when that leaves it under the minimum.
     F32 clearRadius(const LLVector3& origin, F32 radius, const std::vector<ProbeInfluence>& placed, const ProbeParams& params);
 
-    /// Keep at most cap slots, dropping the far and small first.
-    void keepBudget(std::vector<ProbeSlot>& slots, U32 cap);
+    /// Keep at most cap slots, dropping the far and small first; held ones
+    /// rank hold_m nearer, so the kept set does not flicker at the edge.
+    void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m = 0.f);
+
+    /// Pair each new origin with the nearest held one within tolerance, the
+    /// closest pairs first and each held one at most once: per origin, the
+    /// held index or -1. Parts renumbered by a rebuild keep their probes.
+    std::vector<S32> matchNearest(const std::vector<LLVector3>& held, const std::vector<LLVector3>& origins, F32 tolerance);
 
     /// Whether a held probe should move to a newly placed sphere.
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params);
