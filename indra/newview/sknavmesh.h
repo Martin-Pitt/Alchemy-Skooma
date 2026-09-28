@@ -52,6 +52,8 @@ class SKNavWorldView;
 /// lattice; tile indices are relative to it and may be negative when a
 /// cluster grows towards the origin. Tiles rebuild when their signature (member
 /// records, terrain patches, class parameters) moves, and never otherwise.
+class SKNavRoomProbes;
+
 class SKNavMesh : public LLSingleton<SKNavMesh>
 {
     LLSINGLETON(SKNavMesh);
@@ -371,6 +373,7 @@ private:
     LLVector3d mMark;
     bool mHasMark = false;
     std::unique_ptr<SKNavRooms> mRooms;
+    std::unique_ptr<SKNavRoomProbes> mRoomProbes;
 
     /// A counter over what the debug overlay draws: bumped whenever a tile
     /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps

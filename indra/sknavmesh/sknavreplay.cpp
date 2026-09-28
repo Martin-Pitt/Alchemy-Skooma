@@ -369,6 +369,11 @@ namespace sknav
 
         // Enclosure and spaces per mesh with air, as SKNavRooms::post sets them up.
         F64 enclosure_ms = 0.0, spaces_ms = 0.0;
+        F64 spaces_stage_ms[2][SpacesPass::NUM_STAGES] = {};    // the first round, and the rest
+        // The slowest mesh of each: its time, tiles and stages.
+        F64 spaces_slowest[2] = {};
+        size_t slowest_tiles[2] = {};
+        F64 slowest_stage_ms[2][SpacesPass::NUM_STAGES] = {};
         for (S32 round = 0; round < std::max(1, options.mRounds); ++round)
         {
             std::vector<EnclosureProductPtr> before;
@@ -393,9 +398,32 @@ namespace sknav
                         neighboured = true;
                     }
                 }
-                if (round > 0 && !neighboured)
+                if (round > 0 && !neighboured && !options.mDirtyTiles)
                 {
                     continue;
+                }
+                if (round > 0 && options.mDirtyTiles)
+                {
+                    // Fresh copies of the air nearest the middle, as if those tiles were rebuilt.
+                    const LLVector3d mid = (mesh.mAirMin + mesh.mAirMax) * 0.5;
+                    std::vector<std::pair<F64, TileKey>> order;
+                    for (const auto& t : mesh.mTiles)
+                    {
+                        const TileBuildResult& r = *t.second.mResult;
+                        if (r.mAirBuilt && r.mAir && !r.mAir->mLeaves.empty())
+                        {
+                            const LLVector3d c = (t.second.mMin + t.second.mMax) * 0.5 - mid;
+                            order.emplace_back(c.mdV[VX] * c.mdV[VX] + c.mdV[VY] * c.mdV[VY], t.first);
+                        }
+                    }
+                    std::sort(order.begin(), order.end());
+                    for (size_t k = 0; k < std::min<size_t>(order.size(), options.mDirtyTiles); ++k)
+                    {
+                        ReplayTile& t = mesh.mTiles.at(order[k].second);
+                        auto copy = std::make_shared<TileBuildResult>(*t.mResult);
+                        copy->mAir = std::make_shared<TileAir>(*copy->mAir);
+                        t.mResult = copy;
+                    }
                 }
                 input->mGeneration = static_cast<U64>(round) + 1;
                 input->mMeshOrigin = mesh.mOrigin;
@@ -418,40 +446,45 @@ namespace sknav
                 std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
                 enclosure_ms += since(t1);
 
-                auto rooms = std::make_shared<RoomsInput>();
-                rooms->mGeneration = input->mGeneration;
-                rooms->mMeshKey = mix(SEED, mesh.mId.getCRC32());
-                rooms->mMeshOrigin = mesh.mOrigin;
-                rooms->mPrevious = mesh.mRooms;
-                rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
-                const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
-                for (const DoorEntity& d : census.mDoors)
-                {
-                    if (overlapsXY(d.mMin, d.mMax, dlo, dhi) && d.mMin.mdV[VZ] <= dhi.mdV[VZ] && dlo.mdV[VZ] <= d.mMax.mdV[VZ])
-                    {
-                        rooms->mDoors.push_back(d);
-                    }
-                }
-                for (const Feature& f : census.mFeatures)
-                {
-                    if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= dlo.mdV[VX] && f.mMin.mdV[VX] <= dhi.mdV[VX] &&
-                        f.mMax.mdV[VY] >= dlo.mdV[VY] && f.mMin.mdV[VY] <= dhi.mdV[VY])
-                    {
-                        rooms->mLifts.emplace_back(f.mMin, f.mMax);
-                    }
-                }
+                const std::shared_ptr<RoomsInput> rooms = replayRoomsInput(census, mesh, input->mGeneration);
                 t1 = Clock::now();
                 SpacesPass spaces(rooms, product);
                 while (!spaces.step(1u << 30))
                 {
                 }
-                spaces_ms += since(t1);
+                const F64 mesh_ms = since(t1);
+                spaces_ms += mesh_ms;
+                const S32 kind = std::min(round, 1);
+                const bool slowest = mesh_ms > spaces_slowest[kind];
+                if (slowest)
+                {
+                    spaces_slowest[kind] = mesh_ms;
+                    slowest_tiles[kind] = input->mTiles.size();
+                }
+                for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+                {
+                    spaces_stage_ms[kind][k] += spaces.stageMillis(k);
+                    slowest_stage_ms[kind][k] = slowest ? spaces.stageMillis(k) : slowest_stage_ms[kind][k];
+                }
                 mesh.mEnclosure = product;
                 mesh.mRooms = spaces.product();
             }
         }
         out.mStages.emplace_back("enclosure", enclosure_ms);
         out.mStages.emplace_back("spaces", spaces_ms);
+        for (S32 r = 0; r < 2; ++r)
+        {
+            for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+            {
+                out.mStages.emplace_back(std::string(r ? "spaces.again." : "spaces.first.") + SpacesPass::stageName(k), spaces_stage_ms[r][k]);
+            }
+            const std::string slowest = llformat("spaces.%s.slowest(%u tiles)", r ? "again" : "first", static_cast<U32>(slowest_tiles[r]));
+            out.mStages.emplace_back(slowest, spaces_slowest[r]);
+            for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+            {
+                out.mStages.emplace_back(slowest + "." + SpacesPass::stageName(k), slowest_stage_ms[r][k]);
+            }
+        }
 
         t0 = Clock::now();
         for (const auto& m : out.mMeshes)
@@ -472,6 +505,33 @@ namespace sknav
             m->mWind = pass.product();
         }
         out.mStages.emplace_back("wind", since(t0));
+    }
+
+    std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation)
+    {
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mGeneration = generation;
+        rooms->mMeshKey = mix(SEED, mesh.mId.getCRC32());
+        rooms->mMeshOrigin = mesh.mOrigin;
+        rooms->mPrevious = mesh.mRooms;
+        rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
+        const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
+        for (const DoorEntity& d : census.mDoors)
+        {
+            if (overlapsXY(d.mMin, d.mMax, dlo, dhi) && d.mMin.mdV[VZ] <= dhi.mdV[VZ] && dlo.mdV[VZ] <= d.mMax.mdV[VZ])
+            {
+                rooms->mDoors.push_back(d);
+            }
+        }
+        for (const Feature& f : census.mFeatures)
+        {
+            if (f.mKind == FeatureKind::ELEVATOR && f.mMax.mdV[VX] >= dlo.mdV[VX] && f.mMin.mdV[VX] <= dhi.mdV[VX] && f.mMax.mdV[VY] >= dlo.mdV[VY] &&
+                f.mMin.mdV[VY] <= dhi.mdV[VY])
+            {
+                rooms->mLifts.emplace_back(f.mMin, f.mMax);
+            }
+        }
+        return rooms;
     }
 
     void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result)

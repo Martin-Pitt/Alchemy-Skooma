@@ -33,6 +33,7 @@
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -166,6 +167,46 @@ namespace sknav_test
             return air;
         }
 
+        /// Every tile's solids published to a sky map in 1 m columns, as the viewer does.
+        void addSky(EnclosureInput& in) const
+        {
+            auto sky = std::make_shared<SkyMap>();
+            for (size_t i = 0; i < in.mTiles.size(); ++i)
+            {
+                const EnclosureInput::Tile& t = in.mTiles[i];
+                TileAir tops;
+                tops.mCell = CELL;
+                tops.mUnit = UNIT;
+                tops.mTopCell = static_cast<S32>(1.f / CELL);
+                tops.mTopWidth = tops.mTopHeight = 32;
+                tops.mTopStart.assign(32 * 32 + 1, 0);
+                for (S32 ty = 0; ty < 32; ++ty)
+                {
+                    for (S32 tx = 0; tx < 32; ++tx)
+                    {
+                        // Any solid touching the metre counts, as the viewer's tops take every span under it.
+                        const F32 x = t.mKey.mX * 32.f + tx, y = t.mKey.mY * 32.f + ty;
+                        std::vector<TopInterval> runs;
+                        if (x + 1.f > mGround[0] && y + 1.f > mGround[1] && x < mGround[2] && y < mGround[3])
+                        {
+                            runs.push_back({ 0, static_cast<U16>(1.f / UNIT) });
+                        }
+                        for (const Solid& sd : mSolids)
+                        {
+                            if (x + 1.f > sd.mX0 + mShift && x < sd.mX1 + mShift && y + 1.f > sd.mY0 && y < sd.mY1)
+                            {
+                                runs.push_back({ static_cast<U16>((sd.mZ0 + 1.f) / UNIT), static_cast<U16>((sd.mZ1 + 1.f) / UNIT) });
+                            }
+                        }
+                        tops.mTop.insert(tops.mTop.end(), runs.begin(), runs.end());
+                        tops.mTopStart[tx + ty * 32 + 1] = static_cast<U32>(tops.mTop.size());
+                    }
+                }
+                sky->set(i + 1, LLVector3d(t.mKey.mX * 32.0, t.mKey.mY * 32.0, -1.0), tops);
+            }
+            in.mSky = sky;
+        }
+
         std::shared_ptr<EnclosureInput> input(S32 tiles_x, S32 tiles_y = 1) const
         {
             auto in = std::make_shared<EnclosureInput>();
@@ -186,6 +227,65 @@ namespace sknav_test
             return in;
         }
     };
+
+    /// Every space, portal and gap's space, floats to the bit.
+    inline std::string dumpRooms(const EnclosureProduct& enc, const RoomsProduct& rooms)
+    {
+        std::ostringstream o;
+        o << std::hexfloat;
+        auto v3 = [&o](const LLVector3& v) { o << v.mV[0] << ',' << v.mV[1] << ',' << v.mV[2] << ';'; };
+        for (const Space& sp : rooms.mSpaces)
+        {
+            o << "S" << sp.mId << ',' << static_cast<S32>(sp.mBucket) << ',' << sp.mLift << sp.mFlight << sp.mFrozen << ';';
+            v3(sp.mMin);
+            v3(sp.mMax);
+            v3(sp.mCentre);
+            v3(sp.mAnchor);
+            o << sp.mAxis.mV[0] << ',' << sp.mAxis.mV[1] << ',' << sp.mHalf.mV[0] << ',' << sp.mHalf.mV[1] << ';';
+            for (F32 f : { sp.mFloorArea, sp.mVolume, sp.mSurface, sp.mMeanFreePath, sp.mCeilingMin, sp.mCeilingMean, sp.mCeilingMax, sp.mOpenShare,
+                           sp.mFloorMin, sp.mFloorMax, sp.mElongation, sp.mSMean, sp.mCoverMean, sp.mEMean, sp.mEMin, sp.mEMax, sp.mL, sp.mUnknown })
+            {
+                o << f << ',';
+            }
+            for (U32 p : sp.mPortals)
+            {
+                o << 'p' << p;
+            }
+            for (const auto& c : sp.mRaster)
+            {
+                o << 'r' << c.first << ':' << c.second;
+            }
+            o << '\n';
+        }
+        for (const Portal& p : rooms.mPortals)
+        {
+            o << "P" << static_cast<S32>(p.mKind) << ',' << p.mSpaces[0] << ',' << p.mSpaces[1] << ',' << static_cast<S32>(p.mCues) << ',' << p.mDoor
+              << ',' << p.mCrossMesh << ';';
+            v3(p.mCentre);
+            v3(p.mNormal);
+            v3(p.mA);
+            v3(p.mB);
+            o << p.mWidth << ',' << p.mSill << ',' << p.mHead << '\n';
+        }
+        for (const TileEnclosure& te : enc.mTiles)
+        {
+            o << "T" << te.mKey.mX << ',' << te.mKey.mY << ':';
+            for (const GapEnclosure& g : te.mGaps)
+            {
+                o << g.mSpace << ',';
+            }
+            for (const CoarseGap& g : te.mCoarse.mGaps)
+            {
+                o << 'c' << g.mSpace;
+            }
+            o << '\n';
+        }
+        for (U32 id : enc.mSpaceIds)
+        {
+            o << 'i' << id;
+        }
+        return o.str();
+    }
 
     /// Two 8 x 8 m rooms sharing a wall at x = 10, roofed, with a door out of the west one.
     Scene twoRooms()

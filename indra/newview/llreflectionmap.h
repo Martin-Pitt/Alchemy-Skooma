@@ -155,6 +155,11 @@ public:
     // what kind of probe this is, which is fixed the moment it exists.
     U32 mPriority = 0;
 
+    // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
+    bool mNavRooms = false;
+    bool mSuppressedByNavRooms = false;
+    // </SK:Nexii>
+
     // occlusion culling state
     GLuint mOcclusionQuery = 0;
     bool mOccluded = false;

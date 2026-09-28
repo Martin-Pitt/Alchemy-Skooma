@@ -503,10 +503,9 @@ namespace tut
     template<> template<>
     void sknavenclosure_object::test<11>()
     {
-        set_test_name("another mesh's solid overhead shelters; the tile's own does not");
+        set_test_name("a solid overhead hides the share of sky its size and height give it, whoever published it");
         Scene s;
         auto in = s.input(1);
-        in->mTiles[0].mSkyContributor = 1;
         // A platform 10 m up over x, y 8 to 16, as another tile's solid tops.
         TileAir platform;
         platform.mCell = CELL;
@@ -529,13 +528,18 @@ namespace tut
         sky->set(2, LLVector3d(0.0, 0.0, -1.0), platform);
         in->mSky = sky;
         const EnclosureProductPtr p = computeEnclosure(in);
-        ensure("sheltered under it", at(p, 12.1f, 12.1f).mS < 0.5f);
-        ensure("open beside it", at(p, 2.f, 2.f).mS == 1.f);
+        // An 8 m square 8.5 m over a standing head hides about a fifth of the sky.
+        const Enclosure under = at(p, 12.1f, 12.1f);
+        ensure("partly sheltered under it", under.mS < 0.9f && under.mS > 0.65f);
+        ensure("but OUTDOORS", under.mBucket == EnclosureBucket::OUTDOORS);
+        ensure("open beside it", at(p, 2.f, 2.f).mS > 0.9f);
 
         auto own = std::make_shared<SkyMap>();
         own->set(1, LLVector3d(0.0, 0.0, -1.0), platform);
         in->mSky = own;
-        ensure("its own solid is already in its air", at(computeEnclosure(in), 12.1f, 12.1f).mS == 1.f);
+        const Enclosure mine = at(computeEnclosure(in), 12.1f, 12.1f);
+        ensure("the tile's own solid counts too", mine.mS < 0.9f);
+        ensure("the same whoever published it", std::fabs(mine.mS - under.mS) < 0.01f);
     }
 }
 
@@ -628,5 +632,42 @@ namespace tut
         ensure("without its detail", !kept->mAir && kept->mGaps.empty());
         ensure("still INDOORS in the room", at(second, 46.f, 14.f).mBucket == EnclosureBucket::INDOORS);
         ensure("and the live tile still answers", at(second, 10.f, 10.f).mBucket == EnclosureBucket::OUTDOORS);
+    }
+}
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<17>()
+    {
+        set_test_name("a skybox over a terrain mesh takes no open sky from it: the terrain's air ends over its own top");
+        Scene field;
+        auto field_in = field.input(1);
+        // The ground's solid tops, as a built tile carries them: the field's own top is 0.
+        auto tops = std::make_shared<TileAir>(*field_in->mTiles[0].mAir);
+        tops->mTopCell = static_cast<S32>(1.f / CELL);
+        tops->mTopWidth = tops->mTopHeight = 32;
+        tops->mTopStart.assign(32 * 32 + 1, 0);
+        tops->mTop.clear();
+        for (S32 c = 0; c < 32 * 32; ++c)
+        {
+            tops->mTop.push_back({ 0, static_cast<U16>(1.f / UNIT) });
+            tops->mTopStart[c + 1] = static_cast<U32>(tops->mTop.size());
+        }
+        field_in->mTiles[0].mAir = tops;
+        const EnclosureProductPtr a = computeEnclosure(field_in);
+        Scene box;
+        box.mGround = false;
+        box.box(4.f, 4.f, 16.f, 16.f, 19.75f, 20.f);
+        box.box(4.f, 4.f, 16.f, 4.5f, 20.f, 23.f, false);
+        box.box(4.f, 15.5f, 16.f, 16.f, 20.f, 23.f, false);
+        box.box(4.f, 4.f, 4.5f, 16.f, 20.f, 23.f, false);
+        box.box(15.5f, 4.f, 16.f, 16.f, 20.f, 23.f, false);
+        box.box(4.f, 4.f, 16.f, 16.f, 23.f, 23.25f);
+        auto in = box.input(1);
+        in->mNeighbours.push_back({ LLVector3d::zero, a });
+        const Enclosure e = at(computeEnclosure(in), 10.f, 10.f, 20.5f);
+        ensure("no sky inside", e.mS < 0.1f);
+        ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
     }
 }

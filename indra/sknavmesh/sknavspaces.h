@@ -65,6 +65,7 @@ namespace sknav
         F32 mSliverShare = 0.1f;
         F32 mOutdoorS = 0.5f;       ///< spaces this open to the sky join across openings
         F32 mWalledL = 0.6f;        ///< unless one side is this walled
+        F32 mOutdoorCover = 0.3f;   ///< or either is roofed over this share of its sky
         F32 mIndoorL = 0.4f;        ///< a space less walled than this is at most SHELTERED
         F32 mAvatarAreaM2 = 2.f;    ///< a floor smaller than this seeds no space
         F32 mHysteresis = 0.05f;    ///< a space's bucket holds until its mean e is this far past its edge
@@ -96,7 +97,7 @@ namespace sknav
     {
         U32 mId = 0;                ///< stable within the mesh while the space stays where it is
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
-        LLVector3 mMin;             ///< floor plan and floor to highest ceiling
+        LLVector3 mMin;             ///< floor plan and floor to highest ceiling, and every gap it holds
         LLVector3 mMax;
         LLVector3 mCentre;          ///< of the floor, at the lowest floor
         LLVector2 mAxis;            ///< the floor's long axis
@@ -114,6 +115,7 @@ namespace sknav
         F32 mFloorMax = 0.f;
         F32 mElongation = 1.f;
         F32 mSMean = 0.f;
+        F32 mCoverMean = 0.f;       ///< share of the sky roofed over, walls aside, floor-weighted
         F32 mEMean = 0.f;
         F32 mEMin = 0.f;
         F32 mEMax = 0.f;
@@ -159,6 +161,9 @@ namespace sknav
         U16 mSeedB = 0;
     };
 
+    /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
+    struct MergeMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -171,6 +176,8 @@ namespace sknav
         U32 mSeeds = 0;
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
+        U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        std::shared_ptr<const MergeMemo> mMemo;
 
         /// The space with this id, or null.
         const Space* byId(U32 id) const;

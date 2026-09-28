@@ -61,6 +61,13 @@ namespace sknav
         /// No solid but ignore's starts above pos within reach: a tile's own
         /// air already knows what stands over it.
         bool skyOpenAbove(const LLVector3d& pos, F32 reach, U64 ignore) const;
+        /// The share of a horizontal spot's sky, cosine-weighted, hidden by the
+        /// solids within radius: a disc of radius r at height h hides
+        /// r^2 / (r^2 + h^2), so what is small and high hides little and what
+        /// is broad and low nearly all, and a wall hides the sky under its top.
+        /// Read from columns along spokes, no rays. roof, when given, gets the
+        /// share the solids overhead hide without the walls.
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
         /// The top of the highest solid over (x, y); false when there is none.
         bool topAt(F64 x, F64 y, F64& top) const;
 
@@ -70,6 +77,7 @@ namespace sknav
         size_t bytes() const;
 
     private:
+        friend class SkyView;
         static U64 cellKey(S64 x, S64 y) { return (static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y); }
         static U64 blockKey(S64 x, S64 y) { return cellKey(x >> BLOCK_SHIFT, y >> BLOCK_SHIFT); }
         const std::vector<Interval>* find(S64 x, S64 y) const;
@@ -87,6 +95,21 @@ namespace sknav
         std::unordered_map<U64, std::shared_ptr<const std::vector<U64>>> mContributors;   ///< the cells each contributor touches
         size_t mCellCount = 0;
         U64 mVersion = 0;
+    };
+
+    /// A dense window over a map for many reads in one area; reads outside it
+    /// go to the map. The map must outlive it and not change meanwhile.
+    class SkyView
+    {
+    public:
+        SkyView(const SkyMap& map, F64 x0, F64 y0, F64 x1, F64 y1);
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
+
+    private:
+        const SkyMap* mMap;
+        S64 mX0, mY0;
+        S32 mWidth = 0, mHeight = 0;
+        std::vector<const std::vector<SkyMap::Interval>*> mCells;
     };
 }
 
