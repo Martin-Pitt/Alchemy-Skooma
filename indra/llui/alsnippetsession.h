@@ -47,11 +47,13 @@ public:
     };
 
     // A snippet's body read, to go in at `at`: its lines after the first
-    // indented by `indent`; `${1:text}`, `${1}` and `$1` its placeholders,
-    // in order of their numbers -- one inside another's text as well,
-    // `${1:a ${2:b}}` -- and `$0`, or `${0:text}`, where the caret lands
-    // past the last. A number that comes again is a mirror of the first,
-    // written as it holds. `$$` or `\$` a dollar, `\}` a brace.
+    // indented by `indent`, and their own indentation -- four spaces or a
+    // tab a level, as bodies are written -- made again of `unit` a level,
+    // where one is given: the text's own. `${1:text}`, `${1}` and `$1` its
+    // placeholders, in order of their numbers -- one inside another's text
+    // as well, `${1:a ${2:b}}` -- and `$0`, or `${0:text}`, where the caret
+    // lands past the last. A number that comes again is a mirror of the
+    // first, written as it holds. `$$` or `\$` a dollar, `\}` a brace.
     struct Expansion
     {
         // The text as it will stand.
@@ -63,7 +65,8 @@ public:
         // Where $0 is, with its text; else the end of the text.
         ALTextRange              landing;
     };
-    static Expansion expand(std::string_view body, const ALTextPos& at, const std::string& indent);
+    static Expansion expand(std::string_view body, const ALTextPos& at, const std::string& indent, std::string_view unit = {});
+    static constexpr S32 BODY_LEVEL = 4;
 
     // The names of a signature's parameters, from how a completion's
     // detail reads: "integer llSay(integer channel, string msg)" or
@@ -87,6 +90,12 @@ public:
     const ALTextPos&                after() const { return mAfter; }
     S32                             landing() const { return mLanding; }
     const std::vector<Mirror>&      mirrors() const { return mMirrors; }
+    // Another place that repeats a stop, added as it is found.
+    void                            addMirror(Mirror mirror) { mMirrors.push_back(std::move(mirror)); }
+    // Whether the mirrors are brought up as each key is typed, rather than
+    // as the stop is left: every place of a name being changed at once.
+    void                            setLive(bool live) { mLive = live; }
+    bool                            live() const { return mLive && active(); }
 
     // An edit heard: the stop being typed over becomes what was typed, the
     // others move with the text, and one the edit cut into goes, with its
@@ -103,7 +112,11 @@ public:
     // The mirror being brought up, which the edit that does it puts in
     // whole; -1 for none.
     void syncing(S32 mirror) { mSyncing = mirror; }
-    bool syncing() const { return mSyncing >= 0; }
+    // Every mirror being made again at once, as one batch (ALTextView::
+    // editMany): each a stretch replaced is grows to what went in.
+    void syncingAll() { mSyncing = SYNCING_ALL; }
+    bool syncing() const { return mSyncing != -1; }
+    static constexpr S32 SYNCING_ALL = -2;
 
 private:
     std::vector<ALTextRange> mStops;
@@ -111,6 +124,7 @@ private:
     ALTextPos                mAfter;
     std::vector<Mirror>      mMirrors;
     S32                      mSyncing = -1;
+    bool                     mLive    = false;
     // How long the text `${0:text}` put where the caret lands is, to be
     // chosen as it lands; nothing for a bare $0.
     S32                      mLanding = 0;

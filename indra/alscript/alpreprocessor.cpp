@@ -36,6 +36,7 @@
 #include <boost/unordered/unordered_flat_set.hpp>
 
 #include <algorithm>
+#include <array>
 #include <ctime>
 #include <deque>
 #include <limits>
@@ -66,7 +67,9 @@ namespace
     };
 
     typedef boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> HideSet;
-    typedef std::shared_ptr<const HideSet>                                          hide_set_ptr;
+    // A set the run's HideSets made and keeps, for as long as the run's
+    // tokens are: copied with a token as the pointer it is.
+    typedef const HideSet*                                                          hide_set_ptr;
 
     struct Token
     {
@@ -79,9 +82,18 @@ namespace
         // The text is the file's own at that place, rather than what a
         // macro made there.
         bool        verbatim = true;
+        // A name the script declared `const` (ConstMarkers): a variable's,
+        // or a function's.
+        enum class Const : U8
+        {
+            None,
+            Variable,
+            Function
+        };
+        Const        declared = Const::None;
         // The macros this token will not expand as: Prosser's hide set,
         // shared by the tokens one expansion made.
-        hide_set_ptr hide;
+        hide_set_ptr hide = nullptr;
 
         bool is(Kind k, std::string_view t) const { return kind == k && text == t; }
         bool blank() const { return kind == Kind::Space || kind == Kind::Newline || kind == Kind::Comment; }
@@ -90,55 +102,105 @@ namespace
 
     typedef std::vector<Token> Tokens;
 
-    hide_set_ptr hideUnion(const hide_set_ptr& a, const HideSet& b)
+    // The run's hide sets, each made once. A set with a macro's name
+    // added, two joined, two met: each is remembered by what it was made
+    // of, and every set is interned, so the same names are always the one
+    // set and a set is known by its address -- rather than a new set made
+    // for every expansion, and for every token of it that brought one of
+    // its own. No names at all is no set.
+    class HideSets
     {
-        if (b.empty())
+    public:
+        hide_set_ptr with(hide_set_ptr set, const std::string& name)
         {
-            return a;
-        }
-        auto set = std::make_shared<HideSet>(b);
-        if (a)
-        {
-            set->insert(a->begin(), a->end());
-        }
-        return set;
-    }
-
-    // The union of a token's own hide set with an expansion's, where
-    // most tokens have none of their own and take the expansion's as it
-    // is: one set shared by the tokens one expansion made, as Prosser
-    // has it, rather than a copy of it per token.
-    hide_set_ptr hideWith(const hide_set_ptr& own, const hide_set_ptr& theirs)
-    {
-        if (!own || own == theirs)
-        {
-            return theirs;
-        }
-        if (!theirs)
-        {
-            return own;
-        }
-        auto set = std::make_shared<HideSet>(*theirs);
-        set->insert(own->begin(), own->end());
-        return set;
-    }
-
-    hide_set_ptr hideIntersect(const hide_set_ptr& a, const hide_set_ptr& b)
-    {
-        if (!a || !b)
-        {
-            return hide_set_ptr();
-        }
-        auto set = std::make_shared<HideSet>();
-        for (const std::string& name : *a)
-        {
-            if (b->count(name))
+            if (set && set->contains(name))
             {
-                set->insert(name);
+                return set;
             }
+            hide_set_ptr& made = mWith[{ set, name }];
+            if (!made)
+            {
+                HideSet names = set ? *set : HideSet();
+                names.insert(name);
+                made = intern(std::move(names));
+            }
+            return made;
         }
-        return set;
-    }
+
+        hide_set_ptr join(hide_set_ptr own, hide_set_ptr theirs)
+        {
+            if (!own || own == theirs)
+            {
+                return theirs;
+            }
+            if (!theirs)
+            {
+                return own;
+            }
+            hide_set_ptr& made = mJoined[{ own, theirs }];
+            if (!made)
+            {
+                HideSet names = *theirs;
+                names.insert(own->begin(), own->end());
+                made = intern(std::move(names));
+            }
+            return made;
+        }
+
+        hide_set_ptr meet(hide_set_ptr a, hide_set_ptr b)
+        {
+            if (!a || !b)
+            {
+                return nullptr;
+            }
+            if (a == b)
+            {
+                return a;
+            }
+            const auto known = mMet.find({ a, b });
+            if (known != mMet.end())
+            {
+                return known->second;
+            }
+            HideSet names;
+            for (const std::string& name : *a)
+            {
+                if (b->contains(name))
+                {
+                    names.insert(name);
+                }
+            }
+            return mMet[{ a, b }] = intern(std::move(names));
+        }
+
+    private:
+        // The one set of these names, made where there is none yet.
+        hide_set_ptr intern(HideSet names)
+        {
+            if (names.empty())
+            {
+                return nullptr;
+            }
+            std::vector<std::string_view> sorted(names.begin(), names.end());
+            std::sort(sorted.begin(), sorted.end());
+            std::string key;
+            for (std::string_view name : sorted)
+            {
+                key.append(name).push_back('\x01');
+            }
+            std::unique_ptr<const HideSet>& set = mSets[key];
+            if (!set)
+            {
+                set = std::make_unique<const HideSet>(std::move(names));
+            }
+            return set.get();
+        }
+
+        boost::unordered_flat_map<std::string, std::unique_ptr<const HideSet>, ll::string_hash, std::equal_to<>> mSets;
+        boost::unordered_flat_map<std::pair<const HideSet*, std::string>, hide_set_ptr>      mWith;
+        boost::unordered_flat_map<std::pair<const HideSet*, const HideSet*>, hide_set_ptr>   mJoined;
+        boost::unordered_flat_map<std::pair<const HideSet*, const HideSet*>, hide_set_ptr>   mMet;
+    };
 
     // ---- the tokenizers ---------------------------------------------------------
 
@@ -150,19 +212,48 @@ namespace
     // Longest first, so that the first match is the longest.
     // &= |= ^= are not LSL's, but the extensions transform takes them
     // and plain LSL has no use for an & before an =.
-    const char* const LSL_PUNCT[] = { "<<=", ">>=", "...", "##", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-                                      "==",  "!=",  "<=",  ">=", "&&", "||", "<<", ">>", nullptr };
-    const char* const LUA_PUNCT[] = { "...", "//=", "..=", "##", "..", "//", "::", "->", "+=", "-=", "*=", "/=", "%=", "^=",
-                                      "==",  "~=",  "<=",  ">=", nullptr };
+    constexpr std::string_view LSL_PUNCT[] = { "<<=", ">>=", "...", "##", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+                                               "==",  "!=",  "<=",  ">=", "&&", "||", "<<", ">>" };
+    constexpr std::string_view LUA_PUNCT[] = { "...", "//=", "..=", "##", "..", "//", "::", "->", "+=", "-=", "*=", "/=", "%=", "^=",
+                                               "==",  "~=",  "<=",  ">=" };
+
+    // A language's punctuators by their first byte, in the order the list
+    // has them, longest first: a mark is tried against the few that start
+    // as it does, not the whole list.
+    class Punctuators
+    {
+    public:
+        template <size_t N> explicit Punctuators(const std::string_view (&ops)[N])
+        {
+            for (std::string_view op : ops)
+            {
+                mByFirst[static_cast<unsigned char>(op.front())].push_back(op);
+            }
+        }
+        const std::vector<std::string_view>& startingWith(char c) const { return mByFirst[static_cast<unsigned char>(c)]; }
+
+    private:
+        std::array<std::vector<std::string_view>, 256> mByFirst;
+    };
+
+    const Punctuators& punctuators(bool lua)
+    {
+        static const Punctuators lsl(LSL_PUNCT);
+        static const Punctuators luau(LUA_PUNCT);
+        return lua ? luau : lsl;
+    }
 
     // Whether two punctuators written together would lex as something
     // longer than the first: what compression needs a space between.
     bool punctJoins(bool lua, std::string_view a, std::string_view b)
     {
         const std::string joined = std::string(a) + std::string(b);
-        for (const char* const* p = lua ? LUA_PUNCT : LSL_PUNCT; *p; ++p)
+        if (joined.empty())
         {
-            const std::string_view op = *p;
+            return false;
+        }
+        for (std::string_view op : punctuators(lua).startingWith(joined.front()))
+        {
             if (op.size() > a.size() && joined.compare(0, op.size(), op) == 0)
             {
                 return true;
@@ -211,7 +302,7 @@ namespace
             mToken.line     = mLine;
             mToken.column   = mColumn;
             mToken.verbatim = true;
-            mToken.hide.reset();
+            mToken.hide = nullptr;
         }
 
         // Takes one byte into the token, keeping the place.
@@ -316,9 +407,8 @@ namespace
         void punct()
         {
             start(Kind::Punct);
-            for (const char* const* p = mLua ? LUA_PUNCT : LSL_PUNCT; *p; ++p)
+            for (std::string_view op : punctuators(mLua).startingWith(at(mPos)))
             {
-                const std::string_view op = *p;
                 if (mText.compare(mPos, op.size(), op) == 0)
                 {
                     for (size_t i = 0; i < op.size(); ++i)
@@ -741,6 +831,102 @@ namespace
         return i;
     }
 
+    // The macro a file's classic include guard is on -- `#ifndef X`, then
+    // `#define X`, before all but blanks, and the `#endif` that closes the
+    // first the last of everything but blanks, with no `#else` or `#elif`
+    // of it between -- or nothing. Such a file is wanted once: included
+    // again while X is defined, it makes nothing.
+    std::string guardOf(const Tokens& tokens)
+    {
+        // Each directive's word, where it stands at the start of a line.
+        struct Directive
+        {
+            size_t      at;
+            std::string word;
+        };
+        std::vector<Directive> directives;
+        bool                   line_start = true;
+        for (size_t i = 0; i < tokens.size(); ++i)
+        {
+            const Token& t = tokens[i];
+            if (t.kind == Kind::Newline)
+            {
+                line_start = true;
+                continue;
+            }
+            if (t.blank())
+            {
+                continue;
+            }
+            if (line_start && t.is(Kind::Punct, "#"))
+            {
+                const size_t word = skipSpace(tokens, i + 1);
+                directives.push_back({ i, word < tokens.size() && tokens[word].kind == Kind::Ident ? tokens[word].text : std::string() });
+            }
+            line_start = false;
+        }
+        if (directives.size() < 3 || directives[0].word != "ifndef" || directives[1].word != "define" || directives.back().word != "endif")
+        {
+            return std::string();
+        }
+        // Nothing but blanks before the first, and between the first two.
+        if (skipBlank(tokens, 0) != directives[0].at)
+        {
+            return std::string();
+        }
+        const size_t name_at = skipSpace(tokens, skipSpace(tokens, directives[0].at + 1) + 1);
+        if (name_at >= tokens.size() || tokens[name_at].kind != Kind::Ident)
+        {
+            return std::string();
+        }
+        const std::string name = tokens[name_at].text;
+        if (skipBlank(tokens, name_at + 1) != directives[1].at)
+        {
+            return std::string();
+        }
+        const size_t defined_at = skipSpace(tokens, skipSpace(tokens, directives[1].at + 1) + 1);
+        if (defined_at >= tokens.size() || tokens[defined_at].text != name)
+        {
+            return std::string();
+        }
+        // The first closed by the last, and by nothing before it.
+        int depth = 0;
+        for (size_t d = 0; d < directives.size(); ++d)
+        {
+            const std::string& word = directives[d].word;
+            if (word == "if" || word == "ifdef" || word == "ifndef")
+            {
+                ++depth;
+            }
+            else if (word == "endif")
+            {
+                if (--depth == 0 && d + 1 != directives.size())
+                {
+                    return std::string();
+                }
+            }
+            else if ((word == "else" || word == "elif") && depth == 1)
+            {
+                return std::string();
+            }
+        }
+        if (depth != 0)
+        {
+            return std::string();
+        }
+        // Nothing but blanks after the `#endif` line.
+        size_t end = skipSpace(tokens, skipSpace(tokens, directives.back().at + 1) + 1);
+        while (end < tokens.size() && tokens[end].kind != Kind::Newline)
+        {
+            if (!tokens[end].blank())
+            {
+                return std::string();
+            }
+            ++end;
+        }
+        return skipBlank(tokens, end) == tokens.size() ? name : std::string();
+    }
+
     // ---- the engine ------------------------------------------------------------
 
     struct Macro
@@ -790,18 +976,21 @@ namespace
 
     struct FileState
     {
-        S32               index = 0;
-        std::string       path;
-        std::string       name;
-        std::string       assetId;
-        Tokens            tokens;
-        size_t            pos       = 0;
+        S32                           index = 0;
+        std::string                   path;
+        std::string                   name;
+        std::string                   assetId;
+        // The file's tokens as lexed, shared with every other opening of
+        // the same file: read, never changed.
+        std::shared_ptr<const Tokens> lexed;
+        size_t                        pos = 0;
         // Nothing but blanks since the last newline: where a directive
         // may stand.
-        bool              lineStart = true;
-        std::vector<Cond> conds;
+        bool                          lineStart = true;
+        std::vector<Cond>             conds;
 
-        bool active() const { return conds.empty() || conds.back().active; }
+        bool          active() const { return conds.empty() || conds.back().active; }
+        const Tokens& tokens() const { return *lexed; }
     };
 
     class Engine
@@ -854,24 +1043,38 @@ namespace
 
         // -- tokens --
         bool next(Token& t);
-        void unread(const Tokens& tokens);
+        void unread(Tokens&& tokens);
         void emit(const Token& t) { mSink->push_back(t); }
+        void emit(Token&& t) { mSink->push_back(std::move(t)); }
         // What a run may make, against the budget: every token put back
-        // to be scanned again and every token given out is one more. A
-        // run that reaches the budget says so once and stops, since hide
-        // sets stop a macro expanding as itself but not one that
-        // doubles.
-        bool spend(size_t made, const Token& at);
+        // to be scanned again and every token given out is one more, and
+        // its text so many bytes more. A run that reaches the budget says
+        // so once and stops, since hide sets stop a macro expanding as
+        // itself but not one that doubles.
+        bool spend(size_t made, size_t bytes, const Token& at);
+        bool spend(const Tokens& made, const Token& at) { return spend(made.size(), bytesOf(made), at); }
+        static size_t bytesOf(const Tokens& tokens)
+        {
+            size_t bytes = 0;
+            for (const Token& t : tokens)
+            {
+                bytes += t.text.size();
+            }
+            return bytes;
+        }
+        // A token as long as a whole script, made by pasting or
+        // stringizing: the run stops there, before it is made.
+        bool tooLong(size_t bytes, const Token& at);
         bool overran() const { return mOverran; }
 
         // -- expansion --
-        void   handle(const Token& t);
+        void   handle(Token t);
         bool   expandDynamic(const Token& t, const Macro& m);
         bool   expandObject(const Token& t, const Macro& m);
         bool   expandFunction(const Token& t, const Macro& m);
-        Tokens substitute(const Macro& m, const std::vector<Tokens>& args, const Token& site, const hide_set_ptr& hs);
+        Tokens substitute(const Macro& m, const std::vector<Tokens>& args, const Token& site, hide_set_ptr hs);
         Tokens expandAll(const Tokens& in);
-        Token  stringize(const Tokens& arg, const Token& site) const;
+        Token  stringize(const Tokens& arg, const Token& site);
         bool   paste(const Token& left, const Token& right, const Token& site, Token& out);
         static S32 paramIndex(const Macro& m, const Token& t);
 
@@ -889,11 +1092,27 @@ namespace
         // Looked up for every identifier of the whole script, so flat.
         boost::unordered_flat_map<std::string, Macro, ll::string_hash, std::equal_to<>> mMacros;
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>>        mOnce;
+        // Each file opened, by identity: its tokens and its place in the
+        // map, lexed once however often it is included; and the macro its
+        // include guard is on, where it has one.
+        struct Lexed
+        {
+            S32                           index = 0;
+            std::shared_ptr<const Tokens> tokens;
+        };
+        boost::unordered_flat_map<std::string, Lexed, ll::string_hash, std::equal_to<>>       mLexed;
+        boost::unordered_flat_map<std::string, std::string, ll::string_hash, std::equal_to<>> mGuards;
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>>        mPendingNames;
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>>        mIncluded;
         // What the run has made so far, against the budget.
         size_t                                  mMade    = 0;
+        size_t                                  mBytes   = 0;
         bool                                    mOverran = false;
+        // Every hide set of the run, each made once.
+        HideSets                                mHides;
+        // How many times the loop has gone round, which a look at whether
+        // the run is still wanted is made every so many of.
+        size_t                                  mRounds  = 0;
         // How deep argument expansion has gone.
         S32                                     mExpandDepth = 0;
         // Tokens to read before the file: what an expansion made, to be
@@ -952,22 +1171,40 @@ namespace
     void Engine::pushFile(std::string_view text, const std::string& path, const std::string& name, const std::string& assetId)
     {
         auto f     = std::make_unique<FileState>();
-        f->index   = mResult.map.addFile(name, path);
         f->path    = path;
         f->name    = name;
         f->assetId = assetId;
-        f->tokens  = Lexer(mOptions.lua, f->index).run(text);
+        // A file opened before is not lexed again, nor listed again in the
+        // map: its tokens are where they were.
+        if (const auto lexed = path.empty() ? mLexed.end() : mLexed.find(path); lexed != mLexed.end())
+        {
+            f->index = lexed->second.index;
+            f->lexed = lexed->second.tokens;
+        }
+        else
+        {
+            f->index = mResult.map.addFile(name, path);
+            f->lexed = std::make_shared<const Tokens>(Lexer(mOptions.lua, f->index).run(text));
+            if (!path.empty())
+            {
+                mLexed[path] = Lexed{ f->index, f->lexed };
+                if (std::string guard = guardOf(f->tokens()); !guard.empty())
+                {
+                    mGuards[path] = std::move(guard);
+                }
+            }
+        }
         // A file opened is tokens made, against the budget like any
         // other: a file that includes itself twice, as many levels down as
         // the include depth allows, is more files than there are.
         Token at;
         at.file = mFiles.empty() ? 0 : mFiles.back()->index;
-        if (!mFiles.empty() && !mFiles.back()->tokens.empty())
+        if (!mFiles.empty() && !mFiles.back()->tokens().empty())
         {
             const FileState& asking = *mFiles.back();
-            at = asking.tokens[std::min(asking.pos, asking.tokens.size()) - (asking.pos > 0 ? 1 : 0)];
+            at = asking.tokens()[std::min(asking.pos, asking.tokens().size()) - (asking.pos > 0 ? 1 : 0)];
         }
-        if (!spend(f->tokens.size(), at))
+        if (!spend(f->tokens().size(), text.size(), at))
         {
             return;
         }
@@ -981,7 +1218,7 @@ namespace
         {
             Token at;
             at.file = f.index;
-            at.line = f.tokens.empty() ? 0 : f.tokens.back().line;
+            at.line = f.tokens().empty() ? 0 : f.tokens().back().line;
             problem(ALScriptProblem::Severity::Error, "PreprocIfWithoutEndif", "#if without #endif at the end of the file", {}, at);
         }
         mFiles.pop_back();
@@ -989,19 +1226,28 @@ namespace
 
     bool Engine::directiveAhead(const FileState& f) const
     {
-        const size_t i = skipSpace(f.tokens, f.pos);
-        return i < f.tokens.size() && f.tokens[i].is(Kind::Punct, "#");
+        const Tokens& tokens = f.tokens();
+        const size_t  i      = skipSpace(tokens, f.pos);
+        return i < tokens.size() && tokens[i].is(Kind::Punct, "#");
     }
 
     void Engine::loop(size_t depth)
     {
         while (mFiles.size() > depth && !mOverran)
         {
+            // No longer wanted: stopped where it stands, and said so.
+            if (mOptions.superseded && (mRounds++ & 1023) == 0 && mOptions.superseded->load(std::memory_order_relaxed))
+            {
+                mOverran           = true;
+                mResult.overran    = true;
+                mResult.superseded = true;
+                break;
+            }
             if (!mPending.empty())
             {
-                Token t = mPending.front();
+                Token t = std::move(mPending.front());
                 mPending.pop_front();
-                handle(t);
+                handle(std::move(t));
                 continue;
             }
             FileState& f = *mFiles.back();
@@ -1020,11 +1266,11 @@ namespace
             {
                 if (t.kind == Kind::Newline)
                 {
-                    emit(t);
+                    emit(std::move(t));
                 }
                 continue;
             }
-            handle(t);
+            handle(std::move(t));
         }
     }
 
@@ -1052,7 +1298,7 @@ namespace
     {
         if (!mPending.empty())
         {
-            t = mPending.front();
+            t = std::move(mPending.front());
             mPending.pop_front();
             return true;
         }
@@ -1061,11 +1307,11 @@ namespace
             return false;
         }
         FileState& f = *mFiles.back();
-        if (f.pos >= f.tokens.size())
+        if (f.pos >= f.tokens().size())
         {
             return false;
         }
-        t = f.tokens[f.pos++];
+        t = f.tokens()[f.pos++];
         if (t.kind == Kind::Newline)
         {
             f.lineStart = true;
@@ -1077,24 +1323,35 @@ namespace
         return true;
     }
 
-    void Engine::unread(const Tokens& tokens)
+    void Engine::unread(Tokens&& tokens)
     {
-        mPending.insert(mPending.begin(), tokens.begin(), tokens.end());
+        mPending.insert(mPending.begin(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
     }
 
-    bool Engine::spend(size_t made, const Token& at)
+    bool Engine::spend(size_t made, size_t bytes, const Token& at)
     {
         if (mOverran)
         {
             return false;
         }
         mMade += made;
-        if (mMade <= mOptions.tokenBudget)
+        mBytes += bytes;
+        if (mMade <= mOptions.tokenBudget && mBytes <= mOptions.byteBudget)
         {
             return true;
         }
         overrun("PreprocTooMuch", "the macros expand to more than this preprocessor will make; nothing was preprocessed", at);
         return false;
+    }
+
+    bool Engine::tooLong(size_t bytes, const Token& at)
+    {
+        if (bytes <= ALScriptEnvelope::MAX_ASSET_BYTES)
+        {
+            return false;
+        }
+        overrun("PreprocTokenTooLong", "the macros make a token longer than a script may be; nothing was preprocessed", at);
+        return true;
     }
 
     void Engine::overrun(const char* key, std::string_view text, const Token& at)
@@ -1120,7 +1377,7 @@ namespace
 
     // -- expansion --
 
-    void Engine::handle(const Token& t)
+    void Engine::handle(Token t)
     {
         if (t.kind == Kind::Ident && !t.hidden(t.text))
         {
@@ -1134,7 +1391,7 @@ namespace
                 }
             }
         }
-        emit(t);
+        emit(std::move(t));
     }
 
     S32 Engine::paramIndex(const Macro& m, const Token& t)
@@ -1157,7 +1414,7 @@ namespace
     {
         Token out = t;
         out.verbatim = false;
-        out.hide     = hideUnion(t.hide, { m.name });
+        out.hide     = mHides.with(t.hide, m.name);
         const FileState& f = *mFiles.back();
         switch (m.dynamic)
         {
@@ -1177,19 +1434,19 @@ namespace
             case Macro::Dynamic::None:
                 return false;
         }
-        mPending.push_front(out);
+        mPending.push_front(std::move(out));
         return true;
     }
 
     bool Engine::expandObject(const Token& t, const Macro& m)
     {
-        const hide_set_ptr hs  = hideUnion(t.hide, { m.name });
+        const hide_set_ptr hs  = mHides.with(t.hide, m.name);
         Tokens             out = substitute(m, {}, t, hs);
-        if (!spend(out.size(), t))
+        if (mOverran)
         {
             return true;
         }
-        unread(out);
+        unread(std::move(out));
         return true;
     }
 
@@ -1204,34 +1461,37 @@ namespace
         {
             if (!next(n))
             {
-                unread(read);
+                unread(std::move(read));
                 return false;
             }
-            read.push_back(n);
-            if (!n.blank())
+            const bool blank   = n.blank();
+            const bool newline = n.kind == Kind::Newline;
+            read.push_back(std::move(n));
+            if (!blank)
             {
                 break;
             }
-            if (n.kind == Kind::Newline && mPending.empty() && !mIsolated && directiveAhead(*mFiles.back()))
+            if (newline && mPending.empty() && !mIsolated && directiveAhead(*mFiles.back()))
             {
-                unread(read);
+                unread(std::move(read));
                 mFiles.back()->lineStart = true;
                 return false;
             }
         }
-        if (!n.is(Kind::Punct, "("))
+        if (!read.back().is(Kind::Punct, "("))
         {
-            unread(read);
+            unread(std::move(read));
             return false;
         }
-        std::vector<Tokens> args;
-        Tokens              current;
-        S32                 depth  = 0;
-        bool                closed = false;
-        Token               rparen;
+        // Each argument a stretch of what was read, which is all given
+        // back as it was if the call is not one; made into the arguments
+        // only once it is.
+        std::vector<std::pair<size_t, size_t>> spans;
+        size_t                                 from   = read.size();
+        S32                                    depth  = 0;
+        bool                                   closed = false;
         while (next(n))
         {
-            read.push_back(n);
             if (n.is(Kind::Punct, "("))
             {
                 ++depth;
@@ -1241,82 +1501,97 @@ namespace
                 if (depth == 0)
                 {
                     closed = true;
-                    rparen = n;
+                    read.push_back(std::move(n));
                     break;
                 }
                 --depth;
             }
-            else if (n.is(Kind::Punct, ",") && depth == 0 && !(m.variadic && args.size() + 1 >= m.params.size()))
+            else if (n.is(Kind::Punct, ",") && depth == 0 && !(m.variadic && spans.size() + 1 >= m.params.size()))
             {
-                args.push_back(current);
-                current.clear();
+                spans.emplace_back(from, read.size());
+                read.push_back(std::move(n));
+                from = read.size();
                 continue;
             }
-            if (n.kind == Kind::Newline)
-            {
-                n.kind = Kind::Space;
-                n.text = " ";
-            }
-            current.push_back(n);
+            read.push_back(std::move(n));
         }
         if (!closed)
         {
             problem(ALScriptProblem::Severity::Error, "PreprocUnterminatedArguments", "unterminated argument list invoking macro '[1]'", { m.name }, t);
             emit(t);
-            for (const Token& r : read)
+            for (Token& r : read)
             {
-                emit(r);
+                emit(std::move(r));
             }
             return true;
         }
-        args.push_back(current);
-        // Each argument without the blanks around it; `M()` with no
-        // parameters is no arguments.
-        for (Tokens& arg : args)
+        spans.emplace_back(from, read.size() - 1);
+        // `M()` with no parameters is no arguments.
+        size_t count = spans.size();
+        if (m.params.empty() && count == 1 && skipBlank(read, spans[0].first) >= spans[0].second)
         {
-            size_t from = skipBlank(arg, 0);
-            size_t to   = arg.size();
-            while (to > from && arg[to - 1].blank())
-            {
-                --to;
-            }
-            arg = Tokens(arg.begin() + from, arg.begin() + to);
+            count = 0;
         }
-        if (m.params.empty() && args.size() == 1 && args[0].empty())
+        const size_t given = count + (m.variadic && count + 1 == m.params.size() ? 1 : 0);
+        if (given != m.params.size())
         {
-            args.clear();
-        }
-        if (m.variadic && args.size() + 1 == m.params.size())
-        {
-            args.push_back(Tokens());
-        }
-        if (args.size() != m.params.size())
-        {
-            problem(ALScriptProblem::Severity::Error, args.size() < m.params.size() ? "PreprocTooFewArguments" : "PreprocTooManyArguments",
-                    args.size() < m.params.size() ? "too few arguments for macro '[1]'" : "too many arguments for macro '[1]'", { m.name }, t);
+            problem(ALScriptProblem::Severity::Error, given < m.params.size() ? "PreprocTooFewArguments" : "PreprocTooManyArguments",
+                    given < m.params.size() ? "too few arguments for macro '[1]'" : "too many arguments for macro '[1]'", { m.name }, t);
             emit(t);
-            for (const Token& r : read)
+            for (Token& r : read)
             {
-                emit(r);
+                emit(std::move(r));
             }
             return true;
         }
-        const hide_set_ptr hs  = hideUnion(hideIntersect(t.hide, rparen.hide), { m.name });
+        // Each argument without the blanks around it, a line it runs over
+        // a space.
+        std::vector<Tokens> args(given);
+        for (size_t a = 0; a < count; ++a)
+        {
+            size_t first = spans[a].first;
+            size_t last  = spans[a].second;
+            while (first < last && read[first].blank())
+            {
+                ++first;
+            }
+            while (last > first && read[last - 1].blank())
+            {
+                --last;
+            }
+            Tokens& arg = args[a];
+            arg.reserve(last - first);
+            for (size_t i = first; i < last; ++i)
+            {
+                Token& moved = arg.emplace_back(std::move(read[i]));
+                if (moved.kind == Kind::Newline)
+                {
+                    moved.kind = Kind::Space;
+                    moved.text = " ";
+                }
+            }
+        }
+        const hide_set_ptr hs  = mHides.with(mHides.meet(t.hide, read.back().hide), m.name);
         Tokens             out = substitute(m, args, t, hs);
-        if (!spend(out.size(), t))
+        if (mOverran)
         {
             return true;
         }
-        unread(out);
+        unread(std::move(out));
         return true;
     }
 
-    Token Engine::stringize(const Tokens& arg, const Token& site) const
+    Token Engine::stringize(const Tokens& arg, const Token& site)
     {
         std::string text = "\"";
         bool        space = false;
         for (const Token& t : arg)
         {
+            // Twice a token's text at most goes in for it, escaped.
+            if (tooLong(text.size() + 2 * t.text.size() + 2, site))
+            {
+                return Token();
+            }
             if (t.blank())
             {
                 space = true;
@@ -1366,6 +1641,10 @@ namespace
             out = left;
             return true;
         }
+        if (tooLong(left.text.size() + right.text.size(), site))
+        {
+            return false;
+        }
         Tokens lexed = Lexer(mOptions.lua, site.file).run(left.text + right.text);
         if (lexed.size() != 1 || lexed[0].blank())
         {
@@ -1381,11 +1660,13 @@ namespace
         return true;
     }
 
-    Tokens Engine::substitute(const Macro& m, const std::vector<Tokens>& args, const Token& site, const hide_set_ptr& hs)
+    Tokens Engine::substitute(const Macro& m, const std::vector<Tokens>& args, const Token& site, hide_set_ptr hs)
     {
-        const Tokens&                  body = m.body;
-        Tokens                         out;
+        const Tokens&                      body = m.body;
+        Tokens                             out;
         std::vector<std::optional<Tokens>> expanded(args.size());
+        // Whether a `##` is to be done: without one, no pass for them.
+        bool                               pastes = false;
         const auto pasteBeside = [&](size_t i, bool before) {
             size_t j = i;
             if (before)
@@ -1408,7 +1689,12 @@ namespace
                 const S32    idx = j < body.size() ? paramIndex(m, body[j]) : -1;
                 if (idx >= 0)
                 {
-                    out.push_back(stringize(args[idx], site));
+                    Token made = stringize(args[idx], site);
+                    if (mOverran || !spend(1, made.text.size(), site))
+                    {
+                        return Tokens();
+                    }
+                    out.push_back(std::move(made));
                     i = j;
                     continue;
                 }
@@ -1421,7 +1707,8 @@ namespace
                 op.line     = site.line;
                 op.column   = site.column;
                 op.verbatim = false;
-                out.push_back(op);
+                out.push_back(std::move(op));
+                pastes = true;
                 continue;
             }
             const S32 idx = m.functionLike ? paramIndex(m, b) : -1;
@@ -1437,10 +1724,14 @@ namespace
                         mark.line     = site.line;
                         mark.column   = site.column;
                         mark.verbatim = false;
-                        out.push_back(mark);
+                        out.push_back(std::move(mark));
                     }
                     else
                     {
+                        if (!spend(args[idx], site))
+                        {
+                            return Tokens();
+                        }
                         out.insert(out.end(), args[idx].begin(), args[idx].end());
                     }
                 }
@@ -1450,24 +1741,43 @@ namespace
                     {
                         expanded[idx] = expandAll(args[idx]);
                     }
+                    // Spent as it goes in, each time it does: a parameter
+                    // used many times over is that many copies, which is
+                    // what a macro that doubles makes.
+                    if (mOverran || !spend(*expanded[idx], site))
+                    {
+                        return Tokens();
+                    }
                     out.insert(out.end(), expanded[idx]->begin(), expanded[idx]->end());
                 }
                 continue;
             }
-            Token copy    = b;
+            if (!spend(1, b.text.size(), site))
+            {
+                return Tokens();
+            }
+            Token& copy   = out.emplace_back(b);
             copy.file     = site.file;
             copy.line     = site.line;
             copy.column   = site.column;
             copy.verbatim = false;
-            out.push_back(copy);
+        }
+        if (!pastes)
+        {
+            for (Token& t : out)
+            {
+                t.hide = mHides.join(t.hide, hs);
+            }
+            return out;
         }
         // The pastes, left to right.
         Tokens pasted;
+        pasted.reserve(out.size());
         for (size_t i = 0; i < out.size(); ++i)
         {
             if (out[i].kind != Kind::Paste)
             {
-                pasted.push_back(out[i]);
+                pasted.push_back(std::move(out[i]));
                 continue;
             }
             while (!pasted.empty() && pasted.back().blank())
@@ -1483,25 +1793,24 @@ namespace
             Token joined;
             if (paste(pasted.back(), out[j], site, joined))
             {
-                pasted.back() = joined;
+                pasted.back() = std::move(joined);
+            }
+            else if (mOverran)
+            {
+                return Tokens();
             }
             else
             {
-                pasted.push_back(out[j]);
+                pasted.push_back(std::move(out[j]));
             }
             i = j;
         }
-        Tokens result;
+        std::erase_if(pasted, [](const Token& t) { return t.kind == Kind::Placemarker; });
         for (Token& t : pasted)
         {
-            if (t.kind == Kind::Placemarker)
-            {
-                continue;
-            }
-                t.hide = hideWith(t.hide, hs);
-            result.push_back(t);
+            t.hide = mHides.join(t.hide, hs);
         }
-        return result;
+        return pasted;
     }
 
     Tokens Engine::expandAll(const Tokens& in)
@@ -1533,7 +1842,7 @@ namespace
         Token t;
         while (!mOverran && next(t))
         {
-            handle(t);
+            handle(std::move(t));
         }
         mSink     = sink;
         mIsolated = isolated;
@@ -1546,9 +1855,9 @@ namespace
     Tokens Engine::readLine(FileState& f, Token& newline)
     {
         Tokens line;
-        while (f.pos < f.tokens.size())
+        while (f.pos < f.tokens().size())
         {
-            const Token& t = f.tokens[f.pos++];
+            const Token& t = f.tokens()[f.pos++];
             if (t.kind == Kind::Newline)
             {
                 newline     = t;
@@ -2102,7 +2411,14 @@ namespace
                 break;
         }
         const std::string identity = found.path.empty() ? ask.name : found.path;
+        mResult.resolved.push_back({ ask.from, ask.name, false, identity });
         if (mOnce.count(identity))
+        {
+            return;
+        }
+        // A file behind an include guard already defined makes nothing:
+        // not opened, lexed, mapped or charged again.
+        if (const auto guard = mGuards.find(identity); guard != mGuards.end() && mMacros.contains(guard->second))
         {
             return;
         }
@@ -2310,6 +2626,13 @@ namespace
         out.insert(out.end(), more.begin(), more.end());
     }
 
+    // What a level of a transform made, moved into the level above it
+    // rather than copied at every level it passes up through.
+    void append(Tokens& out, Tokens&& more)
+    {
+        out.insert(out.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+    }
+
     // A level of a transform's descent into what the script nests,
     // counted while it stands.
     struct Nesting
@@ -2317,6 +2640,225 @@ namespace
         S32& depth;
         explicit Nesting(S32& d) : depth(++d) {}
         ~Nesting() { --depth; }
+    };
+
+    // The functions a script marks `inline`: the marks taken off, and the
+    // names kept for the optimizer to put in place wherever they are
+    // called. A function is marked where it is defined, at the top of the
+    // script, in any of the ways a mark is written:
+    // - `inline` before it: `inline f()`, `inline integer f(x)`;
+    // - `inline` after its parameters: `integer f(integer x) inline {`;
+    // - a comment there, `/*pragma inline*/` or `//pragma inline`, which a
+    //   compiler that knows nothing of marks passes over.
+    // A word is taken off; a comment is left as it is.
+    class InlineMarkers
+    {
+    public:
+        // Whether there may be a mark at all: cheaper to ask than making
+        // the tokens again for nothing.
+        static bool anyIn(const Tokens& in)
+        {
+            return std::any_of(in.begin(), in.end(), [](const Token& t) { return t.is(Kind::Ident, "inline") || pragma(t); });
+        }
+
+        Tokens run(const Tokens& in)
+        {
+            Tokens out;
+            out.reserve(in.size());
+            S32 depth = 0;
+            // The parentheses open at the top, by where they stand in
+            // `out`; and the last one closed there, with its `)`.
+            std::vector<size_t> opens;
+            size_t              lastOpen  = std::string::npos;
+            size_t              lastClose = std::string::npos;
+            // The function whose parameters a `)` just closed, where a `{`
+            // comes next: what a mark after the parameters marks.
+            const auto after = [&](size_t i) -> std::string {
+                size_t back = out.size();
+                while (back > 0 && out[back - 1].blank())
+                {
+                    --back;
+                }
+                if (back == 0 || back - 1 != lastClose || lastOpen == std::string::npos)
+                {
+                    return std::string();
+                }
+                const size_t next = skipBlank(in, i + 1);
+                if (next >= in.size() || !in[next].is(Kind::Punct, "{"))
+                {
+                    return std::string();
+                }
+                size_t name = lastOpen;
+                while (name > 0 && out[name - 1].blank())
+                {
+                    --name;
+                }
+                return name > 0 && out[name - 1].kind == Kind::Ident ? out[name - 1].text : std::string();
+            };
+            for (size_t i = 0; i < in.size(); ++i)
+            {
+                const Token& t = in[i];
+                if (depth == 0 && t.is(Kind::Ident, "inline"))
+                {
+                    size_t j    = skipBlank(in, i + 1);
+                    size_t name = std::string::npos;
+                    if (j < in.size() && in[j].kind == Kind::Ident)
+                    {
+                        const size_t k = skipBlank(in, j + 1);
+                        if (k < in.size() && in[k].is(Kind::Punct, "("))
+                        {
+                            name = j;
+                        }
+                        else if (k < in.size() && in[k].kind == Kind::Ident)
+                        {
+                            const size_t l = skipBlank(in, k + 1);
+                            if (l < in.size() && in[l].is(Kind::Punct, "("))
+                            {
+                                name = k;
+                            }
+                        }
+                    }
+                    if (name != std::string::npos)
+                    {
+                        mark(in[name].text);
+                        i = j - 1;
+                        continue;
+                    }
+                    if (const std::string marked = after(i); !marked.empty())
+                    {
+                        mark(marked);
+                        // The space after the word goes with it.
+                        if (i + 1 < in.size() && in[i + 1].kind == Kind::Space)
+                        {
+                            ++i;
+                        }
+                        continue;
+                    }
+                }
+                if (depth == 0 && pragma(t))
+                {
+                    if (const std::string marked = after(i); !marked.empty())
+                    {
+                        mark(marked);
+                    }
+                }
+                if (t.kind == Kind::Punct)
+                {
+                    if (t.text == "{")
+                    {
+                        ++depth;
+                    }
+                    else if (t.text == "}")
+                    {
+                        depth = std::max(0, depth - 1);
+                    }
+                    else if (depth == 0 && t.text == "(")
+                    {
+                        opens.push_back(out.size());
+                    }
+                    else if (depth == 0 && t.text == ")" && !opens.empty())
+                    {
+                        lastOpen  = opens.back();
+                        lastClose = out.size();
+                        opens.pop_back();
+                    }
+                }
+                out.push_back(t);
+            }
+            return out;
+        }
+
+        const std::vector<std::string>& names() const { return mNames; }
+
+    private:
+        static bool pragma(const Token& t)
+        {
+            if (t.kind != Kind::Comment)
+            {
+                return false;
+            }
+            std::string_view text = t.text;
+            if (text.starts_with("//"))
+            {
+                text.remove_prefix(2);
+            }
+            else if (text.starts_with("/*") && text.ends_with("*/") && text.size() >= 4)
+            {
+                text = text.substr(2, text.size() - 4);
+            }
+            else
+            {
+                return false;
+            }
+            const size_t first = text.find_first_not_of(" \t");
+            const size_t last  = text.find_last_not_of(" \t\r");
+            return first != std::string_view::npos && text.substr(first, last - first + 1) == "pragma inline";
+        }
+
+        void mark(const std::string& name)
+        {
+            if (std::find(mNames.begin(), mNames.end(), name) == mNames.end())
+            {
+                mNames.push_back(name);
+            }
+        }
+
+        std::vector<std::string> mNames;
+    };
+
+    // `const` before a declaration's type -- a global's, a local's, a
+    // parameter's, or a function's -- taken off wherever the preprocessor
+    // runs over LSL, as `inline` is, and the name it declares flagged, for
+    // assemble() to say where it is (ALLSLConsts checks and folds them).
+    // `const` then a type is no LSL, so no script that compiles loses a
+    // word it meant: `integer const = 1;` keeps its variable.
+    class ConstMarkers
+    {
+    public:
+        static bool anyIn(const Tokens& in)
+        {
+            return std::any_of(in.begin(), in.end(), [](const Token& t) { return t.is(Kind::Ident, "const"); });
+        }
+
+        static Tokens run(Tokens in)
+        {
+            Tokens out;
+            out.reserve(in.size());
+            S32 braces = 0;
+            S32 parens = 0;
+            for (size_t i = 0; i < in.size(); ++i)
+            {
+                if (in[i].is(Kind::Ident, "const"))
+                {
+                    const size_t type = skipSpace(in, i + 1);
+                    const size_t name = type < in.size() && isType(in[type]) ? skipBlank(in, type + 1) : in.size();
+                    if (name < in.size() && in[name].kind == Kind::Ident)
+                    {
+                        const size_t after    = skipBlank(in, name + 1);
+                        const bool   function = braces == 0 && parens == 0 && after < in.size() && in[after].is(Kind::Punct, "(");
+                        in[name].declared     = function ? Token::Const::Function : Token::Const::Variable;
+                        // The word, and the spaces up to the type.
+                        i = type - 1;
+                        continue;
+                    }
+                }
+                if (in[i].kind == Kind::Punct)
+                {
+                    const std::string& p = in[i].text;
+                    braces += p == "{" ? 1 : p == "}" && braces > 0 ? -1 : 0;
+                    parens += p == "(" ? 1 : p == ")" && parens > 0 ? -1 : 0;
+                }
+                out.push_back(std::move(in[i]));
+            }
+            return out;
+        }
+
+    private:
+        static bool isType(const Token& t)
+        {
+            static constexpr std::string_view TYPES[] = { "integer", "float", "string", "key", "vector", "rotation", "quaternion", "list" };
+            return t.kind == Kind::Ident && std::find(std::begin(TYPES), std::end(TYPES), t.text) != std::end(TYPES);
+        }
     };
 
     // The language extensions LSL-PyOptimizer's users know, lowered to
@@ -2334,15 +2876,15 @@ namespace
 
         Tokens run(const Tokens& in)
         {
-            Tokens out = markers(assignments(in));
+            Tokens out = mMarkers.run(assignments(in));
             mScopes.clear();
             return statements(out, 0, out.size());
         }
 
-        bool any() const { return mCounter > 0 || mAssignments > 0 || !mInlined.empty(); }
+        bool any() const { return mCounter > 0 || mAssignments > 0 || !mMarkers.names().empty(); }
         // The functions marked `inline`, for the optimizer to put in
         // place wherever they are called.
-        const std::vector<std::string>& inlined() const { return mInlined; }
+        const std::vector<std::string>& inlined() const { return mMarkers.names(); }
 
     private:
         struct Scope
@@ -2405,45 +2947,6 @@ namespace
             return sign > from && t[sign - 1].is(Kind::Punct, "@") ? t[name - 1].text : std::string();
         }
 
-        // An `inline` before a function's definition -- `inline f()`,
-        // `inline integer f(x)` -- taken off and the name kept.
-        Tokens markers(const Tokens& in)
-        {
-            Tokens out;
-            for (size_t i = 0; i < in.size(); ++i)
-            {
-                if (in[i].is(Kind::Ident, "inline"))
-                {
-                    size_t j = skipBlank(in, i + 1);
-                    size_t name = std::string::npos;
-                    if (j < in.size() && in[j].kind == Kind::Ident)
-                    {
-                        const size_t k = skipBlank(in, j + 1);
-                        if (k < in.size() && in[k].is(Kind::Punct, "("))
-                        {
-                            name = j;
-                        }
-                        else if (k < in.size() && in[k].kind == Kind::Ident)
-                        {
-                            const size_t l = skipBlank(in, k + 1);
-                            if (l < in.size() && in[l].is(Kind::Punct, "("))
-                            {
-                                name = k;
-                            }
-                        }
-                    }
-                    if (name != std::string::npos)
-                    {
-                        mInlined.push_back(in[name].text);
-                        i = j - 1;
-                        continue;
-                    }
-                }
-                out.push_back(in[i]);
-            }
-            return out;
-        }
-
         // `a &= b` and the rest as `a = a & (b)`, the left side an
         // identifier or a vector's component before the operator, the
         // right side as far as the expression goes: to a `;` or `,` or
@@ -2489,7 +2992,7 @@ namespace
                     out.push_back(t);
                     continue;
                 }
-                const Tokens lhs(out.begin() + static_cast<std::ptrdiff_t>(lhs_begin), out.begin() + static_cast<std::ptrdiff_t>(back));
+                Tokens lhs(out.begin() + static_cast<std::ptrdiff_t>(lhs_begin), out.begin() + static_cast<std::ptrdiff_t>(back));
                 // The right side.
                 size_t end   = i + 1;
                 S32    depth = 0;
@@ -2523,7 +3026,7 @@ namespace
                 out.push_back(synth(Kind::Space, " ", t));
                 out.push_back(synth(Kind::Punct, "=", t));
                 out.push_back(synth(Kind::Space, " ", t));
-                append(out, lhs);
+                append(out, std::move(lhs));
                 out.push_back(synth(Kind::Space, " ", t));
                 out.push_back(synth(Kind::Punct, std::string(op, strlen(op) - 1), t));
                 out.push_back(synth(Kind::Space, " ", t));
@@ -2853,7 +3356,7 @@ namespace
                     Tokens with;
                     with.push_back(synth(Kind::Space, " ", site));
                     with.push_back(synth(Kind::Punct, "{", site));
-                    append(with, body);
+                    append(with, std::move(body));
                     with.push_back(synth(Kind::Punct, "@", site));
                     with.push_back(synth(Kind::Ident, done.continueLabel, site));
                     with.push_back(synth(Kind::Punct, ";", site));
@@ -2861,7 +3364,7 @@ namespace
                     body.swap(with);
                 }
             }
-            append(out, body);
+            append(out, std::move(body));
             if (site.is(Kind::Ident, "do"))
             {
                 append(out, slice(in, body_end, end));
@@ -2879,7 +3382,7 @@ namespace
         std::vector<Scope>       mScopes;
         S32                      mCounter     = 0;
         S32                      mAssignments = 0;
-        std::vector<std::string> mInlined;
+        InlineMarkers            mMarkers;
         // How far down the descent is.
         S32                      mNested      = 0;
     };
@@ -3068,7 +3571,7 @@ namespace
             out.push_back(synth(Kind::Ident, hasDefault ? dflt : end, site));
             out.push_back(synth(Kind::Punct, ";", site));
             out.push_back(synth(Kind::Newline, "\n", site));
-            append(out, inner);
+            append(out, std::move(inner));
             out.push_back(synth(Kind::Newline, "\n", site));
             out.push_back(synth(Kind::Punct, "@", site));
             out.push_back(synth(Kind::Ident, end, site));
@@ -3097,9 +3600,13 @@ namespace
     class LazyLists
     {
     public:
+        explicit LazyLists(Engine& engine) : mEngine(engine) {}
+
         Tokens run(const Tokens& in)
         {
-            Tokens out = reads(assignments(in));
+            const Tokens assigned = assignments(in);
+            Tokens       out;
+            reads(assigned, 0, assigned.size(), out);
             if (!mAny)
             {
                 return out;
@@ -3185,7 +3692,7 @@ namespace
                                 {
                                     value.pop_back();
                                 }
-                                append(out, value);
+                                append(out, std::move(value));
                                 out.push_back(synth(Kind::Punct, "]", t));
                                 out.push_back(synth(Kind::Punct, ")", t));
                                 i = stop;
@@ -3212,37 +3719,53 @@ namespace
             return nullptr;
         }
 
-        Tokens reads(const Tokens& in)
+        // The reads between `from` and `to`, each made a call, into `out`;
+        // a read inside the brackets of another a level down, as deep as
+        // blocks may nest -- a macro can nest them without end -- and each
+        // level over the same tokens rather than a copy of its part.
+        void reads(const Tokens& in, size_t from, size_t to, Tokens& out)
         {
-            Tokens out;
-            size_t i = 0;
-            while (i < in.size())
+            const Nesting level(mNested);
+            if (mStopped || !mEngine.nest(mNested, from < to ? in[from] : Token()))
+            {
+                // The run has overrun, and what it made goes unread.
+                mStopped = true;
+                return;
+            }
+            size_t i = from;
+            while (i < to)
             {
                 const Token& t = in[i];
                 if (t.is(Kind::Punct, "("))
                 {
                     const size_t a      = skipBlank(in, i + 1);
-                    const char*  reader = a < in.size() && in[a].kind == Kind::Ident ? readerFor(in[a].text) : nullptr;
-                    const size_t b      = reader ? skipBlank(in, a + 1) : in.size();
-                    if (reader && b < in.size() && in[b].is(Kind::Punct, ")"))
+                    const char*  reader = a < to && in[a].kind == Kind::Ident ? readerFor(in[a].text) : nullptr;
+                    const size_t b      = reader ? skipBlank(in, a + 1) : to;
+                    if (reader && b < to && in[b].is(Kind::Punct, ")"))
                     {
                         size_t     c     = skipBlank(in, b + 1);
-                        const bool paren = c < in.size() && in[c].is(Kind::Punct, "(");
+                        const bool paren = c < to && in[c].is(Kind::Punct, "(");
                         if (paren)
                         {
                             c = skipBlank(in, c + 1);
                         }
-                        if (c < in.size() && in[c].kind == Kind::Ident)
+                        if (c < to && in[c].kind == Kind::Ident)
                         {
                             const size_t d = skipBlank(in, c + 1);
-                            if (d < in.size() && in[d].is(Kind::Punct, "["))
+                            if (d < to && in[d].is(Kind::Punct, "["))
                             {
-                                const size_t e = matching(in, d, "[", "]");
-                                size_t       after = e == std::string::npos ? e : e + 1;
+                                // A bracket closed past `to` is not closed
+                                // within it.
+                                size_t e = matching(in, d, "[", "]");
+                                if (e != std::string::npos && e >= to)
+                                {
+                                    e = std::string::npos;
+                                }
+                                size_t after = e == std::string::npos ? e : e + 1;
                                 if (paren && after != std::string::npos)
                                 {
                                     const size_t f = skipBlank(in, after);
-                                    after          = f < in.size() && in[f].is(Kind::Punct, ")") ? f + 1 : std::string::npos;
+                                    after          = f < to && in[f].is(Kind::Punct, ")") ? f + 1 : std::string::npos;
                                 }
                                 if (after != std::string::npos)
                                 {
@@ -3252,7 +3775,11 @@ namespace
                                     out.push_back(in[c]);
                                     out.push_back(synth(Kind::Punct, ",", t));
                                     out.push_back(synth(Kind::Space, " ", t));
-                                    append(out, reads(slice(in, d + 1, e)));
+                                    reads(in, d + 1, e, out);
+                                    if (mStopped)
+                                    {
+                                        return;
+                                    }
                                     out.push_back(synth(Kind::Punct, ")", t));
                                     i = after;
                                     continue;
@@ -3264,10 +3791,12 @@ namespace
                 out.push_back(t);
                 ++i;
             }
-            return out;
         }
 
-        bool mAny = false;
+        Engine& mEngine;
+        S32     mNested  = 0;
+        bool    mStopped = false;
+        bool    mAny     = false;
     };
 
     // Comments gone, each run of blanks one space or one newline, and no
@@ -3365,7 +3894,7 @@ namespace
             while (i < tokens.size())
             {
                 const Token& t = tokens[i];
-                if (t.is(Kind::Ident, "require"))
+                if (t.is(Kind::Ident, "require") && !indexed(out))
                 {
                     const size_t a = skipBlank(tokens, i + 1);
                     const size_t b = a < tokens.size() && tokens[a].is(Kind::Punct, "(") ? skipBlank(tokens, a + 1) : tokens.size();
@@ -3401,8 +3930,11 @@ namespace
             {
                 return out;
             }
+            // Nothing of the script's: the table maps to no line of it, so
+            // nothing said about the table is said about the script's first.
             Token site;
             site.verbatim = false;
+            site.file     = -1;
             const auto word = [&](Kind kind, const std::string& text) { out.push_back(synth(kind, text, site)); };
             word(Kind::Ident, "local");
             word(Kind::Space, " ");
@@ -3442,6 +3974,21 @@ namespace
         }
 
     private:
+        // Whether the word last put out, past blanks, is a `.` or a `:`:
+        // `t.require("x")` and `t:require("x")` are a table's, not the
+        // global that finds a module.
+        static bool indexed(const Tokens& before)
+        {
+            for (auto it = before.rbegin(); it != before.rend(); ++it)
+            {
+                if (!it->blank())
+                {
+                    return it->is(Kind::Punct, ".") || it->is(Kind::Punct, ":");
+                }
+            }
+            return false;
+        }
+
         bool resolve(const std::string& name, const std::string& from, const Token& at, std::string& key)
         {
             ALPreprocessor::Ask ask;
@@ -3464,6 +4011,7 @@ namespace
                 return false;
             }
             key = found.path.empty() ? name : found.path;
+            mResult.resolved.push_back({ from, name, true, key });
             if (mDone.count(key))
             {
                 return true;
@@ -3485,6 +4033,12 @@ namespace
             mInProgress.insert(key);
             Tokens body;
             mEngine.module(found, body);
+            // Kept as the run made it, its requires still calls, where the
+            // analyzers want each module apart.
+            if (mOptions.apart)
+            {
+                mApart.emplace_back(key, body);
+            }
             gather(body, key);
             mInProgress.erase(key);
             mDone.insert(key);
@@ -3500,6 +4054,12 @@ namespace
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> mDone;
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> mListed;
         std::vector<std::pair<std::string, Tokens>> mModules;
+        // Each module as the run made it, before its requires became
+        // lookups in the table (Options::apart).
+        std::vector<std::pair<std::string, Tokens>> mApart;
+
+    public:
+        const std::vector<std::pair<std::string, Tokens>>& apart() const { return mApart; }
     };
 
     // ---- the text and its map -----------------------------------------------------------
@@ -3537,7 +4097,12 @@ namespace
         S32 column = 0;
         for (const Token& t : tokens)
         {
-            if (t.kind != Kind::Newline)
+            if (t.declared != Token::Const::None)
+            {
+                result.consts.push_back({ t.text, line, column, t.declared == Token::Const::Function });
+            }
+            // What came from no file -- the module table -- maps nowhere.
+            if (t.kind != Kind::Newline && t.file >= 0)
             {
                 // A token over several lines -- a block comment, a long
                 // string -- is a segment on each of them, so that every
@@ -3584,6 +4149,54 @@ namespace
         result.map.finish();
     }
 
+    // Const globals' values written as the literals they come to: each
+    // stretch of the text replaced, what replaced it mapped where the
+    // stretch was, and the names declared const said where they are now.
+    void writeValues(ALPreprocessor::Result& result, const std::vector<ALLSLConsts::Value>& values)
+    {
+        using Place = std::pair<S32, S32>;
+        std::map<Place, bool> declared;
+        for (const ALPreprocessor::Result::Const& c : result.consts)
+        {
+            declared[{ c.line, c.column }] = c.function;
+        }
+        Tokens tokens = Lexer(false, 0, true).run(result.text);
+        Tokens out;
+        out.reserve(tokens.size());
+        size_t next = 0;
+        for (Token& t : tokens)
+        {
+            const Place at{ t.line, t.column };
+            while (next < values.size() && Place{ values[next].endLine, values[next].endColumn } <= at)
+            {
+                ++next;
+            }
+            if (next < values.size() && Place{ values[next].line, values[next].column } <= at)
+            {
+                const ALLSLConsts::Value& v = values[next];
+                if (at == Place{ v.line, v.column })
+                {
+                    Token literal    = t;
+                    literal.kind     = Kind::Other;
+                    literal.text     = v.text;
+                    literal.verbatim = false;
+                    out.push_back(std::move(literal));
+                }
+                continue;
+            }
+            if (const auto found = declared.find(at); found != declared.end() && t.kind == Kind::Ident)
+            {
+                t.declared = found->second ? Token::Const::Function : Token::Const::Variable;
+            }
+            out.push_back(std::move(t));
+        }
+        ALPreprocessor::Result written;
+        assemble(out, written);
+        result.map    = written.map.composed(result.map);
+        result.text   = std::move(written.text);
+        result.consts = std::move(written.consts);
+    }
+
     std::string stamp(S64 when, const char* format)
     {
         const std::time_t t = std::time_t(when);
@@ -3611,33 +4224,35 @@ bool ALPreprocessor::Result::hasErrors() const
     return false;
 }
 
-ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Options& options)
+namespace
 {
     // Every line of a text mapped to itself: what the source is when
     // nothing was done to it.
-    const auto asItIs = [](const std::string& text, const std::string& name, ALSourceMap& map) {
-        map = ALSourceMap();
-        map.addFile(name, std::string());
-        S32    line  = 0;
-        size_t start = 0;
-        while (start <= text.size())
-        {
-            size_t end = text.find('\n', start);
-            if (end == std::string::npos)
-            {
-                end = text.size();
-            }
-            ALSourceMap::Segment s;
-            s.outLine  = line;
-            s.line     = line;
-            s.length   = S32(end - start);
-            s.verbatim = true;
-            map.add(s);
-            ++line;
-            start = end + 1;
-        }
-        map.finish();
-    };
+    void asItIs(const std::string& text, const std::string& name, ALSourceMap& map)
+    {
+        map = ALSourceMap::identity(text, name);
+    }
+}
+
+ALPreprocessor::Result ALPreprocessor::failed(std::string_view source, const Options& options, std::string_view why)
+{
+    Result result;
+    result.overran = true;
+    result.text    = std::string(source);
+    asItIs(result.text, options.fileName, result.map);
+    ALScriptProblem problem;
+    problem.severity = ALScriptProblem::Severity::Error;
+    problem.source   = ALScriptProblem::Source::Preprocessor;
+    problem.key      = "PreprocFailed";
+    problem.args     = { std::string(why) };
+    problem.message  = ALScriptProblem::fill("the preprocessor could not finish ([1]); nothing was preprocessed", problem.args);
+    result.problems.push_back(std::move(problem));
+    return result;
+}
+
+ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Options& options)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     Result result;
     if (source.find(options.lua ? "--fspreprocessor off" : "//fspreprocessor off") != std::string_view::npos)
     {
@@ -3687,17 +4302,58 @@ ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Option
     }
 
     Tokens tokens = engine.run(source);
+    // No longer wanted, before or after the expansion: the transforms and
+    // the rest are not made either.
+    if (!result.superseded && options.superseded && options.superseded->load(std::memory_order_relaxed))
+    {
+        result.overran    = true;
+        result.superseded = true;
+    }
+    if (result.superseded)
+    {
+        result.text = std::string(source);
+        asItIs(result.text, options.fileName, result.map);
+        return result;
+    }
     if (options.lua)
     {
         Requires gathered(engine, options, result);
+        // The script as the run made it, its requires still calls, where
+        // the analyzers want it apart from its modules.
+        Tokens as_made;
+        if (options.apart)
+        {
+            as_made = tokens;
+        }
         gathered.gather(tokens, std::string());
+        if (options.apart && !gathered.apart().empty())
+        {
+            // Each piece assembled over the same files as the whole.
+            const auto piece = [&result](std::string key, const Tokens& made) {
+                Result part;
+                for (const ALSourceMap::File& file : result.map.files())
+                {
+                    part.map.addFile(file.name, file.path);
+                }
+                assemble(made, part);
+                return Result::Piece{ std::move(key), std::move(part.text), std::move(part.map) };
+            };
+            result.apart.valid  = true;
+            result.apart.script = piece(std::string(), as_made);
+            for (const auto& [key, made] : gathered.apart())
+            {
+                result.apart.modules.push_back(piece(key, made));
+            }
+        }
         Tokens all = gathered.prologue();
         if (!all.empty())
         {
-            // Luau reads its `--!strict` and the like only at the top, so
-            // the script's leading ones go ahead of the module table.
+            // Luau reads its `--!strict` and the like only before the first
+            // token that is not a comment -- a header of plain comments may
+            // come before them -- so the script's leading comments all go
+            // ahead of the module table.
             size_t head = 0;
-            while (head < tokens.size() && (tokens[head].blank() && (tokens[head].kind != Kind::Comment || tokens[head].text.compare(0, 3, "--!") == 0)))
+            while (head < tokens.size() && tokens[head].blank())
             {
                 ++head;
             }
@@ -3713,9 +4369,14 @@ ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Option
     {
         if (options.lazyLists || engine.usedLazyLists())
         {
-            LazyLists lazy;
+            LazyLists lazy(engine);
             tokens               = lazy.run(tokens);
             result.usedLazyLists = lazy.any();
+        }
+        if (ConstMarkers::anyIn(tokens))
+        {
+            // Taken off whatever else is done, as `inline` is.
+            tokens = ConstMarkers::run(std::move(tokens));
         }
         if (options.extensions || engine.usedExtensions())
         {
@@ -3726,6 +4387,16 @@ ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Option
             tokens                = extensions.run(tokens);
             result.usedExtensions = extensions.any();
             result.inlined        = extensions.inlined();
+        }
+        else if (InlineMarkers::anyIn(tokens))
+        {
+            // The marks taken off whatever else is done: with the
+            // extensions off, a marked function is a function -- put in
+            // place if the optimizer runs, and never a word the compiler
+            // stops at.
+            InlineMarkers marks;
+            tokens         = marks.run(tokens);
+            result.inlined = marks.names();
         }
         if (options.switches || engine.usedSwitches())
         {
@@ -3742,12 +4413,28 @@ ALPreprocessor::Result ALPreprocessor::run(std::string_view source, const Option
         asItIs(result.text, options.fileName, result.map);
         return result;
     }
+    if (!options.lua && !result.consts.empty())
+    {
+        // What `const` promised, held to over the whole of the text, and
+        // each const global's value as the literal LSL takes there.
+        ALLSLConsts::Result held = ALLSLConsts::run(result.text, result.consts, options.optimizer.target);
+        for (ALScriptProblem& p : held.problems)
+        {
+            mapProblem(p, result.map);
+            result.problems.push_back(std::move(p));
+        }
+        if (!held.values.empty())
+        {
+            writeValues(result, held.values);
+        }
+    }
     finish(result, options);
     return result;
 }
 
 void ALPreprocessor::finish(Result& result, const Options& options)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     if (options.lua || result.overran || result.text.empty())
     {
         return;
@@ -3778,6 +4465,13 @@ void ALPreprocessor::optimize(Result& result, const Options& options)
     ALLSLOptimizer::Options optimizing = options.optimizer;
     optimizing.inlineNames             = result.inlined;
     optimizing.inlining                = optimizing.inlining || !result.inlined.empty();
+    for (const ALPreprocessor::Result::Const& c : result.consts)
+    {
+        if (c.function)
+        {
+            optimizing.constFunctions.push_back(c.name);
+        }
+    }
     ALLSLOptimizer::Result optimized   = ALLSLOptimizer::run(result.text, optimizing);
     const size_t           first_note  = result.problems.size();
     if (optimized.uncompiled)
@@ -3802,11 +4496,13 @@ void ALPreprocessor::optimize(Result& result, const Options& options)
         result.problems.push_back(std::move(p));
         return;
     }
+    // The text's lines found once, for every note.
+    const ALScriptFixes::Lines lines(result.text);
     for (ALScriptProblem p : optimized.problems)
     {
         // What it did, as a change to the source where that can be said,
         // taken back with the note.
-        ALScriptFixes::attachOptimizer(p, result.text);
+        ALScriptFixes::attachOptimizer(p, lines);
         ALScriptFixes::mapThrough(result.map, p);
         mapProblem(p, result.map);
         if (!p.file.empty())
@@ -3835,7 +4531,8 @@ void ALPreprocessor::optimize(Result& result, const Options& options)
     if (options.weigh)
     {
         const ALScriptWeight before = weigh(result.text);
-        const ALScriptWeight after  = weigh(optimized.text);
+        // The optimizer's own weighing where it made one to choose by.
+        const ALScriptWeight after  = optimized.weight.compiled ? optimized.weight : weigh(optimized.text);
         weighed                     = before.total > 0 && after.total > 0;
         if (weighed)
         {
@@ -3854,7 +4551,7 @@ void ALPreprocessor::optimize(Result& result, const Options& options)
             {
                 ALScriptProblem& note = result.problems[i];
                 if (note.source != ALScriptProblem::Source::Optimizer || note.severity != ALScriptProblem::Severity::Note ||
-                    note.key == "OptimizerStoppedEarly" || note.endLine < note.line)
+                    note.key == "OptimizerStoppedEarly" || note.key == "InlinerStoppedEarly" || note.endLine < note.line)
                 {
                     continue;
                 }
@@ -3916,6 +4613,63 @@ std::vector<ALPreprocessor::Token> ALPreprocessor::tokenize(std::string_view tex
 }
 
 // static
+std::vector<ALPreprocessor::Required> ALPreprocessor::requiresIn(std::string_view text)
+{
+    // The shape Requires::gather takes: the word, `(`, a quoted string and
+    // `)`, blanks and comments between them, and no `.` or `:` before it.
+    const std::vector<Token> tokens = tokenize(text, true);
+    const auto blank = [&tokens](size_t i) {
+        const Token::Kind kind = tokens[i].kind;
+        return kind == Token::Kind::Space || kind == Token::Kind::Newline || kind == Token::Kind::Comment;
+    };
+    const auto next = [&tokens, &blank](size_t i) {
+        while (i < tokens.size() && blank(i))
+        {
+            ++i;
+        }
+        return i;
+    };
+    const auto is = [&tokens](size_t i, Token::Kind kind, std::string_view word) {
+        return i < tokens.size() && tokens[i].kind == kind && tokens[i].text == word;
+    };
+    std::vector<Required> out;
+    bool                  indexed = false;
+    for (size_t i = 0; i < tokens.size(); ++i)
+    {
+        if (blank(i))
+        {
+            continue;
+        }
+        const bool field = indexed;
+        indexed          = is(i, Token::Kind::Punct, ".") || is(i, Token::Kind::Punct, ":");
+        if (field || !is(i, Token::Kind::Ident, "require"))
+        {
+            continue;
+        }
+        const size_t open = next(i + 1);
+        const size_t name = is(open, Token::Kind::Punct, "(") ? next(open + 1) : tokens.size();
+        const size_t shut = name < tokens.size() ? next(name + 1) : tokens.size();
+        if (!is(shut, Token::Kind::Punct, ")") || tokens[name].kind != Token::Kind::String)
+        {
+            continue;
+        }
+        const std::string& quoted = tokens[name].text;
+        if (quoted.size() < 2 || (quoted.front() != '"' && quoted.front() != '\''))
+        {
+            continue;
+        }
+        Required one;
+        one.line      = tokens[i].line;
+        one.column    = tokens[i].column;
+        one.endLine   = tokens[shut].line;
+        one.endColumn = tokens[shut].column + 1;
+        one.name      = quoted.substr(1, quoted.size() - 2);
+        out.push_back(std::move(one));
+    }
+    return out;
+}
+
+// static
 ALPreprocessor::Transform ALPreprocessor::transformAt(const std::function<std::string_view(S32)>& line, S32 count, S32 at, std::string& word)
 {
     const auto isWord = [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; };
@@ -3956,6 +4710,46 @@ ALPreprocessor::Transform ALPreprocessor::transformAt(const std::function<std::s
         if (word == "break" || word == "continue")
         {
             return following == ';' || isdigit(static_cast<unsigned char>(following)) ? Transform::Extensions : Transform::None;
+        }
+        // `name(...) inline`, the mark after the parameters, which the
+        // line's first word does not show.
+        for (size_t at = text.find("inline"); at != std::string_view::npos; at = text.find("inline", at + 1))
+        {
+            const size_t after = at + 6;
+            if ((at > 0 && isWord(text[at - 1])) || (after < text.size() && isWord(text[after])))
+            {
+                continue;
+            }
+            const size_t before = at == 0 ? std::string_view::npos : text.find_last_not_of(blank, at - 1);
+            const size_t next   = text.find_first_not_of(blank, after);
+            if (before != std::string_view::npos && text[before] == ')' && (next == std::string_view::npos || text[next] == '{'))
+            {
+                word = "inline";
+                return Transform::Extensions;
+            }
+        }
+        // `const` before a type, anywhere on the line: a declaration's, or
+        // a parameter's.
+        for (size_t at = text.find("const"); at != std::string_view::npos; at = text.find("const", at + 1))
+        {
+            const size_t after = at + 5;
+            if ((at > 0 && isWord(text[at - 1])) || after >= text.size() || isWord(text[after]))
+            {
+                continue;
+            }
+            const size_t type = text.find_first_not_of(blank, after);
+            size_t       end  = type;
+            while (end != std::string_view::npos && end < text.size() && isWord(text[end]))
+            {
+                ++end;
+            }
+            static constexpr std::string_view TYPES[] = { "integer", "float", "string", "key", "vector", "rotation", "quaternion", "list" };
+            if (type != std::string_view::npos && end > type &&
+                std::find(std::begin(TYPES), std::end(TYPES), text.substr(type, end - type)) != std::end(TYPES))
+            {
+                word = "const";
+                return Transform::Extensions;
+            }
         }
         if (word == "inline")
         {

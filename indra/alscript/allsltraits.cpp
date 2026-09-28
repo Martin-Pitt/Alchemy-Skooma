@@ -29,26 +29,46 @@
 #include <tailslide/tailslide.hh>
 #include <tailslide/operations.hh>
 
-#include <cstring>
+#include <boost/unordered/unordered_flat_map.hpp>
+
+#include <algorithm>
+#include <iterator>
+#include <string_view>
 
 namespace
 {
     const ALLSLTraits::Trait TRAITS[] = {
 #include "allsltraits.inc"
     };
+
+    // The rows by name, made once: asked of every call the optimizer
+    // folds, which a walk of five hundred names by strcmp made near a tenth
+    // of a save.
+    const boost::unordered_flat_map<std::string_view, const ALLSLTraits::Trait*>& byName()
+    {
+        static const boost::unordered_flat_map<std::string_view, const ALLSLTraits::Trait*> rows = [] {
+            boost::unordered_flat_map<std::string_view, const ALLSLTraits::Trait*> made;
+            made.reserve(std::size(TRAITS));
+            for (const ALLSLTraits::Trait& t : TRAITS)
+            {
+                made.emplace(t.name, &t);
+            }
+            return made;
+        }();
+        return rows;
+    }
 }
 
 // static
 const ALLSLTraits::Trait* ALLSLTraits::of(const char* name)
 {
-    for (const Trait& t : TRAITS)
+    if (!name)
     {
-        if (!strcmp(t.name, name))
-        {
-            return &t;
-        }
+        return nullptr;
     }
-    return nullptr;
+    const auto& rows  = byName();
+    const auto  found = rows.find(std::string_view(name));
+    return found == rows.end() ? nullptr : found->second;
 }
 
 // static
@@ -58,57 +78,87 @@ bool ALLSLTraits::pure(const char* name)
     return t && t->pure;
 }
 
+namespace
+{
+    // What changes nothing: no assignment, no print, no call but to a
+    // library function that changes nothing -- pure, or, where `reads`,
+    // one whose result is the only point of calling it.
+    bool quiet(Tailslide::LSLASTNode* node, bool reads)
+    {
+        using namespace Tailslide;
+        if (!node)
+        {
+            return true;
+        }
+        switch (node->getNodeType())
+        {
+            case NODE_NULL:
+            case NODE_CONSTANT:
+            case NODE_IDENTIFIER:
+            case NODE_TYPE:
+                return true;
+            case NODE_EXPRESSION:
+            case NODE_AST_NODE_LIST:
+                break;
+            default:
+                return false;
+        }
+        if (node->getNodeType() == NODE_EXPRESSION)
+        {
+            auto* expr = static_cast<LSLExpression*>(node);
+            if (operation_mutates(expr->getOperation()))
+            {
+                return false;
+            }
+            switch (expr->getNodeSubType())
+            {
+                case NODE_PRINT_EXPRESSION:
+                    return false;
+                case NODE_FUNCTION_EXPRESSION:
+                {
+                    LSLSymbol* sym = expr->getSymbol();
+                    if (!sym || sym->getSubType() != SYM_BUILTIN)
+                    {
+                        return false;
+                    }
+                    const ALLSLTraits::Trait* t = ALLSLTraits::of(sym->getName());
+                    if (!t || !(t->pure || (reads && t->mustUse)))
+                    {
+                        return false;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        for (LSLASTNode* child : *node)
+        {
+            if (!quiet(child, reads))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 // static
 bool ALLSLTraits::sideEffectFree(Tailslide::LSLASTNode* node)
 {
-    using namespace Tailslide;
-    if (!node)
-    {
-        return true;
-    }
-    switch (node->getNodeType())
-    {
-        case NODE_NULL:
-        case NODE_CONSTANT:
-        case NODE_IDENTIFIER:
-        case NODE_TYPE:
-            return true;
-        case NODE_EXPRESSION:
-        case NODE_AST_NODE_LIST:
-            break;
-        default:
-            return false;
-    }
-    if (node->getNodeType() == NODE_EXPRESSION)
-    {
-        auto* expr = static_cast<LSLExpression*>(node);
-        if (operation_mutates(expr->getOperation()))
-        {
-            return false;
-        }
-        switch (expr->getNodeSubType())
-        {
-            case NODE_PRINT_EXPRESSION:
-                return false;
-            case NODE_FUNCTION_EXPRESSION:
-            {
-                LSLSymbol* sym = expr->getSymbol();
-                if (!sym || sym->getSubType() != SYM_BUILTIN || !pure(sym->getName()))
-                {
-                    return false;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-    for (LSLASTNode* child : *node)
-    {
-        if (!sideEffectFree(child))
-        {
-            return false;
-        }
-    }
-    return true;
+    return quiet(node, false);
+}
+
+// static
+bool ALLSLTraits::changesNothing(Tailslide::LSLASTNode* node)
+{
+    return quiet(node, true);
+}
+
+// static
+bool ALLSLTraits::atLeastMinusOne(const char* name)
+{
+    static constexpr std::string_view NAMES[] = { "llGetInventoryType", "llListFindList", "llListFindListNext", "llListFindStrided",
+                                                  "llSubStringIndex" };
+    return name && std::find(std::begin(NAMES), std::end(NAMES), std::string_view(name)) != std::end(NAMES);
 }

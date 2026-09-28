@@ -34,141 +34,27 @@
 #include <boost/unordered/unordered_flat_set.hpp>
 
 #include <algorithm>
+#include <limits>
 
-namespace
+// static
+S32 ALCompletionModel::tierOf(const ALFuzzyMatch::Match& match)
 {
-    // Whether a part of a word begins at a byte: after an underscore, a
-    // dot or a colon, at a capital after a small letter, at the last
-    // capital of a run before a small letter, and at a digit.
-    bool partAt(std::string_view word, size_t k)
+    // The matcher's first four, in its order; a run anywhere, or letters
+    // merely in order, are no completion of a name.
+    switch (match.tier)
     {
-        if (k == 0)
-        {
-            return true;
-        }
-        const unsigned char prev = static_cast<unsigned char>(word[k - 1]);
-        const unsigned char c    = static_cast<unsigned char>(word[k]);
-        if (prev == '_' || prev == '.' || prev == ':')
-        {
-            return c != '_';
-        }
-        if (isupper(c) && islower(prev))
-        {
-            return true;
-        }
-        if (isdigit(c) && !isdigit(prev))
-        {
-            return true;
-        }
-        return isupper(c) && isupper(prev) && k + 1 < word.size() && islower(static_cast<unsigned char>(word[k + 1]));
-    }
-
-    bool sameLetter(char a, char b)
-    {
-        return LLStringOps::toLower(a) == LLStringOps::toLower(b);
-    }
-
-    // What was typed, in the word: each letter the next of the word, or
-    // the first of a part further on. Every place in the word and in what
-    // was typed is answered once and remembered, since a word of many
-    // parts starting alike would otherwise be tried every way there is --
-    // `a_a_a_a...` against a near miss, over and again at every keystroke.
-    //
-    // Asked of nearly every name at every keystroke, and refused by most:
-    // refused cheaply first where a letter typed is not in the word in
-    // its turn, or the first begins no part of it; and the table kept
-    // from one word to the next rather than made for each.
-    bool byParts(std::string_view word, std::string_view typed)
-    {
-        size_t at = 0;
-        for (const char c : typed)
-        {
-            while (at < word.size() && !sameLetter(word[at], c))
-            {
-                ++at;
-            }
-            if (at++ == word.size())
-            {
-                return false;
-            }
-        }
-        bool begins = false;
-        for (size_t k = 0; k < word.size() && !begins; ++k)
-        {
-            begins = partAt(word, k) && sameLetter(word[k], typed.front());
-        }
-        if (!begins)
-        {
-            return false;
-        }
-        thread_local std::vector<U8> known;
-        const size_t                 across = word.size() + 1;
-        known.assign((typed.size() + 1) * across * 2, 0);
-        const auto fits = [&](const auto& self, size_t j, size_t i, bool running) -> bool {
-            if (i == typed.size())
-            {
-                return true;
-            }
-            U8& seen = known[(i * across + j) * 2 + (running ? 1 : 0)];
-            if (seen)
-            {
-                return seen == 2;
-            }
-            bool ok = running && j < word.size() && sameLetter(word[j], typed[i]) && self(self, j + 1, i + 1, true);
-            for (size_t k = j; !ok && k < word.size(); ++k)
-            {
-                ok = partAt(word, k) && sameLetter(word[k], typed[i]) && self(self, k + 1, i + 1, true);
-            }
-            seen = ok ? 2 : 1;
-            return ok;
-        };
-        return fits(fits, 0, 0, false);
+        case ALFuzzyMatch::Tier::Prefix:        return 0;
+        case ALFuzzyMatch::Tier::PrefixAnyCase: return 1;
+        case ALFuzzyMatch::Tier::PartRun:       return 2;
+        case ALFuzzyMatch::Tier::Parts:         return 3;
+        default:                                return -1;
     }
 }
 
 // static
 S32 ALCompletionModel::matchTier(std::string_view word, std::string_view typed)
 {
-    if (typed.empty())
-    {
-        return 0;
-    }
-    if (word.size() < typed.size())
-    {
-        return -1;
-    }
-    if (word.compare(0, typed.size(), typed) == 0)
-    {
-        return 0;
-    }
-    auto same_at = [&](size_t at) {
-        for (size_t i = 0; i < typed.size(); ++i)
-        {
-            if (!sameLetter(word[at + i], typed[i]))
-            {
-                return false;
-            }
-        }
-        return true;
-    };
-    if (same_at(0))
-    {
-        return 1;
-    }
-    for (size_t k = 1; k + typed.size() <= word.size(); ++k)
-    {
-        if (partAt(word, k) && same_at(k))
-        {
-            return 2;
-        }
-    }
-    // Past a length where no name is typed by the letters of its parts,
-    // or is one.
-    if (typed.size() <= 32 && word.size() <= 256 && byParts(word, typed))
-    {
-        return 3;
-    }
-    return -1;
+    return tierOf(ALFuzzyMatch::match(word, typed, ALFuzzyMatch::Tier::Parts));
 }
 
 // static
@@ -240,7 +126,8 @@ const char* ALCompletionModel::badgeOf(const ALCompletion& completion)
 }
 
 // static
-void ALCompletionModel::documentWords(const ALTextDocument& text, const ALTextPos& at, std::string_view prefix, std::vector<ALCompletion>& out)
+void ALCompletionModel::documentWords(const ALTextDocument& text, const ALTextPos& at, std::string_view prefix, std::vector<ALCompletion>& out,
+                                      size_t most)
 {
     boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> seen;
     for (const ALCompletion& c : out)
@@ -248,7 +135,7 @@ void ALCompletionModel::documentWords(const ALTextDocument& text, const ALTextPo
         seen.insert(c.text);
     }
     const S32 count = text.lineCount();
-    for (S32 l = 0; l < count && out.size() < CAP; ++l)
+    for (S32 l = 0; l < count && out.size() < most; ++l)
     {
         const std::string& line = text.line(l);
         size_t             i    = 0;
@@ -308,14 +195,16 @@ void ALCompletionModel::rank(std::vector<ALCompletion>& list, std::string_view p
         S32 tier;
         S32 rank;
     };
-    std::vector<std::pair<Sorted, ALCompletion>> sorted;
+    // Ranked by index, and only as far as the cap sorted: a pool of a
+    // thousand words is ordered to its best two hundred, not whole.
+    std::vector<std::pair<Sorted, size_t>> sorted;
     sorted.reserve(list.size());
-    for (ALCompletion& c : list)
+    for (size_t i = 0; i < list.size(); ++i)
     {
-        const S32 tier = prefix.empty() ? 0 : matchTier(c.text, prefix);
-        sorted.push_back({ { tier < 0 ? 9 : tier, kindRank(c) }, std::move(c) });
+        const S32 tier = prefix.empty() ? 0 : matchTier(list[i].text, prefix);
+        sorted.push_back({ { tier < 0 ? 9 : tier, kindRank(list[i]) }, i });
     }
-    std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+    const auto before = [&list](const auto& a, const auto& b) {
         if (a.first.tier != b.first.tier)
         {
             return a.first.tier < b.first.tier;
@@ -324,36 +213,46 @@ void ALCompletionModel::rank(std::vector<ALCompletion>& list, std::string_view p
         {
             return a.first.rank < b.first.rank;
         }
-        return a.second.text < b.second.text;
-    });
-    list.clear();
-    for (auto& [order, c] : sorted)
+        if (list[a.second].text != list[b.second].text)
+        {
+            return list[a.second].text < list[b.second].text;
+        }
+        return a.second < b.second;
+    };
+    const size_t kept = std::min(sorted.size(), CAP);
+    std::partial_sort(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(kept), sorted.end(), before);
+    std::vector<ALCompletion> out;
+    out.reserve(kept);
+    for (size_t i = 0; i < kept; ++i)
     {
-        list.push_back(std::move(c));
+        out.push_back(std::move(list[sorted[i].second]));
     }
-    if (list.size() > CAP)
-    {
-        list.resize(CAP);
-    }
+    list.swap(out);
 }
 
-bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std::string_view prefix, const std::string& head,
-                               std::vector<ALCompletion> answered, const ALTextDocument& text)
+bool ALCompletionModel::pooled(const ALTextPos& start, const std::string& head, std::string_view prefix) const
 {
-    const bool fresh = start != mAsked;
-    if (fresh)
-    {
-        mAsked = start;
-        mSupplied.clear();
-    }
-    mList = std::move(answered);
+    // A prefix grown from the one gathered for matches no word that one
+    // did not (matchTier holds for every start of what it held for).
+    return start == mPoolStart && head == mPoolHead && prefix.starts_with(mPoolPrefix);
+}
+
+void ALCompletionModel::pool(const ALTextPos& start, const ALTextPos& at, std::string_view prefix, const std::string& head, char separator,
+                             std::vector<ALCompletion> answered, const ALTextDocument& text)
+{
+    mPoolStart  = start;
+    mPoolHead   = head;
+    mPoolPrefix = std::string(prefix);
+    mPool       = std::move(answered);
+    mPoolWords.clear();
+    mPoolTargets.clear();
     // After `ll.` the members of `ll` are wanted: the head was put before
     // the prefix for whoever answers by whole names, and is taken off what
     // they answer.
     if (!head.empty())
     {
-        const std::string dotted = head + ".";
-        for (ALCompletion& c : mList)
+        const std::string dotted = head + separator;
+        for (ALCompletion& c : mPool)
         {
             if (c.text.compare(0, dotted.size(), dotted) == 0)
             {
@@ -361,22 +260,66 @@ bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std:
             }
         }
     }
+    // Each made ready once to be matched at every key after.
+    mPoolTargets.reserve(mPool.size());
+    for (const ALCompletion& c : mPool)
+    {
+        mPoolTargets.push_back(ALFuzzyMatch::prepare(c.text));
+    }
+    if (!head.empty())
+    {
+        return;
+    }
+    // The document's words, all of them that match now, for as long as
+    // the identifier is typed: each is offered while it is longer than
+    // what is typed.
+    std::vector<ALCompletion> words(mPool);
+    const size_t              answered_count = words.size();
+    documentWords(text, at, prefix, words, std::numeric_limits<size_t>::max());
+    mPoolWords.reserve(words.size() - answered_count);
+    for (size_t i = answered_count; i < words.size(); ++i)
+    {
+        mPoolWords.push_back(ALFuzzyMatch::prepare(words[i].text));
+    }
+}
+
+bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std::string_view prefix, const std::string& head,
+                               std::vector<ALCompletion> answered, const ALTextDocument& text)
+{
+    pool(start, at, prefix, head, '.', std::move(answered), text);
+    return narrow(start, at, prefix);
+}
+
+bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std::string_view prefix)
+{
+    const bool fresh = start != mAsked;
+    if (fresh)
+    {
+        mAsked = start;
+        mSupplied.clear();
+    }
+    // The pool narrowed to what is typed now.
+    mList.clear();
+    for (size_t i = 0; i < mPool.size(); ++i)
+    {
+        if (prefix.empty() || tierOf(ALFuzzyMatch::match(mPoolTargets[i], prefix, ALFuzzyMatch::Tier::Parts)) >= 0)
+        {
+            mList.push_back(mPool[i]);
+        }
+    }
     // What was answered later about this identifier, narrowed to the
     // prefix as typed now; what was known already keeps its place, and
     // what is new about it fills what was empty. Each found by its name,
     // not by a walk of the list for each answer.
     boost::unordered_flat_map<std::string, size_t, ll::string_hash, std::equal_to<>> listed;
-    if (!mSupplied.empty())
+    listed.reserve(mList.size() + mSupplied.size());
+    for (size_t i = 0; i < mList.size(); ++i)
     {
-        listed.reserve(mList.size() + mSupplied.size());
-        for (size_t i = 0; i < mList.size(); ++i)
-        {
-            listed.emplace(mList[i].text, i);
-        }
+        listed.emplace(mList[i].text, i);
     }
     for (const ALCompletion& c : mSupplied)
     {
-        if (matchTier(c.text, prefix) < 0)
+        if (!prefix.empty() && matchTier(c.text, prefix) < 0)
         {
             continue;
         }
@@ -388,7 +331,7 @@ bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std:
                 have.detail = c.detail;
                 have.kind   = c.kind;
             }
-            if (have.documentation.empty())
+            if (!have.documentation)
             {
                 have.documentation = c.documentation;
             }
@@ -397,9 +340,18 @@ bool ALCompletionModel::narrow(const ALTextPos& start, const ALTextPos& at, std:
         listed.emplace(c.text, mList.size());
         mList.push_back(c);
     }
-    if (head.empty())
+    // Then the document's own, but those named already and those no
+    // longer than what is typed.
+    for (const ALFuzzyMatch::Target& word : mPoolWords)
     {
-        documentWords(text, at, prefix, mList);
+        if (word.text.size() > prefix.size() && tierOf(ALFuzzyMatch::match(word, prefix, ALFuzzyMatch::Tier::Parts)) >= 0 &&
+            !listed.contains(word.text))
+        {
+            ALCompletion c;
+            c.text = word.text;
+            listed.emplace(word.text, mList.size());
+            mList.push_back(std::move(c));
+        }
     }
     rank(mList, prefix);
     if (!mList.empty())
@@ -430,6 +382,12 @@ void ALCompletionModel::close()
     hide();
     mAsked = ALTextPos(-1, -1);
     mSupplied.clear();
+    mPool.clear();
+    mPoolTargets.clear();
+    mPoolWords.clear();
+    mPoolStart = ALTextPos(-1, -1);
+    mPoolHead.clear();
+    mPoolPrefix.clear();
 }
 
 bool ALCompletionModel::relisted(const std::string& asked)
