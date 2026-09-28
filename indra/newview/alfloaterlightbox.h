@@ -50,6 +50,7 @@
 class ALCurveEditorCtrl;
 class ALEmptyState;
 class ALPopover;
+class ALSettingRow;
 class LLButton;
 class LLColor4;
 class LLColorSwatchCtrl;
@@ -76,7 +77,6 @@ public:
     /// key: a global Ctrl+Z would fire while the user is typing anywhere in
     /// the viewer. The studio base answers Ctrl+Z and Ctrl+Y/Ctrl+Shift+Z
     /// through undo() and redo(), and Ctrl+F is this floater's own.
-    bool handleKeyHere(KEY key, MASK mask) override;
     bool undo() override { return applyHistory(false); }
     bool redo() override { return applyHistory(true); }
     /// Only to notice the reference still appearing or going away, which is
@@ -104,8 +104,8 @@ public:
     /// Close the popover that is up, keeping what it chose or, escaping,
     /// keeping nothing.
     void closePopover(bool escape);
-    /// Told once per popover, as it closes.
-    void onPopoverClosed(const LLView* which, bool escaped);
+    /// Told once per popover, as it closes, while it is the one up.
+    void onPopoverClosed(bool escaped);
 
     /// Find a setting or section by name (Ctrl+F): every section and every
     /// setting, ranked against what is typed, and Return goes to it. The
@@ -165,6 +165,8 @@ public:
     const std::string& paneKey(size_t page) const;
 
     void onClickResetControlDefault(const LLSD& userdata);
+    /// A setting row's reset, as a named step: the row resets what it shows.
+    void resetRow(ALSettingRow* row);
     void onClickResetSection(const LLSD& userdata);
     /// Set or clear one section's bit in LLPipeline::sGradeBypassMask, from
     /// the checkbox on that section's accordion header. Ticked means the
@@ -178,8 +180,6 @@ public:
     /// shows once its section is scrolled away or another tab is up, and it
     /// is easy to forget one is in force while judging the grade.
     void refreshBypassBadge();
-    void onCommitVec3(LLUICtrl* ctrl);
-    void refreshVec3Row(const std::string& setting_name);
     void setupToneCurve();
     void refreshToneCurve();
     /// Interpret the graph's action (drag, add, remove) against the selected
@@ -278,7 +278,7 @@ public:
     std::vector<LLPanel*> mTabPages;
     /// What popovers hang from.
     LLPanel* mTopBar = nullptr;
-    LLHandle<ALPopover> mPopover;
+    ALPopoverSlot mPopover;
     PopoverKind mPopoverKind = PopoverKind::None;
     /// The caption a jump lit, and how long ago; draw() puts it out.
     LLHandle<LLView> mLitCaption;
@@ -309,15 +309,6 @@ public:
     };
     std::vector<TonemapperRow> mTonemapperRows;
 
-    // Spinner triplets named "vec3_<Setting>_<0|1|2>", keyed by setting name.
-    // Rows are discovered by walking the widget tree in postBuild; adding a
-    // vector-valued row is pure XUI.
-    /// Any LLUICtrl, not just LLSpinCtrl: the contract is the widget's *name*,
-    /// so a slider, a spinner or anything else that carries one number can
-    /// stand for a component. Sliders matter for banks of related values --
-    /// eight hue sliders read as a shape, eight spinners read as a form.
-    std::map<std::string, std::array<LLUICtrl*, 3>> mVec3Rows;
-    std::vector<boost::signals2::scoped_connection> mVec3Connections;
     boost::signals2::scoped_connection mTonemapConnection;
     boost::signals2::scoped_connection mHDRConnection;
     boost::signals2::scoped_connection mLooksListConnection;
@@ -326,7 +317,6 @@ public:
     LLUICtrl* mLookSave = nullptr;
     LLUICtrl* mLookDelete = nullptr;
     LLUICtrl* mLookRevert = nullptr;
-    bool mVec3Updating = false;
 
     // Tone curve graph. Optional: the floater builds without it. The four
     // curve settings are read fresh on every refresh and commit rather than

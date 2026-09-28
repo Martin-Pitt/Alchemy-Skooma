@@ -48,6 +48,8 @@ bool ALLuauConfig::parse(std::string_view text, ALLuauConfig& out, std::string& 
         config.enabledLint.warningMask = base->lints;
         config.fatalLint.warningMask   = base->fatalLints;
         config.lintErrors              = base->lintErrors;
+        // Added to, as Luau adds a file's globals to the ones above it.
+        config.globals                 = base->globals;
     }
     Luau::ConfigOptions options;
     // Aliases are taken however they are cased in the file.
@@ -80,6 +82,44 @@ bool ALLuauConfig::parse(std::string_view text, ALLuauConfig& out, std::string& 
     }
     error.clear();
     return true;
+}
+
+// static
+bool ALLuauConfig::parseChain(const std::vector<std::string_view>& nearest_first, ALLuauConfig& out, const ALLuauConfig* base)
+{
+    out      = base ? *base : ALLuauConfig();
+    bool any = false;
+    for (auto it = nearest_first.rbegin(); it != nearest_first.rend(); ++it)
+    {
+        ALLuauConfig next;
+        std::string  error;
+        if (parse(*it, next, error, &out))
+        {
+            out = std::move(next);
+            any = true;
+        }
+    }
+    return any;
+}
+
+// static
+std::optional<size_t> ALLuauConfig::aliasIn(const std::vector<std::string_view>& nearest_first, const std::string& alias, std::string& value)
+{
+    for (size_t i = 0; i < nearest_first.size(); ++i)
+    {
+        ALLuauConfig one;
+        std::string  error;
+        if (!parse(nearest_first[i], one, error))
+        {
+            continue;
+        }
+        if (const auto found = one.aliases.find(alias); found != one.aliases.end())
+        {
+            value = found->second;
+            return i;
+        }
+    }
+    return std::nullopt;
 }
 
 // static
