@@ -25,6 +25,7 @@
 #pragma once
 
 #include "alscriptexplorermodel.h"
+#include "alscriptrecompile.h"
 #include "llui.h"
 #include "llhandle.h"
 #include "llpanel.h"
@@ -74,6 +75,11 @@ public:
         virtual bool unsavedAnywhere(const ALScriptRef& ref) const = 0;
         // Every script of an object checked, its problems listed.
         virtual void checkScripts(const LLUUID& root) = 0;
+        // The scripts, and every script of the prims -- each prim with its
+        // object's name -- recompiled for a target, each said in Output and
+        // a closed one's problems listed (ALScriptRecompile).
+        virtual void recompileScripts(std::vector<ALScriptRecompile::One> scripts, std::vector<std::pair<LLUUID, std::string>> prims,
+                                      const std::string& target) = 0;
 
     protected:
         ~Window() = default;
@@ -100,6 +106,9 @@ public:
     // where it is not known or has changed -- of every prim where `refetch`.
     // `from_region` asks every prim's region, not the objects' copies.
     void relist(bool refetch = false, bool from_region = false);
+    // The same on the next frame, however many ask before it: a tab loaded
+    // or closed, a script's own answer, many of them at a time.
+    void relistSoon(bool refetch = false);
     // A script's row, chosen and in view, with the explorer in sight and
     // the keyboard in it: what holds it unfolded first, and the filter let
     // go of where it hides the row.
@@ -119,7 +128,10 @@ public:
     void readState(const LLSD& state) { mModel.readState(state); }
 
 private:
+    // The tree made from the model: now, or -- out of sight -- once it is
+    // seen (pump).
     void fill();
+    void fillWhenSeen();
     void contentsHeard(const ALScriptWorkspace::Contents& contents);
     void rereadNames();
     void askName(const LLUUID& id);
@@ -127,10 +139,9 @@ private:
     // or an open script remembers it by, or an ellipsis while it is asked.
     std::string nameGivenTo(const LLUUID& root) const;
     void        refold(Model::Refold refold);
-    // Listed again, or filled again, on the next frame: asked for from
-    // within the tree's own handling of a click, a drop or a rename, which
-    // the tree is not to be changed under.
-    void        relistSoon(bool refetch);
+    // Filled again on the next frame: asked for from within the tree's own
+    // handling of a click, a drop or a rename, which the tree is not to be
+    // changed under.
     void        fillSoon();
 
     void onChosen();
@@ -149,7 +160,15 @@ private:
     // The name a row was given where it stands, taken.
     void renamed(const Choice& row, const std::string& was, std::string name);
     void remove(const std::vector<Choice>& rows);
-    void recompile(const std::vector<Choice>& rows);
+    // The rows' keys to the clipboard, one a line; the row's object or prim
+    // chosen in world with the build tools on it; the row's item described,
+    // through a dialog.
+    void copyKeys(const std::vector<Choice>& rows);
+    void editInWorld(const Choice& row);
+    void describe(const Choice& row);
+    // The rows' scripts, and their prims', up again for a target: "auto"
+    // for each as it compiles now.
+    void recompile(const std::vector<Choice>& rows, const std::string& target);
     // Start, stop, reset or restart over the rows, asked about first where
     // it reaches more than one script.
     void run(const std::string& action, const std::vector<Choice>& rows);
@@ -201,6 +220,8 @@ private:
     bool                    mNamesStale = false;
     // Listed again on the next frame, and whether every prim is asked again.
     std::optional<bool>     mRelistWanted;
+    // Whether the filter has words in it, as it last committed.
+    bool                    mFiltering = false;
     boost::signals2::scoped_connection mPropertiesConnection;
     boost::signals2::scoped_connection mSelectionConnection;
     boost::signals2::scoped_connection mRunningConnection;

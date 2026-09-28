@@ -504,6 +504,24 @@ struct ALScriptStudioDoc
         // an expansion of an older one was on its way: one expansion at a
         // time, and the next for the latest text, not one a key.
         std::optional<U32> wanted;
+        // What the analyzers last said of a word -- for the tip under the
+        // mouse or the inspector at the caret, which ask the same question
+        // -- by the text's version, the expansion it was read through (none
+        // for the text as it stands) and where the word starts: the other
+        // asking of it is answered from here.
+        struct Hovered
+        {
+            U32                      version   = 0;
+            U32                      expansion = 0;
+            ALTextPos                word;
+            ALScriptAnalysis::Result said;
+        };
+        std::optional<Hovered> hovered;
+        // Whether the text, at the version kept with it, has no default
+        // state (ALScriptStudioChecking::lslFragment): asked on every
+        // caret move and every frame Weights is shown, and a walk of the
+        // whole text to answer.
+        mutable std::optional<std::pair<U32, bool>> fragment;
         // The questions held until it comes.
         std::vector<Waiting> waiting;
         // Whether the script's `.luaurc` was asked for once, so that a
@@ -558,6 +576,12 @@ struct ALScriptStudioDoc
         U32                      fixesFor = 0;
     };
     std::vector<Shown>                         shown;
+    // How many of them are errors and warnings, counted as they are put
+    // in: the tab's dot and the trailer ask on every key.
+    S32                                        shownErrors   = 0;
+    S32                                        shownWarnings = 0;
+    // The rows put in, and counted.
+    void setShown(std::vector<Shown> rows);
     // The problem listed at a place, in the script or an include, saying
     // what it says; null where the list has been made again without it.
     const Shown* findShown(S32 line, S32 column, const std::string& file, const std::string& message) const;
@@ -676,12 +700,11 @@ struct ALScriptStudioDoc
         ALEditorCommand symbolCommand = ALEditorCommand::None;
         U32             symbolVersion = 0;
         ALTextPos       symbolAt;
-        // The crumb path the bar was last told, by the outline it was
-        // read from: a caret that stays within the same symbols asks for
-        // no new crumbs, and it is asked on every key.
+        // The symbols the caret is in, the outermost first, by the outline
+        // it was read from (ALScriptStudioCaret::placePath): what the bar
+        // at the bottom and the outline both show.
         std::vector<size_t> crumbPath;
         U32                 crumbsOf = 0;
-        std::string         crumbName;
         // Where the caret was last seen; when the inspector is due to be
         // told what it is on, or zero; and what it was last told about.
         ALTextPos seen{ -1, -1 };
