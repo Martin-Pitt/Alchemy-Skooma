@@ -33,6 +33,7 @@
 #include "lltextbox.h"
 
 #include "alscriptstudio_fixture.h"
+#include "lltabcontainer.h"
 
 #include "../test/lltut.h"
 
@@ -100,7 +101,17 @@ namespace
         // The tests' scripts are each in a prim of its own, its own root.
         LLUUID rootOf(const ALScriptRef& ref) const override { return ref.object; }
         Doc*   openElsewhere(const ALScriptRef& ref) override { return elsewhere && elsewhere->ref == ref ? elsewhere : nullptr; }
+        std::vector<InventoryItem> inventoryItems() override { return inventory; }
+        std::vector<InventoryItem> inventory;
         void   fetchForSearch(const ALScriptRef& ref, U32 generation, const std::string& where) override { fetches.push_back({ ref, generation, where }); }
+        // Sought here and now, as the thread would, but for when.
+        void matchApart(std::shared_ptr<const std::string> text, const std::string& query, const ALTextSearchOptions& options,
+                        std::function<void(ALScriptSearch::Matched)> matched) override
+        {
+            ++apart;
+            matched(ALScriptSearch::match(ALTextDocument(*text), query, options));
+        }
+        S32 apart = 0;
         void   applyPendingEdits(Doc& doc) override { applied.push_back(doc.id); }
         void   confirmReplaceAll(const LLSD& args, std::function<void()> yes) override
         {
@@ -159,6 +170,8 @@ namespace tut
             // The tab as the skin built it.
             pane = window.find<ALScriptSearchPane>("search_tab");
             ensure("the skin builds the tab as the pane", pane != nullptr);
+            // In sight, its tab the one chosen, as when it is worked in.
+            window.find<LLTabContainer>("bottom_tabs")->selectTabByName("search_tab");
             return *pane;
         }
 
@@ -245,7 +258,7 @@ namespace tut
         ensure_equals("counting while it comes", counted(), services.words("SearchCounting", { { "[HITS]", services.counted("Matches", 3) },
                                                                                               { "[FILES]", services.counted("Files", 2) },
                                                                                               { "[SHOWN]", "2000" } }));
-        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::string("x\ntimer fetched\n"), false);
+        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::make_shared<const std::string>("x\ntimer fetched\n"), false);
         ensure_equals("fetched, found", out.search().found().size(), size_t(3));
         ensure_equals("its text kept, for a replace", out.search().found()[2].text, std::string("x\ntimer fetched\n"));
         ensure_equals("none to wait for", out.search().pending(), 0);
@@ -268,10 +281,10 @@ namespace tut
         find("timer", "listed");
         find("other", "listed");
         ensure_equals("asked twice", studio.fetches.size(), size_t(2));
-        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::string("timer\nother\n"), false);
+        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::make_shared<const std::string>("timer\nother\n"), false);
         ensure("the first search's answer dropped", out.search().found().empty());
         ensure_equals("still waiting on the second's", out.search().pending(), 1);
-        out.fetched(studio.fetches[1].generation, "Thing", away, "away.lsl", std::string("timer\nother\n"), false);
+        out.fetched(studio.fetches[1].generation, "Thing", away, "away.lsl", std::make_shared<const std::string>("timer\nother\n"), false);
         ensure_equals("the second's kept", out.search().found().size(), size_t(1));
         ensure_equals("for what it looked for", out.search().found()[0].places[0].begin.line, 1);
     }
@@ -299,8 +312,13 @@ namespace tut
         out.pump();
         ensure_equals("not at once", out.search().found()[0].places[0].begin.column, 1);
         std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        LLTabContainer* tabs = window.find<LLTabContainer>("bottom_tabs");
+        tabs->selectTabByName("problems_tab");
         out.pump();
-        ensure_equals("then, where it is now", out.search().found()[0].places[0].begin.column, 3);
+        ensure_equals("due, but out of sight: waiting", out.search().found()[0].places[0].begin.column, 1);
+        tabs->selectTabByName("search_tab");
+        out.pump();
+        ensure_equals("then, seen, where it is now", out.search().found()[0].places[0].begin.column, 3);
         out.replaceAll();
         ensure_equals("and replaced", door.editor->text(), std::string("yyx one\n two\n"));
         door.editor->undo();
@@ -320,8 +338,8 @@ namespace tut
         studio.objects           = { { root, "Thing", { door.ref, away, card } } };
         studio.inHand            = root;
         find("timer", "object");
-        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::string("timer\n"), false);
-        out.fetched(studio.fetches[1].generation, "Thing", card, "card", std::string("a timer\n"), true);
+        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::make_shared<const std::string>("timer\n"), false);
+        out.fetched(studio.fetches[1].generation, "Thing", card, "card", std::make_shared<const std::string>("a timer\n"), true);
         ensure_equals("three found", out.search().found().size(), size_t(3));
         services.whenOpened = [this](const ALScriptRef& ref, const std::string&) {
             Doc& opened = doc("away", "timer\n");
@@ -441,8 +459,8 @@ namespace tut
         ensure_equals("waited for", out.search().pending(), 1);
         studio.heldListing();
         ensure_equals("both fetched", studio.fetches.size(), size_t(2));
-        out.fetched(studio.fetches[0].generation, "Thing", one, "one.lsl", std::string("timer\n"), false);
-        out.fetched(studio.fetches[1].generation, "Thing", two, "two.lsl", std::nullopt, false);
+        out.fetched(studio.fetches[0].generation, "Thing", one, "one.lsl", std::make_shared<const std::string>("timer\n"), false);
+        out.fetched(studio.fetches[1].generation, "Thing", two, "two.lsl", nullptr, false);
         ensure_equals("none to wait for", out.search().pending(), 0);
         ensure_equals("one read", out.search().found().size(), size_t(1));
         const std::string said = services.words("SearchCount", { { "[HITS]", services.counted("Matches", 1) },
@@ -463,5 +481,83 @@ namespace tut
         ensure("the earlier listing dropped", studio.fetches.empty());
         studio.heldListing();
         ensure_equals("the later one searched", studio.fetches.size(), size_t(2));
+    }
+
+    template <>
+    template <>
+    void alscriptsearchpane_object::test<8>()
+    {
+        set_test_name("a script read for a search kept by which text it is: found again only for that text; no more than the most kept, the oldest going");
+        ALScriptSearch::Sources& sources = ALScriptSearch::Sources::instance();
+        sources.clear();
+        const ALScriptRef one(LLUUID::generateNewID(), LLUUID::generateNewID());
+        const LLUUID      asset = LLUUID::generateNewID();
+        sources.keep(one, LLUUID::null, { std::make_shared<const std::string>("timer"), "one.lsl", false });
+        ensure("which text unknown: not kept", sources.bytes() == 0);
+        sources.keep(one, asset, { std::make_shared<const std::string>("timer"), "one.lsl", false });
+        const ALScriptSearch::Sources::Source* kept = sources.find(one, asset);
+        ensure("found by its text", kept && *kept->text == "timer" && kept->name == "one.lsl");
+        ensure("not for another", !sources.find(one, LLUUID::generateNewID()) && !sources.find(one, LLUUID::null));
+        sources.keep(one, LLUUID::generateNewID(), { std::make_shared<const std::string>("saved since"), "one.lsl", false });
+        ensure("saved since: in its place", !sources.find(one, asset) && sources.bytes() == std::string("saved since").size());
+
+        sources.clear();
+        const size_t              big = ALScriptSearch::Sources::MOST / 3 + 1;
+        std::vector<ALScriptRef>  refs;
+        std::vector<LLUUID>       assets;
+        for (S32 i = 0; i < 3; ++i)
+        {
+            refs.emplace_back(LLUUID::generateNewID(), LLUUID::generateNewID());
+            assets.push_back(LLUUID::generateNewID());
+            if (i == 2)
+            {
+                ensure("the first used again", sources.find(refs[0], assets[0]) != nullptr);
+            }
+            sources.keep(refs[i], assets[i], { std::make_shared<const std::string>(big, 'x'), "big", false });
+        }
+        ensure("within the most", sources.bytes() <= ALScriptSearch::Sources::MOST);
+        ensure("the one used longest ago gone", !sources.find(refs[1], assets[1]) && sources.find(refs[0], assets[0]) && sources.find(refs[2], assets[2]));
+        sources.clear();
+    }
+
+    template <>
+    template <>
+    void alscriptsearchpane_object::test<9>()
+    {
+        set_test_name("a fetched script sought apart, still to come until the answer is back; one of an earlier search dropped");
+        ALScriptSearchPane& out  = make();
+        const ALScriptRef   away(LLUUID::generateNewID(), LLUUID::generateNewID());
+        studio.objects           = { { LLUUID::generateNewID(), "Thing", { away } } };
+        find("timer", "listed");
+        ensure_equals("fetched", studio.fetches.size(), size_t(1));
+        out.fetched(studio.fetches[0].generation, "Thing", away, "away.lsl", std::make_shared<const std::string>("timer\n"), false);
+        ensure("sought apart", studio.apart == 1 && out.search().found().size() == 1 && out.search().pending() == 0);
+        const S32 before = studio.apart;
+        out.fetched(studio.fetches[0].generation + 7, "Thing", away, "away.lsl", std::make_shared<const std::string>("timer\n"), false);
+        ensure("another search's: not sought", studio.apart == before);
+    }
+
+    template <>
+    template <>
+    void alscriptsearchpane_object::test<10>()
+    {
+        set_test_name("the inventory searched: a script open here as it stands, the rest fetched; typing in an inventory script searches it again");
+        ALScriptSearchPane& out  = make();
+        Doc&                door = doc("door", "timer here\n");
+        door.ref                 = ALScriptRef(LLUUID::null, fresh());
+        const ALScriptRef   away(LLUUID::null, fresh());
+        studio.inventory         = { { door.ref, "door" }, { away, "away.lsl" } };
+        find("timer", "inventory");
+        ensure("the open one as it stands", out.search().found().size() == 1 && out.search().found()[0].doc == door.id);
+        ensure_equals("the other fetched", studio.fetches.size(), size_t(1));
+        ensure("from the inventory", studio.fetches[0].ref == away && studio.fetches[0].where == window.services().words("SearchInventoryWhere"));
+        out.fetched(studio.fetches[0].generation, studio.fetches[0].where, away, "away.lsl", std::make_shared<const std::string>("a timer\n"), false);
+        ensure("both found", out.search().found().size() == 2 && out.search().pending() == 0);
+        door.editor->setCaret(ALTextPos(0, 0));
+        door.editor->insertText("x");
+        out.typedIn(door);
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        out.pump();
+        ensure_equals("typed in: searched again", out.search().found()[0].places[0].begin.column, 1);
     }
 }
