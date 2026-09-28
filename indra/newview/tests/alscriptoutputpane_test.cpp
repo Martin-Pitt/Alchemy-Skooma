@@ -212,7 +212,8 @@ namespace tut
         const LLUUID        script = fresh();
         studio.owned.insert(lamp);
         services.addDoc("door-script", ALScriptRef(door, script), "door.lsl");
-        out.heard(said(door, "Door", "door speaks", Event::Channel::Debug, script, "door.lsl"));
+        // As the region says it: the debug channel names no script.
+        out.heard(said(door, "Door", "door speaks", Event::Channel::Debug));
         out.heard(said(lamp, "Lamp", "lamp speaks"));
         out.heard(said(crate, "Crate", "crate tells its owner", Event::Channel::OwnerSay));
         out.said("Saved door.lsl.", false, nullptr, {});
@@ -428,5 +429,52 @@ namespace tut
         ensure("the envelope has lines of its own", under > 3);
         ensure_equals("its code's third line, where the region names it", out.heard(failed(object, item, "Counter", "attempt to index nil", under + 2)).line, 102);
         ensure_equals("a line in the envelope is none of the code's: as said", out.heard(failed(object, item, "Counter", "boom", 1)).line, 1);
+    }
+
+    template <>
+    template <>
+    void alscriptoutputpane_object::test<8>()
+    {
+        set_test_name("an error the filters hide is not unread: a stranger's, with one object's chosen; the chosen one's is");
+        ALScriptOutputPane& out   = make();
+        const LLUUID        lamp  = fresh();
+        const LLUUID        crate = fresh();
+        out.heard(said(lamp, "Lamp", "lamp speaks"));
+        out.heard(said(crate, "Crate", "crate speaks"));
+        whose(lamp.asString());
+        out.heard(failed(crate, fresh(), "crate.lsl", "Math Error", -1));
+        ensure("a stranger's, hidden: not unread", !out.unread() && studio.unreadChanges == 0);
+        out.heard(failed(lamp, fresh(), "lamp.lsl", "Math Error", -1));
+        ensure("the chosen one's is", out.unread());
+        const S32 said = studio.unreadChanges;
+        out.heard(failed(lamp, fresh(), "lamp.lsl", "Another Error", -1));
+        ensure_equals("unread already: not said again", studio.unreadChanges, said);
+    }
+
+    template <>
+    template <>
+    void alscriptoutputpane_object::test<9>()
+    {
+        set_test_name("what the agent's objects say aloud, to the agent, and in IMs: each its kind, the agent's own; the prim that spoke named");
+        ALScriptOutputPane& out  = make();
+        const LLUUID        lamp = fresh();
+        Event               aloud = said(lamp, "Lamp", "hello", Event::Channel::Said);
+        aloud.primName            = "Bulb";
+        out.heard(aloud);
+        out.heard(said(lamp, "Lamp", "just you", Event::Channel::SaidTo));
+        out.heard(said(lamp, "Lamp", "an IM", Event::Channel::Instant));
+        const auto& entries = out.view()->entries();
+        ensure_equals("three", entries.size(), size_t(3));
+        ensure_equals("the prim that spoke, after its object", entries[0].source, std::string("Lamp \xE2\x96\xB8 Bulb"));
+        ensure_equals("said", entries[0].kind, window.services().words("KindSaid"));
+        ensure_equals("said to the agent", entries[1].kind, window.services().words("KindSaidTo"));
+        ensure_equals("an IM", entries[2].kind, window.services().words("KindInstant"));
+        whose("mine");
+        ensure_equals("the agent's own, all of them", shownTexts().size(), size_t(3));
+        whose("");
+        out.showKind("said");
+        ensure_equals("aloud and to the agent", shown(), std::string("|hello|just you"));
+        out.showKind("im");
+        ensure_equals("IMs", shown(), std::string("|an IM"));
     }
 }
