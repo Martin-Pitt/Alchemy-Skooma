@@ -26,6 +26,8 @@
 
 #include "alscriptproblemspane.h"
 
+#include "alscriptfixes.h"
+
 #include "alcodeeditor.h"
 #include "alpanelist.h"
 #include "alscriptstudioservices.h"
@@ -69,8 +71,9 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         row.file      = file;
         if (!file.empty())
         {
-            // In an include: listed under its name, not marked here.
-            row.fileName = making.includeName ? making.includeName(file) : file;
+            // In an include, or in code the preprocessor made: listed under
+            // its name, not marked here.
+            row.fileName = file == Doc::GENERATED ? services.words("InGeneratedCode") : making.includeName ? making.includeName(file) : file;
             made.rows.push_back(std::move(row));
             return;
         }
@@ -93,27 +96,33 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
     };
 
     // The analyzer's word on a line as it is now over the compiler's on
-    // the text last saved: a syntax error both found is said once.
-    const bool analysis_current = doc.analysisVersion == doc.editor->document().version();
-    auto       analysed_error_on = [&](S32 line) {
-        for (const ALScriptProblem& problem : doc.analysis)
+    // the text last saved: a syntax error both found is said once. Within
+    // a line either way, since the two say where a statement went wrong
+    // differently -- the analyzer at the missing `;`, the compiler at what
+    // came after it.
+    const bool analysis_current = doc.check.analysisVersion == doc.editor->document().version();
+    auto       analysed_error_near = [&](S32 line) {
+        for (const ALScriptProblem& problem : doc.check.analysis)
         {
-            if (problem.severity == ALScriptProblem::Severity::Error && problem.file.empty() && problem.line == line)
+            if (problem.severity == ALScriptProblem::Severity::Error && problem.file.empty() && std::abs(problem.line - line) <= 1)
             {
                 return true;
             }
         }
         return false;
     };
+    // The compiler's are of the text as it was saved: said so, once the
+    // text has changed since, which they may no longer be true of.
+    const std::string as_saved = doc.editor->isDirty() ? " " + services.words("CompilerAsSaved") : std::string();
     for (const Doc::Compiled& problem : doc.problems)
     {
         const Doc::Level level = Doc::levelOf(problem.level);
-        if (analysis_current && level == Doc::Level::Error && problem.file.empty() && analysed_error_on(problem.line))
+        if (analysis_current && level == Doc::Level::Error && problem.file.empty() && analysed_error_near(problem.line))
         {
             continue;
         }
-        add(problem.line, problem.column, problem.hasColumn, problem.line, problem.column, Doc::markOf(level), level, services.words("OriginCompiler"), problem.message,
-            problem.file);
+        add(problem.line, problem.column, problem.hasColumn, problem.line, problem.column, Doc::markOf(level), level, services.words("OriginCompiler"),
+            problem.message + as_saved, problem.file);
     }
     // The preprocessor's own word on the text as it stands, and the
     // optimizer's notes from the last run ahead of a save.
@@ -163,21 +172,14 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
             }
         }
     }
-    for (const ALScriptProblem& problem : doc.analysis)
+    for (const ALScriptProblem& problem : doc.check.analysis)
     {
-        const Doc::Level  level  = Doc::levelOf(problem.severity);
-        const std::string origin = problem.source == ALScriptProblem::Source::Parser  ? services.words("OriginParser")
-                                   : problem.source == ALScriptProblem::Source::Types ? services.words("OriginTypes")
-                                                                                      : services.words("OriginLint");
-        // A Luau lint's name says what to look up or turn off; an LSL
-        // error's number says nothing to whoever reads it.
-        const bool        named   = !problem.code.empty() && problem.code.find_first_not_of("0123456789") != std::string::npos;
-        const std::string message = named ? problem.message + " [" + problem.code + "]" : problem.message;
-        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, Doc::markOf(level), level, origin, message, problem.file,
-            problem.source == ALScriptProblem::Source::Lint ? problem.code : std::string());
+        const Doc::Shown said = Doc::analysisRow(problem, doc.language.lua, services);
+        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, Doc::markOf(said.level), said.level, said.origin, said.message,
+            problem.file, said.lint);
         made.rows.back().key      = problem.key;
         made.rows.back().fixes    = problem.fixes;
-        made.rows.back().fixesFor = doc.analysisVersion;
+        made.rows.back().fixesFor = doc.check.analysisVersion;
         // The gutter's word on what the line offers: a lightbulb where the
         // caret is, a round mark where a fix changes the script.
         if (analysis_current && problem.file.empty() && !problem.fixes.empty())
@@ -202,29 +204,41 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         add(line, column, problem.column >= 0, line, column, ALCodeEditor::Mark::Runtime, Doc::Level::Error, services.words("OriginRuntime"), message,
             problem.file);
     }
-    if (!doc.definitionsError.empty())
+    if (!doc.check.definitionsError.empty())
     {
         Doc::Shown row;
         row.level   = Doc::Level::Note;
         row.origin  = services.words("OriginDefinitions");
-        row.message = doc.definitionsError;
+        row.message = doc.check.definitionsError;
         made.rows.push_back(std::move(row));
     }
     // Code heavier than its target runs a script in: a warning, since
     // the number is the studio's reckoning of what the region compiles --
     // an estimate for Mono, and of the text before the optimizer where it
-    // runs after -- and not the region's word.
-    if (doc.weight && doc.weightVersion == doc.editor->document().version() && doc.weight->total > doc.weight->limit)
+    // runs after -- and not the region's word. Past four fifths of it, as
+    // the trailer colours it, a warning too: what is left is all the
+    // script has to run in. Not where the optimizer is still to run, which
+    // only makes it lighter.
+    const std::optional<ALScriptWeight>& weighed = doc.weighing.weight;
+    const bool current = weighed && doc.weighing.version == doc.editor->document().version();
+    const bool over    = current && weighed->total > weighed->limit;
+    const bool near    = current && !over && doc.weighing.exact && weighed->total * 5 > weighed->limit * 4;
+    if (over || near)
     {
-        const ALScriptWeight&      weight = *doc.weight;
+        const ALScriptWeight&      weight = *doc.weighing.weight;
         LLStringUtil::format_map_t args;
         args["[SIZE]"]   = llformat("%.1f", (F64)weight.total / 1024.0);
         args["[LIMIT]"]  = std::to_string(weight.limit / 1024);
+        args["[LEFT]"]   = near ? llformat("%.1f", (F64)(weight.limit - weight.total) / 1024.0) : std::string();
         args["[TARGET]"] = ALScriptWeight::nameOf(weight.target);
         Doc::Shown row;
         row.level   = Doc::Level::Warning;
         row.origin  = services.words("OriginWeight");
-        row.message = services.words(weight.estimate ? "WeightOverEstimate" : !doc.weightExact ? "WeightOverBefore" : "WeightOver", args);
+        const char* said = near            ? (weight.estimate ? "WeightNearEstimate" : "WeightNear")
+                           : weight.estimate ? "WeightOverEstimate"
+                           : !doc.weighing.exact ? "WeightOverBefore"
+                                                 : "WeightOver";
+        row.message      = services.words(said, args);
         made.rows.push_back(std::move(row));
     }
     std::stable_sort(made.rows.begin(), made.rows.end(), [](const Doc::Shown& a, const Doc::Shown& b) {
@@ -265,11 +279,16 @@ bool ALScriptProblemsPane::postBuild()
     // A row chosen shows its place and keeps the keyboard in the list, so
     // that the arrows walk on through them; a double-click goes there.
     mList->setCommitCallback([this](LLUICtrl*, const LLSD&) { choose(false); });
-    mList->setDoubleClickCallback([this]() { choose(true); });
+    // Return and a double-click go to the place chosen, to type there, and
+    // escape goes back to the script without going anywhere. Its copying is
+    // its own menu's.
+    mList->setGo([this]() { choose(true); });
+    mList->setBack([this]() { mServices->revealed(mList, true); });
     mList->setRightMouseDownCallback([this](LLUICtrl*, S32 x, S32 y, MASK) { showMenu(x, y); });
     // The pane's filters: whose, which levels, which source, which words.
     mOrigin->add(mServices->words("OriginAny"), LLSD(""));
-    for (const char* origin : { "OriginParser", "OriginTypes", "OriginLint", "OriginCompiler", "OriginPreprocessor", "OriginOptimizer", "OriginRuntime", "OriginDefinitions" })
+    for (const char* origin : { "OriginParser", "OriginTypes", "OriginLint", "OriginCompiler", "OriginPreprocessor", "OriginOptimizer", "OriginRuntime", "OriginDefinitions",
+                                "OriginWeight" })
     {
         mOrigin->add(mServices->words(origin), LLSD(mServices->words(origin)));
     }
@@ -361,15 +380,87 @@ void ALScriptProblemsPane::rekey(const std::string& from, const std::string& to)
     }
 }
 
+void ALScriptProblemsPane::checkedScript(const ALScriptRef& ref, const std::string& name, bool lua, const std::vector<Doc::Shown>& rows,
+                                         const std::string& where)
+{
+    const std::string id    = "checked:" + ref.object.asString() + ":" + ref.item.asString();
+    auto              found = std::find_if(mChecked.begin(), mChecked.end(), [&id](const Checked& one) { return one.id == id; });
+    Checked&          one   = found != mChecked.end() ? *found : mChecked.emplace_back();
+    one.id                  = id;
+    one.ref                 = ref;
+    one.name                = name;
+    one.where               = where;
+    one.lua                 = lua;
+    one.rows                = rows;
+    mStore.replace(id, one.rows);
+    if (everyScript())
+    {
+        fill(listed());
+    }
+}
+
+void ALScriptProblemsPane::forgetChecked(const ALScriptRef& ref)
+{
+    const auto found = std::find_if(mChecked.begin(), mChecked.end(), [&ref](const Checked& one) { return one.ref == ref; });
+    if (found == mChecked.end())
+    {
+        return;
+    }
+    mStore.forget(found->id);
+    mChecked.erase(found);
+    if (everyScript())
+    {
+        fill(listed());
+    }
+}
+
+void ALScriptProblemsPane::clearChecked()
+{
+    for (const Checked& one : mChecked)
+    {
+        mStore.forget(one.id);
+    }
+    mChecked.clear();
+    fill(listed());
+}
+
+void ALScriptProblemsPane::showEveryScript()
+{
+    if (!everyScript())
+    {
+        mScope->selectByValue("all");
+        mWindow->problemFiltersChanged();
+    }
+    fill(listed());
+}
+
+std::vector<const ALScriptProblemsPane::Checked*> ALScriptProblemsPane::checkedFor()
+{
+    std::vector<const Checked*> out;
+    if (!everyScript())
+    {
+        return out;
+    }
+    for (const Checked& one : mChecked)
+    {
+        // Opened since, its tab's are what is listed.
+        if (!mServices->findDoc(one.ref))
+        {
+            out.push_back(&one);
+        }
+    }
+    return out;
+}
+
 bool ALScriptProblemsPane::everyScript() const
 {
     return mScope->getValue().asString() == "all";
 }
 
-ALScriptProblemsPane::store_t::Query ALScriptProblemsPane::query(const Doc& doc) const
+ALScriptProblemsPane::store_t::Query ALScriptProblemsPane::query(const std::string& id) const
 {
     store_t::Query query;
-    query.file     = doc.id;
+    query.file     = id;
     query.errors   = mErrors->get();
     query.warnings = mWarnings->get();
     query.notes    = mNotes->get();
@@ -415,11 +506,17 @@ void ALScriptProblemsPane::choose(bool to_editor)
         return;
     }
     const LLSD& problem = item->getValue();
-    if (!problem.isMap() || problem.has("heading") || !mServices->findDoc(problem["doc"].asString()))
+    const bool  checked = problem.isMap() && problem.has("checked");
+    if (!problem.isMap() || problem.has("heading") || (!checked && !mServices->findDoc(problem["doc"].asString())))
     {
         return;
     }
     Place place;
+    if (checked)
+    {
+        place.ref  = ALScriptRef(problem["object"].asUUID(), problem["item"].asUUID());
+        place.name = problem["name"].asString();
+    }
     place.doc       = problem["doc"].asString();
     place.file      = problem["file"].asString();
     place.fileName  = problem["fileName"].asString();
@@ -460,6 +557,7 @@ void ALScriptProblemsPane::readState(const LLSD& state)
 
 void ALScriptProblemsPane::fill(const Doc* doc)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     // The row chosen and how far the list was scrolled are kept through a
     // refill of the same script's: a check comes at every pause in
     // typing, and whoever is working down the list keeps their place.
@@ -472,21 +570,29 @@ void ALScriptProblemsPane::fill(const Doc* doc)
     const bool same = doc && doc->id == mShownFor;
     mShownFor = doc ? doc->id : std::string();
     mList->deleteAllItems();
-    mList->setCommentText(LLStringUtil::null);
+    mList->setEmpty(LLStringUtil::null, LLStringUtil::null);
 
     // How many of each there are before the filters: what the level
     // boxes and the tab say.
-    const std::vector<const Doc*> docs = docsFor(doc);
-    S32                           errors = 0, warnings = 0, notes = 0, fixable = 0;
-    for (const Doc* each : docs)
-    {
-        for (const Doc::Shown& shown : each->shown)
+    const std::vector<const Doc*>     docs    = docsFor(doc);
+    const std::vector<const Checked*> checked = checkedFor();
+    S32                               errors = 0, warnings = 0, notes = 0, fixable = 0;
+    const auto                        count  = [&](const std::vector<Doc::Shown>& rows) {
+        for (const Doc::Shown& shown : rows)
         {
             errors += shown.level == Doc::Level::Error ? 1 : 0;
             warnings += shown.level == Doc::Level::Warning ? 1 : 0;
             notes += shown.level == Doc::Level::Note ? 1 : 0;
             fixable += Doc::ProblemTraits::fixable(shown) ? 1 : 0;
         }
+    };
+    for (const Doc* each : docs)
+    {
+        count(each->shown);
+    }
+    for (const Checked* each : checked)
+    {
+        count(each->rows);
     }
     const S32 held = errors + warnings + notes;
     const auto label = [this](LLCheckBoxCtrl* box, const char* name, S32 count) {
@@ -505,38 +611,54 @@ void ALScriptProblemsPane::fill(const Doc* doc)
     layoutFilters();
     mHeld = held;
     mWindow->problemCountsChanged();
-    if (!doc)
+    if (!doc && checked.empty())
     {
         return;
     }
 
     // What the filters take, by script and, within one, by the file it is
     // in: the script's own, then each include's.
+    // A script no tab holds, an object's check reached, after the open ones.
     struct Group
     {
-        const Doc*                       doc = nullptr;
+        const Doc*                       doc     = nullptr;
+        const Checked*                   checked = nullptr;
         std::string                      file;
         std::string                      fileName;
         std::vector<const Doc::Shown*>   rows;
     };
     std::vector<Group> groups;
     S32                listed = 0;
-    for (const Doc* each : docs)
-    {
-        const auto selected = mStore.select(query(*each));
+    const auto         take   = [&](const Doc* each, const Checked* one, const store_t::Query& asked) {
+        const auto selected = mStore.select(asked);
         for (const Doc::Shown* problem : selected.found)
         {
-            if (groups.empty() || groups.back().doc != each || groups.back().file != problem->file)
+            if (groups.empty() || groups.back().doc != each || groups.back().checked != one || groups.back().file != problem->file)
             {
-                groups.push_back({ each, problem->file, problem->fileName, {} });
+                groups.push_back({ each, one, problem->file, problem->fileName, {} });
             }
             groups.back().rows.push_back(problem);
             ++listed;
         }
+    };
+    for (const Doc* each : docs)
+    {
+        take(each, nullptr, query(each->id));
+    }
+    for (const Checked* one : checked)
+    {
+        take(nullptr, one, query(one->id));
+    }
+    // Where a tab is open, its editor paints a row's mark in the theme's
+    // colour; a script no tab holds takes the same.
+    const ALCodeEditor* painter = nullptr;
+    for (const Doc* each : mServices->openDocs())
+    {
+        painter = painter ? painter : each->editor;
     }
 
     static const LLUIColor ink = LLUIColorTable::instance().getColor("ScrollUnselectedColor", LLColor4::white);
-    const bool all      = docs.size() > 1 || everyScript();
+    const bool all      = docs.size() + checked.size() > 1 || everyScript();
     // Whose they are, over them, wherever that is not plain: more than one
     // script's or file's, or another script's than the one in front, which
     // a row followed into an include leaves the list on.
@@ -570,9 +692,12 @@ void ALScriptProblemsPane::fill(const Doc* doc)
                 counts.push_back(mServices->counted("ProblemNotes", group_notes));
             }
             LLStringUtil::format_map_t args;
-            args["[NAME]"] = group.doc->name;
-            args["[FILE]"] = group.fileName;
-            std::string name = group.file.empty() ? group.doc->name : mServices->words(all ? "ProblemsIncludedBy" : "ProblemsIncluded", args);
+            args["[NAME]"]   = group.doc ? group.doc->name : group.checked->name;
+            args["[FILE]"]   = group.fileName;
+            args["[OBJECT]"] = group.checked ? group.checked->where : std::string();
+            std::string name = !group.file.empty() ? mServices->words(all ? "ProblemsIncludedBy" : "ProblemsIncluded", args)
+                               : group.doc     ? group.doc->name
+                                               : mServices->words("ProblemsChecked", args);
             for (size_t i = 0; i < counts.size(); ++i)
             {
                 name += (i == 0 ? "   \xC2\xB7   " : ", ") + counts[i];
@@ -582,7 +707,7 @@ void ALScriptProblemsPane::fill(const Doc* doc)
             heading["value"]["group"]        = static_cast<S32>(group_index);
             heading["columns"][0]["column"]  = "icon";
             heading["columns"][0]["type"]    = "icon";
-            heading["columns"][0]["value"]   = mWindow->problemIcon(*group.doc, group.file);
+            heading["columns"][0]["value"]   = group.doc ? mWindow->problemIcon(*group.doc, group.file) : mWindow->scriptIcon(group.checked->lua, group.file);
             heading["columns"][1]["column"]  = "message";
             heading["columns"][1]["value"]   = name;
             heading["columns"][1]["color"]   = ink.get().getValue();
@@ -598,7 +723,14 @@ void ALScriptProblemsPane::fill(const Doc* doc)
             // it needs no index into anything that a filter reorders.
             LLSD value;
             value["group"]     = static_cast<S32>(group_index);
-            value["doc"]       = group.doc->id;
+            value["doc"]       = group.doc ? group.doc->id : std::string();
+            if (group.checked)
+            {
+                value["checked"] = group.checked->id;
+                value["object"]  = group.checked->ref.object;
+                value["item"]    = group.checked->ref.item;
+                value["name"]    = group.checked->name;
+            }
             value["line"]      = problem->line;
             value["column"]    = problem->column;
             value["hasColumn"] = problem->hasColumn;
@@ -611,20 +743,20 @@ void ALScriptProblemsPane::fill(const Doc* doc)
             value["message"]   = problem->message;
             value["lint"]      = problem->lint;
             // The column as the status line counts it, where the problem is
-            // in the text open here; an include's is its byte, for want of
-            // its text.
-            const ALTextDocument& text   = group.doc->editor->document();
-            const S32             column = problem->file.empty() && problem->line < text.lineCount()
-                                               ? text.displayColumn(ALTextPos(problem->line, problem->column), group.doc->editor->getTabWidth())
-                                               : problem->column;
+            // in the text open here; an include's, or a script's no tab
+            // holds, is its byte, for want of its text.
+            const ALCodeEditor* editor = group.doc ? group.doc->editor : nullptr;
+            const S32           column = editor && problem->file.empty() && problem->line < editor->document().lineCount()
+                                             ? editor->document().displayColumn(ALTextPos(problem->line, problem->column), editor->getTabWidth())
+                                             : problem->column;
             const std::string where = problem->hasColumn ? llformat("%d:%d", problem->line + 1, column + 1) : llformat("%d", problem->line + 1);
             const std::string level = mServices->words(problem->level == Doc::Level::Error     ? "LevelError"
                                                  : problem->level == Doc::Level::Warning ? "LevelWarning"
                                                                                          : "LevelNote");
             // Every column carries the whole of it: a diagnostic longer
             // than the column is cut at the column's edge.
-            std::string tip = level + "   \xC2\xB7   " + (problem->file.empty() ? group.doc->name : problem->fileName) + ":" + where + "\n" +
-                              problem->message;
+            std::string tip = level + "   \xC2\xB7   " + (!problem->file.empty() ? problem->fileName : group.doc ? group.doc->name : group.checked->name) +
+                              ":" + where + "\n" + problem->message;
             // What would put it right, which its right-click menu offers.
             for (const ALScriptFix& fix : problem->fixes)
             {
@@ -643,7 +775,10 @@ void ALScriptProblemsPane::fill(const Doc* doc)
             row["columns"][0]["value"]  = problem->level == Doc::Level::Error     ? "Problem_Error"
                                           : problem->level == Doc::Level::Warning ? "Problem_Warning"
                                                                                   : "Problem_Note";
-            row["columns"][0]["color"]  = group.doc->editor->markColor(mark).getValue();
+            if (const ALCodeEditor* paints = group.doc ? group.doc->editor : painter)
+            {
+                row["columns"][0]["color"] = paints->markColor(mark).getValue();
+            }
             row["columns"][1]["column"] = "message";
             row["columns"][1]["value"]  = problem->message;
             row["columns"][2]["column"] = "source";
@@ -689,7 +824,7 @@ void ALScriptProblemsPane::fill(const Doc* doc)
                 const LLSD& value = rows[i]->getValue();
                 if (value.has("heading") || value["message"].asString() != chosen["message"].asString() ||
                     value["origin"].asString() != chosen["origin"].asString() || value["file"].asString() != chosen["file"].asString() ||
-                    value["doc"].asString() != chosen["doc"].asString())
+                    value["doc"].asString() != chosen["doc"].asString() || value["checked"].asString() != chosen["checked"].asString())
                 {
                     continue;
                 }
@@ -712,15 +847,19 @@ void ALScriptProblemsPane::fill(const Doc* doc)
         bool current = true;
         for (const Doc* each : docs)
         {
-            current = current && each->loaded && each->analysisVersion == each->editor->document().version();
+            current = current && each->loaded && each->check.analysisVersion == each->editor->document().version();
         }
         LLStringUtil::format_map_t named;
-        named["[NAME]"] = doc->name;
-        mList->setCommentText(!current ? std::string() : all ? mServices->words("NoProblemsOpen") : elsewhere ? mServices->words("NoProblemsIn", named) : mServices->words("NoProblems"));
+        named["[NAME]"] = doc ? doc->name : std::string();
+        mList->setEmpty(!current     ? std::string()
+                        : all       ? mServices->words("NoProblemsOpen")
+                        : elsewhere ? mServices->words("NoProblemsIn", named)
+                                    : mServices->words("NoProblems"),
+                        LLStringUtil::null);
     }
     else if (listed == 0)
     {
-        mList->setCommentText(mServices->counted("ProblemsAllHidden", held));
+        mList->setEmpty(mServices->counted("ProblemsAllHidden", held), LLStringUtil::null);
     }
 }
 
@@ -955,6 +1094,8 @@ void ALScriptProblemsPane::act(const std::string& action)
     {
         // What the script said as it ran, let go of until it says it again.
         doc.runtime.clear();
+        doc.runtimeHeld.clear();
+        mWindow->runtimeCleared(doc);
         mWindow->refreshProblems(doc);
     }
     else if (action == "off" && !lint.empty())

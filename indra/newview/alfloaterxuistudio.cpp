@@ -26,6 +26,9 @@
 
 #include "alfloaterxuistudio.h"
 
+#include "alpanelist.h"
+
+#include "alwatchedfile.h"
 #include "alxmldocument.h"
 #include "alxmllayermerge.h"
 #include "alcolorfield.h"
@@ -59,7 +62,6 @@
 #include "llkeyboard.h"
 #include "lllayoutstack.h"
 #include "lllineeditor.h"
-#include "lllivefile.h"
 #include "llmenugl.h"
 #include "lltooldraganddrop.h"
 #include "llnotificationsutil.h"
@@ -146,34 +148,6 @@ static std::string layerName(const ALXUICatalog::Layer& layer)
 {
     return layer.skin + "/" + layer.language;
 }
-
-// One file of the primary preview, watched for a change on disk. The
-// first check counts as reading it; only a change after that reloads.
-class ALXUILiveFile final : public LLLiveFile
-{
-public:
-    ALXUILiveFile(const std::string& path, ALFloaterXUIStudio* tool)
-    :   LLLiveFile(path, 1.f),
-        mTool(tool)
-    {
-    }
-
-protected:
-    bool loadFile() override
-    {
-        if (!mPrimed)
-        {
-            mPrimed = true;
-            return true;
-        }
-        mTool->fileChanged();
-        return true;
-    }
-
-private:
-    ALFloaterXUIStudio*   mTool;
-    bool                mPrimed = false;
-};
 
 namespace
 {
@@ -1295,8 +1269,6 @@ ALFloaterXUIStudio::ALFloaterXUIStudio(const LLSD& key)
     mDocuments.setCoalesceWindow(COALESCE_SECONDS);
     mCommitCallbackRegistrar.add("XUIStudio.Tree", boost::bind(&ALFloaterXUIStudio::onTreeAction, this, _2));
     mEnableCallbackRegistrar.add("XUIStudio.TreeEnabled", boost::bind(&ALFloaterXUIStudio::onTreeActionEnabled, this, _2));
-    mCommitCallbackRegistrar.add("XUIStudio.List", boost::bind(&ALFloaterXUIStudio::onListAction, this, _2));
-    mEnableCallbackRegistrar.add("XUIStudio.ListEnabled", boost::bind(&ALFloaterXUIStudio::onListActionEnabled, this, _2));
     mCommitCallbackRegistrar.add("XUIStudio.Menu", boost::bind(&ALFloaterXUIStudio::onMenuAction, this, _2));
     mEnableCallbackRegistrar.add("XUIStudio.MenuCheck", boost::bind(&ALFloaterXUIStudio::onMenuCheck, this, _2));
     mEnableCallbackRegistrar.add("XUIStudio.MenuEnable", boost::bind(&ALFloaterXUIStudio::onMenuEnable, this, _2));
@@ -1314,8 +1286,9 @@ ALFloaterXUIStudio::~ALFloaterXUIStudio()
 
 bool ALFloaterXUIStudio::postBuild()
 {
+    addKeys();
     mCatalogFilter = getChild<LLFilterEditor>("catalog_filter");
-    mFileList = getChild<LLScrollListCtrl>("file_list");
+    mFileList = getChild<ALPaneList>("file_list");
     mSkinCombo = getChild<LLComboBox>("skin_combo");
     mLanguageCombo = getChild<LLComboBox>("language_combo");
     mLanguageCombo2 = getChild<LLComboBox>("language_combo_2");
@@ -1325,15 +1298,15 @@ bool ALFloaterXUIStudio::postBuild()
     // ask, and get that.
     ALXUILint::readWords();
     ALXUINotes::get();
-    mFindBar = getChild<ALScopeBar>("find_bar");
-    mFindResults = getChild<LLScrollListCtrl>("find_results");
+    mScopeBar = getChild<ALScopeBar>("scope_bar");
+    mFindResults = getChild<ALPaneList>("find_results");
     mTreeFilter = getChild<LLFilterEditor>("tree_filter");
     mTreePanel = getChild<LLPanel>("tree_host");
     mBreadcrumb = getChild<ALJumpBar>("breadcrumb");
-    mFindings = getChild<LLScrollListCtrl>("findings");
+    mFindings = getChild<ALPaneList>("findings");
     mHistory = getChild<ALHistoryList>("history");
-    mDocumentList = getChild<LLScrollListCtrl>("documents");
-    mSourceLayerList = getChild<LLScrollListCtrl>("source_layer_list");
+    mDocumentList = getChild<ALPaneList>("documents");
+    mSourceLayerList = getChild<ALPaneList>("source_layer_list");
     mOverrideField = getChild<LLTextBox>("override_field");
     mFindingScope = getChild<LLComboBox>("finding_scope");
     mFindingRule = getChild<LLComboBox>("finding_rule");
@@ -1423,7 +1396,7 @@ bool ALFloaterXUIStudio::postBuild()
         {
             mAttributeGrid->setNested(ctrl->getValue().asBoolean());
         });
-    mLayout = getChild<LLScrollListCtrl>("layout");
+    mLayout = getChild<ALPaneList>("layout");
     mSourceLayers = getChild<LLTextBox>("source_layers");
     mSourceText = getChild<ALCodeEditor>("source_text");
     // The source as an editor: what could go here from the schema, what
@@ -1444,9 +1417,9 @@ bool ALFloaterXUIStudio::postBuild()
             refreshSource(selectedView());
         }
     });
-    mBindings = getChild<LLScrollListCtrl>("bindings");
-    mState = getChild<LLScrollListCtrl>("state");
-    mSelectionFindings = getChild<LLScrollListCtrl>("selection_findings");
+    mBindings = getChild<ALPaneList>("bindings");
+    mState = getChild<ALPaneList>("state");
+    mSelectionFindings = getChild<ALPaneList>("selection_findings");
     setMenuBar(getChild<LLMenuBarGL>("studio_menu"));
     // Two strips, split by what each mode needs rather than by what it is
     // about. The navigator holds the ones that are a list of names and read
@@ -1488,7 +1461,7 @@ bool ALFloaterXUIStudio::postBuild()
             mInspectors->setTabImage(panel, icon);
         }
     }
-    mNotifications = getChild<LLScrollListCtrl>("notifications");
+    mNotifications = getChild<ALPaneList>("notifications");
     mNotificationFilter = getChild<LLFilterEditor>("notification_filter");
     mAttributeGrid->onFieldCommit(boost::bind(&ALFloaterXUIStudio::onFieldCommit, this, _1, _2));
     mAttributeGrid->onFieldRemove(boost::bind(&ALFloaterXUIStudio::onFieldRemove, this, _1));
@@ -1498,7 +1471,7 @@ bool ALFloaterXUIStudio::postBuild()
         {
             mAttributeGrid->setAuthoredOnly(ctrl->getValue().asBoolean());
         });
-    mChannels = getChild<LLScrollListCtrl>("channels");
+    mChannels = getChild<ALPaneList>("channels");
     mChannelResponse = getChild<LLComboBox>("channel_response");
     mPalette = getChild<ALSpecimenList>("palette");
     getChild<LLButton>("palette_cells")->setCommitCallback([this](LLUICtrl* ctrl, const LLSD&)
@@ -1507,7 +1480,7 @@ bool ALFloaterXUIStudio::postBuild()
         mPalette->setCellSize(mPaletteCells ? PALETTE_CELL_WIDTH : 0, mPaletteCells ? PALETTE_CELL_HEIGHT : 0);
         saveState();
     });
-    mPaletteAttributes = getChild<LLScrollListCtrl>("palette_attributes");
+    mPaletteAttributes = getChild<ALPaneList>("palette_attributes");
     // The tag chosen above decides what is listed below it.
     mPalette->onChose([this](const std::string&) { fillPaletteAttributes(); });
     mPalette->setDragStarter(boost::bind(&ALFloaterXUIStudio::startPaletteDrag, this, _1));
@@ -1531,7 +1504,7 @@ bool ALFloaterXUIStudio::postBuild()
     getChild<LLButton>("tree_in")->setClickedCallback(boost::bind(&ALFloaterXUIStudio::onTreeMove, this, "move_in"));
     getChild<LLButton>("tree_out")->setClickedCallback(boost::bind(&ALFloaterXUIStudio::onTreeMove, this, "move_out"));
     mTranslateLanguage = getChild<LLComboBox>("translate_language");
-    mTranslateList = getChild<LLScrollListCtrl>("translate_list");
+    mTranslateList = getChild<ALPaneList>("translate_list");
     mTranslateValue = getChild<LLTextEditor>("translate_value");
     mTranslateCounts = getChild<LLTextBox>("translate_counts");
     mEditTarget = getChild<LLTextBox>("edit_target");
@@ -1590,7 +1563,7 @@ bool ALFloaterXUIStudio::postBuild()
     mLanguageCombo->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onSkinOrLanguage, this));
     mLanguageCombo2->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onSkinOrLanguage, this));
     mSecondaryCheck->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onToggleSecondary, this));
-    buildFindBar();
+    buildScopeBar();
     // The summary under the sentence, in the slot at its right end.
     LLTextBox::Params cp(LLUICtrlFactory::getDefaultParams<LLTextBox>());
     cp.name = "find_count";
@@ -1598,13 +1571,13 @@ bool ALFloaterXUIStudio::postBuild()
     cp.font_halign = LLFontGL::RIGHT;
     cp.tool_tip = getString("FindCountTip");
     mFindCount = LLUICtrlFactory::create<LLTextBox>(cp);
-    mFindBar->setAdornment(mFindCount);
+    mScopeBar->setAdornment(mFindCount);
     // Return runs it; changing a dropdown re-runs whatever is already typed,
     // since a sentence with a word changed is a different question about the
     // same words.
     mBreadcrumb->onChose(boost::bind(&ALFloaterXUIStudio::onBreadcrumb, this, _1, _2));
-    mFindBar->onRun(boost::bind(&ALFloaterXUIStudio::onFind, this));
-    mFindBar->onChanged(boost::bind(&ALFloaterXUIStudio::onFindScope, this));
+    mScopeBar->onRun(boost::bind(&ALFloaterXUIStudio::onFind, this));
+    mScopeBar->onChanged(boost::bind(&ALFloaterXUIStudio::onFindScope, this));
     mFindResults->setDoubleClickCallback(boost::bind(&ALFloaterXUIStudio::onFindResult, this));
     mTreeFilter->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onTreeFilter, this));
     mFindings->setDoubleClickCallback(boost::bind(&ALFloaterXUIStudio::onFindingSelected, this));
@@ -1627,11 +1600,14 @@ bool ALFloaterXUIStudio::postBuild()
         filter->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onFindingFilter, this));
     }
 
-    // Every table in the tool copies the same way.
-    for (LLScrollListCtrl* list : { mFileList, mFindResults, mFindings, mDocumentList, mSourceLayerList,
-                                    mLayout, mBindings, mState, mSelectionFindings, mTranslateList })
+    // Every table in the tool is one someone will want in a message or a
+    // bug report, and copies the same way: a line saying which file and
+    // which element it is about, then the rows as a table (ALPaneList).
+    for (ALPaneList* list : { mFileList, mFindResults, mFindings, mDocumentList, mSourceLayerList,
+                              mLayout, mBindings, mState, mSelectionFindings, mTranslateList })
     {
-        watchList(list);
+        list->setCopyable(true);
+        list->setCopyCaption([this, list]() { return listCaption(list); });
     }
     mInspectors->setCommitCallback(boost::bind(&ALFloaterXUIStudio::refreshInspectors, this));
     mModes->setCommitCallback(boost::bind(&ALFloaterXUIStudio::onMode, this));
@@ -1742,15 +1718,15 @@ bool ALFloaterXUIStudio::postBuild()
 
 void ALFloaterXUIStudio::onOpen(const LLSD& key)
 {
-    if (!key.isMap() || !key.has("find") || !mFindBar || !mModes)
+    if (!key.isMap() || !key.has("find") || !mScopeBar || !mModes)
     {
         return;
     }
     mModes->selectTabByName("find_mode");
-    mFindBar->setValue("query", key["find"].asString());
-    mFindBar->setValue("field", "value");
-    mFindBar->setValue("how", "matching");
-    mFindBar->setValue("scope", "");
+    mScopeBar->setValue("query", key["find"].asString());
+    mScopeBar->setValue("field", "value");
+    mScopeBar->setValue("how", "matching");
+    mScopeBar->setValue("scope", "");
     onFind();
     onMode();
 
@@ -1865,18 +1841,10 @@ void ALFloaterXUIStudio::draw()
     ALStudioFloater::draw();
 }
 
-bool ALFloaterXUIStudio::handleKeyHere(KEY key, MASK mask)
+void ALFloaterXUIStudio::addKeys()
 {
-    if (handleMenuAccelerator(key, mask) || handleUndoKeys(key, mask))
-    {
-        return true;
-    }
-    if (key == 'F' && mask == MASK_CONTROL)
-    {
-        mTreeFilter->setFocus(true);
-        return true;
-    }
-    if (key == 'O' && mask == MASK_CONTROL)
+    addCommand({ "find", 'F', MASK_CONTROL, false }, [this]() { findInFront(); return true; });
+    addCommand({ "open_file", 'O', MASK_CONTROL, false }, [this]()
     {
         if (mModes)
         {
@@ -1884,39 +1852,96 @@ bool ALFloaterXUIStudio::handleKeyHere(KEY key, MASK mask)
         }
         mCatalogFilter->setFocus(true);
         return true;
-    }
-    // Between the two places an element is worked on: the outline, where it
-    // is found and moved in the tree, and the canvas, where it is dragged
-    // and its handles are. Control and tab rather than tab, because tab
-    // belongs to the field the developer is typing in; the Mac's own
-    // Control key there, Command-Tab being the system's.
-    if (key == KEY_TAB && (mask == MASK_CONTROL || mask == MASK_MAC_CONTROL))
+    });
+    // Control-tab and control-shift-tab go round the documents, as they go
+    // round Script Studio's -- the Mac's own Control key there, Command-Tab
+    // being the system's.
+    for (const MASK control : { MASK_CONTROL, MASK_MAC_CONTROL })
     {
-        ALXUICanvas* canvas = mCanvases[PRIMARY];
-        const bool on_canvas = canvas && canvas->getVisible() && gFocusMgr.childHasKeyboardFocus(canvas);
-        if (on_canvas || !mTree)
-        {
-            if (mModes)
-            {
-                mModes->selectTabByName("outline_mode");
-            }
-            if (mTree)
-            {
-                mTree->setFocus(true);
-            }
-        }
-        else if (canvas && canvas->getVisible())
-        {
-            canvas->setFocus(true);
-        }
-        return true;
+        addCommand({ "next_document", KEY_TAB, control, false }, [this]() { cycleDocument(1); return true; });
+        addCommand({ "previous_document", KEY_TAB, control | MASK_SHIFT, false }, [this]() { cycleDocument(-1); return true; });
     }
+    // F6 between the outline and the canvas, as it goes between panes in
+    // most editors.
+    addCommand({ "switch_pane", KEY_F6, MASK_NONE, false }, [this]() { switchPane(); return true; });
     // Nothing selected, which is the way out of a selection rather than a
     // way to another one -- and the way to see the whole of a preview with
     // no marks over it.
-    if (key == KEY_ESCAPE && mask == MASK_NONE && mSelection.hasSelection())
+    addCommand({ "clear_selection", KEY_ESCAPE, MASK_NONE, false }, [this]()
     {
+        if (!mSelection.hasSelection())
+        {
+            return false;
+        }
         mSelection.clearSelection();
+        return true;
+    });
+}
+
+// Control-F finds in what is in front: the source's text where the source
+// is the inspector's tab showing, and otherwise the tree's filter.
+void ALFloaterXUIStudio::findInFront()
+{
+    const LLPanel* shown = mInspectors ? mInspectors->getCurrentPanel() : nullptr;
+    if (mSourceText && shown && shown->getName() == "source_tab" && !mFolds.collapsed("inspector_panel"))
+    {
+        mSourceText->setFocus(true);
+        mSourceText->perform(ALEditorCommand::Find);
+        return;
+    }
+    mTreeFilter->setFocus(true);
+}
+
+// The next document or the one before, round the canvas's tabs; a tab
+// waiting on a pin is a file, not a document, and is passed over.
+void ALFloaterXUIStudio::cycleDocument(S32 direction)
+{
+    std::vector<std::string> documents;
+    for (const ALTabStrip::Tab& tab : mCanvasTabs->tabs())
+    {
+        if (mDocuments.find(tab.value))
+        {
+            documents.push_back(tab.value);
+        }
+    }
+    if (documents.size() < 2)
+    {
+        return;
+    }
+    const auto   here  = std::find(documents.begin(), documents.end(), mCanvasTabs->chosen());
+    const size_t count = documents.size();
+    const size_t at    = here == documents.end() ? 0 : static_cast<size_t>(here - documents.begin());
+    onTabChosen(documents[(at + count + (direction > 0 ? 1 : count - 1)) % count]);
+}
+
+// Between the two places an element is worked on: the outline, where it is
+// found and moved in the tree, and the canvas, where it is dragged and its
+// handles are.
+void ALFloaterXUIStudio::switchPane()
+{
+    ALXUICanvas* canvas    = mCanvases[PRIMARY];
+    const bool   on_canvas = canvas && canvas->getVisible() && gFocusMgr.childHasKeyboardFocus(canvas);
+    if (on_canvas || !mTree)
+    {
+        if (mModes)
+        {
+            mModes->selectTabByName("outline_mode");
+        }
+        if (mTree)
+        {
+            mTree->setFocus(true);
+        }
+    }
+    else if (canvas && canvas->getVisible())
+    {
+        canvas->setFocus(true);
+    }
+}
+
+bool ALFloaterXUIStudio::handleKeyHere(KEY key, MASK mask)
+{
+    if (handleStudioKeys(key, mask))
+    {
         return true;
     }
     // A developer who works in one region reaches it without the mouse, and
@@ -1982,14 +2007,6 @@ bool ALFloaterXUIStudio::handleKeyHere(KEY key, MASK mask)
         case KEY_LEFT:  onTreeMove("move_out");  return true;
         case 'D':       onTreeMove("duplicate"); return true;
         default: break;
-        }
-    }
-    if (key == 'C' && mask == MASK_CONTROL)
-    {
-        if (LLScrollListCtrl* list = focusedList())
-        {
-            copyList(list, list->getAllSelected());
-            return true;
         }
     }
     // The panes keep their own keys: the hierarchy walks itself with the
@@ -2100,15 +2117,13 @@ LLSD ALFloaterXUIStudio::row(const LLSD& id, std::initializer_list<std::pair<con
 
 void ALFloaterXUIStudio::fillCatalog()
 {
-    const std::string filter = utf8str_tolower(mCatalogFilter->getText());
+    const std::string filter = mCatalogFilter->getText();
     mFileList->deleteAllItems();
     for (const ALXUICatalog::Entry& e : mCatalog.entries())
     {
         const char* kind = ALXUICatalog::kindName(e.kind);
-        if (!filter.empty()
-            && utf8str_tolower(e.name).find(filter) == std::string::npos
-            && utf8str_tolower(e.title).find(filter) == std::string::npos
-            && filter != kind)
+        if (!ALStringMatch::containsNoCase(e.name, filter) && !ALStringMatch::containsNoCase(e.title, filter)
+            && !ALStringMatch::equalsNoCase(filter, kind))
         {
             continue;
         }
@@ -2170,11 +2185,11 @@ void ALFloaterXUIStudio::onSkinOrLanguage()
     mSkin = mSkinCombo->getValue().asString();
     mLanguage = mLanguageCombo->getValue().asString();
     mLanguage2 = mLanguageCombo2->getValue().asString();
-    if (renamed && mFindBar)
+    if (renamed && mScopeBar)
     {
         // Two of the scopes are named after this skin and this language;
         // the sentence keeps what is chosen and says the new names.
-        buildFindBar();
+        buildScopeBar();
     }
     saveState();
     fillCatalog();
@@ -2191,7 +2206,7 @@ void ALFloaterXUIStudio::onSkinOrLanguage()
 // A form of the same query is four labelled boxes and a reader working out
 // which applies to which. The sentence says how they compose by being one,
 // and it fits in a pane a form would not.
-void ALFloaterXUIStudio::buildFindBar()
+void ALFloaterXUIStudio::buildScopeBar()
 {
     std::vector<ALScopeBar::Segment> said;
 
@@ -2250,7 +2265,7 @@ void ALFloaterXUIStudio::buildFindBar()
                       { getString("FindThisFile"), "file" } };
     said.push_back(where);
 
-    mFindBar->setSentence(std::move(said));
+    mScopeBar->setSentence(std::move(said));
 }
 
 namespace
@@ -2269,7 +2284,7 @@ namespace
 // words -- and an empty field asks nothing, so it costs nothing to try.
 void ALFloaterXUIStudio::onFindScope()
 {
-    if (!mFindBar->valueOf("query").empty())
+    if (!mScopeBar->valueOf("query").empty())
     {
         onFind();
     }
@@ -2277,7 +2292,7 @@ void ALFloaterXUIStudio::onFindScope()
 
 void ALFloaterXUIStudio::onFind()
 {
-    const std::string query = mFindBar->valueOf("query");
+    const std::string query = mScopeBar->valueOf("query");
     mFindResults->deleteAllItems();
     if (query.empty())
     {
@@ -2288,13 +2303,13 @@ void ALFloaterXUIStudio::onFind()
 
     // What the scope names, in the terms the catalog takes: a skin, a
     // language, both or neither.
-    const std::string scope = mFindBar->valueOf("scope");
+    const std::string scope = mScopeBar->valueOf("scope");
     const std::string skin = scope == "skin" || scope == "file" ? mSkin : std::string();
     const std::string language = scope == "language" || scope == "file" ? mLanguage : std::string();
 
     std::vector<ALXUICatalog::Hit> hits =
-        mCatalog.find(query, fieldFrom(mFindBar->valueOf("field")),
-                      matchFrom(mFindBar->valueOf("how")), skin, language);
+        mCatalog.find(query, fieldFrom(mScopeBar->valueOf("field")),
+                      matchFrom(mScopeBar->valueOf("how")), skin, language);
 
     // One file is not a thing the catalog searches by, since a search over
     // one file is a search over its layers: it is the scope, applied here.
@@ -4440,6 +4455,7 @@ void ALFloaterXUIStudio::saveAndRepair()
         setStatus(document().error());
         return;
     }
+    sawOwnWrites();
     mCatalog.reload(mFile);
 
     S32 moved = 0;
@@ -4452,6 +4468,7 @@ void ALFloaterXUIStudio::saveAndRepair()
             moved += count;
         }
     }
+    sawOwnWrites();
     mCatalog.reload(mFile);
     repairing.close();
 
@@ -4473,8 +4490,7 @@ void ALFloaterXUIStudio::saveDocument()
         setStatus(document().error());
         return;
     }
-    // The watchers prime themselves on what they find when the rebuild
-    // makes them, so a write of the tool's own is not an outside change.
+    sawOwnWrites();
     LLStringUtil::format_map_t args;
     args["[FILE]"] = fileNameOf(documentPath());
     documentChanged(getString("EditSaved", args));
@@ -4493,6 +4509,7 @@ void ALFloaterXUIStudio::saveAllDocuments()
         return;
     }
     const S32 written = mDocuments.saveAll();
+    sawOwnWrites();
     LLStringUtil::format_map_t args;
     args["[COUNT]"] = std::to_string(written);
     if (written < unsaved)
@@ -4561,21 +4578,10 @@ void ALFloaterXUIStudio::fillHistory()
 // to say how far.
 void ALFloaterXUIStudio::onHistoryGoTo(size_t in_force)
 {
-    // A bound, so that a set that stops answering does not spin here.
-    for (S32 guard = 0; guard < 1024 && mDocuments.inForce() > in_force; ++guard)
-    {
-        if (!mDocuments.undo())
-        {
-            break;
-        }
-    }
-    for (S32 guard = 0; guard < 1024 && mDocuments.inForce() < in_force; ++guard)
-    {
-        if (!mDocuments.redo())
-        {
-            break;
-        }
-    }
+    // Bounded by the history, so that a set that stops answering does not
+    // spin here.
+    goToStep(in_force, [this]() { return mDocuments.inForce(); }, [this]() { return mDocuments.undo(); },
+             [this]() { return mDocuments.redo(); }, mDocuments.history().size() + 1);
     LLStringUtil::format_map_t args;
     args["[COUNT]"] = std::to_string((S32)mDocuments.inForce());
     replayChange(getString("HistoryWentTo", args));
@@ -4700,6 +4706,7 @@ void ALFloaterXUIStudio::onDocumentSave()
         setStatus(held->error());
         return;
     }
+    sawOwnWrites();
     LLStringUtil::format_map_t args;
     args["[FILE]"] = fileNameOf(path);
     documentChanged(getString("EditSaved", args));
@@ -4780,6 +4787,7 @@ void ALFloaterXUIStudio::closeDocumentAnswered(const std::string& path, S32 opti
             setStatus(held->error());
             return;
         }
+        sawOwnWrites();
         letGoOf(path);
         break;
     case 1:
@@ -5096,18 +5104,26 @@ void ALFloaterXUIStudio::watchFiles(const ALXUICatalog::Entry& entry)
     pv.liveFiles.clear();
     for (const ALXUICatalog::Layer* layer : mCatalog.layersFor(entry, pv.skin, pv.language))
     {
-        auto live = std::make_unique<ALXUILiveFile>(layer->path, this);
-        live->checkAndReload();
-        live->addToEventTimer();
+        // Watched from as it stands: only a change after this reloads.
+        auto live = std::make_unique<ALWatchedFile>(layer->path, [this](const std::string&) { fileChanged(); });
+        live->poll(1.f);
         pv.liveFiles.push_back(std::move(live));
+    }
+}
+
+void ALFloaterXUIStudio::sawOwnWrites()
+{
+    for (const std::unique_ptr<ALWatchedFile>& live : mPreviews[PRIMARY].liveFiles)
+    {
+        live->seen();
     }
 }
 
 // Only the layers of the previewed file are watched, so a change on disk
 // is a change to what is on screen: that one entry is read again rather
-// than the whole tree. The watchers are made afresh by the rebuild and
-// prime themselves on what they find, which is why the tool's own writes
-// need no special case here.
+// than the whole tree. The tool's own writes are marked seen as they are
+// made (sawOwnWrites), and the watchers are made afresh by the rebuild
+// that follows them.
 void ALFloaterXUIStudio::fileChanged()
 {
     // Not while there is work in hand. A rebuild reads the layers again,
@@ -5494,7 +5510,7 @@ void ALFloaterXUIStudio::createRows(ALXUITreeItem* item, LLFolderViewFolder* par
 
 void ALFloaterXUIStudio::onTreeFilter()
 {
-    mModel.getFilter().setFilterSubString(mTreeFilter->getText());
+    mModel.getFilter().setWords(mTreeFilter->getText());
 }
 
 void ALFloaterXUIStudio::onTreeSelection(const std::deque<LLFolderViewItem*>& items, bool user_action)
@@ -6217,60 +6233,6 @@ void ALFloaterXUIStudio::finishLintAll()
     fillFindings();
 }
 
-// A list's rows are a table, and where a copied table is going is a bug
-// report or a message: it carries a line saying which file and which
-// element it is about, a heading naming its columns, and its columns lined
-// up. An empty column is left out, since a heading over nothing tells no
-// one anything.
-namespace
-{
-    // Widths count characters and not bytes, since these tables carry
-    // translated text.
-    S32 xui_display_width(const std::string& text)
-    {
-        S32 count = 0;
-        for (const char c : text)
-        {
-            count += ((U8)c & 0xC0) != 0x80;
-        }
-        return count;
-    }
-
-    // A cell with a newline or a tab in it would break the table it is
-    // being written into.
-    std::string xui_one_line(std::string text)
-    {
-        for (char& c : text)
-        {
-            if (c == '\n' || c == '\r' || c == '\t')
-            {
-                c = ' ';
-            }
-        }
-        return text;
-    }
-}
-
-void ALFloaterXUIStudio::watchList(LLScrollListCtrl* list)
-{
-    list->setRightMouseDownCallback(boost::bind(&ALFloaterXUIStudio::onListRightClick, this, _1, _2, _3, _4));
-    mLists.push_back(list);
-}
-
-// Control+C over a list copies what the menu's Copy would, rather than the
-// comma-separated rows the edit menu would reach.
-LLScrollListCtrl* ALFloaterXUIStudio::focusedList() const
-{
-    for (LLScrollListCtrl* list : mLists)
-    {
-        if (list->hasFocus())
-        {
-            return list;
-        }
-    }
-    return nullptr;
-}
-
 std::string ALFloaterXUIStudio::listCaption(const LLScrollListCtrl* list) const
 {
     LLStringUtil::format_map_t args;
@@ -6282,8 +6244,8 @@ std::string ALFloaterXUIStudio::listCaption(const LLScrollListCtrl* list) const
     }
     if (list == mFindResults)
     {
-        args["[QUERY]"] = mFindBar->valueOf("query");
-        args["[FIELD]"] = mFindBar->valueOf("field");
+        args["[QUERY]"] = mScopeBar->valueOf("query");
+        args["[FIELD]"] = mScopeBar->valueOf("field");
         args["[SKIN]"] = mSkin;
         args["[LANG]"] = mLanguage;
         return getString("CaptionSearch", args);
@@ -6311,213 +6273,6 @@ std::string ALFloaterXUIStudio::listCaption(const LLScrollListCtrl* list) const
         args["[WHAT]"] = getString("CaptionOf", args);
     }
     return getString("CaptionIn", args);
-}
-
-std::string ALFloaterXUIStudio::listAsText(LLScrollListCtrl* list, const std::vector<LLScrollListItem*>& rows) const
-{
-    const S32 columns = list->getNumColumns();
-    if (columns <= 0 || rows.empty())
-    {
-        return std::string();
-    }
-
-    // A column draws no heading when it needs none, which leaves its name
-    // to stand for it here.
-    std::vector<std::string> heading((size_t)columns);
-    for (S32 i = 0; i < columns; ++i)
-    {
-        const LLScrollListColumn* column = list->getColumn(i);
-        if (!column)
-        {
-            continue;
-        }
-        heading[i] = column->mLabel.getString();
-        if (heading[i].empty())
-        {
-            heading[i] = column->mName;
-            if (!heading[i].empty())
-            {
-                heading[i][0] = (char)toupper((U8)heading[i][0]);
-            }
-        }
-    }
-
-    std::vector<std::vector<std::string>> cells;
-    std::vector<bool> used((size_t)columns, false);
-    cells.reserve(rows.size());
-    for (const LLScrollListItem* item : rows)
-    {
-        std::vector<std::string> line((size_t)columns);
-        for (S32 i = 0; i < columns; ++i)
-        {
-            const LLScrollListCell* cell = item->getColumn(i);
-            if (!cell)
-            {
-                continue;
-            }
-            line[i] = xui_one_line(cell->getValue().asString());
-            used[i] = used[i] || !line[i].empty();
-        }
-        cells.push_back(std::move(line));
-    }
-
-    S32 last = -1;
-    std::vector<S32> width((size_t)columns, 0);
-    for (S32 i = 0; i < columns; ++i)
-    {
-        if (!used[i])
-        {
-            continue;
-        }
-        last = i;
-        width[i] = xui_display_width(heading[i]);
-        for (const std::vector<std::string>& line : cells)
-        {
-            width[i] = llmax(width[i], xui_display_width(line[i]));
-        }
-        // One long value -- a tool tip, a translated label -- would push
-        // every other row's remaining columns out past reading distance,
-        // so it is the one that steps out of line instead.
-        width[i] = llmin(width[i], 48);
-    }
-    if (last < 0)
-    {
-        return std::string();
-    }
-
-    std::string text = listCaption(list);
-    if (!text.empty())
-    {
-        text += "\n\n";
-    }
-    auto append = [&](const std::vector<std::string>& line)
-    {
-        for (S32 i = 0; i <= last; ++i)
-        {
-            if (!used[i])
-            {
-                continue;
-            }
-            text += line[i];
-            if (i != last)
-            {
-                text.append((size_t)llmax(0, width[i] - xui_display_width(line[i])) + 2, ' ');
-            }
-        }
-        text += '\n';
-    };
-    append(heading);
-    for (const std::vector<std::string>& line : cells)
-    {
-        append(line);
-    }
-    return text;
-}
-
-void ALFloaterXUIStudio::copyList(LLScrollListCtrl* list, const std::vector<LLScrollListItem*>& rows) const
-{
-    const std::string text = listAsText(list, rows);
-    if (!text.empty())
-    {
-        LLClipboard::instance().copyToClipboard(text, 0, (S32)text.size());
-    }
-}
-
-void ALFloaterXUIStudio::onListRightClick(LLUICtrl* ctrl, S32 x, S32 y, MASK mask)
-{
-    mMenuList = ctrl ? ctrl->as<LLScrollListCtrl>() : nullptr;
-    if (!mMenuList)
-    {
-        return;
-    }
-
-    // The right button does not select, so Copy would have the wrong rows,
-    // or none at all on the first click. Take the row under it, unless the
-    // click landed inside a selection someone has already made.
-    LLScrollListItem* hit = mMenuList->hitItem(x, y);
-    if (hit && !hit->getSelected())
-    {
-        mMenuList->selectItemAt(x, y, MASK_NONE);
-    }
-
-    // The one cell under the pointer, for the copy that is meant to be
-    // pasted into a line of code and not read.
-    mMenuCell.clear();
-    if (hit)
-    {
-        if (const LLScrollListCell* cell = hit->getColumn(mMenuList->getColumnIndexFromOffset(x)))
-        {
-            mMenuCell = cell->getValue().asString();
-        }
-    }
-
-    LLContextMenu* menu = static_cast<LLContextMenu*>(mListMenu.get());
-    if (!menu)
-    {
-        // The floater's registrars are its own scope, active while it
-        // builds itself and not a moment longer; a menu built later finds
-        // the names in them only if that scope is pushed for the build,
-        // which is what the hierarchy's own menu does.
-        mCommitCallbackRegistrar.pushScope();
-        mEnableCallbackRegistrar.pushScope();
-        menu = LLUICtrlFactory::getInstance()->createFromFile<LLContextMenu>(
-            "menu_xui_studio_list.xml", LLMenuGL::sMenuContainer, LLMenuHolderGL::child_registry_t::instance());
-        mEnableCallbackRegistrar.popScope();
-        mCommitCallbackRegistrar.popScope();
-        if (!menu)
-        {
-            return;
-        }
-        mListMenu = menu->getHandle();
-    }
-
-    // A context menu places itself; the popup puts it in front and takes
-    // the mouse. Both, in that order, as every other list here does.
-    menu->show(x, y);
-    LLMenuGL::showPopup(mMenuList, menu, x, y);
-}
-
-bool ALFloaterXUIStudio::onListActionEnabled(const LLSD& param)
-{
-    if (!mMenuList)
-    {
-        return false;
-    }
-    const std::string action = param.asString();
-    if (action == "copy_cell")
-    {
-        return !mMenuCell.empty();
-    }
-    if (action == "copy_all" || action == "select_all")
-    {
-        return mMenuList->getFirstData() != nullptr;
-    }
-    return mMenuList->getFirstSelected() != nullptr;
-}
-
-void ALFloaterXUIStudio::onListAction(const LLSD& param)
-{
-    if (!mMenuList)
-    {
-        return;
-    }
-    const std::string action = param.asString();
-    if (action == "copy_cell")
-    {
-        LLClipboard::instance().copyToClipboard(mMenuCell, 0, (S32)mMenuCell.size());
-    }
-    else if (action == "copy")
-    {
-        copyList(mMenuList, mMenuList->getAllSelected());
-    }
-    else if (action == "copy_all")
-    {
-        copyList(mMenuList, mMenuList->getAllData());
-    }
-    else if (action == "select_all")
-    {
-        mMenuList->selectAll();
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6796,6 +6551,7 @@ void ALFloaterXUIStudio::onTranslationWrite()
         setStatus(held->error());
         return;
     }
+    sawOwnWrites();
     mDocuments.settle();
     fillDocuments();
     fillHistory();
@@ -6872,6 +6628,7 @@ void ALFloaterXUIStudio::onTranslationRemove()
         setStatus(held->error());
         return;
     }
+    sawOwnWrites();
     mDocuments.settle();
     fillDocuments();
     fillHistory();
@@ -7047,6 +6804,7 @@ void ALFloaterXUIStudio::onRepairRoots()
             setStatus(edit.error());
             return;
         }
+        sawOwnWrites();
         LL_INFOS("XUIStudio") << language << "/" << entry.name << ": root \"" << over_root
                             << "\" -> \"" << base_root << "\"" << LL_ENDL;
         ++named;
@@ -9023,11 +8781,7 @@ void ALFloaterXUIStudio::goToFile(const std::string& file)
 // the question was asked by pointing at that row.
 void ALFloaterXUIStudio::openGutterPopover(const std::string& field)
 {
-    if (LLView* up = mGutterPopover.get())
-    {
-        up->die();
-    }
-    mGutterPopover.markDead();
+    mGutterPopover.close();
     mGutterList = nullptr;
 
     LLView* mark = mAttributeGrid ? mAttributeGrid->gutterFor(field) : nullptr;
@@ -9045,7 +8799,7 @@ void ALFloaterXUIStudio::openGutterPopover(const std::string& field)
     pp.rect = LLRect(0, ROWS + FOOT, WIDTH, 0);
     LLPanel* content = LLUICtrlFactory::create<LLPanel>(pp);
 
-    LLScrollListCtrl::Params lp(LLUICtrlFactory::getDefaultParams<LLScrollListCtrl>());
+    ALPaneList::Params lp(LLUICtrlFactory::getDefaultParams<ALPaneList>());
     lp.name = "layers";
     lp.rect = LLRect(0, ROWS + FOOT, WIDTH, FOOT);
     lp.follows.flags = FOLLOWS_ALL;
@@ -9055,7 +8809,7 @@ void ALFloaterXUIStudio::openGutterPopover(const std::string& field)
     LLStringUtil::format_map_t tip_args;
     tip_args["[ATTR]"] = field;
     lp.tool_tip = getString("GutterListTip", tip_args);
-    mGutterList = LLUICtrlFactory::create<LLScrollListCtrl>(lp);
+    mGutterList = LLUICtrlFactory::create<ALPaneList>(lp);
     content->addChild(mGutterList);
 
     LLScrollListColumn::Params force;
@@ -9101,23 +8855,14 @@ void ALFloaterXUIStudio::openGutterPopover(const std::string& field)
         mGutterList = nullptr;
         return;
     }
-    mGutterPopover = popover->getHandle();
+    mGutterPopover.hold(popover, [this](bool) { mGutterList = nullptr; });
 
     // Chosen and gone: the popover is a question about one row, and it has
     // been answered.
     write->setClickedCallback([this](LLUICtrl*, const LLSD&)
     {
         onWriteOverride();
-        if (LLView* up = mGutterPopover.get())
-        {
-            up->die();
-        }
-        mGutterPopover.markDead();
-        mGutterList = nullptr;
-    });
-    popover->onClosed([this](bool)
-    {
-        mGutterPopover.markDead();
+        mGutterPopover.close(false);
         mGutterList = nullptr;
     });
 }
