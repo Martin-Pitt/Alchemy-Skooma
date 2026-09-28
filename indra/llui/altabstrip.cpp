@@ -26,6 +26,7 @@
 
 #include "altabstrip.h"
 
+#include "alsurface.h"
 #include "llfocusmgr.h"
 
 #include "alsaid.h"
@@ -205,10 +206,15 @@ bool ALTabStrip::handleKeyHere(KEY key, MASK mask)
     const S32 at = indexOf(mChosen);
     if (at < 0)
     {
-        // Nothing chosen: the first tab is where a walk starts.
-        if (!mTabs.empty() && mask == MASK_NONE && (key == KEY_RIGHT || key == KEY_LEFT || key == KEY_HOME || key == KEY_END))
+        // Nothing chosen: the first tab is where a walk starts. With no
+        // tab at all the walk goes nowhere, and the arrow is still the
+        // strip's -- passed on, it would walk the avatar.
+        if (mask == MASK_NONE && (key == KEY_RIGHT || key == KEY_LEFT || key == KEY_HOME || key == KEY_END))
         {
-            chooseKeyed(key == KEY_END || key == KEY_LEFT ? mTabs.size() - 1 : 0);
+            if (!mTabs.empty())
+            {
+                chooseKeyed(key == KEY_END || key == KEY_LEFT ? mTabs.size() - 1 : 0);
+            }
             return true;
         }
         return LLUICtrl::handleKeyHere(key, mask);
@@ -537,9 +543,9 @@ void ALTabStrip::draw()
 {
     static const LLUIColor shown = LLUIColorTable::instance().getColor("PanelDefaultBackgroundColor", LLColor4::grey4);
     static const LLUIColor rest = LLUIColorTable::instance().getColor("DkGray", LLColor4::grey3);
-    static const LLUIColor edge = LLUIColorTable::instance().getColor("DefaultShadowLight", LLColor4::black);
-    static const LLUIColor ink = LLUIColorTable::instance().getColor("LabelTextColor", LLColor4::white);
-    static const LLUIColor quiet = LLUIColorTable::instance().getColor("LabelDisabledColor", LLColor4::grey);
+    const LLUIColor& edge = ALSurface::well();
+    const LLUIColor& ink = ALSurface::text();
+    const LLUIColor& quiet = ALSurface::quiet();
 
     const S32 height = getRect().getHeight();
     const F32 alpha = getDrawContext().mAlpha;

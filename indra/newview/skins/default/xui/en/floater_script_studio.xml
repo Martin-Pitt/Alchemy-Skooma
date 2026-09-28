@@ -75,9 +75,19 @@
     <floater.string name="SearchOpen">open scripts</floater.string>
     <floater.string name="SearchThisObject">this object</floater.string>
     <floater.string name="SearchListed">every object listed</floater.string>
+    <floater.string name="SearchAlone">alone</floater.string>
+    <floater.string name="SearchWithIncludes">and what they include</floater.string>
+    <floater.string name="SearchIncludesTip">What an #include or a require brings in, searched too: each file once, as its own, as it is on disk or was last fetched. Replace All leaves those alone, since they are every script's that includes them.</floater.string>
+    <floater.string name="SearchIncluded">Included</floater.string>
     <floater.string name="SearchCountTip">How many places were found, in how many scripts</floater.string>
     <floater.string name="SearchCounting">[HITS] in [FILES], fetching...</floater.string>
     <floater.string name="SearchCount">[HITS] in [FILES]</floater.string>
+    <floater.string name="SearchPassedOver">[SAID], but [MISSED]</floater.string>
+    <floater.string name="SearchBoth">[FIRST] and [SECOND]</floater.string>
+    <floater.string name="SearchUnlistedA">1 prim did not say what it holds</floater.string>
+    <floater.string name="SearchUnlistedB">[COUNT] prims did not say what they hold</floater.string>
+    <floater.string name="SearchUnreadA">1 script could not be read</floater.string>
+    <floater.string name="SearchUnreadB">[COUNT] scripts could not be read</floater.string>
     <floater.string name="SearchCountCapped">[HITS] in [FILES], the first [SHOWN] listed</floater.string>
     <floater.string name="MatchesA">1 match</floater.string>
     <floater.string name="MatchesB">[COUNT] matches</floater.string>
@@ -167,6 +177,8 @@
     <floater.string name="NoProblemsHere">There are no problems in [NAME].</floater.string>
     <floater.string name="NothingKnownBroken">Nothing can be found out about [NAME] until the syntax errors in Problems are fixed.</floater.string>
     <floater.string name="NoDefinition">[NAME] is not defined in this script.</floater.string>
+    <floater.string name="IncludeNotFoundHere">[NAME] was not found: no run of the preprocessor has found it, and it is not in the include folders.</floater.string>
+    <floater.string name="ModuleNotFoundHere">The module [NAME] was not found: no run of the preprocessor has found it, and it is not in the include folders.</floater.string>
     <floater.string name="ReferencesFoundA">1 place where [NAME] stands.</floater.string>
     <floater.string name="ReferencesFoundB">[COUNT] places where [NAME] stands.</floater.string>
     <floater.string name="LookingAcrossA">Looking for [NAME] across 1 other script of the object...</floater.string>
@@ -190,7 +202,13 @@
     <floater.string name="ReplaceMissedA">In [NAME], 1 place no longer read as it did when searched, and was not replaced.</floater.string>
     <floater.string name="ReplaceMissedB">In [NAME], [COUNT] places no longer read as they did when searched, and were not replaced.</floater.string>
     <floater.string name="RenameReserved">[NAME] is a word of the language's own, and cannot be a name of the script's.</floater.string>
-    <floater.string name="RenameClash">Rename to [NEW]; [NEW] is declared in this script already, so the two may clash.</floater.string>
+    <floater.string name="RenameClash">Rename to [NEW]; [NEW] is a name in [SCRIPT] already, so the two may clash.</floater.string>
+    <floater.string name="RenameUnreached">Scripts of other objects that include [NAMES] are not changed.</floater.string>
+    <floater.string name="LookupUnlistedA">1 prim of the object did not say what it holds, so its scripts were not looked through.</floater.string>
+    <floater.string name="LookupUnlistedB">[COUNT] prims of the object did not say what they hold, so their scripts were not looked through.</floater.string>
+    <floater.string name="LookupUnreadA">[NAMES] could not be read, so it was not looked through.</floater.string>
+    <floater.string name="LookupUnreadB">[COUNT] scripts could not be read, so they were not looked through: [NAMES].</floater.string>
+    <floater.string name="RenamePreviewHint">Shift+Return shows each place first.</floater.string>
     <floater.string name="CaretPosition">Ln [LINE], Col [COL]</floater.string>
     <floater.string name="SelectedLinesA">1 line selected</floater.string>
     <floater.string name="SelectedLinesB">[COUNT] lines selected</floater.string>
@@ -213,6 +231,34 @@
     <floater.string name="GoToLineTitle">Go to Line</floater.string>
     <floater.string name="VimHistoryTitle">[KIND] lines entered</floater.string>
     <floater.string name="VimHistoryPlaceholder">Type to find a line; Return runs it, Shift-Return puts it up to edit</floater.string>
+    <floater.string name="VimNoAlternate">E23: No alternate file</floater.string>
+    <floater.string name="VimNoSuchTab">E86: Buffer [NUMBER] does not exist</floater.string>
+    <floater.string name="VimTabsMatch">E93: More than one match for [NAME]</floater.string>
+    <floater.string name="VimNoTabMatch">E94: No matching buffer for [NAME]</floater.string>
+    <floater.string name="VimBadArgument">E474: Invalid argument</floater.string>
+    <floater.string name="VimArgumentRequired">E471: Argument required</floater.string>
+    <floater.string name="VimNotSaved">E37: No write since last change (add ! to override)</floater.string>
+    <floater.string name="VimNoFile">E484: Can't open file [FILE]</floater.string>
+    <floater.string name="VimrcNotTaken">[WHENCE]: these lines of the vimrc were not taken</floater.string>
+    <floater.string name="VimrcNotMade">The vimrc could not be made at [FILE].</floater.string>
+    <floater.string name="VimrcNewFile">" Script Studio's vimrc, read when vim is turned on and again whenever it is saved.
+" Taken: the :map family (nnoremap, inoremap jk &lt;Esc&gt;, ...), let mapleader,
+" and :set of the options vim here knows. Nothing else runs.
+" A notecard dropped on the box in Script Studio Preferences, Editor, takes its place.
+
+</floater.string>
+    <floater.string name="VimNoFileName">E32: No file name</floater.string>
+    <floater.string name="VimCannotChange">E21: Cannot make changes, 'modifiable' is off</floater.string>
+    <floater.string name="VimFileExists">E13: File exists (add ! to override)</floater.string>
+    <floater.string name="VimCannotWrite">E212: Can't open file for writing: [FILE]</floater.string>
+    <floater.string name="VimWritten">"[FILE]" [LINES]L, [BYTES]B written</floater.string>
+    <floater.string name="VimNoErrors">E42: No Errors</floater.string>
+    <floater.string name="VimNotInPath">E447: Can't find file "[NAME]" in path</floater.string>
+    <floater.string name="VimSuggestTitle">Change "[WORD]" to</floater.string>
+    <floater.string name="VimSuggestPlaceholder">Type to find a spelling; Return puts it in</floater.string>
+    <floater.string name="VimFileInfo">"[NAME]" [STATE][LINES] lines --[PERCENT]%--</floater.string>
+    <floater.string name="VimStateModified">[Modified]</floater.string>
+    <floater.string name="VimStateReadOnly">[readonly]</floater.string>
     <floater.string name="GoToLinePlaceholder">Line, or line:column</floater.string>
     <floater.string name="GoToLineHint">Type a line number to go to (from 1 to [COUNT]).</floater.string>
     <floater.string name="GoToLineGo">Go to line [LINE].</floater.string>
@@ -250,6 +296,15 @@
     <floater.string name="ProblemNotesB">[COUNT] notes</floater.string>
     <floater.string name="ProblemsIncluded">[FILE]</floater.string>
     <floater.string name="ProblemsIncludedBy">[FILE], as [NAME] includes it</floater.string>
+    <floater.string name="ProblemsChecked">[NAME] in [OBJECT] (not open)</floater.string>
+    <floater.string name="CheckNoObject">Open one of an object's scripts, or choose the object in the explorer, to check every script in it.</floater.string>
+    <floater.string name="CheckingObject">Checking every script in [OBJECT]...</floater.string>
+    <floater.string name="CheckObjectAway">[OBJECT] is not in sight, so its scripts could not be checked.</floater.string>
+    <floater.string name="CheckedObjectA">Checked 1 script in [OBJECT]</floater.string>
+    <floater.string name="CheckedObjectB">Checked [COUNT] scripts in [OBJECT]</floater.string>
+    <floater.string name="CheckedClean">nothing found wrong</floater.string>
+    <floater.string name="CheckedOpenA">1 open in a tab is checked there.</floater.string>
+    <floater.string name="CheckedOpenB">[COUNT] open in tabs are checked there.</floater.string>
     <floater.string name="NoProblemsOpen">No problems in the scripts open.</floater.string>
     <floater.string name="NoProblemsIn">No problems in [NAME].</floater.string>
     <floater.string name="RepeatedTimes">([COUNT] times)</floater.string>
@@ -268,6 +323,8 @@
     <floater.string name="TrailerLineTip">Go to a line ([KEYS])</floater.string>
     <floater.string name="TrailerLineTipNoKeys">Go to a line</floater.string>
     <floater.string name="TrailerProblemsTip">Show the problems ([KEYS])</floater.string>
+    <floater.string name="TrailerChecking">Checking…</floater.string>
+    <floater.string name="TrailerCheckingTip">The analyzers are checking the script as it stands. The problems listed are of the text before.</floater.string>
     <floater.string name="TrailerProblemsTipNoKeys">Show the problems</floater.string>
     <floater.string name="TrailerSource">Source</floater.string>
     <floater.string name="TrailerExpanded">Preprocessed</floater.string>
@@ -291,6 +348,19 @@
     <floater.string name="TabNotecardTip">A notecard, as plain text</floater.string>
     <floater.string name="TabReadOnlyTip">Read-only: you may read it and not change it</floater.string>
     <floater.string name="TrailerReadOnly">Read-only</floater.string>
+    <floater.string name="ReadAsSLua">[NAME] is read as SLua now, and compiles as SLua when it is saved</floater.string>
+    <floater.string name="ReadAsLSL">[NAME] is read as LSL now, and compiles as LSL when it is saved</floater.string>
+    <floater.string name="ScriptItemDropName">Put its name in here: [TEXT]. With Shift, its key</floater.string>
+    <floater.string name="ScriptItemDropKey">Put its key in here: [TEXT]</floater.string>
+    <floater.string name="ScriptItemDropNoKey">Its key is not yours to see: it is not full permissions. Without Shift, its name goes in</floater.string>
+    <floater.string name="ScriptItemDropReadOnly">This script may not be changed</floater.string>
+    <floater.string name="TrailerIndentSpaces">Spaces: [WIDTH]</floater.string>
+    <floater.string name="TrailerIndentTabs">Tab Size: [WIDTH]</floater.string>
+    <floater.string name="TrailerIndentTipText">How this script is indented, read from its own lines. Press to indent it otherwise, or to convert it</floater.string>
+    <floater.string name="TrailerIndentTipDefaults">How this script is indented: the default in Preferences, since the script does not say. Press to indent it otherwise, or to convert it</floater.string>
+    <floater.string name="TrailerIndentTipChosen">How this script is indented, as chosen for it. Press to indent it otherwise, or to convert it</floater.string>
+    <floater.string name="IndentReadAgain">Read from the Script Again</floater.string>
+    <floater.string name="IndentToDefault">Back to the Default</floater.string>
     <floater.string name="TrailerReadOnlyTip">You may read this script and not change it</floater.string>
     <floater.string name="OriginPreprocessor">Preprocessor</floater.string>
     <floater.string name="OriginOptimizer">Optimizer</floater.string>
@@ -298,12 +368,14 @@
     <floater.string name="Preprocessed">Preprocessed [NAME].</floater.string>
     <floater.string name="PreprocessedPendingA">Preprocessed [NAME]; 1 include could not be fetched: [FILES].</floater.string>
     <floater.string name="PreprocessedPendingB">Preprocessed [NAME]; [COUNT] includes could not be fetched: [FILES].</floater.string>
-    <floater.string name="PreprocessPendingSaveA">[NAME] was not saved: 1 include could not be fetched, and would be left out: [FILES]. Save again to upload without it.</floater.string>
-    <floater.string name="PreprocessPendingSaveB">[NAME] was not saved: [COUNT] includes could not be fetched, and would be left out: [FILES]. Save again to upload without them.</floater.string>
-    <floater.string name="PreprocessErrorsA">The preprocessor found 1 error in [NAME]; save again to upload anyway.</floater.string>
-    <floater.string name="PreprocessErrorsB">The preprocessor found [COUNT] errors in [NAME]; save again to upload anyway.</floater.string>
+    <floater.string name="PreprocessMissingDiskRoute">Includes from the object or the inventory are off; they come from folders on disk: turn on Build &gt; Include from Disk, and add the folder with Build &gt; Add Include Folder...</floater.string>
+    <floater.string name="SavingWithoutA">[NAME] is going up without 1 include: [FILES]. What it holds is not in the upload.</floater.string>
+    <floater.string name="SavingWithoutB">[NAME] is going up without [COUNT] includes: [FILES]. What they hold is not in the upload.</floater.string>
+    <floater.string name="SavingWithErrorsA">[NAME] is going up with 1 error the preprocessor found, so that nothing is lost: the Problems pane shows it.</floater.string>
+    <floater.string name="SavingWithErrorsB">[NAME] is going up with [COUNT] errors the preprocessor found, so that nothing is lost: the Problems pane shows them.</floater.string>
     <floater.string name="SaveAnyway">Save anyway</floater.string>
     <floater.string name="RecoveryWriteFailed">[NAME] could not be kept on this computer against a crash: the recovery folder could not be written.</floater.string>
+    <floater.string name="RecoveryReadFailed">The kept changes to [NAME] could not be read: the file in the recovery folder is gone or damaged.</floater.string>
     <floater.string name="KeepFailed">Not everything unsaved could be kept for next time, so the viewer is not quitting: save or export what is open, or quit again and choose Don't Save.</floater.string>
     <floater.string name="OfflineKeptA">Disconnected: 1 unsaved script or notecard is kept on this computer and offered at your next login.</floater.string>
     <floater.string name="OfflineKeptB">Disconnected: [COUNT] unsaved scripts and notecards are kept on this computer and offered at your next login.</floater.string>
@@ -325,6 +397,19 @@
     <floater.string name="NoticeRestore">Restore Them</floater.string>
     <floater.string name="NoticeRestoreTip">The kept changes put in, as one step to undo</floater.string>
     <floater.string name="NoticeDiscard">Discard</floater.string>
+    <floater.string name="NoticeCompiledDiffers">The compiled part of this script is not what its source makes: it was changed outside the preprocessor, or what the script includes has changed. Saving replaces it.</floater.string>
+    <floater.string name="NoticeKeepSource">Keep Source</floater.string>
+    <floater.string name="NoticeTakeCompiled">Use Compiled Text</floater.string>
+    <floater.string name="NoticeCompare">Compare</floater.string>
+    <floater.string name="NoticeCompareTip">The two texts side by side, the changes marked; Escape goes back</floater.string>
+    <floater.string name="CompareNow">This tab now</floater.string>
+    <floater.string name="CompareSaved">As last saved</floater.string>
+    <floater.string name="CompareNothingSaved">There is no saved text to compare with: a change made after an undo went past it.</floater.string>
+    <floater.string name="CompareKept">Kept, [WHEN]</floater.string>
+    <floater.string name="CompareCompiled">The compiled part, as saved</floater.string>
+    <floater.string name="CompareMade">What the source makes now</floater.string>
+    <floater.string name="NoticeKeepSourceTip">Keep the source as it is; saving makes the compiled part from it again</floater.string>
+    <floater.string name="NoticeTakeCompiledTip">Make the compiled text the source, as one step to undo</floater.string>
     <floater.string name="NoticeDiscardTip">Let the kept changes go; File > Recover Unsaved Changes still has them for a week</floater.string>
     <floater.string name="NoticeCopy">Save a Copy</floater.string>
     <floater.string name="NoticeCopyTip">A new item in your inventory with what is here, saved; this tab closes once it is</floater.string>
@@ -354,6 +439,7 @@
     <floater.string name="RecoveryReopenedA">1 script kept from last time opened again, with its unsaved changes.</floater.string>
     <floater.string name="RecoveryReopenedB">[COUNT] scripts kept from last time opened again, with their unsaved changes.</floater.string>
     <floater.string name="RecoveryRestored">[NAME]'s kept changes put in; undo takes them out again.</floater.string>
+    <floater.string name="CompiledTaken">[NAME]'s compiled text is its source now; undo takes it out again.</floater.string>
     <floater.string name="RecoveryStale">[NAME] was saved since its kept changes were made: saving them replaces what was saved then, and Revert to Saved brings that back.</floater.string>
     <floater.string name="RecoveryDiscarded">[NAME]'s kept changes let go of; File > Recover Unsaved Changes still has them for a week.</floater.string>
     <floater.string name="RecoveryGone">[NAME]'s kept changes let go of for good.</floater.string>
@@ -367,6 +453,27 @@
     <floater.string name="ActionTakeExternalTip">What the external editor saved put in [NAME] and saved; what was typed here is a step back in the undo</floater.string>
     <floater.string name="ActionKeepHere">Keep what is here</floater.string>
     <floater.string name="ActionKeepHereTip">The external editor's save of [NAME] not sent</floater.string>
+    <floater.string name="ActionTakeSaved">Take theirs</floater.string>
+    <floater.string name="ActionTakeSavedTip">What was saved elsewhere put in [NAME]; what was typed here is a step back in the undo</floater.string>
+    <floater.string name="ActionKeepSaved">Keep mine</floater.string>
+    <floater.string name="ActionKeepSavedTip">What was typed here kept; saving [NAME] replaces what was saved elsewhere</floater.string>
+    <floater.string name="ActionCompareSaved">Compare</floater.string>
+    <floater.string name="ActionCompareSavedTip">What was saved elsewhere beside what is here</floater.string>
+    <floater.string name="SavedElsewhereConflict">[NAME] was saved by [WHO] while it had changes here.</floater.string>
+    <floater.string name="SavedElsewhereKept">Kept what is here in [NAME]; saving it replaces what was saved elsewhere.</floater.string>
+    <floater.string name="SavedByBridge">VS Code</floater.string>
+    <floater.string name="RecompileSkippedSaving">[NAME] was not recompiled: a save of it is on its way, which a recompile would land over.</floater.string>
+    <floater.string name="RecompileUnsaved">[NAME] has changes not saved here; what recompiles is the server's text, without them.</floater.string>
+    <floater.string name="SavedByEditor">another editor</floater.string>
+    <floater.string name="SavedByQueue">a recompile</floater.string>
+    <floater.string name="CompareSavedThere">Saved elsewhere</floater.string>
+    <floater.string name="SaveAskingWorld">Checking whether [NAME] was saved elsewhere...</floater.string>
+    <floater.string name="SaveWorldMoved">[NAME] was saved elsewhere since it was opened here -- by a co-owner, or in another viewer -- and saving would replace that.</floater.string>
+    <floater.string name="ActionReloadWorld">Reload</floater.string>
+    <floater.string name="ActionReloadWorldTip">[NAME] loaded again as it is saved now; what was typed here is kept in File > Recover Unsaved Changes</floater.string>
+    <floater.string name="ActionCompareWorld">Compare</floater.string>
+    <floater.string name="ActionCompareWorldTip">[NAME] as it is saved now beside what is here</floater.string>
+    <floater.string name="CompareWorld">Saved now</floater.string>
     <floater.string name="ActionExport">Export to a file</floater.string>
     <floater.string name="ActionExportTip">What [NAME] holds, written to a file on this computer</floater.string>
     <floater.string name="SaveAnywayTip">Save [NAME] as it stands, over what was found</floater.string>
@@ -385,24 +492,34 @@
     <floater.string name="NotecardCopyUnsaved">Save the notecard first; [NAME] can only be copied out of a saved notecard</floater.string>
     <floater.string name="NotecardCopyFailed">[NAME] could not be copied: no region to ask</floater.string>
     <floater.string name="NotecardCopyRefused">[NAME] could not be copied: [ERROR]</floater.string>
-    <floater.string name="PreprocHintSwitch">([WORD] is Firestorm's: turn on Preprocess on Save and Preprocessor > Firestorm > Switch Statements)</floater.string>
-    <floater.string name="PreprocHintExtensions">([WORD] is an extension: turn on Preprocess on Save and Preprocessor > Extensions)</floater.string>
+    <floater.string name="PreprocHintSwitch">([WORD] is Firestorm's: turn on Build > Preprocess on Save and Build > Firestorm > Switch Statements)</floater.string>
+    <floater.string name="RequireNotPreprocessed">require("[NAME]") goes up as written, and the grid has no require: turn on Build > Preprocess on Save to put the module in its place</floater.string>
+    <floater.string name="PreprocHintExtensions">([WORD] is an extension: turn on Build > Preprocess on Save and Build > Extensions)</floater.string>
+    <floater.string name="PreprocHintConst">([WORD] marks what never changes, and lets a global's value be worked out from others: turn on Build > Preprocess on Save)</floater.string>
+    <floater.string name="PreprocHintInline">([WORD] marks a function to be put where it is called: turn on Build > Preprocess on Save)</floater.string>
     <floater.string name="ClearRecentFiles">Clear Menu</floater.string>
     <floater.string name="OriginCompiler">Compiler</floater.string>
+    <floater.string name="CompilerAsSaved">(as of the last save)</floater.string>
+    <floater.string name="UpdatingDefinitions">Asking the region for its language definitions again; every script is checked again once they are in.</floater.string>
     <floater.string name="OriginParser">Parser</floater.string>
     <floater.string name="OriginTypes">Types</floater.string>
     <floater.string name="OriginLint">Lint</floater.string>
     <floater.string name="OriginDefinitions">Definitions</floater.string>
+    <floater.string name="InGeneratedCode">Code the preprocessor made</floater.string>
+    <floater.string name="NoGeneratedView">That is in code the preprocessor made, which the Preprocessed view shows once the script has been expanded.</floater.string>
     <floater.string name="MenuUndo">Undo</floater.string>
     <floater.string name="MenuUndoWhat">Undo [WHAT]</floater.string>
     <floater.string name="MenuRedo">Redo</floater.string>
     <floater.string name="MenuRedoWhat">Redo [WHAT]</floater.string>
+    <floater.string name="TextSize">Text [POINTS] pt</floater.string>
+    <floater.string name="ChordWaiting">[KEYS] pressed: waiting for the next key...</floater.string>
+    <floater.string name="ChordNone">[KEYS] is not a command.</floater.string>
     <floater.string name="PaletteOn">on</floater.string>
     <floater.string name="PaletteOff">off</floater.string>
     <floater.string name="UndoWhatRename">Rename</floater.string>
     <floater.string name="UndoWhatFix">Fix</floater.string>
-    <floater.string name="TrailerWeight">[TARGET] [SIZE] of [LIMIT] KB</floater.string>
-    <floater.string name="TrailerWeightEstimate">[TARGET] ~[SIZE] of [LIMIT] KB</floater.string>
+    <floater.string name="TrailerWeight">[TARGET] [SIZE] of [LIMIT] KB used</floater.string>
+    <floater.string name="TrailerWeightEstimate">[TARGET] ~[SIZE] of [LIMIT] KB used</floater.string>
     <floater.string name="TrailerWeightTip">What the script's code weighs for [TARGET]: [BYTES] of the [MAX] bytes it runs a script in. What it allocates as it runs is not in this.</floater.string>
     <floater.string name="TrailerWeightEstimateTip">About what the script's code weighs for [TARGET]: [BYTES] of the [MAX] bytes it runs a script in, estimated from the code its compiler makes. What it allocates as it runs is not in this.</floater.string>
     <floater.string name="TrailerWeightBeforeTip">Weighed before the preprocessor's optimizer, which a save runs: the saved script may weigh less.</floater.string>
@@ -410,6 +527,8 @@
     <floater.string name="OriginWeight">Weight</floater.string>
     <floater.string name="WeightOver">The script's code comes to about [SIZE] KB, more than the [LIMIT] KB [TARGET] runs a script in.</floater.string>
     <floater.string name="WeightOverEstimate">The script's code is about [SIZE] KB, likely more than the [LIMIT] KB [TARGET] runs a script in.</floater.string>
+    <floater.string name="WeightNear">The script's code comes to [SIZE] of the [LIMIT] KB [TARGET] runs a script in, leaving [LEFT] KB for what it allocates as it runs: its lists, its strings, its stack.</floater.string>
+    <floater.string name="WeightNearEstimate">The script's code comes to about [SIZE] of the [LIMIT] KB [TARGET] runs a script in, leaving about [LEFT] KB for what it allocates as it runs: its lists, its strings, its stack.</floater.string>
     <floater.string name="WeightOverBefore">The script's code is [SIZE] KB before the optimizer, more than the [LIMIT] KB [TARGET] runs a script in: it may fit once the optimizer has been over it.</floater.string>
     <floater.string name="TrailerSize">[SIZE] KB of [LIMIT] KB</floater.string>
     <floater.string name="TrailerSizeTip">What saving this script sends: [BYTES] of the [MAX] bytes a script may be. A preprocessed script is sent as written and as expanded, measured here before the optimizer and compression a save adds.</floater.string>
@@ -419,8 +538,8 @@
     <floater.string name="WeightsNoScript">Nothing open to weigh.</floater.string>
     <floater.string name="WeightsNoTarget">[NAME] has no code of its own to weigh: a notecard, or a script that is only ever included.</floater.string>
     <floater.string name="WeightsNotYet">[NAME] is weighed once it has been checked.</floater.string>
-    <floater.string name="WeightsHead">[NAME] on [TARGET]: [SIZE] of [LIMIT] KB, [SHARE].</floater.string>
-    <floater.string name="WeightsHeadEstimate">[NAME] on [TARGET]: about [SIZE] of [LIMIT] KB, [SHARE].</floater.string>
+    <floater.string name="WeightsHead">[NAME] on [TARGET]: [SIZE] of [LIMIT] KB used, [SHARE].</floater.string>
+    <floater.string name="WeightsHeadEstimate">[NAME] on [TARGET]: about [SIZE] of [LIMIT] KB used, [SHARE].</floater.string>
     <floater.string name="WeightsHeadFailed">[NAME] does not compile for [TARGET]: [ERROR]</floater.string>
     <floater.string name="WeightsHeadError">As it stands, [ERROR].</floater.string>
     <floater.string name="WeightsHeadBefore">Weighed before the preprocessor's optimizer, which a save runs.</floater.string>
@@ -460,8 +579,8 @@
     <floater.string name="OptimizerNoteLighter">(its lines [BYTES] bytes lighter on [TARGET])</floater.string>
     <floater.string name="OptimizerNoteHeavier">(its lines [BYTES] bytes heavier on [TARGET])</floater.string>
     <floater.string name="OptimizerNoteSame">(its lines no lighter on [TARGET])</floater.string>
-    <floater.string name="TrailerOptimized">[TARGET] [BEFORE] → [AFTER] of [LIMIT] KB</floater.string>
-    <floater.string name="TrailerOptimizedEstimate">[TARGET] ~[BEFORE] → ~[AFTER] of [LIMIT] KB</floater.string>
+    <floater.string name="TrailerOptimized">[TARGET] [BEFORE] → [AFTER] of [LIMIT] KB used</floater.string>
+    <floater.string name="TrailerOptimizedEstimate">[TARGET] ~[BEFORE] → ~[AFTER] of [LIMIT] KB used</floater.string>
     <floater.string name="TrailerOptimizedTip">What the script's code weighs on [TARGET] before the preprocessor's optimizer and after it, as this view shows it sent: [BYTESBEFORE] and then [BYTESAFTER] of the [MAX] bytes it runs a script in.</floater.string>
     <floater.string name="TrailerOptimizedEstimateTip">About what the script's code weighs on [TARGET] before the preprocessor's optimizer and after it, as this view shows it sent: [BYTESBEFORE] and then [BYTESAFTER] of the [MAX] bytes it runs a script in, estimated from the code its compiler makes.</floater.string>
     <floater.string name="FixLighter">[BYTES] bytes lighter on [TARGET]</floater.string>
@@ -469,6 +588,7 @@
     <floater.string name="FixHeavier">[BYTES] bytes heavier on [TARGET]</floater.string>
     <floater.string name="FixHeavierEstimate">about [BYTES] bytes heavier on [TARGET]</floater.string>
     <floater.string name="SaveOverWeight">[NAME] was sent, but by the studio's reckoning its code comes to about [SIZE] KB, more than the [LIMIT] KB [TARGET] runs a script in: the region may not compile it, or it may not run.</floater.string>
+    <floater.string name="SaveOverWeightEstimate">[NAME] was sent, but by the studio's estimate its code comes to about [SIZE] KB, likely more than the [LIMIT] KB [TARGET] runs a script in: it may not run.</floater.string>
     <floater.string name="SaveTooLarge">[NAME] was not saved: it is [SIZE] bytes, [OVER] more than the [LIMIT] a script may be.</floater.string>
     <floater.string name="SaveTooLargePlain">Moving part of it into another script, or into a notecard it reads, would bring it under.</floater.string>
     <floater.string name="SaveTooLargeCompress">A preprocessed script is sent as written and as expanded: turning on Compress in the preprocessor's settings shrinks the expanded half.</floater.string>
@@ -498,7 +618,7 @@
          name="file"
          tear_off="false"
          width="200">
-            <menu_item_call label="New Script..." layout="topleft" name="new_script" shortcut="control|N">
+            <menu_item_call label="New Script..." layout="topleft" name="new_script">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="new_script" />
             </menu_item_call>
             <menu_item_call label="New SLua Script..." layout="topleft" name="new_lua_script">
@@ -506,11 +626,11 @@
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="new_lua_script" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Save" layout="topleft" name="save" shortcut="control|S">
+            <menu_item_call label="Save" layout="topleft" name="save">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="save" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="save" />
             </menu_item_call>
-            <menu_item_call label="Save All" layout="topleft" name="save_all" shortcut="control|alt|S">
+            <menu_item_call label="Save All" layout="topleft" name="save_all">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="save_all" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="save_all" />
             </menu_item_call>
@@ -533,6 +653,10 @@
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="recover" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="recover" />
             </menu_item_call>
+            <menu_item_call label="Insert File..." layout="topleft" name="insert_file">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="insert_file" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="insert_file" />
+            </menu_item_call>
             <menu_item_call label="Replace Text from File..." layout="topleft" name="load_file">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="load_file" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="load_file" />
@@ -553,14 +677,29 @@
             <menu_item_call label="Preferences..." layout="topleft" name="preferences">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="preferences" />
             </menu_item_call>
+            <menu_item_call label="Update Language Definitions" layout="topleft" name="update_definitions">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="update_definitions" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
             <menu_item_call label="Move to New Window" layout="topleft" name="pop_out">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="pop_out" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="pop_out" />
             </menu_item_call>
-            <menu_item_call label="Close Script" layout="topleft" name="close" shortcut="control|W">
+            <menu_item_call label="Close Script" layout="topleft" name="close">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="close" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="close" />
+            </menu_item_call>
+            <menu_item_call label="Close Others" layout="topleft" name="close_others">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="close_others" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="close_others" />
+            </menu_item_call>
+            <menu_item_call label="Close Saved" layout="topleft" name="close_saved">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="close_saved" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="close_saved" />
+            </menu_item_call>
+            <menu_item_call label="Close All" layout="topleft" name="close_all">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="close_all" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="close_all" />
             </menu_item_call>
         </menu>
         <menu
@@ -570,51 +709,87 @@
          name="edit"
          tear_off="false"
          width="200">
-            <menu_item_call label="Undo" layout="topleft" name="undo" shortcut="control|Z">
+            <menu_item_call label="Undo" layout="topleft" name="undo">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="undo" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="undo" />
             </menu_item_call>
-            <menu_item_call label="Redo" layout="topleft" name="redo" shortcut="control|Y">
+            <menu_item_call label="Redo" layout="topleft" name="redo">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="redo" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="redo" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Cut" layout="topleft" name="cut" shortcut="control|X">
+            <menu_item_call label="Cut" layout="topleft" name="cut">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="cut" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="cut" />
             </menu_item_call>
-            <menu_item_call label="Copy" layout="topleft" name="copy" shortcut="control|C">
+            <menu_item_call label="Copy" layout="topleft" name="copy">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="copy" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="copy" />
             </menu_item_call>
-            <menu_item_call label="Paste" layout="topleft" name="paste" shortcut="control|V">
+            <menu_item_call label="Paste" layout="topleft" name="paste">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="paste" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="paste" />
             </menu_item_call>
-            <menu_item_call label="Select All" layout="topleft" name="select_all" shortcut="control|A">
+            <menu_item_call label="Select All" layout="topleft" name="select_all">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="select_all" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="select_all" />
             </menu_item_call>
+            <menu_item_call label="Select Line" layout="topleft" name="select_line">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="select_line" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="select_line" />
+            </menu_item_call>
+            <menu_item_call label="Expand Selection" layout="topleft" name="expand_selection">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="expand_selection" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="expand_selection" />
+            </menu_item_call>
+            <menu_item_call label="Shrink Selection" layout="topleft" name="shrink_selection">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="shrink_selection" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="shrink_selection" />
+            </menu_item_call>
+            <menu_item_call label="Select Next Occurrence" layout="topleft" name="select_next_occurrence">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="select_next_occurrence" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="select_next_occurrence" />
+            </menu_item_call>
+            <menu_item_call label="Change All Occurrences" layout="topleft" name="change_all_occurrences">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="change_all_occurrences" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="change_all_occurrences" />
+            </menu_item_call>
+            <menu_item_call label="Select Function" layout="topleft" name="select_function">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="select_function" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="select_function" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Toggle Comment" layout="topleft" name="toggle_comment" shortcut="control|/">
+            <menu_item_call label="Toggle Comment" layout="topleft" name="toggle_comment">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="toggle_comment" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="toggle_comment" />
             </menu_item_call>
-            <menu_item_call label="Duplicate Line" layout="topleft" name="duplicate_line" shortcut="control|shift|D">
+            <menu_item_call label="Insert Line Below" layout="topleft" name="insert_line_below">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="insert_line_below" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="insert_line_below" />
+            </menu_item_call>
+            <menu_item_call label="Insert Line Above" layout="topleft" name="insert_line_above">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="insert_line_above" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="insert_line_above" />
+            </menu_item_call>
+            <menu_item_call label="Duplicate Line" layout="topleft" name="duplicate_line">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="duplicate_line" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="duplicate_line" />
             </menu_item_call>
-            <menu_item_call label="Delete Line" layout="topleft" name="delete_line" shortcut="control|shift|K">
+            <menu_item_call label="Delete Line" layout="topleft" name="delete_line">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="delete_line" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="delete_line" />
             </menu_item_call>
-            <menu_item_call label="Move Line Up" layout="topleft" name="move_line_up" shortcut="alt|UP">
+            <menu_item_call label="Move Line Up" layout="topleft" name="move_line_up">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="move_line_up" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="move_line_up" />
             </menu_item_call>
-            <menu_item_call label="Move Line Down" layout="topleft" name="move_line_down" shortcut="alt|DOWN">
+            <menu_item_call label="Move Line Down" layout="topleft" name="move_line_down">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="move_line_down" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="move_line_down" />
+            </menu_item_call>
+            <menu_item_call label="Join Lines" layout="topleft" name="join_lines">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="join_lines" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="join_lines" />
             </menu_item_call>
             <menu_item_call label="Complete" layout="topleft" name="complete">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="complete" />
@@ -624,7 +799,7 @@
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="signature_help" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="signature_help" />
             </menu_item_call>
-            <menu_item_call label="Rename Symbol..." layout="topleft" name="rename" shortcut="F2">
+            <menu_item_call label="Rename Symbol..." layout="topleft" name="rename">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="rename" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="rename" />
             </menu_item_call>
@@ -636,8 +811,20 @@
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="fix_all" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="fix_all" />
             </menu_item_call>
+            <menu_item_call label="Check Every Script in This Object" layout="topleft" name="check_object">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="check_object" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="check_object" />
+            </menu_item_call>
+            <menu_item_call label="Next Misspelling" layout="topleft" name="next_misspelling">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_misspelling" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_misspelling" />
+            </menu_item_call>
+            <menu_item_call label="Previous Misspelling" layout="topleft" name="previous_misspelling">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_misspelling" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_misspelling" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Format Document" layout="topleft" name="format" shortcut="shift|alt|F">
+            <menu_item_call label="Format Document" layout="topleft" name="format">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="format" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="format" />
             </menu_item_call>
@@ -645,24 +832,32 @@
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="format_selection" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="format_selection" />
             </menu_item_call>
+            <menu_item_call label="Convert Indentation to Spaces" layout="topleft" name="indent_spaces">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="indent_spaces" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="indent_spaces" />
+            </menu_item_call>
+            <menu_item_call label="Convert Indentation to Tabs" layout="topleft" name="indent_tabs">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="indent_tabs" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="indent_tabs" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Find..." layout="topleft" name="find" shortcut="control|F">
+            <menu_item_call label="Find..." layout="topleft" name="find">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="find" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="find" />
             </menu_item_call>
-            <menu_item_call label="Replace..." layout="topleft" name="replace" shortcut="control|H">
+            <menu_item_call label="Replace..." layout="topleft" name="replace">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="replace" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="replace" />
             </menu_item_call>
-            <menu_item_call label="Find Next" layout="topleft" name="find_next" shortcut="F3">
+            <menu_item_call label="Find Next" layout="topleft" name="find_next">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="find_next" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="find_next" />
             </menu_item_call>
-            <menu_item_call label="Find Previous" layout="topleft" name="find_previous" shortcut="shift|F3">
+            <menu_item_call label="Find Previous" layout="topleft" name="find_previous">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="find_previous" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="find_previous" />
             </menu_item_call>
-            <menu_item_call label="Find in Files..." layout="topleft" name="find_in_files" shortcut="control|shift|F">
+            <menu_item_call label="Find in Files..." layout="topleft" name="find_in_files">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="find_in_files" />
             </menu_item_call>
         </menu>
@@ -673,7 +868,7 @@
          name="insert"
          tear_off="false"
          width="200">
-            <menu_item_call label="Snippet..." layout="topleft" name="insert_snippet" shortcut="control|shift|I">
+            <menu_item_call label="Snippet..." layout="topleft" name="insert_snippet">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="insert_snippet" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="insert_snippet" />
             </menu_item_call>
@@ -697,58 +892,82 @@
          name="go"
          tear_off="false"
          width="200">
-            <menu_item_call label="Back" layout="topleft" name="back" shortcut="control|-" use_mac_ctrl="true">
+            <menu_item_call label="Back" layout="topleft" name="back" use_mac_ctrl="true">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="back" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="back" />
             </menu_item_call>
-            <menu_item_call label="Forward" layout="topleft" name="forward" shortcut="control|shift|-" use_mac_ctrl="true">
+            <menu_item_call label="Forward" layout="topleft" name="forward" use_mac_ctrl="true">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="forward" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="forward" />
             </menu_item_call>
+            <menu_item_call label="Last Edit Location" layout="topleft" name="previous_change">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_change" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_change" />
+            </menu_item_call>
+            <menu_item_call label="Next Edit Location" layout="topleft" name="next_change">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_change" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_change" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Go to Script..." layout="topleft" name="quick_open" shortcut="control|P">
+            <menu_item_call label="Go to Script..." layout="topleft" name="quick_open">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="quick_open" />
             </menu_item_call>
-            <menu_item_call label="Go to Line..." layout="topleft" name="go_to_line" shortcut="control|G">
+            <menu_item_call label="Go to Line..." layout="topleft" name="go_to_line">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="go_to_line" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="go_to_line" />
             </menu_item_call>
-            <menu_item_call label="Go to Symbol..." layout="topleft" name="go_to_symbol" shortcut="control|shift|O">
+            <menu_item_call label="Go to Symbol..." layout="topleft" name="go_to_symbol">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="go_to_symbol" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="go_to_symbol" />
             </menu_item_call>
+            <menu_item_call label="Next Function" layout="topleft" name="next_function">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_function" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_function" />
+            </menu_item_call>
+            <menu_item_call label="Previous Function" layout="topleft" name="previous_function">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_function" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_function" />
+            </menu_item_call>
+            <menu_item_call label="Matching Bracket" layout="topleft" name="go_to_bracket">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="go_to_bracket" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="go_to_bracket" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Go to Definition" layout="topleft" name="go_to_definition" shortcut="F12">
+            <menu_item_call label="Go to Definition" layout="topleft" name="go_to_definition">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="go_to_definition" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="go_to_definition" />
             </menu_item_call>
-            <menu_item_call label="Find References" layout="topleft" name="find_references" shortcut="shift|F12">
+            <menu_item_call label="Find References" layout="topleft" name="find_references">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="find_references" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="find_references" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Next Problem" layout="topleft" name="next_problem" shortcut="F8">
+            <menu_item_call label="Next Problem" layout="topleft" name="next_problem">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_problem" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_problem" />
             </menu_item_call>
-            <menu_item_call label="Previous Problem" layout="topleft" name="previous_problem" shortcut="shift|F8">
+            <menu_item_call label="Previous Problem" layout="topleft" name="previous_problem">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_problem" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_problem" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Next Tab" layout="topleft" name="next_tab" shortcut="control|PGDN">
+            <menu_item_call label="Next Tab" layout="topleft" name="next_tab">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_tab" />
             </menu_item_call>
-            <menu_item_call label="Previous Tab" layout="topleft" name="previous_tab" shortcut="control|PGUP">
+            <menu_item_call label="Previous Tab" layout="topleft" name="previous_tab">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_tab" />
+            </menu_item_call>
+            <menu_item_call label="Last Used Tab" layout="topleft" name="last_tab" use_mac_ctrl="true">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="last_tab" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="last_tab" />
             </menu_item_call>
             <menu_item_call label="All Tabs..." layout="topleft" name="all_tabs">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="all_tabs" />
             </menu_item_call>
-            <menu_item_call label="Move Tab Left" layout="topleft" name="move_tab_left" shortcut="control|shift|PGUP">
+            <menu_item_call label="Move Tab Left" layout="topleft" name="move_tab_left">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="move_tab_left" />
             </menu_item_call>
-            <menu_item_call label="Move Tab Right" layout="topleft" name="move_tab_right" shortcut="control|shift|PGDN">
+            <menu_item_call label="Move Tab Right" layout="topleft" name="move_tab_right">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="move_tab_right" />
             </menu_item_call>
             <!-- The code editor takes Tab for itself, so the strip is
@@ -756,6 +975,13 @@
                  tooltip says. -->
             <menu_item_call label="Go to Tabs" layout="topleft" name="focus_tabs">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="focus_tabs" />
+            </menu_item_call>
+            <menu_item_separator layout="topleft" />
+            <menu_item_call label="Next Pane" layout="topleft" name="next_pane">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_pane" />
+            </menu_item_call>
+            <menu_item_call label="Previous Pane" layout="topleft" name="previous_pane">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_pane" />
             </menu_item_call>
         </menu>
         <menu
@@ -765,7 +991,7 @@
          name="view"
          tear_off="false"
          width="200">
-            <menu_item_call label="Command Palette..." layout="topleft" name="command_palette" shortcut="control|shift|P">
+            <menu_item_call label="Command Palette..." layout="topleft" name="command_palette">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="command_palette" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
@@ -887,11 +1113,11 @@
                 </menu_item_check>
             </menu>
             <menu_item_separator layout="topleft" />
-            <menu_item_call label="Fold" layout="topleft" name="fold" shortcut="control|shift|[">
+            <menu_item_call label="Fold" layout="topleft" name="fold">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="fold" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="fold" />
             </menu_item_call>
-            <menu_item_call label="Unfold" layout="topleft" name="unfold" shortcut="control|shift|]">
+            <menu_item_call label="Unfold" layout="topleft" name="unfold">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="unfold" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="unfold" />
             </menu_item_call>
@@ -904,40 +1130,60 @@
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="unfold_all" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
-            <menu_item_check label="Explorer" layout="topleft" name="explorer" shortcut="control|alt|0">
+            <menu_item_check label="Explorer" layout="topleft" name="explorer">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="explorer" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="explorer" />
             </menu_item_check>
-            <menu_item_check label="Problems" layout="topleft" name="problems" shortcut="control|alt|1">
+            <menu_item_check label="Problems" layout="topleft" name="problems">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="problems" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="problems" />
             </menu_item_check>
-            <menu_item_check label="References" layout="topleft" name="references" shortcut="control|alt|2">
+            <menu_item_check label="References" layout="topleft" name="references">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="references" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="references" />
             </menu_item_check>
-            <menu_item_check label="Output" layout="topleft" name="output" shortcut="control|alt|3">
+            <menu_item_check label="Output" layout="topleft" name="output">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="output" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="output" />
             </menu_item_check>
-            <menu_item_check label="Search" layout="topleft" name="search" shortcut="control|alt|5">
+            <menu_item_check label="Search" layout="topleft" name="search">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="search" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="search" />
             </menu_item_check>
-            <menu_item_check label="Weights" layout="topleft" name="weights" shortcut="control|alt|6">
+            <menu_item_check label="Weights" layout="topleft" name="weights">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="weights" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="weights" />
             </menu_item_check>
-            <menu_item_check label="Inspector" layout="topleft" name="inspector" shortcut="control|alt|4">
+            <menu_item_check label="Inspector" layout="topleft" name="inspector">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="inspector" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="inspector" />
             </menu_item_check>
             <menu_item_separator layout="topleft" />
-            <menu_item_check label="Preprocessed Output" layout="topleft" name="expanded" shortcut="control|alt|P">
+            <menu_item_check label="Preprocessed Output" layout="topleft" name="expanded">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="expanded" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="expanded" />
                 <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="expanded" />
             </menu_item_check>
+            <menu_item_check label="Compare with Saved" layout="topleft" name="compare_saved">
+                <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_saved" />
+                <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_saved" />
+                <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_saved" />
+            </menu_item_check>
+            <menu_item_check label="Compare Inline" layout="topleft" name="compare_inline">
+                <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_inline" />
+                <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_inline" />
+                <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_inline" />
+            </menu_item_check>
+            <menu_item_separator layout="topleft" />
+            <menu_item_call label="Zoom In" layout="topleft" name="zoom_in">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="zoom_in" />
+            </menu_item_call>
+            <menu_item_call label="Zoom Out" layout="topleft" name="zoom_out">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="zoom_out" />
+            </menu_item_call>
+            <menu_item_call label="Actual Size" layout="topleft" name="zoom_reset">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="zoom_reset" />
+            </menu_item_call>
         </menu>
         <menu
          label="Build"
@@ -949,6 +1195,24 @@
             <menu_item_call label="Preprocess Now" layout="topleft" name="preprocess">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="preprocess" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="preprocess" />
+            </menu_item_call>
+            <menu_item_separator layout="topleft" />
+            <menu_item_check label="Running" layout="topleft" name="running">
+                <menu_item_check.on_check function="ScriptStudio.Check" parameter="running" />
+                <menu_item_check.on_click function="ScriptStudio.Menu" parameter="running" />
+                <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="running" />
+            </menu_item_check>
+            <menu_item_call label="Reset Script" layout="topleft" name="reset_script">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="reset_script" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="reset_script" />
+            </menu_item_call>
+            <menu_item_call label="Compile Target..." layout="topleft" name="choose_target">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="choose_target" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="choose_target" />
+            </menu_item_call>
+            <menu_item_call label="Experience..." layout="topleft" name="choose_experience">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="choose_experience" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="choose_experience" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
             <menu_item_check label="Hold Saves on Errors" layout="topleft" name="preflight">
@@ -1032,7 +1296,7 @@
          name="help"
          tear_off="false"
          width="200">
-            <menu_item_call label="Reference for the Word at the Caret" layout="topleft" name="reference" shortcut="F1">
+            <menu_item_call label="Reference for the Word at the Caret" layout="topleft" name="reference">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="reference" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="reference" />
             </menu_item_call>
@@ -1120,7 +1384,7 @@
      layout="topleft"
      left_pad="8"
      name="expanded_btn"
-     tool_tip="Show what the preprocessor made of this script, as the server compiles it, in place of the source; press again for the source ([KEYS]). Read-only. Off while the preprocessor is, which the Script Studio preferences turn on."
+     tool_tip="Show what the preprocessor made of this script, as the server compiles it, in place of the source; press again for the source ([KEYS]). Read-only. Off while the preprocessor is: Build &gt; Preprocess on Save turns it on."
      top_delta="0"
      width="26" />
     <button
@@ -1358,42 +1622,61 @@
                  background_opaque="true"
                  bg_opaque_color="DkGray"
                  border="true">
-                    <text
-                     follows="left|top|right"
-                     height="16"
+                    <panel
+                     class="script_studio_notice"
+                     follows="all"
+                     height="28"
                      layout="topleft"
-                     left="8"
-                     name="notice_text"
-                     text_color="AlertCautionTextColor"
-                     top="6"
-                     use_ellipses="true"
-                     width="300" />
-                    <button
-                     follows="right|top"
-                     height="22"
-                     layout="topleft"
-                     name="notice_first"
-                     right="-120"
-                     top="3"
-                     width="100" />
-                    <button
-                     follows="right|top"
-                     height="22"
-                     layout="topleft"
-                     name="notice_second"
-                     right="-30"
-                     top="3"
-                     width="86" />
-                    <button
-                     follows="right|top"
-                     height="22"
-                     label="&#215;"
-                     layout="topleft"
-                     name="notice_close"
-                     right="-4"
-                     tool_tip="Hide this until there is something else to say"
-                     top="3"
-                     width="22" />
+                     left="0"
+                     name="notice"
+                     top="0"
+                     width="574">
+                        <text
+                         follows="left|top|right"
+                         height="16"
+                         layout="topleft"
+                         left="8"
+                         name="notice_text"
+                         text_color="AlertCautionTextColor"
+                         top="6"
+                         use_ellipses="true"
+                         width="300" />
+                        <button
+                         follows="right|top"
+                         height="22"
+                         layout="topleft"
+                         name="notice_first"
+                         right="-120"
+                         top="3"
+                         width="100" />
+                        <button
+                         follows="right|top"
+                         height="22"
+                         layout="topleft"
+                         name="notice_second"
+                         right="-30"
+                         top="3"
+                         width="86" />
+                        <button
+                         follows="right|top"
+                         height="22"
+                         layout="topleft"
+                         name="notice_third"
+                         right="-30"
+                         top="3"
+                         visible="false"
+                         width="86" />
+                        <button
+                         follows="right|top"
+                         height="22"
+                         label="&#215;"
+                         layout="topleft"
+                         name="notice_close"
+                         right="-4"
+                         tool_tip="Hide this until there is something else to say"
+                         top="3"
+                         width="22" />
+                    </panel>
                 </layout_panel>
                 <layout_panel
                  auto_resize="true"
@@ -1421,15 +1704,25 @@
                  background_visible="true"
                  background_opaque="true"
                  bg_opaque_color="MouseGray">
-                    <jump_bar
+                    <panel
+                     class="script_studio_crumbs"
                      follows="left|top|right"
-                     height="22"
+                     height="23"
                      layout="topleft"
                      left="0"
-                     name="breadcrumb"
+                     name="crumbs"
                      right="-290"
-                     tool_tip="Where the caret is: the line and column at the right, and from the script down to the symbol around it at the left. Press a step to go there; press its arrow to pick one of the symbols beside it instead."
-                     top="1" />
+                     top="0">
+                        <jump_bar
+                         follows="all"
+                         height="22"
+                         layout="topleft"
+                         left="0"
+                         name="breadcrumb"
+                         tool_tip="Where the caret is: the line and column at the right, and from the script down to the symbol around it at the left. Press a step to go there; press its arrow to pick one of the symbols beside it instead."
+                         top="1"
+                         width="284" />
+                    </panel>
                     <!-- The script's own state, at the right end of its strip:
                          what it compiles for, whether it runs, and reset. -->
                     <combo_box
@@ -1479,7 +1772,7 @@
                      layout="topleft"
                      name="compile_target"
                      right="-4"
-                     tool_tip="What the script compiles for when it is saved: an LSL script on Mono (the usual choice), on the legacy LSL2 machine, or on Luau; an SLua script as SLua. A script written in one language compiles for that language's targets only."
+                     tool_tip="What the script compiles for when it is saved: an LSL script on Mono (the usual choice), on the legacy LSL2 machine, or on Luau; an SLua script as SLua. A target of the other language reads the script as that language from then on, for a script converted from one to the other."
                      top="2"
                      width="132">
                         <combo_box.item label="LSL on Mono" name="compile_target_mono" value="mono" />
@@ -1579,7 +1872,7 @@
                                      layout="topleft"
                                      left_pad="6"
                                      name="problems_fixable"
-                                     tool_tip="Show only the problems that offer a fix, which the right-click menu, Control-. and the lightbulb make"
+                                     tool_tip="Show only the problems that offer a fix, which the right-click menu and the lightbulb make, as does Quick Fix ([KEYS])"
                                      top_delta="0"
                                      width="62" />
                                     <combo_box
@@ -1641,6 +1934,7 @@
                             </layout_stack>
                         </panel>
                         <panel
+                         class="script_studio_references"
                          follows="all"
                          height="168"
                          label="References"
@@ -1672,6 +1966,28 @@
                                 <pane_list.columns label="" name="role" width="76" />
                                 <pane_list.columns dynamic_width="true" label="Text" name="text" />
                             </pane_list>
+                            <button
+                             follows="top|right"
+                             height="20"
+                             label="Rename"
+                             layout="topleft"
+                             left="422"
+                             name="references_rename"
+                             tool_tip="Rename at the places checked, leaving the rest as they are."
+                             top="1"
+                             visible="false"
+                             width="72" />
+                            <button
+                             follows="top|right"
+                             height="20"
+                             label="Cancel"
+                             layout="topleft"
+                             left_pad="4"
+                             name="references_cancel"
+                             tool_tip="Rename nothing, and list the places as found."
+                             top="1"
+                             visible="false"
+                             width="72" />
                         </panel>
                         <panel
                          class="script_studio_output"
@@ -1921,53 +2237,63 @@
                  name="outline_panel"
                  user_resize="true"
                  width="250">
-                    <text
-                     follows="left|top"
-                     font="SansSerifSmall"
-                     font.style="BOLD"
-                     height="16"
-                     layout="topleft"
-                     left="6"
-                     name="outline_head"
-                     top="5"
-                     width="56">
-                        OUTLINE
-                    </text>
-                    <combo_box
-                     follows="left|top"
-                     height="20"
-                     layout="topleft"
-                     left_pad="2"
-                     name="outline_sort"
-                     tool_tip="How the symbols are ordered under what holds them: as the script has them, by name, or by kind"
-                     top="2"
-                     width="64">
-                        <combo_box.item label="Order" name="outline_sort_order" value="order" />
-                        <combo_box.item label="Name" name="outline_sort_name" value="name" />
-                        <combo_box.item label="Kind" name="outline_sort_kind" value="kind" />
-                    </combo_box>
-                    <filter_editor
-                     follows="left|top|right"
-                     height="20"
-                     label="Filter"
-                     layout="topleft"
-                     left_pad="4"
-                     name="outline_filter"
-                     tool_tip="Only the symbols with these letters in their names"
-                     top="2"
-                     width="112" />
-                    <pane_list
+                    <panel
+                     class="script_studio_outline"
                      follows="all"
-                     height="274"
+                     height="300"
                      layout="topleft"
                      left="0"
-                     name="outline"
-                     tool_tip="What the script declares, the one the caret is in chosen; the arrow before a symbol folds what it holds. Choosing one shows it, and the arrow keys walk the list, left and right folding; return or a double-click goes there to type."
-                     top="26"
+                     name="outline_pane"
+                     top="0"
                      width="250">
-                        <pane_list.columns label="" name="icon" width="20" />
-                        <pane_list.columns dynamic_width="true" label="Symbol" name="symbol" />
-                    </pane_list>
+                        <text
+                         follows="left|top"
+                         font="SansSerifSmall"
+                         font.style="BOLD"
+                         height="16"
+                         layout="topleft"
+                         left="6"
+                         name="outline_head"
+                         top="5"
+                         width="56">
+                            OUTLINE
+                        </text>
+                        <combo_box
+                         follows="left|top"
+                         height="20"
+                         layout="topleft"
+                         left_pad="2"
+                         name="outline_sort"
+                         tool_tip="How the symbols are ordered under what holds them: as the script has them, by name, or by kind"
+                         top="2"
+                         width="64">
+                            <combo_box.item label="Order" name="outline_sort_order" value="order" />
+                            <combo_box.item label="Name" name="outline_sort_name" value="name" />
+                            <combo_box.item label="Kind" name="outline_sort_kind" value="kind" />
+                        </combo_box>
+                        <filter_editor
+                         follows="left|top|right"
+                         height="20"
+                         label="Filter"
+                         layout="topleft"
+                         left_pad="4"
+                         name="outline_filter"
+                         tool_tip="Only the symbols with these letters in their names"
+                         top="2"
+                         width="112" />
+                        <pane_list
+                         follows="all"
+                         height="274"
+                         layout="topleft"
+                         left="0"
+                         name="outline"
+                         tool_tip="What the script declares, the one the caret is in chosen; the arrow before a symbol folds what it holds. Choosing one shows it, and the arrow keys walk the list, left and right folding; return or a double-click goes there to type."
+                         top="26"
+                         width="250">
+                            <pane_list.columns label="" name="icon" width="20" />
+                            <pane_list.columns dynamic_width="true" label="Symbol" name="symbol" />
+                        </pane_list>
+                    </panel>
                 </layout_panel>
                 <layout_panel
                  auto_resize="false"
@@ -1978,30 +2304,40 @@
                  name="symbol_panel"
                  user_resize="true"
                  width="250">
-                    <text
-                     follows="left|top|right"
-                     font="SansSerifSmall"
-                     font.style="BOLD"
-                     height="16"
-                     layout="topleft"
-                     left="6"
-                     name="symbol_head"
-                     top="3"
-                     width="238">
-                        AT THE CARET
-                    </text>
-                    <text_view
+                    <panel
+                     class="script_studio_inspector"
                      follows="all"
-                     font="SansSerif"
-                     height="134"
+                     height="154"
                      layout="topleft"
                      left="0"
-                     name="symbol"
-                     placeholder="The symbol at the caret: its declaration, its documentation and its page on the wiki. F1 looks up the word at the caret; Help browses the whole reference."
-                     read_only="true"
-                     top="20"
-                     width="250"
-                     word_wrap="true" />
+                     name="inspector_pane"
+                     top="0"
+                     width="250">
+                        <text
+                         follows="left|top|right"
+                         font="SansSerifSmall"
+                         font.style="BOLD"
+                         height="16"
+                         layout="topleft"
+                         left="6"
+                         name="symbol_head"
+                         top="3"
+                         width="238">
+                            AT THE CARET
+                        </text>
+                        <text_view
+                         follows="all"
+                         font="SansSerif"
+                         height="134"
+                         layout="topleft"
+                         left="0"
+                         name="symbol"
+                         placeholder="The symbol at the caret: its declaration, its documentation and its page on the wiki. F1 looks up the word at the caret; Help browses the whole reference."
+                         read_only="true"
+                         top="20"
+                         width="250"
+                         word_wrap="true" />
+                    </panel>
                 </layout_panel>
             </layout_stack>
         </layout_panel>
