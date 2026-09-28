@@ -35,6 +35,47 @@
 namespace
 {
     const ALTextLayout::Line EMPTY_LINE;
+
+    // A stretch of a line longer than this is shaped a piece at a time.
+    constexpr size_t SHAPE_PIECE_LEAST = 256;
+    constexpr size_t SHAPE_PIECE_MOST  = 1024;
+
+    // Where the piece of a long stretch that begins at `from` ends: after a
+    // space, where no font joins one glyph to the next, and after one the
+    // four bytes before it pick rather than one so far along. An edit then
+    // changes the piece it is in and no other, and every other piece is
+    // found shaped already. The bytes pick one space in sixteen; where they
+    // pick none by the most a piece may be, the last space before that
+    // ends it, and where there is no space at all, the stretch's end.
+    size_t pieceEnd(const std::string& text, size_t from, size_t end)
+    {
+        if (end - from <= SHAPE_PIECE_MOST)
+        {
+            return end;
+        }
+        size_t last_space = std::string::npos;
+        for (size_t i = from + SHAPE_PIECE_LEAST; i < end; ++i)
+        {
+            if (text[i] == ' ')
+            {
+                last_space = i;
+                U32 picked = 0;
+                for (size_t k = i - 4; k < i; ++k)
+                {
+                    picked = picked * 31 + static_cast<U8>(text[k]);
+                }
+                if ((picked & 15) == 0)
+                {
+                    return i + 1;
+                }
+            }
+            if (i >= from + SHAPE_PIECE_MOST && last_space != std::string::npos)
+            {
+                return last_space + 1;
+            }
+        }
+        return end;
+    }
 }
 
 ALTextLayout::ALTextLayout() = default;
@@ -65,13 +106,9 @@ void ALTextLayout::setFont(const LLFontGL* font)
 
 void ALTextLayout::setWrapWidth(S32 pixels)
 {
-    pixels = llmax(0, pixels);
-    if (pixels == mWrapWidth)
-    {
-        return;
-    }
-    mWrapWidth = pixels;
-    invalidateAll();
+    // Each line is cut into rows again as it is next asked for, from the
+    // glyphs it has; until then it keeps its height.
+    mWrapWidth = llmax(0, pixels);
 }
 
 void ALTextLayout::setTabWidth(S32 spaces)
@@ -124,8 +161,14 @@ void ALTextLayout::invalidateAll()
         mHiddenCount = 0;
         ++mHiddenRevision;
     }
-    mTopsDirty    = true;
+    heightsMoved();
     mContentWidth = -1.f;
+}
+
+void ALTextLayout::heightsMoved()
+{
+    mHeightsStale = true;
+    ++mHeightsRevision;
 }
 
 void ALTextLayout::onEdit(const ALTextDocument::Edit& edit)
@@ -150,7 +193,23 @@ void ALTextLayout::onEdit(const ALTextDocument::Edit& edit)
             }
         }
     }
-    mLines.applySpans(spans, line_count, Line());
+    if (moved)
+    {
+        mLines.applySpans(spans, line_count, Line());
+    }
+    else
+    {
+        // As many lines as before: each the edit touched is laid out again
+        // when next asked for, and keeps its height until then, so that
+        // the lines below keep their tops.
+        for (const ALTextDocument::Edit::LineSpan& span : spans)
+        {
+            for (S32 l = llmax(span.first, 0); l <= span.last && l < lineCount(); ++l)
+            {
+                mLines[l].valid = false;
+            }
+        }
+    }
     // The lines an edit makes are in sight: somebody is typing there.
     mHidden.applySpans(spans, line_count, 0, 0);
     mHiddenCount -= hidden_gone;
@@ -160,7 +219,10 @@ void ALTextLayout::onEdit(const ALTextDocument::Edit& edit)
     {
         ++mHiddenRevision;
     }
-    mTopsDirty    = true;
+    if (moved || hidden_gone > 0)
+    {
+        heightsMoved();
+    }
     mContentWidth = -1.f;
 }
 
@@ -194,8 +256,12 @@ void ALTextLayout::setHidden(S32 first, S32 last, bool hidden)
         {
             mHidden[l] = hidden ? 1 : 0;
             mHiddenCount += hidden ? 1 : -1;
-            mTopsDirty = true;
             ++mHiddenRevision;
+            if (!mHeightsStale && static_cast<size_t>(l) < mHeights.size())
+            {
+                mHeights.set(static_cast<size_t>(l), countedHeight(l));
+                ++mHeightsRevision;
+            }
         }
     }
 }
@@ -265,9 +331,9 @@ void ALTextLayout::invalidateLine(S32 index)
     {
         return;
     }
-    mLines[index] = Line();
-    mTopsDirty    = true;
-    mContentWidth = -1.f;
+    // Laid out again when next asked for, keeping its height until then.
+    mLines[index].valid = false;
+    mContentWidth       = -1.f;
 }
 
 void ALTextLayout::layoutLine(S32 index, Line& out)
@@ -276,9 +342,12 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
     out.placed.clear();
     out.glyphs.clear();
     out.rows.clear();
-    out.width  = 0.f;
-    out.height = 0;
-    out.valid  = true;
+    out.fonts.clear();
+    out.boxes.clear();
+    out.width   = 0.f;
+    out.height  = 0;
+    out.valid   = true;
+    out.ordered = true;
 
     const std::string&    text = mDocument ? mDocument->line(index) : LLStringUtil::null;
     const LLFontFreetype* face = mFont ? mFont->getFontFreetype() : nullptr;
@@ -341,8 +410,7 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
         }
     }
     // The fonts the glyphs were shaped in, by glyph, where not the
-    // document's own: what a row's text is tall for.
-    std::vector<std::pair<size_t, const LLFontGL*>> font_spans;
+    // document's own, go in out.fonts: what a row's text is tall for.
     size_t next_inlay = 0;
     auto   gap        = [&](S32 cluster, F32 width, S32 inlay, bool before, S32 substitution = -1) {
         out.placed.push_back(LLFontGL::Placed{ nullptr, 0, x * inv_x, 0.f });
@@ -377,16 +445,23 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
         {
             return;
         }
-        ALFontShaping::shapeRun(in, source, begin, end, mShaped);
-        for (const ALShapedGlyph& sg : mShaped)
+        for (size_t from = begin; from < end;)
         {
-            out.placed.push_back(LLFontGL::Placed{ sg.face, sg.glyph_id, (x + sg.x_offset) * inv_x, sg.y_offset * inv_y });
-            out.glyphs.push_back(Glyph{ sg.cluster, x * inv_x, sg.x_advance * inv_x, -1, true, substitution });
-            x += sg.x_advance;
-            if (!subpixel)
+            const size_t to = pieceEnd(source, from, end);
+            // Read where the shaper keeps it, before anything else is shaped.
+            const std::vector<ALShapedGlyph>& shaped = ALFontShaping::shapeLine(in, source, from, to);
+            const S32                         base   = static_cast<S32>(from);
+            for (const ALShapedGlyph& sg : shaped)
             {
-                x = static_cast<F32>(ll_round(x));
+                out.placed.push_back(LLFontGL::Placed{ sg.face, sg.glyph_id, (x + sg.x_offset) * inv_x, sg.y_offset * inv_y });
+                out.glyphs.push_back(Glyph{ base + sg.cluster, x * inv_x, sg.x_advance * inv_x, -1, true, substitution });
+                x += sg.x_advance;
+                if (!subpixel)
+                {
+                    x = static_cast<F32>(ll_round(x));
+                }
             }
+            from = to;
         }
     };
     // A piece of the text, shaped run by run where runs cross it.
@@ -413,9 +488,9 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
             const size_t run_from = llmax(from, static_cast<size_t>(run.begin));
             const size_t run_to   = llmin(end, static_cast<size_t>(run.end));
             shape_with(face, text, from, run_from, substitution);
-            font_spans.emplace_back(out.glyphs.size(), run.font);
+            out.fonts.emplace_back(out.glyphs.size(), run.font);
             shape_with(run.font->getFontFreetype(), text, run_from, run_to, substitution);
-            font_spans.emplace_back(out.glyphs.size(), nullptr);
+            out.fonts.emplace_back(out.glyphs.size(), nullptr);
             from = run_to;
         }
     };
@@ -430,16 +505,15 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
         }
         shape_run(text, from, end, -1);
     };
-    // The boxes on the line, by glyph, with their heights: what a row
-    // may be taller for.
-    std::vector<std::pair<size_t, S32>> boxes;
+    // The boxes on the line, by glyph, with their heights, go in
+    // out.boxes: what a row may be taller for.
     auto substitute = [&](const Substitution& sub) {
         const size_t first = out.glyphs.size();
         if (sub.shown.empty())
         {
             if (sub.height > 0)
             {
-                boxes.emplace_back(first, sub.height);
+                out.boxes.emplace_back(first, sub.height);
             }
             gap(sub.begin, llmax(0.f, sub.width) * mScaleX, -1, true, sub.id);
         }
@@ -486,11 +560,24 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
         piece = at + 1;
     }
     out.width = x * inv_x;
+    for (size_t k = 1; k < out.glyphs.size() && out.ordered; ++k)
+    {
+        out.ordered = out.glyphs[k].cluster >= out.glyphs[k - 1].cluster;
+    }
     // The widest line, kept up in the UI's pixels as the width is.
     if (mContentWidth >= 0.f && out.width > mContentWidth)
     {
         mContentWidth = out.width;
     }
+    wrapLine(index, out);
+}
+
+void ALTextLayout::wrapLine(S32 index, Line& out)
+{
+    out.rows.clear();
+    out.height    = 0;
+    out.wrappedAt = mWrapWidth;
+    const std::string& text = mDocument ? mDocument->line(index) : LLStringUtil::null;
 
     // Rows. One, unless the line is wider than the wrap and has somewhere
     // to break. Each as tall as its text -- the document's font, or the
@@ -530,7 +617,7 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
             row.textHeight = llmax(row.textHeight, used->getLineSpacing());
             row.ascent     = llmax(row.ascent, ll_round(used->getAscenderHeight()));
         };
-        for (const auto& [glyph, font] : font_spans)
+        for (const auto& [glyph, font] : out.fonts)
         {
             if (glyph >= glyph_end)
             {
@@ -547,7 +634,7 @@ void ALTextLayout::layoutLine(S32 index, Line& out)
             tall_as(current);
         }
         row.height = row.textHeight;
-        for (const auto& [glyph, height] : boxes)
+        for (const auto& [glyph, height] : out.boxes)
         {
             if (glyph >= glyph_begin && glyph < glyph_end)
             {
@@ -652,56 +739,68 @@ const ALTextLayout::Line& ALTextLayout::line(S32 index)
         return EMPTY_LINE;
     }
     Line& entry = mLines[index];
-    if (!entry.valid)
+    if (!entry.valid || entry.wrappedAt != mWrapWidth)
     {
-        // What the line counted as before: its last height, or a row's.
-        const S32 before = entry.height > 0 ? entry.height : rowHeight();
-        layoutLine(index, entry);
-        if (entry.height != before)
+        // Shaped again, or only cut into rows again where its glyphs are
+        // current and the wrap width moved.
+        if (entry.valid)
         {
-            mTopsDirty = true;
+            wrapLine(index, entry);
+        }
+        else
+        {
+            layoutLine(index, entry);
+        }
+        if (!mHeightsStale && static_cast<size_t>(index) < mHeights.size() && mHeights.at(static_cast<size_t>(index)) != countedHeight(index))
+        {
+            mHeights.set(static_cast<size_t>(index), countedHeight(index));
+            ++mHeightsRevision;
         }
     }
     return entry;
 }
 
-void ALTextLayout::ensureTops()
+S32 ALTextLayout::countedHeight(S32 index) const
+{
+    if (mHidden[index])
+    {
+        return 0;
+    }
+    const S32 height = mLines[index].height;
+    return height > 0 ? height : rowHeight();
+}
+
+void ALTextLayout::ensureHeights()
 {
     refreshIfFontsChanged();
-    if (!mTopsDirty)
+    if (!mHeightsStale)
     {
         return;
     }
-    const S32 row = rowHeight();
-    mTops.resize(mLines.size() + 1);
-    S32 top = 0;
+    mHeightScratch.resize(mLines.size());
     for (size_t i = 0; i < mLines.size(); ++i)
     {
-        mTops[i] = top;
-        if (!mHidden[i])
-        {
-            top += mLines[i].valid ? mLines[i].height : row;
-        }
+        mHeightScratch[i] = countedHeight(static_cast<S32>(i));
     }
-    mTops[mLines.size()] = top;
-    mTopsDirty           = false;
+    mHeights.assign(mHeightScratch);
+    mHeightsStale = false;
 }
 
 S32 ALTextLayout::lineTop(S32 index)
 {
-    ensureTops();
-    return mTops[llclamp(index, 0, static_cast<S32>(mLines.size()))];
+    ensureHeights();
+    return mHeights.before(static_cast<size_t>(llclamp(index, 0, static_cast<S32>(mLines.size()))));
 }
 
 S32 ALTextLayout::totalHeight()
 {
-    ensureTops();
-    return mTops.back();
+    ensureHeights();
+    return mHeights.total();
 }
 
 S32 ALTextLayout::lineAtY(S32 y)
 {
-    ensureTops();
+    ensureHeights();
     if (mLines.empty())
     {
         return 0;
@@ -710,8 +809,7 @@ S32 ALTextLayout::lineAtY(S32 y)
     // with the line after them, so the last of a run is the one in sight
     // -- unless the run reaches the end, where the nearest in sight is
     // above it.
-    const auto after = std::upper_bound(mTops.begin(), mTops.end() - 1, y);
-    const S32  line  = llclamp(static_cast<S32>(after - mTops.begin()) - 1, 0, lineCount() - 1);
+    const S32 line = llclamp(static_cast<S32>(mHeights.reach(y)), 0, lineCount() - 1);
     if (mHidden[line])
     {
         const S32 above = visibleFrom(line, -1);
@@ -751,27 +849,29 @@ S32 ALTextLayout::rowHeightOf(S32 index, S32 row)
 S32 ALTextLayout::rowAtY(S32 index, S32 y)
 {
     const Line& entry = line(index);
-    for (size_t r = 0; r + 1 < entry.rows.size(); ++r)
+    if (entry.rows.size() <= 1)
     {
-        if (y < entry.rows[r].top + entry.rows[r].height)
-        {
-            return static_cast<S32>(r);
-        }
+        return 0;
     }
-    return entry.rows.empty() ? 0 : static_cast<S32>(entry.rows.size()) - 1;
+    // The first row whose bottom is below y; the last, past them all.
+    const auto last = entry.rows.end() - 1;
+    const auto it   = std::upper_bound(entry.rows.begin(), last, y, [](S32 at, const Row& row) { return at < row.top + row.height; });
+    return static_cast<S32>(it - entry.rows.begin());
 }
 
 S32 ALTextLayout::rowOf(S32 index, S32 column)
 {
     const Line& entry = line(index);
-    for (size_t r = 0; r + 1 < entry.rows.size(); ++r)
+    if (entry.rows.size() <= 1)
     {
-        if (column < entry.rows[r].end)
-        {
-            return static_cast<S32>(r);
-        }
+        return 0;
     }
-    return entry.rows.empty() ? 0 : static_cast<S32>(entry.rows.size()) - 1;
+    // The first row that ends past the column; the last, past them all.
+    const auto last  = entry.rows.end() - 1;
+    const auto after = [column](const Row& row) { return column < row.end; };
+    const auto it    = entry.ordered ? std::upper_bound(entry.rows.begin(), last, column, [](S32 at, const Row& row) { return at < row.end; })
+                                     : std::find_if(entry.rows.begin(), last, after);
+    return static_cast<S32>(it - entry.rows.begin());
 }
 
 F32 ALTextLayout::xOf(S32 index, S32 column, S32* row_out)
@@ -787,7 +887,14 @@ F32 ALTextLayout::xOf(S32 index, S32 column, S32* row_out)
         return 0.f;
     }
     const Row& row = entry.rows[r];
-    for (size_t k = row.glyphBegin; k < row.glyphEnd; ++k)
+    size_t     k   = row.glyphBegin;
+    if (entry.ordered)
+    {
+        const auto first = entry.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphBegin);
+        const auto end   = entry.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphEnd);
+        k                = static_cast<size_t>(std::partition_point(first, end, [column](const Glyph& g) { return g.cluster < column; }) - entry.glyphs.begin());
+    }
+    for (; k < row.glyphEnd; ++k)
     {
         const Glyph& glyph = entry.glyphs[k];
         if (glyph.cluster < column)
@@ -817,25 +924,63 @@ S32 ALTextLayout::columnAt(S32 index, S32 r, F32 x, bool round)
     {
         return row.begin;
     }
-    // Each cluster's left edge and the next cluster's, which is its right.
-    S32 cluster = row.begin;
-    F32 left    = 0.f;
-    for (size_t k = row.glyphBegin; k <= row.glyphEnd; ++k)
+    // The first glyph after the row's first that begins a cluster past x,
+    // and the one that begins the cluster before it: x lies between their
+    // left edges. The pens go forward whichever way the text is written,
+    // so both are found by a search, and a step or two over the glyphs of
+    // one cluster.
+    if (row.glyphBegin >= row.glyphEnd)
     {
-        const bool at_end     = (k == row.glyphEnd);
-        const bool starts_one = at_end || k == row.glyphBegin || entry.glyphs[k].cluster != entry.glyphs[k - 1].cluster;
-        if (!starts_one)
-        {
-            continue;
-        }
-        const S32 next_cluster = at_end ? row.end : entry.glyphs[k].cluster;
-        const F32 right        = at_end ? row.width : entry.glyphs[k].pen - row.xStart;
-        if (k != row.glyphBegin && x < right)
-        {
-            return (round && (x - left) * 2.f >= (right - left)) ? next_cluster : cluster;
-        }
-        cluster = next_cluster;
-        left    = right;
+        return row.end;
     }
-    return row.end;
+    const auto starts_one = [&](size_t k) { return k == row.glyphBegin || entry.glyphs[k].cluster != entry.glyphs[k - 1].cluster; };
+    const auto first      = entry.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphBegin);
+    const auto end        = entry.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphEnd);
+    size_t     k = static_cast<size_t>(std::partition_point(first + 1, end, [&](const Glyph& g) { return g.pen - row.xStart <= x; }) - entry.glyphs.begin());
+    while (k < row.glyphEnd && !starts_one(k))
+    {
+        ++k;
+    }
+    size_t before = k > row.glyphBegin ? k - 1 : row.glyphBegin;
+    while (before > row.glyphBegin && !starts_one(before))
+    {
+        --before;
+    }
+    const bool at_end = k >= row.glyphEnd;
+    const F32  right  = at_end ? row.width : entry.glyphs[k].pen - row.xStart;
+    const F32  left   = entry.glyphs[before].pen - row.xStart;
+    if (x >= right)
+    {
+        return row.end;
+    }
+    const S32 cluster      = entry.glyphs[before].cluster;
+    const S32 next_cluster = at_end ? row.end : entry.glyphs[k].cluster;
+    return (round && (x - left) * 2.f >= (right - left)) ? next_cluster : cluster;
+}
+
+// static
+ALTextLayout::Row ALTextLayout::rowWithin(const Line& line, const Row& row, F32 from, F32 to)
+{
+    if (!line.ordered || row.glyphBegin >= row.glyphEnd)
+    {
+        return row;
+    }
+    const auto first = line.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphBegin);
+    const auto end   = line.glyphs.begin() + static_cast<std::ptrdiff_t>(row.glyphEnd);
+    // The first glyph whose right edge reaches `from`, and the first whose
+    // left edge is past `to`; one more either side of those.
+    auto lo = std::partition_point(first, end, [&](const Glyph& g) { return g.pen + g.advance - row.xStart < from; });
+    auto hi = std::partition_point(lo, end, [&](const Glyph& g) { return g.pen - row.xStart <= to; });
+    lo      = lo == first ? lo : lo - 1;
+    hi      = hi == end ? hi : hi + 1;
+    if (lo == first && hi == end)
+    {
+        return row;
+    }
+    Row seen        = row;
+    seen.glyphBegin = static_cast<size_t>(lo - line.glyphs.begin());
+    seen.glyphEnd   = static_cast<size_t>(hi - line.glyphs.begin());
+    seen.begin      = lo == first ? row.begin : lo->cluster;
+    seen.end        = hi == end ? row.end : hi->cluster;
+    return seen;
 }
