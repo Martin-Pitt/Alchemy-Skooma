@@ -137,29 +137,27 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
 
     // The script, where it is open here: what runs is its expansion,
     // where the preprocessor ran, and a line the run names is the
-    // expansion's -- back to the source's, or an include's.
+    // expansion's -- back to the source's, or an include's. Where it is
+    // not, or its map is not known yet, the line is the one the region
+    // counts, and a link to it says so, to be read back once it is.
     const ALScriptStudioDoc* open     = event.item.notNull() ? mServices->findDoc(ALScriptRef(event.prim, event.item)) : nullptr;
     const auto               where_of = [&](S32 line, S32 column) {
         Place where;
-        where.line   = line;
-        where.column = column;
-        if (line < 0 || !open)
+        where.line    = line;
+        where.column  = column;
+        where.running = line >= 0;
+        if (!open || !open->runningMap())
         {
             return where;
         }
-        if (const ALSourceMap* map = open->runningMap())
+        const ALScriptStudioDoc::RunningPlace place = open->placeOfRunning(line, column);
+        if (!place.generated)
         {
-            const ALSourceMap::Loc loc = map->toSource(line, llmax(0, column));
-            if (loc.found())
-            {
-                where.line   = loc.line;
-                where.column = column >= 0 ? loc.column : -1;
-                if (loc.file > 0)
-                {
-                    where.file     = map->files()[loc.file].path;
-                    where.fileName = map->files()[loc.file].name;
-                }
-            }
+            where.line     = place.line;
+            where.column   = place.column;
+            where.file     = place.file;
+            where.fileName = place.fileName;
+            where.running  = false;
         }
         return where;
     };
@@ -172,6 +170,7 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
         value["column"]   = where.column;
         value["file"]     = where.file;
         value["fileName"] = where.fileName;
+        value["running"]  = where.running;
         return value;
     };
     const Place at = where_of(event.line, event.column);
@@ -304,6 +303,11 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
                                   : action == "copy"          ? "ActionCopy"
                                   : action == "take_external" ? "ActionTakeExternal"
                                   : action == "keep_here"     ? "ActionKeepHere"
+                                  : action == "take_saved"    ? "ActionTakeSaved"
+                                  : action == "keep_saved"    ? "ActionKeepSaved"
+                                  : action == "compare_saved" ? "ActionCompareSaved"
+                                  : action == "reload_world"  ? "ActionReloadWorld"
+                                  : action == "compare_world" ? "ActionCompareWorld"
                                                               : "ActionExport";
         const std::string label = mServices->words(key);
         const size_t      last  = entry.text.rfind('\n');
@@ -427,6 +431,7 @@ void ALScriptOutputPane::offerObject(const LLUUID& root, const std::string& name
 
 void ALScriptOutputPane::filter()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     const std::string whose = mWhose->getValue().asString();
     const std::string kind  = mKind->getValue().asString();
     std::string       words = mFind->getText();
@@ -498,5 +503,6 @@ void ALScriptOutputPane::choose(const ALOutputView::Entry& entry)
         mWindow->outputGoToInclude(entry.value["file"].asString(), entry.value["fileName"].asString(), line, column);
         return;
     }
-    mWindow->outputGoTo(ALScriptRef(entry.value["prim"].asUUID(), entry.value["item"].asUUID()), entry.value["name"].asString(), line, column);
+    mWindow->outputGoTo(ALScriptRef(entry.value["prim"].asUUID(), entry.value["item"].asUUID()), entry.value["name"].asString(), line, column,
+                        entry.value["running"].asBoolean());
 }

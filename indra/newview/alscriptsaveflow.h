@@ -40,6 +40,8 @@
 //
 // A save is one of:
 //   Idle           nothing on its way
+//   Asking         waiting on the world's word on the item: the asset it
+//                  holds now, which another save may have moved
 //   Checking       waiting on the analyzers' check of the text as it stands
 //   Preprocessing  waiting on a run of the preprocessor: its own, or one
 //                  that was on its way already, which it joins
@@ -52,6 +54,7 @@ public:
     enum class Stage : U8
     {
         Idle,
+        Asking,
         Checking,
         Preprocessing,
         Sending
@@ -60,16 +63,21 @@ public:
     bool  underway() const { return mStage != Stage::Idle; }
     bool  sending() const { return mStage == Stage::Sending; }
 
-    // The checks that may stop a save. One that stopped a save is let past
+    // The checks that may stop a save: the analyzers' errors, where the
+    // author asked to be held on them. One that stopped a save is let past
     // -- it alone, for that text alone -- where the author asks again over
     // the same text: Save Anyway, or Save a second time. A later check
-    // still stops it, and says why.
+    // still stops it, and says why. Nothing the preprocessor finds stops
+    // one: a save is what keeps the author's work, the source going up in
+    // the envelope whatever the expansion came to.
+    // The world's copy stops one too: an item saved elsewhere since the tab
+    // had it -- by a co-owner, in another viewer -- which this save would
+    // replace without a word.
     enum Check : U8
     {
-        CheckAnalyzers    = 1,
-        CheckPreprocessor = 2,
-        CheckPending      = 4,
-        CheckAll          = 0xFF
+        CheckAnalyzers = 1,
+        CheckWorld     = 2,
+        CheckAll       = 0xFF
     };
 
     // --- asking --------------------------------------------------------------------
@@ -108,6 +116,9 @@ public:
         bool holdOnErrors  = false;
         bool checked       = false;
         S32  checkerErrors = 0;
+        // Whether the world can be asked what the item holds: an item, in
+        // an object or the inventory, whose asset the tab knows.
+        bool askWorld      = false;
     };
     // Where the save goes from here: a file written on the spot, a notecard
     // sent as it stands; the analyzers asked first, or their errors
@@ -115,6 +126,8 @@ public:
     enum class Route : U8
     {
         File,
+        AskWorld,
+        StoppedByWorld,
         Notecard,
         Check,
         StoppedByAnalyzers,
@@ -123,6 +136,10 @@ public:
         Send
     };
     Route route(const Tab& tab);
+
+    // The world's word on the item, of the text at `version`: whether the
+    // asset it holds now is another than the tab's. Asked once for a text.
+    void worldAnswered(S64 version, bool moved);
 
     // --- what it waits on answering ---------------------------------------------
 
@@ -133,27 +150,23 @@ public:
     // now at `now`.
     struct Run
     {
-        S64  asked   = 0;
-        S64  now     = 0;
-        bool errors  = false;
-        bool pending = false;
+        S64 asked = 0;
+        S64 now   = 0;
     };
     // No save waited on it; the text moved on while it ran, and the save is
-    // asked for again; its errors, or an include still to come, stopped the
-    // save; or what it made is to be sent.
+    // asked for again; or what it made is to be sent, whatever it found.
     enum class Landed : U8
     {
         NotForSave,
         MovedOn,
-        StoppedByErrors,
-        StoppedByPending,
         Send
     };
     Landed preprocessed(const Run& run);
     // Sent: the journal's save point as the text went, which the answer
     // marks saved whatever is typed meanwhile; the map the expansion went
-    // through, where it was expanded; a notecard's items.
-    void sent(const ALTextUndo::SavePoint& at, std::optional<ALSourceMap> map, std::vector<LLUUID> items);
+    // through, where it was expanded; a notecard's items; and the request
+    // it went as, which its answer carries.
+    void sent(const ALTextUndo::SavePoint& at, std::optional<ALSourceMap> map, std::vector<LLUUID> items, U64 request = 0);
     // It could not go, said why, or stopped where it was: nothing on its
     // way, the safe fixes to be made again next time, and no close waiting
     // on it any more.
@@ -167,6 +180,9 @@ public:
         bool up       = false;
         bool compiled = false;
         bool quitting = false;
+        // Which save it answers: the tab's own only where it is the request
+        // the tab sent, not another's for the same item on its way at once.
+        U64  request  = 0;
     };
     // Whether it answers this tab's save, rather than a recompile made from
     // elsewhere; whether the text is to be marked saved; and whether it
@@ -205,6 +221,8 @@ public:
     const ALTextUndo::SavePoint&      savePoint() const { return mSavePoint; }
     const std::optional<ALSourceMap>& sentMap() const { return mSentMap; }
     const std::vector<LLUUID>&        sentItems() const { return mSentItems; }
+    // The request the last save went as.
+    U64                               request() const { return mRequest; }
     void                              forgetSentItems() { mSentItems.clear(); }
     // The text a save sent, whose weight is said once it is known, where it
     // is over the target's limit; -1 for none.
@@ -227,5 +245,9 @@ private:
     ALTextUndo::SavePoint      mSavePoint;
     std::optional<ALSourceMap> mSentMap;
     std::vector<LLUUID>        mSentItems;
+    U64                        mRequest = 0;
+    // The text the world was last asked about, and whether it had moved.
+    S64                        mWorldVersion = -1;
+    bool                       mWorldMoved   = false;
     S64                        mWarnWeightFor = -1;
 };
