@@ -27,12 +27,16 @@
 #include "../alfontfield.h"
 
 #include "../alpopover.h"
+#include "../alspecimenlist.h"
 #include "../llcheckboxctrl.h"
 #include "../llcombobox.h"
+#include "../llfocusmgr.h"
 #include "../lllineeditor.h"
+#include "../lltextbox.h"
 #include "../lluictrlfactory.h"
 
 #include "llfontgl.h"
+#include "llmortician.h"
 
 #include "alheadlessui_fixture.h"
 
@@ -208,6 +212,142 @@ namespace tut
         ensure_equals("the name did not change and was not written",
                       field->getValue().asString(), std::string("SansSerif"));
         ensure_equals("and the field committed once for the answer", commits, 1);
+        field->die();
+    }
+
+    template<> template<>
+    void alfontfield_object::test<4>()
+    {
+        set_test_name("a field going with its popover up escapes it: nothing picked is written, and the keyboard goes back where it was");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLLineEditor::Params lp(LLUICtrlFactory::getDefaultParams<LLLineEditor>());
+        lp.name                 = "elsewhere";
+        lp.rect                 = LLRect(400, 322, 500, 300);
+        LLLineEditor* elsewhere = LLUICtrlFactory::create<LLLineEditor>(lp);
+        gFloaterView->addChild(elsewhere);
+        LLMortician::updateClass();
+        ALFontField* field = make();
+        field->setValue("SansSerif");
+        bool written = false;
+        field->onPartCommit([&written](const std::string&, const std::string&) { written = true; });
+        elsewhere->setFocus(true);
+        field->handleMouseDown(4, 10, MASK_NONE);
+        ALPopover* popover = popoverOpen();
+        ensure("the popover opened, with the keyboard", popover != nullptr && gFocusMgr.getKeyboardFocus() != elsewhere);
+        LLCheckBoxCtrl* bold = popover->findChild<LLCheckBoxCtrl>("bold", true);
+        bold->setValue(true);
+        bold->onCommit();
+        field->die();
+        LLMortician::updateClass();
+        ensure("nothing written", !written);
+        ensure("the keyboard back where it was", gFocusMgr.getKeyboardFocus() == elsewhere);
+        gFocusMgr.setKeyboardFocus(nullptr);
+        elsewhere->die();
+    }
+
+    template<> template<>
+    void alfontfield_object::test<5>()
+    {
+        set_test_name("the popover lists the families each beside a specimen in its face; a click shows one, a double-click is it and the yes together");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLMortician::updateClass();
+        ALFontField* field = make();
+        field->setValue("SansSerif");
+        std::vector<Said> said;
+        field->onPartCommit([&said](const std::string& part, const std::string& value) { said.push_back({ part, value }); });
+        field->handleMouseDown(4, 10, MASK_NONE);
+        ALPopover* popover = popoverOpen();
+        ensure("open", popover != nullptr);
+        ALSpecimenList* fonts = popover->findChild<ALSpecimenList>("fonts", true);
+        ensure("the families listed", fonts && fonts->count() > 1);
+        ensure_equals("the field's chosen", fonts->chosen(), std::string("SansSerif"));
+        ensure("each beside a specimen", popover->findChild<LLTextBox>("sample", true) != nullptr);
+        fonts->choose("Monospace");
+        ensure("a click shows it and writes nothing", said.empty() && popoverOpen() == popover);
+        LLView* row = fonts->findChild<LLView>("row_Monospace", true);
+        ensure("its row", row != nullptr);
+        row->handleDoubleClick(10, 10, MASK_NONE);
+        ensure("a double-click settles", popoverOpen() == nullptr);
+        ensure("and writes the name", said.size() == 1 && said[0].part.empty() && said[0].value == "Monospace");
+        field->die();
+    }
+
+    template<> template<>
+    void alfontfield_object::test<6>()
+    {
+        set_test_name("a field offering only some families lists them by their labels, keeps the name it has though it is not one, and the preview says the label");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLMortician::updateClass();
+        ALFontField::Params p(LLUICtrlFactory::getDefaultParams<ALFontField>());
+        p.name     = "font";
+        p.rect     = LLRect(100, 322, 300, 300);
+        p.families = "monospace";
+        ALFontField* field = LLUICtrlFactory::create<ALFontField>(p);
+        gFloaterView->addChild(field);
+        field->setValue("Inter");
+        field->handleMouseDown(4, 10, MASK_NONE);
+        ALPopover* popover = popoverOpen();
+        ensure("open", popover != nullptr);
+        ALSpecimenList* fonts = popover->findChild<ALSpecimenList>("fonts", true);
+        ensure("the name it has, kept though it is not monospace", fonts && fonts->findChild<LLView>("row_Inter", true) != nullptr);
+        ensure("a monospace family listed", fonts->findChild<LLView>("row_CascadiaCode", true) != nullptr);
+        ensure("a proportional one not", fonts->findChild<LLView>("row_DejaVu", true) == nullptr);
+        fonts->choose("CascadiaCode");
+        const LLTextBox* preview = popover->findChild<LLTextBox>("preview", true);
+        ensure("the preview says its label", preview && preview->getText().rfind("Cascadia Code", 0) == 0);
+        popover->escape();
+        field->die();
+    }
+
+    template<> template<>
+    void alfontfield_object::test<7>()
+    {
+        set_test_name("the popover from the keyboard: Alt-Down and F4, as a combo box's list; Down alone is not it");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        ALFontField* field = make();
+        ensure("Down alone: not taken, nothing opened", !field->handleKeyHere(KEY_DOWN, MASK_NONE) && !popoverOpen());
+        ensure("Alt-Down", field->handleKeyHere(KEY_DOWN, MASK_ALT));
+        ALPopover* up = popoverOpen();
+        ensure("opened", up != nullptr);
+        up->escape();
+        ensure("F4", field->handleKeyHere(KEY_F4, MASK_NONE) && popoverOpen() != nullptr);
+        popoverOpen()->escape();
+        field->die();
+    }
+
+    template<> template<>
+    void alfontfield_object::test<8>()
+    {
+        set_test_name("the sizes said in points as well as by name; chosen by name; a size a zoom made is not offered");
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        LLFontGL::getFontAtPoints("SansSerif", 23.f, LLFontGL::NORMAL);
+        ALFontField* field = make();
+        field->handleMouseDown(4, 10, MASK_NONE);
+        ALPopover*  popover = popoverOpen();
+        LLComboBox* sizes   = popover ? popover->findChild<LLComboBox>("size", true) : nullptr;
+        ensure("the sizes", sizes != nullptr);
+        sizes->setValue("Large");
+        const F32 large = LLFontGL::pointsOf("SansSerif", "Large");
+        ensure("fonts.xml gives Large", large > 0.f);
+        ensure_equals("said in points", sizes->getSelectedItemLabel(), "Large" + llformat(" (%g pt)", large));
+        ensure_equals("chosen by name", sizes->getValue().asString(), std::string("Large"));
+        ensure("the zoom's size not among them", !sizes->selectByValue(LLSD("23.0pt")));
+        popover->escape();
         field->die();
     }
 }
