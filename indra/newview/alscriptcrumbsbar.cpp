@@ -104,17 +104,29 @@ void ALScriptCrumbsBar::showTrailer(Doc& doc)
     {
         return;
     }
-    std::vector<Part> parts;
+    // What does not move with the caret made again only where what it is
+    // made of has; a caret moving makes its place and the selection.
+    Steady steady = steadyOf(doc);
+    if (!mSteady || !(*mSteady == steady))
+    {
+        mSteadyLead.clear();
+        mSteadyRest.clear();
+        lead(doc, mSteadyLead);
+        indentation(doc, mSteadyRest);
+        problems(doc, mSteadyRest);
+        weight(doc, mSteadyRest);
+        sending(doc, mSteadyRest);
+        views(doc, mSteadyRest);
+        mSteady = std::move(steady);
+    }
+    std::vector<Part> parts = mSteadyLead;
     place(doc, parts);
     selection(doc, parts);
-    indentation(doc, parts);
-    problems(doc, parts);
-    weight(doc, parts);
-    sending(doc, parts);
-    views(doc, parts);
+    parts.insert(parts.end(), mSteadyRest.begin(), mSteadyRest.end());
     // Joined by a middle dot with air around it; in code, since a
     // string of the skin's is trimmed of its spaces.
     std::vector<Part> said;
+    said.reserve(parts.size() * 2);
     for (Part& part : parts)
     {
         if (!said.empty())
@@ -126,7 +138,42 @@ void ALScriptCrumbsBar::showTrailer(Doc& doc)
     mBar->setTrailer(std::move(said));
 }
 
-void ALScriptCrumbsBar::place(Doc& doc, std::vector<Part>& parts) const
+ALScriptCrumbsBar::Steady ALScriptCrumbsBar::steadyOf(Doc& doc) const
+{
+    Steady steady;
+    steady.id         = doc.id;
+    steady.readOnly   = doc.loaded && !doc.modifiable;
+    steady.banner     = mWindow->vimBanner();
+    steady.loaded     = doc.loaded;
+    steady.tabWidth   = doc.editor->getTabWidth();
+    steady.softTabs   = doc.editor->getSoftTabs();
+    steady.indentFrom = static_cast<U8>(doc.editor->indentFrom());
+    steady.checking   = doc.checkRunning(LLTimer::getTotalSeconds());
+    mWindow->problemCounts(doc, steady.errors, steady.warnings);
+    steady.target     = mWindow->weightTarget(doc);
+    steady.expandable = doc.expandedEditor != nullptr;
+    steady.expanded   = doc.shownView() == Doc::View::Expanded;
+    steady.optimized  = steady.expanded && doc.uploaded.valid && doc.uploaded.version == doc.editor->document().version();
+    steady.codeBefore = doc.uploaded.codeBefore;
+    steady.codeAfter  = doc.uploaded.codeAfter;
+    if (doc.weighing.weight)
+    {
+        steady.weighed    = true;
+        steady.weighedFor = doc.weighing.weight->target;
+        steady.total      = doc.weighing.weight->total;
+        steady.limit      = doc.weighing.weight->limit;
+        steady.estimate   = doc.weighing.weight->estimate;
+    }
+    steady.exact        = doc.weighing.exact;
+    steady.sent         = doc.weighing.sent;
+    steady.notecard     = doc.notecard;
+    steady.assetBytes   = doc.weighing.assetBytes;
+    steady.errorColor   = doc.editor->markColor(ALCodeEditor::Mark::Error);
+    steady.warningColor = doc.editor->markColor(ALCodeEditor::Mark::Warning);
+    return steady;
+}
+
+void ALScriptCrumbsBar::lead(Doc& doc, std::vector<Part>& parts) const
 {
     // A script that may be read and not changed says so for as long as it
     // is in front, not only in the status line as it arrives.
@@ -139,6 +186,10 @@ void ALScriptCrumbsBar::place(Doc& doc, std::vector<Part>& parts) const
     {
         parts.push_back({ banner, std::string(), std::string() });
     }
+}
+
+void ALScriptCrumbsBar::place(Doc& doc, std::vector<Part>& parts) const
+{
     // The view in front's caret: the expansion's own line, while it is
     // the one being read.
     const ALCodeEditor&        shown = *doc.shownText();
@@ -432,48 +483,22 @@ void ALScriptCrumbsBar::showPath(Doc& doc)
     {
         return;
     }
-    const ALTextPos caret = doc.editor->caret();
-    // The path the caret is in: which outline entry at each depth holds
-    // it. The crumbs are built from the outline, which a caret move
-    // does not touch, so the bar is told only where the path itself has
-    // changed -- and it is asked on every key. The outline is the
-    // source's, so while the expansion is in front, whose lines are other
-    // lines, the path is the script alone.
-    std::vector<size_t> path;
-    if (doc.shownView() == Doc::View::Source)
-    {
-        size_t parent = NONE;
-        for (S32 depth = 0;; ++depth)
-        {
-            size_t found = NONE;
-            for (size_t i = 0; i < doc.outline.size(); ++i)
-            {
-                const ALScriptOutlineEntry& entry = doc.outline[i];
-                if (entry.depth == depth && holds(entry.span, caret) && (parent == NONE || within(entry.span, doc.outline[parent].span)))
-                {
-                    found = i;
-                }
-            }
-            if (found == NONE)
-            {
-                break;
-            }
-            path.push_back(found);
-            parent = found;
-        }
-    }
-    if (mShownFor == doc.id && doc.caret.crumbsOf == doc.check.analysisVersion && doc.caret.crumbPath == path &&
-        doc.caret.crumbName == doc.name)
+    // The path the caret is in, as the caret's unit found it: the crumbs
+    // are built from the outline, which a caret move does not touch, so
+    // they are made again only where the path, the outline it was read
+    // from, the tab or its name has changed -- and it is asked on every
+    // key.
+    const std::vector<size_t>& path = doc.caret.crumbPath;
+    if (mShownFor == doc.id && mShownOf == doc.caret.crumbsOf && mShownPath == path && mShownName == doc.name)
     {
         // The same steps over the same outline: only the trailer, which
         // says where the caret is.
         showTrailer(doc);
         return;
     }
-    doc.caret.crumbsOf  = doc.check.analysisVersion;
-    doc.caret.crumbPath = path;
-    doc.caret.crumbName = doc.name;
-    mWindow->pathChanged(doc);
+    mShownOf   = doc.caret.crumbsOf;
+    mShownPath = path;
+    mShownName = doc.name;
 
     std::vector<ALJumpBar::Crumb> crumbs;
     LLStringUtil::format_map_t    args;
