@@ -26,12 +26,14 @@
 
 #include "../alscriptproblemspane.h"
 
+#include "alpanefolds.h"
 #include "alpanelist.h"
 #include "llcheckboxctrl.h"
 #include "llcombobox.h"
 #include "llfiltereditor.h"
 #include "llfontgl.h"
 #include "llscrolllistitem.h"
+#include "lltabcontainer.h"
 
 #include "alscriptstudio_fixture.h"
 
@@ -196,7 +198,7 @@ namespace tut
             for (const LLScrollListItem* item : list()->getAllData())
             {
                 const LLSD& value = item->getValue();
-                out += "|" + (value.has("heading") ? "#" + item->getColumn(1)->getValue().asString() : value["message"].asString());
+                out += std::string(value.has("heading") ? "|#" : "|") + item->getColumn(1)->getValue().asString();
             }
             return out;
         }
@@ -207,7 +209,7 @@ namespace tut
             const std::vector<LLScrollListItem*> rows = list()->getAllData();
             for (size_t i = 0; i < rows.size(); ++i)
             {
-                if (rows[i]->getValue()["message"].asString() == message)
+                if (!rows[i]->getValue().has("heading") && rows[i]->getColumn(1)->getValue().asString() == message)
                 {
                     list()->selectNthItem(static_cast<S32>(i));
                     return;
@@ -604,7 +606,7 @@ namespace tut
         S32 at = -1;
         for (size_t i = 0; i < rows.size(); ++i)
         {
-            at = rows[i]->getValue().has("checked") ? static_cast<S32>(i) : at;
+            at = rows[i]->getValue()["owner"].asString().rfind("checked:", 0) == 0 ? static_cast<S32>(i) : at;
         }
         ensure("a row of it", at >= 0);
         list()->selectNthItem(at);
@@ -620,5 +622,127 @@ namespace tut
         ensure_equals("back", pane->checkedCount(), size_t(1));
         pane->clearChecked();
         ensure("let go of", pane->checkedCount() == 0 && shown().find("in the closed one") == std::string::npos);
+    }
+
+    template<> template<>
+    void alscriptproblemspane_object::test<10>()
+    {
+        set_test_name("what a recompile's compiler said of a closed script is listed beside its check's rows, the last recompile's alone, and goes when it compiles clean");
+        make();
+        LLUUID object, item;
+        object.generate();
+        item.generate();
+        const ALScriptRef closed(object, item);
+        const auto        row = [](const std::string& message, const std::string& origin) {
+            Doc::Shown made;
+            made.line    = 2;
+            made.level   = Doc::Level::Error;
+            made.origin  = origin;
+            made.message = message;
+            return made;
+        };
+        pane->showEveryScript();
+        pane->compiledScript(closed, "hinge.lsl", false, {}, "House");
+        ensure("clean, and nothing listed of it: nothing to list", pane->checkedCount() == 0);
+
+        pane->checkedScript(closed, "hinge.lsl", false, { row("the check's", "Lint") }, "House");
+        pane->compiledScript(closed, "hinge.lsl", false, { row("the compiler's", "Compiler") }, "House");
+        ensure("both listed", shown().find("the check's") != std::string::npos && shown().find("the compiler's") != std::string::npos);
+        ensure_equals("counted", pane->held(), 2);
+
+        pane->compiledScript(closed, "hinge.lsl", false, { row("again", "Compiler") }, "House");
+        ensure("the last recompile's alone", shown().find("the compiler's") == std::string::npos && shown().find("again") != std::string::npos);
+        pane->compiledScript(closed, "hinge.lsl", false, {}, "House");
+        ensure("clean: the compiler's gone, the check's stay", shown().find("again") == std::string::npos && shown().find("the check's") != std::string::npos);
+
+        // Recompiled alone, with no check: gone with its rows.
+        LLUUID other;
+        other.generate();
+        const ALScriptRef lone(object, other);
+        pane->compiledScript(lone, "latch.lsl", false, { row("latch", "Compiler") }, "House");
+        ensure_equals("listed", pane->checkedCount(), size_t(2));
+        pane->compiledScript(lone, "latch.lsl", false, {}, "House");
+        ensure_equals("gone", pane->checkedCount(), size_t(1));
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<11>()
+    {
+        set_test_name("out of sight, the counts said at once and the rows listed once the list is seen, or once a row is to be chosen");
+        ALScriptProblemsPane& out  = make();
+        using S                    = ALScriptProblem::Source;
+        using V                    = ALScriptProblem::Severity;
+        LLTabContainer* tabs       = window.find<LLTabContainer>("bottom_tabs");
+        Doc&            door       = doc("door");
+        door.check.analysis        = { problem(S::Parser, V::Error, 1, "door error"), problem(S::Lint, V::Warning, 3, "door warning") };
+        tabs->selectTabByName("references_tab");
+        ensure("out of sight", !ALPaneFolds::inSight(&out));
+        const S32 said = studio.counts;
+        gather(door);
+        ensure("counted, and said on the tab", out.held() == 2 && studio.counts > said);
+        ensure_equals("not listed", shown(), std::string());
+        out.pump();
+        ensure_equals("nor while unseen", shown(), std::string());
+        tabs->selectTabByName("problems_tab");
+        out.pump();
+        ensure_equals("seen: listed", shown(), std::string("|door error|door warning"));
+
+        tabs->selectTabByName("references_tab");
+        door.check.analysis.push_back(problem(S::Parser, V::Error, 5, "a second error"));
+        gather(door);
+        ensure("counted again, the rows as they were", out.held() == 3 && shown() == "|door error|door warning");
+        const size_t chosen = studio.chosen.size();
+        out.selectFirstError(false);
+        ensure("a row to choose: listed first", shown().find("a second error") != std::string::npos);
+        ensure("and chosen", studio.chosen.size() == chosen + 1 && studio.chosen.back().line == 1);
+        tabs->selectTabByName("problems_tab");
+    }
+
+    template <>
+    template <>
+    void alscriptproblemspane_object::test<12>()
+    {
+        set_test_name("a refill keeps the rows that say the same, moved or not, and the row chosen; no more than a thousand listed, the rest counted");
+        ALScriptProblemsPane& out = make();
+        using S                   = ALScriptProblem::Source;
+        using V                   = ALScriptProblem::Severity;
+        Doc& door                 = doc("door");
+        const auto row_saying     = [this](const std::string& message) -> LLScrollListItem* {
+            for (LLScrollListItem* item : list()->getAllData())
+            {
+                if (!item->getValue().has("heading") && item->getColumn(1)->getValue().asString() == message)
+                {
+                    return item;
+                }
+            }
+            return nullptr;
+        };
+        door.check.analysis = { problem(S::Parser, V::Error, 1, "first"), problem(S::Lint, V::Warning, 3, "second") };
+        gather(door);
+        LLScrollListItem* second = row_saying("second");
+        ensure("listed", second != nullptr && second->getColumn(3)->getValue().asString().rfind("4:", 0) == 0);
+        choose("second");
+        door.check.analysis = { problem(S::Parser, V::Error, 2, "first"), problem(S::Lint, V::Warning, 4, "second") };
+        gather(door);
+        ensure("moved a line: the same row", row_saying("second") == second);
+        ensure("where it is now", second->getColumn(3)->getValue().asString().rfind("5:", 0) == 0);
+        ensure("still chosen", list()->getFirstSelected() == second);
+
+        std::vector<ALScriptProblem> many;
+        for (S32 i = 0; i < 1005; ++i)
+        {
+            many.push_back(problem(S::Lint, V::Warning, i % 10, "many " + std::to_string(i)));
+        }
+        door.check.analysis = many;
+        gather(door);
+        ensure_equals("all counted", out.held(), 1005);
+        S32 rows = 0;
+        for (LLScrollListItem* item : list()->getAllData())
+        {
+            rows += item->getValue().has("heading") ? 0 : 1;
+        }
+        ensure_equals("a thousand listed", rows, 1000);
+        ensure("the rest said", shown().find(services.counted("ProblemsUnlisted", 5)) != std::string::npos);
     }
 }
