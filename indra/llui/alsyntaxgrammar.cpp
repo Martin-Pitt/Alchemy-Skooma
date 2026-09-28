@@ -26,6 +26,8 @@
 
 #include "alsyntaxgrammar.h"
 
+#include "alstringmatch.h"
+
 #include "alregex.h"
 #include "lldir.h"
 #include "llsdserialize.h"
@@ -157,25 +159,11 @@ bool ALSyntaxWords::has(std::string_view table, std::string_view word) const
 
 void ALSyntaxWords::collect(std::string_view prefix, std::vector<std::pair<std::string, std::string>>& out) const
 {
-    auto begins = [&](const std::string& word) {
-        if (word.size() < prefix.size())
-        {
-            return false;
-        }
-        for (size_t i = 0; i < prefix.size(); ++i)
-        {
-            if (LLStringOps::toLower(word[i]) != LLStringOps::toLower(prefix[i]))
-            {
-                return false;
-            }
-        }
-        return true;
-    };
     for (const auto& [table, words] : mTables)
     {
         for (const std::string& word : words)
         {
-            if (begins(word))
+            if (ALStringMatch::startsWithNoCase(word, prefix))
             {
                 out.emplace_back(word, table);
             }
@@ -267,12 +255,30 @@ struct ALSyntaxGrammar::Impl
     std::vector<std::string> extensions;
     std::vector<std::string> wordTables;
     std::string              lineComment;
+    std::string              memberSeparators = ".";
     std::vector<std::pair<char, char>> pairs;
     bool                     prose = false;
     // What opens a block, searched for at the end of the text before the
     // caret, and what closes one, matched at the start of a line's text.
     std::vector<Opener>      indentOpens;
     ALRegex                  indentCloses;
+    // A head that sends only the line under it in, and what that line may
+    // begin with to stay level with it instead.
+    std::vector<Opener>      indentOnce;
+    ALRegex                  indentOnceExcept;
+    // What the editor closes a block with, and the openers it closes.
+    std::string              blockEndWord;
+    std::vector<Opener>      blockEnds;
+    // How a comment goes on to a new line: what its line begins with,
+    // what ends it, and what the new line begins with.
+    struct Continuation
+    {
+        ALRegex     regex;
+        ALRegex     unless;
+        std::string with;
+    };
+    std::vector<Continuation> continuations;
+    ALSyntaxGrammar::FoldWords foldWords;
     std::vector<State>       states;
     // The words the grammar declares for its tables, ahead of whatever is
     // filled in at runtime.
@@ -308,7 +314,8 @@ struct ALSyntaxGrammar::Impl
 
     bool loadRule(const LLSD& in, const std::string& state_name, size_t index, std::vector<Target>& targets, std::string& error);
     bool compileRegex(const std::string& pattern, ALRegex& out, std::string& error) const;
-    bool compileOpeners(const LLSD& opens, std::string& error);
+    bool compileOpeners(const LLSD& opens, std::vector<Opener>& out, std::string& error);
+    static bool anyOpens(const std::vector<Opener>& openers, std::string_view before);
     size_t tryRule(const Rule& rule, std::string_view line, size_t pos, const std::string& payload, const ALSyntaxWords& words,
                    ALSyntaxKind& kind, std::string& capture) const;
     const ALRegex* endRegexFor(const Rule& rule, const std::string& payload) const;
@@ -325,7 +332,7 @@ bool ALSyntaxGrammar::Impl::compileRegex(const std::string& pattern, ALRegex& ou
     return true;
 }
 
-bool ALSyntaxGrammar::Impl::compileOpeners(const LLSD& opens, std::string& error)
+bool ALSyntaxGrammar::Impl::compileOpeners(const LLSD& opens, std::vector<Opener>& out, std::string& error)
 {
     // One pattern, or a list of them, each a pattern or a map of one and
     // what may not follow it on the line.
@@ -349,9 +356,32 @@ bool ALSyntaxGrammar::Impl::compileOpeners(const LLSD& opens, std::string& error
         {
             return false;
         }
-        indentOpens.push_back(std::move(opener));
+        out.push_back(std::move(opener));
     }
-    return !indentOpens.empty();
+    return !out.empty();
+}
+
+// static
+bool ALSyntaxGrammar::Impl::anyOpens(const std::vector<Opener>& openers, std::string_view before)
+{
+    for (const Opener& opener : openers)
+    {
+        // Only a match with nothing it may not be followed by at or after
+        // where it starts: one past the last of those, where there are any.
+        size_t from = 0;
+        if (opener.unless.ok())
+        {
+            opener.unless.forEach(before, [&from](const ALRegexMatch& found) {
+                from = found.begin() + 1;
+                return true;
+            }, 0);
+        }
+        if (opener.regex.search(before, nullptr, from))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ALSyntaxGrammar::Impl::loadRule(const LLSD& in, const std::string& state_name, size_t index,
@@ -765,6 +795,10 @@ bool ALSyntaxGrammar::load(const LLSD& description, std::string& error)
         return false;
     }
     impl->lineComment = description["line_comment"].asString();
+    if (description.has("member_separators"))
+    {
+        impl->memberSeparators = description["member_separators"].asString();
+    }
     impl->prose       = description["prose"].asBoolean();
     const LLSD& pairs = description["pairs"];
     for (LLSD::array_const_iterator it = pairs.beginArray(); it != pairs.endArray(); ++it)
@@ -781,7 +815,7 @@ bool ALSyntaxGrammar::load(const LLSD& description, std::string& error)
     {
         const LLSD& indent = description["indent"];
         if (!indent.isMap() || !indent.has("opens") || !indent.has("closes") ||
-            !impl->compileOpeners(indent["opens"], error) ||
+            !impl->compileOpeners(indent["opens"], impl->indentOpens, error) ||
             !impl->compileRegex(indent["closes"].asString(), impl->indentCloses, error))
         {
             if (error.empty())
@@ -789,6 +823,56 @@ bool ALSyntaxGrammar::load(const LLSD& description, std::string& error)
                 error = "indent is a map with opens and closes";
             }
             return false;
+        }
+        if ((indent.has("once") && !impl->compileOpeners(indent["once"], impl->indentOnce, error)) ||
+            (indent.has("once_except") && !impl->compileRegex(indent["once_except"].asString(), impl->indentOnceExcept, error)))
+        {
+            if (error.empty())
+            {
+                error = "indent's once is a pattern or a list of them, as opens is";
+            }
+            return false;
+        }
+        if (indent.has("ends"))
+        {
+            const LLSD& ends = indent["ends"];
+            impl->blockEndWord = ends["word"].asString();
+            if (impl->blockEndWord.empty() || !ends.has("after") || !impl->compileOpeners(ends["after"], impl->blockEnds, error))
+            {
+                if (error.empty())
+                {
+                    error = "indent's ends is a map of the word a block ends with and the openers, after, it ends";
+                }
+                return false;
+            }
+        }
+        const LLSD& continues = indent["continues"];
+        for (LLSD::array_const_iterator it = continues.beginArray(); it != continues.endArray(); ++it)
+        {
+            Impl::Continuation continuation;
+            continuation.with = (*it)["with"].asString();
+            if (!it->has("regex") || continuation.with.empty() || !impl->compileRegex((*it)["regex"].asString(), continuation.regex, error) ||
+                (it->has("unless") && !impl->compileRegex((*it)["unless"].asString(), continuation.unless, error)))
+            {
+                if (error.empty())
+                {
+                    error = "a continuation is a map of a regex, what the new line begins with, and what ends the comment";
+                }
+                return false;
+            }
+            impl->continuations.push_back(std::move(continuation));
+        }
+    }
+    if (description.has("folds"))
+    {
+        const LLSD& folds = description["folds"];
+        for (const auto& [key, list] : { std::pair{ "opens", &impl->foldWords.opens }, std::pair{ "closes", &impl->foldWords.closes },
+                                         std::pair{ "middles", &impl->foldWords.middles }, std::pair{ "joined", &impl->foldWords.joined } })
+        {
+            for (LLSD::array_const_iterator it = folds[key].beginArray(); it != folds[key].endArray(); ++it)
+            {
+                list->push_back(it->asString());
+            }
         }
     }
     const LLSD& extensions = description["extensions"];
@@ -927,6 +1011,11 @@ const std::string& ALSyntaxGrammar::lineComment() const
     return mImpl->lineComment;
 }
 
+const std::string& ALSyntaxGrammar::memberSeparators() const
+{
+    return mImpl->memberSeparators;
+}
+
 const std::vector<std::pair<char, char>>& ALSyntaxGrammar::pairs() const
 {
     return mImpl->pairs;
@@ -944,24 +1033,53 @@ bool ALSyntaxGrammar::indents() const
 
 bool ALSyntaxGrammar::opensBlock(std::string_view before) const
 {
-    for (const Impl::Opener& opener : mImpl->indentOpens)
+    return Impl::anyOpens(mImpl->indentOpens, before);
+}
+
+bool ALSyntaxGrammar::opensOnce(std::string_view before) const
+{
+    return Impl::anyOpens(mImpl->indentOnce, before);
+}
+
+bool ALSyntaxGrammar::keptLevelWithOnce(std::string_view text) const
+{
+    return mImpl->indentOnceExcept.ok() && mImpl->indentOnceExcept.search(text, nullptr, 0, true, 0);
+}
+
+const std::string& ALSyntaxGrammar::blockEnd(std::string_view before) const
+{
+    static const std::string NONE;
+    return Impl::anyOpens(mImpl->blockEnds, before) ? mImpl->blockEndWord : NONE;
+}
+
+const ALSyntaxGrammar::FoldWords& ALSyntaxGrammar::foldWords() const
+{
+    return mImpl->foldWords;
+}
+
+bool ALSyntaxGrammar::endsComment(std::string_view text) const
+{
+    for (const Impl::Continuation& continuation : mImpl->continuations)
     {
-        // Only a match with nothing it may not be followed by at or after
-        // where it starts: one past the last of those, where there are any.
-        size_t from = 0;
-        if (opener.unless.ok())
-        {
-            opener.unless.forEach(before, [&from](const ALRegexMatch& found) {
-                from = found.begin() + 1;
-                return true;
-            }, 0);
-        }
-        if (opener.regex.search(before, nullptr, from))
+        if (continuation.unless.ok() && continuation.unless.search(text, nullptr, 0))
         {
             return true;
         }
     }
     return false;
+}
+
+const std::string& ALSyntaxGrammar::commentContinues(std::string_view text) const
+{
+    static const std::string NONE;
+    for (const Impl::Continuation& continuation : mImpl->continuations)
+    {
+        if (continuation.regex.search(text, nullptr, 0, true, 0) && !(continuation.unless.ok() && continuation.unless.search(text, nullptr, 0)))
+        {
+            return continuation.with;
+        }
+    }
+    return NONE;
 }
 
 size_t ALSyntaxGrammar::closesBlock(std::string_view text) const

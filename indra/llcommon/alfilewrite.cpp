@@ -26,10 +26,22 @@
 
 #include "alfilewrite.h"
 
+#include "alwatchedfile.h"
 #include "fsyspath.h"
+#include "llfile.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+
+#if LL_WINDOWS
+#include <io.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -43,17 +55,26 @@ namespace
     };
 
     // Every byte of the text, the file closed: the last of it is written as
-    // the file closes, and is the likeliest not to go.
-    Wrote writeAll(const std::filesystem::path& file, std::string_view text)
+    // the file closes, and is the likeliest not to go. Durable, forced out
+    // to the disk first, as far as the disk says it can be.
+    Wrote writeAll(const std::filesystem::path& file, std::string_view text, bool durable)
     {
-        std::ofstream out(file, std::ios::binary | std::ios::trunc);
-        if (!out.is_open())
+        LLFILE* out = LLFile::fopen(file, LLFILE_MODE("wb"));
+        if (!out)
         {
             return Wrote::NotOpened;
         }
-        out.write(text.data(), static_cast<std::streamsize>(text.size()));
-        out.close();
-        return out.fail() ? Wrote::Failed : Wrote::Done;
+        bool all = fwrite(text.data(), 1, text.size(), out) == text.size() && fflush(out) == 0;
+        if (all && durable)
+        {
+#if LL_WINDOWS
+            _commit(_fileno(out));
+#else
+            fsync(fileno(out));
+#endif
+        }
+        all = fclose(out) == 0 && all;
+        return all ? Wrote::Done : Wrote::Failed;
     }
 }
 
@@ -63,10 +84,10 @@ std::string besideOf(const std::string& path)
 {
     // A name nothing else would give a file, since whatever is there by it
     // is written over and then gone.
-    return path + ".saving";
+    return path + std::string(BESIDE);
 }
 
-bool whole(const std::string& path, std::string_view text)
+bool whole(const std::string& path, std::string_view text, bool durable)
 {
     std::error_code ec;
     std::filesystem::path target = fsyspath(path);
@@ -89,14 +110,14 @@ bool whole(const std::string& path, std::string_view text)
     const bool                         exists = !ec && std::filesystem::exists(was);
     if (exists)
     {
-        std::ofstream probe(target, std::ios::binary | std::ios::app);
+        llofstream probe(target, std::ios::binary | std::ios::app);
         if (!probe.is_open())
         {
             return false;
         }
     }
-    const fsyspath beside(besideOf(target.string()));
-    const Wrote    wrote = writeAll(beside, text);
+    const fsyspath beside(besideOf(fsyspath(target).string()));
+    const Wrote    wrote = writeAll(beside, text, durable);
     if (wrote == Wrote::Done)
     {
         // What anyone could do with the old file, they can with the new.
@@ -117,13 +138,94 @@ bool whole(const std::string& path, std::string_view text)
         std::filesystem::remove(beside, ec);
     }
     // Not all of it would go beside it -- the disk is full: in place it
-    // would go no better, and would take the old text with it.
-    if (wrote == Wrote::Failed)
+    // would go no better, and would take the old text with it. A durable
+    // write is whole or nothing.
+    if (wrote == Wrote::Failed || durable)
     {
         return false;
     }
     // Nothing could be put beside it, or it could not be replaced: in place,
     // as it always was written.
-    return writeAll(target, text) == Wrote::Done;
+    return writeAll(target, text, false) == Wrote::Done;
+}
+
+bool temp(const std::string& path, std::string_view text)
+{
+#if LL_WINDOWS
+    llofstream out(fsyspath(path), std::ios::binary);
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    out.close();
+    return !out.fail();
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR);
+    if (fd < 0)
+    {
+        return false;
+    }
+    struct stat st;
+    bool        all = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == getuid() && st.st_nlink == 1 &&
+               fchmod(fd, S_IRUSR | S_IWUSR) == 0 && ftruncate(fd, 0) == 0;
+    size_t done = 0;
+    while (all && done < text.size())
+    {
+        const ssize_t wrote = ::write(fd, text.data() + done, text.size() - done);
+        if (wrote < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        all = wrote > 0;
+        done += wrote > 0 ? static_cast<size_t>(wrote) : 0;
+    }
+    return ::close(fd) == 0 && all;
+#endif
+}
+}
+
+namespace ALFileRead
+{
+bool whole(const std::string& path, std::string& out, std::uintmax_t most)
+{
+    out.clear();
+    // What one look says it is, links followed: a device or a pipe would
+    // be read for ever, or wait for somebody to write it, and a folder not
+    // read at all.
+    const ALFileStamp stamp = ALFileStamp::of(path);
+    if (!stamp.exists || stamp.size > most)
+    {
+        return false;
+    }
+    llifstream in(fsyspath(path), std::ios::binary);
+    if (!in)
+    {
+        return false;
+    }
+    // As much as the look said and a byte more, to see a file that grew
+    // since: one that did is read on, a piece at a time, but never past
+    // the limit.
+    std::string text;
+    size_t      want = static_cast<size_t>(stamp.size) + 1;
+    for (;;)
+    {
+        const size_t at = text.size();
+        text.resize(at + want);
+        in.read(text.data() + at, static_cast<std::streamsize>(want));
+        const std::streamsize got = in.gcount();
+        if (got < 0)
+        {
+            return false;
+        }
+        text.resize(at + static_cast<size_t>(got));
+        if (text.size() > most)
+        {
+            return false;
+        }
+        if (static_cast<size_t>(got) < want)
+        {
+            break;
+        }
+        want = static_cast<size_t>(std::min<std::uintmax_t>(64 * 1024, most + 1 - text.size()));
+    }
+    out = std::move(text);
+    return true;
 }
 }

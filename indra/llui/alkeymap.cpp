@@ -26,6 +26,8 @@
 
 #include "alkeymap.h"
 
+#include "alkeychord.h"
+
 #include <algorithm>
 
 const char* alEditorCommandName(ALEditorCommand command)
@@ -41,7 +43,11 @@ const char* alEditorCommandName(ALEditorCommand command)
         "copy",          "paste",           "delete",          "toggle_comment",   "duplicate_line",   "move_line_up",
         "move_line_down", "delete_line",    "fold",            "unfold",           "fold_all",         "unfold_all",
         "complete",      "signature_help", "go_to_definition", "find_references", "rename",         "find",             "replace",
-        "find_next",     "find_previous",   "quick_fix",
+        "find_next",     "find_previous",   "quick_fix",       "next_misspelling", "previous_misspelling",
+        "join_lines",    "previous_change", "next_change",     "next_function",   "previous_function", "select_function",
+        "go_to_bracket", "insert_line_below", "insert_line_above", "select_line", "move_subword_left",
+        "move_subword_right", "select_subword_left", "select_subword_right", "expand_selection", "shrink_selection",
+        "select_next_occurrence", "change_all_occurrences",
     };
     static_assert(sizeof(NAMES) / sizeof(NAMES[0]) == static_cast<size_t>(ALEditorCommand::COUNT), "every command has a name");
     const size_t index = static_cast<size_t>(command);
@@ -61,8 +67,9 @@ std::optional<ALEditorCommand> alEditorCommandFromName(std::string_view name)
     return std::nullopt;
 }
 
-void ALKeymap::bind(KEY key, MASK mask, ALEditorCommand command)
+void ALKeymap::bind(KEY pressed, MASK mask, ALEditorCommand command)
 {
+    const KEY key = alKeyAsBound(pressed);
     for (Binding& binding : mBindings)
     {
         if (binding.key == key && binding.mask == mask)
@@ -74,8 +81,9 @@ void ALKeymap::bind(KEY key, MASK mask, ALEditorCommand command)
     mBindings.push_back(Binding{ key, mask, command });
 }
 
-void ALKeymap::unbind(KEY key, MASK mask)
+void ALKeymap::unbind(KEY pressed, MASK mask)
 {
+    const KEY key = alKeyAsBound(pressed);
     mBindings.erase(std::remove_if(mBindings.begin(), mBindings.end(),
                                    [&](const Binding& b) { return b.key == key && b.mask == mask; }),
                     mBindings.end());
@@ -111,8 +119,9 @@ bool ALKeymap::keysFor(ALEditorCommand command, KEY& key, MASK& mask) const
     return found;
 }
 
-ALEditorCommand ALKeymap::lookup(KEY key, MASK mask) const
+ALEditorCommand ALKeymap::lookup(KEY pressed, MASK mask) const
 {
+    const KEY key = alKeyAsBound(pressed);
     for (const Binding& binding : mBindings)
     {
         if (binding.key == key && binding.mask == mask)
@@ -134,8 +143,13 @@ ALKeymap ALKeymap::standard()
     map.bind(KEY_DOWN, MASK_NONE, C::MoveDown);
     map.bind(KEY_LEFT, word, C::MoveWordLeft);
     map.bind(KEY_RIGHT, word, C::MoveWordRight);
+#if LL_DARWIN
+    // Option with an arrow is a word on a Mac; elsewhere Alt with one goes
+    // back and forward, as VS Code has it, which is whoever holds the
+    // editor's to say.
     map.bind(KEY_LEFT, MASK_ALT, C::MoveWordLeft);
     map.bind(KEY_RIGHT, MASK_ALT, C::MoveWordRight);
+#endif
     map.bind(KEY_HOME, MASK_NONE, C::MoveLineStart);
     map.bind(KEY_END, MASK_NONE, C::MoveLineEnd);
     map.bind(KEY_HOME, MASK_CONTROL, C::MoveDocStart);
@@ -149,8 +163,10 @@ ALKeymap ALKeymap::standard()
     map.bind(KEY_DOWN, MASK_SHIFT, C::SelectDown);
     map.bind(KEY_LEFT, word | MASK_SHIFT, C::SelectWordLeft);
     map.bind(KEY_RIGHT, word | MASK_SHIFT, C::SelectWordRight);
+#if LL_DARWIN
     map.bind(KEY_LEFT, MASK_ALT | MASK_SHIFT, C::SelectWordLeft);
     map.bind(KEY_RIGHT, MASK_ALT | MASK_SHIFT, C::SelectWordRight);
+#endif
     map.bind(KEY_HOME, MASK_SHIFT, C::SelectLineStart);
     map.bind(KEY_END, MASK_SHIFT, C::SelectLineEnd);
     map.bind(KEY_HOME, MASK_CONTROL | MASK_SHIFT, C::SelectDocStart);
@@ -160,12 +176,16 @@ ALKeymap ALKeymap::standard()
     map.bind('A', MASK_CONTROL, C::SelectAll);
 
     map.bind(KEY_BACKSPACE, MASK_NONE, C::DeleteLeft);
+    // Shift is down half the time in code -- capitals, braces, brackets --
+    // and a Backspace or a Return pressed under it is still one.
+    map.bind(KEY_BACKSPACE, MASK_SHIFT, C::DeleteLeft);
     map.bind(KEY_DELETE, MASK_NONE, C::DeleteRight);
     map.bind(KEY_BACKSPACE, word, C::DeleteWordLeft);
     map.bind(KEY_DELETE, word, C::DeleteWordRight);
     map.bind(KEY_BACKSPACE, MASK_ALT, C::DeleteWordLeft);
     map.bind(KEY_DELETE, MASK_ALT, C::DeleteWordRight);
     map.bind(KEY_RETURN, MASK_NONE, C::NewLine);
+    map.bind(KEY_RETURN, MASK_SHIFT, C::NewLine);
     map.bind(KEY_TAB, MASK_NONE, C::Indent);
     map.bind(KEY_TAB, MASK_SHIFT, C::Unindent);
 
@@ -183,27 +203,89 @@ ALKeymap ALKeymap::standard()
     map.bind(KEY_DOWN, MASK_ALT, C::MoveLineDown);
     map.bind('D', MASK_CONTROL | MASK_SHIFT, C::DuplicateLine);
     map.bind('K', MASK_CONTROL | MASK_SHIFT, C::DeleteLine);
+#if LL_DARWIN
+    // Command-Option with a bracket, as the Mac's editors fold: Command-
+    // Shift with one goes between tabs there.
+    map.bind('[', MASK_CONTROL | MASK_ALT, C::Fold);
+    map.bind(']', MASK_CONTROL | MASK_ALT, C::Unfold);
+#else
     map.bind('[', MASK_CONTROL | MASK_SHIFT, C::Fold);
     map.bind(']', MASK_CONTROL | MASK_SHIFT, C::Unfold);
+#endif
     map.bind(' ', MASK_CONTROL, C::Complete);
     map.bind(' ', MASK_CONTROL | MASK_SHIFT, C::SignatureHelp);
+#if LL_DARWIN
+    // The function keys need Fn on most Macs: first, and so shown in the
+    // menus, the keys Xcode and the text system have for the same --
+    // Control-Command-J to a definition, Control-Command-E to rename every
+    // use, Control-Shift-Command-F for the uses, Command-G and Shift-
+    // Command-G for the next match and the one before, Command-semicolon
+    // for the next misspelling.
+    constexpr MASK CONTROL_COMMAND = MASK_CONTROL | MASK_MAC_CONTROL;
+    map.bind('J', CONTROL_COMMAND, C::GoToDefinition);
+    map.bind('F', CONTROL_COMMAND | MASK_SHIFT, C::FindReferences);
+    map.bind('E', CONTROL_COMMAND, C::Rename);
+    map.bind('G', MASK_CONTROL, C::FindNext);
+    map.bind('G', MASK_CONTROL | MASK_SHIFT, C::FindPrevious);
+    map.bind(';', MASK_CONTROL, C::NextMisspelling);
+    map.bind(';', MASK_CONTROL | MASK_SHIFT, C::PreviousMisspelling);
+#endif
     map.bind(KEY_F12, MASK_NONE, C::GoToDefinition);
     map.bind(KEY_F12, MASK_SHIFT, C::FindReferences);
     map.bind(KEY_F2, MASK_NONE, C::Rename);
     map.bind('F', MASK_CONTROL, C::Find);
-    map.bind('H', MASK_CONTROL, C::Replace);
+#if LL_DARWIN
+    // Command-Option-F, as the Mac's editors have it: Command-H hides the
+    // application there. Control and Alt together elsewhere is AltGr on
+    // many a keyboard, which types.
     map.bind('F', MASK_CONTROL | MASK_ALT, C::Replace);
+#else
+    map.bind('H', MASK_CONTROL, C::Replace);
+#endif
     map.bind(KEY_F3, MASK_NONE, C::FindNext);
     map.bind(KEY_F3, MASK_SHIFT, C::FindPrevious);
     // Control-. as Visual Studio and VS Code have it -- Command-. on a Mac,
     // where MASK_CONTROL is Command -- and Alt-Return as JetBrains does.
     map.bind('.', MASK_CONTROL, C::QuickFix);
     map.bind(KEY_RETURN, MASK_ALT, C::QuickFix);
+    map.bind(KEY_F7, MASK_NONE, C::NextMisspelling);
+    map.bind(KEY_F7, MASK_SHIFT, C::PreviousMisspelling);
+    map.bind('J', MASK_CONTROL, C::JoinLines);
+    map.bind(KEY_BACKSPACE, MASK_CONTROL | MASK_SHIFT, C::PreviousChange);
+    map.bind(KEY_PAGE_DOWN, MASK_ALT, C::NextFunction);
+    map.bind(KEY_PAGE_UP, MASK_ALT, C::PreviousFunction);
+    // Control-Shift-\ as Visual Studio Code has it: Command on a Mac.
+    map.bind('\\', MASK_CONTROL | MASK_SHIFT, C::GoToMatchingBracket);
+    // As Visual Studio Code has them; Command on a Mac.
+    map.bind(KEY_RETURN, MASK_CONTROL, C::InsertLineBelow);
+    map.bind(KEY_RETURN, MASK_CONTROL | MASK_SHIFT, C::InsertLineAbove);
+    map.bind('L', MASK_CONTROL, C::SelectLine);
+#if LL_DARWIN
+    // Control-Option with an arrow, as Visual Studio Code has it there.
+    const MASK part = MASK_MAC_CONTROL | MASK_ALT;
+#else
+    const MASK part = MASK_CONTROL | MASK_ALT;
+#endif
+    map.bind(KEY_LEFT, part, C::MoveSubwordLeft);
+    map.bind(KEY_RIGHT, part, C::MoveSubwordRight);
+    map.bind(KEY_LEFT, part | MASK_SHIFT, C::SelectSubwordLeft);
+    map.bind(KEY_RIGHT, part | MASK_SHIFT, C::SelectSubwordRight);
+#if LL_DARWIN
+    // Control-Shift-Command with an arrow there, Shift-Option being words.
+    const MASK grow = MASK_MAC_CONTROL | MASK_SHIFT | MASK_CONTROL;
+#else
+    const MASK grow = MASK_SHIFT | MASK_ALT;
+#endif
+    map.bind(KEY_RIGHT, grow, C::ExpandSelection);
+    map.bind(KEY_LEFT, grow, C::ShrinkSelection);
+    // As Visual Studio Code has them; Command on a Mac.
+    map.bind('D', MASK_CONTROL, C::SelectNextOccurrence);
+    map.bind('L', MASK_CONTROL | MASK_SHIFT, C::ChangeAllOccurrences);
+    map.bind(KEY_F2, MASK_CONTROL, C::ChangeAllOccurrences);
 #if LL_DARWIN
     // The Mac's own, where MASK_CONTROL is Command: Command with an arrow
     // goes to the ends of the line and of the text, Option with one by
     // words (above), and Command-Backspace back to the line's start.
-    // Command-G is left to whoever holds the editor, to go to a line.
     map.bind(KEY_LEFT, MASK_CONTROL, C::MoveLineStart);
     map.bind(KEY_RIGHT, MASK_CONTROL, C::MoveLineEnd);
     map.bind(KEY_UP, MASK_CONTROL, C::MoveDocStart);

@@ -26,14 +26,17 @@
 
 #include "aldiskincludes.h"
 
+#include "alfilewrite.h"
 #include "alluauconfig.h"
 
 #include "fsyspath.h"
 #include "llsdjson.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace
 {
@@ -122,6 +125,48 @@ bool ALDiskIncludes::blessFromConfig(const std::string& folder, const std::strin
     return true;
 }
 
+// static
+std::vector<std::string> ALDiskIncludes::namesFor(const std::string& name, bool lua, bool require)
+{
+    std::vector<std::string> names{ name };
+    if (!lua)
+    {
+        names.push_back(name + ".lsl");
+        return names;
+    }
+    names.push_back(name + ".luau");
+    names.push_back(name + ".lua");
+    const auto ends = [&name](std::string_view extension) {
+        return name.size() >= extension.size() &&
+               std::equal(extension.begin(), extension.end(), name.end() - extension.size(),
+                          [](char a, char b) { return a == std::tolower(static_cast<unsigned char>(b)); });
+    };
+    std::string folder = name;
+    while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\'))
+    {
+        folder.pop_back();
+    }
+    if (require && !folder.empty() && !ends(".luau") && !ends(".lua"))
+    {
+        names.push_back(folder + "/init.luau");
+        names.push_back(folder + "/init.lua");
+    }
+    return names;
+}
+
+std::vector<std::string> ALDiskIncludes::atTop(const std::string& name) const
+{
+    std::vector<std::string> out;
+    for (const std::string& folder : mFolders)
+    {
+        if (std::optional<std::string> real = admits(fsyspath(fsyspath(folder) / fsyspath(name)).string()))
+        {
+            out.push_back(std::move(*real));
+        }
+    }
+    return out;
+}
+
 std::optional<std::string> ALDiskIncludes::admits(const std::string& file) const
 {
     const std::optional<fs::path> found = real(file);
@@ -195,32 +240,7 @@ std::vector<ALDiskIncludes::Listed> ALDiskIncludes::filesUnder(const std::string
 // static
 bool ALDiskIncludes::readOrdinary(const std::string& file, std::string& out)
 {
-    out.clear();
-    std::error_code ec;
-    const std::filesystem::path path = fsyspath(file);
-    // What a stat says it is, links followed: a device or a pipe would be
-    // read for ever, and a folder not at all.
-    if (!fs::is_regular_file(path, ec) || fs::file_size(path, ec) > MAX_BYTES || ec)
-    {
-        return false;
-    }
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-    {
-        return false;
-    }
-    // Read to one past the limit: a file that grew since the stat is not
-    // read on without end.
-    std::string text(static_cast<size_t>(MAX_BYTES) + 1, '\0');
-    in.read(text.data(), static_cast<std::streamsize>(text.size()));
-    const std::streamsize got = in.gcount();
-    if (got < 0 || static_cast<std::uintmax_t>(got) > MAX_BYTES)
-    {
-        return false;
-    }
-    text.resize(static_cast<size_t>(got));
-    out = std::move(text);
-    return true;
+    return ALFileRead::whole(file, out, MAX_BYTES);
 }
 
 // static
