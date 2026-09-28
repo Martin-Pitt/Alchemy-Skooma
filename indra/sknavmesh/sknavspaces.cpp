@@ -203,6 +203,10 @@ namespace
         S32 mCeil = 0;
     };
 
+    constexpr U64 RASTER_Z = 0x1fffff;
+    constexpr U64 RASTER_Y = RASTER_Z << 21;
+    constexpr U64 RASTER_YZ = RASTER_Y | RASTER_Z;
+
     U64 rasterKey(F32 x, F32 y, F32 z)
     {
         const U64 bias = 1ull << 20;
@@ -507,6 +511,7 @@ namespace sknav
         std::vector<U8> mSide;          ///< 4 per cell
         std::vector<F32> mDist;
         std::vector<LLVector2> mNearest;
+        std::vector<LLVector2> mPos;    ///< per cell, its centre
         std::vector<U8> mAvatar;
         std::vector<S32> mLabel;
 
@@ -572,6 +577,13 @@ namespace sknav
     S32 SpacesPass::State::resolve(U32 t, S32 ix, S32 iy, U32& tile_out, S32& x_out, S32& y_out) const
     {
         const TileAir& a = air(t);
+        if (ix >= 0 && iy >= 0 && ix < a.mWidth && iy < a.mHeight)
+        {
+            tile_out = t;
+            x_out = ix;
+            y_out = iy;
+            return 0;
+        }
         TileKey key = mTiles[t].mKey;
         if (ix < 0)
         {
@@ -845,6 +857,7 @@ namespace sknav
         std::vector<U8>().swap(mSide);
         std::vector<F32>().swap(mDist);
         std::vector<LLVector2>().swap(mNearest);
+        std::vector<LLVector2>().swap(mPos);
         std::vector<U8>().swap(mAvatar);
         std::vector<S32>().swap(mLabel);
         for (TileInfo& ti : mTiles)
@@ -1113,7 +1126,11 @@ namespace sknav
         size_t gaps = 0;
         for (const TileInfo& ti : mTiles)
         {
-            for (const AirLeaf& leaf : ti.mWork ? ti.mAir->mLeaves : std::vector<AirLeaf>())
+            if (!ti.mWork)
+            {
+                continue;
+            }
+            for (const AirLeaf& leaf : ti.mAir->mLeaves)
             {
                 gaps += static_cast<size_t>(leaf.mGapCount) << (2 * leaf.mLevel);
             }
@@ -1155,6 +1172,12 @@ namespace sknav
         }
         const size_t n = mCells.size();
         mProduct->mCells += static_cast<U32>(n);
+        mPos.resize(n);
+        for (U32 c = 0; c < n; ++c)
+        {
+            const TileInfo& ti = mTiles[mCells[c].mTile];
+            mPos[c].set(cellX(ti, mCells[c].mX), cellY(ti, mCells[c].mY));
+        }
         mLink.assign(n * 4, NONE);
         mSide.assign(n * 4, SIDE_WALL);
         for (U32 c = 0; c < n; ++c)
@@ -1242,9 +1265,7 @@ namespace sknav
                 {
                     continue;
                 }
-                const Cell& other = mCells[o];
-                const TileInfo& ot = mTiles[other.mTile];
-                const F32 dd = dist_vec(LLVector2(cellX(ot, other.mX), cellY(ot, other.mY)), mNearest[c]);
+                const F32 dd = dist_vec(mPos[o], mNearest[c]);
                 if (dd < mDist[o] - 1e-6f && dd <= cap)
                 {
                     mDist[o] = dd;
@@ -1343,7 +1364,14 @@ namespace sknav
         // grow the regions there are into what each level exposes, then seed
         // new ones from what is left.
         mLabel.assign(n, -1);
-        auto ground = [this](U32 c) { return mAvatar[c] && !mCells[c].mFlight; };
+        std::vector<U8> is_ground(n);
+        std::vector<U32> level(n);
+        for (U32 c = 0; c < n; ++c)
+        {
+            is_ground[c] = mAvatar[c] && !mCells[c].mFlight;
+            level[c] = static_cast<U32>(mDist[c] / CLEAR_UNIT_M);
+        }
+        auto ground = [&is_ground](U32 c) { return is_ground[c] != 0; };
         std::vector<std::vector<U32>> levels;
         for (U32 c = 0; c < n; ++c)
         {
@@ -1351,7 +1379,7 @@ namespace sknav
             {
                 continue;
             }
-            const size_t lv = static_cast<size_t>(mDist[c] / CLEAR_UNIT_M);
+            const size_t lv = level[c];
             if (levels.size() <= lv)
             {
                 levels.resize(lv + 1);
@@ -1415,7 +1443,7 @@ namespace sknav
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = mLink[a.first * 4 + d];
-                        if (o != NONE && mLabel[o] < 0 && ground(o) && static_cast<size_t>(mDist[o] / CLEAR_UNIT_M) >= lv &&
+                        if (o != NONE && mLabel[o] < 0 && ground(o) && level[o] >= lv &&
                             stamp[o] != static_cast<U32>(step + lv * GROW_STEPS))
                         {
                             stamp[o] = static_cast<U32>(step + lv * GROW_STEPS);
@@ -1441,7 +1469,7 @@ namespace sknav
                     for (S32 d = 0; d < 4; ++d)
                     {
                         const U32 o = mLink[k * 4 + d];
-                        if (o != NONE && mLabel[o] < 0 && ground(o) && static_cast<size_t>(mDist[o] / CLEAR_UNIT_M) >= lv)
+                        if (o != NONE && mLabel[o] < 0 && ground(o) && level[o] >= lv)
                         {
                             mLabel[o] = id;
                             stack.push_back(o);
@@ -1616,7 +1644,6 @@ namespace sknav
             }
             // What stays true of a seed while its air does: size, shape,
             // walls, flight cells and the raster its space is tracked by.
-            std::vector<std::pair<U32, U64>> raster;
             for (U32 c = ti.mColStart.front(); c < ti.mColStart.back(); ++c)
             {
                 const Cell& cell = mCells[c];
@@ -1652,18 +1679,56 @@ namespace sknav
                     }
                     st.mWalled += wall ? 1 : 0;
                 }
-                raster.emplace_back(static_cast<U32>(seed), rasterKey(x, y, cell.mFloor * mUnit));
             }
-            std::sort(raster.begin(), raster.end());
-            for (size_t i = 0; i < raster.size();)
+            // The raster a raster cell at a time, in key order, so each seed's comes out sorted.
+            std::vector<U64> kx(a.mWidth), ky(a.mHeight);
+            for (S32 ix = 0; ix < a.mWidth; ++ix)
             {
-                size_t j = i;
-                while (j < raster.size() && raster[j] == raster[i])
+                kx[ix] = rasterKey(cellX(ti, ix), 0.f, 0.f) & ~RASTER_YZ;
+            }
+            for (S32 iy = 0; iy < a.mHeight; ++iy)
+            {
+                ky[iy] = rasterKey(0.f, cellY(ti, iy), 0.f) & RASTER_Y;
+            }
+            std::vector<U64> block;
+            for (S32 x0 = 0, x1 = 0; x0 < a.mWidth; x0 = x1)
+            {
+                for (x1 = x0 + 1; x1 < a.mWidth && kx[x1] == kx[x0]; ++x1)
                 {
-                    ++j;
                 }
-                rt.mStats[raster[i].first - 1].mRaster.emplace_back(raster[i].second, static_cast<U32>(j - i));
-                i = j;
+                for (S32 y0 = 0, y1 = 0; y0 < a.mHeight; y0 = y1)
+                {
+                    for (y1 = y0 + 1; y1 < a.mHeight && ky[y1] == ky[y0]; ++y1)
+                    {
+                    }
+                    block.clear();
+                    for (S32 iy = y0; iy < y1; ++iy)
+                    {
+                        for (S32 ix = x0; ix < x1; ++ix)
+                        {
+                            const S32 col = ix + iy * a.mWidth;
+                            for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+                            {
+                                const U16 seed = rt.mSeeds[mCells[c].mGap];
+                                if (seed && mAvatar[c])
+                                {
+                                    block.push_back((static_cast<U64>(seed) << 21) | (rasterKey(0.f, 0.f, mCells[c].mFloor * mUnit) & RASTER_Z));
+                                }
+                            }
+                        }
+                    }
+                    std::sort(block.begin(), block.end());
+                    for (size_t i = 0; i < block.size();)
+                    {
+                        size_t j = i;
+                        while (j < block.size() && block[j] == block[i])
+                        {
+                            ++j;
+                        }
+                        rt.mStats[(block[i] >> 21) - 1].mRaster.emplace_back(kx[x0] | ky[y0] | (block[i] & RASTER_Z), static_cast<U32>(j - i));
+                        i = j;
+                    }
+                }
             }
         }
         mLabelBase += regions;
@@ -1798,6 +1863,15 @@ namespace sknav
             const TileAir& a = *ti.mAir;
             for (const AirLeaf& leaf : a.mLeaves)
             {
+                bool seeded = false;
+                for (U32 i = 0; i < leaf.mGapCount && !seeded; ++i)
+                {
+                    seeded = ti.mRooms.mSeeds[leaf.mFirstGap + i] != 0;
+                }
+                if (!seeded)
+                {
+                    continue;
+                }
                 const S32 s = 1 << leaf.mLevel;
                 for (S32 side = 0; side < 2; ++side)
                 {
