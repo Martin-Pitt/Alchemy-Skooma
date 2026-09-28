@@ -59,6 +59,94 @@ namespace ALScriptPlaces
         return text.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
     }
 
+    Lines::Lines(std::shared_ptr<const std::string> held) : mHeld(std::move(held)), mText(mHeld.get())
+    {
+        index();
+    }
+
+    Lines::Lines(const std::string& text) : mText(&text)
+    {
+        index();
+    }
+
+    void Lines::index()
+    {
+        if (!mText)
+        {
+            return;
+        }
+        mStarts.push_back(0);
+        for (size_t at = mText->find('\n'); at != std::string::npos; at = mText->find('\n', at + 1))
+        {
+            mStarts.push_back(at + 1);
+        }
+    }
+
+    bool Lines::has(S32 line) const
+    {
+        return line >= 0 && (mOpen ? line < mOpen->lineCount() : static_cast<size_t>(line) < mStarts.size());
+    }
+
+    std::string Lines::line(S32 line) const
+    {
+        if (!has(line))
+        {
+            return std::string();
+        }
+        if (mOpen)
+        {
+            return mOpen->line(line);
+        }
+        const size_t begin = mStarts[static_cast<size_t>(line)];
+        size_t       end   = static_cast<size_t>(line) + 1 < mStarts.size() ? mStarts[static_cast<size_t>(line) + 1] - 1 : mText->size();
+        if (end > begin && (*mText)[end - 1] == '\r')
+        {
+            --end;
+        }
+        return mText->substr(begin, end - begin);
+    }
+
+    namespace
+    {
+        // Whether a span holds a position, its ends included.
+        bool holds(const ALScriptSpan& span, const ALTextPos& pos)
+        {
+            const ALTextPos begin(span.line, span.column);
+            const ALTextPos end(span.endLine, span.endColumn);
+            return begin <= pos && pos <= end;
+        }
+
+        // Whether a span lies within another.
+        bool within(const ALScriptSpan& inner, const ALScriptSpan& outer)
+        {
+            return holds(outer, ALTextPos(inner.line, inner.column)) && holds(outer, ALTextPos(inner.endLine, inner.endColumn));
+        }
+    }
+
+    std::vector<size_t> pathAt(const std::vector<ALScriptOutlineEntry>& outline, const ALTextPos& at)
+    {
+        std::vector<size_t> path;
+        size_t              parent = NONE;
+        for (S32 depth = 0;; ++depth)
+        {
+            size_t found = NONE;
+            for (size_t i = 0; i < outline.size(); ++i)
+            {
+                const ALScriptOutlineEntry& entry = outline[i];
+                if (entry.depth == depth && holds(entry.span, at) && (parent == NONE || within(entry.span, outline[parent].span)))
+                {
+                    found = i;
+                }
+            }
+            if (found == NONE)
+            {
+                return path;
+            }
+            path.push_back(found);
+            parent = found;
+        }
+    }
+
     std::string lineOf(const ALTextDocument& text, S32 line)
     {
         if (line < 0 || line >= text.lineCount())

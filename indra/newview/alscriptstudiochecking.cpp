@@ -277,6 +277,27 @@ void ALScriptStudioChecking::ask(Doc& doc, ALScriptAnalysis::Kind kind, const AL
     {
         return;
     }
+    // The tip and the inspector ask the same question: the one asking of a
+    // word the other was told of, as the text stands, is told the same.
+    const auto read_now = [this, &doc](U32 expansion) {
+        return (expansion != 0) == preprocessed(doc) && (expansion == 0 || (doc.expanded.valid && doc.expanded.generation == expansion));
+    };
+    if ((kind == ALScriptAnalysis::Kind::Hover || kind == ALScriptAnalysis::Kind::Inspect) && doc.check.hovered &&
+        doc.check.hovered->version == doc.editor->document().version() && read_now(doc.check.hovered->expansion) &&
+        doc.check.hovered->word == doc.editor->identifierAt(at).begin)
+    {
+        ALScriptAnalysis::Result said = doc.check.hovered->said;
+        said.kind                     = kind;
+        if (kind == ALScriptAnalysis::Kind::Hover)
+        {
+            showHover(doc, said, at);
+        }
+        else
+        {
+            mWindow.answeredElsewhere(doc, said, at);
+        }
+        return;
+    }
     ALScriptAnalysis::Request request;
     request.kind    = kind;
     request.id      = doc.id;
@@ -436,6 +457,12 @@ void ALScriptStudioChecking::answered(const ALScriptAnalysis::Result& result, U3
         }
     }
     const ALScriptAnalysis::Result& shown = marked ? *marked : result;
+    // Kept for the other of the two to ask about the same word.
+    if ((result.kind == ALScriptAnalysis::Kind::Hover || result.kind == ALScriptAnalysis::Kind::Inspect) &&
+        result.version == doc.editor->document().version())
+    {
+        doc.check.hovered = Doc::Check::Hovered{ result.version, expansion, doc.editor->identifierAt(at).begin, shown };
+    }
     switch (result.kind)
     {
         case ALScriptAnalysis::Kind::Check:
@@ -459,59 +486,8 @@ void ALScriptStudioChecking::answered(const ALScriptAnalysis::Result& result, U3
             break;
         }
         case ALScriptAnalysis::Kind::Hover:
-        {
-            if (!result.hover.found)
-            {
-                // Nothing: the editor says what the definitions say, if
-                // anything.
-                doc.editor->supplyHover(at, std::string());
-                break;
-            }
-            std::string text = shown.hover.label;
-            // Where it was declared, as the inspector says it: a link there.
-            std::vector<ALCodeEditor::CardLink> links;
-            const Declared                      declared = declaredOf(doc, result, preprocessed(doc));
-            if (declared.line >= 0)
-            {
-                LLStringUtil::format_map_t args;
-                args["[LINE]"]          = std::to_string(declared.line + 1);
-                args["[FILE]"]          = declared.name;
-                const std::string where = mServices.words(declared.path.empty() ? "InspectDeclared" : "InspectDeclaredIn", args);
-                text += "\n" + where;
-                links.push_back({ where, mServices.words("InspectDeclaredTip"), declared.value() });
-            }
-            if (!result.hover.expected.empty())
-            {
-                LLStringUtil::format_map_t args;
-                args["[TYPE]"] = result.hover.expected;
-                text += "\n" + mServices.words("HoverExpected", args);
-            }
-            if (!result.hover.documentation.empty())
-            {
-                text += "\n" + result.hover.documentation;
-            }
-            else if (!result.hover.hasDefinition)
-            {
-                // A builtin the analyzer knows by its declaration alone --
-                // LSL's: what the definitions say of it, its delay, its
-                // god mode.
-                const ALTextRange word = doc.editor->identifierAt(at);
-                if (const ALScriptStudioWords::Vocab* known = ALScriptStudioWords::word(doc.language.lua, doc.editor->document().text(word)))
-                {
-                    const std::string notes = ALScriptStudioWords::notesOf(*known);
-                    if (!notes.empty())
-                    {
-                        text += "\n" + notes;
-                    }
-                }
-            }
-            if (!result.hover.link.empty())
-            {
-                text += "\n" + result.hover.link;
-            }
-            doc.editor->supplyHover(at, text, std::move(links));
+            showHover(doc, shown, at);
             break;
-        }
         case ALScriptAnalysis::Kind::Signature:
         {
             if (!result.signature.found)
@@ -541,6 +517,60 @@ void ALScriptStudioChecking::answered(const ALScriptAnalysis::Result& result, U3
             mWindow.answeredElsewhere(doc, shown, at);
             break;
     }
+}
+
+void ALScriptStudioChecking::showHover(Doc& doc, const ALScriptAnalysis::Result& said, const ALTextPos& at)
+{
+    if (!said.hover.found)
+    {
+        // Nothing: the editor says what the definitions say, if
+        // anything.
+        doc.editor->supplyHover(at, std::string());
+        return;
+    }
+    std::string text = said.hover.label;
+    // Where it was declared, as the inspector says it: a link there.
+    std::vector<ALCodeEditor::CardLink> links;
+    const Declared                      declared = declaredOf(doc, said, preprocessed(doc));
+    if (declared.line >= 0)
+    {
+        LLStringUtil::format_map_t args;
+        args["[LINE]"]          = std::to_string(declared.line + 1);
+        args["[FILE]"]          = declared.name;
+        const std::string where = mServices.words(declared.path.empty() ? "InspectDeclared" : "InspectDeclaredIn", args);
+        text += "\n" + where;
+        links.push_back({ where, mServices.words("InspectDeclaredTip"), declared.value() });
+    }
+    if (!said.hover.expected.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[TYPE]"] = said.hover.expected;
+        text += "\n" + mServices.words("HoverExpected", args);
+    }
+    if (!said.hover.documentation.empty())
+    {
+        text += "\n" + said.hover.documentation;
+    }
+    else if (!said.hover.hasDefinition)
+    {
+        // A builtin the analyzer knows by its declaration alone --
+        // LSL's: what the definitions say of it, its delay, its
+        // god mode.
+        const ALTextRange word = doc.editor->identifierAt(at);
+        if (const ALScriptStudioWords::Vocab* known = ALScriptStudioWords::word(doc.language.lua, doc.editor->document().text(word)))
+        {
+            const std::string notes = ALScriptStudioWords::notesOf(*known);
+            if (!notes.empty())
+            {
+                text += "\n" + notes;
+            }
+        }
+    }
+    if (!said.hover.link.empty())
+    {
+        text += "\n" + said.hover.link;
+    }
+    doc.editor->supplyHover(at, text, std::move(links));
 }
 
 void ALScriptStudioChecking::actionsAnswered(Doc& doc, const ALScriptAnalysis::Result& result, U32 expansion)
@@ -592,30 +622,40 @@ bool ALScriptStudioChecking::lslFragment(const Doc& doc) const
     {
         return false;
     }
+    // Walked once for each text it is asked of.
+    ALCodeEditor& editor  = *doc.editor;
+    const U32     version = editor.document().version();
+    if (doc.check.fragment && doc.check.fragment->first == version)
+    {
+        return doc.check.fragment->second;
+    }
     // A default state, by the grammar's tokens: `default` then `{`, past
     // blanks and comments, the brace on the same line or a later one.
-    ALCodeEditor&   editor  = *doc.editor;
-    bool            waiting = false;
-    const S32       lines   = editor.document().lineCount();
-    for (S32 line = 0; line < lines; ++line)
-    {
-        const std::string& text = editor.document().line(line);
-        for (const ALSyntaxToken& token : editor.highlighter().tokens(line))
+    const auto has_default = [&editor]() {
+        bool      waiting = false;
+        const S32 lines   = editor.document().lineCount();
+        for (S32 line = 0; line < lines; ++line)
         {
-            const std::string_view word = std::string_view(text).substr(token.begin, token.end - token.begin);
-            if (token.kind == ALSyntaxKind::Comment || token.kind == ALSyntaxKind::DocComment ||
-                word.find_first_not_of(" \t") == std::string_view::npos)
+            const std::string& text = editor.document().line(line);
+            for (const ALSyntaxToken& token : editor.highlighter().tokens(line))
             {
-                continue;
+                const std::string_view word = std::string_view(text).substr(token.begin, token.end - token.begin);
+                if (token.kind == ALSyntaxKind::Comment || token.kind == ALSyntaxKind::DocComment ||
+                    word.find_first_not_of(" \t") == std::string_view::npos)
+                {
+                    continue;
+                }
+                if (waiting && word.front() == '{')
+                {
+                    return true;
+                }
+                waiting = token.kind == ALSyntaxKind::Control && word == "default";
             }
-            if (waiting && word.front() == '{')
-            {
-                return false;
-            }
-            waiting = token.kind == ALSyntaxKind::Control && word == "default";
         }
-    }
-    return true;
+        return false;
+    };
+    doc.check.fragment = std::make_pair(version, !has_default());
+    return doc.check.fragment->second;
 }
 
 void ALScriptStudioChecking::schedule(Doc& doc, bool now)
@@ -663,16 +703,38 @@ void ALScriptStudioChecking::pump(F64 now)
             schedule(*doc, true);
         }
     }
+    // The tab in front as soon as it is due; the others one a frame, the
+    // longest due first, so that many tabs opened or restored at once are
+    // not as many whole-text checks asked in one frame.
+    const Doc* front = mServices.frontDoc();
+    Doc*       next  = nullptr;
     for (Doc* doc : mServices.openDocs())
     {
-        if (doc->check.analysisDue > 0.0 && now >= doc->check.analysisDue)
+        if (doc->check.analysisDue <= 0.0 || now < doc->check.analysisDue)
         {
-            doc->check.analysisDue      = 0.0;
-            doc->check.requestedVersion = doc->editor->document().version();
-            doc->check.askedAt          = now;
-            ask(*doc, ALScriptAnalysis::Kind::Check, ALTextPos(), ALTextPos());
+            continue;
+        }
+        if (doc == front)
+        {
+            askCheck(*doc, now);
+        }
+        else if (!next || doc->check.analysisDue < next->check.analysisDue)
+        {
+            next = doc;
         }
     }
+    if (next)
+    {
+        askCheck(*next, now);
+    }
+}
+
+void ALScriptStudioChecking::askCheck(Doc& doc, F64 now)
+{
+    doc.check.analysisDue      = 0.0;
+    doc.check.requestedVersion = doc.editor->document().version();
+    doc.check.askedAt          = now;
+    ask(doc, ALScriptAnalysis::Kind::Check, ALTextPos(), ALTextPos());
 }
 
 void ALScriptStudioChecking::analysed(const ALScriptAnalysis::Result& result)
@@ -1330,6 +1392,7 @@ void ALScriptStudioChecking::askFixAll(Doc& doc, const FixPick& pick)
         mServices.setStatus(mServices.words("FixChecking", args));
         return;
     }
+    mWindow.settleProblems(doc);
     size_t                                left  = 0;
     const std::vector<const ALScriptFix*> fixes = doc.pickFixes(pick, &left);
     // What is not safe to make without a look, said to be left for one.
@@ -1375,6 +1438,7 @@ bool ALScriptStudioChecking::fixAll(Doc& doc, const FixPick& pick)
     // a save, into the source where it stands, whichever view is in front,
     // as the formatting and the trimming a save makes are; asked for,
     // with the source brought forward, to be seen.
+    mWindow.settleProblems(doc);
     ALCodeEditor&                                    source = pick.forSave ? *doc.editor : mWindow.editorInFront(doc);
     const std::vector<const ALScriptFix*>            fixes  = doc.pickFixes(pick);
     std::vector<std::pair<ALTextRange, std::string>> edits;
@@ -1397,8 +1461,9 @@ bool ALScriptStudioChecking::fixAll(Doc& doc, const FixPick& pick)
     return true;
 }
 
-void ALScriptStudioChecking::fixesOn(const Doc& doc, S32 line, std::vector<ALCodeEditor::Fix>& out) const
+void ALScriptStudioChecking::fixesOn(Doc& doc, S32 line, std::vector<ALCodeEditor::Fix>& out)
 {
+    mWindow.settleProblems(doc);
     // Only over the text they were made in: a text typed in since has other
     // places, and is checked again a moment later.
     const U32 now = doc.editor->document().version();
