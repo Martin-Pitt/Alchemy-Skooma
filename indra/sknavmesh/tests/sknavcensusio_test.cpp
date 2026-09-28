@@ -374,4 +374,25 @@ namespace tut
         const F64 ms = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t0).count();
         std::cout << "writeCensus: " << ms << " ms for " << out.str().size() / (1024.0 * 1024.0) << " MB" << std::endl;
     }
+
+    template<> template<>
+    void sknavcensusio_object::test<6>()
+    {
+        set_test_name("the session's marks are written with their region, and the file still reads");
+        CensusFile c = sample();
+        Mark m;
+        m.mId = 7;
+        m.mType = MarkType::SPLIT;
+        m.mVerts.push_back(LLVector3d(256100.5, 255800.25, 25.0));
+        c.mMarks.push_back(m);
+        std::ostringstream out;
+        writeCensus(out, c);
+        const std::string text = out.str();
+        ensure("marks block", text.find("\"marks\":[{\"id\":7,\"kind\":\"point\",\"type\":\"split\"") != std::string::npos);
+        ensure("located", text.find("\"region\":\"Test \\\"Quoted\\\" Region\",\"regionGrid\":[1000,999],\"local\":[100.5,56.25,25]") !=
+                              std::string::npos);
+        CensusFile back;
+        std::string error;
+        ensure("reads: " + error, readCensus(text, back, &error));
+    }
 }

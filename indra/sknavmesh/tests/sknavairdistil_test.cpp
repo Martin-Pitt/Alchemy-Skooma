@@ -406,4 +406,33 @@ namespace tut
         ensure_equals("seam capped", air.mSeams[TileAir::SIDE_NEG_X].count(0), 255u);
         ensure_equals("seam along y capped", air.mSeams[TileAir::SIDE_NEG_Y].count(0), 255u);
     }
+
+    template<> template<>
+    void sknavairdistil_object::test<9>()
+    {
+        set_test_name("a merged leaf never has its floor at or over its ceiling");
+        // Four thin closed gaps whose floors and ceilings each agree within climb,
+        // but one's floor is over another's ceiling.
+        AirGrid g;
+        g.mCell = g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = 2;
+        const U16 floors[4] = { 110, 110, 110, 115 };
+        const U16 ceils[4] = { 114, 114, 114, 118 };
+        g.mStart = { 0, 1, 2, 3, 4 };
+        for (S32 i = 0; i < 4; ++i)
+        {
+            AirGap gap;
+            gap.mFloor = floors[i];
+            gap.mCeiling = ceils[i];
+            gap.mClear = 1;
+            g.mGaps.push_back(gap);
+        }
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        for (const AirGap& gap : air.mGaps)
+        {
+            ensure("ceiling over floor", (gap.mFlags & AirGap::OPEN) || gap.mCeiling > gap.mFloor);
+        }
+        ensure_equals("left fine", air.mGaps.size(), static_cast<size_t>(4));
+    }
 }

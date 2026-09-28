@@ -26,6 +26,7 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavexport.h"
 #include "../sknavwind.h"
 #include "sknavtestscene.h"
 
@@ -223,6 +224,29 @@ namespace tut
         ensure("open air above the platform", c && !(c->mFlags & WindCell::BLOCKED));
         ensure("a wall on it", (e->at(30.25f, 16.f)->mFlags & WindCell::BLOCKED) != 0);
         ensure("sheltered behind it", e->at(34.f, 16.f)->factor() < 0.5f);
+    }
+
+    template<> template<>
+    void sknavwind_object::test<11>()
+    {
+        set_test_name("the export carries no wall-clock time, so the same air exports the same bytes");
+        Scene s;
+        s.box(0.f, 0.f, 64.f, 32.f, 0.f, 4.f);
+        s.wall(30.f, 0.f, 30.5f, 32.f, 7.f);
+        auto in = std::make_shared<WindInput>();
+        const Wind w(s.input(2));
+        in->mEnclosure = w.mEnc;
+        in->mRooms = w.mRooms;
+        in->mBands = { WindLevel() };
+        WindProduct a = *computeWind(in);
+        WindProduct b = a;
+        a.mMillis = 1.5f;
+        b.mMillis = 2500.25f;
+        std::ostringstream ea, eb;
+        writeExportSpaces(ea, LLVector3d(), *w.mRooms, &a);
+        writeExportSpaces(eb, LLVector3d(), *w.mRooms, &b);
+        ensure("wind exported", ea.str().find("\"wind\"") != std::string::npos);
+        ensure("byte-identical", ea.str() == eb.str());
     }
 
     template<> template<>

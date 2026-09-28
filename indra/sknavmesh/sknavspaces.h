@@ -97,7 +97,7 @@ namespace sknav
     {
         U32 mId = 0;                ///< stable within the mesh while the space stays where it is
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
-        LLVector3 mMin;             ///< floor plan and floor to highest ceiling
+        LLVector3 mMin;             ///< floor plan and floor to highest ceiling, and every gap it holds
         LLVector3 mMax;
         LLVector3 mCentre;          ///< of the floor, at the lowest floor
         LLVector2 mAxis;            ///< the floor's long axis
@@ -185,6 +185,9 @@ namespace sknav
         U16 mSeedB = 0;
     };
 
+    /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
+    struct MergeMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -197,6 +200,8 @@ namespace sknav
         U32 mSeeds = 0;
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
+        U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
+        std::shared_ptr<const MergeMemo> mMemo;
 
         /// The space with this id, or null.
         const Space* byId(U32 id) const;

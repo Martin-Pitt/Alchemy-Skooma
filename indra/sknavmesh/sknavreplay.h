@@ -56,6 +56,9 @@ namespace sknav
         /// after runs the meshes that touch another with its neighbours'
         /// answers and its own last ones, as the viewer's re-runs do.
         S32 mRounds = 2;
+        /// Rounds after the first rebuild this many tiles of every mesh, as
+        /// though their air had moved, and run every mesh, neighboured or not.
+        U32 mDirtyTiles = 0;
     };
 
     struct ReplayTile
@@ -109,6 +112,9 @@ namespace sknav
 
     /// clusters -> meshes and tiles -> terrain -> buildTile -> enclosure -> spaces -> wind.
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out);
+
+    /// A mesh's rooms input as the replay gives it: its doors, lifts and last product.
+    std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation);
 
     /// The result in the viewer's navmesh export format, so its readers work unchanged.
     void writeReplayExport(std::ostream& file, const CensusFile& census, const ReplayResult& result);

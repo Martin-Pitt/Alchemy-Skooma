@@ -1,6 +1,6 @@
 /**
  * @file sknavannotate.cpp
- * @brief Marks placed in the world where the navmesh is wrong: points, lines and boxes with a type and a note.
+ * @brief Marks placed in the world where the navmesh is wrong: points and lines with a type and a note.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,6 +27,7 @@
 #include "sknavannotate.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace sknav
@@ -37,27 +38,95 @@ namespace sknav
         {
             case MarkKind::POINT: return "point";
             case MarkKind::LINE: return "line";
-            case MarkKind::BOX: return "box";
+            case MarkKind::PORTAL: return "portal";
             default: return "unknown";
+        }
+    }
+
+    namespace
+    {
+        struct TypeInfo
+        {
+            MarkType mType;
+            const char* mName;
+            MarkGroup mGroup;
+            MarkKind mKind;
+            char mKey;
+        };
+
+        // In MarkType order. A wrong portal and a merge are points: a click
+        // near the portal, or where the two spaces meet. Letters are mnemonic
+        // where they can be, and none of W, A, S, D, E, C, F, Q or Z, which
+        // move the avatar and the camera.
+        const TypeInfo TYPES[] = {
+            { MarkType::MISSED_OPENING, "missed_opening", MarkGroup::OPENING, MarkKind::LINE, '1' },
+            { MarkType::WRONG, "wrong", MarkGroup::OPENING, MarkKind::POINT, '2' },
+            { MarkType::DOOR, "door", MarkGroup::OPENING, MarkKind::LINE, '3' },
+            { MarkType::WINDOW, "window", MarkGroup::OPENING, MarkKind::LINE, '4' },
+            { MarkType::STAIR, "stair", MarkGroup::VERTICAL, MarkKind::LINE, '5' },
+            { MarkType::RAMP, "ramp", MarkGroup::VERTICAL, MarkKind::LINE, '6' },
+            { MarkType::LADDER, "ladder", MarkGroup::VERTICAL, MarkKind::LINE, '7' },
+            { MarkType::ELEVATOR, "elevator", MarkGroup::VERTICAL, MarkKind::LINE, '8' },
+            { MarkType::LEDGE, "ledge", MarkGroup::VERTICAL, MarkKind::LINE, '9' },
+            { MarkType::INDOOR, "indoor", MarkGroup::AREA, MarkKind::POINT, 'I' },
+            { MarkType::SHELTERED, "sheltered", MarkGroup::AREA, MarkKind::POINT, 'H' },
+            { MarkType::OUTDOOR, "outdoor", MarkGroup::AREA, MarkKind::POINT, 'O' },
+            { MarkType::STREET, "street", MarkGroup::AREA, MarkKind::LINE, 'T' },
+            { MarkType::BRIDGE, "bridge", MarkGroup::AREA, MarkKind::LINE, 'B' },
+            { MarkType::BALCONY, "balcony", MarkGroup::AREA, MarkKind::POINT, 'L' },
+            { MarkType::COURTYARD, "courtyard", MarkGroup::AREA, MarkKind::POINT, 'Y' },
+            { MarkType::WATER_BODY, "water", MarkGroup::AREA, MarkKind::POINT, 'P' },
+            { MarkType::WALKABLE, "walkable", MarkGroup::JUDGEMENT, MarkKind::POINT, 'G' },
+            { MarkType::NOT_WALKABLE, "not_walkable", MarkGroup::JUDGEMENT, MarkKind::POINT, 'X' },
+            { MarkType::MERGE, "merge", MarkGroup::JUDGEMENT, MarkKind::POINT, 'M' },
+            { MarkType::SPLIT, "split", MarkGroup::JUDGEMENT, MarkKind::LINE, 'V' },
+            { MarkType::CROSS, "crossed", MarkGroup::JUDGEMENT, MarkKind::PORTAL, 'K' },
+            { MarkType::NOTE, "note", MarkGroup::JUDGEMENT, MarkKind::POINT, 'N' },
+        };
+        static_assert(sizeof(TYPES) / sizeof(TYPES[0]) == static_cast<size_t>(MarkType::COUNT), "a row per type");
+
+        const TypeInfo* info(MarkType type)
+        {
+            const size_t i = static_cast<size_t>(type);
+            return i < static_cast<size_t>(MarkType::COUNT) ? &TYPES[i] : nullptr;
         }
     }
 
     const char* markTypeName(MarkType type)
     {
-        switch (type)
+        const TypeInfo* t = info(type);
+        return t ? t->mName : "unknown";
+    }
+
+    MarkGroup markTypeGroup(MarkType type)
+    {
+        const TypeInfo* t = info(type);
+        return t ? t->mGroup : MarkGroup::JUDGEMENT;
+    }
+
+    MarkKind markTypeKind(MarkType type)
+    {
+        const TypeInfo* t = info(type);
+        return t ? t->mKind : MarkKind::POINT;
+    }
+
+    char markTypeKey(MarkType type)
+    {
+        const TypeInfo* t = info(type);
+        return t ? t->mKey : 0;
+    }
+
+    bool markTypeForKey(char key, MarkType& out)
+    {
+        for (const TypeInfo& t : TYPES)
         {
-            case MarkType::MISSED_OPENING: return "missed_opening";
-            case MarkType::WRONG: return "wrong";
-            case MarkType::MERGE: return "merge";
-            case MarkType::SPLIT: return "split";
-            case MarkType::STAIR: return "stair";
-            case MarkType::WINDOW: return "window";
-            case MarkType::INDOOR: return "indoor";
-            case MarkType::OUTDOOR: return "outdoor";
-            case MarkType::SHELTERED: return "sheltered";
-            case MarkType::NOTE: return "note";
-            default: return "unknown";
+            if (t.mKey == key)
+            {
+                out = t.mType;
+                return true;
+            }
         }
+        return false;
     }
 
     void Mark::extent(LLVector3d& min, LLVector3d& max) const
@@ -77,10 +146,11 @@ namespace sknav
                 max.mdV[axis] = std::max(max.mdV[axis], v.mdV[axis]);
             }
         }
-        if (mKind == MarkKind::BOX)
-        {
-            max.mdV[VZ] = min.mdV[VZ] + std::max(mHeight, 0.f);
-        }
+    }
+
+    std::pair<U32, U32> Mark::portalPair() const
+    {
+        return std::minmax(mSpaceIds[0], mSpaceIds[1]);
     }
 
     bool Mark::complete() const
@@ -89,7 +159,7 @@ namespace sknav
         {
             case MarkKind::POINT: return mVerts.size() == 1;
             case MarkKind::LINE: return mVerts.size() >= 2;
-            case MarkKind::BOX: return mVerts.size() == 2;
+            case MarkKind::PORTAL: return mVerts.size() == 1 && mSpaceIds[0] && mSpaceIds[1];
             default: return false;
         }
     }
@@ -123,37 +193,42 @@ namespace sknav
         return const_cast<MarkSet*>(this)->find(id);
     }
 
-    bool MarkSet::bounds(F64 margin, LLVector3d& min, LLVector3d& max) const
+    void writeMarks(std::ostream& out, const std::vector<Mark>& marks, const MarkLocator& locate)
     {
-        bool any = false;
-        for (const Mark& m : mMarks)
+        // Globals need ten digits for centimetres, whatever the caller left set.
+        const std::streamsize precision = out.precision(std::max<std::streamsize>(out.precision(), 10));
+        out << "\"marks\":[";
+        for (size_t m = 0; m < marks.size(); ++m)
         {
-            if (m.mVerts.empty())
+            const Mark& mark = marks[m];
+            out << (m ? "," : "") << "{\"id\":" << mark.mId << ",\"kind\":\"" << markKindName(mark.mKind) << "\",\"type\":\""
+                << markTypeName(mark.mType) << "\",\"text\":\"" << jsonEscape(mark.mText) << "\",\"created\":" << mark.mCreated;
+            if (mark.mKind == MarkKind::PORTAL)
             {
-                continue;
+                // Which cut this strikes: the mesh, the two spaces it joined
+                // and where the cut sat, so a reader of the same export can
+                // find it among the portals it wrote.
+                out << ",\"mesh\":\"" << mark.mSpaceMesh.asString() << "\",\"spaces\":[" << mark.mSpaceIds[0] << ','
+                    << mark.mSpaceIds[1] << "],\"centre\":[" << mark.mPortalCentre.mdV[VX] << ','
+                    << mark.mPortalCentre.mdV[VY] << ',' << mark.mPortalCentre.mdV[VZ] << ']';
             }
-            LLVector3d lo, hi;
-            m.extent(lo, hi);
-            if (!any)
+            out << ",\"vertices\":[";
+            for (size_t i = 0; i < mark.mVerts.size(); ++i)
             {
-                min = lo;
-                max = hi;
-                any = true;
-                continue;
+                const LLVector3d& v = mark.mVerts[i];
+                out << (i ? "," : "") << "{\"global\":[" << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
+                MarkPlace place;
+                if (locate && locate(v, place))
+                {
+                    out << ",\"region\":\"" << jsonEscape(place.mRegion) << "\",\"regionGrid\":[" << place.mGridX << ',' << place.mGridY
+                        << "],\"local\":[" << place.mLocal.mV[VX] << ',' << place.mLocal.mV[VY] << ',' << place.mLocal.mV[VZ] << ']';
+                }
+                out << '}';
             }
-            for (S32 axis = 0; axis < 3; ++axis)
-            {
-                min.mdV[axis] = std::min(min.mdV[axis], lo.mdV[axis]);
-                max.mdV[axis] = std::max(max.mdV[axis], hi.mdV[axis]);
-            }
+            out << "]}";
         }
-        if (any)
-        {
-            const LLVector3d grow(margin, margin, margin);
-            min -= grow;
-            max += grow;
-        }
-        return any;
+        out << ']';
+        out.precision(precision);
     }
 
     std::string jsonEscape(const std::string& text)

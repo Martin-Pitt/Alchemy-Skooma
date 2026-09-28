@@ -310,8 +310,9 @@ namespace sknav
         if (wind && !wind->mSlabs.empty())
         {
             // Per band its heights, per slab its cells: factor, deflection x and y, flags, a byte each.
+            // No timings: the same air exports the same bytes.
             const WindProduct& w = *wind;
-            file << ",\"wind\":{\"headings\":" << WIND_HEADINGS << ",\"ms\":" << w.mMillis << ",\"bands\":[";
+            file << ",\"wind\":{\"headings\":" << WIND_HEADINGS << ",\"bands\":[";
             for (size_t b = 0; b < w.mBands.size(); ++b)
             {
                 const WindSlabPtr s = w.slab(0, static_cast<S32>(b));

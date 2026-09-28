@@ -1,6 +1,6 @@
 /**
  * @file sknavannotate.h
- * @brief Marks placed in the world where the navmesh is wrong: points, lines and boxes with a type and a note.
+ * @brief Marks placed in the world where the navmesh is wrong: points and lines with a type and a note.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -25,8 +25,14 @@
 #ifndef SK_NAVANNOTATE_H
 #define SK_NAVANNOTATE_H
 
+#include "lluuid.h"
 #include "stdtypes.h"
 #include "v3dmath.h"
+#include "v3math.h"
+
+#include <functional>
+#include <ostream>
+#include <utility>
 
 #include <string>
 #include <vector>
@@ -37,27 +43,61 @@ namespace sknav
     {
         POINT = 0,
         LINE,
-        BOX,        ///< two opposite floor corners, then a height
+        PORTAL,     ///< a portal the spaces pass cut, named by its two spaces
         COUNT
     };
 
     enum class MarkType : U8
     {
+        // Openings.
         MISSED_OPENING = 0,
-        WRONG,
-        MERGE,
-        SPLIT,
-        STAIR,
+        WRONG,          ///< a wrong portal
+        DOOR,
         WINDOW,
+        // Vertical movement.
+        STAIR,
+        RAMP,
+        LADDER,
+        ELEVATOR,
+        LEDGE,          ///< a ledge or drop
+        // Areas.
         INDOOR,
-        OUTDOOR,
         SHELTERED,
+        OUTDOOR,
+        STREET,
+        BRIDGE,
+        BALCONY,
+        COURTYARD,
+        WATER_BODY,     ///< a pool or prim water
+        // Judgements.
+        WALKABLE,       ///< floor the navmesh missed
+        NOT_WALKABLE,   ///< floor that should not be
+        MERGE,          ///< where two spaces that should be one meet
+        SPLIT,          ///< along where a space should be cut in two
+        CROSS,          ///< a portal the spaces pass cut that should not be there
         NOTE,
         COUNT
     };
 
+    enum class MarkGroup : U8
+    {
+        OPENING = 0,
+        VERTICAL,
+        AREA,
+        JUDGEMENT
+    };
+
     const char* markKindName(MarkKind kind);
+    /// Stable and lower-case: the exports and their readers key on it.
     const char* markTypeName(MarkType type);
+    MarkGroup markTypeGroup(MarkType type);
+    /// The shape a type is placed as: openings and ways up are lines along
+    /// them, areas and judgements a point in them.
+    MarkKind markTypeKind(MarkType type);
+    /// The key that picks the type while placing: a digit or an upper-case
+    /// letter, never one the camera and movement keys use.
+    char markTypeKey(MarkType type);
+    bool markTypeForKey(char key, MarkType& out);
 
     /// One mark, in global coordinates. Session only: nothing persists it.
     struct Mark
@@ -66,11 +106,20 @@ namespace sknav
         MarkKind mKind = MarkKind::POINT;
         MarkType mType = MarkType::NOTE;
         std::vector<LLVector3d> mVerts;
-        F32 mHeight = 3.f;      ///< a box's, up from the lower of its two corners
         std::string mText;
         F64 mCreated = 0.0;     ///< seconds since the epoch
+        // A crossed-out portal (MarkKind::PORTAL) names the cut it strikes:
+        // the mesh whose spaces pass cut it, the stable ids of the two spaces
+        // it joined, and the cut's centre. The vertex stays where the click
+        // landed, for the label and the export.
+        LLUUID mSpaceMesh;
+        U32 mSpaceIds[2] = { 0, 0 };
+        LLVector3d mPortalCentre;
 
-        /// The mark's extent: its vertices, and for a box its height too.
+        /// The two space ids of a portal mark, smaller first.
+        std::pair<U32, U32> portalPair() const;
+
+        /// The box around the mark's vertices.
         void extent(LLVector3d& min, LLVector3d& max) const;
         bool complete() const;
     };
@@ -87,14 +136,25 @@ namespace sknav
         const std::vector<Mark>& marks() const { return mMarks; }
         bool empty() const { return mMarks.empty(); }
 
-        /// The AABB of every mark grown by the margin on each side. False
-        /// when there are no marks.
-        bool bounds(F64 margin, LLVector3d& min, LLVector3d& max) const;
-
     private:
         std::vector<Mark> mMarks;
         U32 mNextId = 1;
     };
+
+    /// Where a vertex is on the grid: its region, the region's grid
+    /// coordinates and the region-local position.
+    struct MarkPlace
+    {
+        std::string mRegion;
+        U32 mGridX = 0;
+        U32 mGridY = 0;
+        LLVector3 mLocal;
+    };
+    typedef std::function<bool(const LLVector3d& global, MarkPlace& out)> MarkLocator;
+
+    /// The marks as an export's "marks" array, key included; a vertex the
+    /// locator places gets its region too.
+    void writeMarks(std::ostream& out, const std::vector<Mark>& marks, const MarkLocator& locate);
 
     /// Text as the body of a JSON string: quotes, backslashes and control
     /// characters escaped.
