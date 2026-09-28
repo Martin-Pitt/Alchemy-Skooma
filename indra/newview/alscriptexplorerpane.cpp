@@ -26,6 +26,8 @@
 
 #include "alscriptexplorerpane.h"
 
+#include "alkeychord.h"
+
 #include "alobjectproperties.h"
 #include "alscriptexplorertree.h"
 #include "alscriptstudiodoc.h"
@@ -33,12 +35,15 @@
 #include "llagent.h"
 #include "llbutton.h"
 #include "llfiltereditor.h"
+#include "llfloaterreg.h"
+#include "llcompilequeue.h"
 #include "llfloater.h"
 #include "llmenugl.h"
 #include "llnotificationsutil.h"
 #include "llselectmgr.h"
 #include "lltimer.h"
 #include "lltooldraganddrop.h"
+#include "lltrans.h"
 #include "lluictrlfactory.h"
 #include "llviewerassettype.h"
 #include "llviewercontrol.h"
@@ -56,6 +61,10 @@ namespace
     // often at most it is filled again while answers come in.
     const F64 EXPLORER_POLL = 1.0;
     const F64 EXPLORER_FILL = 0.2;
+    // How long after an object it lists comes or goes it is listed again:
+    // a linkset's prims arrive after its root, and a region's objects in a
+    // stream as one teleports in or out.
+    const F64 EXPLORER_PRESENCE = 0.5;
 
     // The roots selected in world, in their order.
     std::vector<LLUUID> selectedRoots()
@@ -75,6 +84,68 @@ namespace
     LLViewerObject* rootOf(LLViewerObject* object)
     {
         return object && object->getRootEdit() ? object->getRootEdit() : object;
+    }
+
+    // The legacy queues over whole prims, which walk their contents and
+    // report in a window of their own: every script recompiled for a
+    // target ("auto" for what each compiles for now), reset, started or
+    // stopped. Each prim comes with a name for the report. A recompile
+    // leaves a script `running` knows to be stopped stopped, by prim and
+    // item; the rest run after it, as the queue always had it.
+    enum class Queue : U8
+    {
+            Recompile,
+            Reset,
+            Start,
+            Stop
+        };
+        bool startQueue(Queue kind, const std::vector<std::pair<LLUUID, std::string>>& prims, const std::string& target, std::string& error,
+                        std::map<std::pair<LLUUID, LLUUID>, bool> running = {})
+        {
+        // Only the objects RLVa lets be changed; none, and why.
+        std::vector<std::pair<LLUUID, std::string>> allowed;
+        std::string                                  refused;
+        for (const auto& prim : prims)
+        {
+            const std::string why = ALScriptWorkspace::rlvRefusal(gObjectList.findObject(prim.first), LLAssetType::AT_NONE, ALScriptWorkspace::RlvUse::Change);
+            if (why.empty())
+            {
+                allowed.push_back(prim);
+            }
+            else
+            {
+                refused = why;
+            }
+        }
+        if (allowed.empty())
+        {
+            error = refused.empty() ? LLTrans::getString("WorkspaceNothingToDo") : refused;
+            return false;
+        }
+        const char* name  = kind == Queue::Recompile ? "compile_queue" : kind == Queue::Reset ? "reset_queue" : kind == Queue::Start ? "start_queue" : "stop_queue";
+        const char* title = kind == Queue::Recompile ? "CompileQueueTitle" : kind == Queue::Reset ? "ResetQueueTitle" : kind == Queue::Start ? "RunQueueTitle" : "NotRunQueueTitle";
+        LLUUID      id;
+        id.generate();
+        LLFloaterScriptQueue* queue = LLFloaterReg::getTypedInstance<LLFloaterScriptQueue>(name, LLSD(id));
+        if (!queue)
+        {
+            error = LLTrans::getString("WorkspaceQueueCannotOpen");
+            return false;
+        }
+        queue->setCompileTarget(target.empty() ? std::string("auto") : target);
+        queue->setKnownRunning(std::move(running));
+        for (const auto& [prim, prim_name] : allowed)
+        {
+            queue->addObject(prim, prim_name);
+        }
+        if (!queue->start())
+        {
+            queue->closeFloater();
+            error = LLTrans::getString("WorkspaceQueueWouldNotStart");
+            return false;
+        }
+        queue->setTitle(LLTrans::getString(title));
+        return true;
     }
 }
 
@@ -189,15 +260,29 @@ bool ALScriptExplorerPane::postBuild()
     // Put in the list with the frame, once for all that answered in it: a
     // refresh asks every script whether it runs, and a linkset's hundred
     // answers were a hundred lists.
-    mRunningConnection = ALScriptWorkspace::instance().onRunningState([this](const ALScriptWorkspace::RunningState& state) {
-        mModel.running(state.ref, state.running);
-        mStale = true;
+    mRunningConnection = ALScriptWorkspace::instance().onRunningState([this](const ALScriptWorkspace::RunningState&) { mStale = true; });
+    // What a prim holds, answered to whoever asked: the index is every
+    // window's.
+    mHeardConnection = ALScriptWorkspace::instance().contentsIndex().onHeard(
+        [this](const ALScriptWorkspace::Contents& contents) { contentsHeard(contents); });
+    // An object it lists, or would list in sight, coming or going: a pin in
+    // sight again after a teleport, one taken back into the inventory.
+    mPresenceConnection = gObjectList.onPresence([this](const LLUUID& id, bool) {
+        if (mModel.concerns(id))
+        {
+            mPresenceAt = LLTimer::getTotalSeconds() + EXPLORER_PRESENCE;
+        }
     });
     return true;
 }
 
 bool ALScriptExplorerPane::handleKeyHere(KEY key, MASK mask)
 {
+    if (ALKeyChords::isContextMenuKey(key, mask) && mTree && mTree->hasFocus())
+    {
+        mTree->showMenuAtChoice();
+        return true;
+    }
     if (key == KEY_ESCAPE && mask == MASK_NONE && mServices)
     {
         mServices->revealed(mTree, true);
@@ -256,6 +341,11 @@ void ALScriptExplorerPane::pump()
         mRefetchAt = 0.0;
         relist(true);
     }
+    if (mPresenceAt > 0.0 && now >= mPresenceAt)
+    {
+        mPresenceAt = 0.0;
+        relist();
+    }
     if (!mSelectionChanged && now < mPolled + EXPLORER_POLL)
     {
         return;
@@ -270,8 +360,9 @@ void ALScriptExplorerPane::pump()
     }
 }
 
-void ALScriptExplorerPane::relist(bool refetch)
+void ALScriptExplorerPane::relist(bool refetch, bool from_region)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     if (!mServices)
     {
         return;
@@ -309,23 +400,19 @@ void ALScriptExplorerPane::relist(bool refetch)
     fill();
     std::string filter = mFilter->getText();
     LLStringUtil::trim(filter);
-    // What each prim holds, asked where it is not known, where the object
-    // says it has changed since, or where a person asked -- not again for
-    // every prim at every tab opened or closed, nor for one already asked
-    // and not answered yet.
-    const std::vector<LLUUID> asking = mModel.toAsk(refetch, !filter.empty(), [](const LLUUID& prim) {
-        LLViewerObject* in_world = gObjectList.findObject(prim);
-        return in_world && !in_world->isInventoryDirty();
-    });
-    const LLHandle<LLPanel> handle = getHandle();
-    for (const LLUUID& prim : asking)
+    // What each prim listed holds, asked of the index, which asks where it
+    // does not know, where the object says it has changed since, or where
+    // a person asked -- not again for every prim at every tab opened or
+    // closed, nor for one already asked and not answered yet.
+    ALScriptContentsIndex& index = ALScriptWorkspace::instance().contentsIndex();
+    for (const LLUUID& prim : mModel.wanted(!filter.empty()))
     {
-        ALScriptWorkspace::instance().listContents(prim, [handle](const ALScriptWorkspace::Contents& contents) {
-            if (ALScriptExplorerPane* pane = ALViewType::as<ALScriptExplorerPane>(handle.get()))
-            {
-                pane->contentsHeard(contents);
-            }
-        });
+        index.ask(prim, refetch, from_region || mModel.asksRegion(prim));
+    }
+    // Asked of the region until the second ask after a drop has gone.
+    if (mRefetchAt == 0.0)
+    {
+        mModel.doneAskingRegion();
     }
 }
 
@@ -339,10 +426,6 @@ void ALScriptExplorerPane::contentsHeard(const ALScriptWorkspace::Contents& cont
     if (mModel.takePinsChanged())
     {
         mWindow->explorerPinsChanged();
-    }
-    for (const ALScriptRef& ref : heard.askRunning)
-    {
-        ALScriptWorkspace::instance().askRunning(ref);
     }
     mStale = true;
     for (Model::Opening& one : heard.opening)
@@ -407,6 +490,7 @@ std::string ALScriptExplorerPane::nameGivenTo(const LLUUID& root) const
 
 void ALScriptExplorerPane::fill()
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     mStale  = false;
     mFilled = LLTimer::getTotalSeconds();
     std::string filter = mFilter->getText();
@@ -501,6 +585,14 @@ std::optional<bool> ALScriptExplorerPane::knownRunning(const ALScriptRef& ref) c
         return doc->running != 0;
     }
     return mModel.knownRunning(ref);
+}
+
+void ALScriptExplorerPane::takeKeyboard()
+{
+    if (mTree)
+    {
+        mTree->setFocus(true);
+    }
 }
 
 void ALScriptExplorerPane::onChosen()
@@ -628,6 +720,12 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     {
         return rows.size() == 1 && present(rows.front());
     }
+    if (action == "check")
+    {
+        // One object, in sight, whatever row of it.
+        return !rows.empty() && present(rows.front()) &&
+               !any([&rows](const Choice& row) { return row.root != rows.front().root; });
+    }
     if (action == "pin")
     {
         return !rows.empty();
@@ -639,8 +737,10 @@ void ALScriptExplorerPane::act(const std::string& action)
 {
     if (action == "refresh")
     {
+        // Of the regions: an object keeps its copy of what it holds, and
+        // hears that it changed only while it is selected.
         mModel.forgetRunning();
-        relist(true);
+        relist(true, true);
         return;
     }
     if (action == "copy")
@@ -716,6 +816,10 @@ void ALScriptExplorerPane::act(const std::string& action)
         mWindow->explorerPinsChanged();
         relist();
     }
+    else if (action == "check")
+    {
+        mWindow->checkScripts(rows.front().root);
+    }
 }
 
 void ALScriptExplorerPane::run(const std::string& action, const std::vector<Choice>& rows)
@@ -733,27 +837,33 @@ void ALScriptExplorerPane::run(const std::string& action, const std::vector<Choi
             continue;
         }
         const ALScriptRef ref = row.ref();
+        std::string       error;
+        bool              sent = false;
         if (action == "reset")
         {
-            workspace.reset(ref);
+            sent = workspace.reset(ref, error);
         }
         else if (action == "restart")
         {
             // Stopped and set running again, keeping its state.
-            workspace.restart(ref);
+            sent = workspace.restart(ref, error);
         }
-        else if (workspace.setRunning(ref, action == "start"))
+        else if ((sent = workspace.setRunning(ref, action == "start", error)))
         {
             workspace.askRunning(ref);
+        }
+        if (!sent)
+        {
+            mServices->report(error, true);
         }
     }
     if (!prims.empty())
     {
-        const auto kind = action == "start"  ? ALScriptWorkspace::Queue::Start
-                          : action == "stop" ? ALScriptWorkspace::Queue::Stop
-                                             : ALScriptWorkspace::Queue::Reset;
+        const auto kind = action == "start"  ? Queue::Start
+                          : action == "stop" ? Queue::Stop
+                                             : Queue::Reset;
         std::string error;
-        if (!workspace.queue(kind, prims, LLStringUtil::null, error))
+        if (!startQueue(kind, prims, LLStringUtil::null, error))
         {
             mServices->report(error, true);
         }
@@ -966,6 +1076,18 @@ void ALScriptExplorerPane::recompile(const std::vector<Choice>& rows)
         const std::string          name = row.name;
         LLStringUtil::format_map_t args;
         args["[NAME]"] = name;
+        // A save of it on its way would have the server's text land over
+        // it: left alone. Changes not saved in a tab are not what compiles:
+        // said so.
+        if (ALScriptWorkspace::instance().saving(ref))
+        {
+            mServices->report(mServices->words("RecompileSkippedSaving", args), true);
+            continue;
+        }
+        if (mWindow->unsavedAnywhere(ref))
+        {
+            mServices->report(mServices->words("RecompileUnsaved", args), true);
+        }
         mServices->setStatus(mServices->words("Recompiling", args));
         const std::optional<bool> running = knownRunning(ref);
         ALScriptWorkspace::instance().recompile(
@@ -1000,7 +1122,7 @@ void ALScriptExplorerPane::recompile(const std::vector<Choice>& rows)
     if (!prims.empty())
     {
         std::string                               error;
-        std::map<std::pair<LLUUID, LLUUID>, bool> running = mModel.runningKnown();
+        std::map<std::pair<LLUUID, LLUUID>, bool> running = ALScriptWorkspace::instance().contentsIndex().runningKnown();
         for (const ALScriptStudioDoc* doc : mServices->openDocs())
         {
             if (!doc->ref.inInventory() && doc->running >= 0)
@@ -1008,7 +1130,7 @@ void ALScriptExplorerPane::recompile(const std::vector<Choice>& rows)
                 running[{ doc->ref.object, doc->ref.item }] = doc->running != 0;
             }
         }
-        if (!ALScriptWorkspace::instance().queue(ALScriptWorkspace::Queue::Recompile, prims, "auto", error, std::move(running)))
+        if (!startQueue(Queue::Recompile, prims, "auto", error, std::move(running)))
         {
             mServices->report(error, true);
         }
@@ -1062,7 +1184,7 @@ void ALScriptExplorerPane::transfer(const LLUUID& from, const std::vector<LLUUID
     args["[NAME]"] = ALScriptWorkspace::objectName(rootOf(gObjectList.findObject(to)), mServices->words("ObjectUnnamed"));
     mServices->setStatus(mServices->words("TransferGoing", args));
     const LLHandle<LLPanel> handle = getHandle();
-    ALScriptWorkspace::instance().transfer(from, items, to, running, [handle, args](const ALScriptWorkspace::TransferResult& result) {
+    ALScriptWorkspace::instance().transfer(from, items, to, running, [handle, args, to](const ALScriptWorkspace::TransferResult& result) {
         ALScriptExplorerPane* pane = ALViewType::as<ALScriptExplorerPane>(handle.get());
         if (!pane)
         {
@@ -1099,8 +1221,9 @@ void ALScriptExplorerPane::transfer(const LLUUID& from, const std::vector<LLUUID
         }
         services.report(words, !result.error.empty() || !result.refused.empty() || !result.stranded.empty() || !result.lost.empty());
         // The prims listed again, as after a drop from the inventory.
-        pane->relist(true);
+        pane->mModel.askRegion(to);
         pane->mRefetchAt = LLTimer::getTotalSeconds() + 2.0;
+        pane->relist(true);
     });
 }
 
@@ -1214,7 +1337,10 @@ bool ALScriptExplorerPane::dropIntoPrim(LLViewerObject* prim, MASK mask, bool dr
     if (ok && drop)
     {
         // Listed again once the tree is done with the drop, and again in a
-        // moment for what a folder sends once its items are in.
+        // moment for what a folder sends once its items are in -- of the
+        // region, since the object keeps the copy it had, and would hear
+        // otherwise only while selected.
+        mModel.askRegion(prim->getID());
         relistSoon(true);
         mRefetchAt = LLTimer::getTotalSeconds() + 2.0;
     }

@@ -63,7 +63,10 @@ namespace tut
 
         ll_test::HeadlessUI&          ui   = ll_test::HeadlessUI::get();
         ALScriptExplorerTree*         tree = nullptr;
-        Model                         model;
+        // What each prim holds, which the index is answered with on the spot.
+        std::map<LLUUID, ALScriptWorkspace::Contents> held;
+        ALScriptContentsIndex                         index{ fake() };
+        Model                                         model{ index };
         std::map<LLUUID, Model::Seen> world;
         std::vector<LLUUID>           selected;
         // What the tree told its owner of folders opened and folded.
@@ -72,6 +75,13 @@ namespace tut
         std::string state = "running";
 
         ~alscriptexplorertree_data() { delete tree; }
+
+        ALScriptContentsIndex::World fake()
+        {
+            ALScriptContentsIndex::World out;
+            out.ask = [this](const LLUUID& prim, bool, std::function<void(const ALScriptWorkspace::Contents&)> told) { told(held[prim]); };
+            return out;
+        }
 
         ALScriptExplorerTree& make()
         {
@@ -119,6 +129,8 @@ namespace tut
             {
                 contents.items.push_back({ id(n++), name, name.ends_with(".lsl"), false });
             }
+            held[prim] = contents;
+            index.ask(prim, true);
             model.contents(contents);
         }
 
@@ -299,6 +311,34 @@ namespace tut
         ensure("F2 is the folder view's", focus->handleKey(KEY_F2, MASK_NONE, false));
         ensure("escape not taken", !focus->handleKey(KEY_ESCAPE, MASK_NONE, false));
         ensure("the keyboard still there", t.hasFocus());
+        gFocusMgr.setKeyboardFocus(nullptr);
+    }
+
+    template<> template<>
+    void alscriptexplorertree_object::test<6>()
+    {
+        set_test_name("an item may be dragged out, which the owner starts; a prim or an object may not");
+        ALScriptExplorerTree& t     = make();
+        const LLUUID          house = object(10, "House");
+        selected                    = { house };
+        show();
+        holds(id(10), { "a.lsl" });
+        show();
+        S32                         drags = 0;
+        ALScriptExplorerTree::Hooks hooks;
+        hooks.drag = [&drags]() {
+            ++drags;
+            return true;
+        };
+        t.setHooks(std::move(hooks));
+        // The folder view drags only from a row that says it may move; the
+        // press and the move themselves want a window this has none of.
+        ensure("chosen", t.choose(itemRow("a.lsl"), false));
+        LLFolderViewItem* item = t.folderView()->getCurSelectedItem();
+        ensure("an item may move", item && item->isMovable());
+        ensure("and the drag is the owner's", t.folderView()->startDrag() && drags == 1);
+        ensure("chosen", t.choose(objectRow(house), false));
+        ensure("an object may not", !t.folderView()->getCurSelectedItem()->isMovable());
         gFocusMgr.setKeyboardFocus(nullptr);
     }
 }
