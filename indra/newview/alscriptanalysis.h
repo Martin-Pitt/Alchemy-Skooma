@@ -25,6 +25,8 @@
 #pragma once
 
 #include "alluauconfig.h"
+#include "alluauservice.h"
+#include "alscriptjobqueue.h"
 #include "alscriptproblem.h"
 #include "alscriptsymbol.h"
 #include "alscriptweight.h"
@@ -38,11 +40,7 @@
 #include <mutex>
 #include <string>
 
-namespace LL
-{
-    template <class T> struct ThreadPoolUsing;
-    class WorkQueue;
-}
+class ALSerialWorker;
 namespace Luau
 {
     struct FrontendCancellationToken;
@@ -58,9 +56,10 @@ namespace Luau
 // the region's, by the paths the syntax cache gives, read on the worker.
 //
 // Tailslide's builtins are a table the library holds once for the whole
-// process and adds to rather than replaces, so the LSL builtins are loaded
-// once; the Luau definitions are read again when the region's change, and
-// when ALScriptLuauSolver picks the other of Luau's type solvers. An SLua
+// process and adds to rather than replaces, so a region's LSL builtins add
+// what the table lacks; the Luau definitions are read again when the
+// region's change, and when ALScriptLuauSolver picks the other of Luau's
+// type solvers. An SLua
 // type check is held to ALScriptLuauCheckSeconds, and one a newer check of
 // its script has made pointless is stopped where it is.
 // Words keyed as the library keys them, in the skin's language where it has
@@ -147,7 +146,10 @@ public:
         // SLua only: what the script's `.luaurc` says -- the mode, the
         // lints, the globals -- or the defaults where it has none.
         ALLuauConfig config;
-        std::string text;
+        // The text asked about, shared rather than copied: every question
+        // of a version holds the one copy (ALScriptStudioDoc::snapshot, or
+        // the expansion's own), which lives while any of them does.
+        std::shared_ptr<const std::string> text;
         // Where, for anything but a check.
         S32         line   = 0;
         S32         column = 0;
@@ -155,12 +157,34 @@ public:
         // or the same place for the caret alone.
         S32         endLine   = 0;
         S32         endColumn = 0;
-        // Weigh only: the targets to weigh it for. Or, where there are
+        // Weigh, or a check the script's own weigh is folded into: the
+        // targets to weigh it for. A weigh only: or, where there are
         // any, texts to weigh in its place -- the script with a fix's edits
         // made, say -- each for the first target alone, and answered as
         // each one's total in order (Result::variantTotals).
         std::vector<ALScriptWeight::Target> targets;
         std::vector<std::string>            variants;
+        // Weigh only: which of a script's weighs this is -- the text as it
+        // stands, the text a save sends, or the fixes' costs -- none of
+        // which stands in for another as they wait.
+        enum class Weighing : U8
+        {
+            Text,
+            Sent,
+            Fixes
+        };
+        Weighing    weighing = Weighing::Text;
+        // Whether it is about the tab in front: its questions go before
+        // anything else, then its check; then weighing; then the rest.
+        bool        front = false;
+        // The lines of the text nobody reads the names, hints and fixes of:
+        // what an include put into an expansion (ALSourceMap::othersLines).
+        std::vector<std::pair<S32, S32>> passedOver;
+        // SLua over an expansion that keeps its requires as calls: the
+        // modules they reach (ALLuauService::setModules); and the bundle a
+        // save sends, which is what a check's weigh weighs.
+        std::shared_ptr<const ALLuauService::Modules> modules;
+        std::shared_ptr<const std::string>            bundle;
         // What a check says beyond the problems and the outline: what
         // every name is, and what the editor may show beside the text.
         bool        semantics      = false;
@@ -200,13 +224,28 @@ public:
     };
     typedef std::function<void(const Result&)> callback_t;
 
-    // Asks the worker and answers on the main thread. A check of a
-    // script whose newer check is already waiting is passed over rather
-    // than run: typing through a slow check would otherwise queue one
-    // whole-script check per keystroke, every answer but the last
-    // thrown away on arrival, with a hover or a completion waiting
-    // behind them all.
+    // Asks the worker and answers on the main thread. Only the latest of
+    // each kind of question about each script waits -- typing through a
+    // slow check would otherwise queue one whole-script check per
+    // keystroke, every answer but the last thrown away on arrival -- and
+    // the next is picked by rank: the front tab's questions, its check,
+    // weighing, then everything else. A question about a text older than
+    // one asked about since is passed over, and not answered; so is one
+    // whose answer a newer question makes pointless while it runs, which
+    // is stopped where it is an SLua one. Nothing is answered for what is
+    // passed over: whoever asked has asked again.
     void ask(Request request, callback_t callback);
+
+    // A script let go of: nothing it has waiting is run.
+    void forget(const std::string& id);
+
+    // Tailslide's work that is no question -- the optimizer's run over what
+    // a save sends -- done on this thread, which every use of Tailslide is
+    // on: then none of it runs at once with another, and nothing need be
+    // locked. At the rank of the front tab's check, since a save waits on
+    // it; `done` on the main thread once `work` has run, or at once where
+    // the thread is closing and will not.
+    void runEngine(std::function<void()> work, std::function<void()> done);
 
     // The region's definitions changed: the Luau ones are read again
     // before the next check.
@@ -217,25 +256,43 @@ private:
     void ensureStarted();
 
     struct Worker;
-    std::unique_ptr<LL::ThreadPoolUsing<LL::WorkQueue>> mPool;
+    // The one thread the services run on. Closed at cleanup, or as the
+    // viewer starts to quit, and kept closed: an ask after is answered
+    // with nothing rather than starting another.
+    std::unique_ptr<ALSerialWorker>                     mThread;
     // Touched only from the worker's own tasks, which one thread runs one
     // after another.
     std::unique_ptr<Worker>                             mWorker;
     U32                                                 mDefinitionsGeneration = 1;
-    // The newest check asked for of each script with one waiting, by the
-    // serial they were asked in: a check the worker reaches with a newer
-    // one already asked for is passed over, and the newest, reached,
-    // takes its script off. Written on the main thread, read on the
-    // worker; both under the lock, since a check may take a moment and
-    // the main thread goes on asking meanwhile.
-    std::mutex                                          mLatestMutex;
-    boost::unordered_flat_map<std::string, U32, ll::string_hash, std::equal_to<>> mLatestCheck;
-    U32                                                 mAskSerial = 0;
-    // The SLua check the worker is running, if any, and what stops it: a
-    // newer check of the same script asked for stops it, its answer being
-    // one that would be thrown away, and so does the viewer closing. Under
-    // the same lock. Held as the Luau stop token, which only the service
-    // knows the inside of.
-    std::string                                         mRunningId;
-    std::shared_ptr<Luau::FrontendCancellationToken>    mRunningStop;
+    // One job waiting: the question, who is answered, and what the main
+    // thread read for it -- the definitions' paths, the settings.
+    struct Job
+    {
+        Request                     request;
+        std::shared_ptr<callback_t> callback;
+        std::string                 luauPath;
+        std::string                 docsPath;
+        std::string                 lslPath;
+        U32                         generation = 0;
+        bool                        newSolver  = false;
+        F32                         seconds    = 0.f;
+        // Tailslide's work that is no question (runEngine), where it is one.
+        std::function<void()>       engineWork;
+        std::function<void()>       engineDone;
+    };
+    // Takes the next job and runs it, on the worker: one is posted for
+    // every question asked, and one that finds nothing waiting -- its
+    // question replaced by a later one -- does nothing.
+    void runNext();
+    Result run(const Job& job, const std::shared_ptr<Luau::FrontendCancellationToken>& stop);
+
+    // What waits, written on the main thread and taken on the worker, and
+    // the stop of the SLua job running, if any: a question that makes its
+    // answer pointless stops it, and so does the viewer closing. Both
+    // under the lock.
+    std::mutex                                       mQueueMutex;
+    ALScriptJobQueue<Job>                            mQueue;
+    std::shared_ptr<Luau::FrontendCancellationToken> mRunningStop;
+    // Numbers the engine's work, each its own key.
+    U32                                              mEngineSerial = 0;
 };
