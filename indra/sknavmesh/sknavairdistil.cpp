@@ -210,7 +210,9 @@ namespace sknav
                             a.mCeilMax = std::max(a.mCeilMax, o.mCeilMax);
                             a.mClear = std::min(a.mClear, o.mClear);
                         }
-                        ok = ok && a.mFloorMax - a.mFloorMin <= climb && a.mCeilMax - a.mCeilMin <= climb;
+                        // A leaf's record is the highest floor under the lowest ceiling, so those must not cross.
+                        ok = ok && a.mFloorMax - a.mFloorMin <= climb && a.mCeilMax - a.mCeilMin <= climb &&
+                             ((a.mFlags & AirGap::OPEN) || a.mFloorMax < a.mCeilMin);
                         l.mGaps.push_back(a);
                     }
                     if (!ok)
