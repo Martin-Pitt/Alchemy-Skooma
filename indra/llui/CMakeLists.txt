@@ -359,6 +359,7 @@ target_sources(
         alsnippetsession.h
         alfindings.h
         alanchoredranges.h
+        alfenwicktree.h
         alfindbar.h
         alkeycapture.h
         alkeychord.h
@@ -483,6 +484,7 @@ if(AL_BUILD_TESTS)
   al_add_test(alkeymap UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextdiff UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(alanchoredranges PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
+  al_add_test(alfenwicktree PROJECT llui LIBRARIES ${test_libs})
   al_add_test(allinetable PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextdocument UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextundo UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
@@ -610,10 +612,22 @@ if(AL_BUILD_TESTS)
     )
   endforeach()
 
+  # What the text view draws, read back from llrender's hidden window.
+  al_add_test(altextview_gl GL PROJECT llui LIBRARIES ${test_libs})
+
   # The code editor over 50,000-line scripts: what each change to the edit
   # pipeline, the highlighter, the layout, the folds or find is measured by.
   al_add_bench(
     altextengine
+    PROJECT llui
+    LIBRARIES ${test_libs}
+    INCLUDES ${INDRA_SOURCE_DIR}/test
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+  # The same editor drawn, a frame at a time, into llrender's hidden window:
+  # what the drawing steps are measured by.
+  al_add_bench(
+    altextdraw
     PROJECT llui
     LIBRARIES ${test_libs}
     INCLUDES ${INDRA_SOURCE_DIR}/test
