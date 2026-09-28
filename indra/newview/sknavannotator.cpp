@@ -201,14 +201,29 @@ namespace
                                   : agentOf(mark.mVerts.front());
         const LLVector3 b = found ? gAgent.getPosAgentFromGlobal(resolved.mMesh->mOrigin + LLVector3d(resolved.mPortal->mB)) : a;
         const LLVector3 centre = (a + b) * 0.5f;
-        const F32 size = llclamp(0.5f * dist_vec(a, b), 0.35f, 1.5f);
+        const F32 size = llclamp(0.5f * dist_vec(a, b), 0.35f, 2.5f);
         const F32 k = 0.70710678f * size;
-        geom.edge(centre - LLVector3(k, k, 0.f), centre + LLVector3(k, k, 0.f), color);
-        geom.edge(centre - LLVector3(k, -k, 0.f), centre + LLVector3(k, -k, 0.f), color);
+        LLVector3 run(b - a);
+        if (run.magVecSquared() > 1e-8f)
+        {
+            // The X sits at forty-five degrees to the run, so it reads as a
+            // strike whatever way the cut faces.
+            run.normalize();
+            const LLVector3 across(-run.mV[VY], run.mV[VX], 0.f);
+            const LLVector3 arm = (run + across) * k;
+            const LLVector3 arm2 = (run - across) * k;
+            geom.edge(centre - arm, centre + arm, color);
+            geom.edge(centre - arm2, centre + arm2, color);
+        }
+        else
+        {
+            geom.edge(centre - LLVector3(k, k, 0.f), centre + LLVector3(k, k, 0.f), color);
+            geom.edge(centre - LLVector3(k, -k, 0.f), centre + LLVector3(k, -k, 0.f), color);
+        }
         if (found)
         {
-            cross(geom, a, 0.12f, color);
-            cross(geom, b, 0.12f, color);
+            cross(geom, a, 0.18f, color);
+            cross(geom, b, 0.18f, color);
         }
         else
         {
@@ -303,7 +318,7 @@ void SKNavAnnotator::hoverPortal(S32 x, S32 y)
     // pixels of it. Ends behind the camera would fold back onto the view,
     // so a run both of whose ends are behind is skipped.
     static constexpr S32 REACH_PX = 12;
-    S32 best = REACH_PX * REACH_PX;
+    F64 best = F64(REACH_PX) * REACH_PX;
     auto inFront = [camera](const LLVector3& agent) { return (agent - camera->getOrigin()) * camera->getAtAxis() > 0.f; };
     for (const SKNavWorldView::Mesh& mesh : view->meshes())
     {
@@ -329,12 +344,15 @@ void SKNavAnnotator::hoverPortal(S32 x, S32 y)
             LLCoordGL pa, pb;
             camera->projectPosAgentToScreen(agent_a, pa, false);
             camera->projectPosAgentToScreen(agent_b, pb, false);
-            const S32 dx = pb.mX - pa.mX, dy = pb.mY - pa.mY;
-            const S32 len2 = dx * dx + dy * dy;
-            S32 t = len2 > 0 ? ((x - pa.mX) * dx + (y - pa.mY) * dy) / len2 : 0;
-            t = llclamp(t, 0, 1);
-            const S32 ex = pa.mX + t * dx - x, ey = pa.mY + t * dy - y;
-            const S32 d = ex * ex + ey * ey;
+            // The closest point of the drawn run to the cursor, in real
+            // numbers: whole-pixel arithmetic would collapse the projection
+            // onto an end, and only the ends would answer.
+            const F64 dx = F64(pb.mX) - pa.mX, dy = F64(pb.mY) - pa.mY;
+            const F64 len2 = dx * dx + dy * dy;
+            F64 t = len2 > 0.0 ? ((F64(x) - pa.mX) * dx + (F64(y) - pa.mY) * dy) / len2 : 0.0;
+            t = llclamp(t, 0.0, 1.0);
+            const F64 ex = pa.mX + t * dx - x, ey = pa.mY + t * dy - y;
+            const F64 d = ex * ex + ey * ey;
             if (d < best)
             {
                 best = d;
@@ -344,10 +362,12 @@ void SKNavAnnotator::hoverPortal(S32 x, S32 y)
                 mHoverPortal.mCentre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
                 mHoverPortal.mA = a;
                 mHoverPortal.mB = b;
+                mHoverPortal.mKind = portalKindName(portal.mKind);
+                mHoverPortal.mWidth = portal.mWidth;
             }
         }
     }
-    mHoverPortal.mValid = mHoverPortal.mSpaces[0] && mHoverPortal.mSpaces[1] && best < REACH_PX * REACH_PX;
+    mHoverPortal.mValid = mHoverPortal.mSpaces[0] && mHoverPortal.mSpaces[1] && best < F64(REACH_PX) * REACH_PX;
 }
 
 bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const
@@ -361,6 +381,17 @@ bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b)
         }
     }
     return false;
+}
+
+void SKNavAnnotator::clickPortal()
+{
+    if (!mArmed || !mHoverPortal.mValid)
+    {
+        return;
+    }
+    // The mark's vertex sits on the cut itself: a click through open air
+    // never met a surface to land on.
+    togglePortal(mHoverPortal, mHoverPortal.mCentre);
 }
 
 void SKNavAnnotator::togglePortal(const HoverPortal& portal, const LLVector3d& at)
@@ -384,6 +415,12 @@ void SKNavAnnotator::togglePortal(const HoverPortal& portal, const LLVector3d& a
     mark.mSpaceIds[0] = portal.mSpaces[0];
     mark.mSpaceIds[1] = portal.mSpaces[1];
     mark.mPortalCentre = portal.mCentre;
+    // The cut says what it is while the note says nothing of its own: its
+    // kind and width, and the two spaces it joined.
+    if (mark.mText.empty())
+    {
+        mark.mText = llformat("%s, %.2f m, spaces %u-%u", portal.mKind, portal.mWidth, portal.mSpaces[0], portal.mSpaces[1]);
+    }
     commit(std::move(mark));
 }
 
@@ -391,16 +428,6 @@ void SKNavAnnotator::click(const LLVector3d& at)
 {
     if (!mArmed)
     {
-        return;
-    }
-    if (markTypeKind(mNewType) == MarkKind::PORTAL)
-    {
-        // Crossing out: the hovered portal toggles, and nothing is half
-        // placed.
-        if (mHoverPortal.mValid)
-        {
-            togglePortal(mHoverPortal, at);
-        }
         return;
     }
     if (mPending.mVerts.empty())
@@ -665,10 +692,17 @@ bool SKToolNavAnnotate::handleMouseDown(S32 x, S32 y, MASK mask)
     }
     // Off the button just pressed, so Enter and Esc reach the tool.
     gFocusMgr.setKeyboardFocus(nullptr);
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // The hovered cut toggles whether or not the world behind it picked.
+        annotator.clickPortal();
+        return true;
+    }
     LLVector3d at;
     if (pick(x, y, at))
     {
-        SKNavAnnotator::instance().click(at);
+        annotator.click(at);
     }
     return true;
 }

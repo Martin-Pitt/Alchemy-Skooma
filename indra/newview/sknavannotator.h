@@ -78,6 +78,9 @@ public:
     /// drawn one to the cursor, by the spaces overlay's own reach. False in
     /// it when there is none.
     void hoverPortal(S32 x, S32 y);
+    /// Strike or restore the portal under the cursor, whether or not the
+    /// world behind it picked: cuts sit in open air as often as not.
+    void clickPortal();
     /// Whether a portal mark crosses the cut between these two spaces of a
     /// mesh, either way round. What the spaces overlay asks while it draws.
     bool portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const;
@@ -98,6 +101,8 @@ private:
         LLVector3d mCentre;         ///< the cut's centre, global, at the sill
         LLVector3d mA;
         LLVector3d mB;              ///< the cut's ends, global, lifted for drawing
+        const char* mKind = "";     ///< door, stair or opening
+        F32 mWidth = 0.f;
     };
 
     void commit(sknav::Mark mark);
