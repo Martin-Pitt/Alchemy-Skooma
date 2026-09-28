@@ -43,8 +43,10 @@
 #include <tailslide/visitor.hh>
 
 #include <algorithm>
-#include <set>
 #include <cstring>
+#include <mutex>
+#include <optional>
+#include <set>
 
 namespace
 {
@@ -316,8 +318,31 @@ namespace
     }
 
     // Every identifier bound to a symbol, by what the symbol is.
-    struct Semantics final : public Tailslide::ASTVisitor
+    // A visitor that passes over the globals, functions and states lying
+    // wholly within lines nobody reads -- an include's -- rather than
+    // going down into them. Tailslide's lines count from one.
+    struct PassingOver : public Tailslide::ASTVisitor
     {
+        using Tailslide::ASTVisitor::visit;
+        const std::vector<std::pair<S32, S32>>* passedOver = nullptr;
+
+        bool read(Tailslide::LSLASTNode* node) const
+        {
+            if (!passedOver || passedOver->empty())
+            {
+                return true;
+            }
+            const Tailslide::YYLTYPE* loc = node->getLoc();
+            return !ALSourceMap::within(*passedOver, zeroBased(loc->first_line), zeroBased(loc->last_line));
+        }
+        bool visit(Tailslide::LSLGlobalVariable* node) override { return read(node); }
+        bool visit(Tailslide::LSLGlobalFunction* node) override { return read(node); }
+        bool visit(Tailslide::LSLState* node) override { return read(node); }
+    };
+
+    struct Semantics final : public PassingOver
+    {
+        using PassingOver::visit;
         std::vector<ALScriptSemanticToken> out;
 
         bool visit(Tailslide::LSLIdentifier* identifier) override
@@ -359,8 +384,9 @@ namespace
     };
 
     // Each argument of each call, by the parameter it fills.
-    struct Hints final : public Tailslide::ASTVisitor
+    struct Hints final : public PassingOver
     {
+        using PassingOver::visit;
         std::vector<ALScriptInlayHint> out;
 
         bool visit(Tailslide::LSLFunctionExpression* call) override
@@ -768,7 +794,9 @@ namespace
     // where it is missing, rather than on the next line's brace -- and
     // anything else is unexpected, with what was wanted where it says.
     // Keyed, as the map's messages are, for the studio to translate.
-    void plainSyntaxError(std::string_view source, ALScriptProblem& problem)
+    // `lexed` is the text lexed, once for all its syntax errors, made the
+    // first time one wants it.
+    void plainSyntaxError(std::string_view source, ALScriptProblem& problem, std::optional<Lexed>& lexed_once)
     {
         const std::string& said = problem.message;
         const std::string  UNEXPECTED("syntax error, unexpected ");
@@ -793,7 +821,11 @@ namespace
         // The last character before where the parser stopped, past blanks
         // and comments, and whether nothing but blanks is before the stop
         // on its line.
-        const Lexed  lexed   = lex(source);
+        if (!lexed_once)
+        {
+            lexed_once = lex(source);
+        }
+        const Lexed& lexed   = *lexed_once;
         const size_t stopped = std::min(offsetOf(source, problem.line, problem.column), source.size());
         size_t       before  = stopped;
         while (before > 0 && (lexed.code[before - 1] == COMMENT_BYTE || isspace(static_cast<unsigned char>(source[before - 1]))))
@@ -902,7 +934,133 @@ namespace
     // The names in scope at a place, as a name there could be spelt: the
     // script's own -- a local only from where it is declared -- and, with
     // `builtins`, the language's functions and constants.
-    std::vector<std::string> namesAt(Tailslide::LSLScript* script, Tailslide::LSLSymbolTable* builtins, S32 line, S32 column)
+    // The builtins' names that can be misspelt -- functions and constants
+    // -- listed once: the table is the process's, loaded once, and some two
+    // thousand names were listed again for every name not known.
+    std::string declared(Tailslide::LSLType* type);
+
+    // A handler's parameters written as its event takes them -- the types
+    // the builtins say, and the names the handler gave them where it gave
+    // them -- where they are wrong, too many, too few, or one has no type.
+    // Over the bracket after the event's name, where the list closes on
+    // its line.
+    void offerEventParameters(ALScriptProblem& problem, const ALScriptFixes::Lines& lines, Tailslide::LSLSymbolTable* builtins)
+    {
+        const std::string_view line = lines.line(problem.line);
+        std::string            event;
+        size_t                 open = std::string_view::npos;
+        if (problem.key == "LSLArgumentWrongTypeEvent" && problem.args.size() == 5)
+        {
+            event = problem.args[2];
+        }
+        else if ((problem.key == "LSLTooManyArgumentsEvent" || problem.key == "LSLTooFewArgumentsEvent") && problem.args.size() == 1)
+        {
+            event = problem.args[0];
+        }
+        else if (problem.key == "LSLParameterUntyped" && problem.column > 0 && static_cast<size_t>(problem.column) <= line.size())
+        {
+            // The name before the bracket the parameter is in.
+            open = line.rfind('(', static_cast<size_t>(problem.column) - 1);
+            size_t name_end = open;
+            while (name_end != std::string_view::npos && name_end > 0 && isspace(static_cast<unsigned char>(line[name_end - 1])))
+            {
+                --name_end;
+            }
+            size_t name_from = name_end == std::string_view::npos ? name_end : name_end;
+            while (name_from != std::string_view::npos && name_from > 0 && identifierByte(line[name_from - 1]))
+            {
+                --name_from;
+            }
+            if (open != std::string_view::npos && name_from < name_end)
+            {
+                event = std::string(line.substr(name_from, name_end - name_from));
+            }
+        }
+        Tailslide::LSLSymbol* symbol = event.empty() || !builtins ? nullptr : builtins->lookup(event.c_str(), Tailslide::SYM_EVENT);
+        if (!symbol || !symbol->getFunctionDecl())
+        {
+            return;
+        }
+        if (open == std::string_view::npos)
+        {
+            const size_t named = line.find(event, static_cast<size_t>(llmax(0, problem.column)));
+            open               = named == std::string_view::npos ? named : line.find('(', named + event.size());
+        }
+        const size_t close = open == std::string_view::npos ? open : line.find(')', open);
+        if (close == std::string_view::npos)
+        {
+            return;
+        }
+        // The names the handler gave, in order: each parameter's last word.
+        std::vector<std::string> given;
+        const std::string_view   inside = line.substr(open + 1, close - open - 1);
+        for (size_t from = 0; from <= inside.size();)
+        {
+            const size_t           comma = inside.find(',', from);
+            const std::string_view one   = inside.substr(from, comma == std::string_view::npos ? std::string_view::npos : comma - from);
+            size_t                 end   = one.find_last_not_of(" \t");
+            size_t                 start = end;
+            while (start != std::string_view::npos && start > 0 && identifierByte(one[start - 1]))
+            {
+                --start;
+            }
+            if (end != std::string_view::npos && identifierByte(one[end]))
+            {
+                given.emplace_back(one.substr(start, end - start + 1));
+            }
+            if (comma == std::string_view::npos)
+            {
+                break;
+            }
+            from = comma + 1;
+        }
+        std::string parameters;
+        size_t      n = 0;
+        for (Tailslide::LSLASTNode* node = symbol->getFunctionDecl()->getChild(0); node; node = node->getNext())
+        {
+            if (node->getNodeType() == Tailslide::NODE_IDENTIFIER)
+            {
+                auto* identifier = static_cast<Tailslide::LSLIdentifier*>(node);
+                parameters += (parameters.empty() ? "" : ", ") + declared(identifier->getType()) + " " + (n < given.size() ? given[n] : identifier->getName());
+                ++n;
+            }
+        }
+        if (parameters == inside)
+        {
+            return;
+        }
+        ALScriptFix fix = ALScriptFixes::titled("ScriptFixEventParameters", "Write the parameters '[1]' takes", { event });
+        fix.preferred   = true;
+        fix.edits.push_back({ problem.line, static_cast<S32>(open) + 1, problem.line, static_cast<S32>(close), parameters });
+        problem.fixes.push_back(std::move(fix));
+    }
+
+    const std::vector<std::string>& builtinNames(Tailslide::LSLSymbolTable* builtins)
+    {
+        static std::mutex                                 lock;
+        static Tailslide::LSLSymbolTable*                 listed = nullptr;
+        static size_t                                     count  = 0;
+        static std::vector<std::string>                   names;
+        const std::lock_guard<std::mutex>                 guard(lock);
+        if (builtins && (builtins != listed || builtins->getMap().size() != count))
+        {
+            names.clear();
+            for (auto& [name, symbol] : builtins->getMap())
+            {
+                if (symbol->getSymbolType() == Tailslide::SYM_FUNCTION || symbol->getSymbolType() == Tailslide::SYM_VARIABLE)
+                {
+                    names.emplace_back(symbol->getName());
+                }
+            }
+            listed = builtins;
+            count  = builtins->getMap().size();
+        }
+        return names;
+    }
+
+    // The script's own names in scope at a place: its globals, and what
+    // encloses the place declared before it. The builtins are builtinNames.
+    std::vector<std::string> namesAt(Tailslide::LSLScript* script, S32 line, S32 column)
     {
         std::vector<std::string>            out;
         std::vector<Tailslide::LSLASTNode*> path;
@@ -918,16 +1076,6 @@ namespace
             for (auto& [name, symbol] : table->getMap())
             {
                 if (!lexical || startsBefore(*symbol->getLoc(), line + 1, column + 1))
-                {
-                    out.emplace_back(symbol->getName());
-                }
-            }
-        }
-        if (builtins)
-        {
-            for (auto& [name, symbol] : builtins->getMap())
-            {
-                if (symbol->getSymbolType() == Tailslide::SYM_FUNCTION || symbol->getSymbolType() == Tailslide::SYM_VARIABLE)
                 {
                     out.emplace_back(symbol->getName());
                 }
@@ -987,9 +1135,8 @@ struct ALLSLService::Impl
         script    = nullptr;
         parsed    = false;
         passesRan = false;
-        mendedParser.reset();
-        mendedFor.clear();
-        mended = nullptr;
+        mendedWhole   = Mended();
+        mendedAtPlace = Mended();
     }
 
     // A script being typed seldom parses -- a call not yet closed, a
@@ -1000,11 +1147,25 @@ struct ALLSLService::Impl
     // parser stops in blanked, and the blocks left open at the end
     // closed. Every position before the caret, and every line after its
     // own, is where it was, so the answers need no translating back.
-    std::unique_ptr<Tailslide::ScopedScriptParser> mendedParser;
-    std::string                                    mendedFor;
-    S32                                            mendedLine   = -1;
-    S32                                            mendedColumn = -1;
-    Tailslide::LSLScript*                          mended       = nullptr;
+    struct Mended
+    {
+        std::unique_ptr<Tailslide::ScopedScriptParser> parser;
+        std::string                                    source;
+        S32                                            line   = -1;
+        S32                                            column = -1;
+        Tailslide::LSLScript*                          script = nullptr;
+    };
+    // Two kept apart: the whole text's, which a check reads, and one
+    // closed at a place, which a question at the caret reads. Each is made
+    // again only when its own text or place moves; one slot for both was
+    // made again at every turn between a check and a question while the
+    // text did not parse.
+    Mended                                         mendedWhole;
+    Mended                                         mendedAtPlace;
+    // How many copies have been mended, for the test that says so.
+    size_t                                         mendings     = 0;
+    // The lines nobody reads the names, hints and fixes of (setPassedOver).
+    std::vector<std::pair<S32, S32>>               passedOver;
     // Whether the last question had a tree to be answered from.
     bool                                           understood   = false;
 
@@ -1018,37 +1179,39 @@ struct ALLSLService::Impl
             understood = true;
             return own;
         }
-        if (mendedParser && mendedFor == source && mendedLine == line && mendedColumn == column)
+        Mended& slot = line >= 0 ? mendedAtPlace : mendedWhole;
+        if (slot.parser && slot.source == source && slot.line == line && slot.column == column)
         {
-            understood = mended != nullptr;
-            return mended;
+            understood = slot.script != nullptr;
+            return slot.script;
         }
-        mendedFor.assign(source);
-        mendedLine   = line;
-        mendedColumn = column;
-        mended       = nullptr;
+        ++mendings;
+        slot.source.assign(source);
+        slot.line        = line;
+        slot.column      = column;
+        slot.script      = nullptr;
         std::string copy = line >= 0 ? closedAt(source, offsetOf(source, line, column)) : std::string(source);
         // Each try blanks a statement or closes the end; a handful mends
         // what one pause in typing leaves, and a text broken in more
         // places than that is left as it is.
         for (int attempt = 0; attempt < 8; ++attempt)
         {
-            mendedParser = std::make_unique<Tailslide::ScopedScriptParser>(nullptr);
-            mended       = mendedParser->parseLSLBytes(copy.data(), static_cast<int>(copy.size()));
-            if (mended)
+            slot.parser = std::make_unique<Tailslide::ScopedScriptParser>(nullptr);
+            slot.script = slot.parser->parseLSLBytes(copy.data(), static_cast<int>(copy.size()));
+            if (slot.script)
             {
-                mended->collectSymbols();
-                mended->determineTypes();
+                slot.script->collectSymbols();
+                slot.script->determineTypes();
                 break;
             }
-            const size_t at = stoppedAt(*mendedParser, copy);
+            const size_t at = stoppedAt(*slot.parser, copy);
             if (at == std::string_view::npos || !mendAt(copy, at))
             {
                 break;
             }
         }
-        understood = mended != nullptr;
-        return mended;
+        understood = slot.script != nullptr;
+        return slot.script;
     }
 };
 
@@ -1059,9 +1222,100 @@ ALLSLService::ALLSLService()
 
 ALLSLService::~ALLSLService() = default;
 
+namespace
+{
+    // What a builtins line declares: a constant's name after its type, an
+    // event's after `event`, a function's after what it returns.
+    std::string builtinNameOf(std::string_view line)
+    {
+        std::vector<std::string_view> words;
+        size_t                        at = 0;
+        while (words.size() < 3 && at < line.size())
+        {
+            const size_t begin = line.find_first_not_of(" \t(),=\r\n", at);
+            if (begin == std::string_view::npos)
+            {
+                break;
+            }
+            const size_t end = line.find_first_of(" \t(),=\r\n", begin);
+            words.push_back(line.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin));
+            at = end == std::string_view::npos ? line.size() : end;
+        }
+        if (words.size() < 2 || line.compare(0, 2, "//") == 0)
+        {
+            return std::string();
+        }
+        return std::string(words[0] == "const" ? (words.size() > 2 ? words[2] : std::string_view()) : words[1]);
+    }
+}
+
 bool ALLSLService::loadBuiltins(const std::string& path, std::string& error)
 {
     AL_SCRIPT_ENGINE_HELD;
+    // Loaded before -- another region's: Tailslide's table is the
+    // process's and is only ever added to, and loading a file again would
+    // put every name in it twice. So what this one declares that the table
+    // lacks is loaded alone, and what both declare stays as first loaded.
+    if (sBuiltinsLoaded)
+    {
+        llifstream in(path, std::ios::in | std::ios::binary);
+        if (!in.is_open())
+        {
+            error = "cannot open " + path;
+            return false;
+        }
+        Tailslide::ScopedScriptParser probe(nullptr);
+        Tailslide::LSLSymbolTable*    table = probe.context.builtins;
+        std::string                   added;
+        std::set<std::string>         names;
+        for (std::string line; std::getline(in, line);)
+        {
+            const std::string name = builtinNameOf(line);
+            if (!name.empty() && table && !table->lookup(name.c_str(), Tailslide::SYM_ANY) && names.insert(name).second)
+            {
+                added += line;
+                added += '\n';
+            }
+        }
+        error.clear();
+        if (added.empty())
+        {
+            return true;
+        }
+        const std::string more = path + ".added";
+        {
+            llofstream out(more, std::ios::out | std::ios::binary | std::ios::trunc);
+            out << added;
+        }
+        Tailslide::tailslide_init_builtins(more.c_str());
+        LLFile::remove(more);
+        // An event new here numbered as the runtime numbers it, or after
+        // every event there already was: those numbered before keep theirs.
+        int last = 0;
+        std::vector<Tailslide::LSLSymbol*> fresh;
+        for (auto& [name, symbol] : table->getMap())
+        {
+            if (symbol->getSymbolType() != Tailslide::SYM_EVENT)
+            {
+                continue;
+            }
+            if (names.count(symbol->getName()))
+            {
+                fresh.push_back(symbol);
+            }
+            else
+            {
+                last = std::max(last, symbol->getEventIndex());
+            }
+        }
+        for (Tailslide::LSLSymbol* symbol : fresh)
+        {
+            const int index = Luau::lslEventIndex(symbol->getName());
+            symbol->setEventIndex(index > 0 ? index : ++last);
+        }
+        mImpl->builtins = true;
+        return true;
+    }
     // A file that is not there has nothing loaded, which is said here: the
     // file is opened first. A line Tailslide cannot read -- a type it does
     // not know, a constant it cannot parse, blanks -- it says so on stderr
@@ -1124,6 +1378,16 @@ bool ALLSLService::understood() const
     return mImpl->understood;
 }
 
+size_t ALLSLService::mendings() const
+{
+    return mImpl->mendings;
+}
+
+void ALLSLService::setPassedOver(std::vector<std::pair<S32, S32>> lines)
+{
+    mImpl->passedOver = std::move(lines);
+}
+
 bool ALLSLService::hasBuiltins() const
 {
     return mImpl->builtins;
@@ -1137,6 +1401,7 @@ bool ALLSLService::builtinsLoaded()
 
 ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     // The passes in the order Tailslide's own tool runs them. The tree is
     // checked even after errors: the messages are the point here, and the
@@ -1164,6 +1429,8 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
     Tailslide::ScopedScriptParser& parser = *mImpl->parser;
 
     ALScriptProblems problems;
+    // The text lexed once for every syntax error, where there is one.
+    std::optional<Lexed> lexed;
     for (Tailslide::LogMessage* message : parser.logger.getMessages())
     {
         ALScriptProblem problem;
@@ -1205,7 +1472,7 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
         ALMessageMap::Match known;
         if (code == Tailslide::E_SYNTAX_ERROR)
         {
-            plainSyntaxError(source, problem);
+            plainSyntaxError(source, problem, lexed);
         }
         else if (ALMessageMap::lsl(static_cast<int>(code), problem.message, known))
         {
@@ -1216,13 +1483,20 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
     }
     // A name it does not know changed to the nearest it does, where one is
     // near: Tailslide suggested one itself once, and no longer does.
+    // The text's lines found once, for every fix offered over it; and a
+    // problem wholly in lines nobody reads offered none.
+    const ALScriptFixes::Lines lines(source);
+    const auto                 passedOver = [this](const ALScriptProblem& problem) {
+        return ALSourceMap::within(mImpl->passedOver, problem.line, std::max(problem.line, problem.endLine));
+    };
     if (script)
     {
         for (ALScriptProblem& problem : problems)
         {
-            if (problem.key == "LSLUndeclared" && problem.args.size() == 1)
+            if (problem.key == "LSLUndeclared" && problem.args.size() == 1 && !passedOver(problem))
             {
-                ALScriptFixes::offerNames(problem, source, problem.args[0], namesAt(script, parser.context.builtins, problem.line, problem.column));
+                ALScriptFixes::offerNames(problem, lines, problem.args[0], namesAt(script, problem.line, problem.column),
+                                          builtinNames(parser.context.builtins));
             }
         }
     }
@@ -1233,7 +1507,7 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
     {
         for (ALScriptProblem& problem : problems)
         {
-            if (problem.key != "LSLDeclaredButNotUsed" || problem.args.size() != 2)
+            if (problem.key != "LSLDeclaredButNotUsed" || problem.args.size() != 2 || passedOver(problem))
             {
                 continue;
             }
@@ -1245,18 +1519,26 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
             if (declaration->getNodeSubType() == Tailslide::NODE_DECLARATION)
             {
                 Tailslide::LSLASTNode* given = declaration->getChild(1);
-                if (given && given->getNodeType() != Tailslide::NODE_NULL && !ALLSLTraits::sideEffectFree(given))
+                if (given && given->getNodeType() != Tailslide::NODE_NULL && !ALLSLTraits::changesNothing(given))
                 {
                     continue;
                 }
             }
             const Tailslide::YYLTYPE* loc = declaration->getLoc();
-            ALScriptFixes::offerRemoval(problem, source, zeroBased(loc->first_line), zeroBased(loc->first_column), zeroBased(loc->last_line),
+            ALScriptFixes::offerRemoval(problem, lines, zeroBased(loc->first_line), zeroBased(loc->first_column), zeroBased(loc->last_line),
                                         zeroBased(loc->last_column), problem.args[1]);
         }
     }
+    // An event's parameters as it takes them, which the builtins know.
+    for (ALScriptProblem& problem : problems)
+    {
+        if (!passedOver(problem))
+        {
+            offerEventParameters(problem, lines, parser.context.builtins);
+        }
+    }
     // What would put each right, where its words and its place say.
-    ALScriptFixes::attach(problems, source, false);
+    ALScriptFixes::attach(problems, lines, false, mImpl->passedOver);
     return problems;
 }
 
@@ -1264,6 +1546,7 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
 
 std::vector<ALScriptCompletion> ALLSLService::symbols(std::string_view source, S32 line, S32 column)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source, line, column);
     std::vector<ALScriptCompletion> out;
@@ -1309,6 +1592,7 @@ std::vector<ALScriptCompletion> ALLSLService::symbols(std::string_view source, S
 
 ALScriptHover ALLSLService::hover(std::string_view source, S32 line, S32 column)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source);
     ALScriptHover                 answer;
@@ -1347,6 +1631,7 @@ ALScriptHover ALLSLService::hover(std::string_view source, S32 line, S32 column)
 
 ALScriptSignature ALLSLService::signature(std::string_view source, S32 line, S32 column)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source, line, column);
     ALScriptSignature             answer;
@@ -1402,6 +1687,7 @@ ALScriptSignature ALLSLService::signature(std::string_view source, S32 line, S32
 
 ALScriptReferences ALLSLService::references(std::string_view source, S32 line, S32 column)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source);
     ALScriptReferences            answer;
@@ -1438,6 +1724,7 @@ ALScriptReferences ALLSLService::references(std::string_view source, S32 line, S
 
 std::vector<ALScriptOutlineEntry> ALLSLService::outline(std::string_view source)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source);
     std::vector<ALScriptOutlineEntry> out;
@@ -1503,6 +1790,7 @@ std::vector<ALScriptOutlineEntry> ALLSLService::outline(std::string_view source)
 
 std::vector<ALScriptSemanticToken> ALLSLService::semanticTokens(std::string_view source)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     Tailslide::LSLScript* script = mImpl->understand(source);
     if (!script)
@@ -1510,6 +1798,7 @@ std::vector<ALScriptSemanticToken> ALLSLService::semanticTokens(std::string_view
         return {};
     }
     Semantics semantics;
+    semantics.passedOver = &mImpl->passedOver;
     script->visit(&semantics);
     std::vector<ALScriptSemanticToken>& out = semantics.out;
     std::stable_sort(out.begin(), out.end());
@@ -1522,6 +1811,7 @@ std::vector<ALScriptSemanticToken> ALLSLService::semanticTokens(std::string_view
 
 std::vector<ALScriptInlayHint> ALLSLService::inlayHints(std::string_view source, bool parameters)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     if (!parameters)
     {
@@ -1533,6 +1823,7 @@ std::vector<ALScriptInlayHint> ALLSLService::inlayHints(std::string_view source,
         return {};
     }
     Hints hints;
+    hints.passedOver = &mImpl->passedOver;
     script->visit(&hints);
     std::stable_sort(hints.out.begin(), hints.out.end());
     return std::move(hints.out);
@@ -1841,6 +2132,7 @@ namespace
 
 std::vector<ALScriptFix> ALLSLService::actions(std::string_view source, S32 line, S32 column, S32 endLine, S32 endColumn)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_SCRIPTDEV;
     AL_SCRIPT_ENGINE_HELD;
     std::vector<ALScriptFix> out;
     Tailslide::LSLScript*    script = mImpl->resolve(source);

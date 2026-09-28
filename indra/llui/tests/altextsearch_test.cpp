@@ -28,6 +28,9 @@
 
 #include "../test/lltut.h"
 
+#include <atomic>
+#include <thread>
+
 #include <string>
 
 namespace tut
@@ -270,5 +273,83 @@ namespace tut
         const ALTextRange first(ALTextPos(0, 0), ALTextPos(0, 3));
         ensure_equals("a look past the stretch's end sees what is there", said(ALTextSearch::matches(doc, "foo(?= bar)", options, &first)), std::string("0:0-3"));
         ensure("and a match past it is not in it", ALTextSearch::matches(doc, "foo bar", options, &first).empty());
+    }
+
+    template<> template<>
+    void altextsearch_object::test<11>()
+    {
+        set_test_name("patterns kept a few at once: several asked for in turn each answer as their own, searched on two threads at once");
+        const ALTextDocument doc("alpha beta\ngamma alpha\nbeta beta\n");
+        ALTextSearchOptions  regex;
+        regex.regex = true;
+        for (int round = 0; round < 20; ++round)
+        {
+            ensure_equals("alpha", ALTextSearch::matches(doc, "al\\w+", regex).size(), size_t(2));
+            ensure_equals("beta", ALTextSearch::matches(doc, "be\\w+", regex).size(), size_t(3));
+            ensure_equals("gamma", ALTextSearch::matches(doc, "ga\\w+", regex).size(), size_t(1));
+        }
+        std::string bad;
+        ALTextSearch::matches(doc, "(", regex, nullptr, &bad);
+        ensure("a pattern that does not read, said", !bad.empty());
+        bad.clear();
+        ALTextSearch::matches(doc, "(", regex, nullptr, &bad);
+        ensure("and said again, kept as it is", !bad.empty());
+        std::atomic<bool> wrong{ false };
+        std::thread other([&]() {
+            for (int round = 0; round < 200; ++round)
+            {
+                wrong = wrong || ALTextSearch::matches(doc, "be\\w+", regex).size() != 3;
+            }
+        });
+        for (int round = 0; round < 200; ++round)
+        {
+            wrong = wrong || ALTextSearch::matches(doc, "al\\w+|ga\\w+", regex).size() != 3;
+        }
+        other.join();
+        ensure("each thread its own answers", !wrong);
+    }
+
+    template<> template<>
+    void altextsearch_object::test<12>()
+    {
+        set_test_name("what replaces each match is made as it is found, the same as one match's replacement worked out over it again");
+        const ALTextDocument doc("Hello hello HELLO\nfoo(1) bar (2)\nx = foo(3)\n");
+        struct Case
+        {
+            const char* query;
+            const char* with;
+            bool        regex, preserve, across;
+        };
+        const Case cases[] = {
+            { "(\\w+)\\s*\\((\\d)\\)", "$2:$1", true, false, false },
+            { "(?<=\\s)\\w+$", "[$&]", true, false, false },
+            { "\\)\\n(\\w)", ")+$1", true, false, true },
+            { "hello", "bye", false, true, false },
+            { "h(e)llo", "\\U$1", true, true, false },
+        };
+        for (const Case& one : cases)
+        {
+            ALTextSearchOptions options;
+            options.regex        = one.regex;
+            options.preserveCase = one.preserve;
+            options.acrossLines  = one.across;
+            const auto made      = ALTextSearch::replacements(doc, one.query, options, one.with);
+            const auto matches   = ALTextSearch::matches(doc, one.query, options);
+            ensure_equals(std::string(one.query) + ": as many", made.size(), matches.size());
+            ensure(std::string(one.query) + ": found at all", !made.empty());
+            for (size_t i = 0; i < made.size(); ++i)
+            {
+                ensure(std::string(one.query) + ": the same place", made[i].first == matches[i]);
+                ensure_equals(std::string(one.query) + ": the same text", made[i].second, ALTextSearch::replacement(doc, matches[i], one.query, options, one.with));
+            }
+        }
+        // Within a stretch, a look ahead past its end still seen.
+        ALTextSearchOptions regex;
+        regex.regex             = true;
+        const ALTextRange scope(ALTextPos(1, 0), ALTextPos(1, 3));
+        const auto        held = ALTextSearch::replacements(doc, "foo(?=\\()", regex, "<$&>", &scope);
+        ensure("held to the stretch", held.size() == 1 && held[0].second == "<foo>");
+        std::string bad;
+        ensure("a pattern that does not read makes none", ALTextSearch::replacements(doc, "(", regex, "x", nullptr, &bad).empty() && !bad.empty());
     }
 }
