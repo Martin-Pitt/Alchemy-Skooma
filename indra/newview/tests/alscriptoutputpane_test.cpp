@@ -55,6 +55,7 @@ namespace
             std::string file;
             S32         line   = -1;
             S32         column = -1;
+            bool        running = false;
         };
 
         bool outputInSight() const override { return inSight; }
@@ -62,9 +63,9 @@ namespace
         bool ownsObject(const LLUUID& root) const override { return owned.count(root) > 0; }
         void outputAction(ALScriptStudioDoc& doc, const std::string& action) override { actions.push_back(doc.id + ":" + action); }
         void outputShowDoc(ALScriptStudioDoc& doc, bool problems) override { shown.push_back(doc.id + (problems ? ":problems" : "")); }
-        void outputGoTo(const ALScriptRef& ref, const std::string& name, S32 line, S32 column) override
+        void outputGoTo(const ALScriptRef& ref, const std::string& name, S32 line, S32 column, bool running) override
         {
-            went.push_back({ ref, name, std::string(), line, column });
+            went.push_back({ ref, name, std::string(), line, column, running });
         }
         void outputGoToInclude(const std::string& file, const std::string& file_name, S32 line, S32 column) override
         {
@@ -382,12 +383,50 @@ namespace tut
         ensure_equals("two places gone to", studio.went.size(), size_t(2));
         ensure("the script", studio.went[0].ref == ALScriptRef(object, item) && studio.went[0].file.empty());
         ensure_equals("at the error's line", studio.went[0].line, 4);
+        ensure("read back already", !studio.went[0].running);
         ensure_equals("the include", studio.went[1].file, std::string("disk:/scripts/lib.luau"));
         ensure_equals("by its name", studio.went[1].name, std::string("lib.luau"));
         ensure_equals("at the frame's line", studio.went[1].line, 2);
 
-        // Not open here: the line the run names, as it named it.
+        // Not open here: the line the run names, as it named it, and a
+        // link that says so, for the window to read back once it can.
         services.docs.clear();
         ensure_equals("as said", out.heard(error).line, 7);
+        chosen = last();
+        out.choose(chosen);
+        ensure("gone to as the region counts it", studio.went.back().line == 7 && studio.went.back().running);
+    }
+
+    template<> template<>
+    void alscriptoutputpane_object::test<7>()
+    {
+        set_test_name("a run's line counted with the envelope's lines above the code, as the region counts it, read back through the code");
+        ALScriptOutputPane& out    = make();
+        const LLUUID        object = fresh();
+        const LLUUID        item   = fresh();
+        ALSourceMap map;
+        map.addFile("script", "script");
+        for (S32 line = 0; line < 10; ++line)
+        {
+            ALSourceMap::Segment segment;
+            segment.outLine = line;
+            segment.length  = 20;
+            segment.line    = line + 100;
+            map.add(segment);
+        }
+        map.finish();
+        ALScriptStudioDoc& doc = services.addDoc("counter", ALScriptRef(object, item), "Counter");
+        doc.uploaded.valid     = true;
+        doc.uploaded.map       = map;
+        ALScriptEnvelope envelope;
+        envelope.lua           = true;
+        envelope.source        = "one\ntwo\nthree";
+        envelope.expanded      = "code\n";
+        envelope.compileTarget = "luau";
+        doc.envelope           = envelope;
+        const S32 under        = envelope.codeLine();
+        ensure("the envelope has lines of its own", under > 3);
+        ensure_equals("its code's third line, where the region names it", out.heard(failed(object, item, "Counter", "attempt to index nil", under + 2)).line, 102);
+        ensure_equals("a line in the envelope is none of the code's: as said", out.heard(failed(object, item, "Counter", "boom", 1)).line, 1);
     }
 }
