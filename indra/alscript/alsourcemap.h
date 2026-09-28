@@ -28,6 +28,7 @@
 #include "stdtypes.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The map between a preprocessed text and the files it was made from: for
@@ -80,7 +81,10 @@ public:
     // The file with that identity, or -1.
     S32                      fileOf(const std::string& path) const;
 
-    // Segments arrive in output order.
+    // Segments arrive in output order. A verbatim one that carries on from
+    // the last -- the same line of both, the next column of each -- makes
+    // it longer rather than being a segment of its own: text copied as it
+    // stands is one segment, however many tokens it was.
     void add(const Segment& segment);
     // Builds the indexes; nothing answers until it has been called.
     void finish();
@@ -107,14 +111,30 @@ public:
     // it stands at, so that the blanks before it are the source's own: what
     // an insertion at the line's start may be made to the source as.
     bool lineStart(S32 line, Loc& at) const;
+    // The output lines every piece of which came from another file than
+    // the script's own -- what an include put there -- as runs of first
+    // and last line: what the studio shows nothing of, so that what is
+    // worked out for them can be passed over. A line with nothing mapped,
+    // or any of the script's own on it, is not among them.
+    std::vector<std::pair<S32, S32>> othersLines() const;
+    // Whether lines first to last all lie within one of such runs.
+    static bool within(const std::vector<std::pair<S32, S32>>& runs, S32 first, S32 last);
 
     // This map over another: this one's origins are positions in the text
     // the other maps, so the result maps this one's output straight to
     // the other's files. A segment whose origin the other map has nothing
-    // for is dropped.
+    // for is dropped; a verbatim one over several of the other's is read
+    // through each in turn.
     ALSourceMap composed(const ALSourceMap& inner) const;
+    // Every line of a text mapped to itself, as one file of that name:
+    // what the map of a text nothing was done to is.
+    static ALSourceMap identity(std::string_view text, const std::string& name = std::string());
 
 private:
+    // The last segment on an output line that starts at or before the
+    // column, else the line's first; npos for a line with none.
+    size_t segmentAt(S32 line, S32 column) const;
+
     std::vector<File>        mFiles;
     std::vector<Segment>     mSegments;
     // The first segment of each output line, by line; and every segment
