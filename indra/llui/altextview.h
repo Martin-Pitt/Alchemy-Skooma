@@ -82,6 +82,11 @@ class LLContextMenu;
 // and offers the dictionary's suggestions on the right-click menu.
 class ALTextView;
 
+namespace ll_test
+{
+    struct TextViewProbe;
+}
+
 // A keymap with a mind of its own -- a vim mode -- told each key and each
 // character typed before the plain keymap and the text see them, keeping
 // whatever state it needs and working the view through what it exposes.
@@ -123,6 +128,10 @@ public:
 
 class ALTextView : public LLUICtrl, public LLEditMenuHandler, public LLSpellCheckMenuHandler, protected LLPreeditor
 {
+    // What a test asks of how a row is coloured, without that being any
+    // more of what the view offers.
+    friend struct ll_test::TextViewProbe;
+
 public:
     AL_VIEW_TYPE(ALTextView, LLUICtrl);
 
@@ -786,8 +795,12 @@ protected:
     // The x span of a range on a row, if it touches the row; a range past
     // the line's end reaches a little past the last glyph.
     bool spanOnRow(S32 line, S32 row, const ALTextRange& range, F32& x0, F32& x1);
-    // A wavy line from x0 to x1 with its middle at y.
-    void drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color);
+    // A row cut down to what of it is in sight across the text, scrolled as
+    // it is: all that a long line draws of itself.
+    ALTextLayout::Row rowInSight(const ALTextLayout::Line& laid, const ALTextLayout::Row& row, const LLRect& text) const;
+    // A wavy line from x0 to x1 with its middle at y, as much of it as is
+    // within `clip`'s sides.
+    static void drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip);
     // Something was asked about the name at the caret: its definition,
     // its references, a new name; whether it could be.
     virtual bool performSymbol(ALEditorCommand command) { return false; }
@@ -1000,6 +1013,15 @@ private:
     F32          mDesiredX = -1.f;
     S32          mScrollY  = 0;
     F32          mScrollX  = 0.f;
+    // The line the top of the view is on and how far into it, and the
+    // layout's heights they were taken under: where heights above the view
+    // change -- a line wrapped, shown or laid out for the first time --
+    // the view keeps to its line rather than to its pixel, so the text
+    // does not move under the reader. A scroll asked for since stands.
+    S32          mAnchorLine    = 0;
+    S32          mAnchorOffset  = 0;
+    U32          mAnchorHeights = 0;
+    bool         mScrollAsked   = true;
     // What a wheel moved that did not make a whole pixel yet.
     F32          mWheelRemainder = 0.f;
     std::function<void(S32)> mZoomWheel;
@@ -1121,5 +1143,4 @@ private:
     std::string                             mPlaceholder;
     LLFrameTimer                            mSpellTimer;
     boost::signals2::scoped_connection      mSpellSettingsConnection;
-    std::vector<LLVector2>                  mSquiggleScratch;
 };
