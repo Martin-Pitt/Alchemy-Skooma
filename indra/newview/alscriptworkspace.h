@@ -32,6 +32,7 @@
 #include "llsingleton.h"
 #include "lluuid.h"
 
+#include <boost/container_hash/hash.hpp>
 #include <boost/signals2.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 
@@ -47,6 +48,7 @@
 
 class ALScriptContentsIndex;
 class ALScriptTempFiles;
+class ALSourceMap;
 class LLChat;
 class LLEventTimer;
 class LLInventoryItem;
@@ -79,6 +81,13 @@ struct ALScriptRef
 
     friend bool operator==(const ALScriptRef& a, const ALScriptRef& b) { return a.object == b.object && a.item == b.item; }
     friend bool operator!=(const ALScriptRef& a, const ALScriptRef& b) { return !(a == b); }
+    // For a map by it.
+    friend size_t hash_value(const ALScriptRef& ref) noexcept
+    {
+        size_t seed = hash_value(ref.object);
+        boost::hash_combine(seed, hash_value(ref.item));
+        return seed;
+    }
 };
 
 // What a script is and what happens to it: its language and compile target
@@ -216,6 +225,12 @@ public:
         // Task scripts: the experience it was sent to run under -- the
         // null one for none -- which it runs under now.
         std::optional<LLUUID> experience;
+        // A recompile's, where it went up expanded: the expansion's map,
+        // which the diagnostics are of once the envelope's lines above the
+        // code -- `codeLine` of them -- are taken off. Nothing on a save's:
+        // its sender has the expansion.
+        std::shared_ptr<const ALSourceMap> sourceMap;
+        S32                                codeLine = 0;
     };
     typedef std::function<void(const CompileResult&)> compile_callback_t;
 
@@ -224,10 +239,12 @@ public:
         std::string compileTarget;
         // Task scripts only: whether it runs after the compile, and the
         // experience it runs under -- the null one for none. Not given,
-        // the one it runs under now, asked of the region first: an
-        // upload says an experience whatever, and one that said none
-        // would take it away.
-        bool                  running = true;
+        // each as it is now, asked of the region first: an upload says
+        // both whatever, and one that guessed would start a stopped script
+        // or take an experience away. Whether it runs is the index's word
+        // where it has one; a region that does not answer in a few
+        // seconds leaves it running, as a script newly saved is.
+        std::optional<bool>   running;
         std::optional<LLUUID> experience;
         Sender                sender;
     };
@@ -275,6 +292,10 @@ public:
     {
         std::string             text;
         std::vector<Diagnostic> errors;
+        // Where it went into its envelope: the expansion's map, and the
+        // line of the text the expanded code starts on.
+        std::shared_ptr<const ALSourceMap> map;
+        S32                                codeLine = 0;
     };
     typedef std::function<void(const Prepared&)> prepared_callback_t;
     void prepare(const ALScriptRef& ref, const std::string& name, const LLUUID& asset_id, const std::string& text, bool lua,
@@ -346,7 +367,10 @@ public:
     // The experience a script in an object runs under, asked of its
     // region: the null one for none -- and for a script in the inventory,
     // or a region that keeps no experiences -- and nothing where the
-    // region could not be asked, or did not answer.
+    // region could not be asked, or did not answer. Known for the asset
+    // the item holds -- asked before, or saved from here -- it is answered
+    // at once: a script is put under another experience only by a save,
+    // which gives it another asset.
     typedef std::function<void(const std::optional<LLUUID>&)> experience_callback_t;
     void askExperience(const ALScriptRef& ref, experience_callback_t told);
 
@@ -410,6 +434,12 @@ public:
         std::string name;
         bool        script = true;
         bool        lua    = false;
+        // What the agent may do with it: copy, and change. A script is read
+        // only with both; a notecard with copy alone, and only read without
+        // modify.
+        bool        copy   = true;
+        bool        modify = true;
+        std::string description;
     };
     struct Contents
     {
@@ -458,6 +488,10 @@ public:
     bool create(const LLUUID& prim, bool notecard, bool lua, const std::string& name, created_callback_t callback, std::string& error);
     // A new name for a script or notecard, in an object or in inventory.
     bool rename(const ALScriptRef& ref, const std::string& name, std::string& error);
+    // A new description for one, as the legacy editor's field gives it: at
+    // most what an item's description holds, and refused where the item
+    // or its object may not be changed.
+    bool describe(const ALScriptRef& ref, const std::string& description, std::string& error);
     // A new name for a prim -- an object's is its root prim's -- as the
     // build floater's gives one, whether or not it is selected: refused
     // where it may not be changed, or RLVa keeps it from being edited.
@@ -469,16 +503,22 @@ public:
     // --- what scripts say ------------------------------------------------------
 
     // What an object's scripts say on the debug channel and to their
-    // owner, as the viewer hears it: the lines that arrive together from
-    // one script are one event, and a run-time error is parsed to its
-    // place and its stack for both VMs. The line and the column are
-    // zero-based, or -1 where the message named none.
+    // owner, as the viewer hears it -- and what the agent's own objects
+    // say aloud, to the agent alone, or in an IM: the lines that arrive
+    // together from one script are one event, and a run-time error is
+    // parsed to its place and its stack for both VMs. The line and the
+    // column are zero-based, or -1 where the message named none.
     struct RuntimeEvent
     {
         enum class Channel : U8
         {
             Debug,
-            OwnerSay
+            OwnerSay,
+            // Channel 0, heard by everyone near; llRegionSayTo to the
+            // agent; llInstantMessage.
+            Said,
+            SaidTo,
+            Instant
         };
         // Seconds since the epoch, as LLDate counts them.
         F64         time = 0.0;
@@ -487,6 +527,9 @@ public:
         // The script, where the message named one the prim holds.
         LLUUID      item;
         std::string objectName;
+        // The prim that spoke, where it is not the object's root and the
+        // object's own name is known: the object is then `objectName`.
+        std::string primName;
         std::string scriptName;
         bool        lua     = false;
         Channel     channel = Channel::Debug;
@@ -499,10 +542,11 @@ public:
         std::vector<std::string> stack;
     };
     // Every debug-channel and owner-say line the viewer hears from an
-    // object goes through here. A run-time error's lines arrive one
-    // message at a time; they are joined for a moment before they are
-    // delivered.
-    void ingestChat(const LLChat& chat);
+    // object goes through here, and every line the agent's own objects say
+    // aloud, to the agent alone, or -- `instant` -- in an IM. A run-time
+    // error's lines arrive one message at a time; they are joined for a
+    // moment before they are delivered.
+    void ingestChat(const LLChat& chat, bool instant = false);
     // Whatever is still being joined, delivered as it is.
     void flushRuntime();
     // The last few hundred events, oldest first, for a pane opened late.
@@ -562,6 +606,24 @@ private:
     boost::unordered_flat_map<LLUUID, F64> mRuntimeSince;
     // The one in front is under way; the rest wait for it to end.
     std::vector<std::shared_ptr<Transfer>> mTransfers;
+    // Saves waiting to hear whether a script runs, by (object, item), each
+    // wait numbered so that the timer of an earlier one answers none.
+    struct RunningWait
+    {
+        U32                                              generation = 0;
+        std::vector<std::function<void(std::optional<bool>)>> told;
+    };
+    boost::unordered_flat_map<std::pair<LLUUID, LLUUID>, RunningWait> mRunningWaits;
+    U32                                                              mRunningGeneration = 0;
+    // Whether a script runs: the index's word, or the region asked and
+    // waited for a while; nothing where it could not be asked or did not
+    // answer.
+    void awaitRunning(const ALScriptRef& ref, std::function<void(std::optional<bool>)> told);
+    void answerRunning(const ALScriptRef& ref, std::optional<bool> running, U32 generation = 0);
+    // Each task script's experience as last known, with the asset it was
+    // known for: (object, item) to (asset, experience).
+    boost::unordered_flat_map<std::pair<LLUUID, LLUUID>, std::pair<LLUUID, LLUUID>> mExperiences;
+    void                                knownExperience(const ALScriptRef& ref, const LLUUID& asset, const LLUUID& experience);
     std::vector<LLUUID>                 mOwnExperiences;
     std::vector<experiences_callback_t> mOwnExperiencesWaiting;
     bool                                mOwnExperiencesAsked = false;
