@@ -26,6 +26,7 @@
 
 #include "alstudiofloater.h"
 
+#include "alsurface.h"
 #include "alpopover.h"
 #include "llcontrol.h"
 #include "lleditmenuhandler.h"
@@ -37,7 +38,9 @@
 #include "lluicolortable.h"
 #include "lluictrlfactory.h"
 
+#include <algorithm>
 #include <memory>
+#include <utility>
 
 ALStudioFloater::ALStudioFloater(const LLSD& key, std::string state_setting)
 :   LLFloater(key),
@@ -57,10 +60,175 @@ bool ALStudioFloater::handleMenuAccelerator(KEY key, MASK mask)
     return mMenuBar && mMenuBar->handleAcceleratorKey(key, mask);
 }
 
+void ALStudioFloater::addCommand(const KeyedCommand& command, std::function<bool()> run)
+{
+    mCommands.push_back({ command, std::move(run) });
+}
+
+bool ALStudioFloater::runCommandKey(KEY pressed, MASK mask)
+{
+    if (pressed == KEY_NONE)
+    {
+        return false;
+    }
+    const KEY key = alKeyAsBound(pressed);
+    if (runChord(ALKeyChord{ key, mask }))
+    {
+        return true;
+    }
+    // The first of two: the next key is this window's, wherever the
+    // keyboard is.
+    const bool leads = std::any_of(mCommands.begin(), mCommands.end(), [&](const Registered& one) {
+        const std::vector<ALKeyChord> keys = keysOf(one.command);
+        return std::any_of(keys.begin(), keys.end(), [&](const ALKeyChord& chord) { return chord.ledBy(key, mask); });
+    });
+    if (!leads)
+    {
+        return false;
+    }
+    const LLHandle<LLFloater> handle = getHandle();
+    ALKeyChords::wait(this, key, mask, [handle, key, mask](KEY second, MASK second_mask) {
+        if (ALStudioFloater* window = ALViewType::as<ALStudioFloater>(handle.get()))
+        {
+            window->finishChord(key, mask, second, second_mask);
+        }
+    });
+    if (hasString("ChordWaiting"))
+    {
+        setStatus(getString("ChordWaiting", LLStringUtil::format_map_t{ { "[KEYS]", ALKeyChord{ key, mask }.describe() } }));
+    }
+    return true;
+}
+
+bool ALStudioFloater::runChord(const ALKeyChord& chord)
+{
+    for (const Registered& one : mCommands)
+    {
+        const std::vector<ALKeyChord> keys = keysOf(one.command);
+        if (std::find(keys.begin(), keys.end(), chord) != keys.end() && one.run && one.run())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ALStudioFloater::finishChord(KEY lead_key, MASK lead_mask, KEY key, MASK mask)
+{
+    // The wait said no longer, before the command says anything of its own.
+    if (hasString("ChordWaiting"))
+    {
+        setStatus(std::string());
+    }
+    const ALKeyChord chord{ key, mask, lead_key, lead_mask };
+    const MASK       held = lead_mask & (MASK_CONTROL | MASK_MAC_CONTROL);
+    const bool       was  = std::exchange(mByKeys, true);
+    const bool       ran  = runChord(chord) || (held != MASK_NONE && (mask & held) == held && runChord(ALKeyChord{ key, static_cast<MASK>(mask & ~held), lead_key, lead_mask }));
+    mByKeys               = was;
+    if (ran)
+    {
+        return;
+    }
+    if (hasString("ChordNone"))
+    {
+        setStatus(getString("ChordNone", LLStringUtil::format_map_t{ { "[KEYS]", chord.describe() } }), true);
+    }
+}
+
+bool ALStudioFloater::handleStudioKeys(KEY key, MASK mask)
+{
+    const bool was = std::exchange(mByKeys, true);
+    const bool taken = handleMenuAccelerator(key, mask) || handleUndoKeys(key, mask) || runCommandKey(key, mask);
+    mByKeys = was;
+    return taken;
+}
+
+namespace
+{
+    // Held with Control, Command or Alt: not the modifier on its own, which
+    // is no chord yet.
+    bool isChord(KEY key, MASK mask)
+    {
+        return (mask & (MASK_CONTROL | MASK_ALT | MASK_MAC_CONTROL)) != 0 && key != KEY_CONTROL && key != KEY_ALT && key != KEY_SHIFT;
+    }
+
+    // What a window keeping its chords lets go on: Quit, and moving between
+    // windows, with the Mac's own Control key as the viewer takes it.
+    bool passesOn(KEY key, MASK mask)
+    {
+        return (key == 'Q' && mask == MASK_CONTROL) || (key == KEY_TAB && (mask & (MASK_CONTROL | MASK_MAC_CONTROL)) != 0);
+    }
+}
+
+bool ALStudioFloater::handleKeyHere(KEY key, MASK mask)
+{
+    if (handleStudioKeys(key, mask) || LLFloater::handleKeyHere(key, mask))
+    {
+        return true;
+    }
+    if (!mKeepChords || !isChord(key, mask) || passesOn(key, mask))
+    {
+        return false;
+    }
+    handleEditKeys(key, mask);
+    return true;
+}
+
+bool ALStudioFloater::handleEditKeys(KEY key, MASK mask)
+{
+    // The one the keyboard is in, wherever that window is: the key came
+    // from it, up through this window or home to it.
+    LLEditMenuHandler* text = LLEditMenuHandler::gEditMenuHandler;
+    LLView*            view = text ? text->asView() : nullptr;
+    if (mask != MASK_CONTROL || !view || !gFocusMgr.childHasKeyboardFocus(view))
+    {
+        return false;
+    }
+    switch (key)
+    {
+        case 'X':
+            if (text->canCut())
+            {
+                text->cut();
+            }
+            return true;
+        case 'C':
+            if (text->canCopy())
+            {
+                text->copy();
+            }
+            return true;
+        case 'V':
+            if (text->canPaste())
+            {
+                text->paste();
+            }
+            return true;
+        case 'A':
+            if (text->canSelectAll())
+            {
+                text->selectAll();
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+ALStudioFloater::UndoKey ALStudioFloater::undoKeyOf(KEY key, MASK mask) const
+{
+    if (key == 'Z' && mask == MASK_CONTROL)
+    {
+        return UndoKey::Undo;
+    }
+    return (key == 'Y' && mask == MASK_CONTROL) || (key == 'Z' && mask == (MASK_CONTROL | MASK_SHIFT)) ? UndoKey::Redo : UndoKey::None;
+}
+
 bool ALStudioFloater::handleUndoKeys(KEY key, MASK mask)
 {
-    const bool undo_key = (key == 'Z' && mask == MASK_CONTROL);
-    const bool redo_key = (key == 'Y' && mask == MASK_CONTROL) || (key == 'Z' && mask == (MASK_CONTROL | MASK_SHIFT));
+    const UndoKey which    = undoKeyOf(key, mask);
+    const bool    undo_key = which == UndoKey::Undo;
+    const bool    redo_key = which == UndoKey::Redo;
     if (!undo_key && !redo_key)
     {
         return false;
@@ -107,6 +275,26 @@ void ALStudioFloater::sayUndoRedo(const std::string& undo_what, const std::strin
     }
 }
 
+// static
+void ALStudioFloater::goToStep(size_t target, const std::function<size_t()>& in_force, const std::function<bool()>& back,
+                               const std::function<bool()>& forward, size_t bound)
+{
+    while (in_force() > target && bound-- > 0)
+    {
+        if (!back())
+        {
+            return;
+        }
+    }
+    while (in_force() < target && bound-- > 0)
+    {
+        if (!forward())
+        {
+            return;
+        }
+    }
+}
+
 void ALStudioFloater::showHistory(ALHistoryList* list, std::vector<ALHistoryList::Step> steps, size_t in_force)
 {
     const std::string undo_what = in_force > 0 && in_force <= steps.size() ? steps[in_force - 1].what : std::string();
@@ -130,27 +318,18 @@ ALQuickOpen* ALStudioFloater::quickOpen(std::vector<ALQuickOpen::Candidate> cand
     // of symbols is a jump to the first symbol. A freeform one is another
     // question whatever it asks.
     const std::string question = title + "\n" + placeholder;
-    if (LLView* up = mQuickPopover.get())
+    if (ALPopover* popover = mQuickPopover.get())
     {
-        ALQuickOpen* quick   = up->findChild<ALQuickOpen>("quick_open");
-        ALPopover*   popover = ALViewType::as<ALPopover>(up);
-        if (quick && popover && !quick->freeform() && question == mQuickQuestion)
+        ALQuickOpen* quick = popover->findChild<ALQuickOpen>("quick_open");
+        if (quick && !quick->freeform() && question == mQuickQuestion)
         {
             quick->setCandidates(std::move(candidates));
             answerQuickOpen(popover, quick, std::move(chose), std::move(escaped), std::move(hold), std::move(left));
             quick->takeFocus();
             return quick;
         }
-        if (popover)
-        {
-            popover->escape();
-        }
-        else
-        {
-            up->die();
-        }
     }
-    mQuickPopover.markDead();
+    mQuickPopover.close();
 
     constexpr S32 WIDTH = 460;
     constexpr S32 HEIGHT = 300;
@@ -170,7 +349,6 @@ ALQuickOpen* ALStudioFloater::quickOpen(std::vector<ALQuickOpen::Candidate> cand
     {
         return nullptr;
     }
-    mQuickPopover  = popover->getHandle();
     mQuickQuestion = question;
     answerQuickOpen(popover, quick, std::move(chose), std::move(escaped), std::move(hold), std::move(left));
     quick->takeFocus();
@@ -212,12 +390,7 @@ void ALStudioFloater::answerQuickOpen(ALPopover* popover, ALQuickOpen* quick, st
             hold(value);
         });
     }
-    const LLHandle<LLFloater> home = getHandle();
-    mQuickClosed = popover->onClosed([home, answered, escaped = std::move(escaped), left = std::move(left)](bool was_escaped) {
-        if (ALStudioFloater* studio = ALViewType::as<ALStudioFloater>(home.get()))
-        {
-            studio->mQuickPopover.markDead();
-        }
+    mQuickPopover.hold(popover, [answered, escaped = std::move(escaped), left = std::move(left)](bool was_escaped) {
         if (was_escaped && escaped)
         {
             escaped();
@@ -233,7 +406,7 @@ void ALStudioFloater::setStatus(const std::string& text, bool failure)
 {
     // The text box's own ink: the field's, TextFgColor, is black in a skin
     // whose fields are light, and the status line is on the panel.
-    static const LLUIColor normal = LLUIColorTable::instance().getColor("LabelTextColor", LLColor4::white);
+    const LLUIColor& normal = ALSurface::text();
     static const LLUIColor alarm = LLUIColorTable::instance().getColor("LtOrange", LLColor4::yellow);
 
     if (mStatus)
@@ -264,7 +437,7 @@ void ALStudioFloater::draw()
     constexpr F64 FAILURE_SECONDS = 60.0;
     if (mStatus && !mStatusQuiet && LLTimer::getTotalSeconds() - mStatusSaidAt > (mStatusFailure ? FAILURE_SECONDS : NEWS_SECONDS))
     {
-        static const LLUIColor quiet = LLUIColorTable::instance().getColor("LabelDisabledColor", LLColor4::grey);
+        const LLUIColor& quiet = ALSurface::quiet();
         mStatus->setColor(quiet);
         mStatusQuiet = true;
     }

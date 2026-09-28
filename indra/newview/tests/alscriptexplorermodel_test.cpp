@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,13 +48,77 @@ namespace tut
     struct alscriptexplorermodel_data
     {
         typedef ALScriptExplorerModel Model;
+        typedef std::function<void(const ALScriptWorkspace::Contents&)> Told;
 
-        Model model;
         // The world: each object in sight by its root, its prims the root
-        // first; what is selected; the prims of the scripts open.
-        std::map<LLUUID, Model::Seen> world;
-        std::vector<LLUUID>           selected;
-        std::vector<LLUUID>           open;
+        // first; what is selected; the prims of the scripts open; the prims
+        // whose object's copy is not current. The index's asks not answered
+        // yet, and every ask made, of the region or not; the scripts it
+        // asked whether they run.
+        std::map<LLUUID, Model::Seen>        world;
+        std::vector<LLUUID>                  selected;
+        std::vector<LLUUID>                  open;
+        std::set<LLUUID>                     stale;
+        std::map<LLUUID, std::vector<Told>>  pending;
+        std::vector<std::pair<LLUUID, bool>> asks;
+        std::vector<ALScriptRef>             askedRunning;
+        ALScriptContentsIndex                index;
+        Model                                model;
+        // What the model made of the last answer, heard as the pane hears it.
+        Model::Heard                         lastHeard;
+        boost::signals2::scoped_connection   heardConnection;
+
+        alscriptexplorermodel_data() : index(fake()), model(index)
+        {
+            heardConnection = index.onHeard([this](const ALScriptWorkspace::Contents& contents) { lastHeard = model.contents(contents); });
+        }
+
+        ALScriptContentsIndex::World fake()
+        {
+            ALScriptContentsIndex::World out;
+            out.current = [this](const LLUUID& prim) { return !stale.contains(prim); };
+            out.ask     = [this](const LLUUID& prim, bool from_region, Told told) {
+                asks.emplace_back(prim, from_region);
+                pending[prim].push_back(std::move(told));
+            };
+            out.askRunning = [this](const ALScriptRef& ref) { askedRunning.push_back(ref); };
+            return out;
+        }
+
+        // What the pane asks of the index after a listing: the prims asked
+        // now.
+        std::vector<LLUUID> ask(bool refetch, bool filtering)
+        {
+            const size_t before = asks.size();
+            for (const LLUUID& prim : model.wanted(filtering))
+            {
+                index.ask(prim, refetch, model.asksRegion(prim));
+            }
+            std::vector<LLUUID> out;
+            for (size_t i = before; i < asks.size(); ++i)
+            {
+                out.push_back(asks[i].first);
+            }
+            return out;
+        }
+
+        // An answer, through the index: to every ask of its prim not
+        // answered yet, or to one made for it.
+        Model::Heard feed(const ALScriptWorkspace::Contents& contents)
+        {
+            if (pending[contents.prim].empty())
+            {
+                index.ask(contents.prim, true);
+            }
+            std::vector<Told> told = std::move(pending[contents.prim]);
+            pending.erase(contents.prim);
+            lastHeard = Model::Heard();
+            for (Told& one : told)
+            {
+                one(contents);
+            }
+            return lastHeard;
+        }
 
         static LLUUID id(U32 n)
         {
@@ -115,7 +180,7 @@ namespace tut
                 item.lua    = name.ends_with(".luau");
                 contents.items.push_back(item);
             }
-            model.contents(contents);
+            feed(contents);
         }
 
         // The rows as words: an object "O:name", a prim "P:name", the prims
@@ -178,6 +243,8 @@ namespace tut
         ensure_equals(names(), std::string("Lamp* Gone(away)* (unnamed)(away)* Chair Table"));
         ensure("an object by a prim of it, listed by its root", model.objects().back().root == table && model.objects().back().prims.size() == 3);
         ensure("listed prims", model.listed(id(22)) && !model.listed(id(90)));
+        ensure("what coming or going concerns: a listed prim, a pin away", model.concerns(id(22)) && model.concerns(id(90)));
+        ensure("not what it neither lists nor asked for", !model.concerns(id(55)));
 
         // Across sessions, the pins as they were read.
         LLSD kept;
@@ -263,22 +330,21 @@ namespace tut
         selected           = { big };
         open               = { id(105) };
         list();
-        const auto always = [](const LLUUID&) { return true; };
-        std::vector<LLUUID> asked = model.toAsk(false, false, always);
+        std::vector<LLUUID> asked = ask(false, false);
         ensure_equals("the root and the one open", asked.size(), size_t(2));
         const std::vector<Model::Row> all = model.rows(std::string());
         const Model::Row*             one = rowNamed(all, "Big.1");
         ensure("a folded prim is listed, folded, what it holds not known", one && one->folded && !one->known);
         ensure("the linkset's own row is known: its prims are", all.front().known);
         ensure("which", asked[0] == id(100) && asked[1] == id(105));
-        ensure("asked, not again until answered", model.toAsk(false, false, always).empty());
-        ensure_equals("a filter looks through the rest", model.toAsk(false, true, always).size(), count - 2);
-        ensure_equals("a refetch asks them all again", model.toAsk(true, true, always).size(), count);
+        ensure("asked, not again until answered", ask(false, false).empty());
+        ensure_equals("a filter looks through the rest", ask(false, true).size(), count - 2);
+        ensure_equals("a refetch asks them all again", ask(true, true).size(), count);
 
         holds(id(100), { "core.lsl" });
-        ensure("answered and current: not asked", model.toAsk(false, false, always).empty());
-        const auto changed = [](const LLUUID& prim) { return prim != id(100); };
-        std::vector<LLUUID> again = model.toAsk(false, false, changed);
+        ensure("answered and current: not asked", ask(false, false).empty());
+        stale.insert(id(100));
+        std::vector<LLUUID> again = ask(false, false);
         ensure("answered, but changed since: asked again", again.size() == 1 && again[0] == id(100));
 
         // Opened, a folded prim asks to be listed again, for what it holds.
@@ -301,23 +367,22 @@ namespace tut
         contents.prim    = chair;
         contents.fetched = true;
         contents.items.push_back({ id(500), "old.lsl", true, false });
-        Model::Heard heard = model.contents(contents);
+        Model::Heard heard = feed(contents);
         ensure("not listed yet, nothing opens", heard.listed && heard.opening.empty());
-        ensure("the script asked whether it runs", heard.askRunning.size() == 1 && heard.askRunning[0] == ALScriptRef(chair, id(500)));
-        model.running(ALScriptRef(chair, id(500)), true);
+        ensure("the script asked whether it runs", askedRunning == std::vector<ALScriptRef>{ ALScriptRef(chair, id(500)) });
+        index.running(ALScriptRef(chair, id(500)), true);
         contents.items.push_back({ id(501), "new.lsl", true, false });
-        heard = model.contents(contents);
+        heard = feed(contents);
         ensure("listed, opened with its text", heard.opening.size() == 1 && heard.opening[0].ref == ALScriptRef(chair, id(501)) &&
                                                    heard.opening[0].text == std::optional<std::string>("default {}"));
-        ensure("the one known to run not asked again", heard.askRunning.size() == 1 && heard.askRunning[0].item == id(501));
-        heard = model.contents(contents);
+        ensure("the one known to run not asked again", askedRunning.size() == 2 && askedRunning[1].item == id(501));
+        heard = feed(contents);
         ensure("once", heard.opening.empty());
         ensure("a prim not listed is no answer", !model.contents(ALScriptWorkspace::Contents{ id(77) }).listed);
         ensure("what runs, known", model.knownRunning(ALScriptRef(chair, id(500))) == std::optional<bool>(true) &&
                                        !model.knownRunning(ALScriptRef(chair, id(501))));
-        selected.clear();
-        list();
-        ensure("let go of with its prim", !model.knownRunning(ALScriptRef(chair, id(500))));
+        model.forgetRunning();
+        ensure("let go of for the listed prims, to be asked again", !model.knownRunning(ALScriptRef(chair, id(500))));
     }
 
     template<> template<>
@@ -361,8 +426,8 @@ namespace tut
         model.renamed(house, "Home");
         ensure("the root is", model.objects().front().name == "Home" && model.takePinsChanged() && model.pins().front().name == "Home");
         ensure("told once", !model.takePinsChanged());
-        ensure("heard as it is, nothing changes", !model.rereadNames([](const LLUUID& prim) { return prim == id(10) ? std::string("Home") : std::string(); }));
-        ensure("heard otherwise, it does", model.rereadNames([](const LLUUID& prim) { return prim == id(10) ? std::string("Villa") : std::string(); }));
+        ensure("heard as it is, nothing changes", !model.rereadNames([](const LLUUID& prim) { return prim == alscriptexplorermodel_data::id(10) ? std::string("Home") : std::string(); }));
+        ensure("heard otherwise, it does", model.rereadNames([](const LLUUID& prim) { return prim == alscriptexplorermodel_data::id(10) ? std::string("Villa") : std::string(); }));
         ensure("the pin with it", model.nameOf(house) == "Villa" && model.takePinsChanged() && model.pins().front().name == "Villa");
         ensure("a name asked once while listed", model.askName(id(11)) && !model.askName(id(11)) && !model.askName(id(99)));
         model.renamed(id(11), "Gate");
@@ -393,5 +458,58 @@ namespace tut
         ensure("both pinned, each once", model.pins().size() == 2 && model.isPinned(house) && model.isPinned(chair));
         model.pin({ *Model::Choice::of(rowNamed(all, "Chair")->value) });
         ensure("let go", model.pins().size() == 1 && !model.isPinned(chair));
+    }
+
+    template<> template<>
+    void alscriptexplorermodel_object::test<10>()
+    {
+        set_test_name("a prim dropped into, whose object keeps its copy of what it held, is asked again, and of the region, until let go of");
+        const LLUUID house = object(10, "House", 2);
+        selected           = { house };
+        list();
+        ensure_equals("both asked first", ask(false, false).size(), size_t(2));
+        holds(id(10), { "a.lsl" });
+        holds(id(11), {});
+        ensure("known and current: nothing asked", ask(false, false).empty());
+        model.askRegion(id(11));
+        ensure("the one dropped into, though its object says current", ask(false, false) == std::vector<LLUUID>({ id(11) }));
+        ensure("and of the region", model.asksRegion(id(11)) && !model.asksRegion(id(10)) && asks.back().second);
+        holds(id(11), { "b.lsl" });
+        ensure("still, for the ask a moment later", ask(false, false) == std::vector<LLUUID>({ id(11) }));
+        holds(id(11), { "b.lsl" });
+        model.doneAskingRegion();
+        ensure("let go of: as any other", ask(false, false).empty() && !model.asksRegion(id(11)));
+    }
+
+    template<> template<>
+    void alscriptexplorermodel_object::test<11>()
+    {
+        set_test_name("what was folded of an object no longer listed is let go of, and folded as at first should it come back; prims found by id");
+        const size_t count = Model::LARGE_LINKSET + 2;
+        const LLUUID big   = object(200, "Big", count);
+        selected           = { big };
+        list();
+        ensure("a prim of a large linkset folded at first", model.fold(id(201), true, true) == Model::Refold::None);
+        ensure("opened", model.fold(id(201), true, false) == Model::Refold::Relist);
+        ensure("folded shut", model.fold(big, false, true) == Model::Refold::Refill);
+        list();
+        ensure("open through a listing again", model.fold(id(201), true, false) == Model::Refold::None);
+        ensure("and the object shut", model.folded(big));
+
+        selected.clear();
+        list();
+        ensure("not listed: nothing folded", !model.folded(big));
+        selected = { big };
+        list();
+        ensure("back: its prims folded as at first", model.fold(id(201), true, true) == Model::Refold::None);
+        ensure("the object open", !model.folded(big));
+
+        // By id, wherever it is in the list.
+        ensure("a prim revealed, never asked what it holds, is to be asked", model.unfoldTo(id(205)));
+        ensure("unfolded to", model.fold(id(205), true, false) == Model::Refold::None);
+        model.renamed(id(203), "Middle");
+        ensure("renamed in place", rowNamed(model.rows(std::string()), "Middle") != nullptr);
+        ensure_equals("named by its root", model.nameOf(big), std::string("Big"));
+        ensure("present", model.present(big) && !model.present(id(203)));
     }
 }
