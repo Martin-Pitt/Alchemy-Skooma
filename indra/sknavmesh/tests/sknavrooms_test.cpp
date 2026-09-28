@@ -1115,7 +1115,7 @@ namespace tut
     }
 
     template<> template<>
-    void sknavrooms_object::test<24>()
+    void sknavrooms_object::test<30>()
     {
         set_test_name("an L of cells traces the six runs of its outline");
         const std::vector<PlanCell> cells = { { 0.f, 0.f, 3.f }, { 1.f, 0.f, 3.f }, { 2.f, 0.f, 3.f }, { 0.f, 1.f, 3.f },
@@ -1146,8 +1146,8 @@ namespace tut
         ensure("the left runs down to the start", has(0.f, 2.f, 0.f, 0.f));
     }
 
-    template<> template<>
-    void sknavrooms_object::test<25>()
+template<> template<>
+    void sknavrooms_object::test<31>()
     {
         set_test_name("a plan with a hole, a slope and a pinch traces them apart");
         std::vector<PlanCell> cells;
