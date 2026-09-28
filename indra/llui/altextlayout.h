@@ -25,6 +25,7 @@
 #pragma once
 
 #include "alfontshaping.h"
+#include "allinetable.h"
 #include "altextdocument.h"
 #include "llfontgl.h"
 
@@ -87,7 +88,12 @@ public:
     };
 
     // What goes beside a line's text: at a byte column, so wide, before
-    // or after the text there, known to the provider by an id.
+    // or after the text there, known to the provider by an id. The layout
+    // keeps the id in the line's glyphs until the line is laid out again,
+    // which the provider asks for (invalidateLine) when that line's inlays
+    // change -- and not when another line's do. So an id says which of the
+    // line's own inlays it is, never a place in a list that inlays added
+    // or taken away on other lines move.
     struct Inlay
     {
         S32  column = 0;
@@ -275,8 +281,8 @@ private:
     const LLFontGL*                    mFont      = nullptr;
     S32                                mWrapWidth = 0;
     S32                                mTabWidth  = 4;
-    std::vector<Line>                  mLines;
-    std::vector<U8>                    mHidden;
+    ALLineTable<Line>                  mLines;
+    ALLineTable<U8>                    mHidden;
     S32                                mHiddenCount = 0;
     // mTops[i] is the top of line i; mTops[count] the whole height.
     std::vector<S32>                   mTops;
