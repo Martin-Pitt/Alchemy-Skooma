@@ -38,6 +38,8 @@
 #include "llpanel.h"
 #include "lluicolortable.h"
 
+#include <boost/unordered/unordered_flat_set.hpp>
+
 #include <algorithm>
 #include <ctime>
 
@@ -177,10 +179,26 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
 
     // One line of the log, or more where the script said more; the
     // script's name a link to it, at the line of a run-time error.
+    using Channel = ALScriptWorkspace::RuntimeEvent::Channel;
     ALOutputView::Entry entry;
-    entry.time   = clockOf(event.time);
-    entry.source = event.scriptName.empty() ? event.objectName : event.objectName + " / " + event.scriptName;
-    entry.kind   = event.isError ? mServices->words("KindError") : event.channel == ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay ? mServices->words("KindOwnerSay") : std::string();
+    entry.time = clockOf(event.time);
+    // Whose: the object, the prim of it that spoke where that is not its
+    // root, and the script.
+    entry.source = event.objectName;
+    if (!event.primName.empty())
+    {
+        entry.source += " \xE2\x96\xB8 " + event.primName;
+    }
+    if (!event.scriptName.empty())
+    {
+        entry.source += " / " + event.scriptName;
+    }
+    entry.kind = event.isError                        ? mServices->words("KindError")
+                 : event.channel == Channel::OwnerSay ? mServices->words("KindOwnerSay")
+                 : event.channel == Channel::Said     ? mServices->words("KindSaid")
+                 : event.channel == Channel::SaidTo   ? mServices->words("KindSaidTo")
+                 : event.channel == Channel::Instant  ? mServices->words("KindInstant")
+                                                      : std::string();
     entry.text   = event.isError && !event.error.empty() ? event.error : event.message;
     while (!entry.text.empty() && (entry.text.back() == '\n' || entry.text.back() == '\r'))
     {
@@ -190,8 +208,15 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
     entry.key["root"] = event.root;
     entry.key["prim"] = event.prim;
     entry.key["item"] = event.item;
-    entry.key["kind"] = event.isError ? "error" : event.channel == ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay ? "owner" : "debug";
-    entry.key["mine"] = event.channel == ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay || (event.root.notNull() && mWindow->ownsObject(event.root));
+    // What an object says aloud or in an IM is heard only from the agent's
+    // own objects.
+    const bool aloud  = event.channel == Channel::Said || event.channel == Channel::SaidTo || event.channel == Channel::Instant;
+    entry.key["kind"] = event.isError                         ? "error"
+                        : event.channel == Channel::OwnerSay  ? "owner"
+                        : event.channel == Channel::Instant   ? "im"
+                        : aloud                               ? "said"
+                                                              : "debug";
+    entry.key["mine"] = event.channel == Channel::OwnerSay || aloud || (event.root.notNull() && mWindow->ownsObject(event.root));
     if (event.isError)
     {
         entry.color = runtime_color.get();
@@ -238,7 +263,7 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
             }
         }
     }
-    else if (event.channel == ALScriptWorkspace::RuntimeEvent::Channel::OwnerSay)
+    else if (event.channel == Channel::OwnerSay || aloud)
     {
         // What the owner was told, in the colour chat shows an object's
         // words in; the debug channel's in the plain ink.
@@ -255,8 +280,9 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
     }
     mView->append(std::move(entry));
 
-    // An error the Output tab is not showing, said on its title.
-    if (event.isError)
+    // An error the Output tab is not showing, said on its title -- where
+    // the filters let it through: a stranger's, filtered out, is not news.
+    if (event.isError && mView->shows(mView->entries().back()))
     {
         markUnread();
     }
@@ -275,8 +301,6 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
     if (failure)
     {
         entry.color = alarm.get();
-        // Said while the Output tab is not in sight: its title says so.
-        markUnread();
     }
     // The script's name where the words say it, a link to its tab.
     const size_t at = doc && !doc->name.empty() ? text.find(doc->name) : std::string::npos;
@@ -326,11 +350,18 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
         entry.links.push_back(std::move(link));
     }
     mView->append(std::move(entry));
+    // A failure said while the Output tab is not in sight, and the filters
+    // let it through: its title says so.
+    if (failure && mView->shows(mView->entries().back()))
+    {
+        markUnread();
+    }
 }
 
 void ALScriptOutputPane::markUnread()
 {
-    if (!mWindow->outputInSight())
+    // Said on the title once, not once more for every line after.
+    if (!mUnread && !mWindow->outputInSight())
     {
         mUnread = true;
         mWindow->outputUnreadChanged();
@@ -441,7 +472,21 @@ void ALScriptOutputPane::filter()
         mView->setFilter(nullptr);
         return;
     }
-    mView->setFilter([this, whose, kind, words](const ALOutputView::Entry& entry) {
+    // The prims the scripts open here are in: what a script says with no
+    // header naming it -- llOwnerSay, the debug channel, chat -- is known
+    // only by the prim that said it.
+    boost::unordered_flat_set<LLUUID> open_prims;
+    if (whose == "open")
+    {
+        for (const ALScriptStudioDoc* doc : mServices->openDocs())
+        {
+            if (!doc->ref.inInventory() && doc->file.empty())
+            {
+                open_prims.insert(doc->ref.object);
+            }
+        }
+    }
+    mView->setFilter([this, whose, kind, words, open_prims = std::move(open_prims)](const ALOutputView::Entry& entry) {
         const std::string said = entry.key["kind"].asString();
         if (!kind.empty() && said != kind)
         {
@@ -451,7 +496,9 @@ void ALScriptOutputPane::filter()
         // are, but for one object's alone.
         if (whose == "open")
         {
-            if (said != "studio" && !mServices->findDoc(ALScriptRef(entry.key["prim"].asUUID(), entry.key["item"].asUUID())))
+            const LLUUID item = entry.key["item"].asUUID();
+            const LLUUID prim = entry.key["prim"].asUUID();
+            if (said != "studio" && (item.notNull() ? !mServices->findDoc(ALScriptRef(prim, item)) : !open_prims.contains(prim)))
             {
                 return false;
             }
