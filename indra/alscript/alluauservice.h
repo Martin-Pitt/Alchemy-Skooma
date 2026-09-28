@@ -31,6 +31,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Luau
@@ -51,6 +52,11 @@ class ALLuauService
 {
 public:
     ALLuauService();
+    // What Luau keeps for the whole process -- how long a type is said in a
+    // message -- set once, whichever thread first asks: the viewer asks on
+    // its main thread before the analysis thread starts, so the thread only
+    // reads it.
+    static void setUpProcess();
     ~ALLuauService();
     ALLuauService(const ALLuauService&) = delete;
     ALLuauService& operator=(const ALLuauService&) = delete;
@@ -97,6 +103,47 @@ public:
     // without declaring. A script with no configuration is given a
     // default-constructed one.
     void setConfig(const ALLuauConfig& config);
+    // Which script the questions after are asked of, by an id of the
+    // caller's: each is its own module, checked apart and kept as it was
+    // left, so that moving between a few tabs finds each checked. A few
+    // are kept, the one asked of longest ago let go of past that. None
+    // (the empty id) is the one module for whatever is not named -- a
+    // lookup through another object's script -- which lets none go.
+    // setConfig is then the named script's own.
+    void setDocument(std::string_view id);
+    // The lines of the texts asked about next whose names, hints and
+    // fixes nobody reads -- the modules an expansion put ahead of the
+    // script, runs of zero-based first and last line
+    // (ALSourceMap::othersLines): passed over by the semantic tokens and
+    // the hints, and offered no fixes. Their problems are said all the
+    // same. None until told.
+    void setPassedOver(std::vector<std::pair<S32, S32>> lines);
+
+    // What the script asked about next requires, where it keeps its
+    // requires as calls (ALPreprocessor::Options::apart): each module by the
+    // key a require resolves to, and which require resolves to which -- by
+    // what requires (empty for the script itself, else a module's key) and
+    // the name it says. Each module is its own to the checker, checked
+    // once until its text changes, so an edit of the script does not check
+    // them all again. A problem the checker finds in one is the module's,
+    // said with its key as the problem's file and in its lines.
+    struct Module
+    {
+        std::string key;
+        std::string text;
+    };
+    struct Require
+    {
+        std::string from;
+        std::string name;
+        std::string key;
+    };
+    struct Modules
+    {
+        std::vector<Module>  modules;
+        std::vector<Require> reaches;
+    };
+    void setModules(const Modules& modules);
 
     // Everything the front end has to say about one script: parse errors
     // and type errors, then the lints, each in the order it was found.
@@ -133,10 +180,17 @@ public:
     // handler for an event the script asks for and does not hear.
     std::vector<ALScriptFix> actions(std::string_view source, S32 line, S32 column, S32 endLine, S32 endColumn);
 
-    // How many times a script has been type checked: a question asked
-    // again of the same text, with the same configuration, is answered
-    // from the check already made. For the test that says so.
+    // How many times a script has been type checked: a check or a question
+    // asked again of the same text, with the same configuration, is
+    // answered from the check already made. A text is checked at most once
+    // for the check and once for the questions -- once for both where the
+    // script is strict, or under the new solver -- in whatever order they
+    // come. For the test that says so.
     size_t typeChecks() const;
+    // How many modules the front end has checked, the script's and those it
+    // requires alike, since it was built: for the test that says a module
+    // unchanged is not checked again.
+    size_t modulesChecked() const;
 
 private:
     struct Impl;
