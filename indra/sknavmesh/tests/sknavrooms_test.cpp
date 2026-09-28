@@ -778,6 +778,24 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<27>()
+    {
+        set_test_name("a flight walled in on every side, meeting no floor, is no flight space, so none is an island");
+        Scene s;
+        s.flight(8.f, 16.f, 2.f, 4.f, 2.f, 3.f);
+        s.wall(7.75f, 1.75f, 16.25f, 2.f, 5.f);
+        s.wall(7.75f, 4.f, 16.25f, 4.25f, 5.f);
+        s.wall(7.75f, 1.75f, 8.f, 4.25f, 5.f);
+        s.wall(16.f, 1.75f, 16.25f, 4.25f, 5.f);
+        const Result r = run(s.input(1));
+        ensure("its treads have a space", r.at(12.f, 3.f, 3.f) != nullptr);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure("every flight space has a stair portal", !sp.mFlight || r.count(&sp, PortalKind::STAIR) > 0);
+        }
+    }
+
+    template<> template<>
     void sknavrooms_object::test<12>()
     {
         set_test_name("replay a mesh's air through both passes, when a file is named");

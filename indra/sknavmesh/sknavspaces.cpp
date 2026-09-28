@@ -2440,6 +2440,24 @@ namespace sknav
             }
             mRegions = round_uf;
         }
+        // A flight that touches no floor is no stair: drops, low headroom or
+        // steps past climb part it from every floor, so no contact can link it.
+        std::unordered_set<U32> linked;
+        for (const Portal& q : mPortals)
+        {
+            if (q.mKind == PortalKind::STAIR)
+            {
+                linked.insert(q.mSpaces[0]);
+                linked.insert(q.mSpaces[1]);
+            }
+        }
+        for (U32 s = 0; s < total; ++s)
+        {
+            if (mSeeds[s].mFlight && !linked.count(mRegions.find(s)))
+            {
+                mSeeds[s].mFlight = false;
+            }
+        }
 
         // Doors whose leaf splits the air on its own, with no cut on them.
         std::unordered_set<S32> matched(mPortalDoor.begin(), mPortalDoor.end());
@@ -2706,7 +2724,7 @@ namespace sknav
             a.mCells += st.mCells;
             a.mBoundary += st.mBoundary;
             a.mWalled += st.mWalled;
-            a.mFlightCells += st.mFlightCells;
+            a.mFlightCells += si.mFlight ? st.mFlightCells : 0;
             a.mSumX += st.mSumX;
             a.mSumY += st.mSumY;
             a.mSumXX += st.mSumXX;
