@@ -424,6 +424,119 @@ int main(int, char**)
     // A bracket left open at the top: its partner looked for as the caret
     // rests beside it, and the depth the rainbow and the indent read at the
     // end, each after a character typed and taken away below it.
+    // Where a caret is as it is seen: every line's end counted in columns,
+    // as the trailer and vim's vertical motions ask of one line at a time;
+    // then the same of a line with a combining accent in it, which the
+    // characters are walked for.
+    std::printf("\nDisplay columns (every line's end)\n");
+    both("ASCII lines, per thousand", subjects, static_cast<size_t>(LINES / 1000), [](Subject&, ALCodeEditor& e) {
+        const ALTextDocument& d = e.document();
+        for (S32 line = 0; line < d.lineCount(); ++line)
+        {
+            g_sink = g_sink + static_cast<size_t>(d.displayColumn(ALTextPos(line, d.lineLength(line)), 4));
+        }
+    });
+    {
+        const ALTextDocument accented("\tinteger cafe\xCC\x81 = llStringLength(\"cr\xC3\xA8" "me br\xC3\xBB" "l\xC3\xA9" "e\"); // \xE6\x97\xA5\xE6\x9C\xAC");
+        rowOne("a line with accents and CJK, per thousand", ms_per_item(1, [&] {
+            for (int i = 0; i < 1000; ++i)
+            {
+                g_sink = g_sink + static_cast<size_t>(accented.displayColumn(ALTextPos(0, accented.lineLength(0)), 4));
+            }
+        }));
+    }
+
+    // A line of 20,000 characters, as generated code or a list written out
+    // at length has, put in near the top: a character typed in its middle
+    // and taken away, the line laid out again after each; and the x of a
+    // column along it with the column back from that x, as the caret and
+    // the mouse ask.
+    std::printf("\nA line of 20,000 characters\n");
+    {
+        std::string long_line;
+        while (long_line.size() < 20000)
+        {
+            long_line += "value = f(x, [y, z]) + ";
+        }
+        for (Subject& s : subjects)
+        {
+            s.editor->setCaret(ALTextPos(5, 0));
+            s.editor->insertText(long_line + "\n");
+        }
+        // Each pass another letter somewhere else in the middle, so that the
+        // line is one the shaper has not seen, as it is after a keystroke.
+        both("a keystroke in its middle, laid out again", subjects, 2, [](Subject&, ALCodeEditor& e) {
+            static S32 pass = 0;
+            ++pass;
+            const S32  at     = 5000 + (pass * 7) % 10000;
+            const char typed[2] = { static_cast<char>('a' + pass % 26), 0 };
+            e.setCaret(ALTextPos(5, at));
+            e.insertText(typed);
+            g_sink = g_sink + e.layout().line(5).glyphs.size();
+            e.deleteRange(ALTextRange(ALTextPos(5, at), ALTextPos(5, at + 1)));
+            g_sink = g_sink + e.layout().line(5).glyphs.size();
+        });
+        both("a column's x and the column at an x, per thousand", subjects, 1, [](Subject&, ALCodeEditor& e) {
+            ALTextLayout& laid = e.layout();
+            for (S32 i = 0; i < 1000; ++i)
+            {
+                const S32 column = (i * 7919) % 20000;
+                g_sink           = g_sink + static_cast<size_t>(laid.columnAt(5, 0, laid.xOf(5, column) + 1.f, true));
+            }
+        });
+        for (Subject& s : subjects)
+        {
+            s.editor->deleteRange(ALTextRange(ALTextPos(5, 0), ALTextPos(6, 0)));
+        }
+    }
+
+    // Word wrap on: a character typed at the top and taken away, and the
+    // last line's top found after each, which every line's height above it
+    // goes into; the width moved by a pixel and back, and the lines in
+    // view laid out again after each, as a window dragged wider does; and
+    // a line's top asked at random, as drawing and the mouse ask.
+    std::printf("\nWord wrap\n");
+    for (Subject& s : subjects)
+    {
+        s.editor->setWordWrap(true);
+        for (S32 line = 0; line < 60; ++line)
+        {
+            g_sink = g_sink + s.editor->layout().line(line).rows.size();
+        }
+    }
+    both("a keystroke at the top, the last line's top found", subjects, 2, [](Subject&, ALCodeEditor& e) {
+        e.setCaret(ALTextPos(0, 0));
+        e.insertText("x");
+        g_sink = g_sink + static_cast<size_t>(e.layout().lineTop(lastLine(e)));
+        e.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)));
+        g_sink = g_sink + static_cast<size_t>(e.layout().lineTop(lastLine(e)));
+    });
+    both("the width moved by a pixel, 60 lines laid out again", subjects, 2, [](Subject&, ALCodeEditor& e) {
+        ALTextLayout& laid  = e.layout();
+        const S32     width = laid.wrapWidth();
+        for (const S32 to : { width + 1, width })
+        {
+            laid.setWrapWidth(to);
+            for (S32 line = 0; line < 60; ++line)
+            {
+                g_sink = g_sink + laid.line(line).rows.size();
+            }
+            g_sink = g_sink + static_cast<size_t>(laid.lineTop(60));
+        }
+    });
+    both("a line's top and the line at a y, per thousand", subjects, 1, [](Subject&, ALCodeEditor& e) {
+        ALTextLayout& laid = e.layout();
+        for (S32 i = 0; i < 1000; ++i)
+        {
+            const S32 line = (i * 7919) % LINES;
+            g_sink         = g_sink + static_cast<size_t>(laid.lineAtY(laid.lineTop(line) + 1));
+        }
+    });
+    for (Subject& s : subjects)
+    {
+        s.editor->setWordWrap(false);
+    }
+
     std::printf("\nBrackets (an opener at the top, unmatched)\n");
     for (Subject& s : subjects)
     {

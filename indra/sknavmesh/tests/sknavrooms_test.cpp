@@ -1163,5 +1163,113 @@ namespace tut
         // to no staircase.
         product.mSpaces[0].mFlight = false;
         ensure("no links without the flight flag", stairLinks(product).empty());
+
+        set_test_name("an L of cells traces the six runs of its outline");
+        const std::vector<PlanCell> cells = { { 0.f, 0.f, 3.f }, { 1.f, 0.f, 3.f }, { 2.f, 0.f, 3.f }, { 0.f, 1.f, 3.f },
+                                              { 0.f, 0.f, 5.f } };   // a repeated column keeps its lowest floor
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("six runs", edges.size(), 6u);
+        for (const PlanEdge& e : edges)
+        {
+            ensure("all at the lowest floor", std::fabs(e.mZ - 3.f) < 1e-4f);
+        }
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the bottom runs on", has(0.f, 0.f, 3.f, 0.f));
+        ensure("the right stands", has(3.f, 0.f, 3.f, 1.f));
+        ensure("the notch's far side runs back", has(3.f, 1.f, 1.f, 1.f));
+        ensure("the notch's inner side stands", has(1.f, 1.f, 1.f, 2.f));
+        ensure("the top runs back", has(1.f, 2.f, 0.f, 2.f));
+        ensure("the left runs down to the start", has(0.f, 2.f, 0.f, 0.f));
+    }
+
+template<> template<>
+    void sknavrooms_object::test<31>()
+    {
+        set_test_name("a plan with a hole, a slope and a pinch traces them apart");
+        std::vector<PlanCell> cells;
+        for (S32 y = 0; y < 3; ++y)
+        {
+            for (S32 x = 0; x < 3; ++x)
+            {
+                if (x != 1 || y != 1)
+                {
+                    cells.push_back({ F32(x), F32(y), 3.f });
+                }
+            }
+        }
+        for (S32 x = 5; x < 8; ++x)
+        {
+            cells.push_back({ F32(x), 6.f, 3.f + 0.2f * (x - 5) });   // a slope, one floor a step
+        }
+        cells.push_back({ 10.f, 10.f, 3.f });
+        cells.push_back({ 11.f, 11.f, 3.f });   // two cells touching at a corner only
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("the ring's four, the hole's four, the slope's eight, the pinch's eight",
+                      edges.size(), 24u);
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1, F32 z)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f && std::fabs(e.mZ - z) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the ring's bottom is one run", has(0.f, 0.f, 3.f, 0.f, 3.f));
+        ensure("the hole's edge runs with the ring on its left", has(2.f, 1.f, 1.f, 1.f, 3.f));
+        ensure("the slope steps at each floor", has(6.f, 6.f, 7.f, 6.f, 3.2f));
+        ensure("the pinch's second cell stands alone", has(11.f, 11.f, 12.f, 11.f, 3.f));
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<32>()
+    {
+        set_test_name("the spaces pass leaves the overlay's draw with the product");
+        // The L-shaped room of test 1.
+        Scene s;
+        s.wall(2.f, 2.f, 14.f, 2.25f);
+        s.wall(2.f, 25.75f, 6.f, 26.f);
+        s.wall(2.f, 2.f, 2.25f, 4.f);
+        s.wall(2.f, 5.f, 2.25f, 26.f);
+        s.box(2.f, 4.f, 2.25f, 5.f, 2.2f, 3.f, false);
+        s.wall(13.75f, 2.f, 14.f, 8.f);
+        s.wall(6.f, 7.75f, 14.f, 8.f);
+        s.wall(5.75f, 8.f, 6.f, 26.f);
+        s.box(2.f, 2.f, 14.f, 8.f, 3.f, 3.25f);
+        s.box(2.f, 8.f, 6.f, 26.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        const SpacesDrawPtr draw = r.mRooms->mDraw;
+        ensure("the draw came with the pass", draw != nullptr);
+        ensure_equals("a draw entry per space", draw->mSpaces.size(), r.mEnc->mSpaceIds.size());
+        ensure("the room fills", !draw->mFills.empty());
+        bool outlined = false;
+        for (const SpaceDraw& sd : draw->mSpaces)
+        {
+            outlined = outlined || !sd.mOutline.empty();
+            ensure("full strength until a gather draws it", std::fabs(sd.mColor.mV[VALPHA] - 1.f) < 1e-4f);
+        }
+        ensure("the room's outline traced", outlined);
+        F32 area = 0.f;
+        for (const SpacesDraw::Fill& f : draw->mFills)
+        {
+            ensure("the fill names a space", f.mSpace < draw->mSpaces.size());
+            ensure("the fill sits at a floor", f.mZ > -10.f && f.mZ < 30.f);
+            area += f.mSide * f.mSide;
+        }
+        ensure("the fills cover the room's floor", area > 60.f);
     }
 }

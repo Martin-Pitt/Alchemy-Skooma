@@ -537,7 +537,7 @@ vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c,
         float rr = r * r;
 
         v = sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
+        refIndex[i].w < 1 && refParams[i].w <= 0.0 ? 4096.0*4096.0 : // only unconstrained automatic placement disables parallax
                 rr);
 
         w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
@@ -618,7 +618,7 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
         float rr = r * r;
 
         v = sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
+        refIndex[i].w < 1 && refParams[i].w <= 0.0 ? 4096.0*4096.0 : // only unconstrained automatic placement disables parallax
                 rr);
 
         w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
@@ -665,6 +665,10 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
     for (int idx = 0; idx < probeInfluences; ++idx)
     {
         int i = probeIndex[idx];
+        if (refParams[i].w < 0.0)
+        { // residual grid probes contribute only diffuse indirect lighting
+            continue;
+        }
         int p = clamp(abs(refIndex[i].w), 0, 1);
 
         if (p == 0 && !sample_automatic)
@@ -683,6 +687,13 @@ vec3 sampleProbes(vec3 pos, vec3 dir, float lod)
             wsum[p] += w;
             dwsum[p] += dw;
         }
+    }
+
+    if (sample_automatic && wsum[0] == 0.0)
+    { // A list filled by irradiance-only probes still needs the sky reflection.
+        float w, dw;
+        col[0] = tapRefMap(pos, dir, w, dw, lod, refSphere[0].xyz, 0);
+        wsum[0] = 1.0;
     }
 
     // mix automatic and manual probes

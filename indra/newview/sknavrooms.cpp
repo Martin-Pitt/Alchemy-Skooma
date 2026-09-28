@@ -1114,51 +1114,43 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
     const F64 reach2 = reach * reach;
     for (const SKNavWorldView::Mesh& m : mView->meshes())
     {
-        if (!m.mRooms)
+        if (!m.mRooms || !m.mProduct || !m.mRooms->mDraw)
         {
             continue;
         }
-        const std::vector<U32>& ids = m.mProduct->mSpaceIds;
-        for (const TileEnclosure& t : m.mProduct->mTiles)
+        // The draw was traced once with the spaces pass; culling it to the
+        // camera and emitting what it sees is all a gather does.
+        const SpacesDraw& draw = *m.mRooms->mDraw;
+        for (const SpacesDraw::Fill& f : draw.mFills)
         {
-            const CoarseAir& c = t.mCoarse;
-            const F64 side = c.mCells * t.mCell;
-            const LLVector3d tile_min = m.mOrigin + LLVector3d(t.mOrigin);
-            const LLVector3d tile_centre = tile_min + LLVector3d(t.mWidth * t.mCell * 0.5, t.mHeight * t.mCell * 0.5, 0.0);
-            const F64 half = t.mWidth * t.mCell * 0.75;
-            if (dist_vec_squared2D(tile_centre, camera) > (reach + half) * (reach + half))
+            const LLVector3d centre = m.mOrigin + LLVector3d(f.mX + f.mSide * 0.5, f.mY + f.mSide * 0.5, 0.0);
+            if (dist_vec_squared2D(centre, camera) > reach2)
             {
                 continue;
             }
-            for (S32 cy = 0; cy < c.mHeight; ++cy)
+            LLColor4 color = draw.mSpaces[f.mSpace].mColor;
+            color.mV[VALPHA] = opaque ? 1.f : 0.45f;
+            const LLVector3 a = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(f.mX, f.mY, f.mZ + 0.06));
+            geom.tri(a, a + LLVector3(f.mSide, 0.f, 0.f), a + LLVector3(f.mSide, f.mSide, 0.f), color);
+            geom.tri(a, a + LLVector3(f.mSide, f.mSide, 0.f), a + LLVector3(0.f, f.mSide, 0.f), color);
+        }
+        // The outline rides over its fill a little, so the space reads as one
+        // polygon; the lift's phase differs from a neighbour's, so a border
+        // two spaces share does not flicker between them.
+        for (const SpaceDraw& s : draw.mSpaces)
+        {
+            LLColor4 color = s.mColor;
+            color.mV[VALPHA] = opaque ? 1.f : 0.9f;
+            for (const PlanEdge& e : s.mOutline)
             {
-                for (S32 cx = 0; cx < c.mWidth; ++cx)
+                const LLVector3d mid = m.mOrigin + LLVector3d((e.mX0 + e.mX1) * 0.5, (e.mY0 + e.mY1) * 0.5, 0.0);
+                if (dist_vec_squared2D(mid, camera) > reach2)
                 {
-                    const LLVector3d corner = tile_min + LLVector3d(cx * side, cy * side, 0.0);
-                    if (dist_vec_squared2D(corner + LLVector3d(side * 0.5, side * 0.5, 0.0), camera) > reach2)
-                    {
-                        continue;
-                    }
-                    const S32 cell = cx + cy * c.mWidth;
-                    for (U32 i = c.mStart[cell]; i < c.mStart[cell + 1]; ++i)
-                    {
-                        const CoarseGap& g = c.mGaps[i];
-                        if (!g.mSpace || g.mSpace > ids.size())
-                        {
-                            continue;
-                        }
-                        // A pastel per space id, the same from pass to pass.
-                        const U64 h = mix(SEED, ids[g.mSpace - 1]);
-                        const LLColor4 color(0.35f + 0.6f * ((h & 255) / 255.f), 0.35f + 0.6f * (((h >> 8) & 255) / 255.f),
-                                             0.35f + 0.6f * (((h >> 16) & 255) / 255.f), opaque ? 1.f : 0.45f);
-                        const F64 z = corner.mdV[VZ] + g.mFloor * t.mUnit + 0.06;
-                        const F32 inset = static_cast<F32>(side * 0.04);
-                        const LLVector3 a = gAgent.getPosAgentFromGlobal(LLVector3d(corner.mdV[VX], corner.mdV[VY], z)) + LLVector3(inset, inset, 0.f);
-                        const F32 s = static_cast<F32>(side) - 2.f * inset;
-                        geom.tri(a, a + LLVector3(s, 0.f, 0.f), a + LLVector3(s, s, 0.f), color);
-                        geom.tri(a, a + LLVector3(s, s, 0.f), a + LLVector3(0.f, s, 0.f), color);
-                    }
+                    continue;
                 }
+                const LLVector3 a = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(e.mX0, e.mY0, e.mZ + s.mLift));
+                const LLVector3 b = gAgent.getPosAgentFromGlobal(m.mOrigin + LLVector3d(e.mX1, e.mY1, e.mZ + s.mLift));
+                geom.edge(a, b, color);
             }
         }
         for (const Portal& p : m.mRooms->mPortals)

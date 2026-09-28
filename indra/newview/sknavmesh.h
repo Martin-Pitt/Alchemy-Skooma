@@ -63,6 +63,9 @@ public:
     /// Once per frame after the census.
     void update();
 
+    /// First reflection-probe placement pass, before the residual grid pass.
+    void placeReflectionProbes();
+
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
     void cleanupSingleton() override;
@@ -289,6 +292,11 @@ private:
     void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
 
     bool wanted() const;
+    /// Whether the reflection probes consume the rooms: room probes on,
+    /// probes enabled, and the probe level that shows the octree's probes
+    /// the rooms replace. Demands the navmesh runs for them, air and census
+    /// with it.
+    static bool probesDemanded();
     /// Whether a tile is near enough the camera to build its air eagerly.
     static bool inAirRadius(const Tile& tile);
     /// Bring the sky map in line with the published tiles' air.

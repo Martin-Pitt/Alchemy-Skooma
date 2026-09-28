@@ -26,13 +26,38 @@
 #define SK_NAVPROBES_H
 
 #include "sknavspaces.h"
+#include "sknavtypes.h"
 
 #include "v3math.h"
 
+#include <unordered_map>
 #include <vector>
 
 namespace sknav
 {
+    /// True only inside a known closed collision body, never a placeholder AABB.
+    bool probeInsideSolid(const Record& record, const LLVector3d& position);
+
+    /// The solid records of one census scan, bucketed by the lattice tiles
+    /// their global AABBs cover, with the oversized few -- spanning more than
+    /// a screen of tiles -- kept separate, where every point test reaches
+    /// them. A point test is one hash and the records of a single tile.
+    /// Holds its records by counted handle: rebuilding from a new scan lets
+    /// the old scan's records go.
+    class SolidLattice
+    {
+    public:
+        void clear();
+        /// Re-derive from the given records, dropping whatever was held.
+        void rebuild(const std::vector<RecordPtr>& records);
+        /// Whether the point lies inside any solid record's volume.
+        bool contains(const LLVector3d& p) const;
+
+    private:
+        std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mTiles;
+        std::vector<RecordPtr> mLarge;
+    };
+
     struct ProbeParams
     {
         F32 mCellM = 0.5f;          ///< the floor plan's cell, the spaces raster's
@@ -46,6 +71,8 @@ namespace sknav
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
         F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
         F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
+        F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
+        U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
     };
 
     /// A space's floor seen from above: per cell, its floor height, NaN
@@ -89,6 +116,8 @@ namespace sknav
     struct ProbeSlot
     {
         U64 mKey = 0;
+        U32 mSpace = 0;             ///< the space it belongs to, as the caller numbers them
+        U32 mPart = 0;              ///< the rank of its part in the space, the largest first
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
         F32 mArea = 0.f;
@@ -99,7 +128,7 @@ namespace sknav
     /// The plan of a space from its raster, the lowest floor per column.
     FloorPlan floorPlanOf(const Space& space, const ProbeParams& params);
 
-    /// Whether the space gets probes of its own: INDOORS or SHELTERED, under a ceiling.
+    /// Whether a known space has walkable raster cells for a full probe.
     bool wantsProbes(const Space& space, const ProbeParams& params);
 
     /// Split the plan into rectangles, greedily at its reflex corners, fold
@@ -120,6 +149,13 @@ namespace sknav
     /// Keep at most cap slots, dropping the far and small first; held ones
     /// rank hold_m nearer, so the kept set does not flicker at the edge.
     void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m = 0.f);
+
+    /// The budget a room probe stands in: while the cap holds fewer than twice
+    /// the candidates, one sphere per space at most, each standing mSpacingM
+    /// clear of the last, the far and small dropping first; with room to spare,
+    /// every part places however close. Held ones rank mBudgetHoldM nearer
+    /// throughout, so the kept set does not flicker at either edge.
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params);
 
     /// Pair each new origin with the nearest held one within tolerance, the
     /// closest pairs first and each held one at most once: per origin, the
