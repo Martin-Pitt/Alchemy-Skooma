@@ -26,7 +26,10 @@
 
 #include "altextundo.h"
 
+#include "llsdserialize.h"
 #include "llstring.h"
+
+#include <sstream>
 
 namespace
 {
@@ -127,9 +130,17 @@ namespace
     // the one edit it amounts to.
     bool fold(ALTextDocument::Edit& first, const ALTextDocument::Edit& next)
     {
+        // A batch's stretches say where each of its parts is: nothing
+        // folds into one, nor one into anything.
+        if (!first.parts.empty() || !next.parts.empty())
+        {
+            return false;
+        }
         if (first.removed.empty() && next.removed.empty() && next.range.begin == next.range.end && next.range.begin == first.endAfter())
         {
+            // Both end where the second does.
             first.inserted += next.inserted;
+            first.keepEnd(next.endAfter());
             return true;
         }
         if (!first.inserted.empty() || !next.inserted.empty())
@@ -141,6 +152,7 @@ namespace
             // Backspaced: what it took stood right before what the first took.
             first.range   = ALTextRange(next.range.begin, first.range.end);
             first.removed = next.removed + first.removed;
+            first.keepEnd(first.range.begin);
             return true;
         }
         if (next.range.begin == first.range.begin)
@@ -152,6 +164,7 @@ namespace
             reach.range    = ALTextRange(first.range.begin, first.range.begin);
             reach.inserted = first.removed;
             first.range    = ALTextRange(first.range.begin, reach.endAfter());
+            first.keepEnd(first.range.begin);
             return true;
         }
         return false;
@@ -192,9 +205,16 @@ bool ALTextUndo::carriesOn(const Step& last, const ALTextDocument::Edit& next)
     {
         return false;
     }
+    // The tail told by what it does rather than by how much: a run's edits
+    // are folded into one as they join, so a run of typing ends in an edit
+    // of many characters. A step that is not a run has another key, which
+    // is what keeps the next edit from joining it.
     const ALTextDocument::Edit& tail = last.edits.back();
     const Kind                  kind = kindOf(next);
-    if (kind != kindOf(tail))
+    const Kind                  was  = tail.removed.empty() && !tail.inserted.empty() ? Kind::Typing
+                                       : tail.inserted.empty() && !tail.removed.empty() ? Kind::Erasing
+                                                                                        : Kind::Other;
+    if (kind != was)
     {
         return false;
     }
@@ -214,12 +234,22 @@ bool ALTextUndo::carriesOn(const Step& last, const ALTextDocument::Edit& next)
 
 void ALTextUndo::join(Step& last, Step&& next)
 {
+    // Each edit folded into the one before it where it carries straight on
+    // from it -- a run of typing kept as the one edit it amounts to, and
+    // undone and redone as one -- and kept after it otherwise.
     for (ALTextDocument::Edit& edit : next.edits)
     {
-        last.edits.push_back(std::move(edit));
+        // A fold joins the texts, which weigh what they did apart.
+        last.bytes += edit.removed.size() + edit.inserted.size();
+        if (last.edits.empty() || !fold(last.edits.back(), edit))
+        {
+            last.bytes += EDIT_WRITTEN;
+            last.edits.push_back(std::move(edit));
+        }
     }
     last.caretAfter  = next.caretAfter;
     last.anchorAfter = next.anchorAfter;
+    last.written.clear();
 }
 
 void ALTextUndo::record(const ALTextDocument::Edit& edit, const ALTextPos& before, const ALTextPos& after, F64 now)
@@ -233,9 +263,22 @@ void ALTextUndo::settle(const ALTextRange& selection)
     {
         return;
     }
+    ++mRevision;
     Step& newest       = mSteps.newest();
     newest.anchorAfter = selection.begin;
     newest.caretAfter  = selection.end;
+    newest.written.clear();
+}
+
+void ALTextUndo::label(std::string_view text)
+{
+    ++mRevision;
+    // The newest may be named by it, and be written again.
+    if (!mSteps.undone().empty())
+    {
+        mSteps.newest().written.clear();
+    }
+    mSteps.label(text);
 }
 
 void ALTextUndo::record(const ALTextDocument::Edit& edit, const ALTextRange& before_in, const ALTextPos& after, F64 now)
@@ -244,6 +287,7 @@ void ALTextUndo::record(const ALTextDocument::Edit& edit, const ALTextRange& bef
     {
         return;
     }
+    ++mRevision;
     mSettling               = true;
     const ALTextPos& before = before_in.end;
     // A change after an undo throws the redo steps away; the saved text,
@@ -260,53 +304,115 @@ void ALTextUndo::record(const ALTextDocument::Edit& edit, const ALTextRange& bef
     step.caretAfter   = after;
     step.anchorAfter  = after;
     step.serial       = ++mNextSerial;
+    step.bytes        = STEP_WRITTEN + EDIT_WRITTEN + edit.removed.size() + edit.inserted.size();
+    step.typed        = mTypingDepth > 0 && !mSteps.inGroup();
 
-    // The key a run is joined by: the open group, or the kind of change
-    // where it carries on the last step; anything else ends the run first.
-    std::string_view key = "group";
-    if (mGroupDepth == 0)
+    // The key a run is joined by: the kind of change, where it carries on
+    // the last step; anything else ends the run first. A group is one step
+    // however long it stays open, which the stack keeps; a run is one step
+    // while its changes come within the window.
+    std::string_view key = keyOf(kindOf(edit));
+    if (step.typed)
     {
-        key = keyOf(kindOf(edit));
-        if (mSteps.undone().empty() || !carriesOn(mSteps.undone().back(), edit))
+        // A key typed: its first edit carries on a run of keys typed where
+        // the key was typed where the run left the caret, or its text
+        // ended, with nothing selected; the rest of what the key does is
+        // one with the first, at the same moment.
+        key = keyOf(Kind::Typing);
+        if (!mTypingNoted)
         {
-            mSteps.breakRun();
+            mTypingNoted                    = true;
+            const std::vector<Step>& undone = mSteps.undone();
+            const bool               on     = !undone.empty() && undone.back().typed && mTypingAt.begin == mTypingAt.end &&
+                                              (mTypingAt.end == undone.back().caretAfter ||
+                                               (!undone.back().edits.empty() && mTypingAt.end == undone.back().edits.back().endAfter()));
+            if (!on)
+            {
+                mSteps.breakRun();
+            }
         }
     }
-    // A group is one step however long it stays open; a run is one step
-    // while its changes come within the window. The oldest step forgotten
-    // past the depth takes the saved mark down with it -- or away, where
-    // the saved text was what that step led from, since no stepping
-    // back reaches it any more.
-    if (mSteps.note(std::move(step), key, now, mGroupDepth > 0 ? 1e9 : mWindow, join))
+    else if (!mSteps.inGroup() && (mSteps.undone().empty() || !carriesOn(mSteps.undone().back(), edit)))
     {
-        ++mEra;
-        if (mSavedInForce != NOWHERE)
-        {
-            mSavedInForce = mSavedInForce == 0 ? NOWHERE : mSavedInForce - 1;
-        }
+        mSteps.breakRun();
+    }
+    // A new step, or the newest joined: what it weighs now counted.
+    const size_t steps  = mSteps.undone().size();
+    const size_t newest = steps > 0 ? mSteps.undone().back().bytes : 0;
+    mSteps.note(std::move(step), key, now, mWindow, join);
+    mUndoneBytes += mSteps.undone().back().bytes - (mSteps.undone().size() > steps ? 0 : newest);
+    forgetOverBudget();
+}
+
+void ALTextUndo::beginTyping(const ALTextRange& selection)
+{
+    if (mTypingDepth++ == 0)
+    {
+        mTypingAt    = selection;
+        mTypingNoted = false;
+    }
+}
+
+void ALTextUndo::endTyping()
+{
+    if (mTypingDepth > 0 && --mTypingDepth == 0)
+    {
+        mTypingNoted = false;
+    }
+}
+
+void ALTextUndo::forgetOverBudget()
+{
+    // A group still filling its step is weighed once it closes.
+    if (mSteps.inGroup() || mUndoneBytes <= BUDGET)
+    {
+        return;
+    }
+    for (size_t forgot = mSteps.forgetOverBudget(BUDGET, weigh); forgot > 0; --forgot)
+    {
+        forgotOldest();
+    }
+    mUndoneBytes = undoneBytes();
+}
+
+size_t ALTextUndo::undoneBytes() const
+{
+    size_t bytes = 0;
+    for (const Step& step : mSteps.undone())
+    {
+        bytes += step.bytes;
+    }
+    return bytes;
+}
+
+void ALTextUndo::forgotOldest()
+{
+    // The oldest step forgotten past the budget takes the saved mark down
+    // with it -- or away, where the saved text was what that step led from,
+    // since no stepping back reaches it any more.
+    ++mEra;
+    ++mRevision;
+    if (mSavedInForce != NOWHERE)
+    {
+        mSavedInForce = mSavedInForce == 0 ? NOWHERE : mSavedInForce - 1;
     }
 }
 
 void ALTextUndo::beginGroup()
 {
-    if (mGroupDepth++ == 0)
-    {
-        mSteps.breakRun();
-    }
+    mSteps.beginGroup();
 }
 
 void ALTextUndo::endGroup()
 {
-    if (mGroupDepth > 0 && --mGroupDepth == 0)
-    {
-        mSteps.breakRun();
-    }
+    mSteps.endGroup();
+    forgetOverBudget();
 }
 
 void ALTextUndo::closeGroups()
 {
-    mGroupDepth = 0;
-    mSteps.breakRun();
+    mSteps.closeGroups();
+    forgetOverBudget();
 }
 
 std::optional<ALTextRange> ALTextUndo::undo()
@@ -317,10 +423,12 @@ std::optional<ALTextRange> ALTextUndo::undo()
         return std::nullopt;
     }
     mSettling = false;
+    ++mRevision;
+    mUndoneBytes -= step->bytes;
     for (auto it = step->edits.rbegin(); it != step->edits.rend(); ++it)
     {
         const ALTextDocument::Edit back = it->inverse();
-        mDocument.replace(back.range, back.inserted);
+        mDocument.replace(back.range, back.inserted, back.parts);
     }
     const ALTextRange selection(step->anchorBefore, step->caretBefore);
     mSteps.pushRedo(std::move(*step));
@@ -335,9 +443,11 @@ std::optional<ALTextRange> ALTextUndo::redo()
         return std::nullopt;
     }
     mSettling = false;
+    ++mRevision;
+    mUndoneBytes += step->bytes;
     for (const ALTextDocument::Edit& edit : step->edits)
     {
-        mDocument.replace(edit.range, edit.inserted);
+        mDocument.replace(edit.range, edit.inserted, edit.parts);
     }
     const ALTextRange selection(step->anchorAfter, step->caretAfter);
     mSteps.pushUndo(std::move(*step));
@@ -346,8 +456,9 @@ std::optional<ALTextRange> ALTextUndo::redo()
 
 void ALTextUndo::clear()
 {
+    ++mRevision;
     mSteps.clear();
-    mGroupDepth   = 0;
+    mUndoneBytes  = 0;
     mSavedInForce = 0;
     mSettling     = false;
     ++mEra;
@@ -355,13 +466,17 @@ void ALTextUndo::clear()
 
 void ALTextUndo::markSaved()
 {
+    ++mRevision;
     mSavedInForce = mSteps.inForce();
     mSteps.breakRun();
 }
 
-LLSD ALTextUndo::asLLSD(size_t budget) const
+namespace
 {
-    const auto stepAsLLSD = [](const Step& step, size_t& bytes) {
+    // A step as it is written: its carets, its name, and its edits, each
+    // run folded into the one edit it amounts to.
+    LLSD stepAsLLSD(const ALTextUndo::Step& step)
+    {
         LLSD out;
         out["label"]  = step.mLabel;
         out["before"] = posAsLLSD(step.caretBefore);
@@ -375,13 +490,7 @@ LLSD ALTextUndo::asLLSD(size_t budget) const
         {
             out["anchor_after"] = posAsLLSD(step.anchorAfter);
         }
-        bytes += STEP_WRITTEN + step.mLabel.size();
-        LLSD       edits = LLSD::emptyArray();
-        const auto write = [&edits, &bytes](const ALTextDocument::Edit& edit) {
-            bytes += EDIT_WRITTEN + edit.removed.size() + edit.inserted.size();
-            edits.append(editAsLLSD(edit));
-        };
-        // Each run folded into the one edit it amounts to as it is written.
+        LLSD                                edits = LLSD::emptyArray();
         std::optional<ALTextDocument::Edit> pending;
         for (const ALTextDocument::Edit& edit : step.edits)
         {
@@ -391,88 +500,144 @@ LLSD ALTextUndo::asLLSD(size_t budget) const
             }
             if (pending)
             {
-                write(*pending);
+                edits.append(editAsLLSD(*pending));
             }
             pending = edit;
         }
         if (pending)
         {
-            write(*pending);
+            edits.append(editAsLLSD(*pending));
         }
         out["edits"] = edits;
         return out;
-    };
+    }
+}
+
+ALTextUndo::Written ALTextUndo::writtenWithin(size_t budget) const
+{
     const std::vector<Step>& undone = mSteps.undone();
     const std::vector<Step>& redone = mSteps.redone();
+    Written                  out;
     // The steps forward, all or none: part of them would lead nowhere the
     // text was.
     size_t used = 0;
-    LLSD   ahead = LLSD::emptyArray();
     for (const Step& step : redone)
     {
-        ahead.append(stepAsLLSD(step, used));
+        used += weighWritten(step);
     }
-    if (used > budget / 4)
+    out.ahead = used <= budget / 4;
+    if (!out.ahead)
     {
-        ahead = LLSD::emptyArray();
-        used  = 0;
+        used = 0;
     }
-    // The steps back, newest first, as many as the budget holds.
-    std::vector<LLSD> back;
-    size_t            first = undone.size();
-    while (first > 0)
+    // The steps back, newest first, as many as the budget holds, and the
+    // newest whatever it weighs.
+    out.first = undone.size();
+    while (out.first > 0)
     {
-        size_t     bytes = 0;
-        const LLSD step  = stepAsLLSD(undone[first - 1], bytes);
-        if (used + bytes > budget && !back.empty())
+        const size_t bytes = weighWritten(undone[out.first - 1]);
+        if (used + bytes > budget && out.first < undone.size())
         {
             break;
         }
         used += bytes;
-        back.push_back(step);
-        --first;
+        --out.first;
     }
-    LLSD out;
-    out["version"] = HISTORY_VERSION;
-    out["undo"]    = LLSD::emptyArray();
-    for (auto it = back.rbegin(); it != back.rend(); ++it)
-    {
-        out["undo"].append(*it);
-    }
-    out["redo"] = ahead;
     // Where the saved text stands, counted from the oldest step kept; a
     // mark among the steps let go of, or past the steps forward kept, is
     // nowhere.
-    S32 saved = -1;
-    if (mSavedInForce != NOWHERE && mSavedInForce >= first)
+    if (mSavedInForce != NOWHERE && mSavedInForce >= out.first)
     {
-        const size_t at = mSavedInForce - first;
-        if (at <= back.size() + static_cast<size_t>(ahead.size()))
+        const size_t at = mSavedInForce - out.first;
+        if (at <= undone.size() - out.first + (out.ahead ? redone.size() : 0))
         {
-            saved = static_cast<S32>(at);
+            out.saved = static_cast<S32>(at);
         }
     }
-    out["saved"] = saved;
     return out;
 }
 
-bool ALTextUndo::fromLLSD(const LLSD& sd)
+LLSD ALTextUndo::asLLSD(size_t budget) const
+{
+    const Written            within = writtenWithin(budget);
+    const std::vector<Step>& undone = mSteps.undone();
+    LLSD                     out;
+    out["version"] = HISTORY_VERSION;
+    out["undo"]    = LLSD::emptyArray();
+    for (size_t i = within.first; i < undone.size(); ++i)
+    {
+        out["undo"].append(stepAsLLSD(undone[i]));
+    }
+    out["redo"] = LLSD::emptyArray();
+    if (within.ahead)
+    {
+        for (const Step& step : mSteps.redone())
+        {
+            out["redo"].append(stepAsLLSD(step));
+        }
+    }
+    out["saved"] = within.saved;
+    return out;
+}
+
+std::string ALTextUndo::asNotation(size_t budget) const
+{
+    // Each step as it was written the last time, or written now and kept;
+    // the frame around them as LLSD notation writes a map and its arrays,
+    // so that it reads back as asLLSD's.
+    const auto written = [](const Step& step) -> const std::string& {
+        if (step.written.empty())
+        {
+            std::ostringstream text;
+            LLSDSerialize::toNotation(stepAsLLSD(step), text);
+            step.written = text.str();
+        }
+        return step.written;
+    };
+    const Written            within = writtenWithin(budget);
+    const std::vector<Step>& undone = mSteps.undone();
+    std::string              out    = "{'version':i" + std::to_string(HISTORY_VERSION) + ",'undo':[";
+    for (size_t i = within.first; i < undone.size(); ++i)
+    {
+        if (i > within.first)
+        {
+            out += ',';
+        }
+        out += written(undone[i]);
+    }
+    out += "],'redo':[";
+    if (within.ahead)
+    {
+        bool first = true;
+        for (const Step& step : mSteps.redone())
+        {
+            if (!first)
+            {
+                out += ',';
+            }
+            first = false;
+            out += written(step);
+        }
+    }
+    out += "],'saved':i" + std::to_string(within.saved) + "}";
+    return out;
+}
+
+// static
+std::optional<ALTextUndo::History> ALTextUndo::historyFrom(const LLSD& sd, std::string_view text)
 {
     if (!sd.isMap() || sd["version"].asInteger() != HISTORY_VERSION || !sd["undo"].isArray() || !sd["redo"].isArray())
     {
-        return false;
+        return std::nullopt;
     }
-    // Numbered afresh as they are read: a save point taken before this is
-    // of another journal.
-    U64        serial   = mNextSerial;
-    const auto stepFrom = [&serial](const LLSD& one, std::vector<Step>& into) {
+    const auto stepFrom = [](const LLSD& one, std::vector<Step>& into) {
         Step step;
-        step.serial      = ++serial;
-        step.mLabel      = one["label"].asString();
+        step.mLabel       = one["label"].asString();
         step.caretBefore  = posFrom(one["before"]);
         step.caretAfter   = posFrom(one["after"]);
         step.anchorBefore = one.has("anchor_before") ? posFrom(one["anchor_before"]) : step.caretBefore;
         step.anchorAfter  = one.has("anchor_after") ? posFrom(one["anchor_after"]) : step.caretAfter;
+        step.bytes        = STEP_WRITTEN;
         for (LLSD::array_const_iterator it = one["edits"].beginArray(); it != one["edits"].endArray(); ++it)
         {
             ALTextDocument::Edit edit;
@@ -480,56 +645,83 @@ bool ALTextUndo::fromLLSD(const LLSD& sd)
             {
                 return false;
             }
+            step.bytes += EDIT_WRITTEN + edit.removed.size() + edit.inserted.size();
             step.edits.push_back(std::move(edit));
         }
         into.push_back(std::move(step));
         return true;
     };
-    std::vector<Step> undo;
-    std::vector<Step> redo;
+    History history;
     for (LLSD::array_const_iterator it = sd["undo"].beginArray(); it != sd["undo"].endArray(); ++it)
     {
-        if (!stepFrom(*it, undo))
+        if (!stepFrom(*it, history.undo))
         {
-            return false;
+            return std::nullopt;
         }
     }
     for (LLSD::array_const_iterator it = sd["redo"].beginArray(); it != sd["redo"].endArray(); ++it)
     {
-        if (!stepFrom(*it, redo))
+        if (!stepFrom(*it, history.redo))
         {
-            return false;
+            return std::nullopt;
         }
     }
-    // Every step tried first: back from the text as it stands, the newest
-    // first, and forward from it, the next first. A history of another
-    // text fails here rather than taking a text apart when it is stepped.
+    // Every step tried: back from the text, the newest first, and forward
+    // from it, the next first. A history of another text fails here rather
+    // than taking a text apart when it is stepped.
     {
-        ALTextDocument back(mDocument.text());
-        for (auto it = undo.rbegin(); it != undo.rend(); ++it)
+        ALTextDocument back(text);
+        for (auto it = history.undo.rbegin(); it != history.undo.rend(); ++it)
         {
             if (!replay(back, *it, false))
             {
-                return false;
+                return std::nullopt;
             }
         }
-        ALTextDocument ahead(mDocument.text());
-        for (auto it = redo.rbegin(); it != redo.rend(); ++it)
+        ALTextDocument ahead(text);
+        for (auto it = history.redo.rbegin(); it != history.redo.rend(); ++it)
         {
             if (!replay(ahead, *it, true))
             {
-                return false;
+                return std::nullopt;
             }
         }
     }
-    const S32    saved   = sd["saved"].asInteger();
-    const size_t steps   = undo.size() + redo.size();
-    const size_t dropped = mSteps.restore(std::move(undo), std::move(redo));
-    mNextSerial          = serial;
+    history.saved = sd["saved"].asInteger();
+    return history;
+}
+
+void ALTextUndo::restore(History history)
+{
+    // Numbered afresh: a save point taken before this is of another
+    // journal.
+    for (Step& step : history.undo)
+    {
+        step.serial = ++mNextSerial;
+    }
+    for (Step& step : history.redo)
+    {
+        step.serial = ++mNextSerial;
+    }
+    const S32    saved   = history.saved;
+    const size_t steps   = history.undo.size() + history.redo.size();
+    const size_t dropped = mSteps.restore(std::move(history.undo), std::move(history.redo));
+    mUndoneBytes         = undoneBytes();
     ++mEra;
-    mGroupDepth   = 0;
+    ++mRevision;
     mSettling     = false;
     mSavedInForce = saved >= 0 && static_cast<size_t>(saved) <= steps && static_cast<size_t>(saved) >= dropped ? static_cast<size_t>(saved) - dropped : NOWHERE;
+    forgetOverBudget();
+}
+
+bool ALTextUndo::fromLLSD(const LLSD& sd)
+{
+    std::optional<History> history = historyFrom(sd, mDocument.text());
+    if (!history)
+    {
+        return false;
+    }
+    restore(std::move(*history));
     return true;
 }
 
@@ -567,6 +759,7 @@ std::optional<std::string> ALTextUndo::savedText() const
 
 void ALTextUndo::markNeverSaved()
 {
+    ++mRevision;
     mSavedInForce = NOWHERE;
     mSteps.breakRun();
 }
@@ -587,6 +780,7 @@ ALTextUndo::SavePoint ALTextUndo::savePoint()
 
 void ALTextUndo::markSaved(const SavePoint& point)
 {
+    ++mRevision;
     if (point.serial == 0)
     {
         // The text before any step: reachable while the bottom of the

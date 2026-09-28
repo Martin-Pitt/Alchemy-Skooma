@@ -143,4 +143,89 @@ namespace tut
         services.openScript(ref, "Door", std::nullopt, 12);
         ensure("asked to open at a line", services.opened.size() == 1 && services.opened.front().line == 12);
     }
+
+    template<> template<>
+    void alscriptstudiodoc_object::test<5>()
+    {
+        set_test_name("an include or a module a place names: anywhere on an #include line, or in a require call; and what a run found it as");
+        const ALTextDocument lsl("default {}\n  #  include \"lib/util.lsl\" // the helpers\n#include <sys.lsl>\n#define X \"y.lsl\"\n");
+        const std::vector<ALPreprocessor::Required> none;
+        const std::optional<Doc::Named> util = Doc::namedIn(lsl, ALTextPos(1, 0), false, none);
+        ensure("on its line, before the #", util.has_value() && util->name == "lib/util.lsl" && !util->require);
+        ensure("the whole line", util->range == ALTextRange(ALTextPos(1, 0), ALTextPos(1, lsl.lineLength(1))));
+        ensure("angled", Doc::namedIn(lsl, ALTextPos(2, 12), false, none)->name == "sys.lsl");
+        ensure("not a string elsewhere",
+               !Doc::namedIn(lsl, ALTextPos(3, 12), false, none) && !Doc::namedIn(lsl, ALTextPos(0, 3), false, none));
+
+        const std::string                           source = "local m = require(\"mod\")\nlocal n = 1\n";
+        const ALTextDocument                        lua(source);
+        const std::vector<ALPreprocessor::Required> calls  = ALPreprocessor::requiresIn(source);
+        const std::optional<Doc::Named>             mod    = Doc::namedIn(lua, ALTextPos(0, 12), true, calls);
+        ensure("in a require call", mod.has_value() && mod->name == "mod" && mod->require);
+        ensure("over the call", mod->range == ALTextRange(ALTextPos(0, 10), ALTextPos(0, 24)));
+        ensure("not before it", !Doc::namedIn(lua, ALTextPos(0, 3), true, calls));
+        ensure("not in LSL", !Doc::namedIn(lua, ALTextPos(0, 12), false, calls));
+
+        Doc doc;
+        ensure("no run, nothing found", doc.foundAs("lib/util.lsl").empty());
+        doc.expanded.valid    = true;
+        doc.expanded.resolved = { { "", "lib/util.lsl", false, "disk:/s/lib/util.lsl" },
+                                  { "disk:/s/lib/util.lsl", "inner.lsl", false, "disk:/s/inner.lsl" },
+                                  { "", "mod", true, "inv:mod" } };
+        ensure_equals("the script's own", doc.foundAs("lib/util.lsl"), std::string("disk:/s/lib/util.lsl"));
+        ensure("not an include's own", doc.foundAs("inner.lsl").empty());
+        ensure("a module as a module", doc.foundAs("mod", true) == "inv:mod" && doc.foundAs("mod", false).empty());
+        doc.expanded.valid  = false;
+        doc.uploaded.valid  = true;
+        doc.uploaded.resolved = { { "", "lib/util.lsl", false, "disk:/s/other.lsl" } };
+        ensure_equals("or the last save's run", doc.foundAs("lib/util.lsl"), std::string("disk:/s/other.lsl"));
+    }
+
+    template<> template<>
+    void alscriptstudiodoc_object::test<6>()
+    {
+        set_test_name("a run-time error read back to the source, counted where said again; held until the map is known, then placed");
+        Doc doc;
+        // Six lines run: the first two the include's, the rest the
+        // script's from its first line on.
+        ALSourceMap map;
+        map.addFile("script", "script");
+        map.addFile("lib.lsl", "disk:/s/lib.lsl");
+        for (S32 line = 0; line < 6; ++line)
+        {
+            ALSourceMap::Segment segment;
+            segment.outLine = line;
+            segment.length  = 20;
+            segment.file    = line < 2 ? 1 : 0;
+            segment.line    = line < 2 ? line : line - 2;
+            map.add(segment);
+        }
+        map.finish();
+
+        Doc::RuntimeProblem said;
+        said.line    = 4;
+        said.message = "Math Error";
+        ensure_equals("no map: as the region counts it", doc.placeOfRunning(4, -1).line, 4);
+        doc.heardRuntime(said, true);
+        ensure("held", doc.runtime.empty() && doc.runtimeHeld.size() == 1);
+        doc.heardRuntime(said, true);
+
+        doc.uploaded.valid = true;
+        doc.uploaded.map   = map;
+        const Doc::RunningPlace place = doc.placeOfRunning(1, 3);
+        ensure("an include's line, by its path and name", place.line == 1 && place.column == 3 && place.file == "disk:/s/lib.lsl" && place.fileName == "lib.lsl");
+        doc.placeHeldRuntime();
+        ensure("placed, and let go of", doc.runtimeHeld.empty() && doc.runtime.size() == 1);
+        ensure("at the source's line, said twice", doc.runtime[0].line == 2 && doc.runtime[0].file.empty() && doc.runtime[0].count == 2);
+        doc.heardRuntime(said, false);
+        ensure_equals("said again: counted", doc.runtime[0].count, 3);
+        said.line = 0;
+        doc.heardRuntime(said, false);
+        ensure("in the include", doc.runtime.size() == 2 && doc.runtime[1].file == "disk:/s/lib.lsl" && doc.runtime[1].line == 0);
+        const Doc::RunningPlace made = doc.placeOfRunning(9, -1);
+        ensure("past the map: code the preprocessor made, at its own line", made.generated && made.line == 9 && made.file.empty());
+        said.line = 9;
+        doc.heardRuntime(said, false);
+        ensure("said to be there", doc.runtime.size() == 3 && doc.runtime[2].file == Doc::GENERATED && doc.runtime[2].line == 9);
+    }
 }

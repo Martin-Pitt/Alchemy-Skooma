@@ -55,7 +55,8 @@
 
 #include <boost/unordered_map.hpp>
 
-class ALXUILiveFile;
+class ALWatchedFile;
+class ALPaneList;
 class ALPropertyGrid;
 class ALDockPanel;
 class ALXUICanvas;
@@ -266,6 +267,9 @@ public:
 
     // A file of the primary preview changed on disk.
     void fileChanged();
+    // A write of the tool's own is no change from outside: every file
+    // watched is taken as it now stands.
+    void sawOwnWrites();
 
     // Read the catalog and the previews again, for the button that says so.
     void reloadAll();
@@ -275,6 +279,16 @@ public:
     const ALXUICatalog& catalog() const { return mCatalog; }
 
 private:
+    // The keys the window answers to by name (the studio's table): find,
+    // open, the documents round, the panes, and the way out of a selection.
+    void addKeys();
+    // Control-F: the source's find where the source is in front, else the
+    // tree's filter.
+    void findInFront();
+    // The next document or the one before, round the canvas's tabs.
+    void cycleDocument(S32 direction);
+    // Between the outline and the canvas.
+    void switchPane();
     ALFloaterXUIStudio(const LLSD& key);
     ~ALFloaterXUIStudio() override;
 
@@ -293,7 +307,7 @@ private:
         ALXUILint                                   lint;
         std::string                                 skin;
         std::string                                 language;
-        std::vector<std::unique_ptr<ALXUILiveFile>> liveFiles;
+        std::vector<std::unique_ptr<ALWatchedFile>> liveFiles;
         std::vector<ALXUIDiagnostics::Entry>        diagnostics;
         S32                                         views = 0;
         F32                                         seconds = 0.f;
@@ -379,7 +393,7 @@ private:
     void onTreeHover(const ALXUITreeItem* item);
     // Find, said as a sentence. Built here rather than in the file because
     // two of its dropdowns name the skin and language in force.
-    void buildFindBar();
+    void buildScopeBar();
     void onFindScope();
 
     void runLint();
@@ -642,18 +656,9 @@ private:
     void closeDocumentAnswered(const std::string& path, S32 option);
     void letGoOf(const std::string& path);
 
-    // Every list in the tool is a table someone will want in a message or
-    // a bug report: shift and control extend the selection, and the right
-    // button copies it as a table with a heading and a line saying what it
-    // is about, or copies the one cell it was over.
-    void watchList(LLScrollListCtrl* list);
-    void onListRightClick(LLUICtrl* ctrl, S32 x, S32 y, MASK mask);
-    void onListAction(const LLSD& param);
-    bool onListActionEnabled(const LLSD& param);
+    // What a list copied from is about: the file and the element, or the
+    // search, said over the rows.
     std::string listCaption(const LLScrollListCtrl* list) const;
-    std::string listAsText(LLScrollListCtrl* list, const std::vector<LLScrollListItem*>& rows) const;
-    void copyList(LLScrollListCtrl* list, const std::vector<LLScrollListItem*>& rows) const;
-    LLScrollListCtrl* focusedList() const;
 
     ALXUICatalog        mCatalog;
     ALXUITranslate      mTranslate;
@@ -733,10 +738,6 @@ private:
     bool                mSourceSyncing     = false;
     bool                mSourceCaretPending = false;
 
-    LLScrollListCtrl*               mMenuList = nullptr;    // the list the right button was over
-    std::string                     mMenuCell;      // the cell it was over
-    LLHandle<LLView>                mListMenu;
-    std::vector<LLScrollListCtrl*>  mLists;
 
     Sweep                           mSweep;
 
@@ -768,7 +769,7 @@ private:
     S32                             mLintFindings = 0;
 
     LLFilterEditor*     mCatalogFilter = nullptr;
-    LLScrollListCtrl*   mFileList = nullptr;
+    ALPaneList*         mFileList = nullptr;
     LLComboBox*         mSkinCombo = nullptr;
     LLComboBox*         mLanguageCombo = nullptr;
     LLComboBox*         mLanguageCombo2 = nullptr;
@@ -778,24 +779,24 @@ private:
     ALTabStrip*         mCanvasTabs = nullptr;
     LLButton*           mCanvasShown = nullptr;
     LLButton*           mCanvasPinned = nullptr;
-    ALScopeBar*         mFindBar = nullptr;
+    ALScopeBar*         mScopeBar = nullptr;
     LLTextBox*          mFindCount = nullptr;
-    LLScrollListCtrl*   mFindResults = nullptr;
+    ALPaneList*         mFindResults = nullptr;
     LLFilterEditor*     mTreeFilter = nullptr;
     LLPanel*            mTreePanel = nullptr;
     LLFolderView*       mTree = nullptr;
     ALJumpBar*          mBreadcrumb = nullptr;
     ALHistoryList*      mHistory = nullptr;
-    LLScrollListCtrl*   mDocumentList = nullptr;
-    LLScrollListCtrl*   mSourceLayerList = nullptr;
+    ALPaneList*         mDocumentList = nullptr;
+    ALPaneList*         mSourceLayerList = nullptr;
     // The list inside the gutter popover, which lives only while it is up.
-    LLHandle<LLView>    mGutterPopover;
-    LLScrollListCtrl*   mGutterList = nullptr;
+    ALPopoverSlot       mGutterPopover;
+    ALPaneList*         mGutterList = nullptr;
     LLTextBox*          mOverrideField = nullptr;
     // The field the layer table is about: whichever gutter was last clicked,
     // or whichever row of the grid is selected.
     std::string         mGutterField;
-    LLScrollListCtrl*   mFindings = nullptr;
+    ALPaneList*         mFindings = nullptr;
     LLComboBox*         mFindingScope = nullptr;
     LLComboBox*         mFindingRule = nullptr;
     LLComboBox*         mFindingSeverity = nullptr;
@@ -809,7 +810,7 @@ private:
     LLTextBox*          mAttributeWhat = nullptr;       // what is selected, in its own words
     LLFilterEditor*     mAttributeFilter = nullptr;
     ALSpecimenList*     mPalette = nullptr;
-    LLScrollListCtrl*   mPaletteAttributes = nullptr;
+    ALPaneList*         mPaletteAttributes = nullptr;
     // The element named for reparenting, until somewhere is chosen for it.
     ALXUISelection::path_t mCutPath;
     // What a drag is carrying: an element by path, or a tag from the
@@ -819,27 +820,27 @@ private:
     LLUUID              mDragId;
     ALXUISelection::path_t mRenamedFrom;    // and where a rename moved it,
     ALXUISelection::path_t mRenamedTo;      // until the rows are made again
-    LLScrollListCtrl*   mLayout = nullptr;
+    ALPaneList*         mLayout = nullptr;
     LLTextBox*          mSourceLayers = nullptr;
     ALCodeEditor*       mSourceText = nullptr;
-    LLScrollListCtrl*   mBindings = nullptr;
-    LLScrollListCtrl*   mState = nullptr;
-    LLScrollListCtrl*   mSelectionFindings = nullptr;
+    ALPaneList*         mBindings = nullptr;
+    ALPaneList*         mState = nullptr;
+    ALPaneList*         mSelectionFindings = nullptr;
     LLTabContainer*     mModes = nullptr;
     LLTabContainer*     mBottom = nullptr;
-    LLScrollListCtrl*   mNotifications = nullptr;
+    ALPaneList*         mNotifications = nullptr;
     LLFilterEditor*     mNotificationFilter = nullptr;
     // The template being previewed, when the file is notifications.xml.
     std::string         mNotification;
 
-    LLScrollListCtrl*   mChannels = nullptr;
+    ALPaneList*         mChannels = nullptr;
     LLComboBox*         mChannelResponse = nullptr;
     // The listeners are disconnected here: a channel outlives this floater,
     // and a signal still bound to a closed one calls into freed memory.
     std::vector<LLBoundListener>                            mChannelListeners;
     boost::unordered_map<std::string, LLNotificationPtr>     mChannelNotifications;
     LLComboBox*         mTranslateLanguage = nullptr;
-    LLScrollListCtrl*   mTranslateList = nullptr;
+    ALPaneList*         mTranslateList = nullptr;
     LLTextEditor*       mTranslateValue = nullptr;
     LLTextBox*          mTranslateCounts = nullptr;
     LLTextBox*          mEditTarget = nullptr;
