@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <!-- Script Studio's keyboard map, a tab of its preferences: every
      command of the editor, and of the studio's menus, with the keys it
-     answers to, to read, to search, and to change. A menu item answers to
-     one key; an editor's command to as many as it is given. -->
+     answers to, to read, to search, and to change. A command answers to
+     as many keys as it is given; a menu item shows the first. -->
 <panel
  follows="all"
  height="440"
@@ -12,41 +12,14 @@
     <panel.string name="NoKeys">(none)</panel.string>
     <panel.string name="Changed">changed</panel.string>
     <panel.string name="KeyTaken">[KEYS] was [WHOSE]'s; it is [WHAT]'s now.</panel.string>
-    <panel.string name="menu_new_script">New script</panel.string>
-    <panel.string name="menu_new_lua_script">New SLua script</panel.string>
-    <panel.string name="menu_save">Save</panel.string>
-    <panel.string name="menu_save_all">Save all</panel.string>
-    <panel.string name="menu_revert">Revert to saved</panel.string>
-    <panel.string name="menu_open_file">Open a file</panel.string>
-    <panel.string name="menu_close">Close the script</panel.string>
-    <panel.string name="menu_preferences">Preferences</panel.string>
-    <panel.string name="menu_format">Format the document</panel.string>
-    <panel.string name="menu_find_in_files">Find in files</panel.string>
-    <panel.string name="menu_insert_snippet">Insert a snippet</panel.string>
-    <panel.string name="menu_back">Go back</panel.string>
-    <panel.string name="menu_forward">Go forward</panel.string>
-    <panel.string name="menu_go_to_line">Go to a line</panel.string>
-    <panel.string name="menu_go_to_symbol">Go to a symbol</panel.string>
-    <panel.string name="menu_next_problem">Next problem</panel.string>
-    <panel.string name="menu_previous_problem">Previous problem</panel.string>
-    <panel.string name="menu_next_tab">Next tab</panel.string>
-    <panel.string name="menu_previous_tab">Previous tab</panel.string>
-    <panel.string name="menu_all_tabs">Every tab, to pick from</panel.string>
-    <panel.string name="menu_move_tab_left">Move the tab left</panel.string>
-    <panel.string name="menu_move_tab_right">Move the tab right</panel.string>
-    <panel.string name="menu_focus_tabs">The tabs, for the arrow keys</panel.string>
-    <panel.string name="menu_command_palette">Command palette</panel.string>
-    <panel.string name="menu_quick_open">Go to a script by its name</panel.string>
-    <panel.string name="menu_explorer">Show or hide the explorer</panel.string>
-    <panel.string name="menu_problems">Show or hide the problems</panel.string>
-    <panel.string name="menu_references">Show or hide the references</panel.string>
-    <panel.string name="menu_output">Show or hide the output</panel.string>
-    <panel.string name="menu_inspector">Show or hide the inspector</panel.string>
-    <panel.string name="menu_search">Show or hide the search</panel.string>
-    <panel.string name="menu_weights">Show or hide the weights</panel.string>
-    <panel.string name="menu_expanded">The preprocessed output</panel.string>
-    <panel.string name="menu_preprocess">Preprocess now</panel.string>
-    <panel.string name="menu_reference">Reference for the word at the caret</panel.string>
+    <panel.string name="CaptureTitle">Keys for [WHAT]</panel.string>
+    <panel.string name="CapturePrompt">Press a key. Return gives it; Escape keeps what was.</panel.string>
+    <panel.string name="CapturePromptTwo">Press a key, or two in turn (Ctrl+K, then S). Return gives them; Escape keeps what was.</panel.string>
+    <panel.string name="CaptureNothing">Waiting for a key...</panel.string>
+    <panel.string name="CaptureSet">Set</panel.string>
+    <panel.string name="CaptureCancel">Cancel</panel.string>
+    <panel.string name="CaptureTakes">Now [WHOSE]'s, which will lose it.</panel.string>
+    <panel.string name="CaptureShadows">The viewer's menus have [KEYS] for [ITEM]; in the studio it will be the studio's.</panel.string>
     <panel.string name="cmd_move_left">Move left</panel.string>
     <panel.string name="cmd_move_right">Move right</panel.string>
     <panel.string name="cmd_move_up">Move up</panel.string>
@@ -106,6 +79,26 @@
     <panel.string name="cmd_find_next">Find next</panel.string>
     <panel.string name="cmd_find_previous">Find previous</panel.string>
     <panel.string name="cmd_quick_fix">Quick fix</panel.string>
+    <panel.string name="cmd_next_misspelling">Next misspelling</panel.string>
+    <panel.string name="cmd_join_lines">Join lines</panel.string>
+    <panel.string name="cmd_previous_change">Last edit location</panel.string>
+    <panel.string name="cmd_next_change">Next edit location</panel.string>
+    <panel.string name="cmd_next_function">Next function</panel.string>
+    <panel.string name="cmd_previous_function">Previous function</panel.string>
+    <panel.string name="cmd_select_function">Select the function</panel.string>
+    <panel.string name="cmd_go_to_bracket">Go to the matching bracket</panel.string>
+    <panel.string name="cmd_insert_line_below">Insert a line below</panel.string>
+    <panel.string name="cmd_insert_line_above">Insert a line above</panel.string>
+    <panel.string name="cmd_select_line">Select the line</panel.string>
+    <panel.string name="cmd_move_subword_left">Move a name's part left</panel.string>
+    <panel.string name="cmd_move_subword_right">Move a name's part right</panel.string>
+    <panel.string name="cmd_select_subword_left">Select a name's part left</panel.string>
+    <panel.string name="cmd_select_subword_right">Select a name's part right</panel.string>
+    <panel.string name="cmd_expand_selection">Expand the selection</panel.string>
+    <panel.string name="cmd_shrink_selection">Shrink the selection</panel.string>
+    <panel.string name="cmd_select_next_occurrence">Take the next place it stands too</panel.string>
+    <panel.string name="cmd_change_all_occurrences">Change every place it stands</panel.string>
+    <panel.string name="cmd_previous_misspelling">Previous misspelling</panel.string>
     <line_editor
      follows="left|top|right"
      height="22"
@@ -145,7 +138,7 @@
      layout="topleft"
      left="8"
      name="change"
-     tool_tip="Press a key to answer for the chosen command, in place of its keys; whatever answered to it before lets it go"
+     tool_tip="Press keys to answer for the chosen command, in place of its keys; whatever answered to them before lets them go"
      top_pad="4"
      width="80" />
     <button
