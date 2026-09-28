@@ -79,7 +79,7 @@ void LLReflectionMap::autoAdjustOrigin()
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
 
 
-    if (mGroup && !mComplete && !mGroup->hasState(LLViewerOctreeGroup::DEAD))
+    if (mGroup && !mGridPlacementChecked && !mComplete && !mGroup->hasState(LLViewerOctreeGroup::DEAD))
     {
         const LLVector4a* bounds = mGroup->getBounds();
         auto* node = mGroup->getOctreeNode();
@@ -392,6 +392,11 @@ bool LLReflectionMap::isRelevant() const
     if (mViewerObject && RenderReflectionProbeLevel > 0)
     { // not an automatic probe
         return true;
+    }
+
+    if (mBlockedByCensus)
+    {
+        return false;
     }
 
     if (mInsideManualProbe)

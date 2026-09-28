@@ -143,9 +143,10 @@ public:
     // Guaranteed to not return null
     LLReflectionMap* registerViewerObject(LLViewerObject* vobj);
 
-    // <SK:Nexii> Navmesh rooms probes: automatic spheres the rooms product holds, and the boxes where they replace octree probes.
+    // <SK:Nexii> Navmesh rooms probes: full spheres placed before residual grid irradiance probes.
     LLReflectionMap* registerNavRoomsProbe(const LLVector3& origin, F32 radius);
-    void setNavRoomsVolumes(const std::vector<std::pair<LLVector3, LLVector3>>& boxes);
+    void invalidateNavRoomsProbe(LLReflectionMap* probe);
+    void invalidateAutomaticPlacement() { mNavRoomsDirty = true; }
     // Placed probes, which the rooms probes must stay clear of and share the cap with.
     void getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const;
     // </SK:Nexii>
@@ -320,9 +321,9 @@ private:
     ReflectionProbeData mProbeData;
 
     // <SK:Nexii> Navmesh rooms probes: the held parts, agent space, and whether the octree probes need testing against them.
-    std::vector<std::pair<LLVector3, LLVector3>> mNavRoomsVolumes;
     bool mNavRoomsDirty = false;
-    void updateNavRoomsSuppression();
+    void updateCensusPlacement();
+    F64 mNextCensusPlacement = 0.0;
     // </SK:Nexii>
 };
 

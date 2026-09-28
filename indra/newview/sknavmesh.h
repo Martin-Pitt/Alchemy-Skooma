@@ -63,6 +63,9 @@ public:
     /// Once per frame after the census.
     void update();
 
+    /// First reflection-probe placement pass, before the residual grid pass.
+    void placeReflectionProbes();
+
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
     void cleanupSingleton() override;

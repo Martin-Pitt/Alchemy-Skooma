@@ -33,6 +33,7 @@
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "pipeline.h"
+#include "skworldcensus.h"
 
 #include <algorithm>
 #include <chrono>
@@ -67,7 +68,7 @@ void SKNavRoomProbes::clear()
 {
     if (!mHeld.empty() || mPlaced)
     {
-        gPipeline.mReflectionMapManager.setNavRoomsVolumes({});
+        gPipeline.mReflectionMapManager.invalidateAutomaticPlacement();
     }
     mHeld.clear();
     mParts.clear();
@@ -97,6 +98,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
     LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
     const sknav::ProbeParams params;
+    const auto census = SKWorldCensus::instance().snapshot();
 
     std::vector<LLReflectionMap*> placed_probes;
     manager.getNavRoomsContext(placed_probes);
@@ -127,8 +129,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     {
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
-        LLVector3 mMin;
-        LLVector3 mMax;
     };
     std::vector<Candidate> candidates;
     std::vector<sknav::ProbeSlot> slots;
@@ -156,14 +156,18 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
         {
             Candidate c;
             c.mOrigin = origin + part.mOrigin;
+            const LLVector3d global = gAgent.getPosGlobalFromAgent(c.mOrigin);
+            if (census && std::any_of(census->mRecords.begin(), census->mRecords.end(),
+                [&](const auto& record) { return sknav::probeInsideSolid(*record, global); }))
+            {
+                continue;
+            }
             c.mRadius = sknav::clearRadius(c.mOrigin, part.mRadius, placed, params);
             if (c.mRadius <= 0.f)
             {
                 ++mClearedOut;
                 continue;
             }
-            c.mMin = origin + part.mMin;
-            c.mMax = origin + part.mMax;
             sknav::ProbeSlot slot;
             slot.mKey = candidates.size();
             slot.mOrigin = c.mOrigin;
@@ -205,7 +209,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     // One real move per update, so re-captures are staggered and placed probes are never starved.
     bool moved = false;
     std::vector<Held> held;
-    std::vector<std::pair<LLVector3, LLVector3>> volumes;
     for (const sknav::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
@@ -219,11 +222,9 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
                 moved = true;
                 h.mProbe->mOrigin.load3(c.mOrigin.mV);
                 h.mProbe->mRadius = c.mRadius;
-                h.mProbe->mComplete = false;    // no stale cubemap where it now stands
+                manager.invalidateNavRoomsProbe(h.mProbe);
                 h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
                 h.mRadius = c.mRadius;
-                h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
-                h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
                 ++mMoves;
             }
         }
@@ -236,20 +237,13 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             }
             h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
             h.mRadius = c.mRadius;
-            h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
-            h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
             ++mCreated;
-        }
-        // An octree probe gives way only once its replacement has a cubemap.
-        if (h.mProbe->mComplete)
-        {
-            volumes.emplace_back(gAgent.getPosAgentFromGlobal(h.mMin), gAgent.getPosAgentFromGlobal(h.mMax));
         }
         held.push_back(h);
     }
     mHeld.swap(held);
     mPlaced = static_cast<U32>(mHeld.size());
-    manager.setNavRoomsVolumes(volumes);
+    manager.invalidateAutomaticPlacement();
     mLastMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 

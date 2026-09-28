@@ -26,6 +26,7 @@
 #define SK_NAVPROBES_H
 
 #include "sknavspaces.h"
+#include "sknavtypes.h"
 
 #include "v3math.h"
 
@@ -33,6 +34,9 @@
 
 namespace sknav
 {
+    /// True only inside a known closed collision body, never a placeholder AABB.
+    bool probeInsideSolid(const Record& record, const LLVector3d& position);
+
     struct ProbeParams
     {
         F32 mCellM = 0.5f;          ///< the floor plan's cell, the spaces raster's
@@ -99,7 +103,7 @@ namespace sknav
     /// The plan of a space from its raster, the lowest floor per column.
     FloorPlan floorPlanOf(const Space& space, const ProbeParams& params);
 
-    /// Whether the space gets probes of its own: INDOORS or SHELTERED, under a ceiling.
+    /// Whether a known space has walkable raster cells for a full probe.
     bool wantsProbes(const Space& space, const ProbeParams& params);
 
     /// Split the plan into rectangles, greedily at its reflex corners, fold

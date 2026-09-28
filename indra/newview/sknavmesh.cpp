@@ -1389,7 +1389,6 @@ void SKNavMesh::update()
         mSkyRevision = mRevision;
     }
     mRooms->update(*this);
-    mRoomProbes->update(mRooms->view());
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1431,6 +1430,16 @@ void SKNavMesh::update()
         mLastLog = gFrameTimeSeconds;
         LL_INFOS("SKNav") << statsLine() << LL_ENDL;
     }
+}
+
+void SKNavMesh::placeReflectionProbes()
+{
+    if (!wanted())
+    {
+        mRoomProbes->clear();
+        return;
+    }
+    mRoomProbes->update(mRooms->view());
 }
 
 std::string SKNavMesh::statsLine() const

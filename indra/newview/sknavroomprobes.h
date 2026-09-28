@@ -36,9 +36,8 @@
 
 class LLReflectionMap;
 
-/// Holds one automatic sphere per part of each indoor space near the
-/// camera, matched to its part by nearest origin, and tells the probe
-/// manager which octree probes the finished ones replace. Placed probes
+/// Holds one full probe per part of each walkable space near the camera,
+/// matched to its part by nearest origin, before the residual grid pass. Placed probes
 /// always win: a sphere shrinks clear of their influence or is dropped.
 /// Only at probe level 3, where octree probes exist. Main thread only.
 class SKNavRoomProbes
@@ -48,7 +47,7 @@ public:
     ~SKNavRoomProbes();
 
     void update(const SKNavWorldViewPtr& view);
-    /// Let every probe go and replace no octree probe.
+    /// Let every full probe go and release its claim on residual coverage.
     void clear();
     std::string statsLine() const;
 
@@ -58,8 +57,6 @@ private:
         LLPointer<LLReflectionMap> mProbe;
         LLVector3d mOrigin;
         F32 mRadius = 0.f;
-        LLVector3d mMin;            ///< its part, which it replaces octree probes over once complete
-        LLVector3d mMax;
     };
     struct Parts
     {

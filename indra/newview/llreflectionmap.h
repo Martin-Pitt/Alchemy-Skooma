@@ -158,6 +158,12 @@ public:
     // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
     bool mNavRooms = false;
     bool mSuppressedByNavRooms = false;
+    // Grid probes supply irradiance only, after full probes claim coverage.
+    bool mIrradianceOnly = false;
+    bool mBlockedByCensus = false;
+    bool mGridPlacementChecked = false;
+    LLVector3d mGridOrigin;
+    F32 mGridRadius = 0.f;
     // </SK:Nexii>
 
     // occlusion culling state

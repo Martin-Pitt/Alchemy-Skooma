@@ -101,7 +101,7 @@ namespace tut
     template<> template<>
     void sknavprobes_object::test<2>()
     {
-        set_test_name("a plain room is one part, a nick in its wall folds in, and an open one gets none");
+        set_test_name("a plain room is one part and outdoor space also gets full probes");
         const ProbeParams params;
         const std::vector<ProbePart> one = spaceProbes(Room().box(0.f, 0.f, 8.f, 6.f).box(3.f, 6.f, 4.f, 7.f).space(), params);
         ensure_equals("one part", one.size(), 1u);
@@ -110,10 +110,10 @@ namespace tut
 
         Space open = Room().box(0.f, 0.f, 8.f, 6.f).space();
         open.mOpenShare = 0.9f;
-        ensure("no ceiling, no probe", spaceProbes(open, params).empty());
+        ensure("open space gets a probe above its floor", !spaceProbes(open, params).empty());
         Space outdoors = Room().box(0.f, 0.f, 8.f, 6.f).space();
         outdoors.mBucket = EnclosureBucket::OUTDOORS;
-        ensure("outdoors, no probe", spaceProbes(outdoors, params).empty());
+        ensure("outdoors gets full probes", !spaceProbes(outdoors, params).empty());
     }
 
     template<> template<>
@@ -305,4 +305,102 @@ namespace tut
         ensure("nearest never churns more", by_nearest <= by_key);
         ensure("and churns less here", by_nearest < by_key);
     }
+    template<> template<>
+    void sknavprobes_object::test<10>()
+    {
+        set_test_name("census tests the collision shape, not its enclosing box");
+        Record r;
+        r.mSolid = true;
+        r.mShape = Shape::BOX;
+        r.mOrigin = LLVector3d(1000000.0, -1000000.0, 20.0);
+        r.mMin = r.mOrigin - LLVector3d(3, 3, 3);
+        r.mMax = r.mOrigin + LLVector3d(3, 3, 3);
+        r.mHalf = LLVector3(2, 1, 1);
+        r.mAxes[0] = LLVector3(0, 1, 0);
+        r.mAxes[1] = LLVector3(-1, 0, 0);
+        r.mAxes[2] = LLVector3(0, 0, 1);
+        ensure("rotated box inside", probeInsideSolid(r, r.mOrigin + LLVector3d(0, 1.5, 0)));
+        ensure("AABB corner outside", !probeInsideSolid(r, r.mOrigin + LLVector3d(1.5, 0, 0)));
+        r.mProvenance = Provenance::BOX;
+        ensure("placeholder is not evidence", !probeInsideSolid(r, r.mOrigin));
+        r.mProvenance = Provenance::EXACT;
+        r.mRole = Role::SURROUND;
+        ensure("visual surround not collision", !probeInsideSolid(r, r.mOrigin));
+        r.mRole = Role::NAV;
+        r.mSolid = false;
+        ensure("open surface not filled", !probeInsideSolid(r, r.mOrigin));
+        r.mSolid = true;
+        r.mShape = Shape::SPHERE;
+        ensure("ellipsoid center", probeInsideSolid(r, r.mOrigin));
+        ensure("ellipsoid corner", !probeInsideSolid(r, r.mOrigin + LLVector3d(0.9, 1.8, 0)));
+        r.mShape = Shape::CYLINDER;
+        ensure("cylinder inside", probeInsideSolid(r, r.mOrigin + LLVector3d(0, 1, 0.9)));
+        ensure("cylinder above cap", !probeInsideSolid(r, r.mOrigin + LLVector3d(0, 0, 1.1)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<11>()
+    {
+        set_test_name("triangle solids preserve cavities and union overlapping hulls");
+        Record r;
+        r.mSolid = true;
+        r.mMin = LLVector3d(-2, -2, -2);
+        r.mMax = LLVector3d(2, 2, 2);
+        auto tris = std::make_shared<std::vector<LLVector3>>();
+        auto plane = [&](F32 z)
+        {
+            tris->insert(tris->end(), { LLVector3(-2,-2,z), LLVector3(2,-2,z), LLVector3(2,2,z),
+                                      LLVector3(-2,-2,z), LLVector3(2,2,z), LLVector3(-2,2,z) });
+        };
+        // Horizontal cross-sections of a closed hollow body. Vertical faces
+        // do not cross this ray; shared diagonals must count only once.
+        plane(-2); plane(-1); plane(1); plane(2);
+        r.mTriangles = tris;
+        ensure("cavity remains empty", !probeInsideSolid(r, LLVector3d(0,0,0)));
+        ensure("body below cavity", probeInsideSolid(r, LLVector3d(0,0,-1.5)));
+        ensure("body above cavity", probeInsideSolid(r, LLVector3d(0,0,1.5)));
+        tris->clear();
+        plane(-2); plane(1); plane(-1); plane(2);
+        r.mConvexTris = {4, 4};
+        ensure("overlapping hulls form union", probeInsideSolid(r, LLVector3d(0,0,0)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<12>()
+    {
+        set_test_name("open sloping space captures above the chosen cell's floor");
+        ProbeParams params;
+        FloorPlan plan;
+        plan.mW = plan.mH = 12;
+        plan.mCell = 0.5f;
+        plan.mCeiling = -100.f;
+        plan.mFloor.resize(144);
+        for (S32 y = 0; y < 12; ++y)
+            for (S32 x = 0; x < 12; ++x)
+                plan.mFloor[y * 12 + x] = x * 0.5f;
+        const auto parts = placeParts(plan, params);
+        ensure("has probes", !parts.empty());
+        for (const auto& part : parts)
+        {
+            const S32 x = static_cast<S32>(part.mOrigin.mV[0] / plan.mCell);
+            const S32 y = static_cast<S32>(part.mOrigin.mV[1] / plan.mCell);
+            ensure("above local floor, not lowest corner", fabsf(part.mOrigin.mV[2] - plan.floorAt(x, y) - 1.5f) < 1e-4f);
+        }
+    }
+    template<> template<>
+    void sknavprobes_object::test<13>()
+    {
+        set_test_name("residual grid coverage remains above full probes and yields to manual probes");
+        const ProbeParams params;
+        ProbeInfluence nav;
+        nav.mCentre = LLVector3(0, 0, 2);
+        nav.mRadius = 12.f;
+        ensure_equals("inside full probe has no grid", clearRadius(LLVector3(0,0,8), 13.f, {nav}, params), 0.f);
+        ensure_equals("high unwalkable air keeps coverage", clearRadius(LLVector3(0,0,40), 13.f, {nav}, params), 13.f);
+        ProbeInfluence manual;
+        manual.mCentre = LLVector3(0,0,40);
+        manual.mRadius = 8.f;
+        ensure_equals("manual probe overrides high grid too", clearRadius(LLVector3(0,0,40), 13.f, {nav, manual}, params), 0.f);
+    }
+
 }

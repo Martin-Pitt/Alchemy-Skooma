@@ -34,6 +34,101 @@
 
 namespace sknav
 {
+    bool probeInsideSolid(const Record& record, const LLVector3d& position)
+    {
+        if (!record.mSolid || record.mRole != Role::NAV || record.mProvenance == Provenance::BOX ||
+            record.mNavRole == NavRole::MATERIAL_VOLUME || record.mNavRole == NavRole::EXCLUSION_VOLUME)
+        {
+            return false;
+        }
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            if (position.mdV[axis] < record.mMin.mdV[axis] || position.mdV[axis] > record.mMax.mdV[axis])
+            {
+                return false;
+            }
+        }
+        const LLVector3 p(position - record.mOrigin);
+        if (record.mShape != Shape::TRIANGLES)
+        {
+            const LLVector3 delta = p - record.mCenter;
+            LLVector3 local;
+            for (S32 axis = 0; axis < 3; ++axis)
+            {
+                if (record.mHalf.mV[axis] <= 0.f)
+                {
+                    return false;
+                }
+                local.mV[axis] = (delta * record.mAxes[axis]) / record.mHalf.mV[axis];
+            }
+            if (record.mShape == Shape::SPHERE)
+            {
+                return local.lengthSquared() <= 1.f;
+            }
+            if (record.mShape == Shape::CYLINDER)
+            {
+                return local.mV[0] * local.mV[0] + local.mV[1] * local.mV[1] <= 1.f && fabsf(local.mV[2]) <= 1.f;
+            }
+            return fabsf(local.mV[0]) <= 1.f && fabsf(local.mV[1]) <= 1.f && fabsf(local.mV[2]) <= 1.f;
+        }
+        if (!record.mTriangles)
+        {
+            return false;
+        }
+        // Match the navmesh's solid fill: merge shared-edge crossings, pair
+        // them by height, and union decomposition pieces rather than XOR them.
+        const auto& tris = *record.mTriangles;
+        auto inside = [&](size_t begin, size_t end)
+        {
+            std::vector<F32> hits;
+            for (size_t i = begin; i + 2 < end; i += 3)
+            {
+                const auto& a = tris[i];
+                const auto& b = tris[i + 1];
+                const auto& c = tris[i + 2];
+                const F32 d = (b.mV[1] - c.mV[1]) * (a.mV[0] - c.mV[0]) + (c.mV[0] - b.mV[0]) * (a.mV[1] - c.mV[1]);
+                if (fabsf(d) < 1e-9f)
+                {
+                    continue;
+                }
+                const F32 u = ((b.mV[1] - c.mV[1]) * (p.mV[0] - c.mV[0]) + (c.mV[0] - b.mV[0]) * (p.mV[1] - c.mV[1])) / d;
+                const F32 v = ((c.mV[1] - a.mV[1]) * (p.mV[0] - c.mV[0]) + (a.mV[0] - c.mV[0]) * (p.mV[1] - c.mV[1])) / d;
+                if (u >= -1e-5f && v >= -1e-5f && u + v <= 1.f + 1e-5f)
+                {
+                    hits.push_back(u * a.mV[2] + v * b.mV[2] + (1.f - u - v) * c.mV[2]);
+                }
+            }
+            std::sort(hits.begin(), hits.end());
+            hits.erase(std::unique(hits.begin(), hits.end(), [](F32 a, F32 b) { return fabsf(a - b) < 1e-4f; }), hits.end());
+            for (size_t i = 0; i + 1 < hits.size(); i += 2)
+            {
+                if (p.mV[2] >= hits[i] && p.mV[2] <= hits[i + 1])
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        size_t total = 0;
+        for (S32 count : record.mConvexTris)
+        {
+            if (count <= 0) return false;
+            total += static_cast<size_t>(count) * 3;
+        }
+        if (!record.mConvexTris.empty() && total == tris.size())
+        {
+            size_t begin = 0;
+            for (S32 count : record.mConvexTris)
+            {
+                const size_t end = begin + static_cast<size_t>(count) * 3;
+                if (inside(begin, end)) return true;
+                begin = end;
+            }
+            return false;
+        }
+        return inside(0, tris.size());
+    }
+
     namespace
     {
         struct Rect
@@ -121,13 +216,9 @@ namespace sknav
         return x >= 0 && y >= 0 && x < mW && y < mH && !std::isnan(mFloor[y * mW + x]);
     }
 
-    bool wantsProbes(const Space& space, const ProbeParams& params)
+    bool wantsProbes(const Space& space, const ProbeParams&)
     {
-        if (space.mBucket != EnclosureBucket::INDOORS && space.mBucket != EnclosureBucket::SHELTERED)
-        {
-            return false;
-        }
-        return space.mCeilingMean > space.mFloorMin && space.mOpenShare < params.mOpenShare;
+        return space.mBucket != EnclosureBucket::UNKNOWN && !space.mRaster.empty();
     }
 
     FloorPlan floorPlanOf(const Space& space, const ProbeParams& params)
@@ -416,7 +507,8 @@ namespace sknav
             }
             const F32 ox = (plan.mX0 + best % w + 0.5f) * plan.mCell;
             const F32 oy = (plan.mY0 + best / w + 0.5f) * plan.mCell;
-            const F32 half = plan.mCeiling > lo ? (plan.mCeiling - lo) * 0.5f : 1.5f;
+            const F32 floor = plan.floorAt(best % w, best / w);
+            const F32 half = plan.mCeiling > floor ? (plan.mCeiling - floor) * 0.5f : 1.5f;
 
             F32 reach2 = 0.f;
             for (S32 y = 0; y < h; ++y)
@@ -436,11 +528,11 @@ namespace sknav
 
             ProbePart part;
             part.mPart = static_cast<U32>(k);
-            part.mOrigin.set(ox, oy, lo + half);
+            part.mOrigin.set(ox, oy, floor + half);
             part.mRadius = std::min(std::sqrt(reach2 + half * half), params.mMaxRadiusM);
             part.mArea = st[p].mCells * cell_area;
             part.mMin.set((plan.mX0 + st[p].mX0) * plan.mCell, (plan.mY0 + st[p].mY0) * plan.mCell, lo);
-            part.mMax.set((plan.mX0 + st[p].mX1 + 1) * plan.mCell, (plan.mY0 + st[p].mY1 + 1) * plan.mCell, lo + 2.f * half);
+            part.mMax.set((plan.mX0 + st[p].mX1 + 1) * plan.mCell, (plan.mY0 + st[p].mY1 + 1) * plan.mCell, floor + 2.f * half);
             out.push_back(part);
         }
         return out;
@@ -452,7 +544,12 @@ namespace sknav
         {
             return {};
         }
-        return placeParts(floorPlanOf(space, params), params);
+        FloorPlan plan = floorPlanOf(space, params);
+        if (space.mBucket == EnclosureBucket::OUTDOORS || space.mOpenShare >= params.mOpenShare)
+        {
+            plan.mCeiling = -std::numeric_limits<F32>::infinity();
+        }
+        return placeParts(plan, params);
     }
 
     F32 distanceTo(const ProbeInfluence& influence, const LLVector3& p)
