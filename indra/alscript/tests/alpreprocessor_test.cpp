@@ -455,13 +455,40 @@ namespace tut
         add("c", "return require(\"c\")\n");
         r = ALPreprocessor::run("local a = require(\"a\")\nlocal b = require('b')\nlocal x = require(name)\n", options(true));
         ensure_equals("problems", messages(r), std::string());
-        ensure_equals("modules", r.text,
-                      std::string("local __modules = {}\n"
-                                  "__modules[\"b\"] = (function()\nreturn 42\nend)()\n"
-                                  "__modules[\"a\"] = (function()\nlocal b = __modules[\"b\"]\nreturn { b = b }\nend)()\n"
-                                  "local a = __modules[\"a\"]\nlocal b = __modules[\"b\"]\nlocal x = require(name)\n"));
+        const std::string bundled = "local __modules = {}\n"
+                                    "__modules[\"b\"] = (function()\nreturn 42\nend)()\n"
+                                    "__modules[\"a\"] = (function()\nlocal b = __modules[\"b\"]\nreturn { b = b }\nend)()\n"
+                                    "local a = __modules[\"a\"]\nlocal b = __modules[\"b\"]\nlocal x = require(name)\n";
+        ensure_equals("modules", r.text, bundled);
         ensure_equals("included", r.includes.size(), 2u);
         ensure_equals("b mapped to its file", r.map.files()[r.map.toSource(2, 0).file].name, std::string("b"));
+        // The modules' own lines, which the studio shows nothing of: not
+        // the table's, which are no one's, nor the script's.
+        std::string others;
+        for (const auto& [first, last] : r.map.othersLines())
+        {
+            others += std::to_string(first) + "-" + std::to_string(last) + " ";
+        }
+        ensure_equals("the modules' lines", others, std::string("2-2 5-6 "));
+        ensure("not apart unless asked", !r.apart.valid);
+        // Apart, for the analyzers: the script with its requires as calls,
+        // and each module as the run made it, each mapped to its file; the
+        // text the bundle still.
+        ALPreprocessor::Options apart = options(true);
+        apart.apart                   = true;
+        const ALPreprocessor::Result split =
+            ALPreprocessor::run("local a = require(\"a\")\nlocal b = require('b')\nlocal x = require(name)\n", apart);
+        ensure_equals("the bundle as ever", split.text, bundled);
+        ensure("apart", split.apart.valid && split.apart.modules.size() == 2);
+        ensure_equals("the script, its requires calls", split.apart.script.text,
+                      std::string("local a = require(\"a\")\nlocal b = require('b')\nlocal x = require(name)\n"));
+        ensure_equals("the first reached", split.apart.modules[0].key, std::string("a"));
+        ensure_equals("as made, its own require a call", split.apart.modules[0].text, std::string("local b = require(\"b\")\nreturn { b = b }\n"));
+        ensure_equals("then what it reached", split.apart.modules[1].key, std::string("b"));
+        ensure_equals("b", split.apart.modules[1].text, std::string("return 42\n"));
+        const ALSourceMap::Loc in_a = split.apart.modules[0].map.toSource(1, 0);
+        ensure("mapped to its file", in_a.found() && split.apart.modules[0].map.files()[in_a.file].name == "a" && in_a.line == 1);
+        ensure("the script to its own", split.apart.script.map.toSource(2, 6).file == 0);
         r = ALPreprocessor::run("local c = require(\"c\")\n", options(true));
         ensure_equals("a cycle", messages(r), std::string("E c:0: 'c' requires itself\n"));
         r = ALPreprocessor::run("local d = require(\"d\")\n", options(true));
@@ -558,7 +585,7 @@ namespace tut
     {
         set_test_name("every golden file comes out as its expected text");
         namespace fs = std::filesystem;
-        const fs::path dir = fs::path(AL_ALSCRIPT_TEST_DIR) / "preprocessor";
+        const fs::path dir = fsyspath(AL_ALSCRIPT_TEST_DIR) / "preprocessor";
         S32            checked = 0;
         for (const fs::directory_entry& entry : fs::directory_iterator(dir))
         {
@@ -570,7 +597,7 @@ namespace tut
             const std::string stem     = entry.path().stem().string();
             const fs::path    expected = dir / (stem + "_expected" + entry.path().extension().string());
             const auto        read     = [](const fs::path& path) {
-                std::ifstream     in(path, std::ios::binary);
+                llifstream        in(path, std::ios::binary);
                 std::stringstream buffer;
                 buffer << in.rdbuf();
                 return buffer.str();
@@ -607,7 +634,7 @@ namespace tut
             // before it is kept.
             if (const char* write = std::getenv("AL_PREPROCESSOR_WRITE_EXPECTED"); write && *write)
             {
-                std::ofstream out(expected, std::ios::binary);
+                llofstream out(expected, std::ios::binary);
                 out << r.text;
                 continue;
             }
@@ -1022,7 +1049,16 @@ namespace tut
         ensure("an inline function", of({ "inline f(integer a)" }, 0, &word) == T::Extensions);
         ensure_equals("inline's word", word, std::string("inline"));
         ensure("an inline function with its type", of({ "inline integer f(integer a)" }, 0) == T::Extensions);
+        ensure("inline after the parameters", of({ "integer f(integer a) inline {" }, 0, &word) == T::Extensions);
+        ensure_equals("its word", word, std::string("inline"));
+        ensure("inline after them, the brace on the next line", of({ "f() inline" }, 0) == T::Extensions);
+        ensure("a name that ends in inline is not", of({ "integer f(integer a) noinline {" }, 0) == T::None);
         ensure("inline assigned", of({ "inline = 2;" }, 0) == T::None);
+        ensure("const before a type", of({ "const integer X = 1;" }, 0, &word) == T::Extensions);
+        ensure_equals("const's word", word, std::string("const"));
+        ensure("a const parameter", of({ "f(integer a, const vector v)" }, 0) == T::Extensions);
+        ensure("a variable named const", of({ "integer const = 1;" }, 0) == T::None);
+        ensure("a word that starts with const", of({ "constant = 1;" }, 0) == T::None);
         ensure("after a brace and a statement's end", of({ "} ; switch (x)" }, 0) == T::Switch);
         ensure("a plain statement", of({ "integer x = 1;" }, 0) == T::None);
         ensure("a blank line", of({ "   " }, 0) == T::None);
@@ -1139,7 +1175,7 @@ namespace tut
         }
         // Nexii's library, whose ObjectLinksetSittingAvatars has a parameter
         // without its type, included as a save would include it.
-        std::ifstream     in(std::string(AL_ALSCRIPT_TEST_DIR) + "/preprocessor/include/linkset.lsl", std::ios::binary);
+        llifstream        in(std::string(AL_ALSCRIPT_TEST_DIR) + "/preprocessor/include/linkset.lsl", std::ios::binary);
         std::stringstream library;
         library << in.rdbuf();
         add("linkset.lsl", library.str());
@@ -1156,4 +1192,331 @@ namespace tut
         ALPreprocessor::Options plain = options();
         ensure_equals("the text as expanded, for the compiler to read", r.text, ALPreprocessor::run(source, plain).text);
     }
-} // namespace tut
+
+    template<> template<>
+    void alpreprocessor_object::test<30>()
+    {
+        set_test_name("SLua: a field or a method named require is the table's, and only the global finds a module");
+        add("x", "return 1\n");
+        const ALPreprocessor::Result r = ALPreprocessor::run("local a = t.require(\"x\")\n"
+                                                             "local b = t : require(\"x\")\n"
+                                                             "local c = t .. require(\"x\")\n",
+                                                             options(true));
+        ensure_equals("problems", messages(r), std::string());
+        ensure_equals("only the concatenated call is a module's", r.text,
+                      std::string("local __modules = {}\n"
+                                  "__modules[\"x\"] = (function()\nreturn 1\nend)()\n"
+                                  "local a = t.require(\"x\")\n"
+                                  "local b = t : require(\"x\")\n"
+                                  "local c = t .. __modules[\"x\"]\n"));
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<31>()
+    {
+        set_test_name("SLua: the calls a run puts a module in place of are found where they stand, and only those");
+        const std::string source = "local a = require(\"a\")\n"   // 0
+                                   "local b = require 'b'\n"       // 1: no parentheses
+                                   "local c = require( -- the next\n"
+                                   "    'c'\n"
+                                   ")\n"                           // 4
+                                   "-- require(\"d\")\n"
+                                   "local e = \"require('e')\"\n"
+                                   "local f = t.require(\"f\")\n"
+                                   "local g = require(name)\n"
+                                   "local h = require([[h]])\n"
+                                   "local i = x .. require(\"i\")\n"; // 10
+        const std::vector<ALPreprocessor::Required> found = ALPreprocessor::requiresIn(source);
+        ensure_equals("three", found.size(), size_t(3));
+        ensure_equals("a", found[0].name, std::string("a"));
+        ensure("a's stretch", found[0].line == 0 && found[0].column == 10 && found[0].endLine == 0 && found[0].endColumn == 22);
+        ensure_equals("c", found[1].name, std::string("c"));
+        ensure("c's stretch, across lines", found[1].line == 2 && found[1].column == 10 && found[1].endLine == 4 && found[1].endColumn == 1);
+        ensure_equals("i", found[2].name, std::string("i"));
+        ensure("i's line", found[2].line == 10 && found[2].column == 15);
+
+        // Every one of them is one a run puts a module in place of, and
+        // no other call is.
+        add("a", "return 1\n");
+        add("c", "return 3\n");
+        add("i", "return 9\n");
+        const ALPreprocessor::Result r = ALPreprocessor::run(source, options(true));
+        ensure_equals("problems", messages(r), std::string());
+        const auto count = [&r](const std::string& what) {
+            size_t n = 0;
+            for (size_t at = r.text.find(what); at != std::string::npos; at = r.text.find(what, at + 1))
+            {
+                ++n;
+            }
+            return n;
+        };
+        // Each module is filled once at the top, and looked up where it
+        // was called for.
+        ensure_equals("as many lookups as calls found", count("__modules[") - count("] = (function()"), found.size());
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<32>()
+    {
+        set_test_name("a run says what each include and module was found as, by the name the file asking wrote");
+        add("lib/util.lsl", "#include \"inner.lsl\"\nint util() { return 1; }\n");
+        files["lib/util.lsl"].path = "disk:/scripts/lib/util.lsl";
+        add("inner.lsl", "int inner() { return 2; }\n");
+        add("missing.lsl", "");
+        files.erase("missing.lsl");
+        const ALPreprocessor::Result r = ALPreprocessor::run("#include \"lib/util.lsl\"\n#include \"lib/util.lsl\"\ndefault {}\n", options());
+        // Included twice, with no #pragma once: its own include asked for
+        // twice as well.
+        ensure_equals("four found", r.resolved.size(), size_t(4));
+        ensure("the script's, by its name, as the identity found",
+               r.resolved[0].from.empty() && r.resolved[0].name == "lib/util.lsl" && r.resolved[0].path == "disk:/scripts/lib/util.lsl" &&
+                   !r.resolved[0].require);
+        ensure("the include's own, from it", r.resolved[1].from == "disk:/scripts/lib/util.lsl" && r.resolved[1].name == "inner.lsl" &&
+                                                 r.resolved[1].path == "inner.lsl");
+        ensure("the same asked twice, twice", r.resolved[2].name == "lib/util.lsl" && r.resolved[2].from.empty() &&
+                                                  r.resolved[3].name == "inner.lsl");
+
+        add("mod", "return 1\n");
+        files["mod"].path = "disk:/scripts/mod.luau";
+        const ALPreprocessor::Result lua = ALPreprocessor::run("local m = require(\"mod\")\nlocal n = require(\"none\")\n", options(true));
+        ensure_equals("a module found, one not", lua.resolved.size(), size_t(1));
+        ensure("as a require", lua.resolved[0].require && lua.resolved[0].name == "mod" && lua.resolved[0].path == "disk:/scripts/mod.luau");
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<33>()
+    {
+        set_test_name("a parameter used over and over is spent as it goes in, and a token pasted or stringized to itself stops before it outgrows a script");
+        // A parameter used sixteen times, through arguments that each
+        // expand the last: sixteen to the seventh tokens by the end, which
+        // were made whole before they were counted.
+        const std::string many = "#define D(x) x x x x x x x x x x x x x x x x\nD(D(D(D(D(D(D(1)))))))\n";
+        ALPreprocessor::Result r = ALPreprocessor::run(many, options());
+        ensure("ran away: " + messages(r), r.overran && r.problems.back().key == std::string("PreprocTooMuch"));
+        ensure("and gave the source back", r.text == many);
+
+        // A token pasted to itself through an indirection doubles its text
+        // and not the tokens: two to the fortieth bytes by the end.
+        std::string call = "x";
+        for (int i = 0; i < 40; ++i)
+        {
+            call = "D(" + call + ")";
+        }
+        r = ALPreprocessor::run("#define CAT(a) a##a\n#define D(a) CAT(a)\n" + call + ";\n", options());
+        ensure("pasting stopped: " + messages(r), r.overran && r.problems.back().key == std::string("PreprocTokenTooLong"));
+
+        // A string stringized over and over, each level escaping the last.
+        call = "\"a\"";
+        for (int i = 0; i < 40; ++i)
+        {
+            call = "X(" + call + ")";
+        }
+        r = ALPreprocessor::run("#define S(x) #x\n#define X(x) S(x)\n" + call + ";\n", options());
+        ensure("stringizing stopped: " + messages(r), r.overran && r.problems.back().key == std::string("PreprocTokenTooLong"));
+
+        // The bytes stop what the tokens would not, and what fits is
+        // untouched.
+        ALPreprocessor::Options small = options();
+        small.byteBudget              = 1000;
+        r = ALPreprocessor::run("#define L \"" + std::string(600, 'a') + "\"\nL L\n", small);
+        ensure("the bytes: " + messages(r), r.overran && r.problems.back().key == std::string("PreprocTooMuch"));
+        r = ALPreprocessor::run("#define L \"" + std::string(100, 'a') + "\"\nL L\n", small);
+        ensure("within them: " + messages(r), !r.overran && r.text.find(std::string(100, 'a')) != std::string::npos);
+
+        // What a job answers when a run throws: as a run that ran away.
+        const ALPreprocessor::Result failed = ALPreprocessor::failed("integer x;\n", options(), "std::bad_alloc");
+        ensure("overran, with the source", failed.overran && failed.text == "integer x;\n");
+        ensure("and why", failed.problems.size() == 1 && failed.problems[0].key == std::string("PreprocFailed") &&
+                              failed.problems[0].message.find("std::bad_alloc") != std::string::npos &&
+                              failed.problems[0].severity == ALScriptProblem::Severity::Error);
+        ensure("mapped to itself", failed.map.toSource(0, 3).found() && failed.map.toSource(0, 3).line == 0);
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<34>()
+    {
+        set_test_name("lazy lists' reads nested by macros stop at the depth blocks may nest, and within it each is made a call");
+        // A read inside a read's brackets, a thousand deep, made by macros
+        // each expanding the last -- rescanned, so the expansion itself is
+        // flat, and only the rewrite descends.
+        std::string deep = "#define N0 0\n";
+        for (int i = 1; i <= 1000; ++i)
+        {
+            deep += "#define N" + std::to_string(i) + " (integer)l[N" + std::to_string(i - 1) + "]\n";
+        }
+        deep += "list l;\ninteger x = N1000;\n";
+        ALPreprocessor::Options o = options();
+        o.lazyLists               = true;
+        ALPreprocessor::Result r  = ALPreprocessor::run(deep, o);
+        ensure("stopped at the depth: " + messages(r), r.overran && r.problems.back().key == std::string("PreprocNestsTooDeep"));
+
+        // Within it, each read is a call, the inner in the outer's place.
+        r = ALPreprocessor::run("#define N0 0\n#define N1 (integer)l[N0]\n#define N2 (integer)l[N1]\n#define N3 (integer)l[N2]\nlist l;\ninteger x = N3;\n", o);
+        ensure("nested reads each a call: " + r.text,
+               !r.overran && r.text.find("integer x = llList2Integer(l, llList2Integer(l, llList2Integer(l, 0)));") != std::string::npos);
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<35>()
+    {
+        set_test_name("SLua: a header of plain comments and hot ones stays ahead of the module table, which maps to no line of the script");
+        add("m", "return 1\n");
+        const ALPreprocessor::Result r =
+            ALPreprocessor::run("-- @file vehicle/hovertext.luau\n--!strict\n--!nolint LocalUnused\nlocal m = require(\"m\")\n", options(true));
+        ensure_equals("problems", messages(r), std::string());
+        ensure_equals("the header first, whole", r.text.substr(0, r.text.find("local __modules")),
+                      std::string("-- @file vehicle/hovertext.luau\n--!strict\n--!nolint LocalUnused\n"));
+        ensure("each header line its own", r.map.toSource(1, 0).found() && r.map.toSource(1, 0).file == 0 && r.map.toSource(1, 0).line == 1);
+        ensure("the table's line maps nowhere", !r.map.toSource(3, 0).found());
+        ensure("nor its module's wrapping", !r.map.toSource(4, 0).found());
+        ensure("the module's own line maps to it", r.map.toSource(5, 0).found() && r.map.files()[r.map.toSource(5, 0).file].name == "m");
+        ensure("the script's code after it maps back", r.map.toSource(7, 0).file == 0 && r.map.toSource(7, 0).line == 3);
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<36>()
+    {
+        set_test_name("a run no longer wanted stops where it stands and says so, the source as it was; one still wanted is not touched");
+        std::atomic<bool>       later{ false };
+        ALPreprocessor::Options wanted = options(false);
+        wanted.superseded              = &later;
+        wanted.switches                = true;
+        const std::string       source = "#define TWICE(x) ((x) * 2)\ndefault { state_entry() { integer n = TWICE(3); switch (n) { case 6: break; } } }\n";
+        const ALPreprocessor::Result made = ALPreprocessor::run(source, wanted);
+        ensure("still wanted: made", !made.superseded && !made.overran && made.text.find("((3) * 2)") != std::string::npos);
+        later = true;
+        const ALPreprocessor::Result stopped = ALPreprocessor::run(source, wanted);
+        ensure("not wanted: stopped", stopped.superseded && stopped.overran);
+        ensure_equals("the source as it was", stopped.text, source);
+        ensure("nothing said of it", std::none_of(stopped.problems.begin(), stopped.problems.end(),
+                                                  [](const ALScriptProblem& p) { return p.severity == ALScriptProblem::Severity::Error; }));
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<37>()
+    {
+        set_test_name("a header behind a classic include guard: expanded once however often included, listed once in the map; again once undefined; an #else or code after it no guard");
+        add("guarded.lsl", "// the helpers\n#ifndef GUARDED\n#define GUARDED\ninteger helper() { return 1; }\n#endif\n");
+        const ALPreprocessor::Result r = ALPreprocessor::run(
+            "#include \"guarded.lsl\"\n#include \"guarded.lsl\"\n#include \"guarded.lsl\"\ndefault { state_entry() { helper(); } }\n", options());
+        ensure_equals("problems", messages(r), std::string());
+        size_t count = 0;
+        for (size_t at = r.text.find("integer helper()"); at != std::string::npos; at = r.text.find("integer helper()", at + 1))
+        {
+            ++count;
+        }
+        ensure_equals("once", count, size_t(1));
+        ensure_equals("listed once", r.map.files().size(), size_t(2));
+
+        const ALPreprocessor::Result undone = ALPreprocessor::run(
+            "#include \"guarded.lsl\"\n#undef GUARDED\n#include \"guarded.lsl\"\ndefault { state_entry() { } }\n", options());
+        ensure("undefined: again", undone.text.find("integer helper()") != undone.text.rfind("integer helper()"));
+
+        add("elsed.lsl", "#ifndef ELSED\n#define ELSED\ninteger a;\n#else\ninteger b;\n#endif\n");
+        const ALPreprocessor::Result elsed = ALPreprocessor::run("#include \"elsed.lsl\"\n#include \"elsed.lsl\"\n", options());
+        ensure("an #else: no guard, the other branch made", elsed.text.find("integer b;") != std::string::npos);
+        add("after.lsl", "#ifndef AFTER\n#define AFTER\n#endif\ninteger after;\n");
+        const ALPreprocessor::Result after = ALPreprocessor::run("#include \"after.lsl\"\n#include \"after.lsl\"\n", options());
+        ensure("code after the #endif: no guard, made twice", after.text.find("integer after;") != after.text.rfind("integer after;"));
+    }
+    template<> template<>
+    void alpreprocessor_object::test<38>()
+    {
+        set_test_name("a macro's arguments: none for one with no parameters, a line an argument runs over a space, blanks with no ( after them given back as they were");
+        const std::string source = "#define Z() zero\n"
+                                   "#define I(x) [x]\n"
+                                   "#define TWO(a, b) a+b\n"
+                                   "Z() Z( ) Z\n"
+                                   "I (1) I  x I\n"
+                                   "TWO(1,\n2) TWO( (1, 2) ,\t3 )\n"
+                                   "I\n(3)\n";
+        const ALPreprocessor::Result r = ALPreprocessor::run(source, options());
+        ensure_equals("problems", messages(r), std::string());
+        ensure_equals("text", squeeze(r.text), std::string("zero zero Z\n[1] I  x I\n1+2 (1, 2)+3\n[3]\n"));
+    }
+    template<> template<>
+    void alpreprocessor_object::test<39>()
+    {
+        set_test_name("a function marked inline in any of the ways a mark is written, at the top of the script, and the marks taken off with the extensions off");
+        ALPreprocessor::Options o = options();
+        o.extensions              = true;
+        ALPreprocessor::Result r  = ALPreprocessor::run("integer f(integer a) inline { return a; }\n"
+                                                        "g(string s) /*pragma inline*/ { llOwnerSay(s); }\n"
+                                                        "h() //pragma inline\n{\n}\n"
+                                                        "k() /* pragma inline */ { }\n",
+                                                        o);
+        ensure_equals("problems", messages(r), std::string());
+        ensure("the four marked, in order", r.inlined == std::vector<std::string>{ "f", "g", "h", "k" });
+        ensure("the word after the parameters taken off: " + r.text, r.text.find("integer f(integer a) { return a; }") != std::string::npos);
+        ensure("a comment left as it is: " + r.text, r.text.find("g(string s) /*pragma inline*/ { llOwnerSay(s); }") != std::string::npos &&
+                                                         r.text.find("h() //pragma inline\n{") != std::string::npos);
+
+        r = ALPreprocessor::run("integer inline = 1;\nf() { integer x = inline; }\ng() /* not pragma inline */ { }\ninteger v = (1) /*pragma inline*/;\n", o);
+        ensure("a variable named inline, another comment, a parenthesis that closes no parameters: none marked", r.inlined.empty());
+        ensure_equals("and nothing taken off", r.text, std::string("integer inline = 1;\nf() { integer x = inline; }\ng() /* not pragma inline */ { }\ninteger v = (1) /*pragma inline*/;\n"));
+
+        r = ALPreprocessor::run("default { state_entry() inline { } }\n", o);
+        ensure("an event is not a function to put in place", r.inlined.empty());
+
+        // With the extensions off the marks come off all the same.
+        const ALPreprocessor::Result plain = ALPreprocessor::run("inline f() { }\ninteger g(integer a) inline { return a; }\n", options());
+        ensure_equals("taken off", plain.text, std::string("f() { }\ninteger g(integer a) { return a; }\n"));
+        ensure("and the names kept", plain.inlined == std::vector<std::string>{ "f", "g" });
+        ensure("the extensions not said to be used", !plain.usedExtensions);
+
+        // And the optimizer puts the marked function in place.
+        ALPreprocessor::Options optimizing = options();
+        optimizing.optimize                = true;
+        const ALPreprocessor::Result put   = ALPreprocessor::run("say(string s) inline\n{\n    llOwnerSay(s);\n    llOwnerSay(s + \"!\");\n}\n"
+                                                                 "default\n{\n    state_entry()\n    {\n        say(\"a\");\n        say(\"b\");\n    }\n}\n",
+                                                                 optimizing);
+        ensure("both calls put in place: " + put.text, put.text.find("say(") == std::string::npos && put.text.find("llOwnerSay(\"a\")") != std::string::npos &&
+                                                           put.text.find("llOwnerSay(\"b\" + \"!\")") != std::string::npos);
+    }
+
+    template<> template<>
+    void alpreprocessor_object::test<40>()
+    {
+        set_test_name("const before a type is taken off, and each name it declares said where it is, a function's as a function");
+        const auto at = [](const ALPreprocessor::Result& r, size_t i, const std::string& name, S32 line, S32 column, bool function) {
+            return i < r.consts.size() && r.consts[i].name == name && r.consts[i].line == line && r.consts[i].column == column &&
+                   r.consts[i].function == function;
+        };
+        ALPreprocessor::Result r = ALPreprocessor::run("const integer X = 5;\n"
+                                                       "const   float Y = X * 2;\n"
+                                                       "const integer sq(const integer x) { return x * x; }\n"
+                                                       "default { state_entry() { const vector v = <1, 2, 3>; llOwnerSay((string)v); } }\n",
+                                                       options());
+        ensure_equals("problems", messages(r), std::string());
+        ensure_equals("taken off", r.text,
+                      std::string("integer X = 5;\n"
+                                  "float Y = 10.0;\n"
+                                  "integer sq(integer x) { return x * x; }\n"
+                                  "default { state_entry() { vector v = <1, 2, 3>; llOwnerSay((string)v); } }\n"));
+        ensure_equals("five", r.consts.size(), size_t(5));
+        ensure("a global", at(r, 0, "X", 0, 8, false));
+        ensure("the spaces up to the type gone too", at(r, 1, "Y", 1, 6, false));
+        ensure("a function", at(r, 2, "sq", 2, 8, true));
+        ensure("its parameter", at(r, 3, "x", 2, 19, false));
+        ensure("a local", at(r, 4, "v", 3, 33, false));
+        ensure("the extensions not said to be used", !r.usedExtensions);
+
+        // A name, an assignment, a word with no type after it: no const.
+        const std::string plain = "integer const = 1;\nf() { const = 2; integer constant = const; }\n";
+        r                       = ALPreprocessor::run(plain, options());
+        ensure_equals("nothing taken off", r.text, plain);
+        ensure("nothing said", r.consts.empty());
+
+        // Made by a macro, and with the extensions on.
+        ALPreprocessor::Options o = options();
+        o.extensions              = true;
+        r                         = ALPreprocessor::run("#define FIXED const integer\nFIXED Z = 3;\n", o);
+        ensure_equals("problems", messages(r), std::string());
+        ensure_equals("a macro's", squeeze(r.text), std::string("integer Z = 3;\n"));
+        const size_t z       = r.text.find('Z');
+        const size_t newline = r.text.rfind('\n', z);
+        const S32    line    = static_cast<S32>(std::count(r.text.begin(), r.text.begin() + z, '\n'));
+        const S32    column  = static_cast<S32>(newline == std::string::npos ? z : z - newline - 1);
+        ensure("where the name is in the text", at(r, 0, "Z", line, column, false) && r.consts.size() == 1);
+    }
+}

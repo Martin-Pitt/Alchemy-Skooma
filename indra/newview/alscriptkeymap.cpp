@@ -26,14 +26,8 @@
 
 #include "alscriptkeymap.h"
 
-#include "alfloaterscriptstudio.h"
-#include "llbutton.h"
-#include "llfloaterreg.h"
-#include "llviewerwindow.h"
 #include "llkeyboard.h"
-#include "lllineeditor.h"
-#include "llscrolllistctrl.h"
-#include "lltextbox.h"
+#include "lluictrlfactory.h"
 #include "llviewercontrol.h"
 
 #include <algorithm>
@@ -46,10 +40,10 @@ namespace
     const std::string MENU_PREFIX = "menu:";
 
     // The setting: a map from a command's name to its keys, each a map
-    // of key and mask.
-    LLSD rebound() { return gSavedSettings.getLLSD(SETTING); }
+    // of key and mask, and of the key before it for two.
+    const LLSD& rebound();
 
-    void store(const LLSD& map) { gSavedSettings.setLLSD(SETTING, map); }
+    void store(const LLSD& map);
 
     ALScriptKeymap::keys_t keysFrom(const LLSD& list)
     {
@@ -60,6 +54,83 @@ namespace
         }
         return keys;
     }
+
+    // A menu item's keys as the setting keeps them, each with the key
+    // pressed before it where it is two.
+    ALScriptKeymap::chords_t chordsFrom(const LLSD& list)
+    {
+        ALScriptKeymap::chords_t chords;
+        for (LLSD::array_const_iterator it = list.beginArray(); it != list.endArray(); ++it)
+        {
+            ALKeyChord chord = { static_cast<KEY>((*it)["key"].asInteger()), static_cast<MASK>((*it)["mask"].asInteger()) };
+            if (it->has("lead_key"))
+            {
+                chord.leadKey  = static_cast<KEY>((*it)["lead_key"].asInteger());
+                chord.leadMask = static_cast<MASK>((*it)["lead_mask"].asInteger());
+            }
+            if (!chord.none())
+            {
+                chords.push_back(chord);
+            }
+        }
+        return chords;
+    }
+
+    LLSD chordsTo(const ALScriptKeymap::chords_t& chords)
+    {
+        LLSD list = LLSD::emptyArray();
+        for (const ALKeyChord& chord : chords)
+        {
+            if (chord.none())
+            {
+                continue;
+            }
+            LLSD one;
+            one["key"]  = static_cast<S32>(chord.key);
+            one["mask"] = static_cast<S32>(chord.mask);
+            if (chord.twoKeys())
+            {
+                one["lead_key"]  = static_cast<S32>(chord.leadKey);
+                one["lead_mask"] = static_cast<S32>(chord.leadMask);
+            }
+            list.append(one);
+        }
+        return list;
+    }
+
+    ALKeymap build(const LLSD& bound);
+
+    // The setting, and the keymap it makes, read again only once the
+    // setting has changed -- by a key given here, or by anything else that
+    // sets it. Every editor is given the keymap, and the menus ask each of
+    // their commands for its keys at every key pressed.
+    struct Built
+    {
+        LLSD                               bound;
+        ALKeymap                           map;
+        bool                               stale = true;
+        boost::signals2::scoped_connection listening;
+    };
+    Built& built()
+    {
+        static Built one;
+        if (!one.listening.connected())
+        {
+            if (LLControlVariable* control = gSavedSettings.getControl(SETTING))
+            {
+                one.listening = control->getSignal()->connect([](LLControlVariable*, const LLSD&, const LLSD&) { built().stale = true; });
+            }
+        }
+        if (one.stale)
+        {
+            one.bound = gSavedSettings.getLLSD(SETTING);
+            one.map   = build(one.bound);
+            one.stale = false;
+        }
+        return one;
+    }
+
+    const LLSD& rebound() { return built().bound; }
 
     LLSD keysTo(const ALScriptKeymap::keys_t& keys)
     {
@@ -75,12 +146,17 @@ namespace
     }
 }
 
-namespace ALScriptKeymap
+namespace
 {
-    ALKeymap current()
+    void store(const LLSD& map)
     {
-        ALKeymap   map   = ALKeymap::standard();
-        const LLSD bound = rebound();
+        gSavedSettings.setLLSD(SETTING, map);
+        built().stale = true;
+    }
+
+    ALKeymap build(const LLSD& bound)
+    {
+        ALKeymap map = ALKeymap::standard();
         if (!bound.isMap())
         {
             return map;
@@ -92,7 +168,7 @@ namespace ALScriptKeymap
             {
                 continue;
             }
-            for (const auto& [key, mask] : keysOf(map, *command))
+            for (const auto& [key, mask] : ALScriptKeymap::keysOf(map, *command))
             {
                 map.unbind(key, mask);
             }
@@ -103,6 +179,11 @@ namespace ALScriptKeymap
         }
         return map;
     }
+}
+
+namespace ALScriptKeymap
+{
+    const ALKeymap& current() { return built().map; }
 
     keys_t keysOf(const ALKeymap& map, ALEditorCommand command)
     {
@@ -150,110 +231,374 @@ namespace ALScriptKeymap
     {
         // As the studio's menus give them, which this table overrides, so
         // that the two cannot drift: the menus are told these at every
-        // open. Back and forward are the Control key's on a Mac too, as
-        // an editor of code has them there, Command-minus being the
-        // view's zoom elsewhere.
+        // open. A command named again has another key as standard: the
+        // menu shows the first.
 #if LL_DARWIN
         constexpr MASK REAL_CONTROL = MASK_MAC_CONTROL;
 #else
         constexpr MASK REAL_CONTROL = MASK_CONTROL;
 #endif
+        // Control-K, then a key: for what would otherwise hold Control
+        // and Alt together, which is AltGr on many a keyboard -- a German
+        // } or a Polish s typed would fold a pane or save every script.
+        const auto after_k = [](const char* id, KEY key) { return MenuCommand{ id, key, MASK_NONE, true, 'K', MASK_CONTROL }; };
+        // Every command of the menus that is not the editors' own (those are
+        // ALKeymap's), in the menus' order, so that each can be given keys.
         static const std::vector<MenuCommand> commands{
+            // File
             { "new_script", 'N', MASK_CONTROL },
             { "new_lua_script", KEY_NONE, MASK_NONE },
             { "save", 'S', MASK_CONTROL },
-            { "save_all", 'S', MASK_CONTROL | MASK_ALT },
+            after_k("save_all", 'S'),
             { "revert", KEY_NONE, MASK_NONE },
             { "open_file", KEY_NONE, MASK_NONE },
-            { "close", 'W', MASK_CONTROL },
+            { "recover", KEY_NONE, MASK_NONE },
+            { "insert_file", KEY_NONE, MASK_NONE },
+            { "load_file", KEY_NONE, MASK_NONE },
+            { "save_file", KEY_NONE, MASK_NONE },
+            { "save_as", KEY_NONE, MASK_NONE },
+            { "external_editor", KEY_NONE, MASK_NONE },
             { "preferences", KEY_NONE, MASK_NONE },
+            { "update_definitions", KEY_NONE, MASK_NONE },
+            { "pop_out", KEY_NONE, MASK_NONE },
+            { "close", 'W', MASK_CONTROL },
+            { "close_others", KEY_NONE, MASK_NONE },
+            { "close_saved", KEY_NONE, MASK_NONE },
+            { "close_all", KEY_NONE, MASK_NONE },
+            // Edit
+            { "fix_all", KEY_NONE, MASK_NONE },
+            { "check_object", KEY_NONE, MASK_NONE },
             { "format", 'F', MASK_SHIFT | MASK_ALT },
+            { "format_selection", KEY_NONE, MASK_NONE },
+            { "indent_spaces", KEY_NONE, MASK_NONE },
+            { "indent_tabs", KEY_NONE, MASK_NONE },
             { "find_in_files", 'F', MASK_CONTROL | MASK_SHIFT },
+            // Insert
             { "insert_snippet", 'I', MASK_CONTROL | MASK_SHIFT },
-            { "back", '-', REAL_CONTROL },
-            { "forward", '-', REAL_CONTROL | MASK_SHIFT },
+            { "insert_function", KEY_NONE, MASK_NONE },
+            { "insert_event", KEY_NONE, MASK_NONE },
+            { "insert_constant", KEY_NONE, MASK_NONE },
+            // Go
+#if LL_DARWIN
+            // The Control key's on a Mac, as an editor of code has them
+            // there: Command-minus is the text's size.
+            { "back", '-', MASK_MAC_CONTROL },
+            { "forward", '-', MASK_MAC_CONTROL | MASK_SHIFT },
+#else
+            // Alt with an arrow, as VS Code has them: Control-minus is the
+            // text's size.
+            { "back", KEY_LEFT, MASK_ALT },
+            { "forward", KEY_RIGHT, MASK_ALT },
+#endif
+            { "quick_open", 'P', MASK_CONTROL },
+#if LL_DARWIN
+            // The Mac's own Control-G, as its editors go to a line:
+            // Command-G is the next match there.
+            { "go_to_line", 'G', MASK_MAC_CONTROL },
+#else
             { "go_to_line", 'G', MASK_CONTROL },
+#endif
             { "go_to_symbol", 'O', MASK_CONTROL | MASK_SHIFT },
+#if LL_DARWIN
+            // Xcode's next and previous issue, first, the function keys
+            // needing Fn on most Macs.
+            { "next_problem", '\'', MASK_CONTROL },
+            { "previous_problem", '\'', MASK_CONTROL | MASK_SHIFT },
+#endif
             { "next_problem", KEY_F8, MASK_NONE },
             { "previous_problem", KEY_F8, MASK_SHIFT },
             { "next_tab", KEY_PAGE_DOWN, MASK_CONTROL },
+            // Control-Tab too, as everywhere: the Mac's own Control key,
+            // Command-Tab being the system's.
+            { "next_tab", KEY_TAB, REAL_CONTROL },
             { "previous_tab", KEY_PAGE_UP, MASK_CONTROL },
+            { "previous_tab", KEY_TAB, REAL_CONTROL | MASK_SHIFT },
+#if LL_DARWIN
+            // And Command-Shift with a bracket, as the Mac's own go
+            // between tabs.
+            { "next_tab", ']', MASK_CONTROL | MASK_SHIFT },
+            { "previous_tab", '[', MASK_CONTROL | MASK_SHIFT },
+#endif
+            { "last_tab", '6', REAL_CONTROL },
             { "all_tabs", KEY_NONE, MASK_NONE },
             { "move_tab_left", KEY_PAGE_UP, MASK_CONTROL | MASK_SHIFT },
             { "move_tab_right", KEY_PAGE_DOWN, MASK_CONTROL | MASK_SHIFT },
             { "focus_tabs", KEY_NONE, MASK_NONE },
+#if LL_DARWIN
+            { "next_pane", ']', MASK_CONTROL | MASK_MAC_CONTROL },
+            { "previous_pane", '[', MASK_CONTROL | MASK_MAC_CONTROL },
+#endif
+            { "next_pane", KEY_F6, MASK_NONE },
+            { "previous_pane", KEY_F6, MASK_SHIFT },
+            // View
             { "command_palette", 'P', MASK_CONTROL | MASK_SHIFT },
-            { "quick_open", 'P', MASK_CONTROL },
-            { "explorer", '0', MASK_CONTROL | MASK_ALT },
-            { "problems", '1', MASK_CONTROL | MASK_ALT },
-            { "references", '2', MASK_CONTROL | MASK_ALT },
-            { "output", '3', MASK_CONTROL | MASK_ALT },
-            { "inspector", '4', MASK_CONTROL | MASK_ALT },
-            { "search", '5', MASK_CONTROL | MASK_ALT },
-            { "weights", '6', MASK_CONTROL | MASK_ALT },
-            { "expanded", 'P', MASK_CONTROL | MASK_ALT },
+            { "word_wrap", KEY_NONE, MASK_NONE },
+            { "line_numbers", KEY_NONE, MASK_NONE },
+            { "relative_numbers", KEY_NONE, MASK_NONE },
+            { "indent_guides", KEY_NONE, MASK_NONE },
+            { "blanks_none", KEY_NONE, MASK_NONE },
+            { "blanks_selection", KEY_NONE, MASK_NONE },
+            { "blanks_trailing", KEY_NONE, MASK_NONE },
+            { "blanks_all", KEY_NONE, MASK_NONE },
+            { "rainbow_brackets", KEY_NONE, MASK_NONE },
+            { "sticky_headers", KEY_NONE, MASK_NONE },
+            { "vim_mode", KEY_NONE, MASK_NONE },
+            { "semantic_colors", KEY_NONE, MASK_NONE },
+            { "inlay_parameters", KEY_NONE, MASK_NONE },
+            { "inlay_types", KEY_NONE, MASK_NONE },
+            { "weight_notes", KEY_NONE, MASK_NONE },
+            { "weight_heat", KEY_NONE, MASK_NONE },
+            { "spell_check", KEY_NONE, MASK_NONE },
+            { "scroll_bar", KEY_NONE, MASK_NONE },
+            { "scroll_map", KEY_NONE, MASK_NONE },
+            { "map_narrow", KEY_NONE, MASK_NONE },
+            { "map_medium", KEY_NONE, MASK_NONE },
+            { "map_wide", KEY_NONE, MASK_NONE },
+            { "map_preview", KEY_NONE, MASK_NONE },
+            { "map_left", KEY_NONE, MASK_NONE },
+            after_k("explorer", '0'),
+            after_k("problems", '1'),
+            after_k("references", '2'),
+            after_k("output", '3'),
+            after_k("search", '5'),
+            after_k("weights", '6'),
+            after_k("inspector", '4'),
+            after_k("expanded", 'P'),
+            { "compare_saved", KEY_NONE, MASK_NONE },
+            { "compare_inline", KEY_NONE, MASK_NONE },
+            // The text's size: Control-= and Control-minus, Shift or not,
+            // the keypad's too, as everywhere -- Command on a Mac -- and
+            // Control-0 back to the size chosen. The '=' key is '=' from
+            // Windows and KEY_EQUALS from SDL.
+            { "zoom_in", '=', MASK_CONTROL },
+            { "zoom_in", KEY_EQUALS, MASK_CONTROL },
+            { "zoom_in", '=', MASK_CONTROL | MASK_SHIFT },
+            { "zoom_in", KEY_EQUALS, MASK_CONTROL | MASK_SHIFT },
+            { "zoom_in", KEY_ADD, MASK_CONTROL },
+            { "zoom_out", '-', MASK_CONTROL },
+            { "zoom_out", KEY_SUBTRACT, MASK_CONTROL },
+            { "zoom_reset", '0', MASK_CONTROL },
+            // Build
             { "preprocess", KEY_NONE, MASK_NONE },
+            { "running", KEY_NONE, MASK_NONE },
+            { "reset_script", KEY_NONE, MASK_NONE },
+            { "choose_target", KEY_NONE, MASK_NONE },
+            { "choose_experience", KEY_NONE, MASK_NONE },
+            { "preflight", KEY_NONE, MASK_NONE },
+            { "preproc_enabled", KEY_NONE, MASK_NONE },
+            { "preproc_disk", KEY_NONE, MASK_NONE },
+            { "preproc_folder", KEY_NONE, MASK_NONE },
+            { "preproc_switch", KEY_NONE, MASK_NONE },
+            { "preproc_lazy", KEY_NONE, MASK_NONE },
+            { "preproc_compress", KEY_NONE, MASK_NONE },
+            { "preproc_extensions", KEY_NONE, MASK_NONE },
+            { "preproc_optimize", KEY_NONE, MASK_NONE },
+            { "preproc_shrink", KEY_NONE, MASK_NONE },
+            { "preproc_addstrings", KEY_NONE, MASK_NONE },
+            { "preproc_inline", KEY_NONE, MASK_NONE },
+            // Help
+#if LL_DARWIN
+            // Xcode's documentation, first, F1 needing Fn.
+            { "reference", '0', MASK_CONTROL | MASK_SHIFT },
+#endif
             { "reference", KEY_F1, MASK_NONE },
+            { "browse_reference", KEY_NONE, MASK_NONE },
+            { "wiki", KEY_NONE, MASK_NONE },
         };
         return commands;
     }
 
-    bool isMenuCommand(std::string_view item)
+    const std::vector<std::string>& menuIds()
     {
-        const std::vector<MenuCommand>& all = menuCommands();
-        return std::any_of(all.begin(), all.end(), [item](const MenuCommand& one) { return item == one.item; });
+        static const std::vector<std::string> ids = []() {
+            std::vector<std::string> out;
+            for (const MenuCommand& one : menuCommands())
+            {
+                if (std::find(out.begin(), out.end(), one.id) == out.end())
+                {
+                    out.emplace_back(one.id);
+                }
+            }
+            return out;
+        }();
+        return ids;
     }
 
-    std::pair<KEY, MASK> menuKey(std::string_view item)
+    bool isMenuCommand(std::string_view item)
     {
-        const LLSD bound = rebound();
-        const std::string name = MENU_PREFIX + std::string(item);
+        const std::vector<std::string>& all = menuIds();
+        return std::find(all.begin(), all.end(), item) != all.end();
+    }
+
+    chords_t menuKeys(std::string_view item)
+    {
+        const LLSD&       bound = rebound();
+        const std::string name  = MENU_PREFIX + std::string(item);
         if (bound.isMap() && bound.has(name))
         {
-            const keys_t keys = keysFrom(bound[name]);
-            return keys.empty() ? std::make_pair(KEY_NONE, MASK_NONE) : keys.front();
+            return chordsFrom(bound[name]);
         }
+        chords_t keys;
         for (const MenuCommand& one : menuCommands())
         {
-            if (item == one.item)
+            if (item == one.id && !one.chord().none())
             {
-                return { one.key, one.mask };
+                keys.push_back(one.chord());
             }
         }
-        return { KEY_NONE, MASK_NONE };
+        return keys;
+    }
+
+    ALKeyChord menuKey(std::string_view item)
+    {
+        const chords_t keys = menuKeys(item);
+        return keys.empty() ? ALKeyChord{} : keys.front();
     }
 
     bool isMenuRebound(std::string_view item)
     {
-        const LLSD bound = rebound();
+        const LLSD& bound = rebound();
         return bound.isMap() && bound.has(MENU_PREFIX + std::string(item));
     }
 
-    void rebindMenu(std::string_view item, KEY key, MASK mask)
+    void rebindMenu(std::string_view item, const chords_t& keys)
     {
         LLSD bound = rebound();
         if (!bound.isMap())
         {
             bound = LLSD::emptyMap();
         }
-        keys_t keys;
-        if (key != KEY_NONE)
-        {
-            keys.emplace_back(key, mask);
-        }
-        bound[MENU_PREFIX + std::string(item)] = keysTo(keys);
+        bound[MENU_PREFIX + std::string(item)] = chordsTo(keys);
         store(bound);
     }
 
     void restoreMenu(std::string_view item)
     {
-        LLSD bound = rebound();
-        const std::string name = MENU_PREFIX + std::string(item);
+        LLSD              bound = rebound();
+        const std::string name  = MENU_PREFIX + std::string(item);
         if (bound.isMap() && bound.has(name))
         {
             bound.erase(name);
             store(bound);
         }
+    }
+
+    std::vector<Owner> takeKeys(const Owner& keeping, const ALKeyChord& chord, bool apply)
+    {
+        std::vector<Owner> from;
+        const KEY          first_key  = chord.twoKeys() ? chord.leadKey : chord.key;
+        const MASK         first_mask = chord.twoKeys() ? chord.leadMask : chord.mask;
+        // An editor's command: the key goes from its keys, the rest kept.
+        const ALKeymap        map   = current();
+        const ALEditorCommand other = map.lookup(first_key, first_mask);
+        if (other != ALEditorCommand::None && other != keeping.command)
+        {
+            if (apply)
+            {
+                keys_t rest;
+                for (const auto& bound : keysOf(map, other))
+                {
+                    if (bound.first != first_key || bound.second != first_mask)
+                    {
+                        rest.push_back(bound);
+                    }
+                }
+                rebind(other, rest);
+            }
+            Owner was;
+            was.command = other;
+            from.push_back(was);
+        }
+        // A menu's.
+        for (const std::string& id : menuIds())
+        {
+            if (keeping.menu == id)
+            {
+                continue;
+            }
+            const chords_t had = menuKeys(id);
+            chords_t       rest;
+            for (const ALKeyChord& one : had)
+            {
+                const bool same     = one == chord;
+                const bool led      = !chord.twoKeys() && one.ledBy(chord.key, chord.mask);
+                const bool leads_it = chord.twoKeys() && !one.twoKeys() && one.key == chord.leadKey && one.mask == chord.leadMask;
+                if (!same && !led && !leads_it)
+                {
+                    rest.push_back(one);
+                }
+            }
+            if (rest.size() == had.size())
+            {
+                continue;
+            }
+            if (apply)
+            {
+                rebindMenu(id, rest);
+            }
+            Owner was;
+            was.menu = id;
+            from.push_back(was);
+        }
+        return from;
+    }
+
+    std::vector<MenuItem> menuItemsIn(const LLXMLNodePtr& root)
+    {
+        std::vector<MenuItem>                                         out;
+        const std::function<void(const LLXMLNodePtr&, const std::string&)> walk = [&](const LLXMLNodePtr& node, const std::string& path) {
+            for (LLXMLNodePtr child = node->getFirstChild(); child.notNull(); child = child->getNextSibling())
+            {
+                std::string name;
+                std::string label;
+                child->getAttributeString("name", name);
+                child->getAttributeString("label", label);
+                const std::string here = path.empty() ? label : path + " > " + label;
+                if (child->hasName("menu"))
+                {
+                    walk(child, here);
+                }
+                else if ((child->hasName("menu_item_call") || child->hasName("menu_item_check")) && !name.empty())
+                {
+                    out.push_back({ name, here });
+                }
+                else if (child->hasName("menu_bar") || child->hasName("floater") || child->hasName("panel") || child->hasName("layout_stack") ||
+                         child->hasName("layout_panel"))
+                {
+                    // The bar, wherever in the window it is.
+                    if (child->hasName("menu_bar") && name != "studio_menu")
+                    {
+                        continue;
+                    }
+                    walk(child, child->hasName("menu_bar") ? std::string() : path);
+                }
+            }
+        };
+        walk(root, std::string());
+        return out;
+    }
+
+    const std::vector<MenuItem>& studioMenuItems()
+    {
+        static const std::vector<MenuItem> items = []() {
+            LLXMLNodePtr root;
+            return LLUICtrlFactory::getLayeredXMLNode("floater_script_studio.xml", root) ? menuItemsIn(root) : std::vector<MenuItem>();
+        }();
+        return items;
+    }
+
+    std::string describe(const chords_t& keys)
+    {
+        std::string text;
+        for (const ALKeyChord& chord : keys)
+        {
+            if (!text.empty())
+            {
+                text += ", ";
+            }
+            text += chord.describe();
+        }
+        return text;
     }
 
     std::string describe(const keys_t& keys)
@@ -269,293 +614,4 @@ namespace ALScriptKeymap
         }
         return text;
     }
-}
-
-// --- the panel -----------------------------------------------------------------------
-
-static LLPanelInjector<ALPanelScriptKeymap> t_script_keymap("al_panel_script_keymap");
-
-ALPanelScriptKeymap::ALPanelScriptKeymap() = default;
-
-ALPanelScriptKeymap::~ALPanelScriptKeymap() = default;
-
-bool ALPanelScriptKeymap::postBuild()
-{
-    mFilter = getChild<LLLineEditor>("filter");
-    mList   = getChild<LLScrollListCtrl>("keys");
-    mSaid   = getChild<LLTextBox>("said");
-    mFilter->setKeystrokeCallback([this](LLLineEditor*, void*) { fill(); }, nullptr);
-    mList->setCommitOnSelectionChange(true);
-    mList->setCommitCallback([this](LLUICtrl*, const LLSD&) { refreshButtons(); });
-    mList->setDoubleClickCallback([this]() { onChange(); });
-    getChild<LLButton>("change")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onChange(); });
-    getChild<LLButton>("add")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onAdd(); });
-    getChild<LLButton>("clear")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onClear(); });
-    getChild<LLButton>("restore")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onRestore(); });
-    getChild<LLButton>("restore_all")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onRestoreAll(); });
-    fill();
-    return true;
-}
-
-std::string ALPanelScriptKeymap::nameOf(const Chosen& which) const
-{
-    return which.menu.empty() ? getString(std::string("cmd_") + alEditorCommandName(which.command)) : getString("menu_" + which.menu);
-}
-
-void ALPanelScriptKeymap::fill()
-{
-    const Chosen was    = chosen();
-    std::string  filter = mFilter->getText();
-    LLStringUtil::toLower(filter);
-    const ALKeymap map = ALScriptKeymap::current();
-    mList->deleteAllItems();
-    const auto add = [&](const LLSD& value, const std::string& about, const std::string& keys, const std::string& name, bool changed, bool selected) {
-        if (!filter.empty())
-        {
-            std::string haystack = about + " " + keys + " " + name;
-            LLStringUtil::toLower(haystack);
-            if (haystack.find(filter) == std::string::npos)
-            {
-                return;
-            }
-        }
-        LLSD row;
-        row["value"]                = value;
-        row["columns"][0]["column"] = "command";
-        row["columns"][0]["value"]  = about;
-        row["columns"][1]["column"] = "keys";
-        row["columns"][1]["value"]  = keys.empty() ? getString("NoKeys") : keys;
-        row["columns"][2]["column"] = "changed";
-        row["columns"][2]["value"]  = changed ? getString("Changed") : LLStringUtil::null;
-        LLScrollListItem* item      = mList->addElement(row);
-        item->setSelected(selected);
-    };
-    // The editor's commands, then the menus'.
-    for (U8 i = 1; i < static_cast<U8>(ALEditorCommand::COUNT); ++i)
-    {
-        const ALEditorCommand command = static_cast<ALEditorCommand>(i);
-        LLSD                  value;
-        value["command"] = static_cast<S32>(i);
-        add(value, getString(std::string("cmd_") + alEditorCommandName(command)), ALScriptKeymap::describe(ALScriptKeymap::keysOf(map, command)),
-            alEditorCommandName(command), ALScriptKeymap::isRebound(command), command == was.command);
-    }
-    for (const ALScriptKeymap::MenuCommand& one : ALScriptKeymap::menuCommands())
-    {
-        const auto [key, mask] = ALScriptKeymap::menuKey(one.item);
-        ALScriptKeymap::keys_t keys;
-        if (key != KEY_NONE)
-        {
-            keys.emplace_back(key, mask);
-        }
-        LLSD value;
-        value["menu"] = one.item;
-        add(value, getString(std::string("menu_") + one.item), ALScriptKeymap::describe(keys), one.item, ALScriptKeymap::isMenuRebound(one.item),
-            was.menu == one.item);
-    }
-    refreshButtons();
-}
-
-ALPanelScriptKeymap::Chosen ALPanelScriptKeymap::chosen() const
-{
-    Chosen                  which;
-    const LLScrollListItem* item = mList->getFirstSelected();
-    if (!item)
-    {
-        return which;
-    }
-    const LLSD& value = item->getValue();
-    if (value.has("menu"))
-    {
-        which.menu = value["menu"].asString();
-    }
-    else
-    {
-        which.command = static_cast<ALEditorCommand>(value["command"].asInteger());
-    }
-    return which;
-}
-
-void ALPanelScriptKeymap::refreshButtons()
-{
-    const Chosen which = chosen();
-    const bool   some  = which.any();
-    getChild<LLButton>("change")->setEnabled(some);
-    // A menu item answers to one key.
-    getChild<LLButton>("add")->setEnabled(some && which.menu.empty());
-    getChild<LLButton>("clear")->setEnabled(some);
-    getChild<LLButton>("restore")->setEnabled(some && (which.menu.empty() ? ALScriptKeymap::isRebound(which.command) : ALScriptKeymap::isMenuRebound(which.menu)));
-}
-
-void ALPanelScriptKeymap::onChange()
-{
-    mEditing = chosen();
-    mAdding  = false;
-    if (!mEditing.any())
-    {
-        return;
-    }
-    if (LLSetKeyBindDialog* dialog = LLFloaterReg::getTypedInstance<LLSetKeyBindDialog>("keybind_dialog", LLSD()))
-    {
-        dialog->setParent(this, mList, ALLOW_KEYS | ALLOW_MASK_KEYS | ALLOW_MASKS);
-        if (LLFloater* root = gFloaterView->getParentFloater(this))
-        {
-            root->addDependentFloater(dialog);
-        }
-        dialog->openFloater();
-        dialog->setFocus(true);
-    }
-}
-
-void ALPanelScriptKeymap::onAdd()
-{
-    onChange();
-    mAdding = mEditing.menu.empty();
-}
-
-void ALPanelScriptKeymap::onClear()
-{
-    const Chosen which = chosen();
-    if (!which.any())
-    {
-        return;
-    }
-    if (which.menu.empty())
-    {
-        ALScriptKeymap::rebind(which.command, {});
-    }
-    else
-    {
-        ALScriptKeymap::rebindMenu(which.menu, KEY_NONE, MASK_NONE);
-    }
-    mSaid->setText(LLStringUtil::null);
-    fill();
-    ALFloaterScriptStudio::refreshAll();
-}
-
-void ALPanelScriptKeymap::onRestore()
-{
-    const Chosen which = chosen();
-    if (!which.any())
-    {
-        return;
-    }
-    if (which.menu.empty())
-    {
-        ALScriptKeymap::restore(which.command);
-    }
-    else
-    {
-        ALScriptKeymap::restoreMenu(which.menu);
-    }
-    mSaid->setText(LLStringUtil::null);
-    fill();
-    ALFloaterScriptStudio::refreshAll();
-}
-
-void ALPanelScriptKeymap::onRestoreAll()
-{
-    ALScriptKeymap::restoreAll();
-    mSaid->setText(LLStringUtil::null);
-    fill();
-    ALFloaterScriptStudio::refreshAll();
-}
-
-void ALPanelScriptKeymap::onDefaultKeyBind(bool)
-{
-    if (!mEditing.any())
-    {
-        return;
-    }
-    if (mEditing.menu.empty())
-    {
-        ALScriptKeymap::restore(mEditing.command);
-    }
-    else
-    {
-        ALScriptKeymap::restoreMenu(mEditing.menu);
-    }
-    mSaid->setText(LLStringUtil::null);
-    fill();
-    ALFloaterScriptStudio::refreshAll();
-}
-
-std::vector<std::string> ALPanelScriptKeymap::takeKey(const Chosen& keeping, KEY key, MASK mask)
-{
-    std::vector<std::string> from;
-    // An editor's command: the key goes from its keys, the rest kept.
-    const ALKeymap        map   = ALScriptKeymap::current();
-    const ALEditorCommand other = map.lookup(key, mask);
-    if (other != ALEditorCommand::None && other != keeping.command)
-    {
-        ALScriptKeymap::keys_t rest;
-        for (const auto& bound : ALScriptKeymap::keysOf(map, other))
-        {
-            if (bound.first != key || bound.second != mask)
-            {
-                rest.push_back(bound);
-            }
-        }
-        ALScriptKeymap::rebind(other, rest);
-        Chosen was;
-        was.command = other;
-        from.push_back(nameOf(was));
-    }
-    // A menu's: it has no key left. The editor has a key first, so a key
-    // both answered to was the editor's alone in the editor.
-    for (const ALScriptKeymap::MenuCommand& one : ALScriptKeymap::menuCommands())
-    {
-        if (keeping.menu == one.item || ALScriptKeymap::menuKey(one.item) != std::make_pair(key, mask))
-        {
-            continue;
-        }
-        ALScriptKeymap::rebindMenu(one.item, KEY_NONE, MASK_NONE);
-        Chosen was;
-        was.menu = one.item;
-        from.push_back(nameOf(was));
-    }
-    return from;
-}
-
-bool ALPanelScriptKeymap::onSetKeyBind(EMouseClickType click, KEY key, MASK mask, bool)
-{
-    if (!mEditing.any() || click != CLICK_NONE || key == KEY_NONE)
-    {
-        return false;
-    }
-    // Whatever else answered to the key lets it go, and is named.
-    const std::vector<std::string> from = takeKey(mEditing, key, mask);
-    if (mEditing.menu.empty())
-    {
-        ALScriptKeymap::keys_t keys;
-        if (mAdding)
-        {
-            keys = ALScriptKeymap::keysOf(ALScriptKeymap::current(), mEditing.command);
-        }
-        keys.emplace_back(key, mask);
-        ALScriptKeymap::rebind(mEditing.command, keys);
-    }
-    else
-    {
-        ALScriptKeymap::rebindMenu(mEditing.menu, key, mask);
-    }
-    if (from.empty())
-    {
-        mSaid->setText(LLStringUtil::null);
-    }
-    else
-    {
-        std::string whose;
-        for (const std::string& name : from)
-        {
-            whose += (whose.empty() ? "" : ", ") + name;
-        }
-        LLStringUtil::format_map_t args;
-        args["[KEYS]"]  = LLKeyboard::stringFromAccelerator(mask, key);
-        args["[WHOSE]"] = whose;
-        args["[WHAT]"]  = nameOf(mEditing);
-        mSaid->setText(getString("KeyTaken", args));
-    }
-    fill();
-    ALFloaterScriptStudio::refreshAll();
-    return false;
 }
