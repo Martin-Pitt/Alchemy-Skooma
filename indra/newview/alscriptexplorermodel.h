@@ -24,10 +24,12 @@
 
 #pragma once
 
+#include "alscriptcontentsindex.h"
 #include "alscriptworkspace.h"
 #include "llsd.h"
 #include "lluuid.h"
 
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
 
 #include <functional>
@@ -38,15 +40,18 @@
 #include <vector>
 
 // What the Script Studio's explorer lists: the objects in hand -- pinned,
-// selected in world, or holding a script that is open -- each prim's scripts
-// and notecards as they are fetched, whether each script runs as the region
-// last said, the pins, what is folded, and from all of that the rows a
-// filter lets through. Nothing of the world: what an object in sight is and
-// is called, the explorer's panel tells it.
+// selected in world, or holding a script that is open -- the pins, what is
+// folded, and from all of that and what each prim holds the rows a filter
+// lets through. What each prim holds, and whether each script runs, is the
+// contents index's, which every window shares; what this window lists of it
+// is its own. Nothing of the world: what an object in sight is and is
+// called, the explorer's panel tells it.
 class ALScriptExplorerModel
 {
 public:
     typedef ALScriptWorkspace::Item Item;
+
+    explicit ALScriptExplorerModel(ALScriptContentsIndex& index) : mIndex(index) {}
 
     // Past how many prims a linkset's prims are listed folded, what each
     // holds asked of the region only once it is shown: a build of 255 prims
@@ -56,12 +61,10 @@ public:
 
     struct Prim
     {
-        LLUUID            id;
-        std::string       name;
+        LLUUID      id;
+        std::string name;
         // The name is the prim's own, not a stand-in until it is heard.
-        bool              named   = false;
-        bool              fetched = false;
-        std::vector<Item> items;
+        bool        named = false;
     };
     // A pinned object stays listed when it is neither selected nor holding
     // a script open, and across sessions; one that is not around is listed
@@ -130,29 +133,30 @@ public:
     };
     // The objects in hand listed again: the pinned first, so that they keep
     // their place, one not in sight by its pin's name; then what is
-    // selected; then the objects of the scripts open. What each prim was
-    // known to hold is kept until it says again -- made afresh with nothing
-    // in it, the list lost the row chosen in it and showed every object
-    // empty until the answers came. A large linkset's prims are folded when
-    // it is first listed, but the root, which usually holds what the object
-    // does, and any with a script open. Names asked, and whether scripts
-    // run, are let go of for prims no longer listed.
+    // selected; then the objects of the scripts open. A large linkset's
+    // prims are folded when it is first listed, but the root, which usually
+    // holds what the object does, and any with a script open. Names asked
+    // are let go of for prims no longer listed.
     void list(const Listing& listing);
-    // The prims to ask what they hold: where it is not known, where the
-    // world's word on it is not `current`, or every one where `refetch` --
-    // a person asked, or something was made, renamed or deleted in one --
-    // but not one asked and not answered yet, nor, of a large linkset, one
-    // folded out of sight, unless `filtering` looks through it. Each is
-    // taken as asked until it is answered.
-    std::vector<LLUUID> toAsk(bool refetch, bool filtering, const std::function<bool(const LLUUID& prim)>& current);
+    // The prims the list wants the index to know what they hold: every one
+    // listed but, of a large linkset, one folded out of sight, unless
+    // `filtering` looks through it. The index asks only where it does not
+    // know already.
+    std::vector<LLUUID> wanted(bool filtering) const;
+    // A prim whose contents changed where its object keeps no word of it
+    // until it is selected -- a drop into it, a transfer: asked, and asked
+    // of the region rather than of the object's copy, until let go of --
+    // after the ask a moment later, which catches a region slow to count
+    // the change.
+    void askRegion(const LLUUID& prim) { mAskRegion.insert(prim); }
+    bool asksRegion(const LLUUID& prim) const { return mAskRegion.contains(prim); }
+    void doneAskingRegion() { mAskRegion.clear(); }
 
     // A new item to be opened once its prim lists it: by its id, or its
     // name where the region gave no id; with the text it is opened with.
     void openWhenListed(const LLUUID& prim, const LLUUID& item, const std::string& name, std::optional<std::string> text);
-    // What a prim holds, answered: a listing that did not come -- the
-    // object never answered -- leaves what was known of it; one that did
-    // says what it holds, and the prim's name. What it holds that is to be
-    // asked whether it runs, and what was waiting for it to be listed, to
+    // A prim's answer, once the index has taken it in: whether the prim is
+    // listed here, its name, and what was waiting for it to be listed, to
     // be opened now.
     struct Opening
     {
@@ -162,17 +166,25 @@ public:
     };
     struct Heard
     {
-        bool                     listed = false;
-        std::vector<ALScriptRef> askRunning;
-        std::vector<Opening>     opening;
+        bool                 listed = false;
+        std::vector<Opening> opening;
     };
     Heard contents(const ALScriptWorkspace::Contents& contents);
+
+    // What a prim holds as far as the index knows: nothing where it does
+    // not; and whether it knows.
+    const std::vector<Item>& items(const LLUUID& prim) const { return mIndex.items(prim); }
+    bool                     fetched(const LLUUID& prim) const { return mIndex.fetched(prim); }
 
     // --- names ---------------------------------------------------------------------
 
     // Whether a prim is listed, among which the world's word on a name is
     // looked for.
     bool listed(const LLUUID& prim) const { return mListedPrims.contains(prim); }
+    // Whether an object coming into sight or leaving it changes the list: a
+    // prim listed, or one the listing asked for -- a pin's, a selected
+    // object's, an open script's -- in sight or not.
+    bool concerns(const LLUUID& id) const { return mListedPrims.contains(id) || mSought.contains(id); }
     // A name to be asked of its region, once while it is listed: true the
     // first time.
     bool askName(const LLUUID& prim);
@@ -188,10 +200,10 @@ public:
 
     // --- whether scripts run -------------------------------------------------------
 
-    void                running(const ALScriptRef& ref, bool running) { mRunningKnown[{ ref.object, ref.item }] = running; }
-    std::optional<bool> knownRunning(const ALScriptRef& ref) const;
-    void                forgetRunning() { mRunningKnown.clear(); }
-    const std::map<std::pair<LLUUID, LLUUID>, bool>& runningKnown() const { return mRunningKnown; }
+    std::optional<bool> knownRunning(const ALScriptRef& ref) const { return mIndex.running(ref); }
+    // What is known of the listed prims' scripts let go of, for them to be
+    // asked again.
+    void                forgetRunning();
 
     // --- the rows ------------------------------------------------------------------
 
@@ -293,7 +305,16 @@ public:
 private:
     // An object's name, and its pin's with it.
     void renameObject(Object& object, const std::string& name);
+    // Where a listed prim is, and an object by its root: made with the
+    // listing.
+    struct At
+    {
+        size_t object = 0;
+        size_t prim   = 0;
+    };
+    const Object* objectAt(const LLUUID& root) const;
 
+    ALScriptContentsIndex&                    mIndex;
     std::vector<Object>                       mObjects;
     std::vector<Pin>                          mPins;
     bool                                      mPinsChanged = false;
@@ -304,15 +325,14 @@ private:
     boost::unordered_flat_set<LLUUID>         mFolded;
     boost::unordered_flat_set<LLUUID>         mFoldedPrims;
     boost::unordered_flat_set<LLUUID>         mEmptiesOpen;
-    // The prims asked what they hold and not answered yet, which are not
-    // asked again meanwhile.
-    boost::unordered_flat_set<LLUUID>         mContentsAsked;
+    boost::unordered_flat_set<LLUUID>         mAskRegion;
     // The prims listed; those whose names were asked of their regions while
     // listed.
     boost::unordered_flat_set<LLUUID>         mListedPrims;
+    boost::unordered_flat_set<LLUUID>         mSought;
+    boost::unordered_flat_map<LLUUID, At>     mPrimAt;
+    boost::unordered_flat_map<LLUUID, size_t> mObjectAt;
     boost::unordered_flat_set<LLUUID>         mNamesAsked;
-    // What the region said runs, by prim and item.
-    std::map<std::pair<LLUUID, LLUUID>, bool> mRunningKnown;
     // The new items to be opened once their prims list them.
     struct OpenWhenListed
     {

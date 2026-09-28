@@ -25,10 +25,18 @@
 
 #include "alpanelist.h"
 
+#include "alkeychord.h"
+
+#include "alemptystate.h"
+
+#include "llclipboard.h"
+#include "llmenugl.h"
 #include "llscrolllistcell.h"
+#include "llscrolllistcolumn.h"
 #include "llscrolllistitem.h"
 #include "llsdutil.h"
 #include "llui.h"
+#include "lluictrlfactory.h"
 
 #include <utility>
 
@@ -58,6 +66,32 @@ namespace
         }
         return !kept.isMap() && kept.asString() == asked.asString();
     }
+
+    // How many characters a string shows as: its code points, which is
+    // near enough for a table read in a fixed face.
+    S32 displayWidth(const std::string& text)
+    {
+        S32 count = 0;
+        for (const char c : text)
+        {
+            count += ((U8)c & 0xC0) != 0x80;
+        }
+        return count;
+    }
+
+    // A cell with a newline or a tab in it would break the table it is
+    // being written into.
+    std::string oneLine(std::string text)
+    {
+        for (char& c : text)
+        {
+            if (c == '\n' || c == '\r' || c == '\t')
+            {
+                c = ' ';
+            }
+        }
+        return text;
+    }
 }
 
 ALPaneList::Params::Params()
@@ -70,13 +104,309 @@ ALPaneList::ALPaneList(const Params& p)
 {
 }
 
+ALPaneList::~ALPaneList()
+{
+    if (LLView* menu = mCopyMenu.get())
+    {
+        menu->die();
+    }
+}
+
+void ALPaneList::setEmpty(const std::string& headline, const std::string& sentence)
+{
+    if (!mEmpty)
+    {
+        ALEmptyState::Params ep(LLUICtrlFactory::getDefaultParams<ALEmptyState>());
+        ep.name               = "empty";
+        ep.rect               = getItemListRect();
+        ep.follows.flags      = FOLLOWS_ALL;
+        ep.background_visible = false;
+        ep.mouse_opaque       = false;
+        mEmpty                = LLUICtrlFactory::create<ALEmptyState>(ep);
+        addChild(mEmpty);
+    }
+    mEmptyHeadline = headline;
+    mEmpty->say(headline, sentence);
+    mEmpty->setVisible(saysEmpty());
+}
+
+bool ALPaneList::saysEmpty() const
+{
+    return mEmpty && !mEmptyHeadline.empty() && getItemCount() == 0;
+}
+
+void ALPaneList::setGo(std::function<void()> go)
+{
+    mGo = std::move(go);
+    setDoubleClickCallback([this]()
+    {
+        if (mGo)
+        {
+            mWentByClick = true;
+            mGo();
+        }
+    });
+}
+
+bool ALPaneList::handleUnicodeCharHere(llwchar uni_char)
+{
+    if (uni_char == ' ' && mSpace && getFirstSelected())
+    {
+        mSpace();
+        return true;
+    }
+    return LLScrollListCtrl::handleUnicodeCharHere(uni_char);
+}
+
 bool ALPaneList::handleKeyHere(KEY key, MASK mask)
 {
-    if (mKeyHandler && mKeyHandler(key, mask))
+    // Shift-F10 or the Menu key: what a right click on the row chosen
+    // would do -- a menu of the list's, or its owner's.
+    if (ALKeyChords::isContextMenuKey(key, mask))
     {
+        if (LLScrollListItem* item = getFirstSelected())
+        {
+            scrollToShowSelected();
+            const LLRect cell = getCellRect(getItemIndex(item), 0);
+            handleRightMouseDown(cell.mLeft + 4, cell.getCenterY(), MASK_NONE);
+            return true;
+        }
+    }
+    if (mask == MASK_NONE && (key == KEY_LEFT || key == KEY_RIGHT) && mFold)
+    {
+        if (const LLScrollListItem* item = getFirstSelected())
+        {
+            mFold(item->getValue(), key == KEY_LEFT);
+            return true;
+        }
+    }
+    if (mask == MASK_NONE && key == KEY_RETURN && mGo)
+    {
+        mGo();
+        return true;
+    }
+    if (mask == MASK_NONE && key == KEY_ESCAPE && mBack)
+    {
+        mBack();
+        return true;
+    }
+    // What the menu's Copy would, rather than the comma-separated rows the
+    // edit menu would reach.
+    if (mCopyable && key == 'C' && mask == MASK_CONTROL)
+    {
+        copyRows(getAllSelected());
         return true;
     }
     return LLScrollListCtrl::handleKeyHere(key, mask);
+}
+
+bool ALPaneList::handleRightMouseDown(S32 x, S32 y, MASK mask)
+{
+    if (!mCopyable)
+    {
+        return LLScrollListCtrl::handleRightMouseDown(x, y, mask);
+    }
+    // The right button does not choose, so Copy would have the wrong rows,
+    // or none at all on the first click. The row under it, unless the click
+    // landed inside a choice already made.
+    LLScrollListItem* hit = hitItem(x, y);
+    if (hit && !hit->getSelected())
+    {
+        selectItemAt(x, y, MASK_NONE);
+    }
+    mMenuCell.clear();
+    if (hit)
+    {
+        if (const LLScrollListCell* cell = hit->getColumn(getColumnIndexFromOffset(x)))
+        {
+            mMenuCell = cell->getValue().asString();
+        }
+    }
+    if (!LLMenuGL::sMenuContainer)
+    {
+        return true;
+    }
+    if (LLView* old = mCopyMenu.get())
+    {
+        old->die();
+    }
+    LLUICtrl::CommitCallbackRegistry::ScopedRegistrar commit;
+    LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable;
+    const LLHandle<LLUICtrl> self = getHandle();
+    commit.add("PaneList.Copy", [self](LLUICtrl*, const LLSD& action)
+    {
+        if (ALPaneList* list = ALViewType::as<ALPaneList>(self.get()))
+        {
+            list->copyAction(action.asString());
+        }
+    });
+    enable.add("PaneList.CopyEnabled", [self](LLUICtrl*, const LLSD& action)
+    {
+        const ALPaneList* list = ALViewType::as<ALPaneList>(self.get());
+        return list && list->copyActionEnabled(action.asString());
+    });
+    LLContextMenu* menu = LLUICtrlFactory::createFromFile<LLContextMenu>("menu_pane_list.xml", LLMenuGL::sMenuContainer,
+                                                                           LLMenuHolderGL::child_registry_t::instance());
+    if (menu)
+    {
+        mCopyMenu = menu->getHandle();
+        // A context menu places itself; the popup puts it in front and takes
+        // the mouse. Both, in that order, as every other list here does.
+        menu->show(x, y);
+        LLMenuGL::showPopup(this, menu, x, y);
+    }
+    return true;
+}
+
+void ALPaneList::copyAction(const std::string& action)
+{
+    if (action == "copy_cell")
+    {
+        LLClipboard::instance().copyToClipboard(mMenuCell, 0, (S32)mMenuCell.size());
+    }
+    else if (action == "copy")
+    {
+        copyRows(getAllSelected());
+    }
+    else if (action == "copy_all")
+    {
+        copyRows(getAllData());
+    }
+    else if (action == "select_all")
+    {
+        selectAll();
+    }
+}
+
+bool ALPaneList::copyActionEnabled(const std::string& action) const
+{
+    if (action == "copy_cell")
+    {
+        return !mMenuCell.empty();
+    }
+    if (action == "copy_all" || action == "select_all")
+    {
+        return getFirstData() != nullptr;
+    }
+    return getFirstSelected() != nullptr;
+}
+
+void ALPaneList::copyRows(const std::vector<LLScrollListItem*>& rows)
+{
+    const std::string text = asText(rows);
+    if (!text.empty())
+    {
+        LLClipboard::instance().copyToClipboard(text, 0, (S32)text.size());
+    }
+}
+
+std::string ALPaneList::asText(const std::vector<LLScrollListItem*>& all)
+{
+    std::vector<const LLScrollListItem*> rows;
+    for (const LLScrollListItem* item : all)
+    {
+        if (item->getEnabled())
+        {
+            rows.push_back(item);
+        }
+    }
+    const S32 columns = getNumColumns();
+    if (columns <= 0 || rows.empty())
+    {
+        return std::string();
+    }
+
+    // A column draws no heading when it needs none, which leaves its name
+    // to stand for it here.
+    std::vector<std::string> heading((size_t)columns);
+    for (S32 i = 0; i < columns; ++i)
+    {
+        const LLScrollListColumn* column = getColumn(i);
+        if (!column)
+        {
+            continue;
+        }
+        heading[i] = column->mLabel.getString();
+        if (heading[i].empty())
+        {
+            heading[i] = column->mName;
+            if (!heading[i].empty())
+            {
+                heading[i][0] = (char)toupper((U8)heading[i][0]);
+            }
+        }
+    }
+
+    std::vector<std::vector<std::string>> cells;
+    std::vector<bool> used((size_t)columns, false);
+    cells.reserve(rows.size());
+    for (const LLScrollListItem* item : rows)
+    {
+        std::vector<std::string> line((size_t)columns);
+        for (S32 i = 0; i < columns; ++i)
+        {
+            const LLScrollListCell* cell = item->getColumn(i);
+            if (!cell)
+            {
+                continue;
+            }
+            line[i] = oneLine(cell->getValue().asString());
+            used[i] = used[i] || !line[i].empty();
+        }
+        cells.push_back(std::move(line));
+    }
+
+    S32 last = -1;
+    std::vector<S32> width((size_t)columns, 0);
+    for (S32 i = 0; i < columns; ++i)
+    {
+        if (!used[i])
+        {
+            continue;
+        }
+        last = i;
+        width[i] = displayWidth(heading[i]);
+        for (const std::vector<std::string>& line : cells)
+        {
+            width[i] = llmax(width[i], displayWidth(line[i]));
+        }
+        // One long value -- a tool tip, a translated label -- would push
+        // every other row's remaining columns out past reading distance,
+        // so it is the one that steps out of line instead.
+        width[i] = llmin(width[i], 48);
+    }
+    if (last < 0)
+    {
+        return std::string();
+    }
+
+    std::string text = mCopyCaption ? mCopyCaption() : std::string();
+    if (!text.empty())
+    {
+        text += "\n\n";
+    }
+    auto append = [&](const std::vector<std::string>& line)
+    {
+        for (S32 i = 0; i <= last; ++i)
+        {
+            if (!used[i])
+            {
+                continue;
+            }
+            text += line[i];
+            if (i != last)
+            {
+                text.append((size_t)llmax(0, width[i] - displayWidth(line[i])) + 2, ' ');
+            }
+        }
+        text += '\n';
+    };
+    append(heading);
+    for (const std::vector<std::string>& line : cells)
+    {
+        append(line);
+    }
+    return text;
 }
 
 void ALPaneList::onFocusReceived()
@@ -96,6 +426,17 @@ void ALPaneList::onFocusLost()
 
 bool ALPaneList::handleMouseDown(S32 x, S32 y, MASK mask)
 {
+    mWentByClick = false;
+    // An arrow pressed turns its row's fold, before the list takes the
+    // press as a choice.
+    if (mask == MASK_NONE && mFold && mArrowAt)
+    {
+        if (const LLScrollListItem* hit = hitItem(x, y); hit && mArrowAt(hit, x))
+        {
+            mFold(hit->getValue(), std::nullopt);
+            return true;
+        }
+    }
     mPressed.clear();
     // One of several chosen, pressed plainly: all of them stay chosen,
     // held for a drag, and the release chooses the row alone where no drag
@@ -133,6 +474,17 @@ bool ALPaneList::handleMouseUp(S32 x, S32 y, MASK mask)
 {
     mPress.release();
     mPressed.clear();
+    if (std::exchange(mWentByClick, false))
+    {
+        // The release of a double-click that went where its row goes: the
+        // first click chose the row, and choosing it again now would take
+        // the keyboard back from where it went.
+        if (hasMouseCapture())
+        {
+            gFocusMgr.setMouseCapture(nullptr);
+        }
+        return true;
+    }
     return LLScrollListCtrl::handleMouseUp(x, y, mask);
 }
 
@@ -209,6 +561,11 @@ bool ALPaneList::handleToolTip(S32 x, S32 y, MASK mask)
 
 void ALPaneList::draw()
 {
+    // Shown while there is nothing, whatever emptied the list.
+    if (mEmpty)
+    {
+        mEmpty->setVisible(saysEmpty());
+    }
     // A drag gone elsewhere tells the list nothing: its light goes when
     // the pointer is no longer over it.
     if (mDropLit)

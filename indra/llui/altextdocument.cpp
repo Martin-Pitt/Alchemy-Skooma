@@ -26,6 +26,7 @@
 
 #include "altextdocument.h"
 
+#include "altextchars.h"
 #include "llstring.h"
 
 #include <algorithm>
@@ -88,7 +89,7 @@ namespace
 
 // --- Edit --------------------------------------------------------------------
 
-ALTextPos ALTextDocument::Edit::endAfter() const
+ALTextPos ALTextDocument::Edit::workOutEnd() const
 {
     const size_t last_break = inserted.rfind('\n');
     if (last_break == std::string::npos)
@@ -105,11 +106,127 @@ ALTextDocument::Edit ALTextDocument::Edit::inverse() const
     back.range    = rangeAfter();
     back.removed  = inserted;
     back.inserted = removed;
+    // Put back, the text ends where it ended before; and a batch's
+    // stretches are its again, each the other way round.
+    back.keepEnd(range.normalised().end);
+    back.parts.reserve(parts.size());
+    for (const Part& part : parts)
+    {
+        back.parts.push_back({ part.after, part.before });
+    }
     return back;
+}
+
+ALTextPos ALTextDocument::Edit::mapped(const ALTextPos& pos, bool pushed) const
+{
+    // The first stretch that ends past it; the one before is the last that
+    // ended at or before it, but for one put in right at it that does not
+    // push it, which is passed over.
+    auto after = std::upper_bound(parts.begin(), parts.end(), pos, [](const ALTextPos& p, const Part& part) { return p < part.before.end; });
+    while (after != parts.begin() && !pushed && (after - 1)->before.empty() && (after - 1)->before.end == pos)
+    {
+        --after;
+    }
+    if (after == parts.begin())
+    {
+        return pos;
+    }
+    const Part& last = *(after - 1);
+    if (pos.line == last.before.end.line)
+    {
+        return ALTextPos(last.after.end.line, last.after.end.column + (pos.column - last.before.end.column));
+    }
+    return ALTextPos(pos.line + (last.after.end.line - last.before.end.line), pos.column);
+}
+
+const std::vector<ALTextDocument::Edit::LineSpan>& ALTextDocument::Edit::lineSpans() const
+{
+    if (!keptSpans.empty())
+    {
+        return keptSpans;
+    }
+    std::vector<LineSpan>& out = keptSpans;
+    if (parts.empty())
+    {
+        const ALTextRange removed = range.normalised();
+        LineSpan          span;
+        span.first    = removed.begin.line;
+        span.last     = removed.end.line;
+        span.made     = 1 + breaksInserted();
+        span.lastKept = span.last > span.first && removed.end.column == 0 &&
+                        (inserted.empty() ? removed.begin.column == 0 : inserted.back() == '\n');
+        span.firstColumn = removed.begin.column;
+        span.shiftAfter  = span.made - (span.last - span.first + 1);
+        out.push_back(span);
+        return out;
+    }
+    // Where the run of stretches sharing lines began, in the text after.
+    S32 made_from = 0;
+    for (const Part& part : parts)
+    {
+        const bool kept = part.before.end.line > part.before.begin.line && part.before.end.column == 0 &&
+                          (part.after.empty() ? part.before.begin.column == 0
+                                              : part.after.end.column == 0 && part.after.end.line > part.after.begin.line);
+        if (!out.empty() && part.before.begin.line <= out.back().last)
+        {
+            LineSpan& span = out.back();
+            span.last      = std::max(span.last, part.before.end.line);
+            span.made      = part.after.end.line - made_from + 1;
+            span.lastKept  = kept;
+            span.shiftAfter = (out.size() > 1 ? out[out.size() - 2].shiftAfter : 0) + span.made - (span.last - span.first + 1);
+            continue;
+        }
+        LineSpan span;
+        span.first    = part.before.begin.line;
+        span.last     = part.before.end.line;
+        span.made     = part.after.end.line - part.after.begin.line + 1;
+        span.lastKept    = kept;
+        span.firstColumn = part.before.begin.column;
+        span.shiftAfter  = (out.empty() ? 0 : out.back().shiftAfter) + span.made - (span.last - span.first + 1);
+        made_from        = part.after.begin.line;
+        out.push_back(span);
+    }
+    return out;
+}
+
+ALTextPos ALTextDocument::Edit::placed(const ALTextPos& pos) const
+{
+    if (parts.empty())
+    {
+        const ALTextRange removed = range.normalised();
+        if (pos < removed.begin)
+        {
+            return pos;
+        }
+        return removed.end <= pos ? slidPast(pos) : removed.begin;
+    }
+    const auto in = std::upper_bound(parts.begin(), parts.end(), pos, [](const ALTextPos& p, const Part& part) { return p < part.before.end; });
+    if (in != parts.end() && in->before.begin <= pos)
+    {
+        return in->after.begin;
+    }
+    return mapped(pos, true);
+}
+
+S32 ALTextDocument::Edit::lineAfter(S32 line) const
+{
+    const std::vector<LineSpan>& spans = lineSpans();
+    // The last run that begins at or before the line.
+    const auto next = std::upper_bound(spans.begin(), spans.end(), line, [](S32 l, const LineSpan& span) { return l < span.first; });
+    if (next == spans.begin())
+    {
+        return line;
+    }
+    const LineSpan& span = *(next - 1);
+    return line <= span.last ? -1 : line + span.shiftAfter;
 }
 
 ALTextPos ALTextDocument::Edit::slidPast(const ALTextPos& pos) const
 {
+    if (!parts.empty())
+    {
+        return mapped(pos, true);
+    }
     const ALTextRange removed   = range.normalised();
     const ALTextPos   end_after = endAfter();
     if (pos.line == removed.end.line)
@@ -121,8 +238,22 @@ ALTextPos ALTextDocument::Edit::slidPast(const ALTextPos& pos) const
 
 ALTextRange ALTextDocument::Edit::stretched(const ALTextRange& range_in) const
 {
+    const ALTextRange r = range_in.normalised();
+    if (!parts.empty())
+    {
+        // Each end by the stretch it is inside, or else moved by those
+        // before it, one put in right at it not moving it.
+        const auto moved = [&](const ALTextPos& pos, bool is_end) {
+            const auto in = std::upper_bound(parts.begin(), parts.end(), pos, [](const ALTextPos& p, const Part& part) { return p < part.before.end; });
+            if (in != parts.end() && in->before.begin < pos && pos < in->before.end)
+            {
+                return is_end ? in->after.end : in->after.begin;
+            }
+            return mapped(pos, false);
+        };
+        return ALTextRange(moved(r.begin, false), moved(r.end, true));
+    }
     const ALTextRange removed = range.normalised();
-    const ALTextRange r       = range_in.normalised();
     const auto        moved   = [&](const ALTextPos& pos, bool is_end) {
         if (pos <= removed.begin)
         {
@@ -139,6 +270,25 @@ ALTextRange ALTextDocument::Edit::stretched(const ALTextRange& range_in) const
 
 bool ALTextDocument::Edit::slide(ALTextRange& range_in) const
 {
+    if (!parts.empty())
+    {
+        // Taken where any stretch cut through it or landed inside it; else
+        // each end moved by those before it.
+        const ALTextRange r = range_in.normalised();
+        for (auto it = std::lower_bound(parts.begin(), parts.end(), r.begin, [](const Part& part, const ALTextPos& p) { return part.before.end < p; });
+             it != parts.end() && it->before.begin <= r.end; ++it)
+        {
+            const ALTextRange& removed = it->before;
+            const bool         cut     = removed.empty() ? (r.begin < removed.begin && removed.begin < r.end)
+                                                         : (r.begin < removed.end && removed.begin < r.end);
+            if (cut)
+            {
+                return false;
+            }
+        }
+        range_in = ALTextRange(mapped(r.begin, true), mapped(r.end, r.empty()));
+        return true;
+    }
     const ALTextRange removed = range.normalised();
     ALTextRange       r       = range_in.normalised();
     const bool        cut     = removed.empty() ? (r.begin < removed.begin && removed.begin < r.end)
@@ -165,7 +315,9 @@ ALTextDocument::ALTextDocument()
 
 ALTextDocument::ALTextDocument(std::string_view text)
 {
-    splitLines(text, mLines);
+    std::vector<std::string> lines;
+    splitLines(text, lines);
+    mLines.swap(lines);
 }
 
 ALTextDocument::Edit ALTextDocument::setText(std::string_view text)
@@ -175,7 +327,7 @@ ALTextDocument::Edit ALTextDocument::setText(std::string_view text)
 
 std::string ALTextDocument::text() const
 {
-    return joinLines(mLines);
+    return joinLines(mLines.rows());
 }
 
 const std::string& ALTextDocument::wholeText() const
@@ -252,6 +404,82 @@ size_t ALTextDocument::byteCount() const
 
 ALTextDocument::Edit ALTextDocument::replace(ALTextRange range, std::string_view text)
 {
+    return replace(range, text, {});
+}
+
+ALTextDocument::Edit ALTextDocument::replaceMany(std::vector<std::pair<ALTextRange, std::string>> edits)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
+    for (auto& one : edits)
+    {
+        one.first = clampBytes(one.first.normalised());
+    }
+    std::stable_sort(edits.begin(), edits.end(),
+                     [](const auto& a, const auto& b) { return a.first.begin < b.first.begin || (a.first.begin == b.first.begin && a.first.end < b.first.end); });
+    // None over another: one that would be is left out.
+    std::vector<std::pair<ALTextRange, std::string>> kept;
+    kept.reserve(edits.size());
+    for (auto& one : edits)
+    {
+        if (!kept.empty() && one.first.begin < kept.back().first.end)
+        {
+            continue;
+        }
+        kept.push_back(std::move(one));
+    }
+    if (kept.empty())
+    {
+        Edit none;
+        none.range = ALTextRange(start(), start());
+        return none;
+    }
+    if (kept.size() == 1)
+    {
+        return replace(kept.front().first, kept.front().second);
+    }
+    // The text from the first to the last as it will be: what lies between
+    // them as it is, and each put in, its line endings as LF; and where
+    // each is, as it was and as it will be.
+    const ALTextRange       span(kept.front().first.begin, kept.back().first.end);
+    std::string             out;
+    std::vector<Edit::Part> parts;
+    parts.reserve(kept.size());
+    ALTextPos  at   = span.begin;
+    ALTextPos  made = span.begin;
+    const auto append = [&out, &made](std::string_view piece) {
+        out.append(piece);
+        const size_t last_break = piece.rfind('\n');
+        if (last_break == std::string_view::npos)
+        {
+            made.column += static_cast<S32>(piece.size());
+            return;
+        }
+        made.line += static_cast<S32>(std::count(piece.begin(), piece.end(), '\n'));
+        made.column = static_cast<S32>(piece.size() - last_break - 1);
+    };
+    for (auto& [range, piece] : kept)
+    {
+        append(this->text(ALTextRange(at, range.begin)));
+        if (piece.find('\r') != std::string::npos)
+        {
+            std::vector<std::string> lines;
+            splitLines(piece, lines);
+            piece = joinLines(lines);
+        }
+        Edit::Part part;
+        part.before       = range;
+        part.after.begin  = made;
+        append(piece);
+        part.after.end    = made;
+        parts.push_back(part);
+        at = range.end;
+    }
+    return replace(span, out, std::move(parts));
+}
+
+ALTextDocument::Edit ALTextDocument::replace(ALTextRange range, std::string_view text, std::vector<Edit::Part> parts)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     range = clampBytes(range.normalised());
 
     Edit edit;
@@ -278,14 +506,16 @@ ALTextDocument::Edit ALTextDocument::replace(ALTextRange range, std::string_view
         return none;
     }
 
+    edit.keepEnd();
+    edit.parts = std::move(parts);
+
     // The line the range starts in keeps what came before it, the line it
-    // ends in keeps what comes after, and the pieces go between.
+    // ends in keeps what comes after, and the pieces go between: in place
+    // where there are as many as the lines they replace.
     pieces.front().insert(0, mLines[range.begin.line], 0, range.begin.column);
     pieces.back().append(mLines[range.end.line], range.end.column, std::string::npos);
-    mLines.erase(mLines.begin() + range.begin.line, mLines.begin() + range.end.line + 1);
-    mLines.insert(mLines.begin() + range.begin.line,
-                  std::make_move_iterator(pieces.begin()),
-                  std::make_move_iterator(pieces.end()));
+    mLines.replace(static_cast<size_t>(range.begin.line), static_cast<size_t>(range.end.line - range.begin.line + 1),
+                   std::make_move_iterator(pieces.begin()), std::make_move_iterator(pieces.end()));
 
     ++mVersion;
     // The whole text kept, if it was, is made again when next asked
@@ -401,6 +631,76 @@ ALTextPos ALTextDocument::prevWord(ALTextPos pos) const
     return pos.line > 0 ? lineEnd(pos.line - 1) : lineStart(pos.line);
 }
 
+namespace
+{
+    // What a byte is to code's word motion: a blank, a name's, or a mark.
+    // Bytes past ASCII are a name's, so that a character is never split.
+    enum class CodeRun : U8
+    {
+        Blank,
+        Name,
+        Mark,
+    };
+    CodeRun codeRunOf(char c)
+    {
+        return c == ' ' || c == '\t' ? CodeRun::Blank : alWordByte(c) ? CodeRun::Name : CodeRun::Mark;
+    }
+}
+
+ALTextPos ALTextDocument::nextCodeWord(ALTextPos pos, bool parts) const
+{
+    pos                    = clamp(pos);
+    const std::string& l   = mLines[pos.line];
+    const size_t       n   = l.size();
+    size_t             at  = static_cast<size_t>(pos.column);
+    if (at >= n)
+    {
+        return pos.line + 1 < lineCount() ? ALTextPos(pos.line + 1, 0) : lineEnd(pos.line);
+    }
+    const CodeRun run = codeRunOf(l[at]);
+    if (run != CodeRun::Blank)
+    {
+        ++at;
+        while (at < n && codeRunOf(l[at]) == run && !(parts && run == CodeRun::Name && alNamePartAt(l, at)))
+        {
+            ++at;
+        }
+    }
+    while (at < n && codeRunOf(l[at]) == CodeRun::Blank)
+    {
+        ++at;
+    }
+    return ALTextPos(pos.line, static_cast<S32>(at));
+}
+
+ALTextPos ALTextDocument::prevCodeWord(ALTextPos pos, bool parts) const
+{
+    pos = clamp(pos);
+    if (pos.column == 0)
+    {
+        return pos.line > 0 ? lineEnd(pos.line - 1) : pos;
+    }
+    const std::string& l  = mLines[pos.line];
+    size_t             at = static_cast<size_t>(pos.column);
+    while (at > 0 && codeRunOf(l[at - 1]) == CodeRun::Blank)
+    {
+        --at;
+    }
+    if (at > 0)
+    {
+        const CodeRun run = codeRunOf(l[at - 1]);
+        while (at > 0 && codeRunOf(l[at - 1]) == run)
+        {
+            --at;
+            if (parts && run == CodeRun::Name && alNamePartAt(l, at))
+            {
+                break;
+            }
+        }
+    }
+    return ALTextPos(pos.line, static_cast<S32>(at));
+}
+
 ALTextRange ALTextDocument::wordAt(ALTextPos pos) const
 {
     pos                             = clamp(pos);
@@ -436,7 +736,7 @@ S32 ALTextDocument::displayColumn(ALTextPos pos, S32 tab_width) const
     while (at < static_cast<size_t>(pos.column))
     {
         const size_t next = utf8str_step_grapheme_forward(l, at);
-        col               = (l[at] == '\t') ? (col / tab_width + 1) * tab_width : col + 1;
+        col               = (l[at] == '\t') ? alNextTabStop(col, tab_width) : col + 1;
         at                = next;
     }
     return col;
@@ -451,7 +751,7 @@ ALTextPos ALTextDocument::posAtDisplayColumn(S32 line, S32 display_column, S32 t
     size_t             at  = 0;
     while (at < l.size() && col < display_column)
     {
-        const S32 after = (l[at] == '\t') ? (col / tab_width + 1) * tab_width : col + 1;
+        const S32 after = (l[at] == '\t') ? alNextTabStop(col, tab_width) : col + 1;
         // A tab that reaches past the column wanted is the column wanted:
         // nothing sits inside a tab.
         if (after > display_column && l[at] == '\t')
