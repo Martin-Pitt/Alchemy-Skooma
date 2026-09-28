@@ -57,7 +57,7 @@ namespace tut
         alscriptfixes_data()
         {
             lslLoaded = lsl.loadBuiltins(std::string(AL_LSL_DEFINITIONS_DIR) + "/builtins.txt", error);
-            std::ifstream     in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.d.luau", std::ios::binary);
+            llifstream        in(std::string(AL_LSL_DEFINITIONS_DIR) + "/secondlife.d.luau", std::ios::binary);
             std::stringstream text;
             text << in.rdbuf();
             luau.setNewSolver(newSolver, error);
@@ -990,6 +990,12 @@ namespace tut
         problem  = keyed(problems, "LSLUndeclared");
         ensure("said: " + said(problems), problem != nullptr && problem->fixes.size() == 1 && problem->fixes.front().preferred);
         ensure_equals("swapped back", ALScriptFixes::editDistance("totla", "total"), size_t(1));
+        // A name one edit past how far a guess may be is no guess, even
+        // where it is the only one that near.
+        problems = check(head + "        integer count = 1;\n        llOwnerSay((string)(count + cqunx));\n" + tail, false);
+        problem  = keyed(problems, "LSLUndeclared");
+        ensure("said: " + said(problems), problem != nullptr);
+        ensure("two edits from a five-letter name: no guess: " + titles(problem->fixes), problem->fixes.empty());
     }
 
     template<> template<>
@@ -1035,5 +1041,63 @@ namespace tut
         problem.endColumn              = 9;
         ALScriptFixes::attachOptimizer(problem, "integer x;\n");
         ensure("added: " + std::to_string(problem.fixes.size()), problem.fixes.size() == 2 && !problem.fixes.back().preferred && problem.fixes.front().preferred);
+    }
+
+    template<> template<>
+    void object::test<34>()
+    {
+        set_test_name("SLua written with LSL's habits -- != && || ! -- changed to SLua's words, only ~= safe; an index or a loop from 0 counted from 1");
+        ensure_equals("~=", fixed("local a, b = 1, 2\nif a != b then print(1) end\n", true, "LuauUnexpectedDidYouMean", "Change '!=' to '~='"),
+                      std::string("local a, b = 1, 2\nif a ~= b then print(1) end\n"));
+        ensure_equals("and, apart from what it joins", fixed("local a, b = true, false\nif a&&b then print(1) end\n", true, "LuauUnexpectedDidYouMean", "Change '&&' to 'and'"),
+                      std::string("local a, b = true, false\nif a and b then print(1) end\n"));
+        ensure_equals("or", fixed("local a, b = true, false\nif a || b then print(1) end\n", true, "LuauUnexpectedDidYouMean", "Change '||' to 'or'"),
+                      std::string("local a, b = true, false\nif a or b then print(1) end\n"));
+        ensure_equals("not, apart from its operand", fixed("local a = true\nif(!a) then print(1) end\n", true, "LuauUnexpectedDidYouMean", "Change '!' to 'not'"),
+                      std::string("local a = true\nif(not a) then print(1) end\n"));
+        const ALScriptProblems compared = check("local a, b = 1, 2\nif a != b then print(1) end\n", true);
+        const ALScriptProblems denied   = check("local a = true\nif !a then print(1) end\n", true);
+        const ALScriptProblem* unequal  = keyed(compared, "LuauUnexpectedDidYouMean");
+        const ALScriptProblem* negated  = keyed(denied, "LuauUnexpectedDidYouMean");
+        ensure("~= safe, the same whatever it compares", unequal && unequal->fixes.front().safe);
+        ensure("not unsafe: 0 is true in SLua", negated && !negated->fixes.front().safe);
+
+        ensure_equals("an index from 0", fixed("local t = {}\ntable.insert(t, 0, 5)\n", true, "LuauLintTableInsertZero", "Change '0' to '1'"),
+                      std::string("local t = {}\ntable.insert(t, 1, 5)\n"));
+        ensure_equals("a loop from 0", fixed("local t = {1, 2}\nfor i = 0, #t do print(t[i]) end\n", true, "LuauLintForRangeZero", "Change '0' to '1'"),
+                      std::string("local t = {1, 2}\nfor i = 1, #t do print(t[i]) end\n"));
+    }
+
+    template<> template<>
+    void object::test<35>()
+    {
+        set_test_name("LSL: an if ended by its ';', an event's parameters as it takes them, a parameter with no type, a declaration braced, a missing ';' safe");
+        ensure_equals("the if's ';' out", fixed("default { state_entry() { integer x = llGetUnixTime(); if (x); llOwnerSay(\"a\"); } }", false, "LSLEmptyIf",
+                                                "Take out the ';' that ends the if"),
+                      std::string("default { state_entry() { integer x = llGetUnixTime(); if (x) llOwnerSay(\"a\"); } }"));
+        ensure_equals("a wrong type, the name kept", fixed("default { touch_start(string n) { llOwnerSay((string)n); } }", false, "LSLArgumentWrongTypeEvent",
+                                                          "Write the parameters 'touch_start' takes"),
+                      std::string("default { touch_start(integer n) { llOwnerSay((string)n); } }"));
+        ensure_equals("too few, the builtins' names", fixed("default { touch_start() { } }", false, "LSLTooFewArgumentsEvent", "Write the parameters 'touch_start' takes"),
+                      std::string("default { touch_start(integer NumberOfTouches) { } }"));
+        ensure_equals("too many", fixed("default { touch_start(integer n, integer m) { } }", false, "LSLTooManyArgumentsEvent", "Write the parameters 'touch_start' takes"),
+                      std::string("default { touch_start(integer n) { } }"));
+        ensure_equals("an event's with no type", fixed("default { touch_start(n) { } }", false, "LSLParameterUntyped", "Write the parameters 'touch_start' takes"),
+                      std::string("default { touch_start(integer n) { } }"));
+        ensure_equals("a declaration as an if's body, braced", fixed("default { state_entry() { if (llGetUnixTime()) integer i = 1; } }", false, "LSLDeclarationInvalidHere",
+                                                                    "Put it in braces of its own"),
+                      std::string("default { state_entry() { if (llGetUnixTime()) { integer i = 1; } } }"));
+
+        const std::string      function = "say(x) { llOwnerSay((string)x); }\ndefault { state_entry() { say(1); } }";
+        const ALScriptProblems untyped  = check(function, false);
+        const ALScriptProblem* bare     = keyed(untyped, "LSLParameterUntyped");
+        ensure("a function's: every type, none preferred", bare && bare->fixes.size() == 7 &&
+               std::none_of(bare->fixes.begin(), bare->fixes.end(), [](const ALScriptFix& fix) { return fix.preferred; }));
+        const std::optional<std::string> typed = ALScriptFixes::apply(function, bare->fixes.front());
+        ensure("declared as the first", typed && typed->rfind("say(integer x)", 0) == 0 && errors(check(*typed, false)) == 0);
+
+        const ALScriptProblems missing = check("default { state_entry() { integer x = 1 llOwnerSay(\"a\"); } }", false);
+        const ALScriptProblem* ended   = keyed(missing, "LSLSyntaxMissing");
+        ensure("a missing ';' put in safely", ended && !ended->fixes.empty() && ended->fixes.front().safe);
     }
 }
