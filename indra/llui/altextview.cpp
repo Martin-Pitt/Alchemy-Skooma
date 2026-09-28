@@ -34,6 +34,8 @@
 #include "llclipboard.h"
 #include "lldir.h"
 #include "llfocusmgr.h"
+#include "llimage.h"
+#include "llimagegl.h"
 #include "llkeyboard.h"
 #include "lllocalcliprect.h"
 #include "llmenugl.h"
@@ -197,8 +199,62 @@ namespace
 
     // How long the word at the caret is left unmarked after it was typed.
     const F32 SPELL_SETTLE_SECONDS = 1.5f;
-    const F32 SQUIGGLE_AMPLITUDE   = 1.f;
-    const F32 SQUIGGLE_WAVE        = 5.f;
+    // A squiggle: a wave a pixel high either way and five pixels long,
+    // drawn as a line a pixel wide whose edges fade over a pixel more, as
+    // gl_polyline_2d draws one.
+    constexpr F32 SQUIGGLE_AMPLITUDE = 1.f;
+    constexpr S32 SQUIGGLE_WAVE      = 5;
+    constexpr S32 SQUIGGLE_HEIGHT    = 6;
+    constexpr F32 SQUIGGLE_HALF      = 0.5f;
+    constexpr F32 SQUIGGLE_FEATHER   = 1.f;
+
+    // One wave of a squiggle, which a squiggle repeats along its length: so
+    // that one is a quad, however long, rather than a ribbon of triangles
+    // for each pixel of it. White, with as much alpha at each texel as the
+    // line covers of it, and drawn in the squiggle's colour. Texels are as
+    // many to a point as the UI's scale has pixels, so that the line stays
+    // as sharp on a screen that scales it; remade when the scale changes.
+    LLImageGL* squiggleTexture()
+    {
+        static LLPointer<LLImageGL> texture;
+        static S32                  made_at = 0;
+        const S32                   scale   = llclamp(static_cast<S32>(ceilf(LLUI::getScaleFactor().mV[VX])), 1, 4);
+        if (texture && made_at == scale)
+        {
+            return texture;
+        }
+        const S32             width  = SQUIGGLE_WAVE * scale;
+        const S32             height = SQUIGGLE_HEIGHT * scale;
+        LLPointer<LLImageRaw> raw    = new LLImageRaw(static_cast<U16>(width), static_cast<U16>(height), 4);
+        U8*                   data   = raw->getData();
+        const F32             step   = 2.f * F_PI / static_cast<F32>(SQUIGGLE_WAVE);
+        for (S32 row = 0; row < height; ++row)
+        {
+            for (S32 column = 0; column < width; ++column)
+            {
+                // The texel's middle, in points from the wave's start and
+                // its middle, and how near the wave comes to it: looked
+                // for along a wave either side, finely enough that the
+                // fade is smooth.
+                const F32 x    = (static_cast<F32>(column) + 0.5f) / static_cast<F32>(scale);
+                const F32 y    = (static_cast<F32>(row) + 0.5f) / static_cast<F32>(scale) - 0.5f * static_cast<F32>(SQUIGGLE_HEIGHT);
+                F32       near = F32_MAX;
+                for (F32 along = x - static_cast<F32>(SQUIGGLE_WAVE); along <= x + static_cast<F32>(SQUIGGLE_WAVE); along += 0.01f)
+                {
+                    const F32 dx = x - along;
+                    const F32 dy = y - SQUIGGLE_AMPLITUDE * sinf(along * step);
+                    near         = llmin(near, dx * dx + dy * dy);
+                }
+                const F32 cover = llclamp((SQUIGGLE_HALF + SQUIGGLE_FEATHER - sqrtf(near)) / SQUIGGLE_FEATHER, 0.f, 1.f);
+                U8*       texel = data + (static_cast<size_t>(row) * width + column) * 4;
+                texel[0] = texel[1] = texel[2] = 255;
+                texel[3] = static_cast<U8>(llround(cover * 255.f));
+            }
+        }
+        texture = new LLImageGL(raw, false);
+        made_at = scale;
+        return texture;
+    }
 }
 
 ALTextView::Params::Params()
@@ -370,6 +426,7 @@ void ALTextView::setText(std::string_view text)
     mDesiredX         = -1.f;
     mScrollY          = 0;
     mScrollX          = 0.f;
+    mScrollAsked      = true;
     mChangedSinceFocus = false;
     if (mIndentFrom != IndentFrom::Chosen)
     {
@@ -578,6 +635,13 @@ bool ALTextView::hasHorizontalScrollbar() const
 
 void ALTextView::syncScrollbar()
 {
+    // Heights above the view moved since it was last scrolled: back to the
+    // line it was on, as far into it as it was.
+    if (!mScrollAsked && mLayout.heightsRevision() != mAnchorHeights && mDocument.lineCount() > 0)
+    {
+        const S32 line = llclamp(mAnchorLine, 0, mDocument.lineCount() - 1);
+        mScrollY       = mLayout.lineTop(line) + llmin(mAnchorOffset, llmax(0, mLayout.lineHeight(line) - 1));
+    }
     // The ruler takes room the wrap width depends on, so the need for it
     // is decided again once the first decision has been applied.
     for (S32 pass = 0; pass < 2; ++pass)
@@ -603,6 +667,11 @@ void ALTextView::syncScrollbar()
     const S32 width   = llmax(1, text.getWidth());
     const S32 content = mWordWrap ? 0 : static_cast<S32>(ceilf(mLayout.contentWidth())) + H_MARGIN;
     mScrollX          = llclamp(mScrollX, 0.f, static_cast<F32>(llmax(0, content - width)));
+    // Where the top of the view is now, in the text.
+    mAnchorLine    = mLayout.lineAtY(mScrollY);
+    mAnchorOffset  = mScrollY - mLayout.lineTop(mAnchorLine);
+    mAnchorHeights = mLayout.heightsRevision();
+    mScrollAsked   = false;
 }
 
 void ALTextView::setScrollY(S32 y)
@@ -611,7 +680,8 @@ void ALTextView::setScrollY(S32 y)
     {
         mBarShown.reset();
     }
-    mScrollY = llmax(0, y);
+    mScrollY     = llmax(0, y);
+    mScrollAsked = true;
     syncScrollbar();
 }
 
@@ -682,7 +752,8 @@ void ALTextView::scrollToCaret()
     {
         mScrollY = top;
     }
-    mScrollY = llmax(0, mScrollY);
+    mScrollY     = llmax(0, mScrollY);
+    mScrollAsked = true;
     syncScrollbar();
 }
 
@@ -699,7 +770,8 @@ S32 ALTextView::coveredAbove(S32 local_x)
 
 void ALTextView::scrollToLine(S32 line)
 {
-    mScrollY = mLayout.lineTop(line);
+    mScrollY     = mLayout.lineTop(line);
+    mScrollAsked = true;
     syncScrollbar();
 }
 
@@ -1572,6 +1644,9 @@ void ALTextView::onDocumentEdit(const ALTextDocument::Edit& edit)
         }
     }
     mChangeAt = static_cast<S32>(mChanges.size());
+    // The line the top of the view is on slides with the text, so that an
+    // edit above it leaves the view on what it showed.
+    mAnchorLine = edit.placed(ALTextPos(mAnchorLine, 0)).line;
     // The lines the edit touched are checked again when they are next
     // drawn; the ones below slide.
     mSpelling.edited(edit, mDocument.lineCount());
@@ -3689,7 +3764,10 @@ void ALTextView::colorRow(S32 line, const ALTextLayout::Line& laid, const ALText
     mColorScratch.resize(count);
     const LLColor4                    base   = textColor() % alpha;
     const std::vector<ALSyntaxToken>& tokens = mHighlighter.tokens(line);
-    size_t                            t      = 0;
+    // From the first token that reaches the row, where the glyphs go
+    // forward through the line: a long line wraps into many rows.
+    const auto ends_before = [&](const ALSyntaxToken& token) { return token.end <= row.begin; };
+    size_t     t = laid.ordered ? static_cast<size_t>(std::partition_point(tokens.begin(), tokens.end(), ends_before) - tokens.begin()) : 0;
     for (size_t k = 0; k < count; ++k)
     {
         const S32 cluster = laid.glyphs[row.glyphBegin + k].cluster;
@@ -3750,17 +3828,46 @@ void ALTextView::colorRow(S32 line, const ALTextLayout::Line& laid, const ALText
     }
 }
 
-void ALTextView::drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color)
+ALTextLayout::Row ALTextView::rowInSight(const ALTextLayout::Line& laid, const ALTextLayout::Row& row, const LLRect& text) const
 {
-    mSquiggleScratch.clear();
-    for (F32 x = x0; x <= x1; x += 1.f)
+    // A glyph may reach past its advance -- an italic's overhang, a wide
+    // mark -- so those just past the text's edges are drawn as well.
+    constexpr F32 OVERHANG = 16.f;
+    return ALTextLayout::rowWithin(laid, row, mScrollX - OVERHANG, mScrollX + static_cast<F32>(text.getWidth()) + OVERHANG);
+}
+
+void ALTextView::drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip)
+{
+    // As much of it as is in sight, the wave kept where it began.
+    const F32 from = llmax(x0, static_cast<F32>(clip.mLeft));
+    const F32 to   = llmin(x1, static_cast<F32>(clip.mRight));
+    LLImageGL* wave = squiggleTexture();
+    if (from >= to || !wave || !wave->getHasGLTexture())
     {
-        mSquiggleScratch.emplace_back(x, static_cast<F32>(y) + SQUIGGLE_AMPLITUDE * sinf((x - x0) * (2.f * F_PI / SQUIGGLE_WAVE)));
+        return;
     }
-    if (mSquiggleScratch.size() >= 2)
-    {
-        gl_polyline_2d(mSquiggleScratch, color, 1.f);
-    }
+    const F32 u0     = (from - x0) / static_cast<F32>(SQUIGGLE_WAVE);
+    const F32 u1     = (to - x0) / static_cast<F32>(SQUIGGLE_WAVE);
+    const F32 bottom = static_cast<F32>(y - SQUIGGLE_HEIGHT / 2);
+    const F32 top    = static_cast<F32>(y + SQUIGGLE_HEIGHT / 2);
+    gGL.getTextureSlot(0)->bindSampled(wave, ALSamplers::BilinearWrap);
+    gGL.color4fv(color.mV);
+    gGL.begin(LLRender::TRIANGLES);
+    gGL.texCoord2f(u0, 1.f);
+    gGL.vertex2f(from, top);
+    gGL.texCoord2f(u0, 0.f);
+    gGL.vertex2f(from, bottom);
+    gGL.texCoord2f(u1, 0.f);
+    gGL.vertex2f(to, bottom);
+    gGL.texCoord2f(u0, 1.f);
+    gGL.vertex2f(from, top);
+    gGL.texCoord2f(u1, 0.f);
+    gGL.vertex2f(to, bottom);
+    gGL.texCoord2f(u1, 1.f);
+    gGL.vertex2f(to, top);
+    gGL.end();
+    // What is drawn next without a texture of its own gets the white one.
+    gGL.getTextureSlot(0)->unbind();
 }
 
 void ALTextView::drawLayers(S32 line, const ALTextLayout::Line& laid, S32 r, const LLRect& text, S32 row_top, F32 left, F32 alpha)
@@ -3809,7 +3916,8 @@ void ALTextView::drawLayers(S32 line, const ALTextLayout::Line& laid, S32 r, con
     // view put there.
     if (!mAtoms.empty())
     {
-        for (size_t k = row.glyphBegin; k < row.glyphEnd; ++k)
+        const ALTextLayout::Row seen = rowInSight(laid, row, text);
+        for (size_t k = seen.glyphBegin; k < seen.glyphEnd; ++k)
         {
             const ALTextLayout::Glyph& glyph = laid.glyphs[k];
             if (!isAtomId(glyph.substitution))
@@ -3850,7 +3958,7 @@ void ALTextView::drawLayers(S32 line, const ALTextLayout::Line& laid, S32 r, con
             F32 x0, x1;
             if (spanOnRow(line, r, ALTextRange(ALTextPos(line, begin), ALTextPos(line, end)), x0, x1))
             {
-                drawSquiggle(left + x0, left + x1, screen_top - row_h + 2, mSpellErrorColor.get() % alpha);
+                drawSquiggle(left + x0, left + x1, screen_top - row_h + 2, mSpellErrorColor.get() % alpha, text);
             }
         }
     }
@@ -3963,13 +4071,14 @@ void ALTextView::drawRows(const LLRect& text)
                 }
             }
 
-            // The glyphs.
-            const size_t glyph_count = row.glyphEnd - row.glyphBegin;
+            // The glyphs, as many as are in sight.
+            const ALTextLayout::Row seen        = rowInSight(laid, row, text);
+            const size_t            glyph_count = seen.glyphEnd - seen.glyphBegin;
             if (glyph_count)
             {
-                colorRow(line, laid, row, alpha);
-                tintRow(line, laid, row, alpha, mColorScratch);
-                mFont->renderGlyphs(&laid.placed[row.glyphBegin], mColorScratch.data(), glyph_count,
+                colorRow(line, laid, seen, alpha);
+                tintRow(line, laid, seen, alpha, mColorScratch);
+                mFont->renderGlyphs(&laid.placed[seen.glyphBegin], mColorScratch.data(), glyph_count,
                                     left - row.xStart, static_cast<F32>(screen_top - row.ascent));
             }
 
