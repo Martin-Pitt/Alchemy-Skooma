@@ -415,6 +415,14 @@ namespace tut
         {
             ensure("nor at the bottom", p->mKind == PortalKind::STAIR);
         }
+        const std::vector<StairLink> links = stairLinks(*r.mRooms);
+        ensure_equals("the open stair draws one link", links.size(), 1u);
+        const Portal& from = r.mRooms->mPortals[links[0].mFrom];
+        const Portal& to = r.mRooms->mPortals[links[0].mTo];
+        ensure("the link runs bottom to top", from.mSill < to.mSill);
+        ensure("it joins the two ends it has",
+               (&from == r.between(stair, ground)[0] || &from == r.between(stair, deck)[0]) &&
+               (&to == r.between(stair, ground)[0] || &to == r.between(stair, deck)[0]));
     }
 
     template<> template<>
@@ -1112,5 +1120,48 @@ namespace tut
             out << (i ? "," : "") << space;
         }
         out << "]}\n";
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<30>()
+    {
+        set_test_name("a flight's links run from its foot to each exit; a lone end makes none");
+        RoomsProduct product;
+        product.mSpaces.resize(1);
+        product.mSpaces[0].mFlight = true;
+        Portal foot, exit_a, exit_b, door;
+        foot.mKind = PortalKind::STAIR;
+        foot.mSill = 1.f;
+        exit_a.mKind = PortalKind::STAIR;
+        exit_a.mSill = 4.f;
+        exit_b.mKind = PortalKind::STAIR;
+        exit_b.mSill = 7.f;
+        door.mKind = PortalKind::DOOR;
+
+        product.mPortals = { foot, exit_a, door };
+        product.mSpaces[0].mPortals = { 0, 1, 2 };
+        std::vector<StairLink> links = stairLinks(product);
+        ensure_equals("foot to exit, the door ignored", links.size(), 1u);
+        ensure_equals("from the foot", links[0].mFrom, 0u);
+        ensure_equals("to the exit", links[0].mTo, 1u);
+
+        product.mPortals = { foot };
+        product.mSpaces[0].mPortals = { 0 };
+        ensure("no link for a lone end", stairLinks(product).empty());
+
+        product.mPortals = { exit_b, foot, exit_a };
+        product.mSpaces[0].mPortals = { 0, 1, 2 };
+        links = stairLinks(product);
+        ensure_equals("a spiral links the foot to both exits", links.size(), 2u);
+        for (const StairLink& l : links)
+        {
+            ensure_equals("every link starts at the lowest sill", product.mPortals[l.mFrom].mSill, 1.f);
+            ensure("and climbs", product.mPortals[l.mTo].mSill > product.mPortals[l.mFrom].mSill);
+        }
+
+        // A space that lost its flight flag keeps no links: its portals belong
+        // to no staircase.
+        product.mSpaces[0].mFlight = false;
+        ensure("no links without the flight flag", stairLinks(product).empty());
     }
 }

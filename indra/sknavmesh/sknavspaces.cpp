@@ -3963,4 +3963,44 @@ namespace sknav
         }
         return pass.product();
     }
+
+    std::vector<StairLink> stairLinks(const RoomsProduct& product)
+    {
+        std::vector<StairLink> links;
+        for (const Space& sp : product.mSpaces)
+        {
+            if (!sp.mFlight)
+            {
+                continue;
+            }
+            std::vector<U32> stairs;
+            for (const U32 pi : sp.mPortals)
+            {
+                if (product.mPortals[pi].mKind == PortalKind::STAIR)
+                {
+                    stairs.push_back(pi);
+                }
+            }
+            if (stairs.size() < 2)
+            {
+                continue;
+            }
+            U32 foot = stairs[0];
+            for (const U32 pi : stairs)
+            {
+                if (product.mPortals[pi].mSill < product.mPortals[foot].mSill)
+                {
+                    foot = pi;
+                }
+            }
+            for (const U32 pi : stairs)
+            {
+                if (pi != foot)
+                {
+                    links.push_back({ foot, pi });
+                }
+            }
+        }
+        return links;
+    }
 }

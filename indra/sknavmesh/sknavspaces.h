@@ -186,6 +186,20 @@ namespace sknav
     };
     typedef std::shared_ptr<const RoomsProduct> RoomsProductPtr;
 
+    /// One drawn connection inside a flight: from its foot portal to an exit,
+    /// both by index into the product's portals.
+    struct StairLink
+    {
+        U32 mFrom;
+        U32 mTo;
+    };
+
+    /// A flight's stair portals as connections: the lowest sill is the foot,
+    /// every other stair portal an exit of it (a spiral has several). A
+    /// flight with a single stair portal makes no link, and neither does
+    /// anything but a stair portal.
+    std::vector<StairLink> stairLinks(const RoomsProduct& product);
+
     struct RoomsInput
     {
         U64 mGeneration = 0;

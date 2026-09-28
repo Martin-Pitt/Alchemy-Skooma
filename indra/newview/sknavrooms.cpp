@@ -1206,6 +1206,56 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 geom.edge(pa + dir * d, pa + dir * llmin(d + 0.3f, len), color);
             }
         }
+        // A flight drawn as its connections: the foot portal to every exit,
+        // and a stub over a lone end with nothing at the other.
+        for (const StairLink& l : stairLinks(*m.mRooms))
+        {
+            const LLVector3d ca = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mFrom].mCentre) + LLVector3d(0.0, 0.0, 0.3);
+            const LLVector3d cb = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mTo].mCentre) + LLVector3d(0.0, 0.0, 0.3);
+            if (dist_vec_squared2D((ca + cb) * 0.5, camera) > reach2)
+            {
+                continue;
+            }
+            LLColor4 color = skNavSwatchColor(SKNavSwatch::PORTAL_LINK);
+            if (opaque)
+            {
+                color.mV[VALPHA] = 1.f;
+            }
+            geom.edge(gAgent.getPosAgentFromGlobal(ca), gAgent.getPosAgentFromGlobal(cb), color);
+        }
+        for (const Space& sp : m.mRooms->mSpaces)
+        {
+            if (!sp.mFlight)
+            {
+                continue;
+            }
+            U32 lone = 0;
+            U32 count = 0;
+            for (const U32 pi : sp.mPortals)
+            {
+                if (m.mRooms->mPortals[pi].mKind == PortalKind::STAIR)
+                {
+                    lone = pi;
+                    ++count;
+                }
+            }
+            if (count != 1)
+            {
+                continue;
+            }
+            const LLVector3d c = m.mOrigin + LLVector3d(m.mRooms->mPortals[lone].mCentre);
+            if (dist_vec_squared2D(c, camera) > reach2)
+            {
+                continue;
+            }
+            LLColor4 color = skNavSwatchColor(SKNavSwatch::PORTAL_DANGLING);
+            if (opaque)
+            {
+                color.mV[VALPHA] = 1.f;
+            }
+            const LLVector3 base = gAgent.getPosAgentFromGlobal(c + LLVector3d(0.0, 0.0, 0.3));
+            geom.edge(base, base + LLVector3(0.f, 0.f, 1.2f), color);
+        }
     }
 }
 
