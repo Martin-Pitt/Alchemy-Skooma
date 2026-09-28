@@ -117,7 +117,11 @@ namespace al_studio_test
         {
             reports.push_back({ text, failure, doc ? doc->id : std::string(), actions });
         }
-        void setStatus(const std::string& text, bool failure = false) override { statuses.push_back(text); }
+        void setStatus(const std::string& text, bool failure = false) override
+        {
+            statuses.push_back(text);
+            statusFailures.push_back(failure);
+        }
         std::string words(const std::string& name, const LLStringUtil::format_map_t& args = LLStringUtil::format_map_t()) const override
         {
             if (mStrings && mStrings->hasString(name))
@@ -189,6 +193,8 @@ namespace al_studio_test
         S32                                             front = -1;
         std::vector<Said>                               reports;
         std::vector<std::string>                        statuses;
+        // Whether each status said was a failure, in step with them.
+        std::vector<bool>                               statusFailures;
         std::vector<Opened>                             opened;
         std::vector<Went>                               went;
         std::vector<bool>                               reveals;
@@ -285,6 +291,28 @@ namespace al_studio_test
         PaneWindow   mNoPane;
     };
     using StudioWindow = StudioWindowOf<>;
+
+    // A loaded tab of `services` over a big script (albigscript.h), in a
+    // code editor made as the studio makes one and kept by `parent`: what
+    // a test measures a unit's or a pane's work over, with an
+    // ll_test::EditCount on its document to hold an operation to one
+    // change.
+    inline ALScriptStudioDoc& bigTab(FakeServices& services, LLView& parent, const std::string& id, int lines, bool lua = false)
+    {
+        ALScriptStudioDoc& doc = services.addDoc(id, ALScriptRef(), id + (lua ? ".luau" : ".lsl"));
+        doc.loaded             = true;
+        doc.modifiable         = true;
+        doc.language.lua       = lua;
+        ALCodeEditor::Params p(LLUICtrlFactory::getDefaultParams<ALCodeEditor>());
+        p.name     = "editor_" + id;
+        p.rect     = LLRect(0, 200, 400, 0);
+        p.syntax   = lua ? "slua" : "lsl";
+        doc.editor = LLUICtrlFactory::create<ALCodeEditor>(p);
+        doc.editor->setFont(LLFontGL::getFontMonospace());
+        parent.addChild(doc.editor);
+        doc.editor->setText(lua ? ll_test::bigSLua(lines) : ll_test::bigLSL(lines));
+        return doc;
+    }
 }
 
 #endif // AL_ALSCRIPTSTUDIO_FIXTURE_H
