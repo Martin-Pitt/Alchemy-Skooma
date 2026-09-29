@@ -44,6 +44,17 @@ namespace
     // How many times each has been built: what an index over one knows it
     // by, since the list built again is the same list, and may be as long.
     U32                                     sVocabularyBuilds[2] = { 0, 0 };
+    // The definitions each was built from.
+    std::string                             sVocabularyVersion[2];
+    // Each language's tables, as the vocabulary and the preprocessor's
+    // words last made them.
+    struct Tables
+    {
+        std::shared_ptr<const ALSyntaxWords> words;
+        U32                                  builds = 0;
+        std::vector<std::string>             extra;
+    };
+    Tables sTables[2];
 }
 
 // static
@@ -62,12 +73,14 @@ void ALScriptStudioWords::forget()
 // static
 const std::vector<ALScriptStudioWords::Vocab>& ALScriptStudioWords::vocabulary(bool lua)
 {
-    std::vector<Vocab>& out = sVocabulary[lua ? 1 : 0];
-    if (sVocabularyBuilt[lua ? 1 : 0])
+    std::vector<Vocab>& out     = sVocabulary[lua ? 1 : 0];
+    const std::string   version = sources().definitionsVersion ? sources().definitionsVersion() : std::string();
+    if (sVocabularyBuilt[lua ? 1 : 0] && sVocabularyVersion[lua ? 1 : 0] == version)
     {
         return out;
     }
-    sVocabularyBuilt[lua ? 1 : 0] = true;
+    sVocabularyBuilt[lua ? 1 : 0]   = true;
+    sVocabularyVersion[lua ? 1 : 0] = version;
     ++sVocabularyBuilds[lua ? 1 : 0];
     out.clear();
     const LLSD keywords = sources().keywords ? sources().keywords(lua) : LLSD();
@@ -110,6 +123,41 @@ const std::vector<ALScriptStudioWords::Vocab>& ALScriptStudioWords::vocabulary(b
             }
         }
         return list;
+    };
+    // What the offline reference files each by (Vocab::group).
+    Categories categories;
+    if (sources().definitionsYaml)
+    {
+        readCategories(sources().definitionsYaml(), categories);
+    }
+    auto inWords = [](std::string category) {
+        std::replace(category.begin(), category.end(), '_', ' ');
+        LLStringUtil::trim(category);
+        if (!category.empty())
+        {
+            category[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(category[0])));
+        }
+        return category;
+    };
+    auto groupOf = [&](const std::string& text, ALSyntaxKind kind) {
+        if (kind == ALSyntaxKind::Function)
+        {
+            // An SLua ll function is its LSL twin: ll.Say is llSay.
+            const bool        twin  = lua && text.compare(0, 3, "ll.") == 0;
+            const std::string named = twin ? "ll" + text.substr(3) : text;
+            if (const auto found = categories.find(named); found != categories.end())
+            {
+                return inWords(found->second);
+            }
+            const size_t dot = text.find('.');
+            return lua && !twin && dot != std::string::npos ? text.substr(0, dot) : std::string();
+        }
+        if (kind == ALSyntaxKind::Constant)
+        {
+            const size_t under = text.find('_');
+            return under != std::string::npos && under > 0 ? text.substr(0, under) + "_..." : std::string();
+        }
+        return std::string();
     };
     for (LLSD::map_const_iterator group = keywords.beginMap(); group != keywords.endMap(); ++group)
     {
@@ -189,6 +237,7 @@ const std::vector<ALScriptStudioWords::Vocab>& ALScriptStudioWords::vocabulary(b
                     word.detail = firstLine(attrs.get("tooltip").asString());
                     break;
             }
+            word.group = groupOf(word.text, kind);
             out.push_back(std::move(word));
         }
     }
@@ -197,10 +246,81 @@ const std::vector<ALScriptStudioWords::Vocab>& ALScriptStudioWords::vocabulary(b
 }
 
 // static
+void ALScriptStudioWords::readCategories(std::string_view yaml, Categories& out)
+{
+    // A section at the margin; a function two spaces in, a name and a
+    // colon; its keys four in; the items of a list six in, after a dash.
+    bool        in_functions  = false;
+    bool        in_categories = false;
+    std::string current;
+    size_t      at = 0;
+    while (at < yaml.size())
+    {
+        size_t end = yaml.find('\n', at);
+        if (end == std::string_view::npos)
+        {
+            end = yaml.size();
+        }
+        std::string_view line = yaml.substr(at, end - at);
+        at                    = end + 1;
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.remove_suffix(1);
+        }
+        const size_t indent = line.find_first_not_of(' ');
+        if (indent == std::string_view::npos)
+        {
+            continue;
+        }
+        const std::string_view text = line.substr(indent);
+        if (indent == 0)
+        {
+            in_functions  = text == "functions:";
+            in_categories = false;
+            current.clear();
+            continue;
+        }
+        if (!in_functions)
+        {
+            continue;
+        }
+        if (indent == 2 && text.back() == ':' && text.find(' ') == std::string_view::npos)
+        {
+            current.assign(text.substr(0, text.size() - 1));
+            in_categories = false;
+        }
+        else if (indent == 4)
+        {
+            in_categories = text == "categories:";
+        }
+        else if (indent == 6 && in_categories && !current.empty() && text.compare(0, 2, "- ") == 0 && !out.contains(current))
+        {
+            out.emplace(current, std::string(text.substr(2)));
+        }
+    }
+}
+
+// static
 void ALScriptStudioWords::teach(ALCodeEditor& editor, bool lua)
 {
+    editor.highlighter().setWords(tables(lua));
+}
+
+// static
+std::shared_ptr<const ALSyntaxWords> ALScriptStudioWords::tables(bool lua)
+{
     const std::vector<Vocab>& words = vocabulary(lua);
-    std::vector<std::string>  functions, events, types, controls, constants, deprecated;
+    // The preprocessor's words, which the grid's keywords do not list,
+    // while their transforms are on: Firestorm's switch and case, the
+    // extensions' break and continue, and inline and const, which it takes
+    // off whenever it runs.
+    const std::vector<std::string> extra = !lua && sources().preprocessorWords ? sources().preprocessorWords() : std::vector<std::string>();
+    Tables&                        kept  = sTables[lua ? 1 : 0];
+    if (kept.words && kept.builds == sVocabularyBuilds[lua ? 1 : 0] && kept.extra == extra)
+    {
+        return kept.words;
+    }
+    std::vector<std::string> functions, events, types, controls, constants, deprecated;
     for (const Vocab& word : words)
     {
         if (word.deprecated)
@@ -218,29 +338,24 @@ void ALScriptStudioWords::teach(ALCodeEditor& editor, bool lua)
             default: break;
         }
     }
-    if (!lua)
+    for (const std::string& word : extra)
     {
-        // The preprocessor's words, which the grid's keywords do not list,
-        // while their transforms are on: Firestorm's switch and case, the
-        // extensions' break and continue, and inline and const, which it
-        // takes off whenever it runs.
-        const std::vector<std::string> extra = sources().preprocessorWords ? sources().preprocessorWords() : std::vector<std::string>();
-        for (const std::string& word : extra)
+        if (std::find(controls.begin(), controls.end(), word) == controls.end())
         {
-            if (std::find(controls.begin(), controls.end(), word) == controls.end())
-            {
-                controls.push_back(word);
-            }
+            controls.push_back(word);
         }
     }
-    ALSyntaxWords& tables = editor.highlighter().words();
-    tables.set("function", std::move(functions));
-    tables.set("event", std::move(events));
-    tables.set("type", std::move(types));
-    tables.set("control", std::move(controls));
-    tables.set("constant", std::move(constants));
-    tables.set("deprecated", std::move(deprecated));
-    editor.highlighter().wordsChanged();
+    auto made = std::make_shared<ALSyntaxWords>();
+    made->set("function", std::move(functions));
+    made->set("event", std::move(events));
+    made->set("type", std::move(types));
+    made->set("control", std::move(controls));
+    made->set("constant", std::move(constants));
+    made->set("deprecated", std::move(deprecated));
+    kept.words  = std::move(made);
+    kept.builds = sVocabularyBuilds[lua ? 1 : 0];
+    kept.extra  = extra;
+    return kept.words;
 }
 
 // static
@@ -474,7 +589,7 @@ std::string ALScriptStudioWords::notesOf(const Vocab& word)
     }
     if (word.godMode)
     {
-        line(alSaid("ScriptWordGodMode", "Only a god may call this"));
+        line(alSaid("ScriptWordGodMode", "Requires god mode"));
     }
     if (word.deprecated)
     {

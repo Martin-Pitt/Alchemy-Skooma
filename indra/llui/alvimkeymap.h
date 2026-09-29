@@ -26,9 +26,12 @@
 
 #include "albracketindex.h"
 #include "altextview.h"
+#include "alvimcommandline.h"
+#include "alvimhost.h"
 #include "alvimmappings.h"
 #include "alvimpattern.h"
 #include "alvimregisters.h"
+#include "alvimsearch.h"
 #include "lltimer.h"
 
 #include <deque>
@@ -40,6 +43,8 @@
 #include <string_view>
 #include <vector>
 
+class ALVimExCommands;
+
 // Vim over the text view, as a keymap with state: normal, insert, replace,
 // visual, visual-line and visual-block modes; counts; the operators d c y
 // > < = and g~ gu gU, composed with the motions h j k l w W b B e E 0 ^ $
@@ -48,8 +53,9 @@
 // C D Y p P J gJ r ~ o O i a I A u Ctrl-R and . to do the last change
 // again; in insert mode Ctrl-W Ctrl-U Ctrl-H Ctrl-T Ctrl-D Ctrl-N Ctrl-P
 // Ctrl-A Ctrl-R Ctrl-E Ctrl-Y, and Ctrl-J Ctrl-M Ctrl-I for Return and
-// Tab; registers, the unnamed one being the system clipboard, with 0
-// for the last yank and a-z by name (A-Z to add); marks a-z, ` and '; a
+// Tab; registers, the unnamed one the editor's own unless clipboard is
+// unnamed, with 0 for the last yank and a-z by name (A-Z to add), and "+
+// and "* the system clipboard; marks a-z, ` and '; a
 // search line for / and ?; and a : line for a line number, s/// with
 // vim's flags and & g& :& :&& to do the last one again, set, g and v
 // over the lines a pattern picks out, normal, and whatever the hooks
@@ -117,7 +123,7 @@ public:
     Mode   mode() const { return mMode; }
     Hooks& hooks() { return mHooks; }
     // What was typed after : or / so far.
-    const std::string& commandLine() const { return mLine; }
+    const std::string& commandLine() const { return mCommandLine.line; }
     bool               typingLine(std::string& line, S32& caret) const override;
     // A line put up on the : or / line, as the history window hands one
     // back: to be edited and entered, or run as it is, as vim's window
@@ -155,7 +161,8 @@ public:
     // @: and :history; and the settings a :set changes, ignorecase and
     // smartcase, and clipboard: whether what is yanked, deleted and put
     // with no register named goes by the system clipboard, as vim's
-    // clipboard=unnamed has it, or stays the editor's own. A register
+    // clipboard=unnamed has it, or stays the editor's own -- vim's own
+    // default, so that :g/x/d is not a clipboard write a line. A register
     // named -- "a -- never touches the clipboard, and "+ and "* are it
     // whatever this says. The keymap's own unless told to share another's.
     struct Shared
@@ -164,7 +171,7 @@ public:
         std::vector<std::string> search;
         bool                     ignoreCase       = false;
         bool                     smartCase        = false;
-        bool                     unnamedClipboard = true;
+        bool                     unnamedClipboard = false;
         // Every match of the last search lit, as hlsearch has it; and the
         // matches of what is typed on the search line lit, and the next
         // brought into sight, as incsearch has it.
@@ -291,28 +298,52 @@ private:
     // this keymap's over a plain view's text, where every bracket counts.
     // `%`, the bracket objects and [( all ask of it, by one set of rules.
     ALBracketIndex& bracketsOf(ALTextView& view) const;
-    // The position a range address names on the : line -- a number, .,
-    // $, 'x, '< '>, with an offset -- read from `at` on; false where
-    // the line has none there.
-    bool lineAddress(ALTextView& view, const std::string& line, size_t& at, S32& out) const;
     bool insert(ALTextView& view, const Input& input);
     // Insert mode's own Control keys; false where vim gives the key no
     // meaning there, and it is the view's.
     bool insertControl(ALTextView& view, const Input& input);
     // Text put in as though it were typed, for `.` and a count.
     void typeIn(ALTextView& view, const std::string& text);
-    bool commandLine(ALTextView& view, const Input& input);
-    // Tab on the : line: the word at the cursor completed from what the
-    // keymap and the host know -- a command's name, or what follows
-    // one -- the next of them on each Tab, the one before on Shift-Tab,
-    // and the word as typed again past the last, as vim's wildmenu
-    // walks. Any other key keeps what is on the line and drops the rest.
-    void complete(ALTextView& view, bool forward);
-    void dropCompletion();
 
     // Normal mode's command, once the count, the register and any
-    // operator have been read; false where the character is not one.
-    bool command(ALTextView& view, llwchar ch);
+    // operator have been read; false where the character is not one. In
+    // turn: the key a waiting one wants (afterPending), a count or a
+    // register, an operator's motion (operatorKey), visual mode's own
+    // (visualKey), everyone's (normalKey), and else a motion (motionKey).
+    // visualKey and normalKey say nothing of a key that is none of theirs.
+    bool                command(ALTextView& view, llwchar ch);
+    bool                operatorKey(ALTextView& view, llwchar ch);
+    std::optional<bool> visualKey(ALTextView& view, llwchar ch);
+    std::optional<bool> normalKey(ALTextView& view, llwchar ch);
+    bool                motionKey(ALTextView& view, llwchar ch);
+    // A key that waits for the one after it -- a register's name, g's and
+    // z's commands, r's character, a text object's kind -- and that one:
+    // what the waiting key is picks a function from PENDING_KEYS, each
+    // told the waiting key and the one after it. f, F, t, T, ` and ' are
+    // none of the table's, and take a motion's argument (afterMotionKey).
+    struct PendingKey
+    {
+        llwchar key;
+        bool (ALVimKeymap::*take)(ALTextView& view, llwchar pending, llwchar ch);
+    };
+    static const PendingKey PENDING_KEYS[];
+    bool afterPending(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterSurroundWith(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterChangeSurround(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterSurroundPair(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterRegisterName(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterMark(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterRecord(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterPlay(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterReplace(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterG(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterZ(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterGr(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterBracket(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterBigZ(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterWindow(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterObject(ALTextView& view, llwchar pending, llwchar ch);
+    bool afterMotionKey(ALTextView& view, llwchar pending, llwchar ch);
     // A motion by its character, with the count; not ok where the
     // character is no motion.
     Motion motion(ALTextView& view, llwchar ch, S32 count, llwchar arg);
@@ -344,99 +375,8 @@ private:
     // Says a count would make more text than it may, and how much.
     void     tooMuch(size_t bytes);
 
-    // Where a search leaves the caret by its match, as /pattern/e+1 says:
-    // lines on or back ('l', column 0), or characters on or back from the
-    // match's start ('s') or its last character ('e').
-    // Zero, as SearchOffset() makes it: none.
-    struct SearchOffset
-    {
-        char kind;
-        S32  amount;
-    };
-    // A search line's pattern and offset: split at the first unescaped
-    // `kind` after the pattern.
-    static void splitOffset(const std::string& line, llwchar kind, std::string& pattern, std::string& offset_text);
-    static bool parseOffset(const std::string& text, SearchOffset& out);
-    ALTextPos   offsetFrom(const ALTextDocument& d, const ALTextRange& match, const SearchOffset& offset) const;
-    // Searching, with the last pattern kept for n and N, and its offset.
-    bool search(ALTextView& view, const std::string& pattern, bool forward, S32 count, bool whole_word,
-                const SearchOffset& offset = SearchOffset());
-    // What is typed on the search line so far, lit and brought into sight;
-    // and that let go of, the caret's place in sight again.
-    void incrementalSearch(ALTextView& view);
-    void endIncremental(ALTextView& view);
-
-    // The : line.
-    void runCommand(ALTextView& view, const std::string& line);
-    bool substitute(ALTextView& view, S32 first, S32 last, const std::string& spec);
-    // Vim's spelling of a replacement -- & for the match, \1 for a group,
-    // ~ for the last replacement, \r for a line break -- as the search
-    // engine's.
-    std::string replacementOf(const std::string& with) const;
-    // Vim's spelling of a pattern as the search engine's (ALVimPattern),
-    // with the last replacement for ~ and the ignorecase and smartcase
-    // settings; and what the places a pattern names are measured against:
-    // the caret, and the last visual area.
+    // Vim's spelling of a pattern as the search engine's (ALVimSearch).
     typedef ALVimPattern Pattern;
-    Pattern              patternOf(const std::string& vim, std::optional<bool> force_case = std::nullopt) const;
-    ALVimPattern::Places placesOf(const ALTextView& view) const;
-    // The pattern's matches within a scope, the places applied, with
-    // where each whole match began.
-    std::vector<ALTextRange> matchesOf(ALTextView& view, const Pattern& pattern, ALTextSearchOptions options, const ALTextRange* scope, std::string& error,
-                                       std::vector<ALTextPos>& wholes) const;
-    // The :s asking about each match: the edits left to make, in order,
-    // and the one being asked about; the text put in, for the question.
-    struct Confirming
-    {
-        std::vector<std::pair<ALTextRange, std::string>> edits;
-        size_t                                           at      = 0;
-        S32                                              made    = 0;
-        S32                                              lines   = 0;
-        S32                                              lastLine = -1;
-        // While a :g runs its command over the lines, an asking :s puts
-        // its edits here and asks nothing; the asking starts, over the
-        // lot in order, once the :g is through.
-        bool                                             gathering = false;
-    };
-    Confirming mConfirming;
-    // Whether a :g is running its command over lines, which another :g
-    // may not do, as vim has it (E147).
-    bool       mInGlobal = false;
-    // While a :g runs a command that changes only the line it is on --
-    // :d, :s, :> and :< with no lines of their own -- the command puts its
-    // edits here, measured in the text as it was, and they go in at once
-    // when the :g is through: one edit, heard of once, for the lot. The
-    // place the caret lands is kept likewise, and what is said is added up.
-    struct GlobalBatch
-    {
-        std::vector<std::pair<ALTextRange, std::string>> edits;
-        // Where the caret goes, in the text as it was, and how many lines
-        // below that once the edits are in.
-        ALTextPos                                        landing;
-        S32                                              landingBelow = 0;
-        bool                                             landed       = false;
-        S32                                              substitutions = 0;
-        S32                                              substitutedLines = 0;
-        S32                                              deletedLines = 0;
-    };
-    GlobalBatch* mGlobalBatch = nullptr;
-    // Whether a :g's command is one it batches.
-    static bool globalBatches(const std::string& command);
-    void        applyGlobalBatch(ALTextView& view, GlobalBatch& batch);
-    bool       confirmKey(ALTextView& view, const Input& input);
-    // One of the edits made, the ones after it moved by what it changed.
-    void       applyConfirmed(ALTextView& view, size_t index);
-    // All the rest, from the one asked about on, made as one edit, as :s
-    // makes them without asking.
-    void       applyRest(ALTextView& view);
-    void       askNext(ALTextView& view);
-    void       endConfirming(ALTextView& view);
-    // The history of a line kind, and the line entered into it.
-    std::vector<std::string>& historyOf(llwchar kind) { return kind == ':' ? mShared->command : mShared->search; }
-    void                      remember(llwchar kind, const std::string& line);
-    // g and v: the command over every line the pattern picks out, or
-    // every line it does not.
-    bool global(ALTextView& view, S32 first, S32 last, bool ranged, const std::string& spec, bool invert);
     // Keys fed as typed, for :normal and for a macro, through the mappings
     // where `remap` says -- as a macro's and :normal's are, and :normal!'s
     // are not; false where one failed or said an error, and the rest were
@@ -474,20 +414,12 @@ private:
     bool changeSurround(ALTextView& view, llwchar target, llwchar with, S32 count);
     // zo zc za zR zM zj zk [z ]z: the code editor's folds.
     bool foldCommand(ALTextView& view, llwchar ch, llwchar prefix);
-    // The last search's match at the caret or after it, or at it or before
-    // it, round past the ends: what gn and gN take.
-    std::optional<ALTextRange> matchNear(ALTextView& view, bool forward);
     // [( [{ ]) ]}: the bracket the caret is inside of, open before it or
     // closed after it, the count out; false where there is none.
     bool unmatchedBracket(ALTextView& view, llwchar bracket, S32 count, ALTextPos& out) const;
     // A jump from `from`: vim's context marks, '' and ``, set there, and
     // the host told.
     void noteJump(ALTextView& view, const ALTextPos& from);
-    // :registers and :marks, listed as vim lists them, of the names given
-    // or of all.
-    void listRegisters(ALTextView& view, const std::string& names);
-    void listMarks(ALTextView& view, const std::string& names);
-    void list(ALTextView& view, const std::string& text);
 
     // What the mode says, in the skin's words where the skin has them
     // (strings.xml, keys Vim*), else in vim's own English; [NAME]s
@@ -530,17 +462,9 @@ private:
     llwchar mFindChar    = 0;
     bool    mFindForward = true;
     bool    mFindTill    = false;
-    // The search, for n and N; :s sets it too. How case is matched is
-    // in the shared state: sensitive unless :set ignorecase says, as
-    // vim's own default is.
-    std::string mSearchPattern;
-    SearchOffset mSearchOffset{};
-    // The last match a search went to, which n from where an offset left
-    // the caret goes on from.
-    ALTextRange mLastMatch;
-    bool        mIncrementalShown = false;
-    bool        mSearchForward   = true;
-    bool        mSearchWholeWord = false;
+    // Searching: the last pattern, its matches, the search line lit.
+    ALVimSearch mSearch{ *this };
+    friend class ALVimSearch;
 
     // The registers by name: a-z, 0 for the last yank, 1-9 for the last
     // deletes of a line or more, newest first, and - for the last
@@ -553,7 +477,12 @@ private:
     // A plain view's bracket index (bracketsOf).
     mutable std::unique_ptr<ALBracketIndex> mPlainBrackets;
     boost::signals2::scoped_connection mMarksSlide;
-    void                      slideMarks(const ALTextDocument::Edit& edit);
+    // Everything held at a place in the text, moved with each edit made to
+    // it, whoever makes it: the marks and the last visual area, the visual
+    // area being made, the last match gone to, the lines a block insert
+    // goes onto, and the :s edits still to be asked about -- those an edit
+    // cut through let go.
+    void                      slideHeld(const ALTextDocument::Edit& edit);
     void                      followDocument(ALTextView& view);
 
     // The column j and k want, as vim's curswant: where the caret was
@@ -585,37 +514,16 @@ private:
     S32         mBlockLast         = 0;
     S32         mBlockColumn       = 0;
     bool        mBlockAppend       = false;
-    // The char an insert began after, for a replace's backspace.
-    ALTextPos   mInsertStart;
 
-    // The : or / line being typed, and which; the lines entered before,
-    // : and search apart, oldest first, for Up and Down on the line,
-    // q: and @:; and where Up has walked to in them, with what was
-    // typed before it was pressed, which Down comes back to. -1 while
-    // not walking.
-    std::string              mLine;
-    llwchar                  mLineKind = ':';
+    // The settings and histories shared with the other buffers' keymaps.
     std::shared_ptr<Shared>  mShared = std::make_shared<Shared>();
-    S32                      mHistoryAt = -1;
-    std::string              mHistoryPrefix;
-    // Where in the line the next character goes, in bytes.
-    size_t                   mLineCursor = 0;
-    // The completions Tab found for the word at the cursor, which of
-    // them is on the line (-1 for the word as typed), where the word
-    // begins, the word as typed and what followed the cursor.
-    struct Completion
-    {
-        std::vector<std::string> items;
-        S32                      at        = -1;
-        size_t                   wordStart = 0;
-        std::string              typed;
-        std::string              tail;
-    };
-    Completion               mCompletion;
-    // The last :s, for :s with nothing after it, :&, :&&, & and g&: its
-    // replacement as it read once ~ was put in, and its flags.
-    std::string mLastReplacement;
-    std::string mLastSubstituteFlags;
+    // The : and search lines being typed (ALVimCommandLine).
+    ALVimCommandLine         mCommandLine{ *this };
+    friend class ALVimCommandLine;
+    // The : commands (ALVimExCommands), held apart since they name the
+    // keymap's own types.
+    std::unique_ptr<ALVimExCommands> mEx;
+    friend class ALVimExCommands;
 
     // What the last change was, as it was typed, for . -- gathered from
     // the first key of a command until the command is done, and kept
