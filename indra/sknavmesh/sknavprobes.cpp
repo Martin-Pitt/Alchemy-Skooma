@@ -293,9 +293,30 @@ namespace sknav
         return x >= 0 && y >= 0 && x < mW && y < mH && !std::isnan(mFloor[y * mW + x]);
     }
 
-    bool wantsProbes(const Space& space, const ProbeParams&)
+    bool wantsProbes(const Space& space, const ProbeParams& params)
     {
-        return space.mBucket != EnclosureBucket::UNKNOWN && !space.mRaster.empty();
+        if (space.mRaster.empty())
+        {
+            return false;
+        }
+        if (space.mBucket != EnclosureBucket::UNKNOWN)
+        {
+            return true;
+        }
+        // The enclosure pass never answered here: the air may be roofless,
+        // unwalkable, or a guess. A probe still stands, but small, low, and
+        // only on real floor: enough that a portal into this space has two
+        // sides to blend between. The residual grid keeps the rest.
+        U32 cells = 0;
+        for (const auto& r : space.mRaster)
+        {
+            cells += r.second;
+            if (cells >= params.mUnknownMinCells)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     FloorPlan floorPlanOf(const Space& space, const ProbeParams& params)
@@ -637,6 +658,60 @@ namespace sknav
             part.mMax.set((plan.mX0 + st[p].mX1 + 1) * plan.mCell, (plan.mY0 + st[p].mY1 + 1) * plan.mCell, floor + 2.f * half);
             out.push_back(part);
         }
+
+        if (params.mBlendZoneM > 0.f && out.size() > 1)
+        {
+            // The overlap floor: two parts' spheres must share a blend zone
+            // this wide where their parts touch, so a pixel between them takes
+            // each with real weight instead of watching one fade out at its
+            // far edge. Grown only where the floor asks, two passes at most,
+            // and pieces grown only for this stand first in line to shed when
+            // a cap is needed.
+            for (S32 pass = 0; pass < 2; ++pass)
+            {
+                bool grew = false;
+                for (size_t a = 0; a < out.size(); ++a)
+                {
+                    for (size_t b = a + 1; b < out.size(); ++b)
+                    {
+                        const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                        const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(out[a].mRadius, out[b].mRadius));
+                        if (d < out[a].mRadius + out[b].mRadius - w)
+                        {
+                            continue;   // this pair already blends
+                        }
+                        // Parts that do not touch grow nothing: two halves of
+                        // an L stand apart on purpose, and the octree fills
+                        // between them.
+                        const F32 gap_x = std::max(std::max(out[a].mMin.mV[VX] - out[b].mMax.mV[VX], out[b].mMin.mV[VX] - out[a].mMax.mV[VX]), 0.f);
+                        const F32 gap_y = std::max(std::max(out[a].mMin.mV[VY] - out[b].mMax.mV[VY], out[b].mMin.mV[VY] - out[a].mMax.mV[VY]), 0.f);
+                        if (gap_x > 0.f || gap_y > 0.f)
+                        {
+                            continue;
+                        }
+                        const F32 need = d + w;
+                        const F32 want_a = std::min(need - out[b].mRadius, params.mMaxRadiusM);
+                        const F32 want_b = std::min(need - out[a].mRadius, params.mMaxRadiusM);
+                        if (want_a > out[a].mRadius + 1e-3f)
+                        {
+                            out[a].mRadius = std::max(out[a].mRadius, want_a);
+                            out[a].mBridged = true;
+                            grew = true;
+                        }
+                        if (want_b > out[b].mRadius + 1e-3f)
+                        {
+                            out[b].mRadius = std::max(out[b].mRadius, want_b);
+                            out[b].mBridged = true;
+                            grew = true;
+                        }
+                    }
+                }
+                if (!grew)
+                {
+                    break;
+                }
+            }
+        }
         return out;
     }
 
@@ -647,11 +722,26 @@ namespace sknav
             return {};
         }
         FloorPlan plan = floorPlanOf(space, params);
-        if (space.mBucket == EnclosureBucket::OUTDOORS || space.mOpenShare >= params.mOpenShare)
+        const bool unknown = space.mBucket == EnclosureBucket::UNKNOWN;
+        if (space.mBucket == EnclosureBucket::OUTDOORS || space.mOpenShare >= params.mOpenShare ||
+            unknown)
         {
             plan.mCeiling = -std::numeric_limits<F32>::infinity();
         }
-        return placeParts(plan, params);
+        std::vector<ProbePart> parts = placeParts(plan, params);
+        if (unknown)
+        {
+            // Nothing is known here but the floor: sit just above it, reach
+            // a little way, and let the blends into known neighbours decide
+            // what a pixel here takes.
+            for (ProbePart& part : parts)
+            {
+                part.mOrigin.mV[VZ] = part.mMin.mV[VZ] + 1.5f;
+                part.mRadius = std::min(std::max(part.mRadius, params.mMinRadiusM), params.mUnknownRadiusM);
+                part.mSpaceRadius = 0.f;
+            }
+        }
+        return parts;
     }
 
     F32 distanceTo(const ProbeInfluence& influence, const LLVector3& p)

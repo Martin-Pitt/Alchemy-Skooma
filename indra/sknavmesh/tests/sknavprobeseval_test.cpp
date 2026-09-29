@@ -88,7 +88,8 @@ namespace tut
             LLVector3d mOrigin;
             LLVector3d mMin, mMax;
             std::vector<Space> mSpaces;
-            std::vector<std::tuple<U32, U32, bool>> mPortals;   // space a, space b, cross mesh
+            struct PortalEntry { U32 mA = 0, mB = 0; bool mCross = false; LLVector3 mCentre; };
+            std::vector<PortalEntry> mPortals;   // space a, space b, cross mesh, where it stands
         };
         std::vector<WorldMesh> world;
         const std::string cache_path = out_dir + "\\spaces.bin";
@@ -127,12 +128,14 @@ namespace tut
                     cache.read(reinterpret_cast<char*>(&portal_count), sizeof(portal_count));
                     for (U32 p = 0; p < portal_count && cache; ++p)
                     {
-                        U32 a = 0, b = 0;
+                        WorldMesh::PortalEntry e;
                         U8 cross = 0;
-                        cache.read(reinterpret_cast<char*>(&a), sizeof(a));
-                        cache.read(reinterpret_cast<char*>(&b), sizeof(b));
+                        cache.read(reinterpret_cast<char*>(&e.mA), sizeof(e.mA));
+                        cache.read(reinterpret_cast<char*>(&e.mB), sizeof(e.mB));
                         cache.read(reinterpret_cast<char*>(&cross), sizeof(cross));
-                        wm.mPortals.emplace_back(a, b, cross != 0);
+                        cache.read(reinterpret_cast<char*>(&e.mCentre), sizeof(e.mCentre));
+                        e.mCross = cross != 0;
+                        wm.mPortals.push_back(e);
                     }
                     world.push_back(std::move(wm));
                 }
@@ -161,7 +164,7 @@ namespace tut
                 {
                     if (p.mSpaces[0] < wm.mSpaces.size() && p.mSpaces[1] < wm.mSpaces.size())
                     {
-                        wm.mPortals.emplace_back(p.mSpaces[0], p.mSpaces[1], p.mCrossMesh);
+                        wm.mPortals.push_back({ p.mSpaces[0], p.mSpaces[1], p.mCrossMesh, p.mCentre });
                     }
                 }
                 world.push_back(std::move(wm));
@@ -193,12 +196,13 @@ namespace tut
                 }
                 const U32 portal_count = static_cast<U32>(wm.mPortals.size());
                 cache.write(reinterpret_cast<const char*>(&portal_count), sizeof(portal_count));
-                for (const auto& [a, b, cross] : wm.mPortals)
+                for (const auto& entry : wm.mPortals)
                 {
-                    cache.write(reinterpret_cast<const char*>(&a), sizeof(a));
-                    cache.write(reinterpret_cast<const char*>(&b), sizeof(b));
-                    const U8 cross_byte = cross ? 1 : 0;
+                    cache.write(reinterpret_cast<const char*>(&entry.mA), sizeof(entry.mA));
+                    cache.write(reinterpret_cast<const char*>(&entry.mB), sizeof(entry.mB));
+                    const U8 cross_byte = entry.mCross ? 1 : 0;
                     cache.write(reinterpret_cast<const char*>(&cross_byte), sizeof(cross_byte));
+                    cache.write(reinterpret_cast<const char*>(&entry.mCentre), sizeof(entry.mCentre));
                 }
             }
             std::cerr << "world cached: " << world.size() << " meshes" << std::endl;
@@ -258,6 +262,26 @@ namespace tut
                                    std::max(world_max.mdV[VY], wm.mMax.mdV[VY]), 0.0);
         }
         ensure("the replay holds spaces", !cells.empty());
+        {
+            // The buckets and their raster sums: what can probe at all.
+            std::map<U8, std::pair<U32, U32>> by_bucket;    // spaces, with raster >= 2 cells
+            for (const WorldMesh& wm : world)
+            {
+                for (const Space& s : wm.mSpaces)
+                {
+                    U32 cell_sum = 0;
+                    for (const auto& r : s.mRaster) cell_sum += r.second;
+                    auto& e = by_bucket[static_cast<U8>(s.mBucket)];
+                    e.first += 1;
+                    e.second += cell_sum >= 2;
+                }
+            }
+            for (const auto& it : by_bucket)
+            {
+                std::cerr << "bucket " << S32(it.first) << ": " << it.second.first << " spaces, "
+                          << it.second.second << " with raster >= 2" << std::endl;
+            }
+        }
         std::cerr << "meshes with spaces: " << meshes.size() << ", spaces: " << cells.size() << ", world "
                   << (world_max - world_min).length() << " m" << std::endl;
 
@@ -269,13 +293,15 @@ namespace tut
                             S32(90.f + 130.f * (((h >> 16) & 255) / 255.f)));
         };
 
-        struct Strategy { const char* mName; F32 mShare; F32 mSpaceRadius; F32 mHold; };
+        struct Strategy { const char* mName; F32 mShare; F32 mSpaceRadius; F32 mHold; F32 mBlendZone; F32 mUnknownRadius; };
         const std::vector<Strategy> strategies =
         {
-            { "baseline", 1.0f, 0.f, 8.f },
-            { "share", 1.5f, 0.f, 8.f },
-            { "spacerad", 1.5f, 32.f, 8.f },
-            { "stable", 1.5f, 32.f, 24.f },
+            { "baseline", 1.0f, 0.f, 8.f, 0.f, 8.f },
+            { "share", 1.5f, 0.f, 8.f, 0.f, 8.f },
+            { "spacerad", 1.5f, 32.f, 8.f, 0.f, 8.f },
+            { "stable", 1.5f, 32.f, 24.f, 0.f, 8.f },
+            { "floor", 1.0f, 0.f, 8.f, 2.f, 8.f },
+            { "floorbridge", 1.0f, 0.f, 8.f, 2.f, 8.f },
         };
 
         std::ofstream metrics((out_dir + "\\metrics.json").c_str());
@@ -288,11 +314,14 @@ namespace tut
             params.mCoverageShare = strat.mShare;
             params.mSpaceRadiusM = strat.mSpaceRadius;
             params.mBudgetHoldM = strat.mHold;
+            params.mBlendZoneM = strat.mBlendZone;
+            params.mUnknownRadiusM = strat.mUnknownRadius;
 
             // Place, per mesh and space.
             std::vector<Probe> probes;
             std::vector<std::map<U32, std::vector<U32>>> mesh_spaces(meshes.size());
             U32 spaces_probed = 0;
+            U32 bridges = 0;
             for (size_t mi = 0; mi < meshes.size(); ++mi)
             {
                 const WorldMesh& wm = *meshes[mi];
@@ -316,6 +345,60 @@ namespace tut
                 }
             }
 
+            if (strat.mName == std::string("floorbridge"))
+            {
+                // The graph repair: only portals measured bare get a bridge,
+                // small, at the threshold, grown just enough to meet the
+                // nearest sphere of each side.
+                for (size_t mi = 0; mi < meshes.size(); ++mi)
+                {
+                    const WorldMesh& wm = *meshes[mi];
+                    for (const auto& entry : wm.mPortals)
+                    {
+                        const U32 sa = entry.mA, sb = entry.mB;
+                        if (sa >= wm.mSpaces.size() || sb >= wm.mSpaces.size())
+                        {
+                            continue;
+                        }
+                        const auto meets = [&]() -> bool
+                        {
+                            for (U32 a : mesh_spaces[mi][sa])
+                            {
+                                for (U32 b : mesh_spaces[mi][sb])
+                                {
+                                    const F32 dx = probes[a].mOrigin.mV[VX] - probes[b].mOrigin.mV[VX];
+                                    const F32 dy = probes[a].mOrigin.mV[VY] - probes[b].mOrigin.mV[VY];
+                                    const F32 dz = probes[a].mOrigin.mV[VZ] - probes[b].mOrigin.mV[VZ];
+                                    const F32 reach = probes[a].mRadius + probes[b].mRadius;
+                                    if (dx * dx + dy * dy + dz * dz < reach * reach) return true;
+                                }
+                            }
+                            return false;
+                        };
+                        if (!mesh_spaces[mi][sa].empty() && !mesh_spaces[mi][sb].empty() && meets())
+                        {
+                            continue;
+                        }
+                        Probe bridge;
+                        bridge.mOrigin = LLVector3(wm.mOrigin + LLVector3d(entry.mCentre)) + LLVector3(0.f, 0.f, 1.f);
+                        bridge.mRadius = 3.f;
+                        for (U32 side : { sa, sb })
+                        {
+                            for (U32 p : mesh_spaces[mi][side])
+                            {
+                                bridge.mRadius = std::max(bridge.mRadius, dist_vec(bridge.mOrigin, probes[p].mOrigin) + 1.f);
+                            }
+                        }
+                        bridge.mRadius = std::min(bridge.mRadius, 8.f);
+                        bridge.mMesh = static_cast<U32>(mi);
+                        bridge.mSpace = sa;
+                        mesh_spaces[mi][sa].push_back(static_cast<U32>(probes.size()));
+                        probes.push_back(bridge);
+                        ++bridges;
+                    }
+                }
+            }
+
             // The neighbour graph, per mesh: two probes link when their
             // spheres intersect, as the manager's updateNeighbors has it. A
             // portal's spaces count as linked when any probe of the one meets
@@ -335,14 +418,15 @@ namespace tut
             for (size_t mi = 0; mi < meshes.size(); ++mi)
             {
                 const WorldMesh& wm = *meshes[mi];
-                for (const auto& [sa, sb, cross] : wm.mPortals)
+                for (const auto& entry : wm.mPortals)
                 {
+                    const U32 sa = entry.mA, sb = entry.mB;
                     if (sa >= wm.mSpaces.size() || sb >= wm.mSpaces.size())
                     {
                         continue;
                     }
                     portal_pairs += 1;
-                    portal_cross += cross;
+                    portal_cross += entry.mCross;
                     if (mesh_spaces[mi][sa].empty() || mesh_spaces[mi][sb].empty())
                     {
                         ++portal_no_probe;
@@ -358,7 +442,7 @@ namespace tut
                         if (joins) break;
                     }
                     portal_linked += joins;
-                    portal_cross_linked += joins && cross;
+                    portal_cross_linked += joins && entry.mCross;
                     portal_far += !joins;
                 }
                 for (size_t a = 0; a < probes.size(); ++a)
@@ -384,28 +468,41 @@ namespace tut
                 buckets[{ S32(std::floor(probes[p].mOrigin.mV[VX] / 32.f)),
                           S32(std::floor(probes[p].mOrigin.mV[VY] / 32.f)) }].push_back(static_cast<U32>(p));
             }
-            U64 covered = 0, blended = 0, columns = 0;
+            U64 depth[5] = { 0, 0, 0, 0, 0 };   // columns under 0..4+ spheres
+            U64 covered = 0, blended = 0, blended_same = 0, blended_cross = 0, columns = 0;
             for (const SpaceColumns& sc : cells)
             {
                 for (const LLVector3& col : sc.mColumns)
                 {
                     ++columns;
                     U32 hits = 0;
+                    bool cross = false;
                     const S32 bx = S32(std::floor(col.mV[VX] / 32.f)), by = S32(std::floor(col.mV[VY] / 32.f));
-                    for (S32 oy = -1; oy <= 1 && hits < 2; ++oy)
+                    for (S32 oy = -1; oy <= 1 && hits < 5; ++oy)
                     {
-                        for (S32 ox = -1; ox <= 1 && hits < 2; ++ox)
+                        for (S32 ox = -1; ox <= 1 && hits < 5; ++ox)
                         {
                             const auto found = buckets.find({ bx + ox, by + oy });
                             if (found == buckets.end()) continue;
                             for (U32 p : found->second)
                             {
                                 const LLVector3 d = col - probes[p].mOrigin;
-                                if (d.lengthSquared() <= probes[p].mRadius * probes[p].mRadius && ++hits == 2) break;
+                                if (d.lengthSquared() <= probes[p].mRadius * probes[p].mRadius)
+                                {
+                                    if (hits < 4)
+                                    {
+                                        cross = cross || probes[p].mMesh != sc.mMesh || probes[p].mSpace != sc.mIndex;
+                                    }
+                                    ++hits;
+                                    if (hits == 5) break;
+                                }
                             }
                         }
                     }
+                    depth[std::min<U32>(hits, 4u)]++;
                     covered += hits >= 1;
+                    blended_same += hits >= 2 && !cross;
+                    blended_cross += hits >= 2 && cross;
                     blended += hits >= 2;
                 }
             }
@@ -478,9 +575,16 @@ namespace tut
             }
 
             metrics << (st ? "," : "") << "{ \"name\": \"" << strat.mName << "\", \"probes\": " << probes.size()
+                    << ", \"bridges\": " << bridges
                     << ", \"spaces_probed\": " << spaces_probed
                     << ", \"coverage\": " << (columns ? 100.0 * covered / columns : 0.0)
                     << ", \"blend\": " << (columns ? 100.0 * blended / columns : 0.0)
+                    << ", \"blend_same\": " << (columns ? 100.0 * blended_same / columns : 0.0)
+                    << ", \"blend_cross\": " << (columns ? 100.0 * blended_cross / columns : 0.0)
+                    << ", \"depth1\": " << (columns ? 100.0 * depth[1] / columns : 0.0)
+                    << ", \"depth2\": " << (columns ? 100.0 * depth[2] / columns : 0.0)
+                    << ", \"depth3\": " << (columns ? 100.0 * depth[3] / columns : 0.0)
+                    << ", \"depth4\": " << (columns ? 100.0 * depth[4] / columns : 0.0)
                     << ", \"portals_linked\": " << (portal_pairs ? 100.0 * portal_linked / portal_pairs : 0.0)
                     << ", \"portals_without_probes\": " << portal_no_probe
                     << ", \"portals_too_far\": " << portal_far
@@ -492,10 +596,15 @@ namespace tut
                     << " }";
             std::cerr << strat.mName << ": probes " << probes.size() << ", spaces probed " << spaces_probed
                       << ", coverage " << (columns ? 100.0 * covered / columns : 0.0) << "%, blend "
-                      << (columns ? 100.0 * blended / columns : 0.0) << "%, portals linked "
+                      << (columns ? 100.0 * blended / columns : 0.0) << "% (same "
+                      << (columns ? 100.0 * blended_same / columns : 0.0) << ", cross "
+                      << (columns ? 100.0 * blended_cross / columns : 0.0) << "), depth "
+                      << (columns ? 100.0 * depth[1] / columns : 0.0) << "/"
+                      << (columns ? 100.0 * depth[2] / columns : 0.0) << "/"
+                      << (columns ? 100.0 * depth[3] / columns : 0.0) << "/"
+                      << (columns ? 100.0 * depth[4] / columns : 0.0) << "%, portals linked "
                       << (portal_pairs ? 100.0 * portal_linked / portal_pairs : 0.0) << "% (no probe "
-                      << portal_no_probe << ", too far " << portal_far << ", cross " << portal_cross_linked
-                      << "/" << portal_cross << "), links " << links
+                      << portal_no_probe << ", too far " << portal_far << "), links " << links
                       << ", churn/step " << (steps ? (created + dropped) / F64(steps) : 0.0) << std::endl;
 
             // The biggest mesh's world as the strategy draws it: fills,

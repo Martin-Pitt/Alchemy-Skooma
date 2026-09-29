@@ -66,12 +66,13 @@ namespace sknav
         U32 mMaxRects = 64;         ///< rectangles cut per space before the rest floods into them
         F32 mMaxRadiusM = 13.86f;   ///< an octree probe's reach: its 16 m node's half-diagonal
         F32 mMinRadiusM = 2.f;      ///< a sphere shrunk below this is dropped
-        F32 mCoverageShare = 1.5f;  ///< a part's sphere reaches this far past its farthest cell, so
-                                    ///< neighbouring spheres overlap and the blends between them read
-        F32 mSpaceRadiusM = 32.f;   ///< a sphere is grown to reach across its whole space's plan up to
-                                    ///< this, so probes of neighbouring spaces intersect and the
-                                    ///< neighbour graph between them connects; past this the octree
-                                    ///< fills the rest
+        F32 mCoverageShare = 1.f;   ///< a part's sphere reaches this far past its farthest cell
+        F32 mSpaceRadiusM = 0.f;    ///< a sphere also reaches across its space's plan up to this
+        F32 mBlendZoneM = 2.f;      ///< the overlap two adjacent parts' spheres must share, so the
+                                    ///< blend between them has room; solved iteratively per part
+        F32 mBlendShare = 0.35f;    ///< or this share of the smaller sphere's radius, whichever is more
+        F32 mUnknownRadiusM = 8.f;  ///< a probe of an UNKNOWN-bucket space reaches this far at most
+        U32 mUnknownMinCells = 2;   ///< raster cells an UNKNOWN space needs before it probes at all
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
@@ -105,6 +106,8 @@ namespace sknav
         F32 mRadius = 0.f;
         F32 mSpaceRadius = 0.f;     ///< the reach from this origin across the whole space's plan,
                                     ///< so spheres of neighbouring spaces intersect; 0 when off
+        bool mBridged = false;      ///< grown past its part only to carry a blend across a
+                                    ///< boundary the cap left weak; the first to shed
         F32 mArea = 0.f;
         LLVector3 mMin;             ///< the part's floor plan, floor to ceiling
         LLVector3 mMax;
