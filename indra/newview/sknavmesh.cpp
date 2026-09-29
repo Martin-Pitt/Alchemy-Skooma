@@ -2646,6 +2646,54 @@ void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVe
     file << ']';
 }
 
+namespace
+{
+    /// Every root the records name, with what the viewer already knows of it: the
+    /// region's linkset reply first, else the object properties cache. `named` counts those with a name.
+    std::vector<CensusRoot> rootTable(const std::vector<RecordPtr>& records, size_t& named)
+    {
+        std::vector<CensusRoot> out;
+        std::set<LLUUID> seen;
+        named = 0;
+        const SKWorldCensus* census = SKWorldCensus::instanceExists() ? SKWorldCensus::getInstance() : nullptr;
+        for (const RecordPtr& record : records)
+        {
+            if (!seen.insert(record->mRoot).second)
+            {
+                continue;
+            }
+            CensusRoot root;
+            root.mId = record->mRoot;
+            if (const SKWorldCensus::LinksetFacts* facts = census ? census->linksetFactsOf(root.mId) : nullptr)
+            {
+                root.mScriptedKnown = facts->mScriptedKnown;
+                root.mScripted = facts->mScripted;
+                if (!facts->mName.empty())
+                {
+                    root.mName = facts->mName;
+                    root.mDescription = capDescription(facts->mDescription);
+                    root.mSource = NameSource::LINKSET;
+                }
+            }
+            if (root.mSource == NameSource::NONE)
+            {
+                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root.mId))
+                {
+                    if (!props->mName.empty())
+                    {
+                        root.mName = props->mName;
+                        root.mDescription = capDescription(props->mDescription);
+                        root.mSource = NameSource::PROPERTIES;
+                    }
+                }
+            }
+            named += root.mSource != NameSource::NONE;
+            out.push_back(std::move(root));
+        }
+        return out;
+    }
+}
+
 std::string SKNavMesh::exportAll() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
@@ -2709,6 +2757,18 @@ std::string SKNavMesh::exportAll() const
 
     writeFeatures(file, nullptr, nullptr, counts);
     writeDoors(file, nullptr, nullptr, counts);
+    // The census's roots, named where the viewer knows them, so a capture says what it holds.
+    size_t named = 0;
+    std::vector<CensusRoot> roots;
+    if (SKWorldCensus::instanceExists())
+    {
+        if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+        {
+            roots = rootTable(snap->mRecords, named);
+        }
+    }
+    file << ",\"roots\":";
+    writeRootTable(file, roots);
     file << ',';
     SKNavAnnotator::instance().writeMarks(file);
     file << "}\n";
@@ -2717,9 +2777,9 @@ std::string SKNavMesh::exportAll() const
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks (%.1f MB) -> %s", meshes_written,
-                    counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
-                    SKNavAnnotator::instance().marks().marks().size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks, %zu/%zu roots named (%.1f MB) -> %s",
+                    meshes_written, counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
+                    SKNavAnnotator::instance().marks().marks().size(), named, roots.size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 std::string SKNavMesh::exportCensus() const
@@ -2808,6 +2868,8 @@ std::string SKNavMesh::exportCensus() const
         census.mClusters.push_back(std::move(cl));
     }
     census.mFeatures = snap->mFeatures;
+    size_t named = 0;
+    census.mRoots = rootTable(census.mRecords, named);
     census.mMarks = SKNavAnnotator::instance().marks().marks();
     for (const auto& region : mFeatureDoors)
     {
@@ -2850,9 +2912,10 @@ std::string SKNavMesh::exportCensus() const
     // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
     const F32 ms = timer.getElapsedTimeF32() * 1000.f;
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks (%.1f MB, %.0f ms) -> %s",
+    LL_INFOS("SKNavExport") << named << " of " << census.mRoots.size() << " roots named" << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
                     census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
-                    census.mMarks.size(),
+                    census.mMarks.size(), named, census.mRoots.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 
