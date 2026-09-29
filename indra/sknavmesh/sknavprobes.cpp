@@ -881,4 +881,34 @@ namespace sknav
     {
         return dist_vec(held_origin, origin) > params.mMoveM || std::fabs(radius - held_radius) > params.mRadiusShare * held_radius;
     }
+
+    std::vector<std::vector<U32>> symmetricGraph(U32 count, const std::function<bool(U32, U32)>& linked, U32 max_degree)
+    {
+        std::vector<std::vector<U32>> lists(count);
+        if (count == 0 || max_degree == 0 || !linked)
+        {
+            return lists;
+        }
+        // An edge survives only inside both endpoints' budgets. A node's
+        // first max_degree partners are those it meets first in the
+        // caller's scan, so a distance-sorted scan keeps the nearest.
+        for (U32 a = 0; a < count; ++a)
+        {
+            for (U32 b = a + 1; b < count; ++b)
+            {
+                if (lists[a].size() >= max_degree)
+                {
+                    break;              // a is full: no later b can join it
+                }
+                if (lists[b].size() >= max_degree || !linked(a, b))
+                {
+                    continue;
+                }
+                lists[a].push_back(b);
+                lists[b].push_back(a);
+            }
+            std::sort(lists[a].begin(), lists[a].end());
+        }
+        return lists;
+    }
 }

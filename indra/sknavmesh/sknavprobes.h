@@ -30,6 +30,7 @@
 
 #include "v3math.h"
 
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -177,6 +178,14 @@ namespace sknav
 
     /// Whether a held probe should move to a newly placed sphere.
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params);
+
+    /// The neighbour lists of a probe graph, truncated symmetrically: an
+    /// edge stands only where it is within the first max_degree links of
+    /// BOTH endpoints, pairs scanned in the caller's order, so the caller
+    /// must offer candidates in a canonical one (distance-sorted). The
+    /// shader walks exactly these lists, and a one-sided link is a seam it
+    /// cannot cross; each list is sorted ascending.
+    std::vector<std::vector<U32>> symmetricGraph(U32 count, const std::function<bool(U32, U32)>& linked, U32 max_degree);
 }
 
 #endif // SK_NAVPROBES_H
