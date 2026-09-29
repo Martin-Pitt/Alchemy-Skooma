@@ -247,6 +247,9 @@ namespace sknav
     };
     typedef std::shared_ptr<const RoomsProduct> RoomsProductPtr;
 
+    constexpr F32 STAIR_PAIR_REACH_M = 14.f;    ///< staircase ends this far apart in plan can belong to one flight
+    constexpr F32 STAIR_MAX_WIDTH_M = 12.f;     ///< a stair portal wider than this is a deck edge, not an entrance
+
     /// One drawn connection inside a flight: from its foot portal to an exit,
     /// both by index into the product's portals.
     struct StairLink
@@ -255,11 +258,17 @@ namespace sknav
         U32 mTo;
     };
 
-    /// A flight's stair portals as connections: the lowest sill is the foot,
-    /// every other stair portal an exit of it (a spiral has several). A
-    /// flight with a single stair portal makes no link, and neither does
-    /// anything but a stair portal.
-    std::vector<StairLink> stairLinks(const RoomsProduct& product);
+    /// Pair stair portals into a flight's connections: taking the portals by
+    /// ascending sill, each joins the nearest still-unpaired end within
+    /// reach's plan distance, so a staircase's opposing ends meet and a
+    /// multi-storey well's foot serves each of its exits. Ends with nothing
+    /// in reach stay single.
+    std::vector<StairLink> stairPairs(const std::vector<Portal>& portals, const std::vector<U32>& indices, F32 reach);
+
+    /// A flight's stair portals as connections, paired by stairPairs over
+    /// each flight space's own portals. A flight with a single stair portal
+    /// makes no link, and neither does anything but a stair portal.
+    std::vector<StairLink> stairLinks(const RoomsProduct& product, F32 reach = STAIR_PAIR_REACH_M);
 
     struct RoomsInput
     {

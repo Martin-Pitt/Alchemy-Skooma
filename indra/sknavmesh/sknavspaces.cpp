@@ -2546,12 +2546,14 @@ namespace sknav
 
     bool SpacesPass::State::demoteFlatFlights(F32 min_rise)
     {
-        // A staircase spans its portals: every stair portal of one flight
-        // region together has to climb min_rise from its foot to its top
-        // exit. A flight whose portals all sit within that is a deck edge or
-        // a rail the agent steps over anyway - its seeds lose the flag and
-        // the rounds run again, so the floors it touched join instead of
-        // staying split around it.
+        // A staircase pairs its ends. Within one flight region the stair
+        // portals join by stairPairs - each exit to the nearest end within
+        // reach in plan - and a pair has to climb min_rise, so a real
+        // staircase's foot meets its own exit and a multi-storey well's foot
+        // serves each of its exits. What finds no end in reach, or pairs
+        // across level ground, is a deck edge or a rail; so is an entrance
+        // wider than any staircase. Those portals drop, and the rounds run
+        // again so the floors the dropped cuts split join instead.
         std::unordered_set<U32> flying;
         for (U32 s = 0; s < mSeeds.size(); ++s)
         {
@@ -2560,7 +2562,77 @@ namespace sknav
                 flying.insert(mRegions.find(s));
             }
         }
-        std::unordered_map<U32, std::pair<F32, F32>> span;
+        std::vector<bool> keep(mPortals.size(), true);
+        std::unordered_map<U32, std::vector<U32>> ends;
+        for (U32 i = 0; i < mPortals.size(); ++i)
+        {
+            const Portal& q = mPortals[i];
+            if (q.mKind != PortalKind::STAIR)
+            {
+                continue;
+            }
+            bool flies = false;
+            for (const U32 r : q.mSpaces)
+            {
+                if (flying.count(r))
+                {
+                    ends[r].push_back(i);
+                    flies = true;
+                }
+            }
+            if (flies)
+            {
+                keep[i] = false;    // a flight's own ends survive only by pairing
+            }
+        }
+        bool changed = false;
+        for (const auto& [r, idx] : ends)
+        {
+            std::vector<U32> narrow;
+            for (const U32 i : idx)
+            {
+                if (mPortals[i].mWidth <= STAIR_MAX_WIDTH_M)
+                {
+                    narrow.push_back(i);
+                }
+            }
+            const std::vector<StairLink> pairs = stairPairs(mPortals, narrow, STAIR_PAIR_REACH_M);
+            for (const StairLink& l : pairs)
+            {
+                if (mPortals[l.mTo].mSill - mPortals[l.mFrom].mSill >= min_rise)
+                {
+                    keep[l.mFrom] = true;
+                    keep[l.mTo] = true;
+                }
+            }
+        }
+        for (size_t i = 0; i < mPortals.size(); ++i)
+        {
+            if (!keep[i])
+            {
+                changed = true;
+            }
+        }
+        if (changed)
+        {
+            std::vector<Portal> portals;
+            std::vector<S32> doors;
+            portals.reserve(mPortals.size());
+            doors.reserve(mPortalDoor.size());
+            for (size_t i = 0; i < mPortals.size(); ++i)
+            {
+                if (keep[i])
+                {
+                    portals.push_back(mPortals[i]);
+                    doors.push_back(mPortalDoor[i]);
+                }
+            }
+            mPortals.swap(portals);
+            mPortalDoor.swap(doors);
+        }
+        // What a region kept nothing of was no flight at all: its seeds lose
+        // the flag, and the next round joins the floors it touched.
+        std::unordered_set<U32> kept_regions;
         for (const Portal& q : mPortals)
         {
             if (q.mKind != PortalKind::STAIR)
@@ -2569,22 +2641,15 @@ namespace sknav
             }
             for (const U32 r : q.mSpaces)
             {
-                if (!flying.count(r))
+                if (flying.count(r))
                 {
-                    continue;
+                    kept_regions.insert(r);
                 }
-                const auto ins = span.try_emplace(r, q.mSill, q.mSill);
-                ins.first->second.first = std::min(ins.first->second.first, q.mSill);
-                ins.first->second.second = std::max(ins.first->second.second, q.mSill);
             }
         }
-        bool demoted = false;
         for (const U32 r : flying)
         {
-            const auto hit = span.find(r);
-            // No stair portal at all is the island the linked check strips;
-            // here a flight demotes only when its portals sit at one level.
-            if (hit == span.end() || hit->second.second - hit->second.first >= min_rise)
+            if (kept_regions.count(r))
             {
                 continue;
             }
@@ -2593,11 +2658,11 @@ namespace sknav
                 if (mSeeds[s].mFlight && mRegions.find(s) == r)
                 {
                     mSeeds[s].mFlight = false;
-                    demoted = true;
+                    changed = true;
                 }
             }
         }
-        return demoted;
+        return changed;
     }
 
     void SpacesPass::State::merge()
@@ -2840,11 +2905,13 @@ namespace sknav
             }
             if (!merged)
             {
-                // The rounds settled. A staircase spans its portals: a flight
-                // whose stair portals all sit within half a metre is a deck
-                // edge or a rail, not a staircase - strip its seeds' flags
-                // and run the rounds again, so the floors it touched join
-                // instead of staying split around it.
+                // The rounds settled. A staircase pairs its ends within
+                // reach and climbs between them: what pairs with nothing,
+                // pairs across level ground, or opens wider than any
+                // staircase is a deck edge or a rail - its portals drop, its
+                // seeds lose the flag if nothing real is left, and the
+                // rounds run again so the floors the dropped cuts split
+                // join instead of staying split around them.
                 if (!demoteFlatFlights(params().mStairMinRiseM))
                 {
                     break;
@@ -4032,7 +4099,47 @@ namespace sknav
         return pass.product();
     }
 
-    std::vector<StairLink> stairLinks(const RoomsProduct& product)
+    std::vector<StairLink> stairPairs(const std::vector<Portal>& portals, const std::vector<U32>& indices, F32 reach)
+    {
+        // By ascending sill, each end joins the nearest still-unpaired end
+        // within reach in plan. A foot stays available for further exits: a
+        // multi-storey well's foot serves each of them. An end nothing in
+        // reach wanted stays single.
+        std::vector<U32> order(indices);
+        std::sort(order.begin(), order.end(), [&portals](U32 a, U32 b) { return portals[a].mSill < portals[b].mSill; });
+        std::vector<U32> waiting;
+        std::vector<StairLink> pairs;
+        for (const U32 pi : order)
+        {
+            const Portal& p = portals[pi];
+            U32 best = 0;
+            F32 best_d2 = reach * reach;
+            bool found = false;
+            for (const U32 q : waiting)
+            {
+                const F32 dx = p.mCentre.mV[VX] - portals[q].mCentre.mV[VX];
+                const F32 dy = p.mCentre.mV[VY] - portals[q].mCentre.mV[VY];
+                const F32 d2 = dx * dx + dy * dy;
+                if (d2 <= best_d2)
+                {
+                    best_d2 = d2;
+                    best = q;
+                    found = true;
+                }
+            }
+            if (found)
+            {
+                pairs.push_back({ best, pi });
+            }
+            else
+            {
+                waiting.push_back(pi);
+            }
+        }
+        return pairs;
+    }
+
+    std::vector<StairLink> stairLinks(const RoomsProduct& product, F32 reach)
     {
         std::vector<StairLink> links;
         for (const Space& sp : product.mSpaces)
@@ -4053,20 +4160,9 @@ namespace sknav
             {
                 continue;
             }
-            U32 foot = stairs[0];
-            for (const U32 pi : stairs)
+            for (const StairLink& l : stairPairs(product.mPortals, stairs, reach))
             {
-                if (product.mPortals[pi].mSill < product.mPortals[foot].mSill)
-                {
-                    foot = pi;
-                }
-            }
-            for (const U32 pi : stairs)
-            {
-                if (pi != foot)
-                {
-                    links.push_back({ foot, pi });
-                }
+                links.push_back(l);
             }
         }
         return links;

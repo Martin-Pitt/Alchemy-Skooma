@@ -1159,11 +1159,23 @@ namespace tut
             ensure("and climbs", product.mPortals[l.mTo].mSill > product.mPortals[l.mFrom].mSill);
         }
 
+        // Ends further apart in plan than a staircase's reach stay single:
+        // a far cut is no end of this flight.
+        Portal away = exit_a;
+        away.mCentre.set(30.f, 0.f, 0.f);
+        product.mPortals = { foot, away };
+        product.mSpaces[0].mPortals = { 0, 1 };
+        ensure("nothing out of reach pairs", stairLinks(product).empty());
+
         // A space that lost its flight flag keeps no links: its portals belong
         // to no staircase.
         product.mSpaces[0].mFlight = false;
         ensure("no links without the flight flag", stairLinks(product).empty());
+    }
 
+    template<> template<>
+    void sknavrooms_object::test<33>()
+    {
         set_test_name("an L of cells traces the six runs of its outline");
         const std::vector<PlanCell> cells = { { 0.f, 0.f, 3.f }, { 1.f, 0.f, 3.f }, { 2.f, 0.f, 3.f }, { 0.f, 1.f, 3.f },
                                               { 0.f, 0.f, 5.f } };   // a repeated column keeps its lowest floor
