@@ -219,6 +219,9 @@ public:
     bool            getFocusOnAvatar() const        { return mFocusOnAvatar; }
     LLPointer<LLViewerObject>&  getFocusObject()    { return mFocusObject; }
     F32             getFocusObjectDist() const      { return mFocusObjectDist; }
+    // <SK:Nexii> motion recorder
+    const LLVector3& getFocusObjectOffset() const   { return mFocusObjectOffset; }
+    // </SK:Nexii>
     void            updateFocusOffset();
     void            validateFocusObject();
     void            setFocusGlobal(const LLPickInfo& pick);

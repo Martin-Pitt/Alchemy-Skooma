@@ -965,6 +965,9 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.cpp
+    # </SK:Nexii>
   )
 
   set(
@@ -1802,6 +1805,9 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    # <SK:Nexii> motion recorder
+    skmotionrecorder.h
+    # </SK:Nexii>
   )
 
   # The version as one line, for the hosted build's metadata.

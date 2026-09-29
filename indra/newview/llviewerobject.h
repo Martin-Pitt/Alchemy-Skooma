@@ -688,6 +688,7 @@ public:
 
     friend class LLViewerObjectList;
     friend class LLViewerMediaList;
+    friend class SKMotionRecorder; // <SK:Nexii> motion recorder
 
 public:
     LLViewerTexture* getBakedTextureForMagicId(const LLUUID& id);
