@@ -27,6 +27,10 @@
 #include "alscriptstudiocaret.h"
 
 #include "alcodeeditor.h"
+#include "alscriptlookup.h"
+#include "alscriptnavigation.h"
+#include "alscriptstudioanalysis.h"
+#include "alscriptstudiochecking.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudioservices.h"
 #include "llstl.h"
@@ -40,14 +44,14 @@ using ALScriptPlaces::mapSpan;
 using ALScriptPlaces::placeText;
 using ALScriptPlaces::rangeOf;
 
-ALScriptStudioCaret::ALScriptStudioCaret(ALScriptStudioServices& services, Window& window) : mServices(services), mWindow(window) {}
+ALScriptStudioCaret::ALScriptStudioCaret(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptLookup& lookup, Window& window) : mServices(services), mAnalysis(analysis), mNavigation(navigation), mLookup(lookup), mWindow(window) {}
 
 void ALScriptStudioCaret::ask(Doc& doc, ALEditorCommand command, const ALTextRange& word)
 {
-    doc.caret.symbolCommand = command;
-    doc.caret.symbolVersion = doc.editor->document().version();
-    doc.caret.symbolAt      = word.begin;
-    mWindow.askAnalyzer(doc, ALScriptAnalysis::Kind::References, word.begin);
+    doc.caret->symbolCommand = command;
+    doc.caret->symbolVersion = doc.editor->document().version();
+    doc.caret->symbolAt      = word.begin;
+    mAnalysis.askAnalyzer(doc, ALScriptAnalysis::Kind::References, word.begin);
 }
 
 void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at)
@@ -55,15 +59,15 @@ void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& res
     // Of another question, or of a text that has moved on. Where it was
     // asked is the source's place, which the result's own is not where
     // the preprocessor ran and an include moved the lines.
-    if (result.version != doc.caret.symbolVersion || at != doc.caret.symbolAt || doc.caret.symbolCommand == ALEditorCommand::None)
+    if (result.version != doc.caret->symbolVersion || at != doc.caret->symbolAt || doc.caret->symbolCommand == ALEditorCommand::None)
     {
         return;
     }
-    const ALEditorCommand     command = doc.caret.symbolCommand;
+    const ALEditorCommand     command = doc.caret->symbolCommand;
     const ALScriptReferences& refs    = result.references;
-    doc.caret.symbolCommand           = ALEditorCommand::None;
+    doc.caret->symbolCommand          = ALEditorCommand::None;
     LLStringUtil::format_map_t args;
-    const std::string          name = refs.found ? refs.name : doc.editor->document().text(doc.editor->identifierAt(doc.caret.symbolAt));
+    const std::string          name = refs.found ? refs.name : doc.editor->document().text(doc.editor->identifierAt(doc.caret->symbolAt));
     args["[NAME]"]                  = name;
     // A word of the language has no definition in the script to go to --
     // where the script has not made one of its own: its reference is where
@@ -84,7 +88,7 @@ void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& res
     }
     // Back to the source: the declaration and each place in this script
     // or in an include, which keeps the include's identity.
-    const bool         mapped        = mWindow.preprocessed(doc) && doc.expanded.valid && doc.expanded.version == result.version;
+    const bool         mapped        = mAnalysis.preprocessed(doc) && doc.expanded.valid && doc.expanded.version == result.version;
     const ALSourceMap* map           = mapped ? &doc.expanded.map : nullptr;
     bool               hasDefinition = refs.hasDefinition;
     ALScriptSpan       definition    = refs.definition;
@@ -133,7 +137,7 @@ void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& res
         auto lines = place.file.empty() ? files.end() : files.find(place.file);
         if (!place.file.empty() && lines == files.end())
         {
-            lines = files.emplace(place.file, mWindow.sourceLines(place.file)).first;
+            lines = files.emplace(place.file, mAnalysis.sourceLines(place.file)).first;
         }
         if (place.file.empty())
         {
@@ -162,7 +166,7 @@ void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& res
                 mServices.setStatus(mServices.words("NoDefinition", args));
                 break;
             }
-            mWindow.noteJump();
+            mNavigation.noteJump();
             if (homePath.empty())
             {
                 mWindow.goTo(doc, rangeOf(definition));
@@ -174,7 +178,7 @@ void ALScriptStudioCaret::answered(Doc& doc, const ALScriptAnalysis::Result& res
             break;
         case ALEditorCommand::FindReferences:
         case ALEditorCommand::Rename:
-            mWindow.startLookup(doc, command, refs, hasDefinition, homePath, definition, std::move(places), result.version);
+            mLookup.start(doc, command, refs, hasDefinition, homePath, definition, std::move(places), result.version);
             break;
         default:
             break;
@@ -188,9 +192,9 @@ void ALScriptStudioCaret::placePath(Doc& doc)
     {
         path = ALScriptPlaces::pathAt(doc.outline, doc.editor->caret());
     }
-    const bool changed  = path != doc.caret.crumbPath || doc.caret.crumbsOf != doc.check.analysisVersion;
-    doc.caret.crumbPath = std::move(path);
-    doc.caret.crumbsOf  = doc.check.analysisVersion;
+    const bool changed   = path != doc.caret->crumbPath || doc.caret->crumbsOf != doc.check->analysisVersion;
+    doc.caret->crumbPath = std::move(path);
+    doc.caret->crumbsOf  = doc.check->analysisVersion;
     mWindow.showPath(doc, changed);
 }
 
@@ -209,12 +213,12 @@ void ALScriptStudioCaret::pump(F64 now)
     const ALTextPos     caret  = shown.caret();
     if (shown.hasFocus())
     {
-        mWindow.keyboardInText();
+        mNavigation.walked();
     }
-    if (caret != doc->caret.seen)
+    if (caret != doc->caret->seen)
     {
-        doc->caret.seen       = caret;
-        doc->caret.inspectDue = source ? now + SETTLE : 0.0;
+        doc->caret->seen       = caret;
+        doc->caret->inspectDue = source ? now + SETTLE : 0.0;
         placePath(*doc);
         // A search's lit places, and a name's, each go once the caret has
         // left them all; vim's visual block and the places a substitution
@@ -229,9 +233,9 @@ void ALScriptStudioCaret::pump(F64 now)
     }
     // Settled, and the inspector out to say it: a whole-text question at
     // every settle is the analyzers' time nobody reads with it folded.
-    if (source && doc->caret.inspectDue > 0.0 && now >= doc->caret.inspectDue && mWindow.inspectorShown())
+    if (source && doc->caret->inspectDue > 0.0 && now >= doc->caret->inspectDue && mWindow.inspectorShown())
     {
-        doc->caret.inspectDue = 0.0;
+        doc->caret->inspectDue = 0.0;
         const ALTextRange word    = doc->editor->identifierAtCaret();
         const U32         version = doc->editor->document().version();
         if (word.empty())
@@ -241,14 +245,22 @@ void ALScriptStudioCaret::pump(F64 now)
             // blanking at every space and bracket the caret passes.
             if (mWindow.showProblemsAt(*doc, caret))
             {
-                doc->caret.inspectAt = ALTextPos(-1, -1);
+                doc->caret->inspectAt = ALTextPos(-1, -1);
             }
         }
-        else if (word.begin != doc->caret.inspectAt || version != doc->caret.inspectVersion)
+        else if (word.begin != doc->caret->inspectAt || version != doc->caret->inspectVersion)
         {
-            doc->caret.inspectAt      = word.begin;
-            doc->caret.inspectVersion = version;
-            mWindow.askAnalyzer(*doc, ALScriptAnalysis::Kind::Inspect, word.begin);
+            doc->caret->inspectAt      = word.begin;
+            doc->caret->inspectVersion = version;
+            mAnalysis.askAnalyzer(*doc, ALScriptAnalysis::Kind::Inspect, word.begin);
         }
     }
+}
+
+void ALScriptStudioCaret::inspect(Doc& doc, const ALTextPos& at)
+{
+    doc.caret->inspectAt      = at;
+    doc.caret->inspectVersion = doc.editor->document().version();
+    doc.caret->inspectDue     = 0.0;
+    mAnalysis.askAnalyzer(doc, ALScriptAnalysis::Kind::Inspect, at);
 }

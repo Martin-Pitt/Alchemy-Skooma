@@ -71,6 +71,10 @@ public:
         Optional<S32>           min_tab_width;
         Optional<S32>           max_tab_width;
         Optional<S32>           gap;
+        // Whether the strip sits on what its tabs show, the shown tab
+        // opening into it: drawn without its bottom edge, as a folder's tab
+        // is part of the folder.
+        Optional<bool>          attached;
         Params();
     };
 
@@ -205,6 +209,7 @@ public:
 private:
     // Every tab's width, decided together.
     void layout();
+    void layoutWidths();
     // The tabs' whole width, and the room they are shown in.
     S32  contentWidth() const;
     S32  shownWidth() const;
@@ -228,6 +233,11 @@ private:
 
     std::vector<Tab>    mTabs;
     std::vector<S32>    mWidths;
+    // Where each tab starts, from the first's left, and how wide they are
+    // all told: summed once as they are laid out, rather than from the
+    // left for each tab as it is drawn.
+    std::vector<S32>    mLefts;
+    S32                 mContentWidth = 0;
     // Each tab's name as last drawn: cut for a room, kept while the room,
     // the face -- italic for a preview, regular once held -- and the
     // name are the same, since the cutting measures the words.
@@ -246,6 +256,7 @@ private:
     S32                 mMinTabWidth;
     S32                 mMaxTabWidth;
     S32                 mGap;
+    bool                mAttached = false;
     tab_signal_t        mChosenSignal;
     tab_signal_t        mClosedSignal;
     tab_signal_t        mHeldSignal;
