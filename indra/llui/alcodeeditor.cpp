@@ -74,7 +74,12 @@ namespace
 namespace
 {
     const S32 GUTTER_PAD  = 6;
-    const S32 MARK_SIZE   = 6;
+    const S32 MARK_SIZE   = 10;
+    // A warning's underline: dashes; a note's: dots.
+    const S32 UNDERLINE_DASH     = 4;
+    const S32 UNDERLINE_DASH_GAP = 2;
+    const S32 UNDERLINE_DOT      = 2;
+    const S32 UNDERLINE_DOT_GAP  = 2;
     const S32 MARK_INSET  = 3;
     const S32 FOLD_COLUMN = 12;
     const S32 FOLD_MARKER = 7;
@@ -209,49 +214,6 @@ ALCodeEditor::ALCodeEditor(const Params& p)
             clearHighlights(Highlight::Occurrences);
         }
     });
-
-    // The list of completions, made once and shown when there is
-    // something to choose; a child, so it draws over the text and goes
-    // where the view goes. On the text engine, as the hover card is: the
-    // completions in the editor's face and the colours of their kinds,
-    // their details in the reading face after them.
-    ALChoiceList::Params list(LLUICtrlFactory::getDefaultParams<ALChoiceList>());
-    list.name("completions");
-    list.rect(LLRect(0, 10, 10, 0));
-    list.visible(false);
-    list.follows.flags(FOLLOWS_NONE);
-    list.mouse_opaque(true);
-    list.font(getFont());
-    list.bg_visible(true);
-    list.bg_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
-    list.bg_readonly_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
-    list.text_readonly_color(textColor());
-    list.context_menu(std::string());
-    list.h_pad(4);
-    list.v_pad(2);
-    mCompletionList = LLUICtrlFactory::create<ALChoiceList>(list);
-    mCompletionList->onPicked([this](S32) { acceptCompletion(); });
-    mCompletionList->onChosen([this](S32) {
-        if (completionOpen())
-        {
-            showCompletionDoc();
-        }
-    });
-    addChild(mCompletionList);
-
-    // The fixes offered at a problem, on a list of their own made the same
-    // way: a fix is not a completion, and the one list open at a time
-    // keeps its own keys.
-    list.name("fixes");
-    mFixList = LLUICtrlFactory::create<ALChoiceList>(list);
-    mFixList->onPicked([this](S32 index) { takeFix(index); });
-    mFixList->onChosen([this](S32) {
-        if (fixesOpen())
-        {
-            showFixPreview();
-        }
-    });
-    addChild(mFixList);
 }
 
 ALCodeEditor::~ALCodeEditor()
@@ -288,7 +250,7 @@ void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
     hideCard();
     // Numbers and tints were for the text they were given with.
     mLineNumbers.clear();
-    mLineTints.clear();
+    setLineTints({});
     // Each run of lines an edit replaced -- one, or a batch's several.
     const std::vector<ALTextDocument::Edit::LineSpan>& spans = edit.lineSpans();
     const S32                                         lines = document().lineCount();
@@ -518,6 +480,16 @@ void ALCodeEditor::setHighlights(Highlight layer, std::vector<ALTextRange> range
         range = range.normalised();
     }
     mHighlights[static_cast<size_t>(layer)].assign(std::move(ranges));
+}
+
+void ALCodeEditor::clearHighlightsBefore(Highlight layer, const ALTextPos& pos)
+{
+    auto&      lit  = mHighlights[static_cast<size_t>(layer)];
+    const auto past = std::lower_bound(lit.begin(), lit.end(), pos, [](const ALTextRange& range, const ALTextPos& p) { return range.begin < p; });
+    for (auto it = past; it != lit.begin();)
+    {
+        it = lit.erase(--it);
+    }
 }
 
 void ALCodeEditor::clearHighlights()
@@ -841,20 +813,53 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
     // runs: a line down the column from its first row to its last.
     const FoldRegion* shown = mShowFoldMarkers && mGutterHover && mGutterHoverLine >= 0 ? regionStartingAt(mGutterHoverLine) : nullptr;
     S32               guide_top = 0, guide_bottom = 0;
+    // The numbers are placed as they come and drawn together after the
+    // rest, one call for all of them rather than one for each.
+    mNumberGlyphs.clear();
+    mNumberColours.clear();
+    mNumberRuns.clear();
+    const auto number = [&](S32 value, F32 right, F32 baseline, const LLColor4& colour) {
+        char       digits[16];
+        const S32  length = snprintf(digits, sizeof(digits), "%d", value);
+        const F32  shift  = font->placeGlyphs(std::string_view(digits, static_cast<size_t>(llmax(0, length))), LLFontGL::RIGHT, mNumberScratch);
+        const auto ink    = LLColor4U(colour);
+        mNumberRuns.push_back(LLFontGL::GlyphRun{ nullptr, nullptr, mNumberScratch.size(), right + shift, baseline });
+        mNumberGlyphs.insert(mNumberGlyphs.end(), mNumberScratch.begin(), mNumberScratch.end());
+        mNumberColours.insert(mNumberColours.end(), mNumberScratch.size(), ink);
+    };
+    const auto draw_numbers = [&]() {
+        size_t at = 0;
+        for (LLFontGL::GlyphRun& run : mNumberRuns)
+        {
+            run.glyphs = mNumberGlyphs.data() + at;
+            run.colors = mNumberColours.data() + at;
+            at += run.count;
+        }
+        font->renderGlyphRuns(mNumberRuns.data(), mNumberRuns.size());
+        mNumberRuns.clear();
+        mNumberGlyphs.clear();
+        mNumberColours.clear();
+    };
+    // Down every row of a line: the bar of a line changed, and the heat of
+    // one that made something, at least faintly and the warmest in the
+    // heat's own colour; all in one batch.
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
     forEachVisibleRow(text, [&](S32 line, S32 row, S32 screen_top) {
         if (lineChanged(line))
         {
-            gl_rect_2d(gutter.mLeft, screen_top, gutter.mLeft + 2, screen_top - row_h, changed);
+            gl_rect_2d_in_batch(gutter.mLeft, screen_top, gutter.mLeft + 2, screen_top - row_h, changed);
         }
-        // Down every row of the line, a line that made something at least
-        // faintly and the warmest in the heat's own colour.
         if (mHeatShown)
         {
             if (const F32 heat = heatAt(line); heat > 0.f)
             {
-                gl_rect_2d(fold_right + 1, screen_top, gutter.mRight - 1, screen_top - row_h, warm % (alpha * (0.15f + 0.85f * llclamp(heat, 0.f, 1.f))));
+                gl_rect_2d_in_batch(fold_right + 1, screen_top, gutter.mRight - 1, screen_top - row_h, warm % (alpha * (0.15f + 0.85f * llclamp(heat, 0.f, 1.f))));
             }
         }
+    });
+    gGL.end();
+    forEachVisibleRow(text, [&](S32 line, S32 row, S32 screen_top) {
         if (shown && line >= shown->start && line <= shown->end)
         {
             guide_top    = guide_top == 0 ? screen_top : guide_top;
@@ -873,8 +878,7 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
                                                                            : line + 1 + mLineNumberBase;
             if (shown > 0)
             {
-                font->renderUTF8(std::to_string(shown), 0, static_cast<F32>(numbers_right), static_cast<F32>(screen_top - ascent),
-                                 line == caret_line ? lit : ink, LLFontGL::RIGHT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+                number(shown, static_cast<F32>(numbers_right), static_cast<F32>(screen_top - ascent), line == caret_line ? lit : ink);
             }
             const Mark mark = markAt(line);
             if (line == caret_line && fixableAt(line) && !isReadOnly())
@@ -897,17 +901,26 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
             }
             else if (mark != Mark::None)
             {
-                const S32 y = screen_top - (row_h - MARK_SIZE) / 2;
-                if (changesAt(line) && !isReadOnly())
+                // Its severity's own shape, as the Problems list has it --
+                // a cross in a ring for an error, run-time or found, a
+                // triangle for a warning, a ring with a stroke for a note
+                // -- so that the marks tell apart without their colours;
+                // and a dot at its corner where a fix would put it right,
+                // the lightbulb's promise away from the caret.
+                const S32    y = screen_top - (row_h - MARK_SIZE) / 2;
+                const LLRect box(gutter.mLeft + MARK_INSET, y, gutter.mLeft + MARK_INSET + MARK_SIZE, y - MARK_SIZE);
+                if (const LLUIImagePtr icon = markIcon(mark); icon.notNull())
                 {
-                    // Round where a fix would put it right.
-                    gGL.color4fv((markColor(mark) % alpha).mV);
-                    gl_circle_2d(static_cast<F32>(gutter.mLeft + MARK_INSET) + MARK_SIZE / 2.f, static_cast<F32>(y) - MARK_SIZE / 2.f,
-                                 MARK_SIZE / 2.f + 0.5f, 12, true);
+                    icon->draw(box, markColor(mark) % alpha);
                 }
                 else
                 {
-                    gl_rect_2d(gutter.mLeft + MARK_INSET, y, gutter.mLeft + MARK_INSET + MARK_SIZE, y - MARK_SIZE, markColor(mark) % alpha);
+                    gl_rect_2d(box, markColor(mark) % alpha);
+                }
+                if (changesAt(line) && !isReadOnly())
+                {
+                    gGL.color4fv(lit.mV);
+                    gl_circle_2d(static_cast<F32>(box.mRight), static_cast<F32>(box.mBottom) + 1.f, 2.f, 8, true);
                 }
             }
         }
@@ -934,6 +947,7 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
         const S32 cx = fold_right - FOLD_COLUMN / 2;
         gl_rect_2d(cx, guide_top - row_h + FOLD_MARKER / 2, cx + 1, guide_bottom, fold);
     }
+    draw_numbers();
     // The headers pinned over the text have their numbers pinned over
     // the gutter, on the same band.
     const std::vector<S32> pinned = stickyLines(true);
@@ -947,9 +961,9 @@ void ALCodeEditor::drawGutter(const LLRect& text, F32 alpha)
         {
             const S32 line  = pinned[static_cast<size_t>(i)];
             const S32 shown_number = mRelativeLineNumbers && line != caret_line ? std::abs(line - caret_line) : line + 1 + mLineNumberBase;
-            font->renderUTF8(std::to_string(shown_number), 0, static_cast<F32>(numbers_right), static_cast<F32>(text.mTop - i * row_h - ascent), ink,
-                             LLFontGL::RIGHT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+            number(shown_number, static_cast<F32>(numbers_right), static_cast<F32>(text.mTop - i * row_h - ascent), ink);
         }
+        draw_numbers();
     }
 }
 
@@ -1425,17 +1439,6 @@ void ALCodeEditor::drawBeforeRows(const LLRect& text)
         mBrackets.matched = false;
         mBrackets.caret   = ALTextPos(-1, -1);
     }
-    // A tint behind each line that has one, under everything else.
-    if (!mLineTints.empty())
-    {
-        const S32 row_h = layout().rowHeight();
-        forEachVisibleRow(text, [&](S32 line, S32, S32 screen_top) {
-            if (line < static_cast<S32>(mLineTints.size()) && mLineTints[static_cast<size_t>(line)].mV[VALPHA] > 0.f)
-            {
-                gl_rect_2d(text.mLeft, screen_top, text.mRight, screen_top - row_h, mLineTints[static_cast<size_t>(line)] % alpha);
-            }
-        });
-    }
     if (mHighlightCurrentLine && keyboardOnText() && !hasSelection())
     {
         S32 row;
@@ -1505,9 +1508,16 @@ S32 ALCodeEditor::indentOf(S32 line)
 std::vector<ALCodeEditor::Blank> ALCodeEditor::blanksOn(S32 line, S32 within_from, S32 within_to) const
 {
     std::vector<Blank> out;
+    blanksOn(line, within_from, within_to, out);
+    return out;
+}
+
+void ALCodeEditor::blanksOn(S32 line, S32 within_from, S32 within_to, std::vector<Blank>& out) const
+{
+    out.clear();
     if (mShowWhitespace == Whitespace::None || line < 0 || line >= document().lineCount())
     {
-        return out;
+        return;
     }
     const std::string& source = document().line(line);
     const S32          length = static_cast<S32>(source.size());
@@ -1523,7 +1533,7 @@ std::vector<ALCodeEditor::Blank> ALCodeEditor::blanksOn(S32 line, S32 within_fro
         const ALTextRange sel = selection().normalised();
         if (sel.empty() || line < sel.begin.line || line > sel.end.line)
         {
-            return out;
+            return;
         }
         from = llmax(from, sel.begin.line == line ? sel.begin.column : 0);
         to   = llmin(to, sel.end.line == line ? sel.end.column : length);
@@ -1552,7 +1562,7 @@ std::vector<ALCodeEditor::Blank> ALCodeEditor::blanksOn(S32 line, S32 within_fro
         }
         if (tail >= length)
         {
-            return out;
+            return;
         }
         from = llmax(from, tail);
     }
@@ -1579,7 +1589,6 @@ std::vector<ALCodeEditor::Blank> ALCodeEditor::blanksOn(S32 line, S32 within_fro
             ++i;
         }
     }
-    return out;
 }
 
 void ALCodeEditor::drawWhitespace(S32 line, S32 r, const LLRect& text, S32 screen_top, F32 left, F32 alpha)
@@ -1596,8 +1605,9 @@ void ALCodeEditor::drawWhitespace(S32 line, S32 r, const LLRect& text, S32 scree
     // Only what this row covers, and of that what is in sight: a line
     // wrapped into many rows, or scrolled across, would otherwise be
     // walked whole for each.
-    const ALTextLayout::Row row    = rowInSight(laid, laid.rows[static_cast<size_t>(r)], text);
-    std::vector<Blank>      blanks = blanksOn(line, row.begin, row.end);
+    const ALTextLayout::Row   row    = rowInSight(laid, laid.rows[static_cast<size_t>(r)], text);
+    std::vector<Blank>&       blanks = mBlankScratch;
+    blanksOn(line, row.begin, row.end, blanks);
     if (blanks.empty())
     {
         return;
@@ -1787,9 +1797,34 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
         {
             gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, d.color % alpha);
         }
+        else if (d.style == Decoration::Style::Squiggle)
+        {
+            squiggle(left + x0, left + x1, screen_top - row_h + 2, d.color % alpha, text);
+        }
         else
         {
-            drawSquiggle(left + x0, left + x1, screen_top - row_h + 2, d.color % alpha, text);
+            // Dashes or dots two pixels high, counted from where the range
+            // begins so that they do not crawl as it scrolls sideways;
+            // as much of them as is in sight.
+            const bool dashed = d.style == Decoration::Style::Dashed;
+            const S32  on     = dashed ? UNDERLINE_DASH : UNDERLINE_DOT;
+            const S32  period = on + (dashed ? UNDERLINE_DASH_GAP : UNDERLINE_DOT_GAP);
+            const S32  from   = static_cast<S32>(left + x0);
+            const S32  to     = static_cast<S32>(left + x1);
+            const S32  y      = screen_top - row_h + 2;
+            const LLColor4 ink = d.color % alpha;
+            gGL.getTextureSlot(0)->unbind();
+            gGL.begin(LLRender::TRIANGLES);
+            for (S32 x = from; x < to; x += period)
+            {
+                const S32 a = llmax(x, text.mLeft);
+                const S32 b = llmin(llmin(x + on, to), text.mRight);
+                if (a < b)
+                {
+                    gl_rect_2d_in_batch(a, y + 1, b, y - 1, ink);
+                }
+            }
+            gGL.end();
         }
     }
     if (mBrackets.matched && (line == mBrackets.open.line || line == mBrackets.close.line))
@@ -2246,6 +2281,49 @@ bool ALCodeEditor::completionOpen() const
     return mCompletionList && mCompletionList->getVisible();
 }
 
+ALChoiceList* ALCodeEditor::makeChoiceList(const std::string& name)
+{
+    // A child, so it draws over the text and goes where the view goes. On
+    // the text engine, as the hover card is: the choices in the editor's
+    // face and the colours of their kinds, their details in the reading
+    // face after them.
+    ALChoiceList::Params list(LLUICtrlFactory::getDefaultParams<ALChoiceList>());
+    list.name(name);
+    list.rect(LLRect(0, 10, 10, 0));
+    list.visible(false);
+    list.follows.flags(FOLLOWS_NONE);
+    list.mouse_opaque(true);
+    list.font(getFont());
+    list.bg_visible(true);
+    list.bg_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
+    list.bg_readonly_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
+    list.text_readonly_color(textColor());
+    list.context_menu(std::string());
+    list.h_pad(4);
+    list.v_pad(2);
+    ALChoiceList* made = LLUICtrlFactory::create<ALChoiceList>(list);
+    addChild(made);
+    return made;
+}
+
+ALChoiceList& ALCodeEditor::completionList()
+{
+    // Made the first time there is something to choose: most editors --
+    // a tab not looked at, a read-only view -- never show one.
+    if (!mCompletionList)
+    {
+        mCompletionList = makeChoiceList("completions");
+        mCompletionList->onPicked([this](S32) { acceptCompletion(); });
+        mCompletionList->onChosen([this](S32) {
+            if (completionOpen())
+            {
+                showCompletionDoc();
+            }
+        });
+    }
+    return *mCompletionList;
+}
+
 void ALCodeEditor::hideCompletionList()
 {
     if (mCompletionList)
@@ -2357,25 +2435,35 @@ void ALCodeEditor::refreshCompletion()
     listCompletions(again);
 }
 
-// static
+LLUIImagePtr ALCodeEditor::markIcon(Mark mark)
+{
+    const char* name = mark == Mark::Error || mark == Mark::Runtime ? "Problem_Error" : mark == Mark::Warning ? "Problem_Warning" : "Problem_Note";
+    auto        found = mIcons.find(std::string_view(name));
+    if (found == mIcons.end())
+    {
+        found = mIcons.emplace(std::string(name), LLUI::getUIImage(name)).first;
+    }
+    return found->second;
+}
+
 LLUIImagePtr ALCodeEditor::iconOf(const Completion& completion)
 {
     if (completion.icon)
     {
         return completion.icon;
     }
-    static boost::unordered_flat_map<std::string, LLUIImagePtr, ll::string_hash, std::equal_to<>> looked_up;
-    const std::string_view                                                                       name = ALCompletionModel::iconNameOf(completion);
-    auto                                                                                         found = looked_up.find(name);
-    if (found == looked_up.end())
+    const std::string_view name  = ALCompletionModel::iconNameOf(completion);
+    auto                   found = mIcons.find(name);
+    if (found == mIcons.end())
     {
-        found = looked_up.emplace(std::string(name), LLUI::getUIImage(std::string(name))).first;
+        found = mIcons.emplace(std::string(name), LLUI::getUIImage(name)).first;
     }
     return found->second;
 }
 
 void ALCodeEditor::listCompletions(bool keep_choice)
 {
+    completionList();
     // What was chosen, by its word: an answer joined to the list may put
     // rows above it, and the row under the finger must stay the word the
     // finger is on.
@@ -2478,6 +2566,9 @@ ALTextView* ALCodeEditor::sideBox()
     }
     mCompletionDoc->setBackgroundColor(ground);
     mCompletionDoc->setTextColor(textColor());
+    // Shared by a completion's words and a fix's preview: the preview's
+    // tints are its own.
+    mCompletionDoc->setLineTints({});
     return mCompletionDoc;
 }
 
@@ -2634,8 +2725,30 @@ void ALCodeEditor::showFixes(S32 line, std::vector<Fix> fixes, S32 chosen)
     }
 }
 
+ALChoiceList& ALCodeEditor::fixList()
+{
+    // The fixes offered at a problem, on a list of their own made the same
+    // way the first time there are any: a fix is not a completion, and the
+    // one list open at a time keeps its own keys.
+    if (!mFixList)
+    {
+        mFixList = makeChoiceList("fixes");
+        // As a menu: the mouse over a fix previews it, and a click makes it.
+        mFixList->setMenuLike(true);
+        mFixList->onPicked([this](S32 index) { takeFix(index); });
+        mFixList->onChosen([this](S32) {
+            if (fixesOpen())
+            {
+                showFixPreview();
+            }
+        });
+    }
+    return *mFixList;
+}
+
 void ALCodeEditor::fillFixList(S32 chosen)
 {
+    fixList();
     // In the editor's colours, as the completions are; a suppression, and
     // the word that there is nothing, quieter than what makes a change.
     mFixList->setBackgroundColor(paint(Paint::Widget));
@@ -2644,8 +2757,6 @@ void ALCodeEditor::fillFixList(S32 chosen)
     mFixList->setBorderColor(paint(Paint::WidgetBorder));
     const std::vector<Fix>&           fixes = mFixListModel.fixes();
     std::vector<ALChoiceList::Choice> choices;
-    S32                               widest = 0;
-    S32                               noted  = 0;
     for (const Fix& fix : fixes)
     {
         ALChoiceList::Choice choice;
@@ -2655,14 +2766,14 @@ void ALCodeEditor::fillFixList(S32 chosen)
         {
             choice.color = paint(Paint::InlayHint);
         }
-        widest = llmax(widest, getFont()->getWidth(fix.title));
-        noted  = fix.note.empty() ? noted : llmax(noted, getFont()->getWidth(fix.note));
         choices.push_back(std::move(choice));
     }
-    const LLRect local = getLocalRect();
-    const S32    width = llclamp(widest + (noted > 0 ? noted + 24 : 0) + 24, 120, llmax(120, local.getWidth() - 8));
-    mFixList->setShape(LLRect(0, 40, width, 0));
+    // As wide as its fixes and their notes, within the view: laid out at
+    // the most there is room for, then measured.
+    const S32 room = llmax(120, getLocalRect().getWidth() - 8);
+    mFixList->setShape(LLRect(0, 40, room, 0));
     mFixList->setChoices(std::move(choices), llclamp(chosen, 0, llmax(0, static_cast<S32>(fixes.size()) - 1)));
+    const S32 width = llclamp(mFixList->widthFor(), 120, room);
     // Under the caret where it is on the line, else under the line's text.
     const S32          line  = mFixListModel.line();
     const ALTextPos    caret = this->caret();
@@ -2710,22 +2821,34 @@ void ALCodeEditor::showFixPreview()
     const std::string says = ALFixListModel::previewOf(document(), fixes[index], kinds);
     ALTextView& box = *sideBox();
     box.setText(says);
+    // As a comparison shows it (ALDiffView): each line on the band its
+    // kind is tinted, what goes as plain code faded, what comes coloured
+    // as code.
+    const LLColor4 gone_band = LLUIColorTable::instance().getColor("CodeDiffRemovedColor", LLColor4(0.85f, 0.25f, 0.25f, 0.18f)).get();
+    const LLColor4 come_band = LLUIColorTable::instance().getColor("CodeDiffAddedColor", LLColor4(0.25f, 0.75f, 0.35f, 0.18f)).get();
+    LLColor4       faded     = textColor();
+    faded.mV[VALPHA] *= 0.7f;
     std::vector<ALTextView::Style> styles;
+    std::vector<LLColor4>          tints;
     for (S32 line = 0; line < box.document().lineCount() && line < static_cast<S32>(kinds.size()); ++line)
     {
-        if (kinds[static_cast<size_t>(line)] == '-')
+        const char kind = kinds[static_cast<size_t>(line)];
+        tints.push_back(kind == '-' ? gone_band : kind == '+' ? come_band : LLColor4::transparent);
+        if (kind == '-')
         {
             ALTextView::Style gone;
             gone.range = ALTextRange(ALTextPos(line, 0), box.document().lineEnd(line));
-            gone.color = markColor(Mark::Error);
+            gone.font  = getFont();
+            gone.color = faded;
             styles.push_back(gone);
         }
-        else if (kinds[static_cast<size_t>(line)] == '+')
+        else if (kind == '+')
         {
             styleAsCode(box, line, styles);
         }
     }
     box.setStyles(std::move(styles));
+    box.setLineTints(std::move(tints));
     placeSideBox(mFixList->getRect());
 }
 
@@ -3094,7 +3217,7 @@ std::string ALCodeEditor::stringSize(const ALTextRange& literal) const
     {
         LLStringUtil::format_map_t args;
         args["[COUNT]"] = std::to_string(static_cast<S32>(written.size()));
-        says += ", " + alSaid("CodeStringWritten", "[COUNT] as written", args);
+        says += ", " + alSaid("CodeStringWritten", "[COUNT] in source", args);
     }
     return says;
 }
@@ -3397,7 +3520,7 @@ bool ALCodeEditor::selectNextOccurrence()
     }
     mSnippet.addMirror({ 0, next.front() });
     setSelection(taken);
-    scrollToLine(next.front().begin.line);
+    scrollToShow(next.front().begin);
     return true;
 }
 
@@ -3931,13 +4054,48 @@ void ALCodeEditor::drawSignature(const LLRect& text)
     const LLFontGL*  font  = getFont();
     const F32        alpha = getDrawContext().mAlpha;
     const S32        line_h = font->getLineHeight();
-    // Which form of the function, of how many, where it has several: Up
-    // and Down go through them.
-    const std::string counter  = sig.overloads.size() > 1 ? llformat("%d/%d  ", sig.overload + 1, static_cast<S32>(sig.overloads.size())) : std::string();
-    const bool        docs     = !sig.documentation.empty() || !counter.empty();
-    const std::string doc_line = counter + sig.documentation.substr(0, sig.documentation.find('\n'));
-    const S32        wanted = llmax(font->getWidth(sig.label), docs ? font->getWidth(doc_line) : 0) + 2 * SIGNATURE_PAD;
-    const S32        height = line_h * (docs ? 2 : 1) + 2 * SIGNATURE_PAD;
+    // Its pieces measured once for the signature as it stands, and again
+    // only when it, its active parameter or the font moves.
+    SignatureShown& measured = mSignatureShown;
+    if (measured.label != sig.label || measured.documentation != sig.documentation || measured.overload != sig.overload ||
+        measured.overloads != sig.overloads.size() || measured.active != sig.active || measured.font != font)
+    {
+        measured.label         = sig.label;
+        measured.documentation = sig.documentation;
+        measured.overload      = sig.overload;
+        measured.overloads     = sig.overloads.size();
+        measured.active        = sig.active;
+        measured.font          = font;
+        // Which form of the function, of how many, where it has several:
+        // Up and Down go through them.
+        const std::string counter = sig.overloads.size() > 1 ? llformat("%d/%d  ", sig.overload + 1, static_cast<S32>(sig.overloads.size())) : std::string();
+        measured.docs             = !sig.documentation.empty() || !counter.empty();
+        measured.docLine          = counter + sig.documentation.substr(0, sig.documentation.find('\n'));
+        measured.labelWidth       = font->getWidth(sig.label);
+        measured.docWidth         = measured.docs ? font->getWidth(measured.docLine) : 0;
+        measured.begin            = -1;
+        measured.end              = -1;
+        if (sig.active >= 0 && sig.active < static_cast<S32>(sig.parameters.size()))
+        {
+            measured.begin = sig.parameters[sig.active].first;
+            measured.end   = sig.parameters[sig.active].second;
+        }
+        measured.throughWidth = measured.end > 0 ? font->getWidth(sig.label.substr(0, static_cast<size_t>(measured.end))) : measured.labelWidth;
+        // The label in three pieces, the active parameter the middle one;
+        // or whole, where no parameter is active.
+        const S32  size    = static_cast<S32>(sig.label.size());
+        const bool split   = measured.begin >= 0 && measured.end > measured.begin && measured.end <= size;
+        const S32  cuts[4] = { 0, split ? measured.begin : size, split ? measured.end : size, size };
+        for (S32 i = 0; i < 3; ++i)
+        {
+            measured.pieces[i] = sig.label.substr(static_cast<size_t>(cuts[i]), static_cast<size_t>(cuts[i + 1] - cuts[i]));
+            measured.widths[i] = measured.pieces[i].empty() ? 0 : font->getWidth(measured.pieces[i]);
+        }
+    }
+    const bool         docs     = measured.docs;
+    const std::string& doc_line = measured.docLine;
+    const S32          wanted   = llmax(measured.labelWidth, docs ? measured.docWidth : 0) + 2 * SIGNATURE_PAD;
+    const S32          height   = line_h * (docs ? 2 : 1) + 2 * SIGNATURE_PAD;
 
     // Above the caret's row, left with the call's column, kept inside the
     // view; under the row where above would run off the top.
@@ -3952,40 +4110,24 @@ void ALCodeEditor::drawSignature(const LLRect& text)
 
     // The label in three pieces, the active parameter in its own colour.
     const F32 baseline = static_cast<F32>(box.mTop - SIGNATURE_PAD - llround(font->getAscenderHeight()));
-    S32       begin = -1, end = -1;
-    if (sig.active >= 0 && sig.active < static_cast<S32>(sig.parameters.size()))
-    {
-        begin = sig.parameters[sig.active].first;
-        end   = sig.parameters[sig.active].second;
-    }
     // Where the label is longer than the room, it is scrolled so that the
     // parameter being filled in is in the box. The head of a signature is
     // the part already typed, so it is the part to give up; what runs off
     // the left edge under the clip reads as more of it being there.
-    const F32 label_w = static_cast<F32>(font->getWidth(sig.label));
-    const F32 through = end > 0 ? static_cast<F32>(font->getWidth(sig.label.substr(0, static_cast<size_t>(end)))) : label_w;
+    const F32 label_w = static_cast<F32>(measured.labelWidth);
+    const F32 through = static_cast<F32>(measured.throughWidth);
     const F32 shift   = ALCodeCards::labelShift(label_w, through, static_cast<F32>(room));
-    F32 pen = static_cast<F32>(box.mLeft + SIGNATURE_PAD) - shift;
-    auto piece = [&](S32 from, S32 to, const LLColor4& color) {
-        if (to <= from)
-        {
-            return;
-        }
-        const std::string part = sig.label.substr(from, to - from);
-        font->renderUTF8(part, 0, pen, baseline, color, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
-        pen += static_cast<F32>(font->getWidth(part));
-    };
+    F32       pen     = static_cast<F32>(box.mLeft + SIGNATURE_PAD) - shift;
     {
         LLLocalClipRect clip(LLRect(box.mLeft + SIGNATURE_PAD, box.mTop - 1, box.mRight - SIGNATURE_PAD, box.mBottom + 1));
-        if (begin >= 0 && end > begin && end <= static_cast<S32>(sig.label.size()))
+        for (S32 i = 0; i < 3; ++i)
         {
-            piece(0, begin, ink);
-            piece(begin, end, active);
-            piece(end, static_cast<S32>(sig.label.size()), ink);
-        }
-        else
-        {
-            piece(0, static_cast<S32>(sig.label.size()), ink);
+            if (!measured.pieces[i].empty())
+            {
+                font->renderUTF8(measured.pieces[i], 0, pen, baseline, i == 1 ? active : ink, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL,
+                                 LLFontGL::NO_SHADOW);
+                pen += static_cast<F32>(measured.widths[i]);
+            }
         }
     }
     if (docs)
@@ -4533,9 +4675,9 @@ bool ALCodeEditor::handleToolTip(S32 x, S32 y, MASK mask)
         LLStringUtil::format_map_t args;
         args["[TEXT]"] = mInlays[static_cast<size_t>(inlay)].insert;
 #if LL_DARWIN
-        LLToolTipMgr::instance().show(alSaid("CodeInlayWriteMac", "Command-double-click to write '[TEXT]' in", args));
+        LLToolTipMgr::instance().show(alSaid("CodeInlayWriteMac", "Command-double-click to insert '[TEXT]'", args));
 #else
-        LLToolTipMgr::instance().show(alSaid("CodeInlayWrite", "Ctrl-double-click to write '[TEXT]' in", args));
+        LLToolTipMgr::instance().show(alSaid("CodeInlayWrite", "Ctrl-double-click to insert '[TEXT]'", args));
 #endif
         return true;
     }
