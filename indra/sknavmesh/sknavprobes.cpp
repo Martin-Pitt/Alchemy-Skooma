@@ -717,6 +717,7 @@ namespace sknav
 
     std::vector<ProbePart> spaceProbes(const Space& space, const ProbeParams& params)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("probes - space parts");
         if (!wantsProbes(space, params))
         {
             return {};
@@ -781,6 +782,7 @@ namespace sknav
 
     void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("probes - budget");
         if (cap == 0)
         {
             slots.clear();

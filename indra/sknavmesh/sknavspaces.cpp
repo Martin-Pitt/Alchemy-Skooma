@@ -4158,6 +4158,7 @@ namespace sknav
 
     SpacesDrawPtr buildSpacesDraw(const EnclosureProduct& enclosure, const RoomsProduct& rooms)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("spaces - build draw");
         auto draw = std::make_shared<SpacesDraw>();
         const std::vector<U32>& ids = enclosure.mSpaceIds;
         draw->mSpaces.resize(ids.size());
