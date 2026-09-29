@@ -357,7 +357,7 @@ namespace
         out << ",\"viewer\":" << jsonString(LLVersionInfo::instance().getChannelAndVersion());
         out << ",\"start_utc\":" << jsonString(start_utc);
         out << ",\"start_total_us\":" << (U64)totalTime();
-        out << ",\"start_frame_secs\":" << LLFrameTimer::getElapsedSeconds();
+        out << ",\"start_frame_secs\":" << (F64)LLFrameTimer::getElapsedSeconds();
         out << ",\"start_msg_secs\":" << LLMessageSystem::getMessageTimeSeconds().value();
         out << ",\"agent_id\":" << jsonString(gAgent.getID().asString());
 
