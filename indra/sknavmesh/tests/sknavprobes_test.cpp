@@ -30,6 +30,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 
 namespace
@@ -509,5 +510,97 @@ namespace tut
 
         lattice.rebuild({});
         ensure("a rebuild from nothing empties it", !lattice.contains(LLVector3d(4.f, 4.f, 1.f)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<17>()
+    {
+        set_test_name("the blend floor widens a corner pair's thin zone");
+        // Two 2 m squares touching at a corner, ceiling 3: each placed sphere
+        // reaches its farthest corner, so the pair intersects, but the zone
+        // between them is the sliver the corner leaves, well under the owed
+        // blend width. The floor grows them until they share a real zone.
+        FloorPlan plan;
+        plan.mX0 = plan.mY0 = 0;
+        plan.mW = 12;
+        plan.mH = 8;
+        plan.mCell = 0.5f;
+        plan.mCeiling = 3.f;
+        plan.mFloor.assign(96, std::numeric_limits<F32>::quiet_NaN());
+        for (S32 y = 0; y < 4; ++y)
+        {
+            for (S32 x = 0; x < 4; ++x)
+            {
+                plan.mFloor[y * 12 + x] = 3.f;              // the first square
+            }
+        }
+        for (S32 y = 4; y < 8; ++y)
+        {
+            for (S32 x = 4; x < 12; ++x)
+            {
+                plan.mFloor[y * 12 + x] = 3.f;              // the second, at its corner
+            }
+        }
+        const ProbeParams params;
+        const std::vector<ProbePart> parts = placeParts(plan, params);
+        ensure_equals("two parts", parts.size(), 2u);
+        const F32 d = dist_vec(parts[0].mOrigin, parts[1].mOrigin);
+        const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(parts[0].mRadius, parts[1].mRadius));
+        ensure("the spheres share a real blend zone", d < parts[0].mRadius + parts[1].mRadius - w * 0.5f);
+        ensure("grown for this", parts[0].mBridged || parts[1].mBridged);
+        for (const ProbePart& p : parts)
+        {
+            ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
+        }
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<18>()
+    {
+        set_test_name("a chain of corner-touching parts converges inside the pass cap");
+        // Six 2 m squares zigzagging on their corners: growth must propagate
+        // down the chain, one hop a pass, until every corner pair shares a
+        // zone worth blending across.
+        FloorPlan plan;
+        plan.mX0 = plan.mY0 = 0;
+        plan.mW = 28;
+        plan.mH = 8;
+        plan.mCell = 0.5f;
+        plan.mCeiling = 3.f;
+        plan.mFloor.assign(224, std::numeric_limits<F32>::quiet_NaN());
+        for (S32 k = 0; k < 6; ++k)
+        {
+            const S32 x0 = k * 4;
+            const S32 y0 = (k % 2) * 4;
+            for (S32 y = y0; y < y0 + 4; ++y)
+            {
+                for (S32 x = x0; x < x0 + 4; ++x)
+                {
+                    plan.mFloor[y * 28 + x] = 3.f;
+                }
+            }
+        }
+        const ProbeParams params;
+        const std::vector<ProbePart> parts = placeParts(plan, params);
+        ensure_equals("six parts", parts.size(), 6u);
+        for (size_t a = 0; a < parts.size(); ++a)
+        {
+            for (size_t b = a + 1; b < parts.size(); ++b)
+            {
+                const F32 gap_x = std::max(std::max(parts[a].mMin.mV[VX] - parts[b].mMax.mV[VX], parts[b].mMin.mV[VX] - parts[a].mMax.mV[VX]), 0.f);
+                const F32 gap_y = std::max(std::max(parts[a].mMin.mV[VY] - parts[b].mMax.mV[VY], parts[b].mMin.mV[VY] - parts[a].mMax.mV[VY]), 0.f);
+                if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
+                {
+                    continue;   // these two never touch
+                }
+                const F32 d = dist_vec(parts[a].mOrigin, parts[b].mOrigin);
+                const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(parts[a].mRadius, parts[b].mRadius));
+                ensure("every corner pair blends", d < parts[a].mRadius + parts[b].mRadius - w * 0.5f);
+            }
+        }
+        for (const ProbePart& p : parts)
+        {
+            ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
+        }
     }
 }

@@ -664,10 +664,21 @@ namespace sknav
             // The overlap floor: two parts' spheres must share a blend zone
             // this wide where their parts touch, so a pixel between them takes
             // each with real weight instead of watching one fade out at its
-            // far edge. Grown only where the floor asks, two passes at most,
-            // and pieces grown only for this stand first in line to shed when
-            // a cap is needed.
-            for (S32 pass = 0; pass < 2; ++pass)
+            // far edge. The zone each pair owes is frozen at the spheres'
+            // placed radii, and growth propagates along a chain of parts one
+            // pass a time, so the loop runs to a fixpoint, sixteen passes at
+            // most; whatever is short of it then is what it is.
+            std::vector<F32> placed;
+            placed.reserve(out.size());
+            for (const ProbePart& p : out)
+            {
+                placed.push_back(p.mRadius);
+            }
+            const auto owed = [&](size_t a, size_t b)
+            {
+                return std::max(params.mBlendZoneM, params.mBlendShare * std::min(placed[a], placed[b]));
+            };
+            for (S32 pass = 0; pass < 16; ++pass)
             {
                 bool grew = false;
                 for (size_t a = 0; a < out.size(); ++a)
@@ -675,17 +686,19 @@ namespace sknav
                     for (size_t b = a + 1; b < out.size(); ++b)
                     {
                         const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
-                        const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(out[a].mRadius, out[b].mRadius));
+                        const F32 w = owed(a, b);
                         if (d < out[a].mRadius + out[b].mRadius - w)
                         {
                             continue;   // this pair already blends
                         }
                         // Parts that do not touch grow nothing: two halves of
                         // an L stand apart on purpose, and the octree fills
-                        // between them.
+                        // between them. Parts meeting at a corner do touch,
+                        // by the margin of a cell: the span between their
+                        // boxes there is the corner itself.
                         const F32 gap_x = std::max(std::max(out[a].mMin.mV[VX] - out[b].mMax.mV[VX], out[b].mMin.mV[VX] - out[a].mMax.mV[VX]), 0.f);
                         const F32 gap_y = std::max(std::max(out[a].mMin.mV[VY] - out[b].mMax.mV[VY], out[b].mMin.mV[VY] - out[a].mMax.mV[VY]), 0.f);
-                        if (gap_x > 0.f || gap_y > 0.f)
+                        if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
                         {
                             continue;
                         }

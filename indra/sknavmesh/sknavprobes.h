@@ -73,6 +73,8 @@ namespace sknav
         F32 mBlendShare = 0.35f;    ///< or this share of the smaller sphere's radius, whichever is more
         F32 mUnknownRadiusM = 8.f;  ///< a probe of an UNKNOWN-bucket space reaches this far at most
         U32 mUnknownMinCells = 2;   ///< raster cells an UNKNOWN space needs before it probes at all
+        F32 mObligationShare = 1.5f; ///< a sphere grows past its placed radius at most this far of
+                                    ///< itself, so a corridor of thresholds cannot balloon one
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
