@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "alkeymap.h"
 #include "alscriptanalysis.h"
 #include "alscriptpreprocessor.h"
 #include "alscriptreferencespane.h"
@@ -40,7 +41,43 @@
 #include <string_view>
 #include <vector>
 
+class ALScriptStudioAnalysis;
+class ALScriptNavigation;
 class ALScriptStudioServices;
+class ALScriptStudioTabs;
+
+// The name being looked up across the object's scripts: what
+// was asked, the script that declares it (this one, or the
+// include, by identity) and where, how many scripts are still
+// to answer, the places gathered so far, each once, and the
+// version of each open script's text as it was read, so that a
+// rename knows it still holds.
+struct ALScriptStudioDoc::Lookup
+{
+    U32                            generation = 0;
+    ALEditorCommand                command    = ALEditorCommand::None;
+    std::string                    name;
+    bool                           hasDefinition = false;
+    std::string                    homePath;
+    ALScriptSpan                   definition;
+    bool                           renamable = false;
+    U32                            version   = 0;
+    S32                            pending   = 0;
+    std::vector<Place>             places;
+    boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>>      seen;
+    boost::unordered_flat_map<std::string, U32, ll::string_hash, std::equal_to<>> versions;
+    // What a rename would change, for its clash check: each script's
+    // text as the analyzers read it -- this one's expansion, with its
+    // includes, and each other script's reached -- by its name; and
+    // the other scripts reached, by the path the map calls them.
+    std::vector<std::pair<std::string, std::shared_ptr<const std::string>>> texts;
+    boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>>  scripts;
+    // What it could not look through: how many of the object's prims
+    // did not say what they hold, and the scripts that could not be
+    // read, by name.
+    S32                                                                       unlisted = 0;
+    std::vector<std::string>                                                  unread;
+};
 
 // A Script Studio window's lookups of a name across scripts, as the tab's
 // part `doc.lookup` keeps one: Find References and Rename, from what the
@@ -76,7 +113,7 @@ public:
     // language, SLua's by the item's subtype or its runtime.
     static std::vector<Candidate> folderCandidates(const std::vector<const LLInventoryItem*>& items, const LLUUID& own, bool lua);
 
-    // What the lookups ask of the window beyond its services.
+    // What the lookups ask of the window itself, beyond what they are given.
     class Window
     {
     public:
@@ -88,13 +125,8 @@ public:
         // A script's text as the region has it, its author's source out of
         // any envelope, and its asset; nothing where it could not be read.
         virtual void loadSource(const ALScriptRef& ref, std::function<void(const LLUUID& asset, const std::optional<std::string>& source)> loaded) = 0;
-        // A script expanded as the compiler sees it; and the analyzers asked.
+        // A script expanded as the compiler sees it.
         virtual void expand(ALScriptPreprocessor::Request request, std::function<void(const ALPreprocessor::Result&)> expanded) = 0;
-        virtual void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)> answered) = 0;
-        // An include's lines as it reads; none where it is not had.
-        virtual ALScriptPlaces::Lines sourceLines(const std::string& path) const = 0;
-        // A preview held, so that following what is found does not close it.
-        virtual void holdPreview(Doc& doc) = 0;
         // What Find References found: listed, lit in the script, the tab
         // brought up.
         virtual void showFound(Doc& doc, const Found& found) = 0;
@@ -108,15 +140,12 @@ public:
         // by their order in what was found.
         virtual void previewRename(Doc& doc, const Found& found, const std::string& new_name, const std::string& said,
                                    std::function<void(const std::vector<size_t>& kept)> apply) = 0;
-        // A file on disk opened in a tab here; a tab brought forward.
-        virtual Doc* openFileTab(const std::string& path, bool lua) = 0;
-        virtual void activate(Doc& doc)                             = 0;
 
     protected:
         ~Window() = default;
     };
 
-    ALScriptLookup(ALScriptStudioServices& services, Window& window);
+    ALScriptLookup(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, Window& window);
 
     // A place added, once: by its file and where it starts.
     static void addPlace(Doc::Lookup& lookup, Doc::Place place);
@@ -194,6 +223,9 @@ private:
     Doc* lookingIn(const std::string& id, U32 generation);
 
     ALScriptStudioServices& mServices;
+    ALScriptStudioTabs&     mTabs;
+    ALScriptStudioAnalysis& mAnalysis;
+    ALScriptNavigation&     mNavigation;
     Window&                 mWindow;
     // Which lookup the answers arriving belong to.
     U32                     mGeneration = 0;
