@@ -743,7 +743,6 @@ LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
 
     LLReflectionMap* probe = new LLReflectionMap();
     probe->mGroup = group;
-    probe->mIrradianceOnly = true;
 
     if (mDefaultProbe.isNull())
     {  //safety check to make sure default probe is always first probe added
@@ -929,7 +928,6 @@ LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& 
     if (probe)
     {
         probe->mNavRooms = true;
-        probe->mIrradianceOnly = false;
         probe->mOrigin.load3(origin.mV);
         probe->mRadius = radius;
     }
@@ -1179,8 +1177,7 @@ void LLReflectionMapManager::doProbeUpdate()
         }
         updateNeighbors(mUpdatingProbe);
         mUpdatingFace = 0;
-        // Indirect probes finish after SH projection; they need no radiance capture.
-        if (isRadiancePass() || mUpdatingProbe->mIrradianceOnly)
+        if (isRadiancePass())
         {
             mUpdatingProbe->mComplete = true;
             mNavRoomsDirty = mNavRoomsDirty || mUpdatingProbe->mGroup != nullptr; // <SK:Nexii> Navmesh rooms probes: its origin has settled
@@ -1696,7 +1693,7 @@ void LLReflectionMapManager::updateUniforms()
             llmax(minimum_ambiance, refmap->getAmbiance())*ambscale, // ambiance scale
             radscale, // radiance scale
             refmap->mFadeIn, // fade in weight
-            refmap->mNavRooms ? 1.f : (refmap->mIrradianceOnly ? -1.f : 0.f)); // navmesh parallax / irradiance only
+            refmap->mNavRooms ? 1.f : 0.f); // <SK:Nexii> Navmesh rooms probes: parallax on
 
         S32 ni = nc; // neighbor ("index") - index into refNeighbor to write indices for current reflection probe's neighbors
         {

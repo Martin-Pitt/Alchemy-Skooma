@@ -158,8 +158,6 @@ public:
     // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
     bool mNavRooms = false;
     bool mSuppressedByNavRooms = false;
-    // Grid probes supply irradiance only, after full probes claim coverage.
-    bool mIrradianceOnly = false;
     bool mBlockedByCensus = false;
     // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);
     // afterwards that pass owns re-nudging and the cleared radius.
