@@ -32,6 +32,7 @@
 #include <vector>
 #include <tuple>
 // project headers
+#include "alnotecardworld.h"
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "llagentwearables.h"
@@ -50,7 +51,6 @@
 #include "llinventorydefines.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodelbackgroundfetch.h"
-#include "llpreviewnotecard.h"
 #include "llrootview.h"
 #include "llselectmgr.h"
 #include "lltoolbarview.h"
@@ -3513,11 +3513,9 @@ LLInventoryObject* LLToolDragAndDrop::locateInventory(
     }
     else if(mSource == SOURCE_NOTECARD)
     {
-        LLPreviewNotecard* preview = LLFloaterReg::findTypedInstance<LLPreviewNotecard>("preview_notecard", mSourceID);
-        if(preview)
-        {
-            item = (LLViewerInventoryItem*)preview->getDragItem();
-        }
+        // Out of a notecard's text, in the notecard window or Script
+        // Studio.
+        item = ALNotecardDrag::dragged(mCargoIDs[mCurItemIndex]);
     }
     else if(mSource == SOURCE_VIEWER)
     {
