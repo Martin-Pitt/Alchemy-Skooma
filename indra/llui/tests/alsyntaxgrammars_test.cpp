@@ -26,6 +26,8 @@
 
 #include "../alsyntaxgrammar.h"
 
+#include "albigscript.h"
+
 #include "../test/lltut.h"
 
 #include <string>
@@ -39,7 +41,7 @@ namespace tut
 
         alsyntaxgrammars_data()
         {
-            for (const char* name : { "lsl", "slua", "xml", "json", "text" })
+            for (const char* name : { "lsl", "slua", "xml", "json", "text", "config" })
             {
                 std::string error;
                 ensure(std::string(name) + " loads: " + error,
@@ -84,11 +86,12 @@ namespace tut
     template<> template<>
     void alsyntaxgrammars_object::test<1>()
     {
-        set_test_name("the five grammars load and answer to their extensions");
-        ensure_equals("five", library.names().size(), size_t(5));
+        set_test_name("the six grammars load and answer to their extensions");
+        ensure_equals("six", library.names().size(), size_t(6));
         ensure_equals("lsl by extension", library.forExtension(".lsl")->name(), std::string("lsl"));
         ensure_equals("luau by extension", library.forExtension("luau")->name(), std::string("slua"));
         ensure_equals("xui is xml", library.forExtension("xui")->name(), std::string("xml"));
+        ensure_equals("ini is config", library.forExtension("ini")->name(), std::string("config"));
         ensure("nothing for nothing", !library.forExtension("exe"));
     }
 
@@ -260,14 +263,30 @@ namespace tut
         grammar.lexLine(std::string(10, ')'), state, tokens, words);
         ensure("and out again", state.frames.size() < ALSyntaxGrammar::MAX_DEPTH);
 
-        // A span whose end is its opening's capture, over many captures.
+        // A span whose end is its opening's capture, over many captures:
+        // the end is text once the capture is known, and nothing is kept.
         for (S32 i = 0; i < 400; ++i)
         {
             state = grammar.initialState();
             grammar.lexLine("<<w" + std::to_string(i) + " x w" + std::to_string(i), state, tokens, words);
+            ensure("each closes", state.frames.size() == 1);
         }
-        ensure("the ends kept are held to a number", grammar.cachedEndPatterns() <= 256);
-        ensure("and they still close", state.frames.size() == 1);
+
+        // An end with more to it than text around the capture is a regex,
+        // made from the capture as the line meets it.
+        LLSD regex_states;
+        regex_states["main"] = LLSD::emptyArray().with(0, LLSD().with("span_regex", "<<(\\w+)").with("end_regex", "\\1\\d+").with("kind", "string"));
+        LLSD regex_description;
+        regex_description["name"]   = "tested";
+        regex_description["states"] = regex_states;
+        ALSyntaxGrammar regex_grammar;
+        ensure("loads: " + error, regex_grammar.load(regex_description, error));
+        state = regex_grammar.initialState();
+        regex_grammar.lexLine("<<ab x ab y", state, tokens, words);
+        ensure("not closed by the capture alone", state.frames.size() == 2);
+        regex_grammar.lexLine("still ab42 out", state, tokens, words);
+        ensure("closed by the capture and digits", state.frames.size() == 1);
+        ensure_equals("the span to there, and text after", said("still ab42 out", tokens), std::string("string:still ab42|text: out"));
     }
 
     template<> template<>
@@ -339,5 +358,75 @@ namespace tut
         ALSyntaxState slua;
         ensure_equals("SLua, either quote", lexed("slua", "print('lib.lua', \"a/b\")", slua, words),
                       std::string("function:print|punctuation:(|path:'lib.lua'|punctuation:,|text: |path:\"a/b\"|punctuation:)"));
+    }
+    template<> template<>
+    void alsyntaxgrammars_object::test<12>()
+    {
+        set_test_name("lexed the quick way -- rules by first byte, spans' ends looked for, a word's tables in one look -- is lexed as the plain way does it, token for token and state for state");
+        ALSyntaxWords words;
+        words.set("function", { "llSay", "llOwnerSay", "print", "ll.Say", "tostring" });
+        words.set("constant", { "TRUE", "FALSE", "PI", "ZERO_VECTOR" });
+        words.set("event", { "state_entry", "touch_start" });
+        words.set("type", { "number", "string" });
+        words.set("deprecated", { "llSound" });
+        const std::string mixed = "x = \"a\\\"b\\n\" -- c\n[[long\nstring]] --[=[ lvl\n ]] ]=] y\n"
+                                  "/* block\n * more */ z = \"open\n`s {n} \\{ t` q\n<a href=\"x\">&amp;</a> {\"k\": [1, 2]}\n";
+        const auto compare = [&](const char* grammar_name, const std::string& text) {
+            std::shared_ptr<const ALSyntaxGrammar> grammar = library.find(grammar_name);
+            ensure(std::string("grammar ") + grammar_name, grammar != nullptr);
+            ALSyntaxState              quick = grammar->initialState();
+            ALSyntaxState              plain = grammar->initialState();
+            std::vector<ALSyntaxToken> quick_tokens, plain_tokens;
+            size_t                     at   = 0;
+            S32                        line = 0;
+            while (at <= text.size())
+            {
+                const size_t           next = text.find('\n', at);
+                const std::string_view one  = std::string_view(text).substr(at, next == std::string::npos ? std::string::npos : next - at);
+                ALSyntaxGrammar::sPlainLexing = true;
+                grammar->lexLine(one, plain, plain_tokens, words);
+                ALSyntaxGrammar::sPlainLexing = false;
+                grammar->lexLine(one, quick, quick_tokens, words);
+                const std::string where = std::string(grammar_name) + " line " + std::to_string(line);
+                ensure(where + ": the same tokens: " + alsyntaxgrammars_data::said(one, plain_tokens) + " against " +
+                           alsyntaxgrammars_data::said(one, quick_tokens),
+                       quick_tokens == plain_tokens);
+                ensure(where + ": the same state after", quick == plain);
+                if (next == std::string::npos)
+                {
+                    break;
+                }
+                at = next + 1;
+                ++line;
+            }
+        };
+        for (const char* grammar_name : { "lsl", "slua", "xml", "json", "text", "config" })
+        {
+            compare(grammar_name, mixed);
+        }
+        const std::string lsl  = ll_test::bigLSL(3000);
+        const std::string slua = ll_test::bigSLua(3000);
+        compare("lsl", lsl);
+        compare("lsl", "/*\n" + lsl + "\n*/");
+        compare("slua", slua);
+        compare("slua", "--[==[\n" + slua + "\n]==]");
+        compare("slua", "x = [[\n" + slua + "\n]]");
+    }
+
+    template<> template<>
+    void alsyntaxgrammars_object::test<13>()
+    {
+        set_test_name("a notecard of settings: comments, sections, and a key's value -- strings, numbers, keys, true and false -- to the end of its line");
+        ALSyntaxWords words;
+        ALSyntaxState state;
+        ensure_equals("a comment", lexed("config", "# the door", state, words), std::string("comment:# the door"));
+        ensure_equals("a section", lexed("config", "[Door]", state, words), std::string("type:[Door]"));
+        ensure_equals("a number", lexed("config", "speed = 2.5", state, words), std::string("property:speed|punctuation: =|text: |number:2.5"));
+        ensure_equals("a key and true", lexed("config", "owner: 01234567-89ab-cdef-0123-456789abcdef, true", state, words),
+                      std::string("property:owner|punctuation::|text: |constant:01234567-89ab-cdef-0123-456789abcdef|punctuation:,|text: |constant:true"));
+        ensure_equals("a string, and a colon in it left as text", lexed("config", "url = \"http://x\" at 10:30", state, words),
+                      std::string("property:url|punctuation: =|text: |string:\"http://x\"|text: at |number:10|text::|number:30"));
+        ensure_equals("the next line a key again", lexed("config", "name = Door", state, words), std::string("property:name|punctuation: =|text: Door"));
+        ensure_equals("a line with no key, text", lexed("config", "just words here", state, words), std::string("text:just words here"));
     }
 }
