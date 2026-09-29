@@ -40,6 +40,8 @@ namespace sknav
     /// removed, is forgotten. Not thread-safe, but a copy is cheap and
     /// independent: cells live in 32 m blocks shared copy-on-write, so a
     /// snapshot for a worker costs a pointer per block.
+    constexpr F32 SIDE_OPEN_REACH_M = 24.f;    ///< side openness looks for walls this far out
+
     class SkyMap
     {
     public:
@@ -66,8 +68,11 @@ namespace sknav
         /// r^2 / (r^2 + h^2), so what is small and high hides little and what
         /// is broad and low nearly all, and a wall hides the sky under its top.
         /// Read from columns along spokes, no rays. roof, when given, gets the
-        /// share the solids overhead hide without the walls.
-        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
+        /// share the solids overhead hide without the walls, and open side openness.
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr, F32* open = nullptr) const;
+        /// Side openness, O: the share of 16 spokes out of pos that no solid
+        /// standing through pos's height crosses within SIDE_OPEN_REACH_M.
+        F32 sideOpenAt(const LLVector3d& pos) const;
         /// The top of the highest solid over (x, y); false when there is none.
         bool topAt(F64 x, F64 y, F64& top) const;
 
@@ -103,9 +108,11 @@ namespace sknav
     {
     public:
         SkyView(const SkyMap& map, F64 x0, F64 y0, F64 x1, F64 y1);
-        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr) const;
+        F32 coverAbove(const LLVector3d& pos, F32 radius, F32* roof = nullptr, F32* open = nullptr) const;
+        F32 sideOpenAt(const LLVector3d& pos) const;
 
     private:
+        const std::vector<SkyMap::Interval>* cell(S64 x, S64 y) const;
         const SkyMap* mMap;
         S64 mX0, mY0;
         S32 mWidth = 0, mHeight = 0;

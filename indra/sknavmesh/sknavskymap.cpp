@@ -171,6 +171,51 @@ namespace sknav
 
     namespace
     {
+        /// The share of 16 spokes out of pos no column standing through pos's
+        /// height crosses within SIDE_OPEN_REACH_M, read a metre at a time
+        /// along each so no wall is stepped over, stopping at the first.
+        template<typename AT>
+        F32 sides(const AT& at, const LLVector3d& pos)
+        {
+            constexpr S32 SPOKES = 16;
+            static F32 dirs[SPOKES][2];
+            static const bool init = [] {
+                for (S32 j = 0; j < SPOKES; ++j)
+                {
+                    const F64 ang = j * 6.283185307179586 / SPOKES;
+                    dirs[j][0] = static_cast<F32>(std::cos(ang));
+                    dirs[j][1] = static_cast<F32>(std::sin(ang));
+                }
+                return true;
+            }();
+            (void)init;
+            const F64 z = pos.mdV[VZ];
+            auto wall = [&](F64 x, F64 y) {
+                if (const std::vector<SkyMap::Interval>* cell = at(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y))))
+                {
+                    for (const SkyMap::Interval& i : *cell)
+                    {
+                        if (i.mBottom <= z && i.mTop > z)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+            S32 open = 0;
+            for (S32 j = 0; j < SPOKES; ++j)
+            {
+                bool walled = false;
+                for (F64 r = 0.5; r < SIDE_OPEN_REACH_M && !walled; r += 1.0)
+                {
+                    walled = wall(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1]);
+                }
+                open += walled ? 0 : 1;
+            }
+            return static_cast<F32>(open) / SPOKES;
+        }
+
         /// The cosine-weighted share of sky hidden over pos, along spokes read
         /// outwards: a column's lowest solid starting above pos hides the band
         /// of zenith its annulus spans (a disc of radius r at height h hides
@@ -282,9 +327,19 @@ namespace sknav
         }
     }
 
-    F32 SkyMap::coverAbove(const LLVector3d& pos, F32 radius, F32* roof) const
+    F32 SkyMap::coverAbove(const LLVector3d& pos, F32 radius, F32* roof, F32* open) const
     {
-        return cover([this](S64 x, S64 y) { return find(x, y); }, pos, radius, roof);
+        const auto at = [this](S64 x, S64 y) { return find(x, y); };
+        if (open)
+        {
+            *open = sides(at, pos);
+        }
+        return cover(at, pos, radius, roof);
+    }
+
+    F32 SkyMap::sideOpenAt(const LLVector3d& pos) const
+    {
+        return sides([this](S64 x, S64 y) { return find(x, y); }, pos);
     }
 
     SkyView::SkyView(const SkyMap& map, F64 x0, F64 y0, F64 x1, F64 y1)
@@ -307,14 +362,25 @@ namespace sknav
         }
     }
 
-    F32 SkyView::coverAbove(const LLVector3d& pos, F32 radius, F32* roof) const
+    const std::vector<SkyMap::Interval>* SkyView::cell(S64 x, S64 y) const
     {
-        return cover(
-            [this](S64 x, S64 y) {
-                const S64 i = x - mX0, j = y - mY0;
-                return i >= 0 && j >= 0 && i < mWidth && j < mHeight ? mCells[i + j * mWidth] : mMap->find(x, y);
-            },
-            pos, radius, roof);
+        const S64 i = x - mX0, j = y - mY0;
+        return i >= 0 && j >= 0 && i < mWidth && j < mHeight ? mCells[i + j * mWidth] : mMap->find(x, y);
+    }
+
+    F32 SkyView::coverAbove(const LLVector3d& pos, F32 radius, F32* roof, F32* open) const
+    {
+        const auto at = [this](S64 x, S64 y) { return cell(x, y); };
+        if (open)
+        {
+            *open = sides(at, pos);
+        }
+        return cover(at, pos, radius, roof);
+    }
+
+    F32 SkyView::sideOpenAt(const LLVector3d& pos) const
+    {
+        return sides([this](S64 x, S64 y) { return cell(x, y); }, pos);
     }
 
     bool SkyMap::topAt(F64 x, F64 y, F64& top) const
