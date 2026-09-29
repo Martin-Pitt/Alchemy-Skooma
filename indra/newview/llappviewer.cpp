@@ -5720,6 +5720,12 @@ void LLAppViewer::idle()
 
     if (gDisconnected)
     {
+        // <SK:Nexii> motion recorder
+        if (SKMotionRecorder::isRecording())
+        {
+            SKMotionRecorder::onFrameEnd();
+        }
+        // </SK:Nexii>
         return;
     }
 
@@ -5737,6 +5743,12 @@ void LLAppViewer::idle()
             }
         }
 
+        // <SK:Nexii> motion recorder
+        if (SKMotionRecorder::isRecording())
+        {
+            SKMotionRecorder::onFrameEnd();
+        }
+        // </SK:Nexii>
         return;
     }
 

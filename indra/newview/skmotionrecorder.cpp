@@ -44,6 +44,7 @@
 #include "message.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <ctime>
 #include <sstream>
@@ -97,7 +98,7 @@ namespace
         U8  update_type;
         U8  stale;
         U8  is_static;
-        U8  pad;
+        U8  drop;            // SKMotionRecorder::EDropReason
         U32 packet_id;
         F32 time_dilation;
         F32 ping_delay;
@@ -113,6 +114,7 @@ namespace
         F32 final_vel[3];    // after ALMotionPredictor::finalVelocity
         U32 crc;
         U32 parent_id;
+        U64 pre_region_handle; // region pre_pos is relative to
     };
 
     struct ObjectRec
@@ -151,7 +153,7 @@ namespace
 
     static_assert(sizeof(FrameRec)  == 80,  "FrameRec layout");
     static_assert(sizeof(CameraRec) == 104, "CameraRec layout");
-    static_assert(sizeof(UpdateRec) == 184, "UpdateRec layout");
+    static_assert(sizeof(UpdateRec) == 192, "UpdateRec layout");
     static_assert(sizeof(ObjectRec) == 108, "ObjectRec layout");
     static_assert(sizeof(InfoRec)   == 52,  "InfoRec layout");
 
@@ -189,6 +191,7 @@ namespace
         SK_FIELD(UpdateRec, total_us, "u64", 1), SK_FIELD(UpdateRec, local_id, "u32", 1),
         SK_FIELD(UpdateRec, region_handle, "u64", 1), SK_FIELD(UpdateRec, update_type, "u8", 1),
         SK_FIELD(UpdateRec, stale, "u8", 1), SK_FIELD(UpdateRec, is_static, "u8", 1),
+        SK_FIELD(UpdateRec, drop, "u8", 1),
         SK_FIELD(UpdateRec, packet_id, "u32", 1), SK_FIELD(UpdateRec, time_dilation, "f32", 1),
         SK_FIELD(UpdateRec, ping_delay, "f32", 1), SK_FIELD(UpdateRec, raw_pos, "f32", 3),
         SK_FIELD(UpdateRec, raw_vel, "f32", 3), SK_FIELD(UpdateRec, raw_acc, "f32", 3),
@@ -196,7 +199,7 @@ namespace
         SK_FIELD(UpdateRec, pre_pos, "f32", 3), SK_FIELD(UpdateRec, pre_vel, "f32", 3),
         SK_FIELD(UpdateRec, pre_rot, "f32", 4), SK_FIELD(UpdateRec, applied_pos, "f32", 3),
         SK_FIELD(UpdateRec, final_vel, "f32", 3), SK_FIELD(UpdateRec, crc, "u32", 1),
-        SK_FIELD(UpdateRec, parent_id, "u32", 1),
+        SK_FIELD(UpdateRec, parent_id, "u32", 1), SK_FIELD(UpdateRec, pre_region_handle, "u64", 1),
     };
 
     const Field sObjectFields[] = {
@@ -285,6 +288,11 @@ namespace
         append(SKMotionRecorder::REC_INFO, rec);
     }
 
+    std::string jsonReal(F64 value)
+    {
+        return std::isfinite(value) ? llformat("%.17g", value) : std::string("null");
+    }
+
     std::string jsonString(const std::string& in)
     {
         std::string out = "\"";
@@ -337,7 +345,7 @@ namespace
         }
         else
         {
-            out << value.asReal();
+            out << jsonReal(value.asReal());
         }
     }
 
@@ -365,9 +373,9 @@ namespace
         }
         out << "}";
 
-        out << ",\"tuning\":{\"phase_out_time\":" << tuning.mPhaseOutTime << ",\"max_time\":" << tuning.mMaxTime
-            << ",\"cadence_factor\":" << tuning.mCadenceFactor << ",\"cadence_cap\":" << tuning.mCadenceCap
-            << ",\"max_frame_step\":" << tuning.mMaxFrameStep
+        out << ",\"tuning\":{\"phase_out_time\":" << jsonReal(tuning.mPhaseOutTime) << ",\"max_time\":" << jsonReal(tuning.mMaxTime)
+            << ",\"cadence_factor\":" << jsonReal(tuning.mCadenceFactor) << ",\"cadence_cap\":" << jsonReal(tuning.mCadenceCap)
+            << ",\"max_frame_step\":" << jsonReal(tuning.mMaxFrameStep)
             << ",\"cadence_aware\":" << (tuning.mCadenceAware ? "true" : "false") << "}";
 
         out << ",\"regions\":[";
@@ -375,8 +383,8 @@ namespace
         for (const LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
         {
             const LLVector3d& origin = regionp->getOriginGlobal();
-            out << (first ? "" : ",") << "{\"handle\":" << regionp->getHandle() << ",\"origin\":[" << origin.mdV[0]
-                << "," << origin.mdV[1] << "," << origin.mdV[2] << "],\"name\":" << jsonString(regionp->getName()) << "}";
+            out << (first ? "" : ",") << "{\"handle\":" << regionp->getHandle() << ",\"origin\":[" << jsonReal(origin.mdV[0])
+                << "," << jsonReal(origin.mdV[1]) << "," << jsonReal(origin.mdV[2]) << "],\"name\":" << jsonString(regionp->getName()) << "}";
             first = false;
         }
         out << "]";
@@ -464,7 +472,6 @@ void SKMotionRecorder::start()
     sEdgeClipped = false;
     sStartSecs = LLFrameTimer::getElapsedSeconds();
     sRecording = true;
-    onFrameBegin();
 
     LL_INFOS("MotionRecorder") << "Recording object motion to " << sPath << LL_ENDL;
 }
@@ -534,6 +541,7 @@ void SKMotionRecorder::onUpdateBegin(const LLViewerObject* objectp, const LLMess
     sUpdate.msg_secs = LLMessageSystem::getMessageTimeSeconds().value();
     sUpdate.total_us = totalTime();
     sUpdate.local_id = objectp->getLocalID();
+    sUpdate.pre_region_handle = regionHandle(objectp);
     sUpdate.update_type = update_type;
     sUpdate.packet_id = mesgsys ? const_cast<LLMessageSystem*>(mesgsys)->getCurrentRecvPacketID() : 0;
     copy3(sUpdate.pre_pos, objectp->getPosition());
@@ -553,13 +561,14 @@ void SKMotionRecorder::onUpdateDecoded(const LLVector3& pos, const LLVector3& ve
     sUpdate.time_dilation = time_dilation;
 }
 
-void SKMotionRecorder::onUpdateEnd(const LLViewerObject* objectp, const LLVector3& applied_pos, U32 crc, U32 parent_id, bool stale)
+void SKMotionRecorder::onUpdateEnd(const LLViewerObject* objectp, U32 crc, U32 parent_id, bool stale, U8 drop)
 {
     sUpdate.region_handle = regionHandle(objectp);
     sUpdate.stale = stale ? 1 : 0;
+    sUpdate.drop = drop;
     sUpdate.is_static = objectp->mStatic ? 1 : 0;
     sUpdate.ping_delay = sPingDelay;
-    copy3(sUpdate.applied_pos, applied_pos);
+    copy3(sUpdate.applied_pos, objectp->getPosition());
     copy3(sUpdate.final_vel, objectp->getVelocity());
     sUpdate.crc = crc;
     sUpdate.parent_id = parent_id;
@@ -628,6 +637,7 @@ void SKMotionRecorder::onFrameEnd()
         return a.forced != b.forced ? a.forced : a.rec.cam_dist < b.rec.cam_dist;
     });
     U32 dropped = 0;
+    U32 tracked = 0;
     if (sMaxObjects > 0 && sCandidates.size() > sMaxObjects)
     {
         dropped = (U32)sCandidates.size() - sMaxObjects;
@@ -648,6 +658,7 @@ void SKMotionRecorder::onFrameEnd()
         }
         noteSeen(objectp);
         append(REC_OBJECT, candidate.rec);
+        ++tracked;
     }
 
     CameraRec cam = {};
@@ -681,7 +692,7 @@ void SKMotionRecorder::onFrameEnd()
     frame.frame_dt_clamped = gFrameDTClamped;
     frame.updates = sUpdates;
     frame.network_secs = sNetworkSecs;
-    frame.tracked = (U32)sCandidates.size();
+    frame.tracked = tracked;
     frame.dropped = dropped;
     if (LLViewerRegion* regionp = gAgent.getRegion())
     {
@@ -706,4 +717,11 @@ void SKMotionRecorder::onFrameEnd()
     sCandidates.clear();
     sUpdates = 0;
     sNetworkSecs = 0.f;
+
+    sFile.flush();
+    if (!sFile.good())
+    {
+        LL_WARNS("MotionRecorder") << "Write to " << sPath << " failed, stopping" << LL_ENDL;
+        stop();
+    }
 }

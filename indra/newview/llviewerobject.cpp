@@ -1313,7 +1313,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
             // <SK:Nexii> motion recorder
             if (SKMotionRecorder::isRecording())
             {
-                SKMotionRecorder::onUpdateEnd(this, getPosition(), 0, 0, true);
+                SKMotionRecorder::onUpdateEnd(this, 0, 0, true, SKMotionRecorder::DROP_NONE);
             }
             // </SK:Nexii>
             return retval;
@@ -1359,6 +1359,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         from_region_handle(region_handle, &x, &y);
 
         LL_WARNS("UpdateFail") << "Object has invalid region " << x << ":" << y << "!" << LL_ENDL;
+        SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_INVALID_REGION); // <SK:Nexii> motion recorder
         return retval;
     }
 
@@ -2133,6 +2134,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                                 getRegion()->addCacheMissFull(sent_parentp->getLocalID());
                                 gObjectList.killObject(sent_parentp);
                                 gObjectList.killObject(this);
+                                SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_PARENT_CYCLE); // <SK:Nexii> motion recorder
                                 return retval;
                             }
 // [RLVa:KB] - Checked: 2010-03-16 (RLVa-1.1.0k) | Added: RLVa-1.1.0k
@@ -2303,6 +2305,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                             getRegion()->addCacheMissFull(sent_parentp->getLocalID());
                             gObjectList.killObject(sent_parentp);
                             gObjectList.killObject(this);
+                            SKMotionRecorder::onUpdateDropped(this, SKMotionRecorder::DROP_PARENT_CYCLE); // <SK:Nexii> motion recorder
                             return retval;
                         }
                         // make sure this object gets a non-damped update
@@ -2402,7 +2405,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         // <SK:Nexii> motion recorder
         if (SKMotionRecorder::isRecording())
         {
-            SKMotionRecorder::onUpdateEnd(this, getPosition(), crc, parent_id, true);
+            SKMotionRecorder::onUpdateEnd(this, crc, parent_id, true, SKMotionRecorder::DROP_NONE);
         }
         // </SK:Nexii>
         return retval;
@@ -2590,7 +2593,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // <SK:Nexii> motion recorder
     if (SKMotionRecorder::isRecording())
     {
-        SKMotionRecorder::onUpdateEnd(this, new_pos_parent, crc, parent_id, false);
+        SKMotionRecorder::onUpdateEnd(this, crc, parent_id, false, SKMotionRecorder::DROP_NONE);
     }
     // </SK:Nexii>
     if (mDrawable.notNull())

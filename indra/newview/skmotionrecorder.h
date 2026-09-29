@@ -49,6 +49,14 @@ public:
         REC_INFO   = 5,
     };
 
+    // Why an update was abandoned before it was applied.
+    enum EDropReason : U8
+    {
+        DROP_NONE           = 0,
+        DROP_INVALID_REGION = 1,
+        DROP_PARENT_CYCLE   = 2,
+    };
+
     static bool isRecording() { return sRecording; }
 
     static void start();
@@ -66,7 +74,14 @@ public:
     static void onUpdateBegin(const LLViewerObject* objectp, const LLMessageSystem* mesgsys, U8 update_type);
     static void onUpdateDecoded(const LLVector3& pos, const LLVector3& vel, const LLVector3& acc,
                                 const LLQuaternion& rot, const LLVector3& omega, F32 time_dilation);
-    static void onUpdateEnd(const LLViewerObject* objectp, const LLVector3& applied_pos, U32 crc, U32 parent_id, bool stale);
+    static void onUpdateEnd(const LLViewerObject* objectp, U32 crc, U32 parent_id, bool stale, U8 drop);
+    static void onUpdateDropped(const LLViewerObject* objectp, U8 drop)
+    {
+        if (sRecording)
+        {
+            onUpdateEnd(objectp, 0, 0, false, drop);
+        }
+    }
 
     // LLViewerObject::idleUpdate, after prediction has run (or not) for this object this frame.
     static void onObjectIdle(const LLViewerObject* objectp, F32 dt, bool stepped);
