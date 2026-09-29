@@ -723,48 +723,57 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // Clusters clear of the ground: a mesh each, and no terrain in it. A
     // skybox three kilometres up has nothing to do with the land below it, and
     // a heightfield spanning the gap would overflow Recast's span heights.
-    for (const Cluster* c : airborne)
     {
-        live.insert(c->mId);
-        std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
-        if (!mesh)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile airborne");
+        for (const Cluster* c : airborne)
         {
-            mesh = std::make_unique<Mesh>();
-            mesh->mId = c->mId;
-            mesh->mGeneration = mNextGeneration++;
-            mesh->mOrigin = latticeOrigin(c->mMin);
-            if (!c->mRecords.empty())
+            live.insert(c->mId);
+            std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
+            if (!mesh)
             {
-                LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
-                mesh->mRegion = region ? region->getHandle() : 0;
+                mesh = std::make_unique<Mesh>();
+                mesh->mId = c->mId;
+                mesh->mGeneration = mNextGeneration++;
+                mesh->mOrigin = latticeOrigin(c->mMin);
+                if (!c->mRecords.empty())
+                {
+                    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
+                    mesh->mRegion = region ? region->getHandle() : 0;
+                }
             }
-        }
-        mesh->mLastSeen = gFrameTimeSeconds;
-        std::vector<LaidTile> laid;
-        layAirborne(*c, mesh->mOrigin, pad, laid);
-        std::map<TileKey, Tile> wanted;
-        for (LaidTile& lt : laid)
-        {
-            const TileKey key = lt.mKey;
-            Tile& tile = wanted[key];
-            const auto old = mesh->mTiles.find(key);
-            if (old != mesh->mTiles.end())
+            mesh->mLastSeen = gFrameTimeSeconds;
+            std::vector<LaidTile> laid;
             {
-                tile = old->second;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne");
+                layAirborne(*c, mesh->mOrigin, pad, laid);
             }
-            std::vector<RecordPtr> before = std::move(tile.mRecords);
-            tile.mMin = meshTileMin(mesh->mOrigin, key);
-            tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-            tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
-            tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            tile.mRecords = std::move(lt.mRecords);
-            reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            std::map<TileKey, Tile> wanted;
+            for (LaidTile& lt : laid)
+            {
+                const TileKey key = lt.mKey;
+                Tile& tile = wanted[key];
+                const auto old = mesh->mTiles.find(key);
+                if (old != mesh->mTiles.end())
+                {
+                    tile = old->second;
+                }
+                std::vector<RecordPtr> before = std::move(tile.mRecords);
+                tile.mMin = meshTileMin(mesh->mOrigin, key);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
+                tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
+                tile.mRecords = std::move(lt.mRecords);
+                reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            }
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
+            }
+            mesh->mTiles.swap(wanted);
         }
-        if (dropTiles(*mesh, wanted))
-        {
-            mRevision++;
-        }
-        mesh->mTiles.swap(wanted);
     }
 
     // One mesh per region: its terrain, and every record that reaches over
@@ -774,6 +783,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // the structure was rezzed across the border.
     if (LLWorld::instanceExists())
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile regions");
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
             live.insert(region->getRegionID());
@@ -793,8 +803,11 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const U64 land_stamp = landStamp(*region);
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
             std::vector<LaidTile> laid;
-            layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
-                      [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region");
+                layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
+                          [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            }
 
             std::map<TileKey, Tile> wanted;
             for (LaidTile& lt : laid)
@@ -822,6 +835,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     // tile's padded edge.
                     if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
                     {
+                        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - terrain signature");
                         tile.mLandStamp = land_stamp;
                         tile.mWorldStamp = world_stamp;
                         tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
@@ -838,9 +852,12 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 }
                 reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
             }
-            if (dropTiles(*mesh, wanted))
             {
-                mRevision++;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
             }
             mesh->mTiles.swap(wanted);
         }
@@ -848,16 +865,19 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
     // A cluster that has gone, or that has come down to the ground and is now
     // the region's business, takes its mesh with it.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (live.count(it->second->mId))
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile prune");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            ++it;
-        }
-        else
-        {
-            it = mMeshes.erase(it);
-            mRevision++;            // its tiles leave the overlay with it
+            if (live.count(it->second->mId))
+            {
+                ++it;
+            }
+            else
+            {
+                it = mMeshes.erase(it);
+                mRevision++;            // its tiles leave the overlay with it
+            }
         }
     }
 }
