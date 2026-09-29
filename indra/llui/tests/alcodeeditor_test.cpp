@@ -423,7 +423,7 @@ namespace tut
     {
         set_test_name("a dot opens the members of the name before it, and a function accepted comes with its brackets");
         ALCodeEditor& e = make("", "slua");
-        e.highlighter().words().set("function", { "ll.Say", "ll.Abs", "print" });
+        e.highlighter().ownWords().set("function", { "ll.Say", "ll.Abs", "print" });
         std::vector<std::pair<ALTextPos, std::string>> asked;
         e.setCompletionRequest([&](const ALTextPos& at, std::string_view prefix) { asked.emplace_back(at, std::string(prefix)); });
         std::vector<ALTextPos> signatures;
@@ -662,7 +662,7 @@ namespace tut
         ALCodeEditor& f = make("default { state_entry() { llSay(0, \"a\\tb\"); } }\n");
         const ALTextRange escaped = f.stringAt(ALTextPos(0, 36));
         ensure_equals("the whole literal", f.document().text(escaped), std::string("\"a\\tb\""));
-        ensure_equals("the tab counted once, and the source said", f.stringSize(escaped), std::string("3 bytes, 6 as written"));
+        ensure_equals("the tab counted once, and the source said", f.stringSize(escaped), std::string("3 bytes, 6 in source"));
 
         // And the card comes up on the comma, where no word is.
         const LLRect text = f.textRect();
@@ -1239,7 +1239,7 @@ namespace tut
     {
         set_test_name("with nobody to ask, the grammar's words are found by their parts as the document's are");
         ALCodeEditor& e = make("", "lsl");
-        e.highlighter().words().set("function", { "llSetPos", "llSay" });
+        e.highlighter().ownWords().set("function", { "llSetPos", "llSay" });
         type("setp");
         key(' ', MASK_CONTROL);
         bool found = false;
@@ -1362,6 +1362,14 @@ namespace tut
         nearest.edits.emplace_back(ALTextRange(ALTextPos(12, 0), ALTextPos(12, 4)), "B");
         ensure_equals("together", ALCodeEditor::previewOf(farest.document(), nearest, kinds),
                       std::string("- line 10\n- line 11\n- line 12\n+ A 10\n+ line 11\n+ B 12"));
+        // Deep in a block, the lines' indentation in common taken off.
+        ALCodeEditor&     nested = make("{\n    {\n        one;\n            two;\n    }\n}\n");
+        ALCodeEditor::Fix called;
+        called.edits.emplace_back(ALTextRange(ALTextPos(2, 8), ALTextPos(2, 11)), "one()");
+        ensure_equals("at the left", ALCodeEditor::previewOf(nested.document(), called, kinds), std::string("- one;\n+ one();"));
+        called.edits.emplace_back(ALTextRange(ALTextPos(3, 12), ALTextPos(3, 15)), "two()");
+        ensure_equals("each as far in as it is past the least", ALCodeEditor::previewOf(nested.document(), called, kinds),
+                      std::string("- one;\n-     two;\n+ one();\n+     two();"));
     }
 
     template<> template<>
@@ -2514,5 +2522,50 @@ namespace tut
             same("wrapped row " + std::to_string(r) + " after the opener", deeper, again.rows[r]);
         }
     }
-}
 
+    template<> template<>
+    void alcodeeditor_object::test<70>()
+    {
+        set_test_name("an editor makes its completion and fix lists the first time each is shown, not before");
+        ALCodeEditor& e = make("integer count;\nllSay(0, co");
+        ensure("no completion list yet", e.findChild<LLView>("completions", false) == nullptr);
+        ensure("no fix list yet", e.findChild<LLView>("fixes", false) == nullptr);
+        ensure("neither open", !e.completionOpen() && !e.fixesOpen());
+        e.setCaret(e.document().end());
+        key(' ', MASK_CONTROL);
+        ensure("the completions listed", e.completionOpen() && e.findChild<LLView>("completions", false) != nullptr);
+        ensure("and still no fix list", e.findChild<LLView>("fixes", false) == nullptr);
+        key(KEY_ESCAPE);
+        e.setFixProvider([](S32 line, std::vector<ALCodeEditor::Fix>& out) {
+            ALCodeEditor::Fix semi;
+            semi.title = "Insert ';'";
+            semi.value = "semi";
+            semi.edits.emplace_back(ALTextRange(ALTextPos(line, 0), ALTextPos(line, 0)), ";");
+            out = { semi };
+        });
+        e.setFixable(1, true, true);
+        ensure("the fixes listed", e.handleKeyHere('.', MASK_CONTROL) && e.fixesOpen() && e.findChild<LLView>("fixes", false) != nullptr);
+    }
+    template<> template<>
+    void alcodeeditor_object::test<71>()
+    {
+        set_test_name("the next occurrence taken comes out from under the pinned headers, not scrolled to the top under them");
+        std::string text = "default\n{\n    state_entry()\n    {\n";
+        for (int i = 0; i < 80; ++i)
+        {
+            text += "        llOwnerSay(\"line " + std::to_string(i) + "\");\n";
+        }
+        text += "    }\n}\n";
+        ALCodeEditor& e = make(text.c_str());
+        e.setStickyHeaders(true);
+        const S32 row_h = e.layout().rowHeight();
+        // The last llOwnerSay taken, then the next round past the end: the
+        // first, a line above the view.
+        e.setCaret(ALTextPos(83, 10));
+        e.perform(ALEditorCommand::SelectNextOccurrence);
+        e.perform(ALEditorCommand::SelectNextOccurrence);
+        const S32 below = e.layout().lineTop(4) - e.scrollY();
+        ensure("in sight", below < e.textRect().getHeight());
+        ensure("below the handler's state pinned over it: " + std::to_string(below) + " of " + std::to_string(row_h), below >= row_h);
+    }
+}
