@@ -367,41 +367,104 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="CodeStringHead">string</string>
 	<string name="CodeFixLink">Fix: [TITLE]</string>
 	<string name="CodeFixNone">Nothing to fix or refactor here</string>
-	<string name="CodeInlayWrite">Ctrl-double-click to write '[TEXT]' in</string>
-	<string name="CodeInlayWriteMac">Command-double-click to write '[TEXT]' in</string>
+	<string name="CodeInlayWrite">Ctrl-double-click to insert '[TEXT]'</string>
+	<string name="CodeInlayWriteMac">Command-double-click to insert '[TEXT]'</string>
 	<string name="CodeDeprecated">(deprecated)</string>
 	<string name="CodeStringBytesA">[COUNT] byte</string>
 	<string name="CodeStringBytesB">[COUNT] bytes</string>
 	<string name="CodeStringCharactersA">[COUNT] character</string>
 	<string name="CodeStringCharactersB">[COUNT] characters</string>
-	<string name="CodeStringWritten">[COUNT] as written</string>
+	<string name="CodeStringWritten">[COUNT] in source</string>
 
 	<!-- The find bar over an editor's top right corner (alfindbar.cpp):
 	     its tips, its fields' labels and what its count says. -->
-	<string name="FindBarReplaceToo">Replace as well</string>
+	<string name="FindBarReplaceToo">Toggle replace</string>
 	<string name="FindBarFind">Find</string>
 	<string name="FindBarCase">Match case</string>
 	<string name="FindBarWord">Match whole words</string>
 	<string name="FindBarPattern">Match a regular expression</string>
-	<string name="FindBarPrevious">The one before (shift-return)</string>
-	<string name="FindBarNext">The next (return)</string>
-	<string name="FindBarInSelection">In the selection only</string>
+	<string name="FindBarPrevious">Previous match (shift-return)</string>
+	<string name="FindBarNext">Next match (return)</string>
+	<string name="FindBarInSelection">Find in selection</string>
 	<string name="FindBarClose">Close (escape)</string>
 	<string name="FindBarReplace">Replace</string>
 	<string name="FindBarKeepCase">Keep each match's case: HELLO, Hello or hello</string>
-	<string name="FindBarReplaceOne">Replace this one and find the next</string>
-	<string name="FindBarReplaceAll">Replace every one, as one step to undo</string>
-	<string name="FindBarBadPattern">Not a pattern</string>
+	<string name="FindBarReplaceOne">Replace this match and find the next</string>
+	<string name="FindBarReplaceAll">Replace all matches as one undo step</string>
+	<string name="FindBarBadPattern">Invalid regular expression</string>
 	<string name="FindBarNone">No results</string>
 	<string name="FindBarOf">[CURRENT] of [TOTAL]</string>
 	<string name="ScriptWordSleep">The script sleeps [SECONDS] s after this</string>
-	<string name="ScriptWordGodMode">Only a god may call this</string>
-	<string name="FindBarWrappedToTop">Went round the end, on from the top</string>
-	<string name="FindBarWrappedToBottom">Went round the start, back from the bottom</string>
+	<string name="ScriptWordGodMode">Requires god mode</string>
+	<string name="FindBarWrappedToTop">Reached the end; continued from the top</string>
+	<string name="FindBarWrappedToBottom">Reached the start; continued from the bottom</string>
 
 	<!-- The row of tabs over an editor (altabstrip.cpp): the button that
 	     lists them all once they run past it. -->
-	<string name="TabStripList">Every tab, to pick one from</string>
+	<!-- Script Studio's editor colors, as the preferences list them (ALScriptTheme::labelOf). -->
+	<string name="ScriptColorLabel_ScriptText">Text</string>
+	<string name="ScriptColorLabel_ScriptBackground">Background</string>
+	<string name="ScriptColorLabel_ScriptBgReadOnlyColor">Background, read-only</string>
+	<string name="ScriptColorLabel_ScriptCursorColor">Caret</string>
+	<string name="ScriptColorLabel_ScriptSelectionColor">Selection</string>
+	<string name="ScriptColorLabel_ScriptSelectionInactiveColor">Selection, unfocused</string>
+	<string name="ScriptColorLabel_ScriptCurrentLineColor">Current line</string>
+	<string name="ScriptColorLabel_ScriptGutterColor">Gutter</string>
+	<string name="ScriptColorLabel_ScriptLineNumberColor">Line numbers</string>
+	<string name="ScriptColorLabel_ScriptActiveLineNumberColor">Caret's line number</string>
+	<string name="ScriptColorLabel_ScriptBracketMatchColor">Matching bracket</string>
+	<string name="ScriptColorLabel_ScriptFindMatchColor">Find match</string>
+	<string name="ScriptColorLabel_ScriptFoldColor">Fold marks</string>
+	<string name="ScriptColorLabel_ScriptIndentGuideColor">Indent guides</string>
+	<string name="ScriptColorLabel_ScriptWhitespaceColor">Whitespace</string>
+	<string name="ScriptColorLabel_ScriptHighlightColor">Highlighted references</string>
+	<string name="ScriptColorLabel_ScriptChangedColor">Changed lines</string>
+	<string name="ScriptColorLabel_ScriptStickyHeaderColor">Sticky headers</string>
+	<string name="ScriptColorLabel_ScriptInlayHintColor">Parameter name hints</string>
+	<string name="ScriptColorLabel_ScriptInlayHintBgColor">Parameter name hints, background</string>
+	<string name="ScriptColorLabel_ScriptHeatColor">Memory heat</string>
+	<string name="ScriptColorLabel_ScriptErrorColor">Errors</string>
+	<string name="ScriptColorLabel_ScriptWarningColor">Warnings</string>
+	<string name="ScriptColorLabel_ScriptNoteColor">Notes</string>
+	<string name="ScriptColorLabel_ScriptRuntimeErrorColor">Run-time errors</string>
+	<string name="ScriptColorLabel_ScriptWidgetColor">Pop-ups</string>
+	<string name="ScriptColorLabel_ScriptWidgetBorderColor">Pop-ups, border</string>
+	<string name="ScriptColorLabel_ScriptWidgetSelectionColor">Pop-ups, chosen row</string>
+	<string name="ScriptColorLabel_ScriptBracket1Color">Rainbow brackets, level 1</string>
+	<string name="ScriptColorLabel_ScriptBracket2Color">Rainbow brackets, level 2</string>
+	<string name="ScriptColorLabel_ScriptBracket3Color">Rainbow brackets, level 3</string>
+	<string name="ScriptColorLabel_ScriptComment">Comment</string>
+	<string name="ScriptColorLabel_ScriptDocComment">Doc comment</string>
+	<string name="ScriptColorLabel_ScriptString">String</string>
+	<string name="ScriptColorLabel_ScriptEscape">Escape</string>
+	<string name="ScriptColorLabel_ScriptNumber">Number</string>
+	<string name="ScriptColorLabel_ScriptKeyword">Keyword</string>
+	<string name="ScriptColorLabel_ScriptControl">Control</string>
+	<string name="ScriptColorLabel_ScriptType">Type</string>
+	<string name="ScriptColorLabel_ScriptConstant">Constant</string>
+	<string name="ScriptColorLabel_ScriptFunction">Function</string>
+	<string name="ScriptColorLabel_ScriptEvent">Event</string>
+	<string name="ScriptColorLabel_ScriptLabel">Label</string>
+	<string name="ScriptColorLabel_ScriptOperator">Operator</string>
+	<string name="ScriptColorLabel_ScriptPunctuation">Punctuation</string>
+	<string name="ScriptColorLabel_ScriptPreprocessor">Preprocessor</string>
+	<string name="ScriptColorLabel_ScriptTag">Tag</string>
+	<string name="ScriptColorLabel_ScriptAttribute">Attribute</string>
+	<string name="ScriptColorLabel_ScriptAttributeValue">Attribute value</string>
+	<string name="ScriptColorLabel_ScriptEntity">Entity</string>
+	<string name="ScriptColorLabel_ScriptVariable">Variable</string>
+	<string name="ScriptColorLabel_ScriptParameter">Parameter</string>
+	<string name="ScriptColorLabel_ScriptProperty">Property</string>
+	<string name="ScriptColorLabel_ScriptDeprecated">Deprecated</string>
+	<string name="ScriptColorLabel_ScriptInvalid">Invalid</string>
+	<string name="ScriptColorLabel_ScriptNamespace">Namespace</string>
+	<string name="ScriptColorLabel_ScriptState">State</string>
+	<string name="ScriptColorLabel_ScriptGlobalVariable">Global variable</string>
+	<string name="ScriptColorLabel_ScriptPath">Path</string>
+	<!-- A command's keys in a tip, and a tip with them after it. -->
+	<string name="KeysInTip">([KEYS])</string>
+	<string name="TipWithKeys">[TIP] ([KEYS])</string>
+	<string name="TabStripList">All tabs</string>
 	<string name="QuickOpenNone">Nothing matches</string>
 
 	<!-- The vim keymap's words, in the band under the editor's text
@@ -431,10 +494,11 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="VimNoFileUnderCursor">E446: No file name under cursor</string>
 	<string name="VimNoSpellCheck">E756: Spell checking is not enabled</string>
 	<string name="VimNoMisspelling">No misspelled words</string>
+	<string name="VimMisspellingCut">Still checking the spelling: search again to go on</string>
 	<string name="VimNoSuggestions">Sorry, no suggestions</string>
 	<string name="VimNotAddable">E764: Cannot add this word</string>
 	<string name="VimNothingInRegister">E353: Nothing in register [REGISTER]</string>
-	<string name="VimCountTooLarge">Too large a count: it would put in [SIZE] MB</string>
+	<string name="VimCountTooLarge">Too large a count: it would put in [SIZE,number,1] MB</string>
 	<string name="VimBadPattern">E486: [ERROR]</string>
 	<string name="VimPatternNotFound">E486: Pattern not found: [PATTERN]</string>
 	<string name="VimUnknownOption">E518: Unknown option: [OPTION]</string>
@@ -473,7 +537,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="VimLetOnly">Only mapleader and maplocalleader are set with :let</string>
 	<string name="VimrcLine">line [NUMBER]: [ERROR]</string>
 	<string name="VimrcTooLarge">The vimrc is too large to read.</string>
-	<string name="VimrcNotNotecard">The vimrc's item is not a notecard that can be read.</string>
+	<string name="VimrcNotNotecard">The vimrc item is not a readable notecard.</string>
 
 	<!-- Script Studio's own words about a script, from the alscript
 	     library: each problem carries a key and the words it is about,
@@ -522,7 +586,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="PreprocModuleInWorld">could not find module '[1]': one so named is in the object or the inventory, but modules from there are off. Modules come from folders on disk: turn on Build &gt; Include from Disk, and add the folder with Build &gt; Add Include Folder...</string>
 	<string name="PreprocIncludeNotFetched">include file '[1]' could not be fetched, and the script is not sent without it</string>
 	<string name="CompileQueueSkippedSaving">Skipped "[SCRIPT_NAME]": a save of it is on its way, which a recompile would land over.</string>
-	<string name="CompileQueueUnsavedInStudio">"[SCRIPT_NAME]" has changes not saved in Script Studio; what compiles is the server's text, without them.</string>
+	<string name="CompileQueueUnsavedInStudio">Script Studio has unsaved changes to "[SCRIPT_NAME]"; the recompile uses the version saved on the server, without them.</string>
 	<string name="BridgeSentCompiledAsIs">The compiled half was changed and its source was not, so it went up as it is rather than as its source expands.</string>
 	<string name="PreprocIncludeSentWithout">include file '[1]' could not be fetched, and the script went up without it</string>
 	<string name="PreprocObjectUnanswered">the object this script is in did not say what it holds -- it did not answer in time, or is out of view -- so no include was looked for in it; save again once it answers</string>
@@ -851,22 +915,22 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="WorkspaceAssetUnreadable">the asset could not be read</string>
 	<string name="WorkspaceNotecardUnreadable">the notecard could not be read</string>
 	<string name="WorkspaceNotecardUnwritable">the notecard could not be written</string>
-	<string name="WorkspaceNotecardTooLarge">the notecard's text is [SIZE] bytes, and a notecard may hold at most [LIMIT]: past that, no viewer could open it again</string>
+	<string name="WorkspaceNotecardTooLarge">the notecard text is [SIZE] bytes and the limit is [LIMIT] bytes; a larger notecard cannot be opened again</string>
 	<string name="WorkspaceUploadFailed">the upload failed</string>
-	<string name="WorkspaceScriptTooLarge">the script is [SIZE] bytes, and a script may be at most [LIMIT]</string>
-	<string name="WorkspaceNoRegion">no region</string>
+	<string name="WorkspaceScriptTooLarge">the script is [SIZE] bytes and the limit is [LIMIT] bytes</string>
+	<string name="WorkspaceNoRegion">not connected to a region</string>
 	<string name="WorkspaceRegionCannotUpdateScripts">the region cannot update scripts</string>
 	<string name="WorkspaceTransferFolder">Passed between objects</string>
 	<string name="WorkspaceTransferNoFolder">no folder could be made in the trash for what passes between the objects</string>
-	<string name="WorkspaceExperienceUnknown">the region did not say what experience the script runs under, and a save that did not say it would take it away</string>
+	<string name="WorkspaceExperienceUnknown">the region did not say which experience the script uses, and saving without it would remove the script from that experience</string>
 	<string name="WorkspaceRegionCannotUpdateNotecards">the region cannot update notecards</string>
 	<string name="WorkspaceRegionCannotMakeNotecard">the region cannot make a notecard in an object</string>
 	<string name="WorkspaceNameNeeded">a name is needed</string>
-	<string name="WorkspaceObjectNotModifiable">the object may not be changed</string>
-	<string name="WorkspaceNoTrash">no trash folder</string>
+	<string name="WorkspaceObjectNotModifiable">you do not have permission to modify the object</string>
+	<string name="WorkspaceNoTrash">no Trash folder</string>
 	<string name="WorkspaceNothingToDo">nothing to do</string>
 	<string name="WorkspaceQueueCannotOpen">the queue could not be opened</string>
-	<string name="WorkspaceQueueWouldNotStart">the queue would not start</string>
+	<string name="WorkspaceQueueWouldNotStart">the queue could not start</string>
 	<string name="AnalysisNoLuauDefinitions">No Luau definitions at [PATH]</string>
 	<string name="AnalysisNoLSLBuiltins">No LSL builtins</string>
 
@@ -886,6 +950,18 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="XUIEditAlreadyCarries">the element already carries [NAME]</string>
 	<string name="XUIEditSameName">that is the name it has</string>
 	<string name="XUIEditWouldCrossEdge">[NAME] would cross the edge it is measured from, which moves the element to the other side of its parent rather than by [COUNT] pixels</string>
+
+	<!-- A notecard's items, as buttons in its text, and a notecard full, in
+	     the notecard window and in Script Studio (alnotecardembedded.cpp) -->
+	<string name="EmbeddedItemOpenTip">[NAME], embedded in the notecard: click to open it</string>
+	<string name="EmbeddedItemPlayTip">[NAME], embedded in the notecard: click to play it and copy it to your inventory</string>
+	<string name="EmbeddedItemCopyTip">[NAME], embedded in the notecard: click to copy it to your inventory</string>
+	<string name="NotecardReadOnlyDrop">This notecard cannot be changed</string>
+	<string name="NotecardDropNoCopy">You cannot copy this item, so it cannot be added to the notecard</string>
+	<string name="NotecardCopyUnsaved">Save the notecard first: [NAME] can only be copied from a saved notecard</string>
+	<string name="NotecardCopyFailed">[NAME] could not be copied: not connected to a region</string>
+	<string name="NotecardCopyRefused">[NAME] could not be copied: [ERROR]</string>
+	<string name="NotecardFull">[NAME] is full: a notecard holds at most [LIMIT] bytes</string>
 
 	<!-- ToolTips for notecards -->
 	<string name="TooltipNotecardNotAllowedTypeDrop">
@@ -3265,9 +3341,6 @@ If you continue to receive this message, please contact Second Life support for 
 	<string name="CompileSuccessful">Compile successful!</string>
 	<string name="CompileSuccessfulSaving">Compile successful, saving...</string>
 	<string name="SaveComplete">Save complete.</string>
-	<string name="UploadFailed">File upload failed: </string>
-	<string name="ObjectOutOfRange">Script (object out of range)</string>
-	<string name="ScriptWasDeleted">Script (deleted from inventory)</string>
 	
 	<!-- god tools -->
 	<string name="GodToolsObjectOwnedBy">Object [OBJECT] owned by [OWNER]</string>
@@ -3390,7 +3463,6 @@ If you continue to receive this message, please contact Second Life support for 
     <string name="ATTACH_HIND_RFOOT">Right Hind Foot</string>
 
 	<!-- script editor -->
-	<string name="CursorPos">Line [LINE], Column [COLUMN]</string>
 
 	<!-- panel dir browser -->
 	<string name="PanelDirCountFound">[COUNT] found</string>
@@ -4649,7 +4721,7 @@ Try enclosing path to the editor with double quotes.
  <string name="ExternalEditorCommandParseError">Error parsing the external editor command.</string>
  <string name="ExternalEditorFailedToRun">External editor failed to run.</string>
  <string name="ExternalEditorFailedToStart">Failed to start the WebSocket server. Ensure the ExternalWebsocketSyncEnable setting is on.</string>
- <string name="VSCodeLaunchFailed">Failed to launch VS Code. Ensure the 'code' command is available on your PATH.</string>
+ <string name="VSCodeLaunchFailed">Could not start VS Code. Make sure the 'code' command is on your PATH.</string>
 
  <!--  Machine translation of chat messahes -->
  <string name="TranslationFailed">Translation failed: [REASON]</string>
@@ -4828,6 +4900,7 @@ name="Command_360_Capture_Label">360 snapshot</string>
   <string name="Command_Report_Abuse_Label">Report Abuse</string>
   <string name="Command_SceneExplorer_Label">Scene Explorer</string>
   <string name="Command_Scripts_Label">My Scripts</string>
+  <string name="Command_ScriptStudio_Label">Script Studio</string>
   <string name="Command_Stats_Label">Statistics</string>
   <string name="Command_Search_Label">Search</string>
   <string name="Command_Snapshot_Label">Snapshot</string>
@@ -4873,6 +4946,7 @@ name="Command_360_Capture_Label">360 snapshot</string>
   <string name="Command_Report_Abuse_Tooltip">Report Abuse</string>
   <string name="Command_SceneExplorer_Tooltip">Browse and filter everything in the region</string>
   <string name="Command_Scripts_Tooltip">Scripts attached to your avatar</string>
+  <string name="Command_ScriptStudio_Tooltip">Write, check and save scripts</string>
   <string name="Command_Stats_Tooltip">Statistics like FPS, network usage and sim performance</string>
   <string name="Command_Search_Tooltip">Find places, events, people</string>
   <string name="Command_Snapshot_Tooltip">Open the snapshot floater</string>
