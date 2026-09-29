@@ -96,6 +96,7 @@
 #include "llvisualeffect.h"
 #include "rlvactions.h"
 #include "rlvlocks.h"
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 // [/RLVa:KB]
 
 
@@ -1751,6 +1752,8 @@ void render_ui_2d()
     }
 
 
+    SKOverlays::draw(SKOverlayLayer::ScreenUnderUI); // <SK:Nexii> overlay registry: 2.5D/2D under the UI
+
     if (LLPipeline::RenderUIBuffer)
     {
         if (LLView::sIsRectDirty)
@@ -1813,6 +1816,8 @@ void render_ui_2d()
     {
         gViewerWindow->draw();
     }
+
+    SKOverlays::draw(SKOverlayLayer::ScreenOverUI); // <SK:Nexii> overlay registry: 2D over the UI
 
     // reset current origin for font rendering, in case of tiling render
     LLFontGL::sCurOrigin.set(0, 0);

@@ -98,6 +98,7 @@
 #include "llviewerparcelmgr.h"
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
+#include "skoverlay.h" // <SK:Nexii> overlay registry
 #include "llvoavatarself.h"
 #include "llvocache.h"
 #include "llvosky.h"
@@ -4861,6 +4862,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         mHighlightFaces.clear();
 
         renderDebug();
+        SKOverlays::draw(SKOverlayLayer::World); // <SK:Nexii> overlay registry: 3D layer
     }
 
     if (gUseWireframe)
