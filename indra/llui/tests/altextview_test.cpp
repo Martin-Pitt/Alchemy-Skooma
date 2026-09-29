@@ -30,6 +30,7 @@
 
 #include "../llbutton.h"
 #include "../llfocusmgr.h"
+#include "../lllineeditor.h"
 #include "../llpanel.h"
 #include "../lluictrlfactory.h"
 #include "../llurlaction.h"
@@ -40,6 +41,8 @@
 
 #include "../test/lltut.h"
 
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -50,6 +53,29 @@ const std::string gViewTestAnonName("Anon");
 const std::string& rlvGetAnonym(const LLAvatarName& av_name)
 {
     return gViewTestAnonName;
+}
+
+namespace ll_test
+{
+    // What a test reaches inside the view for: how long Next Misspelling
+    // may check lines for, and its going on as the next frame would.
+    struct TextViewProbe
+    {
+        static void misspellingBudget(ALTextView& view, F32 seconds) { view.mMisspellingBudget = seconds; }
+        static bool seeking(const ALTextView& view) { return view.mMisspellingSought.has_value(); }
+        static void trimLayout(ALTextView& view) { view.trimLayout(); }
+        static S32  heldMost() { return ALTextView::LAYOUT_HELD_MOST; }
+        // What a frame does before it draws, of what a test reaches:
+        // Next Misspelling gone on with, and the primary selection offered.
+        static void nextFrame(ALTextView& view)
+        {
+            if (view.mMisspellingSought)
+            {
+                view.seekMisspelling();
+            }
+            view.publishPrimary();
+        }
+    };
 }
 
 namespace tut
@@ -1171,9 +1197,15 @@ namespace tut
         LLClipboard& clipboard = LLClipboard::instance();
         const std::string copied = "copied";
         clipboard.copyToClipboard(copied, 0, static_cast<S32>(copied.size()));
+        const std::string elsewhere = "elsewhere";
+        clipboard.copyToClipboard(elsewhere, 0, static_cast<S32>(elsewhere.size()), true);
         ALTextView& v = make("alpha beta\ngamma\n");
+        v.setSelection(ALTextRange(ALTextPos(0, 9), ALTextPos(0, 10)));
         v.setSelection(ALTextRange(ALTextPos(0, 6), ALTextPos(0, 10)));
         std::string primary;
+        clipboard.pasteFromClipboard(primary, true);
+        ensure_equals("offered once a frame, not at each change", primary, elsewhere);
+        ll_test::TextViewProbe::nextFrame(v);
         ensure("selected", clipboard.pasteFromClipboard(primary, true));
         ensure_equals("is the primary selection", primary, std::string("beta"));
         std::string held;
@@ -1567,5 +1599,257 @@ namespace tut
         ensure_equals("where it was asked to be", v.scrollY(), asked);
         v.setScrollX(0.f);
         ensure_equals("and stays", v.scrollY(), asked);
+    }
+
+    template<> template<>
+    void altextview_object::test<52>()
+    {
+        set_test_name("a word is asked of the checker once however often it is met, and again once the dictionary changes; so many are kept and no more");
+        ALTextView&                v = make("");
+        std::map<std::string, int> asked;
+        v.setSpellChecker([&](const std::string& word) {
+            ++asked[word];
+            return word != "teh";
+        });
+        v.setSpellCheck(true);
+        v.setText("teh cat and teh dog\nthe cat and the dog\nteh end");
+        ensure_equals("the misspellings as ever", v.misspellings(0).size(), size_t(2));
+        ensure("the next line has none", v.misspellings(1).empty());
+        ensure_equals("and the last one", v.misspellings(2).size(), size_t(1));
+        const std::map<std::string, int> once = { { "and", 1 }, { "cat", 1 }, { "dog", 1 }, { "end", 1 }, { "teh", 1 }, { "the", 1 } };
+        ensure("each word asked once", asked == once);
+        v.recheckSpelling();
+        ensure_equals("the same answer", v.misspellings(0).size(), size_t(2));
+        ensure_equals("asked again once the dictionary changed", asked["teh"], 2);
+
+        // More words than are kept: the first of them asked again when
+        // next met, the last not.
+        auto word = [](size_t n) {
+            std::string out = "zz";
+            do
+            {
+                out += static_cast<char>('a' + n % 26);
+                n /= 26;
+            } while (n > 0);
+            return out;
+        };
+        const size_t many = ALTextSpelling::WORDS_KEPT + 10;
+        std::string  text;
+        for (size_t n = 0; n < many; ++n)
+        {
+            text += word(n) + " ";
+        }
+        v.setText(text);
+        asked.clear();
+        ensure("every one right", v.misspellings(0).empty());
+        ensure_equals("every one asked", asked.size(), many);
+        v.setCaret(ALTextPos(0, 0));
+        v.insertText(word(0) + " " + word(many - 1) + "\n");
+        ensure("the new line checked", v.misspellings(0).empty());
+        ensure_equals("the first let go of, and asked again", asked[word(0)], 2);
+        ensure_equals("the last still kept", asked[word(many - 1)], 1);
+    }
+
+    template<> template<>
+    void altextview_object::test<53>()
+    {
+        set_test_name("Next Misspelling checks lines for so long, then goes on a frame at a time; an edit or a moved selection drops it");
+        ALTextView& v = make("all fine\nall fine\nall fine\nall fine\nall fine\nteh end\n");
+        v.setSpellChecker([](const std::string& word) { return word != "teh"; });
+        v.setSpellCheck(true);
+        // No time at all: a line newly checked each time, and no more.
+        ll_test::TextViewProbe::misspellingBudget(v, 0.f);
+        bool cut = false;
+        ensure("cut short", !v.misspellingFrom(ALTextPos(0, 0), true, &cut) && cut);
+        std::optional<ALTextRange> found;
+        S32                        asks = 1;
+        for (; !found && asks < 20; ++asks)
+        {
+            found = v.misspellingFrom(ALTextPos(0, 0), true, &cut);
+        }
+        ensure("found, the same search asked again", found && *found == ALTextRange(ALTextPos(5, 0), ALTextPos(5, 3)) && !cut);
+        ensure_equals("a line further each time", asks, 6);
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        ensure("still looking", ll_test::TextViewProbe::seeking(v) && v.selection().empty());
+        S32 frames = 0;
+        for (; ll_test::TextViewProbe::seeking(v) && frames < 20; ++frames)
+        {
+            ll_test::TextViewProbe::nextFrame(v);
+        }
+        ensure("found in the frames after", v.selection() == ALTextRange(ALTextPos(5, 0), ALTextPos(5, 3)));
+        ensure_equals("a line a frame", frames, 5);
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        v.setCaret(ALTextPos(1, 2));
+        ll_test::TextViewProbe::nextFrame(v);
+        ensure("the caret moved: dropped", !ll_test::TextViewProbe::seeking(v) && v.selection().empty() && v.caret() == ALTextPos(1, 2));
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        v.document().insert(ALTextPos(3, 0), "x");
+        ll_test::TextViewProbe::nextFrame(v);
+        ensure("the text changed: dropped", !ll_test::TextViewProbe::seeking(v) && v.selection().empty());
+
+        // None at all: it looks through every line, then stops.
+        v.setText("all fine\nall fine\nall fine");
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        for (frames = 0; ll_test::TextViewProbe::seeking(v) && frames < 20; ++frames)
+        {
+            ll_test::TextViewProbe::nextFrame(v);
+        }
+        ensure("none: it stopped, and nothing selected", !ll_test::TextViewProbe::seeking(v) && frames < 20 && v.selection().empty());
+
+        // With the time it has, all at once as before.
+        ll_test::TextViewProbe::misspellingBudget(v, ALTextView::MISSPELLING_BUDGET);
+        v.setText("all fine\nteh");
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        ensure("at once", !ll_test::TextViewProbe::seeking(v) && v.selection() == ALTextRange(ALTextPos(1, 0), ALTextPos(1, 3)));
+    }
+
+    template<> template<>
+    void altextview_object::test<54>()
+    {
+        set_test_name("scrolled end to end, the view holds only so many lines' glyphs, and none out of sight; no line's top moves for it");
+        std::string lines;
+        for (int i = 0; i < 5000; ++i)
+        {
+            lines += "line " + std::to_string(i) + "\n";
+        }
+        ALTextView& v     = make(lines.c_str());
+        const S32   total = v.layout().totalHeight();
+        const S32   step  = llmax(1, v.textRect().getHeight());
+        S32         most  = 0;
+        // A screenful at a time, each laid out as a frame draws it.
+        for (S32 y = 0; y < total; y += step)
+        {
+            v.setScrollY(y);
+            ll_test::TextViewProbe::trimLayout(v);
+            for (S32 l = v.firstVisibleLine(); l <= v.lastVisibleLine(); ++l)
+            {
+                v.layout().line(l);
+            }
+            most = llmax(most, v.layout().linesHeld());
+        }
+        // Trimmed before a frame lays out its screen, as draw() does: so
+        // many past what is in sight, and the next screen.
+        const S32 screen = v.lastVisibleLine() - v.firstVisibleLine() + 1;
+        ensure("never more than so many held", most <= ll_test::TextViewProbe::heldMost() + 2 * screen);
+        ensure("fewer than were laid out", most < 5000);
+        ensure_equals("the column as tall", v.layout().totalHeight(), total);
+        ensure("what is in sight held", v.layout().line(v.firstVisibleLine()).valid);
+
+        v.setVisible(false);
+        ensure_equals("out of sight: none held", v.layout().linesHeld(), 0);
+        ensure_equals("and the column as tall", v.layout().totalHeight(), total);
+        v.setVisible(true);
+        ensure("laid out again when asked", !v.layout().line(v.firstVisibleLine()).rows.empty());
+    }
+
+    template<> template<>
+    void altextview_object::test<55>()
+    {
+        set_test_name("a cap on the bytes: typing and pasting go in as far as they fit, cut at a character; several stretches at once not at all; what shortens the text, a text put in whole and an undo are not held to it");
+        ALTextView& v = make("hello");
+        S32         fulls = 0;
+        boost::signals2::scoped_connection heard = v.onFull([&fulls]() { ++fulls; });
+        v.setMaxBytes(10);
+        v.setCaret(ALTextPos(0, 5));
+        type("abcdefgh");
+        ensure_equals("typed as far as it fits", v.text(), std::string("helloabcde"));
+        ensure("and said", fulls > 0);
+
+        v.setMaxBytes(8);
+        v.setText("hello");
+        v.setCaret(ALTextPos(0, 5));
+        fulls = 0;
+        v.insertText("\xC3\xA9\xC3\xA9");
+        ensure_equals("cut where a character starts", v.text(), std::string("hello\xC3\xA9"));
+        ensure_equals("said once", fulls, 1);
+
+        // Full: a change of several stretches that would grow it is not
+        // made; one that does not grow it is.
+        v.setText("abcdefgh");
+        fulls = 0;
+        ensure("several stretches at once, not made", !v.replaceAll({ { ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)), "xx" }, { ALTextRange(ALTextPos(0, 4), ALTextPos(0, 4)), "y" } }));
+        ensure_equals("the text as it was", v.text(), std::string("abcdefgh"));
+        ensure_equals("and said", fulls, 1);
+        ensure("the same length again, made", v.replaceAll({ { ALTextRange(ALTextPos(0, 0), ALTextPos(0, 2)), "zz" } }));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        v.insertText("123");
+        ensure_equals("a selection typed over by as much", v.text(), std::string("123defgh"));
+        v.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        ensure_equals("a deletion", v.text(), std::string("defgh"));
+        v.undo();
+        ensure_equals("undone past nothing it would hold to", v.text(), std::string("123defgh"));
+
+        v.setText("far more than eight bytes");
+        ensure_equals("a text put in whole, whatever its size", v.text(), std::string("far more than eight bytes"));
+        v.setMaxBytes(0);
+        v.setCaret(ALTextPos(0, 0));
+        type("no cap ");
+        ensure_equals("and with no cap, nothing held", v.text(), std::string("no cap far more than eight bytes"));
+    }
+
+    template<> template<>
+    void altextview_object::test<56>()
+    {
+        set_test_name("a key the find field does not take is the field's: Control-A and undo leave the text alone, finding still finds");
+        ALTextView& v = make("one\ntwo\n");
+        v.setCaret(ALTextPos(0, 3));
+        type("!");
+        ensure_equals("typed", v.document().line(0), std::string("one!"));
+        v.showFind(false);
+        LLLineEditor* field = v.findBar()->findChild<LLLineEditor>("find");
+        ensure("the find field", field != nullptr);
+        field->setFocus(true);
+        ensure("it has the keyboard", field->hasFocus());
+        // As the window gives a key: to what has the keyboard, and on up.
+        field->handleKey('A', MASK_CONTROL, false);
+        ensure("the text not all selected", !v.hasSelection());
+        field->handleKey('Z', MASK_CONTROL, false);
+        ensure_equals("nor undone", v.document().line(0), std::string("one!"));
+        ensure("Control-F still the text's", field->handleKey('F', MASK_CONTROL, false));
+        v.setFocus(true);
+        ensure("from the text itself, undo is the text's", v.handleKey('Z', MASK_CONTROL, false));
+        ensure_equals("undone", v.document().line(0), std::string("one"));
+    }
+
+    template<> template<>
+    void altextview_object::test<57>()
+    {
+        set_test_name("find is never seeded with an atom's placeholder: a selection holding one keeps the last query, and the word at the "
+                      "caret stops at one");
+        const std::string text = "see" + ALTextView::atomPlaceholder() + "here word";
+        ALTextView&       v    = make(text.c_str());
+        ALTextView::Atom  item;
+        item.at    = ALTextPos(0, 3);
+        item.width = 20;
+        v.addAtom(item);
+        const S32 after = 3 + static_cast<S32>(ALTextView::atomPlaceholder().size());
+
+        v.setSelection(ALTextRange(ALTextPos(0, after + 5), ALTextPos(0, after + 9)));
+        key('F', MASK_CONTROL);
+        ensure_equals("a selection of text seeds it", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 3), ALTextPos(0, after)));
+        v.showFind(false);
+        ensure_equals("the atom alone: the last query kept", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, after + 2)));
+        v.showFind(false);
+        ensure_equals("text with it: kept too", v.findBar()->query(), std::string("word"));
+
+        v.setCaret(ALTextPos(0, after));
+        v.showFind(false);
+        ensure_equals("the word after it, without it", v.findBar()->query(), std::string("here"));
+        v.setCaret(ALTextPos(0, 3));
+        v.showFind(false);
+        ensure_equals("the word before it, without it", v.findBar()->query(), std::string("see"));
     }
 }

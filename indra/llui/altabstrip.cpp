@@ -92,7 +92,8 @@ namespace
 ALTabStrip::Params::Params()
 :   min_tab_width("min_tab_width", 64),
     max_tab_width("max_tab_width", 220),
-    gap("gap", 2)
+    gap("gap", 2),
+    attached("attached", false)
 {
 }
 
@@ -100,7 +101,8 @@ ALTabStrip::ALTabStrip(const Params& p)
 :   LLUICtrl(p),
     mMinTabWidth(p.min_tab_width),
     mMaxTabWidth(p.max_tab_width),
-    mGap(p.gap)
+    mGap(p.gap),
+    mAttached(p.attached)
 {
 }
 
@@ -301,12 +303,7 @@ void ALTabStrip::chooseKeyed(size_t index)
 
 S32 ALTabStrip::contentWidth() const
 {
-    S32 width = 0;
-    for (const S32 w : mWidths)
-    {
-        width += w;
-    }
-    return width + mGap * llmax(0, static_cast<S32>(mWidths.size()) - 1);
+    return mContentWidth;
 }
 
 bool ALTabStrip::overflowing() const
@@ -440,6 +437,19 @@ std::string ALTabStrip::shortened(const LLFontGL* font, const std::string& label
 // past that the tabs run off the right edge rather than vanish.
 void ALTabStrip::layout()
 {
+    layoutWidths();
+    mLefts.resize(mWidths.size());
+    S32 left = 0;
+    for (size_t i = 0; i < mWidths.size(); ++i)
+    {
+        mLefts[i] = left;
+        left += mWidths[i] + mGap;
+    }
+    mContentWidth = mWidths.empty() ? 0 : left - mGap;
+}
+
+void ALTabStrip::layoutWidths()
+{
     mWidths.assign(mTabs.size(), 0);
     if (mTabs.empty())
     {
@@ -518,11 +528,7 @@ void ALTabStrip::layout()
 
 LLRect ALTabStrip::rectOf(size_t index) const
 {
-    S32 left = -mScroll;
-    for (size_t i = 0; i < index && i < mWidths.size(); ++i)
-    {
-        left += mWidths[i] + mGap;
-    }
+    const S32 left  = (index < mLefts.size() ? mLefts[index] : mWidths.empty() ? 0 : mContentWidth + mGap) - mScroll;
     const S32 width = index < mWidths.size() ? mWidths[index] : 0;
     return LLRect(left, getRect().getHeight(), left + width, 0);
 }
@@ -560,7 +566,7 @@ void ALTabStrip::reshape(S32 width, S32 height, bool called_from_parent)
 void ALTabStrip::draw()
 {
     static const LLUIColor shown = LLUIColorTable::instance().getColor("PanelDefaultBackgroundColor", LLColor4::grey4);
-    static const LLUIColor rest = LLUIColorTable::instance().getColor("DkGray", LLColor4::grey3);
+    static const LLUIColor rest = LLUIColorTable::instance().getColor("StudioTabColor", LLColor4::grey3);
     const LLUIColor& edge = ALSurface::well();
     const LLUIColor& ink = ALSurface::text();
     const LLUIColor& quiet = ALSurface::quiet();
@@ -591,8 +597,14 @@ void ALTabStrip::draw()
         const S32 baseline = (height - font->getLineHeight()) / 2;
 
         // The shown tab is the face of what is under it; the rest sit back.
+        // Where the strip sits on what it shows, the shown tab opens into
+        // it: its bottom edge filled over, between its sides.
         gl_rect_2d(r, (current ? shown : rest).get() % alpha, true);
         gl_rect_2d(r, edge.get() % alpha, false);
+        if (current && mAttached)
+        {
+            gl_rect_2d(r.mLeft + 1, r.mBottom + 1, r.mRight - 1, r.mBottom, shown.get() % alpha, true);
+        }
         if (current && hasFocus())
         {
             // Where the keyboard is, while the strip has it.
@@ -939,7 +951,7 @@ bool ALTabStrip::handleToolTip(S32 x, S32 y, MASK mask)
 {
     if (listRect().pointInRect(x, y))
     {
-        LLToolTipMgr::instance().show(alSaid("TabStripList", "Every tab, to pick one from"));
+        LLToolTipMgr::instance().show(alSaid("TabStripList", "All tabs"));
         return true;
     }
     const S32 which = at(x, y);

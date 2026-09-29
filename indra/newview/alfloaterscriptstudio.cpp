@@ -26,19 +26,26 @@
 
 #include "alfloaterscriptstudio.h"
 
+#include "alscriptstudioaccount.h"
+
 #include "alcodeeditor.h"
+#include "aldiffview.h"
 #include "aldiskincludes.h"
 #include "alserialworker.h"
 #include "alfilewrite.h"
 #include "fsyspath.h"
+#include "alnotecardformat.h"
 #include "alnotecarditems.h"
+#include "alrecovery.h"
 #include "alscriptinventoryindex.h"
 #include "alscriptmodules.h"
 #include "alscriptpreprocessor.h"
 #include "alscriptweightspane.h"
 #include "alscriptstudiofileio.h"
+#include "alscriptstudioglue.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudiovimrc.h"
+#include "alscriptworkspace.h"
 #include "alemptystate.h"
 #include "aljumpbar.h"
 #include "aloutputview.h"
@@ -51,6 +58,7 @@
 #include "alscriptkeymap.h"
 #include "alscriptmessages.h"
 #include "altabstrip.h"
+#include "altextgotoline.h"
 #include "altextsearch.h"
 #include "alvimkeymap.h"
 #include "llagent.h"
@@ -69,13 +77,13 @@
 #include "lldirpicker.h"
 #include "lleditmenuhandler.h"
 #include "llfocusmgr.h"
-#include "llfilepicker.h"
 #include "llfiltereditor.h"
 #include "llfloaterperms.h"
 #include "llexperiencecache.h"
 #include "llfloaterreg.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
+#include "llinventorymodelbackgroundfetch.h"
 #include "lllayoutstack.h"
 #include "lllineeditor.h"
 #include "llmenugl.h"
@@ -87,7 +95,6 @@
 #include "lltextbox.h"
 #include "lltexteditor.h"
 #include "lltrans.h"
-#include "llexternaleditor.h"
 #include "lllogchat.h"
 #include "llscripteditorws.h"
 #include "llui.h"
@@ -95,9 +102,9 @@
 #include "lluictrlfactory.h"
 #include "llviewerassettype.h"
 #include "llviewercontrol.h"
+#include "llviewernetwork.h"
 #include "llviewerinventory.h"
 #include "llweb.h"
-#include "llviewermenufile.h"
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
@@ -111,6 +118,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <tuple>
 
 namespace
 {
@@ -156,6 +164,13 @@ namespace
             return words;
         };
         sources.lslHelpUrl = [] { return gSavedSettings.getString("LSLHelpURL"); };
+        sources.definitionsVersion = [] { return LLSyntaxDefCache::instance().getSyntaxID().asString(); };
+        sources.definitionsYaml    = [] {
+            llifstream        in(gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "syntax_default", "lsl_definitions.yaml"), std::ios::binary);
+            std::stringstream text;
+            text << in.rdbuf();
+            return text.str();
+        };
         return true;
     }();
 
@@ -267,51 +282,6 @@ namespace
         }
         return text;
     }
-
-    // "12" or "12:5", as a person types a place: the line and the column
-    // from one, zero where there is none or it is not a number.
-    void placeTyped(const std::string& text, S32& line, S32& column)
-    {
-        line = column = 0;
-        std::string_view rest(text);
-        while (!rest.empty() && rest.front() == ' ')
-        {
-            rest.remove_prefix(1);
-        }
-        while (!rest.empty() && rest.front() == ':')
-        {
-            rest.remove_prefix(1);
-        }
-        size_t digits = 0;
-        while (digits < rest.size() && isdigit(static_cast<unsigned char>(rest[digits])))
-        {
-            ++digits;
-        }
-        if (digits == 0)
-        {
-            return;
-        }
-        line = static_cast<S32>(std::strtol(std::string(rest.substr(0, digits)).c_str(), nullptr, 10));
-        rest.remove_prefix(digits);
-        if (rest.empty() || (rest.front() != ':' && rest.front() != ','))
-        {
-            return;
-        }
-        rest.remove_prefix(1);
-        while (!rest.empty() && rest.front() == ' ')
-        {
-            rest.remove_prefix(1);
-        }
-        digits = 0;
-        while (digits < rest.size() && isdigit(static_cast<unsigned char>(rest[digits])))
-        {
-            ++digits;
-        }
-        if (digits > 0)
-        {
-            column = static_cast<S32>(std::strtol(std::string(rest.substr(0, digits)).c_str(), nullptr, 10));
-        }
-    }
 }
 
 namespace
@@ -331,30 +301,27 @@ ALFloaterScriptStudio* ALFloaterScriptStudio::lastWorkedIn()
     return window && window->getVisible() ? window : nullptr;
 }
 
-// static
-bool ALFloaterScriptStudio::wantsScripts()
+LLFloater* ALScriptStudio::build(const LLSD& key)
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "ALScriptStudioEnabled", true);
-    return enabled;
+    return LLFloaterReg::build<ALFloaterScriptStudio>(key);
 }
 
-// static
-ALFloaterScriptStudio* ALFloaterScriptStudio::open(const ALScriptRef& ref, const std::string& name, bool take_focus)
+void ALScriptStudio::open(const ALScriptRef& ref, const std::string& name, bool take_focus)
 {
     // Open somewhere already: that window, brought forward -- if a
     // window may be shown at all, which a restriction on viewing
     // scripts decides the same way for every window. Else the window last
     // worked in, as a script window used to open over the last one.
-    ALFloaterScriptStudio* window = ref.isNull() ? nullptr : holderOf(ref, std::string());
+    ALFloaterScriptStudio* window = ref.isNull() ? nullptr : ALFloaterScriptStudio::holderOf(ref, std::string());
     if (!window && !ref.isNull())
     {
-        window = lastWorkedIn();
+        window = ALFloaterScriptStudio::lastWorkedIn();
     }
     if (window)
     {
         if (!LLFloaterReg::canShowInstance("script_studio", window->getKey()))
         {
-            return nullptr;
+            return;
         }
         // A floater takes the keyboard as it opens unless told otherwise.
         const bool auto_focus = window->getAutoFocus();
@@ -366,7 +333,7 @@ ALFloaterScriptStudio* ALFloaterScriptStudio::open(const ALScriptRef& ref, const
             window->setFocus(true);
         }
         window->openScript(ref, name, std::nullopt, -1, take_focus);
-        return window;
+        return;
     }
     // Made first where it is to open without the keyboard -- a script
     // handed over while someone types elsewhere, which would otherwise
@@ -387,11 +354,9 @@ ALFloaterScriptStudio* ALFloaterScriptStudio::open(const ALScriptRef& ref, const
     {
         studio->openScript(ref, name, std::nullopt, -1, take_focus);
     }
-    return studio;
 }
 
-// static
-void ALFloaterScriptStudio::editSnippets(bool lua)
+void ALScriptStudio::editSnippets(bool lua)
 {
     const std::string path = ALScriptSnippets::path(lua);
     if (!LLFile::isfile(path))
@@ -411,8 +376,7 @@ void ALFloaterScriptStudio::editSnippets(bool lua)
     }
 }
 
-// static
-void ALFloaterScriptStudio::openVimrc()
+void ALScriptStudio::openVimrc()
 {
     if (ALFloaterScriptStudio* studio = LLFloaterReg::showTypedInstance<ALFloaterScriptStudio>("script_studio", LLSD(), TAKE_FOCUS_YES))
     {
@@ -427,6 +391,20 @@ std::string ALFloaterScriptStudio::vimrc(std::string& whence)
     return vimrc.text();
 }
 
+std::string ALFloaterScriptStudio::vimrcNewFile() const
+{
+    // Vim comments: the skin's words a line each, each begun by vim's mark
+    // for one -- which the words themselves cannot be, since a string of
+    // the skin's that begins with a quotation mark is read as quoted --
+    // and a blank line to start from.
+    std::string made;
+    for (const std::string& line : LLStringUtil::getTokens(getString("VimrcNewFile"), "\n"))
+    {
+        made += "\" " + line + "\n";
+    }
+    return made + "\n";
+}
+
 void ALFloaterScriptStudio::editVimrc()
 {
     ALScriptStudioVimrc& vimrc = ALScriptStudioVimrc::instance();
@@ -436,7 +414,7 @@ void ALFloaterScriptStudio::editVimrc()
         return;
     }
     const std::string path = ALScriptStudioVimrc::filePath();
-    if (!LLFile::isfile(path) && !ALFileWrite::whole(path, getString("VimrcNewFile")))
+    if (!LLFile::isfile(path) && !ALFileWrite::whole(path, vimrcNewFile()))
     {
         LLStringUtil::format_map_t args;
         args["[FILE]"] = path;
@@ -446,15 +424,13 @@ void ALFloaterScriptStudio::editVimrc()
     openFile(path, false);
 }
 
-// static
-ALFloaterScriptStudio* ALFloaterScriptStudio::explore(const LLUUID& root)
+void ALScriptStudio::explore(const LLUUID& root)
 {
     ALFloaterScriptStudio* studio = LLFloaterReg::showTypedInstance<ALFloaterScriptStudio>("script_studio", LLSD(), TAKE_FOCUS_YES);
     if (studio && root.notNull())
     {
         studio->mExplorerPane->explore(root);
     }
-    return studio;
 }
 
 void ALFloaterScriptStudio::worldAsset(const Doc& doc, std::function<void(std::optional<LLUUID>)> told)
@@ -472,7 +448,7 @@ void ALFloaterScriptStudio::worldAsset(const Doc& doc, std::function<void(std::o
     // asked, and hears nothing of a co-owner's save: the region asked.
     ALScriptWorkspace::instance().listContents(
         ref.object,
-        [ref, told = std::move(told)](const ALScriptWorkspace::Contents& contents) {
+        [ref, told = std::move(told)](const ALScriptContents& contents) {
             LLViewerObject*  object = contents.fetched ? gObjectList.findObject(ref.object) : nullptr;
             LLInventoryItem* item   = object ? object->getInventoryItem(ref.item) : nullptr;
             told(item ? std::optional<LLUUID>(item->getAssetUUID()) : std::nullopt);
@@ -491,7 +467,7 @@ void ALFloaterScriptStudio::takeLoaded(Doc& doc, const std::string& text)
     if (doc.notecard)
     {
         const LLHandle<LLFloater> handle = getHandle();
-        ALScriptWorkspace::instance().load(doc.ref, [handle](const ALScriptWorkspace::Loaded& answer) {
+        ALScriptWorkspace::instance().load(doc.ref, [handle](const ALScriptLoaded& answer) {
             if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()); studio && answer.error.empty())
             {
                 studio->loaded(answer);
@@ -499,7 +475,7 @@ void ALFloaterScriptStudio::takeLoaded(Doc& doc, const std::string& text)
         });
         return;
     }
-    ALScriptWorkspace::Loaded answer;
+    ALScriptLoaded answer;
     answer.ref        = doc.ref;
     answer.assetId    = doc.assetId;
     answer.name       = doc.name;
@@ -510,26 +486,24 @@ void ALFloaterScriptStudio::takeLoaded(Doc& doc, const std::string& text)
     loaded(answer);
 }
 
-// static
-void ALFloaterScriptStudio::itemRemoved(const ALScriptRef& ref)
+void ALScriptStudio::itemRemoved(const ALScriptRef& ref)
 {
     for (LLFloater* floater : LLFloaterReg::getFloaterList("script_studio"))
     {
         ALFloaterScriptStudio* window = ALViewType::as<ALFloaterScriptStudio>(floater);
-        const size_t           index  = window ? window->indexOf(ref) : NONE;
-        if (index == NONE)
+        const size_t           index  = window ? window->indexOf(ref) : ALFloaterScriptStudio::NONE;
+        if (index == ALFloaterScriptStudio::NONE)
         {
             continue;
         }
-        Doc&                       doc = *window->mDocs[index];
+        ALFloaterScriptStudio::Doc& doc = *window->mDocs[index];
         LLStringUtil::format_map_t args;
         args["[NAME]"] = doc.name;
         if (doc.loaded && doc.modifiable && doc.editor->isDirty())
         {
             // What was typed is not the deletion's to take: the tab stays,
             // its text kept on disk, and says what can be done with it.
-            doc.orphan.kind          = Doc::Orphan::Removed;
-            doc.orphan.noticeDismissed = false;
+            ALScriptStudioOrphans::become(doc, ALFloaterScriptStudio::Doc::Orphan::Removed);
             window->mRecovery.keep(doc);
             window->report(window->getString("OrphanRemovedKept", args), true, &doc, { "copy", "export" });
             window->refreshNotice();
@@ -605,7 +579,7 @@ ALFloaterScriptStudio::~ALFloaterScriptStudio()
     // Straight to the store: nothing here is to be said any more.
     // Each forced out to the disk on the writer's thread, and waited on
     // once for the lot.
-    ALScriptRecoveryStore* store = ALScriptStudioRecovery::store();
+    ALRecoveryStore* store = ALRecovery::store();
     for (const std::unique_ptr<Doc>& doc : mDocs)
     {
         if (store && doc->editor && !doc->recoveryKey.empty() && doc->loaded && doc->modifiable && !doc->carriedText && doc->unsaved())
@@ -685,7 +659,14 @@ bool ALFloaterScriptStudio::postBuild()
     mFolds.bind(this, { { "explorer", "explorer_panel", "fold_explorer", getString("PaneExplorer") },
                         { "bottom", "bottom_panel", "fold_bottom", getString("PaneBottom") },
                         { "inspector", "inspector_panel", "fold_inspector", getString("PaneInspector") } });
-    mFolds.onChanged([this]() { saveState(); });
+    mFolds.onChanged([this]() {
+        // Unfolded, by anyone: waiting for something to show is over.
+        if (mBottomWaiting && !mFolds.collapsed("bottom"))
+        {
+            mBottomWaiting = false;
+        }
+        saveState();
+    });
 
     mEditorHost    = getChild<LLPanel>("editor_panel");
     // What the window says with no script open. The editors are made as
@@ -702,9 +683,10 @@ bool ALFloaterScriptStudio::postBuild()
         ep.visible            = false;
         mNoDocs               = LLUICtrlFactory::create<ALEmptyState>(ep);
         mEditorHost->addChild(mNoDocs);
-        mNoDocs->say(getString("NoScriptOpenHeadline"), getString("NoScriptOpenSentence"), getString("NoScriptOpenAction"), getString("NoScriptOpenNew"));
-        mNoDocs->onAction([this]() { mCommands.run("open_file"); });
+        mNoDocs->onAction([this]() { mCommands.run("quick_open"); });
         mNoDocs->onSecondAction([this]() { mCommands.run("new_script"); });
+        mNoDocs->onLink([this]() { mCommands.run("open_file"); });
+        sayNoDocs();
     }
     mTabs          = getChild<ALTabStrip>("tabs");
     mCrumbsBar     = getChild<ALScriptCrumbsBar>("crumbs");
@@ -721,6 +703,7 @@ bool ALFloaterScriptStudio::postBuild()
     mExperience    = getChild<LLComboBox>("experience");
     mExperienceProfile = getChild<LLButton>("experience_profile");
     mResetButton   = getChild<LLButton>("reset_btn");
+    mExperienceWidth = mExperience->getRect().getWidth();
     mSaveButton    = getChild<LLButton>("save_btn");
     mSaveAllButton = getChild<LLButton>("save_all_btn");
     mUndoButton    = getChild<LLButton>("undo_btn");
@@ -743,7 +726,7 @@ bool ALFloaterScriptStudio::postBuild()
         const size_t index = indexOf(id);
         if (index != NONE)
         {
-            holdPreview(*mDocs[index]);
+            mNavigation.holdPreview(*mDocs[index]);
         }
     });
     mProblemsPane = getChild<ALScriptProblemsPane>("problems_tab");
@@ -754,15 +737,17 @@ bool ALFloaterScriptStudio::postBuild()
     mWeightsParts->setBack([this]() { revealed(mWeightsParts, true); });
     mOutputPane = getChild<ALScriptOutputPane>("output_tab");
     // What was said before the window opened, then everything after.
-    for (const ALScriptWorkspace::RuntimeEvent& event : ALScriptWorkspace::instance().recentRuntime())
+    for (const ALScriptRuntimeEvent& event : ALScriptWorkspace::instance().recentRuntime())
     {
         runtimeEvent(event);
     }
-    mRuntimeConnection = ALScriptWorkspace::instance().onRuntime([this](const ALScriptWorkspace::RuntimeEvent& event) { runtimeEvent(event); });
+    mRuntimeConnection = ALScriptWorkspace::instance().onRuntime([this](const ALScriptRuntimeEvent& event) { runtimeEvent(event); });
 
     mSearchPane = getChild<ALScriptSearchPane>("search_tab");
-    mRunningConnection = ALScriptWorkspace::instance().onRunningState([this](const ALScriptWorkspace::RunningState& state) { runningState(state); });
+    mRunningConnection = ALScriptWorkspace::instance().onRunningState([this](const ALScriptRunningState& state) { runningState(state); });
     mCompileTarget->setCommitCallback(boost::bind(&ALFloaterScriptStudio::onCompileTarget, this));
+    mNotecardGrammar = getChild<LLComboBox>("notecard_grammar");
+    mNotecardGrammar->setCommitCallback(boost::bind(&ALFloaterScriptStudio::onNotecardGrammar, this));
     mRunning->setCommitCallback(boost::bind(&ALFloaterScriptStudio::onRunning, this));
     mExperience->setCommitCallback(boost::bind(&ALFloaterScriptStudio::onExperience, this));
     mExperienceProfile->setCommitCallback([this](LLUICtrl*, const LLSD&) {
@@ -801,13 +786,14 @@ bool ALFloaterScriptStudio::postBuild()
     });
     mExpandedButton->setCommitCallback([this](LLUICtrl*, const LLSD&) { toggleExpanded(); });
     mCompiledConnection =
-        ALScriptWorkspace::instance().onCompiled([this](const ALScriptWorkspace::CompileResult& result) { mSaving.compiled(result); });
-    mSavedConnection = ALScriptWorkspace::instance().onSaved([this](const ALScriptWorkspace::Saved& saved) { mSaving.savedElsewhere(saved); });
+        ALScriptWorkspace::instance().onCompiled([this](const ALScriptCompileResult& result) { mSaving.compiled(result); });
+    mSavedConnection = ALScriptWorkspace::instance().onSaved([this](const ALScriptSaved& saved) { mSaving.savedElsewhere(saved); });
     // New definitions from the region: the analyzers reload, the words
     // are rebuilt, and every script is checked again.
     mDefinitionsConnection = LLSyntaxDefCache::instance().addSyntaxIDCallback([this]() {
+        // The words are built again on the first ask, by whichever window
+        // asks first, as the definitions' version has moved.
         ALScriptAnalysis::instance().definitionsChanged();
-        ALScriptStudioWords::forget();
         for (std::unique_ptr<Doc>& doc : mDocs)
         {
             if (doc->loaded)
@@ -892,7 +878,7 @@ bool ALFloaterScriptStudio::postBuild()
             mOrphansDirty = true;
         }
     });
-    mOrphansContents = ALScriptWorkspace::instance().contentsIndex().onHeard([this](const ALScriptWorkspace::Contents& contents) {
+    mOrphansContents = ALScriptWorkspace::instance().contentsIndex().onHeard([this](const ALScriptContents& contents) {
         if (holdsScriptOf(contents.prim))
         {
             mOrphansDirty = true;
@@ -907,7 +893,10 @@ bool ALFloaterScriptStudio::postBuild()
         }
     });
 
-    loadState();
+    if (!loadState())
+    {
+        firstOpen();
+    }
     // Unsaved text kept against a crash, a lost connection noticed, and what
     // holds each tab looked at, whether the window is shown or not: a
     // window closed or hidden a moment after typing still writes what was
@@ -939,9 +928,19 @@ bool ALFloaterScriptStudio::postBuild()
     // after them, so that each goes to the window that has its tab.
     if (mMain)
     {
-        restoreTabs(mRestoreTabs);
+        // Unless the author would rather it opened with what it was opened
+        // for alone; said either way, since the tabs that come back were
+        // not asked for this time.
+        const bool restore = gSavedSettings.getBOOL("ALScriptStudioRestoreTabs");
+        if (const S32 came = restore ? restoreTabs(mRestoreTabs) : 0; came > 0)
+        {
+            LLStringUtil::format_map_t args;
+            args["[COUNT]"] = std::to_string(came);
+            setStatus(getString(came == 1 ? "RestoredTab" : "RestoredTabs", args));
+        }
         mRestoreTabs                     = LLSD();
-        const LLSD                windows = std::exchange(mRestoreWindows, LLSD());
+        const LLSD                windows = restore ? std::exchange(mRestoreWindows, LLSD()) : LLSD::emptyArray();
+        mRestoreWindows                   = LLSD();
         const LLHandle<LLFloater> handle  = getHandle();
         doOnIdleOneTime([handle, windows]() {
             if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
@@ -954,7 +953,7 @@ bool ALFloaterScriptStudio::postBuild()
     return true;
 }
 
-void ALFloaterScriptStudio::restoreTabs(const LLSD& open)
+S32 ALFloaterScriptStudio::restoreTabs(const LLSD& open)
 {
     // Where they can still be had: an inventory item that is still there, a
     // file that is, an object's item that the object in sight lists; one
@@ -962,8 +961,10 @@ void ALFloaterScriptStudio::restoreTabs(const LLSD& open)
     // asked about before the viewer quit.
     if (!open.isMap())
     {
-        return;
+        return 0;
     }
+    const size_t docs_before    = mDocs.size();
+    const size_t pending_before = mPendingRestores.size();
     TabsHeld    held(*this);
     const LLSD  tabs   = open["tabs"];
     const S32   chosen = open["active"].asInteger();
@@ -1013,6 +1014,25 @@ void ALFloaterScriptStudio::restoreTabs(const LLSD& open)
     {
         activate(index);
     }
+    return static_cast<S32>((mDocs.size() - docs_before) + (mPendingRestores.size() - pending_before));
+}
+
+void ALFloaterScriptStudio::firstOpen()
+{
+    mFolds.setCollapsed("inspector", true);
+    mFolds.setCollapsed("bottom", true);
+    mBottomWaiting = true;
+    // About 700 tall, as far as the screen goes, the window's own minimum
+    // the least.
+    constexpr S32 FIRST_HEIGHT = 700;
+    constexpr S32 SCREEN_MARGIN = 40;
+    const S32     room   = gFloaterView ? gFloaterView->getRect().getHeight() - SCREEN_MARGIN : FIRST_HEIGHT;
+    const S32     height = llmax(getMinHeight(), llmin(FIRST_HEIGHT, room));
+    if (height > getRect().getHeight())
+    {
+        reshape(getRect().getWidth(), height);
+    }
+    saveState();
 }
 
 void ALFloaterScriptStudio::restoreWindows(const LLSD& windows)
@@ -1058,15 +1078,15 @@ void ALFloaterScriptStudio::reopenKept()
 {
     // What was kept on purpose at the last quit opens again, with its
     // unsaved changes, into its restored tab or a tab of its own.
-    ALScriptRecoveryStore* store = ALScriptStudioRecovery::store();
+    ALRecoveryStore* store = ALRecovery::store();
     if (!store)
     {
         return;
     }
     S32 reopened = 0;
-    for (const ALScriptRecoveryEntry& entry : store->left())
+    for (const ALRecoveryEntry& entry : store->left())
     {
-        if (entry.state == ALScriptRecoveryEntry::State::Kept)
+        if (entry.state == ALRecoveryEntry::State::Kept)
         {
             mRecovery.recover(entry);
             ++reopened;
@@ -1235,11 +1255,6 @@ void ALFloaterScriptStudio::letGoOf(Doc& doc)
     }
 }
 
-void ALFloaterScriptStudio::saveToClose(const std::string& id)
-{
-    mSaving.saveToClose(id);
-}
-
 void ALFloaterScriptStudio::output(const ALOutputView::Entry& entry)
 {
     mOutputPane->view()->append(entry);
@@ -1263,11 +1278,6 @@ bool ALFloaterScriptStudio::readFile(const std::string& path, std::string& text)
 bool ALFloaterScriptStudio::writeFile(const std::string& path, const std::string& text)
 {
     return ALFileWrite::whole(path, text);
-}
-
-void ALFloaterScriptStudio::jumpedFrom(Doc& doc, const ALTextView& view, const ALTextPos& from)
-{
-    mNavigation.remember(NavPlace{ doc.id, from, &view == doc.expandedEditor ? Doc::View::Expanded : Doc::View::Source });
 }
 
 std::vector<std::string> ALFloaterScriptStudio::fileFolders(const Doc& doc) const
@@ -1323,7 +1333,7 @@ void ALFloaterScriptStudio::tidy(Doc& doc, bool fix, bool format_it, bool trim)
     }
 }
 
-bool ALFloaterScriptStudio::send(const Doc& doc, const std::string& text, const ALScriptWorkspace::SaveOptions& options, std::string& error)
+bool ALFloaterScriptStudio::send(const Doc& doc, const std::string& text, const ALScriptSaveOptions& options, std::string& error)
 {
     return ALScriptWorkspace::instance().save(doc.ref, text, options, nullptr, error);
 }
@@ -1332,7 +1342,7 @@ bool ALFloaterScriptStudio::sendNotecard(const Doc& doc, const std::string& text
                                          std::string& error, U64 request)
 {
     return ALScriptWorkspace::instance().saveNotecard(doc.ref, text, items, nullptr, error,
-                                                      ALScriptWorkspace::Sender(ALScriptWorkspace::Origin::Studio, request));
+                                                      ALScriptSender(ALScriptOrigin::Studio, request));
 }
 
 U64 ALFloaterScriptStudio::newRequest()
@@ -1343,11 +1353,6 @@ U64 ALFloaterScriptStudio::newRequest()
 void ALFloaterScriptStudio::runPreprocessor(const Doc& doc, std::function<void(const ALPreprocessor::Result&)> answer)
 {
     ALScriptPreprocessor::instance().run(mChecking.preprocessRequest(doc), std::move(answer));
-}
-
-void ALFloaterScriptStudio::keepForRecovery(Doc& doc)
-{
-    mRecovery.keep(doc);
 }
 
 void ALFloaterScriptStudio::showProblems()
@@ -1392,6 +1397,8 @@ void ALFloaterScriptStudio::draw()
         sLastWorkedIn = getHandle();
     }
     mChecking.pump(LLTimer::getTotalSeconds());
+    // What the prims hold asked again where it changed, for every window.
+    ALScriptWorkspace::instance().contentsIndex().refresh(LLTimer::getTotalSeconds());
     // The trailer says a check is out once it has been a while, and stops
     // once it is answered.
     if (Doc* front = active(); front && front->checkRunning(LLTimer::getTotalSeconds()) != mTrailerChecking)
@@ -1400,6 +1407,12 @@ void ALFloaterScriptStudio::draw()
         refreshTrailer(*front);
     }
     mCaret.pump(LLTimer::getTotalSeconds());
+    // The strip laid out again where its width changed: the window, or a
+    // pane beside the editor, resized.
+    if (mCrumbsBar && mCrumbsBar->getParent()->getRect().getWidth() != mStripLaid)
+    {
+        layStrip();
+    }
     mExplorerPane->pump();
     mVim.pump();
     if (mVimMode)
@@ -1713,7 +1726,7 @@ void ALFloaterScriptStudio::compare(Doc& doc, const std::string& left, const std
         p.side                    = side;
         doc.compareView           = LLUICtrlFactory::create<ALDiffView>(p);
         doc.compareView->setVisible(false);
-        doc.compareView->setFont(editorFont());
+        doc.compareView->setFont(ALScriptStudio::editorFont());
         const std::string id = doc.id;
         doc.compareView->setOnEscape([this, id]() {
             if (Doc* found = findDoc(id))
@@ -1730,8 +1743,7 @@ void ALFloaterScriptStudio::compare(Doc& doc, const std::string& left, const std
     showView(doc, Doc::View::Compare, true);
 }
 
-// static
-const LLFontGL* ALFloaterScriptStudio::editorFont()
+const LLFontGL* ALScriptStudio::editorFont()
 {
     static LLCachedControl<std::string> family(gSavedSettings, "ALScriptStudioFontFamily", "");
     static LLCachedControl<std::string> size(gSavedSettings, "ALScriptStudioFontSize", "");
@@ -1743,7 +1755,7 @@ const LLFontGL* ALFloaterScriptStudio::editorFont()
     // Zoomed: the size chosen, so many points larger or smaller.
     if (const F32 base = LLFontGL::pointsOf(name, how); zoom() != 0 && base > 0.f)
     {
-        if (const LLFontGL* zoomed = LLFontGL::getFontAtPoints(name, llclamp(base + static_cast<F32>(zoom()), MIN_TEXT_POINTS, MAX_TEXT_POINTS), look))
+        if (const LLFontGL* zoomed = LLFontGL::getFontAtPoints(name, llclamp(base + static_cast<F32>(zoom()), ALFloaterScriptStudio::MIN_TEXT_POINTS, ALFloaterScriptStudio::MAX_TEXT_POINTS), look))
         {
             return zoomed;
         }
@@ -1765,15 +1777,14 @@ void ALFloaterScriptStudio::zoomText(S32 steps)
         zoom = llclamp(zoom, static_cast<S32>(MIN_TEXT_POINTS - base), static_cast<S32>(MAX_TEXT_POINTS - base));
     }
     gSavedSettings.setS32("ALScriptStudioFontZoom", zoom);
-    refreshAll();
+    ALScriptStudio::refreshAll();
     if (base > 0.f)
     {
         setStatus(getString("TextSize", LLStringUtil::format_map_t{ { "[POINTS]", llformat("%g", base + static_cast<F32>(zoom)) } }));
     }
 }
 
-// static
-void ALFloaterScriptStudio::refreshAll()
+void ALScriptStudio::refreshAll()
 {
     for (LLFloater* floater : LLFloaterReg::getFloaterList("script_studio"))
     {
@@ -1784,8 +1795,7 @@ void ALFloaterScriptStudio::refreshAll()
     }
 }
 
-// static
-void ALFloaterScriptStudio::applyTypingOptions(ALCodeEditor& editor)
+void ALScriptStudio::applyTypingOptions(ALCodeEditor& editor)
 {
     // What a script is indented by where it does not say, and whether it
     // is asked; one given its own for its tab keeps that.
@@ -1803,9 +1813,9 @@ void ALFloaterScriptStudio::applyTypingOptions(ALCodeEditor& editor)
     editor.setHoverDelay(llclamp(gSavedSettings.getF32("ALScriptStudioHoverDelay"), 0.f, 5.f));
 }
 
-void ALFloaterScriptStudio::applyEditorOptions(ALCodeEditor& editor)
+void ALFloaterScriptStudio::applyEditorOptions(ALCodeEditor& editor, bool notecard)
 {
-    editor.setFont(editorFont());
+    editor.setFont(ALScriptStudio::editorFont());
     editor.setOnZoomWheel([this](S32 steps) { zoomText(steps); });
     editor.keymap() = ALScriptKeymap::current();
     // Vim put over the editor, or taken away; one already there keeps
@@ -1824,9 +1834,13 @@ void ALFloaterScriptStudio::applyEditorOptions(ALCodeEditor& editor)
     {
         editor.setModalKeymap(nullptr);
     }
-    editor.setWordWrap(mWordWrap);
-    editor.setShowLineNumbers(mLineNumbers);
-    applyTypingOptions(editor);
+    editor.setWordWrap(notecard ? mNotecardWrap : mWordWrap);
+    editor.setShowLineNumbers(notecard ? mNotecardLineNumbers : mLineNumbers);
+    if (notecard)
+    {
+        editor.setLineNumberBase(mNotecardFromZero ? -1 : 0);
+    }
+    ALScriptStudio::applyTypingOptions(editor);
     editor.setShowIndentGuides(mIndentGuides);
     editor.setShowWhitespace(mWhitespace);
     editor.setRelativeLineNumbers(mRelativeNumbers);
@@ -1851,7 +1865,7 @@ void ALFloaterScriptStudio::applyEditorOptions()
 {
     for (std::unique_ptr<Doc>& each : mDocs)
     {
-        applyEditorOptions(*each->editor);
+        applyEditorOptions(*each->editor, each->itemNotecard());
         if (each->expandedEditor)
         {
             applyEditorOptions(*each->expandedEditor);
@@ -1886,7 +1900,7 @@ void ALFloaterScriptStudio::openScript(const ALScriptRef& ref, const std::string
         // called now, renamed since it was opened.
         if (!mNavigation.openingPreview())
         {
-            holdPreview(*mDocs[already]);
+            mNavigation.holdPreview(*mDocs[already]);
         }
         activate(already, focus);
         renameDoc(*mDocs[already], name);
@@ -1914,7 +1928,7 @@ void ALFloaterScriptStudio::openScript(const ALScriptRef& ref, const std::string
     wireDoc(*doc);
     // Kept against a crash under this; and what an earlier session left of
     // it, or a window of this one that went, offered in the notice.
-    doc->recoveryKey = ALScriptRecoveryStore::keyOf(ref.object, ref.item, std::string());
+    doc->recoveryKey = ALRecoveryStore::keyOf(ref.object, ref.item, std::string());
     mRecovery.offerFor(*doc, holderOf(ref, std::string()) != nullptr);
 
     // An object's check listed it while it was closed: its tab says now.
@@ -1932,7 +1946,7 @@ void ALFloaterScriptStudio::openScript(const ALScriptRef& ref, const std::string
     }
 
     const LLHandle<LLFloater> handle = getHandle();
-    ALScriptWorkspace::instance().load(ref, [handle](const ALScriptWorkspace::Loaded& answer) {
+    ALScriptWorkspace::instance().load(ref, [handle](const ALScriptLoaded& answer) {
         if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
         {
             studio->loaded(answer);
@@ -1940,11 +1954,16 @@ void ALFloaterScriptStudio::openScript(const ALScriptRef& ref, const std::string
     });
 }
 
-ALScriptNotecardTab& ALFloaterScriptStudio::notecardItems(Doc& doc, bool fresh)
+ALNotecardEmbedded& ALFloaterScriptStudio::notecardItems(Doc& doc, bool fresh)
 {
     if (!doc.items || fresh)
     {
-        doc.items = std::make_shared<ALScriptNotecardTab>(doc, *this, ALScriptNotecardTab::viewer());
+        Doc*                       raw = &doc;
+        ALNotecardEmbedded::Holder holder;
+        holder.notecard   = [raw]() { return raw->ref; };
+        holder.changeable = [raw]() { return raw->loaded && raw->modifiable; };
+        holder.say        = [this](const std::string& words, bool error) { setStatus(words, error); };
+        doc.items         = std::make_shared<ALNotecardEmbedded>(*doc.editor, std::move(holder), ALNotecardEmbedded::viewer());
     }
     return *doc.items;
 }
@@ -1982,6 +2001,14 @@ void ALFloaterScriptStudio::wireDoc(Doc& doc)
         scheduleAnalysis(*raw);
         mSearchPane->typedIn(*raw);
         mRecovery.schedule(*raw);
+    });
+    // Typing stopped short, a notecard being full: said why. The editor
+    // goes with the tab, and the connection with it.
+    doc.editor->onFull([this, raw]() {
+        LLStringUtil::format_map_t args;
+        args["[NAME]"]  = raw->name;
+        args["[LIMIT]"] = std::to_string(static_cast<S32>(LLNotecard::MAX_SIZE));
+        setStatus(alSaid("NotecardFull", "[NAME] is full: a notecard holds at most [LIMIT] bytes", args), true);
     });
     doc.placedEdits = doc.editor->document().onChanged([this, raw](const ALTextDocument::Edit& edit) {
         LL_PROFILE_ZONE_NAMED_CATEGORY_SCRIPTDEV("studio places slid");
@@ -2080,7 +2107,7 @@ void ALFloaterScriptStudio::goToPending(Doc& doc)
     doc.pendingRunning = false;
 }
 
-void ALFloaterScriptStudio::loaded(const ALScriptWorkspace::Loaded& answer)
+void ALFloaterScriptStudio::loaded(const ALScriptLoaded& answer)
 {
     mOrphansDirty = true;
     const size_t index = indexOf(answer.ref);
@@ -2139,13 +2166,13 @@ void ALFloaterScriptStudio::loaded(const ALScriptWorkspace::Loaded& answer)
         // had, or may no longer be changed: the tab holds the text on its
         // own, unsaved, and says why -- and is loaded again later, further
         // apart each time, where that may go differently.
-        using Failure                     = ALScriptWorkspace::Loaded::Failure;
-        const ALScriptRecoveryEntry entry = *doc.recovering;
+        using Failure                     = ALScriptLoaded::Failure;
+        const ALRecoveryEntry entry = *doc.recovering;
         doc.carriedText.reset();
         doc.carriedEmbedded.reset();
         doc.loadFailure  = answer.error.empty() ? Failure::NotPermitted : answer.failure;
         doc.loadError    = answer.error;
-        doc.orphan.nextReattach = LLTimer::getTotalSeconds() + ALScriptRecoveryRetry::delayAfter(++doc.orphan.reattachTries);
+        ALScriptStudioOrphans::loadFailed(doc);
         becomeOrphan(doc, entry, failedAs(doc, doc.loadFailure));
         if (doc.loadFailure == Failure::NotPermitted)
         {
@@ -2163,7 +2190,20 @@ void ALFloaterScriptStudio::loaded(const ALScriptWorkspace::Loaded& answer)
     doc.loadError   = answer.error;
     if (answer.error.empty())
     {
-        doc.orphan.reattachTries = 0;
+        ALScriptStudioOrphans::loadWentThrough(doc);
+        // A script loaded from its prim is in it, whatever the prim was last
+        // heard to hold -- one just added from the build tools, say: what
+        // it holds is asked again rather than the tab taken for gone.
+        if (!doc.ref.inInventory() && !doc.ref.isNull() && doc.file.empty())
+        {
+            ALScriptContentsIndex& index = ALScriptWorkspace::instance().contentsIndex();
+            const std::vector<ALScriptContents::Item>& items = index.items(doc.ref.object);
+            if (index.fetched(doc.ref.object) &&
+                std::none_of(items.begin(), items.end(), [&doc](const ALScriptContents::Item& item) { return item.id == doc.ref.item; }))
+            {
+                index.ask(doc.ref.object, true);
+            }
+        }
     }
     if (!answer.error.empty())
     {
@@ -2179,9 +2219,16 @@ void ALFloaterScriptStudio::loaded(const ALScriptWorkspace::Loaded& answer)
         // Plain text, with whatever the notecard carried kept to go back
         // with it; nothing to analyse or compile.
         doc.loaded                 = true;
-        ALScriptNotecardTab& items = notecardItems(doc);
+        ALNotecardEmbedded& items = notecardItems(doc);
         items.loaded(answer.embedded);
-        doc.editor->setSyntax("text");
+        // Coloured and outlined as what its text looks written in, unless
+        // picked otherwise.
+        if (!doc.grammarPicked)
+        {
+            doc.grammar = doc.itemNotecard() ? ALNotecardFormat::guess(answer.text) : "text";
+        }
+        doc.editor->setSyntax(doc.grammar);
+        applyEditorOptions(*doc.editor, doc.itemNotecard());
         doc.editor->setText(answer.text);
         // A kept or copied text says its items by their places in the list
         // it was kept with, which the text now put in is read against.
@@ -2193,7 +2240,19 @@ void ALFloaterScriptStudio::loaded(const ALScriptWorkspace::Loaded& answer)
         takeCarriedText(doc);
         items.place();
         doc.editor->setReadOnly(!answer.modifiable);
+        // No more than a notecard is read back with; the text as it came,
+        // over or not, is what it is.
+        doc.editor->setMaxBytes(LLNotecard::MAX_SIZE);
         items.wire();
+        // A Replace All that opened it for its changes: made now.
+        applyPendingEdits(doc);
+        // Its References: the scripts of its object that read it.
+        doc.editor->setSymbolRequest([this, raw = &doc](ALEditorCommand command, const ALTextRange&) {
+            if (command == ALEditorCommand::FindReferences)
+            {
+                findNotecardReaders(*raw);
+            }
+        });
         LLStringUtil::format_map_t args;
         args["[NAME]"] = doc.name;
         setStatus(getString(answer.modifiable ? "Loaded" : "LoadedReadOnly", args));
@@ -2446,8 +2505,8 @@ void ALFloaterScriptStudio::showView(Doc& doc, Doc::View view, bool focus)
         focusShown(doc);
     }
     // The bars read the caret of the view in front, which is another caret
-    // now, wherever it stands: seen afresh on the next frame (mCaret).
-    doc.caret.seen = ALTextPos(-1, -1);
+    // now, wherever it stands: seen afresh on the next frame.
+    ALScriptStudioCaret::seeAfresh(doc);
     refreshToolbar();
 }
 
@@ -2561,7 +2620,7 @@ void ALFloaterScriptStudio::openFileHere(const std::string& path, bool lua, S32 
     size_t            already = indexOf(id);
     if (already != NONE && !mNavigation.openingPreview())
     {
-        holdPreview(*mDocs[already]);
+        mNavigation.holdPreview(*mDocs[already]);
     }
     if (already == NONE)
     {
@@ -2596,7 +2655,7 @@ void ALFloaterScriptStudio::openFileHere(const std::string& path, bool lua, S32 
         doc->loaded     = true;
         doc->modifiable = true;
         wireDoc(*doc);
-        doc->recoveryKey = ALScriptRecoveryStore::keyOf(LLUUID::null, LLUUID::null, path);
+        doc->recoveryKey = ALRecoveryStore::keyOf(LLUUID::null, LLUUID::null, path);
         mRecovery.offerFor(*doc, holderOf(ALScriptRef(), path) != nullptr);
         mDocs.push_back(std::move(doc));
         mOrphansDirty = true;
@@ -2656,12 +2715,7 @@ void ALFloaterScriptStudio::speakFileLanguage(Doc& doc, const FileLanguage& lang
         editor.setHoverRequest(nullptr);
         editor.setSignatureRequest(nullptr);
         editor.setSymbolRequest(nullptr);
-        ALSyntaxWords& tables = editor.highlighter().words();
-        for (const char* table : { "function", "event", "type", "control", "constant", "deprecated" })
-        {
-            tables.set(table, {});
-        }
-        editor.highlighter().wordsChanged();
+        editor.highlighter().setWords(nullptr);
         editor.clearMarks();
     }
     doc.outline.clear();
@@ -2722,7 +2776,23 @@ void ALFloaterScriptStudio::teachEditor(Doc& doc)
         const std::optional<Doc::Named> named = raw->namedAt(at);
         if (!named)
         {
-            return ALTextRange();
+            // A notecard the script reads, by the name it gives: the one in
+            // its object.
+            const ALTextDocument& text = raw->editor->document();
+            if (at.line < 0 || at.line >= text.lineCount())
+            {
+                return ALTextRange();
+            }
+            const std::optional<ALNotecardFormat::Named> card = ALNotecardFormat::namedAt(text.line(at.line), at.column);
+            if (!card)
+            {
+                return ALTextRange();
+            }
+            if (follow)
+            {
+                openNotecardNamed(*raw, card->name);
+            }
+            return ALTextRange(ALTextPos(at.line, card->begin), ALTextPos(at.line, card->end));
         }
         if (follow && !openIncluded(*raw, named->name, named->require))
         {
@@ -2738,18 +2808,15 @@ void ALFloaterScriptStudio::teachEditor(Doc& doc)
     editor.setFixProvider([this, raw](S32 line, std::vector<ALCodeEditor::Fix>& out) { mChecking.fixesOn(*raw, line, out); });
     editor.setFixesShown(
         [this, raw](U32 shown, const std::vector<ALCodeEditor::Fix>& fixes) { mWeighing.fixesShown(raw->id, shown, fixes); });
-    editor.setActionRequest([this, raw](const ALTextRange& at) {
-        raw->check.actionsAsked = at;
-        mChecking.ask(*raw, ALScriptAnalysis::Kind::Actions, at.begin, at.end);
-    });
+    editor.setActionRequest([this, raw](const ALTextRange& at) { mChecking.ask(*raw, ALScriptAnalysis::Kind::Actions, at.begin, at.end); });
     editor.setFixHandler([this, raw](const LLSD& value) {
         if (value.has("action"))
         {
             const size_t n = static_cast<size_t>(value["action"].asInteger());
-            if (n < raw->check.actions.size())
+            if (n < raw->check->actions.size())
             {
-                const ALScriptFix action = raw->check.actions[n];
-                applyFix(*raw, action, raw->check.actionsVersion);
+                const ALScriptFix action = raw->check->actions[n];
+                applyFix(*raw, action, raw->check->actionsVersion);
             }
             return;
         }
@@ -2769,6 +2836,119 @@ void ALFloaterScriptStudio::teachEditor(Doc& doc)
         ALScriptStudioWords::complete(lua, *raw->editor, at, prefix, snippets(lua), getString("SnippetDetail"), out);
         completeLinks(*raw, at, prefix, out);
     });
+}
+
+bool ALFloaterScriptStudio::openNotecardNamed(const Doc& doc, const std::string& name)
+{
+    LLStringUtil::format_map_t args;
+    args["[NAME]"] = name;
+    if (doc.ref.inInventory() || !doc.file.empty())
+    {
+        setStatus(getString("NotecardReadFromObject", args), true);
+        return false;
+    }
+    for (const ALScriptContents::Item& item : ALScriptWorkspace::instance().contentsIndex().items(doc.ref.object))
+    {
+        if (!item.script && item.name == name)
+        {
+            openScript(ALScriptRef(doc.ref.object, item.id), item.name);
+            return true;
+        }
+    }
+    setStatus(getString("NotecardNotFoundHere", args), true);
+    return false;
+}
+
+void ALFloaterScriptStudio::findNotecardReaders(const Doc& doc)
+{
+    LLStringUtil::format_map_t args;
+    args["[NAME]"] = doc.name;
+    if (!doc.itemNotecard() || doc.ref.inInventory())
+    {
+        setStatus(getString("NotecardReadersNeedObject", args), true);
+        return;
+    }
+    // Every script of its object read -- as its tab holds it, or as the
+    // region has it -- and the places it names the notecard listed once the
+    // last has answered.
+    struct Gather
+    {
+        U32                            asked   = 0;
+        S32                            pending = 0;
+        ALScriptReferencesPane::Found found;
+    };
+    auto gather           = std::make_shared<Gather>();
+    gather->asked         = ++mReadersAsked;
+    gather->found.from    = doc.id;
+    gather->found.fromName = doc.name;
+    gather->found.name    = doc.name;
+    const std::string name = doc.name;
+    auto read = [gather, name](const ALScriptRef& ref, const std::string& script, const std::string& text) {
+        const std::vector<ALScriptSpan> spans = ALNotecardFormat::readersOf(text, name);
+        size_t                          from  = 0;
+        S32                             line  = 0;
+        for (const ALScriptSpan& span : spans)
+        {
+            // The line it is on, for the list to show.
+            for (; line < span.line && from != std::string::npos; ++line)
+            {
+                from = text.find('\n', from);
+                from = from == std::string::npos ? from : from + 1;
+            }
+            Doc::Place place;
+            place.span     = span;
+            place.file     = ALScriptPreprocessor::pathOf(ref);
+            place.fileName = script;
+            place.text     = from == std::string::npos ? std::string() : text.substr(from, text.find('\n', from) - from);
+            place.at       = span.column + 1;
+            gather->found.places.push_back(std::move(place));
+        }
+    };
+    const LLHandle<LLFloater> handle = getHandle();
+    auto shown = [handle, gather]() {
+        ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
+        if (!studio || gather->asked != studio->mReadersAsked)
+        {
+            return;
+        }
+        studio->mReferencesPane->show(gather->found);
+        studio->showBottom("references_tab");
+        if (gather->found.places.empty())
+        {
+            LLStringUtil::format_map_t said;
+            said["[NAME]"] = gather->found.name;
+            studio->setStatus(studio->getString("NotecardReadByNone", said));
+        }
+    };
+    gather->pending = 1;
+    for (const ALScriptContents::Item& item : ALScriptWorkspace::instance().contentsIndex().items(doc.ref.object))
+    {
+        if (!item.script)
+        {
+            continue;
+        }
+        const ALScriptRef ref(doc.ref.object, item.id);
+        if (const Doc* open = findDoc(ref); open && open->loaded)
+        {
+            read(ref, item.name, open->editor->wholeText());
+            continue;
+        }
+        ++gather->pending;
+        ALScriptWorkspace::instance().load(ref, [gather, read, shown, ref, script = item.name](const ALScriptLoaded& answer) {
+            if (answer.error.empty())
+            {
+                read(ref, script, sourceOf(answer));
+            }
+            if (--gather->pending == 0)
+            {
+                shown();
+            }
+        });
+    }
+    if (--gather->pending == 0)
+    {
+        shown();
+    }
 }
 
 void ALFloaterScriptStudio::completeLinks(const Doc& doc, const ALTextPos& at, std::string_view prefix, std::vector<ALCodeEditor::Completion>& out)
@@ -2931,8 +3111,8 @@ void ALFloaterScriptStudio::activate(size_t index, bool focus)
     // is seen. The bar at the bottom says so now -- a notecard's too, whose
     // caret is not watched -- rather than keep the last tab's path until
     // the caret moves.
-    mDocs[index]->caret.seen      = ALTextPos(-1, -1);
-    mDocs[index]->caret.inspectAt = ALTextPos(-1, -1);
+    ALScriptStudioCaret::seeAfresh(*mDocs[index]);
+    ALScriptStudioCaret::inspectAfresh(*mDocs[index]);
     mInspectorPane->forget();
     mCaret.placePath(*mDocs[index]);
     refreshNotice();
@@ -2970,7 +3150,7 @@ void ALFloaterScriptStudio::fillTabs()
     mTabs->setTabs(std::move(tabs), mActive < mDocs.size() ? mDocs[mActive]->id : std::string());
     // Every window says which script is in front, as a window of one did.
     const Doc* doc = active();
-    setTitle(doc ? getString("WindowTitle") + " - " + doc->name : getString("WindowTitle"));
+    setTitle(doc ? words("WindowTitleNamed", { { "[NAME]", doc->name } }) : getString("WindowTitle"));
 }
 
 void ALFloaterScriptStudio::fillTabs(const Doc& doc)
@@ -2999,7 +3179,7 @@ void ALFloaterScriptStudio::fillTabs(const Doc& doc)
     mTabs->setTab(tabOf(doc, mTabFacts[index]));
     if (renamed && index == mActive)
     {
-        setTitle(getString("WindowTitle") + " - " + doc.name);
+        setTitle(words("WindowTitleNamed", { { "[NAME]", doc.name } }));
     }
 }
 
@@ -3147,7 +3327,7 @@ void ALFloaterScriptStudio::onTabAction(const std::string& action)
     // by the same names, about the tab in front, which a right-click chose.
     if (action == "keep")
     {
-        holdPreview(*doc);
+        mNavigation.holdPreview(*doc);
     }
     else if (action == "close_others" || action == "close_all" || action == "close_saved")
     {
@@ -3232,7 +3412,6 @@ ALFloaterScriptStudio::ToolbarFacts ALFloaterScriptStudio::toolbarFactsOf() cons
         facts.anyDirty = facts.anyDirty || (each->unsaved() && each->modifiable);
     }
     facts.ownExperiences = ALScriptWorkspace::instance().ownExperiences();
-    facts.room           = mCrumbsBar ? mCrumbsBar->getParent()->getRect().getWidth() : 0;
     if (!doc)
     {
         return facts;
@@ -3254,6 +3433,7 @@ ALFloaterScriptStudio::ToolbarFacts ALFloaterScriptStudio::toolbarFactsOf() cons
     facts.regionLua        = ALScriptWorkspace::luaEnabled(doc->ref);
     facts.lua              = doc->language.lua;
     facts.target           = doc->language.compileTarget;
+    facts.grammar          = doc->grammar;
     facts.experienceKnown  = doc->experienceKnown;
     facts.experienceChosen = doc->experienceChosen;
     facts.experienceAsking = doc->experienceAsking;
@@ -3282,6 +3462,14 @@ void ALFloaterScriptStudio::refreshToolbar()
     const bool script  = doc && !doc->notecard && doc->file.empty();
     mCompileTarget->setVisible(script);
     mCompileTarget->setEnabled(have && script && doc->modifiable);
+    // In its place for a notecard: what its text is read as.
+    const bool notecard = doc && doc->itemNotecard();
+    mNotecardGrammar->setVisible(notecard);
+    mNotecardGrammar->setEnabled(have && notecard);
+    if (notecard)
+    {
+        mNotecardGrammar->setValue(doc->grammar);
+    }
     mSaveButton->setEnabled(have && doc->modifiable && !doc->save.sending());
     mSaveAllButton->setEnabled(mToolbarFacts->anyDirty);
     mUndoButton->setEnabled(doc && doc->shownText()->canUndo());
@@ -3320,23 +3508,76 @@ void ALFloaterScriptStudio::refreshToolbar()
         }
         mCompileTarget->setValue(doc->language.compileTarget);
     }
-    // The breadcrumb runs up to whatever of the script's own controls are
-    // showing at the strip's right, and no further: where none are, it has
-    // the strip.
-    if (mCrumbsBar)
+    layStrip();
+}
+
+namespace
+{
+    // The strip under the editor: its right margin, the gaps after each
+    // of the script's controls from the right, and what the breadcrumb
+    // keeps before the experience's box narrows, down to its least.
+    constexpr S32 STRIP_EDGE       = 4;
+    constexpr S32 STRIP_GAPS[]     = { 4, 4, 6, 8, 4, 6 };
+    constexpr S32 CRUMBS_LEAST     = 200;
+    constexpr S32 EXPERIENCE_LEAST = 90;
+}
+
+void ALFloaterScriptStudio::layStrip()
+{
+    if (!mCrumbsBar)
     {
-        const LLView* first = task && mExperience->getVisible() ? static_cast<const LLView*>(mExperience)
-                              : task                            ? static_cast<const LLView*>(mResetButton)
-                              : script                          ? static_cast<const LLView*>(mCompileTarget)
-                                                                : nullptr;
-        const S32     right = first ? first->getRect().mLeft - 6 : mCrumbsBar->getParent()->getRect().getWidth();
-        const LLRect  crumbs = mCrumbsBar->getRect();
-        if (crumbs.mRight != right && right > crumbs.mLeft)
-        {
-            mCrumbsBar->reshape(right - crumbs.mLeft, crumbs.getHeight());
-            mCrumbsBar->setOrigin(crumbs.mLeft, crumbs.mBottom);
-        }
+        return;
     }
+    // The script's own controls, those showing, packed against the
+    // strip's right edge in their order -- what it compiles for, whether
+    // it runs, reset, the experience's profile and the experience -- so
+    // that one hidden leaves no hole; the breadcrumb runs up to them, and
+    // where that leaves it too little, the experience's box narrows
+    // first. The breadcrumb's trailer drops what matters least of the
+    // rest (ALJumpBar::TrailerPart::drop).
+    const S32 width = mCrumbsBar->getParent()->getRect().getWidth();
+    mStripLaid      = width;
+    S32       right = width - STRIP_EDGE;
+    const S32 left  = mCrumbsBar->getRect().mLeft;
+    LLView* const order[] = { mCompileTarget, mNotecardGrammar, mRunning, mResetButton, mExperienceProfile, mExperience };
+    for (size_t i = 0; i < std::size(order); ++i)
+    {
+        LLView* control = order[i];
+        if (!control->getVisible())
+        {
+            continue;
+        }
+        S32 wide = control->getRect().getWidth();
+        if (control == mExperience)
+        {
+            wide = llclamp(right - left - CRUMBS_LEAST, EXPERIENCE_LEAST, mExperienceWidth);
+        }
+        const LLRect was = control->getRect();
+        control->setShape(LLRect(right - wide, was.mTop, right, was.mBottom));
+        right -= wide + STRIP_GAPS[i];
+    }
+    const S32    end    = right == width - STRIP_EDGE ? width : right;
+    const LLRect crumbs = mCrumbsBar->getRect();
+    if (crumbs.mRight != end && end > crumbs.mLeft)
+    {
+        mCrumbsBar->reshape(end - crumbs.mLeft, crumbs.getHeight());
+        mCrumbsBar->setOrigin(crumbs.mLeft, crumbs.mBottom);
+    }
+}
+
+void ALFloaterScriptStudio::onNotecardGrammar()
+{
+    Doc* doc = active();
+    if (!doc || !doc->itemNotecard())
+    {
+        return;
+    }
+    doc->grammar       = mNotecardGrammar->getValue().asString();
+    doc->grammarPicked = true;
+    doc->editor->setSyntax(doc->grammar);
+    // Checked and outlined again as what it is read as now.
+    mChecking.schedule(*doc, true);
+    refreshToolbar();
 }
 
 void ALFloaterScriptStudio::onTabChosen(const std::string& value)
@@ -3543,7 +3784,15 @@ void ALFloaterScriptStudio::refreshBottomTabs()
     const size_t found = mReferencesPane ? mReferencesPane->found().places.size() : 0;
     args["[COUNT]"]    = std::to_string(found);
     title("references_tab", getString(found == 0 ? "TabReferences" : "TabReferencesCount", args));
-    title("output_tab", getString(mOutputPane && mOutputPane->unread() ? "TabOutputUnread" : "TabOutput"));
+    const bool unread = mOutputPane && mOutputPane->unread();
+    title("output_tab", getString(unread ? "TabOutputUnread" : "TabOutput"));
+    // Folded until it has something to show, from the first open: the first
+    // problems, references or output unfold it at the tab that has them.
+    if (mBottomWaiting && mFolds.collapsed("bottom") && (held > 0 || found > 0 || unread))
+    {
+        mBottomWaiting = false;
+        showBottom(held > 0 ? "problems_tab" : found > 0 ? "references_tab" : "output_tab", false);
+    }
 }
 
 std::vector<ALTextPos> ALFloaterScriptStudio::problemPlaces(const Doc& doc) const
@@ -3696,8 +3945,9 @@ LLMenuItemGL* ALFloaterScriptStudio::menuItem(std::string_view id) const
 
 void ALFloaterScriptStudio::refreshKeyTips()
 {
-    // Each tip as the skin wrote it, its keys said as the menus have them
-    // now; a command with none loses the brackets that would hold them.
+    // Each tip as the skin wrote it, each of its fields the keys the menus
+    // have now, bracketed as the language brackets them (KeysInTip); a
+    // command with none leaves nothing, and the space before it goes too.
     for (const auto& [control, items] : mKeyTips)
     {
         LLView*    view = findChild<LLView>(control);
@@ -3716,10 +3966,13 @@ void ALFloaterScriptStudio::refreshKeyTips()
             const std::string   field = n == 1 ? std::string("[KEYS]") : "[KEYS" + std::to_string(n) + "]";
             if (keys.empty())
             {
-                LLStringUtil::replaceString(tip, " (" + field + ")", std::string());
-                LLStringUtil::replaceString(tip, "; " + field + " ", "; ");
+                LLStringUtil::replaceString(tip, " " + field, std::string());
+                LLStringUtil::replaceString(tip, field, std::string());
             }
-            LLStringUtil::replaceString(tip, field, keys);
+            else
+            {
+                LLStringUtil::replaceString(tip, field, alSaid("KeysInTip", "([KEYS])", { { "[KEYS]", keys } }));
+            }
         }
         view->setToolTip(tip);
     }
@@ -3745,6 +3998,21 @@ void ALFloaterScriptStudio::refreshKeyTips()
     {
         refreshTrailer(*doc);
     }
+    sayNoDocs();
+}
+
+void ALFloaterScriptStudio::sayNoDocs()
+{
+    // Go to Script leads, with the keys that do the same: it reaches every
+    // script there is by name, where Open File reaches only the computer's,
+    // which is the link under the buttons.
+    const LLMenuItemGL*        item = menuItem("quick_open");
+    const std::string          keys = item ? item->getAcceleratorString() : std::string();
+    LLStringUtil::format_map_t args;
+    args["[KEYS]"] = keys;
+    mNoDocs->say(getString("NoScriptOpenHeadline"), getString("NoScriptOpenSentence"),
+                 getString(keys.empty() ? "NoScriptOpenGoToNoKeys" : "NoScriptOpenGoTo", args), getString("NoScriptOpenNew"));
+    mNoDocs->setLink(getString("NoScriptOpenFile"));
 }
 
 void ALFloaterScriptStudio::refreshUndoLabels()
@@ -3754,8 +4022,16 @@ void ALFloaterScriptStudio::refreshUndoLabels()
     Doc*                     doc   = active();
     const LLEditMenuHandler* field = focusedEditHandler();
     const bool               ours  = !field || (doc && (field == doc->editor || field == doc->expandedEditor));
-    const std::string        undo  = doc && (ours || !field->canUndo()) ? doc->shownText()->undoJournal().undoLabel() : std::string();
-    const std::string        redo  = doc && (ours || !field->canRedo()) ? doc->shownText()->undoJournal().redoLabel() : std::string();
+    ALCodeEditor*            text  = doc ? doc->shownText() : nullptr;
+    // Nothing the names come from has moved: nothing to say again.
+    const UndoSaidOf of{ doc, field, text, text ? text->undoJournal().revision() : 0, !ours && field->canUndo(), !ours && field->canRedo() };
+    if (of == mUndoSaidOf)
+    {
+        return;
+    }
+    mUndoSaidOf            = of;
+    const std::string undo = text && (ours || !field->canUndo()) ? text->undoJournal().undoLabel() : std::string();
+    const std::string redo = text && (ours || !field->canRedo()) ? text->undoJournal().redoLabel() : std::string();
     if (undo == mUndoSaid && redo == mRedoSaid)
     {
         return;
@@ -3950,7 +4226,7 @@ void ALFloaterScriptStudio::candidates(const Doc& doc, std::function<void(ALScri
         found.unlisted = static_cast<S32>(listed.unlisted.size());
         for (const LLUUID& prim : listed.prims)
         {
-            for (const ALScriptWorkspace::Item& item : index.items(prim))
+            for (const ALScriptContents::Item& item : index.items(prim))
             {
                 const ALScriptRef ref(prim, item.id);
                 if (item.script && item.lua == lua && ref != own)
@@ -3965,7 +4241,7 @@ void ALFloaterScriptStudio::candidates(const Doc& doc, std::function<void(ALScri
 
 void ALFloaterScriptStudio::loadSource(const ALScriptRef& ref, std::function<void(const LLUUID& asset, const std::optional<std::string>& source)> loaded)
 {
-    ALScriptWorkspace::instance().load(ref, [loaded = std::move(loaded)](const ALScriptWorkspace::Loaded& answer) {
+    ALScriptWorkspace::instance().load(ref, [loaded = std::move(loaded)](const ALScriptLoaded& answer) {
         loaded(answer.assetId, answer.error.empty() ? std::optional<std::string>(sourceOf(answer)) : std::nullopt);
     });
 }
@@ -4007,7 +4283,7 @@ void ALFloaterScriptStudio::askNewName(Doc& doc, std::function<std::string(const
             quick->setHint(said);
         }
     });
-    quick->setQuery(doc.lookup.name);
+    quick->setQuery(doc.lookup->name);
     quick->takeFocus();
 }
 
@@ -4056,11 +4332,6 @@ void ALFloaterScriptStudio::referenceChosen(const ALScriptReferencesPane::Found&
     }
     --mHoldPanes;
     revealed(list, to_editor);
-}
-
-void ALFloaterScriptStudio::save(Doc& doc)
-{
-    mSaving.save(doc);
 }
 
 std::string ALFloaterScriptStudio::bridgeId(const Doc& doc) const
@@ -4115,19 +4386,9 @@ void ALFloaterScriptStudio::startEditor(Doc& doc, const std::string& filename, b
         report(getString("ExternalOpenedVSCode", args), false, &doc);
         return;
     }
-    LLExternalEditor             editor;
-    LLExternalEditor::EErrorCode status = editor.setCommand("LL_SCRIPT_EDITOR");
-    if (status != LLExternalEditor::EC_SUCCESS)
+    if (std::string error; !ALScriptStudioGlue::startEditor(filename, doc.editor->caret().line + 1, error))
     {
-        const std::string message = status == LLExternalEditor::EC_NOT_SPECIFIED ? LLTrans::getString("ExternalEditorNotSet")
-                                                                                   : LLExternalEditor::getErrorMessage(status);
-        LLNotificationsUtil::add("GenericAlert", LLSD().with("MESSAGE", message));
-        return;
-    }
-    status = editor.run(filename, doc.editor->caret().line + 1);
-    if (status != LLExternalEditor::EC_SUCCESS)
-    {
-        LLNotificationsUtil::add("GenericAlert", LLSD().with("MESSAGE", LLExternalEditor::getErrorMessage(status)));
+        LLNotificationsUtil::add("GenericAlert", LLSD().with("MESSAGE", error));
         return;
     }
     report(getString("ExternalOpened", args), false, &doc);
@@ -4136,27 +4397,23 @@ void ALFloaterScriptStudio::startEditor(Doc& doc, const std::string& filename, b
 void ALFloaterScriptStudio::pickFilesToOpen(bool several, std::function<void(const std::vector<std::string>& files)> chosen)
 {
     const LLHandle<LLFloater> handle = getHandle();
-    LLFilePickerReplyThread::startPicker(
-        [handle, chosen](const std::vector<std::string>& files, LLFilePicker::ELoadFilter, LLFilePicker::ESaveFilter) {
-            if (handle.get())
-            {
-                chosen(files);
-            }
-        },
-        LLFilePicker::FFLOAD_SCRIPT, several);
+    ALScriptStudioGlue::pickToOpen(several, [handle, chosen](const std::vector<std::string>& files) {
+        if (handle.get())
+        {
+            chosen(files);
+        }
+    });
 }
 
 void ALFloaterScriptStudio::pickFileToSave(const std::string& name, std::function<void(const std::vector<std::string>& files)> chosen)
 {
     const LLHandle<LLFloater> handle = getHandle();
-    LLFilePickerReplyThread::startPicker(
-        [handle, chosen](const std::vector<std::string>& files, LLFilePicker::ELoadFilter, LLFilePicker::ESaveFilter) {
-            if (handle.get())
-            {
-                chosen(files);
-            }
-        },
-        LLFilePicker::FFSAVE_SCRIPT, name);
+    ALScriptStudioGlue::pickToSave(name, [handle, chosen](const std::vector<std::string>& files) {
+        if (handle.get())
+        {
+            chosen(files);
+        }
+    });
 }
 
 void ALFloaterScriptStudio::askReload(const Doc& doc, std::function<void(bool reload)> answered)
@@ -4166,11 +4423,6 @@ void ALFloaterScriptStudio::askReload(const Doc& doc, std::function<void(bool re
     LLNotificationsUtil::add("ScriptStudioFileChanged", question, LLSD(), [answered](const LLSD& notification, const LLSD& response) {
         answered(LLNotificationsUtil::getSelectedOption(notification, response) == 0);
     });
-}
-
-void ALFloaterScriptStudio::saveStopped(Doc& doc)
-{
-    mSaving.stopped(doc);
 }
 
 void ALFloaterScriptStudio::fileWritten(const std::string& path)
@@ -4191,14 +4443,9 @@ void ALFloaterScriptStudio::fileWritten(const std::string& path)
 void ALFloaterScriptStudio::becomeFile(Doc& doc, const std::string& path)
 {
     mProblemsPane->forget(doc.id);
-    if (ALScriptRecoveryStore* store = ALScriptStudioRecovery::store(); store && !doc.recoveryKey.empty())
-    {
-        store->forget(doc.recoveryKey);
-    }
-    doc.recoveryKey           = ALScriptRecoveryStore::keyOf(LLUUID::null, LLUUID::null, path);
-    doc.recoveryWritten.valid = false;
-    doc.file                  = path;
-    doc.name        = gDirUtilp->getBaseFileName(path);
+    ALScriptStudioRecovery::rekey(doc, ALRecoveryStore::keyOf(LLUUID::null, LLUUID::null, path));
+    doc.file = path;
+    doc.name = gDirUtilp->getBaseFileName(path);
     rekeyDoc(doc, "disk:" + path);
     if (const FileLanguage said = ALScriptStudioFiles::languageOf(path, false); said.said)
     {
@@ -4214,7 +4461,7 @@ LLMenuGL* ALFloaterScriptStudio::recentMenu()
 void ALFloaterScriptStudio::fileSettled(Doc& doc)
 {
     doc.editor->resetDirty();
-    keepSavedWeights(doc);
+    mWeighing.keepSaved(doc);
     mRecovery.keep(doc);
     // The scripts that include it see the file as it is now: those whose
     // last expansion read it, and those that one may have been wanted by
@@ -4421,108 +4668,32 @@ void ALFloaterScriptStudio::goToLine()
         return;
     }
     // A line of the view in front: of the expansion, while it is the one
-    // being read.
+    // being read, by the numbers it shows -- the expansion's count from
+    // past the envelope's lines, as a runtime error's does.
     const std::string         id     = doc->id;
     const Doc::View           view   = doc->shownView();
-    const ALTextPos           was    = doc->shownText()->caret();
     const LLHandle<LLFloater> handle = getHandle();
-    // The editor at the place typed, while it is typed; return leaves it
-    // there, and so does looking away, escape puts it back.
-    auto docOf = [handle, id]() -> Doc* {
-        ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
-        const size_t           index  = studio ? studio->indexOf(id) : NONE;
-        return index == NONE ? nullptr : studio->mDocs[index].get();
-    };
-    // By the numbers the view shows: the expansion's count from past the
-    // envelope's lines, as a runtime error's does.
-    auto placeOf = [](const Doc& doc, const std::string& typed, S32& line, S32& column) {
-        placeTyped(typed, line, column);
-        line -= doc.shownText()->lineNumberBase();
-        const S32 count = doc.shownText()->document().lineCount();
-        return line >= 1 && line <= count;
-    };
-    ALQuickOpen* quick = quickOpen(
-        {}, getString("GoToLinePlaceholder"), getString("GoToLineTitle"),
-        [handle, docOf, placeOf, was, view](const std::string& typed) {
-            Doc* doc = docOf();
-            if (!doc)
-            {
-                return;
-            }
-            ALCodeEditor& text = *doc->shownText();
-            S32           line, column;
-            if (placeOf(*doc, typed, line, column))
-            {
-                // Gone from where the caret was before the line was typed,
-                // which the preview has moved it from since.
-                if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
-                {
-                    studio->mNavigation.remember(NavPlace{ doc->id, was, view });
-                }
-                text.goTo(column > 0 ? text.document().posAtDisplayColumn(line - 1, column - 1, text.getTabWidth()) : ALTextPos(line - 1, 0));
-            }
-            else
-            {
-                text.goTo(was);
-            }
-            text.setFocus(true);
+    ALTextGoToLine::ask(
+        [this](std::function<void(const std::string&)> chose, std::function<void()> escaped, std::function<void()> left) {
+            return quickOpen({}, getString("GoToLinePlaceholder"), getString("GoToLineTitle"), std::move(chose), mEditorHost, 420,
+                             ALQuickOpen::heightForRows(1), std::move(escaped), {}, std::move(left));
         },
-        mEditorHost, 420, ALQuickOpen::heightForRows(1),
-        [docOf, was]() {
-            if (Doc* doc = docOf())
-            {
-                doc->shownText()->goTo(was);
-            }
-        },
-        {},
-        // Looked away from: the line it went to stands, since that is
-        // what was looked at, and the way back from it is kept, as a
-        // line gone to by Return keeps it.
-        [handle, docOf, was, view]() {
+        [handle, id]() -> ALTextView* {
             ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
-            Doc*                   doc    = docOf();
-            if (studio && doc && doc->shownText()->caret() != was)
+            const size_t           index  = studio ? studio->indexOf(id) : NONE;
+            return index == NONE ? nullptr : studio->mDocs[index]->shownText();
+        },
+        doc->shownText()->lineNumberBase(),
+        [handle](const std::string& name, const LLStringUtil::format_map_t& args) {
+            LLFloater* studio = handle.get();
+            return studio ? studio->getString(name, args) : std::string();
+        },
+        [handle, id, view](const ALTextPos& was) {
+            if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
             {
-                studio->mNavigation.remember(NavPlace{ doc->id, was, view });
+                studio->mNavigation.remember(NavPlace{ id, was, view });
             }
         });
-    if (!quick)
-    {
-        return;
-    }
-    quick->onQueryChanged([handle, docOf, placeOf, quick, was](const std::string& typed) {
-        ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
-        Doc*                   doc    = docOf();
-        if (!studio || !doc)
-        {
-            return;
-        }
-        ALCodeEditor&              text = *doc->shownText();
-        S32                        line, column;
-        const bool                 there = placeOf(*doc, typed, line, column);
-        LLStringUtil::format_map_t args;
-        // In the numbers the view shows.
-        args["[COUNT]"] = std::to_string(text.document().lineCount() + text.lineNumberBase());
-        args["[LINE]"]  = std::to_string(line + text.lineNumberBase());
-        args["[COL]"]   = std::to_string(column);
-        std::string trimmed = typed;
-        LLStringUtil::trim(trimmed);
-        if (trimmed.empty())
-        {
-            quick->setHint(studio->getString("GoToLineHint", args));
-            text.goTo(was);
-        }
-        else if (there)
-        {
-            quick->setHint(studio->getString(column > 0 ? "GoToLineGoColumn" : "GoToLineGo", args));
-            text.goTo(column > 0 ? text.document().posAtDisplayColumn(line - 1, column - 1, text.getTabWidth()) : ALTextPos(line - 1, 0));
-        }
-        else
-        {
-            quick->setHint(studio->getString("GoToLineNone", args));
-        }
-    });
-    quick->setQuery(std::string());
 }
 
 void ALFloaterScriptStudio::showCommandPalette()
@@ -4629,7 +4800,7 @@ std::vector<ALQuickOpen::Candidate> ALFloaterScriptStudio::paletteScripts(std::v
     {
         for (const ALScriptExplorerModel::Prim& prim : object.prims)
         {
-            for (const ALScriptWorkspace::Item& item : mExplorerPane->model().items(prim.id))
+            for (const ALScriptContents::Item& item : mExplorerPane->model().items(prim.id))
             {
                 const ALScriptRef ref(prim.id, item.id);
                 if (!listed.insert(ref.id()).second)
@@ -4644,7 +4815,12 @@ std::vector<ALQuickOpen::Candidate> ALFloaterScriptStudio::paletteScripts(std::v
             }
         }
     }
-    // Then what was opened lately and is not open now.
+    // Then what was opened lately and is not open now -- what is gone since
+    // let go of first: an inventory item the inventory, fetched whole, no
+    // longer has (fetched in part, a missing one may be on its way), and a
+    // file no longer on disk.
+    const bool fetched = gInventory.isInventoryUsable() && LLInventoryModelBackgroundFetch::instance().isEverythingFetched();
+    mFiles.pruneRecent([fetched](const ALScriptRef& ref) { return fetched && ref.inInventory() && !gInventory.getItem(ref.item); });
     for (const ALScriptStudioFiles::Recent& recent : mFiles.recentScripts())
     {
         if (!listed.insert(recent.ref.id()).second)
@@ -4934,10 +5110,7 @@ void ALFloaterScriptStudio::reference(Doc& doc)
     // source, whose places the analyzer answers in.
     if (!word.empty() && doc.shownView() == Doc::View::Source)
     {
-        doc.caret.inspectAt      = word.begin;
-        doc.caret.inspectVersion = doc.editor->document().version();
-        doc.caret.inspectDue     = 0.0;
-        askAnalyzer(doc, ALScriptAnalysis::Kind::Inspect, word.begin);
+        mCaret.inspect(doc, word.begin);
     }
     else
     {
@@ -4949,22 +5122,44 @@ void ALFloaterScriptStudio::browseReference()
 {
     Doc*       doc = active();
     const bool lua = doc ? doc->language.lua : false;
-    std::vector<ALQuickOpen::Candidate> candidates;
-    const std::vector<Vocab>&           words = ALScriptStudioWords::vocabulary(lua);
-    for (size_t i = 0; i < words.size(); ++i)
+    // Grouped rather than one list of every word: the events, then the
+    // functions by what they are about, then the constants by family, each
+    // group's words in order; the group said beside each and answered to,
+    // so that typing "chat" finds the chat functions.
+    const std::vector<Vocab>& words = ALScriptStudioWords::vocabulary(lua);
+    std::vector<const Vocab*> listed;
+    for (const Vocab& word : words)
     {
-        if (words[i].kind != ALSyntaxKind::Function && words[i].kind != ALSyntaxKind::Event && words[i].kind != ALSyntaxKind::Constant)
+        if (word.kind == ALSyntaxKind::Function || word.kind == ALSyntaxKind::Event || word.kind == ALSyntaxKind::Constant)
         {
-            continue;
+            listed.push_back(&word);
         }
+    }
+    const auto rank = [](const Vocab* word) { return word->kind == ALSyntaxKind::Event ? 0 : word->kind == ALSyntaxKind::Function ? 1 : 2; };
+    std::stable_sort(listed.begin(), listed.end(), [&rank](const Vocab* a, const Vocab* b) {
+        if (rank(a) != rank(b))
+        {
+            return rank(a) < rank(b);
+        }
+        // Those with no group after those with one, in their kind.
+        if (a->group.empty() != b->group.empty())
+        {
+            return b->group.empty();
+        }
+        return a->group < b->group;
+    });
+    std::vector<ALQuickOpen::Candidate> candidates;
+    for (const Vocab* word : listed)
+    {
+        const std::string kind = kindName(word->kind == ALSyntaxKind::Function ? ALScriptSymbolKind::Function
+                                          : word->kind == ALSyntaxKind::Event  ? ALScriptSymbolKind::Event
+                                                                               : ALScriptSymbolKind::Constant);
         ALQuickOpen::Candidate one;
-        one.label  = words[i].text;
-        one.detail = kindName(words[i].kind == ALSyntaxKind::Function ? ALScriptSymbolKind::Function
-                              : words[i].kind == ALSyntaxKind::Event  ? ALScriptSymbolKind::Event
-                                                                       : ALScriptSymbolKind::Constant);
-        one.also   = words[i].tooltip.substr(0, words[i].tooltip.find('\n'));
+        one.label  = word->text;
+        one.detail = word->group.empty() ? kind : word->group + " \u00b7 " + kind;
+        one.also   = (word->group.empty() ? std::string() : word->group + " ") + word->tooltip.substr(0, word->tooltip.find('\n'));
         // By the word, which new definitions arriving meanwhile keep.
-        one.value  = words[i].text;
+        one.value  = word->text;
         candidates.push_back(std::move(one));
     }
     if (candidates.empty())
@@ -5216,6 +5411,12 @@ void ALFloaterScriptStudio::report(const std::string& text, bool failure, const 
 {
     setStatus(text, failure);
     mOutputPane->said(text, failure, doc, actions);
+    // What can be done about it offered over the tab it is about too.
+    if (Doc* about = doc && !actions.empty() ? findDoc(doc->id) : nullptr)
+    {
+        about->offer = Doc::Offer{ text, actions };
+        refreshNotice();
+    }
 }
 
 // --- find in files -------------------------------------------------------------------
@@ -5294,7 +5495,7 @@ void ALFloaterScriptStudio::listObjects(const LLUUID& only, std::function<void(s
                 one.unlisted = static_cast<S32>(listed.unlisted.size());
                 for (const LLUUID& prim : listed.prims)
                 {
-                    for (const ALScriptWorkspace::Item& item : index.items(prim))
+                    for (const ALScriptContents::Item& item : index.items(prim))
                     {
                         one.items.emplace_back(prim, item.id);
                     }
@@ -5343,7 +5544,7 @@ void ALFloaterScriptStudio::listScripts(const LLUUID& root, std::function<void(A
         out.unlisted = static_cast<S32>(listed.unlisted.size());
         for (const LLUUID& prim : listed.prims)
         {
-            for (const ALScriptWorkspace::Item& item : index.items(prim))
+            for (const ALScriptContents::Item& item : index.items(prim))
             {
                 if (item.script)
                 {
@@ -5362,7 +5563,7 @@ bool ALFloaterScriptStudio::isOpen(const ALScriptRef& ref)
 
 void ALFloaterScriptStudio::read(const ALScriptRef& ref, std::function<void(std::optional<ALScriptObjectCheck::Window::Read>)> told)
 {
-    ALScriptWorkspace::instance().load(ref, [told = std::move(told)](const ALScriptWorkspace::Loaded& loaded) {
+    ALScriptWorkspace::instance().load(ref, [told = std::move(told)](const ALScriptLoaded& loaded) {
         if (!loaded.error.empty() || loaded.notecard)
         {
             told(std::nullopt);
@@ -5422,24 +5623,18 @@ void ALFloaterScriptStudio::objectChecked(const ALScriptObjectCheck::Done& done)
     {
         found.push_back(counted("ProblemWarnings", mCheckedWarnings));
     }
-    said += ": " + (found.empty() ? getString("CheckedClean") : found.size() == 1 ? found[0] : found[0] + ", " + found[1]);
-    said += ".";
+    said = sentence(labelled(said, found.empty() ? getString("CheckedClean") : listed(found)));
     if (done.open > 0)
     {
-        said += " " + counted("CheckedOpen", done.open);
+        said = sentences(said, counted("CheckedOpen", done.open));
     }
     if (done.unlisted > 0)
     {
-        said += " " + counted("LookupUnlisted", done.unlisted);
+        said = sentences(said, counted("LookupUnlisted", done.unlisted));
     }
     if (!done.unread.empty())
     {
-        std::string names;
-        for (const std::string& name : done.unread)
-        {
-            names += (names.empty() ? "" : ", ") + name;
-        }
-        said += " " + counted("LookupUnread", static_cast<S32>(done.unread.size()), { { "[NAMES]", names } });
+        said = sentences(said, counted("LookupUnread", static_cast<S32>(done.unread.size()), { { "[NAMES]", listed(done.unread) } }));
     }
     report(said, mCheckedErrors > 0 || done.unlisted > 0 || !done.unread.empty());
 }
@@ -5478,7 +5673,7 @@ void ALFloaterScriptStudio::listScripts(const std::vector<std::pair<LLUUID, std:
                     ++out->unlisted;
                     continue;
                 }
-                for (const ALScriptWorkspace::Item& item : index.items(prim))
+                for (const ALScriptContents::Item& item : index.items(prim))
                 {
                     if (item.script)
                     {
@@ -5510,9 +5705,9 @@ std::optional<bool> ALFloaterScriptStudio::knownRunning(const ALScriptRef& ref)
 }
 
 void ALFloaterScriptStudio::recompile(const ALScriptRef& ref, const std::string& target, std::optional<bool> running,
-                                      ALScriptWorkspace::compile_callback_t told)
+                                      ALScriptCompileCallback told)
 {
-    ALScriptWorkspace::instance().recompile(ref, target, std::move(told), running, ALScriptWorkspace::Sender(ALScriptWorkspace::Origin::Recompile));
+    ALScriptWorkspace::instance().recompile(ref, target, std::move(told), running, ALScriptSender(ALScriptOrigin::Recompile));
 }
 
 void ALFloaterScriptStudio::scriptRecompiled(const ALScriptRecompile::Script& script)
@@ -5622,7 +5817,7 @@ void ALFloaterScriptStudio::fetchForSearch(const ALScriptRef& ref, U32 generatio
         return;
     }
     const LLHandle<LLFloater> handle = getHandle();
-    ALScriptWorkspace::instance().load(ref, [handle, generation, where](const ALScriptWorkspace::Loaded& loaded) {
+    ALScriptWorkspace::instance().load(ref, [handle, generation, where](const ALScriptLoaded& loaded) {
         // A wrapped script is searched as its author wrote it, and that
         // text kept for a replace to work over, and for the next search.
         std::shared_ptr<const std::string> text;
@@ -5820,7 +6015,7 @@ void ALFloaterScriptStudio::quitAnswered(S32 option)
                     dirty.push_back(doc.get());
                 }
             }
-            if (!mRecovery.keepAll(dirty, ALScriptRecoveryEntry::State::Kept))
+            if (!mRecovery.keepAll(dirty, ALRecoveryEntry::State::Kept))
             {
                 report(getString("KeepFailed"), true);
                 stopClosing();
@@ -6047,7 +6242,7 @@ bool ALFloaterScriptStudio::moveActiveTo(ALFloaterScriptStudio* window)
     }
     // What it holds goes with it whole -- the text, the steps that led to
     // it to take back, the caret -- as a kept tab comes back next session.
-    ALScriptRecoveryEntry moving = ALScriptStudioRecovery::entryOf(*doc);
+    ALRecoveryEntry moving = ALScriptStudioRecovery::entryOf(*doc);
     moving.path.clear();
     if (!doc->file.empty())
     {
@@ -6082,7 +6277,7 @@ bool ALFloaterScriptStudio::moveActiveTo(ALFloaterScriptStudio* window)
             {
                 there.carriedExperience = doc->experience;
             }
-            ALScriptNotecardTab::carry(*doc, there);
+            doc->carryItemsTo(there);
             // Showing what it showed here, once its expansion comes there.
             window->showView(there, doc->view);
         }
@@ -6095,21 +6290,25 @@ bool ALFloaterScriptStudio::moveActiveTo(ALFloaterScriptStudio* window)
 
 // --- recovery ------------------------------------------------------------------------
 
-// static
-void ALFloaterScriptStudio::offerRecovery()
+void ALScriptStudio::offerRecovery()
 {
     // What was kept on purpose opens with the main window, which may be
     // up already, restored as the viewer started.
     const bool open = LLFloaterReg::findTypedInstance<ALFloaterScriptStudio>("script_studio", LLSD()) != nullptr;
-    ALScriptStudioRecovery::offer(
-        []() -> ALScriptStudioRecovery* {
-            ALFloaterScriptStudio* studio = LLFloaterReg::showTypedInstance<ALFloaterScriptStudio>("script_studio", LLSD(), TAKE_FOCUS_YES);
-            return studio ? &studio->mRecovery : nullptr;
+    ALRecovery::offer(
+        [](const std::vector<ALRecoveryEntry>& entries) {
+            if (ALFloaterScriptStudio* studio = LLFloaterReg::showTypedInstance<ALFloaterScriptStudio>("script_studio", LLSD(), TAKE_FOCUS_YES))
+            {
+                for (const ALRecoveryEntry& entry : entries)
+                {
+                    studio->mRecovery.recover(entry);
+                }
+            }
         },
         open);
 }
 
-bool ALFloaterScriptStudio::recoverElsewhere(const ALScriptRecoveryEntry& entry)
+bool ALFloaterScriptStudio::recoverElsewhere(const ALRecoveryEntry& entry)
 {
     ALFloaterScriptStudio* holder = holderOf(ALScriptRef(entry.object, entry.item), entry.file);
     if (!holder || holder == this)
@@ -6145,12 +6344,6 @@ void ALFloaterScriptStudio::activate(Doc& doc)
     {
         activate(index);
     }
-}
-
-void ALFloaterScriptStudio::tabsChanged()
-{
-    fillTabs();
-    refreshToolbar();
 }
 
 void ALFloaterScriptStudio::pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
@@ -6230,7 +6423,7 @@ void ALFloaterScriptStudio::pumpRestores()
     const LLHandle<LLFloater> handle = getHandle();
     for (const ALScriptRef& ref : asking)
     {
-        ALScriptWorkspace::instance().listContents(ref.object, [handle, ref](const ALScriptWorkspace::Contents& contents) {
+        ALScriptWorkspace::instance().listContents(ref.object, [handle, ref](const ALScriptContents& contents) {
             if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
             {
                 studio->restoreListed(ref, contents);
@@ -6239,14 +6432,15 @@ void ALFloaterScriptStudio::pumpRestores()
     }
 }
 
-void ALFloaterScriptStudio::restoreListed(const ALScriptRef& ref, const ALScriptWorkspace::Contents& contents)
+void ALFloaterScriptStudio::restoreListed(const ALScriptRef& ref, const ALScriptContents& contents)
 {
     const auto waiting = std::find_if(mPendingRestores.begin(), mPendingRestores.end(), [&ref](const PendingRestore& one) { return one.ref == ref; });
     if (waiting == mPendingRestores.end())
     {
         return;
     }
-    const auto item = std::find_if(contents.items.begin(), contents.items.end(), [&ref](const ALScriptWorkspace::Item& one) { return one.id == ref.item; });
+    const auto item = std::find_if(contents.items.begin(), contents.items.end(),
+                                   [&ref](const ALScriptContents::Item& one) { return one.id == ref.item; });
     if (item != contents.items.end())
     {
         const std::string name = item->name;
@@ -6328,22 +6522,21 @@ ALFloaterScriptStudio* ALFloaterScriptStudio::holderOf(const ALScriptRef& ref, c
     return nullptr;
 }
 
-void ALFloaterScriptStudio::becomeOrphan(Doc& doc, const ALScriptRecoveryEntry& entry, Doc::Orphan orphan)
+void ALFloaterScriptStudio::becomeOrphan(Doc& doc, const ALRecoveryEntry& entry, Doc::Orphan orphan)
 {
     // Nothing loaded under it: the kept text is the tab's, unsaved, with
     // what its script was -- the language, the target, the envelope -- and
     // a notecard's items.
     doc.loaded                 = true;
     doc.modifiable             = true;
-    doc.orphan.detached               = doc.file.empty();
     doc.notecard               = entry.notecard;
+    applyEditorOptions(*doc.editor, doc.itemNotecard());
     doc.language.lua           = entry.lua;
     doc.language.compileTarget = !entry.compileTarget.empty() ? entry.compileTarget : entry.lua ? "luau" : "mono";
     doc.assetId                = entry.baseAsset;
     doc.objectName             = entry.objectName;
     doc.regionName             = entry.region;
-    doc.orphan.kind                 = orphan;
-    doc.orphan.noticeDismissed        = false;
+    ALScriptStudioOrphans::detach(doc, orphan);
     if (entry.wrapped && !entry.notecard)
     {
         if (!doc.envelope)
@@ -6366,8 +6559,8 @@ void ALFloaterScriptStudio::becomeOrphan(Doc& doc, const ALScriptRecoveryEntry& 
     if (entry.notecard && doc.file.empty())
     {
         // Nothing the asset carries is in reach: a list of its own.
-        ALScriptNotecardTab& items = notecardItems(doc, true);
-        items.take(ALScriptNotecardTab::fromLLSD(entry.embedded));
+        ALNotecardEmbedded& items = notecardItems(doc, true);
+        items.take(ALNotecardEmbedded::fromLLSD(entry.embedded));
         items.wire();
     }
     doc.editor->setText(entry.text);
@@ -6398,7 +6591,7 @@ void ALFloaterScriptStudio::becomeOrphan(Doc& doc, const ALScriptRecoveryEntry& 
     refreshNotice();
 }
 
-void ALFloaterScriptStudio::openOrphan(const ALScriptRecoveryEntry& entry, Doc::Orphan orphan)
+void ALFloaterScriptStudio::openOrphan(const ALRecoveryEntry& entry, Doc::Orphan orphan)
 {
     auto doc         = std::make_unique<Doc>();
     doc->file        = entry.file;
@@ -6416,7 +6609,7 @@ void ALFloaterScriptStudio::openOrphan(const ALScriptRecoveryEntry& entry, Doc::
     activate(index);
 }
 
-ALFloaterScriptStudio::Doc::Orphan ALFloaterScriptStudio::failedAs(const Doc& doc, ALScriptWorkspace::Loaded::Failure failure) const
+ALFloaterScriptStudio::Doc::Orphan ALFloaterScriptStudio::failedAs(const Doc& doc, ALScriptLoaded::Failure failure) const
 {
     LLViewerObject* object = doc.ref.inInventory() ? nullptr : gObjectList.findObject(doc.ref.object);
     return ALScriptStudioOrphans::failedAs(doc, failure, object && !object->isDead());
@@ -6430,7 +6623,7 @@ ALScriptStudioOrphans::Reach ALFloaterScriptStudio::reach(const Doc& doc)
     {
         // As the watcher last found it, off the main thread; looked at here
         // only where nothing watches it.
-        const ALWatchedFile* watch = doc.external.watch.get();
+        const ALWatchedFile* watch = doc.watch.get();
         reach.fileThere            = watch && watch->path() == doc.file ? watch->there() : LLFile::isfile(doc.file);
         return reach;
     }
@@ -6448,12 +6641,14 @@ ALScriptStudioOrphans::Reach ALFloaterScriptStudio::reach(const Doc& doc)
     LLViewerObject* object = gObjectList.findObject(doc.ref.object);
     reach.objectThere      = object && !object->isDead();
     // Whether its prim holds the item, where the region has said what the
-    // prim holds.
+    // prim holds and is not being asked again: a script added since is
+    // not gone meanwhile.
     const ALScriptContentsIndex& index = ALScriptWorkspace::instance().contentsIndex();
-    if (index.fetched(doc.ref.object))
+    if (index.fetched(doc.ref.object) && !index.asking(doc.ref.object))
     {
-        const std::vector<ALScriptWorkspace::Item>& items = index.items(doc.ref.object);
-        reach.heldByPrim = std::any_of(items.begin(), items.end(), [&doc](const ALScriptWorkspace::Item& item) { return item.id == doc.ref.item; });
+        const std::vector<ALScriptContents::Item>& items = index.items(doc.ref.object);
+        reach.heldByPrim =
+            std::any_of(items.begin(), items.end(), [&doc](const ALScriptContents::Item& item) { return item.id == doc.ref.item; });
     }
     return reach;
 }
@@ -6488,7 +6683,7 @@ void ALFloaterScriptStudio::refreshPlace(Doc& doc)
 void ALFloaterScriptStudio::loadScript(const ALScriptRef& ref)
 {
     const LLHandle<LLFloater> handle = getHandle();
-    ALScriptWorkspace::instance().load(ref, [handle](const ALScriptWorkspace::Loaded& answer) {
+    ALScriptWorkspace::instance().load(ref, [handle](const ALScriptLoaded& answer) {
         if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
         {
             studio->loaded(answer);
@@ -6496,9 +6691,9 @@ void ALFloaterScriptStudio::loadScript(const ALScriptRef& ref)
     });
 }
 
-void ALFloaterScriptStudio::discardRecovery(const ALScriptRecoveryEntry& entry)
+void ALFloaterScriptStudio::discardRecovery(const ALRecoveryEntry& entry)
 {
-    if (ALScriptRecoveryStore* store = ALScriptStudioRecovery::store())
+    if (ALRecoveryStore* store = ALRecovery::store())
     {
         store->discard(entry);
     }
@@ -6729,7 +6924,7 @@ void ALFloaterScriptStudio::trimTrailing(Doc& doc)
 
 // --- what scripts say ---------------------------------------------------------------
 
-void ALFloaterScriptStudio::runtimeEvent(const ALScriptWorkspace::RuntimeEvent& event)
+void ALFloaterScriptStudio::runtimeEvent(const ALScriptRuntimeEvent& event)
 {
     mOutputPane->heard(event);
 
@@ -6747,7 +6942,7 @@ void ALFloaterScriptStudio::runtimeEvent(const ALScriptWorkspace::RuntimeEvent& 
 }
 
 // static
-ALScriptStudioDoc::RuntimeProblem ALFloaterScriptStudio::runtimeProblemOf(const ALScriptWorkspace::RuntimeEvent& event)
+ALScriptStudioDoc::RuntimeProblem ALFloaterScriptStudio::runtimeProblemOf(const ALScriptRuntimeEvent& event)
 {
     Doc::RuntimeProblem problem;
     problem.line    = event.line;
@@ -6776,7 +6971,7 @@ void ALFloaterScriptStudio::recallRuntime(Doc& doc)
         return;
     }
     const bool hold = holdsRuntime(doc);
-    for (const ALScriptWorkspace::RuntimeEvent& event : ALScriptWorkspace::instance().runtimeErrorsOf(doc.ref.object, doc.ref.item))
+    for (const ALScriptRuntimeEvent& event : ALScriptWorkspace::instance().runtimeErrorsOf(doc.ref.object, doc.ref.item))
     {
         doc.heardRuntime(runtimeProblemOf(event), hold);
     }
@@ -6820,8 +7015,13 @@ void ALFloaterScriptStudio::outputAction(Doc& doc, const std::string& action)
     // What the words said could be done, done: a save held over what was
     // found asked again -- saved, as a second save would have been, where
     // the text is still what was held -- a failed one tried again, a copy
-    // into the inventory, a file.
+    // into the inventory, a file. The notice offering it is answered.
     activate(indexOf(doc.id));
+    if (doc.offer && doc.offer->offers(action))
+    {
+        doc.offer.reset();
+        refreshNotice();
+    }
     if (action == "save_anyway")
     {
         mSaving.saveAsked(doc);
@@ -6838,19 +7038,14 @@ void ALFloaterScriptStudio::outputAction(Doc& doc, const std::string& action)
     {
         mFiles.saveCopy();
     }
-    else if (action == "take_external" && doc.external.waiting)
+    else if (action == "take_external" && doc.external->waiting)
     {
         // What was typed here a step back in the undo.
-        mExternal.take(doc, *doc.external.waiting);
+        mExternal.take(doc, *doc.external->waiting);
     }
-    else if (action == "keep_here" && doc.external.waiting)
+    else if (action == "keep_here" && doc.external->waiting)
     {
-        // The external editor's save not sent; its copy is written from
-        // here at the next save.
-        doc.external.waiting.reset();
-        LLStringUtil::format_map_t args;
-        args["[NAME]"] = doc.name;
-        setStatus(getString("ExternalKept", args));
+        mExternal.keep(doc);
     }
     else if (action == "take_saved")
     {
@@ -6870,7 +7065,7 @@ void ALFloaterScriptStudio::outputAction(Doc& doc, const std::string& action)
     {
         const LLHandle<LLFloater> handle = getHandle();
         const std::string         id     = doc.id;
-        ALScriptWorkspace::instance().load(doc.ref, [handle, id](const ALScriptWorkspace::Loaded& answer) {
+        ALScriptWorkspace::instance().load(doc.ref, [handle, id](const ALScriptLoaded& answer) {
             ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
             Doc*                   found  = studio ? studio->findDoc(id) : nullptr;
             if (!found || !found->loaded)
@@ -6989,32 +7184,68 @@ void ALFloaterScriptStudio::itemDeleted(const ALScriptRef& ref)
 
 bool ALFloaterScriptStudio::unsavedAnywhere(const ALScriptRef& ref) const
 {
-    return unsavedIn(ref);
+    return ALScriptStudio::unsavedIn(ref);
 }
 
-// static
-bool ALFloaterScriptStudio::unsavedIn(const ALScriptRef& ref)
+bool ALScriptStudio::unsavedIn(const ALScriptRef& ref)
 {
-    const ALFloaterScriptStudio* holder = holderOf(ref, std::string());
-    const size_t                 index  = holder ? holder->indexOf(ref) : NONE;
-    return index != NONE && holder->mDocs[index]->editor->isDirty() && holder->mDocs[index]->modifiable;
+    const ALFloaterScriptStudio* holder = ALFloaterScriptStudio::holderOf(ref, std::string());
+    const size_t                 index  = holder ? holder->indexOf(ref) : ALFloaterScriptStudio::NONE;
+    return index != ALFloaterScriptStudio::NONE && holder->mDocs[index]->editor->isDirty() && holder->mDocs[index]->modifiable;
 }
 
-void ALFloaterScriptStudio::runningState(const ALScriptWorkspace::RunningState& state)
+namespace
+{
+    // How often the Running box asks the region whether what it asked has
+    // taken, and how many times before it says it has not.
+    constexpr F32 RUNNING_ASK_EVERY = 0.5f;
+    constexpr S32 RUNNING_ASKS      = 10;
+}
+
+void ALFloaterScriptStudio::runningState(const ALScriptRunningState& state)
 {
     const size_t index = indexOf(state.ref);
     if (index == NONE)
     {
         return;
     }
-    Doc& doc    = *mDocs[index];
-    doc.running = state.running ? 1 : 0;
+    Doc& doc = *mDocs[index];
     // What it compiles for, as the region knows it, but for one picked
     // here and not saved yet, which is what the next save sends.
     if (!state.compileTarget.empty() && !doc.targetChosen)
     {
         doc.language.compileTarget = state.compileTarget;
     }
+    // The Running box's ask answered: said once the region says it is so,
+    // the box left saying what was asked while the region is not there
+    // yet and asked again in a moment, and said as not so once it has
+    // been asked enough.
+    if (doc.runningAsked)
+    {
+        const bool asked = *doc.runningAsked;
+        if (state.running != asked && --doc.runningAsks > 0)
+        {
+            const LLHandle<LLFloater> handle = getHandle();
+            const std::string         id     = doc.id;
+            doAfterInterval(
+                [handle, id]() {
+                    ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
+                    const Doc*             asking = studio ? studio->findDoc(id) : nullptr;
+                    if (asking && asking->runningAsked)
+                    {
+                        ALScriptWorkspace::instance().askRunning(asking->ref);
+                    }
+                },
+                RUNNING_ASK_EVERY);
+            return;
+        }
+        doc.runningAsked.reset();
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = doc.name;
+        const char* said = state.running == asked ? (asked ? "RunningStarted" : "RunningStopped") : (asked ? "RunningNotStarted" : "RunningNotStopped");
+        report(getString(said, args), state.running != asked, &doc);
+    }
+    doc.running = state.running ? 1 : 0;
     if (&doc == active())
     {
         refreshToolbar();
@@ -7023,17 +7254,64 @@ void ALFloaterScriptStudio::runningState(const ALScriptWorkspace::RunningState& 
 
 // --- a new script in the inventory ----------------------------------------------------
 
+// static
+std::vector<ALScriptSnippets::Snippet> ALFloaterScriptStudio::templatesOf(bool lua)
+{
+    const std::string                      file = lua ? "slua.xml" : "lsl.xml";
+    std::vector<ALScriptSnippets::Snippet> out;
+    ALScriptSnippets::readFrom(gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "script_templates", file), true, out);
+    ALScriptSnippets::readFrom(gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "script_templates", file), false, out);
+    return out;
+}
+
 void ALFloaterScriptStudio::newInventoryScript(bool lua)
+{
+    // What it starts from, as Go to Script asks where to go: the
+    // scripter's own template first where there is one, the grid's own,
+    // then the templates, each told by its value's place in the list.
+    std::vector<ALQuickOpen::Candidate> candidates;
+    auto                                openings = std::make_shared<std::vector<std::string>>();
+    const auto add = [&](const std::string& label, const std::string& detail, const std::string& opening) {
+        ALQuickOpen::Candidate one;
+        one.label  = label;
+        one.detail = detail;
+        one.value  = std::to_string(openings->size());
+        candidates.push_back(std::move(one));
+        openings->push_back(opening);
+    };
+    const std::string own = gSavedSettings.getString(lua ? "ALScriptTemplateSLua" : "ALScriptTemplateLSL");
+    if (!own.empty())
+    {
+        add(getString("TemplateOwn"), getString("TemplateOwnDetail"), own);
+    }
+    add(getString("TemplateGrid"), getString("TemplateGridDetail"), std::string());
+    for (const ALScriptSnippets::Snippet& one : templatesOf(lua))
+    {
+        add(one.name, one.detail, one.body);
+    }
+    const LLHandle<LLFloater> handle = getHandle();
+    quickOpen(std::move(candidates), getString("TemplatesPlaceholder"), getString("TemplatesTitle"),
+              [handle, lua, openings](const std::string& value) {
+                  ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
+                  const size_t           index  = static_cast<size_t>(std::atoi(value.c_str()));
+                  if (studio && index < openings->size())
+                  {
+                      studio->nameNewInventoryScript(lua, (*openings)[index]);
+                  }
+              });
+}
+
+void ALFloaterScriptStudio::nameNewInventoryScript(bool lua, const std::string& opening_in)
 {
     // Named first, as one made in a prim is; then made in the inventory's
     // scripts folder, in the language asked for rather than whichever the
-    // region would pick, and opened here with the scripter's template in
-    // it once the inventory has it.
+    // region would pick, and opened here with what was chosen in it once
+    // the inventory has it -- the grid's own where that was nothing.
     LLSD args;
     args["KIND"]                     = getString(lua ? "NewScriptLua" : "NewScriptLSL");
     args["NAME"]                     = getString("NewScriptName");
     const LLHandle<LLFloater> handle = getHandle();
-    LLNotificationsUtil::add("ScriptStudioNewItem", args, LLSD(), [handle, lua](const LLSD& notification, const LLSD& response) {
+    LLNotificationsUtil::add("ScriptStudioNewItem", args, LLSD(), [handle, lua, opening = opening_in](const LLSD& notification, const LLSD& response) {
         if (!ALViewType::as<ALFloaterScriptStudio>(handle.get()) || LLNotificationsUtil::getSelectedOption(notification, response) != 0)
         {
             return;
@@ -7044,7 +7322,6 @@ void ALFloaterScriptStudio::newInventoryScript(bool lua)
         {
             return;
         }
-        const std::string opening = gSavedSettings.getString(lua ? "ALScriptTemplateSLua" : "ALScriptTemplateLSL");
         LLPointer<LLBoostFuncInventoryCallback> made = new LLBoostFuncInventoryCallback(create_script_cb);
         made->addOnFireFunc([handle, opening](const LLUUID& item_id) {
             ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get());
@@ -7205,10 +7482,10 @@ void ALFloaterScriptStudio::letGoOf(size_t index, bool keep)
         // entry the tab took up goes with it only once what the tab holds
         // is safe -- set aside, saved, or the same as saved -- so that a
         // failed write, or a text nobody could save, loses nothing.
-        ALScriptRecoveryStore* store = ALScriptStudioRecovery::store();
+        ALRecoveryStore* store = ALRecovery::store();
         if (!keep && store && !doc.recoveryKey.empty())
         {
-            ALScriptRecoveryStore::Parting parting;
+            ALRecoveryStore::Parting parting;
             parting.key      = doc.recoveryKey;
             parting.tookUp   = doc.recovering;
             parting.carrying = doc.carriedText.has_value();
@@ -7356,7 +7633,7 @@ void ALFloaterScriptStudio::addFileCommands()
     mCommands.add(
         "recover", [this]() { mRecovery.show(); },
         []() {
-            const ALScriptRecoveryStore* store = ALScriptStudioRecovery::store();
+            const ALRecoveryStore* store = ALRecovery::store();
             return store && store->hasOffers();
         });
     mCommands.add(
@@ -7643,7 +7920,23 @@ void ALFloaterScriptStudio::addGoCommands()
             return doc && !doc->outline.empty();
         });
     addEditorCommand("go_to_definition", ALEditorCommand::GoToDefinition, false);
-    addEditorCommand("find_references", ALEditorCommand::FindReferences, false);
+    // A notecard's references are the scripts of its object that read it.
+    mCommands.add(
+        "find_references",
+        [this]() {
+            if (Doc* doc = active(); doc && doc->itemNotecard())
+            {
+                findNotecardReaders(*doc);
+            }
+            else if (doc)
+            {
+                doc->shownText()->perform(ALEditorCommand::FindReferences);
+            }
+        },
+        [this]() {
+            Doc* doc = active();
+            return doc && (doc->itemNotecard() ? doc->loaded && !doc->ref.inInventory() : doc->shownText()->canPerform(ALEditorCommand::FindReferences));
+        });
     for (const auto& [name, step] : { std::pair{ "next_problem", 1 }, std::pair{ "previous_problem", -1 } })
     {
         mCommands.add(
@@ -7710,9 +8003,30 @@ void ALFloaterScriptStudio::addGoCommands()
 void ALFloaterScriptStudio::addViewCommands()
 {
     mCommands.add("command_palette", [this]() { showCommandPalette(); });
+    // Word wrap and line numbers: a notecard's own where a notecard is in
+    // front, a script's otherwise.
+    for (const auto& [name, script, notecard] : { std::tuple{ "word_wrap", &mWordWrap, &mNotecardWrap },
+                                                  std::tuple{ "line_numbers", &mLineNumbers, &mNotecardLineNumbers } })
+    {
+        mCommands.add(
+            name,
+            [this, script, notecard]() {
+                bool& flag = frontIsNotecard() ? *notecard : *script;
+                flag       = !flag;
+                applyEditorOptions();
+            },
+            nullptr, [this, script, notecard]() { return frontIsNotecard() ? *notecard : *script; });
+    }
+    // A notecard's lines counted from 0, as llGetNotecardLine counts them.
+    mCommands.add(
+        "notecard_from_zero",
+        [this]() {
+            mNotecardFromZero = !mNotecardFromZero;
+            applyEditorOptions();
+        },
+        [this]() { return frontIsNotecard(); }, [this]() { return mNotecardFromZero; });
     // The editors' options, each on or off.
-    for (const auto& [name, flag] : { std::pair{ "word_wrap", &mWordWrap }, std::pair{ "line_numbers", &mLineNumbers },
-                                      std::pair{ "relative_numbers", &mRelativeNumbers }, std::pair{ "indent_guides", &mIndentGuides },
+    for (const auto& [name, flag] : { std::pair{ "relative_numbers", &mRelativeNumbers }, std::pair{ "indent_guides", &mIndentGuides },
                                       std::pair{ "rainbow_brackets", &mRainbowBrackets }, std::pair{ "sticky_headers", &mStickyHeaders },
                                       std::pair{ "spell_check", &mSpellCheck }, std::pair{ "map_preview", &mScrollMapPreview },
                                       std::pair{ "map_left", &mScrollMapLeft } })
@@ -8169,13 +8483,22 @@ void ALFloaterScriptStudio::onRunning()
 {
     if (Doc* doc = active(); doc && !doc->ref.inInventory())
     {
-        if (std::string error; !ALScriptWorkspace::instance().setRunning(doc->ref, mRunning->get(), error))
+        const bool wanted = mRunning->get();
+        if (std::string error; !ALScriptWorkspace::instance().setRunning(doc->ref, wanted, error))
         {
-            mRunning->set(!mRunning->get());
+            mRunning->set(!wanted);
             report(error, true, doc);
+            return;
         }
-        // The script's own, which its next save keeps.
-        doc->running = mRunning->get() ? 1 : 0;
+        // The script's own, which its next save keeps; said once the
+        // region says it is so.
+        doc->running      = wanted ? 1 : 0;
+        doc->runningAsked = wanted;
+        doc->runningAsks  = RUNNING_ASKS;
+        ALScriptWorkspace::instance().askRunning(doc->ref);
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = doc->name;
+        setStatus(getString(wanted ? "RunningStarting" : "RunningStopping", args));
     }
 }
 
@@ -8186,7 +8509,11 @@ void ALFloaterScriptStudio::onReset()
         if (std::string error; !ALScriptWorkspace::instance().reset(doc->ref, error))
         {
             report(error, true, doc);
+            return;
         }
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = doc->name;
+        report(getString("ResetSent", args), false, doc);
     }
 }
 
@@ -8196,8 +8523,9 @@ bool ALFloaterScriptStudio::revertible(const Doc& doc) const
     // nor one whose item, object or file is gone or out of reach -- where
     // a revert set the text aside and left the error in its place.
     using Orphan = Doc::Orphan;
-    return doc.loaded && doc.modifiable && !doc.orphan.detached && doc.orphan.kind != Orphan::Away && doc.orphan.kind != Orphan::Removed &&
-           doc.orphan.kind != Orphan::Offline && doc.orphan.kind != Orphan::FileGone;
+    const Orphan kind = doc.orphan->kind;
+    return doc.loaded && doc.modifiable && !doc.orphan->detached && kind != Orphan::Away && kind != Orphan::Removed &&
+           kind != Orphan::Offline && kind != Orphan::FileGone;
 }
 
 void ALFloaterScriptStudio::askRevert(Doc& doc)
@@ -8274,7 +8602,7 @@ void ALFloaterScriptStudio::revert(Doc& doc)
     doc.loaded     = false;
     doc.editor->setReadOnly(true);
     const LLHandle<LLFloater> handle = getHandle();
-    ALScriptWorkspace::instance().load(doc.ref, [handle](const ALScriptWorkspace::Loaded& answer) {
+    ALScriptWorkspace::instance().load(doc.ref, [handle](const ALScriptLoaded& answer) {
         if (ALFloaterScriptStudio* studio = ALViewType::as<ALFloaterScriptStudio>(handle.get()))
         {
             studio->loaded(answer);
@@ -8290,6 +8618,9 @@ void ALFloaterScriptStudio::writeViewOptions(LLSD& state) const
 {
     state["word_wrap"]    = mWordWrap;
     state["line_numbers"] = mLineNumbers;
+    state["notecard_wrap"]         = mNotecardWrap;
+    state["notecard_line_numbers"] = mNotecardLineNumbers;
+    state["notecard_from_zero"]    = mNotecardFromZero;
     state["indent_guides"]    = mIndentGuides;
     state["whitespace"]       = static_cast<S32>(mWhitespace);
     state["relative_numbers"] = mRelativeNumbers;
@@ -8317,6 +8648,18 @@ void ALFloaterScriptStudio::readViewOptions(const LLSD& state)
     if (state.has("line_numbers"))
     {
         mLineNumbers = state["line_numbers"].asBoolean();
+    }
+    if (state.has("notecard_wrap"))
+    {
+        mNotecardWrap = state["notecard_wrap"].asBoolean();
+    }
+    if (state.has("notecard_line_numbers"))
+    {
+        mNotecardLineNumbers = state["notecard_line_numbers"].asBoolean();
+    }
+    if (state.has("notecard_from_zero"))
+    {
+        mNotecardFromZero = state["notecard_from_zero"].asBoolean();
     }
     if (state.has("indent_guides"))
     {
@@ -8393,9 +8736,38 @@ void ALFloaterScriptStudio::takeViewOptions(const ALFloaterScriptStudio& from)
     applyEditorOptions();
 }
 
+namespace
+{
+    // The account's own state is kept with its settings, by grid
+    // (ALScriptStudioAccount), where there is an account: logged in, its
+    // settings read.
+    constexpr char ACCOUNT_SETTING[] = "ALScriptStudioAccountState";
+    bool           accountReady()
+    {
+        return gAgent.getID().notNull() && gSavedPerAccountSettings.controlExists(ACCOUNT_SETTING);
+    }
+}
+
 void ALFloaterScriptStudio::writeState(LLSD& state) const
 {
+    writeSharedState(state);
+    // The account's own, out of what every account shares and into the
+    // account's settings, under its grid.
+    if (accountReady())
+    {
+        LLSD              all  = gSavedPerAccountSettings.getLLSD(ACCOUNT_SETTING);
+        const std::string grid = LLGridManager::getInstance()->getGrid();
+        LLSD              mine = all[grid];
+        ALScriptStudioAccount::split(state, mine);
+        all[grid] = mine;
+        gSavedPerAccountSettings.setLLSD(ACCOUNT_SETTING, all);
+    }
+}
+
+void ALFloaterScriptStudio::writeSharedState(LLSD& state) const
+{
     writeViewOptions(state);
+    state["bottom_waiting"] = mBottomWaiting;
     if (mExplorerPane)
     {
         mExplorerPane->saveState(state);
@@ -8487,9 +8859,16 @@ LLSD ALFloaterScriptStudio::openTabs() const
     return open;
 }
 
-void ALFloaterScriptStudio::readState(const LLSD& state)
+void ALFloaterScriptStudio::readState(const LLSD& shared)
 {
+    // The account's own from its settings, where it has kept any; before
+    // it has -- the first login since these were shared -- what the shared
+    // state held, taken over as it was.
+    const LLSD state = accountReady()
+                           ? ALScriptStudioAccount::merged(shared, gSavedPerAccountSettings.getLLSD(ACCOUNT_SETTING)[LLGridManager::getInstance()->getGrid()])
+                           : shared;
     readViewOptions(state);
+    mBottomWaiting = state["bottom_waiting"].asBoolean();
     if (mExplorerPane)
     {
         mExplorerPane->readState(state);
