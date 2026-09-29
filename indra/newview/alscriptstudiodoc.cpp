@@ -26,8 +26,18 @@
 
 #include "alscriptstudiodoc.h"
 
+#include "alcodeeditor.h"
+#include "aldiffview.h"
+#include "alnotecardembedded.h"
+#include "alscriptexternaleditor.h"
 #include "alscriptfixes.h"
+#include "alscriptlookup.h"
+#include "alscriptstudiocaret.h"
+#include "alscriptstudiochecking.h"
+#include "alscriptstudioorphans.h"
+#include "alscriptstudiorecovery.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudioweighing.h"
 #include "lldate.h"
 #include "llfocusmgr.h"
 
@@ -36,6 +46,10 @@
 
 // static
 const std::string ALScriptStudioDoc::GENERATED = "generated:";
+
+// Out of line, where each unit's part is whole.
+ALScriptStudioDoc::ALScriptStudioDoc()  = default;
+ALScriptStudioDoc::~ALScriptStudioDoc() = default;
 
 // static
 const char* ALScriptStudioDoc::levelName(Level level)
@@ -87,6 +101,21 @@ ALScriptStudioDoc::Shown ALScriptStudioDoc::analysisRow(const ALScriptProblem& p
     return row;
 }
 
+bool ALScriptStudioDoc::unsaved() const
+{
+    return (editor && editor->isDirty()) || targetChosen || experienceChosen;
+}
+
+ALCodeEditor* ALScriptStudioDoc::shownText() const
+{
+    switch (shownView())
+    {
+        case View::Compare:  return compareView->shown();
+        case View::Expanded: return expandedEditor;
+        default:             return editor;
+    }
+}
+
 bool ALScriptStudioDoc::hasKeyboard() const
 {
     for (const LLView* view : { static_cast<const LLView*>(editor), static_cast<const LLView*>(expandedEditor), static_cast<const LLView*>(compareView) })
@@ -102,7 +131,7 @@ bool ALScriptStudioDoc::hasKeyboard() const
 bool ALScriptStudioDoc::checkRunning(F64 now) const
 {
     constexpr F64 SAID_AFTER = 0.4;
-    return loaded && !notecard && check.requestedVersion != check.analysisVersion && check.askedAt > 0.0 && now - check.askedAt >= SAID_AFTER;
+    return loaded && !notecard && check->requestedVersion != check->analysisVersion && check->askedAt > 0.0 && now - check->askedAt >= SAID_AFTER;
 }
 
 const ALSourceMap* ALScriptStudioDoc::runningMap() const
@@ -223,6 +252,14 @@ std::shared_ptr<const std::string> ALScriptStudioDoc::snapshot() const
         snapshotVersion = version;
     }
     return held;
+}
+
+void ALScriptStudioDoc::carryItemsTo(ALScriptStudioDoc& to) const
+{
+    if (items)
+    {
+        to.carriedEmbedded = items->items();
+    }
 }
 
 // static
@@ -382,10 +419,4 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
         kept.push_back(fix);
     }
     return kept;
-}
-
-// static
-ALCodeEditor::Mark ALScriptStudioDoc::markOf(Level level)
-{
-    return level == Level::Error ? ALCodeEditor::Mark::Error : level == Level::Warning ? ALCodeEditor::Mark::Warning : ALCodeEditor::Mark::Note;
 }
