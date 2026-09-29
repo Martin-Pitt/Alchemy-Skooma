@@ -26,6 +26,7 @@
 
 #include "alscripttheme.h"
 
+#include "alsaid.h"
 #include "altextview.h"
 #include "llcontrol.h"
 #include "lldir.h"
@@ -47,24 +48,24 @@ namespace
         { "ScriptText", "Text" },
         { "ScriptBackground", "Background" },
         { "ScriptBgReadOnlyColor", "Background, read-only" },
-        { "ScriptCursorColor", "Cursor" },
+        { "ScriptCursorColor", "Caret" },
         { "ScriptSelectionColor", "Selection" },
         { "ScriptSelectionInactiveColor", "Selection, unfocused" },
         { "ScriptCurrentLineColor", "Current line" },
         { "ScriptGutterColor", "Gutter" },
         { "ScriptLineNumberColor", "Line numbers" },
         { "ScriptActiveLineNumberColor", "Caret's line number" },
-        { "ScriptBracketMatchColor", "Matched bracket" },
+        { "ScriptBracketMatchColor", "Matching bracket" },
         { "ScriptFindMatchColor", "Find match" },
         { "ScriptFoldColor", "Fold marks" },
         { "ScriptIndentGuideColor", "Indent guides" },
-        { "ScriptWhitespaceColor", "Blank marks" },
-        { "ScriptHighlightColor", "References" },
+        { "ScriptWhitespaceColor", "Whitespace" },
+        { "ScriptHighlightColor", "Highlighted references" },
         { "ScriptChangedColor", "Changed lines" },
-        { "ScriptStickyHeaderColor", "Pinned headers" },
-        { "ScriptInlayHintColor", "Inlay hints" },
-        { "ScriptInlayHintBgColor", "Inlay hints, background" },
-        { "ScriptHeatColor", "Weight heat" },
+        { "ScriptStickyHeaderColor", "Sticky headers" },
+        { "ScriptInlayHintColor", "Parameter name hints" },
+        { "ScriptInlayHintBgColor", "Parameter name hints, background" },
+        { "ScriptHeatColor", "Memory heat" },
         { "ScriptErrorColor", "Errors" },
         { "ScriptWarningColor", "Warnings" },
         { "ScriptNoteColor", "Notes" },
@@ -72,9 +73,9 @@ namespace
         { "ScriptWidgetColor", "Pop-ups" },
         { "ScriptWidgetBorderColor", "Pop-ups, border" },
         { "ScriptWidgetSelectionColor", "Pop-ups, chosen row" },
-        { "ScriptBracket1Color", "Brackets, level 1" },
-        { "ScriptBracket2Color", "Brackets, level 2" },
-        { "ScriptBracket3Color", "Brackets, level 3" },
+        { "ScriptBracket1Color", "Rainbow brackets, level 1" },
+        { "ScriptBracket2Color", "Rainbow brackets, level 2" },
+        { "ScriptBracket3Color", "Rainbow brackets, level 3" },
     };
 
     // A kind a theme made before it was told apart takes the colour of
@@ -193,18 +194,23 @@ const std::vector<std::string>& ALScriptTheme::names()
 // static
 std::string ALScriptTheme::labelOf(const std::string& name)
 {
+    // The English here, and the viewer's language where strings.xml has
+    // the name.
+    std::string english = name;
+    bool        found   = false;
     for (const auto& [own, label] : EDITOR_COLORS)
     {
         if (name == own)
         {
-            return label;
+            english = label;
+            found   = true;
         }
     }
-    if (name.compare(0, 6, "Script") == 0)
+    if (!found && name.compare(0, 6, "Script") == 0)
     {
-        return spaced(name.substr(6));
+        english = spaced(name.substr(6));
     }
-    return name;
+    return alSaidTemplate("ScriptColorLabel_" + name, english);
 }
 
 // static
@@ -218,6 +224,78 @@ bool ALScriptTheme::isEditorColor(const std::string& name)
         }
     }
     return false;
+}
+
+// static
+std::vector<ALScriptTheme::Illegible> ALScriptTheme::illegible(const lookup_t& colour, F32 least, F32 numbers)
+{
+    std::vector<Illegible>        out;
+    const std::optional<LLColor4> ground = colour("ScriptBackground");
+    if (!ground)
+    {
+        return out;
+    }
+    // What is drawn over the ground -- a band, a selection -- as it comes
+    // out, which is what the text over it is read against.
+    const auto laid = [&](const LLColor4& over) {
+        const F32 alpha = llclamp(over.mV[VALPHA], 0.f, 1.f);
+        LLColor4  seen  = lerp(*ground, over, alpha);
+        seen.mV[VALPHA] = 1.f;
+        return seen;
+    };
+    const auto check = [&](const std::string& name, const LLColor4& ink, const std::string& against, const LLColor4& paper, F32 wants) {
+        const F32 apart = ALSurface::contrast(ink, paper);
+        if (apart < wants)
+        {
+            out.push_back({ name, against, apart });
+        }
+    };
+    const std::optional<LLColor4> read_only = colour("ScriptBgReadOnlyColor");
+    std::vector<std::string>      read      = { "ScriptText" };
+    for (const std::string& name : names())
+    {
+        if (!isEditorColor(name))
+        {
+            read.push_back(name);
+        }
+    }
+    for (const std::string& name : read)
+    {
+        if (const std::optional<LLColor4> ink = colour(name))
+        {
+            check(name, *ink, "ScriptBackground", *ground, least);
+            if (read_only)
+            {
+                check(name, *ink, "ScriptBgReadOnlyColor", laid(*read_only), least);
+            }
+        }
+    }
+    if (const std::optional<LLColor4> text = colour("ScriptText"))
+    {
+        for (const char* band : { "ScriptCurrentLineColor", "ScriptSelectionColor" })
+        {
+            if (const std::optional<LLColor4> under = colour(band))
+            {
+                check("ScriptText", *text, band, laid(*under), least);
+            }
+        }
+    }
+    if (const std::optional<LLColor4> number = colour("ScriptLineNumberColor"))
+    {
+        const std::optional<LLColor4> gutter = colour("ScriptGutterColor");
+        check("ScriptLineNumberColor", *number, gutter ? "ScriptGutterColor" : "ScriptBackground", gutter ? laid(*gutter) : *ground, numbers);
+    }
+    return out;
+}
+
+std::vector<ALScriptTheme::Illegible> ALScriptTheme::illegible(F32 least, F32 numbers) const
+{
+    return illegible(
+        [this](const std::string& name) -> std::optional<LLColor4> {
+            const auto found = colors.find(name);
+            return found != colors.end() ? std::optional<LLColor4>(found->second) : std::nullopt;
+        },
+        least, numbers);
 }
 
 // static

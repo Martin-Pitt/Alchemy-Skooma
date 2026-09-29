@@ -26,8 +26,9 @@
 
 #include "../alscriptexternaleditor.h"
 
-#include "../lllogchat.h"
 #include "alscriptstudio_fixture.h"
+#include "alscripttempfiles.h"
+#include "alwatchedfile.h"
 
 #include "fsyspath.h"
 
@@ -37,11 +38,8 @@
 #include <fstream>
 #include <optional>
 
-// The log's first line says when; the chat log's clock is the viewer's.
-std::string LLLogChat::timestamp2LogString(U32, bool)
-{
-    return "[when]";
-}
+// The log's first line says when: "[when]", by the studio's tests' stub of
+// the chat log's clock (alscriptstudio_stubs.cpp).
 
 namespace
 {
@@ -49,7 +47,7 @@ namespace
     typedef std::vector<std::string> Names;
 
     // The window, faked: a record of what the external editor asked of it.
-    struct FakeExternalWindow : public ALScriptExternalEditor::Window
+    struct FakeExternalWindow : public ALScriptExternalEditor::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietSaves
     {
         void watchFile(Doc& doc) override { watched.push_back(doc.id); }
         // As the window takes it: the tab's text replaced, one step to undo.
@@ -118,7 +116,7 @@ namespace tut
             {
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
-            unit = std::make_unique<ALScriptExternalEditor>(services, studio);
+            unit = std::make_unique<ALScriptExternalEditor>(services, studio, studio, studio);
             return *unit;
         }
         // A script's tab, loaded, changeable and saved.
@@ -180,11 +178,11 @@ namespace tut
         unit.edit(a);
         const std::string file = unit.fileName(a);
         ensure_equals("the copy", contents(file), std::string("default {}"));
-        ensure("watched", a.external.watch && a.external.watch->path() == file);
-        ensure("the log beside it", a.external.log && a.external.log->path() == file + ".log");
-        ensure("the bridge told", studio.subscribed == Names{ "a" } && a.external.subscribed);
+        ensure("watched", a.watch && a.watch->path() == file);
+        ensure("the log beside it", a.external->log && a.external->log->path() == file + ".log");
+        ensure("the bridge told", studio.subscribed == Names{ "a" } && a.external->subscribed);
         ensure("the editor started on it", studio.started == Names{ file });
-        ensure_equals("what it holds, known", a.external.written, std::string("default {}"));
+        ensure_equals("what it holds, known", a.external->written, std::string("default {}"));
 
         Doc& e = tab("e", "");
         unit.edit(e);
@@ -194,12 +192,12 @@ namespace tut
         d.file = "/somewhere/d.lsl";
         unit.edit(d);
         ensure("a file on disk watched where it is", studio.watched == Names{ "d" } && studio.started.back() == "/somewhere/d.lsl on disk");
-        ensure("with no log, and nothing for the bridge", !d.external.log && studio.subscribed.size() == 2);
+        ensure("with no log, and nothing for the bridge", !d.external->log && studio.subscribed.size() == 2);
 
         Doc& n    = tab("n", "x");
         n.notecard = true;
         unit.edit(n);
-        ensure("a notecard not", studio.started.size() == 3 && !n.external.watch);
+        ensure("a notecard not", studio.started.size() == 3 && !n.watch);
     }
 
     template<> template<>
@@ -213,7 +211,7 @@ namespace tut
         unit.changed("a", unit.fileName(a));
         ensure("taken", studio.taken == Names{ "two" } && a.editor->text() == "two");
         ensure("saved from here, as the editor's", studio.saved == Names{ "a" } && a.save.external());
-        ensure_equals("what the copy holds, known", a.external.written, std::string("two"));
+        ensure_equals("what the copy holds, known", a.external->written, std::string("two"));
         ensure("nothing asked", !asked());
         a.editor->resetDirty();
         unit.changed("a", unit.fileName(a));
@@ -234,10 +232,10 @@ namespace tut
         write(unit.fileName(a), "two");
         unit.changed("a", unit.fileName(a));
         ensure("not taken", studio.taken.empty() && a.editor->text() == "one here");
-        ensure("held", a.external.waiting && *a.external.waiting == "two");
+        ensure("held", a.external->waiting && *a.external->waiting == "two");
         ensure("and asked about", asked() && services.reports.back().failure && services.reports.back().doc == "a");
-        unit.take(a, *a.external.waiting);
-        ensure("taken once said", studio.taken == Names{ "two" } && !a.external.waiting && studio.saved == Names{ "a" });
+        unit.take(a, *a.external->waiting);
+        ensure("taken once said", studio.taken == Names{ "two" } && !a.external->waiting && studio.saved == Names{ "a" });
     }
 
     template<> template<>
@@ -285,18 +283,18 @@ namespace tut
         a.editor->insertText(" two");
         unit.sync(a);
         ensure_equals("written again", contents(unit.fileName(a)), std::string("one two"));
-        ensure_equals("and known", a.external.written, std::string("one two"));
-        ALScriptWorkspace::CompileResult result;
+        ensure_equals("and known", a.external->written, std::string("one two"));
+        ALScriptCompileResult result;
         result.messages = { "(1, 2) : ERROR : Syntax error\x07" };
         unit.log(a, result);
-        const std::string log = contents(a.external.log->path());
+        const std::string log = contents(a.external->log->path());
         ensure("the log: when, then the words, what cannot be printed dropped",
                log.find("// [when]") == 0 && log.find("Syntax error\n") != std::string::npos && log.find('\x07') == std::string::npos);
         Doc& d = tab("d", "x");
         d.file = "/somewhere/d.lsl";
         unit.log(d, result);
         unit.sync(d);
-        ensure("a tab not held outside: nothing", !d.external.log && !d.external.watch);
+        ensure("a tab not held outside: nothing", !d.external->log && !d.watch);
     }
 
     template<> template<>
@@ -307,16 +305,33 @@ namespace tut
         studio.bridgeThere           = true;
         Doc& a                       = tab("a", "one");
         unit.edit(a);
-        ALScriptWorkspace::CompileResult result;
+        ALScriptCompileResult result;
         unit.log(a, result);
         const std::string file = unit.fileName(a);
-        const std::string log  = a.external.log->path();
+        const std::string log  = a.external->log->path();
         ensure("both there", exists(file) && exists(log));
         a.save.fromExternal(1);
         unit.stop(a);
-        ensure("the bridge told", studio.unsubscribed == Names{ "a" } && !a.external.subscribed);
-        ensure("the watch gone, and the studio's copy with it", !a.external.watch && !exists(file));
-        ensure("the log gone", !exists(log) && !a.external.log);
+        ensure("the bridge told", studio.unsubscribed == Names{ "a" } && !a.external->subscribed);
+        ensure("the watch gone, and the studio's copy with it", !a.watch && !exists(file));
+        ensure("the log gone", !exists(log) && !a.external->log);
         ensure("a save under way is no longer the editor's", !a.save.external());
+    }
+
+    template<> template<>
+    void alscriptexternaleditor_object::test<9>()
+    {
+        set_test_name("a save outside held over changes made here, kept from when the author says so: let go, the tab's text standing, and said");
+        ALScriptExternalEditor& unit = make();
+        Doc&                    a    = tab("a", "one");
+        unit.edit(a);
+        a.editor->setCaret(a.editor->document().end());
+        a.editor->insertText(" here");
+        write(unit.fileName(a), "two");
+        unit.changed("a", unit.fileName(a));
+        ensure("held", a.external->waiting && *a.external->waiting == "two");
+        unit.keep(a);
+        ensure("let go, the tab's text standing", !a.external->waiting && studio.taken.empty() && a.editor->text() == "one here");
+        ensure("said", !services.statuses.empty() && services.statuses.back().find("ExternalKept") == 0);
     }
 }

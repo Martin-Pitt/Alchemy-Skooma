@@ -26,8 +26,9 @@
 
 #include "alpreprocessor.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudiosaves.h"
+#include "alscripttypes.h"
 #include "alscriptweight.h"
-#include "alscriptworkspace.h"
 
 #include <functional>
 #include <memory>
@@ -35,7 +36,13 @@
 #include <string>
 #include <vector>
 
+class ALScriptStudioAnalysis;
+class ALScriptNavigation;
+class ALScriptExternalEditor;
+class ALScriptStudioWeighing;
+class ALScriptStudioRecovery;
 class ALScriptStudioServices;
+class ALScriptStudioTabs;
 
 // A Script Studio window's saves, from the moment one is asked for to the
 // compiler's answer. Where a save stands and where it goes next is the
@@ -43,7 +50,7 @@ class ALScriptStudioServices;
 // tidies, checks, preprocesses, sends, reports, closes -- and tells it what
 // came of each. What it asks of the viewer, the preprocessor and the upload
 // among it, goes through the window, so that whole saves run in a test.
-class ALScriptStudioSaving
+class ALScriptStudioSaving final : public ALScriptStudioSaves
 {
 public:
     typedef ALScriptStudioDoc Doc;
@@ -65,7 +72,7 @@ public:
         std::string program;
     };
 
-    // What saving asks of the window beyond its services.
+    // What saving asks of the window itself, beyond what it is given.
     class Window
     {
     public:
@@ -76,21 +83,13 @@ public:
         // Tidied before a save, a step each to undo: the safe fixes,
         // formatting, the blanks at the lines' ends, where each is asked.
         virtual void tidy(Doc& doc, bool fix, bool format, bool trim) = 0;
-        // What the tab shows held as a preview no longer: it is kept.
-        virtual void holdPreview(Doc& doc) = 0;
-        // The analyzers asked about the text, now or after a pause.
-        virtual void scheduleAnalysis(Doc& doc, bool now) = 0;
-        // The Problems tab said again for a tab, with the next frame;
-        // brought into sight; and its first error chosen, of the checkers'
-        // alone or of all, over what the tab says by then.
-        virtual void refreshProblems(Doc& doc)            = 0;
+        // The Problems tab brought into sight; and its first error chosen,
+        // of the checkers' alone or of all, over what the tab says by then.
         virtual void showProblems()                       = 0;
         virtual void selectFirstError(bool checkers_only) = 0;
 
         // --- the preprocessor ----------------------------------------------------------
 
-        // Whether it runs over a tab.
-        virtual bool preprocessed(const Doc& doc) const = 0;
         // A run over the text as it stands, fetching its includes, and
         // what it made once it has.
         virtual void runPreprocessor(const Doc& doc, std::function<void(const ALPreprocessor::Result&)> answer) = 0;
@@ -100,24 +99,13 @@ public:
         // what waited on it -- a run-time error, a line to go to -- placed.
         virtual void runningKnown(Doc& doc) = 0;
 
-        // --- weighing ------------------------------------------------------------------
-
-        // The target a tab is weighed for; none for one that is not.
-        virtual std::optional<ALScriptWeight::Target> weightTarget(const Doc& doc) const = 0;
-        // Weighed as it stands, and as a run of the preprocessor made it to
-        // be sent.
-        virtual void weigh(Doc& doc)     = 0;
-        virtual void weighSent(Doc& doc) = 0;
-        // What it weighs kept as what it weighs saved.
-        virtual void keepSavedWeights(Doc& doc) = 0;
-
         // --- sending -------------------------------------------------------------------
 
         // A script's text sent to be saved and compiled; a notecard's, with
         // its items. False, with why, where nothing was sent.
         // Each as the request `options.sender` or `request` names, which its
         // answer carries; a new one from newRequest().
-        virtual bool send(const Doc& doc, const std::string& text, const ALScriptWorkspace::SaveOptions& options, std::string& error) = 0;
+        virtual bool send(const Doc& doc, const std::string& text, const ALScriptSaveOptions& options, std::string& error) = 0;
         virtual bool sendNotecard(const Doc& doc, const std::string& text, const std::vector<LLPointer<LLInventoryItem>>& items,
                                   std::string& error, U64 request)                                                                = 0;
         virtual U64  newRequest()                                                                                                 = 0;
@@ -139,21 +127,9 @@ public:
 
         // --- the tab and the window ----------------------------------------------------
 
-        // A kept text loaded under its item, what it holds carried over.
-        virtual void reattach(Doc& doc) = 0;
-        // The notice over the editor, the toolbar, the strip under the
-        // editor and the tabs said again.
-        virtual void refreshNotice()          = 0;
-        virtual void refreshToolbar()         = 0;
-        virtual void refreshTrailer(Doc& doc) = 0;
-        virtual void fillTabs()               = 0;
-        // Written to the recovery store as it stands: saved, what is kept
-        // of it against a crash forgotten.
-        virtual void keepForRecovery(Doc& doc) = 0;
-        // The editor outside told of what was saved here, and of what the
-        // compiler made of it.
-        virtual void syncExternal(Doc& doc)                                                  = 0;
-        virtual void logExternal(Doc& doc, const ALScriptWorkspace::CompileResult& result) = 0;
+        // A kept text loaded under its item, what it holds carried over:
+        // tried now, and a few more times after if it fails.
+        virtual void retryLoad(Doc& doc) = 0;
 
         // --- closing -------------------------------------------------------------------
 
@@ -161,9 +137,6 @@ public:
         virtual bool quittingOnUs() const = 0;
         // A close waiting on a save that stopped, waited on no longer.
         virtual void stopClosing() = 0;
-        // A tab a save has done with, let go of as it stands: saved to be
-        // closed, or the tab a copy saved was made of.
-        virtual void letGoOf(Doc& doc) = 0;
         // A window's close that waits on its tabs' saves, gone on with;
         // nothing where the window is not closing.
         virtual void continueClosing() = 0;
@@ -172,16 +145,16 @@ public:
         ~Window() = default;
     };
 
-    ALScriptStudioSaving(ALScriptStudioServices& services, Window& window);
+    ALScriptStudioSaving(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptExternalEditor& external, ALScriptStudioWeighing& weighing, ALScriptStudioRecovery& recovery, Window& window);
 
     // --- saving ------------------------------------------------------------------------
 
     // A tab saved: out of reach said, queued behind one on its way, or
     // tidied, checked, preprocessed and sent as its flow says.
-    void save(Doc& doc);
+    void save(Doc& doc) override;
     // A save the author asked for: past the one check that stopped the last
     // save of the same text, and then a save.
-    void saveAsked(Doc& doc);
+    void saveAsked(Doc& doc) override;
     // Every tab with anything unsaved.
     void saveAll();
 
@@ -191,33 +164,33 @@ public:
     // Keep Mine or Compare -- but for a save of the text the tab last had,
     // which changes nothing it holds (ALScriptWorkspace::onSaved). And the
     // author's answer.
-    void savedElsewhere(const ALScriptWorkspace::Saved& saved);
+    void savedElsewhere(const ALScriptSaved& saved);
     void takeSaved(Doc& doc);
     void keepSaved(Doc& doc);
     // A tab saved to be closed once its save comes back: where the save
     // cannot begin, the tab is left as it was, and a close waiting on it
     // stops -- rather than closing at whatever save comes next.
-    void saveToClose(const std::string& id);
+    void saveToClose(const std::string& id) override;
     // A save that did not go through -- refused over errors, failed, or
     // compiled with errors: a close waiting on it waits no longer, and a
     // window closing stops, the tab left for the author to look at.
-    void stopped(Doc& doc);
+    void stopped(Doc& doc) override;
 
     // --- the preprocessor --------------------------------------------------------------
 
     // A run of the preprocessor over the text as it stands, fetching its
     // includes; none where one is on its way already. A save waiting on it
     // goes on when it answers (ALScriptSaveFlow::preprocessed).
-    void preprocess(Doc& doc);
+    void preprocess(Doc& doc) override;
 
     // --- answers -----------------------------------------------------------------------
 
     // The compiler's answer, to a save of a tab's or a recompile from the
     // explorer; a copy saved closes the tab it was made of.
-    void compiled(const ALScriptWorkspace::CompileResult& result);
+    void compiled(const ALScriptCompileResult& result);
     // A tab's weight known: over its target's limit, as a save sent it,
     // said once.
-    void warnOverWeight(Doc& doc);
+    void warnOverWeight(Doc& doc) override;
 
 private:
     void preprocessedAnswer(const std::string& id, U32 version, const ALPreprocessor::Result& result);
@@ -237,7 +210,7 @@ private:
     // its word.
     void weighForSave(Doc& doc);
     void reportOverWeight(const Doc& doc, const ALScriptWeight& weight);
-    void compiledHere(const ALScriptWorkspace::CompileResult& result);
+    void compiledHere(const ALScriptCompileResult& result);
     // The save asked for while the last was on its way, made now where
     // anything is still unsaved; true where one is under way again.
     bool sendQueuedSave(Doc& doc);
@@ -247,6 +220,12 @@ private:
     static S32 checkerErrors(const Doc& doc);
 
     ALScriptStudioServices& mServices;
+    ALScriptStudioTabs&     mTabs;
+    ALScriptStudioAnalysis& mAnalysis;
+    ALScriptNavigation&     mNavigation;
+    ALScriptExternalEditor& mExternal;
+    ALScriptStudioWeighing& mWeighing;
+    ALScriptStudioRecovery& mRecovery;
     Window&                 mWindow;
     // Held while this is, for what answers later to know it still is.
     std::shared_ptr<bool>   mAlive = std::make_shared<bool>(true);
