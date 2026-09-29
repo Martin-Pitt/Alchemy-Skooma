@@ -25,7 +25,7 @@
 #pragma once
 
 #include "aloutputview.h"
-#include "alscriptworkspace.h"
+#include "alscripttypes.h"
 #include "llpanel.h"
 #include "lluuid.h"
 
@@ -99,6 +99,7 @@ public:
     // it uses and which it asks what it does not do itself.
     explicit ALScriptOutputPane(const LLPanel::Params& params = getDefaultParams());
     bool postBuild() override;
+    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
 
     // What a script said: a line of the log, or more where it said more,
     // its object offered in the filter the first time it speaks. What
@@ -106,7 +107,7 @@ public:
     // names is the expansion's: said as the source's, or an include's,
     // where the script is open here. The place its error names, which the
     // window marks on the script's line.
-    Place heard(const ALScriptWorkspace::RuntimeEvent& event);
+    Place heard(const ALScriptRuntimeEvent& event);
     // What the studio did, kept where it can be read again. The tab's name
     // where the words say it is a link to it; after them, a link for each
     // thing to be done about it (Window::outputAction).
@@ -139,6 +140,8 @@ private:
     void filter();
     // An error or a failure said: unread, where the tab is not in sight.
     void markUnread();
+    // The row over the log laid out for the width it has.
+    void layoutRow();
 
     ALScriptStudioServices*                     mServices = nullptr;
     Window*                                     mWindow   = nullptr;
@@ -146,6 +149,11 @@ private:
     LLComboBox*                                 mWhose = nullptr;
     LLComboBox*                                 mKind  = nullptr;
     LLFilterEditor*                             mFind  = nullptr;
+    LLButton*                                   mClear = nullptr;
+    LLButton*                                   mCopy  = nullptr;
+    // How wide the skin made the two lists, which is as wide as they get.
+    S32                                         mWhoseWidth = 0;
+    S32                                         mKindWidth  = 0;
     bool                                        mUnread = false;
     std::vector<std::pair<LLUUID, std::string>> mObjects;
 };
