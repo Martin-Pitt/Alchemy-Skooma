@@ -4132,6 +4132,41 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <!-- <SK:Nexii> motion recorder -->
+        <key>SKMotionRecordSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>How long Develop > Network > Record Object Motion records before stopping on its own, in seconds. 0 records until toggled off.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKMotionRecordRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Moving objects and avatars further than this many metres from the camera are left out of a motion recording. 0 records them at any distance.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>256.0</real>
+        </map>
+        <key>SKMotionRecordMaxObjects</key>
+        <map>
+            <key>Comment</key>
+            <string>Most objects a motion recording tracks per frame, nearest to the camera first. The camera focus object and the seat are always kept. 0 is unlimited.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>ClickingAvatarKeepsCamera</key>
         <map>
             <key>Comment</key>

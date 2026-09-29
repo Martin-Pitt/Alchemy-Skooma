@@ -4205,6 +4205,16 @@ function="World.EnvPreset"
                  function="ToggleControl"
                  parameter="PingInterpolate" />
             </menu_item_check>
+            <!-- <SK:Nexii> motion recorder -->
+            <menu_item_check
+             label="Record Object Motion"
+             name="Record Object Motion">
+                <menu_item_check.on_check
+                 function="Advanced.CheckMotionRecord" />
+                <menu_item_check.on_click
+                 function="Advanced.ToggleMotionRecord" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
 
             <menu_item_separator/>
 
