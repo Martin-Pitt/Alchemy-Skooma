@@ -238,6 +238,93 @@ void SKNavOverlayGeom::unbindShader()
     gUIProgram.unbind();
 }
 
+namespace
+{
+    // How far apart a staircase glyph's treads sit, and how wide a portal
+    // bar may be: a flight narrower than this is a step, wider than this
+    // the rails stop reading as rails.
+    constexpr F32 STAIR_RUNG_PITCH = 0.3f;
+    constexpr F32 STAIR_WIDTH_MIN = 0.4f;
+    constexpr F32 STAIR_WIDTH_MAX = 2.4f;
+
+    // The horizontal direction square to a run's plan, or +X for a run that
+    // goes straight up.
+    LLVector3 acrossOf(const LLVector3& run)
+    {
+        LLVector3 plan(run.mV[VX], run.mV[VY], 0.f);
+        if (plan.magVecSquared() < 1e-8f)
+        {
+            return LLVector3(0.f, 1.f, 0.f);
+        }
+        plan.normalize();
+        return LLVector3(-plan.mV[VY], plan.mV[VX], 0.f);
+    }
+}
+
+void skDrawStairBar(SKNavOverlayGeom& geom, const LLVector3& centre, const LLVector3& run, F32 width, const LLColor4& color)
+{
+    const LLVector3 across = acrossOf(run);
+    const F32 half = 0.5f * llclamp(width, STAIR_WIDTH_MIN, STAIR_WIDTH_MAX);
+    geom.edge(centre - across * half, centre + across * half, color);
+}
+
+void skDrawStairGlyph(SKNavOverlayGeom& geom, const std::vector<LLVector3>& path, F32 width, const LLColor4& color,
+                      F32 lift)
+{
+    if (path.size() < 2)
+    {
+        return;
+    }
+    const F32 half = 0.5f * llclamp(width, STAIR_WIDTH_MIN, STAIR_WIDTH_MAX);
+    const LLColor4 rail(color.mV[VRED], color.mV[VGREEN], color.mV[VBLUE], color.mV[VALPHA]);
+    const LLColor4 tread(color.mV[VRED], color.mV[VGREEN], color.mV[VBLUE], color.mV[VALPHA] * 0.7f);
+
+    // The rails follow the run either side of it, a bar's half width out;
+    // a spiral's rail is its helix pushed out the same way.
+    LLVector3 up(0.f, 0.f, lift);
+    LLVector3 across = acrossOf(path[1] - path[0]);
+    LLVector3 rail_left = path[0] + across * half + up;
+    LLVector3 rail_right = path[0] - across * half + up;
+    for (size_t i = 1; i < path.size(); ++i)
+    {
+        across = acrossOf(path[i] - path[i - 1]);
+        const LLVector3 left = path[i] + across * half + up;
+        const LLVector3 right = path[i] - across * half + up;
+        geom.edge(rail_left, left, rail);
+        geom.edge(rail_right, right, rail);
+        rail_left = left;
+        rail_right = right;
+    }
+
+    // The treads, across the run, every so far along it: the flight reads
+    // as steps, not as a bare diagonal.
+    F32 rung_at = STAIR_RUNG_PITCH;
+    F32 walked = 0.f;
+    for (size_t i = 1; i < path.size() && walked < 64.f * STAIR_RUNG_PITCH; ++i)
+    {
+        const LLVector3 from = path[i - 1];
+        const LLVector3 to = path[i];
+        const LLVector3 seg = to - from;
+        const F32 len = seg.magVec();
+        if (len < 1e-6f)
+        {
+            continue;
+        }
+        across = acrossOf(seg);
+        while (rung_at <= walked + len)
+        {
+            const LLVector3 at = from + seg * ((rung_at - walked) / len) + up;
+            geom.edge(at - across * half, at + across * half, tread);
+            rung_at += STAIR_RUNG_PITCH;
+        }
+        walked += len;
+    }
+
+    // The portals at the ends, standing across the run.
+    skDrawStairBar(geom, path.front() + up, path[1] - path[0], width, color);
+    skDrawStairBar(geom, path.back() + up, path[path.size() - 1] - path[path.size() - 2], width, color);
+}
+
 void SKNavOverlayGeom::draw(F32 shade, F32 alpha) const
 {
     const bool ribboned = mEdgeWidth > 1.f && mPixelScale > 0.f;

@@ -1198,8 +1198,9 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 geom.edge(pa + dir * d, pa + dir * llmin(d + 0.3f, len), color);
             }
         }
-        // A flight drawn as its connections: the foot portal to every exit,
-        // and a stub over a lone end with nothing at the other.
+        // A flight drawn as one staircase: rails either side of the run between
+        // its ends with treads between them, the portals standing as bars.
+        // A lone end with nothing at the other draws a stub over itself.
         for (const StairLink& l : stairLinks(*m.mRooms))
         {
             const LLVector3d ca = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mFrom].mCentre) + LLVector3d(0.0, 0.0, 0.3);
@@ -1213,7 +1214,11 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
             {
                 color.mV[VALPHA] = 1.f;
             }
-            geom.edge(gAgent.getPosAgentFromGlobal(ca), gAgent.getPosAgentFromGlobal(cb), color);
+            const F32 width = llclamp(llmin(m.mRooms->mPortals[l.mFrom].mWidth, m.mRooms->mPortals[l.mTo].mWidth), 0.8f, 2.4f);
+            std::vector<LLVector3> path;
+            path.push_back(gAgent.getPosAgentFromGlobal(ca));
+            path.push_back(gAgent.getPosAgentFromGlobal(cb));
+            skDrawStairGlyph(geom, path, width, color, 0.f);
         }
         for (const Space& sp : m.mRooms->mSpaces)
         {

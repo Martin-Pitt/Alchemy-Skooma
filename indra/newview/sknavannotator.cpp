@@ -92,6 +92,33 @@ namespace
         }
     }
 
+// The extra a stair draws over its line: the flight as treads between
+    // rails with portal bars at the ends, and a ray and bar for each way up
+    // beyond the line's own end. The prims carry the line itself; this is
+    // what the line alone does not say.
+    void drawStairExtras(SKNavOverlayGeom& geom, const Mark& mark, const LLColor4& color)
+    {
+        const std::vector<LLVector3d> path = mark.path();
+        if (path.size() < 2)
+        {
+            return;
+        }
+        std::vector<LLVector3> run;
+        run.reserve(path.size());
+        for (const LLVector3d& v : path)
+        {
+            run.push_back(agentOf(v));
+        }
+        skDrawStairGlyph(geom, run, 1.2f, color, 0.06f);
+        const LLVector3 foot = run.front();
+        for (const LLVector3d& exit : mark.mExits)
+        {
+            const LLVector3 at = agentOf(exit);
+            geom.edge(foot, at, color);
+            skDrawStairBar(geom, at, at - foot, 1.2f, color);
+        }
+    }
+
     std::string labelOf(const Mark& mark)
     {
         std::string label = llformat("#%u %s", mark.mId, markTypeName(mark.mType));
@@ -719,38 +746,42 @@ void SKNavAnnotator::render()
     }
 
     LLViewerCamera* camera = LLViewerCamera::getInstance();
-    SKNavOverlayGeom geom;
-    geom.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    // Three gathers: the ghost every mark leaves under geometry, what
+    // stands over the world besides the bodies, and the selected mark and
+    // the one being placed, wider, over everything.
+    SKNavOverlayGeom ghost, front, bold;
+    ghost.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    front.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mId == mSelected)
-        {
-            continue;
-        }
+        const bool selected = mark.mId == mSelected;
+        const LLColor4 color = skNavMarkColor(mark.mType);
+        // A mark is findable through a wall: its own shape, faint, behind.
         if (mark.mKind == MarkKind::PORTAL)
         {
-            drawPortal(geom, mark, skNavMarkColor(mark.mType));
+            drawPortal(ghost, mark, color);
         }
         else
         {
-            drawMark(geom, mark, skNavMarkColor(mark.mType));
+            drawMark(ghost, mark, color);
+        }
+        // Over the world the bodies carry the shape; what they cannot say
+        // draws here - a portal's strike and a stair's flight.
+        if (mark.mKind == MarkKind::PORTAL)
+        {
+            drawPortal(selected ? bold : front, mark, selected ? LLColor4::white : color);
+        }
+        else if (mark.mType == MarkType::STAIR)
+        {
+            drawStairExtras(selected ? bold : front, mark, selected ? LLColor4::white : color);
+        }
+        else if (selected)
+        {
+            drawMark(bold, mark, LLColor4::white);
         }
     }
 
-    // The selected mark and the one being placed, wider and in white over the rest.
-    SKNavOverlayGeom bold;
-    bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
-    if (const Mark* selected = mMarks.find(mSelected))
-    {
-        if (selected->mKind == MarkKind::PORTAL)
-        {
-            drawPortal(bold, *selected, LLColor4::white);
-        }
-        else
-        {
-            drawMark(bold, *selected, LLColor4::white);
-        }
-    }
     if (!mPending.mVerts.empty())
     {
         Mark preview = mPending;
@@ -759,6 +790,10 @@ void SKNavAnnotator::render()
             preview.mVerts.push_back(mHover);
         }
         drawMark(bold, preview, skNavMarkColor(preview.mType));
+        if (preview.mType == MarkType::STAIR)
+        {
+            drawStairExtras(bold, preview, skNavMarkColor(preview.mType));
+        }
     }
     if (mHasHover && mArmed)
     {
@@ -776,14 +811,13 @@ void SKNavAnnotator::render()
         LLGLDisable cull(GL_CULL_FACE);
         {
             LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-            geom.draw();
+            front.draw();
             bold.draw();
         }
         {
             // Behind geometry, fainter, so a mark inside a wall is still found.
             LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
-            geom.draw(0.6f, 0.4f);
-            bold.draw(0.6f, 0.4f);
+            ghost.draw(0.6f, 0.4f);
         }
     }
     SKNavOverlayGeom::unbindShader();
