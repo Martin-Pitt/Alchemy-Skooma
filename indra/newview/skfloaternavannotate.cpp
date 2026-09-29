@@ -144,7 +144,13 @@ void SKFloaterNavAnnotate::onClose(bool app_quitting)
 void SKFloaterNavAnnotate::onSelect()
 {
     LLScrollListItem* item = mList->getFirstSelected();
-    SKNavAnnotator::instance().select(item ? item->getValue().asInteger() : 0);
+    const U32 id = item ? (U32)item->getValue().asInteger() : 0;
+    // Only a change: the list re-selects its row every refresh, and the
+    // annotation's selection is the same thing when the objects picked it.
+    if (id != SKNavAnnotator::instance().selected())
+    {
+        SKNavAnnotator::instance().select(id);
+    }
     refreshSelection();
 }
 

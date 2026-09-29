@@ -27,7 +27,7 @@
 
 #include "llpointer.h"
 #include "llsingleton.h"
-#include "lltool.h"
+#include "lltoolcomp.h"
 #include "sknavannotate.h"
 #include "v4color.h"
 
@@ -72,12 +72,34 @@ public:
     void remove(U32 id);
     void clear();
     void select(U32 id);
+    /// Whether a mark is being placed and not yet kept: a line with a
+    /// click already on it.
+    bool placingPending() const { return !mPending.mVerts.empty(); }
     /// Disarm when another tool has taken over from ours.
     void checkTool();
     U32 selected() const { return mSelected; }
     /// Something about the marks changed; a list shown of them is stale.
     void touch() { ++mRevision; }
     U32 revision() const { return mRevision; }
+
+    /// The object selection holds a mark's body: the annotation follows it,
+    /// and an emptied selection deselects with it.
+    void syncSelection();
+    /// Whether the object selection holds any mark's body.
+    bool selectionHasProxy() const;
+
+    /// Arm the next surface click to add a way up to the selected stair.
+    void armExitPick();
+    bool exitPickPending() const { return mExitPick; }
+    void cancelExitPick();
+    void addExit(const LLVector3d& at);
+
+    /// Wind the selected stair as a helix, or straighten it again.
+    void setSpiral(bool on);
+    /// How many turns the selected spiral's climb takes.
+    void setSpiralTurns(F64 turns);
+    /// Which way the selected spiral winds.
+    void setSpiralHand(S8 hand);
 
     /// The portal the cursor is over, while armed to cross out: the nearest
     /// drawn one to the cursor, by the spaces overlay's own reach. False in
@@ -120,6 +142,8 @@ private:
     bool mArmed = false;
     sknav::MarkType mNewType = sknav::MarkType::MISSED_OPENING;
     U32 mSelected = 0;
+    bool mFollowProxySelection = false;    ///< the selection the objects made chose this mark
+    bool mExitPick = false;                ///< the next surface click adds an exit
     U32 mRevision = 0;
     bool mHasHover = false;
     LLVector3d mHover;
@@ -128,11 +152,13 @@ private:
     U32 mLabelRevision = 0;
 };
 
-/// Places marks where the cursor meets a surface, as the build tools do.
-class SKToolNavAnnotate : public LLTool, public LLSingleton<SKToolNavAnnotate>
+/// Places marks where the cursor meets a surface, as the build tools do,
+/// and works the marks' bodies like objects: a click selects one, its
+/// gizmo drags a point or the whole mark, a click away deselects.
+class SKToolNavAnnotate : public LLToolComposite, public LLSingleton<SKToolNavAnnotate>
 {
     LLSINGLETON(SKToolNavAnnotate);
-    ~SKToolNavAnnotate() override = default;
+    ~SKToolNavAnnotate() override;
 
 public:
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
@@ -142,10 +168,15 @@ public:
     bool handleKey(KEY key, MASK mask) override;
     void handleSelect() override;
     void handleDeselect() override;
+    LLTool* getOverrideTool(MASK mask) override;
+    void render() override;
     bool clipMouseWhenDown() override { return false; }
+
+    static void pickCallback(const LLPickInfo& pick_info);
 
 private:
     bool pick(S32 x, S32 y, LLVector3d& out) const;
+    LLTool* mPlace = nullptr;   ///< the inert child the placing runs under
 };
 
 #endif // SK_NAVANNOTATOR_H
