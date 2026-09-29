@@ -2550,10 +2550,12 @@ namespace sknav
         // portals join by stairPairs - each exit to the nearest end within
         // reach in plan - and a pair has to climb min_rise, so a real
         // staircase's foot meets its own exit and a multi-storey well's foot
-        // serves each of its exits. What finds no end in reach, or pairs
-        // across level ground, is a deck edge or a rail; so is an entrance
-        // wider than any staircase. Those portals drop, and the rounds run
-        // again so the floors the dropped cuts split join instead.
+        // serves each of its exits. What finds no end in reach, pairs across
+        // level ground, or opens wider than any staircase is a deck edge or
+        // a rail. The seeds under such a cut stop flying, so the next round
+        // sees floor to floor there and joins what the cut was splitting
+        // instead of cutting it again; nothing structural changes on an
+        // unmappable cut, which is left alone rather than re-tried forever.
         std::unordered_set<U32> flying;
         for (U32 s = 0; s < mSeeds.size(); ++s)
         {
@@ -2562,7 +2564,39 @@ namespace sknav
                 flying.insert(mRegions.find(s));
             }
         }
-        std::vector<bool> keep(mPortals.size(), true);
+        const auto clearUnder = [&](const Portal& q)
+        {
+            bool cleared = false;
+            const S32 kf = static_cast<S32>(std::lround(q.mSill / mUnit));
+            const LLVector2 n(q.mNormal.mV[VX], q.mNormal.mV[VY]);
+            const LLVector2 at[3] = { LLVector2(q.mCentre.mV[VX], q.mCentre.mV[VY]),
+                                      LLVector2(q.mA.mV[VX], q.mA.mV[VY]),
+                                      LLVector2(q.mB.mV[VX], q.mB.mV[VY]) };
+            for (const LLVector2& c : at)
+            {
+                for (const F32 side : { 0.5f, -0.5f })
+                {
+                    const LLVector2 p = c + n * side;
+                    Probe hit;
+                    if (!probe(p.mV[VX], p.mV[VY], kf, mClimb + 2, hit))
+                    {
+                        continue;
+                    }
+                    const U16 local = mTiles[hit.mTile].mRooms.mSeeds[hit.mGap];
+                    if (!local)
+                    {
+                        continue;
+                    }
+                    const U32 s = mTiles[hit.mTile].mSeedBase + local - 1;
+                    if (mSeeds[s].mFlight && flying.count(mRegions.find(s)))
+                    {
+                        mSeeds[s].mFlight = false;
+                        cleared = true;
+                    }
+                }
+            }
+            return cleared;
+        };
         std::unordered_map<U32, std::vector<U32>> ends;
         for (U32 i = 0; i < mPortals.size(); ++i)
         {
@@ -2571,18 +2605,12 @@ namespace sknav
             {
                 continue;
             }
-            bool flies = false;
             for (const U32 r : q.mSpaces)
             {
                 if (flying.count(r))
                 {
                     ends[r].push_back(i);
-                    flies = true;
                 }
-            }
-            if (flies)
-            {
-                keep[i] = false;    // a flight's own ends survive only by pairing
             }
         }
         bool changed = false;
@@ -2597,68 +2625,34 @@ namespace sknav
                 }
             }
             const std::vector<StairLink> pairs = stairPairs(mPortals, narrow, STAIR_PAIR_REACH_M);
+            std::vector<bool> real(mPortals.size(), false);
             for (const StairLink& l : pairs)
             {
                 if (mPortals[l.mTo].mSill - mPortals[l.mFrom].mSill >= min_rise)
                 {
-                    keep[l.mFrom] = true;
-                    keep[l.mTo] = true;
+                    real[l.mFrom] = true;
+                    real[l.mTo] = true;
                 }
             }
-        }
-        for (size_t i = 0; i < mPortals.size(); ++i)
-        {
-            if (!keep[i])
+            bool kept_any = false;
+            for (const U32 i : idx)
             {
-                changed = true;
-            }
-        }
-        if (changed)
-        {
-            std::vector<Portal> portals;
-            std::vector<S32> doors;
-            portals.reserve(mPortals.size());
-            doors.reserve(mPortalDoor.size());
-            for (size_t i = 0; i < mPortals.size(); ++i)
-            {
-                if (keep[i])
+                if (real[i] || !clearUnder(mPortals[i]))
                 {
-                    portals.push_back(mPortals[i]);
-                    doors.push_back(mPortalDoor[i]);
+                    kept_any = true;    // unmappable: kept rather than re-tried forever
                 }
             }
-            mPortals.swap(portals);
-            mPortalDoor.swap(doors);
-        }
-        // What a region kept nothing of was no flight at all: its seeds lose
-        // the flag, and the next round joins the floors it touched.
-        std::unordered_set<U32> kept_regions;
-        for (const Portal& q : mPortals)
-        {
-            if (q.mKind != PortalKind::STAIR)
+            if (!kept_any)
             {
-                continue;
-            }
-            for (const U32 r : q.mSpaces)
-            {
-                if (flying.count(r))
+                // Nothing real is left in the flight: its seeds stop flying,
+                // and the next round joins the floors it touched.
+                for (U32 s = 0; s < mSeeds.size(); ++s)
                 {
-                    kept_regions.insert(r);
-                }
-            }
-        }
-        for (const U32 r : flying)
-        {
-            if (kept_regions.count(r))
-            {
-                continue;
-            }
-            for (U32 s = 0; s < mSeeds.size(); ++s)
-            {
-                if (mSeeds[s].mFlight && mRegions.find(s) == r)
-                {
-                    mSeeds[s].mFlight = false;
-                    changed = true;
+                    if (mSeeds[s].mFlight && mRegions.find(s) == r)
+                    {
+                        mSeeds[s].mFlight = false;
+                        changed = true;
+                    }
                 }
             }
         }
@@ -2908,10 +2902,10 @@ namespace sknav
                 // The rounds settled. A staircase pairs its ends within
                 // reach and climbs between them: what pairs with nothing,
                 // pairs across level ground, or opens wider than any
-                // staircase is a deck edge or a rail - its portals drop, its
-                // seeds lose the flag if nothing real is left, and the
-                // rounds run again so the floors the dropped cuts split
-                // join instead of staying split around them.
+                // staircase is a deck edge or a rail - the seeds under such
+                // a cut stop flying, its flight loses the flag if nothing
+                // real is left, and the rounds run again so the floors the
+                // cut split join instead of staying split around it.
                 if (!demoteFlatFlights(params().mStairMinRiseM))
                 {
                     break;
