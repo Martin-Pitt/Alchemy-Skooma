@@ -498,7 +498,7 @@ void SKNavMarkObjects::sync(SKNavAnnotator& annotator)
         wantFor(mark, handles, beams, centre);
         const bool stale = prims.mHandles.empty() || prims.mHandles.front().isNull() || prims.mHandles.front()->isDead()
                            || prims.mHandles.size() != handles || prims.mBeams.size() != beams
-                           || (prims.mCentre.notNull() != centre);
+                           || prims.mExits.size() != mark.mExits.size() || (prims.mCentre.notNull() != centre);
         if (stale)
         {
             despawnPrims(prims);
@@ -507,8 +507,12 @@ void SKNavMarkObjects::sync(SKNavAnnotator& annotator)
             continue;
         }
         sknav::Mark* mutable_mark = annotator.find(mark.mId);
-        derived = derive(*mutable_mark, prims) || derived;
-        if (revision_changed)
+        const bool moved = derive(*mutable_mark, prims);
+        derived = moved || derived;
+        // The beams re-lay behind a moved handle as well as behind a mark
+        // changed by hand; the handles themselves are already where the
+        // drag left them, so this is their beams and nothing else.
+        if (moved || revision_changed)
         {
             reassert(mark, prims);
         }
