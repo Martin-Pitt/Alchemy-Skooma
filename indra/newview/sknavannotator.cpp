@@ -92,7 +92,7 @@ namespace
         }
     }
 
-// The extra a stair draws over its line: the flight as treads between
+    // The extra a stair draws over its line: the flight as treads between
     // rails with portal bars at the ends, and a ray and bar for each way up
     // beyond the line's own end. The prims carry the line itself; this is
     // what the line alone does not say.
@@ -1032,20 +1032,15 @@ bool SKToolNavAnnotate::handleHover(S32 x, S32 y, MASK mask)
     {
         return mManip->handleHover(x, y, mask);
     }
-    // A selected mark's gizmo pre-highlights under the cursor, the way a
-    // build tool's does.
+    // A selected mark's gizmo stands on the selection the way a build
+    // tool's does, pre-highlighting under the cursor.
     if (annotator.selectionHasProxy())
     {
+        // The placement hover stands down while the gizmo answers.
+        annotator.setHover(false, LLVector3d());
+        setCurrentTool(mManip);
         mManip->highlightManipulators(x, y);
-        if (mManip->getHighlightedPart() != LLManip::LL_NO_PART)
-        {
-            annotator.setHover(false, LLVector3d());
-            setCurrentTool(mManip);
-            return mManip->handleHover(x, y, mask);
-        }
-        setCurrentTool(mPlace);
-        gViewerWindow->setCursor(UI_CURSOR_ARROW);
-        return true;
+        return mManip->handleHover(x, y, mask);
     }
     setCurrentTool(mPlace);
     LLVector3d at;
@@ -1112,9 +1107,13 @@ LLTool* SKToolNavAnnotate::getOverrideTool(MASK mask)
 
 void SKToolNavAnnotate::render()
 {
-    // The gizmo draws while it is the tool at work; the marks themselves
-    // draw from the pipeline's call on the annotator.
-    LLToolComposite::render();
+    // The gizmo draws while a mark's body is selected and it is the tool
+    // at work; the marks themselves draw from the pipeline's call on the
+    // annotator.
+    if (mCur == mManip && SKNavAnnotator::instance().selectionHasProxy())
+    {
+        mManip->render();
+    }
 }
 
 void SKToolNavAnnotate::handleSelect()
