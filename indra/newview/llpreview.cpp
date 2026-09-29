@@ -34,12 +34,6 @@
 #include "llresmgr.h"
 #include "lltextbox.h"
 #include "llfloaterreg.h"
-// [SL:KB] - Patch: UI-FloaterSearchReplace | Checked: 2010-11-05 (Catznip-3.0)
-#include "llfloatersearchreplace.h"
-#include "llpreviewnotecard.h"
-#include "llpreviewscript.h"
-#include "llscripteditor.h"
-// [/SL:KB]
 #include "llfocusmgr.h"
 #include "lltooldraganddrop.h"
 #include "llradiogroup.h"
@@ -57,29 +51,10 @@
 #include "lltrans.h"
 #include "roles_constants.h"
 
-// [SL:KB] - Patch: Build-ScriptRecover | Checked: 2011-11-23 (Catznip-3.2)
-#include "lleventtimer.h"
-
-/// ---------------------------------------------------------------------------
-/// Timer helper class
-/// ---------------------------------------------------------------------------
-class LLPreviewBackupTimer : public LLEventTimer
-{
-public:
-    LLPreviewBackupTimer(F32 nPeriod, LLPreview* pPreview) : LLEventTimer(nPeriod), mPreview(pPreview) {}
-    /*virtual*/ bool tick() { mPreview->onBackupTimer(); return false; }
-protected:
-    LLPreview* mPreview;
-};
-// [/SL:KB]
-
 // Constants
 
 LLPreview::LLPreview(const LLSD& key)
 :   LLFloater(key),
-// [SL:KB] - Patch: Build-ScriptRecover | Checked: 2011-11-23 (Catznip-3.2)
-    mBackupTimer(NULL),
-// [/SL:KB]
     mItemUUID(key.has("itemid") ? key.get("itemid").asUUID() : key.asUUID()),
     mObjectUUID(),          // set later by setObjectID()
     mCopyToInvBtn( NULL ),
@@ -110,14 +85,6 @@ LLPreview::~LLPreview()
     gFocusMgr.releaseFocusIfNeeded( this ); // calls onCommit()
     gInventory.removeObserver(this);
 
-// [SL:KB] - Patch: Build-ScriptRecover | Checked: 2011-11-23 (Catznip-3.2)
-    // Clean up the backup file (unless we've gotten disconnected)
-    if ( (gAgent.getRegion()) && (hasBackupFile()) )
-    {
-        removeBackupFile();
-    }
-    delete mBackupTimer;
-// [/SL:KB]
 }
 
 void LLPreview::setObjectID(const LLUUID& object_id)
@@ -271,17 +238,6 @@ void LLPreview::refreshFromItem()
 
     getChildView("desc")->setEnabled(canModify(mObjectUUID, item));
 
-// [SL:KB] - Patch: Build-ScriptRecover | Checked: 2011-11-23 (Catznip-3.2)
-    if (hasBackupFile())
-    {
-        const std::string strFilename = getBackupFileName();
-        if (strFilename != mBackupFilename)
-        {
-            LLFile::rename(mBackupFilename, strFilename);
-            mBackupFilename = strFilename;
-        }
-    }
-// [/SL:KB]
 }
 
 // static
@@ -522,62 +478,6 @@ void LLPreview::handleReshape(const LLRect& new_rect, bool by_user)
     LLFloater::handleReshape(new_rect, by_user);
 }
 
-// [SL:KB] - Patch: Build-ScriptRecover | Checked: 2011-11-23 (Catznip-3.2)
-void LLPreview::startBackupTimer(F32 nInterval)
-{
-    if (nInterval > 0.0f)
-    {
-        if (mBackupTimer)
-            delete mBackupTimer;
-        mBackupTimer = new LLPreviewBackupTimer(nInterval, this);
-    }
-    else
-    {
-        delete mBackupTimer;
-        mBackupTimer = nullptr;
-    }
-}
-
-void LLPreview::removeBackupFile()
-{
-    if (hasBackupFile())
-    {
-        LLFile::remove(mBackupFilename);
-        mBackupFilename.clear();
-    }
-}
-
-std::string LLPreview::getBackupFileName() const
-{
-    // NOTE: this function is not guaranteed to return the same filename every time (i.e. the item name may have changed)
-    std::string strFile = LLFile::tmpdir();
-
-    // Find the inventory item for this preview
-    const LLInventoryItem* pItem = getItem();
-    if (pItem)
-    {
-        strFile += gDirUtilp->getScrubbedFileName(utf8str_symbol_truncate(pItem->getName(), 32));
-        strFile += "-";
-    }
-
-    // Append a CRC of the item UUID to make the filename (hopefully) unique
-    LLCRC crcUUID;
-    crcUUID.update((U8*)(&mItemUUID.mData), UUID_BYTES);
-    strFile += llformat("%X", crcUUID.getCRC());
-
-    std::string strTypeExt;
-    if (pItem)
-    {
-        if (LLAssetType::AT_LSL_TEXT == getItem()->getType())
-            strTypeExt = "lsl";
-        else if (LLAssetType::AT_NOTECARD == getItem()->getType())
-            strTypeExt = "nc";
-    }
-    strFile.append(".").append(strTypeExt).append("backup");
-
-    return strFile;
-}
-// [/SL:KB]
 
 //
 // LLMultiPreview
@@ -639,30 +539,6 @@ void LLMultiPreview::tabOpen(LLFloater* opened_floater, bool from_click)
     {
         opened_preview->loadAsset();
     }
-
-// [SL:KB] - Patch: UI-FloaterSearchReplace | Checked: 2010-11-05 (Catznip-2.3)
-    LLFloaterSearchReplace* pSearchFloater = LLFloaterReg::getTypedInstance<LLFloaterSearchReplace>("search_replace");
-    if ( (pSearchFloater) && (pSearchFloater->getDependee() == this) )
-    {
-        LLPreviewNotecard* pPreviewNotecard = NULL; LLPreviewLSL* pPreviewScript = NULL; LLLiveLSLEditor* pPreviewScriptLive = NULL;
-        if ((pPreviewNotecard = ALViewType::as<LLPreviewNotecard>(opened_preview)) != NULL)
-        {
-            LLFloaterSearchReplace::show(pPreviewNotecard->getEditor());
-        }
-        else if ((pPreviewScript = ALViewType::as<LLPreviewLSL>(opened_preview)) != NULL)
-        {
-            LLFloaterSearchReplace::show(pPreviewScript->getEditor());
-        }
-        else if ((pPreviewScriptLive = ALViewType::as<LLLiveLSLEditor>(opened_preview)) != NULL)
-        {
-            LLFloaterSearchReplace::show(pPreviewScriptLive->getEditor());
-        }
-        else
-        {
-            pSearchFloater->setVisible(false);
-        }
-    }
-// [/SL:KB]
 }
 
 

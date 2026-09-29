@@ -25,12 +25,33 @@
 #pragma once
 
 #include "alscriptstudiodoc.h"
-#include "alscriptworkspace.h"
+#include "alscripttempfiles.h"
+#include "alscripttypes.h"
 
 #include <memory>
 #include <string>
 
+class ALScriptStudioSaves;
 class ALScriptStudioServices;
+class ALScriptStudioTabs;
+
+// The script held open in an external editor (ALScriptExternalEditor).
+// Whether the save under way came from the editor, which does not
+// write the file back, is the save's (ALScriptSaveFlow::external).
+struct ALScriptStudioDoc::External
+{
+    // The log beside the copy the editor was given, which the
+    // compiler's words go to, held while the tab has it.
+    std::shared_ptr<ALScriptTempFiles::Claim> log;
+    // Whether the bridge was told, so that VS Code can subscribe.
+    bool                           subscribed = false;
+    // What the copy held when the studio last wrote it or read it: a
+    // save there over changes made here since is asked about rather
+    // than taken, the text it brought held in `waiting` until the
+    // author says which.
+    std::string                    written;
+    std::optional<std::string>     waiting;
+};
 
 // A Script Studio window's tabs held open in an editor outside the viewer
 // -- Edit Externally -- as the tab's part `doc.external` keeps them: a
@@ -46,16 +67,12 @@ class ALScriptExternalEditor
 public:
     typedef ALScriptStudioDoc Doc;
 
-    // What the external editor asks of the window beyond its services.
+    // What the external editor asks of the window itself, beyond what it is given.
     class Window
     {
     public:
         // A tab's file on disk watched for changes made to it outside.
         virtual void watchFile(Doc& doc) = 0;
-        // The tab's carriedText taken as one step to undo; and a save of
-        // the tab from here.
-        virtual void takeCarriedText(Doc& doc) = 0;
-        virtual void save(Doc& doc)            = 0;
         // The bridge: the id it knows a script by, which the copy's name
         // carries so that whoever reads the temp folder finds the same
         // file; the tab told of, so that VS Code can subscribe to it, false
@@ -76,7 +93,7 @@ public:
         ~Window() = default;
     };
 
-    ALScriptExternalEditor(ALScriptStudioServices& services, Window& window);
+    ALScriptExternalEditor(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, Window& window);
 
     // Edit Externally: the copy written afresh -- the editor may have been
     // closed on an old one -- and watched, the bridge told, and the editor
@@ -88,12 +105,16 @@ public:
     // save in two steps empties it for a moment -- `settled` is that look.
     void changed(const std::string& id, const std::string& file, bool settled = false);
     // A save from outside taken into the tab, as one step to undo, and
-    // saved from here.
-    void take(Doc& doc, const std::string& text);
+    // saved from here. By value: the text is often the one held, which
+    // taking it lets go of.
+    void take(Doc& doc, std::string text);
+    // A save from outside held while the tab had changes, not taken: the
+    // copy is written from here at the next save.
+    void keep(Doc& doc);
     // After a save from here: the copy written again where it holds
     // something else; and the compiler's words put in the log beside it.
     void sync(Doc& doc);
-    void log(Doc& doc, const ALScriptWorkspace::CompileResult& result);
+    void log(Doc& doc, const ALScriptCompileResult& result);
     // The tab let go of: the bridge told, the watch and the log gone.
     void stop(Doc& doc);
     // The copy's path, as the old editor names it (ALScriptTempFiles::
@@ -103,6 +124,8 @@ public:
 
 private:
     ALScriptStudioServices& mServices;
+    ALScriptStudioTabs&     mTabs;
+    ALScriptStudioSaves&    mSaves;
     Window&                 mWindow;
     // Held while this is, for a watch or a timer to know it still is.
     std::shared_ptr<bool>   mAlive = std::make_shared<bool>(true);
