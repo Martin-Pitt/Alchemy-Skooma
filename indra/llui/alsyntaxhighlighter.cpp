@@ -33,7 +33,19 @@ namespace
     const std::vector<ALSyntaxToken> NO_TOKENS;
 }
 
-ALSyntaxHighlighter::ALSyntaxHighlighter() = default;
+namespace
+{
+    const std::shared_ptr<const ALSyntaxWords>& noWords()
+    {
+        static const std::shared_ptr<const ALSyntaxWords> none = std::make_shared<const ALSyntaxWords>();
+        return none;
+    }
+}
+
+ALSyntaxHighlighter::ALSyntaxHighlighter()
+:   mWords(noWords())
+{
+}
 
 ALSyntaxHighlighter::~ALSyntaxHighlighter() = default;
 
@@ -41,6 +53,31 @@ void ALSyntaxHighlighter::setGrammar(std::shared_ptr<const ALSyntaxGrammar> gram
 {
     mGrammar = std::move(grammar);
     reset();
+}
+
+void ALSyntaxHighlighter::setWords(std::shared_ptr<const ALSyntaxWords> words)
+{
+    if (!words)
+    {
+        words = noWords();
+    }
+    if (words == mWords)
+    {
+        return;
+    }
+    mWords = std::move(words);
+    mOwnWords.reset();
+    reset();
+}
+
+ALSyntaxWords& ALSyntaxHighlighter::ownWords()
+{
+    if (!mOwnWords || mOwnWords.get() != mWords.get())
+    {
+        mOwnWords = std::make_shared<ALSyntaxWords>(*mWords);
+        mWords    = mOwnWords;
+    }
+    return *mOwnWords;
 }
 
 void ALSyntaxHighlighter::wordsChanged()
@@ -77,6 +114,70 @@ void ALSyntaxHighlighter::reset()
         mLines[i].revision = revisions[i];
     }
     mFirstDirty = 0;
+    mStates.clear();
+    mStateIds.clear();
+    mInitialState = mGrammar ? intern(mGrammar->initialState()) : 0;
+}
+
+size_t ALSyntaxHighlighter::StateHash::operator()(const ALSyntaxState& state) const
+{
+    size_t hash = state.frames.size();
+    for (const ALSyntaxState::Frame& frame : state.frames)
+    {
+        boost::hash_combine(hash, frame.state);
+        boost::hash_combine(hash, std::hash<std::string>()(frame.payload));
+    }
+    return hash;
+}
+
+U32 ALSyntaxHighlighter::intern(ALSyntaxState state)
+{
+    const auto found = mStateIds.find(state);
+    if (found != mStateIds.end())
+    {
+        return found->second;
+    }
+    const U32 id = static_cast<U32>(mStates.size());
+    mStateIds.emplace(state, id);
+    mStates.push_back(std::move(state));
+    return id;
+}
+
+void ALSyntaxHighlighter::compactStates()
+{
+    // A text whose spans open with ever new captures -- long brackets of
+    // every level -- makes states no line is in any longer. Past this many,
+    // those the lines are in are kept, and renumbered.
+    constexpr size_t MOST = 4096;
+    if (mStates.size() <= MOST)
+    {
+        return;
+    }
+    std::vector<U32>           renumbered(mStates.size(), U32_MAX);
+    std::vector<ALSyntaxState> kept;
+    const auto                 keep = [&](U32 id) {
+        if (renumbered[id] == U32_MAX)
+        {
+            renumbered[id] = static_cast<U32>(kept.size());
+            kept.push_back(std::move(mStates[id]));
+        }
+        return renumbered[id];
+    };
+    mInitialState = keep(mInitialState);
+    for (Line& line : mLines)
+    {
+        if (line.valid)
+        {
+            line.start = keep(line.start);
+            line.end   = keep(line.end);
+        }
+    }
+    mStates.swap(kept);
+    mStateIds.clear();
+    for (size_t i = 0; i < mStates.size(); ++i)
+    {
+        mStateIds.emplace(mStates[i], static_cast<U32>(i));
+    }
 }
 
 void ALSyntaxHighlighter::onEdit(const ALTextDocument::Edit& edit)
@@ -103,21 +204,21 @@ void ALSyntaxHighlighter::ensure(S32 line)
     {
         return;
     }
+    compactStates();
     std::vector<ALSyntaxToken> fresh;
-    // Each line starts in the state the one before ends in, read where it
-    // is: a copy only for a line lexed anew.
-    const ALSyntaxState initial = mFirstDirty == 0 ? mGrammar->initialState() : ALSyntaxState();
+    // Each line starts in the state the one before ends in, by number: a
+    // copy of it only for a line lexed anew.
     for (S32 i = mFirstDirty; i <= line; ++i)
     {
-        Line&                entry = mLines[i];
-        const ALSyntaxState& start = (i == 0) ? initial : mLines[i - 1].end;
+        Line&     entry = mLines[i];
+        const U32 start = (i == 0) ? mInitialState : mLines[i - 1].end;
         if (entry.valid && entry.start == start)
         {
             // Lexes as it did.
             continue;
         }
-        ALSyntaxState state = start;
-        mGrammar->lexLine(mDocument->line(i), state, fresh, mWords);
+        ALSyntaxState state = mStates[start];
+        mGrammar->lexLine(mDocument->line(i), state, fresh, *mWords);
         ++mLastLexed;
         if (!entry.valid || fresh != entry.tokens)
         {
@@ -125,7 +226,7 @@ void ALSyntaxHighlighter::ensure(S32 line)
             ++entry.revision;
         }
         entry.start = start;
-        entry.end   = std::move(state);
+        entry.end   = intern(std::move(state));
         entry.valid = true;
     }
     mFirstDirty = line + 1;
