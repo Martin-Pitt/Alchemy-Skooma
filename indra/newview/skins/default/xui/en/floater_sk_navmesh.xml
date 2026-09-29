@@ -304,18 +304,31 @@
     top_pad="4"
     width="292">
    </text>
-   <button
+   <combo_box
     follows="left|top"
     layout="topleft"
     left="12"
     top_pad="8"
     height="23"
-    width="292"
-    name="export_vehicle_button"
-    label="Export a vehicle and its crew"
-    tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-vehicle-&lt;id&gt;.json in the logs folder: triangles in the vehicle's own frame and each face's transparency" />
+    width="200"
+    name="capture_kind"
+    tool_tip="What to capture: the selected linkset or the one the camera points at with its crew, or the selected or pointed-at avatar's attachments (yourself if none)">
+    <combo_box.item label="Vehicle and crew" value="0" name="capture_vehicle" />
+    <combo_box.item label="Worn attachments" value="1" name="capture_attachments" />
+    <combo_box.item label="Avatar" value="2" name="capture_avatar" />
+   </combo_box>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left_pad="4"
+    top_delta="0"
+    height="23"
+    width="88"
+    name="capture_button"
+    label="Export"
+    tool_tip="Write triangles and each face's transparency to sknav-capture-&lt;kind&gt;-&lt;id&gt;.json in the logs folder: a vehicle in its root's frame, worn attachments each in their own root's frame, an avatar in its body frame" />
    <text
-    name="export_vehicle_status"
+    name="capture_status"
     height="26"
     word_wrap="true"
     use_ellipses="false"

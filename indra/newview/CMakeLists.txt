@@ -958,6 +958,7 @@ if(AL_BUILD_VIEWER)
     rlvactions.cpp
     rlvenvironment.cpp
     skphysicsshape.cpp
+    skcaptureexport.cpp
     skfloaternavmesh.cpp
     sknavmesh.cpp
     sknavoverlay.cpp
@@ -1797,6 +1798,7 @@ if(AL_BUILD_VIEWER)
     rlvactions.h
     rlvcommon.h
     skphysicsshape.h
+    skcaptureexport.h
     skfloaternavmesh.h
     sknavmesh.h
     sknavoverlay.h

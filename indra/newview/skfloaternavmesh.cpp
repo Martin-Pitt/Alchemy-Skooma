@@ -29,6 +29,7 @@
 #include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
+#include "skcaptureexport.h"
 #include "sknavmesh.h"
 #include "skworldcensus.h"
 
@@ -47,8 +48,9 @@ bool SKFloaterNavMesh::postBuild()
     getChild<LLUICtrl>("export_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportAll());
     });
-    getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
-        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportVehicle());
+    getChild<LLUICtrl>("capture_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        const S32 kind = llclamp(getChild<LLUICtrl>("capture_kind")->getValue().asInteger(), 0, 2);
+        getChild<LLUICtrl>("capture_status")->setValue(skCaptureExport(static_cast<SKCaptureKind>(kind)));
     });
     return true;
 }

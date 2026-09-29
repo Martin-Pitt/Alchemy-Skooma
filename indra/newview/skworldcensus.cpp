@@ -50,6 +50,7 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skcaptureexport.h"
 #include "sknavmesh.h"
 #include "skphysicsshape.h"
 
@@ -69,44 +70,7 @@ namespace
     // is solid to the sim and told apart from a door only here.
     F32 seeThrough(const LLViewerObject* object)
     {
-        const U8 faces = object->getNumTEs();
-        if (faces == 0)
-        {
-            return 0.f;
-        }
-        U32 clear = 0;
-        for (U8 f = 0; f < faces; ++f)
-        {
-            const LLTextureEntry* te = object->getTE(f);
-            if (!te)
-            {
-                continue;
-            }
-            // A face set to blend is glass whatever its tint, as the mark's
-            // alpha mode reads it.
-            F32 alpha = te->getColor().mV[VALPHA];
-            bool blended = true;
-            bool blend_mode = false;
-            if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-            {
-                alpha *= gltf->mBaseColor.mV[VW];
-                blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
-                blend_mode = blended;
-            }
-            else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
-            {
-                // A legacy material defaults to blend, so an opaque door with a
-                // normal map reads as blended; only a texture with alpha is glass.
-                const LLViewerTexture* image = object->getTEImage(f);
-                blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
-                             image->getComponents() == 4;
-            }
-            if (te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f))
-            {
-                clear++;
-            }
-        }
-        return static_cast<F32>(clear) / faces;
+        return skcapture::seeThroughShare(object);
     }
 
     LLViewerObject* rootOf(LLViewerObject* object)
