@@ -43,6 +43,7 @@
 #include "../alfoldmodel.h"
 #include "../aloutputview.h"
 #include "../alquickopen.h"
+#include "../llspellcheckengine.h"
 #include "../altextsearch.h"
 #include "../alvimkeymap.h"
 
@@ -216,6 +217,24 @@ int main(int, char**)
         e.highlighter().wordsChanged();
         g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
     });
+    // The whole script inside one comment -- LSL's /* */, SLua's long
+    // bracket --[==[ ]==] -- lexed: every byte of it inside a span.
+    {
+        const char* openers[2] = { "/*\n", "--[==[\n" };
+        const char* closers[2] = { "\n*/", "\n]==]" };
+        for (int i = 0; i < 2; ++i)
+        {
+            subjects[i].editor->setText(openers[i] + subjects[i].text + closers[i]);
+        }
+        both("full highlight: all of it in one comment", subjects, 1, [](Subject&, ALCodeEditor& e) {
+            e.highlighter().wordsChanged();
+            g_sink = g_sink + e.highlighter().tokens(lastLine(e)).size();
+        });
+        for (Subject& s : subjects)
+        {
+            s.editor->setText(s.text);
+        }
+    }
 
     std::printf("\nAn edit at the top (typed and taken away, through the journal)\n");
     for (Subject& s : subjects)
@@ -377,6 +396,48 @@ int main(int, char**)
     for (Subject& s : subjects)
     {
         s.editor->setDecorations({});
+    }
+
+    // The spell check over comments and strings, as the platform's own
+    // checker answers it: every line checked afresh, and Next Misspelling
+    // round a script with none, the most it ever looks at.
+    {
+        std::unique_ptr<LLSpellCheckEngine> engine = LLSpellCheckEngine::create();
+        const bool                          real   = engine && engine->setLanguage("en_US");
+        std::printf("\nSpelling (%s)\n", real ? "the platform's checker, en_US" : "no checker to be had: every word right");
+        size_t asked = 0;
+        auto   check = [&](const std::string& word) {
+            ++asked;
+            return !real || engine->checkWord(word);
+        };
+        for (Subject& s : subjects)
+        {
+            s.editor->setSpellChecker(check);
+            s.editor->setSpellCheck(true);
+        }
+        size_t words[2] = {};
+        both("every line checked afresh", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+            e.recheckSpelling();
+            asked = 0;
+            for (S32 line = 0; line < e.document().lineCount(); ++line)
+            {
+                g_sink = g_sink + e.misspellings(line).size();
+            }
+            words[&s - subjects] = asked;
+        });
+        countRow("  words asked of the checker", words[0], words[1]);
+        both("Next Misspelling round a script with none, afresh", subjects, 1, [](Subject&, ALCodeEditor& e) {
+            e.recheckSpelling();
+            g_sink = g_sink + e.misspellingFrom(ALTextPos(0, 0), true).has_value();
+        });
+        both("Next Misspelling round it again, checked already", subjects, 1, [](Subject&, ALCodeEditor& e) {
+            g_sink = g_sink + e.misspellingFrom(ALTextPos(0, 0), true).has_value();
+        });
+        for (Subject& s : subjects)
+        {
+            s.editor->setSpellCheck(false);
+            s.editor->setSpellChecker(nullptr);
+        }
     }
 
     std::printf("\nEvery line at once\n");
@@ -641,6 +702,66 @@ int main(int, char**)
     }
     both("`.`: a 100-character insert typed again, then undone", subjects, 1, [](Subject&, ALCodeEditor& e) {
         typeKeys(e, ".");
+        e.undo();
+    });
+    // Stepping by character along that line, as l does.
+    both("l along a line of 100 characters, per step", subjects, 100, [](Subject&, ALCodeEditor& e) {
+        typeKeys(e, "0");
+        for (int i = 0; i < 99; ++i)
+        {
+            typeKeys(e, "l");
+        }
+    });
+    // A search, then n through its matches; and a search typed on the
+    // search line, with the cursor moved along it, as incsearch sees it.
+    for (Subject& s : subjects)
+    {
+        vims[&s - subjects]->takeLine(*s.editor, '/', "total", true);
+    }
+    both("n through the matches of \"total\", per n", subjects, 10, [](Subject&, ALCodeEditor& e) {
+        typeKeys(e, "nnnnnnnnnn");
+    });
+    both("/total typed, the cursor moved along it, per key", subjects, 15, [](Subject&, ALCodeEditor& e) {
+        typeKeys(e, "/total");
+        for (int i = 0; i < 4; ++i)
+        {
+            e.handleKeyHere(KEY_LEFT, MASK_NONE);
+        }
+        for (int i = 0; i < 4; ++i)
+        {
+            e.handleKeyHere(KEY_RIGHT, MASK_NONE);
+        }
+        e.handleKeyHere(KEY_ESCAPE, MASK_NONE);
+    });
+    // A macro of 500 motions played back while a mapping is made: every
+    // key it feeds is looked at as the start of one.
+    for (Subject& s : subjects)
+    {
+        vims[&s - subjects]->takeLine(*s.editor, ':', "nmap <F5> x", true);
+        s.editor->setCaret(ALTextPos(0, 0));
+        typeKeys(*s.editor, "gg");
+        std::string recorded = "qa";
+        recorded += std::string(250, 'j') + std::string(250, 'k') + "q";
+        typeKeys(*s.editor, recorded.c_str());
+    }
+    both("@a: a macro of 500 motions, a mapping made", subjects, 1, [](Subject&, ALCodeEditor& e) { typeKeys(e, "@a"); });
+    // The whole text selected by lines, then moved within: every motion
+    // makes a selection of all of it.
+    for (Subject& s : subjects)
+    {
+        typeKeys(*s.editor, "ggVG");
+    }
+    both("a motion with the whole text selected (ggVG, then k and j)", subjects, 2, [](Subject&, ALCodeEditor& e) { typeKeys(e, "kj"); });
+    for (Subject& s : subjects)
+    {
+        s.editor->handleKeyHere(KEY_ESCAPE, MASK_NONE);
+    }
+    both(":sort, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "sort", true);
+        e.undo();
+    });
+    both(":sort i, then undone", subjects, 1, [&](Subject& s, ALCodeEditor& e) {
+        vims[&s - subjects]->takeLine(e, ':', "sort i", true);
         e.undo();
     });
 
