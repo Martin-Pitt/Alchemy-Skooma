@@ -606,8 +606,33 @@ namespace sknav
             ProbePart part;
             part.mPart = static_cast<U32>(k);
             part.mOrigin.set(ox, oy, floor + half);
-            part.mRadius = std::min(std::sqrt(reach2 + half * half), params.mMaxRadiusM);
+            part.mRadius = std::min(std::sqrt(reach2 + half * half) * params.mCoverageShare, params.mMaxRadiusM);
             part.mArea = st[p].mCells * cell_area;
+
+            if (params.mSpaceRadiusM > 0.f)
+            {
+                // The reach across the whole space's plan from where this
+                // sphere stands, so spheres of neighbouring parts and spaces
+                // overlap and the neighbour graph between them connects. Huge
+                // spaces (the outdoors) cap, and the octree fills the rest.
+                F32 space_reach2 = 0.f;
+                for (S32 y = 0; y < h; ++y)
+                {
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        if (!plan.in(x, y))
+                        {
+                            continue;
+                        }
+                        const F32 ax = (plan.mX0 + x) * plan.mCell, ay = (plan.mY0 + y) * plan.mCell;
+                        const F32 dx = std::max(std::fabs(ax - ox), std::fabs(ax + plan.mCell - ox));
+                        const F32 dy = std::max(std::fabs(ay - oy), std::fabs(ay + plan.mCell - oy));
+                        space_reach2 = std::max(space_reach2, dx * dx + dy * dy);
+                    }
+                }
+                part.mSpaceRadius = std::min(std::sqrt(space_reach2 + half * half), params.mSpaceRadiusM);
+            }
+
             part.mMin.set((plan.mX0 + st[p].mX0) * plan.mCell, (plan.mY0 + st[p].mY0) * plan.mCell, lo);
             part.mMax.set((plan.mX0 + st[p].mX1 + 1) * plan.mCell, (plan.mY0 + st[p].mY1 + 1) * plan.mCell, floor + 2.f * half);
             out.push_back(part);

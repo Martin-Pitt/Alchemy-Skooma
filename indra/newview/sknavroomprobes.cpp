@@ -186,7 +186,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             {
                 continue;
             }
-            c.mRadius = sknav::clearRadius(c.mOrigin, part.mRadius, placed, params);
+            c.mRadius = sknav::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
             if (c.mRadius <= 0.f)
             {
                 ++mClearedOut;
