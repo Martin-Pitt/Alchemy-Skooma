@@ -199,13 +199,16 @@ namespace
 
     // How long the word at the caret is left unmarked after it was typed.
     const F32 SPELL_SETTLE_SECONDS = 1.5f;
-    // A squiggle: a wave a pixel high either way and five pixels long,
-    // drawn as a line a pixel wide whose edges fade over a pixel more, as
-    // gl_polyline_2d draws one.
+    // A squiggle: a wave a pixel high either way and six pixels long,
+    // drawn as a line a pixel and a half wide, whose edges fade over a
+    // pixel more. A pixel was too thin to see in a pale colour; six rather
+    // than five so that the crests bend no tighter than the line is wide.
+    // The texture is taller than the wave and its fade, so that a sampler
+    // between texels, which wraps, never blends its top into its bottom.
     constexpr F32 SQUIGGLE_AMPLITUDE = 1.f;
-    constexpr S32 SQUIGGLE_WAVE      = 5;
-    constexpr S32 SQUIGGLE_HEIGHT    = 6;
-    constexpr F32 SQUIGGLE_HALF      = 0.5f;
+    constexpr S32 SQUIGGLE_WAVE      = 6;
+    constexpr S32 SQUIGGLE_HEIGHT    = 8;
+    constexpr F32 SQUIGGLE_HALF      = 0.75f;
     constexpr F32 SQUIGGLE_FEATHER   = 1.f;
 
     // One wave of a squiggle, which a squiggle repeats along its length: so
@@ -238,14 +241,14 @@ namespace
                 // fade is smooth.
                 const F32 x    = (static_cast<F32>(column) + 0.5f) / static_cast<F32>(scale);
                 const F32 y    = (static_cast<F32>(row) + 0.5f) / static_cast<F32>(scale) - 0.5f * static_cast<F32>(SQUIGGLE_HEIGHT);
-                F32       near = F32_MAX;
+                F32       nearest = F32_MAX;
                 for (F32 along = x - static_cast<F32>(SQUIGGLE_WAVE); along <= x + static_cast<F32>(SQUIGGLE_WAVE); along += 0.01f)
                 {
                     const F32 dx = x - along;
                     const F32 dy = y - SQUIGGLE_AMPLITUDE * sinf(along * step);
-                    near         = llmin(near, dx * dx + dy * dy);
+                    nearest      = llmin(nearest, dx * dx + dy * dy);
                 }
-                const F32 cover = llclamp((SQUIGGLE_HALF + SQUIGGLE_FEATHER - sqrtf(near)) / SQUIGGLE_FEATHER, 0.f, 1.f);
+                const F32 cover = llclamp((SQUIGGLE_HALF + SQUIGGLE_FEATHER - sqrtf(nearest)) / SQUIGGLE_FEATHER, 0.f, 1.f);
                 U8*       texel = data + (static_cast<size_t>(row) * width + column) * 4;
                 texel[0] = texel[1] = texel[2] = 255;
                 texel[3] = static_cast<U8>(llround(cover * 255.f));
@@ -509,6 +512,13 @@ void ALTextView::setWordWrap(bool wrap)
     syncScrollbar();
 }
 
+void ALTextView::setSideScroll(bool scroll)
+{
+    mSideScroll = scroll;
+    mScrollX    = 0.f;
+    syncScrollbar();
+}
+
 void ALTextView::setTabWidth(S32 spaces)
 {
     useIndentation({ spaces, mSoftTabs }, IndentFrom::Chosen);
@@ -648,7 +658,8 @@ void ALTextView::syncScrollbar()
     {
         const LLRect text   = textRect();
         const bool   need_v = !mScrollMap && mLayout.totalHeight() > llmax(1, text.getHeight());
-        const bool   need_h = !mWordWrap && mLayout.contentWidth() + static_cast<F32>(H_MARGIN) > static_cast<F32>(text.getWidth());
+        const bool   need_h =
+            mSideScroll && !mWordWrap && mLayout.contentWidth() + static_cast<F32>(H_MARGIN) > static_cast<F32>(text.getWidth());
         const bool   changed = need_v != mNeedV || need_h != mNeedH;
         mNeedV               = need_v;
         mNeedH               = need_h;
@@ -665,7 +676,7 @@ void ALTextView::syncScrollbar()
     const S32    page = llmax(1, text.getHeight());
     mScrollY          = llclamp(mScrollY, 0, llmax(0, mLayout.totalHeight() - page));
     const S32 width   = llmax(1, text.getWidth());
-    const S32 content = mWordWrap ? 0 : static_cast<S32>(ceilf(mLayout.contentWidth())) + H_MARGIN;
+    const S32 content = mWordWrap || !mSideScroll ? 0 : static_cast<S32>(ceilf(mLayout.contentWidth())) + H_MARGIN;
     mScrollX          = llclamp(mScrollX, 0.f, static_cast<F32>(llmax(0, content - width)));
     // Where the top of the view is now, in the text.
     mAnchorLine    = mLayout.lineAtY(mScrollY);
@@ -703,18 +714,23 @@ void ALTextView::setScrollX(F32 x)
 
 void ALTextView::scrollToCaret()
 {
+    scrollToShow(mCaret);
+}
+
+void ALTextView::scrollToShow(const ALTextPos& pos)
+{
     const S32 row_h = mLayout.rowHeight();
     if (row_h <= 0)
     {
         return;
     }
     S32       row;
-    const F32 x      = mLayout.xOf(mCaret.line, mCaret.column, &row);
-    const S32 top    = mLayout.lineTop(mCaret.line) + mLayout.rowTop(mCaret.line, row);
-    const S32 height = mLayout.rowHeightOf(mCaret.line, row);
+    const F32 x      = mLayout.xOf(pos.line, pos.column, &row);
+    const S32 top    = mLayout.lineTop(pos.line) + mLayout.rowTop(pos.line, row);
+    const S32 height = mLayout.rowHeightOf(pos.line, row);
     const LLRect text = textRect();
     const S32 page = llmax(height, text.getHeight());
-    // Across first: where the caret is across says what covers it above.
+    // Across first: where it is across says what covers it above.
     if (mWordWrap)
     {
         mScrollX = 0.f;
@@ -735,13 +751,13 @@ void ALTextView::scrollToCaret()
     {
         mScrollY = top + height - page;
     }
-    // Up, below what is drawn over the top where the caret is -- the find
-    // bar, the lines pinned there -- which is asked again at each place
-    // tried, since what is pinned is what the top of the view is inside.
-    const S32 caret_x = text.mLeft + static_cast<S32>(x - mScrollX);
+    // Up, below what is drawn over the top where it is -- the find bar,
+    // the lines pinned there -- which is asked again at each place tried,
+    // since what is pinned is what the top of the view is inside.
+    const S32 local_x = text.mLeft + static_cast<S32>(x - mScrollX);
     for (S32 tries = 0; tries < 4 && mScrollY > 0; ++tries)
     {
-        const S32 covered = llmin(llmax(0, coveredAbove(caret_x)), llmax(0, page - height));
+        const S32 covered = llmin(llmax(0, coveredAbove(local_x)), llmax(0, page - height));
         if (top >= mScrollY + covered)
         {
             break;
@@ -773,6 +789,28 @@ void ALTextView::scrollToLine(S32 line)
     mScrollY     = mLayout.lineTop(line);
     mScrollAsked = true;
     syncScrollbar();
+}
+
+void ALTextView::trimLayout()
+{
+    // So many past what is in sight, however much that is: a window tall
+    // enough to show more lines than that is not trimmed every frame.
+    const S32 first = firstVisibleLine();
+    const S32 last  = lastVisibleLine();
+    if (mLayout.linesHeld() > LAYOUT_HELD_MOST + (last - first + 1))
+    {
+        mLayout.trim(first - LAYOUT_KEPT_AROUND, last + LAYOUT_KEPT_AROUND);
+    }
+}
+
+void ALTextView::onVisibilityChange(bool new_visibility)
+{
+    if (!new_visibility)
+    {
+        publishPrimary();
+        mLayout.trim(0, -1);
+    }
+    LLUICtrl::onVisibilityChange(new_visibility);
 }
 
 S32 ALTextView::firstVisibleLine()
@@ -820,18 +858,22 @@ void ALTextView::placeSelection(const ALTextPos& anchor, const ALTextPos& caret)
     mBlink.reset();
     if (selection() != was)
     {
+        // Offered once a frame, not at every step: a selection of the
+        // whole text moved a line at a time is otherwise copied whole at
+        // each, and a drag's once it is let go of.
         if (hasSelection())
         {
-            if (mSelecting)
-            {
-                mPrimaryStale = true;
-            }
-            else
-            {
-                offerPrimary();
-            }
+            mPrimaryStale = true;
         }
         mCaretMoved();
+    }
+}
+
+void ALTextView::publishPrimary()
+{
+    if (mPrimaryStale && !mSelecting)
+    {
+        offerPrimary();
     }
 }
 
@@ -1470,21 +1512,31 @@ void ALTextView::recheckSpelling()
     mSpelling.recheck();
 }
 
-std::optional<ALTextRange> ALTextView::misspellingFrom(const ALTextPos& from, bool forward)
+std::optional<ALTextRange> ALTextView::misspellingFrom(const ALTextPos& from, bool forward, bool* cut)
 {
+    if (cut)
+    {
+        *cut = false;
+    }
     const S32 lines = mDocument.lineCount();
     if (!getSpellCheck() || lines == 0)
     {
         return std::nullopt;
     }
+    // A real-time clock, read only after a line that had to be checked: a
+    // line checked already costs next to nothing to look at again, and the
+    // search always gets at least one line further.
+    LLTimer spent;
+    spent.setTimerExpirySec(mMisspellingBudget);
     for (S32 i = 0; i <= lines; ++i)
     {
         const S32   line  = ((forward ? from.line + i : from.line - i) % lines + lines) % lines;
         // The place's own line first, after it or before it; and last, once
         // round, what is left of it.
         const bool  own   = i == 0;
-        const bool  again = i == lines;
-        const auto& words = misspellings(line);
+        const bool  again  = i == lines;
+        const U32   checks = mSpelling.checks();
+        const auto& words  = misspellings(line);
         auto found = [&](const std::pair<S32, S32>& word) {
             return ALTextRange(ALTextPos(line, word.first), ALTextPos(line, word.second));
         };
@@ -1507,6 +1559,14 @@ std::optional<ALTextRange> ALTextView::misspellingFrom(const ALTextPos& from, bo
                     return found(*it);
                 }
             }
+        }
+        if (i < lines && mSpelling.checks() != checks && spent.hasExpired())
+        {
+            if (cut)
+            {
+                *cut = true;
+            }
+            return std::nullopt;
         }
     }
     return std::nullopt;
@@ -1546,15 +1606,31 @@ bool ALTextView::convertIndentation(S32 first, S32 last, bool to_spaces, S32 mea
 
 bool ALTextView::goToMisspelling(bool forward)
 {
+    mMisspellingSought.reset();
     const ALTextRange                selected = selection().normalised();
-    const std::optional<ALTextRange> word     = misspellingFrom(forward ? selected.end : selected.begin, forward);
+    bool                             cut      = false;
+    const std::optional<ALTextRange> word     = misspellingFrom(forward ? selected.end : selected.begin, forward, &cut);
     if (!word)
     {
-        return false;
+        if (cut)
+        {
+            mMisspellingSought = MisspellingSought{ forward, selection(), mDocument.version() };
+        }
+        return cut;
     }
     setSelection(*word);
     scrollToCaret();
     return true;
+}
+
+void ALTextView::seekMisspelling()
+{
+    const MisspellingSought sought = *mMisspellingSought;
+    mMisspellingSought.reset();
+    if (sought.version == mDocument.version() && sought.selection == selection() && getSpellCheck())
+    {
+        goToMisspelling(sought.forward);
+    }
 }
 
 const std::vector<std::pair<S32, S32>>& ALTextView::misspellings(S32 line)
@@ -1780,7 +1856,7 @@ ALTextDocument::Edit ALTextView::edit(const ALTextRange& range_in, std::string_v
         resetPreedit();
     }
     const ALTextRange    before = selection();
-    ALTextDocument::Edit done   = mDocument.replace(range, text);
+    ALTextDocument::Edit done   = mDocument.replace(range, fitting(range, text));
     if (done.nothing())
     {
         return done;
@@ -1801,6 +1877,10 @@ ALTextDocument::Edit ALTextView::editMany(std::vector<std::pair<ALTextRange, std
         }
         resetPreedit();
     }
+    if (!fits(edits))
+    {
+        return ALTextDocument::Edit();
+    }
     const ALTextRange    before = selection();
     ALTextDocument::Edit done   = mDocument.replaceMany(std::move(edits));
     if (done.nothing())
@@ -1811,6 +1891,57 @@ ALTextDocument::Edit ALTextView::editMany(std::vector<std::pair<ALTextRange, std
     mUndo.record(done, before, after, LLTimer::getElapsedSeconds());
     placeCaret(after, false);
     return done;
+}
+
+std::string_view ALTextView::fitting(const ALTextRange& over, std::string_view text)
+{
+    if (mMaxBytes == 0)
+    {
+        return text;
+    }
+    const ALTextRange range = over.normalised();
+    const size_t      taken = mDocument.offsetOf(range.end) - mDocument.offsetOf(range.begin);
+    const size_t      left  = mDocument.byteCount() - taken;
+    if (text.size() <= taken || left + text.size() <= mMaxBytes)
+    {
+        return text;
+    }
+    // As much as there is room for, cut where a character starts -- a
+    // notecard's item is one character too, and goes whole or not at all.
+    size_t room = mMaxBytes > left ? mMaxBytes - left : 0;
+    while (room > 0 && room < text.size() && (static_cast<unsigned char>(text[room]) & 0xC0) == 0x80)
+    {
+        --room;
+    }
+    full();
+    return text.substr(0, room);
+}
+
+bool ALTextView::fits(const std::vector<std::pair<ALTextRange, std::string>>& edits)
+{
+    if (mMaxBytes == 0)
+    {
+        return true;
+    }
+    size_t taken = 0, put = 0;
+    for (const auto& [over, text] : edits)
+    {
+        const ALTextRange range = over.normalised();
+        taken += mDocument.offsetOf(range.end) - mDocument.offsetOf(range.begin);
+        put += text.size();
+    }
+    if (put <= taken || mDocument.byteCount() - taken + put <= mMaxBytes)
+    {
+        return true;
+    }
+    full();
+    return false;
+}
+
+void ALTextView::full()
+{
+    make_ui_sound("UISndBadKeystroke");
+    mFull();
 }
 
 void ALTextView::afterEdit()
@@ -1987,6 +2118,12 @@ void ALTextView::apply(const ALTextEditing::Change& change)
     for (const ALTextEditing::Replacement& one : change.replacements)
     {
         edits.emplace_back(one.range, one.text);
+    }
+    // Not made at all, the caret left where it was, where the text has
+    // no room for it.
+    if (!fits(edits))
+    {
+        return;
     }
     mUndo.beginGroup();
     editMany(std::move(edits), change.caret);
@@ -2584,6 +2721,9 @@ void ALTextView::paste()
     // a step of its own: Undo takes back the re-indenting first, and
     // leaves the paste as it was copied.
     const ALTextRange                           into = selection().normalised();
+    // Cut to what there is room for first, so that the lines re-indented
+    // are the lines that went in.
+    text.resize(fitting(into, text).size());
     const std::optional<ALTextIndent::PastePlan> plan =
         mReindentsPaste ? ALTextIndent::planPaste(mDocument, into, text, mHighlighter.grammar().get(), editingOptions()) : std::nullopt;
     mUndo.beginGroup();
@@ -3004,10 +3144,18 @@ void ALTextView::showFind(bool with_replace)
     }
     // Seeded with what is selected, when that is a line's worth or less,
     // or with the word the caret is in when nothing is; written as a
-    // pattern that finds it, where the bar is looking for patterns.
+    // pattern that finds it, where the bar is looking for patterns. Never
+    // with an atom's placeholder, which is no text to type or find: a
+    // selection holding an atom -- a notecard's item -- leaves the last
+    // query, and the word stops at an atom.
     const ALTextRange sel = selection().normalised();
     std::string       seed;
-    if (!sel.empty() && sel.begin.line == sel.end.line && sel.end.column - sel.begin.column < 200)
+    const auto        holds_atom = [this](const ALTextRange& range) {
+        const auto first =
+            std::lower_bound(mAtoms.begin(), mAtoms.end(), range.begin, [](const Atom& a, const ALTextPos& p) { return a.at < p; });
+        return first != mAtoms.end() && first->at < range.end;
+    };
+    if (!sel.empty() && sel.begin.line == sel.end.line && sel.end.column - sel.begin.column < 200 && !holds_atom(sel))
     {
         seed = mDocument.text(sel);
     }
@@ -3016,11 +3164,14 @@ void ALTextView::showFind(bool with_replace)
         const std::string& line  = mDocument.line(mCaret.line);
         size_t             begin = static_cast<size_t>(llclamp(mCaret.column, 0, static_cast<S32>(line.size())));
         size_t             end   = begin;
-        while (begin > 0 && alWordByte(line[begin - 1]))
+        const auto         word  = [&](size_t at) {
+            return alWordByte(line[at]) && !atomAt(ALTextPos(mCaret.line, static_cast<S32>(at)));
+        };
+        while (begin > 0 && word(begin - 1))
         {
             --begin;
         }
-        while (end < line.size() && alWordByte(line[end]))
+        while (end < line.size() && word(end))
         {
             ++end;
         }
@@ -3550,6 +3701,71 @@ void ALTextView::scrollToMapY(S32 y)
     setScrollY(mLayout.lineTop(line) - page / 2);
 }
 
+void ALTextView::readMapRuns(S32 line, S32 columns, std::vector<MapRun>& out)
+{
+    // Each run of glyphs of one kind, by column, as far as the map is
+    // wide; spaces and tabs part runs.
+    const std::string&                text   = mDocument.line(line);
+    const std::vector<ALSyntaxToken>& tokens = mHighlighter.tokens(line);
+    size_t                            t      = 0;
+    S32                               col    = 0;
+    S32                               from   = -1;
+    ALSyntaxKind                      kind   = ALSyntaxKind::Text;
+    const auto                        end    = [&](S32 to) {
+        if (from >= 0)
+        {
+            const S32 x0 = llmin(columns, from);
+            const S32 x1 = llmin(columns, to);
+            if (x1 > x0)
+            {
+                out.push_back(MapRun{ x0, x1, kind });
+            }
+            from = -1;
+        }
+    };
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if ((c & 0xC0) == 0x80)
+        {
+            continue;  // the rest of a character
+        }
+        while (t < tokens.size() && tokens[t].end <= static_cast<S32>(i))
+        {
+            ++t;
+        }
+        const ALSyntaxKind here = t < tokens.size() && tokens[t].begin <= static_cast<S32>(i) ? tokens[t].kind : ALSyntaxKind::Text;
+        if (c == '\t')
+        {
+            end(col);
+            col = alNextTabStop(col, mTabWidth);
+        }
+        else if (c == ' ')
+        {
+            end(col);
+            ++col;
+        }
+        else
+        {
+            if (from >= 0 && here != kind)
+            {
+                end(col);
+            }
+            if (from < 0)
+            {
+                from = col;
+                kind = here;
+            }
+            ++col;
+        }
+        if (col > columns)
+        {
+            break;
+        }
+    }
+    end(col);
+}
+
 void ALTextView::drawMap(F32 alpha)
 {
     const LLRect map = mapRect();
@@ -3579,78 +3795,61 @@ void ALTextView::drawMap(F32 alpha)
     const S32 inner_right = map.mRight - MAP_PAD - (mScrollMapLeft ? 0 : MAP_MARK_W);
     const S32 mark_left   = mScrollMapLeft ? map.mLeft + 1 : map.mRight - MAP_MARK_W;
     LLLocalClipRect clip(map);
+    // Each line's runs of text, read again only where something they are
+    // read from has moved.
+    const S32 columns = llmax(0, (inner_right - inner_left) / MAP_CHAR_W);
+    MapRuns&  runs    = mMapRuns;
+    bool      fresh   = runs.version == mDocument.version() && runs.grammar == mHighlighter.grammar().get() && runs.tabWidth == mTabWidth &&
+                 runs.columns == columns && runs.first == first && runs.last == last && runs.hidden == mLayout.hiddenRevision();
+    for (S32 o = first; fresh && o <= last; ++o)
+    {
+        fresh = runs.revisions[static_cast<size_t>(o - first)] == mHighlighter.revision(mMapLines[o]);
+    }
+    if (!fresh)
+    {
+        runs.version  = mDocument.version();
+        runs.grammar  = mHighlighter.grammar().get();
+        runs.tabWidth = mTabWidth;
+        runs.columns  = columns;
+        runs.first    = first;
+        runs.last     = last;
+        runs.hidden   = mLayout.hiddenRevision();
+        runs.starts.clear();
+        runs.revisions.clear();
+        runs.runs.clear();
+        for (S32 o = first; o <= last; ++o)
+        {
+            const S32 line = mMapLines[o];
+            runs.starts.push_back(runs.runs.size());
+            runs.revisions.push_back(mHighlighter.revision(line));
+            readMapRuns(line, columns, runs.runs);
+        }
+        runs.starts.push_back(runs.runs.size());
+    }
+    // Every run, mark and tick in one batch, which is one draw: a rectangle
+    // drawn apiece is a draw apiece, and the map has thousands.
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
     for (S32 o = first; o <= last; ++o)
     {
-        const S32 line  = mMapLines[o];
-        const S32 top   = map.mTop - MAP_PAD - (o * MAP_LINE_H - scroll);
+        const S32 line   = mMapLines[o];
+        const S32 top    = map.mTop - MAP_PAD - (o * MAP_LINE_H - scroll);
         const S32 bottom = top - MAP_LINE_H;
-        const std::string&                text   = mDocument.line(line);
-        const std::vector<ALSyntaxToken>& tokens = mHighlighter.tokens(line);
         // Each run of glyphs, a rectangle in its kind's ink.
-        size_t t   = 0;
-        S32    col = 0;
-        S32    run_from = -1;
-        ALSyntaxKind run_kind = ALSyntaxKind::Text;
-        auto flush = [&](S32 to) {
-            if (run_from < 0)
-            {
-                return;
-            }
-            const S32 x0 = llmin(inner_right, inner_left + run_from * MAP_CHAR_W);
-            const S32 x1 = llmin(inner_right, inner_left + to * MAP_CHAR_W);
-            if (x1 > x0)
-            {
-                const LLColor4& kind_ink = run_kind == ALSyntaxKind::Text ? ink : colorForKind(run_kind);
-                gl_rect_2d(x0, top, x1, bottom, kind_ink % (alpha * (run_kind == ALSyntaxKind::Text ? 0.45f : 0.7f)));
-            }
-            run_from = -1;
-        };
-        for (size_t i = 0; i < text.size(); ++i)
+        const size_t from = runs.starts[static_cast<size_t>(o - first)];
+        const size_t to   = runs.starts[static_cast<size_t>(o - first) + 1];
+        for (size_t r = from; r < to; ++r)
         {
-            const unsigned char c = static_cast<unsigned char>(text[i]);
-            if ((c & 0xC0) == 0x80)
-            {
-                continue;  // the rest of a character
-            }
-            while (t < tokens.size() && tokens[t].end <= static_cast<S32>(i))
-            {
-                ++t;
-            }
-            const ALSyntaxKind kind = t < tokens.size() && tokens[t].begin <= static_cast<S32>(i) ? tokens[t].kind : ALSyntaxKind::Text;
-            if (c == '\t')
-            {
-                flush(col);
-                col = alNextTabStop(col, mTabWidth);
-            }
-            else if (c == ' ')
-            {
-                flush(col);
-                ++col;
-            }
-            else
-            {
-                if (run_from >= 0 && kind != run_kind)
-                {
-                    flush(col);
-                }
-                if (run_from < 0)
-                {
-                    run_from = col;
-                    run_kind = kind;
-                }
-                ++col;
-            }
-            if (inner_left + col * MAP_CHAR_W > inner_right)
-            {
-                break;
-            }
+            const MapRun&   run      = runs.runs[r];
+            const bool      plain    = run.kind == ALSyntaxKind::Text;
+            const LLColor4& kind_ink = plain ? ink : colorForKind(run.kind);
+            gl_rect_2d_in_batch(inner_left + run.from * MAP_CHAR_W, top, inner_left + run.to * MAP_CHAR_W, bottom, kind_ink % (alpha * (plain ? 0.45f : 0.7f)));
         }
-        flush(col);
         // A mark beside the line, and a match in it.
         LLColor4 mark;
         if (mapMark(line, mark))
         {
-            gl_rect_2d(mark_left, top, mark_left + MAP_MARK_W, bottom - 1, mark % alpha);
+            gl_rect_2d_in_batch(mark_left, top, mark_left + MAP_MARK_W, bottom - 1, mark % alpha);
         }
         const std::vector<ALTextRange>& matches = mFind.matches();
         if (!matches.empty())
@@ -3659,14 +3858,15 @@ void ALTextView::drawMap(F32 alpha)
             if (found != matches.end() && found->begin.line <= line)
             {
                 const S32 tick_left = mScrollMapLeft ? map.mRight - MAP_MARK_W : map.mLeft + 1;
-                gl_rect_2d(tick_left, top, tick_left + MAP_MARK_W, bottom - 1, mFindMatchColor.get() % alpha);
+                gl_rect_2d_in_batch(tick_left, top, tick_left + MAP_MARK_W, bottom - 1, mFindMatchColor.get() % alpha);
             }
         }
         if (line == mCaret.line)
         {
-            gl_rect_2d(inner_left, top, inner_right, top - 1, mCursorColor.get() % (alpha * 0.6f));
+            gl_rect_2d_in_batch(inner_left, top, inner_right, top - 1, mCursorColor.get() % (alpha * 0.6f));
         }
     }
+    gGL.end();
     // The rows on screen, as a window over the map.
     const S32 page        = llmax(1, textRect().getHeight());
     const S32 top_line    = mLayout.lineAtY(mScrollY);
@@ -3838,36 +4038,62 @@ ALTextLayout::Row ALTextView::rowInSight(const ALTextLayout::Line& laid, const A
 
 void ALTextView::drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip)
 {
-    // As much of it as is in sight, the wave kept where it began.
-    const F32 from = llmax(x0, static_cast<F32>(clip.mLeft));
-    const F32 to   = llmin(x1, static_cast<F32>(clip.mRight));
+    const Squiggle one{ x0, x1, y, color, clip.mLeft, clip.mRight };
+    drawSquiggles(&one, 1);
+}
+
+void ALTextView::drawSquiggles(const Squiggle* squiggles, size_t count)
+{
     LLImageGL* wave = squiggleTexture();
-    if (from >= to || !wave || !wave->getHasGLTexture())
+    if (count == 0 || !wave || !wave->getHasGLTexture())
     {
         return;
     }
-    const F32 u0     = (from - x0) / static_cast<F32>(SQUIGGLE_WAVE);
-    const F32 u1     = (to - x0) / static_cast<F32>(SQUIGGLE_WAVE);
-    const F32 bottom = static_cast<F32>(y - SQUIGGLE_HEIGHT / 2);
-    const F32 top    = static_cast<F32>(y + SQUIGGLE_HEIGHT / 2);
     gGL.getTextureSlot(0)->bindSampled(wave, ALSamplers::BilinearWrap);
-    gGL.color4fv(color.mV);
     gGL.begin(LLRender::TRIANGLES);
-    gGL.texCoord2f(u0, 1.f);
-    gGL.vertex2f(from, top);
-    gGL.texCoord2f(u0, 0.f);
-    gGL.vertex2f(from, bottom);
-    gGL.texCoord2f(u1, 0.f);
-    gGL.vertex2f(to, bottom);
-    gGL.texCoord2f(u0, 1.f);
-    gGL.vertex2f(from, top);
-    gGL.texCoord2f(u1, 0.f);
-    gGL.vertex2f(to, bottom);
-    gGL.texCoord2f(u1, 1.f);
-    gGL.vertex2f(to, top);
+    for (size_t i = 0; i < count; ++i)
+    {
+        // As much of it as is in sight, the wave kept where it began.
+        const Squiggle& squiggle = squiggles[i];
+        const F32       from     = llmax(squiggle.x0, static_cast<F32>(squiggle.clipLeft));
+        const F32       to       = llmin(squiggle.x1, static_cast<F32>(squiggle.clipRight));
+        if (from >= to)
+        {
+            continue;
+        }
+        const F32 u0     = (from - squiggle.x0) / static_cast<F32>(SQUIGGLE_WAVE);
+        const F32 u1     = (to - squiggle.x0) / static_cast<F32>(SQUIGGLE_WAVE);
+        const F32 bottom = static_cast<F32>(squiggle.y - SQUIGGLE_HEIGHT / 2);
+        const F32 top    = static_cast<F32>(squiggle.y + SQUIGGLE_HEIGHT / 2);
+        gGL.color4fv(squiggle.color.mV);
+        gGL.texCoord2f(u0, 1.f);
+        gGL.vertex2f(from, top);
+        gGL.texCoord2f(u0, 0.f);
+        gGL.vertex2f(from, bottom);
+        gGL.texCoord2f(u1, 0.f);
+        gGL.vertex2f(to, bottom);
+        gGL.texCoord2f(u0, 1.f);
+        gGL.vertex2f(from, top);
+        gGL.texCoord2f(u1, 0.f);
+        gGL.vertex2f(to, bottom);
+        gGL.texCoord2f(u1, 1.f);
+        gGL.vertex2f(to, top);
+    }
     gGL.end();
     // What is drawn next without a texture of its own gets the white one.
     gGL.getTextureSlot(0)->unbind();
+}
+
+void ALTextView::squiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip)
+{
+    if (mQueueSquiggles)
+    {
+        mSquiggles.push_back(Squiggle{ x0, x1, y, color, clip.mLeft, clip.mRight });
+    }
+    else
+    {
+        drawSquiggle(x0, x1, y, color, clip);
+    }
 }
 
 void ALTextView::drawLayers(S32 line, const ALTextLayout::Line& laid, S32 r, const LLRect& text, S32 row_top, F32 left, F32 alpha)
@@ -3958,7 +4184,7 @@ void ALTextView::drawLayers(S32 line, const ALTextLayout::Line& laid, S32 r, con
             F32 x0, x1;
             if (spanOnRow(line, r, ALTextRange(ALTextPos(line, begin), ALTextPos(line, end)), x0, x1))
             {
-                drawSquiggle(left + x0, left + x1, screen_top - row_h + 2, mSpellErrorColor.get() % alpha, text);
+                squiggle(left + x0, left + x1, screen_top - row_h + 2, mSpellErrorColor.get() % alpha, text);
             }
         }
     }
@@ -4009,6 +4235,14 @@ void ALTextView::drawRows(const LLRect& text)
     const F32  caret_x     = mLayout.xOf(mCaret.line, mCaret.column, &caret_row);
     const F32  space       = mLayout.xOf(0, 0) + 6.f;  // what a selected line end is drawn as
 
+    const F32  left        = static_cast<F32>(text.mLeft) - mScrollX;
+
+    // The rows in sight, walked in three passes -- what is behind the
+    // text, the text, and what is over it -- so that each pass goes to GL
+    // as a batch, rather than every row making draws of its own. A row's
+    // things over the text lie over the next row's text, where they reach
+    // it, rather than under.
+    mRowsSeen.clear();
     for (S32 line = mLayout.lineAtY(mScrollY); line < count; ++line)
     {
         if (mLayout.hidden(line))
@@ -4021,7 +4255,6 @@ void ALTextView::drawRows(const LLRect& text)
         {
             break;
         }
-        const S32 length = mDocument.lineLength(line);
         for (size_t r = 0; r < laid.rows.size(); ++r)
         {
             const ALTextLayout::Row& row     = laid.rows[r];
@@ -4037,93 +4270,133 @@ void ALTextView::drawRows(const LLRect& text)
             // The row's top on the screen, and the top of its text's band,
             // which is the row's bottom part where a box made it taller.
             const S32 row_screen_top = text.mTop - (row_top - mScrollY);
-            const S32 screen_top     = row_screen_top - row.textTop();
-            const F32 left           = static_cast<F32>(text.mLeft) - mScrollX;
+            mRowsSeen.push_back(RowSeen{ line, static_cast<S32>(r), row_screen_top, row_screen_top - row.textTop() });
+        }
+    }
 
-            // The selection behind the row.
-            if (has_sel && sel.begin.line <= line && line <= sel.end.line)
+    // Behind the text: the selection and what the find bar found.
+    const std::vector<ALTextRange>& matches = mFind.matches();
+    gGL.getTextureSlot(0)->unbind();
+    gGL.begin(LLRender::TRIANGLES);
+    for (const RowSeen& seen : mRowsSeen)
+    {
+        const S32                 line   = seen.line;
+        const ALTextLayout::Line& laid   = mLayout.line(line);
+        const ALTextLayout::Row&  row    = laid.rows[static_cast<size_t>(seen.row)];
+        const S32                 length = mDocument.lineLength(line);
+        if (has_sel && sel.begin.line <= line && line <= sel.end.line)
+        {
+            const S32  sel_begin = sel.begin.line < line ? 0 : sel.begin.column;
+            const S32  sel_end   = sel.end.line > line ? length + 1 : sel.end.column;
+            const S32  lo        = llmax(sel_begin, row.begin);
+            const bool last_row  = (static_cast<size_t>(seen.row) + 1 == laid.rows.size());
+            const S32  hi        = llmin(sel_end, last_row ? length + 1 : row.end);
+            if (lo < hi)
             {
-                const S32 sel_begin = sel.begin.line < line ? 0 : sel.begin.column;
-                const S32 sel_end   = sel.end.line > line ? length + 1 : sel.end.column;
-                const S32 lo        = llmax(sel_begin, row.begin);
-                const bool last_row = (r + 1 == laid.rows.size());
-                const S32 hi        = llmin(sel_end, last_row ? length + 1 : row.end);
-                if (lo < hi)
-                {
-                    const F32 x0 = mLayout.xOf(line, lo) ;
-                    const F32 x1 = hi > length ? row.width + space : (hi >= row.end && !last_row ? row.width : mLayout.xOf(line, hi));
-                    gl_rect_2d(static_cast<S32>(left + x0), row_screen_top, static_cast<S32>(left + x1), row_screen_top - row.height, selectionDrawColor() % alpha);
-                }
+                const F32 x0 = mLayout.xOf(line, lo);
+                const F32 x1 = hi > length ? row.width + space : (hi >= row.end && !last_row ? row.width : mLayout.xOf(line, hi));
+                gl_rect_2d_in_batch(static_cast<S32>(left + x0), seen.rowScreenTop, static_cast<S32>(left + x1), seen.rowScreenTop - row.height,
+                                    selectionDrawColor() % alpha);
             }
-
-            // What the find bar found, behind the row.
-            const std::vector<ALTextRange>& matches = mFind.matches();
-            if (!matches.empty())
+        }
+        if (!matches.empty())
+        {
+            auto first = std::lower_bound(matches.begin(), matches.end(), line, [](const ALTextRange& m, S32 l) { return m.end.line < l; });
+            for (auto it = first; it != matches.end() && it->begin.line <= line; ++it)
             {
-                auto first = std::lower_bound(matches.begin(), matches.end(), line, [](const ALTextRange& m, S32 l) { return m.end.line < l; });
-                for (auto it = first; it != matches.end() && it->begin.line <= line; ++it)
+                F32 x0, x1;
+                if (spanOnRow(line, seen.row, *it, x0, x1))
                 {
-                    F32 x0, x1;
-                    if (spanOnRow(line, static_cast<S32>(r), *it, x0, x1))
-                    {
-                        gl_rect_2d(static_cast<S32>(left + x0), row_screen_top, static_cast<S32>(left + x1), row_screen_top - row.height, mFindMatchColor.get() % alpha);
-                    }
-                }
-            }
-
-            // The glyphs, as many as are in sight.
-            const ALTextLayout::Row seen        = rowInSight(laid, row, text);
-            const size_t            glyph_count = seen.glyphEnd - seen.glyphBegin;
-            if (glyph_count)
-            {
-                colorRow(line, laid, seen, alpha);
-                tintRow(line, laid, seen, alpha, mColorScratch);
-                mFont->renderGlyphs(&laid.placed[seen.glyphBegin], mColorScratch.data(), glyph_count,
-                                    left - row.xStart, static_cast<F32>(screen_top - row.ascent));
-            }
-
-            if (hasPreedit() && line == mPreeditBegin.line)
-            {
-                drawPreedit(line, row, screen_top, left, alpha);
-            }
-
-            drawLayers(line, laid, static_cast<S32>(r), text, row_screen_top, left, alpha);
-            drawRowExtras(line, static_cast<S32>(r), text, screen_top, left, alpha);
-
-            // The caret.
-            if (caret_on && line == mCaret.line && static_cast<S32>(r) == caret_row)
-            {
-                const S32  x     = static_cast<S32>(left + caret_x);
-                const bool modal = mModal && !mModal->inserting();
-                if (modal || mCaretStyle != CaretStyle::Line)
-                {
-                    // A block over the cluster the caret is on, as a modal
-                    // editor's is; a space's width past the line's end.
-                    const ALTextPos next  = mDocument.nextCluster(mCaret);
-                    const F32       cell  = llmax(4.f, mLayout.columnWidth());
-                    F32             right = next.line == mCaret.line && next != mCaret ? mLayout.xOf(mCaret.line, next.column) : caret_x + cell;
-                    if (right <= caret_x)
-                    {
-                        right = caret_x + cell;
-                    }
-                    if (!modal && mCaretStyle == CaretStyle::Underline)
-                    {
-                        // A bar under the cluster, as thick as the line caret is wide.
-                        gl_rect_2d(x, row_screen_top - row.height + CARET_WIDTH, static_cast<S32>(left + right), row_screen_top - row.height,
-                                   mCursorColor.get() % alpha);
-                    }
-                    else
-                    {
-                        gl_rect_2d(x, row_screen_top, static_cast<S32>(left + right), row_screen_top - row.height, mCursorColor.get() % (0.55f * alpha));
-                    }
-                }
-                else
-                {
-                    gl_rect_2d(x, row_screen_top, x + CARET_WIDTH, row_screen_top - row.height, mCursorColor.get() % alpha);
+                    gl_rect_2d_in_batch(static_cast<S32>(left + x0), seen.rowScreenTop, static_cast<S32>(left + x1), seen.rowScreenTop - row.height,
+                                        mFindMatchColor.get() % alpha);
                 }
             }
         }
     }
+    gGL.end();
+
+    // The text: every row's glyphs, as many as are in sight, in one call.
+    mGlyphRuns.clear();
+    mRunColours.clear();
+    mRunColourAt.clear();
+    for (const RowSeen& seen : mRowsSeen)
+    {
+        const ALTextLayout::Line& laid        = mLayout.line(seen.line);
+        const ALTextLayout::Row&  row         = laid.rows[static_cast<size_t>(seen.row)];
+        const ALTextLayout::Row   in_sight    = rowInSight(laid, row, text);
+        const size_t              glyph_count = in_sight.glyphEnd - in_sight.glyphBegin;
+        if (!glyph_count)
+        {
+            continue;
+        }
+        colorRow(seen.line, laid, in_sight, alpha);
+        tintRow(seen.line, laid, in_sight, alpha, mColorScratch);
+        mRunColourAt.push_back(mRunColours.size());
+        mRunColours.insert(mRunColours.end(), mColorScratch.begin(), mColorScratch.begin() + static_cast<std::ptrdiff_t>(glyph_count));
+        mGlyphRuns.push_back(LLFontGL::GlyphRun{ &laid.placed[in_sight.glyphBegin], nullptr, glyph_count, left - row.xStart,
+                                                 static_cast<F32>(seen.screenTop - row.ascent) });
+    }
+    for (size_t i = 0; i < mGlyphRuns.size(); ++i)
+    {
+        mGlyphRuns[i].colors = mRunColours.data() + mRunColourAt[i];
+    }
+    mFont->renderGlyphRuns(mGlyphRuns.data(), mGlyphRuns.size());
+
+    // Over the text; the squiggles, which share a texture, after the rest
+    // of it and together.
+    mQueueSquiggles = true;
+    for (const RowSeen& seen : mRowsSeen)
+    {
+        const S32                 line           = seen.line;
+        const size_t              r              = static_cast<size_t>(seen.row);
+        const ALTextLayout::Line& laid           = mLayout.line(line);
+        const ALTextLayout::Row&  row            = laid.rows[r];
+        const S32                 row_screen_top = seen.rowScreenTop;
+        const S32                 screen_top     = seen.screenTop;
+        if (hasPreedit() && line == mPreeditBegin.line)
+        {
+            drawPreedit(line, row, screen_top, left, alpha);
+        }
+
+        drawLayers(line, laid, static_cast<S32>(r), text, row_screen_top, left, alpha);
+        drawRowExtras(line, static_cast<S32>(r), text, screen_top, left, alpha);
+
+        // The caret.
+        if (caret_on && line == mCaret.line && static_cast<S32>(r) == caret_row)
+        {
+            const S32  x     = static_cast<S32>(left + caret_x);
+            const bool modal = mModal && !mModal->inserting();
+            if (modal || mCaretStyle != CaretStyle::Line)
+            {
+                // A block over the cluster the caret is on, as a modal
+                // editor's is; a space's width past the line's end.
+                const ALTextPos next  = mDocument.nextCluster(mCaret);
+                const F32       cell  = llmax(4.f, mLayout.columnWidth());
+                F32             right = next.line == mCaret.line && next != mCaret ? mLayout.xOf(mCaret.line, next.column) : caret_x + cell;
+                if (right <= caret_x)
+                {
+                    right = caret_x + cell;
+                }
+                if (!modal && mCaretStyle == CaretStyle::Underline)
+                {
+                    // A bar under the cluster, as thick as the line caret is wide.
+                    gl_rect_2d(x, row_screen_top - row.height + CARET_WIDTH, static_cast<S32>(left + right), row_screen_top - row.height,
+                               mCursorColor.get() % alpha);
+                }
+                else
+                {
+                    gl_rect_2d(x, row_screen_top, static_cast<S32>(left + right), row_screen_top - row.height, mCursorColor.get() % (0.55f * alpha));
+                }
+            }
+            else
+            {
+                gl_rect_2d(x, row_screen_top, x + CARET_WIDTH, row_screen_top - row.height, mCursorColor.get() % alpha);
+            }
+        }
+    }
+    mQueueSquiggles = false;
+    drawSquiggles(mSquiggles.data(), mSquiggles.size());
+    mSquiggles.clear();
 }
 
 void ALTextView::dragSelectTo(S32 x, S32 y)
@@ -4179,6 +4452,13 @@ void ALTextView::draw()
             dragSelectTo(mDragX, mDragY);
         }
     }
+    // The find bar in the view's colours as they are now: a theme chosen
+    // while it is open recolours it, as it does the text.
+    if (mFindBar && mFindBar->getVisible() && mFindBarColors != LLUIColorTable::instance().generation())
+    {
+        mFindBarColors = LLUIColorTable::instance().generation();
+        mFindBar->setColors(backgroundColor(), textColor());
+    }
     // The find bar's query looked for through the text again once edits
     // have stopped coming for a moment, not at every keystroke; and a
     // worker's matches taken as they come in.
@@ -4190,13 +4470,30 @@ void ALTextView::draw()
     {
         findCounted();
     }
+    if (mMisspellingSought)
+    {
+        seekMisspelling();
+    }
+    publishPrimary();
     syncScrollbar();
+    trimLayout();
     const F32 alpha = getDrawContext().mAlpha;
     if (mBgVisible)
     {
         gl_rect_2d(getLocalRect(), backgroundColor() % alpha);
     }
     const LLRect text = textRect();
+    // A tint behind each line that has one, under everything else.
+    if (!mLineTints.empty())
+    {
+        const S32 row_h = layout().rowHeight();
+        forEachVisibleRow(text, [&](S32 line, S32, S32 screen_top) {
+            if (line < static_cast<S32>(mLineTints.size()) && mLineTints[static_cast<size_t>(line)].mV[VALPHA] > 0.f)
+            {
+                gl_rect_2d(text.mLeft, screen_top, text.mRight, screen_top - row_h, mLineTints[static_cast<size_t>(line)] % alpha);
+            }
+        });
+    }
     drawBeforeRows(text);
     placeAtomViews();
     {
@@ -4250,16 +4547,46 @@ void ALTextView::drawBand(F32 alpha)
     {
         return;
     }
-    std::string line;
-    S32         caret    = 0;
-    const bool  typing   = mModal->typingLine(line, caret);
-    std::string shown    = typing ? line : mModal->message();
-    LLColor4    colour   = typing || !mModal->messageIsError() ? ink : mSpellErrorColor.get();
-    if (!typing && shown.empty())
+    // What to show, read from the keymap and measured only when it has
+    // moved on since.
+    BandShown& band_shown = mBandShown;
+    if (band_shown.keymap != mModal.get() || band_shown.generation != mModal->generation() || band_shown.font != font)
     {
-        shown  = mModal->status();
-        colour = lerp(paper, ink, 0.8f);
+        band_shown.keymap     = mModal.get();
+        band_shown.generation = mModal->generation();
+        band_shown.font       = font;
+        std::string line;
+        S32         caret     = 0;
+        band_shown.typing     = mModal->typingLine(line, caret);
+        band_shown.shown      = band_shown.typing ? line : mModal->message();
+        band_shown.error      = !band_shown.typing && mModal->messageIsError();
+        band_shown.status     = !band_shown.typing && band_shown.shown.empty();
+        if (band_shown.status)
+        {
+            band_shown.shown = mModal->status();
+        }
+        band_shown.caretX = band_shown.typing ? font->getWidth(band_shown.shown.substr(0, static_cast<size_t>(llclamp(caret, 0, static_cast<S32>(band_shown.shown.size())))))
+                                              : 0;
+        band_shown.items.clear();
+        band_shown.lefts.clear();
+        band_shown.widths.clear();
+        band_shown.chosen = -1;
+        band_shown.gap    = font->getWidth("  ");
+        if (band_shown.typing && mModal->menu(band_shown.items, band_shown.chosen))
+        {
+            S32 at = 0;
+            for (const std::string& item : band_shown.items)
+            {
+                const S32 width = font->getWidth(item);
+                band_shown.lefts.push_back(at);
+                band_shown.widths.push_back(width);
+                at += width + band_shown.gap;
+            }
+        }
     }
+    const bool         typing = band_shown.typing;
+    const std::string& shown  = band_shown.shown;
+    const LLColor4     colour = band_shown.status ? lerp(paper, ink, 0.8f) : band_shown.error ? mSpellErrorColor.get() : ink;
     const S32 x = local.mLeft + mHPad + 2;
     const S32 y = band.mBottom + 2 + static_cast<S32>(font->getDescenderHeight());
     font->renderUTF8(shown, 0, static_cast<F32>(x), static_cast<F32>(y), colour % alpha, LLFontGL::LEFT, LLFontGL::BASELINE, LLFontGL::NORMAL, LLFontGL::NO_SHADOW,
@@ -4268,31 +4595,25 @@ void ALTextView::drawBand(F32 alpha)
     const F32 blink = mBlink.getElapsedTimeF32();
     if (typing && keyboardOnText() && gFocusMgr.getAppHasFocus() && (blink < BLINK_DELAY || (static_cast<S32>(blink * 2.f) & 1)))
     {
-        const S32 at    = font->getWidth(shown.substr(0, static_cast<size_t>(llclamp(caret, 0, static_cast<S32>(shown.size())))));
-        const S32 width = llmax(2, static_cast<S32>(font->getWidth(" ")));
+        const S32 at    = band_shown.caretX;
+        const S32 width = llmax(2, band_shown.gap / 2);
         gl_rect_2d(x + at, band.mTop - 2, x + at + width, band.mBottom + 2, ink % (0.6f * alpha));
     }
     // The keymap's row of choices, over the band on the text's last row
     // -- vim's wildmenu -- the one on the line set in the ink with the
     // ink for its ground, and the row slid left so that it shows.
-    std::vector<std::string> items;
-    S32                      chosen = -1;
-    if (typing && mModal->menu(items, chosen) && !items.empty())
+    const std::vector<std::string>& items  = band_shown.items;
+    const std::vector<S32>&         lefts  = band_shown.lefts;
+    const S32                       chosen = band_shown.chosen;
+    if (typing && !items.empty())
     {
-        const S32    gap = font->getWidth("  ");
+        const S32    gap = band_shown.gap;
         const LLRect row(local.mLeft, band.mTop + mLayout.rowHeight() + 2, local.mRight, band.mTop);
         gl_rect_2d(row, lerp(paper, ink, 0.12f) % alpha);
-        std::vector<S32> lefts;
-        S32              at = 0;
-        for (const std::string& item : items)
-        {
-            lefts.push_back(at);
-            at += font->getWidth(item) + gap;
-        }
         S32 slide = 0;
         if (chosen >= 0 && chosen < static_cast<S32>(items.size()))
         {
-            const S32 right = x + lefts[chosen] + font->getWidth(items[chosen]) + gap / 2;
+            const S32 right = x + lefts[chosen] + band_shown.widths[chosen] + gap / 2;
             slide           = llmax(0, right - row.mRight);
         }
         const S32 baseline = row.mBottom + 1 + static_cast<S32>(font->getDescenderHeight());
@@ -4306,7 +4627,7 @@ void ALTextView::drawBand(F32 alpha)
             const bool on = static_cast<S32>(i) == chosen;
             if (on)
             {
-                gl_rect_2d(left - gap / 4, row.mTop - 1, left + font->getWidth(items[i]) + gap / 4, row.mBottom + 1, ink % (0.85f * alpha));
+                gl_rect_2d(left - gap / 4, row.mTop - 1, left + band_shown.widths[i] + gap / 4, row.mBottom + 1, ink % (0.85f * alpha));
             }
             font->renderUTF8(items[i], 0, static_cast<F32>(left), static_cast<F32>(baseline), (on ? paper : ink) % alpha, LLFontGL::LEFT, LLFontGL::BASELINE,
                              LLFontGL::NORMAL, LLFontGL::NO_SHADOW, S32_MAX, row.mRight - left, nullptr, false);
@@ -4315,6 +4636,27 @@ void ALTextView::drawBand(F32 alpha)
 }
 
 // --- input ---------------------------------------------------------------------
+
+bool ALTextView::handleKey(KEY key, MASK mask, bool called_from_parent)
+{
+    LLUICtrl* const focus = dynamic_cast<LLUICtrl*>(gFocusMgr.getKeyboardFocus());
+    if (called_from_parent || !focus || focus == this || !focus->acceptsTextInput() || !focus->hasAncestor(this))
+    {
+        return LLUICtrl::handleKey(key, mask, called_from_parent);
+    }
+    switch (const ALEditorCommand command = mKeymap.lookup(key, mask))
+    {
+        case ALEditorCommand::Find:
+        case ALEditorCommand::Replace:
+        case ALEditorCommand::FindNext:
+        case ALEditorCommand::FindPrevious:
+            return perform(command);
+        default:
+            break;
+    }
+    LLView* const parent = getParent();
+    return parent && parent->handleKey(key, mask, false);
+}
 
 bool ALTextView::handleKeyHere(KEY key, MASK mask)
 {
@@ -4521,6 +4863,9 @@ bool ALTextView::handleMiddleMouseDown(S32 x, S32 y, MASK mask)
 {
     // Over the text only, not its map or bars; nor while a drag is held.
     const bool on_text = textRect().pointInRect(x, y) && !(mScrollMap && mapRect().pointInRect(x, y));
+    // What is selected here is the primary selection by now, though the
+    // frame that offers it has not come.
+    publishPrimary();
     if (mReadOnly || mSelecting || mBarDrag != BarDrag::None || mDraggingMap || !on_text || !LLClipboard::instance().isTextAvailable(true))
     {
         return LLUICtrl::handleMiddleMouseDown(x, y, mask);
@@ -4877,6 +5222,7 @@ void ALTextView::setFocus(bool focus)
 void ALTextView::onFocusLost()
 {
     allowLanguageInput(false);
+    publishPrimary();
     if (mChangedSinceFocus)
     {
         mChangedSinceFocus = false;
