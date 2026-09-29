@@ -288,6 +288,7 @@ using namespace LL;
 #include "llviewernetwork.h"
 // define a self-registering event API object
 #include "llappviewerlistener.h"
+#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 
 #ifdef LL_DISCORD
 #define DISCORDPP_IMPLEMENTATION
@@ -5517,6 +5518,13 @@ void LLAppViewer::idle()
     frame_rate_clamped = llclamp(frame_rate_clamped, MIN_FRAME_RATE, MAX_FRAME_RATE);
     gFrameDTClamped = 1.f / frame_rate_clamped;
 
+    // <SK:Nexii> motion recorder
+    if (SKMotionRecorder::isRecording())
+    {
+        SKMotionRecorder::onFrameBegin();
+    }
+    // </SK:Nexii>
+
     // Global frame timer
     // Smoothly weight toward current frame
     gFPSClamped = (frame_rate_clamped + (4.f * gFPSClamped)) / 5.f;
@@ -5649,7 +5657,18 @@ void LLAppViewer::idle()
         // floating throughout the various object lists.
         //
         idleNameCache();
+        // <SK:Nexii> motion recorder
+        const bool sk_recording = SKMotionRecorder::isRecording();
+        if (sk_recording)
+        {
+            SKMotionRecorder::onNetworkBegin();
+        }
         idleNetwork();
+        if (sk_recording)
+        {
+            SKMotionRecorder::onNetworkEnd();
+        }
+        // </SK:Nexii>
 
 
         // Check for away from keyboard, kick idle agents.
@@ -5858,6 +5877,13 @@ void LLAppViewer::idle()
 
         gAgentCamera.updateCamera();
     }
+
+    // <SK:Nexii> motion recorder
+    if (SKMotionRecorder::isRecording())
+    {
+        SKMotionRecorder::onFrameEnd();
+    }
+    // </SK:Nexii>
 
     // update media focus
     LLViewerMediaFocus::getInstance()->update();

@@ -114,6 +114,7 @@
 #include "rlvactions.h"
 #include "rlvcommon.h"
 #include "rlvlocks.h"
+#include "skmotionrecorder.h" // <SK:Nexii> motion recorder
 // [/RLVa:KB]
 
 //#define DEBUG_UPDATE_TYPE
@@ -1269,6 +1270,13 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         return retval;
     }
 
+    // <SK:Nexii> motion recorder
+    if (SKMotionRecorder::isRecording())
+    {
+        SKMotionRecorder::onUpdateBegin(this, mesgsys, (U8)update_type);
+    }
+    // </SK:Nexii>
+
     // Has this message been overtaken by one already applied? Decided here, before the decode can
     // run setRegion() and zero the counter, and against the sender rather than the counter alone:
     // packet ids are per circuit, so they only order messages from the sim that issued them, and
@@ -1302,6 +1310,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
         if (stale_update && update_type == OUT_TERSE_IMPROVED)
         {
+            // <SK:Nexii> motion recorder
+            if (SKMotionRecorder::isRecording())
+            {
+                SKMotionRecorder::onUpdateEnd(this, getPosition(), 0, 0, true);
+            }
+            // </SK:Nexii>
             return retval;
         }
     }
@@ -2345,6 +2359,13 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     new_rot.normQuat();
 
+    // <SK:Nexii> motion recorder
+    if (SKMotionRecorder::isRecording())
+    {
+        SKMotionRecorder::onUpdateDecoded(new_pos_parent, getVelocity(), getAcceleration(), new_rot, getAngularVelocity(), time_dilation);
+    }
+    // </SK:Nexii>
+
     if (sPingInterpolate && mesgsys != NULL)
     {
         LLCircuitData *cdp = gMessageSystem->mCircuitInfo.findCircuit(mesgsys->getSender());
@@ -2355,6 +2376,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
             F32 ping_delay = 0.5f * time_dilation * ( ((F32)cdp->getPingDelay().value()) * 0.001f + gFrameDTClamped);
             LLVector3 diff = getVelocity() * ping_delay;
             new_pos_parent += diff;
+            SKMotionRecorder::sPingDelay = ping_delay; // <SK:Nexii> motion recorder
         }
         else
         {
@@ -2377,6 +2399,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         setVelocity(old_vel);
         setAcceleration(old_acc);
         setAngularVelocity(old_angv);
+        // <SK:Nexii> motion recorder
+        if (SKMotionRecorder::isRecording())
+        {
+            SKMotionRecorder::onUpdateEnd(this, getPosition(), crc, parent_id, true);
+        }
+        // </SK:Nexii>
         return retval;
     }
 
@@ -2559,6 +2587,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     mLastInterpUpdateSecs = (F64Seconds)update_time;
     mLastMessageUpdateSecs = mLastInterpUpdateSecs;
+    // <SK:Nexii> motion recorder
+    if (SKMotionRecorder::isRecording())
+    {
+        SKMotionRecorder::onUpdateEnd(this, new_pos_parent, crc, parent_id, false);
+    }
+    // </SK:Nexii>
     if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
@@ -2626,7 +2660,19 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
             {   // Move object based on it's velocity and rotation
                 interpolateLinearMotion(frame_time, dt);
             }
+            // <SK:Nexii> motion recorder
+            if (SKMotionRecorder::isRecording())
+            {
+                SKMotionRecorder::onObjectIdle(this, dt, !isAttachment());
+            }
+            // </SK:Nexii>
         }
+        // <SK:Nexii> motion recorder
+        else if (SKMotionRecorder::isRecording())
+        {
+            SKMotionRecorder::onObjectIdle(this, 0.f, false);
+        }
+        // </SK:Nexii>
 
         updateDrawable(false);
     }
@@ -2740,6 +2786,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
             // Note - not killing angular motion here, out of paranoia about stopping rotation for
             // llTargetOmega objects and not having it restart.
             const F32 phase_out = ALMotionPredictor::phaseOutFactor(age, window);
+            SKMotionRecorder::sPhaseOut = phase_out; // <SK:Nexii> motion recorder
             if (phase_out <= 0.f)
             {
                 // Prediction has been given up on entirely, so hold where we are. Falling through
@@ -2795,6 +2842,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                                          << clip_pos
                                          << " from " << new_pos << LL_ENDL;
                 new_pos = clip_pos;
+                SKMotionRecorder::sEdgeClipped = true; // <SK:Nexii> motion recorder
 
                 // Stop motion and get server update for bouncing on the edge
                 new_v.clear();
