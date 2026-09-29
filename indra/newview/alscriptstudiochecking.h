@@ -39,7 +39,83 @@
 #include <string>
 #include <vector>
 
+class ALScriptStudioAnalysis;
+class ALScriptStudioSaves;
+class ALScriptStudioWeighing;
 class ALScriptStudioServices;
+
+// The tab's part of checking (ALScriptStudioChecking): what the
+// analyzers said and when they are next asked, the expansion asked for
+// them and the questions waiting on it, the refactors offered at the
+// caret, and a Fix All waiting on a check.
+struct ALScriptStudioDoc::Check
+{
+    // What the analyzer said of the text at analysisVersion; when the
+    // next check is due, or zero; the version last asked about.
+    ALScriptProblems analysis;
+    // LSL's, as the analyzer said them, before the lints as chosen:
+    // what a change of the lints filters again.
+    ALScriptProblems unfiltered;
+    U32              analysisVersion  = 0;
+    U32              requestedVersion = 0;
+    F64              analysisDue      = 0.0;
+    // When the version last asked about was asked.
+    F64              askedAt          = 0.0;
+    std::string      definitionsError;
+    // How many expansions were taken, which is how an answer about one
+    // names it; the version one has been asked for, or none -- not a
+    // zero, which an empty text's version is: the preprocessor answers
+    // on the main thread a moment later, and one text is expanded once
+    // however many questions wait on it.
+    U32                expansions = 0;
+    std::optional<U32> expanding;
+    // The version the questions waiting were last asked about, while
+    // an expansion of an older one was on its way: one expansion at a
+    // time, and the next for the latest text, not one a key.
+    std::optional<U32> wanted;
+    // What the analyzers last said of a word -- for the tip under the
+    // mouse or the inspector at the caret, which ask the same question
+    // -- by the text's version, the expansion it was read through (none
+    // for the text as it stands) and where the word starts: the other
+    // asking of it is answered from here.
+    struct Hovered
+    {
+        U32                      version   = 0;
+        U32                      expansion = 0;
+        ALTextPos                word;
+        ALScriptAnalysis::Result said;
+    };
+    std::optional<Hovered> hovered;
+    // Whether the text, at the version kept with it, has no default
+    // state (ALScriptStudioChecking::lslFragment): asked on every
+    // caret move and every frame Weights is shown, and a walk of the
+    // whole text to answer.
+    mutable std::optional<std::pair<U32, bool>> fragment;
+    // A question held until the expansion it asks about comes. A
+    // question of a kind replaces the one of that kind still waiting:
+    // a second hover is a hover of somewhere else, and only the last is
+    // wanted.
+    struct Waiting
+    {
+        ALScriptAnalysis::Kind kind = ALScriptAnalysis::Kind::Check;
+        ALTextPos              at;
+        // Where a stretch chosen from `at` ends: the refactors'.
+        ALTextPos              to;
+    };
+    // The questions held until it comes.
+    std::vector<Waiting> waiting;
+    // Whether the script's `.luaurc` was asked for once, so that a
+    // script with none is not asked for it at every check.
+    bool configAsked = false;
+    // The refactors last offered at the caret, in the source's places
+    // at actionsVersion, and the stretch they were asked about.
+    std::vector<ALScriptFix> actions;
+    U32                      actionsVersion = 0;
+    ALTextRange              actionsAsked;
+    // A Fix All asked before the text as it stands was checked, made
+    // once it is: of the problems of one kind, or of all where empty.
+    std::optional<std::string> fixAllAfterCheck;
+};
 
 // A Script Studio window's checking, as the tab's part `doc.check` keeps
 // it: a check due a moment after the last keystroke and sent from the
@@ -80,32 +156,20 @@ public:
     };
     static Sources& sources();
 
-    // What checking asks of the window beyond its services.
+    // What checking asks of the window itself, beyond what it is given.
     class Window
     {
     public:
-        // The analyzers asked a question, answered later; and what the
-        // window's settings add to every question: colours, hints.
-        virtual void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)> answered) = 0;
+        // What the window's settings add to every question: colours, hints.
         virtual void askingOptions(ALScriptAnalysis::Request& request) const = 0;
         // An answer that is not checking's -- a name's references, what is
         // at the caret, a weighing -- handed on, at the source's place.
         virtual void answeredElsewhere(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at) = 0;
-        // What a check's answer is shown by: the problems, the outline,
-        // and the weights the front tab's check weighed along with it; and
-        // the targets a weighing is asked for.
-        virtual void                                refreshProblems(Doc& doc)                                     = 0;
-        // Those asked for made now, where they wait to be made with the
-        // next frame: what is about to read them -- the fixes -- reads
-        // what the last answer said.
-        virtual void                                settleProblems(Doc& doc)                                      = 0;
-        virtual void                                showOutline(Doc& doc)                                         = 0;
-        virtual void                                weighed(Doc& doc, const ALScriptAnalysis::Result& result)     = 0;
-        virtual std::vector<ALScriptWeight::Target> weightTargets(const Doc& doc)                                 = 0;
-        // A save that waited on the check, done; a run of the preprocessor
-        // for a save, where the settings changed.
-        virtual void save(Doc& doc)             = 0;
-        virtual void preprocessForSave(Doc& doc) = 0;
+        // The problems asked for with the next frame made now: what is
+        // about to read them -- the fixes -- reads what the last answer
+        // said. And the outline, which a check's answer is shown by too.
+        virtual void settleProblems(Doc& doc) = 0;
+        virtual void showOutline(Doc& doc)    = 0;
         // The editor of the view in front, which a fix is made in; and the
         // question of whether to make many fixes at once, `yes` where they
         // are to be.
@@ -116,7 +180,7 @@ public:
         ~Window() = default;
     };
 
-    ALScriptStudioChecking(ALScriptStudioServices& services, Window& window);
+    ALScriptStudioChecking(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, ALScriptStudioSaves& saves, ALScriptStudioWeighing& weighing, Window& window);
 
     // --- the analyzers ------------------------------------------------------------
 
@@ -131,7 +195,9 @@ public:
     // and globals, which the parser takes for no script at all until a
     // state is put after them, and whose declarations are for others.
     bool lslFragment(const Doc& doc) const;
-    // A check due a moment after the last keystroke, or at once.
+    // A check due a moment after the last keystroke, or at once. A
+    // notecard's is its own (checkNotecard), which the analyzers have no
+    // part in.
     void schedule(Doc& doc, bool now = false);
     // The analyzers asked about a place of a tab, or a stretch from `at`
     // to `to`: of what the compiler would see, the expansion asked for
@@ -182,6 +248,10 @@ private:
     void showHover(Doc& doc, const ALScriptAnalysis::Result& said, const ALTextPos& at);
     // A check asked of a tab now.
     void askCheck(Doc& doc, F64 now);
+    // A notecard's, made here and now: what scripts will not read of it --
+    // none of it where it carries items, and past so many bytes of a line
+    // -- and, read as JSON, its keys as its outline.
+    void checkNotecard(Doc& doc);
     // The expansion asked for, a question waiting on it; and taken.
     void expandFor(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at, const ALTextPos& to);
     void expandedAnswer(const std::string& id, U32 version, const ALPreprocessor::Result& result);
@@ -216,6 +286,9 @@ private:
     void explainRequires(Doc& doc);
 
     ALScriptStudioServices& mServices;
+    ALScriptStudioAnalysis& mAnalysis;
+    ALScriptStudioSaves&    mSaves;
+    ALScriptStudioWeighing& mWeighing;
     Window&                 mWindow;
     // When the preprocessor's settings are next taken, or zero; and
     // whether its words changed with them.
