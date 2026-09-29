@@ -34,6 +34,7 @@
 
 class ALPaneList;
 class ALScriptStudioServices;
+class ALScriptStudioTabs;
 class LLUICtrl;
 
 // The places jumped from, to go back to and forward again: a place in a
@@ -57,6 +58,7 @@ public:
     // nowhere left to go.
     std::optional<Place> take(bool forward, const std::optional<Place>& here, const std::function<bool(const std::string& doc)>& open);
     bool                 canGo(bool forward) const { return !(forward ? mForward : mBack).empty(); }
+    size_t               places(bool forward) const { return (forward ? mForward : mBack).size(); }
     // A tab known by another id from here on.
     void                 rekey(const std::string& was, const std::string& id);
 
@@ -77,7 +79,7 @@ public:
     typedef ALScriptStudioDoc Doc;
     typedef ALNavHistory::Place Place;
 
-    // What navigation asks of the window beyond its services.
+    // What navigation asks of the window itself, beyond what it is given.
     class Window
     {
     public:
@@ -93,17 +95,14 @@ public:
         // Whether a tab is being worked from -- a pane listing its problems,
         // the places a name was looked up from it -- which holds a preview.
         virtual bool workedFrom(const Doc& doc) const = 0;
-        // A tab let go of as it stands; the tabs' strip filled again; and
-        // the keyboard given to the view a tab shows.
-        virtual void letGoOf(Doc& doc)   = 0;
-        virtual void fillTabs()          = 0;
-        virtual void focusDoc(Doc& doc)  = 0;
+        // The keyboard given to the view a tab shows.
+        virtual void focusDoc(Doc& doc) = 0;
 
     protected:
         ~Window() = default;
     };
 
-    ALScriptNavigation(ALScriptStudioServices& services, Window& window);
+    ALScriptNavigation(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, Window& window);
 
     // A jump from where the caret is in the tab in front; `walking`, a walk
     // down a pane's list, which is one jump until the editor has the
@@ -115,6 +114,8 @@ public:
     // Back, or Forward again.
     void goBack(bool forward);
     bool canGo(bool forward) const { return mHistory.canGo(forward); }
+    // How many places there are to go back, or forward, through.
+    size_t places(bool forward) const { return mHistory.places(forward); }
     // A tab known by another id from here on.
     void rekey(const std::string& was, const std::string& id) { mHistory.rekey(was, id); }
 
@@ -138,6 +139,7 @@ public:
 
 private:
     ALScriptStudioServices& mServices;
+    ALScriptStudioTabs&     mTabs;
     Window&                 mWindow;
     ALNavHistory            mHistory;
     bool                    mWalking = false;

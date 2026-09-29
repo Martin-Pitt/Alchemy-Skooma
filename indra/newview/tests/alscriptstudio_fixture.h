@@ -27,8 +27,17 @@
 
 #include "linden_common.h"
 
+#include "../alrecovery.h"
+#include "../alscriptexternaleditor.h"
+#include "../alscriptlookup.h"
+#include "../alscriptnavigation.h"
+#include "../alscriptstudioanalysis.h"
 #include "../alscriptstudiodoc.h"
+#include "../alscriptstudiorecovery.h"
+#include "../alscriptstudiosaves.h"
 #include "../alscriptstudioservices.h"
+#include "../alscriptstudiotabs.h"
+#include "../alscriptstudioweighing.h"
 
 #include "alcodeeditor.h"
 #include "aldockpanel.h"
@@ -37,6 +46,7 @@
 #include "alpanelist.h"
 #include "alscopebar.h"
 #include "altabstrip.h"
+#include "fsyspath.h"
 #include "llfloater.h"
 #include "llpanel.h"
 #include "lluictrlfactory.h"
@@ -44,6 +54,7 @@
 
 #include "../../llui/tests/alheadlessui_fixture.h"
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -208,6 +219,208 @@ namespace al_studio_test
     private:
         const LLPanel* mStrings = nullptr;
     };
+    // The window's tabs with nothing opened or put back, asked of and
+    // saying nothing: what a unit's test's fake of its window starts from,
+    // overriding what the test watches.
+    struct QuietTabs : public ALScriptStudioTabs
+    {
+        ALScriptStudioDoc* openFileTab(const std::string&, bool) override { return nullptr; }
+        void               activate(ALScriptStudioDoc&) override {}
+        void               letGoOf(ALScriptStudioDoc&) override {}
+        void               revert(ALScriptStudioDoc&) override {}
+        void               takeCarriedText(ALScriptStudioDoc&) override {}
+        void               fillTabs() override {}
+        void               refreshToolbar() override {}
+        void               refreshNotice() override {}
+        void               refreshTrailer(ALScriptStudioDoc&) override {}
+    };
+
+    // The window's analysis with the analyzers never answering, no tab
+    // preprocessed or a fragment, and no include's lines had: what a unit's
+    // test's fake of its window starts from, overriding what the test
+    // watches.
+    struct QuietAnalysis : public ALScriptStudioAnalysis
+    {
+        void askAnalysis(ALScriptAnalysis::Request, std::function<void(const ALScriptAnalysis::Result&)>) override {}
+        void askAnalyzer(ALScriptStudioDoc&, ALScriptAnalysis::Kind, const ALTextPos&) override {}
+        void scheduleAnalysis(ALScriptStudioDoc&, bool) override {}
+        bool preprocessed(const ALScriptStudioDoc&) const override { return false; }
+        bool lslFragment(const ALScriptStudioDoc&) const override { return false; }
+        std::string includeName(const ALScriptStudioDoc&, const std::string& path) const override { return path; }
+        ALScriptPlaces::Lines sourceLines(const std::string&) const override { return ALScriptPlaces::Lines(); }
+        void refreshProblems(ALScriptStudioDoc&) override {}
+    };
+
+    // The window's saving with nothing saved, stopped or warned of: what a
+    // unit's test's fake of its window starts from, overriding what the
+    // test watches.
+    struct QuietSaves : public ALScriptStudioSaves
+    {
+        void save(ALScriptStudioDoc&) override {}
+        void saveAsked(ALScriptStudioDoc&) override {}
+        void saveToClose(const std::string&) override {}
+        void stopped(ALScriptStudioDoc&) override {}
+        void preprocess(ALScriptStudioDoc&) override {}
+        void warnOverWeight(ALScriptStudioDoc&) override {}
+    };
+
+    // Navigation, for a unit given it (ALScriptNavigation): over tabs that
+    // do nothing and a window that records the places Back and Forward
+    // show -- the tab, " expanded" where it is the expansion, and the line
+    // -- with no list walked, nothing worked from and no path open.
+    struct StudioNavigation final : public ALScriptNavigation::Window
+    {
+        explicit StudioNavigation(ALScriptStudioServices& services) : unit(services, tabs, *this) {}
+        void showPlace(ALScriptStudioDoc& doc, ALScriptStudioDoc::View view, const ALTextPos& at) override
+        {
+            shown.push_back(doc.id + (view == ALScriptStudioDoc::View::Expanded ? " expanded " : " ") + std::to_string(at.line));
+        }
+        bool pathOpen(const std::string&) const override { return false; }
+        void choosePreview(ALPaneList*) override {}
+        bool workedFrom(const ALScriptStudioDoc&) const override { return false; }
+        void focusDoc(ALScriptStudioDoc&) override {}
+
+        QuietTabs                tabs;
+        ALScriptNavigation       unit;
+        std::vector<std::string> shown;
+    };
+
+    // The external editor, for a unit given it (ALScriptExternalEditor):
+    // over tabs and saving that do nothing, and a window with no bridge, no
+    // copy held and no editor started, which records the tabs whose files
+    // it was asked to watch.
+    struct StudioExternal final : public ALScriptExternalEditor::Window
+    {
+        explicit StudioExternal(ALScriptStudioServices& services) : unit(services, tabs, saves, *this) {}
+        void        watchFile(ALScriptStudioDoc& doc) override { watched.push_back(doc.id); }
+        std::string bridgeId(const ALScriptStudioDoc&) const override { return std::string(); }
+        bool        subscribe(ALScriptStudioDoc&) override { return false; }
+        void        unsubscribe(const ALScriptStudioDoc&) override {}
+        std::shared_ptr<ALScriptTempFiles::Claim> holdCopy(const std::string&) override { return nullptr; }
+        void startEditor(ALScriptStudioDoc&, const std::string&, bool) override {}
+
+        QuietTabs                tabs;
+        QuietSaves               saves;
+        ALScriptExternalEditor   unit;
+        std::vector<std::string> watched;
+    };
+
+    // The lookups, for a unit given them (ALScriptLookup): over tabs and an
+    // analysis that do nothing, the navigation given, and a window that
+    // names no other scripts -- a lookup declared in one waits on them --
+    // reads and expands none, and counts what it was asked to show or ask.
+    struct StudioLookup final : public ALScriptLookup::Window, public QuietAnalysis
+    {
+        StudioLookup(ALScriptStudioServices& services, ALScriptNavigation& navigation) : unit(services, tabs, *this, navigation, *this) {}
+        void candidates(const ALScriptStudioDoc&, std::function<void(ALScriptLookup::Candidates)>) override {}
+        void loadSource(const ALScriptRef&, std::function<void(const LLUUID&, const std::optional<std::string>&)>) override {}
+        void expand(ALScriptPreprocessor::Request, std::function<void(const ALPreprocessor::Result&)>) override {}
+        void showFound(ALScriptStudioDoc&, const ALScriptLookup::Found&) override { ++shown; }
+        void askNewName(ALScriptStudioDoc&, std::function<std::string(const std::string&)>, std::function<void(const std::string&)>,
+                        std::function<void(const std::string&)>) override
+        {
+            ++named;
+        }
+        void previewRename(ALScriptStudioDoc&, const ALScriptLookup::Found&, const std::string&, const std::string&,
+                           std::function<void(const std::vector<size_t>&)>) override
+        {
+        }
+
+        QuietTabs      tabs;
+        ALScriptLookup unit;
+        S32            shown = 0;
+        S32            named = 0;
+    };
+
+    // Recovery, for a unit given it (ALScriptStudioRecovery): over the tabs
+    // a test gives -- its own fake, to see a kept text taken up -- or ones
+    // that do nothing, and a store of its own, this session's, in a folder
+    // of its own, taken out of the way as it goes; its window has no other
+    // window to take a text up, no script in hand, and makes nothing an
+    // orphan.
+    struct StudioRecovery final : public ALScriptStudioRecovery::Window
+    {
+        explicit StudioRecovery(ALScriptStudioServices& services, ALScriptStudioTabs* given = nullptr)
+        :   folder(fsyspath(std::filesystem::temp_directory_path() / fsyspath("alscriptstudio_" + LLUUID::generateNewID().asString())).string()),
+            unit(services, given ? *given : tabs, *this)
+        {
+            std::filesystem::create_directories(fsyspath(folder));
+            store = std::make_unique<ALRecoveryStore>(folder, "this-session");
+            ALRecovery::useStore(store.get());
+        }
+        ~StudioRecovery()
+        {
+            ALRecovery::useStore(nullptr);
+            store.reset();
+            std::error_code ignored;
+            std::filesystem::remove_all(fsyspath(folder), ignored);
+        }
+        bool recoverElsewhere(const ALRecoveryEntry&) override { return false; }
+        bool scriptInHand(const ALScriptRef&) const override { return false; }
+        void openOrphan(const ALRecoveryEntry&, ALScriptStudioDoc::Orphan) override {}
+        void becomeOrphan(ALScriptStudioDoc&, const ALRecoveryEntry&, ALScriptStudioDoc::Orphan) override {}
+        ALScriptStudioDoc::Orphan failedAs(const ALScriptStudioDoc&, ALScriptLoaded::Failure) const override
+        {
+            return ALScriptStudioDoc::Orphan::Unloaded;
+        }
+        void pick(std::vector<ALQuickOpen::Candidate>, const std::string&, const std::string&, std::function<void(const std::string&)>,
+                  std::function<void(const std::string&)>) override
+        {
+        }
+
+        // How many entries this session keeps for a key.
+        size_t keptFor(const std::string& key) const
+        {
+            size_t count = 0;
+            for (const ALRecoveryEntry& entry : store->list())
+            {
+                count += entry.key == key && entry.session == "this-session" && entry.state != ALRecoveryEntry::State::Discarded;
+            }
+            return count;
+        }
+        // A text of a tab's left by an earlier session, as this one's store
+        // finds it.
+        ALRecoveryEntry leftFor(const ALScriptStudioDoc& doc, const std::string& text)
+        {
+            ALRecoveryStore other(folder, "old-session");
+            ALRecoveryEntry entry = ALScriptStudioRecovery::entryOf(doc);
+            entry.text            = text;
+            entry.history         = LLSD();
+            entry.historyWritten.clear();
+            other.write(entry);
+            return store->leftFor(entry.key).value_or(ALRecoveryEntry());
+        }
+
+        QuietTabs                        tabs;
+        std::string                      folder;
+        std::unique_ptr<ALRecoveryStore> store;
+        ALScriptStudioRecovery           unit;
+    };
+
+    // Weighing, for a unit given it (ALScriptStudioWeighing): over an
+    // analysis and saving that answer nothing, recording each weighing
+    // asked -- of the text as it stands, "text", or as a save sent it,
+    // "sent" -- and a window with the Weights tab out of sight, the
+    // optimizer off, and no notes nor heat.
+    struct StudioWeighing final : public ALScriptStudioWeighing::Window, public QuietAnalysis, public QuietSaves
+    {
+        explicit StudioWeighing(ALScriptStudioServices& services) : unit(services, *this, *this, *this) {}
+        void askWeights(ALScriptStudioDoc&) override { weighs.push_back("text"); }
+        void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)>) override
+        {
+            weighs.push_back(request.weighing == ALScriptAnalysis::Request::Weighing::Sent ? "sent" : "asked");
+        }
+        bool                 optimizing() const override { return false; }
+        std::string          programVersion() const override { return std::string(); }
+        bool                 weightNotes() const override { return false; }
+        bool                 weightHeat() const override { return false; }
+        bool                 weightsShown() const override { return false; }
+        ALScriptWeightsPane* weightsPane() override { return nullptr; }
+
+        ALScriptStudioWeighing   unit;
+        std::vector<std::string> weighs;
+    };
+
     // A pane's window with nothing to fake: the services alone.
     struct NoPane
     {
