@@ -110,6 +110,9 @@ private:
     bool derive(sknav::Mark& mark, const MarkPrims& prims);
     /// A mark the annotator has changed, out to its prims.
     void reassert(const sknav::Mark& mark, MarkPrims& prims);
+    /// A straight stretch between two points, laid along its beam prim,
+    /// parented to a mark's root.
+    void placeBeam(LLViewerObject* beam, LLViewerObject* root, const LLVector3d& a, const LLVector3d& b);
     /// The shape the body takes for a mark: how many handles and beams.
     void wantFor(const sknav::Mark& mark, size_t& handles, size_t& beams, bool& centre) const;
     LLViewerObject* makeHandle(const sknav::Mark& mark, F32 size);
