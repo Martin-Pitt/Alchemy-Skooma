@@ -1502,7 +1502,7 @@ namespace tut
                                         "        l = l + [llFrand(1), llFrand(2)];\n"
                                         "        llOwnerSay((string)g + (string)l + (string)a + (string)b);\n");
         const auto run = [&](ALLSLOptimizer::Target target) {
-            ALLSLOptimizer::Options o     = allsloptimizer_data::options();
+            ALLSLOptimizer::Options o = allsloptimizer_data::options();
             o.target                  = target;
             const ALLSLOptimizer::Result r = ALLSLOptimizer::run(source, o);
             ensure("optimized: " + allsloptimizer_data::notes(r), r.optimized);
@@ -1821,7 +1821,7 @@ namespace tut
         };
         // Folded or not, never larger than the source.
         const auto folded = [&weigh](Target target, const std::string& body) {
-            ALLSLOptimizer::Options o    = allsloptimizer_data::options();
+            ALLSLOptimizer::Options o = allsloptimizer_data::options();
             o.target                  = target;
             const std::string            source = allsloptimizer_data::wrap("", body);
             const ALLSLOptimizer::Result r      = ALLSLOptimizer::run(source, o);
