@@ -63,6 +63,9 @@ public:
     /// Once per frame after the census.
     void update();
 
+    /// First reflection-probe placement pass, before the residual grid pass.
+    void placeReflectionProbes();
+
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
     void cleanupSingleton() override;
@@ -173,10 +176,6 @@ public:
     /// console.
     std::string exportObject() const;
 
-    /// What the navmesh and the census hold in a box, as members of an open
-    /// JSON object: surroundings, tiles, doors and features, each in the form
-    /// the other exports use. Returns a line of counts.
-    std::string writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const;
 
     struct Stats
     {
@@ -256,7 +255,7 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
-        sknav::TileAirPtr mAir;         ///< only while SKNavBuildAir is on
+        sknav::TileAirPtr mAir;         ///< within SKNavAirRadius, until evicted
         sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
         U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
         bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
@@ -281,6 +280,14 @@ private:
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
         F32 mLastSeen = 0.f;
+        // What the region pass's layout and tile re-sign were last laid
+        // against. While all of these stand, the pass would rebuild exactly
+        // what already stands, so it is skipped whole.
+        U64 mLayoutCensus = 0;
+        U64 mLayoutWorld = 0;
+        U64 mLayoutLand = 0;
+        U64 mLayoutParams = 0;
+        F32 mLayoutVoidMargin = 0.f;
         ~Mesh();
     };
 
@@ -293,9 +300,11 @@ private:
     void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
 
     bool wanted() const;
-    /// Whether a processing product is demanded, which builds WEATHER and
-    /// keeps the navmesh running with no overlay: for now, the air.
-    static bool processDemanded();
+    /// Whether the reflection probes consume the rooms: room probes on,
+    /// probes enabled, and the probe level that shows the octree's probes
+    /// the rooms replace. Demands the navmesh runs for them, air and census
+    /// with it.
+    static bool probesDemanded();
     /// Whether a tile is near enough the camera to build its air eagerly.
     static bool inAirRadius(const Tile& tile);
     /// Bring the sky map in line with the published tiles' air.
@@ -377,7 +386,6 @@ private:
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
-    bool mAirWanted = false;
     LLVector3d mMark;
     bool mHasMark = false;
     std::unique_ptr<SKNavRooms> mRooms;

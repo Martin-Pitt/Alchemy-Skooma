@@ -30,6 +30,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 
 namespace
@@ -101,7 +102,7 @@ namespace tut
     template<> template<>
     void sknavprobes_object::test<2>()
     {
-        set_test_name("a plain room is one part, a nick in its wall folds in, and an open one gets none");
+        set_test_name("a plain room is one part and outdoor space also gets full probes");
         const ProbeParams params;
         const std::vector<ProbePart> one = spaceProbes(Room().box(0.f, 0.f, 8.f, 6.f).box(3.f, 6.f, 4.f, 7.f).space(), params);
         ensure_equals("one part", one.size(), 1u);
@@ -110,10 +111,10 @@ namespace tut
 
         Space open = Room().box(0.f, 0.f, 8.f, 6.f).space();
         open.mOpenShare = 0.9f;
-        ensure("no ceiling, no probe", spaceProbes(open, params).empty());
+        ensure("open space gets a probe above its floor", !spaceProbes(open, params).empty());
         Space outdoors = Room().box(0.f, 0.f, 8.f, 6.f).space();
         outdoors.mBucket = EnclosureBucket::OUTDOORS;
-        ensure("outdoors, no probe", spaceProbes(outdoors, params).empty());
+        ensure("outdoors gets full probes", !spaceProbes(outdoors, params).empty());
     }
 
     template<> template<>
@@ -304,5 +305,303 @@ namespace tut
         std::cerr << "rebuild sequence: " << by_key << " regenerations by part index, " << by_nearest << " by nearest origin" << std::endl;
         ensure("nearest never churns more", by_nearest <= by_key);
         ensure("and churns less here", by_nearest < by_key);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<10>()
+    {
+        set_test_name("census tests the collision shape, not its enclosing box");
+        Record r;
+        r.mSolid = true;
+        r.mShape = Shape::BOX;
+        r.mOrigin = LLVector3d(1000000.0, -1000000.0, 20.0);
+        r.mMin = r.mOrigin - LLVector3d(3, 3, 3);
+        r.mMax = r.mOrigin + LLVector3d(3, 3, 3);
+        r.mHalf = LLVector3(2, 1, 1);
+        r.mAxes[0] = LLVector3(0, 1, 0);
+        r.mAxes[1] = LLVector3(-1, 0, 0);
+        r.mAxes[2] = LLVector3(0, 0, 1);
+        ensure("rotated box inside", probeInsideSolid(r, r.mOrigin + LLVector3d(0, 1.5, 0)));
+        ensure("AABB corner outside", !probeInsideSolid(r, r.mOrigin + LLVector3d(1.5, 0, 0)));
+        r.mProvenance = Provenance::BOX;
+        ensure("placeholder is not evidence", !probeInsideSolid(r, r.mOrigin));
+        r.mProvenance = Provenance::EXACT;
+        r.mRole = Role::SURROUND;
+        ensure("visual surround not collision", !probeInsideSolid(r, r.mOrigin));
+        r.mRole = Role::NAV;
+        r.mSolid = false;
+        ensure("open surface not filled", !probeInsideSolid(r, r.mOrigin));
+        r.mSolid = true;
+        r.mShape = Shape::SPHERE;
+        ensure("ellipsoid center", probeInsideSolid(r, r.mOrigin));
+        ensure("ellipsoid corner", !probeInsideSolid(r, r.mOrigin + LLVector3d(0.9, 1.8, 0)));
+        r.mShape = Shape::CYLINDER;
+        ensure("cylinder inside", probeInsideSolid(r, r.mOrigin + LLVector3d(0, 1, 0.9)));
+        ensure("cylinder above cap", !probeInsideSolid(r, r.mOrigin + LLVector3d(0, 0, 1.1)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<11>()
+    {
+        set_test_name("triangle solids preserve cavities and union overlapping hulls");
+        Record r;
+        r.mSolid = true;
+        r.mMin = LLVector3d(-2, -2, -2);
+        r.mMax = LLVector3d(2, 2, 2);
+        auto tris = std::make_shared<std::vector<LLVector3>>();
+        auto plane = [&](F32 z)
+        {
+            tris->insert(tris->end(), { LLVector3(-2,-2,z), LLVector3(2,-2,z), LLVector3(2,2,z),
+                                      LLVector3(-2,-2,z), LLVector3(2,2,z), LLVector3(-2,2,z) });
+        };
+        // Horizontal cross-sections of a closed hollow body. Vertical faces
+        // do not cross this ray; shared diagonals must count only once.
+        plane(-2); plane(-1); plane(1); plane(2);
+        r.mTriangles = tris;
+        ensure("cavity remains empty", !probeInsideSolid(r, LLVector3d(0,0,0)));
+        ensure("body below cavity", probeInsideSolid(r, LLVector3d(0,0,-1.5)));
+        ensure("body above cavity", probeInsideSolid(r, LLVector3d(0,0,1.5)));
+        tris->clear();
+        plane(-2); plane(1); plane(-1); plane(2);
+        r.mConvexTris = {4, 4};
+        ensure("overlapping hulls form union", probeInsideSolid(r, LLVector3d(0,0,0)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<12>()
+    {
+        set_test_name("open sloping space captures above the chosen cell's floor");
+        ProbeParams params;
+        FloorPlan plan;
+        plan.mW = plan.mH = 12;
+        plan.mCell = 0.5f;
+        plan.mCeiling = -100.f;
+        plan.mFloor.resize(144);
+        for (S32 y = 0; y < 12; ++y)
+            for (S32 x = 0; x < 12; ++x)
+                plan.mFloor[y * 12 + x] = x * 0.5f;
+        const auto parts = placeParts(plan, params);
+        ensure("has probes", !parts.empty());
+        for (const auto& part : parts)
+        {
+            const S32 x = static_cast<S32>(part.mOrigin.mV[0] / plan.mCell);
+            const S32 y = static_cast<S32>(part.mOrigin.mV[1] / plan.mCell);
+            ensure("above local floor, not lowest corner", fabsf(part.mOrigin.mV[2] - plan.floorAt(x, y) - 1.5f) < 1e-4f);
+        }
+    }
+    template<> template<>
+    void sknavprobes_object::test<13>()
+    {
+        set_test_name("residual grid coverage remains above full probes and yields to manual probes");
+        const ProbeParams params;
+        ProbeInfluence nav;
+        nav.mCentre = LLVector3(0, 0, 2);
+        nav.mRadius = 12.f;
+        ensure_equals("inside full probe has no grid", clearRadius(LLVector3(0,0,8), 13.f, {nav}, params), 0.f);
+        ensure_equals("high unwalkable air keeps coverage", clearRadius(LLVector3(0,0,40), 13.f, {nav}, params), 13.f);
+        ProbeInfluence manual;
+        manual.mCentre = LLVector3(0,0,40);
+        manual.mRadius = 8.f;
+        ensure_equals("manual probe overrides high grid too", clearRadius(LLVector3(0,0,40), 13.f, {nav, manual}, params), 0.f);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<14>()
+    {
+        set_test_name("a tight budget keeps one sphere per space, crowded ones out");
+        const ProbeParams params;
+        auto slot = [](U32 key, U32 space, U32 part, F32 distance, F32 area, F32 x)
+        {
+            ProbeSlot s;
+            s.mKey = key;
+            s.mSpace = space;
+            s.mPart = part;
+            s.mDistance = distance;
+            s.mArea = area;
+            s.mOrigin.set(x, 0.f, 0.f);
+            return s;
+        };
+        std::vector<ProbeSlot> slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),    // space 0's near small part
+            slot(1, 0, 0, 5.f, 20.f, 12.f),  // and its far large one
+            slot(2, 1, 0, 6.f, 20.f, 5.f),   // space 1 near space 0's kept sphere
+            slot(3, 1, 1, 30.f, 4.f, 40.f),  // and its far one, clear of it
+        };
+        budgetProbes(slots, 3, params); // below twice the candidates, the budget is tight
+        ensure_equals("one per space, the crowded dropped", slots.size(), 2u);
+        ensure("space 0's near part stands", slots[0].mKey == 0ull);
+        ensure("space 1's only clear part stands", slots[1].mKey == 3ull);
+
+        slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),
+            slot(1, 0, 0, 5.f, 20.f, 12.f),
+            slot(2, 1, 0, 6.f, 20.f, 5.f),
+            slot(3, 1, 1, 30.f, 4.f, 40.f),
+        };
+        slots[1].mHeld = true; // a held part outranks its nearer sibling and keeps its ground
+        budgetProbes(slots, 3, params);
+        ensure_equals("the held part kept", slots[0].mKey, 1ull);
+        ensure("the space's other part still out", slots[1].mKey == 3ull);
+
+        slots =
+        {
+            slot(0, 0, 1, 2.f, 4.f, 0.f),
+            slot(1, 0, 0, 5.f, 20.f, 12.f),
+            slot(2, 1, 0, 6.f, 20.f, 5.f),
+            slot(3, 1, 1, 30.f, 4.f, 40.f),
+        };
+        budgetProbes(slots, 8, params); // room for twice the candidates, so every part places
+        ensure_equals("plenty places every part", slots.size(), 4u);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<15>()
+    {
+        set_test_name("a tight budget caps across spaces, the far dropping first");
+        const ProbeParams params;
+        std::vector<ProbeSlot> slots(5);
+        for (U32 i = 0; i < 5; ++i)
+        {
+            slots[i].mKey = i;
+            slots[i].mSpace = i;
+            slots[i].mDistance = 10.f * i;
+            slots[i].mOrigin.set(100.f * i, 0.f, 0.f);
+        }
+        budgetProbes(slots, 2, params);
+        ensure_equals("the cap holds", slots.size(), 2u);
+        ensure("the nearest two kept", slots[0].mKey == 0ull && slots[1].mKey == 1ull);
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<16>()
+    {
+        set_test_name("the solid lattice answers by tile, the oversized bodies apart");
+
+        auto box = [](bool solid, F32 cx, F32 cy, F32 cz, F32 hx, F32 hy, F32 hz)
+        {
+            std::shared_ptr<Record> r = std::make_shared<Record>();
+            r->mSolid = solid;
+            r->mShape = Shape::BOX;
+            r->mCenter.set(cx, cy, cz);
+            r->mAxes[0] = LLVector3::x_axis;
+            r->mAxes[1] = LLVector3::y_axis;
+            r->mAxes[2] = LLVector3::z_axis;
+            r->mHalf.set(hx, hy, hz);
+            r->mMin.set(cx - hx, cy - hy, cz - hz);
+            r->mMax.set(cx + hx, cy + hy, cz + hz);
+            return r;
+        };
+
+        std::vector<RecordPtr> records;
+        records.push_back(box(true, 4.f, 4.f, 1.f, 4.f, 4.f, 1.f));
+        // Reaching over more than a screen of 32 m tiles: kept separate, and
+        // reached by every point test.
+        records.push_back(box(true, 2100.f, 2100.f, 1.f, 1100.f, 1100.f, 1.f));
+        records.push_back(box(false, 20.f, 4.f, 1.f, 2.f, 4.f, 1.f));
+
+        SolidLattice lattice;
+        lattice.rebuild(records);
+        ensure("inside the small solid", lattice.contains(LLVector3d(4.f, 4.f, 1.f)));
+        ensure("outside every solid", !lattice.contains(LLVector3d(40.f, 40.f, 1.f)));
+        ensure("a body that is not solid is invisible", !lattice.contains(LLVector3d(20.f, 4.f, 1.f)));
+        ensure("the oversized one answers anywhere in it", lattice.contains(LLVector3d(2100.f, 2100.f, 1.f)));
+
+        lattice.rebuild({});
+        ensure("a rebuild from nothing empties it", !lattice.contains(LLVector3d(4.f, 4.f, 1.f)));
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<17>()
+    {
+        set_test_name("the blend floor widens a corner pair's thin zone");
+        // Two 2 m squares touching at a corner, ceiling 3: each placed sphere
+        // reaches its farthest corner, so the pair intersects, but the zone
+        // between them is the sliver the corner leaves, well under the owed
+        // blend width. The floor grows them until they share a real zone.
+        FloorPlan plan;
+        plan.mX0 = plan.mY0 = 0;
+        plan.mW = 12;
+        plan.mH = 8;
+        plan.mCell = 0.5f;
+        plan.mCeiling = 3.f;
+        plan.mFloor.assign(96, std::numeric_limits<F32>::quiet_NaN());
+        for (S32 y = 0; y < 4; ++y)
+        {
+            for (S32 x = 0; x < 4; ++x)
+            {
+                plan.mFloor[y * 12 + x] = 3.f;              // the first square
+            }
+        }
+        for (S32 y = 4; y < 8; ++y)
+        {
+            for (S32 x = 4; x < 12; ++x)
+            {
+                plan.mFloor[y * 12 + x] = 3.f;              // the second, at its corner
+            }
+        }
+        const ProbeParams params;
+        const std::vector<ProbePart> parts = placeParts(plan, params);
+        ensure_equals("two parts", parts.size(), 2u);
+        const F32 d = dist_vec(parts[0].mOrigin, parts[1].mOrigin);
+        const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(parts[0].mRadius, parts[1].mRadius));
+        ensure("the spheres share a real blend zone", d < parts[0].mRadius + parts[1].mRadius - w * 0.5f);
+        ensure("growth marked if it happened", parts[0].mGrowth == ProbePart::PLACED ||
+               parts[0].mGrowth == ProbePart::GROWN || parts[0].mGrowth == ProbePart::WEAK);
+        for (const ProbePart& p : parts)
+        {
+            ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
+        }
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<18>()
+    {
+        set_test_name("a chain of corner-touching parts converges inside the pass cap");
+        // Six 2 m squares zigzagging on their corners: growth must propagate
+        // down the chain, one hop a pass, until every corner pair shares a
+        // zone worth blending across.
+        FloorPlan plan;
+        plan.mX0 = plan.mY0 = 0;
+        plan.mW = 28;
+        plan.mH = 8;
+        plan.mCell = 0.5f;
+        plan.mCeiling = 3.f;
+        plan.mFloor.assign(224, std::numeric_limits<F32>::quiet_NaN());
+        for (S32 k = 0; k < 6; ++k)
+        {
+            const S32 x0 = k * 4;
+            const S32 y0 = (k % 2) * 4;
+            for (S32 y = y0; y < y0 + 4; ++y)
+            {
+                for (S32 x = x0; x < x0 + 4; ++x)
+                {
+                    plan.mFloor[y * 28 + x] = 3.f;
+                }
+            }
+        }
+        const ProbeParams params;
+        const std::vector<ProbePart> parts = placeParts(plan, params);
+        ensure_equals("six parts", parts.size(), 6u);
+        for (size_t a = 0; a < parts.size(); ++a)
+        {
+            for (size_t b = a + 1; b < parts.size(); ++b)
+            {
+                const F32 gap_x = std::max(std::max(parts[a].mMin.mV[VX] - parts[b].mMax.mV[VX], parts[b].mMin.mV[VX] - parts[a].mMax.mV[VX]), 0.f);
+                const F32 gap_y = std::max(std::max(parts[a].mMin.mV[VY] - parts[b].mMax.mV[VY], parts[b].mMin.mV[VY] - parts[a].mMax.mV[VY]), 0.f);
+                if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
+                {
+                    continue;   // these two never touch
+                }
+                const F32 d = dist_vec(parts[a].mOrigin, parts[b].mOrigin);
+                const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(parts[a].mRadius, parts[b].mRadius));
+                ensure("every corner pair blends", d < parts[a].mRadius + parts[b].mRadius - w * 0.5f);
+            }
+        }
+        for (const ProbePart& p : parts)
+        {
+            ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
+        }
     }
 }

@@ -158,6 +158,16 @@ public:
     // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
     bool mNavRooms = false;
     bool mSuppressedByNavRooms = false;
+    bool mBlockedByCensus = false;
+    // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);
+    // afterwards that pass owns re-nudging and the cleared radius.
+    bool mGridPlacementChecked = false;
+    LLVector3d mGridOrigin;
+    F32 mGridRadius = 0.f;
+    // The census scan (SKCensusSnapshot::mStamp) the grid placement's solid
+    // test last ran against: a probe already tested against the scan that is
+    // current keeps that answer until either the scan or its anchor changes.
+    U64 mGridCensusStamp = 0;
     // </SK:Nexii>
 
     // occlusion culling state

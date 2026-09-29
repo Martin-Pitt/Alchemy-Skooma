@@ -1,6 +1,6 @@
 /**
  * @file sknavannotator.cpp
- * @brief In-world navmesh annotations: the session's marks, the tool that places them, their drawing and the capture export.
+ * @brief In-world navmesh annotations: the session's marks, the tool that places them, and their drawing.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -28,8 +28,6 @@
 
 #include "llagent.h"
 #include "lldate.h"
-#include "lldir.h"
-#include "llfile.h"
 #include "llhudobject.h"
 #include "llhudtext.h"
 #include "llrender.h"
@@ -39,14 +37,14 @@
 #include "lltoolmgr.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
-#include "llviewernetwork.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
 #include "sknavmesh.h"
 #include "sknavoverlay.h"
+#include "sknavrooms.h"
 
-#include <iomanip>
+#include <utility>
 
 namespace
 {
@@ -58,13 +56,26 @@ namespace
         {
             case MarkType::MISSED_OPENING: return LLColor4(0.2f, 1.f, 0.3f, 1.f);
             case MarkType::WRONG: return LLColor4(1.f, 0.2f, 0.2f, 1.f);
+            case MarkType::DOOR: return LLColor4(0.8f, 0.4f, 0.2f, 1.f);
+            case MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
+            case MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
+            case MarkType::RAMP: return LLColor4(0.3f, 0.5f, 0.9f, 1.f);
+            case MarkType::LADDER: return LLColor4(1.f, 1.f, 0.3f, 1.f);
+            case MarkType::ELEVATOR: return LLColor4(0.7f, 0.5f, 1.f, 1.f);
+            case MarkType::LEDGE: return LLColor4(1.f, 0.45f, 0.45f, 1.f);
+            case MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
+            case MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
+            case MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
+            case MarkType::STREET: return LLColor4(0.75f, 0.75f, 0.75f, 1.f);
+            case MarkType::BRIDGE: return LLColor4(0.8f, 0.6f, 0.4f, 1.f);
+            case MarkType::BALCONY: return LLColor4(1.f, 0.8f, 0.6f, 1.f);
+            case MarkType::COURTYARD: return LLColor4(0.6f, 0.9f, 0.7f, 1.f);
+            case MarkType::WATER_BODY: return LLColor4(0.2f, 0.5f, 1.f, 1.f);
+            case MarkType::WALKABLE: return LLColor4(0.1f, 0.9f, 0.6f, 1.f);
+            case MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
             case MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
             case MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
-            case MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
-            case MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
-            case MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
-            case MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
-            case MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
+            case MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
             default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
         }
     }
@@ -79,22 +90,6 @@ namespace
         geom.edge(at - LLVector3(size, 0.f, 0.f), at + LLVector3(size, 0.f, 0.f), color);
         geom.edge(at - LLVector3(0.f, size, 0.f), at + LLVector3(0.f, size, 0.f), color);
         geom.edge(at - LLVector3(0.f, 0.f, size), at + LLVector3(0.f, 0.f, size), color);
-    }
-
-    /// A box's twelve edges as ribbons, so a wire box reads as boldly as a line.
-    void wireBox(SKNavOverlayGeom& geom, const LLVector3& min, const LLVector3& max, const LLColor4& color)
-    {
-        static const S32 EDGES[12][2] = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 },
-                                          { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
-        LLVector3 corner[8];
-        for (S32 n = 0; n < 8; ++n)
-        {
-            corner[n].set((n & 1) ? max.mV[VX] : min.mV[VX], (n & 2) ? max.mV[VY] : min.mV[VY], (n & 4) ? max.mV[VZ] : min.mV[VZ]);
-        }
-        for (const auto& e : EDGES)
-        {
-            geom.edge(corner[e[0]], corner[e[1]], color);
-        }
     }
 
     void drawMark(SKNavOverlayGeom& geom, const Mark& mark, const LLColor4& color)
@@ -118,13 +113,6 @@ namespace
                     cross(geom, agentOf(v), 0.1f, color);
                 }
                 break;
-            case MarkKind::BOX:
-            {
-                LLVector3d lo, hi;
-                mark.extent(lo, hi);
-                wireBox(geom, agentOf(lo), agentOf(hi), color);
-                break;
-            }
             default:
                 break;
         }
@@ -140,14 +128,107 @@ namespace
         return label;
     }
 
-    void writeVec(std::ostream& file, const LLVector3d& v)
+    std::pair<U32, U32> portalPairOf(U32 a, U32 b)
     {
-        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
+        return a <= b ? std::make_pair(a, b) : std::make_pair(b, a);
     }
 
-    void writeVec(std::ostream& file, const LLVector3& v)
+    // The live portal a crossed mark names: same mesh, the two spaces it
+    // joined either way round, its centre where the mark said, within a
+    // little slack for a pass that has re-cut since. The mesh comes back
+    // too, for the origin the portal's ends are relative to.
+    struct ResolvedPortal
     {
-        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
+        const SKNavWorldView::Mesh* mMesh = nullptr;
+        const Portal* mPortal = nullptr;
+    };
+
+    bool resolvePortal(const Mark& mark, ResolvedPortal& out)
+    {
+        const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+        if (!view)
+        {
+            return false;
+        }
+        const std::pair<U32, U32> pair = mark.portalPair();
+        F64 best = 0.0;
+        for (const SKNavWorldView::Mesh& mesh : view->meshes())
+        {
+            if (mesh.mId != mark.mSpaceMesh || !mesh.mRooms || !mesh.mProduct)
+            {
+                continue;
+            }
+            const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
+            for (const Portal& portal : mesh.mRooms->mPortals)
+            {
+                if (portal.mSpaces[0] >= ids.size() || portal.mSpaces[1] >= ids.size())
+                {
+                    continue;
+                }
+                if (portalPairOf(ids[portal.mSpaces[0]], ids[portal.mSpaces[1]]) != pair)
+                {
+                    continue;
+                }
+                const LLVector3d centre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
+                const F64 d = dist_vec_squared(centre, mark.mPortalCentre);
+                // Two cuts can join the same two spaces; the mark names the
+                // one it sat on, so the nearest wins, within a little slack
+                // for a pass that has re-cut since.
+                if (d > 6.25 || (out.mPortal && d >= best))
+                {
+                    continue;
+                }
+                best = d;
+                out.mMesh = &mesh;
+                out.mPortal = &portal;
+            }
+        }
+        return out.mPortal != nullptr;
+    }
+
+    // A crossed portal: an X across the cut, sized to it, its ends ticked.
+    // A cut the pass has done away with strikes at the click instead, so
+    // the mark stays findable until it is removed.
+    void drawPortal(SKNavOverlayGeom& geom, const Mark& mark, const LLColor4& color)
+    {
+        if (mark.mVerts.empty())
+        {
+            return;
+        }
+        ResolvedPortal resolved;
+        const bool found = resolvePortal(mark, resolved);
+        const LLVector3 a = found ? gAgent.getPosAgentFromGlobal(resolved.mMesh->mOrigin + LLVector3d(resolved.mPortal->mA))
+                                  : agentOf(mark.mVerts.front());
+        const LLVector3 b = found ? gAgent.getPosAgentFromGlobal(resolved.mMesh->mOrigin + LLVector3d(resolved.mPortal->mB)) : a;
+        const LLVector3 centre = (a + b) * 0.5f;
+        const F32 size = llclamp(0.5f * dist_vec(a, b), 0.35f, 2.5f);
+        const F32 k = 0.70710678f * size;
+        LLVector3 run(b - a);
+        if (run.magVecSquared() > 1e-8f)
+        {
+            // The X sits at forty-five degrees to the run, so it reads as a
+            // strike whatever way the cut faces.
+            run.normalize();
+            const LLVector3 across(-run.mV[VY], run.mV[VX], 0.f);
+            const LLVector3 arm = (run + across) * k;
+            const LLVector3 arm2 = (run - across) * k;
+            geom.edge(centre - arm, centre + arm, color);
+            geom.edge(centre - arm2, centre + arm2, color);
+        }
+        else
+        {
+            geom.edge(centre - LLVector3(k, k, 0.f), centre + LLVector3(k, k, 0.f), color);
+            geom.edge(centre - LLVector3(k, -k, 0.f), centre + LLVector3(k, -k, 0.f), color);
+        }
+        if (found)
+        {
+            cross(geom, a, 0.18f, color);
+            cross(geom, b, 0.18f, color);
+        }
+        else
+        {
+            cross(geom, a, 0.3f, color);
+        }
     }
 }
 
@@ -161,15 +242,16 @@ SKNavAnnotator::~SKNavAnnotator()
     }
 }
 
-void SKNavAnnotator::setMode(Mode mode)
+void SKNavAnnotator::arm(bool on)
 {
-    if (mode == mMode)
+    if (on == mArmed)
     {
         return;
     }
-    mMode = mode;
+    mArmed = on;
     cancel();
     mHasHover = false;
+    mHoverPortal = HoverPortal();
     touch();
     syncTool();
 }
@@ -179,11 +261,11 @@ void SKNavAnnotator::syncTool()
     // Other tools replace a transient one without a word, so ask rather than remember.
     LLToolMgr* tools = LLToolMgr::getInstance();
     const bool ours = tools->getCurrentTool() == SKToolNavAnnotate::getInstance();
-    if (mMode != Mode::NONE && !ours)
+    if (mArmed && !ours)
     {
         tools->setTransientTool(SKToolNavAnnotate::getInstance());
     }
-    else if (mMode == Mode::NONE && ours)
+    else if (!mArmed && ours)
     {
         tools->clearTransientTool();
     }
@@ -191,11 +273,12 @@ void SKNavAnnotator::syncTool()
 
 void SKNavAnnotator::checkTool()
 {
-    if (mMode != Mode::NONE && LLToolMgr::getInstance()->getCurrentTool() != SKToolNavAnnotate::getInstance())
+    if (mArmed && LLToolMgr::getInstance()->getCurrentTool() != SKToolNavAnnotate::getInstance())
     {
-        mMode = Mode::NONE;
+        mArmed = false;
         cancel();
         mHasHover = false;
+        mHoverPortal = HoverPortal();
         touch();
     }
 }
@@ -204,23 +287,160 @@ void SKNavAnnotator::setHover(bool valid, const LLVector3d& at)
 {
     mHasHover = valid;
     mHover = at;
+    mHoverPortal = HoverPortal();
+}
+
+void SKNavAnnotator::hoverPortal(S32 x, S32 y)
+{
+    mHoverPortal = HoverPortal();
+    if (!mArmed || markTypeKind(mNewType) != MarkKind::PORTAL)
+    {
+        return;
+    }
+    // Only what the spaces layer is drawing can be struck: nothing shown,
+    // nothing to pick.
+    static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
+    if (!show_spaces)
+    {
+        return;
+    }
+    const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+    if (!view)
+    {
+        return;
+    }
+    // The same reach the overlay draws the portals within.
+    static LLCachedControl<F32> range(gSavedSettings, "SKNavOverlayRange", 96.f);
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3d camera_global = gAgent.getPosGlobalFromAgent(camera->getOrigin());
+    const F64 reach = range;
+    // A portal is under the cursor when its drawn run passes within a few
+    // pixels of it. Ends behind the camera would fold back onto the view,
+    // so a run both of whose ends are behind is skipped.
+    static constexpr S32 REACH_PX = 12;
+    F64 best = F64(REACH_PX) * REACH_PX;
+    auto inFront = [camera](const LLVector3& agent) { return (agent - camera->getOrigin()) * camera->getAtAxis() > 0.f; };
+    for (const SKNavWorldView::Mesh& mesh : view->meshes())
+    {
+        if (!mesh.mRooms || !mesh.mProduct)
+        {
+            continue;
+        }
+        const std::vector<U32>& ids = mesh.mProduct->mSpaceIds;
+        for (const Portal& portal : mesh.mRooms->mPortals)
+        {
+            const LLVector3d a = mesh.mOrigin + LLVector3d(portal.mA) + LLVector3d(0.0, 0.0, 0.15);
+            const LLVector3d b = mesh.mOrigin + LLVector3d(portal.mB) + LLVector3d(0.0, 0.0, 0.15);
+            if (dist_vec_squared2D((a + b) * 0.5, camera_global) > reach * reach)
+            {
+                continue;
+            }
+            const LLVector3 agent_a = gAgent.getPosAgentFromGlobal(a);
+            const LLVector3 agent_b = gAgent.getPosAgentFromGlobal(b);
+            if (!inFront(agent_a) || !inFront(agent_b))
+            {
+                continue;
+            }
+            LLCoordGL pa, pb;
+            camera->projectPosAgentToScreen(agent_a, pa, false);
+            camera->projectPosAgentToScreen(agent_b, pb, false);
+            // The closest point of the drawn run to the cursor, in real
+            // numbers: whole-pixel arithmetic would collapse the projection
+            // onto an end, and only the ends would answer.
+            const F64 dx = F64(pb.mX) - pa.mX, dy = F64(pb.mY) - pa.mY;
+            const F64 len2 = dx * dx + dy * dy;
+            F64 t = len2 > 0.0 ? ((F64(x) - pa.mX) * dx + (F64(y) - pa.mY) * dy) / len2 : 0.0;
+            t = llclamp(t, 0.0, 1.0);
+            const F64 ex = pa.mX + t * dx - x, ey = pa.mY + t * dy - y;
+            const F64 d = ex * ex + ey * ey;
+            if (d < best)
+            {
+                best = d;
+                mHoverPortal.mMesh = mesh.mId;
+                mHoverPortal.mSpaces[0] = portal.mSpaces[0] < ids.size() ? ids[portal.mSpaces[0]] : 0;
+                mHoverPortal.mSpaces[1] = portal.mSpaces[1] < ids.size() ? ids[portal.mSpaces[1]] : 0;
+                mHoverPortal.mCentre = mesh.mOrigin + LLVector3d((portal.mA + portal.mB) * 0.5f);
+                mHoverPortal.mA = a;
+                mHoverPortal.mB = b;
+                mHoverPortal.mKind = portalKindName(portal.mKind);
+                mHoverPortal.mWidth = portal.mWidth;
+            }
+        }
+    }
+    mHoverPortal.mValid = mHoverPortal.mSpaces[0] && mHoverPortal.mSpaces[1] && best < F64(REACH_PX) * REACH_PX;
+}
+
+bool SKNavAnnotator::portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const
+{
+    const std::pair<U32, U32> pair = portalPairOf(space_a, space_b);
+    for (const Mark& mark : mMarks.marks())
+    {
+        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == mesh && mark.portalPair() == pair)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavAnnotator::clickPortal()
+{
+    if (!mArmed || !mHoverPortal.mValid)
+    {
+        return;
+    }
+    // The mark's vertex sits on the cut itself: a click through open air
+    // never met a surface to land on.
+    togglePortal(mHoverPortal, mHoverPortal.mCentre);
+}
+
+void SKNavAnnotator::togglePortal(const HoverPortal& portal, const LLVector3d& at)
+{
+    const std::pair<U32, U32> pair = portalPairOf(portal.mSpaces[0], portal.mSpaces[1]);
+    for (const Mark& mark : mMarks.marks())
+    {
+        if (mark.mKind == MarkKind::PORTAL && mark.mSpaceMesh == portal.mMesh && mark.portalPair() == pair
+            && dist_vec_squared(mark.mPortalCentre, portal.mCentre) < 6.25)
+        {
+            // Struck already: clicking it again lets the cut back.
+            remove(mark.mId);
+            return;
+        }
+    }
+    Mark mark;
+    mark.mKind = MarkKind::PORTAL;
+    mark.mType = MarkType::CROSS;
+    mark.mVerts.push_back(at);
+    mark.mSpaceMesh = portal.mMesh;
+    mark.mSpaceIds[0] = portal.mSpaces[0];
+    mark.mSpaceIds[1] = portal.mSpaces[1];
+    mark.mPortalCentre = portal.mCentre;
+    // The cut says what it is while the note says nothing of its own: its
+    // kind and width, and the two spaces it joined.
+    if (mark.mText.empty())
+    {
+        mark.mText = llformat("%s, %.2f m, spaces %u-%u", portal.mKind, portal.mWidth, portal.mSpaces[0], portal.mSpaces[1]);
+    }
+    commit(std::move(mark));
 }
 
 void SKNavAnnotator::click(const LLVector3d& at)
 {
-    if (mMode == Mode::NONE)
+    if (!mArmed)
     {
         return;
     }
     if (mPending.mVerts.empty())
     {
         mPending = Mark();
-        mPending.mKind = mMode == Mode::POINT ? MarkKind::POINT : (mMode == Mode::LINE ? MarkKind::LINE : MarkKind::BOX);
+        mPending.mKind = markTypeKind(mNewType);
         mPending.mType = mNewType;
-        mPending.mHeight = gSavedSettings.getF32("SKNavAnnotateBoxHeight");
+        // A type picked now is for the mark being placed, not one picked earlier.
+        mSelected = 0;
+        touch();
     }
     mPending.mVerts.push_back(at);
-    if (mPending.mKind != MarkKind::LINE && mPending.complete())
+    if (mPending.mKind == MarkKind::POINT && mPending.complete())
     {
         commit(std::move(mPending));
         mPending = Mark();
@@ -246,7 +466,7 @@ bool SKNavAnnotator::cancel()
 void SKNavAnnotator::commit(Mark mark)
 {
     mark.mCreated = LLDate::now().secondsSinceEpoch();
-    mSelected = mMarks.add(std::move(mark));
+    mMarks.add(std::move(mark));
     touch();
 }
 
@@ -309,7 +529,7 @@ void SKNavAnnotator::syncLabels()
         }
         LLVector3d lo, hi;
         mark.extent(lo, hi);
-        // Over the top of the mark, so a box's label clears its roof.
+        // Over the top of the mark, so the label clears it.
         label->setPositionGlobal(LLVector3d((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, hi.mdV[VZ] + 0.4));
         LLColor4 color = typeColor(mark.mType);
         if (mark.mId == mSelected)
@@ -334,7 +554,15 @@ void SKNavAnnotator::render()
     geom.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mId != mSelected)
+        if (mark.mId == mSelected)
+        {
+            continue;
+        }
+        if (mark.mKind == MarkKind::PORTAL)
+        {
+            drawPortal(geom, mark, typeColor(mark.mType));
+        }
+        else
         {
             drawMark(geom, mark, typeColor(mark.mType));
         }
@@ -345,20 +573,32 @@ void SKNavAnnotator::render()
     bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     if (const Mark* selected = mMarks.find(mSelected))
     {
-        drawMark(bold, *selected, LLColor4::white);
+        if (selected->mKind == MarkKind::PORTAL)
+        {
+            drawPortal(bold, *selected, LLColor4::white);
+        }
+        else
+        {
+            drawMark(bold, *selected, LLColor4::white);
+        }
     }
     if (!mPending.mVerts.empty())
     {
         Mark preview = mPending;
-        if (mHasHover && (preview.mKind == MarkKind::LINE || preview.mKind == MarkKind::BOX))
+        if (mHasHover && preview.mKind == MarkKind::LINE)
         {
             preview.mVerts.push_back(mHover);
         }
         drawMark(bold, preview, typeColor(preview.mType));
     }
-    if (mHasHover && mMode != Mode::NONE)
+    if (mHasHover && mArmed)
     {
         cross(bold, agentOf(mHover), 0.2f, LLColor4::yellow);
+    }
+    if (mHoverPortal.mValid)
+    {
+        // The portal the cursor is over, over everything, ready to strike.
+        bold.edge(agentOf(mHoverPortal.mA), agentOf(mHoverPortal.mB), LLColor4::white);
     }
 
     SKNavOverlayGeom::bindShader();
@@ -380,94 +620,51 @@ void SKNavAnnotator::render()
     SKNavOverlayGeom::unbindShader();
 }
 
-std::string SKNavAnnotator::exportCapture()
+void SKNavAnnotator::pickType(MarkType type)
 {
-    if (mMarks.empty())
+    const MarkKind kind = markTypeKind(type);
+    Mark* selected = mMarks.find(mSelected);
+    if (selected && selected->mKind == kind && selected->mType != type)
     {
-        return "no marks to export";
+        selected->mType = type;
+        mNewType = type;
+        touch();
+        return;
     }
-    const F64 margin = gSavedSettings.getF32("SKNavAnnotateMargin");
-    LLVector3d min, max;
-    mMarks.bounds(margin, min, max);
-
-    const LLDate now = LLDate::now();
-    const std::string stamp = now.toHTTPDateString("%Y%m%dT%H%M%SZ");
-    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknav-capture-" + stamp + ".json");
-    const std::string png = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "sknav-capture-" + stamp + ".png");
-    // The snapshot renders a frame of its own, so the hover cross is gone by then.
-    mHasHover = false;
-
-    // The world as it looks now, marks included, without the floaters over it.
-    const bool shot = gViewerWindow->saveSnapshot(png, gViewerWindow->getWindowWidthRaw(), gViewerWindow->getWindowHeightRaw(),
-                                                  false, false, false, false, LLSnapshotModel::SNAPSHOT_TYPE_COLOR,
-                                                  LLSnapshotModel::SNAPSHOT_FORMAT_PNG);
-
-    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
+    // The armed type again puts the tool away, unless a mark is half placed.
+    if (!selected && mArmed && type == mNewType && mPending.mVerts.empty())
     {
-        return llformat("could not write %s", path.c_str());
+        arm(false);
+        return;
     }
-    file << std::setprecision(10);
-
-    const LLViewerCamera* camera = LLViewerCamera::getInstance();
-    file << "{\"format\":\"sknav-capture\",\"version\":1,\"exported\":\"" << now.asString() << "\",\"grid\":\""
-         << jsonEscape(LLGridManager::getInstance()->getGridId()) << "\",\"screenshot\":\""
-         << (shot ? jsonEscape(gDirUtilp->getBaseFileName(png)) : std::string()) << "\",\"agent\":";
-    writeVec(file, gAgent.getPositionGlobal());
-    file << ",\"camera\":{\"position\":";
-    writeVec(file, gAgent.getPosGlobalFromAgent(camera->getOrigin()));
-    file << ",\"at\":";
-    writeVec(file, camera->getAtAxis());
-    file << ",\"up\":";
-    writeVec(file, camera->getUpAxis());
-    file << ",\"fovY\":" << camera->getView() << ",\"aspect\":" << camera->getAspect() << '}';
-
-    file << ",\"marks\":[";
-    bool first_mark = true;
-    for (const Mark& mark : mMarks.marks())
+    mSelected = 0;
+    mNewType = type;
+    // A half-placed mark keeps its vertices when the shape still fits.
+    if (mPending.mKind != kind)
     {
-        file << (first_mark ? "" : ",") << "{\"id\":" << mark.mId << ",\"kind\":\"" << markKindName(mark.mKind) << "\",\"type\":\""
-             << markTypeName(mark.mType) << "\",\"text\":\"" << jsonEscape(mark.mText) << "\",\"created\":" << mark.mCreated;
-        if (mark.mKind == MarkKind::BOX)
+        mPending = Mark();
+    }
+    mPending.mType = type;
+    touch();
+    arm(true);
+}
+
+void SKNavAnnotator::writeMarks(std::ostream& out) const
+{
+    sknav::writeMarks(out, mMarks.marks(), [](const LLVector3d& v, MarkPlace& place) {
+        LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(v);
+        if (!region)
         {
-            file << ",\"height\":" << mark.mHeight;
+            return false;
         }
-        file << ",\"vertices\":[";
-        for (size_t i = 0; i < mark.mVerts.size(); ++i)
-        {
-            const LLVector3d& v = mark.mVerts[i];
-            file << (i ? "," : "") << "{\"global\":";
-            writeVec(file, v);
-            if (LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(v))
-            {
-                U32 x = 0, y = 0;
-                from_region_handle(region->getHandle(), &x, &y);
-                file << ",\"region\":\"" << jsonEscape(region->getName()) << "\",\"regionGrid\":[" << x / 256 << ',' << y / 256
-                     << "],\"local\":";
-                writeVec(file, region->getPosRegionFromGlobal(v));
-            }
-            file << '}';
-        }
-        file << "]}";
-        first_mark = false;
-    }
-    file << ']';
-
-    file << ",\"bounds\":{\"margin\":" << margin << ",\"min\":";
-    writeVec(file, min);
-    file << ",\"max\":";
-    writeVec(file, max);
-    file << '}';
-
-    const std::string counts = SKNavMesh::instance().writeArea(file, min, max);
-    file << "}\n";
-
-    const std::streamoff bytes = file.tellp();
-    file.close();
-
-    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%zu marks, %s (%.1f MB)%s -> %s", mMarks.marks().size(), counts.c_str(),
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), shot ? " + png" : ", no screenshot", path.c_str());
+        U32 x = 0, y = 0;
+        from_region_handle(region->getHandle(), &x, &y);
+        place.mRegion = region->getName();
+        place.mGridX = x / 256;
+        place.mGridY = y / 256;
+        place.mLocal = region->getPosRegionFromGlobal(v);
+        return true;
+    });
 }
 
 SKToolNavAnnotate::SKToolNavAnnotate()
@@ -495,10 +692,17 @@ bool SKToolNavAnnotate::handleMouseDown(S32 x, S32 y, MASK mask)
     }
     // Off the button just pressed, so Enter and Esc reach the tool.
     gFocusMgr.setKeyboardFocus(nullptr);
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // The hovered cut toggles whether or not the world behind it picked.
+        annotator.clickPortal();
+        return true;
+    }
     LLVector3d at;
     if (pick(x, y, at))
     {
-        SKNavAnnotator::instance().click(at);
+        annotator.click(at);
     }
     return true;
 }
@@ -511,7 +715,13 @@ bool SKToolNavAnnotate::handleMouseUp(S32 x, S32 y, MASK mask)
 bool SKToolNavAnnotate::handleDoubleClick(S32 x, S32 y, MASK mask)
 {
     SKNavAnnotator& annotator = SKNavAnnotator::instance();
-    if (annotator.mode() != SKNavAnnotator::Mode::LINE)
+    if (markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // A crossed portal toggles once per click; the double click that
+        // followed the first press does nothing.
+        return true;
+    }
+    if (markTypeKind(annotator.newType()) != MarkKind::LINE)
     {
         return handleMouseDown(x, y, mask);
     }
@@ -528,7 +738,9 @@ bool SKToolNavAnnotate::handleHover(S32 x, S32 y, MASK mask)
     }
     LLVector3d at;
     const bool hit = pick(x, y, at);
-    SKNavAnnotator::instance().setHover(hit, at);
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    annotator.setHover(hit, at);
+    annotator.hoverPortal(x, y);
     gViewerWindow->setCursor(UI_CURSOR_CROSS);
     return true;
 }
@@ -541,12 +753,18 @@ bool SKToolNavAnnotate::handleKey(KEY key, MASK mask)
         annotator.finish();
         return true;
     }
+    MarkType type;
+    if (mask == MASK_NONE && key < 0x80 && markTypeForKey(static_cast<char>(key), type))
+    {
+        annotator.pickType(type);
+        return true;
+    }
     if (key == KEY_ESCAPE && mask == MASK_NONE)
     {
         // A mark half placed goes first; with none, the tool itself does.
         if (!annotator.cancel())
         {
-            annotator.setMode(SKNavAnnotator::Mode::NONE);
+            annotator.arm(false);
         }
         return true;
     }

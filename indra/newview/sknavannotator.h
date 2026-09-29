@@ -1,6 +1,6 @@
 /**
  * @file sknavannotator.h
- * @brief In-world navmesh annotations: the session's marks, the tool that places them, their drawing and the capture export.
+ * @brief In-world navmesh annotations: the session's marks, the tool that places them, and their drawing.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -31,6 +31,7 @@
 #include "sknavannotate.h"
 
 #include <map>
+#include <ostream>
 #include <string>
 
 class LLHUDText;
@@ -42,21 +43,15 @@ class SKNavAnnotator : public LLSingleton<SKNavAnnotator>
     ~SKNavAnnotator() override;
 
 public:
-    enum class Mode : U8
-    {
-        NONE = 0,
-        POINT,
-        LINE,
-        BOX
-    };
+    /// Arm the placing tool with the current type, or put it away. Armed,
+    /// the annotation tool is in front of the current one.
+    void arm(bool on);
+    bool armed() const { return mArmed; }
 
-    /// Pick a placing tool, or none. Any tool puts the annotation tool in
-    /// front of the current one; none gives the previous one back.
-    void setMode(Mode mode);
-    Mode mode() const { return mMode; }
-
-    /// The type and note new marks are given.
-    void setNewType(sknav::MarkType type) { mNewType = type; }
+    /// A type button or its key. With a mark selected, a type of the same
+    /// shape retypes it. Otherwise the type sticks for the marks placed next
+    /// and arms the tool with its shape; picked again, it puts the tool away.
+    void pickType(sknav::MarkType type);
     sknav::MarkType newType() const { return mNewType; }
 
     /// A surface hit under the cursor, and a click on it.
@@ -72,34 +67,58 @@ public:
     void remove(U32 id);
     void clear();
     void select(U32 id);
-    /// Drop the mode when another tool has taken over from ours.
+    /// Disarm when another tool has taken over from ours.
     void checkTool();
     U32 selected() const { return mSelected; }
     /// Something about the marks changed; a list shown of them is stale.
     void touch() { ++mRevision; }
     U32 revision() const { return mRevision; }
 
+    /// The portal the cursor is over, while armed to cross out: the nearest
+    /// drawn one to the cursor, by the spaces overlay's own reach. False in
+    /// it when there is none.
+    void hoverPortal(S32 x, S32 y);
+    /// Strike or restore the portal under the cursor, whether or not the
+    /// world behind it picked: cuts sit in open air as often as not.
+    void clickPortal();
+    /// Whether a portal mark crosses the cut between these two spaces of a
+    /// mesh, either way round. What the spaces overlay asks while it draws.
+    bool portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const;
+
     /// Draw the marks, the one being placed and the hover point, in the
     /// world pass after the navmesh overlay.
     void render();
 
-    /// Write the capture bundle and its screenshot to the logs folder, and
-    /// return a line for the console.
-    std::string exportCapture();
+    /// The marks as an export's "marks" member, each vertex with its region.
+    void writeMarks(std::ostream& out) const;
 
 private:
+    struct HoverPortal
+    {
+        bool mValid = false;
+        LLUUID mMesh;
+        U32 mSpaces[2] = { 0, 0 };  ///< the two spaces it joins, by stable id
+        LLVector3d mCentre;         ///< the cut's centre, global, at the sill
+        LLVector3d mA;
+        LLVector3d mB;              ///< the cut's ends, global, lifted for drawing
+        const char* mKind = "";     ///< door, stair or opening
+        F32 mWidth = 0.f;
+    };
+
     void commit(sknav::Mark mark);
+    void togglePortal(const HoverPortal& portal, const LLVector3d& at);
     void syncLabels();
     void syncTool();
 
     sknav::MarkSet mMarks;
     sknav::Mark mPending;
-    Mode mMode = Mode::NONE;
+    bool mArmed = false;
     sknav::MarkType mNewType = sknav::MarkType::MISSED_OPENING;
     U32 mSelected = 0;
     U32 mRevision = 0;
     bool mHasHover = false;
     LLVector3d mHover;
+    HoverPortal mHoverPortal;
     std::map<U32, LLPointer<LLHUDText>> mLabels;
     U32 mLabelRevision = 0;
 };

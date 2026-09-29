@@ -500,7 +500,21 @@ namespace sknav
             }
             out << "]}";
         }
-        out << "]}\n";
+        out << "],";
+        writeMarks(out, c.mMarks, [&c](const LLVector3d& v, MarkPlace& place) {
+            const CensusRegion* r = c.regionAt(v.mdV[VX], v.mdV[VY]);
+            if (!r)
+            {
+                return false;
+            }
+            place.mRegion = r->mName;
+            place.mGridX = static_cast<U32>(r->mHandle >> 32) / 256;
+            place.mGridY = static_cast<U32>(r->mHandle & 0xffffffff) / 256;
+            place.mLocal.set(static_cast<F32>(v.mdV[VX] - r->mOrigin.mdV[VX]), static_cast<F32>(v.mdV[VY] - r->mOrigin.mdV[VY]),
+                             static_cast<F32>(v.mdV[VZ] - r->mOrigin.mdV[VZ]));
+            return true;
+        });
+        out << "}\n";
     }
 
     bool readCensus(const std::string& text, CensusFile& c, std::string* error)

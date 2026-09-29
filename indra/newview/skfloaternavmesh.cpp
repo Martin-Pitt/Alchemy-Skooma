@@ -93,13 +93,10 @@ void SKFloaterNavMesh::draw()
         std::string mesh_line = getString("overlay_off");
         if (SKNavMesh::overlayActive() || gSavedSettings.getBOOL("SKNavMeshAlways"))
         {
-            // Asking for a class nothing is building shows an empty world and
-            // no reason for it.
-            const bool weather = gSavedSettings.getU32("SKNavOverlayClass") == 1;
-            mesh_line = (weather && !gSavedSettings.getBOOL("SKNavBuildWeather")) ? getString("weather_off")
-                                                                                  : SKNavMesh::instance().statsLine();
+            mesh_line = SKNavMesh::instance().statsLine();
         }
         getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
+        getChild<LLUICtrl>("overlay_wind_heading")->setEnabled(gSavedSettings.getBOOL("SKNavOverlayWind"));
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
     }
     LLFloater::draw();

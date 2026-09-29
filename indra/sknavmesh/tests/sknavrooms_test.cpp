@@ -1113,4 +1113,196 @@ namespace tut
         }
         out << "]}\n";
     }
+
+    template<> template<>
+    void sknavrooms_object::test<30>()
+    {
+        set_test_name("an L of cells traces the six runs of its outline");
+        const std::vector<PlanCell> cells = { { 0.f, 0.f, 3.f }, { 1.f, 0.f, 3.f }, { 2.f, 0.f, 3.f }, { 0.f, 1.f, 3.f },
+                                              { 0.f, 0.f, 5.f } };   // a repeated column keeps its lowest floor
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("six runs", edges.size(), 6u);
+        for (const PlanEdge& e : edges)
+        {
+            ensure("all at the lowest floor", std::fabs(e.mZ - 3.f) < 1e-4f);
+        }
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the bottom runs on", has(0.f, 0.f, 3.f, 0.f));
+        ensure("the right stands", has(3.f, 0.f, 3.f, 1.f));
+        ensure("the notch's far side runs back", has(3.f, 1.f, 1.f, 1.f));
+        ensure("the notch's inner side stands", has(1.f, 1.f, 1.f, 2.f));
+        ensure("the top runs back", has(1.f, 2.f, 0.f, 2.f));
+        ensure("the left runs down to the start", has(0.f, 2.f, 0.f, 0.f));
+    }
+
+template<> template<>
+    void sknavrooms_object::test<31>()
+    {
+        set_test_name("a plan with a hole, a slope and a pinch traces them apart");
+        std::vector<PlanCell> cells;
+        for (S32 y = 0; y < 3; ++y)
+        {
+            for (S32 x = 0; x < 3; ++x)
+            {
+                if (x != 1 || y != 1)
+                {
+                    cells.push_back({ F32(x), F32(y), 3.f });
+                }
+            }
+        }
+        for (S32 x = 5; x < 8; ++x)
+        {
+            cells.push_back({ F32(x), 6.f, 3.f + 0.2f * (x - 5) });   // a slope, one floor a step
+        }
+        cells.push_back({ 10.f, 10.f, 3.f });
+        cells.push_back({ 11.f, 11.f, 3.f });   // two cells touching at a corner only
+        const std::vector<PlanEdge> edges = tracePlan(cells, 1.f);
+        ensure_equals("the ring's four, the hole's four, the slope's eight, the pinch's eight",
+                      edges.size(), 24u);
+        const auto has = [&edges](F32 x0, F32 y0, F32 x1, F32 y1, F32 z)
+        {
+            for (const PlanEdge& e : edges)
+            {
+                if (std::fabs(e.mX0 - x0) < 1e-4f && std::fabs(e.mY0 - y0) < 1e-4f &&
+                    std::fabs(e.mX1 - x1) < 1e-4f && std::fabs(e.mY1 - y1) < 1e-4f && std::fabs(e.mZ - z) < 1e-4f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensure("the ring's bottom is one run", has(0.f, 0.f, 3.f, 0.f, 3.f));
+        ensure("the hole's edge runs with the ring on its left", has(2.f, 1.f, 1.f, 1.f, 3.f));
+        ensure("the slope steps at each floor", has(6.f, 6.f, 7.f, 6.f, 3.2f));
+        ensure("the pinch's second cell stands alone", has(11.f, 11.f, 12.f, 11.f, 3.f));
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<32>()
+    {
+        set_test_name("the spaces pass leaves the overlay's draw with the product");
+        // The L-shaped room of test 1.
+        Scene s;
+        s.wall(2.f, 2.f, 14.f, 2.25f);
+        s.wall(2.f, 25.75f, 6.f, 26.f);
+        s.wall(2.f, 2.f, 2.25f, 4.f);
+        s.wall(2.f, 5.f, 2.25f, 26.f);
+        s.box(2.f, 4.f, 2.25f, 5.f, 2.2f, 3.f, false);
+        s.wall(13.75f, 2.f, 14.f, 8.f);
+        s.wall(6.f, 7.75f, 14.f, 8.f);
+        s.wall(5.75f, 8.f, 6.f, 26.f);
+        s.box(2.f, 2.f, 14.f, 8.f, 3.f, 3.25f);
+        s.box(2.f, 8.f, 6.f, 26.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        const SpacesDrawPtr draw = r.mRooms->mDraw;
+        ensure("the draw came with the pass", draw != nullptr);
+        ensure_equals("a draw entry per space", draw->mSpaces.size(), r.mEnc->mSpaceIds.size());
+        ensure("the room fills", !draw->mFills.empty());
+        bool outlined = false;
+        for (const SpaceDraw& sd : draw->mSpaces)
+        {
+            outlined = outlined || !sd.mOutline.empty();
+            ensure("full strength until a gather draws it", std::fabs(sd.mColor.mV[VALPHA] - 1.f) < 1e-4f);
+        }
+        ensure("the room's outline traced", outlined);
+        F32 area = 0.f;
+        for (const SpacesDraw::Fill& f : draw->mFills)
+        {
+            ensure("the fill names a space", f.mSpace < draw->mSpaces.size());
+            ensure("the fill sits at a floor", f.mZ > -10.f && f.mZ < 30.f);
+            area += f.mSide * f.mSide;
+        }
+        ensure("the fills cover the room's floor", area > 60.f);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<33>()
+    {
+        set_test_name("a pass over again leaves the landed products and their draw untouched");
+        // The rooms product's draw is only ever fresh if landed products are
+        // replaced rather than rewritten: a pass that mutates the answers a
+        // landed draw was traced from would leave the two disagreeing.
+        Scene s;
+        s.wall(2.f, 2.f, 14.f, 2.25f);
+        s.wall(2.f, 25.75f, 6.f, 26.f);
+        s.wall(2.f, 2.f, 2.25f, 4.f);
+        s.wall(2.f, 5.f, 2.25f, 26.f);
+        s.box(2.f, 4.f, 2.25f, 5.f, 2.2f, 3.f, false);
+        s.wall(13.75f, 2.f, 14.f, 8.f);
+        s.wall(6.f, 7.75f, 14.f, 8.f);
+        s.wall(5.75f, 8.f, 6.f, 26.f);
+        s.box(2.f, 2.f, 14.f, 8.f, 3.f, 3.25f);
+        s.box(2.f, 8.f, 6.f, 26.f, 3.f, 3.25f);
+        const Result first = run(s.input(1));
+        ensure("the first draw", first.mRooms->mDraw != nullptr);
+        const std::vector<SpacesDraw::Fill> fills = first.mRooms->mDraw->mFills;
+        std::vector<size_t> runs;
+        std::vector<PlanEdge> flat;
+        for (const SpaceDraw& sd : first.mRooms->mDraw->mSpaces)
+        {
+            runs.push_back(sd.mOutline.size());
+            flat.insert(flat.end(), sd.mOutline.begin(), sd.mOutline.end());
+        }
+        std::vector<U16> coarse;
+        for (const TileEnclosure& t : first.mEnc->mTiles)
+        {
+            for (const CoarseGap& g : t.mCoarse.mGaps)
+            {
+                coarse.push_back(g.mSpace);
+            }
+        }
+
+        // A second pass, reading the first's products as its previous, must
+        // answer the same world without touching what it read.
+        std::shared_ptr<EnclosureInput> enc_in = s.input(1);
+        enc_in->mPrevious = first.mEnc;
+        auto rooms_in = std::make_shared<RoomsInput>();
+        rooms_in->mPrevious = first.mRooms;
+        const Result second = run(enc_in, rooms_in);
+        ensure("the second draw", second.mRooms->mDraw != nullptr);
+        ensure("a different product, not a rewritten one", second.mRooms != first.mRooms);
+
+        const std::vector<SpacesDraw::Fill>& now_fills = first.mRooms->mDraw->mFills;
+        ensure("the landed fills keep", fills.size() == now_fills.size() &&
+               (fills.empty() || std::memcmp(fills.data(), now_fills.data(), fills.size() * sizeof(SpacesDraw::Fill)) == 0));
+
+        std::vector<PlanEdge> now_flat;
+        bool kept = first.mRooms->mDraw->mSpaces.size() == runs.size();
+        for (size_t k = 0; kept && k < first.mRooms->mDraw->mSpaces.size(); ++k)
+        {
+            const std::vector<PlanEdge>& outline = first.mRooms->mDraw->mSpaces[k].mOutline;
+            kept = outline.size() == runs[k];
+            now_flat.insert(now_flat.end(), outline.begin(), outline.end());
+        }
+        kept = kept && now_flat.size() == flat.size();
+        for (size_t k = 0; kept && k < flat.size(); ++k)
+        {
+            kept = std::fabs(now_flat[k].mX0 - flat[k].mX0) < 1e-4f && std::fabs(now_flat[k].mY0 - flat[k].mY0) < 1e-4f &&
+                   std::fabs(now_flat[k].mX1 - flat[k].mX1) < 1e-4f && std::fabs(now_flat[k].mY1 - flat[k].mY1) < 1e-4f &&
+                   std::fabs(now_flat[k].mZ - flat[k].mZ) < 1e-4f;
+        }
+        ensure("the landed outlines keep", kept);
+
+        size_t c = 0;
+        bool coarse_kept = true;
+        for (const TileEnclosure& t : first.mEnc->mTiles)
+        {
+            for (const CoarseGap& g : t.mCoarse.mGaps)
+            {
+                coarse_kept = coarse_kept && c < coarse.size() && coarse[c++] == g.mSpace;
+            }
+        }
+        ensure("the landed coarse keeps", coarse_kept);
+    }
 }

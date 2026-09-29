@@ -1,6 +1,6 @@
 /**
  * @file skfloaternavannotate.h
- * @brief Navmesh annotations: the placing tools, the session's marks and the capture export.
+ * @brief Navmesh annotations: the type buttons that arm the placing tool, and the session's marks.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -28,10 +28,11 @@
 #include "llfloater.h"
 #include "sknavannotator.h"
 
+class LLButton;
 class LLScrollListCtrl;
 
 /// Where the rooms oracle is wrong, marked in the world. The tool stays in
-/// front while a tool button is down and goes when the floater closes.
+/// front while a type is armed and goes when the floater closes.
 class SKFloaterNavAnnotate final : public LLFloater
 {
 public:
@@ -43,15 +44,14 @@ public:
     void onClose(bool app_quitting) override;
 
 private:
-    void onTool(SKNavAnnotator::Mode mode);
     void onSelect();
-    void onType();
     void onText();
-    void onHeight();
+    void buildTypeGrid();
     void refreshList();
     void refreshSelection();
 
     LLScrollListCtrl* mList = nullptr;
+    LLButton* mTypeButtons[static_cast<size_t>(sknav::MarkType::COUNT)] = {};
     U32 mRevision = U32_MAX;
 };
 

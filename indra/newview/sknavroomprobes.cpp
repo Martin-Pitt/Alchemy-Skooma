@@ -33,6 +33,7 @@
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "pipeline.h"
+#include "skworldcensus.h"
 
 #include <algorithm>
 #include <chrono>
@@ -67,10 +68,12 @@ void SKNavRoomProbes::clear()
 {
     if (!mHeld.empty() || mPlaced)
     {
-        gPipeline.mReflectionMapManager.setNavRoomsVolumes({});
+        gPipeline.mReflectionMapManager.invalidateAutomaticPlacement();
     }
     mHeld.clear();
     mParts.clear();
+    mSolids.clear();
+    mSolidsCensus = nullptr;
     mCandidates = mClearedOut = mOverBudget = mPlaced = 0;
 }
 
@@ -86,17 +89,37 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     }
 
     // A probe only this holds was dropped by the manager, on a teleport or a reset.
+    const size_t held_before = mHeld.size();
     mHeld.erase(std::remove_if(mHeld.begin(), mHeld.end(), [](const Held& h) { return h.mProbe->getNumRefs() == 1; }), mHeld.end());
+    const bool dropped = mHeld.size() != held_before;
 
     if (gFrameTimeSeconds < mNextUpdate)
     {
         return;
     }
     mNextUpdate = gFrameTimeSeconds + UPDATE_PERIOD_S;
+
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes");
     const auto started = std::chrono::steady_clock::now();
 
     LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
     const sknav::ProbeParams params;
+    const auto census = SKWorldCensus::instance().snapshot();
+    // The candidates' solid test reads a tile lattice over the census's solid
+    // records, rebuilt only when a new scan publishes: the per-candidate scan
+    // over every record swept each body's whole triangle soup.
+    if (census != mSolidsCensus)
+    {
+        mSolidsCensus = census;
+        if (census)
+        {
+            mSolids.rebuild(census->mRecords);
+        }
+        else
+        {
+            mSolids.clear();
+        }
+    }
 
     std::vector<LLReflectionMap*> placed_probes;
     manager.getNavRoomsContext(placed_probes);
@@ -127,8 +150,6 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     {
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
-        LLVector3 mMin;
-        LLVector3 mMax;
     };
     std::vector<Candidate> candidates;
     std::vector<sknav::ProbeSlot> slots;
@@ -144,6 +165,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             return;
         }
         Parts& parts = mParts[std::make_pair(mesh.mId, space.mId)];
+        if (parts.mIndex < 0)
+        {
+            parts.mIndex = static_cast<S32>(mParts.size()) - 1;
+        }
         parts.mSeen = true;
         const U64 signature = signatureOf(space);
         if (parts.mSignature != signature || parts.mParts.empty())
@@ -156,16 +181,21 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
         {
             Candidate c;
             c.mOrigin = origin + part.mOrigin;
-            c.mRadius = sknav::clearRadius(c.mOrigin, part.mRadius, placed, params);
+            const LLVector3d global = gAgent.getPosGlobalFromAgent(c.mOrigin);
+            if (mSolids.contains(global))
+            {
+                continue;
+            }
+            c.mRadius = sknav::clearRadius(c.mOrigin, std::max(part.mRadius, part.mSpaceRadius), placed, params);
             if (c.mRadius <= 0.f)
             {
                 ++mClearedOut;
                 continue;
             }
-            c.mMin = origin + part.mMin;
-            c.mMax = origin + part.mMax;
             sknav::ProbeSlot slot;
             slot.mKey = candidates.size();
+            slot.mSpace = static_cast<U32>(parts.mIndex);
+            slot.mPart = part.mPart;
             slot.mOrigin = c.mOrigin;
             slot.mRadius = c.mRadius;
             slot.mArea = part.mArea;
@@ -199,13 +229,13 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     const U32 room = std::max(static_cast<S32>(manager.probeCount()) - 1 - static_cast<S32>(placed.size()), 0);
     const U32 cap = std::min<U32>(max_probes, std::min<U32>(room, LL_MAX_REFLECTION_PROBE_COUNT - 1));
     mCandidates = static_cast<U32>(slots.size());
-    sknav::keepBudget(slots, cap, params.mBudgetHoldM);
+    sknav::budgetProbes(slots, cap, params);
     mOverBudget = mCandidates - static_cast<U32>(slots.size());
 
     // One real move per update, so re-captures are staggered and placed probes are never starved.
     bool moved = false;
+    bool created = false;
     std::vector<Held> held;
-    std::vector<std::pair<LLVector3, LLVector3>> volumes;
     for (const sknav::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
@@ -219,11 +249,9 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
                 moved = true;
                 h.mProbe->mOrigin.load3(c.mOrigin.mV);
                 h.mProbe->mRadius = c.mRadius;
-                h.mProbe->mComplete = false;    // no stale cubemap where it now stands
+                manager.invalidateNavRoomsProbe(h.mProbe);
                 h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
                 h.mRadius = c.mRadius;
-                h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
-                h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
                 ++mMoves;
             }
         }
@@ -236,25 +264,25 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
             }
             h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
             h.mRadius = c.mRadius;
-            h.mMin = gAgent.getPosGlobalFromAgent(c.mMin);
-            h.mMax = gAgent.getPosGlobalFromAgent(c.mMax);
             ++mCreated;
-        }
-        // An octree probe gives way only once its replacement has a cubemap.
-        if (h.mProbe->mComplete)
-        {
-            volumes.emplace_back(gAgent.getPosAgentFromGlobal(h.mMin), gAgent.getPosAgentFromGlobal(h.mMax));
+            created = true;
         }
         held.push_back(h);
     }
     mHeld.swap(held);
     mPlaced = static_cast<U32>(mHeld.size());
-    manager.setNavRoomsVolumes(volumes);
+    // Only a change in what the held spheres cover has to re-open the grid
+    // placement's questions: an idle pass must not send the manager re-testing
+    // every probe every second.
+    if (dropped || created || moved || mHeld.size() != held_before)
+    {
+        manager.invalidateAutomaticPlacement();
+    }
     mLastMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
 std::string SKNavRoomProbes::statsLine() const
 {
-    return llformat("room probes %u of %u parts (%u clear of placed, %u over budget), %u created, %u moves, %.2f ms",
+    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, %.2f ms",
                     mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mLastMs);
 }

@@ -27,6 +27,7 @@
 #include "sknavmesh.h"
 
 #include "sknavannotate.h"
+#include "sknavannotator.h"
 #include "sknavcensusio.h"
 #include "sknavexport.h"
 #include "sknavlayout.h"
@@ -86,21 +87,6 @@ namespace
     bool overlaps3D(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
     {
         return overlapsXY(amin, amax, bmin, bmax) && !(amin.mdV[VZ] > bmax.mdV[VZ] || bmin.mdV[VZ] > amax.mdV[VZ]);
-    }
-
-    /// Whether a triangle about a box's centre reaches into the box.
-    bool withinHalf(const LLVector3* tri, const LLVector3d& half)
-    {
-        for (S32 axis = 0; axis < 3; ++axis)
-        {
-            const F32 lo = llmin(tri[0].mV[axis], llmin(tri[1].mV[axis], tri[2].mV[axis]));
-            const F32 hi = llmax(tri[0].mV[axis], llmax(tri[1].mV[axis], tri[2].mV[axis]));
-            if (hi < -half.mdV[axis] || lo > half.mdV[axis])
-            {
-                return false;
-            }
-        }
-        return true;
     }
 
     void writeVec3d(std::ostream& file, const LLVector3d& v)
@@ -241,13 +227,16 @@ bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive() || processDemanded());
+    return enabled && (always || overlayActive() || probesDemanded());
 }
 
-bool SKNavMesh::processDemanded()
+bool SKNavMesh::probesDemanded()
 {
-    static LLCachedControl<bool> air(gSavedSettings, "SKNavBuildAir", false);
-    return air;
+    // Mirrors the guards in SKNavRoomProbes::update, which cannot demand
+    // anything itself: it only runs when the navmesh already does.
+    static LLCachedControl<bool> room_probes(gSavedSettings, "SKNavRoomProbes", true);
+    static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
+    return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
 bool SKNavMesh::inAirRadius(const Tile& tile)
@@ -488,14 +477,11 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
-    // The air is read off the weather class, so asking for it builds that
-    // class whether or not anything reads its weather.
-    const bool air = processDemanded();
-    const bool weather = weather_on || air;
-    input.mAir = air;
+    // The air is read off the weather class, so the navmesh always builds that class.
+    input.mAir = true;
     static LLCachedControl<F32> airMinGap(gSavedSettings, "SKNavAirMinGap", 0.5f);
     input.mAirMinGap = llclamp(static_cast<F32>(airMinGap), 0.f, 4.f);
-    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
+    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
     // Weather runs down whatever it lands on, so nearly everything is floor to
     // it. A face that is truly vertical still cannot be a walkable polygon of
     // a heightfield - it has no top - which is what the wall faces are for.
@@ -737,48 +723,57 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // Clusters clear of the ground: a mesh each, and no terrain in it. A
     // skybox three kilometres up has nothing to do with the land below it, and
     // a heightfield spanning the gap would overflow Recast's span heights.
-    for (const Cluster* c : airborne)
     {
-        live.insert(c->mId);
-        std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
-        if (!mesh)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile airborne");
+        for (const Cluster* c : airborne)
         {
-            mesh = std::make_unique<Mesh>();
-            mesh->mId = c->mId;
-            mesh->mGeneration = mNextGeneration++;
-            mesh->mOrigin = latticeOrigin(c->mMin);
-            if (!c->mRecords.empty())
+            live.insert(c->mId);
+            std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
+            if (!mesh)
             {
-                LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
-                mesh->mRegion = region ? region->getHandle() : 0;
+                mesh = std::make_unique<Mesh>();
+                mesh->mId = c->mId;
+                mesh->mGeneration = mNextGeneration++;
+                mesh->mOrigin = latticeOrigin(c->mMin);
+                if (!c->mRecords.empty())
+                {
+                    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
+                    mesh->mRegion = region ? region->getHandle() : 0;
+                }
             }
-        }
-        mesh->mLastSeen = gFrameTimeSeconds;
-        std::vector<LaidTile> laid;
-        layAirborne(*c, mesh->mOrigin, pad, laid);
-        std::map<TileKey, Tile> wanted;
-        for (LaidTile& lt : laid)
-        {
-            const TileKey key = lt.mKey;
-            Tile& tile = wanted[key];
-            const auto old = mesh->mTiles.find(key);
-            if (old != mesh->mTiles.end())
+            mesh->mLastSeen = gFrameTimeSeconds;
+            std::vector<LaidTile> laid;
             {
-                tile = old->second;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne");
+                layAirborne(*c, mesh->mOrigin, pad, laid);
             }
-            std::vector<RecordPtr> before = std::move(tile.mRecords);
-            tile.mMin = meshTileMin(mesh->mOrigin, key);
-            tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-            tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
-            tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            tile.mRecords = std::move(lt.mRecords);
-            reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            std::map<TileKey, Tile> wanted;
+            for (LaidTile& lt : laid)
+            {
+                const TileKey key = lt.mKey;
+                Tile& tile = wanted[key];
+                const auto old = mesh->mTiles.find(key);
+                if (old != mesh->mTiles.end())
+                {
+                    tile = old->second;
+                }
+                std::vector<RecordPtr> before = std::move(tile.mRecords);
+                tile.mMin = meshTileMin(mesh->mOrigin, key);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
+                tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
+                tile.mRecords = std::move(lt.mRecords);
+                reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            }
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
+            }
+            mesh->mTiles.swap(wanted);
         }
-        if (dropTiles(*mesh, wanted))
-        {
-            mRevision++;
-        }
-        mesh->mTiles.swap(wanted);
     }
 
     // One mesh per region: its terrain, and every record that reaches over
@@ -788,6 +783,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // the structure was rezzed across the border.
     if (LLWorld::instanceExists())
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile regions");
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
             live.insert(region->getRegionID());
@@ -806,9 +802,30 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+            // The layout and the tile pass below are pure over the census,
+            // this region's land, the region set and the parameters. When
+            // none of those moved since this mesh was last laid, the pass
+            // would rebuild exactly what already stands: skip it whole.
+            // This is what makes the once-a-second reconcile cheap while
+            // the world stands still; the land's stamp is what the second
+            // pass existed to catch.
+            if (mesh->mLayoutCensus == snap->mStamp && mesh->mLayoutWorld == world_stamp &&
+                mesh->mLayoutLand == land_stamp && mesh->mLayoutParams == params &&
+                mesh->mLayoutVoidMargin == void_margin)
+            {
+                continue;
+            }
+            mesh->mLayoutCensus = snap->mStamp;
+            mesh->mLayoutWorld = world_stamp;
+            mesh->mLayoutLand = land_stamp;
+            mesh->mLayoutParams = params;
+            mesh->mLayoutVoidMargin = void_margin;
             std::vector<LaidTile> laid;
-            layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
-                      [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region");
+                layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
+                          [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            }
 
             std::map<TileKey, Tile> wanted;
             for (LaidTile& lt : laid)
@@ -836,6 +853,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     // tile's padded edge.
                     if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
                     {
+                        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - terrain signature");
                         tile.mLandStamp = land_stamp;
                         tile.mWorldStamp = world_stamp;
                         tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
@@ -852,9 +870,12 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 }
                 reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
             }
-            if (dropTiles(*mesh, wanted))
             {
-                mRevision++;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
             }
             mesh->mTiles.swap(wanted);
         }
@@ -862,16 +883,19 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
     // A cluster that has gone, or that has come down to the ground and is now
     // the region's business, takes its mesh with it.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (live.count(it->second->mId))
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile prune");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            ++it;
-        }
-        else
-        {
-            it = mMeshes.erase(it);
-            mRevision++;            // its tiles leave the overlay with it
+            if (live.count(it->second->mId))
+            {
+                ++it;
+            }
+            else
+            {
+                it = mMeshes.erase(it);
+                mRevision++;            // its tiles leave the overlay with it
+            }
         }
     }
 }
@@ -1276,7 +1300,6 @@ void SKNavMesh::schedule()
     // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
-    const bool air = processDemanded();
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -1284,7 +1307,7 @@ void SKNavMesh::schedule()
         {
             Tile& tile = t.second;
             // A built tile near the camera without its air is built again for it.
-            const bool air_due = air && tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
+            const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
             if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
             {
                 continue;
@@ -1313,6 +1336,7 @@ void SKNavMesh::schedule()
 
 void SKNavMesh::update()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - update");
     SKWorldCensus& census = SKWorldCensus::instance();
     const bool want = wanted();
     if (want != mDemanding)
@@ -1328,23 +1352,6 @@ void SKNavMesh::update()
         }
         mDemanding = want;
     }
-    // Air switched off: drop what the tiles hold and what they gave the sky map.
-    const bool air = processDemanded();
-    if (mAirWanted && !air)
-    {
-        for (auto& entry : mMeshes)
-        {
-            for (auto& t : entry.second->mTiles)
-            {
-                t.second.mAir.reset();
-                t.second.mAirCoarse.reset();
-                t.second.mAirBuilt = 0;
-            }
-        }
-        syncSkyMap();
-        mRevision++;
-    }
-    mAirWanted = air;
     if (!want || !LLWorld::instanceExists() || !gAgent.getRegion())
     {
         return;
@@ -1362,6 +1369,7 @@ void SKNavMesh::update()
     {
         mCensusStamp = snap->mStamp;
         last = gFrameTimeSeconds;
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile");
         reconcile(snap);
     }
 
@@ -1379,17 +1387,26 @@ void SKNavMesh::update()
         }
     }
 
-    sampleTerrain();
-    evictAir();
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sample terrain");
+        sampleTerrain();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air");
+        evictAir();
+    }
     schedule();
-    syncFeatureLinks(snap);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync feature links");
+        syncFeatureLinks(snap);
+    }
     if (mSkyRevision != mRevision)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync sky map");
         syncSkyMap();
         mSkyRevision = mRevision;
     }
     mRooms->update(*this);
-    mRoomProbes->update(mRooms->view());
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1431,6 +1448,16 @@ void SKNavMesh::update()
         mLastLog = gFrameTimeSeconds;
         LL_INFOS("SKNav") << statsLine() << LL_ENDL;
     }
+}
+
+void SKNavMesh::placeReflectionProbes()
+{
+    if (!wanted())
+    {
+        mRoomProbes->clear();
+        return;
+    }
+    mRoomProbes->update(mRooms->view());
 }
 
 std::string SKNavMesh::statsLine() const
@@ -2619,91 +2646,6 @@ void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVe
     file << ']';
 }
 
-std::string SKNavMesh::writeArea(std::ostream& file, const LLVector3d& min, const LLVector3d& max) const
-{
-    ExportCounts counts;
-    const LLVector3d center = (min + max) * 0.5;
-    const LLVector3d half = (max - min) * 0.5;
-
-    // The census records in the box, as the object export writes its
-    // surroundings: triangles about the centre, one flat array per record.
-    U32 records = 0;
-    file << ",\"surroundings\":{\"center\":";
-    writeVec3d(file, center);
-    file << ",\"half\":";
-    writeVec3d(file, half);
-    file << ",\"records\":[";
-    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
-    {
-        std::vector<LLVector3> tris;
-        for (const RecordPtr& r : snap->mRecords)
-        {
-            if (!overlaps3D(r->mMin, r->mMax, min, max))
-            {
-                continue;
-            }
-            tris.clear();
-            sknav::emitRecord(*r, center, tris);
-            bool first_tri = true;
-            for (size_t t = 0; t + 2 < tris.size(); t += 3)
-            {
-                if (!withinHalf(&tris[t], half))
-                {
-                    continue;
-                }
-                if (first_tri)
-                {
-                    file << (records ? "," : "") << "{\"root\":\"" << r->mRoot << "\",\"part\":\"" << r->mPart
-                         << "\",\"role\":" << static_cast<S32>(r->mRole) << ",\"provenance\":" << static_cast<S32>(r->mProvenance)
-                         << ",\"navRole\":" << static_cast<S32>(r->mNavRole) << ",\"shape\":" << static_cast<S32>(r->mShape)
-                         << ",\"solid\":" << (r->mSolid ? "true" : "false") << ",\"exclude\":" << static_cast<S32>(r->mExclude)
-                         << ",\"tris\":[";
-                    ++records;
-                }
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    const LLVector3& p = tris[t + k];
-                    file << (first_tri && !k ? "" : ",") << p.mV[VX] << ',' << p.mV[VY] << ',' << p.mV[VZ];
-                }
-                first_tri = false;
-            }
-            if (!first_tri)
-            {
-                file << "]}";
-            }
-        }
-    }
-    file << "]}";
-
-    // Every built tile the box reaches, in whichever mesh, in exportAll's form.
-    file << ",\"tiles\":[";
-    bool first = true;
-    for (const auto& entry : mMeshes)
-    {
-        const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
-        {
-            if (!t.second.mBuilt || !overlapsXY(t.second.mMin, t.second.mMax, min, max))
-            {
-                continue;
-            }
-            file << (first ? "" : ",") << "{\"mesh\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false")
-                 << ",\"origin\":";
-            writeVec3d(file, mesh.mOrigin);
-            file << ",\"tile\":";
-            writeTile(file, mesh, t.first, t.second, counts);
-            file << '}';
-            first = false;
-        }
-    }
-    file << ']';
-    writeDoors(file, &min, &max, counts);
-    writeFeatures(file, &min, &max, counts);
-
-    return llformat("%u records, %u tiles, %u polys, %u doors, %u features", records, counts.mTiles, counts.mPolys, counts.mDoors,
-                    counts.mFeatures);
-}
-
 std::string SKNavMesh::exportAll() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
@@ -2767,15 +2709,17 @@ std::string SKNavMesh::exportAll() const
 
     writeFeatures(file, nullptr, nullptr, counts);
     writeDoors(file, nullptr, nullptr, counts);
+    file << ',';
+    SKNavAnnotator::instance().writeMarks(file);
     file << "}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air (%.1f MB) -> %s", meshes_written,
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks (%.1f MB) -> %s", meshes_written,
                     counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+                    SKNavAnnotator::instance().marks().marks().size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 std::string SKNavMesh::exportCensus() const
@@ -2864,6 +2808,7 @@ std::string SKNavMesh::exportCensus() const
         census.mClusters.push_back(std::move(cl));
     }
     census.mFeatures = snap->mFeatures;
+    census.mMarks = SKNavAnnotator::instance().marks().marks();
     for (const auto& region : mFeatureDoors)
     {
         census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
@@ -2905,8 +2850,9 @@ std::string SKNavMesh::exportCensus() const
     // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
     const F32 ms = timer.getElapsedTimeF32() * 1000.f;
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features (%.1f MB, %.0f ms) -> %s", census.mRecords.size(),
-                    census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks (%.1f MB, %.0f ms) -> %s",
+                    census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+                    census.mMarks.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 
@@ -3346,6 +3292,9 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, static_cast<U64>(show_enclosure));
     key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
     key = mix(key, show_spaces ? 1ull : 0ull);
+    // The spaces layer greys the portals an annotation has crossed out, so
+    // it re-gathers when the marks move.
+    key = mix(key, show_spaces ? SKNavAnnotator::instance().revision() : 0ull);
     // The wind layer shows one heading: the setting's, or the region's wind where the camera is.
     F32 heading = wind_heading;
     if (show_wind && heading < 0.f)
@@ -3390,7 +3339,11 @@ void SKNavMesh::refreshOverlay()
     mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
     if (show_spaces)
     {
-        mRooms->gatherSpaces(mOverlay, camera, reach, opaque);
+        const SKNavAnnotator& annotator = SKNavAnnotator::instance();
+        mRooms->gatherSpaces(mOverlay, camera, reach, opaque,
+                             [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b) {
+                                 return annotator.portalCrossed(mesh, space_a, space_b);
+                             });
     }
     if (show_wind)
     {
@@ -3459,19 +3412,41 @@ void SKNavMesh::refreshOverlay()
                         }
                         const LLVector3 a = originAgent + fromRecast(&tile->verts[poly.verts[v] * 3]) + lift;
                         const LLVector3 b = originAgent + fromRecast(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3]) + lift;
-                        mOverlay.line(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
+                        // full width, in place of the outline the detail pass skips on
+                        // the tile's border, so the seam is one edge and not two stacked
+                        mOverlay.edge(a, b, strength(skNavSwatchColor(joined ? SKNavSwatch::TILE_JOINED : SKNavSwatch::TILE_OPEN), 1.f));
                     }
                 }
 
+                // With the seams shown, an outline edge lying on the tile's border
+                // is the seam's to draw
+                const F32* tb0 = tile->header->bmin;
+                const F32* tb1 = tile->header->bmax;
+                const auto onBorder = [&](const F32* p, const F32* q) {
+                    const F32 eps = 0.01f;
+                    for (int axis : { 0, 2 })
+                    {
+                        for (F32 edge_at : { tb0[axis], tb1[axis] })
+                        {
+                            if (std::fabs(p[axis] - edge_at) < eps && std::fabs(q[axis] - edge_at) < eps)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                };
                 const dtPolyDetail& detail = tile->detailMeshes[p];
                 for (unsigned int t = 0; t < detail.triCount; ++t)
                 {
                     const unsigned char* tri = &tile->detailTris[(detail.triBase + t) * 4];
                     LLVector3 v[3];
+                    const F32* rcs[3];
                     for (int k = 0; k < 3; ++k)
                     {
                         const F32* rc = tri[k] < poly.vertCount ? &tile->verts[poly.verts[tri[k]] * 3]
                                                                 : &tile->detailVerts[(detail.vertBase + tri[k] - poly.vertCount) * 3];
+                        rcs[k] = rc;
                         v[k] = originAgent + fromRecast(rc);
                     }
                     const LLVector3 fill_lift(0.f, 0.f, 0.04f);
@@ -3481,7 +3456,8 @@ void SKNavMesh::refreshOverlay()
                     const LLVector3 lift(0.f, 0.f, 0.06f);
                     for (int k = 0; k < 3; ++k)
                     {
-                        if (dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
+                        if ((dtGetDetailTriEdgeFlags(tri[3], k) & DT_DETAIL_EDGE_BOUNDARY)
+                            && !(show_links && onBorder(rcs[k], rcs[(k + 1) % 3])))
                         {
                             mOverlay.edge(v[k] + lift, v[(k + 1) % 3] + lift, edge);
                         }

@@ -25,6 +25,7 @@
 #ifndef SK_NAVCENSUSIO_H
 #define SK_NAVCENSUSIO_H
 
+#include "sknavannotate.h"
 #include "sknavbuild.h"
 #include "sknavenclosure.h"
 #include "sknavfeatures.h"
@@ -106,6 +107,8 @@ namespace sknav
         std::vector<Feature> mFeatures;
         std::vector<DoorEntity> mDoors;
         std::vector<CensusSpan> mSpans;
+        /// The session's annotation marks, the replay's answer key; written, not read back.
+        std::vector<Mark> mMarks;
 
         const CensusRegion* regionAt(F64 x, F64 y) const;
     };
