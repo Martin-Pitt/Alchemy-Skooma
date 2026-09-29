@@ -89,11 +89,11 @@
     width="120"
     decimal_digits="2"
     increment="0.25"
-    max="4"
-    min="0.25"
+    max_val="4"
+    min_val="0.25"
     name="spiral_turns"
     label="Turns"
-    tool_tip="How many turns of the helix the spiral's climb takes, a quarter at a time" />
+    tool_tip="How many turns of the helix the spiral's climb takes, a quarter turn at a time" />
    <check_box
     follows="left"
     layout="topleft"
