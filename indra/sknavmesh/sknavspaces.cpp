@@ -147,6 +147,7 @@ namespace
         F64 mWeight = 0.0;      ///< m² of leaf gaps
         F64 mS = 0.0;
         F64 mCover = 0.0;
+        F64 mSideOpen = 0.0;
         F64 mE = 0.0;
         F64 mKnown = 0.0;
         F32 mEMin = 1.f;
@@ -2009,6 +2010,7 @@ namespace sknav
                     si.mWeight += area;
                     si.mS += area * ge.mS / 255.0;
                     si.mCover += area * ge.mCover / 255.0;
+                    si.mSideOpen += area * ge.mOpen / 255.0;
                     if (ge.mD != ENCLOSURE_D_UNKNOWN)
                     {
                         const F32 e = ge.mE / 255.f;
@@ -3055,7 +3057,7 @@ namespace sknav
             F64 mCells = 0.0, mBoundary = 0.0, mWalled = 0.0, mFlightCells = 0.0;
             F64 mSumX = 0.0, mSumY = 0.0, mSumXX = 0.0, mSumXY = 0.0, mSumYY = 0.0;
             S32 mFloorMin = INT_MAX, mFloorMax = INT_MIN;
-            F64 mWeight = 0.0, mS = 0.0, mCover = 0.0, mE = 0.0, mKnown = 0.0, mVolume = 0.0, mCeilSum = 0.0, mCeilArea = 0.0, mOpen = 0.0;
+            F64 mWeight = 0.0, mS = 0.0, mCover = 0.0, mSideOpen = 0.0, mE = 0.0, mKnown = 0.0, mVolume = 0.0, mCeilSum = 0.0, mCeilArea = 0.0, mOpen = 0.0;
             F32 mEMin = 1.f, mEMax = 0.f, mCeilMin = 1e30f, mCeilMax = -1e30f;
         };
         std::vector<Acc> acc(nsp);
@@ -3085,6 +3087,7 @@ namespace sknav
             a.mWeight += si.mWeight;
             a.mS += si.mS;
             a.mCover += si.mCover;
+            a.mSideOpen += si.mSideOpen;
             a.mE += si.mE;
             a.mKnown += si.mKnown;
             a.mEMin = std::min(a.mEMin, si.mEMin);
@@ -3133,6 +3136,7 @@ namespace sknav
             sp.mMeanFreePath = sp.mSurface > 0.f ? 4.f * sp.mVolume / sp.mSurface : 0.f;
             sp.mSMean = a.mWeight > 0.0 ? static_cast<F32>(a.mS / a.mWeight) : 0.f;
             sp.mCoverMean = a.mWeight > 0.0 ? static_cast<F32>(a.mCover / a.mWeight) : 0.f;
+            sp.mSideOpenMean = a.mWeight > 0.0 ? static_cast<F32>(a.mSideOpen / a.mWeight) : 0.f;
             sp.mEMean = a.mKnown > 0.0 ? static_cast<F32>(a.mE / a.mKnown) : 0.f;
             sp.mEMin = a.mKnown > 0.0 ? a.mEMin : 0.f;
             sp.mEMax = a.mKnown > 0.0 ? a.mEMax : 0.f;

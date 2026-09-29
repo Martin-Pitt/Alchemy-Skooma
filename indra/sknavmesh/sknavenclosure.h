@@ -50,6 +50,10 @@ namespace sknav
         F32 mCarryRiseM = 2.f;      ///< and whose floor is within this of the walkable floor it came from
         F32 mSkyReachM = 50.f;      ///< solids overhead out to this far sideways hide a gap's sky
         F32 mHysteresis = 0.05f;    ///< a bucket holds until e is this far past its edge
+        /// A gap roofed over at least this share and open at the sides on at
+        /// least mShelterOpen of its spokes is SHELTERED however deep: a canopy, not a hall.
+        F32 mShelterCover = 0.3f;
+        F32 mShelterOpen = 0.55f;
         /// Walkable air no walkable path reaches from outside reads INDOORS,
         /// flagged sealed with D at its cap, rather than UNKNOWN.
         bool mSealedIndoors = true;
@@ -59,6 +63,7 @@ namespace sknav
     constexpr F32 ENCLOSURE_D_UNIT_M = 0.25f;
     constexpr U8 ENCLOSURE_D_DEEP = ENCLOSURE_D_UNKNOWN - 1;   ///< the cap, what a sealed gap reads
     constexpr U8 ENCLOSURE_SEALED = 1 << 0;                     ///< reached from a sealed floor, not from outside
+    constexpr U8 ENCLOSURE_CANOPY = 1 << 1;                     ///< roofed but open at the sides: capped at SHELTERED
 
     /// One gap's answer, parallel to its TileAir's gaps.
     struct GapEnclosure
@@ -70,6 +75,7 @@ namespace sknav
         U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);
         U8 mFlags = 0;              ///< ENCLOSURE_SEALED
         U8 mCover = 0;              ///< share of the sky roofed over, walls aside, in 1/255
+        U8 mOpen = 0;               ///< O, the share of spokes no wall crosses at eye height, in 1/255; 0 unread
     };
 
     /// A 1 m cell's gaps as a far reader needs them, kept when detail is not.
@@ -82,7 +88,8 @@ namespace sknav
         U8 mS = 0;
         U8 mE = 0;
         U8 mD = ENCLOSURE_D_UNKNOWN;
-        U8 mFlags = 0;              ///< ENCLOSURE_SEALED when most of its known air is
+        U8 mFlags = 0;              ///< ENCLOSURE_SEALED, ENCLOSURE_CANOPY when most of its known air is
+        U8 mOpen = 0;
         U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);   ///< of its mean e, with the same hysteresis
     };
 
@@ -101,10 +108,12 @@ namespace sknav
         F32 mS = 0.f;
         F32 mD = 0.f;
         F32 mE = 0.f;
+        F32 mO = 0.f;               ///< side openness
         EnclosureBucket mBucket = EnclosureBucket::UNKNOWN;
         U16 mSpace = 0;             ///< the product's space + 1, 0 for none
         U32 mSpaceId = 0;           ///< that space's id, stable within its mesh
         bool mSealed = false;       ///< INDOORS because no way in was found, D at its cap
+        bool mCanopy = false;       ///< SHELTERED rather than INDOORS because roofed but open at the sides
         F32 mFloor = 0.f;           ///< the gap's, in the frame the read was asked in
         F32 mCeiling = 0.f;         ///< a very large number when open
     };

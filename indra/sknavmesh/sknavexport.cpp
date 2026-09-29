@@ -247,7 +247,7 @@ namespace sknav
     void writeExportEnclosure(std::ostream& file, U64 generation, const TileEnclosure& tile)
     {
         std::vector<U8> blob;
-        blob.reserve(tile.mGaps.size() * 7);
+        blob.reserve(tile.mGaps.size() * 9);
         for (const GapEnclosure& g : tile.mGaps)
         {
             blob.push_back(g.mS);
@@ -257,10 +257,12 @@ namespace sknav
             blob.push_back(g.mFlags);
             blob.push_back(static_cast<U8>(g.mSpace & 0xff));
             blob.push_back(static_cast<U8>(g.mSpace >> 8));
+            blob.push_back(g.mOpen);
+            blob.push_back(g.mCover);
         }
         file << ",\"enclosure\":{\"generation\":" << generation
-             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\",\"space\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
-                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1},\"space\":\"u16, index + 1 into the mesh's spaces, 0 for none\"},\"blob\":\""
+             << ",\"layout\":{\"record\":[\"S\",\"e\",\"D\",\"bucket\",\"flags\",\"space\",\"O\",\"cover\"],\"order\":\"the air's gaps\",\"S\":\"u8 / 255\",\"e\":\"u8 / 255\","
+                "\"D\":\"u8 * 0.25 m, 255 unknown\",\"bucket\":[\"outdoors\",\"sheltered\",\"indoors\",\"unknown\"],\"flags\":{\"sealed\":1,\"canopy\":2},\"space\":\"u16, index + 1 into the mesh's spaces, 0 for none\",\"O\":\"u8 / 255, 0 unread\",\"cover\":\"u8 / 255\"},\"blob\":\""
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
     }
 
@@ -282,7 +284,7 @@ namespace sknav
             vec(origin + LLVector3d(s.mCentre));
             file << ",\"area\":" << s.mFloorArea << ",\"volume\":" << s.mVolume << ",\"surface\":" << s.mSurface << ",\"mfp\":" << s.mMeanFreePath
                  << ",\"ceiling\":[" << s.mCeilingMin + oz << ',' << s.mCeilingMean + oz << ',' << s.mCeilingMax + oz << "],\"floor\":["
-                 << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"cover\":" << s.mCoverMean << ",\"e\":["
+                 << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"cover\":" << s.mCoverMean << ",\"O\":" << s.mSideOpenMean << ",\"e\":["
                  << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
                  << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false")
                  << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";

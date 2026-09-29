@@ -221,11 +221,13 @@ namespace
         return t && t->mAir == tile.mAir && t->mGaps.size() == tile.mAir->mGaps.size() ? t->mGaps.data() : nullptr;
     }
 
-    void fillEnclosure(const TileEnclosure& t, U16 floor, U16 ceiling, U8 s, U8 e, U8 d, U8 bucket, U16 space, U8 flags, Enclosure& out)
+    void fillEnclosure(const TileEnclosure& t, U16 floor, U16 ceiling, U8 s, U8 e, U8 d, U8 o, U8 bucket, U16 space, U8 flags, Enclosure& out)
     {
         out.mSealed = (flags & ENCLOSURE_SEALED) != 0;
+        out.mCanopy = (flags & ENCLOSURE_CANOPY) != 0;
         out.mS = s / 255.f;
         out.mE = e / 255.f;
+        out.mO = o / 255.f;
         out.mD = d == ENCLOSURE_D_UNKNOWN ? 0.f : d * ENCLOSURE_D_UNIT_M;
         out.mBucket = static_cast<EnclosureBucket>(bucket);
         out.mSpace = space;
@@ -296,7 +298,7 @@ namespace
                 const AirGap& g = t->mAir->mGaps[l.mFirstGap + i];
                 const GapEnclosure& e = t->mGaps[l.mFirstGap + i];
                 Enclosure out;
-                fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mBucket, e.mSpace, e.mFlags, out);
+                fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
                 spaceId(p, out);
                 fn(out, g.mFloor, g.mCeiling, *t);
             }
@@ -313,7 +315,7 @@ namespace
         {
             const CoarseGap& g = c.mGaps[i];
             Enclosure out;
-            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, g.mBucket, g.mSpace, g.mFlags, out);
+            fillEnclosure(*t, g.mFloor, g.mCeiling, g.mS, g.mE, g.mD, g.mOpen, g.mBucket, g.mSpace, g.mFlags, out);
             spaceId(p, out);
             fn(out, g.mFloor, g.mCeiling, *t);
         }
@@ -462,6 +464,7 @@ namespace sknav
         std::vector<std::pair<U32, U32>> mWalkSeeds;     ///< from neighbouring meshes, kept for the depth flood
         std::vector<U8> mCover;         ///< share of sky roofed over, in 1/255; 255 under the gap's own low ceiling, 0 with no sky map
         std::vector<std::pair<U32, U32>> mSkyWalkSeeds;  ///< walkable gaps under some sky, at the depth their cover starts them
+        std::vector<U8> mOpen;          ///< side openness, in 1/255; 0 unread
 
         const EnclosureParams& params() const { return mInput->mParams; }
         const TileAir& air(size_t t) const { return *mInput->mTiles[t].mAir; }
@@ -832,6 +835,7 @@ namespace sknav
                 GapEnclosure& e = out.mGaps[g];
                 e.mS = quantise(s);
                 e.mCover = mCover[n];
+                e.mOpen = mOpen[n];
                 ++mProduct->mGapCount;
                 mProduct->mArea += area;
                 if (mDwalk[n] == INF)
@@ -855,13 +859,17 @@ namespace sknav
                     ++mProduct->mSealedGaps;
                     continue;
                 }
+                // Roofed but open at the sides: however deep, a canopy shelters rather than encloses.
+                const bool canopy = mCover[n] >= p.mShelterCover * 255.f && mOpen[n] >= p.mShelterOpen * 255.f;
+                e.mFlags = canopy ? ENCLOSURE_CANOPY : 0;
                 // The same air: its own last bucket. Rebuilt air: the last one of the metre it stands in.
                 const F32 half = (1 << leaf.mLevel) * 0.5f * a.mCell;
                 const EnclosureBucket prev = previous ? static_cast<EnclosureBucket>(previous[g].mBucket)
                                                       : previousBucket(previous_tile, a.mOrigin.mV[VX] + leaf.mX * a.mCell + half,
                                                                        a.mOrigin.mV[VY] + leaf.mY * a.mCell + half,
                                                                        a.mOrigin.mV[VZ] + a.mGaps[g].mFloor * a.mUnit, p.mClimbM);
-                e.mBucket = static_cast<U8>(enclosureBucket(ev, prev, p.mHysteresis));
+                const EnclosureBucket b = enclosureBucket(ev, prev, p.mHysteresis);
+                e.mBucket = static_cast<U8>(canopy && b == EnclosureBucket::INDOORS ? EnclosureBucket::SHELTERED : b);
             }
         }
     }
@@ -915,7 +923,7 @@ namespace sknav
         {
             // Gaps whose floors sit within a climb of the lowest are one coarse gap.
             size_t j = i;
-            F32 area = 0.f, s = 0.f, e = 0.f, d = 0.f, known = 0.f, sealed = 0.f;
+            F32 area = 0.f, s = 0.f, e = 0.f, d = 0.f, o = 0.f, known = 0.f, sealed = 0.f, canopy = 0.f;
             U16 floor = parts[i].mFloor, ceiling = 0;
             while (j < parts.size() && parts[j].mCell == parts[i].mCell && parts[j].mFloor <= parts[i].mFloor + mClimb)
             {
@@ -926,10 +934,12 @@ namespace sknav
                 ceiling = (ceiling == AIR_CEILING_OPEN || g.mCeiling == AIR_CEILING_OPEN) ? AIR_CEILING_OPEN : std::max(ceiling, g.mCeiling);
                 area += w;
                 s += w * ge.mS;
+                o += w * ge.mOpen;
                 if (ge.mD != ENCLOSURE_D_UNKNOWN)
                 {
                     known += w;
                     sealed += (ge.mFlags & ENCLOSURE_SEALED) ? w : 0.f;
+                    canopy += (ge.mFlags & ENCLOSURE_CANOPY) ? w : 0.f;
                     e += w * ge.mE;
                     d += w * ge.mD;
                 }
@@ -939,17 +949,20 @@ namespace sknav
             g.mFloor = floor;
             g.mCeiling = ceiling;
             g.mS = static_cast<U8>(std::lround(s / area));
+            g.mOpen = static_cast<U8>(std::lround(o / area));
             if (known * 2.f >= area)
             {
                 g.mE = static_cast<U8>(std::lround(e / known));
                 g.mD = static_cast<U8>(std::lround(d / known));
-                g.mFlags = sealed * 2.f >= known ? ENCLOSURE_SEALED : 0;
+                g.mFlags = sealed * 2.f >= known ? ENCLOSURE_SEALED : canopy * 2.f >= known ? ENCLOSURE_CANOPY : 0;
                 const S32 cell_index = static_cast<S32>(parts[i].mCell);
                 const F32 x = a.mOrigin.mV[VX] + ((cell_index % c.mWidth) + 0.5f) * c.mCells * a.mCell;
                 const F32 y = a.mOrigin.mV[VY] + ((cell_index / c.mWidth) + 0.5f) * c.mCells * a.mCell;
                 const EnclosureBucket prev = previousBucket(previous_tile, x, y, a.mOrigin.mV[VZ] + floor * a.mUnit, params().mClimbM);
-                g.mBucket = static_cast<U8>((g.mFlags & ENCLOSURE_SEALED) ? EnclosureBucket::INDOORS
-                                                                          : enclosureBucket(g.mE / 255.f, prev, params().mHysteresis));
+                const EnclosureBucket b = enclosureBucket(g.mE / 255.f, prev, params().mHysteresis);
+                g.mBucket = static_cast<U8>((g.mFlags & ENCLOSURE_SEALED)                                    ? EnclosureBucket::INDOORS
+                                            : (g.mFlags & ENCLOSURE_CANOPY) && b == EnclosureBucket::INDOORS ? EnclosureBucket::SHELTERED
+                                                                                                             : b);
             }
             while (cell < parts[i].mCell)
             {
@@ -1007,10 +1020,11 @@ namespace sknav
                     struct Read
                     {
                         S32 mZ;
-                        F32 mCover, mRoof;
+                        F32 mCover, mRoof, mOpen;
                     };
                     std::vector<std::vector<Read>> covers;
                     mCover.assign(mNodeFlags.size(), in.mSky ? 255 : 0);
+                    mOpen.assign(mNodeFlags.size(), 0);
                     // One dense window over the mesh and what stands within reach of it.
                     std::unique_ptr<SkyView> view;
                     if (in.mSky && tiles)
@@ -1045,13 +1059,34 @@ namespace sknav
                                 const AirGap& g = a.mGaps[leaf.mFirstGap + i];
                                 const bool own_sky = (g.mFlags & AirGap::OWN_SKY) != 0;
                                 const F32 headroom = g.mCeiling == AIR_CEILING_OPEN ? 1e6f : (g.mCeiling - g.mFloor) * a.mUnit;
+                                const U32 n = mBase[t] + leaf.mFirstGap + i;
                                 if (!own_sky && (!in.mSky || headroom < SKY_COVER_HEADROOM_M))
                                 {
+                                    // Under its own low ceiling only the sides are asked, at eye height and so under that ceiling.
+                                    if (view && (mNodeFlags[n] & NODE_WALK))
+                                    {
+                                        const F64 z = std::floor(4.0 * (in.mMeshOrigin.mdV[VZ] + a.mOrigin.mV[VZ] + g.mFloor * a.mUnit + std::min(SKY_COVER_EYE_M, headroom * 0.5f)));
+                                        const S32 key = -1 - static_cast<S32>(z);
+                                        const S32 cx = static_cast<S32>((leaf.mX * a.mCell + s) * 0.5), cy = static_cast<S32>((leaf.mY * a.mCell + s) * 0.5);
+                                        std::vector<Read>& at = covers[cx + cy * side];
+                                        const auto hit = std::find_if(at.begin(), at.end(), [key](const Read& r) { return r.mZ == key; });
+                                        F32 open = 0.f;
+                                        if (hit != at.end())
+                                        {
+                                            open = hit->mOpen;
+                                        }
+                                        else
+                                        {
+                                            open = view->sideOpenAt(LLVector3d(std::floor(x) + 0.5, std::floor(y) + 0.5, 0.25 * z + 0.125));
+                                            at.push_back({ key, 0.f, 0.f, open });
+                                            budget -= 16;
+                                        }
+                                        mOpen[n] = quantise(open);
+                                    }
                                     continue;
                                 }
                                 // The sky a standing head sees, less what the solids over it hide.
-                                const U32 n = mBase[t] + leaf.mFirstGap + i;
-                                F32 cover = 0.f, roof = 0.f;
+                                F32 cover = 0.f, roof = 0.f, open = 0.f;
                                 if (view)
                                 {
                                     // Read at the even metre over the head, once per 2 m square and 2 m of height: the first gap there speaks for the rest.
@@ -1064,15 +1099,17 @@ namespace sknav
                                     {
                                         cover = hit->mCover;
                                         roof = hit->mRoof;
+                                        open = hit->mOpen;
                                     }
                                     else
                                     {
-                                        cover = view->coverAbove(LLVector3d(std::floor(x) + 0.5, std::floor(y) + 0.5, z), p.mSkyReachM, &roof);
-                                        at.push_back({ static_cast<S32>(z), cover, roof });
+                                        cover = view->coverAbove(LLVector3d(std::floor(x) + 0.5, std::floor(y) + 0.5, z), p.mSkyReachM, &roof, &open);
+                                        at.push_back({ static_cast<S32>(z), cover, roof, open });
                                         budget -= 16;
                                     }
                                 }
                                 mCover[n] = quantise(roof);
+                                mOpen[n] = quantise(open);
                                 if (cover > 1.f - SKY_COVER_OPEN_MIN)
                                 {
                                     continue;
