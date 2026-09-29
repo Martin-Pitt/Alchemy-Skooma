@@ -708,13 +708,13 @@ namespace sknav
                         if (want_a > out[a].mRadius + 1e-3f)
                         {
                             out[a].mRadius = std::max(out[a].mRadius, want_a);
-                            out[a].mBridged = true;
+                            out[a].mGrowth = ProbePart::GROWN;
                             grew = true;
                         }
                         if (want_b > out[b].mRadius + 1e-3f)
                         {
                             out[b].mRadius = std::max(out[b].mRadius, want_b);
-                            out[b].mBridged = true;
+                            out[b].mGrowth = ProbePart::GROWN;
                             grew = true;
                         }
                     }
@@ -722,6 +722,27 @@ namespace sknav
                 if (!grew)
                 {
                     break;
+                }
+            }
+            // Whatever still falls short of its owed zone at the cap is a
+            // weak boundary: named, so a consumer can bridge it or shed the
+            // sphere when the budget demands, instead of guessing.
+            for (size_t a = 0; a < out.size(); ++a)
+            {
+                for (size_t b = a + 1; b < out.size(); ++b)
+                {
+                    const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                    const F32 w = owed(a, b);
+                    if (d >= out[a].mRadius + out[b].mRadius - w)
+                    {
+                        const F32 gap_x = std::max(std::max(out[a].mMin.mV[VX] - out[b].mMax.mV[VX], out[b].mMin.mV[VX] - out[a].mMax.mV[VX]), 0.f);
+                        const F32 gap_y = std::max(std::max(out[a].mMin.mV[VY] - out[b].mMax.mV[VY], out[b].mMin.mV[VY] - out[a].mMax.mV[VY]), 0.f);
+                        if (gap_x <= plan.mCell + 0.01f && gap_y <= plan.mCell + 0.01f)
+                        {
+                            out[a].mGrowth = ProbePart::WEAK;
+                            out[b].mGrowth = ProbePart::WEAK;
+                        }
+                    }
                 }
             }
         }

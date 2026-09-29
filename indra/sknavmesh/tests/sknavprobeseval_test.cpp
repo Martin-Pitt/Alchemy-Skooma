@@ -88,14 +88,20 @@ namespace tut
             LLVector3d mOrigin;
             LLVector3d mMin, mMax;
             std::vector<Space> mSpaces;
-            struct PortalEntry { U32 mA = 0, mB = 0; bool mCross = false; LLVector3 mCentre; };
-            std::vector<PortalEntry> mPortals;   // space a, space b, cross mesh, where it stands
+            struct PortalEntry { U32 mA = 0, mB = 0; bool mCross = false; LLVector3 mCentre, mEndA, mEndB; };
+            std::vector<PortalEntry> mPortals;   // space a, space b, cross mesh, centre and ends
         };
         std::vector<WorldMesh> world;
         const std::string cache_path = out_dir + "\\spaces.bin";
+        constexpr U32 CACHE_MAGIC = 0x32435053; // "SPC2": spaces + portal ends, v2
         {
             std::ifstream cache(cache_path.c_str(), std::ios::binary);
+            U32 magic = 0;
             if (cache)
+            {
+                cache.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+            }
+            if (cache && magic == CACHE_MAGIC)
             {
                 U32 mesh_count = 0;
                 cache.read(reinterpret_cast<char*>(&mesh_count), sizeof(mesh_count));
@@ -134,8 +140,16 @@ namespace tut
                         cache.read(reinterpret_cast<char*>(&e.mB), sizeof(e.mB));
                         cache.read(reinterpret_cast<char*>(&cross), sizeof(cross));
                         cache.read(reinterpret_cast<char*>(&e.mCentre), sizeof(e.mCentre));
-                        e.mCross = cross != 0;
-                        wm.mPortals.push_back(e);
+                        if (cache.read(reinterpret_cast<char*>(&e.mEndA), sizeof(e.mEndA)) &&
+                            cache.read(reinterpret_cast<char*>(&e.mEndB), sizeof(e.mEndB)))
+                        {
+                            e.mCross = cross != 0;
+                            wm.mPortals.push_back(e);
+                        }
+                        else
+                        {
+                            break;      // an old cache without the ends
+                        }
                     }
                     world.push_back(std::move(wm));
                 }
@@ -164,12 +178,13 @@ namespace tut
                 {
                     if (p.mSpaces[0] < wm.mSpaces.size() && p.mSpaces[1] < wm.mSpaces.size())
                     {
-                        wm.mPortals.push_back({ p.mSpaces[0], p.mSpaces[1], p.mCrossMesh, p.mCentre });
+                        wm.mPortals.push_back({ p.mSpaces[0], p.mSpaces[1], p.mCrossMesh, p.mCentre, p.mA, p.mB });
                     }
                 }
                 world.push_back(std::move(wm));
             }
             std::ofstream cache(cache_path.c_str(), std::ios::binary);
+            cache.write(reinterpret_cast<const char*>(&CACHE_MAGIC), sizeof(CACHE_MAGIC));
             const U32 mesh_count = static_cast<U32>(world.size());
             cache.write(reinterpret_cast<const char*>(&mesh_count), sizeof(mesh_count));
             for (const WorldMesh& wm : world)
@@ -203,6 +218,8 @@ namespace tut
                     const U8 cross_byte = entry.mCross ? 1 : 0;
                     cache.write(reinterpret_cast<const char*>(&cross_byte), sizeof(cross_byte));
                     cache.write(reinterpret_cast<const char*>(&entry.mCentre), sizeof(entry.mCentre));
+                    cache.write(reinterpret_cast<const char*>(&entry.mEndA), sizeof(entry.mEndA));
+                    cache.write(reinterpret_cast<const char*>(&entry.mEndB), sizeof(entry.mEndB));
                 }
             }
             std::cerr << "world cached: " << world.size() << " meshes" << std::endl;
@@ -261,9 +278,40 @@ namespace tut
             world_max = LLVector3d(std::max(world_max.mdV[VX], wm.mMax.mdV[VX]),
                                    std::max(world_max.mdV[VY], wm.mMax.mdV[VY]), 0.0);
         }
-        ensure("the replay holds spaces", !cells.empty());
+                ensure("the replay holds spaces", !cells.empty());
         {
-            // The buckets and their raster sums: what can probe at all.
+            // Why a space has no probe, classified: run the default
+            // placement once over every space and count the rejections by
+            // bucket and reason. The floors the part-folding drops are the
+            // small ones; the raster-less never had walkable air.
+            const sknav::ProbeParams defs;
+            std::map<S32, std::map<std::string, U32>> unprobed;  // bucket -> reason -> spaces
+            std::map<S32, U32> unprobed_by_bucket;
+            for (const WorldMesh& wm : world)
+            {
+                for (const Space& s : wm.mSpaces)
+                {
+                    if (sknav::wantsProbes(s, defs) && !sknav::spaceProbes(s, defs).empty())
+                    {
+                        continue;   // this one places
+                    }
+                    auto& reasons = unprobed[S32(s.mBucket)];
+                    ++unprobed_by_bucket[S32(s.mBucket)];
+                    if (s.mRaster.empty())
+                    {
+                        reasons["no floor raster"]++;
+                    }
+                    else
+                    {
+                        F32 area = 0.f;
+                        for (const auto& r : s.mRaster)
+                        {
+                            area += F32(r.second) * 0.25f;
+                        }
+                        reasons[area < 4.f ? "small, folded" : "folded for width"]++;
+                    }
+                }
+            }
             std::map<U8, std::pair<U32, U32>> by_bucket;    // spaces, with raster >= 2 cells
             for (const WorldMesh& wm : world)
             {
@@ -279,8 +327,19 @@ namespace tut
             for (const auto& it : by_bucket)
             {
                 std::cerr << "bucket " << S32(it.first) << ": " << it.second.first << " spaces, "
-                          << it.second.second << " with raster >= 2" << std::endl;
+                          << it.second.second << " with raster >= 2, "
+                          << unprobed_by_bucket[S32(it.first)] << " place nothing" << std::endl;
             }
+            std::ofstream unprobed_csv((out_dir + "\\unprobed.csv").c_str());
+            unprobed_csv << "bucket,reason,spaces\n";
+            for (const auto& bit : unprobed)
+            {
+                for (const auto& rit : bit.second)
+                {
+                    unprobed_csv << bit.first << ',' << rit.first << ',' << rit.second << '\n';
+                }
+            }
+            std::cerr << "unprobed classification in unprobed.csv" << std::endl;
         }
         std::cerr << "meshes with spaces: " << meshes.size() << ", spaces: " << cells.size() << ", world "
                   << (world_max - world_min).length() << " m" << std::endl;
@@ -297,11 +356,10 @@ namespace tut
         const std::vector<Strategy> strategies =
         {
             { "baseline", 1.0f, 0.f, 8.f, 0.f, 8.f, false },
-            { "spacerad", 1.5f, 32.f, 8.f, 0.f, 8.f, false },
-            { "stable", 1.5f, 32.f, 24.f, 0.f, 8.f, false },
-            { "floorbridge", 1.0f, 0.f, 8.f, 2.f, 8.f, false },
             { "obligation", 1.0f, 0.f, 8.f, 0.f, 8.f, true },
             { "obligation2", 1.0f, 0.f, 24.f, 0.f, 8.f, true },
+            { "candidate", 1.0f, 0.f, 24.f, 2.f, 8.f, true },
+            { "atomic", 1.0f, 0.f, 96.f, 2.f, 8.f, true },
         };
 
         std::ofstream metrics((out_dir + "\\metrics.json").c_str());
@@ -347,15 +405,20 @@ namespace tut
             }
 
             if (strat.mObligations)
+            for (size_t mi = 0; mi < meshes.size(); ++mi)
             {
-                // Every portal must have both sides' nearest spheres cover it
-                // by a margin: two spheres that share a point intersect, so
-                // the graph link is automatic, and the side with no probe of
-                // its own is served by its neighbour reaching across. No new
-                // probes; growth only where a portal asks.
-                for (size_t mi = 0; mi < meshes.size(); ++mi)
+                const WorldMesh& wm = *meshes[mi];
+                // Every portal where the two sides' probe sets have no
+                // intersecting pair: each side's nearest sphere grows to
+                // cover the portal centre by the blend margin, which forces
+                // the intersection the neighbour graph needs. Growth is
+                // capped at the octree reach and at a multiple of the
+                // sphere's own placed radius, so a corridor of thresholds
+                // cannot balloon one sphere; two rounds, re-choosing the
+                // nearest after the first round's growth.
+                for (S32 round = 0; round < 2; ++round)
                 {
-                    const WorldMesh& wm = *meshes[mi];
+                    U32 grew_this_round = 0;
                     for (const auto& entry : wm.mPortals)
                     {
                         if (entry.mA >= wm.mSpaces.size() || entry.mB >= wm.mSpaces.size())
@@ -399,22 +462,35 @@ namespace tut
                                     best = p;
                                 }
                             }
-                            const F32 need = std::sqrt(best_d2) + 1.f;
-                            if (need > probes[best].mRadius)
+                            // The margin: what a blend zone of the owed width
+                            // needs at this threshold, plus a metre of grace.
+                            const F32 w = std::max(params.mBlendZoneM > 0.f ? params.mBlendZoneM : 2.f,
+                                                   params.mBlendShare * std::min(probes[best].mRadius, 24.f));
+                            const F32 margin = std::max(w * 0.5f + 1.f, 2.f);
+                            const F32 cap = std::min(params.mMaxRadiusM, params.mObligationShare * std::max(probes[best].mRadius, 1.f));
+                            const F32 need = std::sqrt(best_d2) + margin;
+                            if (need > probes[best].mRadius && need <= cap)
                             {
-                                probes[best].mRadius = std::min(need, 24.f);
-                                ++obliged;
+                                probes[best].mRadius = need;
+                                ++grew_this_round;
                             }
                         }
                     }
+                    if (!grew_this_round)
+                    {
+                        break;
+                    }
+                    obliged += grew_this_round;
                 }
             }
 
-            if (strat.mName == std::string("floorbridge"))
+            if (strat.mName == std::string("floorbridge") || strat.mName == std::string("candidate"))
             {
-                // The graph repair: only portals measured bare get a bridge,
-                // small, at the threshold, grown just enough to meet the
-                // nearest sphere of each side.
+                // The graph repair. floorbridge: every portal measured bare.
+                // candidate: only the truly bare ones, where both sides are
+                // probeless - obligation has already served the rest - and
+                // the bridge stays small, at the threshold, reaching just
+                // past the mouth it serves.
                 for (size_t mi = 0; mi < meshes.size(); ++mi)
                 {
                     const WorldMesh& wm = *meshes[mi];
@@ -424,6 +500,13 @@ namespace tut
                         if (sa >= wm.mSpaces.size() || sb >= wm.mSpaces.size())
                         {
                             continue;
+                        }
+                        if (strat.mName == std::string("candidate"))
+                        {
+                            if (!mesh_spaces[mi][sa].empty() || !mesh_spaces[mi][sb].empty())
+                            {
+                                continue;   // at least one side probes: not bare
+                            }
                         }
                         const auto meets = [&]() -> bool
                         {
@@ -468,8 +551,15 @@ namespace tut
             // spheres intersect, as the manager's updateNeighbors has it. A
             // portal's spaces count as linked when any probe of the one meets
             // any of the other, which is what lets a blend cross the portal.
+            std::map<std::pair<S32, S32>, std::vector<U32>> buckets_probe;
+            for (size_t p = 0; p < probes.size(); ++p)
+            {
+                buckets_probe[{ S32(std::floor(probes[p].mOrigin.mV[VX] / 32.f)),
+                                S32(std::floor(probes[p].mOrigin.mV[VY] / 32.f)) }].push_back(static_cast<U32>(p));
+            }
             U32 portal_pairs = 0, portal_linked = 0, portal_cross = 0, portal_cross_linked = 0;
-            U32 portal_no_probe = 0, portal_far = 0;
+            U32 portal_no_probe = 0, portal_far = 0, portal_bare = 0;
+            U64 thresholds_total = 0, thresholds_served = 0, threshold_points = 0, threshold_points_in = 0;
             U32 links = 0;
             std::vector<std::pair<U32, U32>> links_of_biggest;
             const auto linked = [&probes](U32 a, U32 b)
@@ -483,6 +573,28 @@ namespace tut
             for (size_t mi = 0; mi < meshes.size(); ++mi)
             {
                 const WorldMesh& wm = *meshes[mi];
+                // Every threshold's mouth: the centre, both ends, and the
+                // metre and a half beyond each end, all to be under some
+                // sphere of this mesh for the threshold to read served. This,
+                // not a distance between spheres, is what a seam looks at.
+                const auto covered_by_any = [&](const LLVector3& p)
+                {
+                    const S32 bx = S32(std::floor(p.mV[VX] / 32.f)), by = S32(std::floor(p.mV[VY] / 32.f));
+                    for (S32 oy = -1; oy <= 1; ++oy)
+                    {
+                        for (S32 ox = -1; ox <= 1; ++ox)
+                        {
+                            const auto found = buckets_probe.find({ bx + ox, by + oy });
+                            if (found == buckets_probe.end()) continue;
+                            for (U32 q : found->second)
+                            {
+                                const LLVector3 d = p - probes[q].mOrigin;
+                                if (d.lengthSquared() <= probes[q].mRadius * probes[q].mRadius) return true;
+                            }
+                        }
+                    }
+                    return false;
+                };
                 for (const auto& entry : wm.mPortals)
                 {
                     const U32 sa = entry.mA, sb = entry.mB;
@@ -490,13 +602,35 @@ namespace tut
                     {
                         continue;
                     }
-                    portal_pairs += 1;
+                    ++portal_pairs;
                     portal_cross += entry.mCross;
+                    if (mesh_spaces[mi][sa].empty() && mesh_spaces[mi][sb].empty())
+                    {
+                        ++portal_no_probe;
+                        ++portal_bare;
+                        continue;
+                    }
                     if (mesh_spaces[mi][sa].empty() || mesh_spaces[mi][sb].empty())
                     {
                         ++portal_no_probe;
-                        continue;
                     }
+                    const LLVector3 centre = LLVector3(wm.mOrigin + LLVector3d(entry.mCentre)) + LLVector3(0.f, 0.f, 1.f);
+                    const LLVector3 ea = LLVector3(wm.mOrigin + LLVector3d(entry.mEndA)) + LLVector3(0.f, 0.f, 1.f);
+                    const LLVector3 eb = LLVector3(wm.mOrigin + LLVector3d(entry.mEndB)) + LLVector3(0.f, 0.f, 1.f);
+                    const LLVector3 dir = eb - ea;
+                    const F32 len = dir.length();
+                    const LLVector3 along = len > 1e-3f ? dir * (1.5f / len) : LLVector3::zero;
+                    const LLVector3 perp = len > 1e-3f ? LLVector3(dir.mV[VY], -dir.mV[VX], 0.f) * (1.2f / len) : LLVector3::zero;
+                    U32 served = 0, points = 0, in_probes = 0;
+                    for (const LLVector3& p : { centre, ea, eb, centre + along, centre - along, centre + perp, centre - perp })
+                    {
+                        ++points;
+                        in_probes += covered_by_any(p);
+                    }
+                    thresholds_total++;
+                    threshold_points += points;
+                    threshold_points_in += in_probes;
+                    thresholds_served += in_probes == points;
                     bool joins = false;
                     for (U32 a : mesh_spaces[mi][sa])
                     {
@@ -526,13 +660,9 @@ namespace tut
             }
 
             // Coverage of every space's floor by the spheres, and how much of
-            // it two spheres share, which is what a blend stands on.
-            std::map<std::pair<S32, S32>, std::vector<U32>> buckets;
-            for (size_t p = 0; p < probes.size(); ++p)
-            {
-                buckets[{ S32(std::floor(probes[p].mOrigin.mV[VX] / 32.f)),
-                          S32(std::floor(probes[p].mOrigin.mV[VY] / 32.f)) }].push_back(static_cast<U32>(p));
-            }
+            // it two spheres share, which is what a blend stands on. The
+            // buckets from the threshold pass already list every probe once.
+            const std::map<std::pair<S32, S32>, std::vector<U32>>& buckets = buckets_probe;
             U64 depth[5] = { 0, 0, 0, 0, 0 };   // columns under 0..4+ spheres
             U64 covered = 0, blended = 0, blended_same = 0, blended_cross = 0, columns = 0;
             for (const SpaceColumns& sc : cells)
@@ -643,6 +773,10 @@ namespace tut
                     << ", \"bridges\": " << bridges
                     << ", \"obliged\": " << obliged
                     << ", \"spaces_probed\": " << spaces_probed
+                    << ", \"thresholds_total\": " << thresholds_total
+                    << ", \"thresholds_served\": " << (thresholds_total ? 100.0 * thresholds_served / thresholds_total : 0.0)
+                    << ", \"threshold_points_in\": " << (threshold_points ? 100.0 * threshold_points_in / threshold_points : 0.0)
+                    << ", \"portals_bare\": " << portal_bare
                     << ", \"coverage\": " << (columns ? 100.0 * covered / columns : 0.0)
                     << ", \"blend\": " << (columns ? 100.0 * blended / columns : 0.0)
                     << ", \"blend_same\": " << (columns ? 100.0 * blended_same / columns : 0.0)
@@ -661,7 +795,9 @@ namespace tut
                     << ", \"moves_per_step\": " << (steps ? moved / F64(steps) : 0.0)
                     << " }";
             std::cerr << strat.mName << ": probes " << probes.size() << ", spaces probed " << spaces_probed
-                      << ", coverage " << (columns ? 100.0 * covered / columns : 0.0) << "%, blend "
+                      << ", thresholds served " << (thresholds_total ? 100.0 * thresholds_served / thresholds_total : 0.0)
+                      << "% (points " << (threshold_points ? 100.0 * threshold_points_in / threshold_points : 0.0)
+                      << "%, bare " << portal_bare << "), coverage " << (columns ? 100.0 * covered / columns : 0.0) << "%, blend "
                       << (columns ? 100.0 * blended / columns : 0.0) << "% (same "
                       << (columns ? 100.0 * blended_same / columns : 0.0) << ", cross "
                       << (columns ? 100.0 * blended_cross / columns : 0.0) << "), depth "

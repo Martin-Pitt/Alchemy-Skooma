@@ -80,7 +80,8 @@ namespace sknav
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
         F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
-        F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
+        F32 mBudgetHoldM = 24.f;    ///< a held sphere ranks this much nearer in the budget; measured
+                                    ///< free against churn, quality unmoved
         F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
         U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
     };
@@ -104,13 +105,19 @@ namespace sknav
     /// One sphere for one part of a space.
     struct ProbePart
     {
+        /// Why a sphere stands where its part's reach left it.
+        enum Growth : U8
+        {
+            PLACED = 0,                 ///< its part's reach, raised by the coverage share
+            GROWN = 1,                  ///< the blend floor grew it for a boundary pair
+            WEAK = 2                    ///< grown to the cap with a boundary still short
+        };
         U32 mPart = 0;              ///< largest first
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
         F32 mSpaceRadius = 0.f;     ///< the reach from this origin across the whole space's plan,
                                     ///< so spheres of neighbouring spaces intersect; 0 when off
-        bool mBridged = false;      ///< grown past its part only to carry a blend across a
-                                    ///< boundary the cap left weak; the first to shed
+        U8 mGrowth = PLACED;        ///< the strongest reason any growth happened
         F32 mArea = 0.f;
         LLVector3 mMin;             ///< the part's floor plan, floor to ceiling
         LLVector3 mMax;
