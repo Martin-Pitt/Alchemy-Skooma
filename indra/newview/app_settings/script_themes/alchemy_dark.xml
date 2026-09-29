@@ -91,7 +91,7 @@
       <key>ScriptDeprecated</key>
       <array><real>0.9412</real><real>0.6431</real><real>0.3647</real><real>1</real></array>
       <key>ScriptInvalid</key>
-      <array><real>0.9569</real><real>0.2784</real><real>0.2784</real><real>1</real></array>
+      <array><real>0.9603</real><real>0.335</real><real>0.335</real><real>1</real></array>
       <key>ScriptErrorColor</key>
       <array><real>0.9451</real><real>0.2980</real><real>0.2980</real><real>1</real></array>
       <key>ScriptWarningColor</key>
