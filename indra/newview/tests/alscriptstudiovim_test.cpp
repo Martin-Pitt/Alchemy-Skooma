@@ -43,7 +43,7 @@ namespace
     typedef std::vector<std::string> Names;
 
     // The window, faked: a record of what vim asked of it.
-    struct FakeVimWindow : public ALScriptStudioVim::Window
+    struct FakeVimWindow : public ALScriptStudioVim::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietSaves
     {
         void closeDocument(std::string_view id) override { asked.push_back(std::string(id)); }
         void letGoOf(Doc& doc) override { letGo.push_back(doc.id); }
@@ -127,11 +127,6 @@ namespace
         }
         std::vector<S32> problemNumbers;
         bool             hasProblems = true;
-        void jumpedFrom(Doc& doc, const ALTextView& view, const ALTextPos& from) override
-        {
-            jumps.push_back(doc.id + (&view == doc.expandedEditor ? " expanded " : " ") + std::to_string(from.line));
-        }
-        Names jumps;
         bool openIncluded(Doc&, const std::string& name, std::optional<bool>) override
         {
             includedAsked.push_back(name);
@@ -168,11 +163,12 @@ namespace tut
     {
         // The UI, and the editors' home; the services are plain, so that
         // what is said is a word's name and its blanks.
-        al_studio_test::StudioWindow       window;
-        al_studio_test::FakeServices       services;
-        ALScriptStudioCommands             commands;
-        FakeVimWindow                      studio;
-        std::unique_ptr<ALScriptStudioVim> vim;
+        al_studio_test::StudioWindow                      window;
+        al_studio_test::FakeServices                      services;
+        ALScriptStudioCommands                            commands;
+        FakeVimWindow                                     studio;
+        std::unique_ptr<al_studio_test::StudioNavigation> navigation;
+        std::unique_ptr<ALScriptStudioVim>                vim;
         // The table's commands run, by name; and two of its toggles.
         Names                              ran;
         bool                               lineNumbers = false, relativeNumbers = false;
@@ -263,7 +259,8 @@ namespace tut
                 },
                 nullptr, [this]() { return relativeNumbers; });
             studio.services = &services;
-            vim             = std::make_unique<ALScriptStudioVim>(services, commands, studio);
+            navigation      = std::make_unique<al_studio_test::StudioNavigation>(services);
+            vim             = std::make_unique<ALScriptStudioVim>(services, studio, studio, navigation->unit, commands, studio);
             return *vim;
         }
 
@@ -667,7 +664,7 @@ namespace tut
 
         ex(a, "w", "out.lsl");
         ensure_equals("written", contents(in("out.lsl")), a.editor->text());
-        const std::string written = "VimWritten [BYTES]=" + std::to_string(a.editor->text().size()) + " [FILE]=" + in("out.lsl") + " [LINES]=4";
+        const std::string written = "VimWritten [BYTES]=" + std::to_string(a.editor->text().size()) + " [FILE]=" + in("out.lsl") + " [LINES]=4 [QUOTED]=\"" + in("out.lsl") + "\"";
         ensure_equals("and said", said->message(), written);
         ensure("not as an error", !said->messageIsError());
         ensure("the tab left as it was", ran.empty());
@@ -771,7 +768,9 @@ namespace tut
 
         said->hooks().jumped(*a.editor, ALTextPos(2, 0));
         said->hooks().jumped(*a.expandedEditor, ALTextPos(1, 0));
-        ensure("a jump kept where it began, in the view it was in", studio.jumps == Names{ "a 2", "a expanded 1" });
+        navigation->unit.goBack(false);
+        navigation->unit.goBack(false);
+        ensure("a jump kept where it began, in the view it was in", navigation->shown == Names{ "a expanded 1", "a 2" });
 
         ensure("Ctrl-O, Ctrl-I, K", said->hooks().command(*a.editor, "back", std::string()) &&
                                         said->hooks().command(*a.editor, "forward", std::string()) &&
@@ -783,11 +782,11 @@ namespace tut
 
         a.editor->setCaret(ALTextPos(1, 0));
         ex(a, "file");
-        ensure_equals(":file", said->message(), std::string("VimFileInfo [LINES]=4 [NAME]=a [PERCENT]=50 [STATE]="));
+        ensure_equals(":file", said->message(), std::string("VimFileInfo [LINES]=4 [NAME]=a [PERCENT]=50 [QUOTED]=\"a\" [STATE]="));
         ensure("not as an error", !said->messageIsError());
         a.editor->insertText("!");
         ex(a, "f");
-        ensure_equals("unsaved", said->message(), std::string("VimFileInfo [LINES]=4 [NAME]=a [PERCENT]=50 [STATE]=VimStateModified "));
+        ensure_equals("unsaved", said->message(), std::string("VimFileInfo [LINES]=4 [NAME]=a [PERCENT]=50 [QUOTED]=\"a\" [STATE]=VimStateModified "));
 
         said->hooks().listing(*a.editor, "mark line  col file/text");
         ensure("a listing to Output",

@@ -26,10 +26,15 @@
 
 #include "alscriptstudiofiles.h"
 
+#include "alcodeeditor.h"
 #include "alfilewrite.h"
+#include "alscriptstudioanalysis.h"
 #include "alscriptstudiofileio.h"
+#include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudiotabs.h"
 #include "lldir.h"
+#include "llfile.h"
 #include "llmenugl.h"
 #include "llsd.h"
 #include "lluictrlfactory.h"
@@ -46,7 +51,7 @@ namespace
     constexpr size_t MOST_RECENT = 10;
 }
 
-ALScriptStudioFiles::ALScriptStudioFiles(ALScriptStudioServices& services, Window& window) : mServices(services), mWindow(window)
+ALScriptStudioFiles::ALScriptStudioFiles(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioAnalysis& analysis, ALScriptStudioSaves& saves, Window& window) : mServices(services), mTabs(tabs), mAnalysis(analysis), mSaves(saves), mWindow(window)
 {
 }
 
@@ -76,7 +81,7 @@ ALScriptStudioFiles::Language ALScriptStudioFiles::languageOf(const std::string&
 
 void ALScriptStudioFiles::watch(Doc& doc)
 {
-    if (doc.file.empty() || doc.external.watch)
+    if (doc.file.empty() || doc.watch)
     {
         return;
     }
@@ -84,7 +89,7 @@ void ALScriptStudioFiles::watch(Doc& doc)
     // editor the studio started, or anything else.
     const std::weak_ptr<bool> alive = mAlive;
     const std::string         id    = doc.id;
-    doc.external.watch              = std::make_unique<StudioLiveFile>(
+    doc.watch                       = std::make_unique<StudioLiveFile>(
         doc.file,
         [this, alive, id](const std::string& file) {
             if (alive.lock())
@@ -137,7 +142,7 @@ void ALScriptStudioFiles::changedOutside(const std::string& id, const std::strin
             if (reload)
             {
                 // What is on disk, as one step to undo, and clean.
-                mWindow.revert(*asked);
+                mTabs.revert(*asked);
             }
         });
         return;
@@ -148,7 +153,7 @@ void ALScriptStudioFiles::changedOutside(const std::string& id, const std::strin
     }
     // Taken as one step to undo, and clean, since it is what the file is.
     doc.carriedText = text;
-    mWindow.takeCarriedText(doc);
+    mTabs.takeCarriedText(doc);
     mWindow.fileSettled(doc);
     mServices.report(mServices.words("FileReloaded", args), false, &doc);
 }
@@ -161,13 +166,13 @@ void ALScriptStudioFiles::write(Doc& doc)
     if (!ALFileWrite::whole(doc.file, doc.editor->wholeText()))
     {
         mServices.report(mServices.words("SaveToFileFailed", args), true, &doc);
-        mWindow.saveStopped(doc);
+        mSaves.stopped(doc);
         return;
     }
-    if (doc.external.watch)
+    if (doc.watch)
     {
         // The watcher on the file: this write is not an outside change.
-        doc.external.watch->seen();
+        doc.watch->seen();
     }
     mServices.report(mServices.words("SavedToFile", args), false, &doc);
     mWindow.fileSettled(doc);
@@ -186,7 +191,7 @@ void ALScriptStudioFiles::openFromDisk()
         {
             for (const std::string& file : files)
             {
-                mWindow.openFileTab(file, false);
+                mTabs.openFileTab(file, false);
             }
         }
     });
@@ -235,7 +240,7 @@ void ALScriptStudioFiles::chosenToLoad(const std::string& id, const std::vector<
         return;
     }
     // In place of the text, or where the caret is, as one step to undo.
-    mWindow.activate(doc);
+    mTabs.activate(doc);
     if (!insert)
     {
         doc.editor->selectAll();
@@ -318,13 +323,13 @@ void ALScriptStudioFiles::chosenToSaveAs(const std::string& id, const std::vecto
     // The tab is the new file from here on: keyed by it, named after
     // it, watched for changes to it, its problems its own, and in the
     // language its name says.
-    doc->external.watch.reset();
+    doc->watch.reset();
     mWindow.becomeFile(*doc, path);
     watch(*doc);
     noteFile(path);
     mServices.report(mServices.words("SavedToFile", args), false, doc);
     mWindow.fileSettled(*doc);
-    mWindow.scheduleAnalysis(*doc, true);
+    mAnalysis.scheduleAnalysis(*doc, true);
 }
 
 // --- the recent lists ---------------------------------------------------------------------
@@ -358,6 +363,23 @@ void ALScriptStudioFiles::noteScript(const Doc& doc)
     }
     fillMenu();
     mWindow.recentChanged();
+}
+
+bool ALScriptStudioFiles::pruneRecent(const std::function<bool(const ALScriptRef&)>& gone)
+{
+    const size_t scripts = mRecentScripts.size();
+    const size_t files   = mRecentFiles.size();
+    mRecentScripts.erase(std::remove_if(mRecentScripts.begin(), mRecentScripts.end(), [&gone](const Recent& one) { return gone(one.ref); }),
+                         mRecentScripts.end());
+    mRecentFiles.erase(std::remove_if(mRecentFiles.begin(), mRecentFiles.end(), [](const std::string& path) { return !LLFile::isfile(path); }),
+                       mRecentFiles.end());
+    const bool pruned = mRecentScripts.size() != scripts || mRecentFiles.size() != files;
+    if (pruned)
+    {
+        fillMenu();
+        mWindow.recentChanged();
+    }
+    return pruned;
 }
 
 void ALScriptStudioFiles::clearRecent()
@@ -441,7 +463,7 @@ void ALScriptStudioFiles::fillMenu()
         item->setClickCallback([this, alive, path](LLUICtrl*, const LLSD&) {
             if (alive.lock())
             {
-                mWindow.openFileTab(path, false);
+                mTabs.openFileTab(path, false);
             }
         });
         menu->addChild(item);
