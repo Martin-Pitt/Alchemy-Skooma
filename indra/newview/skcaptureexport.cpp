@@ -118,6 +118,11 @@ namespace skcapture
         bool blend_mode = false;
         if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
         {
+            // A PBR face draws its material's base colour texture, not the face's own texture.
+            if (gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] == IMG_TRANSPARENT)
+            {
+                return true;
+            }
             alpha *= gltf->mBaseColor.mV[VW];
             blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
             blend_mode = blended;
@@ -259,7 +264,9 @@ namespace
             const bool rigged = object->isRiggedMesh();
             mFile << ",\"rigged\":" << (rigged ? "true" : "false") << ",\"lod\":" << object->getLOD()
                   << ",\"mesh\":" << (volume && volume->isMesh() ? "true" : "false")
-                  << ",\"loaded\":" << (v && v->getNumVolumeFaces() > 0 ? "true" : "false") << ",\"scale\":";
+                  << ",\"loaded\":" << (v && v->getNumVolumeFaces() > 0 ? "true" : "false")
+                  // Trail and exhaust emitters are small prims placed for their particles, not their shape.
+                  << ",\"particles\":" << (object->isParticleSource() ? "true" : "false") << ",\"scale\":";
             vec3(object->getScale());
             mFile << ",\"faces\":[";
             const S32 faces = v ? v->getNumVolumeFaces() : 0;
@@ -280,6 +287,14 @@ namespace
                           << ",\"mode\":\"" << faceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
                           << "\",\"fullbright\":" << (te->getFullbright() ? "true" : "false")
                           << ",\"seeThrough\":" << (faceSeeThrough(object, static_cast<U8>(i)) ? "true" : "false");
+                    // Whether the texture carries alpha at all: a prim made invisible by a fully
+                    // transparent texture reads opaque by tint alone, and only the viewer knows the channels.
+                    const LLViewerTexture* image = object->getTEImage(static_cast<U8>(i));
+                    mFile << ",\"textureAlpha\":" << (image && image->getComponents() == 4 ? "true" : "false");
+                    if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
+                    {
+                        mFile << ",\"baseColorTexture\":\"" << gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] << '"';
+                    }
                 }
                 mFile << ",\"tris\":[";
                 if (!rigged)
