@@ -28,6 +28,7 @@
 
 #include "alpanefolds.h"
 #include "alpanelist.h"
+#include "alscriptstudiocaret.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiowords.h"
 #include "alstringmatch.h"
@@ -206,7 +207,7 @@ void ALScriptOutlinePane::show(Doc& doc)
             for (const size_t i : level)
             {
                 rows.push_back({ i, depth });
-                if (!children[i].empty() && !doc.caret.outlineFolded.contains(mKeys[i]))
+                if (!children[i].empty() && !doc.outlineFolded.contains(mKeys[i]))
                 {
                     walk(children[i], depth + 1);
                 }
@@ -229,7 +230,7 @@ void ALScriptOutlinePane::show(Doc& doc)
     {
         const ALScriptOutlineEntry& entry  = doc.outline[row.index];
         const bool                  parent = filter.empty() && mParents[row.index];
-        const std::string arrow = !parent ? std::string("   ") : doc.caret.outlineFolded.contains(mKeys[row.index]) ? folded : open;
+        const std::string arrow = !parent ? std::string("   ") : doc.outlineFolded.contains(mKeys[row.index]) ? folded : open;
         ALPaneList::Row   one;
         one.key = doc.id + "\x1f" + mKeys[row.index];
         if (const S32 times = seen[one.key]++; times > 0)
@@ -295,7 +296,7 @@ void ALScriptOutlinePane::fold(size_t index, std::optional<bool> folded)
         return;
     }
     const std::string& key  = mKeys[index];
-    const bool         shut = doc->caret.outlineFolded.contains(key);
+    const bool         shut = doc->outlineFolded.contains(key);
     const bool         want = folded.value_or(!shut);
     if (!mParents[index] || want == shut)
     {
@@ -322,11 +323,11 @@ void ALScriptOutlinePane::fold(size_t index, std::optional<bool> folded)
     }
     if (want)
     {
-        doc->caret.outlineFolded.insert(key);
+        doc->outlineFolded.insert(key);
     }
     else
     {
-        doc->caret.outlineFolded.erase(key);
+        doc->outlineFolded.erase(key);
     }
     show(*doc);
     mList->selectByValue(LLSD(static_cast<S32>(index)));
@@ -345,13 +346,13 @@ void ALScriptOutlinePane::followCaret(Doc& doc)
     }
     mFollowed = true;
     // The innermost symbol the caret is in, as the breadcrumb found it.
-    if (doc.caret.crumbPath.empty())
+    if (doc.caret->crumbPath.empty())
     {
         mList->deselectAllItems(true);
         return;
     }
     LLScrollListItem* now = mList->getFirstSelected();
-    for (auto step = doc.caret.crumbPath.rbegin(); step != doc.caret.crumbPath.rend(); ++step)
+    for (auto step = doc.caret->crumbPath.rbegin(); step != doc.caret->crumbPath.rend(); ++step)
     {
         const S32 index = static_cast<S32>(*step);
         if (now && now->getValue().asInteger() == index)

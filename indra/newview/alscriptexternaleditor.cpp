@@ -26,9 +26,12 @@
 
 #include "alscriptexternaleditor.h"
 
+#include "alcodeeditor.h"
 #include "alfilewrite.h"
 #include "alscriptstudiofileio.h"
+#include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudiotabs.h"
 #include "llcallbacklist.h"
 #include "llfile.h"
 #include "lllogchat.h"
@@ -46,8 +49,8 @@ namespace
     }
 }
 
-ALScriptExternalEditor::ALScriptExternalEditor(ALScriptStudioServices& services, Window& window)
-    : mServices(services), mWindow(window)
+ALScriptExternalEditor::ALScriptExternalEditor(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, Window& window)
+    : mServices(services), mTabs(tabs), mSaves(saves), mWindow(window)
 {
 }
 
@@ -74,7 +77,7 @@ void ALScriptExternalEditor::edit(Doc& doc)
         mServices.report(mServices.words("ExternalWriteFailed", args), true, &doc);
         return;
     }
-    Doc::External& external = doc.external;
+    Doc::External& external = *doc.external;
     external.written        = doc.editor->wholeText();
     external.waiting.reset();
     if (on_disk)
@@ -83,15 +86,15 @@ void ALScriptExternalEditor::edit(Doc& doc)
         // outside change does.
         mWindow.watchFile(doc);
     }
-    else if (!external.watch || external.watch->path() != filename)
+    else if (!doc.watch || doc.watch->path() != filename)
     {
         // Watched from what was just written, which is no save of the
         // editor's: a tab with unsaved changes is not saved for being
         // opened outside.
-        external.watch.reset();
+        doc.watch.reset();
         const std::weak_ptr<bool> alive = mAlive;
         const std::string         id    = doc.id;
-        external.watch                  = std::make_unique<StudioLiveFile>(
+        doc.watch                       = std::make_unique<StudioLiveFile>(
             filename,
             [this, alive, id](const std::string& file) {
                 if (alive.lock())
@@ -103,7 +106,7 @@ void ALScriptExternalEditor::edit(Doc& doc)
     }
     else
     {
-        external.watch->seen();
+        doc.watch->seen();
     }
     if (on_disk)
     {
@@ -147,7 +150,7 @@ void ALScriptExternalEditor::changed(const std::string& id, const std::string& f
     {
         text.clear();
     }
-    if (settled && text == doc.external.written)
+    if (settled && text == doc.external->written)
     {
         // Emptied as the first of an editor's two steps, and the second
         // heard and taken since: nothing more to take, nor to save again.
@@ -174,9 +177,9 @@ void ALScriptExternalEditor::changed(const std::string& id, const std::string& f
     // of them would be lost, so the author is asked which, rather than
     // what was typed here left a step back in the undo.
     const std::string& here = doc.editor->wholeText();
-    if (text != here && here != doc.external.written && text != doc.external.written)
+    if (text != here && here != doc.external->written && text != doc.external->written)
     {
-        doc.external.waiting = text;
+        doc.external->waiting = text;
         LLStringUtil::format_map_t args;
         args["[NAME]"] = doc.name;
         mServices.report(mServices.words("ExternalConflict", args), true, &doc, { "take_external", "keep_here" });
@@ -187,31 +190,39 @@ void ALScriptExternalEditor::changed(const std::string& id, const std::string& f
 
 void ALScriptExternalEditor::take(Doc& doc, std::string text)
 {
-    doc.external.waiting.reset();
-    doc.external.written = text;
+    doc.external->waiting.reset();
+    doc.external->written = text;
     if (text != doc.editor->wholeText())
     {
         // The editor's text, as one step to undo; then saved from here,
         // over whatever a check finds, since the editor outside is where
         // the author is looking.
         doc.carriedText = text;
-        mWindow.takeCarriedText(doc);
+        mTabs.takeCarriedText(doc);
     }
     if (!doc.editor->isDirty() && doc.assetId.notNull())
     {
         return;
     }
     doc.save.fromExternal(doc.editor->document().version());
-    mWindow.save(doc);
+    mSaves.save(doc);
+}
+
+void ALScriptExternalEditor::keep(Doc& doc)
+{
+    doc.external->waiting.reset();
+    LLStringUtil::format_map_t args;
+    args["[NAME]"] = doc.name;
+    mServices.setStatus(mServices.words("ExternalKept", args));
 }
 
 void ALScriptExternalEditor::sync(Doc& doc)
 {
-    if (!doc.external.watch)
+    if (!doc.watch)
     {
         return;
     }
-    const std::string filename = doc.external.watch->path();
+    const std::string filename = doc.watch->path();
     if (!gDirUtilp->fileExists(filename))
     {
         return;
@@ -220,19 +231,19 @@ void ALScriptExternalEditor::sync(Doc& doc)
     // was sent, and a file written again under an editor that has it open
     // reads to that editor as changed.
     const std::string& text = doc.editor->wholeText();
-    doc.external.written    = text;
+    doc.external->written   = text;
     std::string        held;
     if (readWholeFile(filename, held) && (held == text || (text.empty() && held == " ")))
     {
         return;
     }
     writeWhole(filename, text);
-    doc.external.watch->seen();
+    doc.watch->seen();
 }
 
 void ALScriptExternalEditor::log(Doc& doc, const ALScriptCompileResult& result)
 {
-    if (!doc.external.log)
+    if (!doc.external->log)
     {
         return;
     }
@@ -249,17 +260,17 @@ void ALScriptExternalEditor::log(Doc& doc, const ALScriptCompileResult& result)
         LLStringUtil::stripNonprintable(line);
         text += line + "\n";
     }
-    ALFileWrite::temp(doc.external.log->path(), text);
+    ALFileWrite::temp(doc.external->log->path(), text);
 }
 
 void ALScriptExternalEditor::stop(Doc& doc)
 {
-    if (doc.external.subscribed)
+    if (doc.external->subscribed)
     {
         mWindow.unsubscribe(doc);
-        doc.external.subscribed = false;
+        doc.external->subscribed = false;
     }
-    doc.external.watch.reset();
-    doc.external.log.reset();
+    doc.watch.reset();
+    doc.external->log.reset();
     doc.save.endExternal();
 }

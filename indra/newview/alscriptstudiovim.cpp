@@ -27,8 +27,11 @@
 #include "alscriptstudiovim.h"
 
 #include "alcodeeditor.h"
+#include "alscriptnavigation.h"
 #include "alscriptstudiocommands.h"
+#include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudiotabs.h"
 #include "fsyspath.h"
 
 #include <algorithm>
@@ -64,8 +67,8 @@ namespace
     }
 }
 
-ALScriptStudioVim::ALScriptStudioVim(ALScriptStudioServices& services, ALScriptStudioCommands& commands, Window& window)
-    : mServices(services), mCommands(commands), mWindow(window)
+ALScriptStudioVim::ALScriptStudioVim(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, ALScriptStudioSaves& saves, ALScriptNavigation& navigation, ALScriptStudioCommands& commands, Window& window)
+    : mServices(services), mTabs(tabs), mSaves(saves), mNavigation(navigation), mCommands(commands), mWindow(window)
 {
 }
 
@@ -102,7 +105,10 @@ void ALScriptStudioVim::connect(ALVimKeymap& vim)
         {
             if (Doc* doc = docOf(view))
             {
-                mWindow.jumpedFrom(*doc, view, from);
+                // A place to come back to with Back, in the view it began
+                // in.
+                const Doc::View in = &view == doc->expandedEditor ? Doc::View::Expanded : Doc::View::Source;
+                mNavigation.remember(ALScriptNavigation::Place{ doc->id, from, in });
             }
         }
     };
@@ -307,7 +313,7 @@ void ALScriptStudioVim::pump()
     if (banner != mBanner)
     {
         mBanner = banner;
-        mWindow.refreshTrailer(*doc);
+        mTabs.refreshTrailer(*doc);
     }
 }
 
@@ -375,14 +381,14 @@ bool ALScriptStudioVim::command(ALTextView& view, const std::string& name, const
     }
     if (name == "q!" || name == "quit!")
     {
-        mWindow.letGoOf(*doc);
+        mTabs.letGoOf(*doc);
         return true;
     }
     if (name == "wq" || name == "x" || name == "xit" || name == "wq!" || name == "x!")
     {
         if (doc->unsaved() && doc->modifiable)
         {
-            mWindow.saveToClose(doc->id);
+            mSaves.saveToClose(doc->id);
         }
         else
         {
@@ -475,7 +481,7 @@ bool ALScriptStudioVim::command(ALTextView& view, const std::string& name, const
         {
             if (Doc* each = mServices.findDoc(id))
             {
-                mWindow.letGoOf(*each);
+                mTabs.letGoOf(*each);
             }
         }
         return true;
@@ -672,7 +678,7 @@ bool ALScriptStudioVim::tabCommand(ALTextView& view, const std::string& name_in,
     auto go = [&](S32 index) {
         if (index >= 0 && index < count)
         {
-            mWindow.activate(*tabs[index]);
+            mTabs.activate(*tabs[index]);
         }
     };
     // Along the strip, round past either end, as vim's buffers and tab
@@ -687,7 +693,7 @@ bool ALScriptStudioVim::tabCommand(ALTextView& view, const std::string& name_in,
     auto close   = [&](Doc& doc) {
         if (bang)
         {
-            mWindow.letGoOf(doc);
+            mTabs.letGoOf(doc);
         }
         else
         {
@@ -704,7 +710,7 @@ bool ALScriptStudioVim::tabCommand(ALTextView& view, const std::string& name_in,
     {
         if (Doc* doc = tabNamed(view, args))
         {
-            mWindow.activate(*doc);
+            mTabs.activate(*doc);
         }
         return true;
     }
@@ -793,7 +799,7 @@ bool ALScriptStudioVim::tabCommand(ALTextView& view, const std::string& name_in,
         {
             if (Doc* doc = mServices.findDoc(id))
             {
-                mWindow.letGoOf(*doc);
+                mTabs.letGoOf(*doc);
             }
         }
         return true;
@@ -974,13 +980,13 @@ void ALScriptStudioVim::openPath(Doc& doc, const std::string& path)
     {
         if (each->file == path)
         {
-            mWindow.activate(*each);
+            mTabs.activate(*each);
             return;
         }
     }
     std::string extension = fsyspath(fsyspath(path).extension()).string();
     LLStringUtil::toLower(extension);
-    mWindow.openFileTab(path, extension == ".lua" || extension == ".luau" || (extension != ".lsl" && doc.language.lua));
+    mTabs.openFileTab(path, extension == ".lua" || extension == ".luau" || (extension != ".lsl" && doc.language.lua));
 }
 
 bool ALScriptStudioVim::fileCommand(ALTextView& view, Doc& doc, const std::string& name_in, const std::string& args)
@@ -1007,7 +1013,7 @@ bool ALScriptStudioVim::fileCommand(ALTextView& view, Doc& doc, const std::strin
             }
             else if (mWindow.revertible(doc))
             {
-                mWindow.revert(doc);
+                mTabs.revert(doc);
             }
             return true;
         }
@@ -1015,7 +1021,7 @@ bool ALScriptStudioVim::fileCommand(ALTextView& view, Doc& doc, const std::strin
         {
             if (Doc* alternate = tabNamed(view, args))
             {
-                mWindow.activate(*alternate);
+                mTabs.activate(*alternate);
             }
             return true;
         }
@@ -1030,7 +1036,7 @@ bool ALScriptStudioVim::fileCommand(ALTextView& view, Doc& doc, const std::strin
         {
             if (each->name == args)
             {
-                mWindow.activate(*each);
+                mTabs.activate(*each);
                 return true;
             }
         }
@@ -1159,7 +1165,7 @@ bool ALScriptStudioVim::fileCommand(ALTextView& view, Doc& doc, const std::strin
             {
                 if (each->unsaved() && each->modifiable)
                 {
-                    mWindow.saveToClose(id);
+                    mSaves.saveToClose(id);
                 }
                 else
                 {

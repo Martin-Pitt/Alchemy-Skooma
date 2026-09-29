@@ -44,7 +44,7 @@ namespace
     typedef ALScriptStudioDoc             Doc;
 
     // The window, faked: a record of what recovery asked of it.
-    struct FakeRecoveryWindow : public ALScriptStudioRecovery::Window
+    struct FakeRecoveryWindow : public ALScriptStudioRecovery::Window, public al_studio_test::QuietTabs
     {
         bool recoverElsewhere(const Entry& entry) override
         {
@@ -80,7 +80,7 @@ namespace
             doc.carriedText.reset();
         }
         void refreshNotice() override { ++notices; }
-        void tabsChanged() override { ++tabs; }
+        void fillTabs() override { ++tabs; }
         void pick(std::vector<ALQuickOpen::Candidate> offered, const std::string&, const std::string&, std::function<void(const std::string&)> choose,
                   std::function<void(const std::string&)> drop) override
         {
@@ -134,7 +134,7 @@ namespace tut
             {
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
-            recovery          = std::make_unique<ALScriptStudioRecovery>(services(), studio());
+            recovery          = std::make_unique<ALScriptStudioRecovery>(services(), studio(), studio());
             studio().recovery = recovery.get();
             folder = fsyspath(std::filesystem::temp_directory_path() / fsyspath("alscriptstudiorecovery_" + LLUUID::generateNewID().asString())).string();
             std::filesystem::create_directories(fsyspath(folder));
@@ -290,14 +290,14 @@ namespace tut
         type(doc, "z");
         ensure("not said again", !r.keep(doc) && services().reports.size() == 1);
         ALRecovery::useStore(store.get());
-        ensure("kept, once it can be", r.keep(doc) && !doc.recoveryFailed);
+        ensure("kept, once it can be", r.keep(doc) && !doc.recovery->failed);
 
         ALRecovery::useStore(&nowhere);
         type(doc, "w");
         r.keepSoon(doc);
         nowhere.flush();
         r.keepSoon(doc);
-        ensure("from the store's thread, said once", services().reports.size() == 2 && doc.recoveryFailed);
+        ensure("from the store's thread, said once", services().reports.size() == 2 && doc.recovery->failed);
         nowhere.flush();
         r.keepSoon(doc);
         nowhere.flush();
@@ -445,17 +445,17 @@ namespace tut
         Doc&                    doc = tab("a", "x\n");
         type(doc, "y");
         r.schedule(doc);
-        const F64 due = doc.recoveryDue;
+        const F64 due = doc.recovery->due;
         ensure("due in a moment", due > LLTimer::getTotalSeconds());
         type(doc, "z");
         r.schedule(doc);
-        ensure("not put off by more typing", doc.recoveryDue == due);
+        ensure("not put off by more typing", doc.recovery->due == due);
         r.pump();
         ensure("not yet", keptFor(doc.recoveryKey) == 0);
-        doc.recoveryDue = LLTimer::getTotalSeconds() - 1.0;
+        doc.recovery->due = LLTimer::getTotalSeconds() - 1.0;
         r.pump();
         store->flush();
-        ensure("written", keptFor(doc.recoveryKey) == 1 && doc.recoveryDue == 0.0);
+        ensure("written", keptFor(doc.recoveryKey) == 1 && doc.recovery->due == 0.0);
         doc.editor->resetDirty();
         r.schedule(doc);
         ensure("clean: forgotten at once", keptFor(doc.recoveryKey) == 0);
@@ -519,7 +519,7 @@ namespace tut
         type(a, "z");
         type(b, "w");
         ensure("not kept", !r.keepAll({ &a, &b }));
-        ensure("each said once", services().reports.size() == 2 && a.recoveryFailed && b.recoveryFailed);
+        ensure("each said once", services().reports.size() == 2 && a.recovery->failed && b.recovery->failed);
         ALRecovery::useStore(store.get());
     }
 
@@ -641,5 +641,20 @@ namespace tut
         r.recover(card);
         ensure("the window cannot have it: the studio keeps it", taken.size() == 2 && studio().orphans.size() == 2);
         ALRecovery::takeWindowsTo(nullptr);
+    }
+
+    template<> template<>
+    void alscriptstudiorecovery_object::test<14>()
+    {
+        set_test_name("a tab kept under another key from here on: what the old one kept let go of, and written afresh under the new");
+        ALScriptStudioRecovery& r = make();
+        Doc&                    a = tab("a", "one\n");
+        type(a, "x");
+        ensure("kept", r.keep(a) && keptFor(a.recoveryKey) == 1);
+        const std::string was = a.recoveryKey;
+        ALScriptStudioRecovery::rekey(a, ALRecoveryStore::keyOf(LLUUID::null, LLUUID::null, "/somewhere/a.lsl"));
+        store->flush();
+        ensure("the old let go of", a.recoveryKey != was && keptFor(was) == 0);
+        ensure("written afresh, though nothing moved", r.keep(a) && keptFor(a.recoveryKey) == 1);
     }
 }
