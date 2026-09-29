@@ -388,6 +388,11 @@ namespace
         std::vector<LLViewerObject*> worn;
         for (const auto& point : avatar->mAttachmentPoints)
         {
+            // A HUD is drawn on the screen, not the avatar; its position is in HUD space.
+            if (point.second->getIsHUDAttachment())
+            {
+                continue;
+            }
             for (const LLPointer<LLViewerObject>& attached : point.second->mAttachedObjects)
             {
                 if (attached.notNull())
