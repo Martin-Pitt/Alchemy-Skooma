@@ -84,6 +84,7 @@ private:
     U32 mOverBudget = 0;    ///< candidates the budget dropped: crowded, past one per space, or past the cap
     U32 mMoves = 0;
     U32 mCreated = 0;
+    U32 mCandidatesAdded = 0;   ///< threshold bubbles the portal pass stood up
     U32 mPlaced = 0;
     F32 mLastMs = 0.f;
 };
