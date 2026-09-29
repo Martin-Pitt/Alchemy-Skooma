@@ -41,6 +41,7 @@
 #include "llviewerwindow.h"
 #include "llworld.h"
 #include "sknavmesh.h"
+#include "sknavmarkobjects.h"
 #include "sknavoverlay.h"
 #include "sknavrooms.h"
 
@@ -49,36 +50,6 @@
 namespace
 {
     using namespace sknav;
-
-    LLColor4 typeColor(MarkType type)
-    {
-        switch (type)
-        {
-            case MarkType::MISSED_OPENING: return LLColor4(0.2f, 1.f, 0.3f, 1.f);
-            case MarkType::WRONG: return LLColor4(1.f, 0.2f, 0.2f, 1.f);
-            case MarkType::DOOR: return LLColor4(0.8f, 0.4f, 0.2f, 1.f);
-            case MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
-            case MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
-            case MarkType::RAMP: return LLColor4(0.3f, 0.5f, 0.9f, 1.f);
-            case MarkType::LADDER: return LLColor4(1.f, 1.f, 0.3f, 1.f);
-            case MarkType::ELEVATOR: return LLColor4(0.7f, 0.5f, 1.f, 1.f);
-            case MarkType::LEDGE: return LLColor4(1.f, 0.45f, 0.45f, 1.f);
-            case MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
-            case MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
-            case MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
-            case MarkType::STREET: return LLColor4(0.75f, 0.75f, 0.75f, 1.f);
-            case MarkType::BRIDGE: return LLColor4(0.8f, 0.6f, 0.4f, 1.f);
-            case MarkType::BALCONY: return LLColor4(1.f, 0.8f, 0.6f, 1.f);
-            case MarkType::COURTYARD: return LLColor4(0.6f, 0.9f, 0.7f, 1.f);
-            case MarkType::WATER_BODY: return LLColor4(0.2f, 0.5f, 1.f, 1.f);
-            case MarkType::WALKABLE: return LLColor4(0.1f, 0.9f, 0.6f, 1.f);
-            case MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
-            case MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
-            case MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
-            case MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
-            default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
-        }
-    }
 
     LLVector3 agentOf(const LLVector3d& global)
     {
@@ -229,6 +200,36 @@ namespace
         {
             cross(geom, a, 0.3f, color);
         }
+    }
+}
+
+LLColor4 skNavMarkColor(sknav::MarkType type)
+{
+    switch (type)
+    {
+        case sknav::MarkType::MISSED_OPENING: return LLColor4(0.2f, 1.f, 0.3f, 1.f);
+        case sknav::MarkType::WRONG: return LLColor4(1.f, 0.2f, 0.2f, 1.f);
+        case sknav::MarkType::DOOR: return LLColor4(0.8f, 0.4f, 0.2f, 1.f);
+        case sknav::MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
+        case sknav::MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
+        case sknav::MarkType::RAMP: return LLColor4(0.3f, 0.5f, 0.9f, 1.f);
+        case sknav::MarkType::LADDER: return LLColor4(1.f, 1.f, 0.3f, 1.f);
+        case sknav::MarkType::ELEVATOR: return LLColor4(0.7f, 0.5f, 1.f, 1.f);
+        case sknav::MarkType::LEDGE: return LLColor4(1.f, 0.45f, 0.45f, 1.f);
+        case sknav::MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
+        case sknav::MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
+        case sknav::MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
+        case sknav::MarkType::STREET: return LLColor4(0.75f, 0.75f, 0.75f, 1.f);
+        case sknav::MarkType::BRIDGE: return LLColor4(0.8f, 0.6f, 0.4f, 1.f);
+        case sknav::MarkType::BALCONY: return LLColor4(1.f, 0.8f, 0.6f, 1.f);
+        case sknav::MarkType::COURTYARD: return LLColor4(0.6f, 0.9f, 0.7f, 1.f);
+        case sknav::MarkType::WATER_BODY: return LLColor4(0.2f, 0.5f, 1.f, 1.f);
+        case sknav::MarkType::WALKABLE: return LLColor4(0.1f, 0.9f, 0.6f, 1.f);
+        case sknav::MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
+        case sknav::MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
+        case sknav::MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
+        case sknav::MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
+        default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
     }
 }
 
@@ -478,6 +479,7 @@ void SKNavAnnotator::remove(U32 id)
         {
             mSelected = 0;
         }
+        SKNavMarkObjects::instance().despawnMark(id);
         touch();
     }
 }
@@ -496,6 +498,7 @@ void SKNavAnnotator::clear()
     mMarks.clear();
     mPending = Mark();
     mSelected = 0;
+    SKNavMarkObjects::instance().despawnAll();
     touch();
 }
 
@@ -531,7 +534,7 @@ void SKNavAnnotator::syncLabels()
         mark.extent(lo, hi);
         // Over the top of the mark, so the label clears it.
         label->setPositionGlobal(LLVector3d((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, hi.mdV[VZ] + 0.4));
-        LLColor4 color = typeColor(mark.mType);
+        LLColor4 color = skNavMarkColor(mark.mType);
         if (mark.mId == mSelected)
         {
             color = LLColor4::white;
@@ -543,6 +546,8 @@ void SKNavAnnotator::syncLabels()
 
 void SKNavAnnotator::render()
 {
+    // The bodies follow the marks and the marks the bodies, once a frame.
+    SKNavMarkObjects::instance().sync(*this);
     syncLabels();
     if (mMarks.empty() && mPending.mVerts.empty() && !mHasHover)
     {
@@ -560,11 +565,11 @@ void SKNavAnnotator::render()
         }
         if (mark.mKind == MarkKind::PORTAL)
         {
-            drawPortal(geom, mark, typeColor(mark.mType));
+            drawPortal(geom, mark, skNavMarkColor(mark.mType));
         }
         else
         {
-            drawMark(geom, mark, typeColor(mark.mType));
+            drawMark(geom, mark, skNavMarkColor(mark.mType));
         }
     }
 
@@ -589,7 +594,7 @@ void SKNavAnnotator::render()
         {
             preview.mVerts.push_back(mHover);
         }
-        drawMark(bold, preview, typeColor(preview.mType));
+        drawMark(bold, preview, skNavMarkColor(preview.mType));
     }
     if (mHasHover && mArmed)
     {

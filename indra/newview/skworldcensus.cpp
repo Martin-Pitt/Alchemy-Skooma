@@ -50,6 +50,7 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "sknavmarkobjects.h"
 #include "sknavmesh.h"
 #include "skphysicsshape.h"
 
@@ -551,6 +552,16 @@ void SKWorldCensus::visit(LLViewerObject* object)
     {
         return;
     }
+
+    // <SK:Nexii> navmesh annotation bodies are survey instruments, not world
+    // content: a mark's beam would otherwise be built into the very mesh it
+    // measures, and the handles would count as surrounds. The annotator
+    // owns them and drops them with the session.
+    if (SKNavMarkObjects::instanceExists() && SKNavMarkObjects::getInstance()->isMarkProxy(object))
+    {
+        return;
+    }
+    // </SK:Nexii>
 
     // Movers and things that are not shapes.
     if (root->flagUsePhysics() || root->flagCharacter() || root->flagVolumeDetect() || root->flagTemporaryOnRez())

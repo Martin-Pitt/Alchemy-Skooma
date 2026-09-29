@@ -29,12 +29,17 @@
 #include "llsingleton.h"
 #include "lltool.h"
 #include "sknavannotate.h"
+#include "v4color.h"
 
 #include <map>
 #include <ostream>
 #include <string>
 
 class LLHUDText;
+class SKNavMarkObjects;
+
+/// The colour a mark of this type draws in; its body prims wear it too.
+LLColor4 skNavMarkColor(sknav::MarkType type);
 
 /// The marks of this session and the one being placed. Main thread only.
 class SKNavAnnotator : public LLSingleton<SKNavAnnotator>
