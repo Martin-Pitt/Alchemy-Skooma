@@ -802,6 +802,24 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+            // The layout and the tile pass below are pure over the census,
+            // this region's land, the region set and the parameters. When
+            // none of those moved since this mesh was last laid, the pass
+            // would rebuild exactly what already stands: skip it whole.
+            // This is what makes the once-a-second reconcile cheap while
+            // the world stands still; the land's stamp is what the second
+            // pass existed to catch.
+            if (mesh->mLayoutCensus == snap->mStamp && mesh->mLayoutWorld == world_stamp &&
+                mesh->mLayoutLand == land_stamp && mesh->mLayoutParams == params &&
+                mesh->mLayoutVoidMargin == void_margin)
+            {
+                continue;
+            }
+            mesh->mLayoutCensus = snap->mStamp;
+            mesh->mLayoutWorld = world_stamp;
+            mesh->mLayoutLand = land_stamp;
+            mesh->mLayoutParams = params;
+            mesh->mLayoutVoidMargin = void_margin;
             std::vector<LaidTile> laid;
             {
                 LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region");

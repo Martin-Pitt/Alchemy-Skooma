@@ -280,6 +280,14 @@ private:
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
         F32 mLastSeen = 0.f;
+        // What the region pass's layout and tile re-sign were last laid
+        // against. While all of these stand, the pass would rebuild exactly
+        // what already stands, so it is skipped whole.
+        U64 mLayoutCensus = 0;
+        U64 mLayoutWorld = 0;
+        U64 mLayoutLand = 0;
+        U64 mLayoutParams = 0;
+        F32 mLayoutVoidMargin = 0.f;
         ~Mesh();
     };
 
