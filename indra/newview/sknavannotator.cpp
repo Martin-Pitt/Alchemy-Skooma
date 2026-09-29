@@ -954,12 +954,6 @@ void SKToolNavAnnotate::pickCallback(const LLPickInfo& pick_info)
     const bool held = self->mMouseDown;
     self->mMouseDown = false;
     const S32 x = pick_info.mMousePt.mX, y = pick_info.mMousePt.mY;
-    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
-    {
-        // The hovered cut toggles whether or not the world behind it picked.
-        annotator.clickPortal();
-        return;
-    }
     LLViewerObject* hit = pick_info.getObject();
     const bool mark_hit = hit && SKNavMarkObjects::instanceExists() && SKNavMarkObjects::instance().isMarkProxy(hit);
     if (mark_hit)
@@ -979,6 +973,12 @@ void SKToolNavAnnotate::pickCallback(const LLPickInfo& pick_info)
                 self->mManip->handleMouseDownOnPart(x, y, pick_info.mKeyMask);
             }
         }
+        return;
+    }
+    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // The hovered cut toggles whether or not the world behind it picked.
+        annotator.clickPortal();
         return;
     }
     if (hit && annotator.exitPickPending())
