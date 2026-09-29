@@ -52,6 +52,7 @@
 #include <vector>
 
 class ALFindBar;
+class ALVimHost;
 class LLContextMenu;
 
 // A view of a document: the lines laid out and drawn, only the ones in
@@ -230,6 +231,18 @@ public:
     bool            isReadOnly() const { return mReadOnly; }
     void            setWordWrap(bool wrap);
     bool            getWordWrap() const { return mWordWrap; }
+    // Whether the view scrolls sideways to what runs past its right edge,
+    // with a bar to do it by. A popup list sized to its choices does not:
+    // its bar would sit over the one row it has.
+    void            setSideScroll(bool scroll);
+    // The most bytes the text may hold -- a notecard's 65,536 -- or none
+    // for no limit. What is typed, pasted or dropped past it goes in as
+    // far as it fits, cut at a character; a change of several stretches
+    // at once that would pass it is not made. Either way the view beeps,
+    // and says so (onFull). Only a change that makes the text longer is
+    // held to it: a text put in whole, an undo and a redo are not.
+    void            setMaxBytes(size_t bytes) { mMaxBytes = bytes; }
+    size_t          maxBytes() const { return mMaxBytes; }
     // How the text is indented -- by tabs or by spaces, and how wide a
     // tab or a level is -- and where that was said: the defaults the view
     // was given; the text itself, as it was put in whole, where the view
@@ -349,6 +362,9 @@ public:
     // one first again.
     void           setModalKeymap(std::unique_ptr<ALModalKeymap> keymap);
     ALModalKeymap* modalKeymap() const { return mModal.get(); }
+    // What vim asks beyond the view -- lit layers, folds, functions,
+    // brackets kept with the text -- where this view has them (ALVimHost).
+    virtual ALVimHost* vimHost() { return nullptr; }
     // Whether a character typed now goes into the text: always, but for a
     // modal keymap outside its inserting modes, where it is a command.
     bool           typingText() const { return !mModal || mModal->inserting(); }
@@ -434,6 +450,11 @@ public:
     void                      addStyle(Style style);
     void                      clearStyles() { setStyles({}); }
     const std::vector<Style>& styles() const { return mStyles.items(); }
+    // A tint behind each line, the width of the text, none where its
+    // alpha is 0: each one a line, from the first, under everything else.
+    // For a text shown rather than edited -- a side of a diff.
+    void                         setLineTints(std::vector<LLColor4> tints) { mLineTints = std::move(tints); }
+    const std::vector<LLColor4>& lineTints() const { return mLineTints; }
 
     // --- atoms ---------------------------------------------------------------
 
@@ -513,10 +534,17 @@ public:
     void        recheckSpelling();
     // The next misspelled word after a place, or the last before it, line
     // by line round past the ends to the place's own line again; none
-    // where there is none, or no spell check.
-    std::optional<ALTextRange> misspellingFrom(const ALTextPos& from, bool forward);
+    // where there is none, or no spell check. Lines not checked yet are
+    // checked for so long (MISSPELLING_BUDGET) and no longer: where that
+    // runs out first, none, and `cut` says so. What was checked is kept,
+    // so the same search again goes on from about where this one stopped.
+    std::optional<ALTextRange> misspellingFrom(const ALTextPos& from, bool forward, bool* cut = nullptr);
+    static constexpr F32       MISSPELLING_BUDGET = 0.02f;
     // Next Misspelling and Previous Misspelling: the word selected, from
-    // the selection's end or its start. False where there is none.
+    // the selection's end or its start. False where there is none. Where
+    // the search runs out of time it goes on a frame at a time, and the
+    // word is selected when found -- unless the text or the selection has
+    // moved meanwhile, which drops it.
     bool goToMisspelling(bool forward);
     // A change worked out over the document (ALTextEditing) made, as one
     // step to undo, and the selection it says after.
@@ -552,6 +580,12 @@ public:
     // --- scrolling -----------------------------------------------------------
 
     void scrollToCaret();
+    // A place brought into sight as the caret is, the view moved no
+    // further than it must, and not left under what is drawn over the top
+    // (coveredAbove): what is shown without the caret going there, such
+    // as a match found ahead of it.
+    void scrollToShow(const ALTextPos& pos);
+    // The line at the top of the view, whatever is drawn over it.
     void scrollToLine(S32 line);
     S32  firstVisibleLine();
     S32  lastVisibleLine();
@@ -570,6 +604,8 @@ public:
     boost::signals2::connection onTextChanged(const changed_signal_t::slot_type& slot) { return mChanged.connect(slot); }
     // Every time the caret lands somewhere else, however it got there.
     boost::signals2::connection onCaretMoved(const changed_signal_t::slot_type& slot) { return mCaretMoved.connect(slot); }
+    // A change cut short, or not made, for the text being full (maxBytes).
+    boost::signals2::connection onFull(const changed_signal_t::slot_type& slot) { return mFull.connect(slot); }
 
     // --- the input method ------------------------------------------------------
 
@@ -655,6 +691,15 @@ public:
 
     void draw() override;
     void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    // Out of sight -- a tab not looked at, a window closed -- the layout
+    // lets go of every line's glyphs, keeping their heights.
+    void onVisibilityChange(bool new_visibility) override;
+    // A key a field of the text's own did not take -- the find bar's, with
+    // the keyboard -- is the field's, not the text's: only finding is done
+    // here, so that the next match is a key away from the find field, and
+    // the rest -- select all, undo, a word left -- go on up to the window,
+    // which gives them to the field.
+    bool handleKey(KEY key, MASK mask, bool called_from_parent) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleUnicodeCharHere(llwchar uni_char) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
@@ -799,8 +844,21 @@ protected:
     // it is: all that a long line draws of itself.
     ALTextLayout::Row rowInSight(const ALTextLayout::Line& laid, const ALTextLayout::Row& row, const LLRect& text) const;
     // A wavy line from x0 to x1 with its middle at y, as much of it as is
-    // within `clip`'s sides.
+    // within `clip`'s sides; and many at once, one texture bound for all.
+    struct Squiggle
+    {
+        F32      x0 = 0.f;
+        F32      x1 = 0.f;
+        S32      y  = 0;
+        LLColor4 color;
+        S32      clipLeft  = 0;
+        S32      clipRight = 0;
+    };
     static void drawSquiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip);
+    static void drawSquiggles(const Squiggle* squiggles, size_t count);
+    // A squiggle as a row draws one: drawn with the rest of the frame's
+    // squiggles, once the rows are drawn, where the rows are being drawn.
+    void squiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip);
     // Something was asked about the name at the caret: its definition,
     // its references, a new name; whether it could be.
     virtual bool performSymbol(ALEditorCommand command) { return false; }
@@ -822,6 +880,14 @@ protected:
     // notification to every listener, one edit for the journal, and the
     // caret put once, at `caret` in the text as it is after.
     ALTextDocument::Edit editMany(std::vector<std::pair<ALTextRange, std::string>> edits, const ALTextPos& caret);
+    // What of a text fits in place of a stretch under maxBytes: all of
+    // it, or as much as fits, cut at a character, the view full.
+    std::string_view     fitting(const ALTextRange& over, std::string_view text);
+    // Whether stretches replaced at once keep under maxBytes; the view
+    // full where they would not.
+    bool                 fits(const std::vector<std::pair<ALTextRange, std::string>>& edits);
+    // A beep, and whoever listens told: a change was cut short or not made.
+    void                 full();
     void                 afterEdit();
     void                 placeCaret(const ALTextPos& pos, bool extend);
     // The selection put somewhere, anchor and caret at once, told to
@@ -892,6 +958,15 @@ private:
     void queryChanged();
     // The bar told what was found.
     void findCounted();
+    // Next Misspelling gone on with where it ran out of time, while the
+    // text and the selection are as they were.
+    void seekMisspelling();
+    // Past so many lines laid out beyond those in sight, the layout lets go
+    // of those more than so many lines from what is in sight: a script
+    // scrolled through end to end otherwise keeps every line's glyphs.
+    static constexpr S32 LAYOUT_HELD_MOST   = 1024;
+    static constexpr S32 LAYOUT_KEPT_AROUND = 256;
+    void                 trimLayout();
     void settleFind()
     {
         if (mFind.isStale())
@@ -986,7 +1061,8 @@ private:
     bool mReadOnly   = false;
     // What the window was last told of the input method.
     bool mLanguageInput = false;
-    bool mWordWrap  = false;
+    bool mWordWrap   = false;
+    bool mSideScroll = true;
     // The line a closing word last brought out, where the caret stood
     // after it, and the blanks it had: undone if the next character makes
     // the word a longer one.
@@ -1027,9 +1103,12 @@ private:
     std::function<void(S32)> mZoomWheel;
     F32          mZoomRemainder = 0.f;
     bool         mSelecting = false;
-    // What is selected becomes the primary selection: at once, or, while a
-    // drag goes on, once it is let go of.
+    // What is selected becomes the primary selection once a frame, and
+    // before anything here could want it -- a middle click, the focus
+    // leaving, the view hidden -- or, while a drag goes on, once it is let
+    // go of.
     void         offerPrimary();
+    void         publishPrimary();
     bool         mPrimaryStale = false;
     // A drag reaches from where the press put the anchor, not from where a
     // modal keymap then moved the caret -- vim's normal mode takes a click
@@ -1075,6 +1154,8 @@ private:
     LLHandle<LLContextMenu> mUrlMenuHandle;
 
     ALFindBar*               mFindBar = nullptr;
+    // The colour table's generation the find bar was last coloured at.
+    U32                      mFindBarColors = 0;
     // What the bar's query found, kept in step with the text.
     ALTextFind               mFind;
     LLUIColor                mFindMatchColor;
@@ -1087,10 +1168,39 @@ private:
     // The lines the map shows, as of the layout's hidden revision and the
     // line count; and the ruler's lines with a mark, as of the text's
     // version and the marks' revision.
+    // The runs of one line for the map, by column, as far as `columns`.
+    struct MapRun;
+    void             readMapRuns(S32 line, S32 columns, std::vector<MapRun>& out);
     std::vector<S32> mMapLines;
     bool             mMapLinesValid    = false;
     U32              mMapLinesRevision = 0;
     S32              mMapLinesCount    = 0;
+    // The map's runs of text for the lines in sight, by column, as last
+    // read: kept while the text, its grammar and each line's tokens, the
+    // tab width, the map's width and the lines in sight hold, so that an
+    // idle frame does not read every line again.
+    struct MapRun
+    {
+        S32          from = 0;
+        S32          to   = 0;
+        ALSyntaxKind kind = ALSyntaxKind::Text;
+    };
+    struct MapRuns
+    {
+        U32                 version  = 0;
+        const void*         grammar  = nullptr;
+        S32                 tabWidth = -1;
+        S32                 columns  = -1;
+        S32                 first    = -1;
+        S32                 last     = -1;
+        U32                 hidden   = 0;
+        // For each line in sight, where its runs start, and its tokens'
+        // revision; the runs of the last end where the list does.
+        std::vector<size_t> starts;
+        std::vector<U32>    revisions;
+        std::vector<MapRun> runs;
+    };
+    MapRuns          mMapRuns;
     std::vector<S32> mRulerMarkLines;
     bool             mRulerMarksValid    = false;
     // Each pixel row of the ruler's track with a match on it, as last found:
@@ -1105,8 +1215,46 @@ private:
     U32              mRulerMarksRevision = 0;
 
     std::vector<LLColor4U> mColorScratch;
+    // A frame's rows in sight, and their glyphs as one call's runs with the
+    // colours they are drawn in: kept from frame to frame rather than made
+    // for each.
+    struct RowSeen
+    {
+        S32 line         = 0;
+        S32 row          = 0;
+        S32 rowScreenTop = 0;
+        S32 screenTop    = 0;
+    };
+    std::vector<RowSeen>            mRowsSeen;
+    std::vector<LLFontGL::GlyphRun> mGlyphRuns;
+    std::vector<LLColor4U>          mRunColours;
+    std::vector<size_t>             mRunColourAt;
+    std::vector<Squiggle>           mSquiggles;
+    // What the band under the text shows and where its pieces go, as the
+    // keymap had it at its generation in this font: read and measured
+    // again only when the keymap has moved on.
+    struct BandShown
+    {
+        const ALModalKeymap*     keymap     = nullptr;
+        U32                      generation = 0;
+        const LLFontGL*          font       = nullptr;
+        bool                     typing     = false;
+        bool                     error      = false;
+        bool                     status     = false;
+        std::string              shown;
+        S32                      caretX     = 0;
+        std::vector<std::string> items;
+        std::vector<S32>         lefts;
+        std::vector<S32>         widths;
+        S32                      chosen     = -1;
+        S32                      gap        = 0;
+    };
+    BandShown                       mBandShown;
+    bool                            mQueueSquiggles = false;
     changed_signal_t       mChanged;
     changed_signal_t       mCaretMoved;
+    changed_signal_t       mFull;
+    size_t                 mMaxBytes = 0;
 
     boost::signals2::scoped_connection mDocumentConnection;
     // In order of where they start, none over another.
@@ -1118,6 +1266,7 @@ private:
     };
     ALAnchoredRanges<Atom, AtomRange>  mAtoms;
     ALAnchoredRanges<Style>            mStyles;
+    std::vector<LLColor4>              mLineTints;
     LLUIColor                          mLinkColor;
     link_signal_t                      mLinkClicked;
     drop_handler_t                     mDropHandler;
@@ -1136,6 +1285,16 @@ private:
     // left alone for a moment after it was typed.
     bool                                    mSpellCheck = false;
     ALTextSpelling                          mSpelling;
+    // Next Misspelling still looking, from a selection in a version of
+    // the text; and how long a search may check lines for.
+    struct MisspellingSought
+    {
+        bool        forward = true;
+        ALTextRange selection;
+        U32         version = 0;
+    };
+    std::optional<MisspellingSought>        mMisspellingSought;
+    F32                                     mMisspellingBudget = MISSPELLING_BUDGET;
     // The change list (changes), and where in it the caret was last taken.
     std::vector<ALTextPos>                  mChanges;
     S32                                     mChangeAt = 0;

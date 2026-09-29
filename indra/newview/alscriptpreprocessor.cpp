@@ -40,6 +40,7 @@
 #include "alluauconfig.h"
 #include "alscriptenvelope.h"
 #include "alscriptstack.h"
+#include "alscriptworkspace.h"
 #include "llagent.h"
 #include "lldir.h"
 #include "llsdjson.h"
@@ -50,7 +51,7 @@
 #include "llviewerinventory.h"
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
-#include "llvoavatarself.h"
+#include "llagentui.h"
 
 #include <boost/unordered/unordered_flat_set.hpp>
 
@@ -225,7 +226,7 @@ ALPreprocessor::Options ALScriptPreprocessor::optionsFor(const Request& request,
                                     : request.compileTarget == "lsl-luau" ? ALLSLOptimizer::Target::Luau
                                                                           : ALLSLOptimizer::Target::Mono;
     options.agentId   = gAgentID.asString();
-    options.agentName = isAgentAvatarValid() ? gAgentAvatarp->getFullname() : std::string();
+    LLAgentUI::buildFullname(options.agentName);
     options.assetId   = request.assetId.isNull() ? std::string() : request.assetId.asString();
     options.fileName  = request.name;
     // The scripter's own macros, one to a line.
@@ -373,7 +374,7 @@ void ALScriptPreprocessor::start(const Request& request, callback_t callback, bo
         attemptJob(job);
         return;
     }
-    ALScriptWorkspace::instance().listContents(prim, [this, job, prim](const ALScriptWorkspace::Contents& contents) {
+    ALScriptWorkspace::instance().listContents(prim, [this, job, prim](const ALScriptContents& contents) {
         if (contents.fetched)
         {
             mResolver->heard(prim, contents.items);
@@ -621,7 +622,7 @@ void ALScriptPreprocessor::fetch(const std::string& path, std::function<void()> 
         done();
         return;
     }
-    ALScriptWorkspace::instance().load(ref, [this, path, done](const ALScriptWorkspace::Loaded& loaded) {
+    ALScriptWorkspace::instance().load(ref, [this, path, done](const ALScriptLoaded& loaded) {
         if (!loaded.error.empty())
         {
             mTexts.failed(path);
