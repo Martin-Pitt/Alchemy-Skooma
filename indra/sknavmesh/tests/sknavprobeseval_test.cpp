@@ -293,15 +293,15 @@ namespace tut
                             S32(90.f + 130.f * (((h >> 16) & 255) / 255.f)));
         };
 
-        struct Strategy { const char* mName; F32 mShare; F32 mSpaceRadius; F32 mHold; F32 mBlendZone; F32 mUnknownRadius; };
+        struct Strategy { const char* mName; F32 mShare; F32 mSpaceRadius; F32 mHold; F32 mBlendZone; F32 mUnknownRadius; bool mObligations; };
         const std::vector<Strategy> strategies =
         {
-            { "baseline", 1.0f, 0.f, 8.f, 0.f, 8.f },
-            { "share", 1.5f, 0.f, 8.f, 0.f, 8.f },
-            { "spacerad", 1.5f, 32.f, 8.f, 0.f, 8.f },
-            { "stable", 1.5f, 32.f, 24.f, 0.f, 8.f },
-            { "floor", 1.0f, 0.f, 8.f, 2.f, 8.f },
-            { "floorbridge", 1.0f, 0.f, 8.f, 2.f, 8.f },
+            { "baseline", 1.0f, 0.f, 8.f, 0.f, 8.f, false },
+            { "spacerad", 1.5f, 32.f, 8.f, 0.f, 8.f, false },
+            { "stable", 1.5f, 32.f, 24.f, 0.f, 8.f, false },
+            { "floorbridge", 1.0f, 0.f, 8.f, 2.f, 8.f, false },
+            { "obligation", 1.0f, 0.f, 8.f, 0.f, 8.f, true },
+            { "obligation2", 1.0f, 0.f, 24.f, 0.f, 8.f, true },
         };
 
         std::ofstream metrics((out_dir + "\\metrics.json").c_str());
@@ -322,6 +322,7 @@ namespace tut
             std::vector<std::map<U32, std::vector<U32>>> mesh_spaces(meshes.size());
             U32 spaces_probed = 0;
             U32 bridges = 0;
+            U32 obliged = 0;
             for (size_t mi = 0; mi < meshes.size(); ++mi)
             {
                 const WorldMesh& wm = *meshes[mi];
@@ -341,6 +342,70 @@ namespace tut
                         probe.mSpace = static_cast<U32>(i);
                         mesh_spaces[mi][static_cast<U32>(i)].push_back(static_cast<U32>(probes.size()));
                         probes.push_back(probe);
+                    }
+                }
+            }
+
+            if (strat.mObligations)
+            {
+                // Every portal must have both sides' nearest spheres cover it
+                // by a margin: two spheres that share a point intersect, so
+                // the graph link is automatic, and the side with no probe of
+                // its own is served by its neighbour reaching across. No new
+                // probes; growth only where a portal asks.
+                for (size_t mi = 0; mi < meshes.size(); ++mi)
+                {
+                    const WorldMesh& wm = *meshes[mi];
+                    for (const auto& entry : wm.mPortals)
+                    {
+                        if (entry.mA >= wm.mSpaces.size() || entry.mB >= wm.mSpaces.size())
+                        {
+                            continue;
+                        }
+                        const auto meets = [&]() -> bool
+                        {
+                            for (U32 a : mesh_spaces[mi][entry.mA])
+                            {
+                                for (U32 b : mesh_spaces[mi][entry.mB])
+                                {
+                                    const F32 dx = probes[a].mOrigin.mV[VX] - probes[b].mOrigin.mV[VX];
+                                    const F32 dy = probes[a].mOrigin.mV[VY] - probes[b].mOrigin.mV[VY];
+                                    const F32 dz = probes[a].mOrigin.mV[VZ] - probes[b].mOrigin.mV[VZ];
+                                    const F32 reach = probes[a].mRadius + probes[b].mRadius;
+                                    if (dx * dx + dy * dy + dz * dz < reach * reach) return true;
+                                }
+                            }
+                            return false;
+                        };
+                        if (meets())
+                        {
+                            continue;
+                        }
+                        const LLVector3 portal = LLVector3(wm.mOrigin + LLVector3d(entry.mCentre)) + LLVector3(0.f, 0.f, 1.f);
+                        for (U32 side : { entry.mA, entry.mB })
+                        {
+                            if (mesh_spaces[mi][side].empty())
+                            {
+                                continue;
+                            }
+                            U32 best = 0;
+                            F32 best_d2 = 1e30f;
+                            for (U32 p : mesh_spaces[mi][side])
+                            {
+                                const F32 d2 = dist_vec_squared(portal, probes[p].mOrigin);
+                                if (d2 < best_d2)
+                                {
+                                    best_d2 = d2;
+                                    best = p;
+                                }
+                            }
+                            const F32 need = std::sqrt(best_d2) + 1.f;
+                            if (need > probes[best].mRadius)
+                            {
+                                probes[best].mRadius = std::min(need, 24.f);
+                                ++obliged;
+                            }
+                        }
                     }
                 }
             }
@@ -576,6 +641,7 @@ namespace tut
 
             metrics << (st ? "," : "") << "{ \"name\": \"" << strat.mName << "\", \"probes\": " << probes.size()
                     << ", \"bridges\": " << bridges
+                    << ", \"obliged\": " << obliged
                     << ", \"spaces_probed\": " << spaces_probed
                     << ", \"coverage\": " << (columns ? 100.0 * covered / columns : 0.0)
                     << ", \"blend\": " << (columns ? 100.0 * blended / columns : 0.0)
