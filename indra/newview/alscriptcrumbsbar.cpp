@@ -28,8 +28,10 @@
 
 #include "alcodeeditor.h"
 #include "alscriptenvelope.h"
+#include "alscriptstudiocaret.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudioweighing.h"
 #include "llfloater.h"
 #include "llmenugl.h"
 #include "lluictrlfactory.h"
@@ -55,6 +57,22 @@ namespace
     {
         return holds(outer, ALTextPos(inner.line, inner.column)) && holds(outer, ALTextPos(inner.endLine, inner.endColumn));
     }
+
+    // Which of the trailer's pieces go first where the strip is narrow:
+    // the indentation, which the Format menu also says; which view is in
+    // front, which the toolbar also shows; what the code weighs, and
+    // whether a check is out; the selection; what a save sends. Anything
+    // said in a warning's colour, what the tab may not do and the problem
+    // counts go last, and the caret's place never.
+    constexpr S32 DROP_INDENT    = 7;
+    constexpr S32 DROP_VIEW      = 6;
+    constexpr S32 DROP_WEIGHT    = 5;
+    constexpr S32 DROP_CHECKING  = 5;
+    constexpr S32 DROP_SELECTION = 4;
+    constexpr S32 DROP_SIZE      = 3;
+    constexpr S32 DROP_WARNED    = 2;
+    constexpr S32 DROP_LEAD      = 1;
+    constexpr S32 DROP_COUNTS    = 1;
 }
 
 static LLPanelInjector<ALScriptCrumbsBar> t_script_studio_crumbs("script_studio_crumbs");
@@ -131,7 +149,9 @@ void ALScriptCrumbsBar::showTrailer(Doc& doc)
     {
         if (!said.empty())
         {
-            said.push_back({ "   \xC2\xB7   ", std::string(), std::string() });
+            Part dot{ "   \xC2\xB7   ", std::string(), std::string() };
+            dot.between = true;
+            said.push_back(std::move(dot));
         }
         said.push_back(std::move(part));
     }
@@ -156,18 +176,18 @@ ALScriptCrumbsBar::Steady ALScriptCrumbsBar::steadyOf(Doc& doc) const
     steady.optimized  = steady.expanded && doc.uploaded.valid && doc.uploaded.version == doc.editor->document().version();
     steady.codeBefore = doc.uploaded.codeBefore;
     steady.codeAfter  = doc.uploaded.codeAfter;
-    if (doc.weighing.weight)
+    if (doc.weighing->weight)
     {
         steady.weighed    = true;
-        steady.weighedFor = doc.weighing.weight->target;
-        steady.total      = doc.weighing.weight->total;
-        steady.limit      = doc.weighing.weight->limit;
-        steady.estimate   = doc.weighing.weight->estimate;
+        steady.weighedFor = doc.weighing->weight->target;
+        steady.total      = doc.weighing->weight->total;
+        steady.limit      = doc.weighing->weight->limit;
+        steady.estimate   = doc.weighing->weight->estimate;
     }
-    steady.exact        = doc.weighing.exact;
-    steady.sent         = doc.weighing.sent;
+    steady.exact        = doc.weighing->exact;
+    steady.sent         = doc.weighing->sent;
     steady.notecard     = doc.notecard;
-    steady.assetBytes   = doc.weighing.assetBytes;
+    steady.assetBytes   = doc.weighing->assetBytes;
     steady.errorColor   = doc.editor->markColor(ALCodeEditor::Mark::Error);
     steady.warningColor = doc.editor->markColor(ALCodeEditor::Mark::Warning);
     return steady;
@@ -180,11 +200,13 @@ void ALScriptCrumbsBar::lead(Doc& doc, std::vector<Part>& parts) const
     if (doc.loaded && !doc.modifiable)
     {
         parts.push_back({ mServices->words("TrailerReadOnly"), std::string(), mServices->words("TrailerReadOnlyTip") });
+        parts.back().drop = DROP_LEAD;
     }
     const std::string banner = mWindow->vimBanner();
     if (!banner.empty())
     {
         parts.push_back({ banner, std::string(), std::string() });
+        parts.back().drop = DROP_LEAD;
     }
 }
 
@@ -216,6 +238,7 @@ void ALScriptCrumbsBar::selection(Doc& doc, std::vector<Part>& parts) const
     {
         const S32 lines = selected.end.line - selected.begin.line + (selected.end.column > 0 ? 1 : 0);
         parts.push_back({ mServices->counted("SelectedLines", lines), std::string(), std::string() });
+        parts.back().drop = DROP_SELECTION;
     }
     else
     {
@@ -223,6 +246,7 @@ void ALScriptCrumbsBar::selection(Doc& doc, std::vector<Part>& parts) const
         // written in; a tab is one.
         const S32 chars = text.displayColumn(selected.end, 1) - text.displayColumn(selected.begin, 1);
         parts.push_back({ mServices->counted("SelectedChars", chars), std::string(), std::string() });
+        parts.back().drop = DROP_SELECTION;
     }
 }
 
@@ -232,16 +256,19 @@ void ALScriptCrumbsBar::problems(Doc& doc, std::vector<Part>& parts) const
     if (doc.checkRunning(LLTimer::getTotalSeconds()))
     {
         parts.push_back({ mServices->words("TrailerChecking"), "problems", mServices->words("TrailerCheckingTip") });
+        parts.back().drop = DROP_CHECKING;
     }
     S32 errors = 0, warnings = 0;
     mWindow->problemCounts(doc, errors, warnings);
     if (errors > 0)
     {
         parts.push_back({ mServices->counted("ProblemErrors", errors), "problems", mTips.problems });
+        parts.back().drop = DROP_COUNTS;
     }
     if (warnings > 0)
     {
         parts.push_back({ mServices->counted("ProblemWarnings", warnings), "problems", mTips.problems });
+        parts.back().drop = DROP_COUNTS;
     }
 }
 
@@ -259,8 +286,8 @@ void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
         const size_t               limit = ALScriptWeight::limitOf(*target);
         LLStringUtil::format_map_t args;
         args["[TARGET]"]      = ALScriptWeight::nameOf(*target);
-        args["[BEFORE]"]      = llformat("%.1f", (F64)doc.uploaded.codeBefore / 1024.0);
-        args["[AFTER]"]       = llformat("%.1f", (F64)doc.uploaded.codeAfter / 1024.0);
+        args["[BEFORE]"]      = llformat("%f", (F64)doc.uploaded.codeBefore / 1024.0);
+        args["[AFTER]"]       = llformat("%f", (F64)doc.uploaded.codeAfter / 1024.0);
         args["[LIMIT]"]       = std::to_string(limit / 1024);
         args["[BYTESBEFORE]"] = std::to_string(doc.uploaded.codeBefore);
         args["[BYTESAFTER]"]  = std::to_string(doc.uploaded.codeAfter);
@@ -276,28 +303,29 @@ void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
         {
             part.color = doc.editor->markColor(ALCodeEditor::Mark::Warning);
         }
+        part.drop = part.color ? DROP_WARNED : DROP_WEIGHT;
         parts.push_back(std::move(part));
         return;
     }
     // What its code weighs for its target, against what the target runs
     // it in: in the warning colour past four fifths, the error's past it.
-    if (!doc.weighing.weight || doc.weighing.weight->total <= 0)
+    if (!doc.weighing->weight || doc.weighing->weight->total <= 0)
     {
         return;
     }
-    const ALScriptWeight&      weighed = *doc.weighing.weight;
+    const ALScriptWeight&      weighed = *doc.weighing->weight;
     LLStringUtil::format_map_t args;
     args["[TARGET]"] = ALScriptWeight::nameOf(weighed.target);
-    args["[SIZE]"]   = llformat("%.1f", (F64)weighed.total / 1024.0);
+    args["[SIZE]"]   = llformat("%f", (F64)weighed.total / 1024.0);
     args["[LIMIT]"]  = std::to_string(weighed.limit / 1024);
     args["[BYTES]"]  = std::to_string(weighed.total);
     args["[MAX]"]    = std::to_string(weighed.limit);
     std::string tip  = mServices->words(weighed.estimate ? "TrailerWeightEstimateTip" : "TrailerWeightTip", args);
-    if (!doc.weighing.exact)
+    if (!doc.weighing->exact)
     {
         tip += " " + mServices->words("TrailerWeightBeforeTip");
     }
-    else if (doc.weighing.sent)
+    else if (doc.weighing->sent)
     {
         tip += " " + mServices->words("TrailerWeightSentTip");
     }
@@ -310,6 +338,7 @@ void ALScriptCrumbsBar::weight(Doc& doc, std::vector<Part>& parts) const
     {
         part.color = doc.editor->markColor(ALCodeEditor::Mark::Warning);
     }
+    part.drop = part.color ? DROP_WARNED : DROP_WEIGHT;
     parts.push_back(std::move(part));
 }
 
@@ -319,17 +348,17 @@ void ALScriptCrumbsBar::sending(Doc& doc, std::vector<Part>& parts) const
     // a notecard's text -- may be: in the warning colour past nine tenths,
     // the error's past the whole, where a save is refused.
     const size_t LIMIT = doc.notecard ? static_cast<size_t>(LLNotecard::MAX_SIZE) : ALScriptEnvelope::MAX_ASSET_BYTES;
-    if (doc.weighing.assetBytes * 2 <= LIMIT)
+    if (doc.weighing->assetBytes * 2 <= LIMIT)
     {
         return;
     }
     LLStringUtil::format_map_t size;
-    size["[SIZE]"]  = std::to_string((doc.weighing.assetBytes + 1023) / 1024);
+    size["[SIZE]"]  = std::to_string((doc.weighing->assetBytes + 1023) / 1024);
     size["[LIMIT]"] = std::to_string(LIMIT / 1024);
-    size["[BYTES]"] = std::to_string(doc.weighing.assetBytes);
+    size["[BYTES]"] = std::to_string(doc.weighing->assetBytes);
     size["[MAX]"]   = std::to_string(LIMIT);
-    size["[OVER]"]  = std::to_string(doc.weighing.assetBytes > LIMIT ? doc.weighing.assetBytes - LIMIT : 0);
-    const bool  over = doc.weighing.assetBytes > LIMIT;
+    size["[OVER]"]  = std::to_string(doc.weighing->assetBytes > LIMIT ? doc.weighing->assetBytes - LIMIT : 0);
+    const bool  over = doc.weighing->assetBytes > LIMIT;
     const char* tip  = doc.notecard ? (over ? "TrailerNotecardSizeOverTip" : "TrailerNotecardSizeTip")
                                     : (over ? "TrailerSizeOverTip" : "TrailerSizeTip");
     Part        part{ mServices->words("TrailerSize", size), std::string(), mServices->words(tip, size) };
@@ -337,10 +366,11 @@ void ALScriptCrumbsBar::sending(Doc& doc, std::vector<Part>& parts) const
     {
         part.color = doc.editor->markColor(ALCodeEditor::Mark::Error);
     }
-    else if (doc.weighing.assetBytes * 10 > LIMIT * 9)
+    else if (doc.weighing->assetBytes * 10 > LIMIT * 9)
     {
         part.color = doc.editor->markColor(ALCodeEditor::Mark::Warning);
     }
+    part.drop = part.color ? DROP_WARNED : DROP_SIZE;
     parts.push_back(std::move(part));
 }
 
@@ -358,6 +388,7 @@ void ALScriptCrumbsBar::indentation(Doc& doc, std::vector<Part>& parts) const
     const ALTextView::IndentFrom from = editor.indentFrom();
     const char* tip = from == ALTextView::IndentFrom::Text ? "TrailerIndentTipText" : from == ALTextView::IndentFrom::Chosen ? "TrailerIndentTipChosen" : "TrailerIndentTipDefaults";
     parts.push_back({ mServices->words(editor.getSoftTabs() ? "TrailerIndentSpaces" : "TrailerIndentTabs", args), "indent", mServices->words(tip) });
+    parts.back().drop = DROP_INDENT;
 }
 
 void ALScriptCrumbsBar::showIndentMenu()
@@ -473,6 +504,7 @@ void ALScriptCrumbsBar::views(Doc& doc, std::vector<Part>& parts) const
         const bool expanded = doc.shownView() == Doc::View::Expanded;
         parts.push_back(
             { mServices->words(expanded ? "TrailerExpanded" : "TrailerSource"), "expanded", expanded ? mTips.expanded : mTips.source });
+        parts.back().drop = DROP_VIEW;
     }
 }
 
@@ -488,15 +520,15 @@ void ALScriptCrumbsBar::showPath(Doc& doc)
     // they are made again only where the path, the outline it was read
     // from, the tab or its name has changed -- and it is asked on every
     // key.
-    const std::vector<size_t>& path = doc.caret.crumbPath;
-    if (mShownFor == doc.id && mShownOf == doc.caret.crumbsOf && mShownPath == path && mShownName == doc.name)
+    const std::vector<size_t>& path = doc.caret->crumbPath;
+    if (mShownFor == doc.id && mShownOf == doc.caret->crumbsOf && mShownPath == path && mShownName == doc.name)
     {
         // The same steps over the same outline: only the trailer, which
         // says where the caret is.
         showTrailer(doc);
         return;
     }
-    mShownOf   = doc.caret.crumbsOf;
+    mShownOf   = doc.caret->crumbsOf;
     mShownPath = path;
     mShownName = doc.name;
 
