@@ -31,7 +31,9 @@
 #include "alcodeeditor.h"
 #include "alpanefolds.h"
 #include "alpanelist.h"
+#include "alscriptstudiochecking.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudioweighing.h"
 #include "llcheckboxctrl.h"
 #include "llclipboard.h"
 #include "llcombobox.h"
@@ -92,7 +94,10 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
                              : level == Doc::Level::Error   ? error_color
                              : level == Doc::Level::Warning ? warning_color
                                                             : note_color;
-        decoration.message = origin + ": " + message;
+        decoration.style   = mark == ALCodeEditor::Mark::Runtime || level == Doc::Level::Error ? ALCodeEditor::Decoration::Style::Squiggle
+                             : level == Doc::Level::Warning                                     ? ALCodeEditor::Decoration::Style::Dashed
+                                                                                                : ALCodeEditor::Decoration::Style::Dotted;
+        decoration.message = services.labelled(origin, message);
         made.decorations.push_back(std::move(decoration));
     };
 
@@ -101,9 +106,9 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
     // a line either way, since the two say where a statement went wrong
     // differently -- the analyzer at the missing `;`, the compiler at what
     // came after it.
-    const bool analysis_current = doc.check.analysisVersion == doc.editor->document().version();
+    const bool analysis_current = doc.check->analysisVersion == doc.editor->document().version();
     auto       analysed_error_near = [&](S32 line) {
-        for (const ALScriptProblem& problem : doc.check.analysis)
+        for (const ALScriptProblem& problem : doc.check->analysis)
         {
             if (problem.severity == ALScriptProblem::Severity::Error && problem.file.empty() && std::abs(problem.line - line) <= 1)
             {
@@ -122,7 +127,7 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         {
             continue;
         }
-        add(problem.line, problem.column, problem.hasColumn, problem.line, problem.column, Doc::markOf(level), level, services.words("OriginCompiler"),
+        add(problem.line, problem.column, problem.hasColumn, problem.line, problem.column, markOf(level), level, services.words("OriginCompiler"),
             problem.message + as_saved, problem.file);
     }
     // The preprocessor's own word on the text as it stands, and the
@@ -144,7 +149,7 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
             args["[TARGET]"] = ALScriptWeight::nameOf(*target);
             message += " " + services.words(*problem.savedBytes > 0 ? "OptimizerNoteLighter" : *problem.savedBytes < 0 ? "OptimizerNoteHeavier" : "OptimizerNoteSame", args);
         }
-        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, Doc::markOf(level), level,
+        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, markOf(level), level,
             services.words(optimizer ? "OriginOptimizer" : "OriginPreprocessor"), message, problem.file);
         made.rows.back().key      = problem.key;
         made.rows.back().fixes    = problem.fixes;
@@ -173,14 +178,14 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
             }
         }
     }
-    for (const ALScriptProblem& problem : doc.check.analysis)
+    for (const ALScriptProblem& problem : doc.check->analysis)
     {
         const Doc::Shown said = Doc::analysisRow(problem, doc.language.lua, services);
-        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, Doc::markOf(said.level), said.level, said.origin, said.message,
+        add(problem.line, problem.column, true, problem.endLine, problem.endColumn, markOf(said.level), said.level, said.origin, said.message,
             problem.file, said.lint);
         made.rows.back().key      = problem.key;
         made.rows.back().fixes    = problem.fixes;
-        made.rows.back().fixesFor = doc.check.analysisVersion;
+        made.rows.back().fixesFor = doc.check->analysisVersion;
         // The gutter's word on what the line offers: a lightbulb where the
         // caret is, a round mark where a fix changes the script.
         if (analysis_current && problem.file.empty() && !problem.fixes.empty())
@@ -205,12 +210,12 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         add(line, column, problem.column >= 0, line, column, ALCodeEditor::Mark::Runtime, Doc::Level::Error, services.words("OriginRuntime"), message,
             problem.file);
     }
-    if (!doc.check.definitionsError.empty())
+    if (!doc.check->definitionsError.empty())
     {
         Doc::Shown row;
         row.level   = Doc::Level::Note;
         row.origin  = services.words("OriginDefinitions");
-        row.message = doc.check.definitionsError;
+        row.message = doc.check->definitionsError;
         made.rows.push_back(std::move(row));
     }
     // Code heavier than its target runs a script in: a warning, since
@@ -220,25 +225,25 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
     // the trailer colours it, a warning too: what is left is all the
     // script has to run in. Not where the optimizer is still to run, which
     // only makes it lighter.
-    const std::optional<ALScriptWeight>& weighed = doc.weighing.weight;
-    const bool current = weighed && doc.weighing.version == doc.editor->document().version();
+    const std::optional<ALScriptWeight>& weighed = doc.weighing->weight;
+    const bool current = weighed && doc.weighing->version == doc.editor->document().version();
     const bool over    = current && weighed->total > weighed->limit;
-    const bool nearby  = current && !over && doc.weighing.exact && weighed->total * 5 > weighed->limit * 4;
-    if (over || nearby)
+    const bool nearing = current && !over && doc.weighing->exact && weighed->total * 5 > weighed->limit * 4;
+    if (over || nearing)
     {
-        const ALScriptWeight&      weight = *doc.weighing.weight;
+        const ALScriptWeight&      weight = *doc.weighing->weight;
         LLStringUtil::format_map_t args;
-        args["[SIZE]"]   = llformat("%.1f", (F64)weight.total / 1024.0);
+        args["[SIZE]"]   = llformat("%f", (F64)weight.total / 1024.0);
         args["[LIMIT]"]  = std::to_string(weight.limit / 1024);
-        args["[LEFT]"]   = nearby ? llformat("%.1f", (F64)(weight.limit - weight.total) / 1024.0) : std::string();
+        args["[LEFT]"]   = nearing ? llformat("%f", (F64)(weight.limit - weight.total) / 1024.0) : std::string();
         args["[TARGET]"] = ALScriptWeight::nameOf(weight.target);
         Doc::Shown row;
         row.level   = Doc::Level::Warning;
         row.origin  = services.words("OriginWeight");
-        const char* said = nearby          ? (weight.estimate ? "WeightNearEstimate" : "WeightNear")
-                           : weight.estimate ? "WeightOverEstimate"
-                           : !doc.weighing.exact ? "WeightOverBefore"
-                                                 : "WeightOver";
+        const char* said = nearing                ? (weight.estimate ? "WeightNearEstimate" : "WeightNear")
+                           : weight.estimate      ? "WeightOverEstimate"
+                           : !doc.weighing->exact ? "WeightOverBefore"
+                                                  : "WeightOver";
         row.message      = services.words(said, args);
         made.rows.push_back(std::move(row));
     }
@@ -251,6 +256,14 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         return a.line != b.line ? a.line < b.line : a.column < b.column;
     });
     return made;
+}
+
+// static
+ALCodeEditor::Mark ALScriptProblemsPane::markOf(Doc::Level level)
+{
+    return level == Doc::Level::Error     ? ALCodeEditor::Mark::Error
+           : level == Doc::Level::Warning ? ALCodeEditor::Mark::Warning
+                                          : ALCodeEditor::Mark::Note;
 }
 
 static LLPanelInjector<ALScriptProblemsPane> t_script_studio_problems("script_studio_problems");
@@ -819,7 +832,7 @@ void ALScriptProblemsPane::listRows(const Doc* doc)
             row.value["group"] = static_cast<S32>(group_index);
             row.value["owner"] = group.owner;
             row.value["index"] = static_cast<S32>(group.index[k]);
-            const ALCodeEditor::Mark mark = problem->origin == runtime ? ALCodeEditor::Mark::Runtime : Doc::markOf(problem->level);
+            const ALCodeEditor::Mark mark = problem->origin == runtime ? ALCodeEditor::Mark::Runtime : markOf(problem->level);
             LLScrollListCell::Params icon = cell("icon",
                                                  problem->level == Doc::Level::Error     ? "Problem_Error"
                                                  : problem->level == Doc::Level::Warning ? "Problem_Warning"
@@ -858,7 +871,7 @@ void ALScriptProblemsPane::listRows(const Doc* doc)
         bool current = true;
         for (const Doc* each : docs)
         {
-            current = current && each->loaded && each->check.analysisVersion == each->editor->document().version();
+            current = current && each->loaded && each->check->analysisVersion == each->editor->document().version();
         }
         LLStringUtil::format_map_t named;
         named["[NAME]"] = doc ? doc->name : std::string();
@@ -883,7 +896,9 @@ std::string ALScriptProblemsPane::whereOf(const Doc* doc, const Doc::Shown& prob
     const S32           column = editor && problem.file.empty() && problem.line < editor->document().lineCount()
                                      ? editor->document().displayColumn(ALTextPos(problem.line, problem.column), editor->getTabWidth())
                                      : problem.column;
-    return problem.hasColumn ? llformat("%d:%d", problem.line + 1, column + 1) : llformat("%d", problem.line + 1);
+    // The line as the tab's gutter counts it: a notecard's may be from 0.
+    const S32 line = mServices->shownLine(problem.line, doc && doc->itemNotecard() && problem.file.empty());
+    return problem.hasColumn ? llformat("%d:%d", line, column + 1) : llformat("%d", line);
 }
 
 const ALScriptProblemsPane::Doc::Shown* ALScriptProblemsPane::shownOf(const LLSD& value) const
@@ -1129,9 +1144,10 @@ void ALScriptProblemsPane::act(const std::string& action)
     const std::string lint    = chosen ? chosen->lint : std::string();
     const bool        lua     = doc.language.lua;
     // A problem as a line of text: where, what level, from whom, what.
-    const auto as_text = [](const Doc& whose, const Doc::Shown& one) {
+    const auto as_text = [this](const Doc& whose, const Doc::Shown& one) {
         const std::string name  = !one.fileName.empty() ? one.fileName : whose.name;
-        const std::string where = one.hasColumn ? llformat("%s:%d:%d", name.c_str(), one.line + 1, one.column + 1) : llformat("%s:%d", name.c_str(), one.line + 1);
+        const S32         line  = mServices->shownLine(one.line, whose.itemNotecard() && one.file.empty());
+        const std::string where = one.hasColumn ? llformat("%s:%d:%d", name.c_str(), line, one.column + 1) : llformat("%s:%d", name.c_str(), line);
         const std::string level = one.level == Doc::Level::Error ? "error" : one.level == Doc::Level::Warning ? "warning" : "note";
         return where + ": " + level + ": " + one.message + " [" + one.origin + "]";
     };

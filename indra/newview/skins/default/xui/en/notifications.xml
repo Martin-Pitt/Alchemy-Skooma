@@ -1760,7 +1760,7 @@ Save changes to &quot;[NAME]&quot;?
    label="New Item"
    name="ScriptStudioNewItem"
    type="alertmodal">
-A name for the new [KIND]:
+Enter a name for the new [KIND]:
     <tag>confirm</tag>
     <form name="form">
       <input name="name" type="text" value="[NAME]" />
@@ -1781,7 +1781,7 @@ A name for the new [KIND]:
    label="Description"
    name="ScriptStudioDescribe"
    type="alertmodal">
-A description for [NAME]:
+Enter a description for [NAME]:
     <tag>confirm</tag>
     <form name="form">
       <input name="description" type="text" value="[DESCRIPTION]" max_length_chars="127" />
@@ -1802,7 +1802,7 @@ A description for [NAME]:
    label="Save Theme"
    name="ScriptStudioSaveTheme"
    type="alertmodal">
-A name for the theme, which the colors as they stand are kept under:
+Enter a name to save the current colors as a theme:
     <tag>confirm</tag>
     <form name="form">
       <input name="name" type="text" value="[NAME]" />
@@ -1822,7 +1822,7 @@ A name for the theme, which the colors as they stand are kept under:
    icon="alertmodal.tga"
    name="ScriptStudioThemeNotSaved"
    type="alertmodal">
-The theme could not be written to [PATH].
+Could not save the theme to [PATH].
     <tag>fail</tag>
   </notification>
 
@@ -1830,7 +1830,7 @@ The theme could not be written to [PATH].
    icon="alertmodal.tga"
    name="ScriptStudioThemeNameShipped"
    type="alertmodal">
-A theme that comes with the viewer is called &quot;[NAME]&quot;. Save yours under another name.
+A built-in theme is already named &quot;[NAME]&quot;. Choose another name.
     <tag>fail</tag>
   </notification>
 
@@ -1860,7 +1860,7 @@ A theme that comes with the viewer is called &quot;[NAME]&quot;. Save yours unde
    icon="alertmodal.tga"
    name="ScriptStudioQuitUnsaved"
    type="alertmodal">
-&quot;[NAME]&quot; has unsaved changes. Save them, keep them to be opened again next time, or let them go?
+&quot;[NAME]&quot; has unsaved changes. Save them, keep them to reopen next time, or discard them?
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1886,7 +1886,7 @@ A theme that comes with the viewer is called &quot;[NAME]&quot;. Save yours unde
    icon="alertmodal.tga"
    name="ScriptStudioQuitUnsavedMany"
    type="alertmodal">
-[COUNT] scripts and notecards have unsaved changes. Save them, keep them to be opened again next time, or let them go?
+[COUNT] scripts and notecards have unsaved changes. Save them, keep them to reopen next time, or discard them?
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1912,7 +1912,7 @@ A theme that comes with the viewer is called &quot;[NAME]&quot;. Save yours unde
    icon="alertmodal.tga"
    name="ScriptStudioKeptOne"
    type="alertmodal">
-You kept the unsaved changes to [NAMES] for next time. They open with Script Studio: open it now?
+You kept unsaved changes to [NAMES] for next time. They reopen when Script Studio opens. Open it now?
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1930,7 +1930,7 @@ You kept the unsaved changes to [NAMES] for next time. They open with Script Stu
    icon="alertmodal.tga"
    name="ScriptStudioKept"
    type="alertmodal">
-You kept unsaved changes to [COUNT] scripts and notecards for next time: [NAMES]. They open with Script Studio: open it now?
+You kept unsaved changes to [COUNT] scripts and notecards for next time: [NAMES]. They reopen when Script Studio opens. Open it now?
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1944,11 +1944,12 @@ You kept unsaved changes to [COUNT] scripts and notecards for next time: [NAMES]
     </form>
   </notification>
 
+
   <notification
    icon="alertmodal.tga"
-   name="ScriptStudioRecoveredOne"
+   name="RecoveredUnsavedOne"
    type="alertmodal">
-Script Studio kept unsaved changes to [NAMES] when the viewer last stopped before they were saved. Open them to look over and save, or discard them; File &gt; Recover Unsaved Changes has them meanwhile.
+Unsaved changes to [NAMES] were kept when the viewer last closed. Open them to review and save, or discard them. Until then, they are in Script Studio's File &gt; Recover Unsaved Changes.
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1968,9 +1969,9 @@ Script Studio kept unsaved changes to [NAMES] when the viewer last stopped befor
 
   <notification
    icon="alertmodal.tga"
-   name="ScriptStudioRecovered"
+   name="RecoveredUnsaved"
    type="alertmodal">
-Script Studio kept unsaved changes to [COUNT] scripts and notecards when the viewer last stopped before they were saved: [NAMES]. Open them to look over and save, or discard them; File &gt; Recover Unsaved Changes has them meanwhile.
+Unsaved changes to [COUNT] scripts and notecards were kept when the viewer last closed: [NAMES]. Open them to review and save, or discard them. Until then, they are in Script Studio's File &gt; Recover Unsaved Changes.
     <tag>confirm</tag>
     <form name="form">
       <button
@@ -1992,7 +1993,7 @@ Script Studio kept unsaved changes to [COUNT] scripts and notecards when the vie
    icon="alertmodal.tga"
    name="ScriptStudioDeleteItemOpen"
    type="alertmodal">
-Delete &quot;[NAME]&quot; from the object? It is open with unsaved changes, which are set aside for a week under File &gt; Recover Unsaved Changes. An item taken out of an object is gone for good.
+Delete &quot;[NAME]&quot; from the object? This cannot be undone. Its unsaved changes are kept for a week in File &gt; Recover Unsaved Changes.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2004,7 +2005,7 @@ Delete &quot;[NAME]&quot; from the object? It is open with unsaved changes, whic
    icon="alertmodal.tga"
    name="ScriptStudioDeleteItemsOpen"
    type="alertmodal">
-Delete [COUNT] items from their objects? Among them are items open with unsaved changes, which are set aside for a week under File &gt; Recover Unsaved Changes. An item taken out of an object is gone for good.
+Delete [COUNT] items from their objects? This cannot be undone. Unsaved changes in open items are kept for a week in File &gt; Recover Unsaved Changes.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2016,7 +2017,7 @@ Delete [COUNT] items from their objects? Among them are items open with unsaved 
    icon="alertmodal.tga"
    name="ScriptStudioReplaceAll"
    type="alertmodal">
-Replace [PLACES] in [SCRIPTS] with &quot;[WITH]&quot;? Each script's change is one step to undo there, and a script not open is opened with the change unsaved.
+Replace [PLACES] in [SCRIPTS] with &quot;[WITH]&quot;? You can undo each one's changes in one step. Those not open will open with the changes unsaved.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2028,7 +2029,7 @@ Replace [PLACES] in [SCRIPTS] with &quot;[WITH]&quot;? Each script's change is o
    icon="alertmodal.tga"
    name="ScriptStudioFixAll"
    type="alertmodal">
-Make [FIXES] in &quot;[NAME]&quot;, one for each problem, such as &quot;[EXAMPLE]&quot;? They are one step to undo.[LEFT]
+Apply [FIXES] in &quot;[NAME]&quot;, one per problem, such as &quot;[EXAMPLE]&quot;? You can undo them in one step.[LEFT]
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2053,7 +2054,7 @@ Keep the changes made to Script Studio&apos;s preferences?
    icon="alertmodal.tga"
    name="ScriptStudioRevert"
    type="alertmodal">
-Revert &quot;[NAME]&quot; to its saved text? What was changed since it was last saved is set aside; File &gt; Recover Unsaved Changes has it for a week.
+Revert &quot;[NAME]&quot; to its last saved version? Your unsaved changes are kept for a week in File &gt; Recover Unsaved Changes.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2065,7 +2066,7 @@ Revert &quot;[NAME]&quot; to its saved text? What was changed since it was last 
    icon="alertmodal.tga"
    name="ScriptStudioResetScripts"
    type="alertmodal">
-Reset [COUNT] scripts? Each forgets what it was doing and starts again from state_entry.
+Reset [COUNT] scripts? Each one clears its variables and starts again from state_entry.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2077,7 +2078,7 @@ Reset [COUNT] scripts? Each forgets what it was doing and starts again from stat
    icon="alertmodal.tga"
    name="ScriptStudioStopScripts"
    type="alertmodal">
-Stop [COUNT] scripts? Each stays stopped until it is started again.
+Stop [COUNT] scripts? They stay stopped until you start them again.
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2089,7 +2090,7 @@ Stop [COUNT] scripts? Each stays stopped until it is started again.
    icon="alertmodal.tga"
    name="ScriptStudioFileChanged"
    type="alertmodal">
-[NAME] changed on disk while it has unsaved changes here. Read it again from disk, or keep what is here?
+[NAME] changed on disk, and this tab has unsaved changes. Reload it from disk, or keep your changes?
     <tag>confirm</tag>
     <usetemplate
      name="okcancelbuttons"
@@ -2175,28 +2176,7 @@ There was a problem saving a notecard due to the following reason: [REASON].  Pl
 <tag>fail</tag>
   </notification>
 
-  <notification
-   icon="alertmodal.tga"
-   name="ScriptCannotUndo"
-   type="alertmodal">
-Could not undo all changes in your version of the script.
-Would you like to load the server&apos;s last saved version?
-(**Warning** This operation cannot be undone.)
-    <tag>confirm</tag>
-    <usetemplate
-     name="okcancelbuttons"
-     notext="Cancel"
-     yestext="OK"/>
-  </notification>
 
-  <notification
-   icon="alertmodal.tga"
-   name="SaveScriptFailObjectNotFound"
-   type="alertmodal">
-Could not save the script because the object it is in could not be found.
-The object may be out of range or may have been deleted.
-<tag>fail</tag>
-  </notification>
 
   <notification
    icon="alertmodal.tga"
@@ -2210,14 +2190,6 @@ Please type the Region name in Start Location box or choose My Last Location or 
      yestext="OK"/>
   </notification>
 
-  <notification
-   icon="alertmodal.tga"
-   name="CouldNotStartStopScript"
-   type="alertmodal">
-Could not start or stop the script because the object it is on could not be found.
-The object may be out of range or may have been deleted.
-  <tag>fail</tag>
-  </notification>
 
   <notification
    icon="alertmodal.tga"
@@ -3552,17 +3524,6 @@ Join land?
      yestext="OK"/>
   </notification>
 
-  <notification
-   icon="alertmodal.tga"
-   name="ConfirmNotecardSave"
-   type="alertmodal">
-This notecard needs to be saved before the item can be copied or viewed. Save notecard?
-    <tag>confirm</tag>
-    <usetemplate
-     name="okcancelbuttons"
-     notext="Cancel"
-     yestext="OK"/>
-  </notification>
 
   <notification
    icon="alertmodal.tga"
@@ -7866,29 +7827,8 @@ Please try again.
      yestext="OK"/>
   </notification>
 
-  <notification
-   icon="notifytip.tga"
-   name="ScriptMissing"
-   type="notifytip">
-Script is missing from database.
-  <tag>fail</tag>
-  </notification>
 
-  <notification
-   icon="notifytip.tga"
-   name="ScriptNoPermissions"
-   type="notifytip">
-Insufficient permissions to view script.
-  <tag>fail</tag>
-  </notification>
 
-  <notification
-   icon="notifytip.tga"
-   name="UnableToLoadScript"
-   type="notifytip">
-Unable to load script.  Please try again.
-  <tag>fail</tag>
-  </notification>
 
   <notification
    icon="notifytip.tga"
