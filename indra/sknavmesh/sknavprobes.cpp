@@ -678,6 +678,29 @@ namespace sknav
             {
                 return std::max(params.mBlendZoneM, params.mBlendShare * std::min(placed[a], placed[b]));
             };
+            // The one overlap constant, half the owed zone: the solve grows
+            // to it, the weak pass tests it, and the tests hold it, so a
+            // pair the solve could not fix is exactly the pair weak names.
+            const auto shorts_of = [&](size_t a, size_t b)
+            {
+                const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                return d >= out[a].mRadius + out[b].mRadius - owed(a, b) * 0.5f;
+            };
+            // Whether two parts touch: a shared edge, or a corner within a
+            // cell of contact, and floors within the climb of one another,
+            // so a storey above never blends through its ceiling.
+            const auto touching = [&](const ProbePart& a, const ProbePart& b)
+            {
+                const F32 gap_x = std::max(std::max(a.mMin.mV[VX] - b.mMax.mV[VX], b.mMin.mV[VX] - a.mMax.mV[VX]), 0.f);
+                const F32 gap_y = std::max(std::max(a.mMin.mV[VY] - b.mMax.mV[VY], b.mMin.mV[VY] - a.mMax.mV[VY]), 0.f);
+                if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
+                {
+                    return false;
+                }
+                const F32 z_lo = std::max(a.mMin.mV[VZ], b.mMin.mV[VZ]);
+                const F32 z_hi = std::min(a.mMax.mV[VZ], b.mMax.mV[VZ]);
+                return z_hi >= z_lo - 0.75f;
+            };
             for (S32 pass = 0; pass < 16; ++pass)
             {
                 bool grew = false;
@@ -685,23 +708,19 @@ namespace sknav
                 {
                     for (size_t b = a + 1; b < out.size(); ++b)
                     {
-                        const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
-                        const F32 w = owed(a, b);
-                        if (d < out[a].mRadius + out[b].mRadius - w)
+                        if (!shorts_of(a, b))
                         {
                             continue;   // this pair already blends
                         }
                         // Parts that do not touch grow nothing: two halves of
                         // an L stand apart on purpose, and the octree fills
-                        // between them. Parts meeting at a corner do touch,
-                        // by the margin of a cell: the span between their
-                        // boxes there is the corner itself.
-                        const F32 gap_x = std::max(std::max(out[a].mMin.mV[VX] - out[b].mMax.mV[VX], out[b].mMin.mV[VX] - out[a].mMax.mV[VX]), 0.f);
-                        const F32 gap_y = std::max(std::max(out[a].mMin.mV[VY] - out[b].mMax.mV[VY], out[b].mMin.mV[VY] - out[a].mMax.mV[VY]), 0.f);
-                        if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
+                        // between them.
+                        if (!touching(out[a], out[b]))
                         {
                             continue;
                         }
+                        const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                        const F32 w = owed(a, b);
                         const F32 need = d + w;
                         const F32 want_a = std::min(need - out[b].mRadius, params.mMaxRadiusM);
                         const F32 want_b = std::min(need - out[a].mRadius, params.mMaxRadiusM);
@@ -724,24 +743,21 @@ namespace sknav
                     break;
                 }
             }
-            // Whatever still falls short of its owed zone at the cap is a
-            // weak boundary: named, so a consumer can bridge it or shed the
-            // sphere when the budget demands, instead of guessing.
+            // Whatever still falls short at the cap is a weak boundary:
+            // named, so a consumer can bridge it or shed the sphere when the
+            // budget demands, instead of guessing.
             for (size_t a = 0; a < out.size(); ++a)
             {
+                if (out[a].mGrowth == ProbePart::PLACED)
+                {
+                    continue;   // a sphere the floor never touched sheds first, not this
+                }
                 for (size_t b = a + 1; b < out.size(); ++b)
                 {
-                    const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
-                    const F32 w = owed(a, b);
-                    if (d >= out[a].mRadius + out[b].mRadius - w)
+                    if (shorts_of(a, b) && touching(out[a], out[b]))
                     {
-                        const F32 gap_x = std::max(std::max(out[a].mMin.mV[VX] - out[b].mMax.mV[VX], out[b].mMin.mV[VX] - out[a].mMax.mV[VX]), 0.f);
-                        const F32 gap_y = std::max(std::max(out[a].mMin.mV[VY] - out[b].mMax.mV[VY], out[b].mMin.mV[VY] - out[a].mMax.mV[VY]), 0.f);
-                        if (gap_x <= plan.mCell + 0.01f && gap_y <= plan.mCell + 0.01f)
-                        {
-                            out[a].mGrowth = ProbePart::WEAK;
-                            out[b].mGrowth = ProbePart::WEAK;
-                        }
+                        out[a].mGrowth = ProbePart::WEAK;
+                        out[b].mGrowth = ProbePart::WEAK;
                     }
                 }
             }

@@ -79,9 +79,10 @@ namespace sknav
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
-        F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
-        F32 mBudgetHoldM = 24.f;    ///< a held sphere ranks this much nearer in the budget; measured
-                                    ///< free against churn, quality unmoved
+        F32 mMatchM = 8.f;          ///< a new sphere this close to a held one is that one, moved; as far
+                                    ///< as the budget's hold reaches, so a held sphere kept by the
+                                    ///< hold can still be matched to its part
+        F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
         F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
         U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
     };

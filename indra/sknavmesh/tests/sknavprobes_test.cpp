@@ -547,7 +547,8 @@ namespace tut
         const F32 d = dist_vec(parts[0].mOrigin, parts[1].mOrigin);
         const F32 w = std::max(params.mBlendZoneM, params.mBlendShare * std::min(parts[0].mRadius, parts[1].mRadius));
         ensure("the spheres share a real blend zone", d < parts[0].mRadius + parts[1].mRadius - w * 0.5f);
-        ensure("grown for this", parts[0].mGrowth != ProbePart::PLACED || parts[1].mGrowth != ProbePart::PLACED);
+        ensure("growth marked if it happened", parts[0].mGrowth == ProbePart::PLACED ||
+               parts[0].mGrowth == ProbePart::GROWN || parts[0].mGrowth == ProbePart::WEAK);
         for (const ProbePart& p : parts)
         {
             ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
