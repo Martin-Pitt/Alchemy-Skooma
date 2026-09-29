@@ -1693,7 +1693,7 @@ void LLReflectionMapManager::updateUniforms()
             llmax(minimum_ambiance, refmap->getAmbiance())*ambscale, // ambiance scale
             radscale, // radiance scale
             refmap->mFadeIn, // fade in weight
-            refmap->mNavRooms ? 1.f : 0.f); // <SK:Nexii> Navmesh rooms probes: parallax on
+            0.f); // unused
 
         S32 ni = nc; // neighbor ("index") - index into refNeighbor to write indices for current reflection probe's neighbors
         {

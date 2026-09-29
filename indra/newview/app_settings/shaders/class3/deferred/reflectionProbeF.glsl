@@ -537,7 +537,7 @@ vec3 tapRefMap(vec3 pos, vec3 dir, out float w, out float dw, float lod, vec3 c,
         float rr = r * r;
 
         v = sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 && refParams[i].w <= 0.0 ? 4096.0*4096.0 : // only unconstrained automatic placement disables parallax
+        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
                 rr);
 
         w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
@@ -618,7 +618,7 @@ vec3 tapIrradianceMap(vec3 pos, vec3 dir, out float w, out float dw, vec3 c, int
         float rr = r * r;
 
         v = sphereIntersect(pos, dir, c,
-        refIndex[i].w < 1 && refParams[i].w <= 0.0 ? 4096.0*4096.0 : // only unconstrained automatic placement disables parallax
+        refIndex[i].w < 1 ? 4096.0*4096.0 : // <== effectively disable parallax correction for automatically placed probes to keep from bombing the world with obvious spheres
                 rr);
 
         w = sphereWeight(pos, dir, refSphere[i].xyz, r, refParams[i], dw);
