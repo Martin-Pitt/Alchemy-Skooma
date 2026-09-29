@@ -1110,6 +1110,13 @@ LLTool* SKToolNavAnnotate::getOverrideTool(MASK mask)
     return LLToolComposite::getOverrideTool(mask);
 }
 
+void SKToolNavAnnotate::render()
+{
+    // The gizmo draws while it is the tool at work; the marks themselves
+    // draw from the pipeline's call on the annotator.
+    LLToolComposite::render();
+}
+
 void SKToolNavAnnotate::handleSelect()
 {
     gViewerWindow->setCursor(UI_CURSOR_CROSS);
