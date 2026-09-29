@@ -521,6 +521,7 @@ void SKNavAnnotator::clear()
     mSelected = 0;
     mFollowProxySelection = false;
     mExitPick = false;
+    mExitPickArmed = false;
     SKNavMarkObjects::instance().despawnAll();
     touch();
 }
@@ -610,6 +611,14 @@ void SKNavAnnotator::armExitPick()
     {
         return;
     }
+    // The click has to reach our tool for the exit to land, so a floater
+    // used without placing first brings the tool up, and puts it away when
+    // the exit is picked or let go.
+    mExitPickArmed = mArmed;
+    if (!mArmed)
+    {
+        arm(true);
+    }
     mExitPick = true;
     touch();
 }
@@ -619,6 +628,10 @@ void SKNavAnnotator::cancelExitPick()
     if (mExitPick)
     {
         mExitPick = false;
+        if (!mExitPickArmed)
+        {
+            arm(false);
+        }
         touch();
     }
 }
@@ -629,7 +642,15 @@ void SKNavAnnotator::addExit(const LLVector3d& at)
     Mark* mark = mMarks.find(mSelected);
     if (!mark || mark->mType != MarkType::STAIR || !mark->complete())
     {
+        if (!mExitPickArmed)
+        {
+            arm(false);
+        }
         return;
+    }
+    if (!mExitPickArmed)
+    {
+        arm(false);
     }
     mark->mExits.push_back(at);
     touch();

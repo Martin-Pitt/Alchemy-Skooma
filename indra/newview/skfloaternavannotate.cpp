@@ -27,9 +27,11 @@
 #include "skfloaternavannotate.h"
 
 #include "llbutton.h"
+#include "llcheckboxctrl.h"
 #include "lllineeditor.h"
 #include "llpanel.h"
 #include "llscrolllistctrl.h"
+#include "llspinctrl.h"
 #include "lluictrlfactory.h"
 
 using sknav::Mark;
@@ -95,6 +97,16 @@ bool SKFloaterNavAnnotate::postBuild()
         annotator.remove(annotator.selected());
     });
     getChild<LLUICtrl>("clear_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { SKNavAnnotator::instance().clear(); });
+    getChild<LLUICtrl>("add_exit")->setCommitCallback([](LLUICtrl*, const LLSD&) { SKNavAnnotator::instance().armExitPick(); });
+    getChild<LLUICtrl>("spiral")->setCommitCallback([](LLUICtrl* ctrl, const LLSD&) {
+        SKNavAnnotator::instance().setSpiral(ctrl->getValue().asBoolean());
+    });
+    getChild<LLUICtrl>("spiral_turns")->setCommitCallback([](LLUICtrl* ctrl, const LLSD&) {
+        SKNavAnnotator::instance().setSpiralTurns(ctrl->getValue().asReal());
+    });
+    getChild<LLUICtrl>("spiral_left")->setCommitCallback([](LLUICtrl* ctrl, const LLSD&) {
+        SKNavAnnotator::instance().setSpiralHand(ctrl->getValue().asBoolean() ? -1 : 1);
+    });
     buildTypeGrid();
     return true;
 }
@@ -136,6 +148,7 @@ void SKFloaterNavAnnotate::onClose(bool app_quitting)
 {
     if (!app_quitting)
     {
+        SKNavAnnotator::instance().cancelExitPick();
         SKNavAnnotator::instance().arm(false);
     }
     LLFloater::onClose(app_quitting);
@@ -178,7 +191,9 @@ void SKFloaterNavAnnotate::refreshList()
         row["columns"][1]["column"] = "kind";
         row["columns"][1]["value"] = sknav::markKindName(mark.mKind);
         row["columns"][2]["column"] = "type";
-        row["columns"][2]["value"] = sknav::markTypeName(mark.mType);
+        row["columns"][2]["value"] = std::string(sknav::markTypeName(mark.mType))
+                                        + (mark.mSpiral ? " (spiral)" : "")
+                                        + (mark.mExits.size() ? llformat(" +%u", (U32)mark.mExits.size()) : "");
         row["columns"][3]["column"] = "text";
         row["columns"][3]["value"] = mark.mText;
         mList->addElement(row);
@@ -208,6 +223,19 @@ void SKFloaterNavAnnotate::refreshSelection()
         }
     }
     getChild<LLUICtrl>("delete_button")->setEnabled(mark != nullptr);
+    // A complete stair serves several floors and can wind.
+    const bool stair = mark && mark->mType == MarkType::STAIR && mark->complete();
+    const bool spiral = stair && mark->mSpiral;
+    getChildView("add_exit")->setEnabled(stair && !annotator.exitPickPending());
+    LLUICtrl* spiral_box = getChild<LLUICtrl>("spiral");
+    spiral_box->setEnabled(stair);
+    spiral_box->setValue(spiral);
+    LLUICtrl* turns = getChild<LLUICtrl>("spiral_turns");
+    turns->setEnabled(spiral);
+    turns->setValue(LLSD(spiral && mark ? mark->mSpiralTurns : 1.0));
+    LLUICtrl* left = getChild<LLUICtrl>("spiral_left");
+    left->setEnabled(spiral);
+    left->setValue(mark && spiral ? mark->mSpiralHand < 0 : false);
 }
 
 void SKFloaterNavAnnotate::draw()
@@ -220,7 +248,11 @@ void SKFloaterNavAnnotate::draw()
         refreshList();
     }
     std::string status = getString("status_idle");
-    if (annotator.armed())
+    if (annotator.exitPickPending())
+    {
+        status = getString("status_exit");
+    }
+    else if (annotator.armed())
     {
         const MarkType type = annotator.newType();
         const MarkKind kind = sknav::markTypeKind(type);
@@ -229,5 +261,8 @@ void SKFloaterNavAnnotate::draw()
     }
     getChild<LLUICtrl>("tool_status")->setValue(status);
     getChild<LLUICtrl>("clear_button")->setEnabled(!annotator.marks().empty());
+    const Mark* selected_mark = annotator.find(annotator.selected());
+    getChildView("add_exit")->setEnabled(selected_mark && selected_mark->mType == MarkType::STAIR
+                                         && selected_mark->complete() && !annotator.exitPickPending());
     LLFloater::draw();
 }

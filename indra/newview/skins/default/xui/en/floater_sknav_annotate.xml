@@ -18,6 +18,7 @@
   <floater.string name="status_point">Placing [TYPE]: click a surface.</floater.string>
   <floater.string name="status_line">Placing [TYPE]: click along it; Enter or a double-click ends the line, Esc cancels.</floater.string>
   <floater.string name="status_portal">Placing [TYPE]: hover a portal the Spaces layer draws and click to strike it out; click a struck one to restore it. The Spaces checkbox in the navmesh console must be on.</floater.string>
+  <floater.string name="status_exit">Picking an exit for the selected stair: click where the way up lands; Esc lets go.</floater.string>
   <text
    name="tool_status"
    height="26"
@@ -50,12 +51,66 @@
    name="mark_text"
    label="Note for the selected mark"
    tool_tip="The selected mark's note; Enter keeps it" />
+  <panel
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   height="25"
+   width="376"
+   name="stair_row"
+   tool_tip="A stair can serve several floors and can wind; pick a stair to work its ways">
+   <button
+    follows="left"
+    layout="topleft"
+    left="0"
+    top="0"
+    height="23"
+    width="90"
+    name="add_exit"
+    label="Add exit"
+    tool_tip="The next surface click adds a way up where the selected stair lands beyond its own top" />
+   <check_box
+    follows="left"
+    layout="topleft"
+    left_pad="8"
+    top_delta="0"
+    height="23"
+    width="72"
+    name="spiral"
+    label="Spiral"
+    tool_tip="Wind the selected stair as a helix about an axis instead of running it straight; the handles then set axis, radius and rise" />
+   <spinner
+    follows="left"
+    layout="topleft"
+    left_pad="8"
+    top_delta="0"
+    height="23"
+    width="120"
+    decimal_digits="2"
+    increment="0.25"
+    max="4"
+    min="0.25"
+    name="spiral_turns"
+    label="Turns"
+    tool_tip="How many turns of the helix the spiral's climb takes, a quarter at a time" />
+   <check_box
+    follows="left"
+    layout="topleft"
+    left_pad="8"
+    top_delta="0"
+    height="23"
+    width="95"
+    name="spiral_left"
+    label="Left-hand"
+    tool_tip="Wind the spiral the other way about its axis" />
+  </panel>
   <scroll_list
    follows="all"
    layout="topleft"
    left="12"
    top_pad="8"
-   height="210"
+   height="185"
    width="376"
    draw_heading="true"
    multi_select="false"

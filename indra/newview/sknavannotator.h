@@ -144,6 +144,7 @@ private:
     U32 mSelected = 0;
     bool mFollowProxySelection = false;    ///< the selection the objects made chose this mark
     bool mExitPick = false;                ///< the next surface click adds an exit
+    bool mExitPickArmed = false;           ///< placing was on its own when the exit pick armed the tool
     U32 mRevision = 0;
     bool mHasHover = false;
     LLVector3d mHover;
