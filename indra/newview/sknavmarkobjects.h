@@ -35,6 +35,7 @@
 #include <vector>
 
 class LLViewerObject;
+class LLViewerRegion;
 class SKNavAnnotator;
 
 /// The bodies of a session's marks. Each mark carries client-only prims - a
@@ -117,6 +118,7 @@ private:
     std::map<U32, MarkPrims> mProxies;      ///< by mark id
     std::map<LLUUID, Ref> mByUUID;          ///< every prim of every mark
     U32 mSeenRevision = 0;                  ///< the annotator revision the prims were last level at
+    LLViewerRegion* mRegion = nullptr;      ///< the region the bodies were rezzed against
 };
 
 #endif // SK_NAVMARKOBJECTS_H
