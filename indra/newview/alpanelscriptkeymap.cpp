@@ -28,9 +28,11 @@
 
 #include "alstringmatch.h"
 
-#include "alfloaterscriptstudio.h"
+#include "alscriptstudio.h"
 #include "alkeycapture.h"
+#include "alscriptkeypresets.h"
 #include "llbutton.h"
+#include "llcombobox.h"
 #include "llkeyboard.h"
 #include "lllineeditor.h"
 #include "llmenugl.h"
@@ -46,7 +48,10 @@ ALPanelScriptKeymap::~ALPanelScriptKeymap() = default;
 
 bool ALPanelScriptKeymap::postBuild()
 {
+    mPreset = getChild<LLComboBox>("preset");
     mFilter = getChild<LLLineEditor>("filter");
+    fillPresets();
+    mPreset->setCommitCallback([this](LLUICtrl*, const LLSD&) { onPreset(); });
     mList   = getChild<LLScrollListCtrl>("keys");
     mSaid   = getChild<LLTextBox>("said");
     mFilter->setKeystrokeCallback([this](LLLineEditor*, void*) { fill(); }, nullptr);
@@ -60,6 +65,37 @@ bool ALPanelScriptKeymap::postBuild()
     getChild<LLButton>("restore_all")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onRestoreAll(); });
     fill();
     return true;
+}
+
+void ALPanelScriptKeymap::refresh()
+{
+    fillPresets();
+    fill();
+}
+
+void ALPanelScriptKeymap::fillPresets()
+{
+    mPreset->removeall();
+    for (const ALScriptKeyPresets::Preset& preset : ALScriptKeyPresets::all())
+    {
+        mPreset->add(getString("preset_" + preset.id), LLSD(preset.id));
+    }
+    mPreset->selectByValue(LLSD(ALScriptKeymap::preset()));
+}
+
+void ALPanelScriptKeymap::onPreset()
+{
+    const std::string id = mPreset->getValue().asString();
+    if (id.empty() || id == ALScriptKeymap::preset())
+    {
+        return;
+    }
+    ALScriptKeymap::setPreset(id);
+    LLStringUtil::format_map_t args;
+    args["[NAME]"] = getString("preset_" + id);
+    mSaid->setText(getString(ALScriptKeymap::anyRebound() ? "PresetChosenOwn" : "PresetChosen", args));
+    fill();
+    ALScriptStudio::refreshAll();
 }
 
 std::string ALPanelScriptKeymap::nameOf(const Chosen& which) const
@@ -208,7 +244,7 @@ void ALPanelScriptKeymap::onClear()
     }
     mSaid->setText(LLStringUtil::null);
     fill();
-    ALFloaterScriptStudio::refreshAll();
+    ALScriptStudio::refreshAll();
 }
 
 void ALPanelScriptKeymap::onRestore()
@@ -228,7 +264,7 @@ void ALPanelScriptKeymap::onRestore()
     }
     mSaid->setText(LLStringUtil::null);
     fill();
-    ALFloaterScriptStudio::refreshAll();
+    ALScriptStudio::refreshAll();
 }
 
 void ALPanelScriptKeymap::onRestoreAll()
@@ -236,7 +272,7 @@ void ALPanelScriptKeymap::onRestoreAll()
     ALScriptKeymap::restoreAll();
     mSaid->setText(LLStringUtil::null);
     fill();
-    ALFloaterScriptStudio::refreshAll();
+    ALScriptStudio::refreshAll();
 }
 
 std::vector<std::string> ALPanelScriptKeymap::takeKey(const Chosen& keeping, const ALKeyChord& chord, bool apply) const
@@ -361,5 +397,5 @@ void ALPanelScriptKeymap::setKeys(const ALKeyChord& chord)
         mSaid->setText(getString("KeyTaken", args));
     }
     fill();
-    ALFloaterScriptStudio::refreshAll();
+    ALScriptStudio::refreshAll();
 }
