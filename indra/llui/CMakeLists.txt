@@ -48,7 +48,6 @@ target_sources(
     llfolderviewitem.cpp
     llfolderviewmodel.cpp
     lliconctrl.cpp
-    llkeywords.cpp
     lllayoutstack.cpp
     lllineeditor.cpp
     llloadingindicator.cpp
@@ -130,6 +129,7 @@ target_sources(
     alpanelist.cpp
     alplace.cpp
     alpopover.cpp
+    alquickask.cpp
     alquickopen.cpp
     alscopebar.cpp
     alsettingrow.cpp
@@ -149,10 +149,13 @@ target_sources(
     alkeycapture.cpp
     alkeychord.cpp
     alkeymap.cpp
+    alvimcommandline.cpp
+    alvimexcommands.cpp
     alvimkeymap.cpp
     alvimmappings.cpp
     alvimpattern.cpp
     alvimregisters.cpp
+    alvimsearch.cpp
     alxuiservice.cpp
     alchoicelist.cpp
     aloutputview.cpp
@@ -163,6 +166,7 @@ target_sources(
     altextdocument.cpp
     altextediting.cpp
     altextfind.cpp
+    altextgotoline.cpp
     altextindent.cpp
     altextlayout.cpp
     altextsearch.cpp
@@ -245,7 +249,6 @@ target_sources(
         llfunctorregistry.h
         llhelp.h
         lliconctrl.h
-        llkeywords.h
         lllayoutstack.h
         lllazyvalue.h
         lllineeditor.h
@@ -338,6 +341,7 @@ target_sources(
         alpanelist.h
         alplace.h
         alpopover.h
+        alquickask.h
         alquickopen.h
         alsaid.h
         altextchars.h
@@ -365,10 +369,15 @@ target_sources(
         alkeychord.h
         alkeymap.h
         allinetable.h
+        alvimcommandline.h
+        alvimexcommands.h
+        alvimhost.h
         alvimkeymap.h
         alvimmappings.h
         alvimpattern.h
         alvimregisters.h
+        alvimsearch.h
+        alvimtext.h
         alxuiservice.h
         alchoicelist.h
         aloutputview.h
@@ -379,6 +388,7 @@ target_sources(
         altextdocument.h
         altextediting.h
         altextfind.h
+        altextgotoline.h
         altextindent.h
         altextlayout.h
         altextsearch.h
@@ -566,6 +576,7 @@ if(AL_BUILD_TESTS)
     altabstrip
     alquickopen
     alstudiofloater
+    altextgotoline
     alxuifields
     alxuischema
     alxuiselection
@@ -613,7 +624,23 @@ if(AL_BUILD_TESTS)
   endforeach()
 
   # What the text view draws, read back from llrender's hidden window.
-  al_add_test(altextview_gl GL PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(
+    altextview_gl
+    GL
+    PROJECT llui
+    LIBRARIES ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # A surface's ground and frame, and the tab strip's tabs, read back the
+  # same way.
+  al_add_test(
+    alsurface_gl
+    GL
+    PROJECT llui
+    LIBRARIES ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
 
   # The code editor over 50,000-line scripts: what each change to the edit
   # pipeline, the highlighter, the layout, the folds or find is measured by.
