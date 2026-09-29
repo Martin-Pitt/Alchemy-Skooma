@@ -26,6 +26,8 @@
 
 #include "../alscriptstudiorecovery.h"
 
+#include "../alrecovery.h"
+
 #include "alscriptstudio_fixture.h"
 
 #include "fsyspath.h"
@@ -42,7 +44,7 @@ namespace
     typedef ALScriptStudioDoc             Doc;
 
     // The window, faked: a record of what recovery asked of it.
-    struct FakeRecoveryWindow : public ALScriptStudioRecovery::Window
+    struct FakeRecoveryWindow : public ALScriptStudioRecovery::Window, public al_studio_test::QuietTabs
     {
         bool recoverElsewhere(const Entry& entry) override
         {
@@ -58,9 +60,9 @@ namespace
         void activate(Doc& doc) override { activated.push_back(doc.id); }
         void openOrphan(const Entry& entry, Doc::Orphan orphan) override { orphans.emplace_back(entry.name, orphan); }
         void becomeOrphan(Doc& doc, const Entry& entry, Doc::Orphan orphan) override { became.emplace_back(doc.id, orphan); }
-        Doc::Orphan failedAs(const Doc& doc, ALScriptWorkspace::Loaded::Failure failure) const override
+        Doc::Orphan failedAs(const Doc& doc, ALScriptLoaded::Failure failure) const override
         {
-            return failure == ALScriptWorkspace::Loaded::Failure::NotPermitted ? Doc::Orphan::Locked : Doc::Orphan::Unloaded;
+            return failure == ALScriptLoaded::Failure::NotPermitted ? Doc::Orphan::Locked : Doc::Orphan::Unloaded;
         }
         // As the window does: the kept history where it fits, else the text
         // as one step to undo.
@@ -78,7 +80,7 @@ namespace
             doc.carriedText.reset();
         }
         void refreshNotice() override { ++notices; }
-        void tabsChanged() override { ++tabs; }
+        void fillTabs() override { ++tabs; }
         void pick(std::vector<ALQuickOpen::Candidate> offered, const std::string&, const std::string&, std::function<void(const std::string&)> choose,
                   std::function<void(const std::string&)> drop) override
         {
@@ -110,11 +112,11 @@ namespace tut
         al_studio_test::StudioWindowOf<FakeRecoveryWindow> window;
         std::unique_ptr<ALScriptStudioRecovery>             recovery;
         std::string                                         folder;
-        std::unique_ptr<ALScriptRecoveryStore>              store;
+        std::unique_ptr<ALRecoveryStore>              store;
 
         ~alscriptstudiorecovery_data()
         {
-            ALScriptStudioRecovery::useStore(nullptr);
+            ALRecovery::useStore(nullptr);
             store.reset();
             if (!folder.empty())
             {
@@ -132,12 +134,12 @@ namespace tut
             {
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
-            recovery          = std::make_unique<ALScriptStudioRecovery>(services(), studio());
+            recovery          = std::make_unique<ALScriptStudioRecovery>(services(), studio(), studio());
             studio().recovery = recovery.get();
             folder = fsyspath(std::filesystem::temp_directory_path() / fsyspath("alscriptstudiorecovery_" + LLUUID::generateNewID().asString())).string();
             std::filesystem::create_directories(fsyspath(folder));
-            store = std::make_unique<ALScriptRecoveryStore>(folder, "this-session");
-            ALScriptStudioRecovery::useStore(store.get());
+            store = std::make_unique<ALRecoveryStore>(folder, "this-session");
+            ALRecovery::useStore(store.get());
             return *recovery;
         }
 
@@ -155,7 +157,7 @@ namespace tut
             Doc& doc        = services().addDoc(id, ref, id);
             doc.loaded      = true;
             doc.modifiable  = true;
-            doc.recoveryKey = ALScriptRecoveryStore::keyOf(ref.object, ref.item, std::string());
+            doc.recoveryKey = ALRecoveryStore::keyOf(ref.object, ref.item, std::string());
             ALCodeEditor::Params p(LLUICtrlFactory::getDefaultParams<ALCodeEditor>());
             p.name      = "editor_" + id;
             p.rect      = LLRect(0, 200, 400, 0);
@@ -178,7 +180,7 @@ namespace tut
         // An entry another session left for a tab's script.
         Entry leftFor(const Doc& doc, const std::string& text, const std::string& session = "old-session")
         {
-            ALScriptRecoveryStore other(folder, session);
+            ALRecoveryStore other(folder, session);
             Entry                 entry = ALScriptStudioRecovery::entryOf(doc);
             entry.text                  = text;
             entry.history               = LLSD();
@@ -279,29 +281,29 @@ namespace tut
             llofstream file(blocked);
             file << "a file where a folder would be";
         }
-        ALScriptRecoveryStore nowhere(blocked, "this-session");
-        ALScriptStudioRecovery::useStore(&nowhere);
+        ALRecoveryStore nowhere(blocked, "this-session");
+        ALRecovery::useStore(&nowhere);
         type(doc, "y");
         ensure("not kept", !r.keep(doc));
         ensure("said", services().reports.size() == 1 && services().reports[0].failure && services().reports[0].doc == "a" &&
                            services().reports[0].text.find("a") != std::string::npos);
         type(doc, "z");
         ensure("not said again", !r.keep(doc) && services().reports.size() == 1);
-        ALScriptStudioRecovery::useStore(store.get());
-        ensure("kept, once it can be", r.keep(doc) && !doc.recoveryFailed);
+        ALRecovery::useStore(store.get());
+        ensure("kept, once it can be", r.keep(doc) && !doc.recovery->failed);
 
-        ALScriptStudioRecovery::useStore(&nowhere);
+        ALRecovery::useStore(&nowhere);
         type(doc, "w");
         r.keepSoon(doc);
         nowhere.flush();
         r.keepSoon(doc);
-        ensure("from the store's thread, said once", services().reports.size() == 2 && doc.recoveryFailed);
+        ensure("from the store's thread, said once", services().reports.size() == 2 && doc.recovery->failed);
         nowhere.flush();
         r.keepSoon(doc);
         nowhere.flush();
         r.keepSoon(doc);
         ensure("and not again", services().reports.size() == 2);
-        ALScriptStudioRecovery::useStore(store.get());
+        ALRecovery::useStore(store.get());
     }
 
     template<> template<>
@@ -443,17 +445,17 @@ namespace tut
         Doc&                    doc = tab("a", "x\n");
         type(doc, "y");
         r.schedule(doc);
-        const F64 due = doc.recoveryDue;
+        const F64 due = doc.recovery->due;
         ensure("due in a moment", due > LLTimer::getTotalSeconds());
         type(doc, "z");
         r.schedule(doc);
-        ensure("not put off by more typing", doc.recoveryDue == due);
+        ensure("not put off by more typing", doc.recovery->due == due);
         r.pump();
         ensure("not yet", keptFor(doc.recoveryKey) == 0);
-        doc.recoveryDue = LLTimer::getTotalSeconds() - 1.0;
+        doc.recovery->due = LLTimer::getTotalSeconds() - 1.0;
         r.pump();
         store->flush();
-        ensure("written", keptFor(doc.recoveryKey) == 1 && doc.recoveryDue == 0.0);
+        ensure("written", keptFor(doc.recoveryKey) == 1 && doc.recovery->due == 0.0);
         doc.editor->resetDirty();
         r.schedule(doc);
         ensure("clean: forgotten at once", keptFor(doc.recoveryKey) == 0);
@@ -512,13 +514,13 @@ namespace tut
             llofstream file(blocked);
             file << "a file where a folder would be";
         }
-        ALScriptRecoveryStore nowhere(blocked, "this-session");
-        ALScriptStudioRecovery::useStore(&nowhere);
+        ALRecoveryStore nowhere(blocked, "this-session");
+        ALRecovery::useStore(&nowhere);
         type(a, "z");
         type(b, "w");
         ensure("not kept", !r.keepAll({ &a, &b }));
-        ensure("each said once", services().reports.size() == 2 && a.recoveryFailed && b.recoveryFailed);
-        ALScriptStudioRecovery::useStore(store.get());
+        ensure("each said once", services().reports.size() == 2 && a.recovery->failed && b.recovery->failed);
+        ALRecovery::useStore(store.get());
     }
 
     template<> template<>
@@ -560,14 +562,14 @@ namespace tut
     {
         set_test_name("at login: what sessions left unsaved is offered; what was kept on purpose is offered where the studio is not open to have opened it");
         make();
-        ALScriptRecoveryStore earlier(folder, "earlier");
+        ALRecoveryStore earlier(folder, "earlier");
         Entry                 lost = entry("item:lost", "typed, then a crash");
         Entry                 kept = entry("item:kept", "kept for next time");
         kept.state                 = Entry::State::Kept;
         ensure("written", earlier.write(lost) && earlier.write(kept));
-        const ALScriptStudioRecovery::Offers closed = ALScriptStudioRecovery::offersAt(*store, false);
+        const ALRecovery::Offers closed = ALRecovery::offersAt(*store, false);
         ensure("both offered", closed.unsaved.size() == 1 && closed.kept.size() == 1 && closed.kept.front().key == "item:kept");
-        const ALScriptStudioRecovery::Offers open = ALScriptStudioRecovery::offersAt(*store, true);
+        const ALRecovery::Offers open = ALRecovery::offersAt(*store, true);
         ensure("the kept not, the studio open having opened it", open.unsaved.size() == 1 && open.kept.empty());
     }
 
@@ -602,5 +604,57 @@ namespace tut
         r.takeUp(loading, read);
         ensure("carried to be picked as a tab loading loads", loading.carriedTarget == std::optional<std::string>("lsl2") &&
                                                                loading.carriedExperience == std::optional<LLUUID>(experience) && !loading.targetChosen);
+    }
+
+    template<> template<>
+    void alscriptstudiorecovery_object::test<13>()
+    {
+        set_test_name("what the notecard window kept goes back to it, under a key of its own; where it cannot have the notecard, the studio takes it up");
+        ALScriptStudioRecovery& r = make();
+        Entry                   card;
+        card.name     = "card";
+        card.object   = LLUUID::generateNewID();
+        card.item     = LLUUID::generateNewID();
+        card.notecard = true;
+        card.text     = "kept\n";
+        card.key      = ALRecoveryStore::windowKeyOf(card.object, card.item);
+        ensure("a key of its own", ALRecoveryStore::isWindowKey(card.key) && card.key != ALRecoveryStore::keyOf(card.object, card.item, std::string()) &&
+                                       !ALRecoveryStore::isWindowKey(ALRecoveryStore::keyOf(card.object, card.item, std::string())));
+
+        std::vector<std::string> taken;
+        bool                     has = true;
+        ALRecovery::takeWindowsTo([&taken, &has](const Entry& entry) {
+            taken.push_back(entry.name);
+            return has;
+        });
+        studio().inHand = false;
+        r.recover(card);
+        ensure("taken up in the window", taken.size() == 1 && studio().orphans.empty() && services().opened.empty());
+
+        // A studio tab's own entry for the same notecard is the studio's.
+        Entry tab = card;
+        tab.key   = ALRecoveryStore::keyOf(card.object, card.item, std::string());
+        r.recover(tab);
+        ensure("a tab's entry is not the window's", taken.size() == 1 && studio().orphans.size() == 1);
+
+        has = false;
+        r.recover(card);
+        ensure("the window cannot have it: the studio keeps it", taken.size() == 2 && studio().orphans.size() == 2);
+        ALRecovery::takeWindowsTo(nullptr);
+    }
+
+    template<> template<>
+    void alscriptstudiorecovery_object::test<14>()
+    {
+        set_test_name("a tab kept under another key from here on: what the old one kept let go of, and written afresh under the new");
+        ALScriptStudioRecovery& r = make();
+        Doc&                    a = tab("a", "one\n");
+        type(a, "x");
+        ensure("kept", r.keep(a) && keptFor(a.recoveryKey) == 1);
+        const std::string was = a.recoveryKey;
+        ALScriptStudioRecovery::rekey(a, ALRecoveryStore::keyOf(LLUUID::null, LLUUID::null, "/somewhere/a.lsl"));
+        store->flush();
+        ensure("the old let go of", a.recoveryKey != was && keptFor(was) == 0);
+        ensure("written afresh, though nothing moved", r.keep(a) && keptFor(a.recoveryKey) == 1);
     }
 }
