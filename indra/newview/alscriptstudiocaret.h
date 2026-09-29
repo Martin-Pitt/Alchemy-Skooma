@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "alkeymap.h"
 #include "alscriptanalysis.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptstudioplaces.h"
@@ -32,7 +33,33 @@
 #include <string>
 #include <vector>
 
+class ALScriptStudioAnalysis;
+class ALScriptNavigation;
+class ALScriptLookup;
 class ALScriptStudioServices;
+
+// The tab's part of what is said of its caret: the name asked about, the
+// path the bar shows, and the inspector's question about where the caret
+// is.
+struct ALScriptStudioDoc::Caret
+{
+    // The name last asked about -- its definition, its references, a
+    // new name -- where, and of which text.
+    ALEditorCommand symbolCommand = ALEditorCommand::None;
+    U32             symbolVersion = 0;
+    ALTextPos       symbolAt;
+    // The symbols the caret is in, the outermost first, by the outline
+    // it was read from (ALScriptStudioCaret::placePath): what the bar
+    // at the bottom and the outline both show.
+    std::vector<size_t> crumbPath;
+    U32                 crumbsOf = 0;
+    // Where the caret was last seen; when the inspector is due to be
+    // told what it is on, or zero; and what it was last told about.
+    ALTextPos seen{ -1, -1 };
+    F64       inspectDue = 0.0;
+    ALTextPos inspectAt{ -1, -1 };
+    U32       inspectVersion = 0;
+};
 
 // A Script Studio window's name at the caret, as the tab's part
 // `doc.caret` keeps it: Go to Definition, Find References and Rename asked
@@ -53,31 +80,16 @@ public:
     // long as the analyzers wait after the last keystroke.
     static constexpr F64 SETTLE = 0.35;
 
-    // What the name at the caret asks of the window beyond its services.
+    // What the name at the caret asks of the window itself, beyond what it is given.
     class Window
     {
     public:
-        // The analyzers asked about a place of a tab's source; whether
-        // the preprocessor makes what they read; and an include's lines as
-        // it reads, none where it is not had.
-        virtual void                 askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& at) = 0;
-        virtual bool                 preprocessed(const Doc& doc) const                                     = 0;
-        virtual ALScriptPlaces::Lines sourceLines(const std::string& path) const                            = 0;
-        // A jump about to be made, for Back to come back from; and the
-        // keyboard in the text in front, which ends a walk down a list.
-        virtual void noteJump()       = 0;
-        virtual void keyboardInText() = 0;
         // A stretch of a tab's source gone to in the view in front, the
         // keyboard given it; a place of an include opened.
         virtual void goTo(Doc& doc, const ALTextRange& range)                                                       = 0;
         virtual void openIncludeAt(const std::string& path, const std::string& name, S32 line, S32 column, S32 length) = 0;
         // A word of the language shown in the reference.
         virtual void showReference(const ALScriptStudioWords::Vocab& word, bool lua) = 0;
-        // The lookup across the object's scripts started from what was
-        // found in the tab.
-        virtual void startLookup(Doc& doc, ALEditorCommand command, const ALScriptReferences& refs, bool has_definition,
-                                 const std::string& home_path, const ALScriptSpan& definition, std::vector<Doc::Place> places,
-                                 U32 version) = 0;
         // The symbols the caret is in, found (placePath): shown on the bar,
         // and -- where they changed -- followed by the outline; and what is
         // wrong where the caret is shown in the inspector, false where
@@ -92,7 +104,7 @@ public:
         ~Window() = default;
     };
 
-    ALScriptStudioCaret(ALScriptStudioServices& services, Window& window);
+    ALScriptStudioCaret(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, ALScriptNavigation& navigation, ALScriptLookup& lookup, Window& window);
 
     // A command about the name at the caret asked of the analyzers, and
     // what they answered done, where it answers that question of that text.
@@ -100,6 +112,15 @@ public:
     void answered(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at);
     // Each frame, at `now`: the tab in front's caret watched.
     void pump(F64 now);
+    // A tab's caret seen afresh on the next frame, wherever it stands: the
+    // view in front is another view now, or the tab another tab.
+    static void seeAfresh(Doc& doc) { doc.caret->seen = ALTextPos(-1, -1); }
+    // The inspector told of the caret again once it is seen, having been
+    // told of another tab's since.
+    static void inspectAfresh(Doc& doc) { doc.caret->inspectAt = ALTextPos(-1, -1); }
+    // The inspector told now of the word of the source at `at`, rather than
+    // a moment after the caret settles.
+    void inspect(Doc& doc, const ALTextPos& at);
     // The symbols a tab's caret is in, found once for both of the panes
     // that show them, and shown: as the caret moves, as the outline is
     // made again, as the tab comes to the front or is renamed. None while
@@ -108,5 +129,8 @@ public:
 
 private:
     ALScriptStudioServices& mServices;
+    ALScriptStudioAnalysis& mAnalysis;
+    ALScriptNavigation&     mNavigation;
+    ALScriptLookup&         mLookup;
     Window&                 mWindow;
 };

@@ -54,7 +54,6 @@
 #include "llpreviewanim.h"
 #include "llpreviewgesture.h"
 #include "llpreviewnotecard.h"
-#include "llpreviewscript.h"
 #include "llpreviewsound.h"
 #include "llpreviewtexture.h"
 #include "llscrollcontainer.h"
@@ -68,7 +67,7 @@
 #include "llviewerobjectlist.h"
 #include "llviewermessage.h"
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
-#include "alfloaterscriptstudio.h"
+#include "alscriptstudio.h"
 #include "rlvactions.h"
 #include "rlvhandler.h"
 #include "rlvlocks.h"
@@ -975,27 +974,8 @@ void LLTaskLSLBridge::openItem()
 // [/RLVa:KB]
     if (object->permModify() || gAgent.isGodlike())
     {
-        if (ALFloaterScriptStudio::wantsScripts())
-        {
-            const LLInventoryItem* item = findItem();
-            ALFloaterScriptStudio::open(ALScriptRef(mPanel->getTaskUUID(), mUUID), item ? item->getName() : std::string());
-            return;
-        }
-
-        LLSD floater_key;
-        floater_key["taskid"] = mPanel->getTaskUUID();
-        floater_key["itemid"] = mUUID;
-
-        LLLiveLSLEditor* preview = LLFloaterReg::showTypedInstance<LLLiveLSLEditor>("preview_scriptedit", floater_key, TAKE_FOCUS_YES);
-        if (preview)
-        {
-            LLSelectNode *node = LLSelectMgr::getInstance()->getSelection()->getFirstRootNode(NULL, true);
-            if (node && node->mValid)
-            {
-                preview->setObjectName(node->mName);
-            }
-            preview->setObjectID(mPanel->getTaskUUID());
-        }
+        const LLInventoryItem* item = findItem();
+        ALScriptStudio::open(ALScriptRef(mPanel->getTaskUUID(), mUUID), item ? item->getName() : std::string());
     }
     else
     {
@@ -1006,8 +986,7 @@ void LLTaskLSLBridge::openItem()
 // virtual
 bool LLTaskLSLBridge::removeItem()
 {
-    LLFloaterReg::hideInstance("preview_scriptedit", LLSD(mUUID));
-    ALFloaterScriptStudio::itemRemoved(ALScriptRef(mPanel->getTaskUUID(), mUUID));
+    ALScriptStudio::itemRemoved(ALScriptRef(mPanel->getTaskUUID(), mUUID));
     return LLTaskInvFVBridge::removeItem();
 }
 

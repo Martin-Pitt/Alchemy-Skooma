@@ -1579,6 +1579,17 @@ function="World.EnvPreset"
            name="Scripts"
            tear_off="true">
           <menu_item_check
+             label="Script Studio..."
+             name="Script Studio Build">
+            <menu_item_check.on_check
+             function="Floater.IsOpen"
+             parameter="script_studio" />
+            <menu_item_check.on_click
+             function="Floater.ToggleOrBringToFront"
+             parameter="script_studio" />
+          </menu_item_check>
+          <menu_item_separator/>
+          <menu_item_check
              label="Script warnings/errors..."
              name="Script debug">
             <menu_item_check.on_check
@@ -1589,7 +1600,7 @@ function="World.EnvPreset"
              parameter="script_debug" />
           </menu_item_check>
           <menu_item_call
-             label="Recompile Scripts (Mono)"
+             label="Recompile Scripts as LSL (Mono)"
              name="Mono">
             <menu_item_call.on_click
                function="Tools.SelectedScriptAction"
@@ -1598,7 +1609,7 @@ function="World.EnvPreset"
                function="EditableSelectedMono" />
           </menu_item_call>
           <menu_item_call
-             label="Recompile Scripts (LSL)"
+             label="Recompile Scripts as LSL (LSO)"
              name="LSL">
             <menu_item_call.on_click
                function="Tools.SelectedScriptAction"
@@ -1607,7 +1618,7 @@ function="World.EnvPreset"
                function="EditableSelected" />
           </menu_item_call>
           <menu_item_call
-             label="Recompile Scripts (Lua)"
+             label="Recompile Scripts as SLua"
              name="Lua">
             <menu_item_call.on_click
                function="Tools.SelectedScriptAction"
@@ -1616,7 +1627,7 @@ function="World.EnvPreset"
                function="EditableSelectedLua" />
           </menu_item_call>
           <menu_item_call
-             label="Recompile Scripts (LSL on Luau)"
+             label="Recompile Scripts as LSL (Luau)"
              name="LSL on Luau">
             <menu_item_call.on_click
                function="Tools.SelectedScriptAction"
@@ -4539,15 +4550,6 @@ function="World.EnvPreset"
               function="Floater.Toggle"
               parameter="script_studio" />
             </menu_item_call>
-            <menu_item_check
-             label="Open scripts in Script Studio"
-             name="Script Studio Scripts">
-             <menu_item_check.on_check
-              control="ALScriptStudioEnabled" />
-             <menu_item_check.on_click
-              function="ToggleControl"
-              parameter="ALScriptStudioEnabled" />
-            </menu_item_check>
             <menu_item_call
              label="Show Color settings"
              name="Color Settings">
