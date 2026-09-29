@@ -395,4 +395,65 @@ namespace tut
         std::string error;
         ensure("reads: " + error, readCensus(text, back, &error));
     }
+
+    template<> template<>
+    void sknavcensusio_object::test<7>()
+    {
+        set_test_name("the root table survives the file, descriptions are capped, and clusters are labelled by their roots");
+        CensusFile c = sample();
+        CensusRoot hotel;
+        hotel.mId = id(1);
+        hotel.mName = "Hotel \"lobby\"\n";
+        hotel.mDescription = "short";
+        hotel.mScriptedKnown = true;
+        hotel.mScripted = true;
+        hotel.mSource = NameSource::LINKSET;
+        CensusRoot ship;
+        ship.mId = id(3);
+        ship.mName = "Ship";
+        // 200 two-byte characters: 400 bytes, cut to 256 on a boundary.
+        for (S32 k = 0; k < 200; ++k)
+        {
+            ship.mDescription += "\xc3\xa9";
+        }
+        ship.mSource = NameSource::PROPERTIES;
+        CensusRoot unknown;
+        unknown.mId = id(6);
+        c.mRoots = { hotel, ship, unknown };
+        CensusCluster all;
+        all.mId = id(9);
+        all.mRecords = { 0, 1, 2, 3 };
+        c.mClusters.push_back(all);
+
+        ensure_equals("label", clusterLabel(c, c.mClusters[1]), std::string("Ship (+2)"));
+        ensure_equals("single root", clusterLabel(c, c.mClusters[0]), std::string("Hotel \"lobby\"\n (+1)"));
+        const std::vector<RootShare> top = dominantRoots(c, c.mClusters[1], 2);
+        ensure("dominant", top.size() == 2 && top[0].mId == id(3) && top[0].mParts == 2 && top[1].mId == id(1));
+
+        std::ostringstream out;
+        writeCensus(out, c);
+        const std::string text = out.str();
+        ensure("label written", text.find("\"label\":\"Ship (+2)\",\"top_roots\":[{\"id\":\"" + id(3).asString() + "\",\"parts\":2,\"name\":\"Ship\"}") !=
+                                    std::string::npos);
+        CensusFile back;
+        std::string error;
+        ensure("reads: " + error, readCensus(text, back, &error));
+        ensure_equals("roots", back.mRoots.size(), 3u);
+        const CensusRoot& h = back.mRoots[0];
+        ensure("hotel", h.mId == hotel.mId && h.mName == hotel.mName && h.mDescription == "short" && h.mScriptedKnown && h.mScripted &&
+                            h.mSource == NameSource::LINKSET);
+        const CensusRoot& s = back.mRoots[1];
+        ensure_equals("capped", s.mDescription.size(), ROOT_DESCRIPTION_MAX);
+        ensure("ship", s.mName == "Ship" && s.mDescription == ship.mDescription.substr(0, 256) && !s.mScriptedKnown &&
+                           s.mSource == NameSource::PROPERTIES);
+        ensure("unknown", back.mRoots[2].mId == id(6) && back.mRoots[2].mSource == NameSource::NONE && !back.mRoots[2].mScriptedKnown);
+        ensure_equals("odd cut", capDescription(std::string(255, 'a') + "\xc3\xa9").size(), 255u);
+
+        // A version 1 file has no root table and still reads.
+        std::string old = text;
+        old.replace(old.find("\"version\":2"), 11, "\"version\":1");
+        old.erase(old.find(",\"roots\":"), old.find(",\"features\":") - old.find(",\"roots\":"));
+        ensure("version 1 reads: " + error, readCensus(old, back, &error));
+        ensure("no roots", back.mRoots.empty() && back.mRecords.size() == c.mRecords.size());
+    }
 }

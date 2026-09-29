@@ -38,7 +38,36 @@
 
 namespace sknav
 {
-    constexpr U32 CENSUS_FORMAT_VERSION = 1;
+    /// Version 2 adds the root table and the clusters' dominant roots; version 1 still reads.
+    constexpr U32 CENSUS_FORMAT_VERSION = 2;
+    constexpr size_t ROOT_DESCRIPTION_MAX = 256;
+
+    /// Where a root's name came from: the region's linkset reply, or the object properties the viewer had cached.
+    enum class NameSource : U8
+    {
+        NONE,
+        LINKSET,
+        PROPERTIES,
+    };
+    const char* nameSourceName(NameSource source);
+
+    /// What the viewer knew about a linkset root, written once per root rather than per record.
+    struct CensusRoot
+    {
+        LLUUID mId;
+        std::string mName;
+        std::string mDescription;   ///< at most ROOT_DESCRIPTION_MAX bytes, cut on a character boundary
+        bool mScriptedKnown = false;
+        bool mScripted = false;
+        NameSource mSource = NameSource::NONE;
+    };
+
+    /// A root's share of a cluster's records.
+    struct RootShare
+    {
+        LLUUID mId;
+        U32 mParts = 0;
+    };
 
     /// One region as the build saw it. Its land is kept as the heights the
     /// terrain windows sample: global z at (origin + phase + i, origin + phase + j)
@@ -107,11 +136,25 @@ namespace sknav
         std::vector<Feature> mFeatures;
         std::vector<DoorEntity> mDoors;
         std::vector<CensusSpan> mSpans;
+        /// Every root the records name, known or not; empty from a version 1 file.
+        std::vector<CensusRoot> mRoots;
         /// The session's annotation marks, the replay's answer key; written, not read back.
         std::vector<Mark> mMarks;
 
         const CensusRegion* regionAt(F64 x, F64 y) const;
+        const CensusRoot* rootOf(const LLUUID& id) const;
     };
+
+    /// A description cut to ROOT_DESCRIPTION_MAX bytes without splitting a UTF-8 character.
+    std::string capDescription(const std::string& text);
+
+    /// A cluster's roots by part count, most first, ties by id; at most `limit`.
+    std::vector<RootShare> dominantRoots(const CensusFile& census, const CensusCluster& cluster, size_t limit);
+    /// "Hotel lobby (+2)": the first named dominant root, and how many other roots the cluster holds.
+    std::string clusterLabel(const CensusFile& census, const CensusCluster& cluster);
+
+    /// The root table as a JSON array, for the census and the navmesh export alike.
+    void writeRootTable(std::ostream& out, const std::vector<CensusRoot>& roots);
 
     /// JSON with the records, vertices and terrain as base64 blobs of packed
     /// little-endian records, the layouts named in the file itself.
