@@ -26,6 +26,10 @@
 
 #include "../alscriptstudiosaving.h"
 
+#include "../alscriptstudiochecking.h"
+#include "../alscriptstudioorphans.h"
+#include "../alscriptstudioweighing.h"
+
 #include "alscriptstudio_fixture.h"
 
 #include "../test/lltut.h"
@@ -39,7 +43,7 @@ namespace
     typedef std::vector<std::string>           Names;
 
     // The window, faked: a record of what saving asked of it.
-    struct FakeSavingWindow : public ALScriptStudioSaving::Window
+    struct FakeSavingWindow : public ALScriptStudioSaving::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietAnalysis
     {
         struct Sent
         {
@@ -73,7 +77,6 @@ namespace
             }
         }
         bool changes = false;
-        void holdPreview(Doc&) override {}
         void scheduleAnalysis(Doc& doc, bool) override { analysed.push_back(doc.id); }
         void refreshProblems(Doc&) override {}
         void showProblems() override { ++problemsShown; }
@@ -86,10 +89,6 @@ namespace
         }
         void showExpanded(Doc&, const std::string&) override {}
         void runningKnown(Doc& doc) override { known.push_back(doc.id); }
-        std::optional<ALScriptWeight::Target> weightTarget(const Doc&) const override { return target; }
-        void weigh(Doc&) override { weighs.push_back("text"); }
-        void weighSent(Doc&) override { weighs.push_back("sent"); }
-        void keepSavedWeights(Doc&) override {}
         bool send(const Doc& doc, const std::string& text, const ALScriptSaveOptions& with, std::string& error) override
         {
             if (!refuse.empty())
@@ -124,14 +123,11 @@ namespace
             }
         }
         void saveFile(Doc& doc) override { files.push_back(doc.id); }
-        void reattach(Doc& doc) override { reattached.push_back(doc.id); }
+        void retryLoad(Doc& doc) override { reattached.push_back(doc.id); }
         void refreshNotice() override { ++notices; }
         void refreshToolbar() override {}
         void refreshTrailer(Doc&) override {}
         void fillTabs() override {}
-        void keepForRecovery(Doc& doc) override { recovered.push_back(doc.id); }
-        void syncExternal(Doc&) override {}
-        void logExternal(Doc&, const CompileResult&) override {}
         bool quittingOnUs() const override { return false; }
         void stopClosing() override { ++stops; }
         // Let go of, as the window does: the tab is gone.
@@ -155,10 +151,9 @@ namespace
         al_studio_test::FakeServices*                       services = nullptr;
         ALScriptStudioSaving::Options                       options;
         bool                                                preprocessor = false;
-        std::optional<ALScriptWeight::Target>               target;
         std::string                                         refuse;
         std::function<void(const ALPreprocessor::Result&)> run;
-        Names                                               tidied, analysed, runs, weighs, files, reattached, recovered, closed, known;
+        Names                                               tidied, analysed, runs, files, reattached, closed, known;
         std::vector<Sent>                                   sent;
         Names                                               notecards;
         U64                                                 requests = 0;
@@ -185,10 +180,14 @@ namespace tut
     {
         // The UI, and the editors' home; the services are plain, so that
         // what is said is a word's name and its blanks.
-        al_studio_test::StudioWindow          window;
-        al_studio_test::FakeServices          services;
-        FakeSavingWindow                      studio;
-        std::unique_ptr<ALScriptStudioSaving> saving;
+        al_studio_test::StudioWindow                      window;
+        al_studio_test::FakeServices                      services;
+        FakeSavingWindow                                  studio;
+        std::unique_ptr<al_studio_test::StudioNavigation> navigation;
+        std::unique_ptr<al_studio_test::StudioExternal>   external;
+        std::unique_ptr<al_studio_test::StudioWeighing>   weighing;
+        std::unique_ptr<al_studio_test::StudioRecovery>   recovery;
+        std::unique_ptr<ALScriptStudioSaving>             saving;
 
         ALScriptStudioSaving& make()
         {
@@ -198,7 +197,12 @@ namespace tut
             }
             studio.services        = &services;
             studio.options.program = "Alchemy Test 1.2.3";
-            saving                 = std::make_unique<ALScriptStudioSaving>(services, studio);
+            navigation             = std::make_unique<al_studio_test::StudioNavigation>(services);
+            external               = std::make_unique<al_studio_test::StudioExternal>(services);
+            weighing               = std::make_unique<al_studio_test::StudioWeighing>(services);
+            recovery               = std::make_unique<al_studio_test::StudioRecovery>(services);
+            saving = std::make_unique<ALScriptStudioSaving>(services, studio, studio, navigation->unit, external->unit, weighing->unit,
+                                                            recovery->unit, studio);
             return *saving;
         }
 
@@ -209,9 +213,10 @@ namespace tut
             LLUUID object, item;
             object.generate();
             item.generate();
-            Doc& doc       = services.addDoc(id, ALScriptRef(object, item), id);
-            doc.loaded     = true;
-            doc.modifiable = true;
+            Doc& doc        = services.addDoc(id, ALScriptRef(object, item), id);
+            doc.loaded      = true;
+            doc.modifiable  = true;
+            doc.recoveryKey = ALRecoveryStore::keyOf(object, item, std::string());
             ALCodeEditor::Params p(LLUICtrlFactory::getDefaultParams<ALCodeEditor>());
             p.name     = "editor_" + id;
             p.rect     = LLRect(0, 200, 400, 0);
@@ -231,8 +236,8 @@ namespace tut
         // The analyzers' check of the text as it stands.
         static void checked(Doc& doc, ALScriptProblems problems = {})
         {
-            doc.check.analysis        = std::move(problems);
-            doc.check.analysisVersion = doc.editor->document().version();
+            doc.check->analysis        = std::move(problems);
+            doc.check->analysisVersion = doc.editor->document().version();
         }
         // The answer to the tab's own save, by the request it sent.
         static CompileResult answer(const Doc& doc, bool success = true)
@@ -267,6 +272,9 @@ namespace tut
 
         Doc& card     = tab("card", "some words");
         card.notecard = true;
+        // Kept against a crash before, which a save lets go of.
+        recovery->store->write(ALScriptStudioRecovery::entryOf(card));
+        ensure("kept before", recovery->keptFor(card.recoveryKey) == 1);
         saving.save(card);
         ensure("a notecard sent as it stands", studio.notecards == Names{ "some words" });
         ensure("and not tidied", studio.tidied.size() == 1);
@@ -274,17 +282,17 @@ namespace tut
         saved.kind          = ALScriptKind::Notecard;
         saving.compiled(saved);
         ensure_equals("its answer said", lastSaid(), std::string("SavedNotecard"));
-        ensure("and kept as saved", studio.recovered == Names{ "card" } && !card.save.underway());
+        ensure("and kept as saved: what was kept let go of", recovery->keptFor(card.recoveryKey) == 0 && !card.save.underway());
 
         Doc& away      = tab("away", "default {}");
-        away.orphan.kind    = Doc::Orphan::Away;
+        away.orphan->kind    = Doc::Orphan::Away;
         services.front = 2;
         saving.save(away);
         ensure_equals("out of reach, said where", lastStatus(), std::string("SaveBlockedAway"));
         ensure("stopped, and the notice back", studio.stops == 1 && studio.notices == 1 && !away.save.underway() && studio.sent.empty());
 
         Doc& detached    = tab("detached", "default {}");
-        detached.orphan.detached = true;
+        detached.orphan->detached = true;
         saving.save(detached);
         ensure("loaded under its item first", studio.reattached == Names{ "detached" } && studio.sent.empty());
         ensure_equals("and said to wait", lastStatus(), std::string("SaveWaitsForLoad"));
@@ -384,7 +392,7 @@ namespace tut
         ensure_equals("compiled", lastSaid(), std::string("Compiled"));
         ensure("what was typed since still unsaved", doc.editor->isDirty());
         ensure("the experience it went with is the one it runs under", !doc.experienceChosen && doc.experienceKnown);
-        ensure("kept for recovery as it is now", studio.recovered == Names{ "a" });
+        ensure("kept for recovery as it is now", recovery->keptFor(doc.recoveryKey) == 1);
 
         Doc& clean = tab("clean", "default {}");
         type(clean, " ");
@@ -403,7 +411,7 @@ namespace tut
         ensure_equals("too large: said", lastSaid(), std::string("SaveTooLarge"));
         ensure("with what would shrink it", services.reports.back().text.find("SaveTooLargePlain") != std::string::npos);
         ensure("its size kept, nothing sent, stopped",
-               big.weighing.assetBytes == too_much.size() && studio.sent.size() == 2 && !big.save.underway() && studio.stops == 1);
+               big.weighing->assetBytes == too_much.size() && studio.sent.size() == 2 && !big.save.underway() && studio.stops == 1);
 
         studio.refuse = "no region";
         Doc& refused  = tab("refused", "default {}");
@@ -419,7 +427,6 @@ namespace tut
         set_test_name("preprocessed first: sent with its errors said, what it made in the envelope with its map, and a text moved on is run again");
         ALScriptStudioSaving& saving = make();
         studio.preprocessor          = true;
-        studio.target                = ALScriptWeight::Target::Mono;
 
         Doc& doc = tab("a", "#include \"x.lsl\"\ndefault {}");
         saving.save(doc);
@@ -449,7 +456,7 @@ namespace tut
         ensure_equals("what it made", envelope->expanded, made.text);
         ensure_equals("by this viewer", envelope->programVersion, studio.options.program);
         ensure("with its map, for the compiler's lines", doc.save.sentMap().has_value());
-        ensure("weighed as each went", std::count(studio.weighs.begin(), studio.weighs.end(), "sent") == 2);
+        ensure("weighed as each went", std::count(weighing->weighs.begin(), weighing->weighs.end(), "sent") == 2);
         saving.compiled(answer(doc));
 
         // The text moved on while the includes came: checked, and run again.
@@ -552,19 +559,18 @@ namespace tut
     {
         set_test_name("what a save sends weighed as it goes, and over its target's limit said once, where the weight is exact; an estimate's said as one");
         ALScriptStudioSaving& saving = make();
-        studio.target                = ALScriptWeight::Target::Mono;
 
         Doc& doc = tab("a", "default {}");
         type(doc, " ");
         saving.save(doc);
-        ensure("weighed", studio.weighs == Names{ "text" });
+        ensure("weighed", weighing->weighs == Names{ "text" });
         ALScriptWeight weight;
         weight.target     = ALScriptWeight::Target::Mono;
         weight.total      = 70000;
         weight.limit      = 65536;
-        doc.weighing.weight        = weight;
-        doc.weighing.version = doc.editor->document().version();
-        doc.weighing.exact   = true;
+        doc.weighing->weight        = weight;
+        doc.weighing->version = doc.editor->document().version();
+        doc.weighing->exact   = true;
         saving.warnOverWeight(doc);
         ensure_equals("over: said", lastSaid(), std::string("SaveOverWeight"));
         ensure("as a failure", services.reports.back().failure);
@@ -576,9 +582,9 @@ namespace tut
         type(guessed, " ");
         saving.save(guessed);
         weight.estimate       = true;
-        guessed.weighing.weight        = weight;
-        guessed.weighing.version = guessed.editor->document().version();
-        guessed.weighing.exact   = true;
+        guessed.weighing->weight        = weight;
+        guessed.weighing->version = guessed.editor->document().version();
+        guessed.weighing->exact   = true;
         saving.warnOverWeight(guessed);
         ensure_equals("an estimate said as one", lastSaid(), std::string("SaveOverWeightEstimate"));
         ensure("once too", services.reports.size() == said + 1);

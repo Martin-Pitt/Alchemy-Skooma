@@ -30,6 +30,7 @@
 
 #include "../llbutton.h"
 #include "../llfocusmgr.h"
+#include "../lllineeditor.h"
 #include "../llpanel.h"
 #include "../lluictrlfactory.h"
 #include "../llurlaction.h"
@@ -1795,5 +1796,60 @@ namespace tut
         v.setCaret(ALTextPos(0, 0));
         type("no cap ");
         ensure_equals("and with no cap, nothing held", v.text(), std::string("no cap far more than eight bytes"));
+    }
+
+    template<> template<>
+    void altextview_object::test<56>()
+    {
+        set_test_name("a key the find field does not take is the field's: Control-A and undo leave the text alone, finding still finds");
+        ALTextView& v = make("one\ntwo\n");
+        v.setCaret(ALTextPos(0, 3));
+        type("!");
+        ensure_equals("typed", v.document().line(0), std::string("one!"));
+        v.showFind(false);
+        LLLineEditor* field = v.findBar()->findChild<LLLineEditor>("find");
+        ensure("the find field", field != nullptr);
+        field->setFocus(true);
+        ensure("it has the keyboard", field->hasFocus());
+        // As the window gives a key: to what has the keyboard, and on up.
+        field->handleKey('A', MASK_CONTROL, false);
+        ensure("the text not all selected", !v.hasSelection());
+        field->handleKey('Z', MASK_CONTROL, false);
+        ensure_equals("nor undone", v.document().line(0), std::string("one!"));
+        ensure("Control-F still the text's", field->handleKey('F', MASK_CONTROL, false));
+        v.setFocus(true);
+        ensure("from the text itself, undo is the text's", v.handleKey('Z', MASK_CONTROL, false));
+        ensure_equals("undone", v.document().line(0), std::string("one"));
+    }
+
+    template<> template<>
+    void altextview_object::test<57>()
+    {
+        set_test_name("find is never seeded with an atom's placeholder: a selection holding one keeps the last query, and the word at the "
+                      "caret stops at one");
+        const std::string text = "see" + ALTextView::atomPlaceholder() + "here word";
+        ALTextView&       v    = make(text.c_str());
+        ALTextView::Atom  item;
+        item.at    = ALTextPos(0, 3);
+        item.width = 20;
+        v.addAtom(item);
+        const S32 after = 3 + static_cast<S32>(ALTextView::atomPlaceholder().size());
+
+        v.setSelection(ALTextRange(ALTextPos(0, after + 5), ALTextPos(0, after + 9)));
+        key('F', MASK_CONTROL);
+        ensure_equals("a selection of text seeds it", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 3), ALTextPos(0, after)));
+        v.showFind(false);
+        ensure_equals("the atom alone: the last query kept", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, after + 2)));
+        v.showFind(false);
+        ensure_equals("text with it: kept too", v.findBar()->query(), std::string("word"));
+
+        v.setCaret(ALTextPos(0, after));
+        v.showFind(false);
+        ensure_equals("the word after it, without it", v.findBar()->query(), std::string("here"));
+        v.setCaret(ALTextPos(0, 3));
+        v.showFind(false);
+        ensure_equals("the word before it, without it", v.findBar()->query(), std::string("see"));
     }
 }

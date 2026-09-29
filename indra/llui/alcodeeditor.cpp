@@ -250,7 +250,7 @@ void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
     hideCard();
     // Numbers and tints were for the text they were given with.
     mLineNumbers.clear();
-    mLineTints.clear();
+    setLineTints({});
     // Each run of lines an edit replaced -- one, or a batch's several.
     const std::vector<ALTextDocument::Edit::LineSpan>& spans = edit.lineSpans();
     const S32                                         lines = document().lineCount();
@@ -1439,17 +1439,6 @@ void ALCodeEditor::drawBeforeRows(const LLRect& text)
         mBrackets.matched = false;
         mBrackets.caret   = ALTextPos(-1, -1);
     }
-    // A tint behind each line that has one, under everything else.
-    if (!mLineTints.empty())
-    {
-        const S32 row_h = layout().rowHeight();
-        forEachVisibleRow(text, [&](S32 line, S32, S32 screen_top) {
-            if (line < static_cast<S32>(mLineTints.size()) && mLineTints[static_cast<size_t>(line)].mV[VALPHA] > 0.f)
-            {
-                gl_rect_2d(text.mLeft, screen_top, text.mRight, screen_top - row_h, mLineTints[static_cast<size_t>(line)] % alpha);
-            }
-        });
-    }
     if (mHighlightCurrentLine && keyboardOnText() && !hasSelection())
     {
         S32 row;
@@ -2577,6 +2566,9 @@ ALTextView* ALCodeEditor::sideBox()
     }
     mCompletionDoc->setBackgroundColor(ground);
     mCompletionDoc->setTextColor(textColor());
+    // Shared by a completion's words and a fix's preview: the preview's
+    // tints are its own.
+    mCompletionDoc->setLineTints({});
     return mCompletionDoc;
 }
 
@@ -2741,6 +2733,8 @@ ALChoiceList& ALCodeEditor::fixList()
     if (!mFixList)
     {
         mFixList = makeChoiceList("fixes");
+        // As a menu: the mouse over a fix previews it, and a click makes it.
+        mFixList->setMenuLike(true);
         mFixList->onPicked([this](S32 index) { takeFix(index); });
         mFixList->onChosen([this](S32) {
             if (fixesOpen())
@@ -2763,8 +2757,6 @@ void ALCodeEditor::fillFixList(S32 chosen)
     mFixList->setBorderColor(paint(Paint::WidgetBorder));
     const std::vector<Fix>&           fixes = mFixListModel.fixes();
     std::vector<ALChoiceList::Choice> choices;
-    S32                               widest = 0;
-    S32                               noted  = 0;
     for (const Fix& fix : fixes)
     {
         ALChoiceList::Choice choice;
@@ -2774,14 +2766,14 @@ void ALCodeEditor::fillFixList(S32 chosen)
         {
             choice.color = paint(Paint::InlayHint);
         }
-        widest = llmax(widest, getFont()->getWidth(fix.title));
-        noted  = fix.note.empty() ? noted : llmax(noted, getFont()->getWidth(fix.note));
         choices.push_back(std::move(choice));
     }
-    const LLRect local = getLocalRect();
-    const S32    width = llclamp(widest + (noted > 0 ? noted + 24 : 0) + 24, 120, llmax(120, local.getWidth() - 8));
-    mFixList->setShape(LLRect(0, 40, width, 0));
+    // As wide as its fixes and their notes, within the view: laid out at
+    // the most there is room for, then measured.
+    const S32 room = llmax(120, getLocalRect().getWidth() - 8);
+    mFixList->setShape(LLRect(0, 40, room, 0));
     mFixList->setChoices(std::move(choices), llclamp(chosen, 0, llmax(0, static_cast<S32>(fixes.size()) - 1)));
+    const S32 width = llclamp(mFixList->widthFor(), 120, room);
     // Under the caret where it is on the line, else under the line's text.
     const S32          line  = mFixListModel.line();
     const ALTextPos    caret = this->caret();
@@ -2829,22 +2821,34 @@ void ALCodeEditor::showFixPreview()
     const std::string says = ALFixListModel::previewOf(document(), fixes[index], kinds);
     ALTextView& box = *sideBox();
     box.setText(says);
+    // As a comparison shows it (ALDiffView): each line on the band its
+    // kind is tinted, what goes as plain code faded, what comes coloured
+    // as code.
+    const LLColor4 gone_band = LLUIColorTable::instance().getColor("CodeDiffRemovedColor", LLColor4(0.85f, 0.25f, 0.25f, 0.18f)).get();
+    const LLColor4 come_band = LLUIColorTable::instance().getColor("CodeDiffAddedColor", LLColor4(0.25f, 0.75f, 0.35f, 0.18f)).get();
+    LLColor4       faded     = textColor();
+    faded.mV[VALPHA] *= 0.7f;
     std::vector<ALTextView::Style> styles;
+    std::vector<LLColor4>          tints;
     for (S32 line = 0; line < box.document().lineCount() && line < static_cast<S32>(kinds.size()); ++line)
     {
-        if (kinds[static_cast<size_t>(line)] == '-')
+        const char kind = kinds[static_cast<size_t>(line)];
+        tints.push_back(kind == '-' ? gone_band : kind == '+' ? come_band : LLColor4::transparent);
+        if (kind == '-')
         {
             ALTextView::Style gone;
             gone.range = ALTextRange(ALTextPos(line, 0), box.document().lineEnd(line));
-            gone.color = markColor(Mark::Error);
+            gone.font  = getFont();
+            gone.color = faded;
             styles.push_back(gone);
         }
-        else if (kinds[static_cast<size_t>(line)] == '+')
+        else if (kind == '+')
         {
             styleAsCode(box, line, styles);
         }
     }
     box.setStyles(std::move(styles));
+    box.setLineTints(std::move(tints));
     placeSideBox(mFixList->getRect());
 }
 

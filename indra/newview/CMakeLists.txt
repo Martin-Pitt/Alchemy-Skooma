@@ -182,6 +182,7 @@ if(AL_BUILD_VIEWER)
     alscriptincluderesolver.cpp
     alscriptinventoryindex.cpp
     alscriptkeymap.cpp
+    alscriptkeypresets.cpp
     alpanelscriptkeymap.cpp
     alscriptlookup.cpp
     alscriptobjectcheck.cpp
@@ -206,6 +207,7 @@ if(AL_BUILD_VIEWER)
     alscriptstudiocommands.cpp
     alscriptstudiodoc.cpp
     alscriptstudiofileio.cpp
+    alscriptstudioglue.cpp
     alscriptstudiofiles.cpp
     alscriptstudioorphans.cpp
     alscriptstudioplaces.cpp
@@ -1020,6 +1022,7 @@ if(AL_BUILD_VIEWER)
     alscriptinventoryindex.h
     alscriptjobqueue.h
     alscriptkeymap.h
+    alscriptkeypresets.h
     alpanelscriptkeymap.h
     alscriptlookup.h
     alscriptobjectcheck.h
@@ -1045,6 +1048,7 @@ if(AL_BUILD_VIEWER)
     alscriptstudiocommands.h
     alscriptstudiodoc.h
     alscriptstudiofileio.h
+    alscriptstudioglue.h
     alscriptstudiofiles.h
     alscriptstudioorphans.h
     alscriptstudioplaces.h
@@ -1056,7 +1060,10 @@ if(AL_BUILD_VIEWER)
     alscriptstudiovimrc.h
     alscriptstudioweighing.h
     alscriptstudiowords.h
+    alscriptstudioanalysis.h
+    alscriptstudiosaves.h
     alscriptstudioservices.h
+    alscriptstudiotabs.h
     alscripttypes.h
     alscriptweightspane.h
     alscriptworkspace.h
@@ -2427,6 +2434,46 @@ if(AL_BUILD_TESTS)
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
 
+  # What Script Studio's tests have in common -- a tab, its save's flow, a
+  # notecard's items, the places and words, the account's recovery, and
+  # the units a unit under test is given --
+  # built once for all of them, rather than once in each. Static: a test
+  # takes only the objects it uses, so one that fakes part of them keeps
+  # its fakes.
+  add_library(
+    al_studio_test_common
+    STATIC
+    alnotecardembedded.cpp
+    alrecovery.cpp
+    alscriptexternaleditor.cpp
+    alscriptlookup.cpp
+    alscriptnavigation.cpp
+    alscriptsaveflow.cpp
+    alscriptstudiodoc.cpp
+    alscriptstudiorecovery.cpp
+    alscriptstudiofileio.cpp
+    alscriptstudioplaces.cpp
+    alscriptstudioweighing.cpp
+    alscriptstudiowords.cpp
+    alscriptweightspane.cpp
+    tests/alscriptpaths_stub.cpp
+    tests/alscriptstudio_stubs.cpp
+  )
+  get_property(studio_test_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
+  target_include_directories(
+    al_studio_test_common
+    PRIVATE
+      ${studio_test_includes}
+      ${INDRA_SOURCE_DIR}/test
+      ${INDRA_SOURCE_DIR}/llmath
+      ${INDRA_SOURCE_DIR}/llui
+  )
+  target_link_libraries(al_studio_test_common PRIVATE al::flags PUBLIC llui alscript ${test_libs})
+  set_target_properties(al_studio_test_common PROPERTIES FOLDER "Tests/${test_project}")
+  # The viewer's precompiled header, which the tests that link this are
+  # compiled against too (al_add_test's PCH).
+  target_precompile_headers(al_studio_test_common PRIVATE llviewerprecompiledheaders.h)
+
   # A unit test compiles one viewer source file on its own. Each line is one
   # such file and its test under tests/.
   foreach(
@@ -2488,7 +2535,8 @@ if(AL_BUILD_TESTS)
     alscriptitemdrop
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2537,8 +2585,8 @@ if(AL_BUILD_TESTS)
     alscriptoutputpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2548,8 +2596,8 @@ if(AL_BUILD_TESTS)
     alscriptproblemspane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2559,8 +2607,9 @@ if(AL_BUILD_TESTS)
     alscriptsearchpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptsearch.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
+    SOURCES alscriptsearch.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2569,8 +2618,8 @@ if(AL_BUILD_TESTS)
     alrecoverykeeper
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alrecovery.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
   )
 
   # A Script Studio window's unsaved texts kept in a recovery store of the
@@ -2579,8 +2628,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiorecovery
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alnotecardembedded.cpp alrecovery.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2593,6 +2642,7 @@ if(AL_BUILD_TESTS)
     alscriptkeymap
     UNIT
     PROJECT ${test_project}
+    SOURCES alscriptkeypresets.cpp
     LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
@@ -2607,8 +2657,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiosaving
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alnotecardembedded.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2618,12 +2668,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiofiles
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiofileio.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2637,8 +2683,8 @@ if(AL_BUILD_TESTS)
     alscriptnavigation
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alnotecardembedded.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2648,13 +2694,8 @@ if(AL_BUILD_TESTS)
     alscriptlookup
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2664,8 +2705,8 @@ if(AL_BUILD_TESTS)
     alscriptreferencespane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2675,12 +2716,8 @@ if(AL_BUILD_TESTS)
     alscriptoutlinepane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2690,8 +2727,8 @@ if(AL_BUILD_TESTS)
     alscriptcrumbsbar
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2701,13 +2738,8 @@ if(AL_BUILD_TESTS)
     alscriptinspectorpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2717,13 +2749,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiocaret
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2747,13 +2774,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiochecking
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2763,14 +2785,9 @@ if(AL_BUILD_TESTS)
     alscriptobjectcheck
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiochecking.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
+    SOURCES alscriptstudiochecking.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2781,13 +2798,8 @@ if(AL_BUILD_TESTS)
     alscriptrecompile
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2797,14 +2809,9 @@ if(AL_BUILD_TESTS)
     alscriptstudioorphans
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnoticebar.cpp
-      alnotecardembedded.cpp
-      alrecovery.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiorecovery.cpp
-      alrecovery.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
+    SOURCES alscriptnoticebar.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2814,8 +2821,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiowords
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alnotecardembedded.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2825,12 +2832,8 @@ if(AL_BUILD_TESTS)
     alscriptstudioweighing
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptweightspane.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2840,12 +2843,8 @@ if(AL_BUILD_TESTS)
     alscriptexternaleditor
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alnotecardembedded.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiofileio.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2855,8 +2854,9 @@ if(AL_BUILD_TESTS)
     alscriptstudiovim
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiocommands.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
+    SOURCES alscriptstudiocommands.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2866,8 +2866,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiodoc
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alnotecardembedded.cpp alscriptsaveflow.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2877,7 +2877,8 @@ if(AL_BUILD_TESTS)
     alscriptweightspane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 

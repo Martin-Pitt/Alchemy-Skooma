@@ -475,6 +475,17 @@
             <key>Value</key>
             <map />
         </map>
+        <key>ALScriptStudioKeymapPreset</key>
+        <map>
+            <key>Comment</key>
+            <string>The editor whose keys Script Studio takes over its own: studio, vscode, visual_studio, jetbrains or xcode. A person's own keys stay over them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>studio</string>
+        </map>
         <key>ALScriptStudioTabWidth</key>
         <map>
             <key>Comment</key>
@@ -1919,7 +1930,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>-3.0</real>
+            <real>-2.0</real>
         </map>
         <key>AlchemyExposureMaxEV</key>
         <map>
@@ -1930,7 +1941,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>4.0</real>
+            <real>2.0</real>
         </map>
         <key>AlchemyExposureLowPercent</key>
         <map>

@@ -231,6 +231,10 @@ public:
     bool            isReadOnly() const { return mReadOnly; }
     void            setWordWrap(bool wrap);
     bool            getWordWrap() const { return mWordWrap; }
+    // Whether the view scrolls sideways to what runs past its right edge,
+    // with a bar to do it by. A popup list sized to its choices does not:
+    // its bar would sit over the one row it has.
+    void            setSideScroll(bool scroll);
     // The most bytes the text may hold -- a notecard's 65,536 -- or none
     // for no limit. What is typed, pasted or dropped past it goes in as
     // far as it fits, cut at a character; a change of several stretches
@@ -446,6 +450,11 @@ public:
     void                      addStyle(Style style);
     void                      clearStyles() { setStyles({}); }
     const std::vector<Style>& styles() const { return mStyles.items(); }
+    // A tint behind each line, the width of the text, none where its
+    // alpha is 0: each one a line, from the first, under everything else.
+    // For a text shown rather than edited -- a side of a diff.
+    void                         setLineTints(std::vector<LLColor4> tints) { mLineTints = std::move(tints); }
+    const std::vector<LLColor4>& lineTints() const { return mLineTints; }
 
     // --- atoms ---------------------------------------------------------------
 
@@ -685,6 +694,12 @@ public:
     // Out of sight -- a tab not looked at, a window closed -- the layout
     // lets go of every line's glyphs, keeping their heights.
     void onVisibilityChange(bool new_visibility) override;
+    // A key a field of the text's own did not take -- the find bar's, with
+    // the keyboard -- is the field's, not the text's: only finding is done
+    // here, so that the next match is a key away from the find field, and
+    // the rest -- select all, undo, a word left -- go on up to the window,
+    // which gives them to the field.
+    bool handleKey(KEY key, MASK mask, bool called_from_parent) override;
     bool handleKeyHere(KEY key, MASK mask) override;
     bool handleUnicodeCharHere(llwchar uni_char) override;
     bool handleMouseDown(S32 x, S32 y, MASK mask) override;
@@ -1046,7 +1061,8 @@ private:
     bool mReadOnly   = false;
     // What the window was last told of the input method.
     bool mLanguageInput = false;
-    bool mWordWrap  = false;
+    bool mWordWrap   = false;
+    bool mSideScroll = true;
     // The line a closing word last brought out, where the caret stood
     // after it, and the blanks it had: undone if the next character makes
     // the word a longer one.
@@ -1250,6 +1266,7 @@ private:
     };
     ALAnchoredRanges<Atom, AtomRange>  mAtoms;
     ALAnchoredRanges<Style>            mStyles;
+    std::vector<LLColor4>              mLineTints;
     LLUIColor                          mLinkColor;
     link_signal_t                      mLinkClicked;
     drop_handler_t                     mDropHandler;

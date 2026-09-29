@@ -30,11 +30,13 @@
 #include "alscriptoutputpane.h"
 #include "alscriptproblemspane.h"
 #include "alscriptsearchpane.h"
+#include "alscriptstudioanalysis.h"
 #include "alscriptstudiocommands.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudiosaving.h"
+#include "alscriptstudiotabs.h"
 #include "alscriptstudiovim.h"
 #include "alscriptexternaleditor.h"
 #include "alscriptstudiofiles.h"
@@ -60,6 +62,7 @@
 #include "alscriptenvelope.h"
 #include "alscriptpreprocessor.h"
 #include "alrecoverystore.h"
+#include "alscripttempfiles.h"
 #include "alscripttypes.h"
 #include "alsourcemap.h"
 #include "alstudiofloater.h"
@@ -115,7 +118,8 @@ class LLViewerObject;
 // a script the preprocessor wrapped shown as the code the server compiled
 // with the author's source in a tab beside it. Its regions fold and come
 // out as any studio's do.
-class ALFloaterScriptStudio final : public ALStudioFloater, public ALScriptStudioServices, public ALScriptOutputPane::Window, public ALScriptProblemsPane::Window,
+class ALFloaterScriptStudio final : public ALStudioFloater, public ALScriptStudioServices, public ALScriptStudioTabs, public ALScriptStudioAnalysis,
+                                    public ALScriptOutputPane::Window, public ALScriptProblemsPane::Window,
                                     public ALScriptSearchPane::Window, public ALScriptExplorerPane::Window, public ALScriptStudioRecovery::Window,
                                     public ALScriptStudioSaving::Window, public ALScriptStudioVim::Window,
                                     public ALScriptExternalEditor::Window, public ALScriptStudioFiles::Window,
@@ -281,7 +285,6 @@ private:
     bool readFile(const std::string& path, std::string& text) override;
     bool writeFile(const std::string& path, const std::string& text) override;
     std::vector<std::string> fileFolders(const Doc& doc) const override;
-    void jumpedFrom(Doc& doc, const ALTextView& view, const ALTextPos& from) override;
     void pickLine(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title, S32 rows,
                   std::function<void(const std::string& line)> chosen, std::function<void(const std::string& line)> shifted,
                   std::function<void()> cancelled) override;
@@ -343,25 +346,18 @@ private:
     void askingOptions(ALScriptAnalysis::Request& request) const override;
     void answeredElsewhere(Doc& doc, const ALScriptAnalysis::Result& result, const ALTextPos& at) override;
     void showOutline(Doc& doc) override { mOutlinePane->show(doc); }
-    std::vector<ALScriptWeight::Target> weightTargets(const Doc& doc) override { return mWeighing.targets(doc); }
-    void weighed(Doc& doc, const ALScriptAnalysis::Result& result) override { mWeighing.weighed(doc, result); }
     bool inspectorShown() const override;
-    void                                preprocessForSave(Doc& doc) override { mSaving.preprocess(doc); }
     ALCodeEditor&                       editorInFront(Doc& doc) override { return sourceInFront(doc); }
     void                                confirmFixAll(const LLSD& args, std::function<void()> yes) override;
-    // Weighing (ALScriptStudioWeighing): saving's calls to it, and what
-    // it asks of the window.
+    // Weighing (ALScriptStudioWeighing): the bar's call to it, and what it
+    // asks of the window.
     std::optional<ALScriptWeight::Target> weightTarget(const Doc& doc) const override { return mWeighing.target(doc); }
-    void                                  weigh(Doc& doc) override { mWeighing.weigh(doc); }
-    void                                  weighSent(Doc& doc) override { mWeighing.weighSent(doc); }
-    void                                  keepSavedWeights(Doc& doc) override { mWeighing.keepSaved(doc); }
     void                                  askWeights(Doc& doc) override { askAnalyzer(doc, ALScriptAnalysis::Kind::Weigh, ALTextPos()); }
     void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)> answered) override;
     bool optimizing() const override;
     std::string programVersion() const override;
     bool        weightNotes() const override { return mWeightNotes; }
     bool        weightHeat() const override { return mWeightHeat; }
-    void        warnOverWeight(Doc& doc) override { mSaving.warnOverWeight(doc); }
     ALScriptWeightsPane* weightsPane() override { return mWeightsPane; }
 
     // The preprocessor: whether it applies to a script; its run over the
@@ -395,7 +391,6 @@ private:
     void                          pickFilesToOpen(bool several, std::function<void(const std::vector<std::string>& files)> chosen) override;
     void pickFileToSave(const std::string& name, std::function<void(const std::vector<std::string>& files)> chosen) override;
     void askReload(const Doc& doc, std::function<void(bool reload)> answered) override;
-    void saveStopped(Doc& doc) override;
     void fileWritten(const std::string& path) override;
     // A file of a tab changed on disk, or went: what is in reach looked at.
     void reachChanged() override { mOrphansDirty = true; }
@@ -433,7 +428,6 @@ private:
     bool sendNotecard(const Doc& doc, const std::string& text, const std::vector<LLPointer<LLInventoryItem>>& items, std::string& error,
                       U64 request) override;
     U64  newRequest() override;
-    void keepForRecovery(Doc& doc) override;
     void takeLoaded(Doc& doc, const std::string& text) override;
     void worldAsset(const Doc& doc, std::function<void(std::optional<LLUUID>)> told) override;
     void takeCarried(Doc& doc) override { takeCarriedText(doc); }
@@ -471,10 +465,9 @@ private:
     // Completion's link numbers: where the call being typed wants one, the
     // prims of the script's object by name, each putting in its number.
     void completeLinks(const Doc& doc, const ALTextPos& at, std::string_view prefix, std::vector<ALCodeEditor::Completion>& out);
-    // Navigation (ALScriptNavigation): the services' and saving's calls to
-    // it, and what it asks of the window.
+    // Navigation (ALScriptNavigation): the services' call to it, and what
+    // it asks of the window.
     void revealed(LLUICtrl* list, bool to_editor) override { mNavigation.revealed(list, to_editor); }
-    void holdPreview(Doc& doc) override { mNavigation.holdPreview(doc); }
     void showPlace(Doc& doc, Doc::View view, const ALTextPos& at) override;
     bool pathOpen(const std::string& path) const override;
     void choosePreview(ALPaneList* list) override;
@@ -525,17 +518,9 @@ private:
     void                 setLintLevel(bool lua, const std::string& id, ALScriptLints::Level level) override;
     void                 showLintSettings() override;
 
-    // The name at the caret (ALScriptStudioCaret): a jump noted, a walk
-    // down a list over, a place gone to, the lookup started, the bar's
-    // path and the inspector's problems.
-    void noteJump() override { mNavigation.noteJump(); }
-    void keyboardInText() override { mNavigation.walked(); }
+    // The name at the caret (ALScriptStudioCaret): a place gone to, the
+    // bar's path and the inspector's problems.
     void goTo(Doc& doc, const ALTextRange& range) override;
-    void startLookup(Doc& doc, ALEditorCommand command, const ALScriptReferences& refs, bool has_definition, const std::string& home_path,
-                     const ALScriptSpan& definition, std::vector<Doc::Place> places, U32 version) override
-    {
-        mLookup.start(doc, command, refs, has_definition, home_path, definition, std::move(places), version);
-    }
     void showPath(Doc& doc, bool changed) override
     {
         mCrumbsBar->showPath(doc);
@@ -564,9 +549,6 @@ private:
     // and the editor's launch, which are the window's -- VS Code itself
     // under tight integration, else the command the ExternalEditor setting
     // gives.
-    void        syncExternal(Doc& doc) override { mExternal.sync(doc); }
-    void        logExternal(Doc& doc, const ALScriptCompileResult& result) override { mExternal.log(doc, result); }
-    void        save(Doc& doc) override;
     std::string bridgeId(const Doc& doc) const override;
     std::shared_ptr<ALScriptTempFiles::Claim> holdCopy(const std::string& path) override;
     bool        subscribe(Doc& doc) override;
@@ -774,8 +756,6 @@ private:
     // another window, kept for next time, or kept as the viewer goes.
     void letGoOf(size_t index, bool keep = false);
     void letGoOf(Doc& doc) override;
-    // A tab saved, and closed once its save comes back.
-    void saveToClose(const std::string& id) override;
     // The window's close, with several scripts unsaved, asked about all of
     // them at once: saved, let go of, or the window kept.
     void closeWindowAnswered(S32 option);
@@ -801,14 +781,12 @@ private:
     // which is the world's; its place; its script loaded; the notice; and
     // the notice's actions.
     Doc::Orphan failedAs(const Doc& doc, ALScriptLoaded::Failure failure) const override;
-    void        reattach(Doc& doc) override { mOrphans.reattach(doc); }
+    void        retryLoad(Doc& doc) override { mOrphans.retryLoad(doc); }
     ALScriptStudioOrphans::Reach reach(const Doc& doc) override;
     void                         refreshPlace(Doc& doc) override;
     void                         loadScript(const ALScriptRef& ref) override;
     ALScriptNoticeBar*           noticeBar() override { return mNoticeBar; }
     void                         saveCopyToFile() override { mFiles.saveCopy(); }
-    void                         saveAgain(Doc& doc) override { mSaving.saveAsked(doc); }
-    void                         takeUpRecovery(Doc& doc, const ALRecoveryEntry& entry) override { mRecovery.takeUp(doc, entry); }
     void                         discardRecovery(const ALRecoveryEntry& entry) override;
     void                         noticeAction(const std::string& action) override { mOrphans.noticeAction(action); }
     void                         takeOffer(Doc& doc, const std::string& action) override { outputAction(doc, action); }
@@ -827,7 +805,6 @@ private:
     Doc* openFileTab(const std::string& path, bool lua) override;
     bool scriptInHand(const ALScriptRef& ref) const override;
     void activate(Doc& doc) override;
-    void tabsChanged() override;
     void pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
               std::function<void(const std::string& value)> chosen, std::function<void(const std::string& value)> dropped) override;
     // What a tab needs from the moment it is made: its text's changes
@@ -1190,34 +1167,34 @@ private:
     // is on, by the item's name.
     ALScriptStudioCommands             mCommands;
     // What is unsaved in the tabs, kept against the viewer going.
-    ALScriptStudioRecovery             mRecovery{ *this, *this };
+    ALScriptStudioRecovery             mRecovery{ *this, *this, *this };
     // Saving and compiling the tabs.
-    ALScriptStudioSaving               mSaving{ *this, *this };
+    ALScriptStudioSaving               mSaving{ *this, *this, *this, mNavigation, mExternal, mWeighing, mRecovery, *this };
     // The window's side of vim, over its editors.
-    ALScriptStudioVim                  mVim{ *this, mCommands, *this };
+    ALScriptStudioVim                  mVim{ *this, *this, mSaving, mNavigation, mCommands, *this };
     // Its tabs held open in an editor outside.
-    ALScriptExternalEditor             mExternal{ *this, *this };
+    ALScriptExternalEditor             mExternal{ *this, *this, mSaving, *this };
     // Its files on disk, and the recent lists.
-    ALScriptStudioFiles                mFiles{ *this, *this };
+    ALScriptStudioFiles                mFiles{ *this, *this, *this, mSaving, *this };
     // What its scripts weigh.
-    ALScriptStudioWeighing             mWeighing{ *this, *this };
+    ALScriptStudioWeighing             mWeighing{ *this, *this, mSaving, *this };
     // Its tabs whose script is gone or out of reach, and the notice.
-    ALScriptStudioOrphans              mOrphans{ *this, *this };
+    ALScriptStudioOrphans              mOrphans{ *this, *this, mSaving, mRecovery, *this };
     // The places gone from, and the previews a list opens as it is walked.
-    ALScriptNavigation                 mNavigation{ *this, *this };
+    ALScriptNavigation                 mNavigation{ *this, *this, *this };
     // Its names looked up across the object's scripts, and renamed.
-    ALScriptLookup                     mLookup{ *this, *this };
+    ALScriptLookup                     mLookup{ *this, *this, *this, mNavigation, *this };
     // Every script of an object checked, and what it is called while it is.
-    ALScriptObjectCheck                mObjectCheck{ *this, *this };
+    ALScriptObjectCheck                mObjectCheck{ *this, *this, *this };
     // Recompiles from the Explorer.
     ALScriptRecompile                  mRecompile{ *this, *this };
     std::string                        mCheckingWhere;
     S32                                mCheckedErrors   = 0;
     S32                                mCheckedWarnings = 0;
     // The name at its caret, and the caret watched.
-    ALScriptStudioCaret                mCaret{ *this, *this };
+    ALScriptStudioCaret                mCaret{ *this, *this, mNavigation, mLookup, *this };
     // Its checking: the analyzers asked and answered, and fixes.
-    ALScriptStudioChecking             mChecking{ *this, *this };
+    ALScriptStudioChecking             mChecking{ *this, *this, mSaving, mWeighing, *this };
     LLHandle<LLContextMenu>            mTabMenuHandle;
     bool                               mMain = true;
     bool                               mClosingWindow = false;

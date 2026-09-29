@@ -512,6 +512,13 @@ void ALTextView::setWordWrap(bool wrap)
     syncScrollbar();
 }
 
+void ALTextView::setSideScroll(bool scroll)
+{
+    mSideScroll = scroll;
+    mScrollX    = 0.f;
+    syncScrollbar();
+}
+
 void ALTextView::setTabWidth(S32 spaces)
 {
     useIndentation({ spaces, mSoftTabs }, IndentFrom::Chosen);
@@ -651,7 +658,8 @@ void ALTextView::syncScrollbar()
     {
         const LLRect text   = textRect();
         const bool   need_v = !mScrollMap && mLayout.totalHeight() > llmax(1, text.getHeight());
-        const bool   need_h = !mWordWrap && mLayout.contentWidth() + static_cast<F32>(H_MARGIN) > static_cast<F32>(text.getWidth());
+        const bool   need_h =
+            mSideScroll && !mWordWrap && mLayout.contentWidth() + static_cast<F32>(H_MARGIN) > static_cast<F32>(text.getWidth());
         const bool   changed = need_v != mNeedV || need_h != mNeedH;
         mNeedV               = need_v;
         mNeedH               = need_h;
@@ -668,7 +676,7 @@ void ALTextView::syncScrollbar()
     const S32    page = llmax(1, text.getHeight());
     mScrollY          = llclamp(mScrollY, 0, llmax(0, mLayout.totalHeight() - page));
     const S32 width   = llmax(1, text.getWidth());
-    const S32 content = mWordWrap ? 0 : static_cast<S32>(ceilf(mLayout.contentWidth())) + H_MARGIN;
+    const S32 content = mWordWrap || !mSideScroll ? 0 : static_cast<S32>(ceilf(mLayout.contentWidth())) + H_MARGIN;
     mScrollX          = llclamp(mScrollX, 0.f, static_cast<F32>(llmax(0, content - width)));
     // Where the top of the view is now, in the text.
     mAnchorLine    = mLayout.lineAtY(mScrollY);
@@ -3136,10 +3144,18 @@ void ALTextView::showFind(bool with_replace)
     }
     // Seeded with what is selected, when that is a line's worth or less,
     // or with the word the caret is in when nothing is; written as a
-    // pattern that finds it, where the bar is looking for patterns.
+    // pattern that finds it, where the bar is looking for patterns. Never
+    // with an atom's placeholder, which is no text to type or find: a
+    // selection holding an atom -- a notecard's item -- leaves the last
+    // query, and the word stops at an atom.
     const ALTextRange sel = selection().normalised();
     std::string       seed;
-    if (!sel.empty() && sel.begin.line == sel.end.line && sel.end.column - sel.begin.column < 200)
+    const auto        holds_atom = [this](const ALTextRange& range) {
+        const auto first =
+            std::lower_bound(mAtoms.begin(), mAtoms.end(), range.begin, [](const Atom& a, const ALTextPos& p) { return a.at < p; });
+        return first != mAtoms.end() && first->at < range.end;
+    };
+    if (!sel.empty() && sel.begin.line == sel.end.line && sel.end.column - sel.begin.column < 200 && !holds_atom(sel))
     {
         seed = mDocument.text(sel);
     }
@@ -3148,11 +3164,14 @@ void ALTextView::showFind(bool with_replace)
         const std::string& line  = mDocument.line(mCaret.line);
         size_t             begin = static_cast<size_t>(llclamp(mCaret.column, 0, static_cast<S32>(line.size())));
         size_t             end   = begin;
-        while (begin > 0 && alWordByte(line[begin - 1]))
+        const auto         word  = [&](size_t at) {
+            return alWordByte(line[at]) && !atomAt(ALTextPos(mCaret.line, static_cast<S32>(at)));
+        };
+        while (begin > 0 && word(begin - 1))
         {
             --begin;
         }
-        while (end < line.size() && alWordByte(line[end]))
+        while (end < line.size() && word(end))
         {
             ++end;
         }
@@ -4464,6 +4483,17 @@ void ALTextView::draw()
         gl_rect_2d(getLocalRect(), backgroundColor() % alpha);
     }
     const LLRect text = textRect();
+    // A tint behind each line that has one, under everything else.
+    if (!mLineTints.empty())
+    {
+        const S32 row_h = layout().rowHeight();
+        forEachVisibleRow(text, [&](S32 line, S32, S32 screen_top) {
+            if (line < static_cast<S32>(mLineTints.size()) && mLineTints[static_cast<size_t>(line)].mV[VALPHA] > 0.f)
+            {
+                gl_rect_2d(text.mLeft, screen_top, text.mRight, screen_top - row_h, mLineTints[static_cast<size_t>(line)] % alpha);
+            }
+        });
+    }
     drawBeforeRows(text);
     placeAtomViews();
     {
@@ -4606,6 +4636,27 @@ void ALTextView::drawBand(F32 alpha)
 }
 
 // --- input ---------------------------------------------------------------------
+
+bool ALTextView::handleKey(KEY key, MASK mask, bool called_from_parent)
+{
+    LLUICtrl* const focus = dynamic_cast<LLUICtrl*>(gFocusMgr.getKeyboardFocus());
+    if (called_from_parent || !focus || focus == this || !focus->acceptsTextInput() || !focus->hasAncestor(this))
+    {
+        return LLUICtrl::handleKey(key, mask, called_from_parent);
+    }
+    switch (const ALEditorCommand command = mKeymap.lookup(key, mask))
+    {
+        case ALEditorCommand::Find:
+        case ALEditorCommand::Replace:
+        case ALEditorCommand::FindNext:
+        case ALEditorCommand::FindPrevious:
+            return perform(command);
+        default:
+            break;
+    }
+    LLView* const parent = getParent();
+    return parent && parent->handleKey(key, mask, false);
+}
 
 bool ALTextView::handleKeyHere(KEY key, MASK mask)
 {

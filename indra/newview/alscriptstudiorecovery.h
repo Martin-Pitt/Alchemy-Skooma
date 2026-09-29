@@ -35,6 +35,33 @@
 #include <vector>
 
 class ALScriptStudioServices;
+class ALScriptStudioTabs;
+
+// A tab's part of what keeps its unsaved text against a crash: the rest of
+// what ALScriptStudioRecovery keeps of it, beside its key (Doc::recoveryKey).
+struct ALScriptStudioDoc::Recovery
+{
+    // When it is next written there, or zero; and whether writing it
+    // failed, which is said once.
+    F64  due    = 0.0;
+    bool failed = false;
+    // What was last written there -- the text's version, its history's
+    // revision, the picks for its next save, as what, and whether forced
+    // out to the disk -- so that nothing is written again where none
+    // has moved.
+    struct Written
+    {
+        bool                       valid   = false;
+        U32                        text    = 0;
+        U32                        history = 0;
+        ALRecoveryEntry::State     state   = ALRecoveryEntry::State::Unsaved;
+        bool                       durable = false;
+        // And what was picked for its next save.
+        std::optional<std::string> target;
+        std::optional<LLUUID>      experience;
+    };
+    Written written;
+};
 
 // A Script Studio window's unsaved texts kept against the viewer going
 // before they were saved -- a crash, a lost connection, a quit -- in the
@@ -54,7 +81,7 @@ public:
     typedef ALScriptStudioDoc     Doc;
     typedef ALRecoveryEntry Entry;
 
-    // What recovery asks of the window beyond its services.
+    // What recovery asks of the window itself, beyond what it is given.
     class Window
     {
     public:
@@ -62,25 +89,14 @@ public:
         // studio's windows, taken up there -- two tabs of one script would
         // each save over the other; false where no other window has it.
         virtual bool recoverElsewhere(const Entry& entry) = 0;
-        // A file on disk opened in a tab where it is; null where it could
-        // not be.
-        virtual Doc* openFileTab(const std::string& path, bool lua) = 0;
         // Whether a script can be had to put a kept text over: its item in
         // the inventory, or its object in sight.
         virtual bool scriptInHand(const ALScriptRef& ref) const = 0;
-        // A tab brought to the front.
-        virtual void activate(Doc& doc) = 0;
         // A kept text in a tab of its own, its script gone; a tab made one;
         // and what a load failing makes one.
         virtual void        openOrphan(const Entry& entry, Doc::Orphan orphan)                  = 0;
         virtual void        becomeOrphan(Doc& doc, const Entry& entry, Doc::Orphan orphan)      = 0;
         virtual Doc::Orphan failedAs(const Doc& doc, ALScriptLoaded::Failure failure) const = 0;
-        // Text carried in put in place of the server's, as one step to undo.
-        virtual void takeCarriedText(Doc& doc) = 0;
-        // The notice over the editor said again; and the tabs and the
-        // toolbar, a tab's text having changed under them.
-        virtual void refreshNotice() = 0;
-        virtual void tabsChanged()   = 0;
         // A list to pick from, over the editors: what is chosen, and what
         // Shift-Return is pressed on.
         virtual void pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
@@ -90,7 +106,7 @@ public:
         ~Window() = default;
     };
 
-    ALScriptStudioRecovery(ALScriptStudioServices& services, Window& window);
+    ALScriptStudioRecovery(ALScriptStudioServices& services, ALScriptStudioTabs& tabs, Window& window);
 
     // A tab as an entry, from the tab alone -- nothing of the world's asked
     // -- since it is written as the viewer goes as well, after the world
@@ -104,6 +120,9 @@ public:
     // took up let go of, its own from here. A write that fails is said once,
     // not at every pause in typing. False where it could not be kept.
     bool keep(Doc& doc, Entry::State state = Entry::State::Unsaved);
+    // The tab kept under another key from here on -- a file saved under a
+    // new path -- what the old one kept let go of, and written afresh.
+    static void rekey(Doc& doc, const std::string& key);
     // keep for each of several tabs at once, the unsaved texts written on
     // the writer's thread, each forced out to the disk there, and waited
     // on once for the lot: what the viewer going asks. False where any
@@ -149,6 +168,7 @@ private:
     bool wholeOf(Entry& entry);
 
     ALScriptStudioServices& mServices;
+    ALScriptStudioTabs&     mTabs;
     Window&                 mWindow;
     // Held while this is, for what answers later to know it still is.
     std::shared_ptr<bool>   mAlive = std::make_shared<bool>(true);
