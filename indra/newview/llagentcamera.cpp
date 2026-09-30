@@ -1662,7 +1662,6 @@ void LLAgentCamera::updateLastCamera()
 
 void LLAgentCamera::updateFocusOffset()
 {
-    resetSKFollow(); // <SK:Nexii> camera follow
     validateFocusObject();
     if (mFocusObject.notNull())
     {
@@ -1759,10 +1758,11 @@ LLVector3d LLAgentCamera::calcFocusPositionTargetGlobal()
             {
                 updateFocusOffset();
             }
-            LLVector3 focus_agent = mFocusObject->getRenderPosition() + mFocusObjectOffset;
-            mFocusTargetGlobal.setVec(gAgent.getPosGlobalFromAgent(focus_agent));
             // <SK:Nexii> camera follow
-            mFocusTargetGlobal = smoothSKFollow(mFocusTargetGlobal);
+            // Only the object's position is smoothed; the user's offset passes through untouched.
+            const LLVector3d obj_global = smoothSKFollow(gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition()));
+            mFocusTargetGlobal = obj_global + LLVector3d(mFocusObjectOffset);
+            mSKFollowRaw = gAgent.getPosGlobalFromAgent(mFocusObject->getRenderPosition() + mFocusObjectOffset);
             // </SK:Nexii>
         }
         return mFocusTargetGlobal;
@@ -1789,22 +1789,26 @@ LLVector3d LLAgentCamera::smoothSKFollow(const LLVector3d& raw)
     static LLCachedControl<bool> follow_enabled(gSavedSettings, "SKCameraFollowEnabled", true);
     static LLCachedControl<F32> follow_tau(gSavedSettings, "SKCameraFollowSmoothing", 0.12f);
     constexpr F64 SNAP_DISTANCE = 2.0;
+    constexpr F64 SETTLED_DISTANCE = 0.001;
     constexpr F64 MAX_STEP = 0.25;
 
-    mSKFollowRaw = raw;
     LLViewerObject* rootp = mFocusObject.notNull() ? (LLViewerObject*)mFocusObject->getRoot() : nullptr;
     const F64 tau = follow_tau();
-    const bool moving = rootp && !rootp->isAvatar() && rootp->mDrawable.notNull() &&
-                        (!rootp->getVelocity().isExactlyZero() || rootp->mDrawable->isActive());
-    if (!follow_enabled || tau <= 0.0 || !mTrackFocusObject || !moving)
+    if (!follow_enabled || tau <= 0.0 || !mTrackFocusObject || !rootp || rootp->isAvatar() || rootp->mDrawable.isNull())
     {
         resetSKFollow();
         return raw;
     }
 
+    const bool moving = !rootp->getVelocity().isExactlyZero() || rootp->mDrawable->isActive();
     const F64 now = LLFrameTimer::getElapsedSeconds();
     if (!mSKFollowValid || mSKFollowObjectId != mFocusObject->getID() || (raw - mSKFollowPos).magVec() > SNAP_DISTANCE)
     {
+        if (!moving)
+        {
+            resetSKFollow();
+            return raw;
+        }
         mSKFollowPos = raw;
         mSKFollowSecs = now;
         mSKFollowObjectId = mFocusObject->getID();
@@ -1813,9 +1817,20 @@ LLVector3d LLAgentCamera::smoothSKFollow(const LLVector3d& raw)
         return raw;
     }
 
+    // A stopped object keeps settling without feed-forward, so it never jumps.
+    if (!moving && (raw - mSKFollowPos).magVec() < SETTLED_DISTANCE)
+    {
+        resetSKFollow();
+        return raw;
+    }
+
     const F64 dt = llclamp(now - mSKFollowSecs, 0.0, MAX_STEP);
     mSKFollowSecs = now;
-    mSKFollowPos += LLVector3d(rootp->getVelocity()) * dt;
+    if (moving)
+    {
+        const LLVector3 arm = mFocusObject->getRenderPosition() - rootp->getRenderPosition();
+        mSKFollowPos += LLVector3d(rootp->getVelocity() + rootp->getAngularVelocity() % arm) * dt;
+    }
     mSKFollowPos += (raw - mSKFollowPos) * (1.0 - exp(-dt / tau));
     mSKFollowActive = true;
     return mSKFollowPos;
