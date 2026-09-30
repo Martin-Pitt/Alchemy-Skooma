@@ -1382,8 +1382,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     const LLVector3 old_vel = getVelocity();
     const LLVector3 old_acc = getAcceleration();
     // <SK:Nexii> smoothed update corrections
-    const F32 sk_since_interp = (F32)(LLFrameTimer::getElapsedSeconds() - mLastInterpUpdateSecs.value());
-    const LLVector3 sk_shown_pos = predicted_pos_parent + ALMotionPredictor::positionDelta(old_vel, old_acc, sk_since_interp);
+    const F64Seconds sk_last_interp = mLastInterpUpdateSecs;
     bool sk_pos_applied = false;
     // </SK:Nexii>
 
@@ -2569,7 +2568,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // <SK:Nexii> smoothed update corrections
     if (sk_pos_applied)
     {
-        skSmoothUpdate(sk_shown_pos);
+        skSmoothUpdate(predicted_pos_parent, old_vel, old_acc, update_time - sk_last_interp.value());
     }
     // </SK:Nexii>
     if (mDrawable.notNull())
@@ -2629,7 +2628,9 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
             applyAngularVelocity(dt);
 
             if (isAttachment())
-            {   // An attachment rides its joint, so there is no linear motion to predict -- but it
+            {
+                mSKPendingCorrection.clear(); // <SK:Nexii> smoothed update corrections
+                // An attachment rides its joint, so there is no linear motion to predict -- but it
                 // still needs the drawable pass below. Returning here skipped clearChanged(SHIFTED),
                 // and a still attachment present at a region shift has no other route back into
                 // updateDrawable, so the flag latched and forced undamped motion from then on.
@@ -2640,6 +2641,12 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
                 interpolateLinearMotion(frame_time, dt);
             }
         }
+        // <SK:Nexii> smoothed update corrections
+        if (isSelected())
+        {
+            mSKPendingCorrection.clear();
+        }
+        // </SK:Nexii>
 
         updateDrawable(false);
     }
@@ -2674,14 +2681,14 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
     }
 
     const ALMotionPredictor::Tuning& tuning = sPredictionTuning;
-    // <SK:Nexii> smoothed update corrections
-    const LLVector3 sk_step = skBleedCorrection((F32)((F64Seconds)frame_time - mLastInterpUpdateSecs).value());
-    bool sk_step_used = false;
-    // </SK:Nexii>
 
     // A frame that spans a stall -- a paused viewer, a snapshot floater holding FreezeTime, a long
     // hitch -- would otherwise carry every moving object forward by the whole of it in one step.
     F32 dt = ALMotionPredictor::clampFrameStep(dt_seconds, tuning);
+    // <SK:Nexii> smoothed update corrections
+    const LLVector3 sk_step = skBleedCorrection(dt);
+    bool sk_step_used = false;
+    // </SK:Nexii>
     F64Seconds time_since_last_update = frame_time - mLastMessageUpdateSecs;
     if (time_since_last_update <= (F64Seconds)0.0 || dt <= 0.f)
     {
@@ -2877,6 +2884,10 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
             && getAcceleration().isExactlyZero()
             && getAngularVelocity().isExactlyZero())
         {
+            // <SK:Nexii> smoothed update corrections
+            skNudge(mSKPendingCorrection);
+            mSKPendingCorrection.clear();
+            // </SK:Nexii>
             mStatic = true;
             gObjectList.updateActive(this);
         }
@@ -7343,16 +7354,23 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
 
 // <SK:Nexii> smoothed update corrections
 // Keep a moving object where it is shown and bleed the difference to the update out over time.
-void LLViewerObject::skSmoothUpdate(const LLVector3& shown_pos)
+void LLViewerObject::skSmoothUpdate(const LLVector3& old_pos, const LLVector3& old_vel, const LLVector3& old_acc, F64 since_interp)
 {
     static LLCachedControl<bool> smooth(gSavedSettings, "SKMotionSmoothCorrections", true);
+    const bool eligible = smooth && sVelocityInterpolate && !mStatic && !mParent
+                       && !isSelected() && !(isAvatar() && asAvatar()->isSelf());
+    if (!eligible)
+    {
+        mSKPendingCorrection.clear();
+        mSKHasMotionState = false;
+        return;
+    }
+    const LLVector3 shown_pos = old_pos + ALMotionPredictor::positionDelta(old_vel, old_acc, (F32)since_interp);
     const LLVector3 received = getPosition();
     LLVector3 correction = received - shown_pos;
     const F32 interval = mMotionPredictor.hasCadence() ? mMotionPredictor.getUpdateInterval() : 0.1f;
     const F32 limit = llmax(2.f, 3.f * getVelocity().length() * interval);
-    const bool eligible = smooth && sVelocityInterpolate && mSKHasMotionState && !mStatic && !mParent
-                       && !isSelected() && !(isAvatar() && asAvatar()->isSelf());
-    const bool snapped = !eligible || !correction.isFinite() || correction.length() > limit;
+    const bool snapped = !eligible || !mSKHasMotionState || !correction.isFinite() || correction.length() > limit;
     if (snapped)
     {
         correction.clear();
@@ -7362,7 +7380,7 @@ void LLViewerObject::skSmoothUpdate(const LLVector3& shown_pos)
         setPositionParent(shown_pos);
     }
     mSKPendingCorrection = correction;
-    mSKHasMotionState = !mParent;
+    mSKHasMotionState = eligible;
 }
 
 LLVector3 LLViewerObject::skBleedCorrection(F32 elapsed)

@@ -750,7 +750,7 @@ private:
     // Motion prediction between updates
     void interpolateLinearMotion(const F64SecondsImplicit & frame_time, const F32SecondsImplicit & dt);
     // <SK:Nexii> smoothed update corrections
-    void skSmoothUpdate(const LLVector3& shown_pos);
+    void skSmoothUpdate(const LLVector3& old_pos, const LLVector3& old_vel, const LLVector3& old_acc, F64 since_interp);
     LLVector3 skBleedCorrection(F32 elapsed);
     void skNudge(const LLVector3& step);
     // </SK:Nexii>
