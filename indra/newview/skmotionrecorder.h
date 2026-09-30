@@ -57,7 +57,32 @@ public:
         DROP_PARENT_CYCLE   = 2,
     };
 
+    // Main-loop stages timed into FRAME; a record carries the stages of the frame before it.
+    enum EStage : U8
+    {
+        STAGE_OBJECTS = 0, // gObjectList.update
+        STAGE_MOVE,        // gPipeline.updateMove
+        STAGE_CAMERA,      // gAgentCamera.updateCamera
+        STAGE_IDLE,        // LLAppViewer::idle
+        STAGE_GEOM,        // display()'s createObjects, processPartitionQ and updateGeom
+        STAGE_DISPLAY,     // display(), all of it
+        STAGE_SWAP,        // swap()
+        STAGE_FLUSH,       // the recorder's own frame write
+        STAGE_COUNT
+    };
+
     static bool isRecording() { return sRecording; }
+
+    // Stage timing: take now() before the call and pass it to stageEnd() after it.
+    static U64 now();
+    static void stageEnd(EStage stage, U64 start_us)
+    {
+        if (start_us)
+        {
+            addStage(stage, start_us);
+        }
+    }
+    static void onGeomRebuilt() { ++sRebuilds; }
 
     static void start();
     static void stop();
@@ -93,8 +118,11 @@ public:
     static bool sEdgeClipped;
     // Written unconditionally by the ping interpolation block of processUpdateMessage.
     static F32  sPingDelay;
+    // Drawables rebuilt by LLPipeline::updateGeom this frame, counted while recording.
+    static U32  sRebuilds;
 
 private:
+    static void addStage(EStage stage, U64 start_us);
     static bool sRecording;
 };
 

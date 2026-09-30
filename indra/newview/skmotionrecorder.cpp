@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <ctime>
 #include <sstream>
 #include <unordered_set>
@@ -71,6 +72,17 @@ namespace
         F64 last_packet_in;  // agent region circuit, message clock
         U32 tracked;
         U32 dropped;
+        // Stage times of the previous frame, which finishes after its own record is written.
+        F32 objects_ms;
+        F32 move_ms;
+        F32 camera_ms;
+        F32 idle_ms;
+        F32 geom_ms;
+        F32 render_ms;       // display() less geom_ms and swap_ms
+        F32 swap_ms;
+        F32 flush_ms;
+        U32 rebuilds;        // drawables rebuilt by LLPipeline::updateGeom
+        U32 pad;
     };
 
     struct CameraRec
@@ -154,7 +166,7 @@ namespace
     };
 #pragma pack(pop)
 
-    static_assert(sizeof(FrameRec)  == 80,  "FrameRec layout");
+    static_assert(sizeof(FrameRec)  == 120,  "FrameRec layout");
     static_assert(sizeof(CameraRec) == 104, "CameraRec layout");
     static_assert(sizeof(UpdateRec) == 208, "UpdateRec layout");
     static_assert(sizeof(ObjectRec) == 108, "ObjectRec layout");
@@ -179,6 +191,11 @@ namespace
         SK_FIELD(FrameRec, ping_ms, "f32", 1), SK_FIELD(FrameRec, ping_avg_ms, "f32", 1),
         SK_FIELD(FrameRec, last_packet_in, "f64", 1), SK_FIELD(FrameRec, tracked, "u32", 1),
         SK_FIELD(FrameRec, dropped, "u32", 1),
+        SK_FIELD(FrameRec, objects_ms, "f32", 1), SK_FIELD(FrameRec, move_ms, "f32", 1),
+        SK_FIELD(FrameRec, camera_ms, "f32", 1), SK_FIELD(FrameRec, idle_ms, "f32", 1),
+        SK_FIELD(FrameRec, geom_ms, "f32", 1), SK_FIELD(FrameRec, render_ms, "f32", 1),
+        SK_FIELD(FrameRec, swap_ms, "f32", 1), SK_FIELD(FrameRec, flush_ms, "f32", 1),
+        SK_FIELD(FrameRec, rebuilds, "u32", 1),
     };
 
     const Field sCameraFields[] = {
@@ -246,6 +263,9 @@ namespace
     F32 sRadius = 0.f;
     U32 sMaxObjects = 0;
     U64 sNetworkStart = 0;
+    F32 sStageMs[SKMotionRecorder::STAGE_COUNT] = {};
+    F32 sPrevStageMs[SKMotionRecorder::STAGE_COUNT] = {};
+    U32 sPrevRebuilds = 0;
     F32 sNetworkSecs = 0.f;
     U32 sUpdates = 0;
     U64 sFrameBytes = 0;
@@ -357,7 +377,7 @@ namespace
     {
         std::ostringstream out;
         out.precision(17);
-        out << "{\"format\":\"skmotion\",\"version\":2,\"endian\":\"little\"";
+        out << "{\"format\":\"skmotion\",\"version\":3,\"endian\":\"little\",\"stage_times\":\"previous_frame\"";
         out << ",\"viewer\":" << jsonString(LLVersionInfo::instance().getChannelAndVersion());
         out << ",\"start_utc\":" << jsonString(start_utc);
         out << ",\"start_total_us\":" << (U64)totalTime();
@@ -436,6 +456,20 @@ bool SKMotionRecorder::sRecording = false;
 F32  SKMotionRecorder::sPhaseOut = 1.f;
 bool SKMotionRecorder::sEdgeClipped = false;
 F32  SKMotionRecorder::sPingDelay = 0.f;
+U32  SKMotionRecorder::sRebuilds = 0;
+
+U64 SKMotionRecorder::now()
+{
+    return totalTime();
+}
+
+void SKMotionRecorder::addStage(EStage stage, U64 start_us)
+{
+    if (sRecording)
+    {
+        sStageMs[stage] += (F32)((U64)totalTime() - start_us) * 1e-3f;
+    }
+}
 
 void SKMotionRecorder::start()
 {
@@ -472,6 +506,10 @@ void SKMotionRecorder::start()
     sFrameBytes = 0;
     sUpdates = 0;
     sNetworkSecs = 0.f;
+    std::fill(std::begin(sStageMs), std::end(sStageMs), 0.f);
+    std::fill(std::begin(sPrevStageMs), std::end(sPrevStageMs), 0.f);
+    sRebuilds = 0;
+    sPrevRebuilds = 0;
     sPhaseOut = 1.f;
     sEdgeClipped = false;
     sStartSecs = LLFrameTimer::getElapsedSeconds();
@@ -521,6 +559,11 @@ void SKMotionRecorder::onFrameBegin()
     }
 
     ++sFrame;
+
+    std::copy(std::begin(sStageMs), std::end(sStageMs), std::begin(sPrevStageMs));
+    std::fill(std::begin(sStageMs), std::end(sStageMs), 0.f);
+    sPrevRebuilds = sRebuilds;
+    sRebuilds = 0;
 
     LLViewerObject* focusp = gAgentCamera.getFocusObject();
     sFocusId = focusp ? focusp->getID() : LLUUID::null;
@@ -705,6 +748,16 @@ void SKMotionRecorder::onFrameEnd()
     frame.network_secs = sNetworkSecs;
     frame.tracked = tracked;
     frame.dropped = dropped;
+    frame.objects_ms = sPrevStageMs[STAGE_OBJECTS];
+    frame.move_ms = sPrevStageMs[STAGE_MOVE];
+    frame.camera_ms = sPrevStageMs[STAGE_CAMERA];
+    frame.idle_ms = sPrevStageMs[STAGE_IDLE];
+    frame.geom_ms = sPrevStageMs[STAGE_GEOM];
+    frame.render_ms = llmax(0.f, sPrevStageMs[STAGE_DISPLAY] - sPrevStageMs[STAGE_GEOM] - sPrevStageMs[STAGE_SWAP]);
+    frame.swap_ms = sPrevStageMs[STAGE_SWAP];
+    frame.flush_ms = sPrevStageMs[STAGE_FLUSH];
+    frame.rebuilds = sPrevRebuilds;
+    const U64 flush_start = totalTime();
     if (LLViewerRegion* regionp = gAgent.getRegion())
     {
         frame.region_handle = regionp->getHandle();
@@ -730,6 +783,7 @@ void SKMotionRecorder::onFrameEnd()
     sNetworkSecs = 0.f;
 
     sFile.flush();
+    stageEnd(STAGE_FLUSH, flush_start);
     if (!sFile.good())
     {
         LL_WARNS("MotionRecorder") << "Write to " << sPath << " failed, stopping" << LL_ENDL;

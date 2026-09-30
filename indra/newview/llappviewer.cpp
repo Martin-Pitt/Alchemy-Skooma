@@ -1563,7 +1563,11 @@ bool LLAppViewer::doFrame()
                 {
                     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_IDLE);
                     LL_PROFILE_ZONE_NAMED_CATEGORY_APP("df idle");
+                    // <SK:Nexii> motion recorder
+                    const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+                    // </SK:Nexii>
                     idle();
+                    SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_IDLE, sk_start); // <SK:Nexii> motion recorder
                 }
 
                 {
@@ -1593,7 +1597,11 @@ bool LLAppViewer::doFrame()
                 pingMainloopTimeout("Main:Display");
                 gGLActive = true;
 
+                // <SK:Nexii> motion recorder
+                const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+                // </SK:Nexii>
                 display();
+                SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_DISPLAY, sk_start); // <SK:Nexii> motion recorder
 
                 {
                     LLPerfStats::RecordSceneTime T(LLPerfStats::StatType_t::RENDER_IDLE);
@@ -5774,7 +5782,11 @@ void LLAppViewer::idle()
     {
         if (!(logoutRequestSent() && hasSavedFinalSnapshot()))
         {
+            // <SK:Nexii> motion recorder
+            const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+            // </SK:Nexii>
             gObjectList.update(gAgent);
+            SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_OBJECTS, sk_start); // <SK:Nexii> motion recorder
         }
     }
 
@@ -5867,7 +5879,11 @@ void LLAppViewer::idle()
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update"); //LL_RECORD_BLOCK_TIME(FTM_WORLD_UPDATE);
+        // <SK:Nexii> motion recorder
+        const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+        // </SK:Nexii>
         gPipeline.updateMove();
+        SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_MOVE, sk_start); // <SK:Nexii> motion recorder
     }
 
     LLWorld::getInstance()->updateParticles();
@@ -5887,7 +5903,11 @@ void LLAppViewer::idle()
             LLViewerJoystick::getInstance()->moveObjects();
         }
 
+        // <SK:Nexii> motion recorder
+        const U64 sk_start = SKMotionRecorder::isRecording() ? SKMotionRecorder::now() : 0;
+        // </SK:Nexii>
         gAgentCamera.updateCamera();
+        SKMotionRecorder::stageEnd(SKMotionRecorder::STAGE_CAMERA, sk_start); // <SK:Nexii> motion recorder
     }
 
     // <SK:Nexii> motion recorder
