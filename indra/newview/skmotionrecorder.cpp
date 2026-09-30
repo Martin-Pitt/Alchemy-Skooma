@@ -98,6 +98,7 @@ namespace
         F32 focus_offset[3];
         F32 avatar_render_pos[3]; // agent
         U32 sit_root_local_id;
+        F64 focus_raw[3];    // global, before the camera follow smoothing
     };
 
     struct UpdateRec
@@ -167,7 +168,7 @@ namespace
 #pragma pack(pop)
 
     static_assert(sizeof(FrameRec)  == 120,  "FrameRec layout");
-    static_assert(sizeof(CameraRec) == 104, "CameraRec layout");
+    static_assert(sizeof(CameraRec) == 128, "CameraRec layout");
     static_assert(sizeof(UpdateRec) == 208, "UpdateRec layout");
     static_assert(sizeof(ObjectRec) == 108, "ObjectRec layout");
     static_assert(sizeof(InfoRec)   == 52,  "InfoRec layout");
@@ -204,6 +205,7 @@ namespace
         SK_FIELD(CameraRec, focus_on_avatar, "u8", 1), SK_FIELD(CameraRec, camera_mode, "u8", 1),
         SK_FIELD(CameraRec, focus_local_id, "u32", 1), SK_FIELD(CameraRec, focus_offset, "f32", 3),
         SK_FIELD(CameraRec, avatar_render_pos, "f32", 3), SK_FIELD(CameraRec, sit_root_local_id, "u32", 1),
+        SK_FIELD(CameraRec, focus_raw, "f64", 3),
     };
 
     const Field sUpdateFields[] = {
@@ -377,7 +379,7 @@ namespace
     {
         std::ostringstream out;
         out.precision(17);
-        out << "{\"format\":\"skmotion\",\"version\":3,\"endian\":\"little\",\"stage_times\":\"previous_frame\"";
+        out << "{\"format\":\"skmotion\",\"version\":4,\"endian\":\"little\",\"stage_times\":\"previous_frame\"";
         out << ",\"viewer\":" << jsonString(LLVersionInfo::instance().getChannelAndVersion());
         out << ",\"start_utc\":" << jsonString(start_utc);
         out << ",\"start_total_us\":" << (U64)totalTime();
@@ -391,7 +393,8 @@ namespace
                                   "RegionCrossingInterpolationTime", "CameraPositionSmoothing",
                                   "ALInterpolationCadenceAware", "ALInterpolationCadenceFactor",
                                   "ALInterpolationMaxFrameStep", "SKMotionRecordSeconds", "SKMotionRecordRadius",
-                                  "SKMotionRecordMaxObjects", "SKMotionRecoverClampedVelocity" })
+                                  "SKMotionRecordMaxObjects", "SKMotionRecoverClampedVelocity",
+                                  "SKCameraFollowEnabled", "SKCameraFollowSmoothing" })
         {
             writeSetting(out, name, first);
         }
@@ -720,6 +723,7 @@ void SKMotionRecorder::onFrameEnd()
     copy3d(cam.cam_pos, gAgentCamera.getCameraPositionGlobal());
     copy4(cam.cam_rot, LLViewerCamera::getInstance()->getQuaternion());
     copy3d(cam.focus_pos, gAgentCamera.getFocusGlobal());
+    copy3d(cam.focus_raw, gAgentCamera.getSKFollowRawFocusGlobal());
     cam.focus_on_avatar = gAgentCamera.getFocusOnAvatar() ? 1 : 0;
     cam.camera_mode = (U8)gAgentCamera.getCameraMode();
     if (LLViewerObject* focusp = gAgentCamera.getFocusObject())
