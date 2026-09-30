@@ -74,6 +74,8 @@ public:
     static void onUpdateBegin(const LLViewerObject* objectp, const LLMessageSystem* mesgsys, U8 update_type);
     static void onUpdateDecoded(const LLVector3& pos, const LLVector3& vel, const LLVector3& acc,
                                 const LLQuaternion& rot, const LLVector3& omega, F32 time_dilation);
+    // The velocity clamped-velocity recovery left in place, before ping interpolation.
+    static void onUpdateRecovered(const LLVector3& vel, U8 method);
     static void onUpdateEnd(const LLViewerObject* objectp, U32 crc, U32 parent_id, bool stale, U8 drop);
     static void onUpdateDropped(const LLViewerObject* objectp, U8 drop)
     {

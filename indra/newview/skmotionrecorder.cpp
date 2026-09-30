@@ -115,6 +115,9 @@ namespace
         U32 crc;
         U32 parent_id;
         U64 pre_region_handle; // region pre_pos is relative to
+        F32 used_vel[3];     // after clamped-velocity recovery, before ping interpolation
+        U8  recover;         // 0 none, 1 ratio, 2 fallback, 3 clamped but not recovered
+        U8  pad[3];
     };
 
     struct ObjectRec
@@ -153,7 +156,7 @@ namespace
 
     static_assert(sizeof(FrameRec)  == 80,  "FrameRec layout");
     static_assert(sizeof(CameraRec) == 104, "CameraRec layout");
-    static_assert(sizeof(UpdateRec) == 192, "UpdateRec layout");
+    static_assert(sizeof(UpdateRec) == 208, "UpdateRec layout");
     static_assert(sizeof(ObjectRec) == 108, "ObjectRec layout");
     static_assert(sizeof(InfoRec)   == 52,  "InfoRec layout");
 
@@ -200,6 +203,7 @@ namespace
         SK_FIELD(UpdateRec, pre_rot, "f32", 4), SK_FIELD(UpdateRec, applied_pos, "f32", 3),
         SK_FIELD(UpdateRec, final_vel, "f32", 3), SK_FIELD(UpdateRec, crc, "u32", 1),
         SK_FIELD(UpdateRec, parent_id, "u32", 1), SK_FIELD(UpdateRec, pre_region_handle, "u64", 1),
+        SK_FIELD(UpdateRec, used_vel, "f32", 3), SK_FIELD(UpdateRec, recover, "u8", 1),
     };
 
     const Field sObjectFields[] = {
@@ -353,7 +357,7 @@ namespace
     {
         std::ostringstream out;
         out.precision(17);
-        out << "{\"format\":\"skmotion\",\"version\":1,\"endian\":\"little\"";
+        out << "{\"format\":\"skmotion\",\"version\":2,\"endian\":\"little\"";
         out << ",\"viewer\":" << jsonString(LLVersionInfo::instance().getChannelAndVersion());
         out << ",\"start_utc\":" << jsonString(start_utc);
         out << ",\"start_total_us\":" << (U64)totalTime();
@@ -555,10 +559,17 @@ void SKMotionRecorder::onUpdateDecoded(const LLVector3& pos, const LLVector3& ve
 {
     copy3(sUpdate.raw_pos, pos);
     copy3(sUpdate.raw_vel, vel);
+    copy3(sUpdate.used_vel, vel);
     copy3(sUpdate.raw_acc, acc);
     copy4(sUpdate.raw_rot, rot);
     copy3(sUpdate.raw_omega, omega);
     sUpdate.time_dilation = time_dilation;
+}
+
+void SKMotionRecorder::onUpdateRecovered(const LLVector3& vel, U8 method)
+{
+    copy3(sUpdate.used_vel, vel);
+    sUpdate.recover = method;
 }
 
 void SKMotionRecorder::onUpdateEnd(const LLViewerObject* objectp, U32 crc, U32 parent_id, bool stale, U8 drop)
