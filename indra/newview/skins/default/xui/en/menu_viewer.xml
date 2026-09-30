@@ -4217,6 +4217,18 @@ function="World.EnvPreset"
                  parameter="SKMotionRecoverClampedVelocity" />
             </menu_item_check>
             <!-- </SK:Nexii> -->
+            <!-- <SK:Nexii> camera follow -->
+            <menu_item_check
+             label="Smooth Camera Follow"
+             name="Smooth Camera Follow">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKCameraFollowEnabled" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKCameraFollowEnabled" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <!-- <SK:Nexii> motion recorder -->
             <menu_item_check
              label="Record Object Motion"
