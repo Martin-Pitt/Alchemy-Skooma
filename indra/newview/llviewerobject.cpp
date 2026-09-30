@@ -7287,11 +7287,22 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
     const F64 now = LLFrameTimer::getElapsedSeconds();
     const bool in_world = mRegionp && !getParent();
     const bool have_prev = in_world && mSKLastRawSecs > 0.0 && mSKLastRawRegion == mRegionp && now - mSKLastRawSecs <= 1.0;
+    if (!have_prev)
+    {
+        mSKRawSpeedEWMA = 0.f;
+    }
     const LLVector3 prev_pos = mSKLastRawPos;
     const F64 prev_secs = mSKLastRawSecs;
     mSKLastRawPos = new_pos;
     mSKLastRawSecs = now;
     mSKLastRawRegion = in_world ? mRegionp : nullptr;
+
+    // A clamped acceleration points the wrong way, and the finite difference was no better than none.
+    const LLVector3& acc = getAcceleration();
+    if (fabsf(acc.mV[VX]) >= ACC_CLAMP || fabsf(acc.mV[VY]) >= ACC_CLAMP || fabsf(acc.mV[VZ]) >= ACC_CLAMP)
+    {
+        setAcceleration(LLVector3::zero);
+    }
 
     const LLVector3 vel = getVelocity();
     mSKRecoveredVel = vel;
@@ -7321,6 +7332,19 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
         return;
     }
     const LLVector3 dir = delta / dist;
+
+    // A bounce or a teleport moves against the reported velocity; the ratio would be meaningless.
+    if (dir * vel <= 0.f)
+    {
+        return;
+    }
+    for (S32 i = 0; i < 3; ++i)
+    {
+        if (clamped[i] && (dir.mV[i] > 0.f) != (vel.mV[i] > 0.f))
+        {
+            return;
+        }
+    }
 
     const F64 gap = now - prev_secs;
     if (gap >= 0.01 && gap <= 1.0)
@@ -7361,13 +7385,6 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
 
     mSKRecoveredVel = dir * speed;
     setVelocity(mSKRecoveredVel);
-
-    // A clamped acceleration points the wrong way, and the finite difference was no better than none.
-    const LLVector3& acc = getAcceleration();
-    if (fabsf(acc.mV[VX]) >= ACC_CLAMP || fabsf(acc.mV[VY]) >= ACC_CLAMP || fabsf(acc.mV[VZ]) >= ACC_CLAMP)
-    {
-        setAcceleration(LLVector3::zero);
-    }
 }
 // </SK:Nexii>
 
@@ -7391,7 +7408,10 @@ void LLViewerObject::setRegion(LLViewerRegion *regionp)
 
     mLatestRecvPacketID = 0;
     mRegionp = regionp;
-    mSKLastRawSecs = 0.0; // <SK:Nexii> clamped velocity recovery
+    // <SK:Nexii> clamped velocity recovery
+    mSKLastRawSecs = 0.0;
+    mSKRawSpeedEWMA = 0.f;
+    // </SK:Nexii>
 
     // A different simulator is sending this object now, at whatever rate it chooses. The rate the
     // old one used says nothing about when the new one is late.
