@@ -4452,6 +4452,18 @@ function="World.EnvPreset"
                  parameter="SKMotionRecoverClampedVelocity" />
             </menu_item_check>
             <!-- </SK:Nexii> -->
+            <!-- <SK:Nexii> smoothed update corrections -->
+            <menu_item_check
+             label="Smooth Update Corrections"
+             name="Smooth Update Corrections">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKMotionSmoothCorrections" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKMotionSmoothCorrections" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
 
             <menu_item_separator/>
 

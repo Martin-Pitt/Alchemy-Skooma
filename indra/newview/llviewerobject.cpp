@@ -1381,6 +1381,11 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // full update hands back once it has been decoded for everything else.
     const LLVector3 old_vel = getVelocity();
     const LLVector3 old_acc = getAcceleration();
+    // <SK:Nexii> smoothed update corrections
+    const F32 sk_since_interp = (F32)(LLFrameTimer::getElapsedSeconds() - mLastInterpUpdateSecs.value());
+    const LLVector3 sk_shown_pos = predicted_pos_parent + ALMotionPredictor::positionDelta(old_vel, old_acc, sk_since_interp);
+    bool sk_pos_applied = false;
+    // </SK:Nexii>
 
     U32 parent_id = 0;
     U8  material = 0;
@@ -2408,6 +2413,7 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         if(llfinite(mag_sqr))
         {
             setPositionParent(new_pos_parent);
+            sk_pos_applied = true; // <SK:Nexii> smoothed update corrections
         }
         else
         {
@@ -2560,6 +2566,12 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     mLastInterpUpdateSecs = (F64Seconds)update_time;
     mLastMessageUpdateSecs = mLastInterpUpdateSecs;
+    // <SK:Nexii> smoothed update corrections
+    if (sk_pos_applied)
+    {
+        skSmoothUpdate(sk_shown_pos);
+    }
+    // </SK:Nexii>
     if (mDrawable.notNull())
     {
         // Don't clear invisibility flag on update if still orphaned!
@@ -2662,6 +2674,10 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
     }
 
     const ALMotionPredictor::Tuning& tuning = sPredictionTuning;
+    // <SK:Nexii> smoothed update corrections
+    const LLVector3 sk_step = skBleedCorrection((F32)((F64Seconds)frame_time - mLastInterpUpdateSecs).value());
+    bool sk_step_used = false;
+    // </SK:Nexii>
 
     // A frame that spans a stall -- a paused viewer, a snapshot floater holding FreezeTime, a long
     // hitch -- would otherwise carry every moving object forward by the whole of it in one step.
@@ -2672,6 +2688,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
         // Nothing to integrate this frame, but the clock still has to move: leaving it behind
         // stores up the whole idle span as one huge dt the moment motion resumes.
         mLastInterpUpdateSecs = frame_time;
+        skNudge(sk_step); // <SK:Nexii> smoothed update corrections
         return;
     }
 
@@ -2747,6 +2764,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
                 // would spend the terrain and region-edge clamps below on a zero-length step, and
                 // could still shift the object -- which is not what "stop predicting" should mean.
                 mLastInterpUpdateSecs = frame_time;
+                skNudge(sk_step); // <SK:Nexii> smoothed update corrections
                 return;
             }
 
@@ -2757,7 +2775,10 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
             }
         }
 
-        new_pos = new_pos + getPositionRegion();
+        // <SK:Nexii> smoothed update corrections
+        new_pos = new_pos + getPositionRegion() + sk_step;
+        sk_step_used = true;
+        // </SK:Nexii>
         new_v = new_v + vel;
 
 
@@ -2863,6 +2884,13 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
         // for objects that are spinning but not translating, make sure to flag them as having moved
         setChanged(MOVED);
     }
+
+    // <SK:Nexii> smoothed update corrections
+    if (!sk_step_used)
+    {
+        skNudge(sk_step);
+    }
+    // </SK:Nexii>
 
     // Update the last time we did anything
     mLastInterpUpdateSecs = frame_time;
@@ -7313,6 +7341,57 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
 }
 // </SK:Nexii>
 
+// <SK:Nexii> smoothed update corrections
+// Keep a moving object where it is shown and bleed the difference to the update out over time.
+void LLViewerObject::skSmoothUpdate(const LLVector3& shown_pos)
+{
+    static LLCachedControl<bool> smooth(gSavedSettings, "SKMotionSmoothCorrections", true);
+    const LLVector3 received = getPosition();
+    LLVector3 correction = received - shown_pos;
+    const F32 interval = mMotionPredictor.hasCadence() ? mMotionPredictor.getUpdateInterval() : 0.1f;
+    const F32 limit = llmax(2.f, 3.f * getVelocity().length() * interval);
+    const bool eligible = smooth && sVelocityInterpolate && mSKHasMotionState && !mStatic && !mParent
+                       && !isSelected() && !(isAvatar() && asAvatar()->isSelf());
+    const bool snapped = !eligible || !correction.isFinite() || correction.length() > limit;
+    if (snapped)
+    {
+        correction.clear();
+    }
+    else
+    {
+        setPositionParent(shown_pos);
+    }
+    mSKPendingCorrection = correction;
+    mSKHasMotionState = !mParent;
+}
+
+LLVector3 LLViewerObject::skBleedCorrection(F32 elapsed)
+{
+    if (elapsed <= 0.f || mSKPendingCorrection.isExactlyZero())
+    {
+        return LLVector3::zero;
+    }
+    static LLCachedControl<F32> tau(gSavedSettings, "SKMotionSmoothTau", 0.15f);
+    const F32 k = tau > 0.f ? 1.f - expf(-elapsed / tau) : 1.f;
+    const LLVector3 step = mSKPendingCorrection * k;
+    mSKPendingCorrection -= step;
+    if (mSKPendingCorrection.magVecSquared() < 1e-6f)
+    {
+        mSKPendingCorrection.clear();
+    }
+    return step;
+}
+
+void LLViewerObject::skNudge(const LLVector3& step)
+{
+    if (!step.isExactlyZero())
+    {
+        setPositionRegion(getPositionRegion() + step);
+        setChanged(MOVED | SILHOUETTE);
+    }
+}
+// </SK:Nexii>
+
 void LLViewerObject::setRegion(LLViewerRegion *regionp)
 {
     if (!regionp)
@@ -7336,6 +7415,10 @@ void LLViewerObject::setRegion(LLViewerRegion *regionp)
     // <SK:Nexii> clamped velocity recovery
     mSKLastRawSecs = 0.0;
     mSKRawSpeedEWMA = 0.f;
+    // </SK:Nexii>
+    // <SK:Nexii> smoothed update corrections
+    mSKPendingCorrection.clear();
+    mSKHasMotionState = false;
     // </SK:Nexii>
 
     // A different simulator is sending this object now, at whatever rate it chooses. The rate the

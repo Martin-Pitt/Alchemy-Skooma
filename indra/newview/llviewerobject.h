@@ -690,6 +690,7 @@ public:
     friend class LLViewerMediaList;
 
 public:
+    const LLVector3& getSKPendingCorrection() const { return mSKPendingCorrection; } // <SK:Nexii> smoothed update corrections
     LLViewerTexture* getBakedTextureForMagicId(const LLUUID& id);
     void updateAvatarMeshVisibility(const LLUUID& id, const LLUUID& old_id);
     void refreshBakeTexture();
@@ -748,6 +749,11 @@ private:
 
     // Motion prediction between updates
     void interpolateLinearMotion(const F64SecondsImplicit & frame_time, const F32SecondsImplicit & dt);
+    // <SK:Nexii> smoothed update corrections
+    void skSmoothUpdate(const LLVector3& shown_pos);
+    LLVector3 skBleedCorrection(F32 elapsed);
+    void skNudge(const LLVector3& step);
+    // </SK:Nexii>
 
     static void initObjectDataMap();
 
@@ -945,6 +951,10 @@ protected:
     F64             mSKLastRawSecs = 0.0;           // frame time it arrived; 0 when there is none
     LLViewerRegion* mSKLastRawRegion = nullptr;
     F32             mSKRawSpeedEWMA = 0.f;          // observed speed for the fallback; 0 when unknown
+    // </SK:Nexii>
+    // <SK:Nexii> smoothed update corrections
+    LLVector3       mSKPendingCorrection;           // received minus shown position, still to bleed in
+    bool            mSKHasMotionState = false;      // an update has placed this object in its region
     // </SK:Nexii>
 
     // extra data sent from the sim...currently only used for tree species info
