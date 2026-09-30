@@ -4143,6 +4143,19 @@
             <key>Value</key>
             <real>0.5</real>
         </map>
+        <!-- <SK:Nexii> clamped velocity recovery -->
+        <key>SKMotionRecoverClampedVelocity</key>
+        <map>
+            <key>Comment</key>
+            <string>Restore the true velocity of fast objects whose terse update clamps an axis at 128 m/s, from the unclamped axes and the direction of travel.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <!-- <SK:Nexii> motion recorder -->
         <key>SKMotionRecordSeconds</key>
         <map>

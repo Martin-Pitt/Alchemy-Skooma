@@ -4205,6 +4205,18 @@ function="World.EnvPreset"
                  function="ToggleControl"
                  parameter="PingInterpolate" />
             </menu_item_check>
+            <!-- <SK:Nexii> clamped velocity recovery -->
+            <menu_item_check
+             label="Recover Clamped Velocities"
+             name="Recover Clamped Velocities">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SKMotionRecoverClampedVelocity" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SKMotionRecoverClampedVelocity" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <!-- <SK:Nexii> motion recorder -->
             <menu_item_check
              label="Record Object Motion"
