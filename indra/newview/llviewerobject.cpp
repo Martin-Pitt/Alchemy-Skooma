@@ -2335,6 +2335,17 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
     new_rot.normQuat();
 
+    // <SK:Nexii> clamped velocity recovery
+    if (update_type == OUT_TERSE_IMPROVED)
+    {
+        static LLCachedControl<bool> recover_clamped(gSavedSettings, "SKMotionRecoverClampedVelocity", true);
+        if (recover_clamped)
+        {
+            skRecoverClampedVelocity(new_pos_parent);
+        }
+    }
+    // </SK:Nexii>
+
     if (sPingInterpolate && mesgsys != NULL)
     {
         LLCircuitData *cdp = gMessageSystem->mCircuitInfo.findCircuit(mesgsys->getSender());
@@ -7200,6 +7211,101 @@ void LLViewerObject::setIncludeInSearch(bool include_in_search)
     setFlags(FLAGS_INCLUDE_IN_SEARCH, include_in_search);
 }
 
+// <SK:Nexii> clamped velocity recovery
+// Terse updates clamp each velocity axis to +-128 m/s; the unclamped axes are exact and successive
+// positions give the direction, so their ratio restores the speed.
+void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
+{
+    constexpr F32 VEL_CLAMP = 127.99f;
+    constexpr F32 ACC_CLAMP = 63.99f;
+
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const bool in_world = mRegionp && !getParent();
+    const bool have_prev = in_world && mSKLastRawSecs > 0.0 && mSKLastRawRegion == mRegionp && now - mSKLastRawSecs <= 1.0;
+    const LLVector3 prev_pos = mSKLastRawPos;
+    const F64 prev_secs = mSKLastRawSecs;
+    mSKLastRawPos = new_pos;
+    mSKLastRawSecs = now;
+    mSKLastRawRegion = in_world ? mRegionp : nullptr;
+
+    const LLVector3 vel = getVelocity();
+    mSKRecoveredVel = vel;
+    mSKRecoverMethod = 0;
+
+    bool clamped[3];
+    bool any_clamped = false;
+    for (S32 i = 0; i < 3; ++i)
+    {
+        clamped[i] = fabsf(vel.mV[i]) >= VEL_CLAMP;
+        any_clamped |= clamped[i];
+    }
+    if (!any_clamped)
+    {
+        return;
+    }
+    mSKRecoverMethod = 3;
+    if (!have_prev)
+    {
+        return;
+    }
+
+    const LLVector3 delta = new_pos - prev_pos;
+    const F32 dist = delta.length();
+    if (dist < 0.5f)
+    {
+        return;
+    }
+    const LLVector3 dir = delta / dist;
+
+    const F64 gap = now - prev_secs;
+    if (gap >= 0.01 && gap <= 1.0)
+    {
+        const F32 rate = dist / (F32)gap;
+        mSKRawSpeedEWMA = mSKRawSpeedEWMA > 0.f ? mSKRawSpeedEWMA + 0.3f * (rate - mSKRawSpeedEWMA) : rate;
+    }
+
+    const F32 reported = vel.length();
+    S32 axis = -1;
+    for (S32 i = 0; i < 3; ++i)
+    {
+        if (!clamped[i] && fabsf(dir.mV[i]) >= 0.05f && (axis < 0 || fabsf(dir.mV[i]) > fabsf(dir.mV[axis])))
+        {
+            axis = i;
+        }
+    }
+
+    F32 speed = 0.f;
+    if (axis >= 0)
+    {
+        const F32 ratio = fabsf(vel.mV[axis]) / fabsf(dir.mV[axis]);
+        if (ratio >= reported - 1e-3f && ratio <= 2000.f)
+        {
+            speed = ratio;
+            mSKRecoverMethod = 1;
+        }
+    }
+    if (mSKRecoverMethod != 1 && mSKRawSpeedEWMA > 0.f)
+    {
+        speed = llmax(mSKRawSpeedEWMA, reported);
+        mSKRecoverMethod = 2;
+    }
+    if (mSKRecoverMethod == 3)
+    {
+        return;
+    }
+
+    mSKRecoveredVel = dir * speed;
+    setVelocity(mSKRecoveredVel);
+
+    // A clamped acceleration points the wrong way, and the finite difference was no better than none.
+    const LLVector3& acc = getAcceleration();
+    if (fabsf(acc.mV[VX]) >= ACC_CLAMP || fabsf(acc.mV[VY]) >= ACC_CLAMP || fabsf(acc.mV[VZ]) >= ACC_CLAMP)
+    {
+        setAcceleration(LLVector3::zero);
+    }
+}
+// </SK:Nexii>
+
 void LLViewerObject::setRegion(LLViewerRegion *regionp)
 {
     if (!regionp)
@@ -7220,6 +7326,7 @@ void LLViewerObject::setRegion(LLViewerRegion *regionp)
 
     mLatestRecvPacketID = 0;
     mRegionp = regionp;
+    mSKLastRawSecs = 0.0; // <SK:Nexii> clamped velocity recovery
 
     // A different simulator is sending this object now, at whatever rate it chooses. The rate the
     // old one used says nothing about when the new one is late.
