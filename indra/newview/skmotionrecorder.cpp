@@ -371,7 +371,7 @@ namespace
                                   "RegionCrossingInterpolationTime", "CameraPositionSmoothing",
                                   "ALInterpolationCadenceAware", "ALInterpolationCadenceFactor",
                                   "ALInterpolationMaxFrameStep", "SKMotionRecordSeconds", "SKMotionRecordRadius",
-                                  "SKMotionRecordMaxObjects" })
+                                  "SKMotionRecordMaxObjects", "SKMotionRecoverClampedVelocity" })
         {
             writeSetting(out, name, first);
         }
