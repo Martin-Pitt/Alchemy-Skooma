@@ -7212,8 +7212,8 @@ void LLViewerObject::setIncludeInSearch(bool include_in_search)
 }
 
 // <SK:Nexii> clamped velocity recovery
-// Terse updates clamp each velocity axis to +-128 m/s; the unclamped axes are exact and successive
-// positions give the direction, so their ratio restores the speed.
+// Terse updates clamp each velocity axis to +-128 m/s; the fastest unclamped axis is exact, and
+// divided by its share of the direction of travel it restores the speed.
 void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
 {
     constexpr F32 VEL_CLAMP = 127.99f;
@@ -7292,7 +7292,8 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
     S32 axis = -1;
     for (S32 i = 0; i < 3; ++i)
     {
-        if (!clamped[i] && fabsf(dir.mV[i]) >= 0.05f && (axis < 0 || fabsf(dir.mV[i]) > fabsf(dir.mV[axis])))
+        if (!clamped[i] && fabsf(vel.mV[i]) >= 0.5f && fabsf(dir.mV[i]) > 1e-6f && (dir.mV[i] > 0.f) == (vel.mV[i] > 0.f)
+            && (axis < 0 || fabsf(vel.mV[i]) > fabsf(vel.mV[axis])))
         {
             axis = i;
         }
