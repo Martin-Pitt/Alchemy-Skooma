@@ -409,7 +409,9 @@ namespace tut
     void sknavprobes_object::test<14>()
     {
         set_test_name("a tight budget keeps one sphere per space, crowded ones out");
-        const ProbeParams params;
+        ProbeParams params;
+        params.mMaxPerSpace = 1;
+        params.mSpacingM = 8.f;
         auto slot = [](U32 key, U32 space, U32 part, F32 distance, F32 area, F32 x)
         {
             ProbeSlot s;
@@ -603,5 +605,57 @@ namespace tut
         {
             ensure("still capped", p.mRadius <= params.mMaxRadiusM + 1e-3f);
         }
+    }
+
+    template<> template<>
+    void sknavprobes_object::test<19>()
+    {
+        set_test_name("a tight budget tiles a street with spheres, not one per space");
+        const ProbeParams params;
+        // One long street, its parts every 5 m, and a row of small rooms
+        // beside it nearer the camera: the rooms must not starve the street.
+        std::vector<ProbeSlot> slots;
+        for (U32 i = 0; i < 40; ++i)
+        {
+            ProbeSlot s;
+            s.mKey = i;
+            s.mSpace = 0;
+            s.mPart = i;
+            s.mArea = 60.f;
+            s.mOrigin.set(5.f * i, 0.f, 1.5f);
+            s.mDistance = 10.f + 0.1f * i;
+            slots.push_back(s);
+        }
+        for (U32 i = 0; i < 10; ++i)
+        {
+            ProbeSlot s;
+            s.mKey = 100 + i;
+            s.mSpace = 1 + i;
+            s.mArea = 12.f;
+            s.mOrigin.set(20.f * i, 12.f, 1.5f);
+            s.mDistance = 1.f;
+            slots.push_back(s);
+        }
+        std::vector<std::pair<U64, ProbeDrop>> dropped;
+        budgetProbes(slots, 24, params, &dropped);   // under twice the 50 candidates: tight
+        U32 street = 0;
+        for (const ProbeSlot& s : slots)
+        {
+            street += s.mSpace == 0;
+            for (const ProbeSlot& t : slots)
+            {
+                ensure("kept spheres keep their spacing", &s == &t || dist_vec(s.mOrigin, t.mOrigin) >= params.mSpacingM);
+            }
+        }
+        ensure_equals("every room kept", static_cast<U32>(slots.size()) - street, 10u);
+        ensure("the street holds several spheres", street >= 10u);
+        ensure("the street's spheres stop at the per-space limit", street <= params.mMaxPerSpace);
+        ensure_equals("every candidate kept or named dropped", slots.size() + dropped.size(), 50u);
+        U32 spacing = 0;
+        for (const auto& d : dropped)
+        {
+            spacing += d.second == ProbeDrop::SPACING;
+        }
+        ensure("street parts closer than the spacing dropped for it", spacing > 0u);
     }
 }
