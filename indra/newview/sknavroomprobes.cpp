@@ -74,7 +74,7 @@ void SKNavRoomProbes::clear()
     mParts.clear();
     mSolids.clear();
     mSolidsCensus = nullptr;
-    mCandidates = mClearedOut = mOverBudget = mPlaced = 0;
+    mCandidates = mClearedOut = mOverBudget = mPlaced = mCandidatesAdded = 0;
 }
 
 void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
@@ -146,13 +146,30 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
     const LLVector3d camera_global = gAgent.getPosGlobalFromAgent(camera);
     const LLVector3d reach(REACH_M, REACH_M, REACH_M);
 
+    // Portals name each side by its slot in the mesh's spaces, so the
+    // candidates gather under the same names: space id to slot, per mesh.
+    std::map<LLUUID, std::map<U32, U32>> productId_to_space;
+    for (const auto& entry : view->meshes())
+    {
+        if (!entry.mRooms) continue;
+        std::map<U32, U32>& ids = productId_to_space[entry.mId];
+        for (size_t i = 0; i < entry.mRooms->mSpaces.size(); ++i)
+        {
+            ids[entry.mRooms->mSpaces[i].mId] = static_cast<U32>(i);
+        }
+    }
+
     struct Candidate
     {
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
+        F32 mArea = 0.f;
+        U32 mPart = 0;
+        U32 mSpace = 0;         ///< the space's slot in its product, what portals name
+        LLUUID mMesh;
+        bool mBridge = false;   ///< a threshold's own sphere, not a part's
     };
     std::vector<Candidate> candidates;
-    std::vector<sknav::ProbeSlot> slots;
     mClearedOut = 0;
     for (auto& p : mParts)
     {
@@ -192,21 +209,133 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
                 ++mClearedOut;
                 continue;
             }
-            sknav::ProbeSlot slot;
-            slot.mKey = candidates.size();
-            slot.mSpace = static_cast<U32>(parts.mIndex);
-            slot.mPart = part.mPart;
-            slot.mOrigin = c.mOrigin;
-            slot.mRadius = c.mRadius;
-            slot.mArea = part.mArea;
-            slot.mDistance = std::max(dist_vec(camera, c.mOrigin) - c.mRadius, 0.f);
-            slots.push_back(slot);
+            c.mArea = part.mArea;
+            c.mPart = part.mPart;
+            c.mSpace = productId_to_space[mesh.mId][space.mId];
+            c.mMesh = mesh.mId;
             candidates.push_back(c);
         }
     });
     for (auto it = mParts.begin(); it != mParts.end();)
     {
         it = it->second.mSeen ? std::next(it) : mParts.erase(it);
+    }
+
+    // Every doorway where two spaces meet is a blend the shader must carry:
+    // both sides' bubbles reach the threshold and past it, so they overlap
+    // and the graph links them; a doorway into a space with no bubbles of
+    // its own is served by its neighbour reaching through; and a threshold
+    // neither side can reach, however far the octree cap lets them grow,
+    // gets a small bubble of its own. The camera's reach bounds the work.
+    {
+        std::map<std::pair<LLUUID, U32>, std::vector<U32>> by_space;
+        for (size_t i = 0; i < candidates.size(); ++i)
+        {
+            by_space[{candidates[i].mMesh, candidates[i].mSpace}].push_back(static_cast<U32>(i));
+        }
+        const auto link_pair = [&](U32 a, U32 b)
+        {
+            const F32 dx = candidates[a].mOrigin.mV[VX] - candidates[b].mOrigin.mV[VX];
+            const F32 dy = candidates[a].mOrigin.mV[VY] - candidates[b].mOrigin.mV[VY];
+            const F32 dz = candidates[a].mOrigin.mV[VZ] - candidates[b].mOrigin.mV[VZ];
+            const F32 reach = candidates[a].mRadius + candidates[b].mRadius;
+            return dx * dx + dy * dy + dz * dz < reach * reach;
+        };
+        const auto any_link = [&](const std::vector<U32>& as, const std::vector<U32>& bs)
+        {
+            for (U32 a : as)
+            {
+                for (U32 b : bs)
+                {
+                    if (link_pair(a, b)) return true;
+                }
+            }
+            return false;
+        };
+        const auto nearest_of = [&](const std::vector<U32>& list, const LLVector3& p)
+        {
+            U32 best = 0;
+            F32 best_d2 = 1e30f;
+            for (U32 q : list)
+            {
+                const F32 d2 = dist_vec_squared(p, candidates[q].mOrigin);
+                if (d2 < best_d2) { best_d2 = d2; best = q; }
+            }
+            return std::make_pair(best, best_d2);
+        };
+        std::vector<std::pair<LLUUID, U32>> bridged;
+        view->portalsIn(camera_global - reach, camera_global + reach, [&](const SKNavWorldView::Mesh& mesh, const sknav::Portal& portal)
+        {
+            if (portal.mSpaces[0] >= productId_to_space[mesh.mId].size() ||
+                portal.mSpaces[1] >= productId_to_space[mesh.mId].size())
+            {
+                return;
+            }
+            const U32 id_a = portal.mSpaces[0], id_b = portal.mSpaces[1];
+            const std::vector<U32>& list_a = by_space[{mesh.mId, id_a}];
+            const std::vector<U32>& list_b = by_space[{mesh.mId, id_b}];
+            if (!list_a.empty() && !list_b.empty() && any_link(list_a, list_b))
+            {
+                return;     // already blends across
+            }
+            const LLVector3 centre = LLVector3(mesh.mOrigin + LLVector3d(portal.mCentre)) + LLVector3(0.f, 0.f, 1.f);
+            bool grew = false;
+            for (const std::vector<U32>* list : { &list_a, &list_b })
+            {
+                if (list->empty())
+                {
+                    continue;
+                }
+                const auto pair = nearest_of(*list, centre);
+                Candidate& c = candidates[pair.first];
+                const F32 need = std::sqrt(pair.second) + 2.f;  // past the mouth, generous
+                const F32 cap = std::min(params.mMaxRadiusM, std::max(c.mRadius * params.mObligationShare, c.mRadius + 2.f));
+                if (need > c.mRadius && need <= cap)
+                {
+                    c.mRadius = need;
+                    grew = true;
+                }
+            }
+            if (!grew || list_a.empty() || list_b.empty() || !any_link(list_a, list_b))
+            {
+                // A threshold nothing reaches: its own small bubble, matched
+                // to later updates by origin like any part's.
+                Candidate bridge;
+                bridge.mOrigin = centre;
+                bridge.mRadius = 3.f;
+                for (const std::vector<U32>* list : { &list_a, &list_b })
+                {
+                    if (list->empty()) continue;
+                    const auto pair = nearest_of(*list, bridge.mOrigin);
+                    bridge.mRadius = std::max(bridge.mRadius, std::sqrt(pair.second) + 1.f);
+                }
+                bridge.mRadius = std::min(bridge.mRadius, 8.f);
+                bridge.mMesh = mesh.mId;
+                bridge.mSpace = id_a;
+                bridge.mBridge = true;
+                bridged.emplace_back(mesh.mId, id_a);
+                std::vector<U32>& list = by_space[{mesh.mId, id_a}];
+                list.push_back(static_cast<U32>(candidates.size()));
+                candidates.push_back(bridge);
+                ++mCandidatesAdded;
+            }
+        });
+    }
+
+    // Slots stand for candidates, built after the portal pass so a grown or
+    // bridged sphere is budgeted at its final size.
+    std::vector<sknav::ProbeSlot> slots;
+    for (const Candidate& c : candidates)
+    {
+        sknav::ProbeSlot slot;
+        slot.mKey = slots.size();
+        slot.mSpace = c.mSpace;
+        slot.mPart = c.mPart;
+        slot.mOrigin = c.mOrigin;
+        slot.mRadius = c.mRadius;
+        slot.mArea = c.mArea;
+        slot.mDistance = std::max(dist_vec(camera, c.mOrigin) - c.mRadius, 0.f);
+        slots.push_back(slot);
     }
 
     // Parts renumbered by a rebuild keep their probes: match by nearest origin.
