@@ -1947,15 +1947,6 @@ void renderReflectionProbe(LLReflectionMap* probe)
 
 namespace
 {
-    LLColor4 probeDebugColor(const LLReflectionMap* probe, const LLReflectionMap* fallback)
-    {
-        if (probe == fallback) return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
-        if (probe->mBlockedByCensus) return LLColor4(1.f, 0.2f, 0.2f, 1.f);
-        if (probe->mViewerObject) return LLColor4(1.f, 0.3f, 1.f, 1.f);
-        if (probe->mNavRooms) return LLColor4(0.f, 1.f, 1.f, 1.f);
-        return LLColor4(1.f, 0.6f, 0.f, 1.f);
-    }
-
     // <SK:Nexii> Probe links: kind colours matching the scan-pulse display in reflectionProbeF.glsl.
     LLColor4 skProbeKindColor(LLReflectionMapManager::SKProbeKind kind)
     {
@@ -2166,7 +2157,8 @@ void LLReflectionMapManager::renderDebug()
 
     for (const auto& probe : mProbes)
     {
-        const LLColor4 color = probeDebugColor(probe, mDefaultProbe);
+        // Markers share the scan-pulse kind colours; a census-blocked probe stays red.
+        const LLColor4 color = probe->mBlockedByCensus && probe != mDefaultProbe ? LLColor4(1.f, 0.2f, 0.2f, 1.f) : skProbeKindColor(getSKProbeKind(probe));
         const LLVector3 origin(probe->mOrigin.getF32ptr());
         gGL.diffuseColor4fv(color.mV);
         gGL.begin(LLRender::LINES);
