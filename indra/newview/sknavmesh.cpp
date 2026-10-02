@@ -1262,6 +1262,8 @@ void SKNavMesh::schedule()
     // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    // Marks are placed against the mesh on screen, so annotating only fills tiles that have none yet.
+    const bool annotating = SKNavAnnotator::instanceExists() && SKNavAnnotator::instance().armed();
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -1270,7 +1272,7 @@ void SKNavMesh::schedule()
             Tile& tile = t.second;
             // A built tile near the camera without its air is built again for it.
             const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
-            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
+            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due) || (annotating && tile.mBuilt))
             {
                 continue;
             }
