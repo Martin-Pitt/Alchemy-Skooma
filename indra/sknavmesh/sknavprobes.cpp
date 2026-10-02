@@ -843,9 +843,20 @@ namespace sknav
 
     void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params)
     {
+        budgetProbes(slots, cap, params, nullptr);
+    }
+
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params,
+                      std::vector<std::pair<U64, ProbeDrop>>* dropped)
+    {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("probes - budget");
+        const auto drop = [dropped](const ProbeSlot& s, ProbeDrop why)
+        {
+            if (dropped) dropped->emplace_back(s.mKey, why);
+        };
         if (cap == 0)
         {
+            for (const ProbeSlot& s : slots) drop(s, ProbeDrop::CAP);
             slots.clear();
             return;
         }
@@ -856,16 +867,23 @@ namespace sknav
         {
             return;
         }
-        // Tight: one sphere per space at most, and not a second sphere within
-        // mSpacingM of a placed one. The near and large claim the budget first,
-        // held ones ranking nearer, so the kept set does not flicker.
+        // Tight: a few spheres per space at most, none within mSpacingM of a
+        // kept one, so the cap spreads over the floor rather than piling up.
+        // The near and large claim it first, held ones ranking nearer, so the
+        // kept set does not flicker.
         std::vector<ProbeSlot> kept;
         kept.reserve(std::min<size_t>(slots.size(), cap));
         std::map<U32, U32> per_space;
         for (const ProbeSlot& s : slots)
         {
+            if (kept.size() == cap)
+            {
+                drop(s, ProbeDrop::CAP);
+                continue;
+            }
             if (per_space[s.mSpace] >= params.mMaxPerSpace)
             {
+                drop(s, ProbeDrop::PER_SPACE);
                 continue;
             }
             bool crowded = false;
@@ -879,14 +897,11 @@ namespace sknav
             }
             if (crowded)
             {
+                drop(s, ProbeDrop::SPACING);
                 continue;
             }
             ++per_space[s.mSpace];
             kept.push_back(s);
-            if (kept.size() == cap)
-            {
-                break;
-            }
         }
         slots.swap(kept);
     }

@@ -80,7 +80,7 @@ void SKNavRoomProbes::clear()
 void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavRoomProbes", true);
-    static LLCachedControl<U32> max_probes(gSavedSettings, "SKNavRoomProbesMax", 128);
+    static LLCachedControl<U32> max_probes(gSavedSettings, "SKNavRoomProbesMax", 240);
     static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
     if (!enabled || !view || !LLPipeline::sReflectionProbesEnabled || probe_level < 3)
     {
@@ -324,12 +324,14 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
     // Slots stand for candidates, built after the portal pass so a grown or
     // bridged sphere is budgeted at its final size.
+    // The budget counts spheres per space, and slots repeat across meshes.
+    std::map<std::pair<LLUUID, U32>, U32> space_numbers;
     std::vector<sknav::ProbeSlot> slots;
     for (const Candidate& c : candidates)
     {
         sknav::ProbeSlot slot;
         slot.mKey = slots.size();
-        slot.mSpace = c.mSpace;
+        slot.mSpace = space_numbers.emplace(std::make_pair(c.mMesh, c.mSpace), static_cast<U32>(space_numbers.size())).first->second;
         slot.mPart = c.mPart;
         slot.mOrigin = c.mOrigin;
         slot.mRadius = c.mRadius;

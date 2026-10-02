@@ -83,8 +83,9 @@ namespace sknav
                                     ///< as the budget's hold reaches, so a held sphere kept by the
                                     ///< hold can still be matched to its part
         F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
-        F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
-        U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
+        F32 mSpacingM = 10.f;       ///< kept spheres stand this far apart at least, while the budget is tight
+        U32 mMaxPerSpace = 16;      ///< spheres per space at most, while the budget is tight: a street
+                                    ///< is one space, and one sphere left the rest of it bare
     };
 
     /// A space's floor seen from above: per cell, its floor height, NaN
@@ -173,11 +174,18 @@ namespace sknav
     void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m = 0.f);
 
     /// The budget a room probe stands in: while the cap holds fewer than twice
-    /// the candidates, one sphere per space at most, each standing mSpacingM
-    /// clear of the last, the far and small dropping first; with room to spare,
-    /// every part places however close. Held ones rank mBudgetHoldM nearer
+    /// the candidates, mMaxPerSpace spheres per space at most, each standing
+    /// mSpacingM clear of every kept one, the far and small dropping first;
+    /// with room to spare, every part places however close. Held ones rank mBudgetHoldM nearer
     /// throughout, so the kept set does not flicker at either edge.
     void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params);
+
+    /// Why the budget left a slot out.
+    enum class ProbeDrop : U8 { CAP, SPACING, PER_SPACE };
+
+    /// The same, naming each dropped slot by its key and the reason.
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params,
+                      std::vector<std::pair<U64, ProbeDrop>>* dropped);
 
     /// Pair each new origin with the nearest held one within tolerance, the
     /// closest pairs first and each held one at most once: per origin, the
