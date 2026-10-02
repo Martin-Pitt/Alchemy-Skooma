@@ -768,12 +768,17 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     }
 
     // One mesh per region: its terrain, and every record that reaches over
-    // that land. A record's own region names it for the void past every edge,
-    // but where it stands on another region's land it is meshed with that
-    // land, so a structure and the ground under it stay one mesh even when
-    // the structure was rezzed across the border.
+    // that land, and the void nearer it than any other region with whatever
+    // hangs out there. A structure is meshed with the land it stands on, so it
+    // and the ground under it stay one mesh even when it was rezzed across the
+    // border.
     if (LLWorld::instanceExists())
     {
+        std::vector<RegionSquare> squares;
+        for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+        {
+            squares.push_back({ region->getOriginGlobal(), region->getWidth() });
+        }
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
             live.insert(region->getRegionID());
@@ -793,8 +798,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const U64 land_stamp = landStamp(*region);
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
             std::vector<LaidTile> laid;
-            layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
-                      [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin, squares, laid);
 
             std::map<TileKey, Tile> wanted;
             for (LaidTile& lt : laid)
