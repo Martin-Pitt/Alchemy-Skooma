@@ -1457,7 +1457,26 @@ void SKNavMesh::placeReflectionProbes()
         mRoomProbes->clear();
         return;
     }
-    mRoomProbes->update(mRooms->view());
+    mRoomProbes->update(mRooms->view(), *this);
+}
+
+void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const
+{
+    out.clear();
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end())
+    {
+        return;
+    }
+    // Inset, so a space flush with a tile edge does not pick up its neighbour.
+    const LLVector3d inset(0.01, 0.01, 0.0);
+    for (const auto& t : it->second->mTiles)
+    {
+        if (overlapsXY(t.second.mMin, t.second.mMax, min + inset, max - inset))
+        {
+            out.push_back(t.second.mBuilt ? t.second.mContentKey : 0);
+        }
+    }
 }
 
 std::string SKNavMesh::statsLine() const
