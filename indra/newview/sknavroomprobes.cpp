@@ -414,6 +414,9 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view)
 
 std::string SKNavRoomProbes::statsLine() const
 {
-    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, %.2f ms",
-                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mLastMs);
+    const LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
+    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, "
+                    "%u nav-octree links, %u relinked, %.2f ms",
+                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves,
+                    manager.countNavOctreeLinks(), manager.getRelevanceRelinks(), mLastMs);
 }
