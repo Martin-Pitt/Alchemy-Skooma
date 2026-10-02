@@ -1861,7 +1861,8 @@ void LLReflectionMapManager::setUniforms()
 
 void renderReflectionProbe(LLReflectionMap* probe)
 {
-    if (probe->isRelevant())
+    // <SK:Nexii> Probe links: neighbour links are drawn kind-coloured by LLReflectionMapManager::renderDebug instead.
+    if (false && probe->isRelevant()) // </SK:Nexii>
     {
         F32* po = probe->mOrigin.getF32ptr();
 
@@ -1954,6 +1955,65 @@ namespace
         if (probe->mNavRooms) return LLColor4(0.f, 1.f, 1.f, 1.f);
         return LLColor4(1.f, 0.6f, 0.f, 1.f);
     }
+
+    // <SK:Nexii> Probe links: kind colours matching the scan-pulse display in reflectionProbeF.glsl.
+    LLColor4 skProbeKindColor(LLReflectionMapManager::SKProbeKind kind)
+    {
+        switch (kind)
+        {
+        case LLReflectionMapManager::SK_PROBE_PLACED_SPHERE: return LLColor4(1.f, 0.25f, 0.85f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_PLACED_BOX: return LLColor4(1.f, 0.55f, 0.1f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_OCTREE: return LLColor4(0.1f, 0.85f, 1.f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_NAV_SPHERE: return LLColor4(0.3f, 1.f, 0.35f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_NAV_BOX: return LLColor4(1.f, 0.95f, 0.2f, 1.f);
+        default: return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
+        }
+    }
+
+    // Interval of t in [from + t * (to - from)] inside the probe's influence volume (oriented box or sphere).
+    void skProbeLinkInterval(LLReflectionMap* probe, const LLVector3& from, const LLVector3& to, F32& t0, F32& t1)
+    {
+        LLViewerObject* obj = probe->mViewerObject;
+        if (obj && obj->getReflectionProbeIsBox() && obj->mDrawable.notNull())
+        {
+            LLVector3 s = obj->getScale() * 0.5f;
+            LLMatrix4a m;
+            m.setMul(LLMatrix4a::scaling(s.mV[0], s.mV[1], s.mV[2]), obj->mDrawable->getWorldMatrix());
+            m.invert();
+            LLVector4a a, b, pa, pb;
+            a.load3(from.mV);
+            b.load3(to.mV);
+            m.affineTransform(a, pa);
+            m.affineTransform(b, pb);
+            t0 = -FLT_MAX;
+            t1 = FLT_MAX;
+            for (S32 i = 0; i < 3; ++i)
+            {
+                const F32 o = pa[i];
+                const F32 d = pb[i] - o;
+                if (fabsf(d) < 1e-6f)
+                {
+                    if (fabsf(o) > 1.f) { t0 = 1.f; t1 = 0.f; return; }
+                    continue;
+                }
+                F32 lo = (-1.f - o) / d;
+                F32 hi = (1.f - o) / d;
+                if (lo > hi) std::swap(lo, hi);
+                t0 = llmax(t0, lo);
+                t1 = llmin(t1, hi);
+            }
+            return;
+        }
+        const LLVector3 c(probe->mOrigin.getF32ptr());
+        const LLVector3 d = to - from;
+        const F32 len = d.magVec();
+        if (len < 1e-6f) { t0 = 0.f; t1 = 1.f; return; }
+        const F32 tc = (c - from) * d / (len * len);
+        const F32 r = probe->mRadius / len;
+        t0 = tc - r;
+        t1 = tc + r;
+    }
+    // </SK:Nexii>
 }
 
 void LLReflectionMapManager::renderDebug()
@@ -1964,6 +2024,75 @@ void LLReflectionMapManager::renderDebug()
     {
         renderReflectionProbe(probe);
     }
+
+    // <SK:Nexii> Probe links: each neighbour pair once, A's colour to B's edge, dashed overlap, B's colour from A's edge.
+    std::vector<std::pair<LLColor4, std::vector<LLVector3>>> buckets; // gDebugProgram colours by uniform only
+    for (auto& probe : mProbes)
+    {
+        if (!probe->isRelevant())
+        {
+            continue;
+        }
+        const LLColor4 ca = skProbeKindColor(getSKProbeKind(probe));
+        const LLVector3 pa(probe->mOrigin.getF32ptr());
+        for (auto& neighbor : probe->mNeighbors)
+        {
+            if (neighbor->isRelevant() && neighbor < probe.get())
+            {
+                continue;
+            }
+            const LLColor4 cb = skProbeKindColor(getSKProbeKind(neighbor));
+            const LLVector3 pb(neighbor->mOrigin.getF32ptr());
+            const F32 len = (pb - pa).magVec();
+            if (len < 1e-3f)
+            {
+                continue;
+            }
+            F32 a0, a1, b0, b1;
+            skProbeLinkInterval(probe, pa, pb, a0, a1);
+            skProbeLinkInterval(neighbor, pa, pb, b0, b1);
+            const F32 aEnd = llclamp(a1, 0.f, 1.f);
+            const F32 bStart = llclamp(b0, 0.f, 1.f);
+            auto seg = [&](const LLColor4& c, F32 t0, F32 t1)
+            {
+                auto it = std::find_if(buckets.begin(), buckets.end(), [&](const auto& e) { return e.first == c; });
+                if (it == buckets.end())
+                {
+                    it = buckets.emplace(buckets.end(), c, std::vector<LLVector3>());
+                }
+                it->second.push_back(lerp(pa, pb, t0));
+                it->second.push_back(lerp(pa, pb, t1));
+            };
+            seg(ca, 0.f, llmin(aEnd, bStart));
+            seg(cb, llmax(aEnd, bStart), 1.f);
+            if (bStart < aEnd)
+            {
+                constexpr F32 DASH = 0.25f;
+                const F32 step = DASH / len;
+                S32 n = 0;
+                for (F32 t = bStart; t < aEnd && n < 4096; t += step, ++n)
+                {
+                    seg((n & 1) ? cb : ca, t, llmin(t + step, aEnd));
+                }
+            }
+            else if (aEnd < bStart)
+            {
+                seg(LLColor4(0.4f, 0.4f, 0.4f, 1.f), aEnd, bStart); // no overlap: grey gap
+            }
+        }
+    }
+    for (const auto& bucket : buckets)
+    {
+        gGL.diffuseColor4fv(bucket.first.mV);
+        gGL.begin(LLRender::LINES);
+        for (const LLVector3& v : bucket.second)
+        {
+            gGL.vertex3fv(v.mV);
+        }
+        gGL.end();
+        gGL.flush();
+    }
+    // </SK:Nexii>
 
     for (const auto& probe : mProbes)
     {
