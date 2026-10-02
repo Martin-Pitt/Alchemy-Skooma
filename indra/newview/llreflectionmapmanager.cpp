@@ -1970,48 +1970,89 @@ namespace
         }
     }
 
-    // Interval of t in [from + t * (to - from)] inside the probe's influence volume (oriented box or sphere).
-    void skProbeLinkInterval(LLReflectionMap* probe, const LLVector3& from, const LLVector3& to, F32& t0, F32& t1)
+    // Probe link weights: one probe's influence at a world point, for drawing a link as the shader blends it.
+    struct SKProbeLinkEnd
     {
+        LLReflectionMap* probe;
+        LLMatrix4a toUnit; // world to unit box, box probes only
+        bool box;
+        bool manual;
+    };
+
+    SKProbeLinkEnd skProbeLinkEnd(LLReflectionMap* probe)
+    {
+        SKProbeLinkEnd e{ probe, LLMatrix4a(), false, probe->mPriority > 0 };
         LLViewerObject* obj = probe->mViewerObject;
-        if (obj && obj->getReflectionProbeIsBox() && obj->mDrawable.notNull())
+        if (obj && obj->getReflectionProbeIsBox() && obj->getVolume() && obj->mDrawable.notNull())
         {
             LLVector3 s = obj->getScale() * 0.5f;
-            LLMatrix4a m;
-            m.setMul(LLMatrix4a::scaling(s.mV[0], s.mV[1], s.mV[2]), obj->mDrawable->getWorldMatrix());
-            m.invert();
-            LLVector4a a, b, pa, pb;
-            a.load3(from.mV);
-            b.load3(to.mV);
-            m.affineTransform(a, pa);
-            m.affineTransform(b, pb);
-            t0 = -FLT_MAX;
-            t1 = FLT_MAX;
-            for (S32 i = 0; i < 3; ++i)
-            {
-                const F32 o = pa[i];
-                const F32 d = pb[i] - o;
-                if (fabsf(d) < 1e-6f)
-                {
-                    if (fabsf(o) > 1.f) { t0 = 1.f; t1 = 0.f; return; }
-                    continue;
-                }
-                F32 lo = (-1.f - o) / d;
-                F32 hi = (1.f - o) / d;
-                if (lo > hi) std::swap(lo, hi);
-                t0 = llmax(t0, lo);
-                t1 = llmin(t1, hi);
-            }
-            return;
+            e.toUnit.setMul(LLMatrix4a::scaling(s.mV[0], s.mV[1], s.mV[2]), obj->mDrawable->getWorldMatrix());
+            e.toUnit.invert();
+            e.box = true;
+            e.manual = true;
         }
-        const LLVector3 c(probe->mOrigin.getF32ptr());
-        const LLVector3 d = to - from;
-        const F32 len = d.magVec();
-        if (len < 1e-6f) { t0 = 0.f; t1 = 1.f; return; }
-        const F32 tc = (c - from) * d / (len * len);
-        const F32 r = probe->mRadius / len;
-        t0 = tc - r;
-        t1 = tc + r;
+        return e;
+    }
+
+    // Mirrors skProbeRawWeight/sphereWeight/boxDistanceWeight and the in-volume test of shouldSampleProbe in
+    // class3/deferred/reflectionProbeF.glsl (rp:80-117, rp:481-509, rp:963-973); w = 0 outside the volume.
+    F32 skProbeLinkWeight(const SKProbeLinkEnd& e, const LLVector3& pos, F32& dw, bool& insideBox)
+    {
+        dw = 0.f;
+        const F32 fade = e.probe->mFadeIn;
+        if (e.box)
+        {
+            LLVector4a p, u;
+            p.load3(pos.mV);
+            e.toUnit.affineTransform(p, u);
+            const F32 m = llmax(fabsf(u[0]), llmax(fabsf(u[1]), fabsf(u[2])));
+            if (m > 1.f)
+            {
+                return 0.f;
+            }
+            insideBox = true;
+            const F32 d = 1.f - m;
+            dw = llclamp(d, 0.f, 1.f) * fade;
+            return llmax(d, 0.001f);
+        }
+        const F32 r = e.probe->mRadius;
+        const F32 d2 = llmax((pos - LLVector3(e.probe->mOrigin.getF32ptr())).magVec(), 0.001f);
+        if (d2 > r)
+        {
+            return 0.f;
+        }
+        const F32 r1 = r * 0.5f;
+        const F32 atten = 1.f - llmax(d2 - r1, 0.f) / llmax(r - r1, 0.001f);
+        const F32 w = fade / d2;
+        dw = w * atten * llmax(r, 1.f) * 4.f;
+        return w * atten;
+    }
+
+    // Both probes' normalised shares at pos, classes mixed as sampleProbes does (rp:651-707).
+    void skProbeLinkShares(const SKProbeLinkEnd& a, const SKProbeLinkEnd& b, const LLVector3& pos, F32& sa, F32& sb)
+    {
+        bool insideBox = false;
+        F32 dwa, dwb;
+        F32 wa = skProbeLinkWeight(a, pos, dwa, insideBox);
+        F32 wb = skProbeLinkWeight(b, pos, dwb, insideBox);
+        if (insideBox)
+        {
+            if (!a.manual) wa = 0.f;
+            if (!b.manual) wb = 0.f;
+        }
+        F32 wsum[2] = { 0.f, 0.f };
+        wsum[a.manual] += wa;
+        wsum[b.manual] += wb;
+        const F32 dwsum1 = (a.manual ? dwa : 0.f) + (b.manual ? dwb : 0.f);
+        const bool hasAuto = wsum[0] > 0.f;
+        const F32 manualShare = wsum[1] > 0.f ? (hasAuto ? llmin(dwsum1, 1.f) : 1.f) : 0.f;
+        auto share = [&](const SKProbeLinkEnd& e, F32 w)
+        {
+            const F32 cls = e.manual ? manualShare : (hasAuto ? 1.f - manualShare : 0.f);
+            return wsum[e.manual] > 0.f ? w / wsum[e.manual] * cls : 0.f;
+        };
+        sa = share(a, wa);
+        sb = share(b, wb);
     }
     // </SK:Nexii>
 }
@@ -2025,7 +2066,7 @@ void LLReflectionMapManager::renderDebug()
         renderReflectionProbe(probe);
     }
 
-    // <SK:Nexii> Probe links: each neighbour pair once, A's colour to B's edge, dashed overlap, B's colour from A's edge.
+    // <SK:Nexii> Probe links: each neighbour pair once, coloured and dashed by the shader's blend weights along it.
     std::vector<std::pair<LLColor4, std::vector<LLVector3>>> buckets; // gDebugProgram colours by uniform only
     for (auto& probe : mProbes)
     {
@@ -2048,36 +2089,65 @@ void LLReflectionMapManager::renderDebug()
             {
                 continue;
             }
-            F32 a0, a1, b0, b1;
-            skProbeLinkInterval(probe, pa, pb, a0, a1);
-            skProbeLinkInterval(neighbor, pa, pb, b0, b1);
-            const F32 aEnd = llclamp(a1, 0.f, 1.f);
-            const F32 bStart = llclamp(b0, 0.f, 1.f);
-            auto seg = [&](const LLColor4& c, F32 t0, F32 t1)
+            const SKProbeLinkEnd ea = skProbeLinkEnd(probe);
+            const SKProbeLinkEnd eb = skProbeLinkEnd(neighbor);
+            auto seg = [&](const LLColor4& c, F32 m0, F32 m1)
             {
                 auto it = std::find_if(buckets.begin(), buckets.end(), [&](const auto& e) { return e.first == c; });
                 if (it == buckets.end())
                 {
                     it = buckets.emplace(buckets.end(), c, std::vector<LLVector3>());
                 }
-                it->second.push_back(lerp(pa, pb, t0));
-                it->second.push_back(lerp(pa, pb, t1));
+                it->second.push_back(lerp(pa, pb, m0 / len));
+                it->second.push_back(lerp(pa, pb, m1 / len));
             };
-            seg(ca, 0.f, llmin(aEnd, bStart));
-            seg(cb, llmax(aEnd, bStart), 1.f);
-            if (bStart < aEnd)
+            // Solid in the dominant colour at >= 90% share, else dashes from 0.05 m (even) to 0.5 m (near 90%).
+            constexpr F32 STEP = 0.05f, DASH_MIN = 0.05f, DASH_MAX = 0.5f, SOLID = 0.9f;
+            auto blendAt = [&](F32 m, F32& w1, F32& w2, bool& aFirst)
             {
-                constexpr F32 DASH = 0.25f;
-                const F32 step = DASH / len;
-                S32 n = 0;
-                for (F32 t = bStart; t < aEnd && n < 4096; t += step, ++n)
+                F32 sa, sb;
+                skProbeLinkShares(ea, eb, lerp(pa, pb, m / len), sa, sb);
+                aFirst = sa >= sb;
+                w1 = llmax(sa, sb);
+                w2 = llmin(sa, sb);
+            };
+            S32 dash = 0;
+            F32 m = 0.f;
+            for (S32 n = 0; m < len && n < 20000; ++n)
+            {
+                F32 w1, w2;
+                bool aFirst;
+                blendAt(m + llmin(STEP, len - m) * 0.5f, w1, w2, aFirst);
+                const LLColor4& dom = aFirst ? ca : cb;
+                if (w1 <= 0.f)
                 {
-                    seg((n & 1) ? cb : ca, t, llmin(t + step, aEnd));
+                    const F32 e = llmin(m + STEP, len);
+                    seg(LLColor4(0.4f, 0.4f, 0.4f, 1.f), m, e); // neither probe reaches here
+                    m = e;
+                    dash = 0;
+                    continue;
                 }
-            }
-            else if (aEnd < bStart)
-            {
-                seg(LLColor4(0.4f, 0.4f, 0.4f, 1.f), aEnd, bStart); // no overlap: grey gap
+                if (w1 >= SOLID || w2 <= 0.f)
+                {
+                    const F32 e = llmin(m + STEP, len);
+                    seg(dom, m, e);
+                    m = e;
+                    dash = 0;
+                    continue;
+                }
+                const F32 evenness = llclamp((w2 / w1 - (1.f - SOLID) / SOLID) / (1.f - (1.f - SOLID) / SOLID), 0.f, 1.f);
+                const F32 dashLen = lerp(DASH_MAX, DASH_MIN, evenness);
+                F32 ew1, ew2;
+                bool eaFirst;
+                if (m + dashLen > len || (blendAt(m + dashLen, ew1, ew2, eaFirst), ew1 >= SOLID || ew2 <= 0.f))
+                {
+                    const F32 e = llmin(m + STEP, len); // no room for a whole dash
+                    seg(dom, m, e);
+                    m = e;
+                    continue;
+                }
+                seg((dash++ & 1) ? cb : ca, m, m + dashLen);
+                m += dashLen;
             }
         }
     }
