@@ -606,8 +606,16 @@ namespace sknav
             const F32 ox = (plan.mX0 + best % w + 0.5f) * plan.mCell;
             const F32 oy = (plan.mY0 + best / w + 0.5f) * plan.mCell;
             const F32 floor = plan.floorAt(best % w, best / w);
-            const F32 half = plan.mCeiling > floor ? (plan.mCeiling - floor) * 0.5f : 1.5f;
+            const bool open = !(plan.mCeiling > floor);
+            // Open sky leans to an avatar's eye height: there is no top to
+            // centre on, and the air above is nobody's reflection.
+            const F32 half = open ? 1.5f : (plan.mCeiling - floor) * 0.5f;
 
+            // The room is inside the bubble, not the bubble in the room: the
+            // sphere must hold every cell's whole air column, its floor and
+            // its top, so the farthest point is taken per column, floor and
+            // ceiling both, sloped or flat. Open columns top out two eye
+            // heights up.
             F32 reach2 = 0.f;
             for (S32 y = 0; y < h; ++y)
             {
@@ -620,14 +628,17 @@ namespace sknav
                     const F32 ax = (plan.mX0 + x) * plan.mCell, ay = (plan.mY0 + y) * plan.mCell;
                     const F32 dx = std::max(std::fabs(ax - ox), std::fabs(ax + plan.mCell - ox));
                     const F32 dy = std::max(std::fabs(ay - oy), std::fabs(ay + plan.mCell - oy));
-                    reach2 = std::max(reach2, dx * dx + dy * dy);
+                    const F32 f = plan.floorAt(x, y);
+                    const F32 top = open ? f + 3.f : std::max(plan.mCeiling, f);
+                    const F32 dz = std::max(std::fabs(f - (floor + half)), std::fabs(top - (floor + half)));
+                    reach2 = std::max(reach2, dx * dx + dy * dy + dz * dz);
                 }
             }
 
             ProbePart part;
             part.mPart = static_cast<U32>(k);
             part.mOrigin.set(ox, oy, floor + half);
-            part.mRadius = std::min(std::sqrt(reach2 + half * half) * params.mCoverageShare, params.mMaxRadiusM);
+            part.mRadius = std::min(std::sqrt(reach2) * params.mCoverageShare, params.mMaxRadiusM);
             part.mArea = st[p].mCells * cell_area;
 
             if (params.mSpaceRadiusM > 0.f)
