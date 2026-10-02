@@ -136,7 +136,10 @@ namespace sknav
         std::vector<RecordPtr> own_records;     // this region's own, for the void
         for (const RecordPtr& r : ground_records)
         {
-            if (overlapsXY(r->mMin, r->mMax, land_min, land_max))
+            // A surround's rendered shape is for the void alone: over land a
+            // phantom megasculpty would roof the region, and a solid one
+            // already comes in as its physics record.
+            if (r->mRole != Role::SURROUND && overlapsXY(r->mMin, r->mMax, land_min, land_max))
             {
                 land_records.push_back(r);
             }

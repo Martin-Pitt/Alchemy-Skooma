@@ -81,7 +81,7 @@ namespace sknav
     void layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out);
 
     /// A region's own mesh: its tiles over its land with every grounded record
-    /// reaching over that land, plus the void past its edge within void_margin
+    /// reaching over that land but the surrounds, plus the void past its edge within void_margin
     /// as far as the region's own records reach, where no other region's land
     /// is (land_at says where there is).
     void layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
