@@ -1118,6 +1118,21 @@ void LLReflectionMapManager::getNavRoomsContext(std::vector<LLReflectionMap*>& p
 }
 // </SK:Nexii>
 
+// <SK:Nexii> Probe kinds for the census export and the probe volume display.
+LLReflectionMapManager::SKProbeKind LLReflectionMapManager::getSKProbeKind(const LLReflectionMap* probe) const
+{
+    if (probe == mDefaultProbe.get())
+    {
+        return SK_PROBE_DEFAULT;
+    }
+    if (probe->mViewerObject)
+    {
+        return probe->mViewerObject->getReflectionProbeIsBox() ? SK_PROBE_PLACED_BOX : SK_PROBE_PLACED_SPHERE;
+    }
+    return probe->mNavRooms ? SK_PROBE_NAV_SPHERE : SK_PROBE_OCTREE;
+}
+// </SK:Nexii>
+
 S32 LLReflectionMapManager::allocateCubeIndex()
 {
     if (!mCubeFree.empty())

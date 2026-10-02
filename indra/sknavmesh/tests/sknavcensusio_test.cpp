@@ -451,9 +451,65 @@ namespace tut
 
         // A version 1 file has no root table and still reads.
         std::string old = text;
-        old.replace(old.find("\"version\":2"), 11, "\"version\":1");
+        old.replace(old.find("\"version\":3"), 11, "\"version\":1");
         old.erase(old.find(",\"roots\":"), old.find(",\"features\":") - old.find(",\"roots\":"));
         ensure("version 1 reads: " + error, readCensus(old, back, &error));
         ensure("no roots", back.mRoots.empty() && back.mRecords.size() == c.mRecords.size());
+    }
+
+    template<> template<>
+    void sknavcensusio_object::test<8>()
+    {
+        set_test_name("every probe kind survives the file, boxes with their rotation and scale, and a version 2 file reads without probes");
+        CensusFile c = sample();
+        for (U8 k = 0; k < static_cast<U8>(ProbeKind::COUNT); ++k)
+        {
+            CensusProbe p;
+            p.mKind = static_cast<ProbeKind>(k);
+            p.mObject = id(20 + k);
+            p.mOrigin.set(256000.125 + k, 255900.5, 31.25 + k);
+            p.mRadius = 3.5f + k;
+            p.mPriority = k == 1 || k == 2 ? 1 : 0;
+            p.mRelevant = k != 3;
+            p.mSuppressed = k == 3;
+            p.mInsideManual = k == 4;
+            p.mResident = k % 2 == 0;
+            p.mRotation = LLQuaternion(0.5f + k, LLVector3(0.f, 0.6f, 0.8f));
+            p.mScale.set(4.f, 2.5f + k, 3.f);
+            c.mProbes.push_back(p);
+        }
+
+        std::ostringstream out;
+        writeCensus(out, c);
+        const std::string text = out.str();
+        CensusFile back;
+        std::string error;
+        ensure("reads: " + error, readCensus(text, back, &error));
+        ensure_equals("probes", back.mProbes.size(), c.mProbes.size());
+        for (size_t i = 0; i < c.mProbes.size(); ++i)
+        {
+            const CensusProbe& a = c.mProbes[i];
+            const CensusProbe& b = back.mProbes[i];
+            const std::string what = probeKindName(a.mKind);
+            ensure(what, b.mKind == a.mKind && b.mObject == a.mObject && b.mOrigin == a.mOrigin && b.mRadius == a.mRadius &&
+                             b.mPriority == a.mPriority && b.mRelevant == a.mRelevant && b.mSuppressed == a.mSuppressed &&
+                             b.mInsideManual == a.mInsideManual && b.mResident == a.mResident);
+            const bool box = a.mKind == ProbeKind::PLACED_BOX || a.mKind == ProbeKind::NAV_BOX;
+            if (box)
+            {
+                ensure(what + " box", b.mRotation == a.mRotation && b.mScale == a.mScale);
+            }
+            else
+            {
+                ensure(what + " no box", b.mRotation == LLQuaternion::DEFAULT && b.mScale == LLVector3::zero);
+            }
+        }
+
+        // A version 2 file has no probes and still reads.
+        std::string old = text;
+        old.replace(old.find("\"version\":3"), 11, "\"version\":2");
+        old.erase(old.find(",\"probes\":"), old.find(",\"features\":") - old.find(",\"probes\":"));
+        ensure("version 2 reads: " + error, readCensus(old, back, &error));
+        ensure("no probes", back.mProbes.empty() && back.mRecords.size() == c.mRecords.size());
     }
 }

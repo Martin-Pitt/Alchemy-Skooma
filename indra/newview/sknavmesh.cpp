@@ -2871,6 +2871,27 @@ std::string SKNavMesh::exportCensus() const
     size_t named = 0;
     census.mRoots = rootTable(census.mRecords, named);
     census.mMarks = SKNavAnnotator::instance().marks().marks();
+    const LLReflectionMapManager& probes = gPipeline.mReflectionMapManager;
+    static_assert(static_cast<U8>(ProbeKind::NAV_BOX) == LLReflectionMapManager::SK_PROBE_NAV_BOX, "census probe kinds are the manager's");
+    for (const LLPointer<LLReflectionMap>& probe : probes.getSKProbes())
+    {
+        CensusProbe p;
+        p.mKind = static_cast<ProbeKind>(probes.getSKProbeKind(probe));
+        p.mOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+        p.mRadius = probe->mRadius;
+        p.mPriority = static_cast<S32>(probe->mPriority);
+        p.mRelevant = probe->isRelevant();
+        p.mSuppressed = probe->mSuppressedByNavRooms;
+        p.mInsideManual = probe->mInsideManualProbe;
+        p.mResident = probe->isActive();
+        if (probe->mViewerObject)
+        {
+            p.mObject = probe->mViewerObject->getID();
+            p.mRotation = probe->mViewerObject->getRenderRotation();
+            p.mScale = probe->mViewerObject->getScale();
+        }
+        census.mProbes.push_back(p);
+    }
     for (const auto& region : mFeatureDoors)
     {
         census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
@@ -2913,9 +2934,9 @@ std::string SKNavMesh::exportCensus() const
     const F32 ms = timer.getElapsedTimeF32() * 1000.f;
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
     LL_INFOS("SKNavExport") << named << " of " << census.mRoots.size() << " roots named" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks, %zu probes, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
                     census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
-                    census.mMarks.size(), named, census.mRoots.size(),
+                    census.mMarks.size(), census.mProbes.size(), named, census.mRoots.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 

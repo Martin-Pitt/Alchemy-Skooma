@@ -31,6 +31,8 @@
 #include "sknavfeatures.h"
 #include "sknavtypes.h"
 
+#include "llquaternion.h"
+
 #include <iosfwd>
 #include <string>
 #include <utility>
@@ -38,8 +40,8 @@
 
 namespace sknav
 {
-    /// Version 2 adds the root table and the clusters' dominant roots; version 1 still reads.
-    constexpr U32 CENSUS_FORMAT_VERSION = 2;
+    /// Version 2 adds the root table and the clusters' dominant roots, version 3 the reflection probes; older versions still read.
+    constexpr U32 CENSUS_FORMAT_VERSION = 3;
     constexpr size_t ROOT_DESCRIPTION_MAX = 256;
 
     /// Where a root's name came from: the region's linkset reply, or the object properties the viewer had cached.
@@ -105,6 +107,36 @@ namespace sknav
         std::vector<std::pair<LLVector3d, LLVector3d>> mLinks[NUM_CLASSES];
     };
 
+    /// What a reflection probe is; the values are the viewer's probe kinds (LLReflectionMapManager::SKProbeKind).
+    enum class ProbeKind : U8
+    {
+        DEFAULT,        ///< the sky probe every pixel falls back to
+        PLACED_SPHERE,  ///< a reflection probe object
+        PLACED_BOX,
+        OCTREE,         ///< automatic, one per octree node
+        NAV_SPHERE,     ///< automatic, held by a navmesh room part
+        NAV_BOX,        ///< reserved: navmesh room boxes do not exist yet
+        COUNT
+    };
+    const char* probeKindName(ProbeKind kind);
+
+    /// A reflection probe the viewer held at export time, global.
+    struct CensusProbe
+    {
+        ProbeKind mKind = ProbeKind::OCTREE;
+        LLUUID mObject;             ///< the probe object, placed probes only
+        LLVector3d mOrigin;
+        F32 mRadius = 0.f;          ///< a box's is its half diagonal
+        S32 mPriority = 0;
+        bool mRelevant = true;      ///< false: settings, a manual probe swallowing it or a room part leave it unused
+        bool mSuppressed = false;   ///< an octree probe a finished room part replaces
+        bool mInsideManual = false; ///< an automatic probe a manual probe swallows
+        bool mResident = false;     ///< held a cube slot
+        /// Boxes: the object's rotation and full scale; the volume is the unit cube scaled by half the scale.
+        LLQuaternion mRotation;
+        LLVector3 mScale;
+    };
+
     /// The viewer's clustering: members as indices into the records.
     struct CensusCluster
     {
@@ -138,6 +170,8 @@ namespace sknav
         std::vector<CensusSpan> mSpans;
         /// Every root the records name, known or not; empty from a version 1 file.
         std::vector<CensusRoot> mRoots;
+        /// Every reflection probe the viewer held; empty from a version 1 or 2 file.
+        std::vector<CensusProbe> mProbes;
         /// The session's annotation marks, the replay's answer key; written, not read back.
         std::vector<Mark> mMarks;
 

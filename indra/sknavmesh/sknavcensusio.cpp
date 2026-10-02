@@ -340,6 +340,20 @@ namespace sknav
         }
     }
 
+    const char* probeKindName(ProbeKind kind)
+    {
+        switch (kind)
+        {
+            case ProbeKind::DEFAULT: return "default";
+            case ProbeKind::PLACED_SPHERE: return "placed_sphere";
+            case ProbeKind::PLACED_BOX: return "placed_box";
+            case ProbeKind::OCTREE: return "octree";
+            case ProbeKind::NAV_SPHERE: return "nav_sphere";
+            case ProbeKind::NAV_BOX: return "nav_box";
+            default: return "unknown";
+        }
+    }
+
     std::string capDescription(const std::string& text)
     {
         if (text.size() <= ROOT_DESCRIPTION_MAX)
@@ -554,6 +568,25 @@ namespace sknav
         }
         out << "],\"roots\":";
         writeRootTable(out, c.mRoots);
+
+        out << ",\"probes\":[";
+        for (size_t i = 0; i < c.mProbes.size(); ++i)
+        {
+            const CensusProbe& p = c.mProbes[i];
+            out << (i ? "," : "") << "{\"kind\":\"" << probeKindName(p.mKind) << "\",\"object\":\"" << p.mObject << "\",\"origin\":";
+            vec(out, p.mOrigin);
+            out << ",\"radius\":" << p.mRadius << ",\"priority\":" << p.mPriority << ",\"relevant\":" << boolText(p.mRelevant)
+                << ",\"suppressed\":" << boolText(p.mSuppressed) << ",\"inside_manual\":" << boolText(p.mInsideManual)
+                << ",\"resident\":" << boolText(p.mResident);
+            if (p.mKind == ProbeKind::PLACED_BOX || p.mKind == ProbeKind::NAV_BOX)
+            {
+                out << ",\"rotation\":[" << p.mRotation.mQ[VX] << ',' << p.mRotation.mQ[VY] << ',' << p.mRotation.mQ[VZ] << ','
+                    << p.mRotation.mQ[VW] << "],\"scale\":";
+                vec(out, p.mScale);
+            }
+            out << '}';
+        }
+        out << ']';
 
         out << ",\"features\":[";
         for (size_t i = 0; i < c.mFeatures.size(); ++i)
@@ -881,6 +914,47 @@ namespace sknav
                 const std::string source = rd.text(re, "source");
                 r.mSource = source == "linkset" ? NameSource::LINKSET : source == "properties" ? NameSource::PROPERTIES : NameSource::NONE;
                 c.mRoots.push_back(std::move(r));
+            }
+        }
+
+        if (version >= 3)
+        {
+            for (Elem pe : rd.array(doc, "probes"))
+            {
+                CensusProbe p;
+                const std::string kind = rd.text(pe, "kind");
+                p.mKind = ProbeKind::COUNT;
+                for (U8 k = 0; k < static_cast<U8>(ProbeKind::COUNT); ++k)
+                {
+                    if (kind == probeKindName(static_cast<ProbeKind>(k)))
+                    {
+                        p.mKind = static_cast<ProbeKind>(k);
+                    }
+                }
+                if (p.mKind == ProbeKind::COUNT)
+                {
+                    rd.fail("unknown probe kind: " + kind);
+                    break;
+                }
+                p.mObject = rd.id(pe, "object");
+                p.mOrigin = rd.vec3d(pe, "origin");
+                p.mRadius = rd.f32(pe, "radius");
+                p.mPriority = static_cast<S32>(rd.num(pe, "priority"));
+                p.mRelevant = rd.flag(pe, "relevant");
+                p.mSuppressed = rd.flag(pe, "suppressed");
+                p.mInsideManual = rd.flag(pe, "inside_manual");
+                p.mResident = rd.flag(pe, "resident");
+                if (p.mKind == ProbeKind::PLACED_BOX || p.mKind == ProbeKind::NAV_BOX)
+                {
+                    const simdjson::dom::array q = rd.array(pe, "rotation");
+                    if (rd.mError.empty())
+                    {
+                        p.mRotation.set(static_cast<F32>(rd.at(q, 0)), static_cast<F32>(rd.at(q, 1)), static_cast<F32>(rd.at(q, 2)),
+                                        static_cast<F32>(rd.at(q, 3)));
+                    }
+                    p.mScale = rd.vec3(pe, "scale");
+                }
+                c.mProbes.push_back(p);
             }
         }
 
