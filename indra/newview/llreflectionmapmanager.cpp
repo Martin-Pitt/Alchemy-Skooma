@@ -55,6 +55,9 @@
 #pragma warning (pop)
 #endif
 
+#include "llimagepng.h" // <SK:Nexii> render/probe-shot
+#include "llviewerwindow.h" // <SK:Nexii> render/probe-shot
+
 LLPointer<LLImageGL> gEXRImage;
 
 void load_exr(const std::string& filename)
@@ -406,6 +409,21 @@ void LLReflectionMapManager::update()
         did_update = true;
         doProbeUpdate();
     }
+
+    // <SK:Nexii> render/probe-shot
+    if (mProbeShotPending)
+    {
+        mProbeShotPending = false;
+        const std::string dir = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "probe_shots");
+        LLFile::mkdir(dir);
+        const std::string stem = gDirUtilp->add(dir, LLDate::now().toHTTPDateString("%Y%m%d_%H%M%S"));
+        takeProbeShot(stem + "_local", false);
+        takeProbeShot(stem + "_default", true);
+        LLSD args;
+        args["MESSAGE"] = "Probe shots saved to " + stem + "_*";
+        LLNotificationsUtil::add("SystemMessageTip", args);
+    }
+    // </SK:Nexii>
 
     // Occlusion state only means anything for as long as the queries that produce it keep
     // running, and they stop whenever LLPipeline::sUseOcclusion drops out of its "query"
@@ -961,6 +979,96 @@ void LLReflectionMapManager::doProbeUpdate()
         mUpdatingProbe->mViewerObject->setDebugText(llformat("%.1f", (F32)gFrameTimeSeconds), LLColor4(1, 1, 0, 1));
     }
 }
+
+// <SK:Nexii> render/probe-shot: renders the six faces a probe at the camera would capture, through the same
+// cubeSnapshot path and radiance pass, and saves each as linear EXR plus one sRGB PNG strip; sky_only applies
+// the default probe's render types.
+void LLReflectionMapManager::takeProbeShot(const std::string& stem, bool sky_only)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    static const char* face_names[6] = { "east", "west", "north", "south", "up", "down" };
+
+    const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
+    const bool radiance_pass = mRadiancePass;
+    const F32 light_scale = mLightScale;
+    mRadiancePass = true;
+    mLightScale = 1.f;
+
+    if (sky_only)
+    {
+        gPipeline.pushRenderTypeMask();
+        gPipeline.andRenderTypeMask(LLPipeline::RENDER_TYPE_SKY, LLPipeline::RENDER_TYPE_WL_SKY,
+            LLPipeline::RENDER_TYPE_WATER, LLPipeline::RENDER_TYPE_VOIDWATER, LLPipeline::RENDER_TYPE_CLOUDS, LLPipeline::RENDER_TYPE_TERRAIN, LLPipeline::END_RENDER_TYPES);
+    }
+
+    std::vector<std::vector<F32>> faces(6);
+    S32 res = 0;
+    for (S32 face = 0; face < 6; ++face)
+    {
+        gPipeline.mRT = &gPipeline.mAuxillaryRT;
+        gViewerWindow->cubeSnapshot(origin, mTexture, mReflectionProbeCount, face, 0.1f, false);
+        gPipeline.mRT = &gPipeline.mMainRT;
+
+        // cubeSnapshot renders a square the width of the auxiliary target into its lower left corner.
+        LLRenderTarget& screen = gPipeline.mAuxillaryRT.screen;
+        res = (S32)llmin(gPipeline.mAuxillaryRT.deferredScreen.getWidth(), screen.getHeight());
+        std::vector<F32>& pixels = faces[face];
+        pixels.resize((size_t)res * res * 3);
+        screen.bindTarget();
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, res, res, GL_RGB, GL_FLOAT, pixels.data());
+        screen.flush();
+
+        // GL rows run bottom up; images run top down.
+        for (S32 y = 0; y < res / 2; ++y)
+        {
+            std::swap_ranges(pixels.begin() + (size_t)y * res * 3, pixels.begin() + (size_t)(y + 1) * res * 3,
+                             pixels.begin() + (size_t)(res - 1 - y) * res * 3);
+        }
+
+        const std::string exr = stem + "_" + face_names[face] + ".exr";
+        const char* err = nullptr;
+        if (SaveEXR(pixels.data(), res, res, 3, 1, exr.c_str(), &err) != TINYEXR_SUCCESS)
+        {
+            LL_WARNS("ProbeShot") << "Could not write " << exr << ": " << (err ? err : "unknown error") << LL_ENDL;
+            FreeEXRErrorMessage(err);
+        }
+    }
+
+    if (sky_only)
+    {
+        gPipeline.popRenderTypeMask();
+    }
+    mRadiancePass = radiance_pass;
+    mLightScale = light_scale;
+
+    // One strip in face order, clamped and sRGB encoded, for a quick look without an EXR viewer.
+    LLPointer<LLImageRaw> strip = new LLImageRaw(res * 6, res, 3);
+    U8* out = strip->getData();
+    for (S32 face = 0; face < 6; ++face)
+    {
+        const std::vector<F32>& pixels = faces[face];
+        for (S32 y = 0; y < res; ++y)
+        {
+            // LLImageRaw rows run bottom up too.
+            const F32* src = pixels.data() + (size_t)(res - 1 - y) * res * 3;
+            U8* dst = out + ((size_t)y * res * 6 + (size_t)face * res) * 3;
+            for (S32 i = 0; i < res * 3; ++i)
+            {
+                dst[i] = (U8)ll_round(linearTosRGB(llclamp(src[i], 0.f, 1.f)) * 255.f);
+            }
+        }
+    }
+    const std::string png_path = stem + "_strip.png";
+    LLPointer<LLImagePNG> png = new LLImagePNG;
+    if (!png->encode(strip, 0.f) || !png->save(png_path))
+    {
+        LL_WARNS("ProbeShot") << "Could not write " << png_path << LL_ENDL;
+    }
+
+    LL_INFOS("ProbeShot") << "Probe shot at " << origin << " saved to " << stem << "_*" << LL_ENDL;
+}
+// </SK:Nexii>
 
 // Do the reflection map update render passes.
 // For every 12 calls of this function, one complete reflection probe radiance map and irradiance map is generated

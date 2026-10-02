@@ -3598,6 +3598,14 @@ function="World.EnvPreset"
             <menu_item_call.on_click
              function="Advanced.ClickHDRIPreview" />
           </menu_item_call>
+          <!-- <SK:Nexii> render/probe-shot -->
+          <menu_item_call
+           label="Export Probe Shot"
+           name="Export Probe Shot">
+            <menu_item_call.on_click
+             function="Advanced.ExportProbeShot" />
+          </menu_item_call>
+          <!-- </SK:Nexii> -->
         </menu>
       <menu
         create_jump_keys="true"
