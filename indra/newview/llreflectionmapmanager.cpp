@@ -1710,6 +1710,18 @@ void LLReflectionMapManager::updateUniforms()
             refmap->mFadeIn, // fade in weight
             0.f); // unused
 
+        // <SK:Nexii> Probe volume display: the kind rides in bits 24-27 of refParams.w, raw, only while the display is on.
+        // Bits 0-15 stay free for the navmesh room box plan; with a kind set the pattern is a normal float, never a denormal.
+        static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
+        if (render_ref_probe_volumes)
+        {
+            const U32 bits = static_cast<U32>(getSKProbeKind(refmap)) << 24;
+            F32 w;
+            memcpy(&w, &bits, sizeof(w));
+            mProbeData.refParams[count].mV[3] = w;
+        }
+        // </SK:Nexii>
+
         S32 ni = nc; // neighbor ("index") - index into refNeighbor to write indices for current reflection probe's neighbors
         {
             //LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmsu - refNeighbors");

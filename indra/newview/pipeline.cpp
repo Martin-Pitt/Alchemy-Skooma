@@ -5435,6 +5435,16 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        // <SK:Nexii> Probe volume display: camera to agent space, so its blend hatching stays put on surfaces.
+        static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
+        LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
+        inv_view.invert();
+        const GLint inv_view_loc = gReflectionProbeDisplayProgram.getUniformLocation(sk_probe_inv_view);
+        if (inv_view_loc >= 0)
+        {
+            glUniformMatrix4fv(inv_view_loc, 1, GL_FALSE, inv_view.getF32ptr());
+        }
+        // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);

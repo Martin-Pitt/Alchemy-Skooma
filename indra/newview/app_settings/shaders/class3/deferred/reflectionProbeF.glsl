@@ -928,6 +928,149 @@ vec4 sampleReflectionProbesDebug(vec3 pos)
     return col;
 }
 
+// <SK:Nexii> Probe volume display: every probe drawn on scene surfaces as a frozen scanner pulse, kind-coloured, with blends hatched.
+// refParams[i].w carries the probe's kind in bits 24-27 while the display is on (LLReflectionMapManager::SKProbeKind).
+uniform mat4 sk_probe_inv_view; // camera space to agent space
+
+vec3 skProbeKindColor(int i)
+{
+    uint kind = (floatBitsToUint(refParams[i].w) >> 24) & 15u;
+    if (kind == 1u) return vec3(1.0, 0.25, 0.85);  // placed sphere
+    if (kind == 2u) return vec3(1.0, 0.55, 0.1);   // placed box
+    if (kind == 3u) return vec3(0.1, 0.85, 1.0);   // octree automatic
+    if (kind == 4u) return vec3(0.3, 1.0, 0.35);   // navmesh room sphere
+    if (kind == 5u) return vec3(1.0, 0.95, 0.2);   // navmesh room box (reserved)
+    return vec3(0.6);                              // default probe
+}
+
+// Signed distance in metres from a camera-space point to probe i's influence volume.
+float skProbeDistance(int i, vec3 pos)
+{
+    if (refIndex[i].w < 0)
+    {
+        mat4 m = refBox[i];
+        vec3 u = (m * vec4(pos, 1.0)).xyz;
+        vec3 half_extent = vec3(1.0 / length(vec3(m[0][0], m[1][0], m[2][0])),
+                                1.0 / length(vec3(m[0][1], m[1][1], m[2][1])),
+                                1.0 / length(vec3(m[0][2], m[1][2], m[2][2])));
+        vec3 q = (abs(u) - 1.0) * half_extent;
+        return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    }
+    return length(pos - refSphere[i].xyz) - refSphere[i].w;
+}
+
+// The weight sampleProbes gives probe i at pos, before the per-class normalisation.
+float skProbeRawWeight(int i, vec3 pos, out float dw)
+{
+    if (refIndex[i].w < 0)
+    {
+        vec3 u = (refBox[i] * vec4(pos, 1.0)).xyz;
+        float d = 1.0 - max(abs(u.x), max(abs(u.y), abs(u.z)));
+        dw = boxDistanceWeight(d, refParams[i].z);
+        return max(d, 0.001);
+    }
+    return sphereWeight(pos, vec3(0.0), refSphere[i].xyz, refSphere[i].w, refParams[i], dw);
+}
+
+vec4 skProbePulseDebug(vec3 pos, vec3 norm)
+{
+    float dist = length(pos);
+    float half_width = max(0.06, 0.0012 * dist); // ~12 cm near, a few pixels far
+
+    vec4 band = vec4(0.0);
+    vec3 tint = vec3(0.0);
+    float tint_a = 0.0;
+    for (int i = 1; i < refmapCount; ++i)
+    {
+        float sd = skProbeDistance(i, pos);
+        if (sd > 4.0 * half_width)
+        {
+            continue;
+        }
+        vec3 c = skProbeKindColor(i);
+        float x = sd / half_width;
+        float a = 0.9 * exp(-x * x);
+        if (sd < 0.0)
+        {   // the wake behind the front, then a faint fill
+            a = max(a, 0.3 * exp(sd / 0.75));
+            float t = 0.07 + 0.05 * exp(sd / 3.0);
+            if (t > tint_a)
+            {
+                tint_a = t;
+                tint = c;
+            }
+        }
+        band += vec4(c * a, a) * (1.0 - band.a);
+    }
+
+    vec4 col = band + vec4(tint * tint_a, tint_a) * (1.0 - band.a);
+
+    // The real selection: first containing probe and its neighbours, weighted and mixed as sampleProbes does.
+    sample_automatic = true;
+    preProbeSample(pos);
+    float wsum[2] = float[2](0.0, 0.0);
+    float dwsum1 = 0.0;
+    float wraw[REF_SAMPLE_COUNT];
+    for (int k = 0; k < probeInfluences; ++k)
+    {
+        int i = probeIndex[k];
+        int p = clamp(abs(refIndex[i].w), 0, 1);
+        wraw[k] = 0.0;
+        if (p == 0 && !sample_automatic)
+        {
+            continue;
+        }
+        float dw = 0.0;
+        wraw[k] = skProbeRawWeight(i, pos, dw);
+        wsum[p] += wraw[k];
+        if (p == 1)
+        {
+            dwsum1 += dw;
+        }
+    }
+    bool has_auto = sample_automatic && wsum[0] > 0.0;
+    float manual_share = wsum[1] > 0.0 ? (has_auto ? min(dwsum1, 1.0) : 1.0) : 0.0;
+    float w1 = 0.0, w2 = 0.0;
+    int i1 = -1, i2 = -1;
+    for (int k = 0; k < probeInfluences; ++k)
+    {
+        int i = probeIndex[k];
+        int p = clamp(abs(refIndex[i].w), 0, 1);
+        float share = p == 1 ? manual_share : (has_auto ? 1.0 - manual_share : 0.0);
+        float w = wsum[p] > 0.0 ? wraw[k] / wsum[p] * share : 0.0;
+        if (w > w1)
+        {
+            w2 = w1; i2 = i1;
+            w1 = w; i1 = i;
+        }
+        else if (w > w2)
+        {
+            w2 = w; i2 = i;
+        }
+    }
+
+    if (i2 >= 0 && w1 < 0.9)
+    {   // world-space diagonal stripes, triplanar, denser the more even the blend
+        vec3 wp = (sk_probe_inv_view * vec4(pos, 1.0)).xyz;
+        vec3 wn = abs(mat3(sk_probe_inv_view) * norm);
+        wn = pow(wn, vec3(4.0));
+        wn /= max(wn.x + wn.y + wn.z, 1e-4);
+        float evenness = clamp(w2 / max(w1, 1e-4), 0.0, 1.0);
+        float freq = 1.0 / mix(0.8, 0.25, evenness); // stripes per metre
+        vec3 s = vec3(wp.y + wp.z, wp.x + wp.z, wp.x + wp.y) * freq;
+        vec3 line = step(fract(s), vec3(0.15));
+        float hatch = dot(line, wn);
+        float parity = dot(mod(floor(s), 2.0), wn);
+        vec3 c = mix(skProbeKindColor(i1 == 0 ? i2 : i1), skProbeKindColor(i2 == 0 ? i1 : i2), step(0.5, parity));
+        float a = 0.75 * hatch;
+        col = vec4(c * a, a) + col * (1.0 - a);
+    }
+
+    // unpremultiplied for the blend the display pass draws with
+    return col.a > 0.0 ? vec4(col.rgb / col.a, min(col.a, 1.0)) : vec4(0.0);
+}
+// </SK:Nexii>
+
 void sampleReflectionProbesLegacy(inout vec3 ambenv, inout vec3 glossenv, inout vec3 legacyenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, float envIntensity, bool transparent, vec3 amblit)
 {
