@@ -1061,6 +1061,7 @@ namespace tut
             U8 mBucket = 3;
             bool mBridge = false;
             U8 mStatus = KEPT;
+            LLVector3 mLo, mHi;     // the part's floor plan, floor to top; a bridge's own sphere bounds
         };
         struct Held
         {
@@ -1150,6 +1151,8 @@ namespace tut
                     {
                         Candidate c;
                         c.mOrigin = o + part.mOrigin;
+                        c.mLo = o + part.mMin;
+                        c.mHi = o + part.mMax;
                         c.mArea = part.mArea;
                         c.mPart = part.mPart;
                         c.mMesh = static_cast<U32>(mi);
@@ -1254,6 +1257,8 @@ namespace tut
                                 bridge.mRadius = std::max(bridge.mRadius, std::sqrt(pair.second) + 1.f);
                             }
                             bridge.mRadius = std::min(bridge.mRadius, 8.f);
+                            bridge.mLo = centre - LLVector3(bridge.mRadius, bridge.mRadius, bridge.mRadius);
+                            bridge.mHi = centre + LLVector3(bridge.mRadius, bridge.mRadius, bridge.mRadius);
                             bridge.mMesh = static_cast<U32>(mi);
                             bridge.mSpace = id_a;
                             bridge.mBucket = static_cast<U8>(world[mi].mSpaces[id_a].mBucket);
@@ -1397,9 +1402,10 @@ namespace tut
             for (size_t c = 0; c < primary.size(); ++c)
             {
                 const Candidate& p = primary[c];
-                pj << (c ? "," : "") << llformat("{\"o\":[%.2f,%.2f,%.2f],\"r\":%.2f,\"mesh\":%u,\"space\":%u,\"part\":%u,\"bucket\":%u,\"bridge\":%d,\"status\":\"%s\"}",
+                pj << (c ? "," : "") << llformat("{\"o\":[%.2f,%.2f,%.2f],\"r\":%.2f,\"mesh\":%u,\"space\":%u,\"part\":%u,\"bucket\":%u,\"bridge\":%d,\"status\":\"%s\",\"lo\":[%.2f,%.2f,%.2f],\"hi\":[%.2f,%.2f,%.2f]}",
                                                  p.mOrigin.mV[VX], p.mOrigin.mV[VY], p.mOrigin.mV[VZ], p.mRadius, p.mMesh, p.mSpace, p.mPart,
-                                                 U32(p.mBucket), p.mBridge ? 1 : 0, status_names[p.mStatus]);
+                                                 U32(p.mBucket), p.mBridge ? 1 : 0, status_names[p.mStatus],
+                                                 p.mLo.mV[VX], p.mLo.mV[VY], p.mLo.mV[VZ], p.mHi.mV[VX], p.mHi.mV[VY], p.mHi.mV[VZ]);
             }
             pj << "]}";
             const size_t steps = path.size() - 1;
