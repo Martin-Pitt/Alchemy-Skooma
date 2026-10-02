@@ -4990,7 +4990,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>128</integer>
+            <integer>240</integer>
         </map>
         <key>SKNavOverlayFeatures</key>
         <map>
