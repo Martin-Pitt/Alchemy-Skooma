@@ -32,6 +32,7 @@
 #include "alfoldmodel.h"
 #include "allinetable.h"
 #include "alsnippetsession.h"
+#include "altextfeatures.h"
 #include "altextview.h"
 #include "alvimhost.h"
 #include "llstl.h"
@@ -45,7 +46,7 @@
 #include <string_view>
 #include <vector>
 
-class ALChoiceList;
+class ALChoicePopup;
 
 // The text view configured for code: a gutter with line numbers, a mark
 // per line for what an analyzer said about it and a marker per block that
@@ -59,7 +60,7 @@ class ALChoiceList;
 // none of the analyzers hands over regions of its own.
 // Completions come from whoever is set as the provider, and until someone
 // is, from the grammar's vocabulary and the words in the document.
-class ALCodeEditor : public ALTextView, public ALVimHost
+class ALCodeEditor : public ALTextView, public ALVimHost, private ALTextFeatures
 {
 public:
     AL_VIEW_TYPE(ALCodeEditor, ALTextView);
@@ -730,25 +731,35 @@ protected:
     // The blank marks on one row, over the glyphs the layout placed, so
     // that a tab is marked across the width it actually took.
     void drawWhitespace(S32 line, S32 row, const LLRect& text, S32 screen_top, F32 left, F32 alpha);
+    // --- ALTextFeatures ----------------------------------------------------------
+
+    bool performFeature(ALEditorCommand command) override;
+    bool canPerformFeature(ALEditorCommand command) const override;
+    bool offersSymbols() const override { return static_cast<bool>(mSymbolRequest); }
     void revealLine(S32 line) override;
-    bool performFold(ALEditorCommand command) override;
-    bool canFold(ALEditorCommand command) const override;
-    bool performFunction(ALEditorCommand command) override;
+    bool mapMark(S32 line, LLColor4& color) const override;
+    U32  marksRevision() const override { return mMarksRevision; }
+    bool closerOpenedAt(const ALTextPos& closer, ALTextPos& opener) override;
+    // The features' commands, by what they are about: folding; the code's
+    // structure, the functions a host knows of and a bracket's partner;
+    // completion; what the call at the caret takes, asked for again; the
+    // fixes for the problem at the caret; and the name at the caret -- its
+    // definition, its references, a new name. Each with whether it could
+    // be done.
+    bool performFold(ALEditorCommand command);
+    bool canFold(ALEditorCommand command) const;
+    bool performFunction(ALEditorCommand command);
     // Where Go to Matching Bracket goes, or false for nowhere.
     bool bracketToGoTo(ALTextPos& to);
     // What Expand Selection would grow the selection to (ALSmartSelect).
     std::optional<ALTextRange> grownSelection();
-    bool canFunction(ALEditorCommand command) const override;
-    bool complete() override;
-    bool signatureHelp() override;
-    bool quickFix() override;
-    bool canQuickFix() const override;
-    bool performSymbol(ALEditorCommand command) override;
-    bool canSymbol(ALEditorCommand command) const override;
-    bool offersSymbols() const override { return static_cast<bool>(mSymbolRequest); }
-    bool mapMark(S32 line, LLColor4& color) const override;
-    U32  marksRevision() const override { return mMarksRevision; }
-    bool closerOpenedAt(const ALTextPos& closer, ALTextPos& opener) override;
+    bool canFunction(ALEditorCommand command) const;
+    bool complete();
+    bool signatureHelp();
+    bool quickFix();
+    bool canQuickFix() const;
+    bool performSymbol(ALEditorCommand command);
+    bool canSymbol(ALEditorCommand command) const;
 
 private:
     void onEdit(const ALTextDocument::Edit& edit);
@@ -793,16 +804,7 @@ private:
     void refreshCompletion();
     // Whether Return takes the chosen completion (setAcceptOnEnter).
     bool returnAccepts() const;
-    void placeCompletion();
-    // A list of so many rows put under the row of a place, at its column,
-    // or over it where under would run off the bottom.
-    void placeListAt(ALChoiceList& list, const ALTextPos& at, S32 rows, S32 width);
-    // The box beside a list that says more about its chosen line -- a
-    // completion's documentation, a fix's preview -- made the first time it
-    // is wanted and shared, one list being up at a time; and put beside a
-    // list, as tall as it says up to a limit.
-    ALTextView* sideBox();
-    void        placeSideBox(const LLRect& list);
+    // The fix chosen, previewed beside the list.
     void        showFixPreview();
     void        takeFix(S32 index);
     // The list made of `fixes`, under `line`, with one chosen; and the list
@@ -814,15 +816,21 @@ private:
     void listCompletions(bool keep_choice);
     // What the chosen completion does, beside the list, or nothing.
     void showCompletionDoc();
-    void hideCompletionDoc();
     // Out of sight, but still about the word it was asked about, for an
     // answer that may yet come.
     void hideCompletionList();
-    // The completions' list and the fixes', made the first time each is
-    // shown; a choice list for either.
-    ALChoiceList& completionList();
-    ALChoiceList& fixList();
-    ALChoiceList* makeChoiceList(const std::string& name);
+    // The completions' list and the fixes', each with the box beside it
+    // (ALChoicePopup): found among the editor's children by name, or null
+    // before the first is shown; made the first time each is wanted, most
+    // editors -- a tab not looked at, a read-only view -- never showing
+    // either; and dressed in the editor's face and colours.
+    ALChoicePopup* popupFound(std::string_view name) const;
+    ALChoicePopup& makePopup(const char* name, const char* list, const char* side, bool menu_like);
+    ALChoicePopup& completionPopup();
+    ALChoicePopup& fixPopup();
+    void           dress(ALChoicePopup& popup);
+    // Whether a point of the editor is on the completions' list, shown.
+    bool           onCompletionList(S32 x, S32 y) const;
     void drawSignature(const LLRect& text);
     // The card for the problems and the word at a point of the text, where
     // there is anything to say; what the tooltip and the resting mouse
@@ -1023,14 +1031,11 @@ private:
     ALTextPos               mSignatureOpen{ -1, -1 };
     symbol_request_t        mSymbolRequest;
     link_request_t          mLinkRequest;
-    ALChoiceList*           mCompletionList = nullptr;
-    ALTextView*             mCompletionDoc  = nullptr;
     // The icons the completions wear, by name (iconOf).
     boost::unordered_flat_map<std::string, LLUIImagePtr, ll::string_hash, std::equal_to<>> mIcons;
     fix_provider_t          mFixProvider;
     function_provider_t     mFunctionProvider;
     fix_handler_t           mFixHandler;
-    ALChoiceList*           mFixList = nullptr;
     // What the list holds (ALFixListModel); who is told each showing of
     // it, and who is asked for the refactors.
     ALFixListModel          mFixListModel;
@@ -1045,10 +1050,6 @@ private:
     // from its best.
     bool                    mCompletionAsked = false;
     bool                    mCompletionMoved = false;
-    // What the documentation beside the list shows, and beside what, for
-    // a list made again with the same row chosen to leave it be.
-    std::string             mCompletionDocFor;
-    LLRect                  mCompletionDocBeside;
     // The stops of a snippet or a call being filled in (ALSnippetSession).
     ALSnippetSession         mSnippet;
     // Each placeholder's mirrors made what it holds: as one step of its

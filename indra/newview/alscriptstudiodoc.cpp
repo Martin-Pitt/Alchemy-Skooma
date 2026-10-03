@@ -31,10 +31,12 @@
 #include "alnotecardembedded.h"
 #include "alscriptexternaleditor.h"
 #include "alscriptfixes.h"
+#include "alscriptlintpass.h"
 #include "alscriptlookup.h"
 #include "alscriptstudiocaret.h"
 #include "alscriptstudiochecking.h"
 #include "alscriptstudioorphans.h"
+#include "alscriptstudioplaces.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudioweighing.h"
@@ -77,15 +79,18 @@ ALScriptStudioDoc::Level ALScriptStudioDoc::levelOf(ALScriptProblem::Severity se
 ALScriptStudioDoc::Shown ALScriptStudioDoc::analysisRow(const ALScriptProblem& problem, bool lua, const ALScriptStudioServices& services)
 {
     Shown row;
-    row.level  = levelOf(problem.severity);
-    row.origin = problem.source == ALScriptProblem::Source::Parser  ? services.words("OriginParser")
-                 : problem.source == ALScriptProblem::Source::Types ? services.words("OriginTypes")
-                                                                    : services.words("OriginLint");
+    row.level     = levelOf(problem.severity);
+    row.migration = lua && ALScriptLintPass::migration(problem);
+    row.origin    = row.migration                                      ? services.words("OriginMigration")
+                    : problem.source == ALScriptProblem::Source::Parser ? services.words("OriginParser")
+                    : problem.source == ALScriptProblem::Source::Types  ? services.words("OriginTypes")
+                                                                        : services.words("OriginLint");
     // A lint's name says what to look up, or what a NOLINT comment turns
     // off: Luau's own, LSL's as its key has it. An error's number says
     // nothing to whoever reads it.
     std::string name = ALScriptFixes::lintName(problem, lua);
-    if (name.empty() && !problem.code.empty() && problem.code.find_first_not_of("0123456789") != std::string::npos)
+    if (name.empty() && problem.source != ALScriptProblem::Source::Assistant && !problem.code.empty() &&
+        problem.code.find_first_not_of("0123456789") != std::string::npos)
     {
         name = problem.code;
     }
@@ -295,7 +300,7 @@ std::optional<ALScriptStudioDoc::Named> ALScriptStudioDoc::namedIn(const ALTextD
     }
     for (const ALPreprocessor::Required& call : calls)
     {
-        const ALTextRange stretch(ALTextPos(call.line, call.column), ALTextPos(call.endLine, call.endColumn));
+        const ALTextRange stretch = ALScriptPlaces::rangeOf(call);
         if (!(at < stretch.begin) && !(stretch.end < at))
         {
             Named named;
@@ -346,13 +351,15 @@ std::string ALScriptStudioDoc::foundAs(const std::string& name, std::optional<bo
 
 void ALScriptStudioDoc::setShown(std::vector<Shown> rows)
 {
-    shown         = std::move(rows);
-    shownErrors   = 0;
-    shownWarnings = 0;
+    shown          = std::move(rows);
+    shownErrors    = 0;
+    shownWarnings  = 0;
+    shownMigration = 0;
     for (const Shown& one : shown)
     {
         shownErrors += one.level == Level::Error ? 1 : 0;
         shownWarnings += one.level == Level::Warning ? 1 : 0;
+        shownMigration += one.migration && one.file.empty() ? 1 : 0;
     }
 }
 
@@ -372,10 +379,10 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
 {
     std::vector<const ALScriptFix*> taken;
     const U32                       now       = editor->document().version();
-    const bool                      only_safe = pick.forSave || pick.key.empty();
+    const bool                      only_safe = pick.forSave || (pick.key.empty() && !pick.migration);
     for (const Shown& one : shown)
     {
-        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key))
+        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key) || (pick.migration && !one.migration))
         {
             continue;
         }
@@ -396,8 +403,8 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
         }
     }
     // One step of edits that never meet: of two that would, the first.
-    const auto begin_of = [](const ALScriptEdit& edit) { return ALTextPos(edit.line, edit.column); };
-    const auto end_of   = [](const ALScriptEdit& edit) { return ALTextPos(edit.endLine, edit.endColumn); };
+    const auto begin_of = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).begin; };
+    const auto end_of   = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).end; };
     std::vector<const ALScriptFix*> kept;
     std::vector<ALTextRange>        claimed;
     for (const ALScriptFix* fix : taken)

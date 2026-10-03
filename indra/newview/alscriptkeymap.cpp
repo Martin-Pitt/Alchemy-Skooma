@@ -479,6 +479,7 @@ namespace ALScriptKeymap
             after_k("save_all", 'S'),
             { "revert", KEY_NONE, MASK_NONE },
             { "open_file", KEY_NONE, MASK_NONE },
+            { "local_history", KEY_NONE, MASK_NONE },
             { "recover", KEY_NONE, MASK_NONE },
             { "insert_file", KEY_NONE, MASK_NONE },
             { "load_file", KEY_NONE, MASK_NONE },
@@ -494,11 +495,13 @@ namespace ALScriptKeymap
             { "close_all", KEY_NONE, MASK_NONE },
             // Edit
             { "fix_all", KEY_NONE, MASK_NONE },
+            { "fix_migration", KEY_NONE, MASK_NONE },
             { "check_object", KEY_NONE, MASK_NONE },
             { "format", 'F', MASK_SHIFT | MASK_ALT },
             { "format_selection", KEY_NONE, MASK_NONE },
             { "indent_spaces", KEY_NONE, MASK_NONE },
             { "indent_tabs", KEY_NONE, MASK_NONE },
+            { "convert_slua", KEY_NONE, MASK_NONE },
             { "find_in_files", 'F', MASK_CONTROL | MASK_SHIFT },
             // Insert
             { "insert_snippet", 'I', MASK_CONTROL | MASK_SHIFT },
@@ -534,6 +537,9 @@ namespace ALScriptKeymap
 #endif
             { "next_problem", KEY_F8, MASK_NONE },
             { "previous_problem", KEY_F8, MASK_SHIFT },
+            // What is left from LSL, as F8 walks every problem.
+            { "next_migration", KEY_F8, MASK_ALT },
+            { "previous_migration", KEY_F8, MASK_ALT | MASK_SHIFT },
             { "next_tab", KEY_PAGE_DOWN, MASK_CONTROL },
             // Control-Tab too, as everywhere: the Mac's own Control key,
             // Command-Tab being the system's.

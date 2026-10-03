@@ -143,6 +143,7 @@ if(AL_BUILD_VIEWER)
     alchatautocomplete.cpp
     alchatbar.cpp
     alchatcommand.cpp
+    alchattimestamp.cpp
     alcheatcodes.cpp
     alclassifieditem.cpp
     alcolorwheelctrl.cpp
@@ -198,9 +199,11 @@ if(AL_BUILD_VIEWER)
     alscriptpreprocessor.cpp
     alscriptproblemspane.cpp
     alscriptreferencespane.cpp
+    alscriptregionusage.cpp
     alscriptsaveflow.cpp
     alscriptsearch.cpp
     alscriptsearchpane.cpp
+    alscriptsnippets.cpp
     alscriptstudioaccount.cpp
     alscriptstudiocaret.cpp
     alscriptstudiochecking.cpp
@@ -211,14 +214,17 @@ if(AL_BUILD_VIEWER)
     alscriptstudiofiles.cpp
     alscriptstudioorphans.cpp
     alscriptstudioplaces.cpp
+    alscriptstudiohistory.cpp
     alscriptstudiorecovery.cpp
     alrecovery.cpp
     alrecoverykeeper.cpp
     alscriptstudiosaving.cpp
+    alscriptstudioviewer.cpp
     alscriptstudiovim.cpp
     alscriptstudiovimrc.cpp
     alscriptstudioweighing.cpp
     alscriptstudiowords.cpp
+    alscripttheme.cpp
     alscripttypes.cpp
     alscriptweightspane.cpp
     alscriptworkspace.cpp
@@ -980,6 +986,7 @@ if(AL_BUILD_VIEWER)
     alchatautocomplete.h
     alchatbar.h
     alchatcommand.h
+    alchattimestamp.h
     alclassifieditem.h
     alcolorwheelctrl.h
     alcolorwheelmodel.h
@@ -1035,9 +1042,11 @@ if(AL_BUILD_VIEWER)
     alscriptpreprocessor.h
     alscriptproblemspane.h
     alscriptreferencespane.h
+    alscriptregionusage.h
     alscriptsaveflow.h
     alscriptsearch.h
     alscriptsearchpane.h
+    alscriptsnippets.h
     alscriptstudio.h
     alscriptstudioaccount.h
     alscriptstudiocaret.h
@@ -1048,7 +1057,9 @@ if(AL_BUILD_VIEWER)
     alscriptstudioglue.h
     alscriptstudiofiles.h
     alscriptstudioorphans.h
+    alscriptstudiopane.h
     alscriptstudioplaces.h
+    alscriptstudiohistory.h
     alscriptstudiorecovery.h
     alrecovery.h
     alrecoverykeeper.h
@@ -1061,6 +1072,8 @@ if(AL_BUILD_VIEWER)
     alscriptstudiosaves.h
     alscriptstudioservices.h
     alscriptstudiotabs.h
+    alscriptstudioviewer.h
+    alscripttheme.h
     alscripttypes.h
     alscriptweightspane.h
     alscriptworkspace.h
@@ -2442,11 +2455,15 @@ if(AL_BUILD_TESTS)
     alscriptexternaleditor.cpp
     alscriptlookup.cpp
     alscriptnavigation.cpp
+    alscriptnoticebar.cpp
     alscriptsaveflow.cpp
     alscriptstudiodoc.cpp
-    alscriptstudiorecovery.cpp
     alscriptstudiofileio.cpp
+    alscriptstudiofiles.cpp
+    alscriptstudioorphans.cpp
     alscriptstudioplaces.cpp
+    alscriptstudiorecovery.cpp
+    alscriptstudioviewer.cpp
     alscriptstudioweighing.cpp
     alscriptstudiowords.cpp
     alscriptweightspane.cpp
@@ -2473,6 +2490,7 @@ if(AL_BUILD_TESTS)
   foreach(
     test
     alagentlocationformat
+    alchattimestamp
     alcolorwheelmodel
     alcrashreporter
     alcurvemodel
@@ -2552,6 +2570,10 @@ if(AL_BUILD_TESTS)
     LIBRARIES llui alscript ${test_libs}
   )
 
+  # What the region reserves for the objects in hand, the world faked: the
+  # answers read, each object asked once a minute, the attachments at once.
+  al_add_test(alscriptregionusage UNIT PROJECT ${test_project} LIBRARIES llui alscript ${test_libs})
+
   # What the Script Studio's explorer lists, and the rows it makes of them,
   # with nothing of the world.
   al_add_test(
@@ -2616,6 +2638,17 @@ if(AL_BUILD_TESTS)
     PCH al_studio_test_common
   )
 
+  # A Script Studio window's saves kept in a history of the test's, listed,
+  # compared and put back over tabs of their own editors.
+  al_add_test(
+    alscriptstudiohistory
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    PCH al_studio_test_common
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
   # A Script Studio window's unsaved texts kept in a recovery store of the
   # test's, and taken up again over tabs of their own editors.
   al_add_test(
@@ -2624,6 +2657,20 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
     PCH al_studio_test_common
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The scripter's snippets: the shipped and their own, read, written and
+  # kept whole on disk.
+  al_add_test(alscriptsnippets UNIT PROJECT ${test_project} LIBRARIES llui ${test_libs})
+
+  # Script Studio's themes: their colours, the shipped ones legible, and
+  # every skin's script colours read against what they are drawn on.
+  al_add_test(
+    alscripttheme
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2805,7 +2852,6 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
     PCH al_studio_test_common
-    SOURCES alscriptnoticebar.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 

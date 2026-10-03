@@ -49,6 +49,7 @@
 #include <vector>
 
 class ALScriptContentsIndex;
+class ALScriptRegionUsage;
 class ALScriptTempFiles;
 class ALSourceMap;
 class LLChat;
@@ -241,6 +242,9 @@ public:
     // whether its scripts run: the one index the studio's windows, lookups
     // and searches read (alscriptcontentsindex.h).
     ALScriptContentsIndex& contentsIndex() { return *mContentsIndex; }
+    // What the region reserves for the objects in hand, for every studio
+    // window alike; and the world it asks, the viewer's.
+    ALScriptRegionUsage&   regionUsage() { return *mRegionUsage; }
     // The copies of scripts written to the temp folder for an editor
     // outside, whichever window writes one (alscripttempfiles.h): named
     // alike, held rather than owned, and what a session that crashed left
@@ -308,6 +312,9 @@ private:
     // An answer handed to its caller and every listener, on the main
     // coroutine; and, where the text went up, said as saved with it.
     void        deliver(const ALScriptCompileResult& result, const ALScriptCompileCallback& callback, const std::string* text = nullptr);
+    // A save that went up kept in the account's history (ALRecovery),
+    // whoever sent it, with what the item and its object are called.
+    void        keepInHistory(const ALScriptSaved& saved) const;
     // A notecard's asset sent, and `text`, its text, said as saved.
     bool        uploadNotecard(const ALScriptRef& ref, const std::string& buffer, const std::string& text, bool carries,
                                ALScriptCompileCallback callback, std::string& error, ALScriptSender sender);
@@ -320,6 +327,7 @@ private:
     // The saves on their way, by request, until each is answered.
     boost::unordered_flat_map<U64, ALScriptRef> mUnderway;
     std::unique_ptr<ALScriptContentsIndex> mContentsIndex;
+    std::unique_ptr<ALScriptRegionUsage>   mRegionUsage;
     std::unique_ptr<ALScriptTempFiles>     mTempFiles;
     // What leaves the object list let go of by the index.
     boost::signals2::scoped_connection     mPresenceConnection;
