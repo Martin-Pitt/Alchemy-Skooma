@@ -53,13 +53,15 @@ namespace
     // record of what was asked.
     struct FakeOrphansWindow : public Orphans::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietSaves
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         Reach reach(const Doc& doc) override { return reaches.count(doc.id) ? reaches[doc.id] : Reach(); }
         void  refreshPlace(Doc& doc) override { placed.push_back(doc.id); }
         void  loadScript(const ALScriptRef& ref) override { loads.push_back(ref); }
         ALScriptNoticeBar* noticeBar() override { return bar; }
         void               refreshToolbar() override { ++toolbars; }
         void               saveCopyToInventory(Doc& doc) override { did.push_back("copy " + doc.id); }
-        void               saveCopyToFile() override { did.push_back("export"); }
         void               saveAsked(Doc& doc) override { did.push_back("save " + doc.id); }
         void               takeOffer(Doc& doc, const std::string& action) override { did.push_back("offer " + doc.id + ": " + action); }
         void               discardRecovery(const ALRecoveryEntry&) override { did.push_back("discard"); }
@@ -99,6 +101,7 @@ namespace tut
         al_studio_test::StudioWindowOf<FakeNoticeWindow> window;
         FakeOrphansWindow                                studio;
         std::unique_ptr<al_studio_test::StudioRecovery>  recovery;
+        std::unique_ptr<al_studio_test::StudioFiles>     files;
         std::unique_ptr<Orphans>                         unit;
 
         al_studio_test::FakeServices& services() { return window.services(); }
@@ -119,7 +122,8 @@ namespace tut
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
             recovery = std::make_unique<al_studio_test::StudioRecovery>(services(), &studio);
-            unit     = std::make_unique<Orphans>(services(), studio, studio, recovery->unit, studio);
+            files    = std::make_unique<al_studio_test::StudioFiles>(services());
+            unit     = std::make_unique<Orphans>(services(), studio, studio, recovery->unit, files->unit, studio);
             return *unit;
         }
         // A tab of a script in an object, or in the inventory, loaded and
@@ -350,7 +354,8 @@ namespace tut
         unit.noticeAction("export");
         unit.noticeAction("save");
         ensure("a copy, a file, a save",
-               studio.did == Names{ "source a", "carried a: restored text", "source a", "discard", "copy a", "export", "save a" });
+               studio.did == Names{ "source a", "carried a: restored text", "source a", "discard", "copy a", "save a" } &&
+                   files->picked == Names{ "a" });
         a.orphan->reattachTries = 3;
         unit.noticeAction("retry_load");
         ensure("not detached: nothing to try", studio.loads.empty());
@@ -429,9 +434,10 @@ namespace tut
         Orphans& unit    = make();
         Doc&     a       = tab("a");
         services().front = 0;
-        ALRecoveryEntry kept = recovery->leftFor(a, "default { state_entry() { } }");
-        recovery->store->load(kept);
-        a.recoverable = kept;
+        // As a tab is offered it: the entry's listing, not yet its text.
+        const ALRecoveryEntry kept = recovery->leftFor(a, "default { state_entry() { } }");
+        a.recoverable              = kept;
+        ensure("offered as listed", !kept.whole);
         unit.noticeAction("compare_kept");
         ensure_equals("now beside kept", studio.did.back(),
                       "compare a: default {} | default { state_entry() { } } (" + said("CompareNow") + " | " + said("CompareKept", "[WHEN]", kept.whenSaid()) + ")");
@@ -529,5 +535,31 @@ namespace tut
         ensure("tried later, further apart each time", a.orphan->reattachTries == 2 && first > 0.0 && second > first);
         Orphans::loadWentThrough(a);
         ensure("from the first try once one goes through", a.orphan->reattachTries == 0);
+    }
+
+    template<> template<>
+    void alscriptstudioorphans_object::test<13>()
+    {
+        set_test_name("a save of the history offered back: restored as carried text, the comparison ended, said; or let go of with the notice");
+        Orphans& unit = make();
+        Doc&     a    = tab("a");
+        ALSavedText shown;
+        shown.text     = "default { }";
+        shown.when     = LLDate(1.8e9);
+        a.historyShown = shown;
+        unit.noticeAction("restore_saved");
+        ensure("the source back in front, then taken", studio.did == Names{ "source a", "carried a: default { }" } && !a.historyShown);
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = "a";
+        args["[WHEN]"] = ALRecoveryEntry::sayWhen(shown.when);
+        ensure_equals("and said", services().reports.back().text, services().words("HistoryRestored", args));
+
+        studio.did.clear();
+        a.historyShown = shown;
+        a.modifiable   = false;
+        unit.noticeAction("restore_saved");
+        ensure("not into a tab that may not be changed", studio.did.empty() && a.historyShown);
+        unit.noticeAction("close");
+        ensure("let go of with the notice", !a.historyShown);
     }
 }

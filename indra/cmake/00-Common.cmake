@@ -37,7 +37,11 @@ add_library(al::flags ALIAS al_flags)
 # the sanctioned way to set them for a whole tree.
 
 if(NOT DEFINED CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 20)
+  if(WINDOWS)
+    set(CMAKE_CXX_STANDARD 20)
+  else()
+    set(CMAKE_CXX_STANDARD 23)
+  endif()
 endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -267,7 +271,7 @@ if(WINDOWS)
       /Zc:inline
   )
 elseif(LINUX)
-  target_compile_options(al_flags INTERFACE -fsigned-char)
+  target_compile_options(al_flags INTERFACE -fsigned-char -pthread)
 elseif(DARWIN)
   # The Xcode attribute is what the Xcode generator honours; the compile
   # option covers Ninja and Makefile generators.
@@ -285,7 +289,9 @@ endif()
 # binary. Windows sets the format through CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
 # above, and links with full debug information unless the target opts out of
 # it for Release through AL_SKIP_RELEASE_DEBUG_INFO.
-if(LINUX OR DARWIN)
+if(LINUX)
+  target_compile_options(al_flags INTERFACE $<$<CONFIG:Release>:-g> -gz=zstd)
+elseif(DARWIN)
   target_compile_options(al_flags INTERFACE $<$<CONFIG:Release>:-g>)
 elseif(WINDOWS)
   target_link_options(

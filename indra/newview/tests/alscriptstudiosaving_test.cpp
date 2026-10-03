@@ -30,6 +30,7 @@
 #include "../alscriptstudioorphans.h"
 #include "../alscriptstudioweighing.h"
 
+#include "../alscriptstudiofileio.h"
 #include "alscriptstudio_fixture.h"
 
 #include "../test/lltut.h"
@@ -45,6 +46,9 @@ namespace
     // The window, faked: a record of what saving asked of it.
     struct FakeSavingWindow : public ALScriptStudioSaving::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietAnalysis
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         struct Sent
         {
             std::string                    doc;
@@ -122,8 +126,6 @@ namespace
                 doc.carriedText.reset();
             }
         }
-        void saveFile(Doc& doc) override { files.push_back(doc.id); }
-        void retryLoad(Doc& doc) override { reattached.push_back(doc.id); }
         void refreshNotice() override { ++notices; }
         void refreshToolbar() override {}
         void refreshTrailer(Doc&) override {}
@@ -153,7 +155,7 @@ namespace
         bool                                                preprocessor = false;
         std::string                                         refuse;
         std::function<void(const ALPreprocessor::Result&)> run;
-        Names                                               tidied, analysed, runs, files, reattached, closed, known;
+        Names                                               tidied, analysed, runs, closed, known;
         std::vector<Sent>                                   sent;
         Names                                               notecards;
         U64                                                 requests = 0;
@@ -187,6 +189,8 @@ namespace tut
         std::unique_ptr<al_studio_test::StudioExternal>   external;
         std::unique_ptr<al_studio_test::StudioWeighing>   weighing;
         std::unique_ptr<al_studio_test::StudioRecovery>   recovery;
+        std::unique_ptr<al_studio_test::StudioFiles>      files;
+        std::unique_ptr<al_studio_test::StudioOrphans>    orphans;
         std::unique_ptr<ALScriptStudioSaving>             saving;
 
         ALScriptStudioSaving& make()
@@ -201,8 +205,10 @@ namespace tut
             external               = std::make_unique<al_studio_test::StudioExternal>(services);
             weighing               = std::make_unique<al_studio_test::StudioWeighing>(services);
             recovery               = std::make_unique<al_studio_test::StudioRecovery>(services);
+            files                  = std::make_unique<al_studio_test::StudioFiles>(services);
+            orphans                = std::make_unique<al_studio_test::StudioOrphans>(services, recovery->unit, files->unit);
             saving = std::make_unique<ALScriptStudioSaving>(services, studio, studio, navigation->unit, external->unit, weighing->unit,
-                                                            recovery->unit, studio);
+                                                            recovery->unit, files->unit, orphans->unit, studio);
             return *saving;
         }
 
@@ -266,9 +272,11 @@ namespace tut
         ALScriptStudioSaving& saving = make();
 
         Doc& file = tab("file", "x = 1");
-        file.file = "/scripts/x.luau";
+        file.file = files->in("x.luau");
         saving.save(file);
-        ensure("a file written, nothing sent", studio.files == Names{ "file" } && studio.sent.empty());
+        std::string written;
+        ensure("a file written, nothing sent", files->settled == Names{ "file" } && ALScriptFileIO::readWholeFile(file.file, written) && written == "x = 1" &&
+                                                  studio.sent.empty());
 
         Doc& card     = tab("card", "some words");
         card.notecard = true;
@@ -294,7 +302,7 @@ namespace tut
         Doc& detached    = tab("detached", "default {}");
         detached.orphan->detached = true;
         saving.save(detached);
-        ensure("loaded under its item first", studio.reattached == Names{ "detached" } && studio.sent.empty());
+        ensure("loaded under its item first", orphans->loads.size() == 1 && orphans->loads[0] == detached.ref && studio.sent.empty());
         ensure_equals("and said to wait", lastStatus(), std::string("SaveWaitsForLoad"));
     }
 

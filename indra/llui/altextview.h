@@ -52,6 +52,8 @@
 #include <vector>
 
 class ALFindBar;
+class ALTextFeatures;
+class ALTextRuler;
 class ALVimHost;
 class LLContextMenu;
 
@@ -365,6 +367,10 @@ public:
     // What vim asks beyond the view -- lit layers, folds, functions,
     // brackets kept with the text -- where this view has them (ALVimHost).
     virtual ALVimHost* vimHost() { return nullptr; }
+    // What a view built over this one adds -- folding, completion, fixes,
+    // names, marks beside lines, a bracket's partner -- where it has any
+    // (ALTextFeatures).
+    ALTextFeatures* features() const { return mFeatures; }
     // Whether a character typed now goes into the text: always, but for a
     // modal keymap outside its inserting modes, where it is a command.
     bool           typingText() const { return !mModal || mModal->inserting(); }
@@ -666,6 +672,20 @@ public:
     // Where the gutter and the text begin: past the map when it is on
     // the left.
     S32    leftEdge() const;
+    // How far the bars have faded, once the mouse has left them and the
+    // text has settled; and back in sight, the mouse being on one.
+    F32    barAlpha() const;
+    void   showBars() { mBarShown.reset(); }
+    // What the ruler and the map draw besides the text: the find bar's
+    // matches as last found, without waiting on a search under way or one
+    // due after edits, and a count that moves on as they change; their
+    // colour, and the caret's.
+    const std::vector<ALTextRange>& matchesFound() const { return mFind.matches(); }
+    U32                             matchesGeneration() const { return mFind.generation(); }
+    const LLColor4&                 findMatchColor() const { return mFindMatchColor.get(); }
+    const LLColor4&                 cursorColor() const { return mCursorColor.get(); }
+    // Whether a press on the view gives it the keyboard.
+    bool   takesFocus() const { return mTakesFocus; }
 
     // --- LLEditMenuHandler ---------------------------------------------------
 
@@ -774,6 +794,10 @@ protected:
     friend class LLUICtrlFactory;
     ALTextView(const Params& p);
 
+    // The features a subclass adds, told by it once it is built and
+    // taken back before it goes.
+    void setFeatures(ALTextFeatures* features) { mFeatures = features; }
+
     // What a subclass adds to the picture: room at the left of the text
     // for a gutter, whatever it draws there and under the rows before they
     // are drawn, and whatever it draws over each row after its glyphs --
@@ -786,8 +810,10 @@ protected:
     virtual S32  coveredAbove(S32 local_x);
     // A view of its own under a point, drawn over the text -- the find bar,
     // a list, a card, a view the text holds -- which has the mouse before
-    // the text does; or nothing.
-    LLView*      overlayAt(S32 x, S32 y) { return childFromPoint(x, y); }
+    // the text does; or nothing. Not the ruler, which is beside the text;
+    // and a see-through child that only holds others is over the text only
+    // where one of those is.
+    LLView*      overlayAt(S32 x, S32 y);
     // An edit command done -- typed, replaced, undone -- before the caret
     // is brought into sight: whatever a subclass left for after its edits,
     // done once rather than at each.
@@ -806,37 +832,11 @@ protected:
     // A line's row drawn at a place, coloured as it is in the text: what
     // a header pinned at the top is drawn with.
     void drawRowAt(S32 line, S32 row, F32 left, S32 screen_top, F32 alpha);
-    // What a subclass does about folding: the caret has landed on a
-    // hidden line and it must be seen; a fold command was given; whether
-    // one could be.
-    virtual void revealLine(S32 line) { mLayout.setHidden(line, line, false); }
-    virtual bool performFold(ALEditorCommand command) { return false; }
-    virtual bool canFold(ALEditorCommand command) const { return false; }
-    // And about the code's structure: the functions a code editor's host
-    // knows of, and a bracket's partner.
-    virtual bool performFunction(ALEditorCommand command) { return false; }
-    virtual bool canFunction(ALEditorCommand command) const { return false; }
     // Whether a click lands where the last one did, which is what makes
     // it the next of a run; and the run armed for a third click, once a
     // subclass has taken a double click as its own.
     bool sameClickSpot(S32 x, S32 y) const;
     void armTripleClick();
-    // Completion was asked for.
-    virtual bool complete() { return false; }
-    // What the call at the caret takes, asked for again.
-    virtual bool signatureHelp() { return false; }
-    // The fixes for the problem at the caret offered, and whether there are
-    // any to offer.
-    virtual bool quickFix() { return false; }
-    virtual bool canQuickFix() const { return false; }
-    // What the map shows beside a line: a mark's colour, where the
-    // subclass has one for it; and a count that moves on whenever the
-    // marks do, so that the lines with one are not looked for every frame.
-    virtual bool mapMark(S32 line, LLColor4& color) const { return false; }
-    virtual U32  marksRevision() const { return 0; }
-    // The bracket a closing one at a place closes, where the subclass
-    // knows how to match them past strings and comments.
-    virtual bool closerOpenedAt(const ALTextPos& closer, ALTextPos& opener) { return false; }
     // The x span of a range on a row, if it touches the row; a range past
     // the line's end reaches a little past the last glyph.
     bool spanOnRow(S32 line, S32 row, const ALTextRange& range, F32& x0, F32& x1);
@@ -859,13 +859,12 @@ protected:
     // A squiggle as a row draws one: drawn with the rest of the frame's
     // squiggles, once the rows are drawn, where the rows are being drawn.
     void squiggle(F32 x0, F32 x1, S32 y, const LLColor4& color, const LLRect& clip);
-    // Something was asked about the name at the caret: its definition,
-    // its references, a new name; whether it could be.
-    virtual bool performSymbol(ALEditorCommand command) { return false; }
-    virtual bool canSymbol(ALEditorCommand command) const { return false; }
-    // Whether anyone answers those questions of this view at all: the
-    // right-click menu leaves them out of a view nobody answers them for.
-    virtual bool offersSymbols() const { return false; }
+    // Where a row's squiggles have their middle, the row's text standing
+    // from `text_top` with its baseline `ascent` under it: under the
+    // baseline, so that the wave leaves the text above it whole -- a
+    // period's foot too -- and crosses only the descenders, as any
+    // editor's does.
+    static S32 squiggleMiddle(S32 text_top, S32 ascent);
     // The screen y of the top of a line's row -- the row's own top; a row
     // a box made taller than the font's line holds its text at its
     // bottom -- and every row on screen in turn, for a subclass drawing
@@ -938,14 +937,16 @@ private:
     void                 syncLanguageInput();
 
     void syncScrollbar();
-    // The bars: where each is, where its thumb is on it, how faded they
-    // are, and the scroll a drag or a press on one asks for.
+    // The ruler, or the map in its place, put where it goes and shown
+    // where there is one; and whether the mouse at a point is on it, with
+    // nothing of the view's over it there.
+    void placeRuler();
+    bool rulerAt(S32 x, S32 y);
+    // The bars: where each is, where the bottom one's thumb is on it, and
+    // the scroll a drag or a press on it asks for.
     LLRect rulerRect() const;
     LLRect hBarRect() const;
-    LLRect vThumb(const LLRect& track);
     LLRect hThumb(const LLRect& track);
-    F32    barAlpha() const;
-    void   scrollToRulerY(S32 y, S32 offset);
     void   scrollToBarX(S32 x, S32 offset);
     void   drawBars(F32 alpha);
     void drawRows(const LLRect& text);
@@ -980,16 +981,6 @@ private:
             findCounted();
         }
     }
-    // The map: the lines it shows, hidden ones left out, and how far its
-    // window is scrolled; the line at a y of it; the view scrolled so a
-    // y of it is in the middle.
-    S32  mapScroll(const LLRect& map);
-    S32  mapLineAt(S32 y);
-    void scrollToMapY(S32 y);
-    void drawMap(F32 alpha);
-    // The lines around the one under the mouse on the map, drawn beside
-    // it in the view's own face and colours while the mouse is there.
-    void drawMapPreview(F32 alpha);
     void drawPreedit(S32 line, const ALTextLayout::Row& row, S32 screen_top, F32 left, F32 alpha);
     void colorRow(S32 line, const ALTextLayout::Line& laid, const ALTextLayout::Row& row, F32 alpha);
     // The links, the atoms and the misspellings of a row, drawn over its glyphs.
@@ -1023,27 +1014,22 @@ private:
     ALSyntaxHighlighter mHighlighter;
     ALTextLayout        mLayout;
     ALKeymap            mKeymap;
+    ALTextFeatures*     mFeatures = nullptr;
     std::unique_ptr<ALModalKeymap> mModal;
     // The band under the text a modal keymap has: its line, or its
     // status and message.
     void drawBand(F32 alpha);
-    // Where the mouse rests on the map, or -1: what the preview is of.
-    S32                 mMapHoverY = -1;
     const LLFontGL*     mFont       = nullptr;
     // Whether the text needs a bar each way; since when the bars were
-    // last wanted in sight; and which one a drag has hold of, by how far
-    // into its thumb it was taken.
+    // last wanted in sight; whether a drag has hold of the bottom one, by
+    // how far into its thumb it was taken; and the bar down the side, its
+    // own view.
     bool         mNeedV = false;
     bool         mNeedH = false;
     LLFrameTimer mBarShown;
-    enum class BarDrag : U8
-    {
-        None,
-        Vertical,
-        Horizontal
-    };
-    BarDrag      mBarDrag       = BarDrag::None;
+    bool         mDraggingBar   = false;
     S32          mBarDragOffset = 0;
+    ALTextRuler* mRuler         = nullptr;
 
     LLUIColor mTextColor;
     LLUIColor mTextReadOnlyColor;
@@ -1164,55 +1150,6 @@ private:
     S32              mScrollMapWidth   = 80;
     bool             mScrollMapPreview = true;
     bool             mScrollMapLeft    = false;
-    bool             mDraggingMap      = false;
-    // The lines the map shows, as of the layout's hidden revision and the
-    // line count; and the ruler's lines with a mark, as of the text's
-    // version and the marks' revision.
-    // The runs of one line for the map, by column, as far as `columns`.
-    struct MapRun;
-    void             readMapRuns(S32 line, S32 columns, std::vector<MapRun>& out);
-    std::vector<S32> mMapLines;
-    bool             mMapLinesValid    = false;
-    U32              mMapLinesRevision = 0;
-    S32              mMapLinesCount    = 0;
-    // The map's runs of text for the lines in sight, by column, as last
-    // read: kept while the text, its grammar and each line's tokens, the
-    // tab width, the map's width and the lines in sight hold, so that an
-    // idle frame does not read every line again.
-    struct MapRun
-    {
-        S32          from = 0;
-        S32          to   = 0;
-        ALSyntaxKind kind = ALSyntaxKind::Text;
-    };
-    struct MapRuns
-    {
-        U32                 version  = 0;
-        const void*         grammar  = nullptr;
-        S32                 tabWidth = -1;
-        S32                 columns  = -1;
-        S32                 first    = -1;
-        S32                 last     = -1;
-        U32                 hidden   = 0;
-        // For each line in sight, where its runs start, and its tokens'
-        // revision; the runs of the last end where the list does.
-        std::vector<size_t> starts;
-        std::vector<U32>    revisions;
-        std::vector<MapRun> runs;
-    };
-    MapRuns          mMapRuns;
-    std::vector<S32> mRulerMarkLines;
-    bool             mRulerMarksValid    = false;
-    // Each pixel row of the ruler's track with a match on it, as last found:
-    // for which matches, which track and which text's height.
-    std::vector<U8> mRulerRows;
-    bool            mRulerRowsValid      = false;
-    U32             mRulerRowsGeneration = 0;
-    S32             mRulerRowsTop        = 0;
-    S32             mRulerRowsHeight     = 0;
-    S32             mRulerRowsTotal      = 0;
-    U32              mRulerMarksVersion  = 0;
-    U32              mRulerMarksRevision = 0;
 
     std::vector<LLColor4U> mColorScratch;
     // A frame's rows in sight, and their glyphs as one call's runs with the
