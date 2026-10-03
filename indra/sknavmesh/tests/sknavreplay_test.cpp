@@ -535,8 +535,9 @@ namespace tut
                 std::vector<LLVector3> verts, tris;
                 std::vector<S32> idx;
                 std::vector<U8> areas, two;
+                std::vector<LLUUID> roots;
                 const F32 cos_slope = std::cos(in.mParams[0].mSlope * DEG_TO_RAD);
-                const auto add = [&](const std::vector<LLVector3>& t, U8 area, bool two_sided) {
+                const auto add = [&](const std::vector<LLVector3>& t, U8 area, bool two_sided, const LLUUID& root) {
                     for (size_t i = 0; i + 2 < t.size(); i += 3)
                     {
                         LLVector3 n = (t[i + 1] - t[i]) % (t[i + 2] - t[i]);
@@ -549,6 +550,7 @@ namespace tut
                         }
                         areas.push_back(up > cos_slope ? area : 0);
                         two.push_back(two_sided ? 1 : 0);
+                        roots.push_back(root);
                     }
                 };
                 for (const RecordPtr& rec : in.mRecords)
@@ -557,7 +559,7 @@ namespace tut
                     {
                         tris.clear();
                         emitRecord(*rec, in.mMeshOrigin, tris);
-                        add(tris, AREA_OBJECT, rec->mProvenance == Provenance::HULL || rec->mProvenance == Provenance::BASE_HULL);
+                        add(tris, AREA_OBJECT, rec->mProvenance == Provenance::HULL || rec->mProvenance == Provenance::BASE_HULL, rec->mRoot);
                     }
                 }
                 const size_t objects = areas.size();
@@ -571,7 +573,7 @@ namespace tut
                         tris.insert(tris.end(), { at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y), at(x + 1, y + 1), at(x, y + 1) });
                     }
                 }
-                add(tris, AREA_GROUND, false);
+                add(tris, AREA_GROUND, false, LLUUID::null);
                 if (objects == 0)
                 {
                     continue;
@@ -593,7 +595,7 @@ namespace tut
                         out << ' ' << v.mV[VX] << ' ' << v.mV[VY] << ' ' << v.mV[VZ];
                     }
                     out << ' ' << static_cast<S32>(areas[i]) << ' ' << g << ' ' << (g >= 0 ? static_cast<S32>(p.mKind[g]) : -1) << ' '
-                        << (i < p.mRegion.size() ? p.mRegion[i] : -1) << '\n';
+                        << (i < p.mRegion.size() ? p.mRegion[i] : -1) << ' ' << roots[i] << '\n';
                 }
             }
         }
