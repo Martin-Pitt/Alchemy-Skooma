@@ -45,10 +45,6 @@ namespace
     // Spaces this far from the camera are considered; the budget trims the rest.
     constexpr F64 REACH_M = 192.0;
     constexpr F32 UPDATE_PERIOD_S = 1.f;
-    // Fresh placements run on the main thread, at tens of milliseconds a
-    // space: a pass places until this is spent, then returns next frame for
-    // the rest, so a region's worth of spaces costs frames, not one stall.
-    constexpr F32 PLACE_BUDGET_MS = 6.f;
 
     U64 signatureOf(const sknav::Space& space)
     {
@@ -66,7 +62,7 @@ namespace
     }
 }
 
-SKNavRoomProbes::SKNavRoomProbes() : mReads(std::make_shared<DiskReads>())
+SKNavRoomProbes::SKNavRoomProbes() : mResults(std::make_shared<WorkerResults>())
 {
 }
 
@@ -80,19 +76,39 @@ void SKNavRoomProbes::clear()
     }
     mHeld.clear();
     mParts.clear();
+    mPlacing.clear();
     mSolids.clear();
     mSolidsCensus = nullptr;
     mCandidates = mClearedOut = mOverBudget = mPlaced = mCandidatesAdded = 0;
 }
 
-void SKNavRoomProbes::takeDiskReads()
+void SKNavRoomProbes::takeWorkerResults()
 {
     std::vector<std::pair<U64, std::vector<sknav::CachedSpaceParts>>> done;
     std::vector<U64> missed;
+    std::vector<Placed> placed;
     {
-        std::lock_guard<std::mutex> lock(mReads->mMutex);
-        done.swap(mReads->mDone);
-        missed.swap(mReads->mMissed);
+        std::lock_guard<std::mutex> lock(mResults->mMutex);
+        done.swap(mResults->mDone);
+        missed.swap(mResults->mMissed);
+        placed.swap(mResults->mPlaced);
+    }
+    for (Placed& p : placed)
+    {
+        mPlacing.erase(std::make_pair(p.mMesh, p.mSpace));
+        if (p.mKey)
+        {
+            mCache.insert(p.mKey, p.mSpace, p.mAnchor, p.mParts);
+            mStoreKeys.insert(p.mKey);
+        }
+        else
+        {
+            Parts& parts = mParts[std::make_pair(p.mMesh, p.mSpace)];
+            parts.mSignature = p.mSignature;
+            parts.mParts = std::move(p.mParts);
+            parts.mPlaced = true;
+        }
+        ++mCachePlaced;
     }
     for (auto& d : done)
     {
@@ -135,20 +151,40 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
 
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - room probes");
     const auto started = std::chrono::steady_clock::now();
-    takeDiskReads();
-    const std::shared_ptr<sknav::TileDiskCache> disk = navmesh.diskCache();
-    const LL::WorkQueue::ptr_t workers = disk ? navmesh.workerQueue() : nullptr;
-    std::set<U64> placed_keys;
-    std::vector<U64> tile_keys;
     mCacheHits = mCachePlaced = 0;
+    takeWorkerResults();
+    const std::shared_ptr<sknav::TileDiskCache> disk = navmesh.diskCache();
+    const LL::WorkQueue::ptr_t workers = navmesh.workerQueue();
+    std::set<U64> placed_keys;
+    placed_keys.swap(mStoreKeys);
+    std::vector<U64> tile_keys;
+    // Placement is pure work over a space's raster, tens of milliseconds a
+    // space: it runs on the workers, and a space whose answer is pending
+    // keeps the parts it had, or waits, until the result is taken.
     bool deferred = false;
-    const auto budget_spent = [&started]()
+    const sknav::ProbeParams params;
+    const auto place = [&](const LLUUID& mesh, const sknav::Space& space, U64 key)
     {
-        return std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count() > PLACE_BUDGET_MS;
+        if (mPlacing.insert(std::make_pair(mesh, space.mId)).second)
+        {
+            const std::shared_ptr<WorkerResults> results = mResults;
+            workers->post([results, mesh, key, copy = space, params]()
+            {
+                Placed p;
+                p.mKey = key;
+                p.mMesh = mesh;
+                p.mSpace = copy.mId;
+                p.mAnchor = copy.mAnchor;
+                p.mSignature = signatureOf(copy);
+                p.mParts = sknav::spaceProbes(copy, params);
+                std::lock_guard<std::mutex> lock(results->mMutex);
+                results->mPlaced.push_back(std::move(p));
+            });
+        }
+        deferred = true;
     };
 
     LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
-    const sknav::ProbeParams params;
     const auto census = SKWorldCensus::instance().snapshot();
     // The candidates' solid test reads a tile lattice over the census's solid
     // records, rebuilt only when a new scan publishes: the per-candidate scan
@@ -238,10 +274,10 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             {
                 return;
             }
-            if (workers && !mCache.hasKey(key) && !mMissed.count(key) && disk->contains(key))
+            if (disk && !mCache.hasKey(key) && !mMissed.count(key) && disk->contains(key))
             {
                 mReading.insert(key);
-                const std::shared_ptr<DiskReads> reads = mReads;
+                const std::shared_ptr<WorkerResults> reads = mResults;
                 workers->post([disk, reads, key]()
                 {
                     std::vector<U8> bytes;
@@ -263,22 +299,14 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                 });
                 return;
             }
-            if (!mCache.hasKey(key) && budget_spent())
+            const std::vector<sknav::ProbePart>* held = mCache.find(key, space.mId, space.mAnchor);
+            if (!held)
             {
-                deferred = true;
+                place(mesh.mId, space, key);
                 return;
             }
-            bool placed = false;
-            cached = mCache.partsFor(key, space, params, &placed);
-            if (placed)
-            {
-                placed_keys.insert(key);
-                ++mCachePlaced;
-            }
-            else
-            {
-                ++mCacheHits;
-            }
+            cached = *held;
+            ++mCacheHits;
         }
         else
         {
@@ -293,17 +321,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             const U64 signature = signatureOf(space);
             if (parts.mSignature != signature || !parts.mPlaced)
             {
-                if (budget_spent())
-                {
-                    deferred = true;    // last pass's parts stand until the next
-                }
-                else
-                {
-                    parts.mSignature = signature;
-                    parts.mParts = sknav::spaceProbes(space, params);
-                    parts.mPlaced = true;
-                    ++mCachePlaced;
-                }
+                place(mesh.mId, space, 0);  // last pass's parts stand meanwhile
             }
             space_parts = &parts.mParts;
         }
@@ -337,7 +355,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     // Every key a space was placed under this pass is written whole, on a worker.
     for (U64 key : placed_keys)
     {
-        const std::vector<sknav::CachedSpaceParts>* spaces = workers ? mCache.spaces(key) : nullptr;
+        const std::vector<sknav::CachedSpaceParts>* spaces = disk ? mCache.spaces(key) : nullptr;
         if (spaces)
         {
             workers->post([disk, key, copy = *spaces]() { disk->store(key, sknav::packProbeParts(copy, key)); });
@@ -526,7 +544,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     }
     if (deferred)
     {
-        // A space the budget put off has no candidates this pass: its
+        // A space still being placed has no candidates this pass: its
         // probes stay up rather than drop and come back a frame later.
         for (size_t i = 0; i < mHeld.size(); ++i)
         {
