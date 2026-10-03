@@ -27,13 +27,16 @@
 #include "alscriptworkspace.h"
 
 #include "alobjectproperties.h"
+#include "alrecovery.h"
 #include "alscriptanalysis.h"
 #include "alscriptcontentsindex.h"
 #include "alscriptenvelope.h"
 #include "alscriptpreprocessor.h"
+#include "alscriptregionusage.h"
 #include "alscripttempfiles.h"
 #include "lldbstrings.h"
 #include "llagent.h"
+#include "llcorehttputil.h"
 #include "llappviewer.h"
 #include "llassetstorage.h"
 #include "llcallbacklist.h"
@@ -58,6 +61,7 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
+#include "llsdutil_math.h"
 #include "llvoinventorylistener.h"
 #include "message.h"
 // [RLVa:KB]
@@ -260,6 +264,69 @@ namespace
         }
         LLAppViewer::instance()->postToMainCoro(std::forward<Call>(call));
     }
+
+    // What the region reserves, asked of the viewer's world.
+    ALScriptRegionUsage::World regionUsageWorld()
+    {
+        typedef ALScriptRegionUsage::World World;
+        World world;
+        world.kindOf = [](const LLUUID& root) {
+            // The agent's own attachments, which AttachmentResources answers
+            // for; an object on land in the agent's region, whose parcel
+            // LandResources answers for there; nothing else.
+            const LLViewerObject* object = gObjectList.findObject(root);
+            if (!object || object->isAvatar())
+            {
+                return World::Kind::None;
+            }
+            if (object->isAttachment())
+            {
+                return object->permYouOwner() ? World::Kind::Attachment : World::Kind::None;
+            }
+            return object->getRegion() && object->getRegion() == gAgent.getRegion() ? World::Kind::Land : World::Kind::None;
+        };
+        world.askAttachments = [](std::function<void(const LLSD&)> told) {
+            if (LLViewerRegion* region = gAgent.getRegion())
+            {
+                region->requestGetCapability("AttachmentResources", [told](const LLSD& answer) { onMain([told, answer]() { told(answer); }); });
+            }
+        };
+        world.askLand = [](const LLUUID& root, std::function<void(const LLSD&)> told) {
+            // The parcel under the object, then what its objects reserve --
+            // the details, which list each object -- as the Script Limits
+            // floater asks.
+            const LLViewerObject* object = gObjectList.findObject(root);
+            LLViewerRegion*       region = gAgent.getRegion();
+            if (!object || !region || object->getRegion() != region)
+            {
+                return;
+            }
+            LLSD where;
+            where["location"]  = ll_sd_from_vector3(object->getPositionRegion());
+            where["region_id"] = region->getRegionID();
+            region->requestPostCapability("RemoteParcelRequest", where, [told](const LLSD& parcel) {
+                LLViewerRegion* here = gAgent.getRegion();
+                const LLUUID    id   = parcel["parcel_id"].asUUID();
+                if (!here || id.isNull())
+                {
+                    return;
+                }
+                LLSD asked;
+                asked["parcel_id"] = id;
+                here->requestPostCapability("LandResources", asked, [told](const LLSD& resources) {
+                    const std::string url = resources["ScriptResourceDetails"].asString();
+                    if (url.empty())
+                    {
+                        return;
+                    }
+                    LLCoreHttpUtil::HttpCoroutineAdapter::callbackHttpGet(url, [told](const LLSD& details) {
+                        onMain([told, details]() { told(details); });
+                    });
+                });
+            });
+        };
+        return world;
+    }
 }
 
 // --- language ------------------------------------------------------------------
@@ -298,6 +365,7 @@ ALScriptWorkspace::ALScriptWorkspace()
     };
     world.askRunning = [this](const ALScriptRef& ref) { askRunning(ref); };
     mContentsIndex   = std::make_unique<ALScriptContentsIndex>(std::move(world));
+    mRegionUsage     = std::make_unique<ALScriptRegionUsage>(regionUsageWorld());
     // A prim gone from the world is asked again if it comes back: what it
     // held and which of its scripts ran are not kept for every prim ever
     // seen.
@@ -553,8 +621,62 @@ void ALScriptWorkspace::deliver(const ALScriptCompileResult& result, const ALScr
         saved.asset    = result.newAssetId;
         saved.sender   = result.sender;
         saved.compiled = result.success;
+        saved.newItem  = result.newItemId;
         mSaved(saved);
+        keepInHistory(saved);
     }
+}
+
+void ALScriptWorkspace::keepInHistory(const ALScriptSaved& saved) const
+{
+    // Named here, where the inventory and the world are, by the item it
+    // was; kept under the one it is now.
+    const bool  moved = saved.newItem.notNull() && saved.newItem != saved.ref.item;
+    ALSavedText kept;
+    kept.key      = ALRecoveryStore::keyOf(saved.ref.object, moved ? saved.newItem : saved.ref.item, std::string());
+    kept.notecard = saved.kind == ALScriptKind::Notecard;
+    kept.asset    = saved.asset;
+    kept.text     = saved.text;
+    // A script's author's text, not the envelope it went up in.
+    if (!kept.notecard)
+    {
+        if (std::optional<ALScriptEnvelope> envelope = ALScriptEnvelope::parse(saved.text))
+        {
+            kept.text = std::move(envelope->source);
+        }
+    }
+    if (saved.ref.inInventory())
+    {
+        if (const LLViewerInventoryItem* item = gInventory.getItem(saved.ref.item))
+        {
+            kept.name = item->getName();
+            kept.lua  = item->getInventorySubType() == SST_LUA;
+        }
+    }
+    else
+    {
+        for (const ALScriptContents::Item& item : mContentsIndex->items(saved.ref.object))
+        {
+            if (item.id == saved.ref.item)
+            {
+                kept.name = item.name;
+                kept.lua  = item.lua;
+            }
+        }
+        if (LLViewerObject* prim = gObjectList.findObject(saved.ref.object))
+        {
+            const LLViewerObject* root = prim->getRootEdit() ? prim->getRootEdit() : prim;
+            if (const ALScriptContentsIndex::Prim* known = mContentsIndex->prim(root->getID()))
+            {
+                kept.objectName = known->name;
+            }
+            if (prim->getRegion())
+            {
+                kept.region = prim->getRegion()->getName();
+            }
+        }
+    }
+    ALRecovery::keepSaved(std::move(kept), moved ? ALRecoveryStore::keyOf(saved.ref.object, saved.ref.item, std::string()) : std::string());
 }
 
 bool ALScriptWorkspace::saving(const ALScriptRef& ref) const
