@@ -31,7 +31,9 @@
 #include "alscriptengine.h"
 
 #include "almessagemap.h"
+#include "allsllintpass.h"
 #include "allsltraits.h"
+#include "alscriptlexicon.h"
 
 #include "llfile.h"
 
@@ -495,66 +497,24 @@ namespace
     {
         Lexed out;
         out.code.assign(text.size(), 0);
-        enum class In { Code, String, LineComment, BlockComment } in = In::Code;
-        for (size_t i = 0; i < text.size(); ++i)
+        for (size_t i = 0; i < text.size();)
         {
-            const char c    = text[i];
-            const char next = i + 1 < text.size() ? text[i + 1] : '\0';
-            switch (in)
+            const ALScriptLexicon::Stretch run = ALScriptLexicon::stretchAt(text, i, false);
+            switch (run.kind)
             {
-                case In::Code:
-                    if (c == '"')
-                    {
-                        in          = In::String;
-                        out.code[i] = STRING_BYTE;
-                    }
-                    else if (c == '/' && next == '/')
-                    {
-                        in = In::LineComment;
-                        ++i;
-                    }
-                    else if (c == '/' && next == '*')
-                    {
-                        in = In::BlockComment;
-                        ++i;
-                    }
-                    else
-                    {
-                        out.code[i] = CODE_BYTE;
-                    }
+                case ALScriptLexicon::Kind::Code:
+                    out.code[i] = CODE_BYTE;
                     break;
-                case In::String:
-                    out.code[i] = STRING_BYTE;
-                    if (c == '\\')
-                    {
-                        if (i + 1 < text.size())
-                        {
-                            out.code[++i] = STRING_BYTE;
-                        }
-                    }
-                    else if (c == '"')
-                    {
-                        in = In::Code;
-                    }
+                case ALScriptLexicon::Kind::String:
+                    std::fill(out.code.begin() + i, out.code.begin() + run.end, STRING_BYTE);
+                    out.inString = !run.closed;
                     break;
-                case In::LineComment:
-                    if (c == '\n')
-                    {
-                        in          = In::Code;
-                        out.code[i] = CODE_BYTE;
-                    }
-                    break;
-                case In::BlockComment:
-                    if (c == '*' && next == '/')
-                    {
-                        in = In::Code;
-                        ++i;
-                    }
+                case ALScriptLexicon::Kind::Comment:
+                    out.inComment = !run.closed;
                     break;
             }
+            i = run.end;
         }
-        out.inString  = in == In::String;
-        out.inComment = in == In::BlockComment;
         return out;
     }
 
@@ -607,7 +567,7 @@ namespace
 
     bool identifierByte(char c)
     {
-        return isalnum(static_cast<unsigned char>(c)) || c == '_';
+        return ALScriptLexicon::isNameByte(c);
     }
 
     // The statement the caret is in, closed where the caret is: a string
@@ -1593,6 +1553,21 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
         }
         problems.push_back(std::move(problem));
     }
+    // The studio's own lints, beside Tailslide's warnings: their fixes,
+    // made as the pass read the script, offered only where they will be
+    // read.
+    if (script)
+    {
+        const size_t before = problems.size();
+        ALLSLLintPass::check(source, script, problems);
+        for (size_t i = before; i < problems.size(); ++i)
+        {
+            if (ALSourceMap::within(mImpl->passedOver, problems[i].line, std::max(problems[i].line, problems[i].endLine)))
+            {
+                problems[i].fixes.clear();
+            }
+        }
+    }
     // A name it does not know changed to the nearest it does, where one is
     // near: Tailslide suggested one itself once, and no longer does.
     // The text's lines found once, for every fix offered over it; and a
@@ -2206,7 +2181,7 @@ namespace
             return false;
         }
         return stringLiteral(text) ||
-               std::all_of(text.begin(), text.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.'; });
+               std::all_of(text.begin(), text.end(), [](char c) { return ALScriptLexicon::isNameByte(c) || c == '.'; });
     }
 
     // Whether an expression is the whole of what it is given to -- a

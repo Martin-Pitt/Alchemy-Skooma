@@ -39,6 +39,9 @@
     <floater.string name="SnippetNewName">New snippet</floater.string>
     <floater.string name="SnippetCopyName">[NAME] (copy)</floater.string>
     <floater.string name="SnippetBuiltin">Built into the viewer. Copy it to make a version you can change.</floater.string>
+    <floater.string name="SnippetsNotecardName">Script snippets</floater.string>
+    <floater.string name="SnippetsNotecardNotMade">the notecard could not be made</floater.string>
+    <floater.string name="SnippetsOnlyNotecards">Only a notecard in your inventory can bring snippets in</floater.string>
     <floater.string name="LintLSL20001">A declaration that hides one in an outer scope</floater.string>
     <floater.string name="LintLSL20002">An assignment used as a condition</floater.string>
     <floater.string name="LintLSL20003">Changing to the current state</floater.string>
@@ -56,6 +59,14 @@
     <floater.string name="LintLSL20018">== used as a statement</floater.string>
     <floater.string name="LintLSL20019">A deprecated function or constant</floater.string>
     <floater.string name="LintLSL20020">A deprecated function or constant with a replacement</floater.string>
+    <floater.string name="LintLSLSlLoopInvariantCall">llGetListLength(l) in a loop's check, l unchanged in the loop (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlSleepingCall">A call that makes the script sleep, where a Fast one does the same without (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlMergeablePrimParams">Prim-params calls one after another, which one call could make (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlCostlyListen">A listen on channel 0 for anyone, which hears every line of chat (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlFastTimer">A timer under a tenth of a second (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlFastSensor">A sensor repeat under a second (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlStringBuild">A string joined to in a loop, which makes it anew each time round (the studio's own)</floater.string>
+    <floater.string name="LintLSLSlRepeatedCall">The same answer asked for again in one handler, llGetOwner() and its kin (the studio's own)</floater.string>
     <floater.string name="LintLuauUnknownGlobal">An unknown global (the type checker also reports it)</floater.string>
     <floater.string name="LintLuauDeprecatedGlobal">A deprecated global</floater.string>
     <floater.string name="LintLuauGlobalUsedAsLocal">A global used only inside one function</floater.string>
@@ -85,6 +96,28 @@
     <floater.string name="LintLuauIntegerParsing">An integer literal too big to be exact</floater.string>
     <floater.string name="LintLuauComparisonPrecedence">not a == b, and similar comparisons</floater.string>
     <floater.string name="LintLuauRedundantNativeAttribute">A redundant @native attribute</floater.string>
+    <floater.string name="LintLuauSlCompoundAssign">x = x + 1, where Luau has x += 1 (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlNumberTruth">A number read as true or false, which Luau counts true even at 0 (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlNilSentinel">A find compared with -1 where it answers nil, or llcompat's with nil where it answers -1 (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlTableCompare">A table compared with one built there, {}, which it can never equal (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlZeroIndex">A list, a string or ll counted from 0, as LSL counted (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlCompatCall">llcompat's function where ll's means the same (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlBooleanNumber">A boolean compared with a number, as LSL's TRUE and FALSE were (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlGlobalAssign">A global made where a local would do, or a function made global inside a block (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlParenCondition">A condition in brackets, as LSL's had to be (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlAlmostSwapped">a = b and then b = a, which is no swap (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlMustUse">A call that only answers, its answer thrown away (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlGeneralizedFor">for k, v in pairs(t), where Luau's for walks t itself (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlEmptyBlock">An if, an else or a loop whose block is empty (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlIndexDivision">A list indexed by a / division, which may be a fraction (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlVectorProduct">Two vectors multiplied where a number is wanted, or taken % each other, as LSL's dot and cross products (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlSleepingCall">A call that makes the script sleep, where a Fast one does the same without (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlMergeablePrimParams">Prim-params calls one after another, which one call could make (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlCostlyListen">A listen on channel 0 for anyone, which hears every line of chat (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlFastTimer">A timer under a tenth of a second (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlFastSensor">A sensor repeat under a second (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlStringBuild">A string joined to in a loop, which makes it anew each time round (the studio's own)</floater.string>
+    <floater.string name="LintLuauSlRepeatedCall">The same answer asked for again in one handler, llGetOwner() and its kin (the studio's own)</floater.string>
     <floater.string name="LintLuauName">[DESCRIPTION]
 
 In a .luaurc: [NAME]</floater.string>
@@ -1151,10 +1184,10 @@ end</floater.string>
              layout="topleft"
              left_pad="4"
              name="luau_solver"
-             tool_tip="Luau type solver for SLua. New finds different mistakes, may be slower; some messages English only"
+             tool_tip="Luau type solver for SLua. Old is the grid's; New finds different mistakes, may be slower; some messages English only"
              top_delta="-3"
              width="210">
-                <combo_box.item label="Old" name="old" value="old" />
+                <combo_box.item label="Old, as the grid checks" name="old" value="old" />
                 <combo_box.item label="New" name="new" value="new" />
             </combo_box>
             <scroll_list
@@ -1223,7 +1256,7 @@ end</floater.string>
              left="12"
              multi_select="false"
              name="snippet_list"
-             tool_tip="Your snippets, then the viewer's built-in ones (copy one to change it)"
+             tool_tip="Your snippets, then the viewer's built-in ones (copy one to change it). Drop a snippets notecard here to add its snippets to yours."
              top_pad="8"
              width="280">
                 <scroll_list.columns dynamic_width="true" label="Snippet" name="name" />
@@ -1259,6 +1292,16 @@ end</floater.string>
              tool_tip="Delete the selected snippet (your own only)"
              top_delta="0"
              width="70" />
+            <button
+             follows="left|bottom"
+             height="22"
+             label="Save to Inventory"
+             layout="topleft"
+             left="12"
+             name="snippet_to_inventory"
+             tool_tip="Save your own snippets, LSL and SLua, to a new notecard in your Notecards folder, to keep or to give. Dropping that notecard here adds its snippets."
+             top_pad="4"
+             width="140" />
 
             <text
              follows="left|top"
@@ -1469,6 +1512,125 @@ end</floater.string>
                      tool_tip="The text a new SLua script starts with; if empty, the grid's default"
                      top_delta="0"
                      width="380" />
+        </panel>
+        <panel
+         follows="all"
+         height="478"
+         label="LSL to SLua"
+         layout="topleft"
+         name="convert_tab"
+         width="804">
+            <text
+             follows="left|top|right"
+             height="32"
+             layout="topleft"
+             left="12"
+             name="convert_note"
+             top="12"
+             width="780"
+             wrap="true">
+                How Code &gt; Convert to SLua writes an LSL script. Each choice changes only what means exactly what the LSL did; what it leaves as LSL had it is noted, with SLua's way.
+            </text>
+            <text
+             follows="left|top"
+             height="16"
+             layout="topleft"
+             left="12"
+             name="convert_preset_label"
+             top_pad="10"
+             width="70">
+                Write it:
+            </text>
+            <combo_box
+             follows="left|top"
+             height="22"
+             layout="topleft"
+             left_pad="4"
+             name="convert_preset"
+             tool_tip="SLua's own ways, as far as each means what the LSL did; or as close to LSL as SLua lets it be, with llcompat and the timer event"
+             top_delta="-3"
+             width="220">
+                <combo_box.item label="In SLua's own ways" name="convert_modern" value="modern" />
+                <combo_box.item label="As close to LSL as it can be" name="convert_close" value="close" />
+                <combo_box.item label="As chosen below" name="convert_custom" value="custom" />
+            </combo_box>
+            <check_box
+             control_name="ALScriptConvertLLTimers"
+             follows="left|top"
+             height="20"
+             label="Timers on LLTimers"
+             layout="topleft"
+             left="12"
+             name="convert_timers"
+             tool_tip="llSetTimerEvent's timer runs on LLTimers, calling the timer handler of the state the script is in. Off: the timer event, set going by llcompat.SetTimerEvent."
+             top_pad="10"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertDetectedTable"
+             follows="left|top"
+             height="20"
+             label="What was detected from the handler's table"
+             layout="topleft"
+             left="12"
+             name="convert_detected"
+             tool_tip="llDetectedKey(0) in a touch_start becomes detected[1]:getKey(). Off: llcompat.DetectedKey(0)."
+             top_pad="4"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertSLuaCalls"
+             follows="left|top"
+             height="20"
+             label="SLua's ll where it means the same as llcompat"
+             layout="topleft"
+             left="12"
+             name="convert_calls"
+             tool_tip="A boolean answer (if ll.SameGroup(id) then), a constant index moved on by one, and a find asked only whether it found, read against nil. Off: llcompat for all of them."
+             top_pad="4"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertIdioms"
+             follows="left|top"
+             height="20"
+             label="What SLua has in a call's stead"
+             layout="topleft"
+             left="12"
+             name="convert_idioms"
+             tool_tip="math, vector and quaternion's functions, ^, print, os.time and table.find, where they mean the same as the LSL call."
+             top_pad="4"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertHandlerFields"
+             follows="left|top"
+             height="20"
+             label="Handlers assigned to LLEvents' fields"
+             layout="topleft"
+             left="12"
+             name="convert_fields"
+             tool_tip="LLEvents.touch_start = function(detected) ... end, one for each event. Off: LLEvents:on, which lets other code listen to the event too."
+             top_pad="4"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertTypes"
+             follows="left|top"
+             height="20"
+             label="Luau types on locals, parameters and returns"
+             layout="topleft"
+             left="12"
+             name="convert_types"
+             tool_tip="local count: number = 0, and function names(who: string): string, from LSL's types."
+             top_pad="4"
+             width="700" />
+            <check_box
+             control_name="ALScriptConvertComments"
+             follows="left|top"
+             height="20"
+             label="A -- LSL: comment over each place the two languages differ"
+             layout="topleft"
+             left="12"
+             name="convert_comments"
+             tool_tip="Each place SLua means something else than LSL did, or has a way of its own, said over its line. Off: said only in Output."
+             top_pad="4"
+             width="700" />
         </panel>
         <panel
          class="al_panel_script_keymap"

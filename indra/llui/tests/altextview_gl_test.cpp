@@ -29,6 +29,7 @@
 #include "../../llrender/tests/llheadlessgl_fixture.h"
 
 #include "../alcodeeditor.h"
+#include "../altextruler.h"
 #include "../altextview.h"
 #include "../llui.h"
 #include "../llfocusmgr.h"
@@ -58,6 +59,7 @@ namespace
     struct Painter : public ALTextView
     {
         using ALTextView::drawSquiggle;
+        using ALTextView::squiggleMiddle;
     };
 
     constexpr S32 W = ll_test::HeadlessGL::WIDTH;
@@ -341,10 +343,11 @@ namespace tut
             return ll_test::readFramebufferRGBA(W, H);
         };
         // Every pixel that differs between two frames lies within a line's
-        // band, a few pixels either way; and some do.
-        const auto only_on = [&](const std::string& what, const std::vector<U8>& a, const std::vector<U8>& b, S32 line) {
+        // band, a few pixels either way -- `below` more under it -- and
+        // some do.
+        const auto only_on = [&](const std::string& what, const std::vector<U8>& a, const std::vector<U8>& b, S32 line, S32 below = 0) {
             const S32 top    = editor->textRect().mTop - (editor->layout().lineTop(line) - editor->scrollY()) + 3;
-            const S32 bottom = top - 3 - editor->layout().lineHeight(line) - 3;
+            const S32 bottom = top - 3 - editor->layout().lineHeight(line) - 3 - below;
             bool      some   = false;
             for (S32 y = 0; y < H; ++y)
             {
@@ -384,7 +387,11 @@ namespace tut
         d.range = ALTextRange(ALTextPos(7, 8), ALTextPos(7, 13));
         d.color = LLColor4::red;
         editor->setDecorations({ d });
-        only_on("a squiggle", plain, frame(), 7);
+        // Under the text, where the line's descenders reach: past the row
+        // where the font's lines are closer than its letters are tall.
+        const LLFontGL* mono     = LLFontGL::getFontMonospace();
+        const S32       overhang = llmax(0, ll_round(mono->getDescenderHeight()) - (mono->getLineSpacing() - ll_round(mono->getAscenderHeight())));
+        only_on("a squiggle", plain, frame(), 7, overhang);
 
         std::list<LLVertexBufferData> capture;
         gGL.beginList(&capture);
@@ -395,5 +402,103 @@ namespace tut
         ensure("a handful of draws: " + std::to_string(capture.size()), capture.size() <= 25);
         gFocusMgr.setKeyboardFocus(nullptr);
         editor->die();
+    }
+
+    // The preview of the lines under the mouse on the map is drawn over the
+    // text beside the map: to its left where the map is on the right, to its
+    // right where it is on the left -- not off the view past it.
+    template<> template<>
+    void altextview_gl_object::test<6>()
+    {
+        ll_test::HeadlessUI& ui = ll_test::HeadlessUI::get(/*gl_textures=*/true);
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        std::string text;
+        for (S32 i = 0; i < 200; ++i)
+        {
+            text += "word word word word\n";
+        }
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name           = "view";
+        p.rect           = LLRect(0, H, W, 0);
+        p.default_text   = text;
+        ALTextView* view = LLUICtrlFactory::create<ALTextView>(p);
+        view->setFont(LLFontGL::getFontMonospace());
+        view->setScrollMap(true);
+        view->setScrollMapWidth(60);
+        view->setBackgroundColor(LLColor4(0.1f, 0.1f, 0.12f, 1.f));
+        view->setTextColor(LLColor4(0.9f, 0.9f, 0.9f, 1.f));
+        ALTextRuler* map = view->findChild<ALTextRuler>("ruler");
+        // Every pixel of the view, as it draws.
+        const auto drawn = [&]() {
+            gl().clearFramebuffer();
+            glEnable(GL_BLEND);
+            gGL.setSceneBlendType(LLRender::BT_ALPHA);
+            view->draw();
+            gGL.flush();
+            glDisable(GL_BLEND);
+            glFinish();
+            return ll_test::readFramebufferRGBA(W, H);
+        };
+        // How many pixels between two columns differ between two frames.
+        const auto changed = [&](const std::vector<U8>& a, const std::vector<U8>& b, S32 from, S32 to) {
+            S32 count = 0;
+            for (S32 y = 0; y < H; ++y)
+            {
+                for (S32 x = from; x < to; ++x)
+                {
+                    const size_t at = (static_cast<size_t>(y) * W + x) * 4;
+                    count += a[at] != b[at] || a[at + 1] != b[at + 1] || a[at + 2] != b[at + 2];
+                }
+            }
+            return count;
+        };
+        for (const bool left : { false, true })
+        {
+            view->setScrollMapOnLeft(left);
+            map->onMouseLeave(0, 0, MASK_NONE);
+            const std::vector<U8> plain = drawn();
+            map->handleHover(30, H / 2, MASK_NONE);
+            const std::vector<U8> shown = drawn();
+            const S32 text_from = left ? 60 : 0;
+            const S32 text_to   = left ? W : W - 60;
+            ensure(std::string("the preview over the text, the map on the ") + (left ? "left" : "right"),
+                   changed(plain, shown, text_from, text_to) > 1000);
+        }
+        view->die();
+    }
+
+    // A row's squiggle is under its text: nothing at or above the baseline,
+    // where a period's foot stands, and only the fade in the pixel under
+    // it; the line itself lower still.
+    template<> template<>
+    void altextview_gl_object::test<7>()
+    {
+        const S32              text_top = 150;
+        const S32              ascent   = 12;
+        const S32              baseline = text_top - ascent;
+        const S32              middle   = Painter::squiggleMiddle(text_top, ascent);
+        const std::vector<S32> now      = coverage([&] { Painter::drawSquiggle(40.f, 140.f, middle, LLColor4::white, LLRect(0, H, W, 0)); });
+        S32                    under    = 0;
+        S32                    drawn    = 0;
+        for (S32 x = 40; x < 140; ++x)
+        {
+            for (S32 y = baseline; y < text_top; ++y)
+            {
+                if (now[static_cast<size_t>(y) * W + x] != 0)
+                {
+                    fail("over the text at " + std::to_string(x) + "," + std::to_string(y));
+                }
+            }
+            under = llmax(under, now[static_cast<size_t>(baseline - 1) * W + x]);
+            for (S32 y = 0; y < baseline; ++y)
+            {
+                drawn = llmax(drawn, now[static_cast<size_t>(y) * W + x]);
+            }
+        }
+        ensure("drawn under the text", drawn == 255);
+        ensure("only the fade just under the baseline: " + std::to_string(under), under < 128);
     }
 }
