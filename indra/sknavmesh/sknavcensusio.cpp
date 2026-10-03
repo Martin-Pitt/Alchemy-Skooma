@@ -350,6 +350,7 @@ namespace sknav
             case ProbeKind::OCTREE: return "octree";
             case ProbeKind::NAV_SPHERE: return "nav_sphere";
             case ProbeKind::NAV_BOX: return "nav_box";
+            case ProbeKind::CLUSTER: return "cluster";
             default: return "unknown";
         }
     }

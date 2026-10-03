@@ -48,6 +48,7 @@
 #include "sknavmesh.h"
 #include "sknavrooms.h"
 #include "sknavprobes.h"
+#include "skclusterprobes.h" // <SK:Nexii> Cluster probes
 
 #if LL_WINDOWS
 #pragma warning (push)
@@ -181,7 +182,8 @@ static void touch_default_probe(LLReflectionMap* probe)
 }
 
 LLReflectionMapManager::LLReflectionMapManager()
-: mSolids(new sknav::SolidLattice)
+: mSolids(new sknav::SolidLattice),
+  mClusterProbes(std::make_unique<SKClusterProbes>()) // <SK:Nexii> Cluster probes
 {
     mDynamicProbeCount = LL_MAX_REFLECTION_PROBE_COUNT;
     initCubeFree();
@@ -225,6 +227,10 @@ struct CompareProbeDistance
             return lhs->mPriority > rhs->mPriority;
         }
 
+        if (lhs->mClusterFill != rhs->mClusterFill) // <SK:Nexii> Cluster probes: few and broad, so they keep their slots first
+        {
+            return lhs->mClusterFill;
+        }
         if (lhs->mNavRooms != rhs->mNavRooms)
         {
             return lhs->mNavRooms;
@@ -254,6 +260,10 @@ static bool check_priority(LLReflectionMap* a, LLReflectionMap* b)
         if (a->mPriority != b->mPriority)
         {
             return a->mPriority > b->mPriority;
+        }
+        if (a->mClusterFill != b->mClusterFill) // <SK:Nexii> Cluster probes: one capture covers a whole structure
+        {
+            return a->mClusterFill;
         }
         if (a->mNavRooms != b->mNavRooms)
         {
@@ -425,6 +435,7 @@ void LLReflectionMapManager::update()
 
     SKNavMesh::instance().placeReflectionProbes();
     updateCensusPlacement();
+    updateClusterProbes(); // <SK:Nexii> Cluster probes
 
     if (mUpdatingProbe != nullptr)
     {
@@ -936,6 +947,36 @@ LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& 
     return probe;
 }
 
+LLReflectionMap* LLReflectionMapManager::registerClusterProbe(const LLVector3& origin, F32 radius)
+{
+    LLReflectionMap* probe = addProbe();
+    if (probe)
+    {
+        probe->mClusterFill = true;
+        probe->mOrigin.load3(origin.mV);
+        probe->mRadius = radius;
+    }
+    return probe;
+}
+
+std::string LLReflectionMapManager::clusterProbesStatsLine() const
+{
+    return mClusterProbes->statsLine();
+}
+
+void LLReflectionMapManager::updateClusterProbes()
+{
+    const auto census = SKWorldCensus::instance().snapshot();
+    static LLCachedControl<bool> enabled(gSavedSettings, "SKClusterProbes", true);
+    if (!enabled || mRenderReflectionProbeLevel < 3)
+    {
+        mClusterProbes->clear();
+        return;
+    }
+    // The lattice is the census pass's; a scan it has not caught up with yet waits a frame.
+    mClusterProbes->update(*this, census, census && census == mSolidsCensus ? mSolids.get() : nullptr);
+}
+
 void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
 {
     if (mUpdatingProbe == probe)
@@ -967,7 +1008,7 @@ void LLReflectionMapManager::updateCensusPlacement()
     }
     const U64 census_stamp = census ? census->mStamp : 0;
     if (!refresh && std::all_of(mProbes.begin(), mProbes.end(), [&](const auto& probe)
-        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms ||
+        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms || probe->mClusterFill ||
                  (probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp); }))
     {
         return;
@@ -1030,7 +1071,7 @@ void LLReflectionMapManager::updateCensusPlacement()
     const auto solid_checks_started = std::chrono::steady_clock::now();
     for (auto& probe : mProbes)
     {
-        if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms) continue;
+        if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms || probe->mClusterFill) continue;
         if (!refresh && probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp) continue;
         const LLVector3 old(probe->mOrigin.getF32ptr());
         if (!probe->mGridPlacementChecked)
@@ -1130,6 +1171,10 @@ LLReflectionMapManager::SKProbeKind LLReflectionMapManager::getSKProbeKind(const
     if (probe->mViewerObject)
     {
         return probe->mViewerObject->getReflectionProbeIsBox() ? SK_PROBE_PLACED_BOX : SK_PROBE_PLACED_SPHERE;
+    }
+    if (probe->mClusterFill)
+    {
+        return SK_PROBE_CLUSTER;
     }
     return probe->mNavRooms ? SK_PROBE_NAV_SPHERE : SK_PROBE_OCTREE;
 }
@@ -1664,7 +1709,7 @@ U32 LLReflectionMapManager::countNavOctreeLinks() const
         {
             for (const auto& other : probe->mNeighbors)
             {
-                links += (other != mDefaultProbe && !other->mViewerObject && !other->mNavRooms) ? 1 : 0;
+                links += (other != mDefaultProbe && !other->mViewerObject && !other->mNavRooms && !other->mClusterFill) ? 1 : 0;
             }
         }
     }
@@ -1717,6 +1762,7 @@ void LLReflectionMapManager::updateUniforms()
 
     S32 count = 0;
     U32 nc = 0; // neighbor "cursor" - index into refNeighbor to start writing the next probe's list of neighbors
+    S32 cluster_first = 0, cluster_end = 0; // <SK:Nexii> Cluster probes: the index range the shader scans for them
 
     LLEnvironment& environment = LLEnvironment::instance();
     LLSettingsSky::ptr_t psky = environment.getCurrentSky();
@@ -1739,7 +1785,12 @@ void LLReflectionMapManager::updateUniforms()
             break;
         }
 
-        if (refmap != mDefaultProbe)
+        if (refmap->mClusterFill) // <SK:Nexii> Cluster probes are never a search's first probe; they span too many neighbours
+        {
+            cluster_first = cluster_end == 0 ? count : cluster_first;
+            cluster_end = count + 1;
+        }
+        else if (refmap != mDefaultProbe)
         {
             // bucket search data
             // theory of operation:
@@ -1794,10 +1845,12 @@ void LLReflectionMapManager::updateUniforms()
 
         // <SK:Nexii> Probe volume display: the kind rides in bits 24-27 of refParams.w, raw, only while the display is on.
         // Bits 0-15 stay free for the navmesh room box plan; with a kind set the pattern is a normal float, never a denormal.
+        // Bit 28 marks a census cluster fill for the shader's tiers (skProbeTier), always.
         static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
-        if (render_ref_probe_volumes)
+        if (render_ref_probe_volumes || refmap->mClusterFill)
         {
-            const U32 bits = static_cast<U32>(getSKProbeKind(refmap)) << 24;
+            const U32 bits = (render_ref_probe_volumes ? static_cast<U32>(getSKProbeKind(refmap)) << 24 : 0u) |
+                             (refmap->mClusterFill ? 1u << 28 : 0u);
             F32 w;
             memcpy(&w, &bits, sizeof(w));
             mProbeData.refParams[count].mV[3] = w;
@@ -1887,6 +1940,10 @@ void LLReflectionMapManager::updateUniforms()
 #endif
 
     mProbeData.refmapCount = count;
+    // <SK:Nexii> Cluster probes: refBucket's .yzw are otherwise unused, and bucket 0 carries their range.
+    mProbeData.refBucket[0][1] = cluster_first;
+    mProbeData.refBucket[0][2] = cluster_end;
+    // </SK:Nexii>
 
     gPipeline.mHeroProbeManager.updateUniforms();
 
@@ -2039,6 +2096,7 @@ namespace
         case LLReflectionMapManager::SK_PROBE_OCTREE: return LLColor4(0.1f, 0.85f, 1.f, 1.f);
         case LLReflectionMapManager::SK_PROBE_NAV_SPHERE: return LLColor4(0.3f, 1.f, 0.35f, 1.f);
         case LLReflectionMapManager::SK_PROBE_NAV_BOX: return LLColor4(1.f, 0.95f, 0.2f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_CLUSTER: return LLColor4(0.55f, 0.45f, 1.f, 1.f);
         default: return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
         }
     }
@@ -2050,11 +2108,12 @@ namespace
         LLMatrix4a toUnit; // world to unit box, box probes only
         bool box;
         bool manual;
+        S32 tier; // skProbeTier in reflectionProbeF.glsl: 0 automatic, 1 manual, 2 cluster fill, 3 default
     };
 
     SKProbeLinkEnd skProbeLinkEnd(LLReflectionMap* probe)
     {
-        SKProbeLinkEnd e{ probe, LLMatrix4a(), false, probe->mPriority > 0 };
+        SKProbeLinkEnd e{ probe, LLMatrix4a(), false, probe->mPriority > 0, 0 };
         LLViewerObject* obj = probe->mViewerObject;
         if (obj && obj->getReflectionProbeIsBox() && obj->getVolume() && obj->mDrawable.notNull())
         {
@@ -2064,6 +2123,7 @@ namespace
             e.box = true;
             e.manual = true;
         }
+        e.tier = e.manual ? 1 : probe->mClusterFill ? 2 : 0; // the default probe is never linked
         return e;
     }
 
@@ -2101,7 +2161,7 @@ namespace
         return w * atten;
     }
 
-    // Both probes' normalised shares at pos, classes mixed as sampleProbes does (rp:651-707).
+    // Both probes' normalised shares at pos, tiers mixed as skMixProbeTiers does in reflectionProbeF.glsl.
     void skProbeLinkShares(const SKProbeLinkEnd& a, const SKProbeLinkEnd& b, const LLVector3& pos, F32& sa, F32& sb)
     {
         bool insideBox = false;
@@ -2113,19 +2173,29 @@ namespace
             if (!a.manual) wa = 0.f;
             if (!b.manual) wb = 0.f;
         }
-        F32 wsum[2] = { 0.f, 0.f };
-        wsum[a.manual] += wa;
-        wsum[b.manual] += wb;
-        const F32 dwsum1 = (a.manual ? dwa : 0.f) + (b.manual ? dwb : 0.f);
-        const bool hasAuto = wsum[0] > 0.f;
-        const F32 manualShare = wsum[1] > 0.f ? (hasAuto ? llmin(dwsum1, 1.f) : 1.f) : 0.f;
-        auto share = [&](const SKProbeLinkEnd& e, F32 w)
+        F32 wsum[4] = { 0.f, 0.f, 0.f, 0.f };
+        F32 dwsum[4] = { 0.f, 0.f, 0.f, 0.f };
+        wsum[a.tier] += wa;
+        dwsum[a.tier] += dwa;
+        wsum[b.tier] += wb;
+        dwsum[b.tier] += dwb;
+        // Top down, each present tier takes its distance weight of what is left, all of it when nothing lies below.
+        constexpr S32 TOP_DOWN[4] = { 1, 0, 2, 3 };
+        F32 tierShare[4] = { 0.f, 0.f, 0.f, 0.f };
+        F32 remaining = 1.f;
+        for (S32 k = 0; k < 4; ++k)
         {
-            const F32 cls = e.manual ? manualShare : (hasAuto ? 1.f - manualShare : 0.f);
-            return wsum[e.manual] > 0.f ? w / wsum[e.manual] * cls : 0.f;
-        };
-        sa = share(a, wa);
-        sb = share(b, wb);
+            const S32 t = TOP_DOWN[k];
+            bool lower = false;
+            for (S32 l = k + 1; l < 4; ++l)
+            {
+                lower = lower || wsum[TOP_DOWN[l]] > 0.f;
+            }
+            tierShare[t] = wsum[t] > 0.f ? remaining * (lower ? llmin(dwsum[t], 1.f) : 1.f) : 0.f;
+            remaining -= tierShare[t];
+        }
+        sa = wsum[a.tier] > 0.f ? wa / wsum[a.tier] * tierShare[a.tier] : 0.f;
+        sb = wsum[b.tier] > 0.f ? wb / wsum[b.tier] * tierShare[b.tier] : 0.f;
     }
     // </SK:Nexii>
 }

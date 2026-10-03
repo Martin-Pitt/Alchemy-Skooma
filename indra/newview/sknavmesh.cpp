@@ -1489,7 +1489,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
