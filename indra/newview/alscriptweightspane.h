@@ -24,8 +24,10 @@
 
 #pragma once
 
+#include "alscriptregionusage.h"
 #include "alscriptweight.h"
 #include "llpanel.h"
+#include "llstl.h"
 
 #include <boost/unordered/unordered_flat_map.hpp>
 
@@ -66,11 +68,15 @@ public:
         bool                        beforeOptimizer = false;
         std::optional<size_t>       sent;
         // An include's name, by the identity its parts carry.
-        boost::unordered_flat_map<std::string, std::string> fileNames;
+        boost::unordered_flat_map<std::string, std::string, ll::string_hash, std::equal_to<>> fileNames;
         // What a function with no name of its own is called by where it
         // stands: the event a handler is put on, as the outline lists it,
         // by the line the function starts on.
         boost::unordered_flat_map<S32, std::string> handlers;
+        // What the region reserves for the script's object, as it last
+        // said: memory for all the object's scripts, not this one's alone,
+        // counted at their limits; and when it said so.
+        std::optional<ALScriptRegionUsage::Usage> region;
     };
     // Where a part is: in the script shown where `file` is empty, else in
     // that include.
@@ -110,6 +116,8 @@ private:
         size_t               nth = 0;
         std::optional<S64>   change;
         bool                 fresh = false;
+        // Its name as shown, made once for the row and for sorting by it.
+        std::string          name;
     };
 
     const ALScriptWeight* chosen() const;

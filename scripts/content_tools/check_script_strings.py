@@ -8,7 +8,8 @@ translator may work from the same English under the same keys. Nothing in
 the build keeps the copies together, so this does:
 
   * every `"Key", "English"` pair the code passes to alSaid, said, fail,
-    note, problem and the like, against the key's text in strings.xml;
+    note, problem and the like, against the key's text in strings.xml --
+    the LSL to SLua converter's notes among them, under Slua;
   * every row of the map's LSL table against Tailslide's logger.cc, by
     error code, with %s and %d read as the marks;
   * every row of the lint table against the emitWarning calls in Luau's
@@ -17,16 +18,20 @@ the build keeps the copies together, so this does:
     Error.cpp, whose messages are built rather than formatted, so only
     their pieces can be looked for -- each stretch must be buildable
     from the file's own string literals -- and likewise the lints the map
-    matches by shape against Linter.cpp;
+    matches by shape against Linter.cpp; but a row of the table that is
+    the parser's, which writes its messages whole where it knows what
+    was meant, against Parser.cpp's, its marks standing for anything;
   * every key in the tables against strings.xml, and every studio key in
     strings.xml against the code, for one that nothing says any more;
   * every key alscriptfixes.cpp offers a fix for, its AL_FIXED_KEYS list,
     against strings.xml, so that a problem renamed where it is made does
     not quietly lose its fix;
-  * every command the studio's Keys preferences list -- the editor's, in
-    alkeymap.cpp, and the menus', in alscriptkeymap.cpp -- against the
-    panel's name for it, and every such name against a command. A command
-    with no name is a missing string, which QA mode stops the viewer on;
+  * every editor command the studio's Keys preferences list, from
+    alkeymap.cpp, against the panel's name for it, and every such name
+    against a command. A command with no name is a missing string, which
+    QA mode stops the viewer on. The menus' commands the panel names by
+    where they are in the menus, in the menus' own words, which
+    alscriptkeymap_test holds to their table;
   * every item of the studio's menus against the command table
     (ALScriptStudioCommands): each item names a command something
     registers, and each command registered with `add` is an item -- one
@@ -55,7 +60,6 @@ STRINGS = os.path.join(ROOT, "indra", "newview", "skins", "default", "xui", "en"
 MAP = os.path.join(ROOT, "indra", "alscript", "almessagemap.cpp")
 FIXES = os.path.join(ROOT, "indra", "alscript", "alscriptfixes.cpp")
 EDITOR_KEYS = os.path.join(ROOT, "indra", "llui", "alkeymap.cpp")
-MENU_KEYS = os.path.join(ROOT, "indra", "newview", "alscriptkeymap.cpp")
 KEYS_PANEL = os.path.join(ROOT, "indra", "newview", "skins", "default", "xui", "en", "panel_script_studio_keys.xml")
 STUDIO_SKIN = os.path.join(ROOT, "indra", "newview", "skins", "default", "xui", "en", "floater_script_studio.xml")
 CODE = [
@@ -65,7 +69,7 @@ CODE = [
 ]
 # The keys that are the studio's: what strings.xml groups under these
 # prefixes is compared; the rest of the file is the viewer's.
-PREFIXES = ("Vim", "Preproc", "Optimizer", "Inliner", "LuauLint", "Luau", "LSL", "Workspace", "Analysis", "XUIEdit", "FindBar", "TabStrip", "ScriptFix", "ScriptAction")
+PREFIXES = ("Vim", "Preproc", "Optimizer", "Inliner", "LuauLint", "Luau", "LSL", "Workspace", "Analysis", "XUIEdit", "FindBar", "TabStrip", "ScriptFix", "ScriptAction", "Slua")
 # The viewer's own under those prefixes: the legacy editor's tooltips.
 NOT_OURS = ("LSLTip",)
 # The calls that pass a key with its English, and which arguments those
@@ -77,6 +81,8 @@ CALLS = {
     "fail": [(0, 1, "")],
     "problem": [(1, 2, "")],
     "note": [(1, 2, "")],
+    "noteOnce": [(1, 2, "")],
+    "linted": [(0, 1, "")],
     "noteAt": [(1, 2, "")],
     "titled": [(0, 1, "")],
     "alSaidCount": [(0, 2, "A"), (0, 3, "B")],
@@ -173,14 +179,10 @@ def read_fixed_keys():
 
 def read_key_commands():
     """The names the Keys panel looks up: cmd_ and each editor command but
-    none, menu_ and each menu command."""
+    none. The menus' commands it names by the menus, not by its strings."""
     editor = open(EDITOR_KEYS, encoding="utf-8").read()
     table = re.search(r"NAMES\[\]\s*=\s*\{(.*?)\};", editor, re.S)
-    names = ["cmd_" + n for n in re.findall(r'"([a-z_]+)"', table.group(1)) if n != "none"] if table else []
-    menus = open(MENU_KEYS, encoding="utf-8").read()
-    table = re.search(r"std::vector<MenuCommand>\s+commands\s*\{(.*?)\};", menus, re.S)
-    names += ["menu_" + n for n in re.findall(r'\{\s*"([a-z_]+)"', table.group(1))] if table else []
-    return names
+    return ["cmd_" + n for n in re.findall(r'"([a-z_]+)"', table.group(1)) if n != "none"] if table else []
 
 
 def read_studio_commands():
@@ -249,15 +251,20 @@ def arguments(text, at):
 
 
 def literal_or_branches(arg):
-    """A string literal as [(None, text)], or a `c ? "a" : "b"` as its two
+    """A string literal as [(None, text)] -- adjacent literals, "a" "b",
+    joined as the compiler joins them -- or a `c ? "a" : "b"` as its two
     branches [(0, a), (1, b)]; nothing for anything else."""
-    lit = r'"((?:[^"\\]|\\.)*)"'
-    m = re.fullmatch(lit, arg, re.S)
+    lits = r'((?:"(?:[^"\\]|\\.)*"\s*)+)'
+
+    def joined(text):
+        return "".join(unescape_c(m) for m in re.findall(r'"((?:[^"\\]|\\.)*)"', text))
+
+    m = re.fullmatch(lits, arg, re.S)
     if m:
-        return [(None, unescape_c(m.group(1)))]
-    m = re.fullmatch(r".*?\?\s*" + lit + r"\s*:\s*" + lit, arg, re.S)
+        return [(None, joined(m.group(1)))]
+    m = re.fullmatch(r".*?\?\s*" + lits + r":\s*" + lits, arg, re.S)
     if m:
-        return [(0, unescape_c(m.group(1))), (1, unescape_c(m.group(2)))]
+        return [(0, joined(m.group(1))), (1, joined(m.group(2)))]
     return []
 
 
@@ -397,12 +404,12 @@ def main():
     panel = {e.get("name"): e.text or "" for e in ET.parse(KEYS_PANEL).getroot().iter("panel.string")}
     print("the Keys panel's names against the commands it lists (%d)" % len(commands))
     if not commands:
-        fail("no commands read from alkeymap.cpp or alscriptkeymap.cpp")
+        fail("no commands read from alkeymap.cpp")
     for name in commands:
         if name not in panel:
             fail("panel_script_studio_keys.xml has no %s" % name)
     for name in sorted(panel):
-        if (name.startswith("cmd_") or name.startswith("menu_")) and name not in commands:
+        if name.startswith("cmd_") and name not in commands:
             fail("panel_script_studio_keys.xml names %s, which is no command" % name)
 
     listed, unlisted, twice = read_studio_commands()
@@ -455,10 +462,17 @@ def main():
                 for text in sorted(theirs[name]):
                     if text not in ours:
                         print("  (not mapped) %s %r" % (name, text))
-        print("the error table's pieces against Luau's Error.cpp, the shaped lints' against Linter.cpp")
+        print("the error table's pieces against Luau's Error.cpp, or whole against Parser.cpp; the shaped lints' against Linter.cpp")
         error_src = open(os.path.join(luau, "Analysis", "src", "Error.cpp"), encoding="utf-8").read()
         lint_src = open(os.path.join(luau, "Analysis", "src", "Linter.cpp"), encoding="utf-8").read()
-        for src, rows in ((error_src, err_rows), (lint_src, [(k, t) for _, k, t in shape_rows])):
+        parser_src = open(os.path.join(luau, "Ast", "src", "Parser.cpp"), encoding="utf-8").read()
+        # The parser's rows: each is one of its messages, written whole with
+        # what the marks stand for in place -- `Unexpected '&&'; did you
+        # mean 'and'?` -- which Error.cpp's pieces would never build.
+        said_whole = [unescape_c(m) for m in re.findall(r'"((?:[^"\\]|\\.)*)"', parser_src)]
+        built_rows = [(key, text) for key, text in err_rows
+                      if not any(re.fullmatch("(?:.+)".join(re.escape(p) for p in literals_of(text)), m, re.S) for m in said_whole)]
+        for src, rows in ((error_src, built_rows), (lint_src, [(k, t) for _, k, t in shape_rows])):
             # The file's literals, a printf template's cut at its %s.
             literals = set()
             for m in re.findall(r'"((?:[^"\\]|\\.)*)"', src):

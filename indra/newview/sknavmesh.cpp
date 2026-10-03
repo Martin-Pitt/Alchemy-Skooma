@@ -723,48 +723,57 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // Clusters clear of the ground: a mesh each, and no terrain in it. A
     // skybox three kilometres up has nothing to do with the land below it, and
     // a heightfield spanning the gap would overflow Recast's span heights.
-    for (const Cluster* c : airborne)
     {
-        live.insert(c->mId);
-        std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
-        if (!mesh)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile airborne");
+        for (const Cluster* c : airborne)
         {
-            mesh = std::make_unique<Mesh>();
-            mesh->mId = c->mId;
-            mesh->mGeneration = mNextGeneration++;
-            mesh->mOrigin = latticeOrigin(c->mMin);
-            if (!c->mRecords.empty())
+            live.insert(c->mId);
+            std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
+            if (!mesh)
             {
-                LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
-                mesh->mRegion = region ? region->getHandle() : 0;
+                mesh = std::make_unique<Mesh>();
+                mesh->mId = c->mId;
+                mesh->mGeneration = mNextGeneration++;
+                mesh->mOrigin = latticeOrigin(c->mMin);
+                if (!c->mRecords.empty())
+                {
+                    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
+                    mesh->mRegion = region ? region->getHandle() : 0;
+                }
             }
-        }
-        mesh->mLastSeen = gFrameTimeSeconds;
-        std::vector<LaidTile> laid;
-        layAirborne(*c, mesh->mOrigin, pad, laid);
-        std::map<TileKey, Tile> wanted;
-        for (LaidTile& lt : laid)
-        {
-            const TileKey key = lt.mKey;
-            Tile& tile = wanted[key];
-            const auto old = mesh->mTiles.find(key);
-            if (old != mesh->mTiles.end())
+            mesh->mLastSeen = gFrameTimeSeconds;
+            std::vector<LaidTile> laid;
             {
-                tile = old->second;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne");
+                layAirborne(*c, mesh->mOrigin, pad, laid);
             }
-            std::vector<RecordPtr> before = std::move(tile.mRecords);
-            tile.mMin = meshTileMin(mesh->mOrigin, key);
-            tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-            tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
-            tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            tile.mRecords = std::move(lt.mRecords);
-            reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            std::map<TileKey, Tile> wanted;
+            for (LaidTile& lt : laid)
+            {
+                const TileKey key = lt.mKey;
+                Tile& tile = wanted[key];
+                const auto old = mesh->mTiles.find(key);
+                if (old != mesh->mTiles.end())
+                {
+                    tile = old->second;
+                }
+                std::vector<RecordPtr> before = std::move(tile.mRecords);
+                tile.mMin = meshTileMin(mesh->mOrigin, key);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
+                tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
+                tile.mRecords = std::move(lt.mRecords);
+                reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            }
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
+            }
+            mesh->mTiles.swap(wanted);
         }
-        if (dropTiles(*mesh, wanted))
-        {
-            mRevision++;
-        }
-        mesh->mTiles.swap(wanted);
     }
 
     // One mesh per region: its terrain, and every record that reaches over
@@ -774,6 +783,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // the structure was rezzed across the border.
     if (LLWorld::instanceExists())
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile regions");
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
             live.insert(region->getRegionID());
@@ -792,9 +802,30 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+            // The layout and the tile pass below are pure over the census,
+            // this region's land, the region set and the parameters. When
+            // none of those moved since this mesh was last laid, the pass
+            // would rebuild exactly what already stands: skip it whole.
+            // This is what makes the once-a-second reconcile cheap while
+            // the world stands still; the land's stamp is what the second
+            // pass existed to catch.
+            if (mesh->mLayoutCensus == snap->mStamp && mesh->mLayoutWorld == world_stamp &&
+                mesh->mLayoutLand == land_stamp && mesh->mLayoutParams == params &&
+                mesh->mLayoutVoidMargin == void_margin)
+            {
+                continue;
+            }
+            mesh->mLayoutCensus = snap->mStamp;
+            mesh->mLayoutWorld = world_stamp;
+            mesh->mLayoutLand = land_stamp;
+            mesh->mLayoutParams = params;
+            mesh->mLayoutVoidMargin = void_margin;
             std::vector<LaidTile> laid;
-            layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
-                      [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region");
+                layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
+                          [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            }
 
             std::map<TileKey, Tile> wanted;
             for (LaidTile& lt : laid)
@@ -822,6 +853,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     // tile's padded edge.
                     if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
                     {
+                        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - terrain signature");
                         tile.mLandStamp = land_stamp;
                         tile.mWorldStamp = world_stamp;
                         tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
@@ -838,9 +870,12 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 }
                 reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
             }
-            if (dropTiles(*mesh, wanted))
             {
-                mRevision++;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
             }
             mesh->mTiles.swap(wanted);
         }
@@ -848,16 +883,19 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
     // A cluster that has gone, or that has come down to the ground and is now
     // the region's business, takes its mesh with it.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (live.count(it->second->mId))
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile prune");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            ++it;
-        }
-        else
-        {
-            it = mMeshes.erase(it);
-            mRevision++;            // its tiles leave the overlay with it
+            if (live.count(it->second->mId))
+            {
+                ++it;
+            }
+            else
+            {
+                it = mMeshes.erase(it);
+                mRevision++;            // its tiles leave the overlay with it
+            }
         }
     }
 }
@@ -1351,13 +1389,19 @@ void SKNavMesh::update()
         }
     }
 
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sample terrain");
-    sampleTerrain();
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air");
-    evictAir();
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sample terrain");
+        sampleTerrain();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air");
+        evictAir();
+    }
     schedule();
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync feature links");
-    syncFeatureLinks(snap);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync feature links");
+        syncFeatureLinks(snap);
+    }
     if (mSkyRevision != mRevision)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync sky map");
@@ -1415,7 +1459,26 @@ void SKNavMesh::placeReflectionProbes()
         mRoomProbes->clear();
         return;
     }
-    mRoomProbes->update(mRooms->view());
+    mRoomProbes->update(mRooms->view(), *this);
+}
+
+void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const
+{
+    out.clear();
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end())
+    {
+        return;
+    }
+    // Inset, so a space flush with a tile edge does not pick up its neighbour.
+    const LLVector3d inset(0.01, 0.01, 0.0);
+    for (const auto& t : it->second->mTiles)
+    {
+        if (overlapsXY(t.second.mMin, t.second.mMax, min + inset, max - inset))
+        {
+            out.push_back(t.second.mBuilt ? t.second.mContentKey : 0);
+        }
+    }
 }
 
 std::string SKNavMesh::statsLine() const
@@ -2604,6 +2667,54 @@ void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVe
     file << ']';
 }
 
+namespace
+{
+    /// Every root the records name, with what the viewer already knows of it: the
+    /// region's linkset reply first, else the object properties cache. `named` counts those with a name.
+    std::vector<CensusRoot> rootTable(const std::vector<RecordPtr>& records, size_t& named)
+    {
+        std::vector<CensusRoot> out;
+        std::set<LLUUID> seen;
+        named = 0;
+        const SKWorldCensus* census = SKWorldCensus::instanceExists() ? SKWorldCensus::getInstance() : nullptr;
+        for (const RecordPtr& record : records)
+        {
+            if (!seen.insert(record->mRoot).second)
+            {
+                continue;
+            }
+            CensusRoot root;
+            root.mId = record->mRoot;
+            if (const SKWorldCensus::LinksetFacts* facts = census ? census->linksetFactsOf(root.mId) : nullptr)
+            {
+                root.mScriptedKnown = facts->mScriptedKnown;
+                root.mScripted = facts->mScripted;
+                if (!facts->mName.empty())
+                {
+                    root.mName = facts->mName;
+                    root.mDescription = capDescription(facts->mDescription);
+                    root.mSource = NameSource::LINKSET;
+                }
+            }
+            if (root.mSource == NameSource::NONE)
+            {
+                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root.mId))
+                {
+                    if (!props->mName.empty())
+                    {
+                        root.mName = props->mName;
+                        root.mDescription = capDescription(props->mDescription);
+                        root.mSource = NameSource::PROPERTIES;
+                    }
+                }
+            }
+            named += root.mSource != NameSource::NONE;
+            out.push_back(std::move(root));
+        }
+        return out;
+    }
+}
+
 std::string SKNavMesh::exportAll() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
@@ -2667,6 +2778,18 @@ std::string SKNavMesh::exportAll() const
 
     writeFeatures(file, nullptr, nullptr, counts);
     writeDoors(file, nullptr, nullptr, counts);
+    // The census's roots, named where the viewer knows them, so a capture says what it holds.
+    size_t named = 0;
+    std::vector<CensusRoot> roots;
+    if (SKWorldCensus::instanceExists())
+    {
+        if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+        {
+            roots = rootTable(snap->mRecords, named);
+        }
+    }
+    file << ",\"roots\":";
+    writeRootTable(file, roots);
     file << ',';
     SKNavAnnotator::instance().writeMarks(file);
     file << "}\n";
@@ -2675,9 +2798,9 @@ std::string SKNavMesh::exportAll() const
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks (%.1f MB) -> %s", meshes_written,
-                    counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
-                    SKNavAnnotator::instance().marks().marks().size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks, %zu/%zu roots named (%.1f MB) -> %s",
+                    meshes_written, counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
+                    SKNavAnnotator::instance().marks().marks().size(), named, roots.size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 std::string SKNavMesh::exportCensus() const
@@ -2766,7 +2889,30 @@ std::string SKNavMesh::exportCensus() const
         census.mClusters.push_back(std::move(cl));
     }
     census.mFeatures = snap->mFeatures;
+    size_t named = 0;
+    census.mRoots = rootTable(census.mRecords, named);
     census.mMarks = SKNavAnnotator::instance().marks().marks();
+    const LLReflectionMapManager& probes = gPipeline.mReflectionMapManager;
+    static_assert(static_cast<U8>(ProbeKind::NAV_BOX) == LLReflectionMapManager::SK_PROBE_NAV_BOX, "census probe kinds are the manager's");
+    for (const LLPointer<LLReflectionMap>& probe : probes.getSKProbes())
+    {
+        CensusProbe p;
+        p.mKind = static_cast<ProbeKind>(probes.getSKProbeKind(probe));
+        p.mOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+        p.mRadius = probe->mRadius;
+        p.mPriority = static_cast<S32>(probe->mPriority);
+        p.mRelevant = probe->isRelevant();
+        p.mSuppressed = probe->mSuppressedByNavRooms;
+        p.mInsideManual = probe->mInsideManualProbe;
+        p.mResident = probe->isActive();
+        if (probe->mViewerObject)
+        {
+            p.mObject = probe->mViewerObject->getID();
+            p.mRotation = probe->mViewerObject->getRenderRotation();
+            p.mScale = probe->mViewerObject->getScale();
+        }
+        census.mProbes.push_back(p);
+    }
     for (const auto& region : mFeatureDoors)
     {
         census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
@@ -2808,9 +2954,10 @@ std::string SKNavMesh::exportCensus() const
     // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
     const F32 ms = timer.getElapsedTimeF32() * 1000.f;
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
-    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks (%.1f MB, %.0f ms) -> %s",
+    LL_INFOS("SKNavExport") << named << " of " << census.mRoots.size() << " roots named" << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks, %zu probes, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
                     census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
-                    census.mMarks.size(),
+                    census.mMarks.size(), census.mProbes.size(), named, census.mRoots.size(),
                     static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 

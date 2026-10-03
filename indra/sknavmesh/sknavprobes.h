@@ -30,6 +30,7 @@
 
 #include "v3math.h"
 
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -66,13 +67,25 @@ namespace sknav
         U32 mMaxRects = 64;         ///< rectangles cut per space before the rest floods into them
         F32 mMaxRadiusM = 13.86f;   ///< an octree probe's reach: its 16 m node's half-diagonal
         F32 mMinRadiusM = 2.f;      ///< a sphere shrunk below this is dropped
+        F32 mCoverageShare = 1.f;   ///< a part's sphere reaches this far past its farthest cell
+        F32 mSpaceRadiusM = 0.f;    ///< a sphere also reaches across its space's plan up to this
+        F32 mBlendZoneM = 2.f;      ///< the overlap two adjacent parts' spheres must share, so the
+                                    ///< blend between them has room; solved iteratively per part
+        F32 mBlendShare = 0.35f;    ///< or this share of the smaller sphere's radius, whichever is more
+        F32 mUnknownRadiusM = 8.f;  ///< a probe of an UNKNOWN-bucket space reaches this far at most
+        U32 mUnknownMinCells = 2;   ///< raster cells an UNKNOWN space needs before it probes at all
+        F32 mObligationShare = 1.5f; ///< a sphere grows past its placed radius at most this far of
+                                    ///< itself, so a corridor of thresholds cannot balloon one
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
-        F32 mMatchM = 4.f;          ///< a new sphere this close to a held one is that one, moved
+        F32 mMatchM = 8.f;          ///< a new sphere this close to a held one is that one, moved; as far
+                                    ///< as the budget's hold reaches, so a held sphere kept by the
+                                    ///< hold can still be matched to its part
         F32 mBudgetHoldM = 8.f;     ///< a held sphere ranks this much nearer in the budget
-        F32 mSpacingM = 8.f;        ///< kept spheres stand this far apart at least, while the budget is tight
-        U32 mMaxPerSpace = 1;       ///< spheres per space at most, while the budget is tight
+        F32 mSpacingM = 10.f;       ///< kept spheres stand this far apart at least, while the budget is tight
+        U32 mMaxPerSpace = 16;      ///< spheres per space at most, while the budget is tight: a street
+                                    ///< is one space, and one sphere left the rest of it bare
     };
 
     /// A space's floor seen from above: per cell, its floor height, NaN
@@ -94,9 +107,19 @@ namespace sknav
     /// One sphere for one part of a space.
     struct ProbePart
     {
+        /// Why a sphere stands where its part's reach left it.
+        enum Growth : U8
+        {
+            PLACED = 0,                 ///< its part's reach, raised by the coverage share
+            GROWN = 1,                  ///< the blend floor grew it for a boundary pair
+            WEAK = 2                    ///< grown to the cap with a boundary still short
+        };
         U32 mPart = 0;              ///< largest first
         LLVector3 mOrigin;
         F32 mRadius = 0.f;
+        F32 mSpaceRadius = 0.f;     ///< the reach from this origin across the whole space's plan,
+                                    ///< so spheres of neighbouring spaces intersect; 0 when off
+        U8 mGrowth = PLACED;        ///< the strongest reason any growth happened
         F32 mArea = 0.f;
         LLVector3 mMin;             ///< the part's floor plan, floor to ceiling
         LLVector3 mMax;
@@ -151,11 +174,18 @@ namespace sknav
     void keepBudget(std::vector<ProbeSlot>& slots, U32 cap, F32 hold_m = 0.f);
 
     /// The budget a room probe stands in: while the cap holds fewer than twice
-    /// the candidates, one sphere per space at most, each standing mSpacingM
-    /// clear of the last, the far and small dropping first; with room to spare,
-    /// every part places however close. Held ones rank mBudgetHoldM nearer
+    /// the candidates, mMaxPerSpace spheres per space at most, each standing
+    /// mSpacingM clear of every kept one, the far and small dropping first;
+    /// with room to spare, every part places however close. Held ones rank mBudgetHoldM nearer
     /// throughout, so the kept set does not flicker at either edge.
     void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params);
+
+    /// Why the budget left a slot out.
+    enum class ProbeDrop : U8 { CAP, SPACING, PER_SPACE };
+
+    /// The same, naming each dropped slot by its key and the reason.
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params,
+                      std::vector<std::pair<U64, ProbeDrop>>* dropped);
 
     /// Pair each new origin with the nearest held one within tolerance, the
     /// closest pairs first and each held one at most once: per origin, the
@@ -164,6 +194,14 @@ namespace sknav
 
     /// Whether a held probe should move to a newly placed sphere.
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params);
+
+    /// The neighbour lists of a probe graph, truncated symmetrically: an
+    /// edge stands only where it is within the first max_degree links of
+    /// BOTH endpoints, pairs scanned in the caller's order, so the caller
+    /// must offer candidates in a canonical one (distance-sorted). The
+    /// shader walks exactly these lists, and a one-sided link is a seam it
+    /// cannot cross; each list is sorted ascending.
+    std::vector<std::vector<U32>> symmetricGraph(U32 count, const std::function<bool(U32, U32)>& linked, U32 max_degree);
 }
 
 #endif // SK_NAVPROBES_H

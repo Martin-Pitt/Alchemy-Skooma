@@ -32,6 +32,7 @@
 
 #include <simdjson.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -46,6 +47,8 @@ namespace sknav
     static_assert(sizeof(void*) != 8 || sizeof(Record) == 224, "a new Record field must go into the census export");
     // And a TileBuildInput field goes into the params, unless a tile sets it.
     static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 232, "a new TileBuildInput field must go into the census export");
+    // And a CensusRoot field goes into writeRootTable and the reader.
+    static_assert(sizeof(void*) != 8 || sizeof(CensusRoot) == sizeof(LLUUID) + 2 * sizeof(std::string) + 8, "a new CensusRoot field must go into the root table");
 
     namespace
     {
@@ -315,6 +318,127 @@ namespace sknav
         return nullptr;
     }
 
+    const CensusRoot* CensusFile::rootOf(const LLUUID& id) const
+    {
+        for (const CensusRoot& r : mRoots)
+        {
+            if (r.mId == id)
+            {
+                return &r;
+            }
+        }
+        return nullptr;
+    }
+
+    const char* nameSourceName(NameSource source)
+    {
+        switch (source)
+        {
+            case NameSource::LINKSET: return "linkset";
+            case NameSource::PROPERTIES: return "properties";
+            default: return "none";
+        }
+    }
+
+    const char* probeKindName(ProbeKind kind)
+    {
+        switch (kind)
+        {
+            case ProbeKind::DEFAULT: return "default";
+            case ProbeKind::PLACED_SPHERE: return "placed_sphere";
+            case ProbeKind::PLACED_BOX: return "placed_box";
+            case ProbeKind::OCTREE: return "octree";
+            case ProbeKind::NAV_SPHERE: return "nav_sphere";
+            case ProbeKind::NAV_BOX: return "nav_box";
+            default: return "unknown";
+        }
+    }
+
+    std::string capDescription(const std::string& text)
+    {
+        if (text.size() <= ROOT_DESCRIPTION_MAX)
+        {
+            return text;
+        }
+        size_t end = ROOT_DESCRIPTION_MAX;
+        // Back off continuation bytes so the cut lands on a character's first byte.
+        while (end > 0 && (static_cast<U8>(text[end]) & 0xc0) == 0x80)
+        {
+            --end;
+        }
+        return text.substr(0, end);
+    }
+
+    std::vector<RootShare> dominantRoots(const CensusFile& census, const CensusCluster& cluster, size_t limit)
+    {
+        std::map<LLUUID, U32> counts;
+        for (U32 i : cluster.mRecords)
+        {
+            if (i < census.mRecords.size())
+            {
+                ++counts[census.mRecords[i]->mRoot];
+            }
+        }
+        std::vector<RootShare> out;
+        out.reserve(counts.size());
+        for (const auto& c : counts)
+        {
+            out.push_back({ c.first, c.second });
+        }
+        std::stable_sort(out.begin(), out.end(), [](const RootShare& a, const RootShare& b) { return a.mParts > b.mParts; });
+        if (out.size() > limit)
+        {
+            out.resize(limit);
+        }
+        return out;
+    }
+
+    namespace
+    {
+        template<typename Lookup>
+        std::string labelOf(const std::vector<RootShare>& all, Lookup root_of)
+        {
+            if (all.empty())
+            {
+                return {};
+            }
+            std::string name;
+            for (const RootShare& s : all)
+            {
+                const CensusRoot* r = root_of(s.mId);
+                if (r && !r->mName.empty())
+                {
+                    name = r->mName;
+                    break;
+                }
+            }
+            if (name.empty())
+            {
+                name = all.front().mId.asString();
+            }
+            return all.size() > 1 ? name + " (+" + std::to_string(all.size() - 1) + ")" : name;
+        }
+    }
+
+    std::string clusterLabel(const CensusFile& census, const CensusCluster& cluster)
+    {
+        return labelOf(dominantRoots(census, cluster, std::numeric_limits<size_t>::max()),
+                       [&census](const LLUUID& id) { return census.rootOf(id); });
+    }
+
+    void writeRootTable(std::ostream& out, const std::vector<CensusRoot>& roots)
+    {
+        out << '[';
+        for (size_t i = 0; i < roots.size(); ++i)
+        {
+            const CensusRoot& r = roots[i];
+            out << (i ? "," : "") << "{\"id\":\"" << r.mId << "\",\"name\":\"" << jsonEscape(r.mName) << "\",\"description\":\""
+                << jsonEscape(capDescription(r.mDescription)) << "\",\"scripted\":" << (r.mScriptedKnown ? boolText(r.mScripted) : "null")
+                << ",\"source\":\"" << nameSourceName(r.mSource) << "\"}";
+        }
+        out << ']';
+    }
+
     void writeCensus(std::ostream& out, const CensusFile& c)
     {
         out.precision(std::numeric_limits<F64>::max_digits10);
@@ -416,12 +540,51 @@ namespace sknav
             << NO_TRIANGLES << "},\"records\":{\"count\":" << c.mRecords.size() << ",\"blob\":\"" << b64(records) << "\",\"vertices\":\""
             << b64(vertices) << "\",\"convex\":\"" << b64(convex) << "\"}";
 
+        std::map<LLUUID, const CensusRoot*> roots;
+        for (const CensusRoot& r : c.mRoots)
+        {
+            roots.emplace(r.mId, &r);
+        }
+        const auto root_of = [&roots](const LLUUID& id) -> const CensusRoot* {
+            const auto found = roots.find(id);
+            return found == roots.end() ? nullptr : found->second;
+        };
         out << ",\"clusters\":[";
         for (size_t i = 0; i < c.mClusters.size(); ++i)
         {
             const CensusCluster& cl = c.mClusters[i];
+            const std::vector<RootShare> all = dominantRoots(c, cl, std::numeric_limits<size_t>::max());
             out << (i ? "," : "") << "{\"id\":\"" << cl.mId << "\",\"grounded\":" << boolText(cl.mGrounded) << ",\"records\":\"" << b64(cl.mRecords)
-                << "\"}";
+                << "\",\"label\":\"" << jsonEscape(labelOf(all, root_of)) << "\",\"top_roots\":[";
+            // Derived from the records and the root table, so the reader skips it.
+            for (size_t k = 0; k < all.size() && k < 3; ++k)
+            {
+                const RootShare& share = all[k];
+                const CensusRoot* r = root_of(share.mId);
+                out << (k ? "," : "") << "{\"id\":\"" << share.mId << "\",\"parts\":" << share.mParts << ",\"name\":\""
+                    << jsonEscape(r ? r->mName : std::string()) << "\"}";
+            }
+            out << "]}";
+        }
+        out << "],\"roots\":";
+        writeRootTable(out, c.mRoots);
+
+        out << ",\"probes\":[";
+        for (size_t i = 0; i < c.mProbes.size(); ++i)
+        {
+            const CensusProbe& p = c.mProbes[i];
+            out << (i ? "," : "") << "{\"kind\":\"" << probeKindName(p.mKind) << "\",\"object\":\"" << p.mObject << "\",\"origin\":";
+            vec(out, p.mOrigin);
+            out << ",\"radius\":" << p.mRadius << ",\"priority\":" << p.mPriority << ",\"relevant\":" << boolText(p.mRelevant)
+                << ",\"suppressed\":" << boolText(p.mSuppressed) << ",\"inside_manual\":" << boolText(p.mInsideManual)
+                << ",\"resident\":" << boolText(p.mResident);
+            if (p.mKind == ProbeKind::PLACED_BOX || p.mKind == ProbeKind::NAV_BOX)
+            {
+                out << ",\"rotation\":[" << p.mRotation.mQ[VX] << ',' << p.mRotation.mQ[VY] << ',' << p.mRotation.mQ[VZ] << ','
+                    << p.mRotation.mQ[VW] << "],\"scale\":";
+                vec(out, p.mScale);
+            }
+            out << '}';
         }
         out << ']';
 
@@ -532,7 +695,8 @@ namespace sknav
         }
         Reader rd;
         c = CensusFile();
-        if (rd.text(doc, "format") != FORMAT || static_cast<U32>(rd.num(doc, "version")) != CENSUS_FORMAT_VERSION)
+        const U32 version = static_cast<U32>(rd.num(doc, "version"));
+        if (rd.text(doc, "format") != FORMAT || version < 1 || version > CENSUS_FORMAT_VERSION)
         {
             if (error)
             {
@@ -731,6 +895,67 @@ namespace sknav
                 }
             }
             c.mClusters.push_back(std::move(cl));
+        }
+
+        if (version >= 2)
+        {
+            for (Elem re : rd.array(doc, "roots"))
+            {
+                CensusRoot r;
+                r.mId = rd.id(re, "id");
+                r.mName = rd.text(re, "name");
+                r.mDescription = rd.text(re, "description");
+                Elem scripted;
+                if (rd.member(re, "scripted", scripted) && !scripted.is_null())
+                {
+                    r.mScriptedKnown = true;
+                    r.mScripted = rd.flag(re, "scripted");
+                }
+                const std::string source = rd.text(re, "source");
+                r.mSource = source == "linkset" ? NameSource::LINKSET : source == "properties" ? NameSource::PROPERTIES : NameSource::NONE;
+                c.mRoots.push_back(std::move(r));
+            }
+        }
+
+        if (version >= 3)
+        {
+            for (Elem pe : rd.array(doc, "probes"))
+            {
+                CensusProbe p;
+                const std::string kind = rd.text(pe, "kind");
+                p.mKind = ProbeKind::COUNT;
+                for (U8 k = 0; k < static_cast<U8>(ProbeKind::COUNT); ++k)
+                {
+                    if (kind == probeKindName(static_cast<ProbeKind>(k)))
+                    {
+                        p.mKind = static_cast<ProbeKind>(k);
+                    }
+                }
+                if (p.mKind == ProbeKind::COUNT)
+                {
+                    rd.fail("unknown probe kind: " + kind);
+                    break;
+                }
+                p.mObject = rd.id(pe, "object");
+                p.mOrigin = rd.vec3d(pe, "origin");
+                p.mRadius = rd.f32(pe, "radius");
+                p.mPriority = static_cast<S32>(rd.num(pe, "priority"));
+                p.mRelevant = rd.flag(pe, "relevant");
+                p.mSuppressed = rd.flag(pe, "suppressed");
+                p.mInsideManual = rd.flag(pe, "inside_manual");
+                p.mResident = rd.flag(pe, "resident");
+                if (p.mKind == ProbeKind::PLACED_BOX || p.mKind == ProbeKind::NAV_BOX)
+                {
+                    const simdjson::dom::array q = rd.array(pe, "rotation");
+                    if (rd.mError.empty())
+                    {
+                        p.mRotation.set(static_cast<F32>(rd.at(q, 0)), static_cast<F32>(rd.at(q, 1)), static_cast<F32>(rd.at(q, 2)),
+                                        static_cast<F32>(rd.at(q, 3)));
+                    }
+                    p.mScale = rd.vec3(pe, "scale");
+                }
+                c.mProbes.push_back(p);
+            }
         }
 
         for (Elem fe : rd.array(doc, "features"))

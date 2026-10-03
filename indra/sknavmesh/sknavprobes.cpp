@@ -293,9 +293,30 @@ namespace sknav
         return x >= 0 && y >= 0 && x < mW && y < mH && !std::isnan(mFloor[y * mW + x]);
     }
 
-    bool wantsProbes(const Space& space, const ProbeParams&)
+    bool wantsProbes(const Space& space, const ProbeParams& params)
     {
-        return space.mBucket != EnclosureBucket::UNKNOWN && !space.mRaster.empty();
+        if (space.mRaster.empty())
+        {
+            return false;
+        }
+        if (space.mBucket != EnclosureBucket::UNKNOWN)
+        {
+            return true;
+        }
+        // The enclosure pass never answered here: the air may be roofless,
+        // unwalkable, or a guess. A probe still stands, but small, low, and
+        // only on real floor: enough that a portal into this space has two
+        // sides to blend between. The residual grid keeps the rest.
+        U32 cells = 0;
+        for (const auto& r : space.mRaster)
+        {
+            cells += r.second;
+            if (cells >= params.mUnknownMinCells)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     FloorPlan floorPlanOf(const Space& space, const ProbeParams& params)
@@ -585,8 +606,16 @@ namespace sknav
             const F32 ox = (plan.mX0 + best % w + 0.5f) * plan.mCell;
             const F32 oy = (plan.mY0 + best / w + 0.5f) * plan.mCell;
             const F32 floor = plan.floorAt(best % w, best / w);
-            const F32 half = plan.mCeiling > floor ? (plan.mCeiling - floor) * 0.5f : 1.5f;
+            const bool open = !(plan.mCeiling > floor);
+            // Open sky leans to an avatar's eye height: there is no top to
+            // centre on, and the air above is nobody's reflection.
+            const F32 half = open ? 1.5f : (plan.mCeiling - floor) * 0.5f;
 
+            // The room is inside the bubble, not the bubble in the room: the
+            // sphere must hold every cell's whole air column, its floor and
+            // its top, so the farthest point is taken per column, floor and
+            // ceiling both, sloped or flat. Open columns top out two eye
+            // heights up.
             F32 reach2 = 0.f;
             for (S32 y = 0; y < h; ++y)
             {
@@ -599,34 +628,182 @@ namespace sknav
                     const F32 ax = (plan.mX0 + x) * plan.mCell, ay = (plan.mY0 + y) * plan.mCell;
                     const F32 dx = std::max(std::fabs(ax - ox), std::fabs(ax + plan.mCell - ox));
                     const F32 dy = std::max(std::fabs(ay - oy), std::fabs(ay + plan.mCell - oy));
-                    reach2 = std::max(reach2, dx * dx + dy * dy);
+                    const F32 f = plan.floorAt(x, y);
+                    const F32 top = open ? f + 3.f : std::max(plan.mCeiling, f);
+                    const F32 dz = std::max(std::fabs(f - (floor + half)), std::fabs(top - (floor + half)));
+                    reach2 = std::max(reach2, dx * dx + dy * dy + dz * dz);
                 }
             }
 
             ProbePart part;
             part.mPart = static_cast<U32>(k);
             part.mOrigin.set(ox, oy, floor + half);
-            part.mRadius = std::min(std::sqrt(reach2 + half * half), params.mMaxRadiusM);
+            part.mRadius = std::min(std::sqrt(reach2) * params.mCoverageShare, params.mMaxRadiusM);
             part.mArea = st[p].mCells * cell_area;
+
+            if (params.mSpaceRadiusM > 0.f)
+            {
+                // The reach across the whole space's plan from where this
+                // sphere stands, so spheres of neighbouring parts and spaces
+                // overlap and the neighbour graph between them connects. Huge
+                // spaces (the outdoors) cap, and the octree fills the rest.
+                F32 space_reach2 = 0.f;
+                for (S32 y = 0; y < h; ++y)
+                {
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        if (!plan.in(x, y))
+                        {
+                            continue;
+                        }
+                        const F32 ax = (plan.mX0 + x) * plan.mCell, ay = (plan.mY0 + y) * plan.mCell;
+                        const F32 dx = std::max(std::fabs(ax - ox), std::fabs(ax + plan.mCell - ox));
+                        const F32 dy = std::max(std::fabs(ay - oy), std::fabs(ay + plan.mCell - oy));
+                        space_reach2 = std::max(space_reach2, dx * dx + dy * dy);
+                    }
+                }
+                part.mSpaceRadius = std::min(std::sqrt(space_reach2 + half * half), params.mSpaceRadiusM);
+            }
+
             part.mMin.set((plan.mX0 + st[p].mX0) * plan.mCell, (plan.mY0 + st[p].mY0) * plan.mCell, lo);
             part.mMax.set((plan.mX0 + st[p].mX1 + 1) * plan.mCell, (plan.mY0 + st[p].mY1 + 1) * plan.mCell, floor + 2.f * half);
             out.push_back(part);
+        }
+
+        if (params.mBlendZoneM > 0.f && out.size() > 1)
+        {
+            // The overlap floor: two parts' spheres must share a blend zone
+            // this wide where their parts touch, so a pixel between them takes
+            // each with real weight instead of watching one fade out at its
+            // far edge. The zone each pair owes is frozen at the spheres'
+            // placed radii, and growth propagates along a chain of parts one
+            // pass a time, so the loop runs to a fixpoint, sixteen passes at
+            // most; whatever is short of it then is what it is.
+            std::vector<F32> placed;
+            placed.reserve(out.size());
+            for (const ProbePart& p : out)
+            {
+                placed.push_back(p.mRadius);
+            }
+            const auto owed = [&](size_t a, size_t b)
+            {
+                return std::max(params.mBlendZoneM, params.mBlendShare * std::min(placed[a], placed[b]));
+            };
+            // The one overlap constant, half the owed zone: the solve grows
+            // to it, the weak pass tests it, and the tests hold it, so a
+            // pair the solve could not fix is exactly the pair weak names.
+            const auto shorts_of = [&](size_t a, size_t b)
+            {
+                const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                return d >= out[a].mRadius + out[b].mRadius - owed(a, b) * 0.5f;
+            };
+            // Whether two parts touch: a shared edge, or a corner within a
+            // cell of contact, and floors within the climb of one another,
+            // so a storey above never blends through its ceiling.
+            const auto touching = [&](const ProbePart& a, const ProbePart& b)
+            {
+                const F32 gap_x = std::max(std::max(a.mMin.mV[VX] - b.mMax.mV[VX], b.mMin.mV[VX] - a.mMax.mV[VX]), 0.f);
+                const F32 gap_y = std::max(std::max(a.mMin.mV[VY] - b.mMax.mV[VY], b.mMin.mV[VY] - a.mMax.mV[VY]), 0.f);
+                if (gap_x > plan.mCell + 0.01f || gap_y > plan.mCell + 0.01f)
+                {
+                    return false;
+                }
+                const F32 z_lo = std::max(a.mMin.mV[VZ], b.mMin.mV[VZ]);
+                const F32 z_hi = std::min(a.mMax.mV[VZ], b.mMax.mV[VZ]);
+                return z_hi >= z_lo - 0.75f;
+            };
+            for (S32 pass = 0; pass < 16; ++pass)
+            {
+                bool grew = false;
+                for (size_t a = 0; a < out.size(); ++a)
+                {
+                    for (size_t b = a + 1; b < out.size(); ++b)
+                    {
+                        if (!shorts_of(a, b))
+                        {
+                            continue;   // this pair already blends
+                        }
+                        // Parts that do not touch grow nothing: two halves of
+                        // an L stand apart on purpose, and the octree fills
+                        // between them.
+                        if (!touching(out[a], out[b]))
+                        {
+                            continue;
+                        }
+                        const F32 d = dist_vec(out[a].mOrigin, out[b].mOrigin);
+                        const F32 w = owed(a, b);
+                        const F32 need = d + w;
+                        const F32 want_a = std::min(need - out[b].mRadius, params.mMaxRadiusM);
+                        const F32 want_b = std::min(need - out[a].mRadius, params.mMaxRadiusM);
+                        if (want_a > out[a].mRadius + 1e-3f)
+                        {
+                            out[a].mRadius = std::max(out[a].mRadius, want_a);
+                            out[a].mGrowth = ProbePart::GROWN;
+                            grew = true;
+                        }
+                        if (want_b > out[b].mRadius + 1e-3f)
+                        {
+                            out[b].mRadius = std::max(out[b].mRadius, want_b);
+                            out[b].mGrowth = ProbePart::GROWN;
+                            grew = true;
+                        }
+                    }
+                }
+                if (!grew)
+                {
+                    break;
+                }
+            }
+            // Whatever still falls short at the cap is a weak boundary:
+            // named, so a consumer can bridge it or shed the sphere when the
+            // budget demands, instead of guessing.
+            for (size_t a = 0; a < out.size(); ++a)
+            {
+                if (out[a].mGrowth == ProbePart::PLACED)
+                {
+                    continue;   // a sphere the floor never touched sheds first, not this
+                }
+                for (size_t b = a + 1; b < out.size(); ++b)
+                {
+                    if (shorts_of(a, b) && touching(out[a], out[b]))
+                    {
+                        out[a].mGrowth = ProbePart::WEAK;
+                        out[b].mGrowth = ProbePart::WEAK;
+                    }
+                }
+            }
         }
         return out;
     }
 
     std::vector<ProbePart> spaceProbes(const Space& space, const ProbeParams& params)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("probes - space parts");
         if (!wantsProbes(space, params))
         {
             return {};
         }
         FloorPlan plan = floorPlanOf(space, params);
-        if (space.mBucket == EnclosureBucket::OUTDOORS || space.mOpenShare >= params.mOpenShare)
+        const bool unknown = space.mBucket == EnclosureBucket::UNKNOWN;
+        if (space.mBucket == EnclosureBucket::OUTDOORS || space.mOpenShare >= params.mOpenShare ||
+            unknown)
         {
             plan.mCeiling = -std::numeric_limits<F32>::infinity();
         }
-        return placeParts(plan, params);
+        std::vector<ProbePart> parts = placeParts(plan, params);
+        if (unknown)
+        {
+            // Nothing is known here but the floor: sit just above it, reach
+            // a little way, and let the blends into known neighbours decide
+            // what a pixel here takes.
+            for (ProbePart& part : parts)
+            {
+                part.mOrigin.mV[VZ] = part.mMin.mV[VZ] + 1.5f;
+                part.mRadius = std::min(std::max(part.mRadius, params.mMinRadiusM), params.mUnknownRadiusM);
+                part.mSpaceRadius = 0.f;
+            }
+        }
+        return parts;
     }
 
     F32 distanceTo(const ProbeInfluence& influence, const LLVector3& p)
@@ -666,8 +843,20 @@ namespace sknav
 
     void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params)
     {
+        budgetProbes(slots, cap, params, nullptr);
+    }
+
+    void budgetProbes(std::vector<ProbeSlot>& slots, U32 cap, const ProbeParams& params,
+                      std::vector<std::pair<U64, ProbeDrop>>* dropped)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("probes - budget");
+        const auto drop = [dropped](const ProbeSlot& s, ProbeDrop why)
+        {
+            if (dropped) dropped->emplace_back(s.mKey, why);
+        };
         if (cap == 0)
         {
+            for (const ProbeSlot& s : slots) drop(s, ProbeDrop::CAP);
             slots.clear();
             return;
         }
@@ -678,16 +867,23 @@ namespace sknav
         {
             return;
         }
-        // Tight: one sphere per space at most, and not a second sphere within
-        // mSpacingM of a placed one. The near and large claim the budget first,
-        // held ones ranking nearer, so the kept set does not flicker.
+        // Tight: a few spheres per space at most, none within mSpacingM of a
+        // kept one, so the cap spreads over the floor rather than piling up.
+        // The near and large claim it first, held ones ranking nearer, so the
+        // kept set does not flicker.
         std::vector<ProbeSlot> kept;
         kept.reserve(std::min<size_t>(slots.size(), cap));
         std::map<U32, U32> per_space;
         for (const ProbeSlot& s : slots)
         {
+            if (kept.size() == cap)
+            {
+                drop(s, ProbeDrop::CAP);
+                continue;
+            }
             if (per_space[s.mSpace] >= params.mMaxPerSpace)
             {
+                drop(s, ProbeDrop::PER_SPACE);
                 continue;
             }
             bool crowded = false;
@@ -701,14 +897,11 @@ namespace sknav
             }
             if (crowded)
             {
+                drop(s, ProbeDrop::SPACING);
                 continue;
             }
             ++per_space[s.mSpace];
             kept.push_back(s);
-            if (kept.size() == cap)
-            {
-                break;
-            }
         }
         slots.swap(kept);
     }
@@ -750,5 +943,35 @@ namespace sknav
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params)
     {
         return dist_vec(held_origin, origin) > params.mMoveM || std::fabs(radius - held_radius) > params.mRadiusShare * held_radius;
+    }
+
+    std::vector<std::vector<U32>> symmetricGraph(U32 count, const std::function<bool(U32, U32)>& linked, U32 max_degree)
+    {
+        std::vector<std::vector<U32>> lists(count);
+        if (count == 0 || max_degree == 0 || !linked)
+        {
+            return lists;
+        }
+        // An edge survives only inside both endpoints' budgets. A node's
+        // first max_degree partners are those it meets first in the
+        // caller's scan, so a distance-sorted scan keeps the nearest.
+        for (U32 a = 0; a < count; ++a)
+        {
+            for (U32 b = a + 1; b < count; ++b)
+            {
+                if (lists[a].size() >= max_degree)
+                {
+                    break;              // a is full: no later b can join it
+                }
+                if (lists[b].size() >= max_degree || !linked(a, b))
+                {
+                    continue;
+                }
+                lists[a].push_back(b);
+                lists[b].push_back(a);
+            }
+            std::sort(lists[a].begin(), lists[a].end());
+        }
+        return lists;
     }
 }

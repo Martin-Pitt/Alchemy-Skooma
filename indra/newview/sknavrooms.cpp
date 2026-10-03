@@ -431,6 +431,7 @@ bool SKNavWind::sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) co
 
 void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather wind");
     if (!mView)
     {
         return;
@@ -1037,6 +1038,7 @@ std::string SKNavRooms::statsLine() const
 
 void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather overlay");
     if (!mView || mode == 0)
     {
         return;
@@ -1107,6 +1109,7 @@ void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera,
 void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
                               const PortalCrossedFn& crossed) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather spaces");
     if (!mView)
     {
         return;
