@@ -597,7 +597,7 @@ namespace tut
         std::string made = actedOn(script, false, "llListen", false, "Add a handler for 'listen'");
         ensure_equals("before the brace, after a blank line", made,
                       "default\n{\n    state_entry()\n    {\n        llListen(0, \"\", NULL_KEY, \"\");\n        llSetTimerEvent(1.0);\n    }\n\n"
-                      "    listen(integer Channel, string Name, key ID, string Text)\n    {\n    }\n}\n");
+                      "    listen(integer channel, string name, key id, string msg)\n    {\n    }\n}\n");
         ensure("the timer too", actions(script, false, 4, 8, 4, 8).size() == 2);
         // Heard already: nothing.
         const std::string heard = "default\n{\n    state_entry() {\n        llSetTimerEvent(1.0);\n    }\n\n    timer() {\n    }\n}\n";
@@ -605,7 +605,7 @@ namespace tut
         // The brace where the state's first handler has it.
         const std::string same = "default\n{\n    state_entry() {\n        llSensorRepeat(\"\", NULL_KEY, AGENT, 10.0, PI, 5.0);\n    }\n}\n";
         made = actedOn(same, false, "llSensorRepeat", false, "Add a handler for 'sensor'");
-        ensure("on its line: " + made, made.find("\n\n    sensor(integer NumberDetected) {\n    }\n}\n") != std::string::npos);
+        ensure("on its line: " + made, made.find("\n\n    sensor(integer num_detected) {\n    }\n}\n") != std::string::npos);
         // Asked for from a function a handler calls, and from one that one
         // calls: offered all the same.
         const std::string helper = "arm()\n{\n    llSetTimerEvent(1.0);\n}\nstart()\n{\n    arm();\n}\n"
@@ -669,10 +669,17 @@ namespace tut
     {
         set_test_name("a handler is offered for an event a SLua script asks for and does not hear, with the parameters the definitions give");
         ensure("definitions: " + error, luauLoaded);
+        // Nonstrict, as the grid compiles: the new solver checking strict
+        // cannot yet push an overloaded function's parameter types into a
+        // function given to it, so every LLEvents:on there is an error it
+        // is upstream's to put right.
+        ALLuauConfig grid;
+        grid.mode = "nonstrict";
+        luau.setConfig(grid);
         const std::string script = "ll.Listen(0, \"\", ll.GetOwner(), \"\")\n";
         std::string       made   = actedOn(script, true, "Listen", false, "Add a handler for 'listen'");
         ensure_equals("at the end", made,
-                      script + "\nLLEvents:on(\"listen\", function(Channel: number, Name: string, ID: uuid, Text: string)\nend)\n");
+                      script + "\nLLEvents:on(\"listen\", function(channel: number, name: string, id: uuid, msg: string)\nend)\n");
         const std::string heard = script + "LLEvents:on(\"listen\", function(channel, name, id, text) end)\n";
         ensure("heard: " + titles(actions(heard, true, 0, 3, 0, 3)), actedOn(heard, true, "Listen", false, "Add a handler for 'listen'").rfind("offered", 0) == 0);
         // A handler taken off is no handler put on.
@@ -1079,7 +1086,7 @@ namespace tut
                                                           "Write the parameters 'touch_start' takes"),
                       std::string("default { touch_start(integer n) { llOwnerSay((string)n); } }"));
         ensure_equals("too few, the builtins' names", fixed("default { touch_start() { } }", false, "LSLTooFewArgumentsEvent", "Write the parameters 'touch_start' takes"),
-                      std::string("default { touch_start(integer NumberOfTouches) { } }"));
+                      std::string("default { touch_start(integer num_detected) { } }"));
         ensure_equals("too many", fixed("default { touch_start(integer n, integer m) { } }", false, "LSLTooManyArgumentsEvent", "Write the parameters 'touch_start' takes"),
                       std::string("default { touch_start(integer n) { } }"));
         ensure_equals("an event's with no type", fixed("default { touch_start(n) { } }", false, "LSLParameterUntyped", "Write the parameters 'touch_start' takes"),
@@ -1111,5 +1118,130 @@ namespace tut
         const std::string made = fixed(script, false, "LSLSyntaxMissing", "Insert '}'");
         ensure("closed after the call, its own line: " + made, made.find("\"Hello, Avatar!\");\n    }\n\n    touch_start(") != std::string::npos);
         ensure("no error left", errors(check(made, false)) == 0);
+    }
+
+    template<> template<>
+    void object::test<37>()
+    {
+        set_test_name("SlCompoundAssign's fix: x = x op y written x op= y, safe; a field and a join too");
+        ensure("definitions: " + error, luauLoaded);
+        const std::string made = fixed("local x = 1\nx = x + 2 * x\nprint(x)\n", true, "LuauLintSlCompoundAssign", "Write it x += ...");
+        ensure_equals("the text", made, std::string("local x = 1\nx += 2 * x\nprint(x)\n"));
+        const ALScriptProblems problems = check("local x = 1\nx = x + 2 * x\nprint(x)\n", true);
+        const ALScriptProblem* problem  = keyed(problems, "LuauLintSlCompoundAssign");
+        ensure("safe", problem && problem->fixes.front().safe);
+        ensure_equals("a field, joined", fixed("local t = { n = \"a\" }\nt.n = t.n ..\"b\" .. \"c\"\nprint(t.n)\n", true, "LuauLintSlCompoundAssign",
+                                               "Write it t.n ..= ..."),
+                      std::string("local t = { n = \"a\" }\nt.n ..= \"b\" .. \"c\"\nprint(t.n)\n"));
+    }
+
+    template<> template<>
+    void object::test<38>()
+    {
+        set_test_name("SlLoopInvariantCall's fix: the call in a local before the loop, named as nothing else is, and read in the check; not safe");
+        ensure("builtins: " + error, lslLoaded);
+        const std::string script = "default { state_entry() {\n"
+                                   "    list l = [1, 2]; integer length = 3; integer i;\n"
+                                   "    for (i = 0; i < llGetListLength(l); ++i) llOwnerSay((string)(i + length));\n"
+                                   "} }\n";
+        const std::string made = fixed(script, false, "LSLSlLoopInvariantCall", "Work out llGetListLength once, before the loop");
+        ensure_equals("the text", made,
+                      std::string("default { state_entry() {\n"
+                                  "    list l = [1, 2]; integer length = 3; integer i;\n"
+                                  "    integer length2 = llGetListLength(l);\n"
+                                  "    for (i = 0; i < length2; ++i) llOwnerSay((string)(i + length));\n"
+                                  "} }\n"));
+        const ALScriptProblems problems = check(script, false);
+        const ALScriptProblem* problem  = keyed(problems, "LSLSlLoopInvariantCall");
+        ensure("not safe", problem && !problem->fixes.front().safe);
+        // Not where the loop is all its if has: a declaration may not be.
+        const ALScriptProblems in_if = check("default { state_entry() {\n"
+                                             "    list l; integer i;\n"
+                                             "    if (TRUE) while (i < llGetListLength(l)) ++i;\n"
+                                             "} }\n",
+                                             false);
+        const ALScriptProblem* alone = keyed(in_if, "LSLSlLoopInvariantCall");
+        ensure("said, with no fix", alone && alone->fixes.empty());
+    }
+
+    template<> template<>
+    void object::test<39>()
+    {
+        set_test_name("SlNumberTruth's fixes: n ~= 0, an if-then-else bracketed first, and not n as n == 0; not safe");
+        ensure("definitions: " + error, luauLoaded);
+        ensure_equals("compared", fixed("local n = 0\nif n then print(n) end\n", true, "LuauLintSlNumberTruth", "Compare it: n ~= 0"),
+                      std::string("local n = 0\nif n ~= 0 then print(n) end\n"));
+        ensure_equals("bracketed", fixed("local c = true\nif (if c then 1 else 2) then print(c) end\n", true, "LuauLintSlNumberTruth",
+                                         "Compare it: if c then 1 else 2 ~= 0"),
+                      std::string("local c = true\nif ((if c then 1 else 2) ~= 0) then print(c) end\n"));
+        ensure_equals("not", fixed("local n = 0\nprint(not n)\n", true, "LuauLintSlNumberTruthNot", "Ask whether it is 0: n == 0"),
+                      std::string("local n = 0\nprint(n == 0)\n"));
+        const ALScriptProblems problems = check("local n = 0\nif n then print(n) end\n", true);
+        const ALScriptProblem* problem  = keyed(problems, "LuauLintSlNumberTruth");
+        ensure("not safe", problem && !problem->fixes.front().safe);
+    }
+
+    template<> template<>
+    void object::test<40>()
+    {
+        set_test_name("SlNilSentinel's fixes: nil where SLua's find answers it, -1 where llcompat's does; a find on the right put on the left; safe");
+        ensure("definitions: " + error, luauLoaded);
+        ensure_equals("never", fixed("local l = {1}\nif ll.ListFindList(l, {2}) == -1 then print(l) end\n", true, "LuauLintSlNilSentinel",
+                                     "Write it ll.ListFindList(...) == nil"),
+                      std::string("local l = {1}\nif ll.ListFindList(l, {2}) == nil then print(l) end\n"));
+        ensure_equals("on the right", fixed("local i = table.find({1}, 1)\nprint(-1 ~= i)\n", true, "LuauLintSlNilSentinelAlways", "Write it i ~= nil"),
+                      std::string("local i = table.find({1}, 1)\nprint(i ~= nil)\n"));
+        ensure_equals("ordered, bracketed", fixed("local i = ll.SubStringIndex(\"ab\", \"b\")\nprint((i) < 0)\n", true, "LuauLintSlNilSentinelOrder",
+                                                  "Write it i == nil"),
+                      std::string("local i = ll.SubStringIndex(\"ab\", \"b\")\nprint((i) == nil)\n"));
+        ensure_equals("ordered, on the right", fixed("local i = ll.SubStringIndex(\"ab\", \"b\")\nprint(0 <= i)\n", true,
+                                                     "LuauLintSlNilSentinelOrder", "Write it i ~= nil"),
+                      std::string("local i = ll.SubStringIndex(\"ab\", \"b\")\nprint(i ~= nil)\n"));
+        ensure_equals("llcompat's", fixed("print(llcompat.ListFindList({1}, {1}) ~= nil)\n", true, "LuauLintSlNilSentinelAlways",
+                                          "Write it llcompat.ListFindList(...) ~= -1"),
+                      std::string("print(llcompat.ListFindList({1}, {1}) ~= -1)\n"));
+        const ALScriptProblems problems = check("print(table.find({1}, 1) == -1)\n", true);
+        const ALScriptProblem* problem  = keyed(problems, "LuauLintSlNilSentinel");
+        ensure("safe", problem && !problem->fixes.empty() && problem->fixes.front().safe);
+    }
+
+    template<> template<>
+    void object::test<41>()
+    {
+        set_test_name("a deprecated ll function's replacement put in by name only where it takes the same arguments: not "
+                      "ll.SetPrimitiveParams', which wants a link first");
+        ensure("definitions: " + error, luauLoaded);
+        ensure_equals("the same arguments", fixed("ll.SetLinkPrimitiveParams(LINK_THIS, {})\n", true, "LuauLintDeprecatedMemberUse",
+                                                  "Use 'll.SetLinkPrimitiveParamsFast' instead of 'll.SetLinkPrimitiveParams'"),
+                      std::string("ll.SetLinkPrimitiveParamsFast(LINK_THIS, {})\n"));
+        for (const char* call : { "ll.SetPrimitiveParams({})\n", "ll.MakeFire(1, 1, 1, 1, 1, \"\", vector(0, 0, 0))\n" })
+        {
+            const ALScriptProblems problems = check(call, true);
+            for (const ALScriptProblem& problem : problems)
+            {
+                if (problem.key.rfind("LuauLintDeprecatedMemberUse", 0) == 0)
+                {
+                    for (const ALScriptFix& fix : problem.fixes)
+                    {
+                        ensure("no replacement by name: " + std::string(call) + fix.title, fix.key != "ScriptFixUseInstead");
+                    }
+                }
+            }
+        }
+    }
+
+    template<> template<>
+    void object::test<42>()
+    {
+        set_test_name("a script made --!strict: its head's --!nonstrict or --!nocheck changed, else it put first; nothing where it is already");
+        const auto made = [](const std::string& text) {
+            const std::optional<ALScriptFix> fix = ALScriptFixes::strictFix(text);
+            return fix ? ALScriptFixes::apply(text, *fix).value_or("(not made)") : std::string("(none)");
+        };
+        ensure_equals("put first", made("-- a door\nlocal x = 1\n"), std::string("--!strict\n-- a door\nlocal x = 1\n"));
+        ensure_equals("changed", made("-- a door\n--!nonstrict\nlocal x = 1\n"), std::string("-- a door\n--!strict\nlocal x = 1\n"));
+        ensure_equals("from nocheck", made("--!nocheck\nprint(1)\n"), std::string("--!strict\nprint(1)\n"));
+        ensure_equals("already", made("--!strict\nprint(1)\n"), std::string("(none)"));
+        ensure_equals("past the head, not read", made("print(1)\n--!nonstrict\n"), std::string("--!strict\nprint(1)\n--!nonstrict\n"));
     }
 }

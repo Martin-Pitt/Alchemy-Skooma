@@ -35,6 +35,7 @@
 #include "allslservice.h"
 #include "allsltraits.h"
 #include "allslvalues.h"
+#include "alscriptlexicon.h"
 #include "llmath.h"
 #include "llmd5.h"
 #include "llstl.h"
@@ -648,6 +649,8 @@ namespace
     // way -- duplicate keys, numbers with a fraction or an exponent,
     // escapes outside ASCII, and the JSON_* answers, which are
     // characters no string literal here may hold -- is left to it.
+    struct JsonField;
+
     struct JsonValue
     {
         enum class Kind : U8
@@ -660,10 +663,16 @@ namespace
             Array,
             Object
         };
-        Kind                                           kind = Kind::Null;
-        std::string                                    text;  // a number as written, a string unescaped
-        std::vector<JsonValue>                         items;
-        std::vector<std::pair<std::string, JsonValue>> fields;
+        Kind                    kind = Kind::Null;
+        std::string             text;  // a number as written, a string unescaped
+        std::vector<JsonValue>  items;
+        std::vector<JsonField>  fields;
+    };
+
+    struct JsonField
+    {
+        std::string first;
+        JsonValue   second;
     };
 
     struct JsonReader
@@ -4920,10 +4929,6 @@ namespace
         std::map<LSLSymbol*, LSLASTNode*> of;
     };
 
-    const char* const KEYWORDS[] = { "default", "state",  "event",   "jump",     "return", "if",    "else",       "for",  "do",
-                                     "while",   "print",  "integer", "float",    "string", "key",   "vector",     "rotation",
-                                     "quaternion", "list", "TRUE",   "FALSE",    "inline", "const", "break", "continue",   "switch", "case", nullptr };
-
     // What each character of a name costs the target's code, where the
     // compiled script keeps it. Mono keeps a global's as its field's, and a
     // function's as its method's, and each once more where the code
@@ -5021,12 +5026,11 @@ namespace
         // Every name given so far, which none is given again but a label's.
         boost::unordered_flat_set<std::string, ll::string_hash, std::equal_to<>> given;
         const auto usable = [&](const std::string& name) {
-            for (const char* const* k = KEYWORDS; *k; ++k)
+            // No word of the language's, the preprocessor's extensions
+            // included, whether or not they are on.
+            if (ALScriptLexicon::lslWord(name) != ALScriptLexicon::LSL_NAME)
             {
-                if (name == *k)
-                {
-                    return false;
-                }
+                return false;
             }
             return !given.contains(name) && !(context.builtins && context.builtins->lookup(name.c_str(), SYM_ANY));
         };
