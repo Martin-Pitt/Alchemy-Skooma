@@ -2849,9 +2849,9 @@ std::string SKNavMesh::exportObject() const
             target = static_cast<LLViewerObject*>(target->getParent());
         }
     }
-    if (!target || target->isAvatar())
+    if (!target)
     {
-        return "that is an avatar who is not sitting on anything";
+        return "select an object, or point the camera at one";
     }
     LLViewerObject* root = target;
 
@@ -2994,7 +2994,16 @@ std::string SKNavMesh::exportObject() const
 
     file << "{\"format\":\"sknav-object\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
     file << ",\"root\":\"" << root->getID() << '"';
-    if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root->getID()))
+    if (root->isAvatar())
+    {
+        // The avatar exports itself: the body part carries no faces, what
+        // it wears follows as its children, and the name comes from the
+        // name cache rather than the object properties.
+        file << ",\"avatar\":true,\"name\":";
+        LLAvatarName av_name;
+        text(LLAvatarNameCache::get(root->getID(), &av_name) ? av_name.getCompleteName() : std::string());
+    }
+    else if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root->getID()))
     {
         file << ",\"name\":";
         text(props->mName);
@@ -3016,12 +3025,73 @@ std::string SKNavMesh::exportObject() const
          << ",\"scripted\":" << (root->flagScripted() ? "true" : "false")
          << ",\"phantom\":" << (root->flagPhantom() ? "true" : "false");
     file << ",\"parts\":";
-    linkset(root, own);
+    if (root->isAvatar())
+    {
+        // The body is not a prim, and what the avatar wears hangs off it
+        // as its own crew entry below.
+        file << "[]";
+    }
+    else
+    {
+        linkset(root, own);
+    }
 
     // Everyone sitting anywhere on the linkset, and what each of them wears:
-    // a turret or the whole visible aircraft can be an attachment.
+    // a turret or the whole visible aircraft can be an attachment. An
+    // avatar exporting itself is its own crew, seat none.
     file << ",\"crew\":[";
     bool first_crew = true;
+    auto crew_member = [&](LLVOAvatar* avatar, S32 seat_link) {
+        if (!first_crew)
+        {
+            file << ',';
+        }
+        first_crew = false;
+        LLAvatarName av_name;
+        const bool named = LLAvatarNameCache::get(avatar->getID(), &av_name);
+        file << "{\"id\":\"" << avatar->getID() << "\",\"name\":";
+        text(named ? av_name.getCompleteName() : std::string());
+        file << ",\"self\":" << (avatar->isSelf() ? "true" : "false")
+             << ",\"friend\":" << (LLAvatarTracker::instance().isBuddy(avatar->getID()) ? "true" : "false");
+        LLNameValue* title = avatar->getNVPair("Title");
+        file << ",\"title\":";
+        text(title && title->getString() ? title->getString() : "");
+        file << ",\"seatLink\":" << seat_link << ",\"position\":";
+        vec3((avatar->getRenderPosition() - origin) * inverse);
+        file << ",\"attachments\":[";
+        bool first_attachment = true;
+        for (const auto& point : avatar->mAttachmentPoints)
+        {
+            for (const LLPointer<LLViewerObject>& attached : point.second->mAttachedObjects)
+            {
+                if (attached.isNull())
+                {
+                    continue;
+                }
+                if (!first_attachment)
+                {
+                    file << ',';
+                }
+                first_attachment = false;
+                // The worn linkset's own pose in the vehicle's frame: a
+                // turret turns about its root, and only its rotation says
+                // which way it pointed when this was taken.
+                const LLQuaternion worn = attached->getRenderRotation() * inverse;
+                file << "{\"point\":" << point.first << ",\"item\":\"" << attached->getAttachmentItemID()
+                     << "\",\"rootPosition\":";
+                vec3((attached->getRenderPosition() - origin) * inverse);
+                file << ",\"rootRotation\":[" << worn.mQ[VX] << ',' << worn.mQ[VY] << ',' << worn.mQ[VZ] << ','
+                     << worn.mQ[VW] << "],\"parts\":";
+                linkset(attached.get(), own);
+                file << '}';
+            }
+        }
+        file << "]}";
+    };
+    if (root->isAvatar())
+    {
+        crew_member(static_cast<LLVOAvatar*>(root), 0);
+    }
     std::vector<LLViewerObject*> prims { root };
     for (const LLPointer<LLViewerObject>& child : root->getChildren())
     {
@@ -3032,55 +3102,10 @@ std::string SKNavMesh::exportObject() const
         for (const LLPointer<LLViewerObject>& child : prim->getChildren())
         {
             LLVOAvatar* avatar = child->isAvatar() ? static_cast<LLVOAvatar*>(child.get()) : nullptr;
-            if (!avatar)
+            if (avatar)
             {
-                continue;
+                crew_member(avatar, linkNumber(prim));
             }
-            if (!first_crew)
-            {
-                file << ',';
-            }
-            first_crew = false;
-            LLAvatarName av_name;
-            const bool named = LLAvatarNameCache::get(avatar->getID(), &av_name);
-            file << "{\"id\":\"" << avatar->getID() << "\",\"name\":";
-            text(named ? av_name.getCompleteName() : std::string());
-            file << ",\"self\":" << (avatar->isSelf() ? "true" : "false")
-                 << ",\"friend\":" << (LLAvatarTracker::instance().isBuddy(avatar->getID()) ? "true" : "false");
-            LLNameValue* title = avatar->getNVPair("Title");
-            file << ",\"title\":";
-            text(title && title->getString() ? title->getString() : "");
-            file << ",\"seatLink\":" << linkNumber(prim) << ",\"position\":";
-            vec3((avatar->getRenderPosition() - origin) * inverse);
-            file << ",\"attachments\":[";
-            bool first_attachment = true;
-            for (const auto& point : avatar->mAttachmentPoints)
-            {
-                for (const LLPointer<LLViewerObject>& attached : point.second->mAttachedObjects)
-                {
-                    if (attached.isNull())
-                    {
-                        continue;
-                    }
-                    if (!first_attachment)
-                    {
-                        file << ',';
-                    }
-                    first_attachment = false;
-                    // The worn linkset's own pose in the vehicle's frame: a
-                    // turret turns about its root, and only its rotation says
-                    // which way it pointed when this was taken.
-                    const LLQuaternion worn = attached->getRenderRotation() * inverse;
-                    file << "{\"point\":" << point.first << ",\"item\":\"" << attached->getAttachmentItemID()
-                         << "\",\"rootPosition\":";
-                    vec3((attached->getRenderPosition() - origin) * inverse);
-                    file << ",\"rootRotation\":[" << worn.mQ[VX] << ',' << worn.mQ[VY] << ',' << worn.mQ[VZ] << ','
-                         << worn.mQ[VW] << "],\"parts\":";
-                    linkset(attached.get(), own);
-                    file << '}';
-                }
-            }
-            file << "]}";
         }
     }
     file << ']';
