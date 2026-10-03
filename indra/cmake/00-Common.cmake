@@ -37,7 +37,11 @@ add_library(al::flags ALIAS al_flags)
 # the sanctioned way to set them for a whole tree.
 
 if(NOT DEFINED CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 20)
+  if(WINDOWS)
+    set(CMAKE_CXX_STANDARD 20)
+  else()
+    set(CMAKE_CXX_STANDARD 23)
+  endif()
 endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -267,7 +271,7 @@ if(WINDOWS)
       /Zc:inline
   )
 elseif(LINUX)
-  target_compile_options(al_flags INTERFACE -fsigned-char)
+  target_compile_options(al_flags INTERFACE -fsigned-char -pthread)
 elseif(DARWIN)
   # The Xcode attribute is what the Xcode generator honours; the compile
   # option covers Ninja and Makefile generators.
