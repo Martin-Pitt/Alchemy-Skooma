@@ -644,6 +644,16 @@ void LLFloater::storeDockStateControl()
     }
 }
 
+// <SK:Nexii> Collapse is restored at login, alongside visibility
+void LLFloater::storeCollapseStateControl()
+{
+    if (!sQuitting && !mCollapseStateControl.empty())
+    {
+        getControlGroup()->setBOOL(mCollapseStateControl, isMinimized());
+    }
+}
+// </SK:Nexii>
+
 // static
 std::string LLFloater::getControlName(const std::string& name, const LLSD& key)
 {
@@ -1740,6 +1750,7 @@ void LLFloater::setMinimized(bool minimize)
     }
 
     make_ui_sound(minimize ? "UISndWindowClose" : "UISndWindowOpen");
+    storeCollapseStateControl(); // <SK:Nexii> Collapse is restored at login
     layoutDragHandle(); // <SK:Nexii> Picks up the turn, and updates the title buttons with it
     applyTitle ();
 }
@@ -3786,6 +3797,7 @@ void LLFloater::setInstanceName(const std::string& name)
         if (!mVisibilityControl.empty())
         {
             mVisibilityControl = LLFloaterReg::declareVisibilityControl(ctrl_name);
+            mCollapseStateControl = LLFloaterReg::declareCollapseStateControl(ctrl_name); // <SK:Nexii>
         }
         if(!mDocStateControl.empty())
         {

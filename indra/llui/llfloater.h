@@ -454,6 +454,7 @@ protected:
     void            storeRectControl();
     void            storeVisibilityControl();
     void            storeDockStateControl();
+    void            storeCollapseStateControl(); // <SK:Nexii> Collapse is restored at login
 
     void            setKey(const LLSD& key);
     void            setInstanceName(const std::string& name);
@@ -540,6 +541,7 @@ protected:
     std::string     mPosYControl;
     std::string     mVisibilityControl;
     std::string     mDocStateControl;
+    std::string     mCollapseStateControl; // <SK:Nexii> Collapse is restored at login
     LLSD            mKey;               // Key used for retrieving instances; set (for now) by LLFLoaterReg
 
     LLDragHandle*   mDragHandle;
