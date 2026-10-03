@@ -31,7 +31,9 @@
 #include "alobjectproperties.h"
 #include "alpanefolds.h"
 #include "alscriptexplorertree.h"
+#include "alscriptregionusage.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alscriptworkspace.h"
 #include "llagent.h"
@@ -58,6 +60,7 @@
 #include "roles_constants.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace
 {
@@ -155,29 +158,14 @@ static LLPanelInjector<ALScriptExplorerPane> t_script_studio_explorer("script_st
 
 ALScriptExplorerPane::ALScriptExplorerPane(const LLPanel::Params& params) : LLPanel(params), mModel(ALScriptWorkspace::instance().contentsIndex()) {}
 
-ALScriptExplorerPane::~ALScriptExplorerPane()
-{
-    // A menu still open calls into this pane, which is going: it goes
-    // first. The menus live in the viewer's menu holder, not here.
-    if (LLContextMenu* open = mMenu.get())
-    {
-        open->hide();
-        open->die();
-    }
-}
-
 bool ALScriptExplorerPane::postBuild()
 {
     mTree   = getChild<ALScriptExplorerTree>("explorer_tree");
     mFilter = getChild<LLFilterEditor>("explorer_filter");
     // The window this is the explorer of, found through the view tree, as
     // what the explorer asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The explorer", mServices, mWindow))
     {
-        LL_WARNS() << "The explorer is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     ALScriptExplorerTree::Hooks hooks;
@@ -286,6 +274,8 @@ bool ALScriptExplorerPane::postBuild()
     // window's.
     mHeardConnection = ALScriptWorkspace::instance().contentsIndex().onHeard(
         [this](const ALScriptContents& contents) { contentsHeard(contents); });
+    // What the region said the objects reserve, beside their names.
+    mRegionUsageConnection = ALScriptWorkspace::instance().regionUsage().onHeard([this]() { fillSoon(); });
     // An object it lists, or would list in sight, coming or going: a pin in
     // sight again after a teleport, one taken back into the inventory.
     mPresenceConnection = gObjectList.onPresence([this](const LLUUID& id, bool) {
@@ -532,7 +522,19 @@ void ALScriptExplorerPane::fill()
     const std::string running_no  = said("RunningNo");
     const std::string no_modify   = said("NoModifyMark");
     const std::string no_copy     = said("NoCopyMark");
-    const auto        look        = [&](const Model::Row& row) {
+    // What the region reserves for each object in sight, asked for as it
+    // is listed -- once a minute at most -- and said once it has answered.
+    ALScriptRegionUsage& usage = ALScriptWorkspace::instance().regionUsage();
+    std::vector<LLUUID>  roots;
+    for (const Model::Row& row : rows)
+    {
+        if (row.kind == Model::Row::Kind::Object && row.present)
+        {
+            roots.push_back(row.value["root"].asUUID());
+        }
+    }
+    usage.ask(roots, mFilled);
+    const auto look = [&](const Model::Row& row) {
         ALScriptExplorerTree::Look out;
         switch (row.kind)
         {
@@ -548,6 +550,12 @@ void ALScriptExplorerPane::fill()
                 out.suffix = row.present         ? LLStringUtil::null
                              : row.region.empty() ? away
                                                   : bracketed(mServices->words("KindAwayIn", where));
+                if (const ALScriptRegionUsage::Usage* reserved = row.present ? usage.usageOf(row.value["root"].asUUID()) : nullptr)
+                {
+                    LLStringUtil::format_map_t size;
+                    size["[RESERVED]"] = llformat("%f", (F64)reserved->memory / 1024.0);
+                    out.suffix += bracketed(mServices->words("ExplorerReserved", size));
+                }
                 out.icon   = row.many ? "Inv_Object_Multi" : "Inv_Object";
                 break;
             }
@@ -769,10 +777,7 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     // only where it may modify it; an item read only where it may copy it,
     // and a script where it may modify it too.
     auto changeable = [this](const Choice& row) { return mModel.primModifiable(row.prim); };
-    auto readable   = [this](const Choice& row) {
-        const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
-        return !item || gAgent.isGodlike() || (item->copy && (item->modify || !item->script));
-    };
+    auto readable   = [this](const Choice& row) { return this->readable(row); };
     auto itemChangeable = [this](const Choice& row) {
         const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
         return !item || item->modify;
@@ -844,7 +849,71 @@ bool ALScriptExplorerPane::enabled(const std::string& action) const
     {
         return !rows.empty();
     }
+    if (action == "compare")
+    {
+        const auto pair = Model::comparing(rows);
+        return pair && readable(pair->first) && readable(pair->second);
+    }
+    if (action == "compare_with" || action == "local_history")
+    {
+        return rows.size() == 1 && rows.front().isItem() && readable(rows.front());
+    }
     return false;
+}
+
+bool ALScriptExplorerPane::readable(const Choice& row) const
+{
+    const std::optional<ALScriptContents::Item> item = mModel.itemAt(row.ref());
+    return !item || gAgent.isGodlike() || (item->copy && (item->modify || !item->script));
+}
+
+void ALScriptExplorerPane::compare(const Choice& first, const Choice& second)
+{
+    // The one open already is the one compared, its text as it is now:
+    // only a tab can be set beside another text.
+    const bool    swap  = !mServices->findDoc(first.ref()) && mServices->findDoc(second.ref());
+    const Choice& open  = swap ? second : first;
+    const Choice& other = swap ? first : second;
+    const auto    title = [this](const Choice& row) {
+        const std::string place = mModel.placeOf(row);
+        return place.empty() ? row.name : place + " \xE2\x96\xB8 " + row.name;
+    };
+    mWindow->compareItems(open.ref(), open.name, title(open), other.ref(), title(other));
+}
+
+void ALScriptExplorerPane::compareWith(const Choice& row)
+{
+    std::vector<Choice> others = mModel.comparableWith(row);
+    others.erase(std::remove_if(others.begin(), others.end(), [this](const Choice& one) { return !readable(one); }), others.end());
+    if (others.empty())
+    {
+        LLStringUtil::format_map_t args;
+        args["[NAME]"] = row.name;
+        mServices->setStatus(mServices->words("ExplorerNothingToCompare", args));
+        return;
+    }
+    std::vector<ALQuickOpen::Candidate> candidates;
+    for (size_t i = 0; i < others.size(); ++i)
+    {
+        ALQuickOpen::Candidate candidate;
+        candidate.label  = others[i].name;
+        candidate.detail = mModel.placeOf(others[i]);
+        candidate.value  = std::to_string(i);
+        candidates.push_back(std::move(candidate));
+    }
+    LLStringUtil::format_map_t args;
+    args["[NAME]"]                 = row.name;
+    const LLHandle<LLPanel> handle = getHandle();
+    mWindow->pick(std::move(candidates), mServices->words("ExplorerComparePlaceholder"), mServices->words("ExplorerCompareTitle", args),
+                  [handle, row, others](const std::string& value) {
+                      ALScriptExplorerPane* pane  = ALViewType::as<ALScriptExplorerPane>(handle.get());
+                      const size_t          index = static_cast<size_t>(std::strtoul(value.c_str(), nullptr, 10));
+                      if (pane && index < others.size())
+                      {
+                          pane->compare(row, others[index]);
+                      }
+                  },
+                  nullptr);
 }
 
 void ALScriptExplorerPane::act(const std::string& action)
@@ -941,6 +1010,21 @@ void ALScriptExplorerPane::act(const std::string& action)
     {
         editInWorld(rows.front());
     }
+    else if (action == "compare")
+    {
+        if (const auto pair = Model::comparing(rows))
+        {
+            compare(pair->first, pair->second);
+        }
+    }
+    else if (action == "compare_with")
+    {
+        compareWith(rows.front());
+    }
+    else if (action == "local_history")
+    {
+        mWindow->showHistory(rows.front().ref(), rows.front().name);
+    }
     else if (action == "describe")
     {
         describe(rows.front());
@@ -1012,11 +1096,6 @@ void ALScriptExplorerPane::showMenu(S32 x, S32 y)
     {
         return;
     }
-    if (LLContextMenu* old = mMenu.get())
-    {
-        old->die();
-        mMenu.markDead();
-    }
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar commit;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable;
     commit.add("Explorer.Action", [this](LLUICtrl*, const LLSD& param) { act(param.asString()); });
@@ -1025,15 +1104,11 @@ void ALScriptExplorerPane::showMenu(S32 x, S32 y)
         const std::vector<Choice> rows = choice();
         return param.asString() == "pin" && !rows.empty() && mModel.isPinned(rows.front().root);
     });
-    LLContextMenu* menu = LLUICtrlFactory::createFromFile<LLContextMenu>("menu_script_studio_explorer.xml", LLMenuGL::sMenuContainer,
-                                                                          LLMenuHolderGL::child_registry_t::instance());
-    if (!menu)
+    if (!mMenu.make("menu_script_studio_explorer.xml"))
     {
         return;
     }
-    mMenu = menu->getHandle();
-    menu->show(x, y);
-    LLMenuGL::showPopup(mTree, menu, x, y);
+    mMenu.show(mTree, x, y);
 }
 
 // --- keys, the build tools, descriptions ----------------------------------------------
