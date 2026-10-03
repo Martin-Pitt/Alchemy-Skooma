@@ -290,7 +290,7 @@ namespace tut
         ensure("nothing without a grammar", highlighter.tokens(0).empty());
         highlighter.setGrammar(loaded(mini()));
         ensure_equals("plain words", said(doc.line(0), highlighter.tokens(0)), std::string("text:foo bar"));
-        highlighter.words().set("function", { "bar" });
+        highlighter.ownWords().set("function", { "bar" });
         highlighter.wordsChanged();
         ensure_equals("a function now", said(doc.line(0), highlighter.tokens(0)), std::string("text:foo |function:bar"));
     }
@@ -312,5 +312,73 @@ namespace tut
         highlighter.tokens(2);
         ensure_equals("the first's edit reached nothing", highlighter.lastLexed(), 0);
         ensure_equals("and the second reads as it did", said(second.line(1), highlighter.tokens(1)), std::string("text:y"));
+    }
+    template<> template<>
+    void alsyntaxhighlighter_object::test<9>()
+    {
+        set_test_name("the states lines are in are kept once, and those no line is in any longer let go of; the tokens are what lexing afresh gives");
+        ALTextDocument doc;
+        std::string    text;
+        for (S32 i = 0; i < 100; ++i)
+        {
+            text += "a\n";
+        }
+        doc.setText(text);
+        ALSyntaxHighlighter highlighter;
+        highlighter.setGrammar(loaded(brackets()));
+        highlighter.attach(&doc);
+        highlighter.tokens(99);
+        ensure("one state for every line in the same state", highlighter.statesKept() <= 2);
+
+        // Each time, the first line opens a bracket of another level, which
+        // every line after it is inside: a hundred new states each time,
+        // and the last time's no longer anyone's.
+        for (S32 level = 1; level <= 60; ++level)
+        {
+            const S32 first_length = doc.lineLength(0);
+            doc.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(0, first_length)), "[" + std::string(static_cast<size_t>(level), '=') + "[");
+            highlighter.tokens(99);
+        }
+        highlighter.tokens(99);
+        ensure("let go of past a number: " + std::to_string(highlighter.statesKept()), highlighter.statesKept() <= 4096 + 100);
+
+        // One more edit, and every line's tokens as a highlighter made
+        // afresh has them.
+        doc.replace(ALTextRange(ALTextPos(50, 0), ALTextPos(50, 1)), "]" + std::string(60, '=') + "] b");
+        ALSyntaxHighlighter fresh;
+        fresh.setGrammar(loaded(brackets()));
+        fresh.attach(&doc);
+        for (S32 line = 0; line < doc.lineCount(); ++line)
+        {
+            ensure("line " + std::to_string(line) + " as lexed afresh", highlighter.tokens(line) == fresh.tokens(line));
+        }
+    }
+    template<> template<>
+    void alsyntaxhighlighter_object::test<10>()
+    {
+        set_test_name("words set once are shared between views; a view's own copy changes it and no other; none set, none");
+        auto shared = std::make_shared<ALSyntaxWords>();
+        shared->set("function", { "foo" });
+        ALTextDocument doc;
+        doc.setText("foo bar\n");
+        ALSyntaxHighlighter a, b;
+        a.setGrammar(loaded(mini()));
+        b.setGrammar(loaded(mini()));
+        a.attach(&doc);
+        b.attach(&doc);
+        a.setWords(shared);
+        b.setWords(shared);
+        ensure("the same words", &a.words() == &b.words());
+        ensure_equals("a word of them", said(doc.line(0), a.tokens(0)), std::string("function:foo|text: bar"));
+
+        b.ownWords().set("function", { "bar" });
+        b.wordsChanged();
+        ensure("its own now", &a.words() != &b.words());
+        ensure("the other's as they were", a.words().has("function", "foo") && !a.words().has("function", "bar"));
+        ensure_equals("its own word", said(doc.line(0), b.tokens(0)), std::string("text:foo |function:bar"));
+        ensure_equals("and the other's", said(doc.line(0), a.tokens(0)), std::string("function:foo|text: bar"));
+
+        a.setWords(nullptr);
+        ensure_equals("none set, none", said(doc.line(0), a.tokens(0)), std::string("text:foo bar"));
     }
 }
