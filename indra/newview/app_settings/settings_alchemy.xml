@@ -4672,6 +4672,664 @@
             <key>Value</key>
             <string>All</string>
         </map>
+        <key>SKNavCensusAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Run the navmesh census even when nothing consumes it (the overlay or a consumer runs it otherwise).</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavCensusBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds per frame the navmesh census may spend scanning objects.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKNavCensusLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the navmesh census statistics every few seconds.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavClusterGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres two objects may be apart and still belong to one navmesh cluster.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKNavMeshEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Build a client-side navmesh from the objects around the agent.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the agent the navmesh census covers.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>512.0</real>
+        </map>
+        <key>SKNavRoleRequestSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between requests for the region's pathfinding roles.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>60.0</real>
+        </map>
+        <key>SKNavSettleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an object must stay still before the navmesh treats it as landscape.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKNavAvatarRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of radius the avatar class of the navmesh is eroded by.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
+        </map>
+        <key>SKNavAirBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Memory the navmesh's detailed air may hold before the least recently near tiles give theirs up, in MB.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <key>SKNavAirMinGap</key>
+        <map>
+            <key>Comment</key>
+            <string>Closed gaps of the navmesh's air lower than this, in metres, are folded into the solid around them: slivers between stacked prims are not air anything moves through.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKNavAirRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres around the camera within which navmesh tiles build their air eagerly. Tiles further out keep what they have.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>128.0</real>
+        </map>
+        <key>SKNavAirBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Megabytes of detailed navmesh air kept in memory. Past it, the tiles the camera has been least near are evicted to the disk cache, never within 1.5 times SKNavAirRadius.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>512</integer>
+        </map>
+        <key>SKNavDiskCacheMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Megabytes of built navmesh tiles kept in the cache folder, least recently used pruned first. 0 turns the disk cache off.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2048</integer>
+        </map>
+        <key>SKNavSealedIndoors</key>
+        <map>
+            <key>Comment</key>
+            <string>Read walkable air that no walkable path reaches from outside (a sealed building) as indoors, flagged sealed and as deep as depth goes, rather than as no answer. Air over no walkable floor stays unknown either way.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavRoomsSettleMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a navmesh mesh's air must stay unchanged before its enclosure pass runs, so a burst of tile builds costs one pass.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>500</integer>
+        </map>
+        <key>SKNavBuildWeather</key>
+        <map>
+            <key>Comment</key>
+            <string>Also build the weather class of the navmesh (0.5 m headroom, no erosion) past SKNavAirRadius, where the air does not need it.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavBuildsInFlight</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh tile builds allowed on the worker at once. 0 = the build pool's width.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavBuildsPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh tile builds launched per frame at most.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKNavCell</key>
+        <map>
+            <key>Comment</key>
+            <string>Navmesh cell size in metres, horizontal and vertical.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.125</real>
+        </map>
+        <key>SKNavClimb</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of step the navmesh still treats as connected floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.75</real>
+        </map>
+        <key>SKNavMeshAlways</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the navmesh even when the overlay is off and no consumer asked.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayRange</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres from the camera the navmesh overlay draws, falling away over its last fifth.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>96.0</real>
+        </map>
+        <key>SKNavSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope the avatar class still treats as floor. Avatars in Second Life climb far steeper ground than a navmesh usually allows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>74.0</real>
+        </map>
+        <key>SKNavWeatherSlope</key>
+        <map>
+            <key>Comment</key>
+            <string>Degrees of slope the weather class still treats as floor. Weather runs down whatever it lands on, so this sits as high as a heightfield allows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>89.0</real>
+        </map>
+        <key>SKNavWeatherHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres of headroom the weather class of the navmesh needs.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKNavBuildWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Read walls, floor edges and drop links off the navmesh as it is built.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavCoverPeek</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres a wall may fall short of the eye and still count as full cover.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.15</real>
+        </map>
+        <key>SKNavDropMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres an avatar may drop from a ledge onto floor below.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKNavDropSpacing</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres between drop links along a ledge.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
+        <key>SKNavWeatherDropMax</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres water may fall from a ledge and still be traced to where it lands.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>24.0</real>
+        </map>
+        <key>SKNavOverlayWalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw walls, ledges and drop links in the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavCensusObjectCache</key>
+        <map>
+            <key>Comment</key>
+            <string>Take objects the region has cached but not drawn into the census, as boxes.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavOverlayCensus</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the census shapes and their structures in the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- <SK:Nexii> Navmesh features overlay -->
+        <key>SKNavOverlayEnclosure</key>
+        <map>
+            <key>Comment</key>
+            <string>Tint the floors of the navmesh's air by how enclosed they are: 0 off, 1 by indoorness e, 2 by bucket (outdoors, sheltered, indoors; grey where nothing answered).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlaySpaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Fill the floor of each space the rooms pass cut in a colour of its own, and draw its portals: doors red, stairs lime, openings cyan, dashed where nothing is over them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavRoomProbes</key>
+        <map>
+            <key>Comment</key>
+            <string>Give each part of an indoor space the rooms pass cut an automatic reflection probe sphere of its own, in place of the octree's automatic probes there. Placed probes always win. Needs SKNavBuildAir.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavRoomProbesMax</key>
+        <map>
+            <key>Comment</key>
+            <string>At most this many rooms probes, the nearest kept; the probe array's own cap applies as well.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>240</integer>
+        </map>
+        <key>SKNavOverlayFeatures</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the doors, ladders, elevator shafts and vehicles the census has recognised, with each span's exits.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> Navmesh wind -->
+        <key>SKNavWindSettleMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a mesh's rooms must be quiet before its wind slabs are rebuilt, so a mesh still streaming in builds them once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>3000</integer>
+        </map>
+        <key>SKNavOverlayWind</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw an arrow every 2 m over the lowest wind band near the camera, for one heading, coloured by speed factor: blue calm, cyan the free stream, yellow twice it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayWindHeading</key>
+        <map>
+            <key>Comment</key>
+            <string>The heading the wind overlay shows, in degrees the wind blows toward, counter-clockwise from east; negative follows the region's wind at the camera.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>-1.0</real>
+        </map>
+        <!-- </SK:Nexii> -->
+        <key>SKNavOverlayEdgeWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>How wide the navmesh overlay draws the edges of the walkable surface, in pixels.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
+        <key>SKNavOverlayBackdrop</key>
+        <map>
+            <key>Comment</key>
+            <string>What the navmesh overlay lays over the world when the world is switched off; its alpha is how much of the world still shows.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Color4</string>
+            <key>Value</key>
+            <array>
+                <real>0.05</real>
+                <real>0.06</real>
+                <real>0.08</real>
+                <real>0.88</real>
+            </array>
+        </map>
+        <key>SKNavPartition</key>
+        <map>
+            <key>Comment</key>
+            <string>How Recast divides walkable area into regions: 0 watershed, 1 monotone, 2 layers, 3 slope (watershed split where the slope changes).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>3</integer>
+        </map>
+        <key>SKNavDetailSample</key>
+        <map>
+            <key>Comment</key>
+            <string>How often the detail mesh samples a polygon for height, in cells. 0 leaves polygons flat and adds no vertices.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>6.0</real>
+        </map>
+        <key>SKNavOverlayFaces</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the wall faces in the navmesh overlay: the vertical surfaces Atmo paints and drains, at their full height.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavWallMinHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>How tall a vertical surface must be to count as a wall face, in metres. Below this it is the terracing a slope leaves in the heightfield.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKNavSurroundReach</key>
+        <map>
+            <key>Comment</key>
+            <string>How far outside every connected region a thing must reach before the census treats it as a sim surround, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>8.0</real>
+        </map>
+        <key>SKNavVoidMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far past a region's edge the navmesh will follow what hangs off it, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>256.0</real>
+        </map>
+        <key>SKNavWeatherRadius</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius of the weather class, in metres. Zero skips erosion entirely, which keeps the surface against the walls it drains down; one cell (0.125) is the alternative if that leaves degenerate polygons.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.0</real>
+        </map>
+        <key>SKNavGroundedMargin</key>
+        <map>
+            <key>Comment</key>
+            <string>How far above the land a structure may sit and still be meshed with the region rather than on its own, in metres.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>5.0</real>
+        </map>
+        <key>SKNavOverlayClass</key>
+        <map>
+            <key>Comment</key>
+            <string>Which agent class the navmesh overlay draws: 0 avatar, 1 weather.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayLinks</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour tile-boundary edges in the navmesh overlay by whether Detour joined them.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavOverlayXRay</key>
+        <map>
+            <key>Comment</key>
+            <string>Also draw the parts of the navmesh hidden behind geometry, darker and fainter.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayWorld</key>
+        <map>
+            <key>Comment</key>
+            <string>Keep drawing the world under the navmesh overlay. Off wipes the frame, leaving the navmesh alone.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavOverlayUpdates</key>
+        <map>
+            <key>Comment</key>
+            <string>Blip each tile update, coloured by why it was rebuilt, with a line back to what caused it.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavWorkerThreads</key>
+        <map>
+            <key>Comment</key>
+            <string>Threads the navmesh tile builds run on. 0 = one per core, less two.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavTerrainBudgetMS</key>
+        <map>
+            <key>Comment</key>
+            <string>Milliseconds a frame may spend sampling navmesh terrain heights.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
         <key>ShowAdvancedHoverTips</key>
         <map>
             <key>Comment</key>

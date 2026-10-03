@@ -109,6 +109,9 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
+#include "sknavannotator.h" // <SK:Nexii> navmesh annotations
+#include "sknavmesh.h" // <SK:Nexii> navmesh overlay
+#include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
 #include "llviewerstats.h"
@@ -5311,6 +5314,23 @@ void LLPipeline::renderDebug()
         glPointSize(8.f);
         LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
 
+        // <SK:Nexii> navmesh tile updates: a line from the blip back to what
+        // caused the update, under the same depth test as the blip itself
+        gGL.begin(LLRender::LINES);
+        for (std::list<DebugBlip>::const_iterator iter = mDebugBlips.begin(); iter != mDebugBlips.end(); ++iter)
+        {
+            const DebugBlip& blip = *iter;
+            if (!blip.mHasFrom)
+            {
+                continue;
+            }
+            gGL.color4fv(blip.mColor.mV);
+            gGL.vertex3fv(blip.mFrom.mV);
+            gGL.vertex3fv(blip.mPosition.mV);
+        }
+        gGL.end();
+        // </SK:Nexii>
+
         gGL.begin(LLRender::POINTS);
         for (std::list<DebugBlip>::iterator iter = mDebugBlips.begin(); iter != mDebugBlips.end(); )
         {
@@ -5407,11 +5427,13 @@ void LLPipeline::renderDebug()
 
     visible_selected_groups.clear();
 
+    // <SK:Nexii> Probe debug drawn after tonemapping in renderFinalize so its kind colours survive exposure.
     //draw reflection probes and links between them
-    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
-    {
-        mReflectionMapManager.renderDebug();
-    }
+    //if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
+    //{
+    //    mReflectionMapManager.renderDebug();
+    //}
+    // </SK:Nexii>
 
     static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
     if (render_ref_probe_volumes && !hud_only)
@@ -5419,6 +5441,16 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        // <SK:Nexii> Probe volume display: camera to agent space, so its blend hatching stays put on surfaces.
+        static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
+        LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
+        inv_view.invert();
+        const GLint inv_view_loc = gReflectionProbeDisplayProgram.getUniformLocation(sk_probe_inv_view);
+        if (inv_view_loc >= 0)
+        {
+            glUniformMatrix4fv(inv_view_loc, 1, GL_FALSE, inv_view.getF32ptr());
+        }
+        // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);
@@ -10567,6 +10599,28 @@ void LLPipeline::renderFinalize()
     {
         renderPhysicsDisplay();
     }
+    // <SK:Nexii> navmesh census overlay: record and cluster boxes
+    // A layer of the navmesh debug pass can be on without the surface itself,
+    // so ask the pass rather than the mask alone.
+    if (SKNavMesh::overlayActive())
+    {
+        SKWorldCensus::instance().renderDebug();
+        SKNavMesh::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> Probe debug drawn after tonemapping so its kind colours survive exposure; occludes like the navmesh overlay.
+    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES))
+    {
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        mReflectionMapManager.renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on
+    if (SKNavAnnotator::instanceExists())
+    {
+        SKNavAnnotator::instance().render();
+    }
+    // </SK:Nexii>
 
     /*if (LLRenderTarget::sUseFBO && !gCubeSnapshot)
     { // copy depth buffer from mRT->screen to framebuffer
@@ -14129,6 +14183,17 @@ void LLPipeline::addDebugBlip(const LLVector3& position, const LLColor4& color)
     DebugBlip blip(position, color);
     mDebugBlips.push_back(blip);
 }
+
+// <SK:Nexii> navmesh tile updates: the same blip, pointing back at what
+// caused the update when something did
+void LLPipeline::addDebugBlip(const LLVector3& position, const LLColor4& color, const LLVector3& from)
+{
+    DebugBlip blip(position, color);
+    blip.mFrom = from;
+    blip.mHasFrom = true;
+    mDebugBlips.push_back(blip);
+}
+// </SK:Nexii>
 
 void LLPipeline::hidePermanentObjects( std::vector<U32>& restoreList )
 {

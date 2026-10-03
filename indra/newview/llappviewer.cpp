@@ -216,6 +216,8 @@
 #include "llsdserialize.h"
 
 #include "llworld.h"
+#include "sknavmesh.h" // <SK:Nexii> navmesh build tick
+#include "skworldcensus.h" // <SK:Nexii> navmesh census tick
 #include "llhudeffecttrail.h"
 #include "llslurl.h"
 #include "llurlregistry.h"
@@ -2006,6 +2008,10 @@ bool LLAppViewer::cleanup()
     LL_INFOS() << "Cleaning up Objects" << LL_ENDL;
 
     LLViewerObject::cleanupVOClasses();
+
+    // <SK:Nexii> navmesh census: release any held viewer objects before the avatar appearance dictionary below goes away
+    SKWorldCensus::deleteSingleton();
+    // </SK:Nexii>
 
     SUBSYSTEM_CLEANUP(LLAvatarAppearance);
 
@@ -5842,6 +5848,10 @@ void LLAppViewer::idle()
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("world update"); //LL_RECORD_BLOCK_TIME(FTM_WORLD_UPDATE);
         gPipeline.updateMove();
     }
+    // <SK:Nexii> navmesh: the census scans after objects moved, the mesh follows the census
+    SKWorldCensus::instance().update();
+    SKNavMesh::instance().update();
+    // </SK:Nexii>
 
     LLWorld::getInstance()->updateParticles();
 
