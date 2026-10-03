@@ -27,6 +27,7 @@
 #include "alscriptformatter.h"
 
 #include "alpreprocessor.h"
+#include "alscriptlexicon.h"
 
 #include <algorithm>
 #include <set>
@@ -78,21 +79,12 @@ namespace
 
     bool significant(const Token& t) { return t.kind != Kind::Space && t.kind != Kind::Comment; }
 
-    bool isLslKeyword(std::string_view w)
+    // LSL's words that shape the code -- not its types, nor print, which
+    // are laid out as names are -- and Luau's keywords.
+    bool isKeyword(bool lua, const Token& t)
     {
-        static const std::set<std::string_view> words = { "if", "else", "for", "while", "do", "return", "jump", "state", "default" };
-        return words.count(w) > 0;
+        return t.kind == Kind::Ident && (lua ? ALScriptLexicon::isLuauKeyword(t.text) : ALScriptLexicon::lslWord(t.text) == ALScriptLexicon::LSL_CONTROL);
     }
-
-    bool isLuaKeyword(std::string_view w)
-    {
-        static const std::set<std::string_view> words = { "and",   "break", "const", "continue", "do",  "else",   "elseif", "end",   "export", "false",
-                                                          "for",   "function", "if", "in",       "local", "nil",  "not",    "or",    "repeat", "return",
-                                                          "then",  "true",  "until", "while" };
-        return words.count(w) > 0;
-    }
-
-    bool isKeyword(bool lua, const Token& t) { return t.kind == Kind::Ident && (lua ? isLuaKeyword(t.text) : isLslKeyword(t.text)); }
 
     bool isOperator(bool lua, std::string_view op)
     {
@@ -376,7 +368,9 @@ namespace
                 at      = t.line + static_cast<S32>(t.text.size());
                 continue;
             }
-            if (significant(t))
+            // A comment is something on the line, though nothing of the
+            // structure: a line of one is kept, not emptied as a blank.
+            if (t.kind != Kind::Space)
             {
                 current.blank = false;
             }
@@ -804,62 +798,24 @@ std::vector<bool> ALScriptFormatter::breaksInStrings(std::string_view text, bool
         return out;
     }
     // An LSL string may hold a break as written, which the tokens -- read
-    // as a preprocessor reads C -- end at; so the text is read here, past
-    // comments, a quote to its closing quote.
-    bool in_string = false;
-    bool in_block  = false;
-    S32  line      = 0;
-    for (size_t i = 0; i < text.size(); ++i)
+    // as a preprocessor reads C -- end at; so the text is read as LSL
+    // reads it, past comments, a quote to its closing quote.
+    S32 line = 0;
+    for (size_t i = 0; i < text.size();)
     {
-        const char c    = text[i];
-        const char next = i + 1 < text.size() ? text[i + 1] : '\0';
-        if (c == '\n')
+        const ALScriptLexicon::Stretch run = ALScriptLexicon::stretchAt(text, i, false);
+        for (size_t k = i; k < run.end; ++k)
         {
-            if (in_string)
+            if (text[k] == '\n')
             {
-                mark(line);
-            }
-            ++line;
-        }
-        else if (in_block)
-        {
-            if (c == '*' && next == '/')
-            {
-                in_block = false;
-                ++i;
-            }
-        }
-        else if (in_string)
-        {
-            if (c == '\\' && next != '\0')
-            {
-                if (next == '\n')
+                if (run.kind == ALScriptLexicon::Kind::String)
                 {
-                    mark(line++);
+                    mark(line);
                 }
-                ++i;
-            }
-            else if (c == '"')
-            {
-                in_string = false;
+                ++line;
             }
         }
-        else if (c == '"')
-        {
-            in_string = true;
-        }
-        else if (c == '/' && next == '/')
-        {
-            while (i + 1 < text.size() && text[i + 1] != '\n')
-            {
-                ++i;
-            }
-        }
-        else if (c == '/' && next == '*')
-        {
-            in_block = true;
-            ++i;
-        }
+        i = run.end;
     }
     return out;
 }

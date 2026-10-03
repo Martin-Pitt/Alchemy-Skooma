@@ -26,6 +26,7 @@
 
 #include "alcodeeditor.h"
 #include "alfindings.h"
+#include "almenuslot.h"
 #include "alscriptanalysis.h"
 #include "alscriptstudiodoc.h"
 #include "llhandle.h"
@@ -120,9 +121,9 @@ public:
         virtual std::string scriptIcon(bool lua, const std::string& include) const        = 0;
         // A fix made over the text at `version`, whose places it is in.
         virtual bool applyFix(Doc& doc, const ALScriptFix& fix, U32 version) = 0;
-        // The preferred fix of every problem of a kind made -- of every
-        // kind, for none -- once asked.
-        virtual void fixAllOfKind(Doc& doc, const std::string& key) = 0;
+        // The preferred fix of every problem picked made -- of a kind, of
+        // every kind, or what is left from LSL -- once asked.
+        virtual void fixAll(Doc& doc, const Doc::FixPick& pick) = 0;
         // The tab's problems gathered again, with the next frame.
         virtual void refreshProblems(Doc& doc) = 0;
         // What the script said as it ran let go of, and not listed again
@@ -134,6 +135,9 @@ public:
         virtual ALScriptLints::Level lintLevel(bool lua, const std::string& id) const                 = 0;
         virtual void                 setLintLevel(bool lua, const std::string& id, ALScriptLints::Level) = 0;
         virtual void                 showLintSettings()                                              = 0;
+        // The object a script is in, by its root; none for one in the
+        // inventory, or out of sight.
+        virtual LLUUID rootOf(const ALScriptRef&) const { return LLUUID::null; }
 
     protected:
         ~Window() = default;
@@ -143,7 +147,6 @@ public:
     // Script Studio window it finds through the view tree, whose services
     // it uses and which it asks what it does not do itself.
     explicit ALScriptProblemsPane(const LLPanel::Params& params = getDefaultParams());
-    ~ALScriptProblemsPane() override;
     bool postBuild() override;
 
     // A tab's problems made anew: kept, and listed again where the list
@@ -169,6 +172,11 @@ public:
     void forgetChecked(const ALScriptRef& ref);
     void clearChecked();
     void showEveryScript();
+    // The list brought to one origin, by its word's name: OriginMigration.
+    void showOrigin(const std::string& origin);
+    // The list brought to one object's scripts -- those open, and those
+    // its check read -- which an object's check lists.
+    void showObject(const LLUUID& root);
     size_t checkedCount() const { return mChecked.size(); }
 
     // The list filled with a tab's problems, and every open script's
@@ -223,7 +231,13 @@ private:
     // The filters' question of one script's problems, by its id.
     store_t::Query          query(const std::string& id) const;
     std::vector<const Doc*> docsFor(const Doc* doc);
+    // Which scripts the list holds: every open one's, one object's, or
+    // more than the one in front either way; and whether a script is one
+    // of them.
     bool                    everyScript() const;
+    bool                    objectScripts() const;
+    bool                    manyScripts() const { return everyScript() || objectScripts(); }
+    bool                    inScope(const ALScriptRef& ref) const;
     void                    layoutFilters();
     // The chosen row's script, its problem, and its lint where there is a
     // choice about it.
@@ -269,6 +283,8 @@ private:
     LLFilterEditor*         mFilter   = nullptr;
     store_t                 mStore;
     std::vector<Checked>    mChecked;
+    // The object whose scripts the list holds, where it holds one's.
+    LLUUID                  mObjectRoot;
     // Whose problems the list holds, so that a refill of the same
     // script's keeps the row chosen and the scroll.
     std::string             mShownFor;
@@ -276,5 +292,5 @@ private:
     // Whose rows the list holds, and whether they wait for it to be seen.
     std::string             mRowsFor;
     bool                    mRowsWanted = false;
-    LLHandle<LLContextMenu> mMenu;
+    ALMenuSlot              mMenu;
 };

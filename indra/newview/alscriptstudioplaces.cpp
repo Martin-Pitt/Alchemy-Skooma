@@ -27,6 +27,7 @@
 #include "alscriptstudioplaces.h"
 
 #include "alscriptenvelope.h"
+#include "alscriptlexicon.h"
 
 namespace ALScriptPlaces
 {
@@ -106,21 +107,16 @@ namespace ALScriptPlaces
         return mText->substr(begin, end - begin);
     }
 
-    namespace
+    bool holds(const ALScriptSpan& span, const ALTextPos& pos)
     {
-        // Whether a span holds a position, its ends included.
-        bool holds(const ALScriptSpan& span, const ALTextPos& pos)
-        {
-            const ALTextPos begin(span.line, span.column);
-            const ALTextPos end(span.endLine, span.endColumn);
-            return begin <= pos && pos <= end;
-        }
+        const ALTextRange range = rangeOf(span);
+        return range.begin <= pos && pos <= range.end;
+    }
 
-        // Whether a span lies within another.
-        bool within(const ALScriptSpan& inner, const ALScriptSpan& outer)
-        {
-            return holds(outer, ALTextPos(inner.line, inner.column)) && holds(outer, ALTextPos(inner.endLine, inner.endColumn));
-        }
+    bool within(const ALScriptSpan& inner, const ALScriptSpan& outer)
+    {
+        const ALTextRange range = rangeOf(inner);
+        return holds(outer, range.begin) && holds(outer, range.end);
     }
 
     std::vector<size_t> pathAt(const std::vector<ALScriptOutlineEntry>& outline, const ALTextPos& at)
@@ -156,22 +152,10 @@ namespace ALScriptPlaces
         return text.line(line);
     }
 
-    // A name as both languages spell one: a letter or an underscore, then
-    // letters, digits and underscores.
+    // A name as both languages spell one.
     bool isIdentifier(const std::string& text)
     {
-        if (text.empty() || (!isalpha(static_cast<unsigned char>(text[0])) && text[0] != '_'))
-        {
-            return false;
-        }
-        for (const char c : text)
-        {
-            if (!isalnum(static_cast<unsigned char>(c)) && c != '_')
-            {
-                return false;
-            }
-        }
-        return true;
+        return ALScriptLexicon::isName(text);
     }
 
     S32 mapSpan(const ALSourceMap& map, ALScriptSpan& span)
