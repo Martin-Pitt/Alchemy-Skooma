@@ -43,6 +43,7 @@ class LLPanel;
 class LLScrollListCtrl;
 class LLTabContainer;
 class LLTextBox;
+class LLViewerInventoryItem;
 
 // One window for everything about the studio a person sets once:
 // Colours, with a theme to pick and every colour to change by hand
@@ -116,6 +117,16 @@ private:
     void onSnippetNew();
     void onSnippetCopy();
     void onSnippetDelete();
+    // The scripter's own, both languages, to a new notecard in Notecards;
+    // and a notecard dropped on the list read, and its snippets brought in
+    // beside them.
+    void onSnippetsToInventory();
+    void addSnippetsFrom(const LLViewerInventoryItem& notecard);
+    // Convert to SLua's preset as its choices say it: SLua's own ways, as
+    // close to LSL as can be, or neither; and a preset chosen, its choices
+    // set.
+    void refreshConvertPreset();
+    void onConvertPreset();
     bool snippetLua() const;
     // The chosen row: one of the scripter's own, by index, or not.
     S32  chosenOwnSnippet() const;
@@ -164,6 +175,7 @@ private:
     bool                                                   mSnippetsUnsaved = false;
     U32                                                    mSnippetEdits    = 0;
     boost::signals2::scoped_connection                     mSnippetBodyChanged;
+    std::vector<boost::signals2::scoped_connection>        mConvertConnections;
     // Each language's file as it was when the window opened, for Cancel.
     std::string                                            mWasSnippets[2];
     bool                                                   mWasSnippetsFile[2] = { false, false };
