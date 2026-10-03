@@ -45,6 +45,10 @@ namespace
     // Spaces this far from the camera are considered; the budget trims the rest.
     constexpr F64 REACH_M = 192.0;
     constexpr F32 UPDATE_PERIOD_S = 1.f;
+    // Fresh placements run on the main thread, at tens of milliseconds a
+    // space: a pass places until this is spent, then returns next frame for
+    // the rest, so a region's worth of spaces costs frames, not one stall.
+    constexpr F32 PLACE_BUDGET_MS = 6.f;
 
     U64 signatureOf(const sknav::Space& space)
     {
@@ -137,6 +141,11 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     std::set<U64> placed_keys;
     std::vector<U64> tile_keys;
     mCacheHits = mCachePlaced = 0;
+    bool deferred = false;
+    const auto budget_spent = [&started]()
+    {
+        return std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count() > PLACE_BUDGET_MS;
+    };
 
     LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
     const sknav::ProbeParams params;
@@ -254,6 +263,11 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                 });
                 return;
             }
+            if (!mCache.hasKey(key) && budget_spent())
+            {
+                deferred = true;
+                return;
+            }
             bool placed = false;
             cached = mCache.partsFor(key, space, params, &placed);
             if (placed)
@@ -274,12 +288,22 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                 parts.mIndex = static_cast<S32>(mParts.size()) - 1;
             }
             parts.mSeen = true;
+            // A space that places no parts is placed once too: an empty
+            // answer under the same signature is as final as a full one.
             const U64 signature = signatureOf(space);
-            if (parts.mSignature != signature || parts.mParts.empty())
+            if (parts.mSignature != signature || !parts.mPlaced)
             {
-                parts.mSignature = signature;
-                parts.mParts = sknav::spaceProbes(space, params);
-                ++mCachePlaced;
+                if (budget_spent())
+                {
+                    deferred = true;    // last pass's parts stand until the next
+                }
+                else
+                {
+                    parts.mSignature = signature;
+                    parts.mParts = sknav::spaceProbes(space, params);
+                    parts.mPlaced = true;
+                    ++mCachePlaced;
+                }
             }
             space_parts = &parts.mParts;
         }
@@ -499,6 +523,19 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             created = true;
         }
         held.push_back(h);
+    }
+    if (deferred)
+    {
+        // A space the budget put off has no candidates this pass: its
+        // probes stay up rather than drop and come back a frame later.
+        for (size_t i = 0; i < mHeld.size(); ++i)
+        {
+            if (std::find(match.begin(), match.end(), static_cast<S32>(i)) == match.end())
+            {
+                held.push_back(mHeld[i]);
+            }
+        }
+        mNextUpdate = gFrameTimeSeconds;
     }
     mHeld.swap(held);
     mPlaced = static_cast<U32>(mHeld.size());

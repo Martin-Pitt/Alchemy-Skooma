@@ -73,6 +73,7 @@ private:
     {
         U64 mSignature = 0;
         std::vector<sknav::ProbePart> mParts;
+        bool mPlaced = false;   ///< placed under mSignature, even to nothing
         bool mSeen = false;
         S32 mIndex = -1;        ///< this space's number within an update, for the budget's per-space rule
     };
