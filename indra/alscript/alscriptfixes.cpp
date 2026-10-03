@@ -26,6 +26,8 @@
 
 #include "alscriptfixes.h"
 
+#include "allsltraits.h"
+#include "alscriptlexicon.h"
 #include "llstring.h"
 
 #include <algorithm>
@@ -49,6 +51,7 @@
     X(LSLIntFloatMulAssign) \
     X(LSLInvalidOperator) \
     X(LSLParameterUntyped) \
+    X(LSLSlLoopInvariantCall) \
     X(LSLSyntaxMissing) \
     X(LSLUndeclaredWithSuggestion) \
     X(LSLWrongTypeInAssignment) \
@@ -67,6 +70,12 @@
     X(LuauLintGlobalUsedAsLocalLine) \
     X(LuauLintImportUnused) \
     X(LuauLintLocalUnused) \
+    X(LuauLintSlCompoundAssign) \
+    X(LuauLintSlNilSentinel) \
+    X(LuauLintSlNilSentinelAlways) \
+    X(LuauLintSlNilSentinelOrder) \
+    X(LuauLintSlNumberTruth) \
+    X(LuauLintSlNumberTruthNot) \
     X(LuauLintTableInsertZero) \
     X(LuauLintTableMoveZero) \
     X(LuauLintTableRemoveZero) \
@@ -115,12 +124,12 @@ namespace
 
     bool identifierByte(char c)
     {
-        return isalnum(static_cast<unsigned char>(c)) || c == '_';
+        return ALScriptLexicon::isNameByte(c);
     }
 
     bool isIdentifier(std::string_view word)
     {
-        return !word.empty() && !isdigit(static_cast<unsigned char>(word.front())) && std::all_of(word.begin(), word.end(), identifierByte);
+        return ALScriptLexicon::isName(word);
     }
 
     // A name and its members, `math.abs` or `LLEvents:on`.
@@ -203,9 +212,7 @@ namespace
     // float. What it does not, no fix offers.
     bool castable(const std::string& from, const std::string& to)
     {
-        static const char* const TYPES[] = { "integer", "float", "string", "key", "vector", "rotation", "list" };
-        const auto known = [](const std::string& type) { return std::find(std::begin(TYPES), std::end(TYPES), type) != std::end(TYPES); };
-        if (from == to || !known(from) || !known(to))
+        if (from == to || !ALScriptLexicon::isLslType(from) || !ALScriptLexicon::isLslType(to))
         {
             return false;
         }
@@ -651,7 +658,7 @@ namespace
         }
         else if (lua && (is(key, Fixed::LuauLintTableInsertZero) || is(key, Fixed::LuauLintTableRemoveZero) || is(key, Fixed::LuauLintTableMoveZero) ||
                          is(key, Fixed::LuauLintForRangeZero)) &&
-                 !marked.empty() && marked.front() == '0' && (marked.size() == 1 || !(isalnum(static_cast<unsigned char>(marked[1])) || marked[1] == '.' || marked[1] == '_')))
+                 !marked.empty() && marked.front() == '0' && (marked.size() == 1 || !(ALScriptLexicon::isNameByte(marked[1]) || marked[1] == '.')))
         {
             // Counted from 1, where SLua's arrays start: the 0 the lint
             // marks -- the index given, or where the loop begins.
@@ -681,100 +688,22 @@ namespace
         bool   toLineEnd = false;
     };
 
-    // Lua's long bracket at `at`, `[[` or `[==[`: its level, or -1.
-    int longBracket(std::string_view line, size_t at)
-    {
-        if (at >= line.size() || line[at] != '[')
-        {
-            return -1;
-        }
-        size_t level = 0;
-        while (at + 1 + level < line.size() && line[at + 1 + level] == '=')
-        {
-            ++level;
-        }
-        return at + 1 + level < line.size() && line[at + 1 + level] == '[' ? static_cast<int>(level) : -1;
-    }
-
     // The comments of one line, past its strings. A comment or a string
     // begun on a line before is not seen, which is no loss: a NOLINT is
     // said at the end of the line it is about.
     std::vector<Comment> commentsOf(std::string_view line, bool lua)
     {
         std::vector<Comment> out;
-        char                 quote = 0;
-        for (size_t i = 0; i < line.size(); ++i)
+        for (size_t i = 0; i < line.size();)
         {
-            const char c = line[i];
-            if (quote)
+            const ALScriptLexicon::Stretch run = ALScriptLexicon::stretchAt(line, i, lua);
+            if (run.kind == ALScriptLexicon::Kind::Comment)
             {
-                if (c == '\\')
-                {
-                    ++i;
-                }
-                else if (c == quote)
-                {
-                    quote = 0;
-                }
-                continue;
+                // To the line's end where it is a line comment: closed,
+                // by the line, with no closer of its own.
+                out.push_back({ i + run.open, run.end - run.close, run.closed && run.close == 0 });
             }
-            if (c == '"' || (lua && (c == '\'' || c == '`')))
-            {
-                quote = c;
-                continue;
-            }
-            if (lua)
-            {
-                // A long string is passed over whole: a `--` in one is
-                // no comment.
-                if (const int level = longBracket(line, i); level >= 0)
-                {
-                    const std::string closer = "]" + std::string(static_cast<size_t>(level), '=') + "]";
-                    const size_t      end    = line.find(closer, i + static_cast<size_t>(level) + 2);
-                    if (end == std::string_view::npos)
-                    {
-                        break;
-                    }
-                    i = end + closer.size() - 1;
-                    continue;
-                }
-                if (c == '-' && i + 1 < line.size() && line[i + 1] == '-')
-                {
-                    if (const int level = longBracket(line, i + 2); level >= 0)
-                    {
-                        const std::string closer = "]" + std::string(static_cast<size_t>(level), '=') + "]";
-                        const size_t      begin  = i + 4 + static_cast<size_t>(level);
-                        const size_t      end    = line.find(closer, begin);
-                        out.push_back({ begin, end == std::string_view::npos ? line.size() : end, false });
-                        if (end == std::string_view::npos)
-                        {
-                            break;
-                        }
-                        i = end + closer.size() - 1;
-                        continue;
-                    }
-                    out.push_back({ i + 2, line.size(), true });
-                    break;
-                }
-            }
-            else if (c == '/' && i + 1 < line.size())
-            {
-                if (line[i + 1] == '/')
-                {
-                    out.push_back({ i + 2, line.size(), true });
-                    break;
-                }
-                if (line[i + 1] == '*')
-                {
-                    const size_t end = line.find("*/", i + 2);
-                    out.push_back({ i + 2, end == std::string_view::npos ? line.size() : end, false });
-                    if (end == std::string_view::npos)
-                    {
-                        break;
-                    }
-                    i = end + 1;
-                }
-            }
+            i = run.end;
         }
         return out;
     }
@@ -897,18 +826,10 @@ namespace
                 // A block comment runs to its closing brackets, with as
                 // many equals signs between them as it opened with.
                 comment = true;
-                if (line.size() > 2 && line[2] == '[')
+                if (const S32 level = ALScriptLexicon::longBracketLevel(line, 2); level >= 0)
                 {
-                    size_t equals = 3;
-                    while (equals < line.size() && line[equals] == '=')
-                    {
-                        ++equals;
-                    }
-                    if (equals < line.size() && line[equals] == '[')
-                    {
-                        closing  = "]" + std::string(equals - 3, '=') + "]";
-                        in_block = line.find(closing, equals + 1) == std::string_view::npos;
-                    }
+                    closing  = "]" + std::string(static_cast<size_t>(level), '=') + "]";
+                    in_block = ALScriptLexicon::longBracketClose(line, 4 + static_cast<size_t>(level), level) == std::string_view::npos;
                 }
             }
             else if (!lua && (line.compare(0, 2, "//") == 0 || line.compare(0, 2, "/*") == 0))
@@ -1203,7 +1124,6 @@ namespace ALScriptFixes
             return;
         }
         // The type it is declared as, before its name.
-        static const char* const TYPES[] = { "integer", "float", "string", "key", "vector", "rotation", "quaternion", "list" };
         S32 word_end = column;
         while (word_end > 0 && isspace(static_cast<unsigned char>(first[word_end - 1])))
         {
@@ -1214,7 +1134,7 @@ namespace ALScriptFixes
         {
             --word;
         }
-        if (word < word_end && std::find(std::begin(TYPES), std::end(TYPES), first.substr(word, word_end - word)) != std::end(TYPES))
+        if (word < word_end && ALScriptLexicon::isLslType(first.substr(word, word_end - word)))
         {
             column = word;
         }
@@ -1489,6 +1409,141 @@ namespace ALScriptFixes
                     problem.fixes.push_back(std::move(fix));
                 }
             }
+            else if (lua && is(key, Fixed::LuauLintSlCompoundAssign) && args.size() == 2 && problem.column >= 0)
+            {
+                // x = x op, written x op=: from the first x to what follows
+                // the operator, on the statement's first line, as the lint
+                // read it. Safe: Luau's x op= y is x = x op y.
+                const std::string_view line = lines.line(problem.line);
+                size_t                 at   = static_cast<size_t>(problem.column);
+                const auto             skip = [&] {
+                    while (at < line.size() && (line[at] == ' ' || line[at] == '\t'))
+                    {
+                        ++at;
+                    }
+                    return true;
+                };
+                const auto take = [&](std::string_view word) {
+                    if (line.substr(at, word.size()) != word)
+                    {
+                        return false;
+                    }
+                    at += word.size();
+                    return true;
+                };
+                if (take(args[0]) && skip() && take("=") && skip() && take(args[0]) && skip() && take(args[1]) && skip())
+                {
+                    ALScriptFix fix = titled("ScriptFixCompoundAssign", "Write it [1] [2]= ...", { args[0], args[1] });
+                    fix.preferred   = true;
+                    fix.safe        = true;
+                    fix.edits.push_back(
+                        { problem.line, problem.column, problem.line, static_cast<S32>(at), args[0] + " " + args[1] + "= " });
+                    problem.fixes.push_back(std::move(fix));
+                }
+            }
+            else if (lua && is(key, Fixed::LuauLintSlNumberTruth) && args.size() == 2 && lines.offsetOf(problem.endLine, problem.endColumn))
+            {
+                // Asked whether it is not 0, as LSL asked. Not safe: the
+                // script did otherwise, whatever it meant.
+                const bool  bracket = args[1] == "(";
+                ALScriptFix fix     = titled("ScriptFixCompareZero", "Compare it: [1] ~= 0", { args[0] });
+                fix.preferred       = true;
+                if (bracket)
+                {
+                    fix.edits.push_back({ problem.line, problem.column, problem.line, problem.column, "(" });
+                }
+                fix.edits.push_back(
+                    { problem.endLine, problem.endColumn, problem.endLine, problem.endColumn, bracket ? ") ~= 0" : " ~= 0" });
+                problem.fixes.push_back(std::move(fix));
+            }
+            else if (lua && is(key, Fixed::LuauLintSlNumberTruthNot) && args.size() == 1 && problem.column >= 0 &&
+                     lines.offsetOf(problem.endLine, problem.endColumn))
+            {
+                // not n as n == 0: the not and what follows it taken out,
+                // where n begins on the same line.
+                const std::string_view line = lines.line(problem.line);
+                size_t                 at   = static_cast<size_t>(problem.column);
+                if (line.substr(at, 3) == "not")
+                {
+                    at += 3;
+                    while (at < line.size() && (line[at] == ' ' || line[at] == '\t'))
+                    {
+                        ++at;
+                    }
+                    if (at < line.size())
+                    {
+                        ALScriptFix fix = titled("ScriptFixEqualsZero", "Ask whether it is 0: [1] == 0", { args[0] });
+                        fix.preferred   = true;
+                        fix.edits.push_back({ problem.line, problem.column, problem.line, static_cast<S32>(at), "" });
+                        fix.edits.push_back({ problem.endLine, problem.endColumn, problem.endLine, problem.endColumn, " == 0" });
+                        problem.fixes.push_back(std::move(fix));
+                    }
+                }
+            }
+            else if (lua &&
+                     (is(key, Fixed::LuauLintSlNilSentinel) || is(key, Fixed::LuauLintSlNilSentinelAlways) ||
+                      is(key, Fixed::LuauLintSlNilSentinelOrder)) &&
+                     args.size() == 9)
+            {
+                // The find compared with what it answers where it finds
+                // nothing: after it where it is on the left; else what is
+                // before it taken out, and the comparison put after. Safe
+                // (YD5): what was asked never held, always held, or was an
+                // error, so nothing the script did can have rested on it.
+                const S32 find_line       = std::atoi(args[5].c_str());
+                const S32 find_column     = std::atoi(args[6].c_str());
+                const S32 find_end_line   = std::atoi(args[7].c_str());
+                const S32 find_end_column = std::atoi(args[8].c_str());
+                if (lines.offsetOf(problem.line, problem.column) && lines.offsetOf(problem.endLine, problem.endColumn) &&
+                    lines.offsetOf(find_line, find_column) && lines.offsetOf(find_end_line, find_end_column))
+                {
+                    ALScriptFix fix = titled("ScriptFixAskFound", "Write it [1] [2]", { args[0], args[4] });
+                    fix.preferred   = true;
+                    fix.safe        = true;
+                    if (find_line == problem.line && find_column == problem.column)
+                    {
+                        fix.edits.push_back({ find_end_line, find_end_column, problem.endLine, problem.endColumn, " " + args[4] });
+                    }
+                    else
+                    {
+                        fix.edits.push_back({ problem.line, problem.column, find_line, find_column, "" });
+                        fix.edits.push_back({ problem.endLine, problem.endColumn, problem.endLine, problem.endColumn, " " + args[4] });
+                    }
+                    problem.fixes.push_back(std::move(fix));
+                }
+            }
+            else if (!lua && is(key, Fixed::LSLSlLoopInvariantCall) && args.size() == 4 && problem.line == problem.endLine &&
+                     problem.column >= 0)
+            {
+                // A local before the loop, set to the call, which the check
+                // then reads: where the loop begins its line, in a block.
+                // Not safe: a jump into the loop from before it would pass
+                // the local by.
+                const S32              loop_line   = std::atoi(args[2].c_str());
+                const S32              loop_column = std::atoi(args[3].c_str());
+                const std::string_view loop        = lines.line(loop_line);
+                const std::string_view here        = lines.line(problem.line);
+                const bool             alone       = loop_column >= 0 && static_cast<size_t>(loop_column) <= loop.size() &&
+                                            loop.substr(0, loop_column).find_first_not_of(" \t") == std::string_view::npos;
+                if (alone && problem.endColumn <= static_cast<S32>(here.size()) && problem.endColumn > problem.column)
+                {
+                    const std::string_view call = here.substr(problem.column, problem.endColumn - problem.column);
+                    const bool             length = args[0] == "llGetListLength" || args[0] == "llStringLength";
+                    std::string            base   = length ? "length" : args[0].substr(2);
+                    if (!base.empty())
+                    {
+                        base[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(base[0])));
+                    }
+                    const std::string name = freshName(lines.text(), base);
+                    ALScriptFix       fix  = titled("ScriptFixHoistCall", "Work out [1] once, before the loop", { args[0] });
+                    fix.preferred          = true;
+                    const std::string declared =
+                        std::string(loop.substr(0, loop_column)) + args[1] + " " + name + " = " + std::string(call) + ";\n";
+                    fix.edits.push_back({ loop_line, 0, loop_line, 0, declared });
+                    fix.edits.push_back({ problem.line, problem.column, problem.line, problem.endColumn, name });
+                    problem.fixes.push_back(std::move(fix));
+                }
+            }
             else if (!lua && is(key, Fixed::LSLUndeclaredWithSuggestion) && args.size() == 2 && isIdentifier(args[0]) && isIdentifier(args[1]))
             {
                 ALScriptFix fix = titled("ScriptFixChange", "Change '[1]' to '[2]'", { args[0], args[1] });
@@ -1545,9 +1600,13 @@ namespace ALScriptFixes
                 // What the definitions say to use instead, where they name
                 // one thing, put in place of the whole of what was written
                 // -- and only where that is the name the lint said, as it
-                // is for `ll.Abs` and not for an alias of it. Not safe: the
-                // reason usually says how the two differ.
-                if (problem.endLine == problem.line)
+                // is for `ll.Abs` and not for an alias of it. Not where what
+                // they name takes other arguments -- ll.SetPrimitiveParams'
+                // ll.SetLinkPrimitiveParamsFast wants a link first -- which
+                // the name alone would leave a call that cannot work. Not
+                // safe: the reason usually says how the two differ.
+                const ALLSLTraits::Trait* row = args[0].rfind("ll.", 0) == 0 ? ALLSLTraits::of(("ll" + args[0].substr(3)).c_str()) : nullptr;
+                if (problem.endLine == problem.line && !(row && (row->slua & ALLSLTraits::SluaUseDiffers)))
                 {
                     const std::string_view line = lines.line(problem.line);
                     if (problem.column >= 0 && problem.endColumn <= static_cast<S32>(line.size()) &&
@@ -1567,6 +1626,50 @@ namespace ALScriptFixes
                 attachOnLine(problem, lines.line(problem.line), lines, lua);
             }
         }
+    }
+
+    std::optional<ALScriptFix> strictFix(std::string_view slua)
+    {
+        // The head's lines: comments and blanks before the first code,
+        // where Luau reads its --! directives.
+        S32 line = 0;
+        for (size_t start = 0; start < slua.size(); ++line)
+        {
+            const size_t     end  = std::min(slua.find('\n', start), slua.size());
+            std::string_view text = slua.substr(start, end - start);
+            if (!text.empty() && text.back() == '\r')
+            {
+                text.remove_suffix(1);
+            }
+            const size_t at   = text.find_first_not_of(" \t");
+            const auto   word = [&](std::string_view directive) {
+                return at != std::string_view::npos && text.substr(at, directive.size()) == directive &&
+                       text.substr(at + directive.size()).find_first_not_of(" \t") == std::string_view::npos;
+            };
+            if (word("--!strict"))
+            {
+                return std::nullopt;
+            }
+            for (std::string_view mode : { std::string_view("--!nonstrict"), std::string_view("--!nocheck") })
+            {
+                if (word(mode))
+                {
+                    ALScriptFix fix = titled("ScriptFixMakeStrict", "Make the script --!strict", {});
+                    fix.preferred   = true;
+                    fix.edits.push_back({ line, static_cast<S32>(at), line, static_cast<S32>(at + mode.size()), "--!strict" });
+                    return fix;
+                }
+            }
+            if (at != std::string_view::npos && text.substr(at, 2) != "--")
+            {
+                break;
+            }
+            start = end + 1;
+        }
+        ALScriptFix fix = titled("ScriptFixMakeStrict", "Make the script --!strict", {});
+        fix.preferred   = true;
+        fix.edits.push_back({ 0, 0, 0, 0, "--!strict\n" });
+        return fix;
     }
 
     void offerRequire(ALScriptProblem& problem, std::string_view text, const std::string& module, bool field)

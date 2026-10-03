@@ -27,6 +27,7 @@
 #include "alscriptstudiodoc.h"
 #include "alscriptweight.h"
 #include "aljumpbar.h"
+#include "almenuslot.h"
 #include "llmenugl.h"
 #include "llpanel.h"
 
@@ -82,7 +83,6 @@ public:
     };
 
     explicit ALScriptCrumbsBar(const LLPanel::Params& params = getDefaultParams());
-    ~ALScriptCrumbsBar() override;
     bool postBuild() override;
 
     // The path of the tab in front's caret, as the caret's unit found it
@@ -129,7 +129,7 @@ private:
     ALScriptStudioServices* mServices = nullptr;
     Window*                 mWindow   = nullptr;
     ALJumpBar*              mBar      = nullptr;
-    LLHandle<LLContextMenu> mIndentMenu;
+    ALMenuSlot              mIndentMenu;
     Tips                    mTips;
     // Whose path the bar shows, so that a tab come to the front is shown
     // there whatever its own path was when last shown; and the path, the
@@ -156,8 +156,9 @@ private:
         U8          indentFrom = 0;
         // The problems'.
         bool        checking = false;
-        S32         errors   = 0;
-        S32         warnings = 0;
+        S32         errors    = 0;
+        S32         warnings  = 0;
+        S32         migration = 0;
         // The weight's, or the optimizer's.
         std::optional<ALScriptWeight::Target> target;
         bool                                  optimized  = false;
