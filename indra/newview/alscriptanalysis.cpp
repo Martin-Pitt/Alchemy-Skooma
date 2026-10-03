@@ -27,6 +27,7 @@
 #include "alscriptanalysis.h"
 
 #include "alscriptanalyzers.h"
+#include "alscriptlintpass.h"
 #include "alscriptstack.h"
 #include "llappviewer.h"
 #include "llviewercontrol.h"
@@ -364,6 +365,14 @@ namespace ALScriptLints
         {
             return level == Level::Off ? "off" : level == Level::Error ? "error" : "warning";
         }
+
+        // What one is where nobody chose: on, but for the studio's own the
+        // table has off.
+        Level defaultOf(bool lua, std::string_view id)
+        {
+            const ALScriptLintPass::Rule* rule = ALScriptLintPass::rule(id);
+            return rule && rule->in(lua) && !rule->on ? Level::Off : Level::Warning;
+        }
     }
 
     const std::vector<Lint>& all()
@@ -374,9 +383,25 @@ namespace ALScriptLints
             {
                 out.push_back(Lint{ id, false });
             }
+            // The studio's own after Tailslide's.
+            for (const ALScriptLintPass::Rule& rule : ALScriptLintPass::rules())
+            {
+                if (rule.in(false))
+                {
+                    out.push_back(Lint{ rule.name, false });
+                }
+            }
             for (const std::string& name : ALLuauConfig::lintNames())
             {
                 out.push_back(Lint{ name, true });
+            }
+            // The studio's own after Luau's.
+            for (const ALScriptLintPass::Rule& rule : ALScriptLintPass::rules())
+            {
+                if (rule.in(true))
+                {
+                    out.push_back(Lint{ rule.name, true });
+                }
             }
             return out;
         }();
@@ -387,7 +412,7 @@ namespace ALScriptLints
     {
         const LLSD        levels = gSavedSettings.getLLSD("ALScriptLintLevels");
         const std::string said   = levels.has(keyOf(lua, id)) ? levels[keyOf(lua, id)].asString() : std::string();
-        return said == "off" ? Level::Off : said == "error" ? Level::Error : Level::Warning;
+        return said == "off" ? Level::Off : said == "error" ? Level::Error : said == "warning" ? Level::Warning : defaultOf(lua, id);
     }
 
     void setLevel(bool lua, std::string_view id, Level to)
@@ -399,7 +424,7 @@ namespace ALScriptLints
         }
         // Only what differs from the default is kept, so that a default
         // that changes reaches everyone who did not choose otherwise.
-        if (to == Level::Warning)
+        if (to == defaultOf(lua, id))
         {
             levels.erase(keyOf(lua, id));
         }
@@ -419,7 +444,7 @@ namespace ALScriptLints
         }
         for (const auto& [id, to] : chosen)
         {
-            if (to == Level::Warning)
+            if (to == defaultOf(lua, id))
             {
                 levels.erase(keyOf(lua, id));
             }
@@ -442,17 +467,23 @@ namespace ALScriptLints
     void apply(ALScriptProblems& problems)
     {
         const LLSD levels = gSavedSettings.getLLSD("ALScriptLintLevels");
-        if (!levels.isMap() || levels.size() == 0)
-        {
-            return;
-        }
+        const bool chosen = levels.isMap() && levels.size() > 0;
         problems.erase(std::remove_if(problems.begin(), problems.end(),
-                                      [&levels](ALScriptProblem& problem) {
-                                          if (problem.severity != ALScriptProblem::Severity::Warning || problem.code.empty())
+                                      [&](ALScriptProblem& problem) {
+                                          // Tailslide's warnings, and the studio's own, which may be notes.
+                                          const ALScriptLintPass::Rule* own = problem.source == ALScriptProblem::Source::Lint
+                                                                                  ? ALScriptLintPass::rule(problem.code)
+                                                                                  : nullptr;
+                                          if ((problem.severity != ALScriptProblem::Severity::Warning && !own) || problem.code.empty())
                                           {
                                               return false;
                                           }
-                                          const std::string said = levels.has("lsl:" + problem.code) ? levels["lsl:" + problem.code].asString() : std::string();
+                                          const std::string key  = "lsl:" + problem.code;
+                                          std::string       said = chosen && levels.has(key) ? levels[key].asString() : std::string();
+                                          if (said.empty() && own && !own->on)
+                                          {
+                                              said = "off";
+                                          }
                                           if (said == "error")
                                           {
                                               problem.severity = ALScriptProblem::Severity::Error;
@@ -491,6 +522,24 @@ namespace ALScriptLints
             {
                 continue;
             }
+            // The studio's own, in masks of their own.
+            if (const uint64_t own = ALScriptLintPass::bit(lint.id))
+            {
+                switch (level(true, lint.id))
+                {
+                    case Level::Off:
+                        base.slLints &= ~own;
+                        break;
+                    case Level::Error:
+                        base.slLints |= own;
+                        base.slFatalLints |= own;
+                        break;
+                    default:
+                        base.slLints |= own;
+                        break;
+                }
+                continue;
+            }
             const uint64_t bit = ALLuauConfig::lintBit(lint.id);
             switch (level(true, lint.id))
             {
@@ -506,18 +555,14 @@ namespace ALScriptLints
                     break;
             }
         }
-        // Left to the solver: the new one's nonstrict reports only a
-        // checked function called wrongly, so a script it checks is
-        // checked strict unless something says otherwise; the old one's
-        // nonstrict is how the grid compiles.
+        // A mode the scripter chose; else none, which the service reads as
+        // the solver's own (ALLuauService::setConfig): the old one's
+        // nonstrict, as the grid compiles, and the new one's strict, its
+        // nonstrict reporting only what is sure to fail.
         const std::string mode = gSavedSettings.getString("ALScriptLuauMode");
         if (mode == "strict" || mode == "nocheck" || mode == "nonstrict")
         {
             base.mode = mode;
-        }
-        else
-        {
-            base.mode = gSavedSettings.getString("ALScriptLuauSolver") == "new" ? "strict" : "nonstrict";
         }
         made = base;
         return base;
