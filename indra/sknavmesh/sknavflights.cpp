@@ -651,6 +651,8 @@ namespace sknav
             region_of_group[g] = kind[g] == TREAD ? ff(g) : g;
         }
         out.mRegion.assign(n, -1);
+        out.mGroup = grp;
+        out.mKind = kind;
         for (S32 t = 0; t < n; ++t)
         {
             if (grp[t] >= 0)

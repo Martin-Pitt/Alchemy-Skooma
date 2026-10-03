@@ -38,6 +38,8 @@ namespace sknav
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
     constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a chain climbing less than this is level ground the agent's step covers
 
+    enum SlopeGroupKind : U8 { SLOPE_GROUP, LANDING_GROUP, TREAD_GROUP };
+
     /// One tread of a flight, mesh-local SL metres.
     struct FlightTread
     {
@@ -72,6 +74,8 @@ namespace sknav
         std::vector<U8> mCodes;     ///< per input triangle; 0 where it is not walkable
         std::vector<U8> mReal;      ///< code -> area; code 0 is null
         std::vector<S32> mRegion;   ///< per input triangle, -1 where it is not walkable
+        std::vector<S32> mGroup;    ///< per input triangle, its smoothing group; -1 where it is not walkable
+        std::vector<U8> mKind;      ///< per group: SLOPE_GROUP, LANDING_GROUP or TREAD_GROUP
         std::vector<Flight> mFlights;
         S32 mSlopes = 0;            ///< groups by kind
         S32 mLandings = 0;
