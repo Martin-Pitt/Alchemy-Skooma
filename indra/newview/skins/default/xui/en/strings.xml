@@ -650,6 +650,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="OptimizerRemovedWhile">removed a while loop whose condition is always false</string>
 	<string name="OptimizerRenamed">renamed the [1] [2] to [3]</string>
 	<string name="OptimizerSimplified">simplified [1] to [2]</string>
+	<string name="OptimizerSubstitutedLocal">put the value of [1] where it is read, and removed it</string>
 	<string name="OptimizerSwappedBranches">swapped the branches of if ([1]) and dropped the !</string>
 	<string name="OptimizerSwappedOnXor">wrote if ([1]) as if ([2]), its branches swapped</string>
 	<string name="OptimizerTurnedEmptyBranch">turned an empty if branch around</string>
@@ -696,6 +697,20 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="ScriptFixRequire">Require '[1]'</string>
 	<string name="ScriptFixRequireField">Take '[1]' from '[2]'</string>
 	<string name="ScriptFixInclude">Include '[1]'</string>
+	<string name="ScriptFixCompoundAssign">Write it [1] [2]= ...</string>
+	<string name="ScriptFixHoistCall">Work out [1] once, before the loop</string>
+	<string name="ScriptFixCompareZero">Compare it: [1] ~= 0</string>
+	<string name="ScriptFixEqualsZero">Ask whether it is 0: [1] == 0</string>
+	<string name="ScriptFixAskFound">Write it [1] [2]</string>
+	<string name="ScriptFixWriteIt">Write it [1]</string>
+	<string name="ScriptFixDeclareFirst">Declare local [1] before it is first named</string>
+	<string name="ScriptFixUnbracket">Take out the brackets</string>
+	<string name="ScriptFixRemoveElse">Take out the empty else</string>
+	<string name="ScriptFixStringParts">Put [1]'s pieces in a table, joined once after the loop</string>
+	<string name="ScriptFixKeepCall">Keep [1] in a local, [2]</string>
+	<string name="ScriptFixNoteDone">Done: take the note out</string>
+	<string name="ScriptFixNoteLint">[1], and take the note out</string>
+	<string name="ScriptFixMakeStrict">Make the script --!strict</string>
 	<string name="ScriptActionAnnotate">Declare it as '[1]'</string>
 	<string name="ScriptActionExtract">Put it in a local, '[1]'</string>
 	<string name="ScriptActionInterpolate">Write it as an interpolated string</string>
@@ -766,6 +781,17 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LSLSyntaxUnexpected">Did not expect [1] here.</string>
 	<string name="LSLSyntaxUnexpectedWanted">Did not expect [1] here; expected [2].</string>
 	<string name="LSLParameterUntyped">The parameter '[1]' needs its type before it: integer, float, string, key, vector, rotation or list.</string>
+	<string name="LSLSlLoopInvariantCall">[1] is worked out again on every turn of the loop, though nothing in the loop changes what it is given: a local set before the loop works it out once</string>
+	<string name="LSLSlSleepingCall">[1] makes the script sleep [2] s each call; [3] does the same without the sleep</string>
+	<string name="LSLSlSleepingCallOften">[1] makes the script sleep [2] s each time it runs here, in a loop or the timer event; [3] does the same without the sleep</string>
+	<string name="LSLSlSleepingTexture">[1] makes the script sleep [2] s each call; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LSLSlSleepingTextureOften">[1] makes the script sleep [2] s each time it runs here, in a loop or the timer event; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LSLSlMergeablePrimParams">These [1] calls to [2] could be one, with all their rules, and PRIM_LINK_TARGET where the link changes</string>
+	<string name="LSLSlCostlyListen">This listens on channel 0 for anyone, so the script wakes for every line of chat nearby. A name, a key, or another channel hears less</string>
+	<string name="LSLSlFastTimer">A timer every [1] s, under a tenth of a second, fires every few of the region's 45 frames a second, and the time it takes is time other scripts there wait for</string>
+	<string name="LSLSlFastSensor">A sensor sweeping every [1] s, under a second, searches round the object that often: once a second or less is plenty for most</string>
+	<string name="LSLSlStringBuild">[1] is joined to with + in a loop, which copies all of it each time round. In SLua the pieces put in a table and joined once, with table.concat, are quicker</string>
+	<string name="LSLSlRepeatedCall">[1] is called [2] times here, and answers the same each time: a local set once holds it</string>
 	<string name="LuauLintUnknownGlobalAssign">Unknown global '[1]'; consider assigning to it first</string>
 	<string name="LuauLintDeprecatedGlobal">Global '[1]' is deprecated, use '[2]' instead</string>
 	<string name="LuauLintDeprecatedGlobalPlain">Global '[1]' is deprecated</string>
@@ -852,6 +878,46 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LuauLintDeprecatedFunctionUse">Function '[1]' is deprecated, use '[2]' instead</string>
 	<string name="LuauLintDeprecatedFunctionReason">Function '[1]' is deprecated. [2]</string>
 	<string name="LuauLintDeprecatedFunction">Function '[1]' is deprecated</string>
+	<string name="LuauLintSlCompoundAssign">Luau's [2]= says this once: [1] [2]= ...</string>
+	<string name="LuauLintSlNumberTruth">[1] is a number, and Luau counts every number true, 0 too: [1] ~= 0 asks whether it is not 0</string>
+	<string name="LuauLintSlNumberTruthNot">not [1] is always false: [1] is a number, and Luau counts every number true, 0 too. [1] == 0 asks whether it is 0</string>
+	<string name="LuauLintSlNilSentinel">[1] == [4] never holds: [2] answers [3] where it finds nothing, not [4]. [1] == [3] asks whether it found nothing</string>
+	<string name="LuauLintSlNilSentinelAlways">[1] ~= [4] always holds: [2] answers [3] where it finds nothing, not [4]. [1] ~= [3] asks whether it found something</string>
+	<string name="LuauLintSlNilSentinelOrder">Comparing [1] with a number is an error where [2] finds nothing: it answers nil there, not -1. [1] [5] asks the same</string>
+	<string name="LuauLintSlTableCompare">[1] == {} is always false: {} is a new table, equal to no other. [2] asks whether [1] is empty</string>
+	<string name="LuauLintSlTableCompareAlways">[1] ~= {} is always true: {} is a new table, equal to no other. [2] asks whether [1] has anything in it</string>
+	<string name="LuauLintSlTableCompareItems">[1] can never equal a table built where it is compared: a new table is equal to no other. LSL compared lists by their lengths alone, which #[1] gives</string>
+	<string name="LuauLintSlZeroIndex">[1][0] is nothing: Luau's lists count from 1, where LSL's counted from 0. [1][1] is the first</string>
+	<string name="LuauLintSlZeroIndexLoop">This loop counts from 0 to [1] - 1, as LSL's lists did, but Luau's count from 1: [2] reads nothing at 0 and never the last. for [3] = 1, [1] counts as Luau does</string>
+	<string name="LuauLintSlZeroIndexSub">[1] counts from 1 and takes 0 as 1, so it ends a character sooner than LSL's llGetSubString with the same numbers</string>
+	<string name="LuauLintSlZeroIndexArg">[1] counts from 1 in SLua, as Luau does: its first is 1, not 0</string>
+	<string name="LuauLintSlZeroIndexFound">[1] is never 0: [2] answers from 1, where LSL's answered from 0, so its first is 1</string>
+	<string name="LuauLintSlCompatCall">[1] is LSL's, kept for scripts moved from it; ll's means the same here: [2]</string>
+	<string name="LuauLintSlBooleanNumber">[1] == [2] never holds: [1] is true or false, never a number as LSL's truths were</string>
+	<string name="LuauLintSlBooleanNumberAlways">[1] ~= [2] always holds: [1] is true or false, never a number as LSL's truths were</string>
+	<string name="LuauLintSlBooleanNumberChoice">[1] asks no more than [2]: its 1 or 0 is made only to be compared</string>
+	<string name="LuauLintSlGlobalAssign">This makes [1] a global. A local is quicker for Luau to read</string>
+	<string name="LuauLintSlGlobalFunction">function [1] makes a global. local function [1] is quicker for Luau to call</string>
+	<string name="LuauLintSlGlobalFunctionInScope">function [1] here makes a global, and only once this runs. local function [1] keeps it to this block</string>
+	<string name="LuauLintSlParenCondition">Luau's [1] needs no brackets round its condition, where LSL's did</string>
+	<string name="LuauLintSlAlmostSwapped">[1] = [2] and then [2] = [1] leave both [2]: a swap is [3]</string>
+	<string name="LuauLintSlMustUse">[1] changes nothing and only answers, and nothing reads its answer here</string>
+	<string name="LuauLintSlGeneralizedFor">Luau's for walks a table given as it is: in [1] says what in [2] says</string>
+	<string name="LuauLintSlGeneralizedForList">Luau's for walks a table given as it is: in [1] walks a list as in [2] does, where the list has no gaps</string>
+	<string name="LuauLintSlEmptyBlock">This [1]'s block is empty: it does nothing</string>
+	<string name="LuauLintSlIndexDivision">[1] may be a fraction, which a list has nothing at: Luau's / divides as floats do, where LSL's integers divided whole. [2] rounds down</string>
+	<string name="LuauLintSlVectorProduct">[1] multiplies each part of two vectors, and gives a vector: LSL's * of two vectors was their dot product, a number. vector.dot([2], [3]) is LSL's</string>
+	<string name="LuauLintSlVectorCross">[1] is each part's remainder in SLua: LSL's % of two vectors was their cross product. vector.cross([2], [3]) is LSL's</string>
+	<string name="LuauLintSlSleepingCall">[1] makes the script sleep [2] s each call; [3] does the same without the sleep</string>
+	<string name="LuauLintSlSleepingCallOften">[1] makes the script sleep [2] s each time it runs here, in a loop or a timer; [3] does the same without the sleep</string>
+	<string name="LuauLintSlSleepingTexture">[1] makes the script sleep [2] s each call; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LuauLintSlSleepingTextureOften">[1] makes the script sleep [2] s each time it runs here, in a loop or a timer; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LuauLintSlMergeablePrimParams">These [1] calls to [2] could be one, with all their rules, and PRIM_LINK_TARGET where the link changes</string>
+	<string name="LuauLintSlCostlyListen">This listens on channel 0 for anyone, so the script wakes for every line of chat nearby. A name, a key, or another channel hears less</string>
+	<string name="LuauLintSlFastTimer">A timer every [1] s, under a tenth of a second, fires every few of the region's 45 frames a second, and the time it takes is time other scripts there wait for</string>
+	<string name="LuauLintSlFastSensor">A sensor sweeping every [1] s, under a second, searches round the object that often: once a second or less is plenty for most</string>
+	<string name="LuauLintSlStringBuild">[1] is joined to with .. in a loop, which makes a new string each time round. SLua's way is to put the pieces in a table and join them once, with table.concat</string>
+	<string name="LuauLintSlRepeatedCall">[1] is called [2] times here, and answers the same each time: a local set once holds it</string>
 	<string name="LuauUnexpectedDidYouMean">Unexpected '[1]'; did you mean '[2]'?</string>
 	<string name="LuauUnknownGlobalAssign">Unknown global '[1]'; consider assigning to it first</string>
 	<string name="LuauUnknownType">Unknown type '[1]'</string>
@@ -902,6 +968,57 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LuauCheckedCall">the function '[1]' expects to get a [2] as its [3] argument, but is being given a [4]</string>
 	<string name="LuauFailsAtRuntimeIn">in the function '[1]', 'the argument '[2]' is used in a way that will error at runtime</string>
 	<string name="LuauFailsAtRuntime">the argument '[1]' is used in a way that will error at runtime</string>
+
+	<!-- What the LSL to SLua converter notes where the two languages differ
+	     (allsltoslua.cpp): in a comment marked LSL over the line, and at the
+	     LSL's place. [1], [2], [3] are names, the definitions' own words, or code -->
+	<string name="SluaSharedAssigned">set where the assignment's value is used</string>
+	<string name="SluaSharedCalled">read where a call of the script's in the same statement changes it</string>
+	<string name="SluaSharedHeld">given a list another may hold</string>
+	<string name="SluaSharedGiven">given to another variable</string>
+	<string name="SluaSharedReturned">returned by a function</string>
+	<string name="SluaSharedKept">passed to a function of the script's that keeps it</string>
+	<string name="SluaKeyText">LSL's keys held any text; SLua's uuid() stops the script on text that is no UUID, as it would here, where only a uuid will do.</string>
+	<string name="SluaUuidText">uuid() stops the script on text that is no UUID, where LSL's keys held any text; touuid() answers nil instead.</string>
+	<string name="SluaDetectedTable">detected[n] is what LSL read with llDetected*(n - 1): SLua counts it from 1, and one past its end is an error, where LSL answered nothing.</string>
+	<string name="SluaMathDomain">math.sqrt, math.log and math.log10 answer nan or -inf out of their range, where LSL answered 0 or stopped with a math error.</string>
+	<string name="SluaAbsent">SLua has no [1], in ll or in llcompat: it is left out.</string>
+	<string name="SluaUse">SLua would use [1] for [2].</string>
+	<string name="SluaCompatOnlyTimer">SLua's ll has no SetTimerEvent; llcompat's is LSL's. SLua's own timers are LLTimers:every(seconds, callback) and LLTimers:once, several at a time.</string>
+	<string name="SluaCompatOnly">SLua's ll has no [1]; llcompat.[1] is LSL's.</string>
+	<string name="SluaDetected">llcompat.Detected* count from 0, as LSL's did. SLua's own way is the handler's detected table: detected[n + 1]:getKey(), :getName(), :getPos() and the rest.</string>
+	<string name="SluaDeprecatedForWhy">SLua deprecates ll.[1], for [2]: [3]</string>
+	<string name="SluaDeprecatedFor">SLua deprecates ll.[1], for [2].</string>
+	<string name="SluaDeprecatedWhy">SLua deprecates ll.[1]: [2]</string>
+	<string name="SluaDeprecated">SLua deprecates ll.[1].</string>
+	<string name="SluaIndexFound">llcompat.[1] counts from 0 and says -1 for none, as LSL did; ll.[1] counts from 1 and says nil.</string>
+	<string name="SluaIndex">llcompat.[1] takes indexes from 0, as LSL did; ll.[1] takes them from 1.</string>
+	<string name="SluaBool">llcompat.[1] answers 1 or 0, as LSL did; ll.[1] answers true or false.</string>
+	<string name="SluaBoolList">llcompat.[1]'s list has 1 or 0 where LSL's did; ll.[1]'s has true or false there.</string>
+	<string name="SluaRightFirst">LSL ran the right side of this before the left, and Luau runs the left first: one side changes what the other reads.</string>
+	<string name="SluaBit32">bit32 answers 0 to 4294967295; LSL's integers were signed, from -2147483648.</string>
+	<string name="SluaIntegerDivision">// rounds down, and LSL's integer / rounded toward zero: they differ where the answer is negative.</string>
+	<string name="SluaModulo">Luau's % takes the divisor's sign, and LSL's took the dividend's: they differ where one is negative.</string>
+	<string name="SluaListCompare">LSL compares lists by their lengths alone, and != answers the difference of them.</string>
+	<string name="SluaShortCircuit">[1] leaves its right side unrun once the left decides it; LSL ran both sides, the right one first.</string>
+	<string name="SluaUuid">SLua's uuid holds a key; LSL's key could hold any text.</string>
+	<string name="SluaAssignInExpression">SLua's assignments are statements: this one is made by a function called where it stood.</string>
+	<string name="SluaStringBuild">[1] is built with .. in a loop, which makes a new string each time. SLua's way is to put the pieces in a table and join them once, with table.concat.</string>
+	<string name="SluaMemoryHack">([1] = [2]) + [1] spared LSO's memory, clearing [1] once LSL, going right to left, had read it. Luau goes left to right and needs no such thing: the clearing is left out.</string>
+	<string name="SluaStateSame">a change to the state the script is in; a script of one state has no other to go to.</string>
+	<string name="SluaJump">jump [1]: SLua has no goto, and this jump is neither out of a loop nor to its next turn. Rewrite it.</string>
+	<string name="SluaListCopy">LSL's lists were values, and [1] is [2], so each + makes a new list of it, as LSL did. Where nothing else holds it, table.insert([1], x) grows it in place.</string>
+	<string name="SluaStateExit">state_exit runs as a script leaves a state, and this one has no other: it never ran.</string>
+	<string name="SluaTimer">the timer event, set going by llcompat.SetTimerEvent; LLTimers:every is SLua's own.</string>
+	<string name="SluaStates">LSL let go of a state's listens, sensor repeats and targets as it left the state; setState does not. Remove them yourself where the script relied on it.</string>
+	<string name="SluaTimers">SLua's LLTimers can run several timers at once: LLTimers:every(seconds, callback), LLTimers:once(seconds, callback) and LLTimers:off(timer).</string>
+	<string name="SluaTimerStates">the timer event, set going by llcompat.SetTimerEvent, keeps going from state to state, as LSL's did; LLTimers:every is SLua's own.</string>
+	<string name="SluaHeader">Written from LSL by Script Studio. Each "-- LSL:" comment marks a place where
+SLua means something else than LSL did, or has a way of its own: read it, then
+delete it. LSL's integers wrapped at 32 bits and its floats were single
+precision; SLua's numbers are doubles, which do neither.</string>
+	<string name="SluaHeaderPlain">Written from LSL by Script Studio. LSL's integers wrapped at 32 bits and its
+floats were single precision; SLua's numbers are doubles, which do neither.</string>
 
 	<!-- What the script workspace says when a load, a save or a queue
 	     cannot go ahead (alscriptworkspace.cpp), and the analyzers when
