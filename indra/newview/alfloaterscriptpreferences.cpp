@@ -58,6 +58,11 @@
 #include "llinventorymodel.h"
 #include "llviewerinventory.h"
 #include "alscriptpreprocessor.h"
+#include "alscriptworkspace.h"
+#include "llagent.h"
+#include "llfloaterperms.h"
+#include "llnotecard.h"
+#include "llviewerassettype.h"
 
 #include <algorithm>
 #include <sstream>
@@ -81,6 +86,15 @@ namespace
         "ALScriptStudioVimClipboard",
         "ALScriptFormatBlankLines",  "ALScriptFormatSpacing",      "ALScriptFormatOnSave",      "ALScriptTrimOnSave",        "ALScriptFixOnSave",
         "ALScriptTemplateLSL",       "ALScriptTemplateSLua",       "ALScriptPreprocDefines",    "ExternalEditor",
+        "ALScriptConvertLLTimers",   "ALScriptConvertDetectedTable", "ALScriptConvertSLuaCalls", "ALScriptConvertIdioms",
+        "ALScriptConvertHandlerFields", "ALScriptConvertTypes",    "ALScriptConvertComments",
+    };
+
+    // What each preset of Convert to SLua sets: SLua's own ways, or as
+    // close to LSL as SLua lets it be. Handlers, types and comments are
+    // the scripter's either way.
+    const std::pair<const char*, bool> CONVERT_MODERN[] = {
+        { "ALScriptConvertLLTimers", true }, { "ALScriptConvertDetectedTable", true }, { "ALScriptConvertSLuaCalls", true }, { "ALScriptConvertIdioms", true },
     };
 
     // The places an include is looked for, as the setting spells them.
@@ -144,7 +158,17 @@ bool ALFloaterScriptPreferences::postBuild()
     getChild<LLButton>("snippet_new")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onSnippetNew(); });
     getChild<LLButton>("snippet_copy")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onSnippetCopy(); });
     getChild<LLButton>("snippet_delete")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onSnippetDelete(); });
+    getChild<LLButton>("snippet_to_inventory")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onSnippetsToInventory(); });
     mSnippetLang->setCommitCallback([this](LLUICtrl*, const LLSD&) { fillSnippets(true); });
+    getChild<LLComboBox>("convert_preset")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onConvertPreset(); });
+    for (const auto& [setting, modern] : CONVERT_MODERN)
+    {
+        if (LLControlVariable* control = gSavedSettings.getControl(setting))
+        {
+            mConvertConnections.emplace_back(control->getSignal()->connect([this](LLControlVariable*, const LLSD&, const LLSD&) { refreshConvertPreset(); }));
+        }
+    }
+    refreshConvertPreset();
     mSnippetList->setCommitCallback([this](LLUICtrl*, const LLSD&) { showSnippet(); });
     for (LLLineEditor* field : { mSnippetName, mSnippetPrefix, mSnippetDetail })
     {
@@ -872,6 +896,26 @@ bool ALFloaterScriptPreferences::handleDragAndDrop(S32 x, S32 y, MASK mask, bool
         }
         return true;
     }
+    if (mSnippetList && mSnippetList->isInVisibleChain() && localPointToOtherView(x, y, &local_x, &local_y, mSnippetList) &&
+        mSnippetList->pointInView(local_x, local_y))
+    {
+        // A notecard of the agent's own, whose snippets come in beside
+        // theirs.
+        const LLInventoryItem*       item = static_cast<LLInventoryItem*>(cargo_data);
+        const LLViewerInventoryItem* held = item ? gInventory.getItem(item->getLinkedUUID()) : nullptr;
+        if (cargo_type != DAD_NOTECARD || !held || held->getType() != LLAssetType::AT_NOTECARD)
+        {
+            *accept     = ACCEPT_NO;
+            tooltip_msg = getString("SnippetsOnlyNotecards");
+            return true;
+        }
+        *accept = ACCEPT_YES_SINGLE;
+        if (drop)
+        {
+            addSnippetsFrom(*held);
+        }
+        return true;
+    }
     return LLFloater::handleDragAndDrop(x, y, mask, drop, cargo_type, cargo_data, accept, tooltip_msg);
 }
 
@@ -1254,4 +1298,150 @@ void ALFloaterScriptPreferences::onSnippetDelete()
     flushSnippets();
     mSnippetList->deselectAllItems();
     fillSnippets(false);
+}
+
+void ALFloaterScriptPreferences::onSnippetsToInventory()
+{
+    flushSnippets();
+    const std::vector<ALScriptSnippets::Snippet> lsl  = ALScriptSnippets::own(false);
+    const std::vector<ALScriptSnippets::Snippet> slua = ALScriptSnippets::own(true);
+    if (lsl.empty() && slua.empty())
+    {
+        LLNotificationsUtil::add("ScriptStudioSnippetsNone");
+        return;
+    }
+    // Refused before an item is made, rather than an empty notecard left
+    // where the upload would refuse it.
+    const std::string text = ALScriptSnippets::notecardText(lsl, slua);
+    if (text.size() > static_cast<size_t>(LLNotecard::MAX_SIZE))
+    {
+        LLSD args;
+        args["SIZE"]  = static_cast<S32>(text.size());
+        args["LIMIT"] = static_cast<S32>(LLNotecard::MAX_SIZE);
+        LLNotificationsUtil::add("ScriptStudioSnippetsTooLarge", args);
+        return;
+    }
+    // A new notecard of the account's default permissions, as every other
+    // way of making one gives, and the snippets saved in it once it is.
+    const std::string name     = getString("SnippetsNotecardName");
+    const std::string not_made = getString("SnippetsNotecardNotMade");
+    const S32         count    = static_cast<S32>(lsl.size() + slua.size());
+    const auto        failed = [name](const std::string& why) {
+        LLSD args;
+        args["NAME"]   = name;
+        args["REASON"] = why;
+        LLNotificationsUtil::add("ScriptStudioSnippetsNotSaved", args);
+    };
+    LLPointer<LLBoostFuncInventoryCallback> made = new LLBoostFuncInventoryCallback(create_notecard_cb);
+    made->addOnFireFunc([text, name, not_made, count, failed](const LLUUID& item_id) {
+        if (item_id.isNull())
+        {
+            failed(not_made);
+            return;
+        }
+        std::string error;
+        const bool  sent = ALScriptWorkspace::getInstance()->saveNotecard(
+            ALScriptRef(LLUUID::null, item_id), text, {},
+            [name, count, failed](const ALScriptCompileResult& result) {
+                if (!result.success)
+                {
+                    failed(result.error);
+                    return;
+                }
+                LLSD args;
+                args["NAME"]  = name;
+                args["COUNT"] = count;
+                LLNotificationsUtil::add("ScriptStudioSnippetsSaved", args);
+            },
+            error);
+        if (!sent)
+        {
+            failed(error);
+        }
+    });
+    std::string desc;
+    LLViewerAssetType::generateDescriptionFor(LLAssetType::AT_NOTECARD, desc);
+    create_inventory_item(gAgent.getID(), gAgent.getSessionID(), gInventory.findCategoryUUIDForType(LLFolderType::FT_NOTECARD),
+                          LLTransactionID::tnull, name, desc, LLAssetType::AT_NOTECARD, LLInventoryType::IT_NOTECARD, NO_INV_SUBTYPE,
+                          LLFloaterPerms::getNextOwnerPerms("Notecards"), made);
+}
+
+void ALFloaterScriptPreferences::refreshConvertPreset()
+{
+    bool all = true, none = true;
+    for (const auto& [setting, modern] : CONVERT_MODERN)
+    {
+        const bool on = gSavedSettings.getBOOL(setting);
+        all           = all && on == modern;
+        none          = none && on != modern;
+    }
+    getChild<LLComboBox>("convert_preset")->selectByValue(all ? "modern" : none ? "close" : "custom");
+}
+
+void ALFloaterScriptPreferences::onConvertPreset()
+{
+    const std::string preset = getChild<LLComboBox>("convert_preset")->getValue().asString();
+    if (preset == "custom")
+    {
+        return;
+    }
+    for (const auto& [setting, modern] : CONVERT_MODERN)
+    {
+        gSavedSettings.setBOOL(setting, preset == "modern" ? modern : !modern);
+    }
+    refreshConvertPreset();
+}
+
+void ALFloaterScriptPreferences::addSnippetsFrom(const LLViewerInventoryItem& notecard)
+{
+    const LLHandle<LLFloater> handle = getHandle();
+    const std::string         name   = notecard.getName();
+    ALScriptWorkspace::getInstance()->load(ALScriptRef(LLUUID::null, notecard.getUUID()), [handle, name](const ALScriptLoaded& loaded) {
+        // Brought in only while the window is open: its Cancel takes the
+        // snippets back with everything else the window changed.
+        ALFloaterScriptPreferences* self = ALViewType::as<ALFloaterScriptPreferences>(handle.get());
+        if (!self)
+        {
+            return;
+        }
+        LLSD args;
+        args["NAME"] = name;
+        if (!loaded.error.empty())
+        {
+            args["REASON"] = loaded.error;
+            LLNotificationsUtil::add("ScriptStudioSnippetsNotRead", args);
+            return;
+        }
+        std::vector<ALScriptSnippets::Snippet> lsl;
+        std::vector<ALScriptSnippets::Snippet> slua;
+        if (!ALScriptSnippets::readNotecard(loaded.text, self->snippetLua(), lsl, slua))
+        {
+            LLNotificationsUtil::add("ScriptStudioSnippetsNotSnippets", args);
+            return;
+        }
+        self->flushSnippets();
+        ALScriptSnippets::Merged all;
+        for (bool lua : { false, true })
+        {
+            const std::vector<ALScriptSnippets::Snippet>& incoming = lua ? slua : lsl;
+            if (incoming.empty())
+            {
+                continue;
+            }
+            std::vector<ALScriptSnippets::Snippet> own    = ALScriptSnippets::own(lua);
+            const ALScriptSnippets::Merged         merged = ALScriptSnippets::merge(own, incoming);
+            if (merged.added + merged.renamed > 0)
+            {
+                ALScriptSnippets::saveOwn(lua, own);
+            }
+            all.added += merged.added;
+            all.renamed += merged.renamed;
+            all.skipped += merged.skipped;
+        }
+        self->fillSnippets(true);
+        args["ADDED"]   = static_cast<S32>(all.added);
+        args["RENAMED"] = static_cast<S32>(all.renamed);
+        args["SKIPPED"] = static_cast<S32>(all.skipped);
+        LLNotificationsUtil::add("ScriptStudioSnippetsAdded", args);
+    });
 }

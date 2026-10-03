@@ -1183,6 +1183,20 @@ namespace tut
             ensure(std::string(pure) + " is pure", ALLSLTraits::pure(pure));
         }
         ensure("llGetPos is not", !ALLSLTraits::pure("llGetPos") && ALLSLTraits::of("llGetPos")->mustUse);
+        // What SLua makes of each, from the same definitions.
+        ensure("llGetSubString takes its second and third from one in SLua's ll",
+               ALLSLTraits::of("llGetSubString")->slua == ALLSLTraits::SluaIndexArgs && ALLSLTraits::of("llGetSubString")->sluaIndexArgs == 0x6);
+        ensure("llListFindList answers an index, and SLua deprecates it",
+               ALLSLTraits::of("llListFindList")->slua == (ALLSLTraits::SluaIndexResult | ALLSLTraits::SluaDeprecated));
+        ensure("llSameGroup answers a boolean", ALLSLTraits::of("llSameGroup")->slua == ALLSLTraits::SluaBool);
+        ensure("llSetTimerEvent is llcompat's alone", ALLSLTraits::of("llSetTimerEvent")->slua == ALLSLTraits::SluaRemoved);
+        ensure("llSay is as it was", ALLSLTraits::of("llSay")->slua == 0 && !ALLSLTraits::of("llSay")->sluaUse);
+        ensure("llAbs has math.abs in its stead", ALLSLTraits::of("llAbs")->sluaUse && std::string(ALLSLTraits::of("llAbs")->sluaUse) == "math.abs");
+        // How long each sleeps, under LSO and under Mono.
+        ensure("llSetPos sleeps 0.2 s", ALLSLTraits::of("llSetPos")->sleep == 0.2f && ALLSLTraits::of("llSetPos")->monoSleep == 0.2f);
+        ensure("llSetLinkPrimitiveParamsFast does not", ALLSLTraits::of("llSetLinkPrimitiveParamsFast")->sleep == 0.0f);
+        ensure("llTextBox sleeps under LSO alone", ALLSLTraits::of("llTextBox")->sleep == 1.0f && ALLSLTraits::of("llTextBox")->monoSleep == 0.0f);
+        ensure("llOpenFloater under Mono alone", ALLSLTraits::of("llOpenFloater")->sleep == 0.0f && ALLSLTraits::of("llOpenFloater")->monoSleep == 0.2f);
     }
     template<> template<>
     void allsloptimizer_object::test<33>()

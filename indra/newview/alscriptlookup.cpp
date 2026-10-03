@@ -26,11 +26,14 @@
 
 #include "alscriptlookup.h"
 
+#include "alscriptlexicon.h"
 #include "alscriptnavigation.h"
 #include "alscriptstudioanalysis.h"
+#include "alscriptfixes.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiotabs.h"
+#include "alscriptstudioviewer.h"
 #include "alscriptstudiowords.h"
 #include "llinventorytype.h"
 
@@ -101,17 +104,13 @@ bool ALScriptLookup::reserved(bool lua, const std::string& name)
     // its keywords and types, the preprocessor's words while their
     // transforms are on, and every function, event and constant the
     // definitions give.
-    static const std::set<std::string> LSL{ "default", "state", "event", "jump", "return", "if", "else", "for", "do", "while", "print",
-                                           "integer", "float", "string", "key", "vector", "rotation", "quaternion", "list" };
-    static const std::set<std::string> LUAU{ "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
-                                            "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue" };
-    if (lua ? LUAU.count(name) > 0 : LSL.count(name) > 0)
+    if (ALScriptLexicon::isKeyword(lua, name))
     {
         return true;
     }
-    if (!lua && ALScriptStudioWords::sources().preprocessorWords)
+    if (!lua)
     {
-        const std::vector<std::string> words = ALScriptStudioWords::sources().preprocessorWords();
+        const std::vector<std::string> words = ALScriptStudioViewer::get().preprocessorWords();
         if (std::find(words.begin(), words.end(), name) != words.end())
         {
             return true;
@@ -592,58 +591,14 @@ std::string ALScriptLookup::refused(const Doc& doc, const std::string& name) con
 // static
 bool ALScriptLookup::mentions(std::string_view text, std::string_view name, bool lua)
 {
-    // Passed over as the lexers pass over them: `//` and `/* */` comments
-    // and "" strings in LSL; `--` and `--[[ ]]` comments, '' "" `` strings
-    // and [[ ]] long ones in SLua.
-    const auto long_close = [&text](size_t at, size_t& level) {
-        // A long bracket opening at `at`, `[[` or `[==[`: its closer.
-        if (at >= text.size() || text[at] != '[')
-        {
-            return std::string();
-        }
-        level = 0;
-        while (at + 1 + level < text.size() && text[at + 1 + level] == '=')
-        {
-            ++level;
-        }
-        return at + 1 + level < text.size() && text[at + 1 + level] == '[' ? "]" + std::string(level, '=') + "]" : std::string();
-    };
-    const auto name_byte = [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    // Past the strings and the comments, as the lexers pass over them.
+    const auto name_byte = ALScriptLexicon::isNameByte;
     for (size_t i = 0; i < text.size();)
     {
         const char c = text[i];
-        if (c == '"' || (lua && (c == '\'' || c == '`')))
+        if (const ALScriptLexicon::Stretch run = ALScriptLexicon::stretchAt(text, i, lua); run.kind != ALScriptLexicon::Kind::Code)
         {
-            for (++i; i < text.size() && text[i] != c && text[i] != '\n'; ++i)
-            {
-                i += text[i] == '\\' ? 1 : 0;
-            }
-            ++i;
-            continue;
-        }
-        if (lua && c == '-' && i + 1 < text.size() && text[i + 1] == '-')
-        {
-            size_t            level  = 0;
-            const std::string closer = long_close(i + 2, level);
-            const size_t      end    = closer.empty() ? text.find('\n', i) : text.find(closer, i + 4 + level);
-            i                        = end == std::string_view::npos ? text.size() : end + (closer.empty() ? 0 : closer.size());
-            continue;
-        }
-        if (lua && c == '[')
-        {
-            size_t            level  = 0;
-            const std::string closer = long_close(i, level);
-            if (!closer.empty())
-            {
-                const size_t end = text.find(closer, i + 2 + level);
-                i                = end == std::string_view::npos ? text.size() : end + closer.size();
-                continue;
-            }
-        }
-        if (!lua && c == '/' && i + 1 < text.size() && (text[i + 1] == '/' || text[i + 1] == '*'))
-        {
-            const size_t end = text[i + 1] == '/' ? text.find('\n', i) : text.find("*/", i + 2);
-            i                = end == std::string_view::npos ? text.size() : end + (text[i + 1] == '/' ? 0 : 2);
+            i = run.end;
             continue;
         }
         if (name_byte(c))
@@ -773,12 +728,82 @@ void ALScriptLookup::previewRename(const std::string& id, U32 generation, const 
     }
     std::string said = renameHint(doc, lookup.name, static_cast<S32>(lookup.places.size()), static_cast<S32>(files.size()), name, false);
     const std::weak_ptr<bool> alive = mAlive;
-    mWindow.previewRename(doc, shown, name, said, [this, alive, id, generation, name](const std::vector<size_t>& kept) {
-        if (alive.lock())
+    mWindow.previewRename(
+        doc, shown, name, said,
+        [this, alive, id, generation, name](const std::vector<size_t>& kept) {
+            if (alive.lock())
+            {
+                renameTo(id, generation, name, &kept);
+            }
+        },
+        [this, alive, id, generation, name](const std::string& file, const std::vector<size_t>& kept) {
+            if (alive.lock())
+            {
+                showRenameChanges(id, generation, name, file, kept);
+            }
+        });
+}
+
+bool ALScriptLookup::showRenameChanges(const std::string& id, U32 generation, const std::string& new_name, const std::string& file,
+                                       const std::vector<size_t>& kept)
+{
+    Doc* found = lookingIn(id, generation);
+    if (!found)
+    {
+        return false;
+    }
+    Doc&               doc    = *found;
+    const Doc::Lookup& lookup = *doc.lookup;
+    std::string        name   = new_name;
+    LLStringUtil::trim(name);
+    // The tab the file is in, as the rename reaches it on the spot, and
+    // the version its places were read at.
+    Doc*        target  = nullptr;
+    std::string called  = doc.name;
+    U32         version = lookup.version;
+    if (file.empty())
+    {
+        target = &doc;
+    }
+    else
+    {
+        ALScriptRef ref;
+        target             = ALScriptPreprocessor::refOf(file, ref) ? mServices.findDoc(ref) : mServices.findDoc(file);
+        const auto read_at = lookup.versions.find(file);
+        target             = read_at != lookup.versions.end() ? target : nullptr;
+        version            = read_at != lookup.versions.end() ? read_at->second : 0;
+        const auto named   = std::find_if(lookup.places.begin(), lookup.places.end(), [&file](const Doc::Place& place) { return place.file == file; });
+        called             = named != lookup.places.end() ? named->fileName : file;
+    }
+    LLStringUtil::format_map_t args;
+    args["[NAME]"]   = name;
+    args["[SCRIPT]"] = called;
+    if (!target || !target->loaded || target->editor->document().version() != version)
+    {
+        mServices.setStatus(mServices.words("RenameChangesNotHere", args), true);
+        return false;
+    }
+    // Each place kept in the file where the old name still stands, as the
+    // rename makes them there.
+    const ALTextDocument& text = target->editor->document();
+    ALScriptFix           all;
+    for (size_t index : kept)
+    {
+        const Doc::Place* place = index < lookup.places.size() ? &lookup.places[index] : nullptr;
+        if (place && place->file == file && place->span.line < text.lineCount() && text.text(rangeOf(place->span)) == lookup.name)
         {
-            renameTo(id, generation, name, &kept);
+            all.edits.emplace_back(place->span, name);
         }
-    });
+    }
+    const std::string                now   = target->editor->wholeText();
+    const std::optional<std::string> after = ALScriptFixes::apply(now, all);
+    if (!after)
+    {
+        return false;
+    }
+    mTabs.activate(*target);
+    mWindow.compare(*target, now, *after, mServices.words("CompareNow"), mServices.words("RenameAfter", args));
+    return true;
 }
 
 void ALScriptLookup::renameTo(const std::string& id, U32 generation, const std::string& new_name, const std::vector<size_t>* kept)
