@@ -519,10 +519,10 @@ namespace
     void trianglesNear(const Partitioner& P, F64 px, F64 py, std::vector<S32>& out)
     {
         out.clear();
-        const S32 cx0 = static_cast<S32>(std::floor((px - NEAR_XY - P.mGx0) / GRID_M));
-        const S32 cx1 = static_cast<S32>(std::floor((px + NEAR_XY - P.mGx0) / GRID_M));
-        const S32 cy0 = static_cast<S32>(std::floor((py - NEAR_XY - P.mGy0) / GRID_M));
-        const S32 cy1 = static_cast<S32>(std::floor((py + NEAR_XY - P.mGy0) / GRID_M));
+        const S32 cx0 = static_cast<S32>(std::floor((px - NEAR_XY - P.mGx0) / P.mGcell));
+        const S32 cx1 = static_cast<S32>(std::floor((px + NEAR_XY - P.mGx0) / P.mGcell));
+        const S32 cy0 = static_cast<S32>(std::floor((py - NEAR_XY - P.mGy0) / P.mGcell));
+        const S32 cy1 = static_cast<S32>(std::floor((py + NEAR_XY - P.mGy0) / P.mGcell));
         for (S32 cy = std::max(cy0, 0); cy <= std::min(cy1, P.mGh - 1); ++cy)
         {
             for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
