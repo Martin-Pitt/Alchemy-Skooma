@@ -1286,7 +1286,7 @@ template<> template<>
     }
 
     template<> template<>
-    void sknavrooms_object::test<33>()
+    void sknavrooms_object::test<34>()
     {
         set_test_name("a pass over again leaves the landed products and their draw untouched");
         // The rooms product's draw is only ever fresh if landed products are
