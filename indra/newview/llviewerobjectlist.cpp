@@ -1028,34 +1028,46 @@ void LLViewerObjectList::update(LLAgent &agent)
         // frame behind -- or not, for the next vehicle over, and it could change when an unrelated
         // object was removed from the list. No non-avatar idleUpdate reads avatar state, so nothing
         // needs the reverse order.
-        for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
-            idle_iter != idle_end; idle_iter++)
-        {
-            objectp = *idle_iter;
-            llassert(objectp->isActive());
-            if (!objectp->isAvatar())
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - idle objects");
+            for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
+                idle_iter != idle_end; idle_iter++)
             {
-                objectp->idleUpdate(agent, frame_time);
+                objectp = *idle_iter;
+                llassert(objectp->isActive());
+                if (!objectp->isAvatar())
+                {
+                    objectp->idleUpdate(agent, frame_time);
+                }
             }
-        }
+        } // </SK:Nexii>
 
-        for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
-            idle_iter != idle_end; idle_iter++)
-        {
-            objectp = *idle_iter;
-            if (objectp->isAvatar())
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - idle avatars");
+            for (std::vector<LLViewerObject*>::iterator idle_iter = idle_list.begin();
+                idle_iter != idle_end; idle_iter++)
             {
-                objectp->idleUpdate(agent, frame_time);
+                objectp = *idle_iter;
+                if (objectp->isAvatar())
+                {
+                    objectp->idleUpdate(agent, frame_time);
+                }
             }
-        }
+        } // </SK:Nexii>
 
         //update flexible objects
-        LLVolumeImplFlexible::updateClass();
+        { // <SK:Nexii> sub-zones for the profiler
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - flexibles");
+            LLVolumeImplFlexible::updateClass();
+        } // </SK:Nexii>
 
         //update animated textures
         if (gAnimateTextures)
         {
-            LLViewerTextureAnim::updateClass();
+            { // <SK:Nexii> sub-zones for the profiler
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("vol - texture anim");
+                LLViewerTextureAnim::updateClass();
+            } // </SK:Nexii>
         }
     }
 

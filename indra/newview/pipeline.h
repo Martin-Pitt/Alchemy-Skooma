@@ -557,6 +557,10 @@ public:
     static void refreshCachedSettings();
 
     void addDebugBlip(const LLVector3& position, const LLColor4& color);
+    // <SK:Nexii> navmesh tile updates: the same blip, with a line back to
+    // whatever caused the update
+    void addDebugBlip(const LLVector3& position, const LLColor4& color, const LLVector3& from);
+    // </SK:Nexii>
 
     void hidePermanentObjects( std::vector<U32>& restoreList );
     void restorePermanentObjects( const std::vector<U32>& restoreList );
@@ -727,6 +731,7 @@ public:
         RENDER_DEBUG_IMPOSTORS          = 0x100000000,
         RENDER_DEBUG_REFLECTION_PROBES  = 0x200000000,
         RENDER_DEBUG_PROBE_UPDATES      = 0x400000000,
+        RENDER_DEBUG_NAVMESH            = 0x800000000, // <SK:Nexii> navmesh census and mesh overlay
     };
 
 public:
@@ -1277,6 +1282,11 @@ protected:
         LLColor4 mColor;
         LLVector3 mPosition;
         F32 mAge;
+        // <SK:Nexii> navmesh tile updates: the blip a tile update spawns also
+        // points at what caused it, when something did
+        LLVector3 mFrom;
+        bool mHasFrom = false;
+        // </SK:Nexii>
 
         DebugBlip(const LLVector3& position, const LLColor4& color)
             : mColor(color), mPosition(position), mAge(0.f)

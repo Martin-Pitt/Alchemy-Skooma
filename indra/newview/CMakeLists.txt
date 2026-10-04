@@ -964,6 +964,16 @@ if(AL_BUILD_VIEWER)
     pipeline.cpp
     rlvactions.cpp
     rlvenvironment.cpp
+    skphysicsshape.cpp
+    skfloaternavannotate.cpp
+    skfloaternavmesh.cpp
+    sknavannotator.cpp
+    sknavmesh.cpp
+    sknavoverlay.cpp
+    sknavpalette.cpp
+    sknavroomprobes.cpp
+    sknavrooms.cpp
+    skworldcensus.cpp
     rlvcommon.cpp
     rlveffects.cpp
     rlvextensions.cpp
@@ -1810,6 +1820,16 @@ if(AL_BUILD_VIEWER)
     pipeline.h
     rlvactions.h
     rlvcommon.h
+    skphysicsshape.h
+    skfloaternavannotate.h
+    skfloaternavmesh.h
+    sknavannotator.h
+    sknavmesh.h
+    sknavoverlay.h
+    sknavpalette.h
+    sknavroomprobes.h
+    sknavrooms.h
+    skworldcensus.h
     rlvdefines.h
     rlveffects.h
     rlvenvironment.h
@@ -2076,6 +2096,8 @@ if(AL_BUILD_VIEWER)
       ll::tinyexr
       ll::minizip
       ll::pugixml
+      ll::recast
+      sknavmesh
       ll::velopack
       ll::webrtc
   )

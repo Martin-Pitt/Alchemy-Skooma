@@ -7276,6 +7276,32 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
 
     }
 
+    // A sculpt gets its cut-out pieces by pinching the surface so that two
+    // vertices land in the same place. The triangles spanning the pinch are
+    // degenerate - a line, not a surface - but every consumer that walks the
+    // index buffer treats that line as geometry: rasterised, each one becomes
+    // a stripe across the whole region. The normals above are already
+    // accumulated from the full set of triangles, so dropping the degenerate
+    // ones now changes nothing the eye sees.
+    if (volume->getParams().isSculpt() && mNumIndices >= 3)
+    {
+        U16* kept = mIndices;
+        for (S32 i = 0; i + 2 < mNumIndices; i += 3)
+        {
+            const LLVector4a& a = pos[mIndices[i]];
+            const LLVector4a& b = pos[mIndices[i + 1]];
+            const LLVector4a& c = pos[mIndices[i + 2]];
+            if (a.equals3(b) || b.equals3(c) || c.equals3(a))
+            {
+                continue;
+            }
+            *kept++ = mIndices[i];
+            *kept++ = mIndices[i + 1];
+            *kept++ = mIndices[i + 2];
+        }
+        mNumIndices = static_cast<S32>(kept - mIndices);
+    }
+
     return true;
 }
 

@@ -6555,6 +6555,104 @@ void LLMeshRepository::buildPhysicsMesh(LLModel::Decomposition& decomp)
         {
             get_vertex_buffer_from_mesh(mesh, decomp.mMesh[i]);
         }
+        else
+        {
+            // QuickHull builds nothing for a hull with no volume: every point
+            // coplanar. Such a hull is still the physics shape the sim collides
+            // with -- an analyzed physics model is often only its surfaces --
+            // so fan it from its own points rather than leaving the physics
+            // shape overlay with nothing to draw.
+            //
+            // The asset stores a hull as a point cloud, not a boundary, so put
+            // the points in order around the plane first: fanning them as
+            // stored crosses itself and leaves triangular holes.
+            const std::vector<LLVector3>& points = decomp.mHull[i];
+            LLModel::PhysicsMesh& out = decomp.mMesh[i];
+
+            if (points.size() >= 3)
+            {
+                // The plane: the widest pair gives an edge in it, the point
+                // farthest from that line gives the normal.
+                size_t first = 0;
+                size_t second = 1;
+                F32 widest = 0.f;
+                for (size_t a = 0; a < points.size(); ++a)
+                {
+                    for (size_t b = a + 1; b < points.size(); ++b)
+                    {
+                        F32 distance = (points[b] - points[a]).magVecSquared();
+                        if (distance > widest)
+                        {
+                            widest = distance;
+                            first = a;
+                            second = b;
+                        }
+                    }
+                }
+
+                LLVector3 u = points[second] - points[first];
+                LLVector3 normal;
+                widest = 0.f;
+                for (const LLVector3& p : points)
+                {
+                    LLVector3 n = u % (p - points[first]);
+                    F32 area = n.magVecSquared();
+                    if (area > widest)
+                    {
+                        widest = area;
+                        normal = n;
+                    }
+                }
+
+                if (widest > 0.f)
+                {
+                    normal.normalize();
+                    u.normalize();
+                    const LLVector3 v = normal % u;
+
+                    LLVector3 centre;
+                    for (const LLVector3& p : points)
+                    {
+                        centre += p;
+                    }
+                    centre /= static_cast<F32>(points.size());
+
+                    // Angle around the centre. atan2, not a half-plane and a
+                    // cross product: a rectangle's opposite corners are
+                    // antipodal, and a cross product of zero there is not a
+                    // strict weak ordering, so the sort can leave them crossed.
+                    std::vector<size_t> order(points.size());
+                    for (size_t j = 0; j < order.size(); ++j)
+                    {
+                        order[j] = j;
+                    }
+                    std::sort(order.begin(), order.end(), [&](size_t a, size_t b)
+                    {
+                        const LLVector3 da = points[a] - centre;
+                        const LLVector3 db = points[b] - centre;
+                        return atan2f(da * v, da * u) < atan2f(db * v, db * u);
+                    });
+
+                    for (size_t j = 1; j + 1 < order.size(); ++j)
+                    {
+                        const LLVector3& v0 = points[order[0]];
+                        const LLVector3& v1 = points[order[j]];
+                        const LLVector3& v2 = points[order[j + 1]];
+
+                        LLVector3 n = (v1 - v0) % (v2 - v0);
+                        n.normalize();
+
+                        out.mPositions.push_back(v0);
+                        out.mPositions.push_back(v1);
+                        out.mPositions.push_back(v2);
+
+                        out.mNormals.push_back(n);
+                        out.mNormals.push_back(n);
+                        out.mNormals.push_back(n);
+                    }
+                }
+            }
+        }
     }
 
     if (!decomp.mBaseHull.empty() && decomp.mBaseHullMesh.empty())
