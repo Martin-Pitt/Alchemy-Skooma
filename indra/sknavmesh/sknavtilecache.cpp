@@ -413,7 +413,7 @@ namespace sknav
     }
 
     // Whoever adds a field to TileBuildInput keys it below, then updates this size.
-    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 232, "a new TileBuildInput field must go into tileContentKey");
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 256, "a new TileBuildInput field must go into tileContentKey");
 
     U64 tileContentKey(const TileBuildInput& input)
     {
@@ -432,6 +432,11 @@ namespace sknav
         h = quant(h, input.mZMax, KEY_POSITION_M);
         h = mixF32(h, input.mCell);
         h = mix(h, static_cast<U64>(input.mPartition));
+        for (const auto& [root, cue] : input.mRootCues)
+        {
+            h = mixId(h, root);
+            h = mix(h, static_cast<U64>(cue));
+        }
         h = mixF32(h, input.mDetailSampleCells);
         h = mixF32(h, input.mDetailMaxErrorCells);
         h = mixF32(h, input.mWallMinHeight);
@@ -539,23 +544,24 @@ namespace sknav
             for (const Flight& f : result.mFlights[c])
             {
                 w.pod(f.mKey);
-                w.pod(f.mCode);
                 w.pod(f.mRise);
+                w.pod(f.mRun);
                 w.pod(f.mPlane[0]);
                 w.pod(f.mPlane[1]);
                 w.pod(f.mPlane[2]);
                 w.pod(f.mZMin);
                 w.pod(f.mZMax);
-                w.vec(f.mTopNosingA);
-                w.vec(f.mTopNosingB);
-                w.pod(static_cast<U32>(f.mTreads.size()));
-                for (const FlightTread& t : f.mTreads)
+                for (const LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
                 {
-                    w.pod(t.mZ);
-                    w.vec(t.mNosingA);
-                    w.vec(t.mNosingB);
-                    w.pod(t.mRise);
-                    w.pod(t.mGoing);
+                    w.vec(*v);
+                }
+                w.pod(static_cast<U8>(f.mKind));
+                w.pod(static_cast<U8>(f.mRule));
+                w.pod(f.mTreads);
+                w.pod(static_cast<U32>(f.mCodes.size()));
+                for (const U8 code : f.mCodes)
+                {
+                    w.pod(code);
                 }
                 w.pod(static_cast<U32>(f.mFootprint.size()));
                 for (const LLVector2& p : f.mFootprint)
@@ -661,18 +667,26 @@ namespace sknav
                 }
                 else if (t == TAG_FLIGHTS[c])
                 {
-                    ok = sec.count(n, 77);
+                    ok = sec.count(n, 123);
                     res.mFlights[c].resize(ok ? n : 0);
                     for (Flight& f : res.mFlights[c])
                     {
                         U32 m = 0;
-                        ok = ok && sec.pod(f.mKey) && sec.pod(f.mCode) && sec.pod(f.mRise) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
-                             sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax) && sec.vec(f.mTopNosingA) && sec.vec(f.mTopNosingB) &&
-                             sec.count(m, 36);
-                        f.mTreads.resize(ok ? m : 0);
-                        for (FlightTread& t : f.mTreads)
+                        U8 kind = 0, rule = 0;
+                        ok = ok && sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
+                             sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
+                        for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
                         {
-                            ok = ok && sec.pod(t.mZ) && sec.vec(t.mNosingA) && sec.vec(t.mNosingB) && sec.pod(t.mRise) && sec.pod(t.mGoing);
+                            ok = ok && sec.vec(*v);
+                        }
+                        ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && kind <= static_cast<U8>(ConnectorKind::RAMP) &&
+                             rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
+                        f.mKind = static_cast<ConnectorKind>(kind);
+                        f.mRule = static_cast<ConnectorRule>(rule);
+                        f.mCodes.resize(ok ? m : 0);
+                        for (U8& code : f.mCodes)
+                        {
+                            ok = ok && sec.pod(code);
                         }
                         ok = ok && sec.count(m, 8);
                         f.mFootprint.resize(ok ? m : 0);

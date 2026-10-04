@@ -1072,6 +1072,18 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     }
 
     finishTileInput(tile.mRecords, mesh.mOrigin, *input);
+    // A linkset named for stairs or a ramp says which it is better than its shape can.
+    const SKWorldCensus* census = SKWorldCensus::instanceExists() ? SKWorldCensus::getInstance() : nullptr;
+    tileRootCues(
+        [census](const LLUUID& id) {
+            if (const SKWorldCensus::LinksetFacts* facts = census ? census->linksetFactsOf(id) : nullptr; facts && !facts->mName.empty())
+            {
+                return nameCue(facts->mName, facts->mDescription);
+            }
+            const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(id);
+            return props ? nameCue(props->mName, props->mDescription) : static_cast<U8>(CUE_NONE);
+        },
+        *input);
 
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;

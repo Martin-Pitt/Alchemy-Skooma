@@ -26,6 +26,8 @@
 
 #include "sknavflights.h"
 
+#include "llstring.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -461,12 +463,435 @@ namespace
         }
         return worst;
     }
+
+    constexpr F64 STEP_DZ = 0.5;            ///< a connector steps onto a floor or into another of its groups within this
+    constexpr F64 NEAR_XY = 0.15;           ///< this close in plan counts as touching
+    constexpr F64 SAMPLE_M = 0.25;          ///< along a group's boundary
+    constexpr F64 TREAD_MAX_M2 = 6.0;       ///< a level group bigger than this is a floor, whatever its risers say
+    constexpr F64 MIN_SLOPE_DEG = 5.0;
+    constexpr F64 FLOORISH_DEG = 10.0;      ///< a slope this gentle and FLOORISH_M2 big is a floor
+    constexpr F64 FLOORISH_M2 = 20.0;
+    constexpr F64 BEYOND_M = 0.6;           ///< the floor at an end carries on this far, or it is a rail or a wall top
+    constexpr F64 LINK_XY = 1.5;            ///< contacts this close in plan and LEVEL_DZ in height are one end
+    constexpr F64 LEVEL_DZ = 0.3;
+    constexpr F64 MIN_END_SPAN_M = 0.4;     ///< a narrower end is a corner touching, not a way on
+    constexpr F64 MAX_GRADE_DEG = 55.0;     ///< steeper is a wall, a ladder or furniture
+    constexpr F64 MIN_RUN_M = 0.5;
+    constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
+    constexpr F64 DUP_M = 3.0;              ///< two connectors with both ends this close are one
+
+    /// Height of walkable triangle t at a point in plan: over it, or within NEAR_XY of an edge.
+    bool nearZ(const Partitioner& P, S32 t, F64 px, F64 py, F64& z)
+    {
+        if (P.zAt(t, px, py, z))
+        {
+            return true;
+        }
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const V3 &a = P.mV[P.mT[t * 3 + k]], &b = P.mV[P.mT[t * 3 + (k + 1) % 3]];
+            const F64 ax = b.x - a.x, ay = b.y - a.y, d = ax * ax + ay * ay;
+            const F64 u = d > 0 ? std::clamp(((px - a.x) * ax + (py - a.y) * ay) / d, 0.0, 1.0) : 0.0;
+            if (std::hypot(a.x + u * ax - px, a.y + u * ay - py) <= NEAR_XY)
+            {
+                z = a.z + u * (b.z - a.z);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Walkable triangles whose index cells come within NEAR_XY of a point, each once.
+    void trianglesNear(const Partitioner& P, F64 px, F64 py, std::vector<S32>& out)
+    {
+        out.clear();
+        const S32 cx0 = static_cast<S32>(std::floor((px - NEAR_XY - P.mGx0) / GRID_M));
+        const S32 cx1 = static_cast<S32>(std::floor((px + NEAR_XY - P.mGx0) / GRID_M));
+        const S32 cy0 = static_cast<S32>(std::floor((py - NEAR_XY - P.mGy0) / GRID_M));
+        const S32 cy1 = static_cast<S32>(std::floor((py + NEAR_XY - P.mGy0) / GRID_M));
+        for (S32 cy = std::max(cy0, 0); cy <= std::min(cy1, P.mGh - 1); ++cy)
+        {
+            for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
+            {
+                for (const S32 t : P.mGrid[static_cast<size_t>(cy) * P.mGw + cx])
+                {
+                    if (std::find(out.begin(), out.end(), t) == out.end())
+                    {
+                        out.push_back(t);
+                    }
+                }
+            }
+        }
+    }
+
+    struct Contact
+    {
+        F64 x, y, z;
+    };
+
+    struct End
+    {
+        std::vector<Contact> mPts;
+        F64 mX = 0, mY = 0, mZMean = 0;
+        F64 mZ = 0;         ///< median
+        F64 mSpan = 0;      ///< plan diagonal of its contacts
+    };
+
+    /// Contacts linked within LINK_XY in plan and LEVEL_DZ in height, as ends.
+    std::vector<End> clusterEnds(const std::vector<Contact>& pts)
+    {
+        const size_t n = pts.size();
+        std::vector<size_t> par(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            par[i] = i;
+        }
+        const auto f = [&](size_t i) {
+            while (par[i] != i)
+            {
+                i = par[i] = par[par[i]];
+            }
+            return i;
+        };
+        std::map<std::pair<S64, S64>, std::vector<size_t>> cells;
+        for (size_t i = 0; i < n; ++i)
+        {
+            cells[{ static_cast<S64>(std::floor(pts[i].x / LINK_XY)), static_cast<S64>(std::floor(pts[i].y / LINK_XY)) }].push_back(i);
+        }
+        for (const auto& [c, idx] : cells)
+        {
+            for (S64 dx = -1; dx <= 1; ++dx)
+            {
+                for (S64 dy = -1; dy <= 1; ++dy)
+                {
+                    const auto it = cells.find({ c.first + dx, c.second + dy });
+                    if (it == cells.end())
+                    {
+                        continue;
+                    }
+                    for (const size_t j : it->second)
+                    {
+                        for (const size_t i : idx)
+                        {
+                            if (i < j && std::fabs(pts[i].z - pts[j].z) <= LEVEL_DZ &&
+                                std::hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) <= LINK_XY)
+                            {
+                                par[f(i)] = f(j);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::map<size_t, std::vector<Contact>> groups;
+        for (size_t i = 0; i < n; ++i)
+        {
+            groups[f(i)].push_back(pts[i]);
+        }
+        std::vector<End> out;
+        for (auto& [r, ps] : groups)
+        {
+            End e;
+            F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+            std::vector<F64> zs;
+            for (const Contact& p : ps)
+            {
+                e.mX += p.x;
+                e.mY += p.y;
+                e.mZMean += p.z;
+                x0 = std::min(x0, p.x);
+                y0 = std::min(y0, p.y);
+                x1 = std::max(x1, p.x);
+                y1 = std::max(y1, p.y);
+                zs.push_back(p.z);
+            }
+            const F64 count = static_cast<F64>(ps.size());
+            e.mX /= count;
+            e.mY /= count;
+            e.mZMean /= count;
+            std::sort(zs.begin(), zs.end());
+            e.mZ = zs[zs.size() / 2];
+            e.mSpan = std::hypot(x1 - x0, y1 - y0);
+            e.mPts = std::move(ps);
+            out.push_back(std::move(e));
+        }
+        return out;
+    }
+
+    /// An end's extent across the run (px, py), at its median height.
+    void endExtent(const End& e, F64 px, F64 py, LLVector3& a, LLVector3& b)
+    {
+        F64 lo = 1e30, hi = -1e30;
+        for (const Contact& p : e.mPts)
+        {
+            const F64 d = (p.x - e.mX) * px + (p.y - e.mY) * py;
+            lo = std::min(lo, d);
+            hi = std::max(hi, d);
+        }
+        a.set(static_cast<F32>(e.mX + lo * px), static_cast<F32>(e.mY + lo * py), static_cast<F32>(e.mZ));
+        b.set(static_cast<F32>(e.mX + hi * px), static_cast<F32>(e.mY + hi * py), static_cast<F32>(e.mZ));
+    }
+
+    /// Stairs and ramps: slope groups, and tread groups too small to be a
+    /// floor, joined where they step into each other. Each end is where such
+    /// a set steps off onto a floor that carries on, and pairs with the
+    /// nearest end on the next level up.
+    void buildConnectors(Partitioner& P, const std::vector<S32>& grp, const std::vector<U8>& kind, S32 ngroups, const std::vector<U8>& codes,
+                         const std::vector<U8>& cues, std::vector<Flight>& flights)
+    {
+        const S32 n = P.ntris();
+        std::vector<F64> area(ngroups, 0.0), nz(ngroups, 0.0);
+        std::vector<S32> first(ngroups, -1);
+        for (S32 t = 0; t < n; ++t)
+        {
+            if (grp[t] >= 0)
+            {
+                area[grp[t]] += P.mArea[t];
+                nz[grp[t]] += P.mN[t].z * P.mArea[t];
+                first[grp[t]] = first[grp[t]] < 0 ? t : first[grp[t]];
+            }
+        }
+        std::vector<U8> cand(ngroups, 0);
+        bool any = false;
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            const F64 deg = std::acos(std::min(1.0, nz[g] / std::max(area[g], 1e-9))) * RAD_TO_DEG;
+            const bool slope = kind[g] == SLOPE_GROUP && deg >= MIN_SLOPE_DEG && !(deg < FLOORISH_DEG && area[g] > FLOORISH_M2);
+            const bool tread = kind[g] == TREAD_GROUP && area[g] <= TREAD_MAX_M2;
+            cand[g] = first[g] >= 0 && P.mPart[first[g]] && (slope || tread);
+            any = any || cand[g];
+        }
+        if (!any)
+        {
+            return;
+        }
+
+        std::vector<S32> root(ngroups);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            root[g] = g;
+        }
+        const auto find = [&](S32 g) {
+            while (root[g] != g)
+            {
+                g = root[g] = root[root[g]];
+            }
+            return g;
+        };
+        std::vector<std::vector<Contact>> contacts(ngroups);
+        std::vector<Boundary> edges;
+        P.boundaries(grp, edges);
+        std::vector<S32> nearby, beyond, seen;
+        for (const Boundary& e : edges)
+        {
+            const S32 g = grp[e.mTri];
+            if (g < 0 || !cand[g])
+            {
+                continue;
+            }
+            const V3 &a = P.mV[e.mA], &b = P.mV[e.mB];
+            const F64 len = std::hypot(b.x - a.x, b.y - a.y);
+            const S32 k = std::max(1, static_cast<S32>(len / SAMPLE_M));
+            for (S32 j = 0; j <= k; ++j)
+            {
+                const F64 s = static_cast<F64>(j) / k;
+                const F64 px = a.x + s * (b.x - a.x), py = a.y + s * (b.y - a.y), pz = a.z + s * (b.z - a.z);
+                trianglesNear(P, px, py, nearby);
+                seen.clear();
+                for (const S32 u : nearby)
+                {
+                    const S32 o = grp[u];
+                    F64 z = 0;
+                    if (o < 0 || o == g || std::find(seen.begin(), seen.end(), o) != seen.end() || !nearZ(P, u, px, py, z) ||
+                        std::fabs(z - pz) > STEP_DZ)
+                    {
+                        continue;
+                    }
+                    if (cand[o])
+                    {
+                        const S32 ra = find(g), rb = find(o);
+                        if (ra != rb)
+                        {
+                            root[std::max(ra, rb)] = std::min(ra, rb);
+                        }
+                    }
+                    else
+                    {
+                        const F64 qx = px + BEYOND_M * e.mOx, qy = py + BEYOND_M * e.mOy;
+                        trianglesNear(P, qx, qy, beyond);
+                        bool floor = false;
+                        for (const S32 w : beyond)
+                        {
+                            F64 zw = 0;
+                            floor = floor || (grp[w] >= 0 && !cand[grp[w]] && nearZ(P, w, qx, qy, zw) && std::fabs(zw - z) <= LEVEL_DZ);
+                        }
+                        if (!floor)
+                        {
+                            continue;
+                        }
+                        contacts[g].push_back({ px, py, z });
+                    }
+                    seen.push_back(o);
+                }
+            }
+        }
+
+        std::map<S32, std::vector<S32>> comps;
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            if (cand[g])
+            {
+                comps[find(g)].push_back(g);
+            }
+        }
+        std::vector<std::vector<S32>> tris_of(ngroups);
+        for (S32 t = 0; t < n; ++t)
+        {
+            if (grp[t] >= 0 && cand[grp[t]])
+            {
+                tris_of[grp[t]].push_back(t);
+            }
+        }
+        for (const auto& [r, members] : comps)
+        {
+            std::vector<Contact> pts;
+            for (const S32 g : members)
+            {
+                pts.insert(pts.end(), contacts[g].begin(), contacts[g].end());
+            }
+            std::vector<End> ends = clusterEnds(pts);
+            ends.erase(std::remove_if(ends.begin(), ends.end(), [](const End& e) { return e.mSpan < MIN_END_SPAN_M; }), ends.end());
+            if (ends.size() < 2)
+            {
+                continue;
+            }
+            U8 treads = 0;
+            F64 comp_area = 0;
+            F64 by_cue[3] = { 0, 0, 0 };
+            std::vector<LLVector2> plan;
+            std::vector<U8> member_codes;
+            for (const S32 g : members)
+            {
+                treads = static_cast<U8>(std::min(255, treads + (kind[g] == TREAD_GROUP ? 1 : 0)));
+                for (const S32 t : tris_of[g])
+                {
+                    by_cue[t < static_cast<S32>(cues.size()) && cues[t] < 3 ? cues[t] : CUE_NONE] += P.mArea[t];
+                    comp_area += P.mArea[t];
+                    for (S32 c = 0; c < 3; ++c)
+                    {
+                        const V3& v = P.mV[P.mT[t * 3 + c]];
+                        plan.emplace_back(static_cast<F32>(v.x), static_cast<F32>(v.y));
+                    }
+                    if (std::find(member_codes.begin(), member_codes.end(), codes[t]) == member_codes.end())
+                    {
+                        member_codes.push_back(codes[t]);
+                    }
+                }
+            }
+            // the cue with most area, none included
+            U8 cue = CUE_NONE;
+            for (const U8 c : { CUE_RAMP, CUE_STAIR })
+            {
+                cue = by_cue[c] > by_cue[cue] ? c : cue;
+            }
+            const std::vector<LLVector2> footprint = hull(plan);
+
+            std::vector<std::pair<Flight, F64>> found;
+            for (const End& e : ends)
+            {
+                F64 level = 1e30;
+                for (const End& f : ends)
+                {
+                    if (f.mZ >= e.mZ + FLIGHT_MIN_RISE_M)
+                    {
+                        level = std::min(level, f.mZ);
+                    }
+                }
+                const End* t = nullptr;
+                F64 run = 1e30;
+                for (const End& f : ends)
+                {
+                    const F64 d = std::hypot(f.mX - e.mX, f.mY - e.mY);
+                    if (f.mZ >= e.mZ + FLIGHT_MIN_RISE_M && f.mZ <= level + LEVEL_DZ && d < run)
+                    {
+                        run = d;
+                        t = &f;
+                    }
+                }
+                if (!t)
+                {
+                    continue;
+                }
+                const F64 rise = t->mZ - e.mZ;
+                // Ends that nearly meet in plan wind round: walk the surface's length instead.
+                const F64 walk = run >= MIN_RUN_M ? run : std::max(run, comp_area / std::max(std::max(e.mSpan, t->mSpan), MIN_END_SPAN_M));
+                const F64 grade = std::atan2(rise, std::max(walk, 1e-6)) * RAD_TO_DEG;
+                Flight fl;
+                if (cue != CUE_NONE)
+                {
+                    fl.mKind = cue == CUE_STAIR ? ConnectorKind::STAIR : ConnectorKind::RAMP;
+                    fl.mRule = ConnectorRule::NAME;
+                }
+                else if (treads >= 2)
+                {
+                    fl.mKind = ConnectorKind::STAIR;
+                    fl.mRule = ConnectorRule::TREADS;
+                }
+                else
+                {
+                    fl.mKind = grade > STAIR_GRADE_DEG ? ConnectorKind::STAIR : ConnectorKind::RAMP;
+                    fl.mRule = ConnectorRule::GRADE;
+                }
+                const bool cued = fl.mRule != ConnectorRule::GRADE;
+                if (grade > MAX_GRADE_DEG || walk < MIN_RUN_M || (rise < MIN_RISE_UNCUED_M && !cued))
+                {
+                    continue;
+                }
+                const F64 dx = run > 1e-3 ? (t->mX - e.mX) / run : 1.0, dy = run > 1e-3 ? (t->mY - e.mY) / run : 0.0;
+                fl.mBottom.set(static_cast<F32>(e.mX), static_cast<F32>(e.mY), static_cast<F32>(e.mZMean));
+                fl.mTop.set(static_cast<F32>(t->mX), static_cast<F32>(t->mY), static_cast<F32>(t->mZMean));
+                endExtent(e, -dy, dx, fl.mBottomA, fl.mBottomB);
+                endExtent(*t, -dy, dx, fl.mTopA, fl.mTopB);
+                fl.mRise = static_cast<F32>(rise);
+                fl.mRun = static_cast<F32>(walk);
+                const F64 slope = run > 1e-3 ? rise / walk : 0.0;
+                fl.mPlane[0] = static_cast<F32>(slope * dx);
+                fl.mPlane[1] = static_cast<F32>(slope * dy);
+                fl.mPlane[2] = static_cast<F32>(e.mZ - slope * (dx * e.mX + dy * e.mY));
+                fl.mZMin = static_cast<F32>(e.mZ);
+                fl.mZMax = static_cast<F32>(t->mZ);
+                fl.mFootprint = footprint;
+                fl.mTreads = treads;
+                fl.mCodes = member_codes;
+                U64 key = 1469598103934665603ull;
+                for (const F64 v : { e.mX, e.mY, e.mZ, t->mX, t->mY, t->mZ })
+                {
+                    key = (key ^ static_cast<U64>(std::llround(v * 4.0))) * 1099511628211ull;
+                }
+                fl.mKey = key;
+                found.emplace_back(std::move(fl), e.mSpan + t->mSpan);
+            }
+            std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            const size_t before = flights.size();
+            for (const auto& [f, w] : found)
+            {
+                const bool dup = std::any_of(flights.begin() + before, flights.end(), [&](const Flight& k) {
+                    return (k.mBottom - f.mBottom).length() < DUP_M && (k.mTop - f.mTop).length() < DUP_M;
+                });
+                if (!dup)
+                {
+                    flights.push_back(f);
+                }
+            }
+        }
+    }
 }
 
 namespace sknav
 {
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes)
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes,
+                                   const std::vector<U8>& cues)
     {
         SlopePartition out;
         Partitioner P;
@@ -553,10 +978,8 @@ namespace sknav
         }
 
         // 2. level groups are treads or landings
-        enum Kind : U8 { SLOPE, LANDING, TREAD };
+        enum Kind : U8 { SLOPE = SLOPE_GROUP, LANDING = LANDING_GROUP, TREAD = TREAD_GROUP };
         std::vector<U8> kind(ngroups, SLOPE);
-        std::vector<std::pair<Riser, Riser>> tread_edges(ngroups);
-        std::vector<F64> going(ngroups, 0.0);
         for (S32 g = 0; g < ngroups; ++g)
         {
             const S32 t0 = first[g];
@@ -596,14 +1019,12 @@ namespace sknav
                     if (depth < SLOPE_REACH_M && (best < 0 || depth < best))
                     {
                         best = depth;
-                        tread_edges[g] = { *u, *d };
                     }
                 }
             }
             if (best >= 0)
             {
                 kind[g] = TREAD;
-                going[g] = best;
                 ++out.mTreads;
             }
             else
@@ -759,132 +1180,20 @@ namespace sknav
             }
         }
 
-        // 4. flight records, treads bottom to top with their nosings
-        std::map<S32, std::vector<S32>> by;
-        for (S32 g = 0; g < ngroups; ++g)
-        {
-            if (kind[g] == TREAD)
-            {
-                by[ff(g)].push_back(g);
-            }
-        }
-        std::vector<F64> zsum(ngroups, 0.0), asum(ngroups, 0.0);
-        std::vector<std::vector<LLVector2>> pts(ngroups);
-        for (S32 t = 0; t < n; ++t)
-        {
-            const S32 g = grp[t];
-            if (g >= 0 && kind[g] == TREAD)
-            {
-                zsum[g] += P.mC[t].z * P.mArea[t];
-                asum[g] += P.mArea[t];
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    const V3& v = P.mV[P.mT[t * 3 + k]];
-                    pts[ff(g)].emplace_back(static_cast<F32>(v.x), static_cast<F32>(v.y));
-                }
-            }
-        }
-        const auto vec = [&](S32 i) { return LLVector3(static_cast<F32>(P.mV[i].x), static_cast<F32>(P.mV[i].y), static_cast<F32>(P.mV[i].z)); };
-        for (const auto& [root, treads] : by)
-        {
-            Flight f;
-            S32 top = treads.front();
-            F64 rise = 0;
-            for (const S32 g : treads)
-            {
-                const Riser& down = tread_edges[g].second;
-                FlightTread tr;
-                tr.mZ = static_cast<F32>(zsum[g] / asum[g]);
-                tr.mNosingA = vec(down.mA);
-                tr.mNosingB = vec(down.mB);
-                tr.mNosingA.mV[VZ] = tr.mNosingB.mV[VZ] = tr.mZ;
-                tr.mRise = static_cast<F32>(-down.mDz);
-                tr.mGoing = static_cast<F32>(going[g]);
-                rise += tr.mRise;
-                f.mTreads.push_back(tr);
-                top = zsum[g] / asum[g] > zsum[top] / asum[top] ? g : top;
-            }
-            std::sort(f.mTreads.begin(), f.mTreads.end(), [](const FlightTread& a, const FlightTread& b) { return a.mZ < b.mZ; });
-            const Riser& up = tread_edges[top].first;
-            // the top nosing is the landing's, at its height
-            f.mTopNosingA = vec(up.mA);
-            f.mTopNosingB = vec(up.mB);
-            f.mTopNosingA.mV[VZ] = f.mTopNosingB.mV[VZ] = static_cast<F32>(zsum[top] / asum[top] + up.mDz);
-            f.mRise = static_cast<F32>((rise + up.mDz) / (treads.size() + 1));
-            f.mZMin = f.mTreads.front().mZ - f.mTreads.front().mRise;
-            f.mZMax = f.mTreads.back().mZ + static_cast<F32>(up.mDz);
-            if (f.mZMax - f.mZMin < FLIGHT_MIN_RISE_M)
-            {
-                // A chain this level is a deck edge or a rail, not a
-                // staircase: the climb from its foot to its top is one step
-                // the agent makes anyway, and a flight cut over it only
-                // splits floors that are already joined.
-                ++out.mFlat;
-                continue;
-            }
-            f.mFootprint = hull(pts[root]);
-            f.mCode = out.mCodes[first[root]];
-            // welded nosings quantised to the centimetre, so each tile's copy hashes alike
-            U64 key = 1469598103934665603ull;
-            for (const LLVector3& p : { (f.mTreads.front().mNosingA + f.mTreads.front().mNosingB) * 0.5f, (f.mTopNosingA + f.mTopNosingB) * 0.5f })
-            {
-                for (S32 k = 0; k < 3; ++k)
-                {
-                    key = (key ^ static_cast<U64>(std::llround(p.mV[k] * 100.f))) * 1099511628211ull;
-                }
-            }
-            f.mKey = key;
-
-            // least squares z = a x + b y + c through the nosings' midpoints
-            std::vector<LLVector3> mids;
-            for (const FlightTread& tr : f.mTreads)
-            {
-                mids.push_back((tr.mNosingA + tr.mNosingB) * 0.5f);
-            }
-            mids.push_back((f.mTopNosingA + f.mTopNosingB) * 0.5f);
-            F64 sxx = 0, sxy = 0, syy = 0, sx = 0, sy = 0, sxz = 0, syz = 0, sz = 0;
-            const F64 m = static_cast<F64>(mids.size());
-            for (const LLVector3& p : mids)
-            {
-                sx += p.mV[VX];
-                sy += p.mV[VY];
-                sz += p.mV[VZ];
-            }
-            sx /= m;
-            sy /= m;
-            sz /= m;
-            for (const LLVector3& p : mids)
-            {
-                const F64 x = p.mV[VX] - sx, y = p.mV[VY] - sy, z = p.mV[VZ] - sz;
-                sxx += x * x;
-                sxy += x * y;
-                syy += y * y;
-                sxz += x * z;
-                syz += y * z;
-            }
-            const F64 det = sxx * syy - sxy * sxy;
-            F64 a = 0, b = 0;
-            const F64 spread = sxx + syy;
-            if (std::fabs(det) > 1e-6 * spread * spread)
-            {
-                a = (sxz * syy - syz * sxy) / det;
-                b = (syz * sxx - sxz * sxy) / det;
-            }
-            else if (spread > 1e-9)
-            {
-                // a straight flight's nosings are collinear in plan: climb along their line
-                const F64 angle = 0.5 * std::atan2(2 * sxy, sxx - syy);
-                const F64 dx = std::cos(angle), dy = std::sin(angle);
-                const F64 s = (sxz * dx + syz * dy) / (sxx * dx * dx + 2 * sxy * dx * dy + syy * dy * dy);
-                a = s * dx;
-                b = s * dy;
-            }
-            f.mPlane[0] = static_cast<F32>(a);
-            f.mPlane[1] = static_cast<F32>(b);
-            f.mPlane[2] = static_cast<F32>(sz - a * sx - b * sy);
-            out.mFlights.push_back(std::move(f));
-        }
+        // 4. connectors: slope and tread groups that step off onto a floor at each end
+        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, out.mFlights);
         return out;
+    }
+
+    U8 nameCue(const std::string& name, const std::string& description)
+    {
+        std::string text = name + " " + description;
+        LLStringUtil::toLower(text);
+        if (text.find("stair") != std::string::npos || text.find("step") != std::string::npos)
+        {
+            return CUE_STAIR;
+        }
+        return text.find("ramp") != std::string::npos ? CUE_RAMP : CUE_NONE;
     }
 
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb)
@@ -895,7 +1204,7 @@ namespace sknav
             for (size_t p = 0; p < centroids.size() && p < 0xffff; ++p)
             {
                 const LLVector3& c = centroids[p];
-                if (codes[p] == f.mCode && c.mV[VZ] >= f.mZMin - climb && c.mV[VZ] <= f.mZMax + climb &&
+                if (std::find(f.mCodes.begin(), f.mCodes.end(), codes[p]) != f.mCodes.end() && c.mV[VZ] >= f.mZMin - climb && c.mV[VZ] <= f.mZMax + climb &&
                     outside(f.mFootprint, LLVector2(c.mV[VX], c.mV[VY])) < 0.25f)
                 {
                     f.mPolys.push_back(static_cast<U16>(p));

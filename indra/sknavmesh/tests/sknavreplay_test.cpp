@@ -578,7 +578,13 @@ namespace tut
                 {
                     continue;
                 }
-                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb);
+                std::vector<U8> cues(roots.size(), CUE_NONE);
+                for (size_t i = 0; i < roots.size(); ++i)
+                {
+                    const auto it = std::lower_bound(in.mRootCues.begin(), in.mRootCues.end(), std::make_pair(roots[i], U8(0)));
+                    cues[i] = it != in.mRootCues.end() && it->first == roots[i] ? it->second : static_cast<U8>(CUE_NONE);
+                }
+                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, 63, cues);
                 out << "tile " << key.mX << ' ' << key.mY << ' ' << in.mMeshOrigin.mdV[VX] << ' ' << in.mMeshOrigin.mdV[VY] << ' '
                     << in.mMeshOrigin.mdV[VZ] << ' ' << in.mTileX * in.mTileSize << ' ' << in.mTileY * in.mTileSize << ' ' << in.mTileSize << '\n';
                 for (size_t i = 0; i < areas.size(); ++i)
@@ -596,6 +602,12 @@ namespace tut
                     }
                     out << ' ' << static_cast<S32>(areas[i]) << ' ' << g << ' ' << (g >= 0 ? static_cast<S32>(p.mKind[g]) : -1) << ' '
                         << (i < p.mRegion.size() ? p.mRegion[i] : -1) << ' ' << roots[i] << '\n';
+                }
+                for (const Flight& f : p.mFlights)
+                {
+                    out << "f " << f.mBottom.mV[VX] << ' ' << f.mBottom.mV[VY] << ' ' << f.mBottom.mV[VZ] << ' ' << f.mTop.mV[VX] << ' '
+                        << f.mTop.mV[VY] << ' ' << f.mTop.mV[VZ] << ' ' << static_cast<S32>(f.mKind) << ' ' << static_cast<S32>(f.mRule) << ' '
+                        << static_cast<S32>(f.mTreads) << ' ' << f.mRise << ' ' << f.mRun << '\n';
                 }
             }
         }
