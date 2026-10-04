@@ -1479,6 +1479,21 @@ void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, 
     }
 }
 
+bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        for (const auto& t : m.second->mTiles)
+        {
+            if ((t.second.mInFlight || t.second.mSignature != t.second.mBuilt) && overlaps3D(t.second.mMin, t.second.mMax, min, max))
+            {
+                return true;
+            }
+        }
+    }
+    return mRooms->settlingIn(min, max);
+}
+
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;

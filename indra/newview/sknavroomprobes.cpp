@@ -251,6 +251,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         bool mBridge = false;   ///< a threshold's own sphere, not a part's
     };
     std::vector<Candidate> candidates;
+    std::vector<std::pair<LLVector3d, LLVector3d>> pending;    ///< spaces still being read or placed, global
     mClearedOut = 0;
     for (auto& p : mParts)
     {
@@ -264,7 +265,9 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         }
         // Over tiles that all have content keys the cache answers, and a key
         // the disk holds is read on a worker first, its space waiting a pass.
-        navmesh.tileContentKeysIn(mesh.mId, mesh.mOrigin + LLVector3d(space.mMin), mesh.mOrigin + LLVector3d(space.mMax), tile_keys);
+        const LLVector3d space_min = mesh.mOrigin + LLVector3d(space.mMin);
+        const LLVector3d space_max = mesh.mOrigin + LLVector3d(space.mMax);
+        navmesh.tileContentKeysIn(mesh.mId, space_min, space_max, tile_keys);
         const U64 key = sknav::probePartsKey(tile_keys, params);
         std::vector<sknav::ProbePart> cached;
         const std::vector<sknav::ProbePart>* space_parts = &cached;
@@ -272,6 +275,8 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         {
             if (mReading.count(key))
             {
+                deferred = true;
+                pending.emplace_back(space_min, space_max);
                 return;
             }
             if (disk && !mCache.hasKey(key) && !mMissed.count(key) && disk->contains(key))
@@ -297,12 +302,15 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                         reads->mMissed.push_back(key);
                     }
                 });
+                deferred = true;
+                pending.emplace_back(space_min, space_max);
                 return;
             }
             const std::vector<sknav::ProbePart>* held = mCache.find(key, space.mId, space.mAnchor);
             if (!held)
             {
                 place(mesh.mId, space, key);
+                pending.emplace_back(space_min, space_max);
                 return;
             }
             cached = *held;
@@ -509,6 +517,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     bool moved = false;
     bool created = false;
     std::vector<Held> held;
+    std::vector<Held> retiring;
     for (const sknav::ProbeSlot& slot : slots)
     {
         const Candidate& c = candidates[slot.mKey];
@@ -517,15 +526,25 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         if (m >= 0)
         {
             h = mHeld[m];
+            h.mRetiring = false;
+            h.mWaitFor = nullptr;
             if (!moved && sknav::shouldReplace(held_origins[m], h.mRadius, c.mOrigin, c.mRadius, params))
             {
-                moved = true;
-                h.mProbe->mOrigin.load3(c.mOrigin.mV);
-                h.mProbe->mRadius = c.mRadius;
-                manager.invalidateNavRoomsProbe(h.mProbe);
-                h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
-                h.mRadius = c.mRadius;
-                ++mMoves;
+                // Make before break: the old sphere keeps its capture until the new one has its own.
+                LLPointer<LLReflectionMap> fresh = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
+                if (fresh.notNull())
+                {
+                    moved = true;
+                    Held old = h;
+                    old.mRetiring = true;
+                    old.mWaitFor = fresh;
+                    retiring.push_back(old);
+                    h.mProbe = fresh;
+                    h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
+                    h.mRadius = c.mRadius;
+                    ++mMoves;
+                    created = true;
+                }
             }
         }
         else
@@ -542,17 +561,65 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         }
         held.push_back(h);
     }
+    // A probe that lost its candidate -- its space being read or placed, or out
+    // of the view while its tiles and rooms rebuild -- retires rather than
+    // goes: it stays matchable, so the same parts coming back take it up again
+    // capture intact, and it lets go only once its area has settled and every
+    // probe now covering it, or the one it moved to, has finished capturing.
+    for (size_t i = 0; i < mHeld.size(); ++i)
+    {
+        if (std::find(match.begin(), match.end(), static_cast<S32>(i)) == match.end())
+        {
+            Held h = mHeld[i];
+            if (!h.mRetiring)
+            {
+                h.mRetiring = true;
+                h.mWaitFor = nullptr;
+            }
+            retiring.push_back(h);
+        }
+    }
+    const auto captured = [](const LLReflectionMap* probe) { return probe->mComplete && probe->mFadeIn >= 1.f; };
+    for (Held& r : retiring)
+    {
+        if ((r.mOrigin - camera_global).magVec() > REACH_M + r.mRadius)
+        {
+            continue;
+        }
+        if (r.mWaitFor.notNull())
+        {
+            const bool still_held = std::any_of(held.begin(), held.end(), [&](const Held& h) { return h.mProbe == r.mWaitFor; });
+            if (still_held && captured(r.mWaitFor))
+            {
+                continue;
+            }
+            if (still_held)
+            {
+                held.push_back(r);
+                continue;
+            }
+            r.mWaitFor = nullptr;   // its successor went too: judge it by its area
+        }
+        const LLVector3d span(r.mRadius, r.mRadius, r.mRadius);
+        const LLVector3d lo = r.mOrigin - span, hi = r.mOrigin + span;
+        const bool unsettled = navmesh.settlingIn(lo, hi) ||
+            std::any_of(pending.begin(), pending.end(), [&](const std::pair<LLVector3d, LLVector3d>& box)
+            {
+                return box.first.mdV[VX] <= hi.mdV[VX] && lo.mdV[VX] <= box.second.mdV[VX] &&
+                       box.first.mdV[VY] <= hi.mdV[VY] && lo.mdV[VY] <= box.second.mdV[VY] &&
+                       box.first.mdV[VZ] <= hi.mdV[VZ] && lo.mdV[VZ] <= box.second.mdV[VZ];
+            });
+        const bool covered_uncaptured = std::any_of(held.begin(), held.end(), [&](const Held& h)
+        {
+            return !h.mRetiring && !captured(h.mProbe) && (h.mOrigin - r.mOrigin).magVec() < h.mRadius;
+        });
+        if (unsettled || covered_uncaptured)
+        {
+            held.push_back(r);
+        }
+    }
     if (deferred)
     {
-        // A space still being placed has no candidates this pass: its
-        // probes stay up rather than drop and come back a frame later.
-        for (size_t i = 0; i < mHeld.size(); ++i)
-        {
-            if (std::find(match.begin(), match.end(), static_cast<S32>(i)) == match.end())
-            {
-                held.push_back(mHeld[i]);
-            }
-        }
         mNextUpdate = gFrameTimeSeconds;
     }
     mHeld.swap(held);

@@ -69,6 +69,9 @@ public:
     /// The content keys of a mesh's tiles whose footprint meets the global
     /// box, 0 for a tile not published under one.
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+    /// Whether anything meeting the global box is still on its way: a tile
+    /// queued or building, or a rooms pass not yet landed over it.
+    bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.

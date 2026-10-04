@@ -68,6 +68,10 @@ private:
         LLPointer<LLReflectionMap> mProbe;
         LLVector3d mOrigin;
         F32 mRadius = 0.f;
+        /// Kept only until what replaces it is captured: mWaitFor when it
+        /// moved there, else whatever covers it once its area has settled.
+        bool mRetiring = false;
+        LLPointer<LLReflectionMap> mWaitFor;
     };
     struct Parts
     {
