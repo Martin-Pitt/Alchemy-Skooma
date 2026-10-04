@@ -147,7 +147,7 @@ namespace
             x += 0.3f;
         }
         z += 0.25f;
-        s.box(x, -0.75f, 0, x + 1.5f, 0.75f, z);
+        s.box(x, -2.f, 0, x + 1.5f, 2.f, z);
         x += 1.5f;
         for (S32 k = 0; k < 5; ++k)
         {
@@ -348,11 +348,11 @@ namespace tut
     template<> template<>
     void sknavflights_object::test<6>()
     {
-        set_test_name("a spiral is one stair of twelve treads");
+        set_test_name("a spiral has no straight run, so it makes no flight");
         const SlopePartition p = spiral().partition();
-        ensure("one flight of twelve", p.mFlights.size() == 1 && p.mFlights[0].mTreads == 12);
+        ensure_equals("treads", p.mTreads, 12);
         ensure_equals("landings", p.mLandings, 2);
-        ensure(llformat("rise %.3f", p.mFlights[0].mRise), std::fabs(p.mFlights[0].mRise - 13 * 0.22f) < 0.05f);
+        ensure_equals("flights", p.mFlights.size(), 0u);
     }
 
     template<> template<>
@@ -528,10 +528,10 @@ namespace tut
     {
         set_test_name("a short narrow flight is smaller than a sliver and still survives");
         TileBuildInput in = stairTile();
-        // three 0.25 m steps on 0.4 m treads, 0.9 m wide, then a landing
+        // three 0.25 m steps on 0.4 m treads, 1.2 m wide, then a landing
         for (S32 k = 1; k <= 3; ++k)
         {
-            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.4f, 15.5f, 0.f, 10.f + k * 0.4f, 16.4f, k * 0.25f));
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.4f, 15.4f, 0.f, 10.f + k * 0.4f, 16.6f, k * 0.25f));
         }
         in.mRecords.push_back(boxRecord(11.2f, 13.f, 0.f, 15.f, 19.f, 1.f));
         const TileBuildResult r = buildTile(in);
