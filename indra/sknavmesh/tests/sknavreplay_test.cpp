@@ -27,6 +27,7 @@
 #include "../test/lltut.h"
 
 #include "../sknavairdistil.h"
+#include "../sknavflights.h"
 #include "../sknavannotate.h"
 #include "../sknavlayout.h"
 #include "../sknavreplay.h"
@@ -502,5 +503,113 @@ namespace tut
         }
         stats << "}}\n";
         std::cout << "\n" << replaySummary(r) << "-> " << dir << "sknavmesh-export.json" << std::endl;
+    }
+
+    // The slope partition of every replayed tile, for the stair oracle:
+    // SKNAV_PARTITION_DUMP names a census, SKNAV_PARTITION_DUMP_OUT the text
+    // file of each tile's walkable triangles with their group, kind and region.
+    template<> template<>
+    void sknavreplay_object::test<7>()
+    {
+        set_test_name("dump a census's slope partition, when one is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_PARTITION_DUMP");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mRounds = 1;
+        ReplayResult r;
+        replayCensus(c, options, r);
+        std::ofstream out(LLStringUtil::getenv("SKNAV_PARTITION_DUMP_OUT"), std::ios::binary);
+        ensure("output", out.good());
+        out.precision(9);
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildInput& in = *tile.mInput;
+                std::vector<LLVector3> verts, tris;
+                std::vector<S32> idx;
+                std::vector<U8> areas, two;
+                std::vector<LLUUID> roots;
+                const F32 cos_slope = std::cos(in.mParams[0].mSlope * DEG_TO_RAD);
+                const auto add = [&](const std::vector<LLVector3>& t, U8 area, bool two_sided, const LLUUID& root) {
+                    for (size_t i = 0; i + 2 < t.size(); i += 3)
+                    {
+                        LLVector3 n = (t[i + 1] - t[i]) % (t[i + 2] - t[i]);
+                        n.normalize();
+                        const F32 up = two_sided ? std::fabs(n.mV[VZ]) : n.mV[VZ];
+                        for (S32 k = 0; k < 3; ++k)
+                        {
+                            idx.push_back(static_cast<S32>(verts.size()));
+                            verts.push_back(t[i + k]);
+                        }
+                        areas.push_back(up > cos_slope ? area : 0);
+                        two.push_back(two_sided ? 1 : 0);
+                        roots.push_back(root);
+                    }
+                };
+                for (const RecordPtr& rec : in.mRecords)
+                {
+                    if (rec)
+                    {
+                        tris.clear();
+                        emitRecord(*rec, in.mMeshOrigin, tris);
+                        add(tris, AREA_OBJECT, rec->mProvenance == Provenance::HULL || rec->mProvenance == Provenance::BASE_HULL, rec->mRoot);
+                    }
+                }
+                const size_t objects = areas.size();
+                const TerrainWindow& t = in.mTerrain;
+                tris.clear();
+                for (S32 y = 0; t.mWidth >= 2 && y + 1 < t.mHeight; ++y)
+                {
+                    for (S32 x = 0; x + 1 < t.mWidth; ++x)
+                    {
+                        const auto at = [&](S32 i, S32 j) { return LLVector3(t.mOrigin.mV[VX] + i * t.mSpacing, t.mOrigin.mV[VY] + j * t.mSpacing, t.mZ[j * t.mWidth + i]); };
+                        tris.insert(tris.end(), { at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y), at(x + 1, y + 1), at(x, y + 1) });
+                    }
+                }
+                add(tris, AREA_GROUND, false, LLUUID::null);
+                if (objects == 0)
+                {
+                    continue;
+                }
+                std::vector<U8> cues(roots.size(), CUE_NONE);
+                for (size_t i = 0; i < roots.size(); ++i)
+                {
+                    const auto it = std::lower_bound(in.mRootCues.begin(), in.mRootCues.end(), std::make_pair(roots[i], U8(0)));
+                    cues[i] = it != in.mRootCues.end() && it->first == roots[i] ? it->second : static_cast<U8>(CUE_NONE);
+                }
+                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, 63, cues);
+                out << "tile " << key.mX << ' ' << key.mY << ' ' << in.mMeshOrigin.mdV[VX] << ' ' << in.mMeshOrigin.mdV[VY] << ' '
+                    << in.mMeshOrigin.mdV[VZ] << ' ' << in.mTileX * in.mTileSize << ' ' << in.mTileY * in.mTileSize << ' ' << in.mTileSize << '\n';
+                for (size_t i = 0; i < areas.size(); ++i)
+                {
+                    if (!areas[i])
+                    {
+                        continue;
+                    }
+                    const S32 g = i < p.mGroup.size() ? p.mGroup[i] : -1;
+                    out << "t";
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        const LLVector3& v = verts[idx[i * 3 + k]];
+                        out << ' ' << v.mV[VX] << ' ' << v.mV[VY] << ' ' << v.mV[VZ];
+                    }
+                    out << ' ' << static_cast<S32>(areas[i]) << ' ' << g << ' ' << (g >= 0 ? static_cast<S32>(p.mKind[g]) : -1) << ' '
+                        << (i < p.mRegion.size() ? p.mRegion[i] : -1) << ' ' << roots[i] << '\n';
+                }
+                for (const Flight& f : p.mFlights)
+                {
+                    out << "f " << f.mBottom.mV[VX] << ' ' << f.mBottom.mV[VY] << ' ' << f.mBottom.mV[VZ] << ' ' << f.mTop.mV[VX] << ' '
+                        << f.mTop.mV[VY] << ' ' << f.mTop.mV[VZ] << ' ' << static_cast<S32>(f.mKind) << ' ' << static_cast<S32>(f.mRule) << ' '
+                        << static_cast<S32>(f.mTreads) << ' ' << f.mRise << ' ' << f.mRun << '\n';
+                }
+            }
+        }
     }
 }

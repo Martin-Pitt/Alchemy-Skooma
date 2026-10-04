@@ -207,6 +207,26 @@ namespace sknav
         }
     }
 
+    void tileRootCues(const std::function<U8(const LLUUID&)>& cue_of, TileBuildInput& input)
+    {
+        input.mRootCues.clear();
+        for (const RecordPtr& r : input.mRecords)
+        {
+            if (r)
+            {
+                input.mRootCues.emplace_back(r->mRoot, U8(0));
+            }
+        }
+        std::sort(input.mRootCues.begin(), input.mRootCues.end());
+        input.mRootCues.erase(std::unique(input.mRootCues.begin(), input.mRootCues.end()), input.mRootCues.end());
+        for (auto& [id, cue] : input.mRootCues)
+        {
+            cue = cue_of(id);
+        }
+        input.mRootCues.erase(std::remove_if(input.mRootCues.begin(), input.mRootCues.end(), [](const auto& c) { return c.second == CUE_NONE; }),
+                              input.mRootCues.end());
+    }
+
     void finishTileInput(const std::vector<RecordPtr>& records, const LLVector3d& mesh_origin, TileBuildInput& input)
     {
         F32 zmin = 1e9f, zmax = -1e9f;

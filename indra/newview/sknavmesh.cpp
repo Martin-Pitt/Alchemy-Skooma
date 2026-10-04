@@ -1072,6 +1072,18 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     }
 
     finishTileInput(tile.mRecords, mesh.mOrigin, *input);
+    // A linkset named for stairs or a ramp says which it is better than its shape can.
+    const SKWorldCensus* census = SKWorldCensus::instanceExists() ? SKWorldCensus::getInstance() : nullptr;
+    tileRootCues(
+        [census](const LLUUID& id) {
+            if (const SKWorldCensus::LinksetFacts* facts = census ? census->linksetFactsOf(id) : nullptr; facts && !facts->mName.empty())
+            {
+                return nameCue(facts->mName, facts->mDescription);
+            }
+            const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(id);
+            return props ? nameCue(props->mName, props->mDescription) : static_cast<U8>(CUE_NONE);
+        },
+        *input);
 
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
@@ -1300,6 +1312,8 @@ void SKNavMesh::schedule()
     // camming across a sim builds what you are looking at.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    // Marks are placed against the mesh on screen, so annotating only fills tiles that have none yet.
+    const bool annotating = SKNavAnnotator::instanceExists() && SKNavAnnotator::instance().armed();
     for (auto& entry : mMeshes)
     {
         Mesh& mesh = *entry.second;
@@ -1308,7 +1322,7 @@ void SKNavMesh::schedule()
             Tile& tile = t.second;
             // A built tile near the camera without its air is built again for it.
             const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
-            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
+            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due) || (annotating && tile.mBuilt))
             {
                 continue;
             }

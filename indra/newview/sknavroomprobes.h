@@ -73,23 +73,37 @@ private:
     {
         U64 mSignature = 0;
         std::vector<sknav::ProbePart> mParts;
+        bool mPlaced = false;   ///< placed under mSignature, even to nothing
         bool mSeen = false;
         S32 mIndex = -1;        ///< this space's number within an update, for the budget's per-space rule
     };
 
-    /// Reads the worker finished, taken on the main thread.
-    struct DiskReads
+    /// A space's parts as a worker placed them.
+    struct Placed
+    {
+        U64 mKey = 0;           ///< the tiles' content key, 0 when they have none
+        LLUUID mMesh;
+        U32 mSpace = 0;
+        LLVector3 mAnchor;
+        U64 mSignature = 0;
+        std::vector<sknav::ProbePart> mParts;
+    };
+    /// What the workers finished, taken on the main thread.
+    struct WorkerResults
     {
         std::mutex mMutex;
         std::vector<std::pair<U64, std::vector<sknav::CachedSpaceParts>>> mDone;
         std::vector<U64> mMissed;
+        std::vector<Placed> mPlaced;
     };
-    void takeDiskReads();
+    void takeWorkerResults();
 
     std::vector<Held> mHeld;
     sknav::ProbePartsCache mCache;
-    std::shared_ptr<DiskReads> mReads;
+    std::shared_ptr<WorkerResults> mResults;
     std::set<U64> mReading;         ///< keys a worker is reading; their spaces wait
+    std::set<std::pair<LLUUID, U32>> mPlacing;  ///< spaces a worker is placing; their old parts stand
+    std::set<U64> mStoreKeys;       ///< keys a worker placed under since the last pass, to write
     std::set<U64> mMissed;          ///< keys the disk had nothing usable under
     std::map<std::pair<LLUUID, U32>, Parts> mParts;
     F64 mNextUpdate = 0.0;
