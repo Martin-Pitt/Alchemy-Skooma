@@ -811,6 +811,15 @@ namespace sknav
             f.mRise = static_cast<F32>((rise + up.mDz) / (treads.size() + 1));
             f.mZMin = f.mTreads.front().mZ - f.mTreads.front().mRise;
             f.mZMax = f.mTreads.back().mZ + static_cast<F32>(up.mDz);
+            if (f.mZMax - f.mZMin < FLIGHT_MIN_RISE_M)
+            {
+                // A chain this level is a deck edge or a rail, not a
+                // staircase: the climb from its foot to its top is one step
+                // the agent makes anyway, and a flight cut over it only
+                // splits floors that are already joined.
+                ++out.mFlat;
+                continue;
+            }
             f.mFootprint = hull(pts[root]);
             f.mCode = out.mCodes[first[root]];
             // welded nosings quantised to the centimetre, so each tile's copy hashes alike

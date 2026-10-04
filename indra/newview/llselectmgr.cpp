@@ -104,6 +104,11 @@
 #include "llinventoryobserver.h"
 #include "lllocalmesh.h"
 #include "llscripteditorws.h"
+// <SK:Nexii> navmesh annotation bodies: the marks' own delete and picker
+// naming, routed from here because the selection is what the user deletes.
+#include "sknavannotator.h"
+#include "sknavmarkobjects.h"
+// </SK:Nexii>
 
 LLViewerObject* getSelectedParentObject(LLViewerObject *object) ;
 
@@ -159,6 +164,18 @@ static void synthesizeLocalPreviewNode(LLSelectNode* nodep, LLViewerObject* obje
             nodep->mDescription = mesh_path;
         }
     }
+    // <SK:Nexii> navmesh annotation bodies name themselves after their mark,
+    // and carry its note as their description.
+    if (SKNavMarkObjects::instanceExists())
+    {
+        std::string mark_name, mark_description;
+        if (SKNavMarkObjects::getInstance()->proxyDisplay(objectp, mark_name, mark_description))
+        {
+            nodep->mName = mark_name;
+            nodep->mDescription = mark_description;
+        }
+    }
+    // </SK:Nexii>
     nodep->mPermissions->init(gAgent.getID(), gAgent.getID(), LLUUID::null, LLUUID::null);
     const U32 full_perm = PERM_MODIFY | PERM_COPY | PERM_MOVE | PERM_TRANSFER;
     nodep->mPermissions->initMasks(full_perm, full_perm, PERM_NONE, PERM_NONE, full_perm);
@@ -190,11 +207,11 @@ static void synthesizeLocalPreviewNode(LLSelectNode* nodep, LLViewerObject* obje
 // path (DeRezObject/ObjectDelete) can't touch them, so despawn them locally.
 static void deleteLocalPreviewSelection()
 {
-    if (!LLLocalMeshMgr::instanceExists())
+    if (!LLLocalMeshMgr::instanceExists() && !SKNavMarkObjects::instanceExists())
     {
         return;
     }
-    LLLocalMeshMgr* mgr = LLLocalMeshMgr::getInstance();
+    LLLocalMeshMgr* mgr = LLLocalMeshMgr::instanceExists() ? LLLocalMeshMgr::getInstance() : nullptr;
     LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
 
     // Snapshot the objects first; deleting despawns them and clears the selection.
@@ -207,6 +224,28 @@ static void deleteLocalPreviewSelection()
         }
     }
 
+    // <SK:Nexii> navmesh annotation bodies belong to their marks: dropping
+    // the mark takes the body down. A selection can mix them with local mesh
+    // previews, so route each to its owner and let the rest despawn below.
+    if (SKNavMarkObjects::instanceExists())
+    {
+        SKNavMarkObjects* mark_objects = SKNavMarkObjects::getInstance();
+        std::vector<LLPointer<LLViewerObject> > leftovers;
+        for (LLPointer<LLViewerObject>& obj : objects)
+        {
+            if (obj.notNull() && mark_objects->isMarkProxy(obj))
+            {
+                SKNavAnnotator::instance().remove(mark_objects->markIdOf(obj));
+            }
+            else
+            {
+                leftovers.push_back(obj);
+            }
+        }
+        objects.swap(leftovers);
+    }
+    // </SK:Nexii>
+
     LLSelectMgr::getInstance()->deselectAll();
 
     for (LLPointer<LLViewerObject>& obj : objects)
@@ -214,7 +253,10 @@ static void deleteLocalPreviewSelection()
         // Derez the linkset (the in-world Delete key takes a local preview out of the
         // world but keeps the loaded file in the Local Assets list). The first part of
         // a linkset derezzes it; later parts no-op. Use the floater's Delete to unload.
-        mgr->despawnPreviewObject(obj.get());
+        if (mgr)
+        {
+            mgr->despawnPreviewObject(obj.get());
+        }
     }
 }
 //

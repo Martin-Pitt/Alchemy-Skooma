@@ -327,9 +327,9 @@ namespace tut
     {
         set_test_name("a curb top stays a landing; only the threshold between two risers is a tread");
         const SlopePartition p = curb().partition();
-        ensure("one flight of one", treadCounts(p) == std::vector<size_t>({ 1 }));
+        ensure("one tread: the threshold between the two risers", p.mTreads == 1);
         ensure_equals("road, sidewalk and porch are landings", p.mLandings, 3);
-        ensure(llformat("the tread is the threshold at %.2f", p.mFlights[0].mTreads[0].mZ), std::fabs(p.mFlights[0].mTreads[0].mZ - 0.35f) < 1e-3f);
+        ensure("a step that size is no flight", p.mFlights.empty() && p.mFlat == 1);
     }
 
     template<> template<>
@@ -733,5 +733,20 @@ namespace tut
         }
         ensure("treads marked", marked > 0);
         ensure_equals("nothing off the stair", stray, 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<20>()
+    {
+        set_test_name("a chain that rises less than half a metre is no staircase");
+        Soup s = straight(8, 0.05f);
+        const SlopePartition p = s.partition();
+        ensure_equals("the shallow treads still chain", p.mTreads, 8);
+        ensure_equals("but no flight comes of them", p.mFlights.size(), 0u);
+        ensure_equals("dropped as flat", p.mFlat, 1);
+        const SlopePartition real = straight().partition();
+        ensure_equals("a staircase still makes its flight", real.mFlights.size(), 1u);
+        ensure("it rises half a metre", real.mFlights[0].mZMax - real.mFlights[0].mZMin >= FLIGHT_MIN_RISE_M);
+        ensure_equals("and nothing was dropped", real.mFlat, 0);
     }
 }

@@ -1201,6 +1201,61 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 geom.edge(pa + dir * d, pa + dir * llmin(d + 0.3f, len), color);
             }
         }
+        // A flight drawn as one staircase: rails either side of the run between
+        // its ends with treads between them, the portals standing as bars.
+        // A lone end with nothing at the other draws a stub over itself.
+        for (const StairLink& l : stairLinks(*m.mRooms))
+        {
+            const LLVector3d ca = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mFrom].mCentre) + LLVector3d(0.0, 0.0, 0.3);
+            const LLVector3d cb = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mTo].mCentre) + LLVector3d(0.0, 0.0, 0.3);
+            if (dist_vec_squared2D((ca + cb) * 0.5, camera) > reach2)
+            {
+                continue;
+            }
+            LLColor4 color = skNavSwatchColor(SKNavSwatch::PORTAL_LINK);
+            if (opaque)
+            {
+                color.mV[VALPHA] = 1.f;
+            }
+            const F32 width = llclamp(llmin(m.mRooms->mPortals[l.mFrom].mWidth, m.mRooms->mPortals[l.mTo].mWidth), 0.8f, 2.4f);
+            std::vector<LLVector3> path;
+            path.push_back(gAgent.getPosAgentFromGlobal(ca));
+            path.push_back(gAgent.getPosAgentFromGlobal(cb));
+            skDrawStairGlyph(geom, path, width, color, 0.f);
+        }
+        for (const Space& sp : m.mRooms->mSpaces)
+        {
+            if (!sp.mFlight)
+            {
+                continue;
+            }
+            U32 lone = 0;
+            U32 count = 0;
+            for (const U32 pi : sp.mPortals)
+            {
+                if (m.mRooms->mPortals[pi].mKind == PortalKind::STAIR)
+                {
+                    lone = pi;
+                    ++count;
+                }
+            }
+            if (count != 1)
+            {
+                continue;
+            }
+            const LLVector3d c = m.mOrigin + LLVector3d(m.mRooms->mPortals[lone].mCentre);
+            if (dist_vec_squared2D(c, camera) > reach2)
+            {
+                continue;
+            }
+            LLColor4 color = skNavSwatchColor(SKNavSwatch::PORTAL_DANGLING);
+            if (opaque)
+            {
+                color.mV[VALPHA] = 1.f;
+            }
+            const LLVector3 base = gAgent.getPosAgentFromGlobal(c + LLVector3d(0.0, 0.0, 0.3));
+            geom.edge(base, base + LLVector3(0.f, 0.f, 1.2f), color);
+        }
     }
 }
 

@@ -968,6 +968,7 @@ if(AL_BUILD_VIEWER)
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
     sknavannotator.cpp
+    sknavmarkobjects.cpp
     sknavmesh.cpp
     sknavoverlay.cpp
     sknavpalette.cpp
@@ -1824,6 +1825,7 @@ if(AL_BUILD_VIEWER)
     skfloaternavannotate.h
     skfloaternavmesh.h
     sknavannotator.h
+    sknavmarkobjects.h
     sknavmesh.h
     sknavoverlay.h
     sknavpalette.h

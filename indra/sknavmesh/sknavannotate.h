@@ -87,6 +87,14 @@ namespace sknav
         JUDGEMENT
     };
 
+    /// A spiral stair's winding, in turns of the helix: the range a ring
+    /// prim's revolutions take, so the editing offers the same.
+    constexpr F64 SPIRAL_MIN_TURNS = 0.25;
+    constexpr F64 SPIRAL_MAX_TURNS = 4.0;
+    /// The winding a helix is sampled at, radians of arc per vertex: a
+    /// quarter turn reads as a polyline without burying an export in points.
+    constexpr F64 SPIRAL_PITCH_RAD = 0.25;
+
     const char* markKindName(MarkKind kind);
     /// Stable and lower-case: the exports and their readers key on it.
     const char* markTypeName(MarkType type);
@@ -106,6 +114,20 @@ namespace sknav
         MarkKind mKind = MarkKind::POINT;
         MarkType mType = MarkType::NOTE;
         std::vector<LLVector3d> mVerts;
+        // A stair's ways up beyond where its line ends: the top of a flight
+        // serves more floors than one. Stair marks; the export lists them
+        // beside the vertices.
+        std::vector<LLVector3d> mExits;
+        // A stair wound as a helix rather than run straight (stair marks):
+        // the axis centre at the foot's height, the turn radius, how many
+        // turns the climb takes, and which way it winds (+1 right-handed,
+        // -1 left). The line keeps its two vertices, foot then top; the
+        // helix between them is sampled where a polyline is asked for.
+        bool mSpiral = false;
+        LLVector3d mSpiralCentre;
+        F64 mSpiralRadius = 0.0;
+        F64 mSpiralTurns = 1.0;
+        S8 mSpiralHand = 1;
         std::string mText;
         F64 mCreated = 0.0;     ///< seconds since the epoch
         // A crossed-out portal (MarkKind::PORTAL) names the cut it strikes:
@@ -119,7 +141,17 @@ namespace sknav
         /// The two space ids of a portal mark, smaller first.
         std::pair<U32, U32> portalPair() const;
 
-        /// The box around the mark's vertices.
+        /// The point a share `fraction` (0 the foot, 1 the top) of a spiral
+        /// stair's climb sits at: one turn of the helix about the centre, the
+        /// rise spread evenly along it. Meaningful only for a spiral.
+        LLVector3d helixAt(F64 fraction) const;
+
+        /// The polyline the mark stands for: its vertices, or for a spiral
+        /// the helix sampled along the climb. What drawing, the extent and
+        /// the export read.
+        std::vector<LLVector3d> path() const;
+
+        /// The box around the mark, its exits included.
         void extent(LLVector3d& min, LLVector3d& max) const;
         bool complete() const;
     };

@@ -36,6 +36,7 @@ namespace sknav
     constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
     constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< the crease angle: neighbours further apart are different slopes
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
+    constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a chain climbing less than this is level ground the agent's step covers
 
     /// One tread of a flight, mesh-local SL metres.
     struct FlightTread
@@ -75,6 +76,7 @@ namespace sknav
         S32 mSlopes = 0;            ///< groups by kind
         S32 mLandings = 0;
         S32 mTreads = 0;
+        S32 mFlat = 0;              ///< chains dropped as staircases: they rise less than FLIGHT_MIN_RISE_M
     };
 
     /// Partition a class soup (mesh-local SL metres, three indices per
