@@ -39,7 +39,11 @@ namespace
     constexpr F64 SEAM_DZ = 0.02;       ///< closer than this across a boundary is the same surface
     constexpr F64 PROBE_M = 0.05;       ///< how far past a boundary edge to look for the neighbour
     constexpr F64 OPPOSITE = -0.7;      ///< cos between a tread's up and down riser directions
-    constexpr F64 GRID_M = 1.0;         ///< the probe index's cell
+    constexpr F64 GRID_M = 1.0;         ///< the probe index's cell, at its finest
+    // The index spans every walkable triangle in the soup, which is not clipped
+    // to the tile: one sky dome or kilometre-wide mesh in it would ask for a
+    // grid of billions of cells. The cell grows until the grid fits this.
+    constexpr size_t GRID_MAX_CELLS = 1u << 18;
     constexpr size_t MAX_PAIRS = 1 << 16; ///< a group with more riser pairs than this is no tread
 
     struct V3
@@ -105,6 +109,7 @@ namespace
 
         // the probe index
         F64 mGx0 = 0, mGy0 = 0;
+        F64 mGcell = GRID_M;
         S32 mGw = 0, mGh = 0;
         std::vector<std::vector<S32>> mGrid;
 
@@ -260,8 +265,9 @@ namespace
             }
             mGx0 = x0;
             mGy0 = y0;
-            mGw = static_cast<S32>((x1 - x0) / GRID_M) + 1;
-            mGh = static_cast<S32>((y1 - y0) / GRID_M) + 1;
+            mGcell = std::max(GRID_M, std::sqrt((x1 - x0 + GRID_M) * (y1 - y0 + GRID_M) / static_cast<F64>(GRID_MAX_CELLS)));
+            mGw = static_cast<S32>((x1 - x0) / mGcell) + 1;
+            mGh = static_cast<S32>((y1 - y0) / mGcell) + 1;
             mGrid.assign(static_cast<size_t>(mGw) * mGh, {});
             for (S32 t = 0; t < ntris(); ++t)
             {
@@ -278,8 +284,8 @@ namespace
                     tx1 = std::max(tx1, p.x);
                     ty1 = std::max(ty1, p.y);
                 }
-                const S32 cx0 = static_cast<S32>((tx0 - mGx0) / GRID_M), cx1 = static_cast<S32>((tx1 - mGx0) / GRID_M);
-                const S32 cy0 = static_cast<S32>((ty0 - mGy0) / GRID_M), cy1 = static_cast<S32>((ty1 - mGy0) / GRID_M);
+                const S32 cx0 = static_cast<S32>((tx0 - mGx0) / mGcell), cx1 = static_cast<S32>((tx1 - mGx0) / mGcell);
+                const S32 cy0 = static_cast<S32>((ty0 - mGy0) / mGcell), cy1 = static_cast<S32>((ty1 - mGy0) / mGcell);
                 for (S32 cy = cy0; cy <= cy1; ++cy)
                 {
                     for (S32 cx = cx0; cx <= cx1; ++cx)
@@ -358,7 +364,7 @@ namespace
             const V3& n = mN[e.mTri];
             const V3& c = mC[e.mTri];
             const F64 z_here = c.z - (n.x * (px - c.x) + n.y * (py - c.y)) / n.z;
-            const S32 cx = static_cast<S32>(std::floor((px - mGx0) / GRID_M)), cy = static_cast<S32>(std::floor((py - mGy0) / GRID_M));
+            const S32 cx = static_cast<S32>(std::floor((px - mGx0) / mGcell)), cy = static_cast<S32>(std::floor((py - mGy0) / mGcell));
             if (cx < 0 || cy < 0 || cx >= mGw || cy >= mGh)
             {
                 return false;
