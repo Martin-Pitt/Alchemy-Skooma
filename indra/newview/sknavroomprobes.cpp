@@ -249,6 +249,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         U32 mSpace = 0;         ///< the space's slot in its product, what portals name
         LLUUID mMesh;
         bool mBridge = false;   ///< a threshold's own sphere, not a part's
+        U64 mSource = 0;        ///< what its space was placed from, 0 for a bridge
     };
     std::vector<Candidate> candidates;
     std::vector<std::pair<LLVector3d, LLVector3d>> pending;    ///< spaces still being read or placed, global
@@ -271,6 +272,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
         const U64 key = sknav::probePartsKey(tile_keys, params);
         std::vector<sknav::ProbePart> cached;
         const std::vector<sknav::ProbePart>* space_parts = &cached;
+        U64 source = key;
         if (key)
         {
             if (mReading.count(key))
@@ -332,6 +334,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                 place(mesh.mId, space, 0);  // last pass's parts stand meanwhile
             }
             space_parts = &parts.mParts;
+            source = parts.mSignature;
         }
         const LLVector3 origin = gAgent.getPosAgentFromGlobal(mesh.mOrigin);
         for (const sknav::ProbePart& part : *space_parts)
@@ -353,6 +356,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             c.mPart = part.mPart;
             c.mSpace = productId_to_space[mesh.mId][space.mId];
             c.mMesh = mesh.mId;
+            c.mSource = source;
             candidates.push_back(c);
         }
     });
@@ -528,7 +532,20 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             h = mHeld[m];
             h.mRetiring = false;
             h.mWaitFor = nullptr;
-            if (!moved && sknav::shouldReplace(held_origins[m], h.mRadius, c.mOrigin, c.mRadius, params))
+            // Kept over a space placed anew from other content -- a wall gone, a doorway opened:
+            // its capture stands, and is retaken in place when the refresh rotation comes round.
+            if (h.mSource && c.mSource && h.mSource != c.mSource)
+            {
+                manager.staleNavRoomsProbe(h.mProbe);
+                ++mStaled;
+            }
+            if (c.mSource)
+            {
+                h.mSource = c.mSource;
+            }
+            // A capture taken from inside what is now a solid shows its inside: always retake it.
+            const bool buried = mSolids.contains(h.mOrigin);
+            if (!moved && (buried || sknav::shouldRecapture(held_origins[m], h.mRadius, c.mOrigin, params)))
             {
                 // Make before break: the old sphere keeps its capture until the new one has its own.
                 LLPointer<LLReflectionMap> fresh = manager.registerNavRoomsProbe(c.mOrigin, c.mRadius);
@@ -546,6 +563,14 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
                     created = true;
                 }
             }
+            else if (sknav::shouldReplace(held_origins[m], h.mRadius, held_origins[m], c.mRadius, params))
+            {
+                // Close enough to keep its capture: only the sphere it reaches over follows the part.
+                manager.resizeNavRoomsProbe(h.mProbe, c.mRadius);
+                h.mRadius = c.mRadius;
+                ++mResizes;
+                created = true;
+            }
         }
         else
         {
@@ -554,6 +579,7 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
             {
                 continue;
             }
+            h.mSource = c.mSource;
             h.mOrigin = gAgent.getPosGlobalFromAgent(c.mOrigin);
             h.mRadius = c.mRadius;
             ++mCreated;
@@ -637,9 +663,9 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
 std::string SKNavRoomProbes::statsLine() const
 {
     const LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
-    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, "
+    return llformat("room probes %u of %u parts (%u clear of placed, %u dropped by the budget), %u created, %u moves, %u resizes, %u staled, "
                     "%u nav-octree links, %u relinked, cache %u hits %u placed, %u keys %u parts, %u loads %u stores, %.2f ms",
-                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves,
+                    mPlaced, mCandidates + mClearedOut, mClearedOut, mOverBudget, mCreated, mMoves, mResizes, mStaled,
                     manager.countNavOctreeLinks(), manager.getRelevanceRelinks(), mCacheHits, mCachePlaced,
                     static_cast<U32>(mCache.keys()), static_cast<U32>(mCache.parts()), mDiskLoads, mDiskStores, mLastMs);
 }

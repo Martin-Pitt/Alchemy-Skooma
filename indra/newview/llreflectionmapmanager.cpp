@@ -977,6 +977,19 @@ void LLReflectionMapManager::updateClusterProbes()
     mClusterProbes->update(*this, census, census && census == mSolidsCensus ? mSolids.get() : nullptr);
 }
 
+void LLReflectionMapManager::resizeNavRoomsProbe(LLReflectionMap* probe, F32 radius)
+{
+    probe->mRadius = radius;
+    mNavRoomsDirty = true;
+    updateNeighbors(probe);
+}
+
+void LLReflectionMapManager::staleNavRoomsProbe(LLReflectionMap* probe)
+{
+    constexpr F32 STALE_AGE_S = 60.f;
+    probe->mLastUpdateTime = llmin(probe->mLastUpdateTime, (F32)gFrameTimeSeconds - STALE_AGE_S);
+}
+
 void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
 {
     if (mUpdatingProbe == probe)

@@ -156,6 +156,11 @@ public:
     // <SK:Nexii> Navmesh rooms probes: full spheres placed before residual grid irradiance probes.
     LLReflectionMap* registerNavRoomsProbe(const LLVector3& origin, F32 radius);
     void invalidateNavRoomsProbe(LLReflectionMap* probe);
+    // A new influence radius for a rooms probe; its capture stands, as it depends only on the origin.
+    void resizeNavRoomsProbe(LLReflectionMap* probe, F32 radius);
+    // What a rooms probe sees may have changed: its capture stands, and is retaken in place when the
+    // refresh rotation reaches it, as if it were a minute old, ahead of fresh ones but behind any capture.
+    void staleNavRoomsProbe(LLReflectionMap* probe);
     void invalidateAutomaticPlacement() { mNavRoomsDirty = true; }
     // Census cluster fill probes: automatic spheres that blend over the default probe and under every other probe.
     LLReflectionMap* registerClusterProbe(const LLVector3& origin, F32 radius);
