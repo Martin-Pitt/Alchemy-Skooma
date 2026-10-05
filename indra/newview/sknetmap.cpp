@@ -266,6 +266,7 @@ void SKNetMap::draw()
         drawChromeTint();
         drawTerrain();
         drawObjects();
+        SKMapScene::instance().drawFloorplan(mView);
         mParcels->draw(mView);
         drawSelf();
         drawSelfExtras();
@@ -540,10 +541,17 @@ void SKNetMap::drawReadout()
         return;
     }
     const SKMapScene::Stats& stats = SKMapScene::instance().stats();
-    const std::string text = llformat("draw %.2f ms | scene %u polys %u layers, job %.1f ms (%u)", mDrawMs, stats.mPolys, stats.mLayers,
-                                      stats.mJobMs, stats.mJobs);
-    LLFontGL::getFontMonospace()->renderUTF8(text, 0, 4.f, 4.f, LLColor4::white, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL,
-                                             LLFontGL::DROP_SHADOW);
+    std::vector<std::string> lines;
+    lines.push_back(llformat("draw %.2f ms, cells %u, queue %u, uploads %u, cache %.1f MB", mDrawMs, stats.mCells, stats.mQueued,
+                             stats.mUploads, stats.mCacheMB));
+    lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
+    const LLFontGL* font = LLFontGL::getFontMonospace();
+    F32 y = 4.f;
+    for (auto it = lines.rbegin(); it != lines.rend(); ++it)
+    {
+        font->renderUTF8(*it, 0, 4.f, y, LLColor4::white, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW);
+        y += font->getLineHeight();
+    }
 }
 
 void SKNetMap::drawChromeTint()
