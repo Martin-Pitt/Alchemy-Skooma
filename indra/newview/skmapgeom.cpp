@@ -739,6 +739,147 @@ namespace skmap
             }
         }
 
+        S64 quantise(F64 v, F64 scale)
+        {
+            return static_cast<S64>(std::floor(v * scale + 0.5));
+        }
+
+        /// A node's hash starts from its cell, so two cells with the same content never share a bake.
+        U64 cellSeed(const CellId& cell)
+        {
+            return sknav::mix(sknav::mix(sknav::mix(sknav::SEED, static_cast<U64>(cell.mTier)), static_cast<U64>(static_cast<S64>(cell.mX))),
+                              static_cast<U64>(static_cast<S64>(cell.mY)));
+        }
+
+        /// Step 12: per layer, a quadtree of content hashes over 8 m leaves, and a hash of the
+        /// layer's line marks.
+        void hashCells(Scene& s, const SceneInput& input)
+        {
+            s.mCellHashes.assign(s.mLayers.size(), {});
+            s.mMarkHashes.assign(s.mLayers.size(), 0);
+            auto leavesOf = [&](F64 x0, F64 y0, F64 x1, F64 y1, std::vector<CellId>& out) {
+                cellsInBox(TIER_MIN, LLVector3d(s.mOrigin.mdV[VX] + x0 - HASH_REACH_M, s.mOrigin.mdV[VY] + y0 - HASH_REACH_M, 0.0),
+                           LLVector3d(s.mOrigin.mdV[VX] + x1 + HASH_REACH_M, s.mOrigin.mdV[VY] + y1 + HASH_REACH_M, 0.0), out);
+            };
+            std::vector<CellId> leaves;
+            for (size_t l = 0; l < s.mLayers.size(); ++l)
+            {
+                const SceneLayer& layer = s.mLayers[l];
+                std::map<CellId, std::vector<U64>> records;
+                for (U32 id : layer.mPolys)
+                {
+                    const ScenePoly& poly = s.mPolys[id];
+                    const TileInput& tile = input.mTiles[poly.mTile];
+                    U64 r = sknav::mix(sknav::SEED, tile.mMesh.getCRC32());
+                    r = sknav::mix(r, static_cast<U32>(tile.mKey.mX));
+                    r = sknav::mix(r, static_cast<U32>(tile.mKey.mY));
+                    r = sknav::mix(r, tile.mContentKey);
+                    r = sknav::mix(r, poly.mIndex);
+                    r = sknav::mix(r, poly.mCoverage);
+                    U64 run_kind = 0;
+                    if (poly.mRun >= 0)
+                    {
+                        const SceneRun& run = s.mRuns[poly.mRun];
+                        run_kind = run.mStair ? 2 + (static_cast<U64>(run.mTreads) << 8) : 1;
+                        // Rungs and chevrons are drawn from the run's ends, global so a box step keeps them.
+                        for (const LLVector3* end : { &run.mBottomA, &run.mBottomB, &run.mTopA, &run.mTopB })
+                        {
+                            r = sknav::mix(r, static_cast<U64>(quantise(s.mOrigin.mdV[VX] + end->mV[VX], 100.0)));
+                            r = sknav::mix(r, static_cast<U64>(quantise(s.mOrigin.mdV[VY] + end->mV[VY], 100.0)));
+                            r = sknav::mix(r, static_cast<U64>(quantise(s.mOrigin.mdV[VZ] + end->mV[VZ], 100.0)));
+                        }
+                        if (!run.mStair)
+                        {
+                            // Only a ramp is shaded by height, against the layer's base.
+                            r = sknav::mix(r, static_cast<U64>(quantise(layer.mBaseZ, 10.0)));
+                        }
+                    }
+                    r = sknav::mix(r, run_kind);
+                    r = sknav::mix(r, static_cast<U64>(quantise(poly.mWater, 10.0)));
+                    leavesOf(poly.mMinX, poly.mMinY, poly.mMaxX, poly.mMaxY, leaves);
+                    for (const CellId& c : leaves)
+                    {
+                        records[c].push_back(r);
+                    }
+                }
+                std::map<CellId, std::vector<U64>> marks;
+                std::vector<U64> mark_records;
+                for (U32 m : layer.mMarks)
+                {
+                    const LineMark& mark = s.mMarks[m];
+                    const S64 ax = quantise(s.mOrigin.mdV[VX] + mark.mA.mV[VX], 100.0), ay = quantise(s.mOrigin.mdV[VY] + mark.mA.mV[VY], 100.0);
+                    const S64 bx = quantise(s.mOrigin.mdV[VX] + mark.mB.mV[VX], 100.0), by = quantise(s.mOrigin.mdV[VY] + mark.mB.mV[VY], 100.0);
+                    U64 r = sknav::mix(sknav::SEED, static_cast<U64>(mark.mKind));
+                    r = sknav::mix(sknav::mix(sknav::mix(sknav::mix(r, ax), ay), bx), by);
+                    const U64 ribbon = sknav::mix(sknav::mix(r, static_cast<U64>(quantise(mark.mHeight, 100.0))),
+                                                  static_cast<U64>(static_cast<S64>(mark.mFloorSide)));
+                    mark_records.push_back(ribbon);
+                    if (mark.mKind != MarkKind::LEDGE && mark.mKind != MarkKind::WALL)
+                    {
+                        continue;   // the raster's halos read only these
+                    }
+                    leavesOf(llmin(mark.mA.mV[VX], mark.mB.mV[VX]), llmin(mark.mA.mV[VY], mark.mB.mV[VY]),
+                             llmax(mark.mA.mV[VX], mark.mB.mV[VX]), llmax(mark.mA.mV[VY], mark.mB.mV[VY]), leaves);
+                    for (const CellId& c : leaves)
+                    {
+                        marks[c].push_back(r);
+                    }
+                }
+                std::sort(mark_records.begin(), mark_records.end());
+                U64 mark_hash = sknav::SEED;
+                for (U64 r : mark_records)
+                {
+                    mark_hash = sknav::mix(mark_hash, r);
+                }
+                s.mMarkHashes[l] = mark_hash;
+
+                std::map<CellId, U64>& nodes = s.mCellHashes[l];
+                for (auto& entry : records)
+                {
+                    std::vector<U64>& rs = entry.second;
+                    std::sort(rs.begin(), rs.end());
+                    U64 h = cellSeed(entry.first);
+                    for (U64 r : rs)
+                    {
+                        h = sknav::mix(h, r);
+                    }
+                    const auto mit = marks.find(entry.first);
+                    if (mit != marks.end())
+                    {
+                        std::sort(mit->second.begin(), mit->second.end());
+                        for (U64 r : mit->second)
+                        {
+                            h = sknav::mix(h, r);
+                        }
+                    }
+                    nodes[entry.first] = h ? h : 1;
+                }
+                // Parents mix their four children in a fixed order.
+                for (S32 tier = TIER_MIN + 1; tier <= TIER_MAX; ++tier)
+                {
+                    std::set<CellId> parents;
+                    for (const auto& entry : nodes)
+                    {
+                        if (entry.first.mTier == tier - 1)
+                        {
+                            parents.insert(entry.first.ancestor(tier));
+                        }
+                    }
+                    for (const CellId& p : parents)
+                    {
+                        U64 h = cellSeed(p);
+                        for (S32 k = 0; k < 4; ++k)
+                        {
+                            const CellId child = { tier - 1, p.mX * 2 + (k & 1), p.mY * 2 + (k >> 1) };
+                            const auto it = nodes.find(child);
+                            h = sknav::mix(h, it != nodes.end() ? it->second : 0);
+                        }
+                        nodes[p] = h ? h : 1;
+                    }
+                }
+            }
+        }
+
         /// Index every polygon by the 4 m cells it meets.
         void buildIndex(Scene& scene, std::vector<std::vector<Cell>>& poly_cells)
         {
@@ -1453,12 +1594,23 @@ namespace skmap
                 poly.mCoverage = static_cast<U8>(input.mCoverage(at));
             }
         }
+        hashCells(s, input);
         for (const TileInput& tile : input.mTiles)
         {
             s.mBuilt.insert({ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),
                               static_cast<S32>(std::floor((tile.mMin.mdV[VY] + 1.0) / LATTICE_M)) });
         }
         return scene;
+    }
+
+    U64 cellKey(const Scene& scene, S32 layer, const CellId& cell)
+    {
+        if (layer < 0 || layer >= static_cast<S32>(scene.mCellHashes.size()))
+        {
+            return 0;
+        }
+        const auto it = scene.mCellHashes[layer].find(cell);
+        return it != scene.mCellHashes[layer].end() ? it->second : 0;
     }
 
     FloorHit floorAt(const Scene& scene, const LLVector3d& pos, F32 below, F32 above)

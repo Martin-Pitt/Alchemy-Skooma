@@ -498,6 +498,90 @@ namespace tut
         ensure_equals("no void across it", west_void, 0);
     }
 
+    /// A 32 m tile of 4 m terrain quads, all joined, with a wall along x = 16.
+    TileMaker grid()
+    {
+        TileMaker t;
+        for (S32 y = 0; y < 8; ++y)
+        {
+            for (S32 x = 0; x < 8; ++x)
+            {
+                const S32 id = t.quad(x * 4.f, y * 4.f, x * 4.f + 4.f, y * 4.f + 4.f, 0.f, 0.f, AREA_GROUND);
+                if (x > 0)
+                {
+                    t.join(id - 1, 1, id, 3);
+                }
+                if (y > 0)
+                {
+                    t.join(id - 8, 2, id, 0);
+                }
+            }
+        }
+        t.quad(40.f, 40.f, 44.f, 44.f, 6.f, 6.f);
+        t.mSegments.push_back(segment(44.f, 40.f, 44.f, 44.f, EdgeKind::WALL, 2.f, 6.f));
+        return t;
+    }
+
+    // Hashes: the same input gives the same keys, a changed polygon moves only the leaves
+    // within 2 m of it (and their ancestors), and a layer's mark hash ignores other layers.
+    template<> template<>
+    void skmapgeom_object::test<15>()
+    {
+        const TileMaker t = grid();
+        skmap::SceneInput in = input({ t.make(LAND, true, 0, 0), });
+        in.mTiles.front().mMax.set(64.0, 64.0, 100.0);
+        skmap::ScenePtr a = skmap::buildScene(in);
+        skmap::ScenePtr b = skmap::buildScene(in);
+        ensure("deterministic hashes", a->mCellHashes == b->mCellHashes && a->mMarkHashes == b->mMarkHashes);
+        const S32 ground = layerOf(*a, LLVector3d(2.0, 2.0, 0.0));
+        ensure("ground layer", ground >= 0);
+        ensure("a leaf key", skmap::cellKey(*a, ground, skmap::cellAt(0, 2.0, 2.0)) != 0);
+        ensure("a 512 m key", skmap::cellKey(*a, ground, skmap::cellAt(6, 2.0, 2.0)) != 0);
+        ensure("nothing far away", skmap::cellKey(*a, ground, skmap::cellAt(0, 300.0, 300.0)) == 0);
+
+        // One polygon, (12..16, 12..16), turns indoors.
+        in.mCoverage = [](const LLVector3d& p) {
+            return p.mdV[VX] > 12.0 && p.mdV[VX] < 16.0 && p.mdV[VY] > 12.0 && p.mdV[VY] < 16.0 ? EnclosureBucket::INDOORS
+                                                                                                    : EnclosureBucket::UNKNOWN;
+        };
+        skmap::ScenePtr c = skmap::buildScene(in);
+        const std::map<skmap::CellId, U64>& before = a->mCellHashes[ground];
+        const std::map<skmap::CellId, U64>& after = c->mCellHashes[layerOf(*c, LLVector3d(2.0, 2.0, 0.0))];
+        S32 changed = 0;
+        for (const auto& entry : before)
+        {
+            if (entry.first.mTier != 0)
+            {
+                continue;
+            }
+            const auto it = after.find(entry.first);
+            ensure("leaf kept", it != after.end());
+            if (it->second == entry.second)
+            {
+                continue;
+            }
+            ++changed;
+            const LLVector3d lo = entry.first.minCorner(), hi = entry.first.maxCorner();
+            ensure("changed only within 2 m", lo.mdV[VX] <= 16.0 + 2.0 && hi.mdV[VX] >= 12.0 - 2.0 && lo.mdV[VY] <= 16.0 + 2.0
+                                                  && hi.mdV[VY] >= 12.0 - 2.0);
+        }
+        ensure("the leaves around it changed", changed > 0);
+        ensure("a far leaf kept its key", before.at(skmap::cellAt(0, 28.0, 28.0)) == after.at(skmap::cellAt(0, 28.0, 28.0)));
+
+        // The deck's mark hash does not move when only the ground gains a wall.
+        TileMaker more = grid();
+        more.mSegments.push_back(segment(0.f, 32.f, 0.f, 0.f, EdgeKind::WALL, 2.f, 0.f));
+        skmap::SceneInput in2 = input({ more.make(LAND, true, 0, 0) });
+        in2.mTiles.front().mMax.set(64.0, 64.0, 100.0);
+        skmap::ScenePtr d = skmap::buildScene(in2);
+        const S32 deck_a = layerOf(*a, LLVector3d(42.0, 42.0, 6.0));
+        const S32 deck_d = layerOf(*d, LLVector3d(42.0, 42.0, 6.0));
+        const S32 ground_d = layerOf(*d, LLVector3d(2.0, 2.0, 0.0));
+        ensure("deck found", deck_a >= 0 && deck_d >= 0);
+        ensure("the deck's mark hash holds", a->mMarkHashes[deck_a] == d->mMarkHashes[deck_d]);
+        ensure("the ground's moved", a->mMarkHashes[ground] != d->mMarkHashes[ground_d]);
+    }
+
     // Coverage is sampled a metre over each polygon's centroid.
     template<> template<>
     void skmapgeom_object::test<14>()
@@ -512,5 +596,110 @@ namespace tut
         skmap::ScenePtr s = skmap::buildScene(in);
         ensure("indoors", s->mPolys[0].mCoverage == static_cast<U8>(EnclosureBucket::INDOORS));
         ensure("outdoors", s->mPolys[1].mCoverage == static_cast<U8>(EnclosureBucket::OUTDOORS));
+    }
+
+    // Every cell has its own key: leaves with the same records, outside and inside one quad's
+    // edge or deep inside it, never share a bake.
+    template<> template<>
+    void skmapgeom_object::test<16>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 32.f, 32.f, 0.f, 0.f);
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
+        const S32 l = layerOf(*s, LLVector3d(16.0, 16.0, 0.0));
+        ensure("one layer", l >= 0);
+        const U64 outside = skmap::cellKey(*s, l, { 0, -1, 1 });
+        const U64 edge = skmap::cellKey(*s, l, { 0, 0, 1 });
+        const U64 inner_a = skmap::cellKey(*s, l, { 0, 1, 1 });
+        const U64 inner_b = skmap::cellKey(*s, l, { 0, 2, 1 });
+        ensure("all four keyed", outside && edge && inner_a && inner_b);
+        ensure("outside and inside the edge differ", outside != edge);
+        ensure("two inner leaves differ", inner_a != inner_b);
+        ensure("two parents differ", skmap::cellKey(*s, l, { 1, 0, 0 }) != skmap::cellKey(*s, l, { 1, 1, 0 }));
+    }
+
+    /// Terrain tiles in a row along x, each a sloped 32 m quad stitched to its neighbours: the
+    /// first two flat at 0, then 0 to 3.5, 3.5 to 7 and 7 to 10.5. With ramp, tile 0 also holds
+    /// a ramp from the land at (8, 8) up to a deck at 1.5 m.
+    skmap::SceneInput terrainRow(S32 tiles, bool ramp, const LLVector3d& origin)
+    {
+        static const F32 Z[5][2] = { { 0.f, 0.f }, { 0.f, 0.f }, { 0.f, 3.5f }, { 3.5f, 7.f }, { 7.f, 10.5f } };
+        std::vector<TileInput> row;
+        for (S32 k = 0; k < tiles; ++k)
+        {
+            TileMaker t;
+            const S32 land = t.quad(k * 32.f, 0.f, k * 32.f + 32.f, 32.f, Z[k][0], Z[k][1], AREA_GROUND);
+            t.border(land, 1);
+            t.border(land, 3);
+            if (ramp && k == 0)
+            {
+                const S32 slope = t.quad(8.f, 8.f, 12.f, 10.f, 0.f, 1.5f);
+                const S32 deck = t.quad(12.f, 8.f, 16.f, 10.f, 1.5f, 1.5f);
+                t.join(slope, 3, land, 0);
+                t.join(slope, 1, deck, 3);
+                t.flight(ConnectorKind::RAMP, 0, LLVector3(8.f, 8.f, 0.f), LLVector3(8.f, 10.f, 0.f), LLVector3(12.f, 8.f, 1.5f),
+                         LLVector3(12.f, 10.f, 1.5f), { static_cast<U16>(slope) }, 91);
+            }
+            row.push_back(t.make(LAND, true, k, 0));
+        }
+        skmap::SceneInput in = input(row);
+        in.mOrigin = origin;
+        in.mMin.set(-64.0, -64.0, -1.0e4);
+        in.mMax.set(192.0, 128.0, 1.0e5);
+        return in;
+    }
+
+    // A scene built from another origin over the same tiles gives every node the same key.
+    template<> template<>
+    void skmapgeom_object::test<17>()
+    {
+        skmap::SceneInput in = terrainRow(3, true, LLVector3d(0.0, 0.0, 0.0));
+        in.mTiles.front().mSegments =
+            std::make_shared<const std::vector<WallSegment>>(std::vector<WallSegment>{ segment(0.f, 32.f, 0.f, 0.f, EdgeKind::WALL, 2.f) });
+        skmap::ScenePtr a = skmap::buildScene(in);
+        in.mOrigin.set(-64.0, -64.0, 0.0);
+        skmap::ScenePtr b = skmap::buildScene(in);
+        ensure("some runs", !a->mRuns.empty());
+        ensure("some marks", !a->mMarks.empty());
+        ensure_equals("same layers", a->mLayers.size(), b->mLayers.size());
+        ensure("same mark hashes", a->mMarkHashes == b->mMarkHashes);
+        ensure("same cell keys", a->mCellHashes == b->mCellHashes);
+    }
+
+    // A box step that moves the ground's median keeps every ground leaf away from the new
+    // tiles; a ramp, graded from that median, re-keys.
+    template<> template<>
+    void skmapgeom_object::test<18>()
+    {
+        const LLVector3d origin(0.0, 0.0, 0.0);
+        skmap::ScenePtr a = skmap::buildScene(terrainRow(2, false, origin));
+        skmap::ScenePtr b = skmap::buildScene(terrainRow(5, false, origin));
+        const S32 ga = layerOf(*a, LLVector3d(4.0, 4.0, 0.0));
+        const S32 gb = layerOf(*b, LLVector3d(4.0, 4.0, 0.0));
+        ensure("ground layers", ga >= 0 && gb >= 0 && a->mLayers[ga].mGround && b->mLayers[gb].mGround);
+        ensure("one surface", b->mSurfaces.size() == 1);
+        ensure("the median moved", a->mLayers[ga].mBaseZ != b->mLayers[gb].mBaseZ);
+        S32 kept = 0;
+        for (const auto& entry : a->mCellHashes[ga])
+        {
+            const LLVector3d hi = entry.first.maxCorner();
+            if (entry.first.mTier != 0 || hi.mdV[VX] + skmap::HASH_REACH_M > 64.0)
+            {
+                continue;
+            }
+            ensure("a ground leaf keeps its key", skmap::cellKey(*b, gb, entry.first) == entry.second);
+            ++kept;
+        }
+        ensure("leaves compared", kept > 0);
+
+        skmap::ScenePtr ra = skmap::buildScene(terrainRow(2, true, origin));
+        skmap::ScenePtr rb = skmap::buildScene(terrainRow(5, true, origin));
+        const S32 rga = layerOf(*ra, LLVector3d(4.0, 4.0, 0.0));
+        const S32 rgb = layerOf(*rb, LLVector3d(4.0, 4.0, 0.0));
+        ensure("the ramp is the ground's", ra->mRuns.size() == 1 && ra->mRuns[0].mLayer == rga && !ra->mRuns[0].mStair);
+        const skmap::CellId leaf = skmap::cellAt(0, 10.0, 9.0);
+        ensure("the ramp leaf re-keys", skmap::cellKey(*ra, rga, leaf) != skmap::cellKey(*rb, rgb, leaf));
+        ensure("a far leaf does not", skmap::cellKey(*ra, rga, skmap::cellAt(0, 28.0, 28.0))
+                                          == skmap::cellKey(*rb, rgb, skmap::cellAt(0, 28.0, 28.0)));
     }
 }

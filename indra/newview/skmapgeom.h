@@ -253,6 +253,11 @@ namespace skmap
         std::vector<Contour> mContours;
         /// Global 32 m lattice cells holding at least one published tile.
         std::set<std::pair<S32, S32>> mBuilt;
+        /// Per layer, the content hash of every quadtree node with anything in it: 8 m leaves
+        /// at tier 0 up to 512 m at tier 6, keyed by the bake cell they stand for.
+        std::vector<std::map<CellId, U64>> mCellHashes;
+        /// Per layer, a hash over its line marks: the ribbons are keyed by it.
+        std::vector<U64> mMarkHashes;
 
         LLVector2 toLocal(const LLVector3d& global) const
         {
@@ -262,8 +267,14 @@ namespace skmap
 
     typedef std::shared_ptr<const Scene> ScenePtr;
 
-    /// Analyse the input into a scene. Pure and deterministic: the same input gives the same scene.
+    constexpr F32 HASH_REACH_M = 2.f;           ///< what a leaf's raster reads past its edge: the halo cap
+
+    /// Analyse the input into a scene. Pure and deterministic: the same input gives the same
+    /// scene. It takes no view, zoom or agent: content never depends on them.
     ScenePtr buildScene(const SceneInput& input);
+
+    /// The content hash of a layer's bake cell, or 0 when the layer has nothing there.
+    U64 cellKey(const Scene& scene, S32 layer, const CellId& cell);
 
     /// The global 4 m cell holding a global position.
     std::pair<S32, S32> indexCell(F64 x, F64 y);
