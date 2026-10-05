@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="678"
+ min_height="738"
  min_width="300"
- height="698"
+ height="758"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -329,6 +329,28 @@
     tool_tip="Write triangles and each face's transparency to sknav-capture-&lt;kind&gt;-&lt;id&gt;.json in the logs folder: a vehicle in its root's frame, worn attachments each in their own root's frame, an avatar in its body frame" />
    <text
     name="capture_status"
+    height="26"
+    word_wrap="true"
+    use_ellipses="false"
+    type="string"
+    follows="left|top|right"
+    layout="topleft"
+    left="12"
+    top_pad="4"
+    width="292">
+   </text>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left="12"
+    top_pad="8"
+    height="23"
+    width="292"
+    name="export_vehicle_button"
+    label="Export an object and its surroundings"
+    tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-object-&lt;id&gt;.json in the logs folder: triangles in the object's own frame and each face's transparency, plus the navmesh's collision input and the visible faces within 16 m of the point, in world axes" />
+   <text
+    name="export_vehicle_status"
     height="26"
     word_wrap="true"
     use_ellipses="false"

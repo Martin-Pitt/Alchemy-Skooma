@@ -166,6 +166,23 @@ namespace
         }
         return 0;
     }
+
+    constexpr F32 EXPORT_REACH_M = 16.f; ///< the object export's surroundings: half the side of the cube about the point
+
+    /// Whether a triangle's box meets the cube of half side reach about the origin.
+    bool withinReach(const LLVector3* tri, F32 reach)
+    {
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            const F32 lo = llmin(tri[0].mV[axis], llmin(tri[1].mV[axis], tri[2].mV[axis]));
+            const F32 hi = llmax(tri[0].mV[axis], llmax(tri[1].mV[axis], tri[2].mV[axis]));
+            if (hi < -reach || lo > reach)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 }
 
 SKNavMesh::Mesh::~Mesh()
@@ -2505,15 +2522,126 @@ std::string SKNavMesh::exportAll() const
     }
     file << ']';
 
-    // The door table as the rooms pass would read it. Names are anyone's
-    // text, so they are escaped.
-    U32 doors_written = 0;
-    file << ",\"doors\":[";
-    for (const auto& region : mFeatureDoors)
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features (%.1f MB) -> %s", meshes_written,
+                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written,
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+}
+
+std::string SKNavMesh::exportObject() const
+{
+    // The selection first, so a vehicle can be picked in the edit tools; else
+    // whatever the screen centre is on, as the mark casts.
+    LLViewerObject* target = LLSelectMgr::getInstance()->getSelection()->getFirstRootObject(true);
+    bool have_hit = false;
+    LLVector4a hit_point;
+    if (!target && gViewerWindow)
     {
-        for (const DoorEntity& d : region.second)
+        const LLRect& view = gViewerWindow->getWorldViewRectScaled();
+        target = gViewerWindow->cursorIntersect(view.getCenterX(), view.getCenterY(), 1024.f, nullptr, -1, true,
+                                                false, true, true, nullptr, &hit_point);
+        have_hit = target != nullptr;
+    }
+    if (!target)
+    {
+        return "select an object, or point the camera at one";
+    }
+    // Pointing at a pilot or at what they wear means the thing they sit on.
+    if (target->isAttachment())
+    {
+        target = target->getAvatar();
+    }
+    while (target && !target->isRoot() && target->getParent())
+    {
+        target = static_cast<LLViewerObject*>(target->getParent());
+    }
+    if (target && target->isAvatar() && target->getParent())
+    {
+        target = static_cast<LLViewerObject*>(target->getParent());
+        while (!target->isRoot() && target->getParent())
         {
-            if (doors_written++)
+            target = static_cast<LLViewerObject*>(target->getParent());
+        }
+    }
+    if (!target || target->isAvatar())
+    {
+        return "that is an avatar who is not sitting on anything";
+    }
+    LLViewerObject* root = target;
+
+    const std::string name = llformat("sknav-object-%s.json", root->getID().asString().c_str());
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, name);
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    file << std::setprecision(6);
+
+    // Everything is written in the root's own frame, so a vehicle caught
+    // banked, pitched or upside down still reads as its plan view down -z.
+    const LLVector3 origin = root->getRenderPosition();
+    const LLQuaternion rotation = root->getRenderRotation();
+    const LLQuaternion inverse = ~rotation;
+
+    auto vec3 = [&file](const LLVector3& v) {
+        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
+    };
+    auto text = [&file](const std::string& s) {
+        file << '"';
+        for (char c : s)
+        {
+            if (c == '"' || c == '\\')
+            {
+                file << '\\' << c;
+            }
+            else if (c == '\n')
+            {
+                file << "\\n";
+            }
+            else if (static_cast<unsigned char>(c) >= 0x20)
+            {
+                file << c;
+            }
+        }
+        file << '"';
+    };
+
+    U32 parts_written = 0, triangles_written = 0;
+
+    // A frame to write triangles in: agent-space origin, the rotation into
+    // it, and a reach past which triangles are left out (0 keeps them all).
+    struct Frame
+    {
+        LLVector3 mOrigin;
+        LLQuaternion mInverse;
+        F32 mReach;
+    };
+
+    // One prim: its load state and, per face, how it blends and its
+    // triangles in the given frame. A rigged mesh follows a skeleton, so its
+    // rest positions would be wrong; it is listed without triangles.
+    auto part = [&](LLViewerObject* object, S32 link, const Frame& frame) {
+        ++parts_written;
+        file << "{\"id\":\"" << object->getID() << "\",\"link\":" << link;
+        LLVOVolume* volume = dynamic_cast<LLVOVolume*>(object);
+        const LLVolume* v = volume ? volume->getVolume() : nullptr;
+        const bool rigged = object->isRiggedMesh();
+        file << ",\"rigged\":" << (rigged ? "true" : "false") << ",\"lod\":" << object->getLOD()
+             << ",\"mesh\":" << (volume && volume->isMesh() ? "true" : "false")
+             << ",\"loaded\":" << (v && v->getNumVolumeFaces() > 0 ? "true" : "false") << ",\"scale\":";
+        vec3(object->getScale());
+        file << ",\"faces\":[";
+        const S32 faces = v ? v->getNumVolumeFaces() : 0;
+        const LLVector3 scale = object->getScale();
+        const LLVector3 position = object->getRenderPosition();
+        const LLQuaternion object_rotation = object->getRenderRotation();
+        for (S32 f = 0; f < faces; ++f)
+        {
+            if (f)
             {
                 file << ',';
             }
@@ -2530,13 +2658,152 @@ std::string SKNavMesh::exportAll() const
                  << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"";
             for (const char c : d.mName)
             {
-                if (c == '"' || c == '\\')
+                file << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << facePbrAlpha(te)
+                     << ",\"mode\":\"" << faceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
+                     << "\",\"fullbright\":" << (te->getFullbright() ? "true" : "false");
+            }
+            file << ",\"tris\":[";
+            if (!rigged)
+            {
+                const LLVolumeFace& face = v->getVolumeFace(f);
+                bool first_tri = true;
+                for (S32 i = 0; i + 2 < face.mNumIndices; i += 3)
                 {
-                    file << '\\' << c;
+                    LLVector3 local[3];
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        LLVector3 world(face.mPositions[face.mIndices[i + k]].getF32ptr());
+                        world.scaleVec(scale);
+                        world = world * object_rotation + position;
+                        local[k] = (world - frame.mOrigin) * frame.mInverse;
+                    }
+                    if (frame.mReach > 0.f && !withinReach(local, frame.mReach))
+                    {
+                        continue;
+                    }
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        file << (first_tri && !k ? "" : ",") << local[k].mV[VX] << ',' << local[k].mV[VY] << ','
+                             << local[k].mV[VZ];
+                    }
+                    first_tri = false;
+                    ++triangles_written;
                 }
-                else if (static_cast<unsigned char>(c) >= 0x20)
+            }
+            file << "]}";
+        }
+        file << "]}";
+    };
+
+    // The linkset's prims in link order: the root, then its children that are
+    // not people sitting on it.
+    auto linkset = [&](LLViewerObject* object, const Frame& frame) {
+        file << '[';
+        part(object, 1, frame);
+        for (const LLPointer<LLViewerObject>& child : object->getChildren())
+        {
+            if (!child->isAvatar())
+            {
+                file << ',';
+                part(child.get(), linkNumber(child.get()), frame);
+            }
+        }
+        file << ']';
+    };
+    const Frame own { origin, inverse, 0.f };
+
+    // The heading is the root's forward axis flattened onto the ground; the
+    // map turns the outline by that alone.
+    const LLVector3 forward = LLVector3::x_axis * rotation;
+    const LLVector3 up = LLVector3::z_axis * rotation;
+    const F32 heading = std::atan2(forward.mV[VY], forward.mV[VX]) * RAD_TO_DEG;
+
+    file << "{\"format\":\"sknav-object\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
+    file << ",\"root\":\"" << root->getID() << '"';
+    if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root->getID()))
+    {
+        file << ",\"name\":";
+        text(props->mName);
+        file << ",\"description\":";
+        text(props->mDescription);
+    }
+    file << ",\"hover\":";
+    text(root->mHudText);
+    file << ",\"position\":";
+    const LLVector3d global = root->getPositionGlobal();
+    file << '[' << std::setprecision(10) << global.mdV[VX] << ',' << global.mdV[VY] << ',' << global.mdV[VZ] << ']'
+         << std::setprecision(6);
+    file << ",\"rotation\":[" << rotation.mQ[VX] << ',' << rotation.mQ[VY] << ',' << rotation.mQ[VZ] << ','
+         << rotation.mQ[VW] << "],\"up\":";
+    vec3(up);
+    file << ",\"heading\":" << heading << ",\"velocity\":";
+    vec3(root->getVelocity());
+    file << ",\"physical\":" << (root->flagUsePhysics() ? "true" : "false")
+         << ",\"scripted\":" << (root->flagScripted() ? "true" : "false")
+         << ",\"phantom\":" << (root->flagPhantom() ? "true" : "false");
+    file << ",\"parts\":";
+    linkset(root, own);
+
+    // Everyone sitting anywhere on the linkset, and what each of them wears:
+    // a turret or the whole visible aircraft can be an attachment.
+    file << ",\"crew\":[";
+    bool first_crew = true;
+    std::vector<LLViewerObject*> prims { root };
+    for (const LLPointer<LLViewerObject>& child : root->getChildren())
+    {
+        prims.push_back(child.get());
+    }
+    for (LLViewerObject* prim : prims)
+    {
+        for (const LLPointer<LLViewerObject>& child : prim->getChildren())
+        {
+            LLVOAvatar* avatar = child->isAvatar() ? static_cast<LLVOAvatar*>(child.get()) : nullptr;
+            if (!avatar)
+            {
+                continue;
+            }
+            if (!first_crew)
+            {
+                file << ',';
+            }
+            first_crew = false;
+            LLAvatarName av_name;
+            const bool named = LLAvatarNameCache::get(avatar->getID(), &av_name);
+            file << "{\"id\":\"" << avatar->getID() << "\",\"name\":";
+            text(named ? av_name.getCompleteName() : std::string());
+            file << ",\"self\":" << (avatar->isSelf() ? "true" : "false")
+                 << ",\"friend\":" << (LLAvatarTracker::instance().isBuddy(avatar->getID()) ? "true" : "false");
+            LLNameValue* title = avatar->getNVPair("Title");
+            file << ",\"title\":";
+            text(title && title->getString() ? title->getString() : "");
+            file << ",\"seatLink\":" << linkNumber(prim) << ",\"position\":";
+            vec3((avatar->getRenderPosition() - origin) * inverse);
+            file << ",\"attachments\":[";
+            bool first_attachment = true;
+            for (const auto& point : avatar->mAttachmentPoints)
+            {
+                for (const LLPointer<LLViewerObject>& attached : point.second->mAttachedObjects)
                 {
-                    file << c;
+                    if (attached.isNull())
+                    {
+                        continue;
+                    }
+                    if (!first_attachment)
+                    {
+                        file << ',';
+                    }
+                    first_attachment = false;
+                    // The worn linkset's own pose in the vehicle's frame: a
+                    // turret turns about its root, and only its rotation says
+                    // which way it pointed when this was taken.
+                    const LLQuaternion worn = attached->getRenderRotation() * inverse;
+                    file << "{\"point\":" << point.first << ",\"item\":\"" << attached->getAttachmentItemID()
+                         << "\",\"rootPosition\":";
+                    vec3((attached->getRenderPosition() - origin) * inverse);
+                    file << ",\"rootRotation\":[" << worn.mQ[VX] << ',' << worn.mQ[VY] << ',' << worn.mQ[VZ] << ','
+                         << worn.mQ[VW] << "],\"parts\":";
+                    linkset(attached.get(), own);
+                    file << '}';
                 }
             }
             file << "\",\"leaves\":[";
@@ -2547,15 +2814,92 @@ std::string SKNavMesh::exportAll() const
             file << "]}";
         }
     }
-    file << "]}\n";
+    file << ']';
+
+    // The navmesh's input around the point taken, in world axes about it: the
+    // census records' collision triangles and the visible faces of their
+    // linksets, so a build can be replayed offline and a staircase's treads
+    // read against the shape the sim collides with.
+    const LLVector3 center = have_hit ? LLVector3(hit_point.getF32ptr()) : origin;
+    const LLVector3d center_global = gAgent.getPosGlobalFromAgent(center);
+    const Frame world { center, LLQuaternion::DEFAULT, EXPORT_REACH_M };
+    file << ",\"surroundings\":{\"reach\":" << EXPORT_REACH_M << ",\"center\":" << std::setprecision(10) << '['
+         << center_global.mdV[VX] << ',' << center_global.mdV[VY] << ',' << center_global.mdV[VZ] << ']'
+         << std::setprecision(6) << ",\"records\":[";
+    U32 records_written = 0;
+    std::vector<LLUUID> roots;
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        std::vector<LLVector3> tris;
+        for (const RecordPtr& r : snap->mRecords)
+        {
+            bool outside = false;
+            for (S32 axis = 0; axis < 3; ++axis)
+            {
+                outside |= r->mMax.mdV[axis] < center_global.mdV[axis] - EXPORT_REACH_M ||
+                           r->mMin.mdV[axis] > center_global.mdV[axis] + EXPORT_REACH_M;
+            }
+            if (outside)
+            {
+                continue;
+            }
+            tris.clear();
+            sknav::emitRecord(*r, center_global, tris);
+            bool first_tri = true;
+            for (size_t t = 0; t + 2 < tris.size(); t += 3)
+            {
+                if (!withinReach(&tris[t], EXPORT_REACH_M))
+                {
+                    continue;
+                }
+                if (first_tri)
+                {
+                    file << (records_written ? "," : "") << "{\"root\":\"" << r->mRoot << "\",\"part\":\"" << r->mPart
+                         << "\",\"role\":" << static_cast<S32>(r->mRole) << ",\"provenance\":" << static_cast<S32>(r->mProvenance)
+                         << ",\"navRole\":" << static_cast<S32>(r->mNavRole) << ",\"shape\":" << static_cast<S32>(r->mShape)
+                         << ",\"solid\":" << (r->mSolid ? "true" : "false") << ",\"exclude\":" << static_cast<S32>(r->mExclude)
+                         << ",\"tris\":[";
+                    ++records_written;
+                    if (std::find(roots.begin(), roots.end(), r->mRoot) == roots.end())
+                    {
+                        roots.push_back(r->mRoot);
+                    }
+                }
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    const LLVector3& p = tris[t + k];
+                    file << (first_tri && !k ? "" : ",") << p.mV[VX] << ',' << p.mV[VY] << ',' << p.mV[VZ];
+                }
+                first_tri = false;
+            }
+            if (!first_tri)
+            {
+                file << "]}";
+            }
+        }
+    }
+    file << "],\"linksets\":[";
+    bool first_linkset = true;
+    for (const LLUUID& id : roots)
+    {
+        LLViewerObject* object = gObjectList.findObject(id);
+        if (!object || object->isAvatar())
+        {
+            continue;
+        }
+        file << (first_linkset ? "" : ",") << "{\"root\":\"" << id << "\",\"parts\":";
+        linkset(object, world);
+        file << '}';
+        first_linkset = false;
+    }
+    file << "]}}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written, doors_written,
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+    return llformat("%u parts, %u triangles, %u nearby records (%.1f MB) -> %s", parts_written, triangles_written,
+                    records_written, static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
 }
 
 void SKNavMesh::refreshOverlay()

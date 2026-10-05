@@ -52,6 +52,9 @@ bool SKFloaterNavMesh::postBuild()
         const S32 kind = llclamp(getChild<LLUICtrl>("capture_kind")->getValue().asInteger(), 0, 2);
         getChild<LLUICtrl>("capture_status")->setValue(skCaptureExport(static_cast<SKCaptureKind>(kind)));
     });
+    getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportObject());
+    });
     return true;
 }
 
