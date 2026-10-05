@@ -4804,6 +4804,39 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKMapLayerParcels</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw parcel boundary lines on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsForSale</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade parcels for sale and at auction on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsCollision</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade the parcels you are banned from or not allowed on, on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

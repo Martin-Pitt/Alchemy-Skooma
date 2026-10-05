@@ -49,6 +49,7 @@
 #include "llworldmapview.h"
 #include "skmapmarkers.h"
 #include "skmapobjects.h"
+#include "skmapparcels.h"
 #include "skmappeople.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
@@ -173,7 +174,8 @@ namespace skmapdraw
 
 SKNetMap::SKNetMap(const Params& p)
     : LLUICtrl(p),
-      mObjects(std::make_unique<SKMapObjects>())
+      mObjects(std::make_unique<SKMapObjects>()),
+      mParcels(std::make_unique<SKMapParcels>())
 {
 }
 
@@ -250,6 +252,7 @@ void SKNetMap::draw()
         drawChromeTint();
         drawTerrain();
         drawObjects();
+        mParcels->draw(mView);
         drawSelf();
         drawSelfExtras();
         drawPeople();

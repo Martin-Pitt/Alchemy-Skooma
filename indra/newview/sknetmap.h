@@ -37,6 +37,7 @@
 
 class LLViewerTexture;
 class SKMapObjects;
+class SKMapParcels;
 
 class SKNetMap : public LLUICtrl
 {
@@ -102,6 +103,7 @@ private:
     void drawObjects();
 
     std::unique_ptr<SKMapObjects> mObjects;
+    std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
     bool mHovered = false;
     bool mChrome = false;
