@@ -32,7 +32,14 @@ if(AL_BUILD_VIEWER)
     "${CMAKE_CURRENT_SOURCE_DIR}/skins/default/html/common/equirectangular/js/OrbitControls.js"
     COPYONLY
   )
+endif()
 
+# What the tests read from this source tree as the viewer does: the grid's
+# LSL definitions, and the fonts the UI tests lay text out in with
+# LLUI_TEST_APP_DIR as their application directory. Staged for a build of
+# the tests alone as well, which would otherwise find no definitions and
+# lay text out in whatever fonts the host has.
+if(AL_BUILD_VIEWER OR AL_BUILD_TESTS)
   # LSL Definitions
   find_package(unofficial-lsl-definitions CONFIG REQUIRED)
   configure_file(
@@ -61,7 +68,9 @@ if(AL_BUILD_VIEWER)
   message(VERBOSE "Copying fonts from ${ALCHEMY_FONTS_DIR}")
   file(GLOB FONT_FILE_GLOB_LIST "${ALCHEMY_FONTS_DIR}/*")
   file(COPY ${FONT_FILE_GLOB_LIST} DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+endif()
 
+if(AL_BUILD_VIEWER)
   # Copy over the Emoji/shortcodes mapping XML files (and create dependency
   # if they are changed, CMake will run again and copy over new versions)
   find_package(unofficial-emoji-shortcodes CONFIG REQUIRED)
@@ -221,6 +230,8 @@ if(AL_BUILD_VIEWER)
     alscriptstudiosaving.cpp
     alscriptstudioviewer.cpp
     alscriptstudiovim.cpp
+    alfollowednotecard.cpp
+    alscriptstudiosnippetnotecard.cpp
     alscriptstudiovimrc.cpp
     alscriptstudioweighing.cpp
     alscriptstudiowords.cpp
@@ -1065,6 +1076,8 @@ if(AL_BUILD_VIEWER)
     alrecoverykeeper.h
     alscriptstudiosaving.h
     alscriptstudiovim.h
+    alfollowednotecard.h
+    alscriptstudiosnippetnotecard.h
     alscriptstudiovimrc.h
     alscriptstudioweighing.h
     alscriptstudiowords.h
@@ -2481,9 +2494,6 @@ if(AL_BUILD_TESTS)
   )
   target_link_libraries(al_studio_test_common PRIVATE al::flags PUBLIC llui alscript ${test_libs})
   set_target_properties(al_studio_test_common PROPERTIES FOLDER "Tests/${test_project}")
-  # The viewer's precompiled header, which the tests that link this are
-  # compiled against too (al_add_test's PCH).
-  target_precompile_headers(al_studio_test_common PRIVATE llviewerprecompiledheaders.h)
 
   # A unit test compiles one viewer source file on its own. Each line is one
   # such file and its test under tests/.
@@ -2548,7 +2558,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2602,7 +2611,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2613,7 +2621,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2624,7 +2631,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     SOURCES alscriptsearch.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
@@ -2635,7 +2641,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
   )
 
   # A Script Studio window's saves kept in a history of the test's, listed,
@@ -2645,7 +2650,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2656,7 +2660,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2699,7 +2702,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2710,7 +2712,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2725,7 +2726,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2736,7 +2736,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2747,7 +2746,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2758,7 +2756,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2769,7 +2766,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2780,7 +2776,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2791,7 +2786,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2816,7 +2810,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2827,7 +2820,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     SOURCES alscriptstudiochecking.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
@@ -2840,7 +2832,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2851,7 +2842,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2862,7 +2852,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2873,7 +2862,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2884,7 +2872,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2895,7 +2882,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     SOURCES alscriptstudiocommands.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
@@ -2907,7 +2893,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2918,7 +2903,6 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     LIBRARIES al_studio_test_common llui alscript ${test_libs}
-    PCH al_studio_test_common
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
