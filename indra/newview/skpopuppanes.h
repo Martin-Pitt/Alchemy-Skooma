@@ -98,6 +98,7 @@ private:
     sk::PopupNav mNav;
     std::vector<sk::PopupRect> mRects;      ///< per pane; valid while placed
     std::vector<bool> mPlaced;
+    std::vector<F32> mAnchor;               ///< per child pane, its opener row's top when placed, unscrolled
     std::vector<F32> mScroll;               ///< per pane, pixels scrolled down
     F32 mWindowW = 0.f;
     F32 mWindowH = 0.f;

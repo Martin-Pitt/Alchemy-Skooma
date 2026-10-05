@@ -74,6 +74,7 @@ LLHandle<SKPopupPanes> SKPopupPanes::show(LLView* spawner, S32 x, S32 y, std::ve
     view->mNav.reset(nav);
     view->mRects.assign(view->mSpecs.size(), sk::PopupRect());
     view->mPlaced.assign(view->mSpecs.size(), false);
+    view->mAnchor.assign(view->mSpecs.size(), 0.f);
     view->mScroll.assign(view->mSpecs.size(), 0.f);
 
     // The spawner's point in window pixels, y down.
@@ -165,12 +166,20 @@ void SKPopupPanes::layout()
     }
     for (size_t i = 0; i < panes.size(); ++i)
     {
-        if (!panes[i].mOpen || mPlaced[i] || panes[i].mParent < 0 || !mPlaced[panes[i].mParent])
+        if (!panes[i].mOpen || panes[i].mParent < 0 || !mPlaced[panes[i].mParent])
         {
             continue;
         }
         const S32 parent = panes[i].mParent;
-        const F32 row_top = mRects[parent].mY + sk::PopupLayout::rowTop(panes[parent].mRows, panes[i].mOpener) - mScroll[parent];
+        // A refresh that shows or hides rows above the opener moves it, and the child with it.
+        const F32 anchor = mRects[parent].mY + sk::PopupLayout::rowTop(panes[parent].mRows, panes[i].mOpener);
+        if (mPlaced[i] && anchor == mAnchor[i])
+        {
+            continue;
+        }
+        const bool moved = mPlaced[i];
+        mAnchor[i] = anchor;
+        const F32 row_top = anchor - mScroll[parent];
         std::vector<sk::PopupRect> others;
         for (size_t j = 0; j < panes.size(); ++j)
         {
@@ -182,7 +191,10 @@ void SKPopupPanes::layout()
         mRects[i] = sk::PopupLayout::placeChild(mRects[parent], row_top, w, sk::PopupLayout::paneHeight(panes[i].mRows, mWindowH), others,
                                                 mWindowW, mWindowH);
         mPlaced[i] = true;
-        mScroll[i] = 0.f;
+        if (!moved)
+        {
+            mScroll[i] = 0.f;
+        }
     }
     // This view covers the open panes and no more, so clicks between them close it.
     F32 x0 = mWindowW, y0 = mWindowH, x1 = 0.f, y1 = 0.f;
