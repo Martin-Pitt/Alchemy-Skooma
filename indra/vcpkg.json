@@ -1,5 +1,5 @@
 {
-  "builtin-baseline": "2c88ca199b27256e4c7d9f796216f82f2b976b0e",
+  "builtin-baseline": "da2be01c400dd3ed102c1198752ef44c76aabe37",
   "dependencies": [
     "alchemy-branding",
     "alchemy-dictionaries",
@@ -76,7 +76,7 @@
     "minizip",
     {
       "name": "nvapi",
-      "platform": "windows & x64"
+      "platform": "windows"
     },
     {
       "name": "open-libndofdev",
@@ -153,6 +153,13 @@
     "xxhash",
     "zlib"
   ],
+  "overrides": [
+    {
+      "$comment": "HarfBuzz 14.5 is Unicode 18 and ICU 78 is Unicode 17; alfontshaping test 35 holds the two to one Unicode. Lift this with ICU's move to Unicode 18.",
+      "name": "harfbuzz",
+      "version": "14.4.0"
+    }
+  ],
   "features": {
     "dullahan-example": {
       "description": "Build with support for Dullahan OpenGL example application",
@@ -227,7 +234,22 @@
         },
         {
           "name": "sentry-native",
-          "platform": "windows | linux"
+          "features": [
+            "backend",
+            "compression",
+            "transport"
+          ],
+          "platform": "linux"
+        },
+        {
+          "name": "sentry-native",
+          "features": [
+            "backend",
+            "compression",
+            "transport",
+            "wer"
+          ],
+          "platform": "windows"
         }
       ]
     },
