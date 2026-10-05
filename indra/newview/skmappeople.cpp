@@ -33,7 +33,9 @@
 #include "llavataractions.h"
 #include "llcallbacklist.h"
 #include "llgroupmgr.h"
+#include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llvoavatarself.h"
 #include "llviewerobjectlist.h"
 #include "llvoavatar.h"
 #include "llworld.h"
@@ -102,6 +104,34 @@ void SKMapPeople::idle()
     }
     LL_PROFILE_ZONE_SCOPED;
     gatherPeople();
+    updateCoverAhead();
+}
+
+void SKMapPeople::updateCoverAhead()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapCoverAhead", true);
+    if (!show)
+    {
+        mCoverAhead = sknav::Cover::NONE;
+        return;
+    }
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    if (now - mCoverAt < 0.1)
+    {
+        return;
+    }
+    mCoverAt = now;
+    // Along the camera in plan, within a metre and a half, against the agent's own eyes.
+    const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+    const F32 eye = isAgentAvatarValid() ? gAgentAvatarp->mBodySize.mV[VZ] * 0.94f : 1.8f;
+    sknav::Cover cover = sknav::Cover::NONE;
+    F32 height = 0.f;
+    if (!SKNavMesh::instance().coverAt(gAgent.getPositionGlobal(), LLVector3(at.mV[VX], at.mV[VY], 0.f), sknav::AgentClass::AVATAR, eye, cover,
+                                       height, 1.5f))
+    {
+        cover = sknav::Cover::NONE;
+    }
+    mCoverAhead = cover;
 }
 
 void SKMapPeople::gatherPeople()

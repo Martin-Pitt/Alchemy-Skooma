@@ -63,6 +63,8 @@ public:
     const std::vector<Person>& people() const { return mPeople; }
     /// Whether the agent stands where it can be hurt; general mode until the combat commit.
     bool combat() const { return false; }
+    /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
+    sknav::Cover coverAhead() const { return mCoverAhead; }
 
     /// A map drew this frame: the idle work runs while one has, recently.
     void noteDrawn();
@@ -73,9 +75,12 @@ public:
 private:
     void idle();
     void gatherPeople();
+    void updateCoverAhead();
 
     std::vector<Person> mPeople;
     F64 mLastDrawn = -1.0e9;
+    sknav::Cover mCoverAhead = sknav::Cover::NONE;
+    F64 mCoverAt = -1.0e9;
 };
 
 #endif // SK_MAPPEOPLE_H
