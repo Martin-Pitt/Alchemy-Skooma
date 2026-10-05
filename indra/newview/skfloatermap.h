@@ -39,6 +39,7 @@ public:
     ~SKFloaterMap() override;
 
     bool postBuild() override;
+    void onOpen(const LLSD& key) override;
     void draw() override;
     void setMinimized(bool minimize) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;

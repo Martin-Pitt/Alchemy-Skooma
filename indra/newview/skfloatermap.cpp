@@ -55,10 +55,16 @@ bool SKFloaterMap::postBuild()
     mCog = getChild<LLButton>("sk_map_cog");
     mCog->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_map_settings"); });
     layoutCog();
-    seed();
     // Keep it on screen.
     gFloaterView->adjustToFitScreen(this, false);
     return true;
+}
+
+void SKFloaterMap::onOpen(const LLSD& key)
+{
+    LLFloater::onOpen(key);
+    // Here, not in postBuild: the saved rect, which sizes the map, is applied in between.
+    seed();
 }
 
 void SKFloaterMap::seed()
