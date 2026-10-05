@@ -414,6 +414,11 @@ bool LLReflectionMap::isRelevant() const
         return false;
     }
 
+    if (mClusterFill && RenderReflectionProbeLevel < 3) // <SK:Nexii> Cluster probes fill under the automatic probes, which only level 3 has.
+    {
+        return false;
+    }
+
     if (RenderReflectionProbeLevel == 3)
     { // all automatics are relevant
         return true;

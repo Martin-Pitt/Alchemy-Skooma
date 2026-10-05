@@ -79,6 +79,8 @@ namespace sknav
         F32 mOpenShare = 0.5f;      ///< a space with more of its floor under open sky has no ceiling
         F32 mMoveM = 1.f;           ///< a held probe moves only when its part moves further
         F32 mRadiusShare = 0.2f;    ///< or its radius changes by more than this share
+        F32 mMoveShare = 0.25f;     ///< a held probe recaptures only when its part moves past mMoveM and
+                                    ///< this share of its radius: closer, its capture still serves
         F32 mMatchM = 8.f;          ///< a new sphere this close to a held one is that one, moved; as far
                                     ///< as the budget's hold reaches, so a held sphere kept by the
                                     ///< hold can still be matched to its part
@@ -194,6 +196,10 @@ namespace sknav
 
     /// Whether a held probe should move to a newly placed sphere.
     bool shouldReplace(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, F32 radius, const ProbeParams& params);
+    /// Whether a held probe's part moved far enough, for its size, that its
+    /// capture no longer serves and a new one is worth taking. A radius
+    /// change alone never is: the sphere is resized, capture kept.
+    bool shouldRecapture(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, const ProbeParams& params);
 
     /// The neighbour lists of a probe graph, truncated symmetrically: an
     /// edge stands only where it is within the first max_degree links of

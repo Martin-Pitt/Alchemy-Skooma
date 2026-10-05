@@ -1437,6 +1437,21 @@ void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, 
     }
 }
 
+bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        for (const auto& t : m.second->mTiles)
+        {
+            if ((t.second.mInFlight || t.second.mSignature != t.second.mBuilt) && overlaps3D(t.second.mMin, t.second.mMax, min, max))
+            {
+                return true;
+            }
+        }
+    }
+    return mRooms->settlingIn(min, max);
+}
+
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
@@ -1447,7 +1462,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
