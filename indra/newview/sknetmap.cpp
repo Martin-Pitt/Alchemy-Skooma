@@ -277,6 +277,7 @@ void SKNetMap::draw()
         SKMapScene::instance().drawFloorplan(mView);
         SKMapScene::instance().drawVoid(mView);
         mParcels->draw(mView);
+        drawEvents();
         drawPings();
         drawVehicles();
         drawSelf();
@@ -473,6 +474,43 @@ boost::signals2::connection SKNetMap::setPingCallback(const ping_signal_t::slot_
 void SKNetMap::firePing(const LLVector3d& pos)
 {
     sPingSignal(pos);
+}
+
+// static
+void SKNetMap::addEvent(const SKCombatEvent& event)
+{
+    SKMapPeople::instance().addEvent(event);
+}
+
+void SKNetMap::drawEvents()
+{
+    static LLCachedControl<F32> line_s(gSavedSettings, "SKMapKillLineSeconds", 0.5f);
+    static LLCachedControl<F32> icon_s(gSavedSettings, "SKMapDeathIconSeconds", 2.f);
+    const SKMapPeople& people = SKMapPeople::instance();
+    std::vector<skmap::EventRing::Draw> draws;
+    people.events().visible(LLFrameTimer::getElapsedSeconds(), line_s, icon_s, people.combat(), draws);
+    if (draws.empty())
+    {
+        return;
+    }
+    gGL.begin(LLRender::TRIANGLES);
+    for (const skmap::EventRing::Draw& d : draws)
+    {
+        const LLVector2 target = mView.toWidget(d.mEvent->targetPos);
+        if (d.mLineAlpha > 0.f)
+        {
+            skmapdraw::colour(skmap::palette::EVENT_LINE, d.mLineAlpha);
+            skmapdraw::line(mView.toWidget(d.mEvent->actorPos), target, 1.f);
+        }
+        if (d.mIconAlpha > 0.f)
+        {
+            const F32 r = skmap::palette::EVENT_ICON_PX;
+            skmapdraw::colour(skmap::palette::EVENT_ICON, d.mIconAlpha);
+            skmapdraw::line(target + LLVector2(-r, -r), target + LLVector2(r, r), 2.f);
+            skmapdraw::line(target + LLVector2(-r, r), target + LLVector2(r, -r), 2.f);
+        }
+    }
+    gGL.end();
 }
 
 void SKNetMap::drawPings()

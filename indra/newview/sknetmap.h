@@ -35,6 +35,7 @@
 
 #include "skmaplabels.h"
 #include "skmappalette.h"
+#include "skmappolicy.h"
 #include "skmapview.h"
 
 class LLFontGL;
@@ -95,6 +96,8 @@ public:
     typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;
     static boost::signals2::connection setPingCallback(const ping_signal_t::slot_type& cb);
     static void firePing(const LLVector3d& pos);
+    /// A combat event to draw: a line from actor to target, and a cross for a kill or a death.
+    static void addEvent(const SKCombatEvent& event);
     /// Ease the pan back to the agent over a quarter second.
     void recentre();
     bool isPanned() const { return mPan.lengthSquared() > 1e-4f; }
@@ -120,6 +123,7 @@ private:
     void drawPeople();
     void drawVehicles();
     void drawPings();
+    void drawEvents();
     /// The font the dots' codes are drawn in, at SKMapMarkerFontPx.
     static const LLFontGL* codeFont();
     void drawTracking();

@@ -5112,6 +5112,28 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKMapKillLineSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a combat event's line from shooter to target fades over on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKMapDeathIconSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a kill or death mark stays on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>
