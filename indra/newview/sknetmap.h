@@ -100,6 +100,7 @@ private:
     void drawNorth();
     void drawChromeTint();
     void drawChromeFrame();
+    void drawReadout();
 
     void drawObjects();
 
@@ -108,6 +109,7 @@ private:
     std::vector<DrawnDot> mDots;
     bool mHovered = false;
     bool mChrome = false;
+    F32 mDrawMs = 0.f;
 
     skmap::MapView mView;
     LLVector2 mPan;                     ///< metres east and north of the agent

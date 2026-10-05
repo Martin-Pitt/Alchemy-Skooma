@@ -62,6 +62,7 @@
 #include "skmapobjects.h"
 #include "skmapparcels.h"
 #include "skmappeople.h"
+#include "skmapscene.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
 
@@ -245,8 +246,10 @@ void SKNetMap::draw()
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
+    LLTimer draw_timer;
     updateView();
     SKMapPeople::instance().noteDrawn();
+    SKMapScene::instance().noteDrawn(*this);
 
     // The classic map's matrix setup: widget pixels, the UI scale and offset applied by hand.
     gGL.pushMatrix();
@@ -273,6 +276,8 @@ void SKNetMap::draw()
     }
     gGL.popMatrix();
     gGL.popUIMatrix();
+    mDrawMs = draw_timer.getElapsedTimeF32() * 1000.f;
+    drawReadout();
 
     LLUICtrl::draw();
 }
@@ -325,8 +330,14 @@ void SKNetMap::drawObjects()
         return;
     }
     mObjects->update(mView, SKMapPeople::instance().combat());
-    // Where no floorplan exists, until the floorplan says where it does: everywhere for now.
-    mObjects->draw(mView, nullptr);
+    if (mode >= 2)
+    {
+        mObjects->draw(mView, nullptr);
+        return;
+    }
+    // Only in the 32 m cells with no published navmesh tile.
+    const SKMapScene& scene = SKMapScene::instance();
+    mObjects->draw(mView, [&scene](S32 x, S32 y) { return scene.built(x, y); });
 }
 
 void SKNetMap::drawSelf()
@@ -519,6 +530,20 @@ void SKNetMap::drawNorth()
                         std::fabs(north.mV[VY]) > 1e-4f ? hy / std::fabs(north.mV[VY]) : 1e9f);
     const LLVector2 at = centre + north * t;
     font->renderUTF8("N", 0, at.mV[VX], at.mV[VY], text, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW);
+}
+
+void SKNetMap::drawReadout()
+{
+    static LLCachedControl<bool> readout(gSavedSettings, "SKMapDebugReadout", false);
+    if (!readout)
+    {
+        return;
+    }
+    const SKMapScene::Stats& stats = SKMapScene::instance().stats();
+    const std::string text = llformat("draw %.2f ms | scene %u polys %u layers, job %.1f ms (%u)", mDrawMs, stats.mPolys, stats.mLayers,
+                                      stats.mJobMs, stats.mJobs);
+    LLFontGL::getFontMonospace()->renderUTF8(text, 0, 4.f, 4.f, LLColor4::white, LLFontGL::LEFT, LLFontGL::BOTTOM, LLFontGL::NORMAL,
+                                             LLFontGL::DROP_SHADOW);
 }
 
 void SKNetMap::drawChromeTint()
