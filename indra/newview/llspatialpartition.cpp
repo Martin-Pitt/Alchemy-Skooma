@@ -129,6 +129,14 @@ LLSpatialGroup::~LLSpatialGroup()
 
     sNodeCount--;
 
+    // The reflection probe holds a raw back-pointer to this group, but outlives
+    // it (the manager keeps the probe alive past the group's death). Clear it,
+    // or the probe's placement pass will read freed memory.
+    if (mReflectionProbe)
+    {
+        mReflectionProbe->mGroup = nullptr;
+    }
+
     clearDrawMap();
 }
 

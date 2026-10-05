@@ -27,14 +27,22 @@
 #include "sknavmesh.h"
 
 #include "skcaptureexport.h"
+#include "sknavannotate.h"
+#include "sknavannotator.h"
+#include "sknavcensusio.h"
+#include "sknavexport.h"
+#include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpalette.h"
+#include "sknavroomprobes.h"
+#include "sknavrooms.h"
 
 #include "alobjectproperties.h"
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
 #include "llagent.h"
 #include "llavatarnamecache.h"
+#include "llbase64.h"
 #include "llcallingcard.h"
 #include "llappviewer.h"
 #include "lldate.h"
@@ -55,6 +63,7 @@
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
+#include "llwind.h"
 #include "llviewershadermgr.h"
 #include "llvoavatarself.h"
 #include "llvovolume.h"
@@ -64,7 +73,9 @@
 #include "workqueue.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <iomanip>
 #include <sstream>
 #include <set>
@@ -77,94 +88,26 @@ namespace
     using skcapture::facePbrAlpha;
     using skcapture::linkNumber;
 
-    // Detour packs tile, poly and salt bits into 32: 10 + 12 leaves the 10 salt
-    // bits init insists on. 1024 tiles is a square kilometre per structure.
-    const S32 MAX_TILES_PER_MESH = 1024;
-    const S32 MAX_POLYS_PER_TILE = 4096;
-
-    /// How far past a tile geometry and terrain are taken: the build's border
-    /// for the widest class, plus a metre of terrain grid.
-    F32 padFor(const TileBuildInput& params)
+    bool overlaps3D(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
     {
-        F32 border = 0.f;
-        for (S32 c = 0; c < NUM_CLASSES; ++c)
-        {
-            if (params.mClasses[c])
-            {
-                border = std::max(border, sknav::borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
-            }
-        }
-        return border + 1.f;
+        return overlapsXY(amin, amax, bmin, bmax) && !(amin.mdV[VZ] > bmax.mdV[VZ] || bmin.mdV[VZ] > amax.mdV[VZ]);
     }
 
-    LLVector3d tileMin(const LLVector3d& origin, const TileKey& key)
+    void writeVec3d(std::ostream& file, const LLVector3d& v)
     {
-        return LLVector3d(origin.mdV[VX] + key.mX * TILE_M, origin.mdV[VY] + key.mY * TILE_M, 0.0);
+        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
     }
 
-    bool overlapsXY(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
+    void writeVec3(std::ostream& file, const LLVector3& v)
     {
-        return !(amin.mdV[VX] > bmax.mdV[VX] || bmin.mdV[VX] > amax.mdV[VX] || amin.mdV[VY] > bmax.mdV[VY] || bmin.mdV[VY] > amax.mdV[VY]);
+        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
     }
-
-    /// The records each lattice tile can see, bucketed by the cells their
-    /// padded AABB touches. A tile is one cell, so a lookup is one hash: the
-    /// per-tile scan over every record in the region is gone, and a record is
-    /// kept only by the tiles it can actually reach.
-    struct RecordGrid
-    {
-        std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mCells;
-
-        void insert(const RecordPtr& r, F32 pad)
-        {
-            const LLVector3d pmin = r->mMin - LLVector3d(pad, pad, 0);
-            const LLVector3d pmax = r->mMax + LLVector3d(pad, pad, 0);
-            const TileKey k0 = tileOf(pmin), k1 = tileOf(pmax);
-            for (S32 y = k0.mY; y <= k1.mY; ++y)
-            {
-                for (S32 x = k0.mX; x <= k1.mX; ++x)
-                {
-                    mCells[{ x, y }].push_back(r);
-                }
-            }
-        }
-
-        void query(const TileKey& key, std::vector<RecordPtr>& out) const
-        {
-            const auto it = mCells.find(key);
-            if (it == mCells.end())
-            {
-                out.clear();
-                return;
-            }
-            out = it->second;
-        }
-    };
 
     // Two span corners the same within a few centimetres.
     bool sameSpan(const LLVector3d& a, const LLVector3d& b)
     {
         return std::fabs(a.mdV[VX] - b.mdV[VX]) <= 0.05 && std::fabs(a.mdV[VY] - b.mdV[VY]) <= 0.05
             && std::fabs(a.mdV[VZ] - b.mdV[VZ]) <= 0.05;
-    }
-
-    /// The lattice origin a mesh gets: the tile corner at or below the point, z zero.
-    LLVector3d latticeOrigin(const LLVector3d& p)
-    {
-        const TileKey k = tileOf(p);
-        return LLVector3d(k.mX * TILE_M, k.mY * TILE_M, 0.0);
-    }
-
-    U8 areaOf(unsigned short flags)
-    {
-        for (U8 a = 1; a < 8; ++a)
-        {
-            if (flags & (1u << a))
-            {
-                return a;
-            }
-        }
-        return 0;
     }
 
     constexpr F32 EXPORT_REACH_M = 16.f; ///< the object export's surroundings: half the side of the cube about the point
@@ -195,6 +138,8 @@ SKNavMesh::Mesh::~Mesh()
 }
 
 SKNavMesh::SKNavMesh()
+    : mRooms(std::make_unique<SKNavRooms>()),
+      mRoomProbes(std::make_unique<SKNavRoomProbes>())
 {
 }
 
@@ -217,14 +162,34 @@ bool SKNavMesh::overlayActive()
     // boxes all read the built mesh, and none of them needs the surface drawn
     // in the way of what they are for.
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
-        || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures");
+        || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
+        || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
+        || gSavedSettings.getBOOL("SKNavOverlayWind");
 }
 
 bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive());
+    return enabled && (always || overlayActive() || probesDemanded());
+}
+
+bool SKNavMesh::probesDemanded()
+{
+    // Mirrors the guards in SKNavRoomProbes::update, which cannot demand
+    // anything itself: it only runs when the navmesh already does.
+    static LLCachedControl<bool> room_probes(gSavedSettings, "SKNavRoomProbes", true);
+    static LLCachedControl<S32> probe_level(gSavedSettings, "RenderReflectionProbeLevel", 3);
+    return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
+}
+
+bool SKNavMesh::inAirRadius(const Tile& tile)
+{
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
+    const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
+    return dx * dx + dy * dy <= static_cast<F64>(radius) * radius;
 }
 
 LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
@@ -246,6 +211,117 @@ LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
     return LL::WorkQueue::getInstance("NavMesh");
 }
 
+std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
+{
+    static LLCachedControl<U32> cap_mb(gSavedSettings, "SKNavDiskCacheMB", 2048);
+    if (!cap_mb)
+    {
+        return nullptr;
+    }
+    const U64 cap = static_cast<U64>(cap_mb) * 1048576;
+    if (!mDiskCache)
+    {
+        mDiskCache = std::make_shared<TileDiskCache>(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "sknav"), cap);
+        // Indexing a full folder is slow; until it is done a lookup misses.
+        if (LL::WorkQueue::ptr_t workers = workerQueue())
+        {
+            std::shared_ptr<TileDiskCache> cache = mDiskCache;
+            workers->post([cache]() { cache->index(); });
+        }
+    }
+    else
+    {
+        mDiskCache->setCap(cap);
+    }
+    return mDiskCache;
+}
+
+void SKNavMesh::evictAir()
+{
+    static LLCachedControl<U32> budget_mb(gSavedSettings, "SKNavAirBudgetMB", 512);
+    static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
+
+    struct Held
+    {
+        Mesh* mMesh;
+        TileKey mKey;
+        Tile* mTile;
+    };
+    std::vector<Held> held;
+    std::vector<EvictionCandidate> candidates;
+    for (auto& entry : mMeshes)
+    {
+        for (auto& t : entry.second->mTiles)
+        {
+            Tile& tile = t.second;
+            const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
+            const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
+            const F64 distance = std::sqrt(dx * dx + dy * dy);
+            tile.mNearness = accumulateNearness(tile.mNearness, distance, radius, dt);
+            if (tile.mAir && !tile.mInFlight)
+            {
+                held.push_back({ entry.second.get(), t.first, &tile });
+                candidates.push_back({ tile.mAir->bytes(), tile.mNearness, distance });
+            }
+        }
+    }
+    const std::vector<size_t> out = chooseEvictions(candidates, static_cast<size_t>(budget_mb) * 1048576, 1.5 * radius);
+    if (out.empty())
+    {
+        return;
+    }
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    LL::WorkQueue::ptr_t workers = cache ? workerQueue() : nullptr;
+    for (size_t i : out)
+    {
+        Mesh& mesh = *held[i].mMesh;
+        Tile& tile = *held[i].mTile;
+        // Spill what is not on disk yet: the products as published, packed on a worker.
+        if (workers && tile.mContentKey && !cache->contains(tile.mContentKey))
+        {
+            auto snap = std::make_shared<TileBuildResult>();
+            snap->mStatus = TileBuildResult::SUCCESS;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                snap->mPolys[cls] = tile.mPolys[cls];
+                const dtMeshTile* dt_tile = mesh.mNav[cls] ? mesh.mNav[cls]->getTileAt(held[i].mKey.mY, held[i].mKey.mX, 0) : nullptr;
+                if (dt_tile && dt_tile->data && dt_tile->dataSize > 0)
+                {
+                    snap->mData[cls].assign(dt_tile->data, dt_tile->data + dt_tile->dataSize);
+                }
+                if (tile.mSegments[cls])
+                {
+                    snap->mSegments[cls] = *tile.mSegments[cls];
+                }
+                if (tile.mLinks[cls])
+                {
+                    snap->mLinks[cls] = *tile.mLinks[cls];
+                }
+                if (tile.mFlights[cls])
+                {
+                    snap->mFlights[cls] = *tile.mFlights[cls];
+                }
+            }
+            if (tile.mFaces)
+            {
+                snap->mFaces = *tile.mFaces;
+            }
+            snap->mMillis = tile.mMillis;
+            snap->mAir = tile.mAir;
+            snap->mAirBuilt = true;
+            const U64 content_key = tile.mContentKey;
+            workers->post([cache, snap, content_key]() { cache->store(content_key, packTileProduct(*snap, content_key)); });
+        }
+        tile.mAirCoarse = coarseAir(*tile.mAir);
+        tile.mAir.reset();
+        tile.mAirBuilt = 0;         // back within the radius, it is asked for again and found on disk
+        mStats.mAirEvicted++;
+    }
+    mRevision++;                    // the sky map takes the coarse tops in place of the detail
+}
+
 void SKNavMesh::cleanupSingleton()
 {
     // Join the pool before the singleton dies: a job in flight carries this
@@ -255,6 +331,8 @@ void SKNavMesh::cleanupSingleton()
         mWorkers->close();
         mWorkers.reset();
     }
+    mRooms->close();
+    mRoomProbes->clear();
 }
 
 bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
@@ -263,16 +341,9 @@ bool SKNavMesh::ensureNav(Mesh& mesh, S32 cls)
     {
         return true;
     }
-    dtNavMesh* nav = dtAllocNavMesh();
-    dtNavMeshParams p;
-    p.orig[0] = p.orig[1] = p.orig[2] = 0.f;    // coordinates are mesh-local already
-    p.tileWidth = static_cast<F32>(TILE_M);
-    p.tileHeight = static_cast<F32>(TILE_M);
-    p.maxTiles = MAX_TILES_PER_MESH;
-    p.maxPolys = MAX_POLYS_PER_TILE;
-    if (!dtStatusSucceed(nav->init(&p)))
+    dtNavMesh* nav = allocMeshNav();
+    if (!nav)
     {
-        dtFreeNavMesh(nav);
         mStats.mFailures++;
         LL_WARNS_ONCE("SKNav") << "dtNavMesh::init refused " << MAX_TILES_PER_MESH << " tiles x " << MAX_POLYS_PER_TILE << " polys" << LL_ENDL;
         return false;
@@ -299,6 +370,8 @@ U64 SKNavMesh::paramsSignature() const
     h = mixF32(h, probe.mDetailSampleCells);
     h = mixF32(h, probe.mWallMinHeight);
     h = mix(h, probe.mWallFaces);
+    h = mix(h, probe.mAir);
+    h = mixF32(h, probe.mAirMinGap);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
     {
@@ -322,7 +395,7 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> weatherSlope(gSavedSettings, "SKNavWeatherSlope", 89.f);
     static LLCachedControl<F32> weatherRadius(gSavedSettings, "SKNavWeatherRadius", 0.125f);
     static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
-    static LLCachedControl<bool> weather(gSavedSettings, "SKNavBuildWeather", false);
+    static LLCachedControl<bool> weather_on(gSavedSettings, "SKNavBuildWeather", false);
     static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
     static LLCachedControl<F32> dropAvatar(gSavedSettings, "SKNavDropMax", 10.f);
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
@@ -348,7 +421,11 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
-    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = weather;
+    // The air is read off the weather class, so the navmesh always builds that class.
+    input.mAir = true;
+    static LLCachedControl<F32> airMinGap(gSavedSettings, "SKNavAirMinGap", 0.5f);
+    input.mAirMinGap = llclamp(static_cast<F32>(airMinGap), 0.f, 4.f);
+    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
     // Weather runs down whatever it lands on, so nearly everything is floor to
     // it. A face that is truly vertical still cannot be a walkable polygon of
     // a heightfield - it has no top - which is what the wall faces are for.
@@ -362,9 +439,9 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
                                                              llclamp(static_cast<F32>(weatherSlope), 1.f, 89.9f) };
 
     // Faces are for the weather class's readers, edges and drops for both.
-    input.mWallFaces = walls && weather;
+    input.mWallFaces = walls && weather_on;
     input.mEdges[static_cast<S32>(AgentClass::AVATAR)] = walls;
-    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather;
+    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather_on;
     input.mDropMax[static_cast<S32>(AgentClass::AVATAR)] = dropAvatar;
     input.mDropMax[static_cast<S32>(AgentClass::WEATHER)] = dropWeather;
     input.mDropSpacing = llmax(0.5f, static_cast<F32>(dropSpacing));
@@ -506,7 +583,7 @@ void SKNavMesh::sampleTerrain()
     LLTimer timer;
     TileBuildInput probe;
     fillParams(probe);
-    const F32 pad = padFor(probe);
+    const F32 pad = tilePad(probe);
     const F32 budget_ms = llmax(0.1f, static_cast<F32>(budget));
     for (auto& entry : mMeshes)
     {
@@ -564,7 +641,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     const U64 params = paramsSignature();
     TileBuildInput probe;
     fillParams(probe);
-    const F32 pad = padFor(probe);
+    const F32 pad = tilePad(probe);
     const U64 world_stamp = worldStamp();
 
     // Grounded structures are meshed with the region they stand in, so that
@@ -590,52 +667,57 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // Clusters clear of the ground: a mesh each, and no terrain in it. A
     // skybox three kilometres up has nothing to do with the land below it, and
     // a heightfield spanning the gap would overflow Recast's span heights.
-    for (const Cluster* c : airborne)
     {
-        live.insert(c->mId);
-        std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
-        if (!mesh)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile airborne");
+        for (const Cluster* c : airborne)
         {
-            mesh = std::make_unique<Mesh>();
-            mesh->mId = c->mId;
-            mesh->mGeneration = mNextGeneration++;
-            mesh->mOrigin = latticeOrigin(c->mMin);
-            if (!c->mRecords.empty())
+            live.insert(c->mId);
+            std::unique_ptr<Mesh>& mesh = mMeshes[c->mId];
+            if (!mesh)
             {
-                LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
-                mesh->mRegion = region ? region->getHandle() : 0;
+                mesh = std::make_unique<Mesh>();
+                mesh->mId = c->mId;
+                mesh->mGeneration = mNextGeneration++;
+                mesh->mOrigin = latticeOrigin(c->mMin);
+                if (!c->mRecords.empty())
+                {
+                    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(c->mRecords.front()->mOrigin + LLVector3d(1, 1, 0));
+                    mesh->mRegion = region ? region->getHandle() : 0;
+                }
             }
-        }
-        mesh->mLastSeen = gFrameTimeSeconds;
-        const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
-        RecordGrid grid;
-        for (const RecordPtr& r : c->mRecords)
-        {
-            grid.insert(r, pad);
-        }
-        std::map<TileKey, Tile> wanted;
-        for (const auto& entry : c->mTiles)
-        {
-            const TileKey key{ entry.first.mX - ox, entry.first.mY - oy };
-            Tile& tile = wanted[key];
-            const auto old = mesh->mTiles.find(key);
-            if (old != mesh->mTiles.end())
+            mesh->mLastSeen = gFrameTimeSeconds;
+            std::vector<LaidTile> laid;
             {
-                tile = old->second;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne");
+                layAirborne(*c, mesh->mOrigin, pad, laid);
             }
-            std::vector<RecordPtr> before = std::move(tile.mRecords);
-            tile.mMin = tileMin(mesh->mOrigin, key);
-            tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-            tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
-            tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
-            grid.query(entry.first, tile.mRecords);
-            reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            std::map<TileKey, Tile> wanted;
+            for (LaidTile& lt : laid)
+            {
+                const TileKey key = lt.mKey;
+                Tile& tile = wanted[key];
+                const auto old = mesh->mTiles.find(key);
+                if (old != mesh->mTiles.end())
+                {
+                    tile = old->second;
+                }
+                std::vector<RecordPtr> before = std::move(tile.mRecords);
+                tile.mMin = meshTileMin(mesh->mOrigin, key);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = c->mMin.mdV[VZ];
+                tile.mMax.mdV[VZ] = c->mMax.mdV[VZ];
+                tile.mRecords = std::move(lt.mRecords);
+                reSign(tile, before, recordSignature(tile.mRecords), 0, params);
+            }
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
+            }
+            mesh->mTiles.swap(wanted);
         }
-        if (dropTiles(*mesh, wanted))
-        {
-            mRevision++;
-        }
-        mesh->mTiles.swap(wanted);
     }
 
     // One mesh per region: its terrain, and every record that reaches over
@@ -645,6 +727,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     // the structure was rezzed across the border.
     if (LLWorld::instanceExists())
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile regions");
         for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
         {
             live.insert(region->getRegionID());
@@ -660,124 +743,83 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
             }
             mesh->mLastSeen = gFrameTimeSeconds;
 
-            const LLVector3d& origin = region->getOriginGlobal();
-            const F64 width = region->getWidth();
-            const LLVector3d land_min = origin - LLVector3d(pad, pad, 0);
-            const LLVector3d land_max = origin + LLVector3d(width + pad, width + pad, 0);
-            const S32 ox = tileIndex(mesh->mOrigin.mdV[VX]), oy = tileIndex(mesh->mOrigin.mdV[VY]);
-            std::vector<RecordPtr> land_records;    // reaches over this region's land
-            std::vector<RecordPtr> own_records;     // this region's own, for the void
-            for (const RecordPtr& r : ground_records)
-            {
-                if (overlapsXY(r->mMin, r->mMax, land_min, land_max))
-                {
-                    land_records.push_back(r);
-                }
-                if (r->mOrigin == origin)
-                {
-                    own_records.push_back(r);
-                }
-            }
-
-            const S32 per_edge = static_cast<S32>(std::ceil(region->getWidth() / TILE_M));
             const LLSurface& land = region->getLand();
             const U64 land_stamp = landStamp(*region);
-            RecordGrid land_grid;
-            for (const RecordPtr& r : land_records)
-            {
-                land_grid.insert(r, pad);
-            }
-            RecordGrid void_grid;
-            for (const RecordPtr& r : own_records)
-            {
-                void_grid.insert(r, pad);
-            }
-
-            // The region's own tiles, plus the void past its edge as far as
-            // its own records reach, within SKNavVoidMargin: the surrounds and
-            // the things hanging off the sim are out there, and the void is
-            // exactly where they are.
             static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
-            const S32 out = llclamp(static_cast<S32>(std::ceil(void_margin / TILE_M)), 0, 16);
-            S32 x0 = 0, x1 = per_edge - 1, y0 = 0, y1 = per_edge - 1;
-            for (const RecordPtr& r : own_records)
+            // The layout and the tile pass below are pure over the census,
+            // this region's land, the region set and the parameters. When
+            // none of those moved since this mesh was last laid, the pass
+            // would rebuild exactly what already stands: skip it whole.
+            // This is what makes the once-a-second reconcile cheap while
+            // the world stands still; the land's stamp is what the second
+            // pass existed to catch.
+            if (mesh->mLayoutCensus == snap->mStamp && mesh->mLayoutWorld == world_stamp &&
+                mesh->mLayoutLand == land_stamp && mesh->mLayoutParams == params &&
+                mesh->mLayoutVoidMargin == void_margin)
             {
-                x0 = llmin(x0, tileIndex(r->mMin.mdV[VX]) - ox);
-                x1 = llmax(x1, tileIndex(r->mMax.mdV[VX]) - ox);
-                y0 = llmin(y0, tileIndex(r->mMin.mdV[VY]) - oy);
-                y1 = llmax(y1, tileIndex(r->mMax.mdV[VY]) - oy);
+                continue;
             }
-            x0 = llmax(x0, -out);
-            y0 = llmax(y0, -out);
-            x1 = llmin(x1, per_edge - 1 + out);
-            y1 = llmin(y1, per_edge - 1 + out);
+            mesh->mLayoutCensus = snap->mStamp;
+            mesh->mLayoutWorld = world_stamp;
+            mesh->mLayoutLand = land_stamp;
+            mesh->mLayoutParams = params;
+            mesh->mLayoutVoidMargin = void_margin;
+            std::vector<LaidTile> laid;
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region");
+                layRegion(region->getOriginGlobal(), region->getWidth(), mesh->mOrigin, ground_records, pad, void_margin,
+                          [](const LLVector3d& p) { return LLWorld::getInstance()->getRegionFromPosGlobal(p) != nullptr; }, laid);
+            }
 
             std::map<TileKey, Tile> wanted;
-            for (S32 y = y0; y <= y1; ++y)
+            for (LaidTile& lt : laid)
             {
-                for (S32 x = x0; x <= x1; ++x)
+                const TileKey key = lt.mKey;
+                Tile& tile = wanted[key];
+                const auto old = mesh->mTiles.find(key);
+                if (old != mesh->mTiles.end())
                 {
-                    const TileKey key{ x, y };
-                    const TileKey global{ ox + x, oy + y };
-                    const bool over_land = (x >= 0 && x < per_edge && y >= 0 && y < per_edge);
-                    Tile& tile = wanted[key];
-                    const auto old = mesh->mTiles.find(key);
-                    if (old != mesh->mTiles.end())
-                    {
-                        tile = old->second;
-                    }
-                    std::vector<RecordPtr> before = std::move(tile.mRecords);
-                    tile.mMin = tileMin(mesh->mOrigin, key);
-                    tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
-                    tile.mMin.mdV[VZ] = land.getMinZ();
-                    tile.mMax.mdV[VZ] = land.getMaxZ();
-                    if (over_land)
-                    {
-                        land_grid.query(global, tile.mRecords);
-                        tile.mOverLand = true;
-                        // The land under the tile stands until its region's
-                        // stamp moves, and then only this tile re-signs and
-                        // waits for its window to be sampled again. The world
-                        // stamp catches a region arriving or leaving under the
-                        // tile's padded edge.
-                        if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
-                        {
-                            tile.mLandStamp = land_stamp;
-                            tile.mWorldStamp = world_stamp;
-                            tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
-                            tile.mTerrainStale = true;
-                        }
-                    }
-                    else
-                    {
-                        // Past this region's edge only the void is this
-                        // region's business. A tile over another region's land
-                        // belongs to that region's mesh, records and all, so
-                        // the ground and what stands on it stay together and
-                        // the same patch is not meshed twice.
-                        if (LLWorld::getInstance()->getRegionFromPosGlobal((tile.mMin + tile.mMax) * 0.5))
-                        {
-                            wanted.erase(key);
-                            continue;
-                        }
-                        void_grid.query(global, tile.mRecords);
-                        if (tile.mRecords.empty())
-                        {
-                            // Empty void: nothing to mesh out here.
-                            wanted.erase(key);
-                            continue;
-                        }
-                        tile.mOverLand = false;
-                        tile.mTerrain.reset();
-                        tile.mTerrainStale = false;
-                        tile.mTerrainSignature = 0;
-                    }
-                    reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
+                    tile = old->second;
                 }
+                std::vector<RecordPtr> before = std::move(tile.mRecords);
+                tile.mMin = meshTileMin(mesh->mOrigin, key);
+                tile.mMax = tile.mMin + LLVector3d(TILE_M, TILE_M, 0.0);
+                tile.mMin.mdV[VZ] = land.getMinZ();
+                tile.mMax.mdV[VZ] = land.getMaxZ();
+                tile.mRecords = std::move(lt.mRecords);
+                if (lt.mOverLand)
+                {
+                    tile.mOverLand = true;
+                    // The land under the tile stands until its region's
+                    // stamp moves, and then only this tile re-signs and
+                    // waits for its window to be sampled again. The world
+                    // stamp catches a region arriving or leaving under the
+                    // tile's padded edge.
+                    if (!tile.mTerrain || tile.mLandStamp != land_stamp || tile.mWorldStamp != world_stamp)
+                    {
+                        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - terrain signature");
+                        tile.mLandStamp = land_stamp;
+                        tile.mWorldStamp = world_stamp;
+                        tile.mTerrainSignature = terrainSignature(tile.mMin, tile.mMax, pad);
+                        tile.mTerrainStale = true;
+                    }
+                }
+                else
+                {
+                    // Past this region's edge only the void is this region's business.
+                    tile.mOverLand = false;
+                    tile.mTerrain.reset();
+                    tile.mTerrainStale = false;
+                    tile.mTerrainSignature = 0;
+                }
+                reSign(tile, before, recordSignature(tile.mRecords), tile.mTerrainSignature, params);
             }
-            if (dropTiles(*mesh, wanted))
             {
-                mRevision++;
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - drop tiles");
+                if (dropTiles(*mesh, wanted))
+                {
+                    mRevision++;
+                }
             }
             mesh->mTiles.swap(wanted);
         }
@@ -785,16 +827,19 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
 
     // A cluster that has gone, or that has come down to the ground and is now
     // the region's business, takes its mesh with it.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (live.count(it->second->mId))
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile prune");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            ++it;
-        }
-        else
-        {
-            it = mMeshes.erase(it);
-            mRevision++;            // its tiles leave the overlay with it
+            if (live.count(it->second->mId))
+            {
+                ++it;
+            }
+            else
+            {
+                it = mMeshes.erase(it);
+                mRevision++;            // its tiles leave the overlay with it
+            }
         }
     }
 }
@@ -949,6 +994,13 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
+    // Air is built eagerly near the camera; a tile further out keeps any it
+    // has, and without it needs WEATHER only if weather itself is on.
+    if (input->mAir && !tile.mAir && !inAirRadius(tile))
+    {
+        input->mAir = false;
+        input->mClasses[static_cast<S32>(AgentClass::WEATHER)] = gSavedSettings.getBOOL("SKNavBuildWeather");
+    }
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
     // tile past the region's edge is standing on land another region meshes.
@@ -963,56 +1015,75 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         input->mTerrain = *tile.mTerrain;
     }
 
-    F32 zmin = 1e9f, zmax = -1e9f;
-    for (F32 z : input->mTerrain.mZ)
-    {
-        if (z > -900.f)
-        {
-            zmin = std::min(zmin, z);
-            zmax = std::max(zmax, z);
-        }
-    }
-    const F32 land_min = zmin;
-    for (const RecordPtr& r : tile.mRecords)
-    {
-        // An exclusion volume is not a shape: the sim takes the navmesh out
-        // of its inside. Build it as a cut, not as something to stand on.
-        if (r && r->mNavRole == sknav::NavRole::EXCLUSION_VOLUME)
-        {
-            input->mCuts.push_back(r);
-        }
-        else
-        {
-            input->mRecords.push_back(r);
-        }
-    }
-    for (const RecordPtr& r : tile.mRecords)
-    {
-        zmin = std::min(zmin, static_cast<F32>(r->mMin.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
-        zmax = std::max(zmax, static_cast<F32>(r->mMax.mdV[VZ] - mesh.mOrigin.mdV[VZ]));
-    }
-    // The land's lowest sample is the deepest ground there is: a record
-    // buried below it never becomes a floor, so the heightfield does not
-    // reach down for it. Whatever still falls under the surface, the tile
-    // build takes out of the spans.
-    if (land_min < 1e9f)
-    {
-        zmin = std::max(zmin, land_min);
-    }
-    if (zmin > zmax)
-    {
-        zmin = zmax = 0.f;
-    }
-    input->mZMin = zmin - 1.f;
-    input->mZMax = zmax + 3.f;
+    finishTileInput(tile.mRecords, mesh.mOrigin, *input);
 
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    // A stored product Detour refused last time is built afresh, and overwritten.
+    const bool skip_load = tile.mDiskRefused;
+    tile.mDiskRefused = false;
+    struct Outcome
+    {
+        std::shared_ptr<TileBuildResult> mResult;
+        U64 mKey = 0;
+        bool mLooked = false;
+        bool mLoaded = false;
+        bool mCorrupt = false;
+        F32 mLoadMs = 0.f;
+    };
     const bool posted = main_queue->postTo(
         workers,
-        [input]() { return std::make_shared<TileBuildResult>(buildTile(*input)); },
-        [this, id, generation, key, signature](std::shared_ptr<TileBuildResult> result) { publish(id, generation, key, signature, result); });
+        [input, cache, skip_load]()
+        {
+            auto out = std::make_shared<Outcome>();
+            // What the tile is built from, keyed so the same world finds it on disk
+            // next session; hashed here, since a big mesh's triangles are not cheap.
+            const U64 content_key = tileContentKey(*input);
+            out->mKey = content_key;
+            if (cache && !skip_load)
+            {
+                out->mLooked = true;
+                LLTimer timer;
+                std::vector<U8> bytes;
+                if (cache->load(content_key, bytes))
+                {
+                    auto loaded = std::make_shared<TileBuildResult>();
+                    if (unpackTileProduct(bytes.data(), bytes.size(), content_key, *loaded))
+                    {
+                        out->mResult = loaded;
+                        out->mLoaded = true;
+                        out->mLoadMs = timer.getElapsedTimeF32() * 1000.f;
+                        loaded->mMillis = out->mLoadMs;     // what this tile cost now, not when it was built
+                        return out;
+                    }
+                    // Damaged or written by another version: gone, and built afresh.
+                    cache->erase(content_key);
+                    out->mCorrupt = true;
+                }
+            }
+            out->mResult = std::make_shared<TileBuildResult>(buildTile(*input));
+            if (cache && out->mResult->mStatus != TileBuildResult::FAILED)
+            {
+                cache->store(content_key, packTileProduct(*out->mResult, content_key));
+            }
+            return out;
+        },
+        [this, id, generation, key, signature](std::shared_ptr<Outcome> out)
+        {
+            if (out->mLoaded)
+            {
+                mStats.mDiskLoads++;
+                mStats.mDiskLoadMs = out->mLoadMs;
+            }
+            else if (out->mLooked)
+            {
+                mStats.mDiskRebuilds++;
+                mStats.mDiskCorrupt += out->mCorrupt ? 1 : 0;
+            }
+            publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded);
+        });
     if (posted)
     {
         tile.mInFlight = true;
@@ -1021,8 +1092,10 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     return posted;
 }
 
-void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result)
+void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result,
+                        U64 content_key, bool loaded)
 {
+    bool refused = false;
     mInFlight = std::max(0, mInFlight - 1);
     const auto it = mMeshes.find(mesh_id);
     if (it == mMeshes.end() || it->second->mGeneration != generation)
@@ -1058,10 +1131,15 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // The walls of the build before this one describe geometry that has
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
+        tile.mAir.reset();
+        tile.mAirCoarse.reset();
+        tile.mContentKey = 0;
+        tile.mAirBuilt = signature;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
             tile.mSegments[cls].reset();
             tile.mLinks[cls].reset();
+            tile.mFlights[cls].reset();
         }
         tile.mBuilt = signature;    // do not retry the same input
         tile.mCause = CAUSE_FAILED;
@@ -1098,18 +1176,33 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
                 dtFree(copy);
                 tile.mPolys[cls] = 0;
                 mStats.mFailures++;
+                refused = loaded;
                 LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
             }
         }
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+    tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
+    tile.mAirBuilt = result->mAirBuilt ? signature : 0;
+    // A tile rebuilt without its air keeps the tops it had only while its input holds.
+    if (tile.mAir || tile.mBuilt != signature)
+    {
+        tile.mAirCoarse.reset();
+    }
+    tile.mContentKey = refused ? 0 : content_key;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
         tile.mLinks[cls] = std::make_shared<const std::vector<DropLink>>(std::move(result->mLinks[cls]));
+        tile.mFlights[cls] = result->mFlights[cls].empty() ? nullptr : std::make_shared<const std::vector<Flight>>(std::move(result->mFlights[cls]));
     }
     tile.mBuilt = signature;
     tile.mMillis = result->mMillis;
+    if (refused)
+    {
+        tile.mBuilt = 0;            // scheduled again, and built rather than loaded
+        tile.mDiskRefused = true;
+    }
     // The floors beside a ladder or a shaft may have moved with the tile.
     for (auto& region : mFeatureLinks)
     {
@@ -1157,7 +1250,9 @@ void SKNavMesh::schedule()
         for (auto& t : mesh.mTiles)
         {
             Tile& tile = t.second;
-            if (tile.mInFlight || tile.mSignature == tile.mBuilt)
+            // A built tile near the camera without its air is built again for it.
+            const bool air_due = tile.mSignature == tile.mBuilt && tile.mAirBuilt != tile.mSignature && inAirRadius(tile);
+            if (tile.mInFlight || (tile.mSignature == tile.mBuilt && !air_due))
             {
                 continue;
             }
@@ -1185,6 +1280,7 @@ void SKNavMesh::schedule()
 
 void SKNavMesh::update()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - update");
     SKWorldCensus& census = SKWorldCensus::instance();
     const bool want = wanted();
     if (want != mDemanding)
@@ -1217,6 +1313,7 @@ void SKNavMesh::update()
     {
         mCensusStamp = snap->mStamp;
         last = gFrameTimeSeconds;
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile");
         reconcile(snap);
     }
 
@@ -1234,9 +1331,26 @@ void SKNavMesh::update()
         }
     }
 
-    sampleTerrain();
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sample terrain");
+        sampleTerrain();
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air");
+        evictAir();
+    }
     schedule();
-    syncFeatureLinks(snap);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync feature links");
+        syncFeatureLinks(snap);
+    }
+    if (mSkyRevision != mRevision)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - sync sky map");
+        syncSkyMap();
+        mSkyRevision = mRevision;
+    }
+    mRooms->update(*this);
 
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mTiles = 0;
@@ -1244,12 +1358,21 @@ void SKNavMesh::update()
     mStats.mFaces = 0;
     mStats.mSegments = 0;
     mStats.mLinks = 0;
+    mStats.mAirTiles = 0;
+    mStats.mAirBytes = 0;
     mStats.mInFlight = mInFlight;
+    mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
+    mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
     for (const auto& entry : mMeshes)
     {
         for (const auto& t : entry.second->mTiles)
         {
             mStats.mTiles++;
+            if (t.second.mAir)
+            {
+                mStats.mAirTiles++;
+                mStats.mAirBytes += t.second.mAir->bytes();
+            }
             if (t.second.mBuilt)
             {
                 mStats.mTilesBuilt++;
@@ -1271,12 +1394,73 @@ void SKNavMesh::update()
     }
 }
 
+void SKNavMesh::placeReflectionProbes()
+{
+    if (!wanted())
+    {
+        mRoomProbes->clear();
+        return;
+    }
+    mRoomProbes->update(mRooms->view());
+}
+
 std::string SKNavMesh::statsLine() const
 {
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms",
+    const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
-                    mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs);
+                    mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
+                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
+                    looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
+}
+
+std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
+{
+    return mRooms->view();
+}
+
+U64 SKNavMesh::skyContributor(const LLUUID& mesh, const TileKey& key)
+{
+    return sknav::skyContributor(mesh, key);
+}
+
+void SKNavMesh::syncSkyMap()
+{
+    // A contributor is a tile of a mesh. Its air is replaced whole on every
+    // publish, so a pointer that moved is a tile to hand over again.
+    std::map<U64, TileAirPtr> seen;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        for (const auto& t : mesh.mTiles)
+        {
+            // An evicted tile's tops still say what stands over it.
+            const TileAirPtr& tile_air = t.second.mAir ? t.second.mAir : t.second.mAirCoarse;
+            if (!tile_air)
+            {
+                continue;
+            }
+            const U64 key = skyContributor(mesh.mId, t.first);
+            const auto old = mSkyTiles.find(key);
+            if (old == mSkyTiles.end() || old->second != tile_air)
+            {
+                const TileAir& air = *tile_air;
+                mSkyMap.set(key, mesh.mOrigin + LLVector3d(air.mOrigin), air);
+            }
+            seen[key] = tile_air;
+        }
+    }
+    for (const auto& old : mSkyTiles)
+    {
+        if (!seen.count(old.first))
+        {
+            mSkyMap.remove(old.first);
+        }
+    }
+    mSkyTiles.swap(seen);
 }
 
 SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z_out) const
@@ -1426,6 +1610,58 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
             }
         }
     });
+}
+
+void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    struct Pick
+    {
+        LLVector3d mOrigin;
+        const Flight* mFlight;
+        bool mHome;
+    };
+    std::map<std::pair<LLUUID, U64>, Pick> picks;
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (!tile.mFlights[c])
+        {
+            return;
+        }
+        for (const Flight& f : *tile.mFlights[c])
+        {
+            LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+            for (const LLVector2& p : f.mFootprint)
+            {
+                lo.set(llmin(lo.mV[0], p.mV[0]), llmin(lo.mV[1], p.mV[1]));
+                hi.set(llmax(hi.mV[0], p.mV[0]), llmax(hi.mV[1], p.mV[1]));
+            }
+            if (!overlapsXY(mesh.mOrigin + LLVector3d(lo.mV[0], lo.mV[1], 0.0), mesh.mOrigin + LLVector3d(hi.mV[0], hi.mV[1], 0.0), min, max))
+            {
+                continue;
+            }
+            LLVector2 mid;
+            for (const LLVector2& p : f.mFootprint)
+            {
+                mid += p / static_cast<F32>(f.mFootprint.size());
+            }
+            const LLVector3d centre = mesh.mOrigin + LLVector3d(mid.mV[0], mid.mV[1], 0.0);
+            const bool home = centre.mdV[VX] >= tile.mMin.mdV[VX] && centre.mdV[VX] < tile.mMax.mdV[VX] &&
+                              centre.mdV[VY] >= tile.mMin.mdV[VY] && centre.mdV[VY] < tile.mMax.mdV[VY];
+            auto it = picks.find({ mesh.mId, f.mKey });
+            if (it == picks.end())
+            {
+                picks.emplace(std::make_pair(mesh.mId, f.mKey), Pick { mesh.mOrigin, &f, home });
+            }
+            else if (home && !it->second.mHome)
+            {
+                it->second = { mesh.mOrigin, &f, home };
+            }
+        }
+    });
+    for (const auto& entry : picks)
+    {
+        fn(entry.second.mOrigin, *entry.second.mFlight);
+    }
 }
 
 void SKNavMesh::linksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const LinkFn& fn) const
@@ -2286,6 +2522,122 @@ std::string SKNavMesh::markUnderCamera()
                     mMark.mdV[VX], mMark.mdV[VY], mMark.mdV[VZ], label.c_str(), root->getID().asString().c_str());
 }
 
+void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& key, const Tile& tile, ExportCounts& counts) const
+{
+    TileExport out;
+    out.mKey = key;
+    out.mMin = tile.mMin;
+    out.mMax = tile.mMax;
+    out.mFaces = tile.mFaces.get();
+    out.mAir = tile.mAir;
+    if (tile.mAir)
+    {
+        out.mEnclosure = mRooms->enclosureTile(mesh.mId, key, tile.mAir, out.mEnclosureGeneration);
+    }
+    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+    {
+        out.mNav[cls] = mesh.mNav[cls];
+        out.mSegments[cls] = tile.mSegments[cls].get();
+        out.mLinks[cls] = tile.mLinks[cls].get();
+        out.mFlights[cls] = tile.mFlights[cls].get();
+    }
+    writeExportTile(file, mesh.mOrigin, out, counts);
+}
+
+void SKNavMesh::writeFeatures(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const
+{
+    // What the census recognised, with each span's exits and links per class.
+    file << ",\"features\":[";
+    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        for (const Feature& f : snap->mFeatures)
+        {
+            if (min && max && !overlaps3D(f.mMin, f.mMax, *min, *max))
+            {
+                continue;
+            }
+            if (counts.mFeatures++)
+            {
+                file << ',';
+            }
+            const FeatureSpan* span = featureSpan(featureId(f));
+            writeExportFeature(file, f, span ? span->mKind : LinkKind::LADDER, span ? span->mExits : nullptr, span ? span->mLinks : nullptr);
+        }
+    }
+    file << ']';
+}
+
+void SKNavMesh::writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const
+{
+    // The door table as the rooms pass would read it. Names are anyone's
+    // text, so they are escaped.
+    file << ",\"doors\":[";
+    for (const auto& region : mFeatureDoors)
+    {
+        for (const DoorEntity& d : region.second)
+        {
+            if (min && max && !overlaps3D(d.mMin, d.mMax, *min, *max))
+            {
+                continue;
+            }
+            if (counts.mDoors++)
+            {
+                file << ',';
+            }
+            writeExportDoor(file, d);
+        }
+    }
+    file << ']';
+}
+
+namespace
+{
+    /// Every root the records name, with what the viewer already knows of it: the
+    /// region's linkset reply first, else the object properties cache. `named` counts those with a name.
+    std::vector<CensusRoot> rootTable(const std::vector<RecordPtr>& records, size_t& named)
+    {
+        std::vector<CensusRoot> out;
+        std::set<LLUUID> seen;
+        named = 0;
+        const SKWorldCensus* census = SKWorldCensus::instanceExists() ? SKWorldCensus::getInstance() : nullptr;
+        for (const RecordPtr& record : records)
+        {
+            if (!seen.insert(record->mRoot).second)
+            {
+                continue;
+            }
+            CensusRoot root;
+            root.mId = record->mRoot;
+            if (const SKWorldCensus::LinksetFacts* facts = census ? census->linksetFactsOf(root.mId) : nullptr)
+            {
+                root.mScriptedKnown = facts->mScriptedKnown;
+                root.mScripted = facts->mScripted;
+                if (!facts->mName.empty())
+                {
+                    root.mName = facts->mName;
+                    root.mDescription = capDescription(facts->mDescription);
+                    root.mSource = NameSource::LINKSET;
+                }
+            }
+            if (root.mSource == NameSource::NONE)
+            {
+                if (const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(root.mId))
+                {
+                    if (!props->mName.empty())
+                    {
+                        root.mName = props->mName;
+                        root.mDescription = capDescription(props->mDescription);
+                        root.mSource = NameSource::PROPERTIES;
+                    }
+                }
+            }
+            named += root.mSource != NameSource::NONE;
+            out.push_back(std::move(root));
+        }
+        return out;
+    }
+}
+
 std::string SKNavMesh::exportAll() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
@@ -2299,13 +2651,6 @@ std::string SKNavMesh::exportAll() const
     }
     file << std::setprecision(10);
 
-    auto vec3d = [&file](const LLVector3d& v) {
-        file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
-    };
-    auto vec3 = [&file](const LLVector3& v) {
-        file << '[' << v.mV[VX] << ',' << v.mV[VY] << ',' << v.mV[VZ] << ']';
-    };
-
     F32 height = 2.f;
     if (isAgentAvatarValid())
     {
@@ -2316,19 +2661,10 @@ std::string SKNavMesh::exportAll() const
     static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
     static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
 
-    U32 meshes_written = 0, tiles_written = 0, polys_written = 0, segments_written = 0;
-    U32 links_written = 0, faces_written = 0;
+    U32 meshes_written = 0;
+    ExportCounts counts;
 
-    file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << LLDate::now().asString() << '"';
-    file << ",\"agent\":";
-    vec3d(gAgent.getPositionGlobal());
-    file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb
-         << ",\"slope\":" << slope << ",\"cell\":" << cell << '}';
-    file << ",\"classes\":[\"avatar\",\"weather\"]";
-    file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
-    file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
-    file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
-    file << ",\"meshes\":[";
+    writeExportHeader(file, LLDate::now().asString(), gAgent.getPositionGlobal(), height, radius, climb, slope, cell);
 
     bool first_mesh = true;
     for (const auto& entry : mMeshes)
@@ -2341,13 +2677,12 @@ std::string SKNavMesh::exportAll() const
         first_mesh = false;
         ++meshes_written;
         file << "{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"origin\":";
-        vec3d(mesh.mOrigin);
+        writeVec3d(file, mesh.mOrigin);
         file << ",\"tiles\":[";
         bool first_tile = true;
         for (const auto& t : mesh.mTiles)
         {
-            const Tile& tile = t.second;
-            if (!tile.mBuilt)
+            if (!t.second.mBuilt)
             {
                 continue;
             }
@@ -2356,179 +2691,197 @@ std::string SKNavMesh::exportAll() const
                 file << ',';
             }
             first_tile = false;
-            ++tiles_written;
-            file << "{\"key\":[" << t.first.mX << ',' << t.first.mY << "],\"min\":";
-            vec3d(tile.mMin);
-            file << ",\"max\":";
-            vec3d(tile.mMax);
-            if (tile.mFaces)
-            {
-                file << ",\"faces\":[";
-                bool first = true;
-                for (const WallFace& f : *tile.mFaces)
-                {
-                    if (!first)
-                    {
-                        file << ',';
-                    }
-                    first = false;
-                    ++faces_written;
-                    file << "{\"min\":";
-                    vec3(f.mMin);
-                    file << ",\"max\":";
-                    vec3(f.mMax);
-                    file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
-                }
-                file << ']';
-            }
-            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-            {
-                file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{";
-                const dtNavMesh* nav = mesh.mNav[cls];
-                // Detour x runs along Recast x, which is SL y, so the tile at
-                // this lattice key sits at (mY, mX).
-                const dtMeshTile* dt = nav ? nav->getTileAt(t.first.mY, t.first.mX, 0) : nullptr;
-                file << "\"polys\":[";
-                if (dt && dt->header)
-                {
-                    bool first = true;
-                    for (S32 p = 0; p < dt->header->polyCount; ++p)
-                    {
-                        const dtPoly& poly = dt->polys[p];
-                        if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
-                        {
-                            continue;
-                        }
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++polys_written;
-                        file << "{\"v\":[";
-                        for (S32 v = 0; v < static_cast<S32>(poly.vertCount); ++v)
-                        {
-                            if (v)
-                            {
-                                file << ',';
-                            }
-                            vec3d(mesh.mOrigin + LLVector3d(fromRecast(&dt->verts[poly.verts[v] * 3])));
-                        }
-                        file << "],\"area\":" << static_cast<S32>(areaOf(poly.flags)) << '}';
-                    }
-                }
-                file << "],\"segments\":[";
-                if (tile.mSegments[cls])
-                {
-                    bool first = true;
-                    for (const WallSegment& seg : *tile.mSegments[cls])
-                    {
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++segments_written;
-                        file << "{\"a\":";
-                        vec3d(mesh.mOrigin + LLVector3d(seg.mA));
-                        file << ",\"b\":";
-                        vec3d(mesh.mOrigin + LLVector3d(seg.mB));
-                        file << ",\"kind\":" << static_cast<S32>(seg.mKind) << ",\"value\":" << seg.mValue
-                             << ",\"area\":" << static_cast<S32>(seg.mArea) << '}';
-                    }
-                }
-                file << "],\"links\":[";
-                if (tile.mLinks[cls])
-                {
-                    bool first = true;
-                    for (const DropLink& link : *tile.mLinks[cls])
-                    {
-                        if (!first)
-                        {
-                            file << ',';
-                        }
-                        first = false;
-                        ++links_written;
-                        file << "{\"from\":";
-                        vec3d(mesh.mOrigin + LLVector3d(link.mFrom));
-                        file << ",\"to\":";
-                        vec3d(mesh.mOrigin + LLVector3d(link.mTo));
-                        file << ",\"height\":" << link.mHeight << ",\"kind\":" << static_cast<S32>(link.mKind) << '}';
-                    }
-                }
-                file << "]}";
-            }
-            file << '}';
+            writeTile(file, mesh, t.first, t.second, counts);
         }
-        file << "]}";
+        file << ']';
+        mRooms->writeSpaces(file, mesh.mId);
+        file << '}';
     }
     file << ']';
 
-    // What the census recognised, with each span's exits and links per class.
-    U32 features_written = 0;
-    file << ",\"features\":[";
-    if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    writeFeatures(file, nullptr, nullptr, counts);
+    writeDoors(file, nullptr, nullptr, counts);
+    // The census's roots, named where the viewer knows them, so a capture says what it holds.
+    size_t named = 0;
+    std::vector<CensusRoot> roots;
+    if (SKWorldCensus::instanceExists())
     {
-        for (const Feature& f : snap->mFeatures)
+        if (SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
         {
-            if (features_written++)
-            {
-                file << ',';
-            }
-            file << "{\"kind\":\"" << featureName(f.mKind) << "\",\"confidence\":" << f.mConfidence << ",\"evidence\":\""
-                 << f.mEvidence << "\",\"min\":";
-            vec3d(f.mMin);
-            file << ",\"max\":";
-            vec3d(f.mMax);
-            file << ",\"foot\":" << f.mFoot << ",\"top\":" << f.mTop << ",\"working\":" << (f.mWorking ? "true" : "false")
-                 << ",\"combat\":" << (f.mCombat ? "true" : "false") << ",\"air\":" << (f.mAir ? "true" : "false") << ",\"roots\":[";
-            for (size_t i = 0; i < f.mRoots.size(); ++i)
-            {
-                file << (i ? ",\"" : "\"") << f.mRoots[i] << '"';
-            }
-            file << "],\"parts\":[";
-            for (size_t i = 0; i < f.mParts.size(); ++i)
-            {
-                file << (i ? ",\"" : "\"") << f.mParts[i] << '"';
-            }
-            file << ']';
-            if (const FeatureSpan* span = featureSpan(featureId(f)))
-            {
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                {
-                    file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{\"exits\":[";
-                    for (size_t i = 0; i < span->mExits[cls].size(); ++i)
-                    {
-                        if (i)
-                        {
-                            file << ',';
-                        }
-                        vec3d(span->mExits[cls][i]);
-                    }
-                    file << "],\"links\":[";
-                    for (size_t i = 0; i < span->mLinks[cls].size(); ++i)
-                    {
-                        file << (i ? "," : "") << "{\"from\":";
-                        vec3d(span->mLinks[cls][i].first);
-                        file << ",\"to\":";
-                        vec3d(span->mLinks[cls][i].second);
-                        file << ",\"kind\":" << static_cast<S32>(span->mKind) << '}';
-                    }
-                    file << "]}";
-                }
-            }
-            file << '}';
+            roots = rootTable(snap->mRecords, named);
         }
     }
-    file << ']';
+    file << ",\"roots\":";
+    writeRootTable(file, roots);
+    file << ',';
+    SKNavAnnotator::instance().writeMarks(file);
+    file << "}\n";
 
     const std::streamoff bytes = file.tellp();
     file.close();
 
     LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << LL_ENDL;
-    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features (%.1f MB) -> %s", meshes_written,
-                    tiles_written, polys_written, segments_written, links_written, faces_written, features_written,
-                    static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+    return llformat("%u meshes, %u tiles: %u polys, %u segments, %u links, %u faces, %u features, %u doors, %u air, %zu marks, %zu/%zu roots named (%.1f MB) -> %s",
+                    meshes_written, counts.mTiles, counts.mPolys, counts.mSegments, counts.mLinks, counts.mFaces, counts.mFeatures, counts.mDoors, counts.mAirs,
+                    SKNavAnnotator::instance().marks().marks().size(), named, roots.size(), static_cast<F64>(bytes) / (1024.0 * 1024.0), path.c_str());
+}
+
+std::string SKNavMesh::exportCensus() const
+{
+    if (!SKWorldCensus::instanceExists() || !LLWorld::instanceExists())
+    {
+        return "the census is not running";
+    }
+    SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot();
+    if (!snap)
+    {
+        return "no census yet";
+    }
+    static LLCachedControl<F32> air_radius(gSavedSettings, "SKNavAirRadius", 128.f);
+    static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
+    static LLCachedControl<F32> grounded_margin(gSavedSettings, "SKNavGroundedMargin", 5.f);
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+    static LLCachedControl<bool> sealed(gSavedSettings, "SKNavSealedIndoors", true);
+
+    LLTimer timer;
+    CensusFile census;
+    census.mExported = LLDate::now().asString();
+    census.mStamp = snap->mStamp;
+    census.mAgent = gAgent.getPositionGlobal();
+    census.mCamera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    census.mRange = snap->mRange;
+    fillParams(census.mParams);
+    census.mAirRadius = air_radius;
+    census.mBuildWeather = gSavedSettings.getBOOL("SKNavBuildWeather");
+    census.mClusterGap = gap;
+    census.mGroundedMargin = grounded_margin;
+    census.mVoidMargin = void_margin;
+    // As the rooms pass sets them up.
+    census.mEnclosure.mWalkHeadM = census.mParams.mParams[static_cast<S32>(AgentClass::AVATAR)].mHeight;
+    census.mEnclosure.mSealedIndoors = sealed;
+
+    // Every window samples on whole metres from its padded corner, and every
+    // corner is on the lattice: one phase covers all of a region's windows.
+    const F32 pad = tilePad(census.mParams);
+    const F64 phase = std::ceil(static_cast<F64>(pad)) - pad;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        CensusRegion r;
+        r.mId = region->getRegionID();
+        r.mHandle = region->getHandle();
+        r.mOrigin = region->getOriginGlobal();
+        r.mName = region->getName();
+        r.mWidth = region->getWidth();
+        r.mWater = region->getWaterHeight();
+        LLSurface& land = region->getLand();
+        r.mLandMin = land.getMinZ();
+        r.mLandMax = land.getMaxZ();
+        r.mPhase = static_cast<F32>(phase);
+        r.mSamples = static_cast<S32>(std::ceil(r.mWidth - phase));
+        r.mZ.resize(static_cast<size_t>(r.mSamples) * r.mSamples);
+        for (S32 y = 0; y < r.mSamples; ++y)
+        {
+            for (S32 x = 0; x < r.mSamples; ++x)
+            {
+                const LLVector3d p(r.mOrigin.mdV[VX] + phase + x, r.mOrigin.mdV[VY] + phase + y, 0.0);
+                r.mZ[static_cast<size_t>(y) * r.mSamples + x] = land.resolveHeightGlobal(p);
+            }
+        }
+        census.mRegions.push_back(std::move(r));
+    }
+
+    census.mRecords = snap->mRecords;
+    std::unordered_map<const Record*, U32> index;
+    for (size_t i = 0; i < census.mRecords.size(); ++i)
+    {
+        index[census.mRecords[i].get()] = static_cast<U32>(i);
+    }
+    for (const ClusterPtr& c : snap->mClusters.mClusters)
+    {
+        CensusCluster cl;
+        cl.mId = c->mId;
+        cl.mGrounded = grounded(*c);
+        for (const RecordPtr& r : c->mRecords)
+        {
+            const auto found = index.find(r.get());
+            if (found != index.end())
+            {
+                cl.mRecords.push_back(found->second);
+            }
+        }
+        census.mClusters.push_back(std::move(cl));
+    }
+    census.mFeatures = snap->mFeatures;
+    size_t named = 0;
+    census.mRoots = rootTable(census.mRecords, named);
+    census.mMarks = SKNavAnnotator::instance().marks().marks();
+    const LLReflectionMapManager& probes = gPipeline.mReflectionMapManager;
+    static_assert(static_cast<U8>(ProbeKind::NAV_BOX) == LLReflectionMapManager::SK_PROBE_NAV_BOX, "census probe kinds are the manager's");
+    for (const LLPointer<LLReflectionMap>& probe : probes.getSKProbes())
+    {
+        CensusProbe p;
+        p.mKind = static_cast<ProbeKind>(probes.getSKProbeKind(probe));
+        p.mOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+        p.mRadius = probe->mRadius;
+        p.mPriority = static_cast<S32>(probe->mPriority);
+        p.mRelevant = probe->isRelevant();
+        p.mSuppressed = probe->mSuppressedByNavRooms;
+        p.mInsideManual = probe->mInsideManualProbe;
+        p.mResident = probe->isActive();
+        if (probe->mViewerObject)
+        {
+            p.mObject = probe->mViewerObject->getID();
+            p.mRotation = probe->mViewerObject->getRenderRotation();
+            p.mScale = probe->mViewerObject->getScale();
+        }
+        census.mProbes.push_back(p);
+    }
+    for (const auto& region : mFeatureDoors)
+    {
+        census.mDoors.insert(census.mDoors.end(), region.second.begin(), region.second.end());
+    }
+    for (const auto& region : mFeatureLinks)
+    {
+        for (const auto& entry : region.second)
+        {
+            CensusSpan s;
+            s.mId = entry.first;
+            s.mKind = entry.second.mKind;
+            s.mMin = entry.second.mMin;
+            s.mMax = entry.second.mMax;
+            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+            {
+                s.mExits[cls] = entry.second.mExits[cls];
+                s.mLinks[cls] = entry.second.mLinks[cls];
+            }
+            census.mSpans.push_back(std::move(s));
+        }
+    }
+
+    // Milliseconds in the name, so two exports in one second both survive.
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t secs = std::chrono::system_clock::to_time_t(now);
+    const S32 millis = static_cast<S32>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%S", std::gmtime(&secs));
+    const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, llformat("sknav-census-%s.%03dZ.json", stamp, millis));
+    llofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+    {
+        return llformat("could not write %s", path.c_str());
+    }
+    writeCensus(file, census);
+    const std::streamoff bytes = file.tellp();
+    file.close();
+
+    // All of it on the main thread, which a large census keeps well under half a second; the time is reported to keep that honest.
+    const F32 ms = timer.getElapsedTimeF32() * 1000.f;
+    LL_INFOS("SKNavExport") << "wrote " << bytes << " bytes to " << path << " in " << ms << " ms" << LL_ENDL;
+    LL_INFOS("SKNavExport") << named << " of " << census.mRoots.size() << " roots named" << LL_ENDL;
+    return llformat("%zu records, %zu clusters, %zu regions, %zu doors, %zu features, %zu marks, %zu probes, %zu/%zu roots named (%.1f MB, %.0f ms) -> %s",
+                    census.mRecords.size(), census.mClusters.size(), census.mRegions.size(), census.mDoors.size(), census.mFeatures.size(),
+                    census.mMarks.size(), census.mProbes.size(), named, census.mRoots.size(),
+                    static_cast<F64>(bytes) / (1024.0 * 1024.0), ms, path.c_str());
 }
 
 std::string SKNavMesh::exportObject() const
@@ -2645,18 +2998,9 @@ std::string SKNavMesh::exportObject() const
             {
                 file << ',';
             }
-            file << "{\"id\":\"" << d.mId << "\",\"region\":" << d.mRegion << ",\"min\":";
-            vec3d(d.mMin);
-            file << ",\"max\":";
-            vec3d(d.mMax);
-            file << ",\"plane\":";
-            vec3d(d.mPlanePoint);
-            file << ",\"planeKnown\":" << (d.mPlaneKnown ? "true" : "false") << ",\"normal\":";
-            vec3(d.mNormal);
-            file << ",\"width\":" << d.mWidth << ",\"height\":" << d.mHeight << ",\"sill\":" << d.mSill
-                 << ",\"double\":" << (d.mDouble ? "true" : "false") << ",\"confidence\":" << d.mConfidence
-                 << ",\"damageable\":" << (d.mDamageable ? "true" : "false") << ",\"name\":\"";
-            for (const char c : d.mName)
+            const LLTextureEntry* te = object->getTE(static_cast<U8>(f));
+            file << "{\"te\":" << f;
+            if (te)
             {
                 file << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << facePbrAlpha(te)
                      << ",\"mode\":\"" << faceAlphaMode(te) << "\",\"texture\":\"" << te->getID()
@@ -2806,11 +3150,6 @@ std::string SKNavMesh::exportObject() const
                     file << '}';
                 }
             }
-            file << "\",\"leaves\":[";
-            for (size_t i = 0; i < d.mLeaves.size(); ++i)
-            {
-                file << (i ? ",\"" : "\"") << d.mLeaves[i] << '"';
-            }
             file << "]}";
         }
     }
@@ -2910,6 +3249,10 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_walls(gSavedSettings, "SKNavOverlayWalls", true);
     static LLCachedControl<bool> show_faces(gSavedSettings, "SKNavOverlayFaces", false);
     static LLCachedControl<bool> show_links(gSavedSettings, "SKNavOverlayLinks", true);
+    static LLCachedControl<U32> show_enclosure(gSavedSettings, "SKNavOverlayEnclosure", 0);
+    static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
+    static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
+    static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -2974,6 +3317,26 @@ void SKNavMesh::refreshOverlay()
     key = mixF32(key, static_cast<F32>(peek));
     key = mixF32(key, eye);
     key = mix(key, mHasMark ? 1ull : 0ull);
+    key = mix(key, static_cast<U64>(show_enclosure));
+    key = mix(key, show_enclosure || show_spaces ? mRooms->revision() : 0ull);
+    key = mix(key, show_spaces ? 1ull : 0ull);
+    // The spaces layer greys the portals an annotation has crossed out, so
+    // it re-gathers when the marks move.
+    key = mix(key, show_spaces ? SKNavAnnotator::instance().revision() : 0ull);
+    // The wind layer shows one heading: the setting's, or the region's wind where the camera is.
+    F32 heading = wind_heading;
+    if (show_wind && heading < 0.f)
+    {
+        heading = 0.f;
+        if (LLViewerRegion* region = gAgent.getRegion())
+        {
+            const LLVector3 v = region->mWind.getVelocity(region->getPosRegionFromGlobal(camera));
+            heading = v.lengthSquared() > 1e-6f ? std::atan2(v.mV[VY], v.mV[VX]) * RAD_TO_DEG : 0.f;
+        }
+    }
+    const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
+    key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
+    key = mix(key, show_wind ? mRooms->revision() : 0ull);
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -3000,6 +3363,20 @@ void SKNavMesh::refreshOverlay()
     // where the camera is now; the fade waits for upload() and bakes there.
     mOverlay.setEdgeWidth(llclamp(static_cast<F32>(edge_width), 1.f, 8.f), camera_agent, fov_y, viewport_height);
     mOverlay.setFade(camera_agent, static_cast<F32>(reach), static_cast<F32>(reach * 0.8));
+    // Floors tinted by how enclosed their air is; a layer of its own, like the walls.
+    mRooms->gatherOverlay(mOverlay, camera, reach, show_enclosure, opaque);
+    if (show_spaces)
+    {
+        const SKNavAnnotator& annotator = SKNavAnnotator::instance();
+        mRooms->gatherSpaces(mOverlay, camera, reach, opaque,
+                             [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b) {
+                                 return annotator.portalCrossed(mesh, space_a, space_b);
+                             });
+    }
+    if (show_wind)
+    {
+        mRooms->gatherWind(mOverlay, camera, reach, wind_bucket * (360.f / sknav::WIND_HEADINGS), opaque);
+    }
 
     for (const auto& entry : mMeshes)
     {
@@ -3031,7 +3408,7 @@ void SKNavMesh::refreshOverlay()
                     continue;
                 }
                 LLColor4 color;
-                switch (areaOf(poly.flags))
+                switch (polyArea(poly.flags))
                 {
                     case AREA_GROUND: color = skNavSwatchColor(SKNavSwatch::GROUND); break;
                     case AREA_OBJECT: color = skNavSwatchColor(SKNavSwatch::OBJECT); break;

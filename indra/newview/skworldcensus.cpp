@@ -275,6 +275,7 @@ bool SKWorldCensus::sameRegions(const std::vector<U64>& regions) const
 
 void SKWorldCensus::update()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - update");
     if (!wanted() || !LLWorld::instanceExists() || !gAgent.getRegion())
     {
         if (mScan.mActive)
@@ -312,6 +313,7 @@ void SKWorldCensus::update()
 
 void SKWorldCensus::beginScan()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - begin scan");
     mScan.mPending = std::make_shared<SKCensusSnapshot>();
     mScan.mPending->mCenter = gAgent.getPositionGlobal();
     // Where you are looking matters as much as where you stand: cam across a
@@ -348,6 +350,7 @@ void SKWorldCensus::abandonScan()
 
 void SKWorldCensus::continueScan(F32 budget_ms)
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - scan slice");
     LLTimer timer;
     const S32 count = static_cast<S32>(mScan.mObjects.size());
     while (mScan.mIndex < count)
@@ -382,6 +385,7 @@ void SKWorldCensus::continueScan(F32 budget_ms)
 
 void SKWorldCensus::finishScan()
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - finish scan");
     static LLCachedControl<F32> gap(gSavedSettings, "SKNavClusterGap", 0.5f);
     std::shared_ptr<SKCensusSnapshot> done = mScan.mPending;
     mScan.mActive = false;

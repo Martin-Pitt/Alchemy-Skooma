@@ -46,6 +46,7 @@
 #include "alfloaterprofilelegacy.h"
 #include "alfloaterprogressview.h"
 #include "alfloaterscopes.h"
+#include "skfloaternavannotate.h" // <SK:Nexii> navmesh annotations
 #include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
@@ -590,6 +591,9 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("scopes", "floater_scopes.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ALFloaterScopes>);
     // <SK:Nexii> navmesh console: overlay switches and status
     LLFloaterReg::add("sk_navmesh", "floater_sk_navmesh.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavMesh>);
+    // <SK:Nexii> navmesh annotations: marks placed in the world and their capture export
+    LLFloaterReg::add("sk_nav_annotate", "floater_sknav_annotate.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterNavAnnotate>);
+    // </SK:Nexii>
     // </SK:Nexii>
     LLFloaterReg::add("message_builder", "floater_message_builder.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageBuilder>);
     LLFloaterReg::add("message_log", "floater_message_log.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMessageLog>);

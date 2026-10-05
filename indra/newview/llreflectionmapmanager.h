@@ -32,8 +32,16 @@
 #include "llcubemap.h"
 #include "aluniformbuffer.h"
 
+#include <memory>
+
 class LLSpatialGroup;
 class LLViewerObject;
+
+struct SKCensusSnapshot;
+namespace sknav
+{
+    class SolidLattice;
+}
 
 // number of reflection probes to keep in vram
 #define LL_MAX_REFLECTION_PROBE_COUNT 256
@@ -115,6 +123,7 @@ public:
 
     // allocate an environment map of the given resolution
     LLReflectionMapManager();
+    ~LLReflectionMapManager();
 
     // release any GL state
     void cleanup();
@@ -142,6 +151,29 @@ public:
     // vobj must not be null
     // Guaranteed to not return null
     LLReflectionMap* registerViewerObject(LLViewerObject* vobj);
+
+    // <SK:Nexii> Navmesh rooms probes: full spheres placed before residual grid irradiance probes.
+    LLReflectionMap* registerNavRoomsProbe(const LLVector3& origin, F32 radius);
+    void invalidateNavRoomsProbe(LLReflectionMap* probe);
+    void invalidateAutomaticPlacement() { mNavRoomsDirty = true; }
+    // Placed probes, which the rooms probes must stay clear of and share the cap with.
+    void getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Probe kinds for the census export and the probe volume display; the values are the census file's.
+    enum SKProbeKind : U8
+    {
+        SK_PROBE_DEFAULT = 0,
+        SK_PROBE_PLACED_SPHERE,
+        SK_PROBE_PLACED_BOX,
+        SK_PROBE_OCTREE,
+        SK_PROBE_NAV_SPHERE,
+        SK_PROBE_NAV_BOX, // reserved: navmesh room boxes do not exist yet
+    };
+    SKProbeKind getSKProbeKind(const LLReflectionMap* probe) const;
+    // Every probe held, the default probe first.
+    const std::vector<LLPointer<LLReflectionMap>>& getSKProbes() const { return mProbes; }
+    // </SK:Nexii>
 
     // reset all state on the next update
     void reset();
@@ -311,5 +343,16 @@ private:
     F32 mResumeTime = 0.f;
 
     ReflectionProbeData mProbeData;
+
+    // <SK:Nexii> Navmesh rooms probes: the held parts, agent space, and whether the octree probes need testing against them.
+    bool mNavRoomsDirty = false;
+    void updateCensusPlacement();
+    F64 mNextCensusPlacement = 0.0;
+    // The census's solid bodies as a tile lattice for the grid placement's
+    // point tests, rebuilt only when the census publishes a new scan.
+    // mSolidsCensus is the scan it was built from.
+    std::unique_ptr<sknav::SolidLattice> mSolids;
+    std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
+    // </SK:Nexii>
 };
 

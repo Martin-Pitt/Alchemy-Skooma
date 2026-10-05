@@ -109,6 +109,7 @@
 #include "llvotree.h"
 #include "llvopartgroup.h"
 #include "llworld.h"
+#include "sknavannotator.h" // <SK:Nexii> navmesh annotations
 #include "sknavmesh.h" // <SK:Nexii> navmesh overlay
 #include "skworldcensus.h" // <SK:Nexii> navmesh census overlay
 #include "llcubemap.h"
@@ -5438,6 +5439,16 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        // <SK:Nexii> Probe volume display: camera to agent space, so its blend hatching stays put on surfaces.
+        static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
+        LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
+        inv_view.invert();
+        const GLint inv_view_loc = gReflectionProbeDisplayProgram.getUniformLocation(sk_probe_inv_view);
+        if (inv_view_loc >= 0)
+        {
+            glUniformMatrix4fv(inv_view_loc, 1, GL_FALSE, inv_view.getF32ptr());
+        }
+        // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);
@@ -10593,6 +10604,12 @@ void LLPipeline::renderFinalize()
     {
         SKWorldCensus::instance().renderDebug();
         SKNavMesh::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on
+    if (SKNavAnnotator::instanceExists())
+    {
+        SKNavAnnotator::instance().render();
     }
     // </SK:Nexii>
 

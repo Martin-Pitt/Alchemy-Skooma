@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SK:Nexii> Navmesh annotations: marks placed in the world where the
+     navmesh is wrong, written into the navmesh and census exports. -->
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="true"
+ min_height="490"
+ min_width="400"
+ height="550"
+ layout="topleft"
+ name="floater_sknav_annotate"
+ save_rect="true"
+ single_instance="true"
+ title="Navmesh annotations"
+ width="400">
+  <floater.string name="status_idle">Pick a type to place it; while placing, the key on each button switches to it. A mark selected below takes a type of its own shape.</floater.string>
+  <floater.string name="status_point">Placing [TYPE]: click a surface.</floater.string>
+  <floater.string name="status_line">Placing [TYPE]: click along it; Enter or a double-click ends the line, Esc cancels.</floater.string>
+  <floater.string name="status_portal">Placing [TYPE]: hover a portal the Spaces layer draws and click to strike it out; click a struck one to restore it. The Spaces checkbox in the navmesh console must be on.</floater.string>
+  <text
+   name="tool_status"
+   height="26"
+   word_wrap="true"
+   type="string"
+   text_color="LabelTextColor"
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top="24"
+   width="376" />
+  <panel
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="4"
+   height="187"
+   width="376"
+   name="type_grid"
+   tool_tip="The type the next marks get, and the selected mark's" />
+  <line_editor
+   follows="left|top|right"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="22"
+   width="376"
+   max_length_bytes="1024"
+   commit_on_focus_lost="true"
+   name="mark_text"
+   label="Note for the selected mark"
+   tool_tip="The selected mark's note; Enter keeps it" />
+  <scroll_list
+   follows="all"
+   layout="topleft"
+   left="12"
+   top_pad="8"
+   height="210"
+   width="376"
+   draw_heading="true"
+   multi_select="false"
+   name="marks_list">
+    <scroll_list.columns name="id" label="#" width="30" />
+    <scroll_list.columns name="kind" label="Kind" width="45" />
+    <scroll_list.columns name="type" label="Type" width="100" />
+    <scroll_list.columns name="text" label="Note" />
+  </scroll_list>
+  <button
+   follows="left|bottom"
+   layout="topleft"
+   left="12"
+   top_pad="6"
+   height="23"
+   width="100"
+   name="delete_button"
+   label="Delete"
+   tool_tip="Remove the selected mark" />
+  <button
+   follows="left|bottom"
+   layout="topleft"
+   left_pad="8"
+   top_delta="0"
+   height="23"
+   width="100"
+   name="clear_button"
+   label="Clear"
+   tool_tip="Remove every mark" />
+</floater>

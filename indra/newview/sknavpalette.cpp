@@ -55,6 +55,13 @@ namespace
         LLColor4(0.40f, 0.90f, 0.80f, 0.90f),
         LLColor4(1.00f, 0.25f, 0.45f, 0.90f),
         LLColor4(0.95f, 0.95f, 0.30f, 0.95f),
+        LLColor4(0.45f, 0.80f, 1.00f, 0.55f),
+        LLColor4(1.00f, 0.75f, 0.25f, 0.60f),
+        LLColor4(0.85f, 0.20f, 0.45f, 0.65f),
+        LLColor4(0.50f, 0.50f, 0.50f, 0.45f),
+        LLColor4(0.95f, 0.10f, 0.10f, 0.95f),
+        LLColor4(0.50f, 1.00f, 0.00f, 0.95f),
+        LLColor4(0.00f, 0.90f, 0.95f, 0.95f),
     };
 }
 

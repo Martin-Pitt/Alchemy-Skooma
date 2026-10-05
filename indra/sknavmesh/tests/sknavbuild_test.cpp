@@ -768,12 +768,13 @@ namespace tut
         TileBuildInput in = tile(0, 0);
         in.mTerrain = flat(0.f);
         in.mPartition = Partition::SLOPE;
-        // twelve 0.25 m steps on 0.4 m treads up the y axis, then a landing
+        // overlapping prims, 0.25 m steps on 0.4 m treads up the y axis; the
+        // twelfth reaches on to y = 20 and is the landing
         for (S32 k = 0; k < 12; ++k)
         {
             in.mRecords.push_back(box(12.f, 8.f + k * 0.4f, 0.f, 15.f, 20.f, (k + 1) * 0.25f));
         }
-        const F32 top = 8.f + 12 * 0.4f;
+        const F32 top = 8.f + 11 * 0.4f;
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
 

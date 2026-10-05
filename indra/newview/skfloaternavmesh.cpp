@@ -26,6 +26,7 @@
 
 #include "skfloaternavmesh.h"
 
+#include "llfloaterreg.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
@@ -52,9 +53,13 @@ bool SKFloaterNavMesh::postBuild()
         const S32 kind = llclamp(getChild<LLUICtrl>("capture_kind")->getValue().asInteger(), 0, 2);
         getChild<LLUICtrl>("capture_status")->setValue(skCaptureExport(static_cast<SKCaptureKind>(kind)));
     });
+    getChild<LLUICtrl>("export_census_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+        getChild<LLUICtrl>("export_census_status")->setValue(SKNavMesh::instance().exportCensus());
+    });
     getChild<LLUICtrl>("export_vehicle_button")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         getChild<LLUICtrl>("export_vehicle_status")->setValue(SKNavMesh::instance().exportObject());
     });
+    getChild<LLUICtrl>("annotate_button")->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_nav_annotate"); });
     return true;
 }
 
@@ -93,13 +98,10 @@ void SKFloaterNavMesh::draw()
         std::string mesh_line = getString("overlay_off");
         if (SKNavMesh::overlayActive() || gSavedSettings.getBOOL("SKNavMeshAlways"))
         {
-            // Asking for a class nothing is building shows an empty world and
-            // no reason for it.
-            const bool weather = gSavedSettings.getU32("SKNavOverlayClass") == 1;
-            mesh_line = (weather && !gSavedSettings.getBOOL("SKNavBuildWeather")) ? getString("weather_off")
-                                                                                  : SKNavMesh::instance().statsLine();
+            mesh_line = SKNavMesh::instance().statsLine();
         }
         getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
+        getChild<LLUICtrl>("overlay_wind_heading")->setEnabled(gSavedSettings.getBOOL("SKNavOverlayWind"));
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
     }
     LLFloater::draw();

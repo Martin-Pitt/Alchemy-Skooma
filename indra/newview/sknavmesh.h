@@ -27,12 +27,16 @@
 
 #include "llsingleton.h"
 #include "sknavbuild.h"
+#include "sknavexport.h"
 #include "sknavoverlay.h"
+#include "sknavskymap.h"
+#include "sknavtilecache.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
 
 #include <functional>
+#include <iosfwd>
 #include <map>
 #include <memory>
 #include <string>
@@ -41,11 +45,15 @@
 class dtNavMesh;
 class dtNavMeshQuery;
 class LLViewerRegion;
+class SKNavRooms;
+class SKNavWorldView;
 
 /// Main thread only. Every mesh has its own F64 origin on the global 32 m
 /// lattice; tile indices are relative to it and may be negative when a
 /// cluster grows towards the origin. Tiles rebuild when their signature (member
 /// records, terrain patches, class parameters) moves, and never otherwise.
+class SKNavRoomProbes;
+
 class SKNavMesh : public LLSingleton<SKNavMesh>
 {
     LLSINGLETON(SKNavMesh);
@@ -54,6 +62,9 @@ class SKNavMesh : public LLSingleton<SKNavMesh>
 public:
     /// Once per frame after the census.
     void update();
+
+    /// First reflection-probe placement pass, before the residual grid pass.
+    void placeReflectionProbes();
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
@@ -90,6 +101,12 @@ public:
     /// the exits of each span. The span links are a table beside the tiles,
     /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+    /// Stair flights whose footprint meets the box, with the mesh origin
+    /// their mesh-local positions are relative to. A flight across a tile
+    /// seam comes once, as the copy of the tile holding its footprint's
+    /// centroid, with that tile's polys.
+    typedef std::function<void(const LLVector3d& origin, const sknav::Flight& flight)> FlightFn;
+    void flightsIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const FlightFn& fn) const;
 
     /// A ladder's or a working elevator's span with the floors it can be
     /// boarded or left at, per class, lowest first. Global.
@@ -118,7 +135,18 @@ public:
     bool coverAt(const LLVector3d& pos, const LLVector3& dir, sknav::AgentClass cls, F32 eye_height,
                  sknav::Cover& cover_out, F32& height_out, F32 reach = 1.f) const;
 
+    /// No solid of any published tile's air starts above pos within reach:
+    /// the region sky map, which forgets a roof as soon as its tile does.
+    bool skyOpenAt(const LLVector3d& pos, F32 reach = 50.f) const { return mSkyMap.skyOpenAt(pos, reach); }
+    const sknav::SkyMap& skyMap() const { return mSkyMap; }
+
     std::string statsLine() const;
+
+    /// The enclosure answers over every mesh, as of the last pass to land
+    /// (sknavrooms.h). Main thread; the view itself is readable anywhere.
+    std::shared_ptr<const SKNavWorldView> view() const;
+    /// The key a tile's air gives the sky map under.
+    static U64 skyContributor(const LLUUID& mesh, const sknav::TileKey& key);
 
     /// Cast from the middle of the screen, mark what it hits, and write down
     /// everything the census and the navmesh know there. Returns a line for
@@ -131,6 +159,13 @@ public:
     /// console with the counts, the size and the full path.
     std::string exportAll() const;
 
+    /// What every tile is built from, to logs/sknav-census-<UTC>.json:
+    /// the census's records, clusters, doors, features and spans, each
+    /// region's land as the terrain windows sample it, and the build
+    /// parameters, so the build replays offline (sknavcensusio.h). Returns
+    /// a line for the console with the counts, the size and the full path.
+    std::string exportCensus() const;
+
     /// The selected linkset, or the one under the screen centre, with everyone
     /// seated on it and their attachments, as triangles in the root's own frame
     /// with each face's transparency: raw input for working out a vehicle's
@@ -140,6 +175,7 @@ public:
     /// offline. Written beside the navmesh export; returns a line for the
     /// console.
     std::string exportObject() const;
+
 
     struct Stats
     {
@@ -153,6 +189,15 @@ public:
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
+        U32 mAirTiles = 0;
+        size_t mAirBytes = 0;
+        U32 mAirEvicted = 0;    ///< tiles whose detail went to disk for the budget
+        U64 mDiskBytes = 0;
+        U32 mDiskEntries = 0;
+        U32 mDiskLoads = 0;     ///< builds answered from disk
+        U32 mDiskRebuilds = 0;  ///< builds that looked on disk and found nothing usable
+        U32 mDiskCorrupt = 0;   ///< of those, entries that were there but refused
+        F32 mDiskLoadMs = 0.f;  ///< the last load, read and unpack
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
         F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
@@ -160,6 +205,8 @@ public:
     const Stats& stats() const { return mStats; }
 
 private:
+    friend class SKNavRooms;
+
     /// Why a tile needed building, for the update blip. A record beats the
     /// land and both beat the parameters, because a signature that moved with
     /// all three moved for the most specific reason.
@@ -208,8 +255,15 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
+        sknav::TileAirPtr mAir;         ///< within SKNavAirRadius, until evicted
+        sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
+        U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
+        bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
+        F64 mNearness = 0.0;            ///< camera nearness over time, for the air budget
+        U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
     };
 
     struct Mesh
@@ -226,10 +280,35 @@ private:
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
         F32 mLastSeen = 0.f;
+        // What the region pass's layout and tile re-sign were last laid
+        // against. While all of these stand, the pass would rebuild exactly
+        // what already stands, so it is skipped whole.
+        U64 mLayoutCensus = 0;
+        U64 mLayoutWorld = 0;
+        U64 mLayoutLand = 0;
+        U64 mLayoutParams = 0;
+        F32 mLayoutVoidMargin = 0.f;
         ~Mesh();
     };
 
+    typedef sknav::ExportCounts ExportCounts;
+    /// One tile as a JSON object, shared by every export so their formats
+    /// cannot drift. Features and doors are written as members, leading
+    /// comma included, and only those meeting the box when one is given.
+    void writeTile(std::ostream& file, const Mesh& mesh, const sknav::TileKey& key, const Tile& tile, ExportCounts& counts) const;
+    void writeFeatures(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
+    void writeDoors(std::ostream& file, const LLVector3d* min, const LLVector3d* max, ExportCounts& counts) const;
+
     bool wanted() const;
+    /// Whether the reflection probes consume the rooms: room probes on,
+    /// probes enabled, and the probe level that shows the octree's probes
+    /// the rooms replace. Demands the navmesh runs for them, air and census
+    /// with it.
+    static bool probesDemanded();
+    /// Whether a tile is near enough the camera to build its air eagerly.
+    static bool inAirRadius(const Tile& tile);
+    /// Bring the sky map in line with the published tiles' air.
+    void syncSkyMap();
     /// The pool the tile builds run on, created on first use. A pool of its
     /// own, so the builds neither queue behind nor starve the viewer's shared
     /// work: they are pure and independent, one per core.
@@ -254,7 +333,13 @@ private:
     static bool dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
-    void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result);
+    void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
+                 U64 content_key = 0, bool loaded = false);
+    /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.
+    std::shared_ptr<sknav::TileDiskCache> diskCache();
+    /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently
+    /// near first, spilling to disk what is not there already.
+    void evictAir();
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
     /// What the region's land looks like now, over all its patches. A tile's
@@ -291,14 +376,20 @@ private:
     /// that has gone drops out with the next one.
     std::map<U64, std::vector<sknav::DoorEntity>> mFeatureDoors;
     std::unique_ptr<LL::ThreadPool> mWorkers;
+    std::shared_ptr<sknav::TileDiskCache> mDiskCache;
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;
     Stats mStats;
     F32 mLastLog = 0.f;
     bool mDemanding = false;
+    sknav::SkyMap mSkyMap;
+    std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
+    U64 mSkyRevision = 0;
     LLVector3d mMark;
     bool mHasMark = false;
+    std::unique_ptr<SKNavRooms> mRooms;
+    std::unique_ptr<SKNavRoomProbes> mRoomProbes;
 
     /// A counter over what the debug overlay draws: bumped whenever a tile
     /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps

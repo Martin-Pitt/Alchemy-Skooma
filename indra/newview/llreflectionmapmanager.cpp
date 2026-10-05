@@ -31,6 +31,7 @@
 
 #include "llreflectionmapmanager.h"
 
+#include <chrono>
 #include <vector>
 
 #include "llviewercamera.h"
@@ -43,6 +44,10 @@
 #include "llstartup.h"
 #include "llviewermenufile.h"
 #include "llnotificationsutil.h"
+#include "llagent.h"
+#include "sknavmesh.h"
+#include "sknavrooms.h"
+#include "sknavprobes.h"
 
 #if LL_WINDOWS
 #pragma warning (push)
@@ -176,10 +181,15 @@ static void touch_default_probe(LLReflectionMap* probe)
 }
 
 LLReflectionMapManager::LLReflectionMapManager()
+: mSolids(new sknav::SolidLattice)
 {
     mDynamicProbeCount = LL_MAX_REFLECTION_PROBE_COUNT;
     initCubeFree();
 }
+
+// Defined here, where the forward-declared SolidLattice and census snapshot
+// the members hold are complete types.
+LLReflectionMapManager::~LLReflectionMapManager() = default;
 
 void LLReflectionMapManager::initCubeFree()
 {
@@ -206,11 +216,19 @@ struct CompareProbeDistance
 {
     bool operator()(const LLPointer<LLReflectionMap>& lhs, const LLPointer<LLReflectionMap>& rhs) const
     {
+        if ((lhs->mDistance == FLT_MAX) != (rhs->mDistance == FLT_MAX))
+        {
+            return rhs->mDistance == FLT_MAX;
+        }
         if (lhs->mPriority != rhs->mPriority)
         {
             return lhs->mPriority > rhs->mPriority;
         }
 
+        if (lhs->mNavRooms != rhs->mNavRooms)
+        {
+            return lhs->mNavRooms;
+        }
         return lhs->mDistance < rhs->mDistance;
     }
 };
@@ -236,6 +254,10 @@ static bool check_priority(LLReflectionMap* a, LLReflectionMap* b)
         if (a->mPriority != b->mPriority)
         {
             return a->mPriority > b->mPriority;
+        }
+        if (a->mNavRooms != b->mNavRooms)
+        {
+            return a->mNavRooms;
         }
         return a->mDistance < b->mDistance;
     }
@@ -401,6 +423,9 @@ void LLReflectionMapManager::update()
     LLReflectionMap* oldestProbe = nullptr;
     LLReflectionMap* oldestOccluded = nullptr;
 
+    SKNavMesh::instance().placeReflectionProbes();
+    updateCensusPlacement();
+
     if (mUpdatingProbe != nullptr)
     {
         did_update = true;
@@ -473,6 +498,7 @@ void LLReflectionMapManager::update()
             }
 
             probe->mInsideManualProbe = eclipsed;
+
         }
     }
 
@@ -676,7 +702,14 @@ void LLReflectionMapManager::update()
         LLReflectionMap* probe = oldestProbe;
         llassert(probe->mCubeIndex != -1);
 
-        probe->autoAdjustOrigin();
+        // <SK:Nexii> Navmesh rooms probes: a probe the census pass has anchored gets its
+        // placement from that pass -- re-deriving it here would reset the radius the pass
+        // cleared and restart the capture on every refresh.
+        if (!probe->mGridPlacementChecked)
+        {
+            probe->autoAdjustOrigin();
+        }
+        // </SK:Nexii>
 
         sUpdateCount++;
         mUpdatingProbe = probe;
@@ -697,6 +730,7 @@ void LLReflectionMapManager::refreshSettings()
     mRenderReflectionProbeLevel = gSavedSettings.getS32("RenderReflectionProbeLevel");
     mRenderReflectionProbeCount = gSavedSettings.getU32("RenderReflectionProbeCount");
     mRenderReflectionProbeDynamicAllocation = gSavedSettings.getS32("RenderReflectionProbeDynamicAllocation");
+    mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
     cleanupQueryPool();
 }
 
@@ -721,6 +755,7 @@ LLReflectionMap* LLReflectionMapManager::addProbe(LLSpatialGroup* group)
     if (group)
     {
         probe->mOrigin = group->getOctreeNode()->getCenter();
+        mNavRoomsDirty = true; // <SK:Nexii> Navmesh rooms probes
     }
 
     if (gCubeSnapshot)
@@ -886,6 +921,218 @@ LLReflectionMap* LLReflectionMapManager::registerViewerObject(LLViewerObject* vo
     return probe;
 }
 
+// <SK:Nexii> Navmesh rooms probes
+LLReflectionMap* LLReflectionMapManager::registerNavRoomsProbe(const LLVector3& origin, F32 radius)
+{
+    LLReflectionMap* probe = addProbe();
+    if (probe)
+    {
+        probe->mNavRooms = true;
+        probe->mOrigin.load3(origin.mV);
+        probe->mRadius = radius;
+    }
+    return probe;
+}
+
+void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
+{
+    if (mUpdatingProbe == probe)
+    {
+        mUpdatingProbe = nullptr;
+        mUpdatingFace = 0;
+        mRadiancePass = false;
+    }
+    probe->mComplete = false;
+    probe->mFadeIn = 0.f;
+    probe->mOccluded = false;
+    mNavRoomsDirty = true;
+    updateNeighbors(probe);
+}
+
+void LLReflectionMapManager::updateCensusPlacement()
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census placement");
+    const auto census = SKWorldCensus::instance().snapshot();
+    if (mRenderReflectionProbeLevel < 2)
+    {
+        return;
+    }
+    const bool refresh = mNavRoomsDirty || gFrameTimeSeconds >= mNextCensusPlacement;
+    if (refresh)
+    {
+        mNextCensusPlacement = gFrameTimeSeconds + 1.0;
+        mNavRoomsDirty = false;
+    }
+    const U64 census_stamp = census ? census->mStamp : 0;
+    if (!refresh && std::all_of(mProbes.begin(), mProbes.end(), [&](const auto& probe)
+        { return probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms ||
+                 (probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp); }))
+    {
+        return;
+    }
+    const sknav::ProbeParams params;
+    std::vector<sknav::ProbeInfluence> full_probes;
+
+    for (const auto& probe : mProbes)
+    {
+        if (probe->mViewerObject && !probe->mViewerObject->isDead())
+        {
+            probe->syncToViewerObject();
+            sknav::ProbeInfluence inf;
+            inf.mCentre.set(probe->mOrigin.getF32ptr());
+            inf.mRadius = probe->mRadius;
+            inf.mBox = probe->mViewerObject->getReflectionProbeIsBox();
+            if (inf.mBox)
+            {
+                const auto rot = probe->mViewerObject->getRenderRotation();
+                inf.mAxes[0] = LLVector3::x_axis * rot;
+                inf.mAxes[1] = LLVector3::y_axis * rot;
+                inf.mAxes[2] = LLVector3::z_axis * rot;
+                inf.mHalf = probe->mViewerObject->getScale() * 0.5f;
+            }
+            full_probes.push_back(inf);
+        }
+        else if (probe->mNavRooms && probe->isRelevant())
+        {
+            sknav::ProbeInfluence inf;
+            inf.mCentre.set(probe->mOrigin.getF32ptr());
+            inf.mRadius = probe->mRadius;
+            full_probes.push_back(inf);
+        }
+    }
+    // A lattice broad phase keeps the fine shape tests local, even for a
+    // census containing thousands of parts. Very large bodies stay separate.
+    // It is derived from one scan and rebuilt only when a new scan publishes:
+    // a refresh that finds the same scan reuses it, instead of re-indexing
+    // every record every time.
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census lattice");
+        if (census != mSolidsCensus)
+        {
+            mSolidsCensus = census;
+            if (census)
+            {
+                mSolids->rebuild(census->mRecords);
+            }
+            else
+            {
+                mSolids->clear();
+            }
+        }
+    }
+    // Re-testing a probe against the census can sweep a whole triangle soup,
+    // and a new scan marks every grid probe for re-test at once. Bound the
+    // time the sweep takes per frame; the rest carries over. mProbes is
+    // distance sorted, so the nearest probes are re-tested first.
+    constexpr F32 SOLID_CHECK_BUDGET_MS = 2.f;
+    const auto solid_checks_started = std::chrono::steady_clock::now();
+    for (auto& probe : mProbes)
+    {
+        if (probe == mDefaultProbe || probe->mViewerObject || probe->mNavRooms) continue;
+        if (!refresh && probe->mGridPlacementChecked && probe->mGridCensusStamp == census_stamp) continue;
+        const LLVector3 old(probe->mOrigin.getF32ptr());
+        if (!probe->mGridPlacementChecked)
+        {
+            probe->autoAdjustOrigin();
+            probe->mGridOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+            probe->mGridRadius = probe->mRadius;
+            probe->mGridPlacementChecked = true;
+        }
+        else if (refresh && !probe->mComplete)
+        {
+            // A capture still pending on a probe whose surroundings changed: re-nudge
+            // toward empty space and re-anchor the demand. Only a refresh reaches this
+            // branch: without one, the pass is here solely for probes the census has
+            // not answered yet. autoAdjustOrigin re-derives the radius from the octree,
+            // so a nudge that settles where it started restores the cleared radius the
+            // pass below applies; only a real move re-anchors, and the changed block
+            // below then aborts any capture the move tore out from under.
+            const LLVector3 placed(probe->mOrigin.getF32ptr());
+            const F32 placed_radius = probe->mRadius;
+            probe->autoAdjustOrigin();
+            if (dist_vec_squared(LLVector3(probe->mOrigin.getF32ptr()), placed) > 0.0001f)
+            {
+                probe->mGridOrigin = gAgent.getPosGlobalFromAgent(LLVector3(probe->mOrigin.getF32ptr()));
+                probe->mGridRadius = probe->mRadius;
+                // The solid answer was for where it stood; the move re-opens the question.
+                probe->mGridCensusStamp = census_stamp - 1;
+            }
+            else
+            {
+                probe->mOrigin.load3(placed.mV);
+                probe->mRadius = placed_radius;
+            }
+        }
+        LLVector3 chosen = gAgent.getPosAgentFromGlobal(probe->mGridOrigin);
+        F32 radius = probe->mGridRadius;
+        bool blocked = probe->mBlockedByCensus;
+        if (probe->mGridCensusStamp != census_stamp)
+        {
+            const F32 elapsed = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - solid_checks_started).count();
+            if (elapsed <= SOLID_CHECK_BUDGET_MS)
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census solid test");
+                blocked = mSolids->contains(probe->mGridOrigin);
+                probe->mGridCensusStamp = census_stamp;
+            }
+            // Over budget: the stamp stays behind and the test retries next
+            // frame, while the radius share below still runs.
+        }
+        // Full probes have already claimed their space and their slots. The
+        // second pass only covers what remains, including high/unwalkable air.
+        radius = sknav::clearRadius(chosen, radius, full_probes, params);
+        const bool covered = radius <= 0.f;
+        const bool changed = dist_vec_squared(old, chosen) > 0.0001f || fabsf(radius - probe->mRadius) > 0.001f ||
+                             probe->mBlockedByCensus != blocked || probe->mSuppressedByNavRooms != covered;
+        probe->mBlockedByCensus = blocked;
+        probe->mSuppressedByNavRooms = covered;
+        if (changed)
+        {
+            // Never finish a capture whose first faces came from another position.
+            if (mUpdatingProbe == probe)
+            {
+                mUpdatingProbe = nullptr;
+                mUpdatingFace = 0;
+                mRadiancePass = false;
+            }
+            probe->mOrigin.load3(chosen.mV);
+            probe->mRadius = radius;
+            probe->mComplete = false;
+            probe->mFadeIn = 0.f;
+            probe->mOccluded = false;
+            updateNeighbors(probe);
+        }
+    }
+}
+
+void LLReflectionMapManager::getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const
+{
+    placed.clear();
+    for (const auto& probe : mProbes)
+    {
+        if (probe->mViewerObject && !probe->mViewerObject->isDead() && probe->isRelevant())
+        {
+            placed.push_back(probe);
+        }
+    }
+}
+// </SK:Nexii>
+
+// <SK:Nexii> Probe kinds for the census export and the probe volume display.
+LLReflectionMapManager::SKProbeKind LLReflectionMapManager::getSKProbeKind(const LLReflectionMap* probe) const
+{
+    if (probe == mDefaultProbe.get())
+    {
+        return SK_PROBE_DEFAULT;
+    }
+    if (probe->mViewerObject)
+    {
+        return probe->mViewerObject->getReflectionProbeIsBox() ? SK_PROBE_PLACED_BOX : SK_PROBE_PLACED_SPHERE;
+    }
+    return probe->mNavRooms ? SK_PROBE_NAV_SPHERE : SK_PROBE_OCTREE;
+}
+// </SK:Nexii>
+
 S32 LLReflectionMapManager::allocateCubeIndex()
 {
     if (!mCubeFree.empty())
@@ -948,6 +1195,7 @@ void LLReflectionMapManager::doProbeUpdate()
         if (isRadiancePass())
         {
             mUpdatingProbe->mComplete = true;
+            mNavRoomsDirty = mNavRoomsDirty || mUpdatingProbe->mGroup != nullptr; // <SK:Nexii> Navmesh rooms probes: its origin has settled
             mUpdatingProbe = nullptr;
             mRadiancePass = false;
         }
@@ -1462,6 +1710,18 @@ void LLReflectionMapManager::updateUniforms()
             refmap->mFadeIn, // fade in weight
             0.f); // unused
 
+        // <SK:Nexii> Probe volume display: the kind rides in bits 24-27 of refParams.w, raw, only while the display is on.
+        // Bits 0-15 stay free for the navmesh room box plan; with a kind set the pattern is a normal float, never a denormal.
+        static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
+        if (render_ref_probe_volumes)
+        {
+            const U32 bits = static_cast<U32>(getSKProbeKind(refmap)) << 24;
+            F32 w;
+            memcpy(&w, &bits, sizeof(w));
+            mProbeData.refParams[count].mV[3] = w;
+        }
+        // </SK:Nexii>
+
         S32 ni = nc; // neighbor ("index") - index into refNeighbor to write indices for current reflection probe's neighbors
         {
             //LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmsu - refNeighbors");
@@ -1601,7 +1861,8 @@ void LLReflectionMapManager::setUniforms()
 
 void renderReflectionProbe(LLReflectionMap* probe)
 {
-    if (probe->isRelevant())
+    // <SK:Nexii> Probe links: neighbour links are drawn kind-coloured by LLReflectionMapManager::renderDebug instead.
+    if (false && probe->isRelevant()) // </SK:Nexii>
     {
         F32* po = probe->mOrigin.getF32ptr();
 
@@ -1684,6 +1945,118 @@ void renderReflectionProbe(LLReflectionMap* probe)
 #endif
 }
 
+namespace
+{
+    LLColor4 probeDebugColor(const LLReflectionMap* probe, const LLReflectionMap* fallback)
+    {
+        if (probe == fallback) return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
+        if (probe->mBlockedByCensus) return LLColor4(1.f, 0.2f, 0.2f, 1.f);
+        if (probe->mViewerObject) return LLColor4(1.f, 0.3f, 1.f, 1.f);
+        if (probe->mNavRooms) return LLColor4(0.f, 1.f, 1.f, 1.f);
+        return LLColor4(1.f, 0.6f, 0.f, 1.f);
+    }
+
+    // <SK:Nexii> Probe links: kind colours matching the scan-pulse display in reflectionProbeF.glsl.
+    LLColor4 skProbeKindColor(LLReflectionMapManager::SKProbeKind kind)
+    {
+        switch (kind)
+        {
+        case LLReflectionMapManager::SK_PROBE_PLACED_SPHERE: return LLColor4(1.f, 0.25f, 0.85f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_PLACED_BOX: return LLColor4(1.f, 0.55f, 0.1f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_OCTREE: return LLColor4(0.1f, 0.85f, 1.f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_NAV_SPHERE: return LLColor4(0.3f, 1.f, 0.35f, 1.f);
+        case LLReflectionMapManager::SK_PROBE_NAV_BOX: return LLColor4(1.f, 0.95f, 0.2f, 1.f);
+        default: return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
+        }
+    }
+
+    // Probe link weights: one probe's influence at a world point, for drawing a link as the shader blends it.
+    struct SKProbeLinkEnd
+    {
+        LLReflectionMap* probe;
+        LLMatrix4a toUnit; // world to unit box, box probes only
+        bool box;
+        bool manual;
+    };
+
+    SKProbeLinkEnd skProbeLinkEnd(LLReflectionMap* probe)
+    {
+        SKProbeLinkEnd e{ probe, LLMatrix4a(), false, probe->mPriority > 0 };
+        LLViewerObject* obj = probe->mViewerObject;
+        if (obj && obj->getReflectionProbeIsBox() && obj->getVolume() && obj->mDrawable.notNull())
+        {
+            LLVector3 s = obj->getScale() * 0.5f;
+            e.toUnit.setMul(LLMatrix4a::scaling(s.mV[0], s.mV[1], s.mV[2]), obj->mDrawable->getWorldMatrix());
+            e.toUnit.invert();
+            e.box = true;
+            e.manual = true;
+        }
+        return e;
+    }
+
+    // Mirrors skProbeRawWeight/sphereWeight/boxDistanceWeight and the in-volume test of shouldSampleProbe in
+    // class3/deferred/reflectionProbeF.glsl (rp:80-117, rp:481-509, rp:963-973); w = 0 outside the volume.
+    F32 skProbeLinkWeight(const SKProbeLinkEnd& e, const LLVector3& pos, F32& dw, bool& insideBox)
+    {
+        dw = 0.f;
+        const F32 fade = e.probe->mFadeIn;
+        if (e.box)
+        {
+            LLVector4a p, u;
+            p.load3(pos.mV);
+            e.toUnit.affineTransform(p, u);
+            const F32 m = llmax(fabsf(u[0]), llmax(fabsf(u[1]), fabsf(u[2])));
+            if (m > 1.f)
+            {
+                return 0.f;
+            }
+            insideBox = true;
+            const F32 d = 1.f - m;
+            dw = llclamp(d, 0.f, 1.f) * fade;
+            return llmax(d, 0.001f);
+        }
+        const F32 r = e.probe->mRadius;
+        const F32 d2 = llmax((pos - LLVector3(e.probe->mOrigin.getF32ptr())).magVec(), 0.001f);
+        if (d2 > r)
+        {
+            return 0.f;
+        }
+        const F32 r1 = r * 0.5f;
+        const F32 atten = 1.f - llmax(d2 - r1, 0.f) / llmax(r - r1, 0.001f);
+        const F32 w = fade / d2;
+        dw = w * atten * llmax(r, 1.f) * 4.f;
+        return w * atten;
+    }
+
+    // Both probes' normalised shares at pos, classes mixed as sampleProbes does (rp:651-707).
+    void skProbeLinkShares(const SKProbeLinkEnd& a, const SKProbeLinkEnd& b, const LLVector3& pos, F32& sa, F32& sb)
+    {
+        bool insideBox = false;
+        F32 dwa, dwb;
+        F32 wa = skProbeLinkWeight(a, pos, dwa, insideBox);
+        F32 wb = skProbeLinkWeight(b, pos, dwb, insideBox);
+        if (insideBox)
+        {
+            if (!a.manual) wa = 0.f;
+            if (!b.manual) wb = 0.f;
+        }
+        F32 wsum[2] = { 0.f, 0.f };
+        wsum[a.manual] += wa;
+        wsum[b.manual] += wb;
+        const F32 dwsum1 = (a.manual ? dwa : 0.f) + (b.manual ? dwb : 0.f);
+        const bool hasAuto = wsum[0] > 0.f;
+        const F32 manualShare = wsum[1] > 0.f ? (hasAuto ? llmin(dwsum1, 1.f) : 1.f) : 0.f;
+        auto share = [&](const SKProbeLinkEnd& e, F32 w)
+        {
+            const F32 cls = e.manual ? manualShare : (hasAuto ? 1.f - manualShare : 0.f);
+            return wsum[e.manual] > 0.f ? w / wsum[e.manual] * cls : 0.f;
+        };
+        sa = share(a, wa);
+        sb = share(b, wb);
+    }
+    // </SK:Nexii>
+}
+
 void LLReflectionMapManager::renderDebug()
 {
     gDebugProgram.bind();
@@ -1691,6 +2064,121 @@ void LLReflectionMapManager::renderDebug()
     for (auto& probe : mProbes)
     {
         renderReflectionProbe(probe);
+    }
+
+    // <SK:Nexii> Probe links: each neighbour pair once, coloured and dashed by the shader's blend weights along it.
+    std::vector<std::pair<LLColor4, std::vector<LLVector3>>> buckets; // gDebugProgram colours by uniform only
+    for (auto& probe : mProbes)
+    {
+        if (!probe->isRelevant())
+        {
+            continue;
+        }
+        const LLColor4 ca = skProbeKindColor(getSKProbeKind(probe));
+        const LLVector3 pa(probe->mOrigin.getF32ptr());
+        for (auto& neighbor : probe->mNeighbors)
+        {
+            if (neighbor->isRelevant() && neighbor < probe.get())
+            {
+                continue;
+            }
+            const LLColor4 cb = skProbeKindColor(getSKProbeKind(neighbor));
+            const LLVector3 pb(neighbor->mOrigin.getF32ptr());
+            const F32 len = (pb - pa).magVec();
+            if (len < 1e-3f)
+            {
+                continue;
+            }
+            const SKProbeLinkEnd ea = skProbeLinkEnd(probe);
+            const SKProbeLinkEnd eb = skProbeLinkEnd(neighbor);
+            auto seg = [&](const LLColor4& c, F32 m0, F32 m1)
+            {
+                auto it = std::find_if(buckets.begin(), buckets.end(), [&](const auto& e) { return e.first == c; });
+                if (it == buckets.end())
+                {
+                    it = buckets.emplace(buckets.end(), c, std::vector<LLVector3>());
+                }
+                it->second.push_back(lerp(pa, pb, m0 / len));
+                it->second.push_back(lerp(pa, pb, m1 / len));
+            };
+            // Solid in the dominant colour at >= 90% share, else dashes from 0.05 m (even) to 0.5 m (near 90%).
+            constexpr F32 STEP = 0.05f, DASH_MIN = 0.05f, DASH_MAX = 0.5f, SOLID = 0.9f;
+            auto blendAt = [&](F32 m, F32& w1, F32& w2, bool& aFirst)
+            {
+                F32 sa, sb;
+                skProbeLinkShares(ea, eb, lerp(pa, pb, m / len), sa, sb);
+                aFirst = sa >= sb;
+                w1 = llmax(sa, sb);
+                w2 = llmin(sa, sb);
+            };
+            S32 dash = 0;
+            F32 m = 0.f;
+            for (S32 n = 0; m < len && n < 20000; ++n)
+            {
+                F32 w1, w2;
+                bool aFirst;
+                blendAt(m + llmin(STEP, len - m) * 0.5f, w1, w2, aFirst);
+                const LLColor4& dom = aFirst ? ca : cb;
+                if (w1 <= 0.f)
+                {
+                    const F32 e = llmin(m + STEP, len);
+                    seg(LLColor4(0.4f, 0.4f, 0.4f, 1.f), m, e); // neither probe reaches here
+                    m = e;
+                    dash = 0;
+                    continue;
+                }
+                if (w1 >= SOLID || w2 <= 0.f)
+                {
+                    const F32 e = llmin(m + STEP, len);
+                    seg(dom, m, e);
+                    m = e;
+                    dash = 0;
+                    continue;
+                }
+                const F32 evenness = llclamp((w2 / w1 - (1.f - SOLID) / SOLID) / (1.f - (1.f - SOLID) / SOLID), 0.f, 1.f);
+                const F32 dashLen = lerp(DASH_MAX, DASH_MIN, evenness);
+                F32 ew1, ew2;
+                bool eaFirst;
+                if (m + dashLen > len || (blendAt(m + dashLen, ew1, ew2, eaFirst), ew1 >= SOLID || ew2 <= 0.f))
+                {
+                    const F32 e = llmin(m + STEP, len); // no room for a whole dash
+                    seg(dom, m, e);
+                    m = e;
+                    continue;
+                }
+                seg((dash++ & 1) ? cb : ca, m, m + dashLen);
+                m += dashLen;
+            }
+        }
+    }
+    for (const auto& bucket : buckets)
+    {
+        gGL.diffuseColor4fv(bucket.first.mV);
+        gGL.begin(LLRender::LINES);
+        for (const LLVector3& v : bucket.second)
+        {
+            gGL.vertex3fv(v.mV);
+        }
+        gGL.end();
+        gGL.flush();
+    }
+    // </SK:Nexii>
+
+    for (const auto& probe : mProbes)
+    {
+        const LLColor4 color = probeDebugColor(probe, mDefaultProbe);
+        const LLVector3 origin(probe->mOrigin.getF32ptr());
+        gGL.diffuseColor4fv(color.mV);
+        gGL.begin(LLRender::LINES);
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            LLVector3 offset;
+            offset.mV[axis] = 0.5f;
+            gGL.vertex3fv((origin - offset).mV);
+            gGL.vertex3fv((origin + offset).mV);
+        }
+        gGL.end();
+        gGL.flush();
     }
 
     gDebugProgram.unbind();

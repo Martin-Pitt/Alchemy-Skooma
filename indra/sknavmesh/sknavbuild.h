@@ -25,6 +25,8 @@
 #ifndef SK_NAVBUILD_H
 #define SK_NAVBUILD_H
 
+#include "sknavairdistil.h"
+#include "sknavflights.h"
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
@@ -100,6 +102,14 @@ namespace sknav
         bool mEdges[NUM_CLASSES] = { false, false };
         F32 mDropMax[NUM_CLASSES] = { 10.f, 24.f };
         F32 mDropSpacing = 2.f;
+        /// The air grid (sknavair.h), off the WEATHER heightfield, which keeps
+        /// the door leaves that split rooms. Nothing when WEATHER is not built.
+        bool mAir = false;
+        /// Cells WEATHER reads past the tile when it keeps the air, so the
+        /// clearance on the tile is exact; AVATAR's heightfield never grows.
+        S32 mAirPad = 16;
+        /// Closed gaps lower than this are folded into the solid around them.
+        F32 mAirMinGap = 0.5f;
     };
 
     struct TileBuildResult
@@ -117,6 +127,11 @@ namespace sknav
         /// Floor edges with what lies beyond them, and where a floor can be left.
         std::vector<WallSegment> mSegments[NUM_CLASSES];
         std::vector<DropLink> mLinks[NUM_CLASSES];
+        /// The distilled air, null when there is none; mAirBuilt says it was asked for.
+        TileAirPtr mAir;
+        bool mAirBuilt = false;
+        /// Stair flights and the polys they produced, when the partition is SLOPE.
+        std::vector<Flight> mFlights[NUM_CLASSES];
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
