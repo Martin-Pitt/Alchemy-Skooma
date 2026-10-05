@@ -34,6 +34,7 @@
 #include "skmapallies.h"
 #include "skmapallyresolver.h"
 #include "skmapgeom.h"
+#include "skmapmarkers.h"
 #include "skmappolicy.h"
 
 #include <map>
@@ -70,6 +71,7 @@ public:
         skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;
         bool mAlly = false;
         skmap::Visibility mVisibility = skmap::Visibility::DOT;
+        std::string mCode;                  ///< the ally's code in combat, else empty
     };
 
     void initSingleton() override;
@@ -125,6 +127,7 @@ private:
     LLUUID mActiveGroup;
     bool mGroupKnown = false;
     std::set<LLUUID> mCandidates;
+    skmap::MarkerCodes mCodes;
     LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
     boost::signals2::connection mTeleportConnection;
     std::vector<LLUUID> mVehicleRoots;

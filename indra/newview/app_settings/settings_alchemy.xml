@@ -5057,6 +5057,50 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKMapMarkerLabels</key>
+        <map>
+            <key>Comment</key>
+            <string>In combat, mark each ally's dot and nametag with a short code that stays with them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapMarkerFontPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixel size of the codes on mini-map dots, 8 to 11.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>SKMapMarkerPaddingPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels between a code and the edge of its mini-map dot, 0 to 3.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKMapMarkerCodeHold</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an ally keeps their code after leaving the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>120.0</real>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

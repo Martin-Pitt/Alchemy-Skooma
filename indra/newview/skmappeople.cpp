@@ -73,6 +73,7 @@ void SKMapPeople::initSingleton()
     // Every probe record goes with a teleport.
     mTeleportConnection = LLViewerParcelMgr::getInstance()->setTeleportFinishedCallback([this](const LLVector3d&, const bool&) {
         mResolver.forgetRecords();
+        mCodes.clear();
     });
 }
 
@@ -326,6 +327,11 @@ void SKMapPeople::gatherPeople()
         }
     }
 
+    static LLCachedControl<F32> code_hold(gSavedSettings, "SKMapMarkerCodeHold", skmap::CODE_HOLD_S);
+    mCodes.setHold(code_hold);
+    const F64 code_now = LLFrameTimer::getElapsedSeconds();
+    mCodes.release(code_now);
+
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);
     mPeople.clear();
     mPeople.reserve(ids.size());
@@ -395,6 +401,10 @@ void SKMapPeople::gatherPeople()
         if (p.mVisibility == skmap::Visibility::HIDDEN)
         {
             continue;
+        }
+        if (p.mVisibility == skmap::Visibility::DOT_CODED)
+        {
+            p.mCode = skmap::codeString(mCodes.codeFor(p.mId, code_now));
         }
         mPeople.push_back(p);
     }

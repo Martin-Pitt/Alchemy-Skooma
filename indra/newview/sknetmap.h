@@ -36,6 +36,7 @@
 #include "skmappalette.h"
 #include "skmapview.h"
 
+class LLFontGL;
 class LLViewerTexture;
 class SKMapObjects;
 class SKMapParcels;
@@ -112,6 +113,8 @@ private:
     void drawSelfExtras();
     void drawPeople();
     void drawVehicles();
+    /// The font the dots' codes are drawn in, at SKMapMarkerFontPx.
+    static const LLFontGL* codeFont();
     void drawTracking();
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();

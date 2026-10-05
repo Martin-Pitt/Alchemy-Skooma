@@ -478,27 +478,53 @@ void SKNetMap::drawVehicles()
         };
         const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
         const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);
-        skmapdraw::colour(skmap::palette::VEH_CIVIL_HULL);
+        const bool ally = v.mLook == skmap::VehicleLook::ALLY;
+        const bool neutral = v.mLook == skmap::VehicleLook::NEUTRAL;
+        skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_HULL : neutral ? skmap::palette::VEH_NEUTRAL_HULL : skmap::palette::VEH_CIVIL_HULL);
         skmapdraw::triangle(a, b, c);
         skmapdraw::triangle(a, c, d);
         const F32 mid_y = (v.mMin.mV[VY] + v.mMax.mV[VY]) * 0.5f;
         const F32 length = v.mMax.mV[VX] - v.mMin.mV[VX];
-        skmapdraw::colour(skmap::palette::VEH_CIVIL_TOP);
+        skmapdraw::colour(ally ? skmap::palette::VEH_ALLY_TOP : neutral ? skmap::palette::VEH_NEUTRAL_TOP : skmap::palette::VEH_CIVIL_TOP);
         skmapdraw::line(at(v.mMax.mV[VX] - length * 0.25f, mid_y), at(v.mMax.mV[VX], mid_y), 2.f);
     }
     gGL.end();
 }
 
+const LLFontGL* SKNetMap::codeFont()
+{
+    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+    static U32 made_for = 0;
+    static const LLFontGL* font = nullptr;
+    if (!font || made_for != font_px)
+    {
+        // Pixels to points at 96 dpi.
+        made_for = font_px;
+        font = LLFontGL::getFontAtPoints("SansSerif", llclamp(static_cast<F32>(font_px), 8.f, 11.f) * 0.75f, LLFontGL::NORMAL);
+        if (!font)
+        {
+            font = LLFontGL::getFontSansSerifSmall();
+        }
+    }
+    return font;
+}
+
 void SKNetMap::collectDots()
 {
     static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
-    constexpr F32 FONT_PX = 8.f;
-    constexpr F32 PADDING_PX = 0.5f;
+    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
+    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+    static LLCachedControl<F32> padding(gSavedSettings, "SKMapMarkerPaddingPx", 0.5f);
+    const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
+    const F32 pad = llclamp(static_cast<F32>(padding), 0.f, 3.f);
     mDots.clear();
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
-        mDots.push_back({ p.mId, mView.toWidget(p.mPos), skmap::markerRadius(chevron, false, 0, 0.f, FONT_PX, PADDING_PX) });
+        const bool coded = labels && !p.mCode.empty();
+        const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
+        mDots.push_back({ p.mId, mView.toWidget(p.mPos),
+                          skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad) });
     }
 }
 
@@ -506,7 +532,9 @@ void SKNetMap::drawPeople()
 {
     static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
     static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
-    constexpr F32 FONT_PX = 8.f;
+    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
+    static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+    const F32 FONT_PX = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
     for (size_t i = 0; i < people.size() && i < mDots.size(); ++i)
     {
@@ -521,7 +549,16 @@ void SKNetMap::drawPeople()
         }
         skmapdraw::shadow(at, radius);
         gGL.begin(LLRender::TRIANGLES);
-        gGL.color4f(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        // Allies in combat are cyan; everyone else keeps the general colours.
+        const bool ally_coded = p.mVisibility == skmap::Visibility::DOT_CODED;
+        if (ally_coded)
+        {
+            skmapdraw::colour(skmap::palette::DOT_COMBAT);
+        }
+        else
+        {
+            gGL.color4f(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        }
         if (triangles && p.mHasHeading)
         {
             LLVector2 ahead = mView.toWidgetOffset(std::cos(p.mHeading), std::sin(p.mHeading));
@@ -544,6 +581,13 @@ void SKNetMap::drawPeople()
             skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
         }
         gGL.end();
+        // The chevron replaces the code on the dot; the tag keeps it.
+        if (!chevron && labels && ally_coded && !p.mCode.empty())
+        {
+            const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
+            codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                                   LLFontGL::NO_SHADOW);
+        }
     }
 }
 
@@ -650,8 +694,18 @@ void SKNetMap::updateHover()
         texts.push_back(t);
     }
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    static LLCachedControl<bool> code_labels(gSavedSettings, "SKMapMarkerLabels", true);
     for (TagText& t : texts)
     {
+        // In combat the tag leads with the ally's code, as the dot shows it.
+        for (const SKMapPeople::Person& p : people)
+        {
+            if (p.mId == t.mId && code_labels)
+            {
+                t.mCode = p.mCode;
+                break;
+            }
+        }
         // A second line only when there is something to say: two people sharing a name show
         // their usernames, else the floor they are on.
         const bool shared = name_counts[t.mName] > 1 && RlvActions::canShowName(RlvActions::SNC_DEFAULT, t.mId);
