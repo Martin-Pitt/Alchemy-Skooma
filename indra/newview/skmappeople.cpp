@@ -43,6 +43,7 @@
 #include "llvoavatar.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "lljoint.h"
 #include "skmappalette.h"
 #include "skmapscene.h"
 #include "sknetmap.h"
@@ -128,6 +129,8 @@ void SKMapPeople::idle()
     mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getElapsedSeconds());
     gatherPeople();
     mResolver.dispatch(LLFrameTimer::getElapsedSeconds());
+    updateFiringLines();
+    updateProjectiles();
     updateCoverAhead();
     gatherVehicles();
 }
@@ -258,6 +261,134 @@ void SKMapPeople::addPing(const LLVector3d& pos)
                  mPings.end());
     mPings.push_back({ pos, now });
     SKNetMap::firePing(pos);
+}
+
+void SKMapPeople::updateFiringLines()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFiringLines", true);
+    if (!show)
+    {
+        mFiring.clear();
+        return;
+    }
+    constexpr F64 RECAST_S = 0.25;      ///< 4 Hz an avatar
+    constexpr S32 RAYS_PER_IDLE = 4;
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    // Only for people the map draws: in combat, allies; a hidden avatar's aim must not leak.
+    std::map<LLUUID, FiringLine> kept;
+    std::vector<std::pair<F64, const Person*>> due;
+    for (const Person& p : mPeople)
+    {
+        const bool in_view = p.mPos.mdV[VX] >= mViewMin.mdV[VX] && p.mPos.mdV[VX] <= mViewMax.mdV[VX] && p.mPos.mdV[VY] >= mViewMin.mdV[VY]
+                          && p.mPos.mdV[VY] <= mViewMax.mdV[VY];
+        if (!p.mLoaded || !in_view)
+        {
+            continue;
+        }
+        const auto it = mFiring.find(p.mId);
+        if (it != mFiring.end())
+        {
+            kept[p.mId] = it->second;
+        }
+        const F64 last = it != mFiring.end() ? it->second.mCast : -1.0e9;
+        if (now - last >= RECAST_S)
+        {
+            due.emplace_back(last, &p);
+        }
+    }
+    // The longest waiting first, a few rays an idle.
+    std::sort(due.begin(), due.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    S32 rays = 0;
+    for (const auto& entry : due)
+    {
+        if (rays >= RAYS_PER_IDLE)
+        {
+            break;
+        }
+        LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(gObjectList.findObject(entry.second->mId));
+        LLJoint* head = avatar ? avatar->getJoint("mHead") : nullptr;
+        if (!head)
+        {
+            continue;
+        }
+        ++rays;
+        const LLVector3 from = head->getWorldPosition();
+        const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
+        const LLVector3 to = from + dir * skmap::palette::FIRING_REACH_M;
+        LLVector4a start, end, hit;
+        // Past the head, so the shooter's own attachments are not what the ray finds.
+        start.load3((from + dir * 0.5f).mV);
+        end.load3(to.mV);
+        S32 face = -1;
+        LLVector3 stop = to;
+        if (gPipeline.lineSegmentIntersectInWorld(start, end, false, false, false, false, &face, &hit))
+        {
+            stop.set(hit.getF32ptr());
+        }
+        FiringLine& line = kept[entry.second->mId];
+        line.mFrom = gAgent.getPosGlobalFromAgent(from);
+        line.mTo = gAgent.getPosGlobalFromAgent(stop);
+        line.mCast = now;
+    }
+    mFiring.swap(kept);
+}
+
+void SKMapPeople::updateProjectiles()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", false);
+    // Never in combat: a shot's owner cannot be told without asking, and it would show where
+    // someone hidden is shooting from.
+    if (!show || mCombat)
+    {
+        mProjectiles.clear();
+        mLastObjectPos.clear();
+        return;
+    }
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    if (now - mProjectilesAt < 0.1)
+    {
+        return;
+    }
+    mProjectilesAt = now;
+    std::vector<Projectile> found;
+    std::map<LLUUID, LLVector3d> seen;
+    for (const LLPointer<LLViewerObject>& ptr : gObjectList.getMapObjects())
+    {
+        LLViewerObject* object = ptr.get();
+        if (!object || object->isDead() || !object->isRoot() || object->isAttachment() || !object->flagUsePhysics())
+        {
+            continue;
+        }
+        const LLVector3d pos = object->getPositionGlobal();
+        if (pos.mdV[VX] < mViewMin.mdV[VX] || pos.mdV[VX] > mViewMax.mdV[VX] || pos.mdV[VY] < mViewMin.mdV[VY] || pos.mdV[VY] > mViewMax.mdV[VY])
+        {
+            continue;
+        }
+        const F32 speed = object->getVelocity().length();
+        const F32 size = object->getScale().length();
+        Projectile p;
+        p.mPos = pos;
+        if (speed > 20.f)
+        {
+            // A streak over the last tenth of a second.
+            p.mFast = true;
+            const LLVector3 back = object->getVelocity() * -0.1f;
+            p.mTail = pos + LLVector3d(back);
+        }
+        else if (size >= 0.05f && size <= 0.6f && speed > 1.f)
+        {
+            const auto last = mLastObjectPos.find(object->getID());
+            p.mTail = last != mLastObjectPos.end() ? last->second : pos;
+        }
+        else
+        {
+            continue;
+        }
+        seen[object->getID()] = pos;
+        found.push_back(p);
+    }
+    mProjectiles.swap(found);
+    mLastObjectPos.swap(seen);
 }
 
 void SKMapPeople::updateCombat()

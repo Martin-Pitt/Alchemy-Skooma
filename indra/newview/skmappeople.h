@@ -106,6 +106,24 @@ public:
     void addEvent(const SKCombatEvent& event) { mEvents.add(event); }
     const skmap::EventRing& events() const { return mEvents; }
 
+    /// Where a drawn avatar is aiming: its head's ray to what it hits, or 64 m out.
+    struct FiringLine
+    {
+        LLVector3d mFrom;
+        LLVector3d mTo;
+        F64 mCast = -1.0e9;
+    };
+    const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
+
+    /// Fast physical objects in view, opt-in and never in combat.
+    struct Projectile
+    {
+        LLVector3d mPos;
+        LLVector3d mTail;                   ///< where it was a tenth of a second ago
+        bool mFast = false;                 ///< a streak, not a thrown dot
+    };
+    const std::vector<Projectile>& projectiles() const { return mProjectiles; }
+
     /// The user's ally groups: the active group's faction, or the group alone.
     const std::set<LLUUID>& candidates() const { return mCandidates; }
     /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
@@ -123,6 +141,8 @@ private:
     void updateCoverAhead();
     void gatherVehicles();
     void updateCombat();
+    void updateFiringLines();
+    void updateProjectiles();
     void updateCandidates();
     void loadFactions();
 
@@ -143,6 +163,10 @@ private:
     skmap::MarkerCodes mCodes;
     std::vector<Ping> mPings;
     skmap::EventRing mEvents;
+    std::map<LLUUID, FiringLine> mFiring;
+    std::vector<Projectile> mProjectiles;
+    std::map<LLUUID, LLVector3d> mLastObjectPos;
+    F64 mProjectilesAt = -1.0e9;
     LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
     boost::signals2::connection mTeleportConnection;
     std::vector<LLUUID> mVehicleRoots;

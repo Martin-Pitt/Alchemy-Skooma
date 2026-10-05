@@ -279,6 +279,8 @@ void SKNetMap::draw()
         mParcels->draw(mView);
         drawEvents();
         drawPings();
+        drawProjectiles();
+        drawFiringLines();
         drawVehicles();
         drawSelf();
         drawSelfExtras();
@@ -508,6 +510,74 @@ void SKNetMap::drawEvents()
             skmapdraw::colour(skmap::palette::EVENT_ICON, d.mIconAlpha);
             skmapdraw::line(target + LLVector2(-r, -r), target + LLVector2(r, r), 2.f);
             skmapdraw::line(target + LLVector2(-r, r), target + LLVector2(r, -r), 2.f);
+        }
+    }
+    gGL.end();
+}
+
+void SKNetMap::drawFiringLines()
+{
+    const std::map<LLUUID, SKMapPeople::FiringLine>& lines = SKMapPeople::instance().firingLines();
+    if (lines.empty())
+    {
+        return;
+    }
+    gGL.begin(LLRender::TRIANGLES);
+    for (const auto& entry : lines)
+    {
+        // Brighter at the shooter, faint at the far end: 20% down to 5% over the 64 m.
+        const LLVector2 a = mView.toWidget(entry.second.mFrom), b = mView.toWidget(entry.second.mTo);
+        const F32 reach = static_cast<F32>(dist_vec(entry.second.mFrom, entry.second.mTo)) / skmap::palette::FIRING_REACH_M;
+        const F32 far_alpha = lerp(skmap::palette::FIRING_ALPHA_NEAR, skmap::palette::FIRING_ALPHA_FAR, llclamp(reach, 0.f, 1.f));
+        LLVector2 d = b - a;
+        if (d.normVec() < 1e-3f)
+        {
+            continue;
+        }
+        const LLVector2 n(-d.mV[VY] * 0.5f, d.mV[VX] * 0.5f);
+        const LLColor4 near_c(1.f, 1.f, 1.f, skmap::palette::FIRING_ALPHA_NEAR);
+        const LLColor4 far_c(1.f, 1.f, 1.f, far_alpha);
+        gGL.color4fv(near_c.mV);
+        gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
+        gGL.color4fv(far_c.mV);
+        gGL.vertex2f((b - n).mV[VX], (b - n).mV[VY]);
+        gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
+        gGL.color4fv(near_c.mV);
+        gGL.vertex2f((a - n).mV[VX], (a - n).mV[VY]);
+        gGL.color4fv(far_c.mV);
+        gGL.vertex2f((b + n).mV[VX], (b + n).mV[VY]);
+        gGL.color4fv(near_c.mV);
+        gGL.vertex2f((a + n).mV[VX], (a + n).mV[VY]);
+    }
+    gGL.end();
+}
+
+void SKNetMap::drawProjectiles()
+{
+    const std::vector<SKMapPeople::Projectile>& shots = SKMapPeople::instance().projectiles();
+    if (shots.empty())
+    {
+        return;
+    }
+    gGL.begin(LLRender::TRIANGLES);
+    for (const SKMapPeople::Projectile& p : shots)
+    {
+        const LLVector2 head = mView.toWidget(p.mPos);
+        if (p.mFast)
+        {
+            // A streak and a bright head.
+            skmapdraw::colour(skmap::palette::PROJECTILE, 0.5f);
+            skmapdraw::line(mView.toWidget(p.mTail), head, 1.f);
+            skmapdraw::colour(skmap::palette::PROJECTILE);
+            skmapdraw::disc(head, 1.5f, 8);
+        }
+        else
+        {
+            // A thrown object: a dot and a ring.
+            skmapdraw::colour(skmap::palette::PROJECTILE);
+            skmapdraw::disc(head, 1.5f, 8);
+            skmapdraw::colour(skmap::palette::PROJECTILE, 0.6f);
+            skmapdraw::ring(head, 4.f, 1.f, 16);
         }
     }
     gGL.end();

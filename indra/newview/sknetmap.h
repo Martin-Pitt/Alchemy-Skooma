@@ -124,6 +124,8 @@ private:
     void drawVehicles();
     void drawPings();
     void drawEvents();
+    void drawFiringLines();
+    void drawProjectiles();
     /// The font the dots' codes are drawn in, at SKMapMarkerFontPx.
     static const LLFontGL* codeFont();
     void drawTracking();
