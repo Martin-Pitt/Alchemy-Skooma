@@ -32,4 +32,15 @@
      name="sk_net_map"
      top="0"
      width="200"/>
+    <button
+     follows="top|right"
+     height="16"
+     image_overlay="Icon_Gear"
+     layout="topleft"
+     left="164"
+     name="sk_map_cog"
+     tool_tip="Minimap settings"
+     top="2"
+     visible="false"
+     width="16" />
 </floater>

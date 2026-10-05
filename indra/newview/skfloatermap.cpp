@@ -52,6 +52,9 @@ bool SKFloaterMap::postBuild()
     mMap = getChild<SKNetMap>("sk_net_map");
     sendChildToBack(mMap);
     sendChildToBack(getDragHandle());
+    mCog = getChild<LLButton>("sk_map_cog");
+    mCog->setCommitCallback([](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("sk_map_settings"); });
+    layoutCog();
     seed();
     // Keep it on screen.
     gFloaterView->adjustToFitScreen(this, false);
@@ -94,6 +97,34 @@ void SKFloaterMap::updateTitleButtons()
     {
         mButtonShown[i] = mButtons[i] && mButtons[i]->getVisible();
     }
+    layoutCog();
+}
+
+void SKFloaterMap::reshape(S32 width, S32 height, bool called_from_parent)
+{
+    LLFloater::reshape(width, height, called_from_parent);
+    layoutCog();
+}
+
+void SKFloaterMap::layoutCog()
+{
+    if (!mCog)
+    {
+        return;
+    }
+    static LLUICachedControl<S32> close_box_from_top("UICloseBoxFromTop", 0);
+    constexpr S32 COG_PX = 16;
+    S32 right = getRect().getWidth() - LLPANEL_BORDER_WIDTH;
+    S32 top = getRect().getHeight() - close_box_from_top;
+    for (S32 i = 0; i < BUTTON_COUNT; ++i)
+    {
+        if (mButtons[i] && mButtonShown[i] && mButtons[i]->getRect().mLeft - 1 < right)
+        {
+            right = mButtons[i]->getRect().mLeft - 1;
+            top = mButtons[i]->getRect().mTop;
+        }
+    }
+    mCog->setRect(LLRect(right - COG_PX, top, right, top - COG_PX));
 }
 
 bool SKFloaterMap::chromeWanted() const
@@ -136,6 +167,10 @@ void SKFloaterMap::draw()
     if (mMap)
     {
         mMap->setChrome(chrome);
+    }
+    if (mCog)
+    {
+        mCog->setVisible(chrome && !isMinimized());
     }
     LLFloater::draw();
 }

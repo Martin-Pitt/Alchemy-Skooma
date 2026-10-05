@@ -27,6 +27,7 @@
 
 #include "llfloater.h"
 
+class LLButton;
 class SKNetMap;
 
 class SKFloaterMap : public LLFloater
@@ -41,6 +42,7 @@ public:
     void draw() override;
     void setMinimized(bool minimize) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
 
 protected:
     /// Records which base buttons the floater shows, so the chrome can hide them at rest.
@@ -51,8 +53,11 @@ private:
     void seed();
     /// Whether the border, tint, grip and buttons show this frame.
     bool chromeWanted() const;
+    /// The cog sits just left of the leftmost base button the floater shows.
+    void layoutCog();
 
     SKNetMap* mMap = nullptr;
+    LLButton* mCog = nullptr;
     bool mButtonShown[BUTTON_COUNT] = {};
 };
 

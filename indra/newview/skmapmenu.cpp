@@ -303,6 +303,8 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
                                      }
                                  },
                                  true, map->isPanned()));
+    spec.mItems.push_back(separator());
+    spec.mItems.push_back(action(label("settings"), []() { LLFloaterReg::showInstance("sk_map_settings"); }));
     panes.push_back(spec);
 
     auto gates = std::make_shared<std::vector<Gate>>();
