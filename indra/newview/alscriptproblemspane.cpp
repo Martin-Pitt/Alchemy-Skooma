@@ -32,6 +32,7 @@
 #include "alpanefolds.h"
 #include "alpanelist.h"
 #include "alscriptstudiochecking.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudioweighing.h"
 #include "llcheckboxctrl.h"
@@ -183,9 +184,10 @@ ALScriptProblemsPane::Made ALScriptProblemsPane::make(const Doc& doc, const ALSc
         const Doc::Shown said = Doc::analysisRow(problem, doc.language.lua, services);
         add(problem.line, problem.column, true, problem.endLine, problem.endColumn, markOf(said.level), said.level, said.origin, said.message,
             problem.file, said.lint);
-        made.rows.back().key      = problem.key;
-        made.rows.back().fixes    = problem.fixes;
-        made.rows.back().fixesFor = doc.check->analysisVersion;
+        made.rows.back().key       = problem.key;
+        made.rows.back().fixes     = problem.fixes;
+        made.rows.back().fixesFor  = doc.check->analysisVersion;
+        made.rows.back().migration = said.migration;
         // The gutter's word on what the line offers: a lightbulb where the
         // caret is, a round mark where a fix changes the script.
         if (analysis_current && problem.file.empty() && !problem.fixes.empty())
@@ -282,12 +284,8 @@ bool ALScriptProblemsPane::postBuild()
     mFilter   = getChild<LLFilterEditor>("problems_filter");
     // The window this is a tab of, found through the view tree, as what
     // the tab asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The Problems tab", mServices, mWindow))
     {
-        LL_WARNS() << "The Problems tab is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     // A row chosen shows its place and keeps the keyboard in the list, so
@@ -301,8 +299,8 @@ bool ALScriptProblemsPane::postBuild()
     mList->setRightMouseDownCallback([this](LLUICtrl*, S32 x, S32 y, MASK) { showMenu(x, y); });
     // The pane's filters: whose, which levels, which source, which words.
     mOrigin->add(mServices->words("OriginAny"), LLSD(""));
-    for (const char* origin : { "OriginParser", "OriginTypes", "OriginLint", "OriginCompiler", "OriginPreprocessor", "OriginOptimizer", "OriginRuntime", "OriginDefinitions",
-                                "OriginWeight" })
+    for (const char* origin : { "OriginParser", "OriginTypes", "OriginLint", "OriginMigration", "OriginCompiler", "OriginPreprocessor", "OriginOptimizer",
+                                "OriginRuntime", "OriginDefinitions", "OriginWeight" })
     {
         mOrigin->add(mServices->words(origin), LLSD(mServices->words(origin)));
     }
@@ -352,23 +350,13 @@ bool ALScriptProblemsPane::postBuild()
 
 
 
-ALScriptProblemsPane::~ALScriptProblemsPane()
-{
-    // A menu still open calls into this pane, which is going: it goes
-    // first. The menus live in the viewer's menu holder, not here.
-    if (LLContextMenu* open = mMenu.get())
-    {
-        open->die();
-    }
-}
-
 void ALScriptProblemsPane::changed(const Doc& doc)
 {
-    mStore.replace(doc.id, doc.shown);
+    mStore.replace(doc.id, doc.shownRows);
     // The list, where it lists this script's: the one it is about, or
     // every one open.
     Doc* shown = listed();
-    if (shown && (shown == &doc || everyScript()))
+    if (shown && (shown == &doc || (manyScripts() && inScope(doc.ref))))
     {
         fill(shown);
     }
@@ -422,7 +410,7 @@ void ALScriptProblemsPane::relist(Checked& one)
     one.rows = one.analysed;
     one.rows.insert(one.rows.end(), one.compiled.begin(), one.compiled.end());
     mStore.replace(one.id, one.rows);
-    if (everyScript())
+    if (manyScripts())
     {
         fill(listed());
     }
@@ -465,7 +453,7 @@ void ALScriptProblemsPane::forgetChecked(const ALScriptRef& ref)
     }
     mStore.forget(found->id);
     mChecked.erase(found);
-    if (everyScript())
+    if (manyScripts())
     {
         fill(listed());
     }
@@ -491,17 +479,37 @@ void ALScriptProblemsPane::showEveryScript()
     fill(listed());
 }
 
+void ALScriptProblemsPane::showOrigin(const std::string& origin)
+{
+    if (mOrigin->selectByValue(LLSD(mServices->words(origin))))
+    {
+        mWindow->problemFiltersChanged();
+    }
+    fill(listed());
+}
+
+void ALScriptProblemsPane::showObject(const LLUUID& root)
+{
+    mObjectRoot = root;
+    if (!objectScripts())
+    {
+        mScope->selectByValue("object");
+        mWindow->problemFiltersChanged();
+    }
+    fill(listed());
+}
+
 std::vector<const ALScriptProblemsPane::Checked*> ALScriptProblemsPane::checkedFor()
 {
     std::vector<const Checked*> out;
-    if (!everyScript())
+    if (!manyScripts())
     {
         return out;
     }
     for (const Checked& one : mChecked)
     {
         // Opened since, its tab's are what is listed.
-        if (!mServices->findDoc(one.ref))
+        if (!mServices->findDoc(one.ref) && inScope(one.ref))
         {
             out.push_back(&one);
         }
@@ -512,6 +520,27 @@ std::vector<const ALScriptProblemsPane::Checked*> ALScriptProblemsPane::checkedF
 bool ALScriptProblemsPane::everyScript() const
 {
     return mScope->getValue().asString() == "all";
+}
+
+bool ALScriptProblemsPane::objectScripts() const
+{
+    return mScope->getValue().asString() == "object";
+}
+
+bool ALScriptProblemsPane::inScope(const ALScriptRef& ref) const
+{
+    if (!objectScripts())
+    {
+        return true;
+    }
+    // One whose object is out of sight now, which its check reached, is
+    // still counted as its; one in the inventory is no object's.
+    if (ref.inInventory() || mObjectRoot.isNull())
+    {
+        return false;
+    }
+    const LLUUID root = mWindow->rootOf(ref);
+    return root.isNull() ? ref.object == mObjectRoot : root == mObjectRoot;
 }
 
 ALScriptProblemsPane::store_t::Query ALScriptProblemsPane::query(const std::string& id) const
@@ -535,12 +564,16 @@ std::vector<const ALScriptProblemsPane::Doc*> ALScriptProblemsPane::docsFor(cons
     {
         return docs;
     }
-    docs.push_back(doc);
-    if (everyScript())
+    // The one in front first, where the list holds it.
+    if (!objectScripts() || (doc->file.empty() && inScope(doc->ref)))
+    {
+        docs.push_back(doc);
+    }
+    if (manyScripts())
     {
         for (const Doc* other : mServices->openDocs())
         {
-            if (other != doc && !other->notecard)
+            if (other != doc && !other->notecard && (!objectScripts() || (other->file.empty() && inScope(other->ref))))
             {
                 docs.push_back(other);
             }
@@ -593,7 +626,9 @@ void ALScriptProblemsPane::choose(bool to_editor)
 void ALScriptProblemsPane::saveState(LLSD& state) const
 {
     state["problem_levels"] = LLSD::emptyArray().with(0, mErrors->get()).with(1, mWarnings->get()).with(2, mNotes->get()).with(3, mFixable->get());
-    state["problem_scope"]  = mScope->getValue().asString();
+    // One object's scripts are the last check's, which is not kept: every
+    // open one's in its place.
+    state["problem_scope"]  = objectScripts() ? std::string("all") : mScope->getValue().asString();
     state["problem_origin"] = mOrigin->getValue().asString();
 }
 
@@ -637,7 +672,7 @@ void ALScriptProblemsPane::fill(const Doc* doc)
     };
     for (const Doc* each : docs)
     {
-        count(each->shown);
+        count(each->shown());
     }
     for (const Checked* each : checked)
     {
@@ -748,7 +783,7 @@ void ALScriptProblemsPane::listRows(const Doc* doc)
     }
 
     static const LLUIColor ink = LLUIColorTable::instance().getColor("ScrollUnselectedColor", LLColor4::white);
-    const bool all      = docs.size() + checked.size() > 1 || everyScript();
+    const bool all      = docs.size() + checked.size() > 1 || manyScripts();
     // Whose they are, over them, wherever that is not plain: more than one
     // script's or file's, or another script's than the one in front, which
     // a row followed into an include leaves the list on.
@@ -1071,6 +1106,13 @@ bool ALScriptProblemsPane::fixShown(const std::string& which) const
         // with it: an empty kind would be every kind.
         return !shown->key.empty() && doc->pickFixes(Doc::FixPick{ shown->key }).size() > 1;
     }
+    if (which == "migration")
+    {
+        // All that is left from LSL, from one of it.
+        Doc::FixPick pick;
+        pick.migration = true;
+        return shown->migration && !doc->pickFixes(pick).empty();
+    }
     size_t left = 0;
     return which == "all" && doc->pickFixes(Doc::FixPick{}, &left).size() + left > 1;
 }
@@ -1089,24 +1131,17 @@ void ALScriptProblemsPane::showMenu(S32 x, S32 y)
         return;
     }
     mList->selectItemAt(x, y, MASK_NONE);
-    if (LLContextMenu* old = mMenu.get())
-    {
-        old->die();
-        mMenu.markDead();
-    }
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar commit;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable;
     commit.add("Problem.Action", [this](LLUICtrl*, const LLSD& param) { act(param.asString()); });
     enable.add("Problem.Enable", [this](LLUICtrl*, const LLSD& param) { return enabled(param.asString()); });
     enable.add("Problem.Check", [this](LLUICtrl*, const LLSD&) { return lintIsError(); });
     enable.add("Problem.FixVisible", [this](LLUICtrl*, const LLSD& param) { return fixShown(param.asString()); });
-    LLContextMenu* menu = LLUICtrlFactory::createFromFile<LLContextMenu>("menu_script_studio_problem.xml", LLMenuGL::sMenuContainer,
-                                                                          LLMenuHolderGL::child_registry_t::instance());
+    LLContextMenu* menu = mMenu.make("menu_script_studio_problem.xml");
     if (!menu)
     {
         return;
     }
-    mMenu = menu->getHandle();
     const Doc::Shown* shown = chosenShown();
     const Doc*        doc   = chosenDoc();
     // Each fix the problem offers, by what it does, first in the menu:
@@ -1126,8 +1161,7 @@ void ALScriptProblemsPane::showMenu(S32 x, S32 y)
         }
     }
     menu->setItemVisible("fix_separator", shown && doc && doc->modifiable && !shown->fixes.empty());
-    menu->show(x, y);
-    LLMenuGL::showPopup(mList, menu, x, y);
+    mMenu.show(mList, x, y);
 }
 
 void ALScriptProblemsPane::act(const std::string& action)
@@ -1216,12 +1250,17 @@ void ALScriptProblemsPane::act(const std::string& action)
     {
         if (const Doc::Shown* shown = chosenShown(); shown && !shown->key.empty())
         {
-            const std::string key = shown->key;
-            mWindow->fixAllOfKind(doc, key);
+            mWindow->fixAll(doc, Doc::FixPick{ shown->key });
         }
     }
     else if (action == "fix_all")
     {
-        mWindow->fixAllOfKind(doc, std::string());
+        mWindow->fixAll(doc, Doc::FixPick{});
+    }
+    else if (action == "fix_migration")
+    {
+        Doc::FixPick pick;
+        pick.migration = true;
+        mWindow->fixAll(doc, pick);
     }
 }

@@ -134,6 +134,7 @@
 #include "llavatarnamecache.h"
 #include "alrecovery.h"
 #include "alregex.h"
+#include "alscriptstudio.h"
 #include "alxmlmergelog.h"
 #include "lldiriterator.h"
 #include "llexperiencecache.h"
@@ -990,6 +991,9 @@ bool LLAppViewer::init()
     // Load translations for tooltips
     LLFloater::initClass();
     LLUrlFloaterDispatchHandler::registerInDispatcher();
+    // What Script Studio asks of the viewer, for its windows and the
+    // preferences' preview alike.
+    ALScriptStudio::attachViewer();
 
     /////////////////////////////////////////////////
 
@@ -1165,7 +1169,8 @@ bool LLAppViewer::init()
             unsupported = true;
         }
 
-        if (gSysCPU.getMHz() < minCPU)
+        // A clock the system would not report is unknown, not slow.
+        if (gSysCPU.getMHz() > 0 && gSysCPU.getMHz() < minCPU)
         {
             minSpecs += LLNotifications::instance().getGlobalString("UnsupportedCPU");
             minSpecs += "\n";
@@ -3678,7 +3683,7 @@ bool LLAppViewer::initWindow()
     gViewerWindow->initBase();
 
     // show viewer window
-    //gViewerWindow->getWindow()->show();
+    gViewerWindow->getWindow()->show();
 
     LL_INFOS("AppInit") << "Window initialization done." << LL_ENDL;
 

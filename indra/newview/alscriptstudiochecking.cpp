@@ -26,6 +26,7 @@
 
 #include "alscriptstudiochecking.h"
 
+#include "allsltoslua.h"
 #include "alnotecardembedded.h"
 #include "alnotecardformat.h"
 #include "alnotecarditems.h"
@@ -34,6 +35,7 @@
 #include "alscriptstudioplaces.h"
 #include "alscriptstudiosaves.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudioviewer.h"
 #include "alscriptstudioweighing.h"
 #include "alscriptstudiowords.h"
 #include "lldir.h"
@@ -106,18 +108,29 @@ using ALScriptPlaces::declaredOf;
 using ALScriptPlaces::mapSpan;
 using ALScriptPlaces::rangeOf;
 
-// static
-ALScriptStudioChecking::Sources& ALScriptStudioChecking::sources()
-{
-    static Sources sources;
-    return sources;
-}
-
 ALScriptStudioChecking::ALScriptStudioChecking(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, ALScriptStudioSaves& saves, ALScriptStudioWeighing& weighing, Window& window) : mServices(services), mAnalysis(analysis), mSaves(saves), mWeighing(weighing), mWindow(window) {}
 
 bool ALScriptStudioChecking::preprocessed(const Doc& doc) const
 {
-    return doc.loaded && !doc.notecard && (doc.envelope.has_value() || (sources().preprocessing && sources().preprocessing()));
+    return preprocessedWhy(doc) != ALPreprocessor::Wanted::No;
+}
+
+ALPreprocessor::Wanted ALScriptStudioChecking::preprocessedWhy(const Doc& doc) const
+{
+    if (!doc.loaded || doc.notecard)
+    {
+        return ALPreprocessor::Wanted::No;
+    }
+    const auto directives = [&doc]() {
+        const ALTextDocument& text = doc.editor->document();
+        if (doc.directivesOf != text.version())
+        {
+            doc.directives   = ALPreprocessor::usesDirectives([&text](S32 i) { return std::string_view(text.line(i)); }, text.lineCount(), doc.language.lua);
+            doc.directivesOf = text.version();
+        }
+        return doc.directives;
+    };
+    return ALPreprocessor::wanted(doc.envelope.has_value(), directives, ALScriptStudioViewer::get().preprocessing());
 }
 
 ALScriptPreprocessor::Request ALScriptStudioChecking::preprocessRequest(const Doc& doc, bool with_source) const
@@ -174,7 +187,7 @@ void ALScriptStudioChecking::expandFor(Doc& doc, ALScriptAnalysis::Kind kind, co
     // its own.
     ALScriptPreprocessor::Request asked = preprocessRequest(doc);
     asked.apart                         = true;
-    sources().expand(asked, [this, alive, id, version](const ALPreprocessor::Result& result) {
+    ALScriptStudioViewer::get().expand(asked, [this, alive, id, version](const ALPreprocessor::Result& result) {
         if (alive.lock())
         {
             expandedAnswer(id, version, result);
@@ -329,7 +342,7 @@ void ALScriptStudioChecking::ask(Doc& doc, ALScriptAnalysis::Kind kind, const AL
         // file overrides key by key; that choice alone where there is none.
         const ALLuauConfig                  base  = ALScriptLints::luauBase();
         const ALScriptPreprocessor::Request root  = preprocessRequest(doc, /*with_source*/ false);
-        const bool                          found = sources().configOf(root, request.config, &base);
+        const bool                          found = ALScriptStudioViewer::get().configOf(root, request.config, &base);
         if (!found)
         {
             request.config = base;
@@ -339,7 +352,7 @@ void ALScriptStudioChecking::ask(Doc& doc, ALScriptAnalysis::Kind kind, const AL
             doc.check->configAsked          = true;
             const std::weak_ptr<bool> alive = mAlive;
             const std::string         id    = doc.id;
-            sources().fetchConfig(root, [this, alive, id]() {
+            ALScriptStudioViewer::get().fetchConfig(root, [this, alive, id]() {
                 if (Doc* asked = alive.lock() ? mServices.findDoc(id) : nullptr)
                 {
                     schedule(*asked, true);
@@ -618,7 +631,7 @@ void ALScriptStudioChecking::actionsAnswered(Doc& doc, const ALScriptAnalysis::R
         one.refactor = true;
         for (const ALScriptEdit& edit : action.edits)
         {
-            one.edits.emplace_back(ALTextRange(ALTextPos(edit.line, edit.column), ALTextPos(edit.endLine, edit.endColumn)), edit.text);
+            one.edits.emplace_back(ALScriptPlaces::rangeOf(edit), edit.text);
         }
         one.value["doc"]    = doc.id;
         one.value["action"] = static_cast<S32>(i);
@@ -1093,8 +1106,7 @@ void ALScriptStudioChecking::checked(Doc& doc)
     mWindow.showOutline(doc);
     if (doc.check->fixAllAfterCheck && doc.check->analysisVersion == doc.editor->document().version())
     {
-        FixPick pick;
-        pick.key = *doc.check->fixAllAfterCheck;
+        const FixPick pick = *doc.check->fixAllAfterCheck;
         doc.check->fixAllAfterCheck.reset();
         askFixAll(doc, pick);
     }
@@ -1113,12 +1125,35 @@ void ALScriptStudioChecking::showProblems(Doc& doc)
     if (doc.language.lua)
     {
         explainRequires(doc);
+        notesAsProblems(doc);
     }
     else
     {
         explainTransformWords(doc);
     }
     mAnalysis.refreshProblems(doc);
+}
+
+void ALScriptStudioChecking::notesAsProblems(Doc& doc)
+{
+    // Those read before, gone with the text they were read in.
+    ALScriptProblems& analysis = doc.check->analysis;
+    analysis.erase(std::remove_if(analysis.begin(), analysis.end(), [](const ALScriptProblem& problem) { return problem.key == "SluaNote"; }),
+                   analysis.end());
+    if (doc.check->analysisVersion != doc.editor->document().version())
+    {
+        return;
+    }
+    const std::string text  = doc.editor->wholeText();
+    ALScriptProblems  notes = ALLSLToSLua::notesIn(text, alScriptKeyedWords);
+    if (notes.empty())
+    {
+        return;
+    }
+    ALLSLToSLua::linkNotes(notes, analysis, text);
+    // First: a Fix All takes a note's fix, which takes the note out with
+    // the lint's, before the lint's own, which would leave the note.
+    analysis.insert(analysis.begin(), std::make_move_iterator(notes.begin()), std::make_move_iterator(notes.end()));
 }
 
 void ALScriptStudioChecking::offerImports(Doc& doc)
@@ -1185,7 +1220,7 @@ void ALScriptStudioChecking::offerImports(Doc& doc)
     // script checked again once what it finds is new.
     const std::weak_ptr<bool>                  waiting = mAlive;
     const std::string                          waiter  = doc.id;
-    const std::vector<ALScriptModules::Module> modules = sources().modules(request, open, names, [this, waiting, waiter]() {
+    const std::vector<ALScriptModules::Module> modules = ALScriptStudioViewer::get().modules(request, open, names, [this, waiting, waiter]() {
         if (Doc* asked = waiting.lock() ? mServices.findDoc(waiter) : nullptr)
         {
             schedule(*asked, true);
@@ -1209,7 +1244,7 @@ void ALScriptStudioChecking::offerImports(Doc& doc)
             ask.name    = name;
             ask.require = true;
             ALPreprocessor::Include     found;
-            const ALPreprocessor::Found named = sources().lookUp(request, ask, found);
+            const ALPreprocessor::Found named = ALScriptStudioViewer::get().lookUp(request, ask, found);
             if (named != ALPreprocessor::Found::No && !found.path.empty() && ALScriptModules::identity(found.path) != self)
             {
                 offer(problem, name, false);
@@ -1256,7 +1291,7 @@ void ALScriptStudioChecking::offerImports(Doc& doc)
     {
         const std::weak_ptr<bool> alive = mAlive;
         const std::string         id    = doc.id;
-        sources().fetchNearby(request, [this, alive, id]() {
+        ALScriptStudioViewer::get().fetchNearby(request, [this, alive, id]() {
             if (Doc* asked = alive.lock() ? mServices.findDoc(id) : nullptr)
             {
                 schedule(*asked, true);
@@ -1268,23 +1303,39 @@ void ALScriptStudioChecking::offerImports(Doc& doc)
 void ALScriptStudioChecking::explainTransformWords(Doc& doc)
 {
     // A parse error on one of the preprocessor's words, with its transform
-    // off, is the transform's to explain (ALPreprocessor::transformAt).
+    // off, is the transform's to explain (ALPreprocessor::transformAt); one
+    // on a directive, with the script not preprocessed, the preprocessor's.
     using Transform                     = ALPreprocessor::Transform;
-    const bool            preprocessing = sources().preprocessing && sources().preprocessing();
+    const bool            preprocessing = preprocessed(doc);
     const ALTextDocument& text          = doc.editor->document();
     const auto            line          = [&text](S32 index) { return std::string_view(text.line(index)); };
+    const bool expanded = preprocessing;
     for (ALScriptProblem& problem : doc.check->analysis)
     {
         if (problem.severity != ALScriptProblem::Severity::Error || !problem.file.empty())
         {
             continue;
         }
+        // A directive read as code, the script not preprocessed: the
+        // parser's complaint is the preprocessor's to explain, and what it
+        // would put in is nothing the line wants.
+        if (!expanded && problem.line >= 0 && problem.line < text.lineCount())
+        {
+            const std::string_view at   = line(problem.line);
+            const size_t           code = at.find_first_not_of(" \t");
+            if (code != std::string_view::npos && at[code] == '#')
+            {
+                problem.message += " " + mServices.words("PreprocHintDirective");
+                problem.fixes.clear();
+                continue;
+            }
+        }
         std::string     word;
         const Transform transform = ALPreprocessor::transformAt(line, text.lineCount(), problem.line, word);
         // `inline` and `const` are taken off whenever the preprocessor
         // runs, whether the extensions are on or not.
         const bool      marker    = transform == Transform::Extensions && (word == "inline" || word == "const");
-        const bool      on        = preprocessing && transform != Transform::None && (marker || sources().transformOn(transform));
+        const bool      on        = preprocessing && transform != Transform::None && (marker || ALScriptStudioViewer::get().transformOn(transform));
         if (transform == Transform::None || on)
         {
             continue;
@@ -1428,7 +1479,7 @@ bool ALScriptStudioChecking::applyFix(Doc& doc, const ALScriptFix& fix, U32 vers
     std::vector<std::pair<ALTextRange, std::string>> edits;
     for (const ALScriptEdit& edit : fix.edits)
     {
-        const ALTextRange range(ALTextPos(edit.line, edit.column), ALTextPos(edit.endLine, edit.endColumn));
+        const ALTextRange range = ALScriptPlaces::rangeOf(edit);
         if (text.clamp(range.begin) != range.begin || text.clamp(range.end) != range.end)
         {
             mServices.setStatus(mServices.words("FixStale"), true);
@@ -1454,7 +1505,7 @@ void ALScriptStudioChecking::askFixAll(Doc& doc, const FixPick& pick)
     // than said to have nothing to fix.
     if (!pick.forSave && doc.loaded && !doc.notecard && doc.check->analysisVersion != doc.editor->document().version())
     {
-        doc.check->fixAllAfterCheck = pick.key;
+        doc.check->fixAllAfterCheck = pick;
         schedule(doc, true);
         LLStringUtil::format_map_t args;
         args["[NAME]"] = doc.name;
@@ -1464,6 +1515,14 @@ void ALScriptStudioChecking::askFixAll(Doc& doc, const FixPick& pick)
     mWindow.settleProblems(doc);
     size_t                                left  = 0;
     const std::vector<const ALScriptFix*> fixes = doc.pickFixes(pick, &left);
+    // What is left from LSL, where any of it could change what the script
+    // does: all of it seen first, beside the text as it is, and made by
+    // Apply.
+    if (pick.migration && std::any_of(fixes.begin(), fixes.end(), [](const ALScriptFix* fix) { return !fix->safe; }))
+    {
+        previewFixAll(doc, pick);
+        return;
+    }
     // What is not safe to make without a look, said to be left for one.
     const std::string left_said = left > 0 ? mServices.counted("FixesLeft", static_cast<S32>(left)) : std::string();
     if (fixes.size() < 2)
@@ -1489,18 +1548,79 @@ void ALScriptStudioChecking::askFixAll(Doc& doc, const FixPick& pick)
     args["LEFT"]                    = left_said.empty() ? std::string() : " " + left_said;
     const std::weak_ptr<bool> alive = mAlive;
     const std::string         id    = doc.id;
-    mWindow.confirmFixAll(args, [this, alive, id, pick]() {
-        if (Doc* asked = alive.lock() ? mServices.findDoc(id) : nullptr)
-        {
-            fixAll(*asked, pick);
-        }
-    });
+    mWindow.confirmFixAll(
+        args,
+        [this, alive, id, pick]() {
+            if (Doc* asked = alive.lock() ? mServices.findDoc(id) : nullptr)
+            {
+                fixAll(*asked, pick);
+            }
+        },
+        [this, alive, id, pick]() {
+            if (Doc* asked = alive.lock() ? mServices.findDoc(id) : nullptr)
+            {
+                previewFixAll(*asked, pick);
+            }
+        });
+}
+
+void ALScriptStudioChecking::previewFixAll(Doc& doc, const FixPick& pick)
+{
+    if (!doc.loaded)
+    {
+        return;
+    }
+    // The fixes' edits made over a copy of the source, as they would be
+    // made over it: in the text's order, none meeting another.
+    mWindow.settleProblems(doc);
+    const std::vector<const ALScriptFix*> fixes = doc.pickFixes(pick);
+    ALScriptFix                           all;
+    for (const ALScriptFix* fix : fixes)
+    {
+        all.edits.insert(all.edits.end(), fix->edits.begin(), fix->edits.end());
+    }
+    const std::string                now   = doc.editor->wholeText();
+    const std::optional<std::string> after = fixes.empty() ? std::nullopt : ALScriptFixes::apply(now, all);
+    if (!after)
+    {
+        mServices.setStatus(mServices.words("FixNone"));
+        return;
+    }
+    doc.check->fixAllPreviewed = Doc::Check::FixAllPreview{ pick, doc.editor->document().version() };
+    LLStringUtil::format_map_t args;
+    args["[FIXES]"] = mServices.counted("Fixes", static_cast<S32>(fixes.size()));
+    args["[NAME]"]  = doc.name;
+    mWindow.compare(doc, now, *after, mServices.words("CompareNow"), mServices.words("FixAllAfter", args));
+    mServices.report(mServices.words("FixAllPreviewed", args), false, &doc, { "apply_fixes" });
+}
+
+bool ALScriptStudioChecking::applyPreviewed(Doc& doc)
+{
+    // Never nothing said: Apply that makes nothing says why.
+    if (!doc.check->fixAllPreviewed)
+    {
+        mServices.setStatus(mServices.words("FixAllNotPreviewed"), true);
+        return false;
+    }
+    const Doc::Check::FixAllPreview previewed = *doc.check->fixAllPreviewed;
+    doc.check->fixAllPreviewed.reset();
+    // Made only over the text that was seen with them.
+    if (!doc.loaded || doc.editor->document().version() != previewed.version)
+    {
+        mServices.setStatus(mServices.words("FixAllChangedSince"), true);
+        return false;
+    }
+    return fixAll(doc, previewed.pick);
 }
 
 bool ALScriptStudioChecking::fixAll(Doc& doc, const FixPick& pick)
 {
     if (!doc.loaded || !doc.modifiable)
     {
+        if (!pick.forSave)
+        {
+            mServices.setStatus(mServices.words("FixAllNotMade"), true);
+        }
         return false;
     }
     // Only the fixes made over the text as it stands (pickFixes). Made on
@@ -1515,13 +1635,28 @@ bool ALScriptStudioChecking::fixAll(Doc& doc, const FixPick& pick)
     {
         for (const ALScriptEdit& edit : fix->edits)
         {
-            edits.emplace_back(ALTextRange(ALTextPos(edit.line, edit.column), ALTextPos(edit.endLine, edit.endColumn)), edit.text);
+            edits.emplace_back(ALScriptPlaces::rangeOf(edit), edit.text);
         }
     }
     // Every one of them one step to undo: they were made over one check,
-    // and none meets another.
-    if (edits.empty() || !source.replaceAll(std::move(edits)))
+    // and none meets another. Asked for and none made, said: the problems
+    // they were for gone since, which a check says again, or the text
+    // refusing them.
+    if (edits.empty())
     {
+        if (!pick.forSave)
+        {
+            mServices.setStatus(mServices.words("FixStale"), true);
+            schedule(doc, true);
+        }
+        return false;
+    }
+    if (!source.replaceAll(std::move(edits)))
+    {
+        if (!pick.forSave)
+        {
+            mServices.setStatus(mServices.words("FixAllNotMade"), true);
+        }
         return false;
     }
     source.undoJournal().label("fix");
@@ -1536,7 +1671,7 @@ void ALScriptStudioChecking::fixesOn(Doc& doc, S32 line, std::vector<ALCodeEdito
     // Only over the text they were made in: a text typed in since has other
     // places, and is checked again a moment later.
     const U32 now = doc.editor->document().version();
-    for (const Doc::Shown& shown : doc.shown)
+    for (const Doc::Shown& shown : doc.shown())
     {
         if (!shown.file.empty() || shown.line != line || shown.fixesFor != now)
         {
@@ -1551,7 +1686,7 @@ void ALScriptStudioChecking::fixesOn(Doc& doc, S32 line, std::vector<ALCodeEdito
             one.suppress  = fix.kind == ALScriptFix::Kind::Suppress;
             for (const ALScriptEdit& edit : fix.edits)
             {
-                one.edits.emplace_back(ALTextRange(ALTextPos(edit.line, edit.column), ALTextPos(edit.endLine, edit.endColumn)), edit.text);
+                one.edits.emplace_back(ALScriptPlaces::rangeOf(edit), edit.text);
             }
             // The problem by what the pane's rows carry, and the fix by its
             // place among the problem's.

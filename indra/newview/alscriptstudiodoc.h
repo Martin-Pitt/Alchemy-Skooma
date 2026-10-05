@@ -28,6 +28,7 @@
 #include "alluauservice.h"
 #include "alpreprocessor.h"
 #include "alrecoverystore.h"
+#include "alsavehistory.h"
 #include "alscriptenvelope.h"
 #include "alscriptproblem.h"
 #include "alscriptsaveflow.h"
@@ -297,6 +298,11 @@ struct ALScriptStudioDoc
     // and whose expanded code the other editor shows; a save runs
     // the preprocessor over the source and wraps both again.
     std::optional<ALScriptEnvelope>            envelope;
+    // Whether the text holds a directive of the preprocessor's, as of a
+    // version of it (ALPreprocessor::usesDirectives): read as it is asked,
+    // which is often, and the text but now and then changed.
+    mutable U32                                directivesOf = ~0u;
+    mutable bool                               directives   = false;
     // The version a wrapped script was loaded at, where the first run over
     // its source is to be held up to its compiled half; none once it has
     // been. And the compiled half, where the source could not have made
@@ -495,12 +501,25 @@ struct ALScriptStudioDoc
         // The version of the text the fixes are in the places of: the
         // check's, or the preprocessor run's that made the note.
         U32                      fixesFor = 0;
+        // What a script moved from LSL is left to see to: a note the
+        // converter left, an LSL habit's lint, a call to llcompat
+        // (ALScriptLintPass::migration).
+        bool                     migration = false;
     };
-    std::vector<Shown>                         shown;
+    // The rows, shared with the Problems pane's store, which holds them
+    // as they are without a copy; never changed once put, only put again.
+    std::shared_ptr<const std::vector<Shown>>  shownRows;
+    const std::vector<Shown>&                  shown() const
+    {
+        static const std::vector<Shown> none;
+        return shownRows ? *shownRows : none;
+    }
     // How many of them are errors and warnings, counted as they are put
     // in: the tab's dot and the trailer ask on every key.
-    S32                                        shownErrors   = 0;
-    S32                                        shownWarnings = 0;
+    S32                                        shownErrors    = 0;
+    S32                                        shownWarnings  = 0;
+    // And how many are left to move from LSL, whatever their level.
+    S32                                        shownMigration = 0;
     // The rows put in, and counted.
     void setShown(std::vector<Shown> rows);
     // The problem listed at a place, in the script or an include, saying
@@ -513,6 +532,9 @@ struct ALScriptStudioDoc
         std::string key;
         // Only what may be made on a save: safe, and taking nothing out.
         bool        forSave = false;
+        // What is left from LSL alone (Shown::migration), every preferred
+        // fix of it, safe or not: what is not is seen before it is made.
+        bool        migration = false;
     };
     // The preferred fixes picked, of the script's own problems, none of
     // whose edits overlap another taken before it. Over the whole script,
@@ -557,6 +579,19 @@ struct ALScriptStudioDoc
         bool         replace = false;
     };
     std::vector<PendingEdit>                   pendingEdits;
+    // Another item's text to set this one's beside once it has loaded --
+    // the Explorer's Compare, asked before the tab had its text -- under
+    // the other's title and its own.
+    struct PendingCompare
+    {
+        std::string text;
+        std::string theirTitle;
+        std::string ownTitle;
+    };
+    std::optional<PendingCompare>              pendingCompare;
+    // A save of its item compared with it (ALScriptStudioHistory), until
+    // the comparison ends: offered back by the notice.
+    std::optional<ALSavedText>                 historyShown;
     // The script held open in an external editor (ALScriptExternalEditor).
     struct External;
     Part<External>                             external;

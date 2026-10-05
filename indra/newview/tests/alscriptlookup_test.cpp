@@ -52,6 +52,9 @@ namespace
     // asked, held for the test to answer.
     struct FakeLookupWindow : public ALScriptLookup::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietAnalysis
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         struct Load
         {
             ALScriptRef                                                          ref;
@@ -134,13 +137,20 @@ namespace
             previewed = std::move(preview_of);
         }
         void previewRename(Doc& doc, const Found& found, const std::string& new_name, const std::string& said,
-                           std::function<void(const std::vector<size_t>&)> apply_kept) override
+                           std::function<void(const std::vector<size_t>&)>                     apply_kept,
+                           std::function<void(const std::string&, const std::vector<size_t>&)> show_changes) override
         {
             previewIn   = doc.id;
             previewOf   = found;
             previewName = new_name;
             previewSaid = said;
             apply       = std::move(apply_kept);
+            changes     = std::move(show_changes);
+        }
+        void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                     const std::string& right_title) override
+        {
+            compared.push_back(doc.id + ": " + left + " | " + right + " (" + left_title + " | " + right_title + ")");
         }
         Doc* openFileTab(const std::string& path, bool lua) override
         {
@@ -170,6 +180,8 @@ namespace
         std::string                                        previewIn, previewName, previewSaid;
         Found                                              previewOf;
         std::function<void(const std::vector<size_t>&)>    apply;
+        std::function<void(const std::string&, const std::vector<size_t>&)> changes;
+        Names                                              compared;
         std::function<Doc*(const std::string&)>            whenFileOpened;
     };
 
@@ -263,6 +275,8 @@ namespace tut
 {
     struct alscriptlookup_data
     {
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
         al_studio_test::StudioWindow                      window;
         al_studio_test::FakeServices                      services;
         FakeLookupWindow                                  studio;
@@ -278,7 +292,7 @@ namespace tut
 
         alscriptlookup_data()
         {
-            ALScriptStudioWords::Sources& sources = ALScriptStudioWords::sources();
+            auto& sources = viewer.slots;
             sources.keywords                      = [](bool lua) {
                 LLSD keywords;
                 keywords["functions"][lua ? "ll.Say" : "llSay"] = LLSD().with("return", "");
@@ -289,7 +303,6 @@ namespace tut
         }
         ~alscriptlookup_data()
         {
-            ALScriptStudioWords::sources() = ALScriptStudioWords::Sources();
             ALScriptStudioWords::forget();
             gFocusMgr.setKeyboardFocus(nullptr);
         }
@@ -784,5 +797,40 @@ namespace tut
         const ALScriptPlaces::Lines tab(&open);
         ensure("a tab's", tab.line(1) == "y" && !tab.has(2));
         ensure("nothing: no lines", !ALScriptPlaces::Lines().has(0));
+    }
+
+    template<> template<>
+    void alscriptlookup_object::test<15>()
+    {
+        set_test_name("a rename previewed shows what it makes of a file, at the places kept: here, or in another open and unchanged; not in one that is not");
+        make();
+        Doc& doc  = tab("a", a, A_TEXT, "A");
+        Doc& open = tab("b", b, "foo() { count = 2; }\nbar() { total = count; }\n", "B");
+        const std::string pb = ALScriptPreprocessor::pathOf(b), pd = ALScriptPreprocessor::pathOf(d);
+        unit->start(doc, ALEditorCommand::Rename, refsOf("count"), false, std::string(), span(0, 8, 5),
+                    { place("", 0, 8), place("", 1, 26), place(pb, 0, 8, 5, "B"), place(pb, 1, 16, 5, "B"), place(pd, 2, 4, 5, "D") },
+                    doc.editor->document().version());
+        studio.previewed("sum");
+        ensure("offered", (bool)studio.changes);
+
+        studio.changes("", { 1, 2, 3 });
+        ensure_equals("here, at the one of its own kept", studio.compared.size(), 1U);
+        ensure_equals("beside it as it is", studio.compared.back(),
+                      "a: " + std::string(A_TEXT) + " | integer count;\ndefault { state_entry() { sum = 1; } }\n (CompareNow | RenameAfter [NAME]=sum [SCRIPT]=A)");
+        ensure("in its tab, brought forward", studio.activated.back() == "a");
+        ensure("nothing changed", doc.editor->text() == A_TEXT);
+
+        studio.changes(pb, { 2, 3 });
+        ensure_equals("another open", studio.compared.back(),
+                      "b: foo() { count = 2; }\nbar() { total = count; }\n | foo() { sum = 2; }\nbar() { total = sum; }\n (CompareNow | RenameAfter [NAME]=sum [SCRIPT]=B)");
+        ensure("in its tab", studio.activated.back() == "b");
+
+        const size_t before = studio.compared.size();
+        studio.changes(pd, { 4 });
+        ensure("not open: said, not shown", studio.compared.size() == before && has(services.statuses.back(), "RenameChangesNotHere [NAME]=sum [SCRIPT]=D") &&
+                                                services.statusFailures.back());
+        open.editor->insertText("// ");
+        studio.changes(pb, { 2, 3 });
+        ensure("changed since: said", studio.compared.size() == before && has(services.statuses.back(), "RenameChangesNotHere"));
     }
 }

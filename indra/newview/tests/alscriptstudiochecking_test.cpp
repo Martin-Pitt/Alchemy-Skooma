@@ -29,6 +29,7 @@
 #include <boost/unordered_map.hpp>
 
 #include "../alscriptstudiochecking.h"
+#include "alscriptlintpass.h"
 
 #include "../alnotecardembedded.h"
 #include "../alscriptstudioweighing.h"
@@ -117,6 +118,9 @@ namespace
     // was told. Its problems made as the Problems pane makes them.
     struct FakeCheckingWindow : public ALScriptStudioChecking::Window, public al_studio_test::QuietAnalysis, public al_studio_test::QuietSaves
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         struct Ask
         {
             ALScriptAnalysis::Request                            request;
@@ -149,7 +153,7 @@ namespace
             {
                 return;
             }
-            doc.shown.clear();
+            std::vector<Doc::Shown> rows;
             for (const ALScriptProblem& problem : doc.check->analysis)
             {
                 Doc::Shown shown;
@@ -160,17 +164,26 @@ namespace
                 shown.key      = problem.key;
                 shown.fixes    = problem.fixes;
                 shown.fixesFor = doc.check->analysisVersion;
-                doc.shown.push_back(std::move(shown));
+                // As the pane's rows have it (ALScriptStudioDoc::analysisRow).
+                shown.migration = doc.language.lua && ALScriptLintPass::migration(problem);
+                rows.push_back(std::move(shown));
             }
+            doc.setShown(std::move(rows));
         }
         void showOutline(Doc& doc) override { told.push_back("outline " + doc.id); }
         void                                save(Doc& doc) override { told.push_back("save " + doc.id); }
         void                                preprocess(Doc& doc) override { told.push_back("run " + doc.id); }
         ALCodeEditor&                       editorInFront(Doc& doc) override { return *doc.editor; }
-        void                                confirmFixAll(const LLSD& args, std::function<void()> yes) override
+        void                                confirmFixAll(const LLSD& args, std::function<void()> yes, std::function<void()> see) override
         {
             confirmed = args;
             confirm   = std::move(yes);
+            preview   = std::move(see);
+        }
+        void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                     const std::string& right_title) override
+        {
+            told.push_back("compare " + doc.id + ": " + left + " | " + right + " (" + left_title + " | " + right_title + ")");
         }
 
         std::vector<Ask>                    asks;
@@ -181,6 +194,7 @@ namespace
         std::string                         front;
         LLSD                                confirmed;
         std::function<void()>               confirm;
+        std::function<void()>               preview;
         // The tabs whose problems are asked for and not made yet.
         std::set<std::string>               waiting;
     };
@@ -245,6 +259,8 @@ namespace tut
 
     struct alscriptstudiochecking_data
     {
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
         al_studio_test::StudioWindow                    window;
         al_studio_test::FakeServices                    services;
         FakeCheckingWindow                              studio;
@@ -261,7 +277,7 @@ namespace tut
 
         alscriptstudiochecking_data()
         {
-            ALScriptStudioChecking::Sources& sources = ALScriptStudioChecking::sources();
+            auto& sources = viewer.slots;
             sources.preprocessing                    = [this] { return preprocessing; };
             sources.transformOn = [this](ALPreprocessor::Transform transform) {
                 return transform == ALPreprocessor::Transform::Switch && switches;
@@ -287,7 +303,6 @@ namespace tut
         }
         ~alscriptstudiochecking_data()
         {
-            ALScriptStudioChecking::sources() = ALScriptStudioChecking::Sources();
             gFocusMgr.setKeyboardFocus(nullptr);
         }
         ALScriptStudioChecking& make()
@@ -760,6 +775,35 @@ namespace tut
         studio.asks.back().answered(answer(constant, { problem(0, "syntax error") }));
         ensure("const explained: " + constant.check->analysis[0].message,
                constant.check->analysis[0].message.find("syntax error PreprocHintConst [WORD]=const") == 0);
+
+        // A script with a directive is preprocessed, the setting off or
+        // on: the grid could compile it no other way.
+        Doc&         directive = tab("d", "  #define MAX 15\ndefault { state_entry() { } }\n");
+        const size_t expanded  = expansions.size();
+        ensure("preprocessed for its directive", checking.preprocessed(directive) &&
+                                                     checking.preprocessedWhy(directive) == ALPreprocessor::Wanted::Directives);
+        checking.ask(directive, Kind::Check, ALTextPos(), ALTextPos());
+        ensure("expanded, not read as code", expansions.size() == expanded + 1);
+        ensure("an envelope first", [&] {
+            directive.envelope = ALScriptEnvelope();
+            const bool first   = checking.preprocessedWhy(directive) == ALPreprocessor::Wanted::Enveloped;
+            directive.envelope.reset();
+            return first;
+        }());
+
+        // A # line that is no directive, the script not preprocessed: the
+        // preprocessor's to explain, and nothing put in where the parser
+        // stopped.
+        Doc& stray = tab("e", "# 15\ndefault { state_entry() { } }\n");
+        ensure("not preprocessed", !checking.preprocessed(stray));
+        checking.ask(stray, Kind::Check, ALTextPos(), ALTextPos());
+        ALScriptProblem missing = problem(0, "Missing '('.");
+        missing.fixes.push_back(fix("Insert '('", 0, 2, 2, "("));
+        studio.asks.back().answered(answer(stray, { missing, problem(1, "syntax error") }));
+        ensure("the line explained: " + (stray.check->analysis.empty() ? std::string() : stray.check->analysis[0].message),
+               stray.check->analysis.size() == 2 && stray.check->analysis[0].message == "Missing '('. PreprocHintDirective" &&
+                   stray.check->analysis[0].fixes.empty());
+        ensure_equals("a line of code: as the parser said", stray.check->analysis[1].message, std::string("syntax error"));
         preprocessing = true;
     }
 
@@ -833,7 +877,7 @@ namespace tut
         one.fixes                        = { fix("First", 0, 0, 7, "float") };
         checking.ask(doc, Kind::Check, ALTextPos(), ALTextPos());
         studio.asks[0].answered(answer(doc, { one, problem(2, "two") }));
-        ensure("asked for, made with the next frame", studio.waiting.count("a") == 1 && doc.shown.empty());
+        ensure("asked for, made with the next frame", studio.waiting.count("a") == 1 && doc.shown().empty());
         std::vector<ALCodeEditor::Fix> fixes;
         checking.fixesOn(doc, 0, fixes);
         ensure("made first: one", studio.waiting.empty() && fixes.size() == 1 && fixes[0].title == "First" &&
@@ -1189,5 +1233,157 @@ namespace tut
         file.notecard = true;
         checking.schedule(file, true);
         ensure("a text file on disk is not checked", file.check->analysisDue <= 0.0);
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<21>()
+    {
+        set_test_name("Fix All previewed: the text after beside the text now, Apply offered, made as one step; not over a text changed since");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a");
+        // Asked before the check, asked again once it has answered.
+        checking.askFixAll(doc, Doc::FixPick{});
+        checking.pump(1.0);
+        ALScriptProblem one = problem(0, "one");
+        one.fixes           = { fix("First", 0, 0, 7, "float") };
+        ALScriptProblem two = problem(3, "two");
+        two.fixes           = { fix("Second", 3, 4, 15, "touch_start") };
+        const std::string before = doc.editor->wholeText();
+        studio.asks.back().answered(answer(doc, { one, two }));
+        ensure("asked, with a preview", (bool)studio.preview);
+        studio.preview();
+        ensure("nothing made yet", doc.editor->wholeText() == before);
+        const std::string& compared = studio.told.back();
+        ensure("the text now beside it after" + compared,
+               compared.rfind("compare a: " + before + " | float count;", 0) == 0 && compared.find("    touch_start() { count = 1; }") != std::string::npos &&
+                   compared.find("(CompareNow | FixAllAfter [FIXES]=Fixes [COUNT]=2") != std::string::npos);
+        ensure("Apply offered", services.reports.back().actions == Names{ "apply_fixes" } && services.reports.back().doc == "a");
+        ensure("made", checking.applyPreviewed(doc) && doc.editor->document().line(0) == "float count;" &&
+                           doc.editor->undoJournal().undoLabel() == "fix");
+        ensure("once", !checking.applyPreviewed(doc));
+
+        checking.pump(1.0);
+        ALScriptProblem three = problem(0, "three");
+        three.fixes           = { fix("Third", 0, 0, 5, "integer") };
+        ALScriptProblem four  = problem(3, "four");
+        four.fixes            = { fix("Fourth", 3, 4, 15, "touch_end") };
+        studio.preview = nullptr;
+        studio.asks.back().answered(answer(doc, { three, four }));
+        checking.askFixAll(doc, Doc::FixPick{});
+        ensure("asked again", (bool)studio.preview);
+        studio.preview();
+        doc.editor->setText("default {}\n");
+        ensure("changed since: not made", !checking.applyPreviewed(doc) && doc.editor->wholeText() == "default {}\n");
+        ensure("said", services.statuses.back() == "FixAllChangedSince" && services.statusFailures.back());
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<22>()
+    {
+        set_test_name("each LSL comment in an SLua script a note to see to, before the check's own: Done, and the lint's fix of the line it "
+                      "stands over with it; read again, not twice; none in LSL");
+        ALScriptStudioChecking& checking = make();
+        const std::string       text     = "local s = \"abc\"\n"
+                                           "-- LSL: llcompat.GetSubString takes indexes from 0, as LSL did; ll.GetSubString takes them from 1.\n"
+                                           "print(llcompat.GetSubString(s, 0, 2))\n"
+                                           "-- LSL: something else\n"
+                                           "print(s)\n";
+        Doc& doc          = tab("a", text);
+        doc.language.lua  = true;
+        checking.schedule(doc, true);
+        checking.pump(1.0);
+        ALScriptProblem compat = problem(2, "llcompat.GetSubString is ll's", ALScriptProblem::Severity::Note);
+        compat.source          = ALScriptProblem::Source::Lint;
+        compat.code            = "SlCompatCall";
+        compat.fixes           = { fix("Write it ll.GetSubString(s, 1, 3)", 2, 6, 36, "ll.GetSubString(s, 1, 3)") };
+        studio.asks.back().answered(answer(doc, { compat }));
+        const ALScriptProblems& said = doc.check->analysis;
+        ensure_equals("two notes, then the lint", said.size(), size_t(3));
+        ensure("the notes first", said[0].key == "SluaNote" && said[0].line == 1 && said[1].key == "SluaNote" && said[1].line == 3 &&
+                                      said[2].code == "SlCompatCall");
+        ensure("the lint's fix with the note's", said[0].fixes.size() == 2 && said[0].fixes[0].preferred &&
+                                                     said[0].fixes[0].title == "Write it ll.GetSubString(s, 1, 3), and take the note out");
+        ensure("the other: Done alone", said[1].fixes.size() == 1 && !said[1].fixes[0].preferred);
+        ensure("made", checking.applyFix(doc, said[0].fixes[0], version(doc)) &&
+                           doc.editor->wholeText() == "local s = \"abc\"\nprint(ll.GetSubString(s, 1, 3))\n-- LSL: something else\nprint(s)\n");
+
+        checking.pump(2.0);
+        studio.asks.back().answered(answer(doc));
+        ensure("read again: the one left, once", doc.check->analysis.size() == 1 && doc.check->analysis[0].line == 2);
+
+        Doc& lsl = tab("b", "// -- LSL: not SLua\ndefault { state_entry() {} }\n");
+        checking.schedule(lsl, true);
+        checking.pump(3.0);
+        studio.asks.back().answered(answer(lsl));
+        ensure("none in LSL", lsl.check->analysis.empty());
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<23>()
+    {
+        set_test_name("what is left from LSL fixed: every preferred fix of it, not another problem's; seen first where any could change "
+                      "what the script does, asked as Fix All asks where none could");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a");
+        doc.language.lua                 = true;
+        checking.schedule(doc, true);
+        checking.pump(1.0);
+        const auto lint = [&](S32 line, const char* code, const ALScriptFix& with) {
+            ALScriptProblem out = problem(line, code, ALScriptProblem::Severity::Warning);
+            out.source          = ALScriptProblem::Source::Lint;
+            out.code            = code;
+            out.fixes           = { with };
+            return out;
+        };
+        const ALScriptProblem zero   = lint(0, "SlZeroIndex", fix("First", 0, 0, 7, "float", false));
+        const ALScriptProblem paren  = lint(3, "SlParenCondition", fix("Second", 3, 4, 15, "touch_start", true));
+        const ALScriptProblem shadow = lint(1, "LocalShadow", fix("Third", 1, 0, 1, "x", true));
+        studio.asks.back().answered(answer(doc, { zero, paren, shadow }));
+        Doc::FixPick pick;
+        pick.migration = true;
+        studio.preview = nullptr;
+        checking.askFixAll(doc, pick);
+        ensure("not asked: seen", !studio.preview);
+        const std::string& compared = studio.told.back();
+        ensure("the two from LSL, not the other: " + compared, compared.find("FixAllAfter [FIXES]=Fixes [COUNT]=2") != std::string::npos &&
+                                                                   compared.find("float count;") != std::string::npos);
+        ensure("Apply offered", services.reports.back().actions == Names{ "apply_fixes" });
+        ensure("made", checking.applyPreviewed(doc) && doc.editor->document().line(0) == "float count;");
+
+        Doc& safe       = tab("b");
+        safe.language.lua = true;
+        checking.schedule(safe, true);
+        checking.pump(2.0);
+        const ALScriptProblem first  = lint(0, "SlParenCondition", fix("First", 0, 0, 7, "float", true));
+        const ALScriptProblem second = lint(3, "SlCompoundAssign", fix("Second", 3, 4, 15, "touch_start", true));
+        studio.asks.back().answered(answer(safe, { first, second }));
+        studio.preview = nullptr;
+        checking.askFixAll(safe, pick);
+        ensure("all safe: asked as Fix All asks", (bool)studio.preview);
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<24>()
+    {
+        set_test_name("what is left from LSL put right where a fix could change the script: previewed beside the text, and made by Apply");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a", "local t = {}\nif #t then print(1) end\n");
+        doc.language.lua                 = true;
+        checking.schedule(doc, true);
+        checking.pump(1.0);
+        ALScriptProblem truth = problem(1, "#t is a number", ALScriptProblem::Severity::Warning);
+        truth.source          = ALScriptProblem::Source::Lint;
+        truth.code            = "SlNumberTruth";
+        truth.fixes           = { fix("Compare it: #t ~= 0", 1, 3, 5, "#t ~= 0", false) };
+        studio.asks.back().answered(answer(doc, { truth }));
+        Doc::FixPick pick;
+        pick.migration = true;
+        checking.askFixAll(doc, pick);
+        ensure("previewed, not asked", !studio.preview && studio.told.back().rfind("compare a: ", 0) == 0);
+        ensure("Apply offered", services.reports.back().actions == Names{ "apply_fixes" });
+        ensure("made by Apply", checking.applyPreviewed(doc));
+        ensure_equals("put right", doc.editor->document().line(1), std::string("if #t ~= 0 then print(1) end"));
+        ensure("Apply again: nothing waiting, and said", !checking.applyPreviewed(doc) && services.statuses.back() == "FixAllNotPreviewed" &&
+                                                            services.statusFailures.back());
     }
 }

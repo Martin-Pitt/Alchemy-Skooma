@@ -26,11 +26,14 @@
 
 #include "../alluauservice.h"
 #include "../alluauconfig.h"
+#include "../alscriptfixes.h"
+#include "../alscriptlintpass.h"
 #include "../alselenefilters.h"
 
 #include "../test/lltut.h"
 #include "llsdserialize.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -55,20 +58,6 @@ namespace tut
             definitions = text.str();
             service.setNewSolver(newSolver, error);
             loaded      = service.loadDefinitions(definitions, error);
-        }
-
-        // The new solver's nonstrict mode says only what is sure to fail
-        // as the script runs, which a wrong argument to ll.Say is not: a
-        // test of what the checker says of a type asks it in strict mode
-        // there.
-        void strictUnderNewSolver()
-        {
-            if (newSolver)
-            {
-                ALLuauConfig config;
-                config.mode = "strict";
-                service.setConfig(config);
-            }
         }
 
         // Every problem on a line, for a failure message that says what
@@ -137,7 +126,6 @@ namespace tut
     {
         set_test_name("a wrong argument type is a type error");
         ensure("definitions load: " + error, loaded);
-        strictUnderNewSolver();
         ALScriptProblems problems = service.check("ll.Say(\"zero\", 0)\n");
         ensure("an error: " + said(problems), errors(problems) > 0);
         ensure("from the type checker", problems.front().source == ALScriptProblem::Source::Types);
@@ -397,7 +385,6 @@ namespace tut
     {
         set_test_name("a key that is not there is named by what was written, with the nearest key there is");
         ensure("definitions loaded: " + error, loaded);
-        strictUnderNewSolver();
         ALScriptProblems problems = service.check("ll.ay(0, \"hi\")\n");
         ensure("one problem", !problems.empty());
         const std::string& message = problems.front().message;
@@ -492,8 +479,8 @@ namespace tut
         ensure("not one that says its type:" + listed, !has(2, 11, ": number"));
         ensure("name: before the string:" + listed, has(3, 6, "name:"));
         ensure("nothing before an argument that is the name:" + listed, !has(3, 12, "times:"));
-        ensure("the channel's name before the 0:" + listed, has(4, 7, "Channel:") || has(4, 7, "channel:"));
-        ensure("and the text's:" + listed, has(4, 10, "Text:") || has(4, 10, "text:"));
+        ensure("the channel's name before the 0:" + listed, has(4, 7, "channel:"));
+        ensure("and the message's:" + listed, has(4, 10, "msg:"));
         std::vector<ALScriptInlayHint> only_types = service.inlayHints(script, false, true);
         ensure("types alone, when asked", only_types.size() == 1 && only_types.front().kind == ALScriptInlayHint::Kind::Type);
         ensure("nothing when neither is asked", service.inlayHints(script, false, false).empty());
@@ -524,7 +511,6 @@ namespace tut
     {
         set_test_name("the engine's commonest messages come back keyed, which an upgrade that rewords them would end");
         ensure("definitions loaded: " + error, loaded);
-        strictUnderNewSolver();
         // Each script says one thing the map has a row for; a Luau whose
         // wording moved on gives the message with no key, and this is
         // where that shows -- run check_script_strings.py then.
@@ -586,9 +572,10 @@ namespace tut
             ensure("the same hint: " + after_hover[i].text + " / " + after_check[i].text,
                    after_hover[i].text == after_check[i].text && after_hover[i].line == after_check[i].line);
         }
-        // Another configuration, or another text, is checked again.
+        // Another configuration, or another text, is checked again: one
+        // unlike either solver's default.
         ALLuauConfig strict;
-        strict.mode = "strict";
+        strict.mode = "nocheck";
         service.setConfig(strict);
         service.hover(script, 1, 6);
         ensure("another configuration, checked again", service.typeChecks() > checked);
@@ -1004,6 +991,13 @@ namespace tut
     {
         set_test_name("every template Script Studio offers for a new SLua script checks without an error");
         ensure("definitions loaded: " + error, loaded);
+        // Nonstrict, as the grid compiles: the new solver checking strict
+        // cannot yet push an overloaded function's parameter types into a
+        // function given to it, so every LLEvents:on there is an error it
+        // is upstream's to put right.
+        ALLuauConfig grid;
+        grid.mode = "nonstrict";
+        service.setConfig(grid);
         llifstream in(std::string(AL_SCRIPT_TEMPLATES_DIR) + "/slua.xml", std::ios::in | std::ios::binary);
         LLSD       templates;
         ensure("read", in.is_open() && LLSDSerialize::fromXML(templates, in) != LLSDParser::PARSE_FAILURE && templates.isArray());
@@ -1022,5 +1016,202 @@ namespace tut
             }
             ensure(name + ":" + wrong, wrong.empty());
         }
+    }
+
+    template<> template<>
+    void alluauservice_object::test<34>()
+    {
+        set_test_name("the studio's own lints beside Luau's: found, off or an error as configured, turned off by --!nolint and selene's comments, and a NOLINT answers to its name");
+        ensure("definitions loaded: " + error, loaded);
+        const auto found = [&](const std::string& text) {
+            ALScriptProblems out;
+            for (const ALScriptProblem& p : service.check(text))
+            {
+                if (p.code == "SlCompoundAssign" || p.key.rfind("LuauLintDirective", 0) == 0)
+                {
+                    out.push_back(p);
+                }
+            }
+            return out;
+        };
+        const std::string script = "local x = 1\nx = x + 1\nlocal t = { n = \"a\" }\nt.n = t.n .. \"b\"\nx = 1 + x\nprint(x, t.n)\n";
+        ALScriptProblems  said   = found(script);
+        ensure_equals("two: x and t.n", said.size(), size_t(2));
+        ensure("the first, a note in its words: " + said[0].message,
+               said[0].key == "LuauLintSlCompoundAssign" && said[0].severity == ALScriptProblem::Severity::Note && said[0].line == 1 &&
+                   said[0].args == std::vector<std::string>{ "x", "+" } && said[0].source == ALScriptProblem::Source::Lint);
+        ensure("a field, joined: " + said[1].message, said[1].line == 3 && said[1].args == std::vector<std::string>{ "t.n", ".." });
+        ensure("a NOLINT answers to its name", ALScriptFixes::suppressed(said[0], "x = x + 1 -- NOLINT(SlCompoundAssign)", "", true) &&
+                                                   !ALScriptFixes::suppressed(said[0], "x = x + 1 -- NOLINT(LocalUnused)", "", true));
+
+        ALLuauConfig config;
+        config.slLints = 0;
+        service.setConfig(config);
+        ensure("off", found(script).empty());
+        config.slLints      = ALScriptLintPass::defaults();
+        config.slFatalLints = ALScriptLintPass::bit("SlCompoundAssign");
+        service.setConfig(config);
+        said = found(script);
+        ensure("an error", said.size() == 2 && said[0].severity == ALScriptProblem::Severity::Error);
+        config.slFatalLints = 0;
+        config.lintErrors   = true;
+        service.setConfig(config);
+        said = found(script);
+        ensure("every lint an error", said.size() == 2 && said[0].severity == ALScriptProblem::Severity::Error);
+        service.setConfig(ALLuauConfig());
+
+        said = found("--!nolint SlCompoundAssign\n" + script);
+        ensure("--!nolint by its name, and no word that Luau does not know it", said.empty());
+        ensure("--!nolint alone", found("--!nolint\n" + script).empty());
+        said = found("--!nolint SlNope\n" + script);
+        ensure("a name that is none is still said", said.size() == 3 && said[0].key.rfind("LuauLintDirective", 0) == 0);
+
+        said = found("local x = 1\nx = x + 1 -- selene: allow(SlCompoundAssign)\nprint(x)\n");
+        ensure("selene's comment beside it", said.empty());
+        said = found("--# selene: deny(SlCompoundAssign)\nlocal x = 1\nx = x + 1\nprint(x)\n");
+        ensure("selene's for the whole file, an error", said.size() == 1 && said[0].severity == ALScriptProblem::Severity::Error);
+        ensure("selene's words for the studio's own", ALSeleneFilters::slLints("SlCompoundAssign") == ALScriptLintPass::bit("SlCompoundAssign") &&
+                                                          ALSeleneFilters::slLints("unused_variable") == 0);
+    }
+
+    template<> template<>
+    void alluauservice_object::test<35>()
+    {
+        set_test_name("SlNumberTruth: a number read as a condition, through and, or and brackets, and under not; not number?, nor a comparison");
+        ensure("definitions loaded: " + error, loaded);
+        const auto found = [&](const std::string& text) {
+            std::vector<std::string> out;
+            for (const ALScriptProblem& p : service.check(text))
+            {
+                if (p.code == "SlNumberTruth")
+                {
+                    out.push_back(p.key + " " + p.args[0] + " " + std::to_string(p.line));
+                }
+            }
+            return out;
+        };
+        const std::vector<std::string> said = found("local n = 0\n"
+                                                    "if n then print(1) end\n"
+                                                    "while (true and n) do break end\n"
+                                                    "local b = not n\n"
+                                                    "local t = if n then 1 else 2\n"
+                                                    "local m: number? = nil\n"
+                                                    "if m then print(m) end\n"
+                                                    "if n ~= 0 or not (n > 1) then print(b, t) end\n");
+        ensure_equals("four: " + llformat("%zu", said.size()), said.size(), size_t(4));
+        ensure("each: " + said[0] + "|" + said[1] + "|" + said[2] + "|" + said[3],
+               said[0] == "LuauLintSlNumberTruth n 1" && said[1] == "LuauLintSlNumberTruth n 2" && said[2] == "LuauLintSlNumberTruthNot n 3" &&
+                   said[3] == "LuauLintSlNumberTruth n 4");
+        // A local by what it is given, where the old solver's nonstrict
+        // mode says any: a copy of a number is one; one given a string, or
+        // joined to one, or a parameter, is not.
+        const std::vector<std::string> given = found("local n = llcompat.ListFindList({1}, {1})\n"
+                                                     "local copy = n\n"
+                                                     "local s = 0\n"
+                                                     "s = \"x\"\n"
+                                                     "local j = 0\n"
+                                                     "j ..= \"y\"\n"
+                                                     "local function f(p) if p then return 1 end return 0 end\n"
+                                                     "if copy or s or j then print(f(n)) end\n");
+        // The new solver types j a number still, and is taken at its word.
+        ensure("a copy only: " + (given.empty() ? std::string() : given[0]),
+               given.size() == (newSolver ? 2u : 1u) && given[0] == "LuauLintSlNumberTruth copy 7");
+    }
+
+    template<> template<>
+    void alluauservice_object::test<36>()
+    {
+        set_test_name("a configuration that says no mode is checked in the solver's own: the new one's strict, as strict as the old one's nonstrict; one that says nonstrict is nonstrict under either");
+        ensure("definitions loaded: " + error, loaded);
+        const std::string script = "local function f(): number? return nil end\nlocal x = f() + 1\nprint(x)\n";
+        const auto        nil_said = [&] {
+            for (const ALScriptProblem& p : service.check(script))
+            {
+                if (p.severity == ALScriptProblem::Severity::Error && p.line == 1)
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        service.setConfig(ALLuauConfig());
+        const bool by_default = nil_said();
+        ALLuauConfig nonstrict;
+        nonstrict.mode = "nonstrict";
+        service.setConfig(nonstrict);
+        const bool asked_nonstrict = nil_said();
+        if (newSolver)
+        {
+            ensure("strict where nothing says", by_default);
+            ensure("nonstrict where asked", !asked_nonstrict);
+        }
+        else
+        {
+            ensure_equals("nonstrict, whether asked or not", by_default, asked_nonstrict);
+        }
+        service.setConfig(ALLuauConfig());
+    }
+
+    template<> template<>
+    void alluauservice_object::test<37>()
+    {
+        set_test_name("SlNilSentinel: a find against -1, or ordered against 0 or -1, on either side, a local given one, table's and string's; llcompat's against nil; not what can hold");
+        ensure("definitions loaded: " + error, loaded);
+        const auto found = [&](const std::string& text) {
+            std::vector<std::string> out;
+            for (const ALScriptProblem& p : service.check(text))
+            {
+                if (p.code == "SlNilSentinel")
+                {
+                    out.push_back(p.key + " " + p.args[0] + " " + p.args[4] + " " + std::to_string(p.line) +
+                                  (p.severity == ALScriptProblem::Severity::Error ? "" : " not an error"));
+                }
+            }
+            std::sort(out.begin(), out.end());
+            return out;
+        };
+        const std::vector<std::string> said = found("local l = {1, 2}\n"
+                                                    "if ll.ListFindList(l, {2}) == -1 then print(1) end\n"
+                                                    "if -1 ~= ll.SubStringIndex(\"ab\", \"b\") then print(2) end\n"
+                                                    "local i = ll.ListFindList(l, {1})\n"
+                                                    "if i < 0 or 0 <= i then print(3) end\n"
+                                                    "if table.find(l, 2) ~= -1 then print(4) end\n"
+                                                    "local s = \"abc\"\n"
+                                                    "if s:find(\"b\") == -1 or string.find(s, \"c\") > -1 then print(5) end\n"
+                                                    "local c = llcompat.ListFindList(l, {1})\n"
+                                                    "if c == nil or (llcompat.SubStringIndex(s, \"a\")) ~= nil then print(6) end\n");
+        const std::vector<std::string> expected = {
+            "LuauLintSlNilSentinel c == -1 9",
+            "LuauLintSlNilSentinel ll.ListFindList(...) == nil 1",
+            "LuauLintSlNilSentinel s:find(...) == nil 7",
+            "LuauLintSlNilSentinelAlways ll.SubStringIndex(...) ~= nil 2",
+            "LuauLintSlNilSentinelAlways llcompat.SubStringIndex(...) ~= -1 9",
+            "LuauLintSlNilSentinelAlways table.find(...) ~= nil 5",
+            "LuauLintSlNilSentinelOrder i == nil 4",
+            "LuauLintSlNilSentinelOrder i ~= nil 4",
+            "LuauLintSlNilSentinelOrder string.find(...) ~= nil 7",
+        };
+        std::string listed;
+        for (const std::string& each : said)
+        {
+            listed += each + "\n";
+        }
+        ensure("each, an error:\n" + listed, said == expected);
+        // What can hold: nil against SLua's, -1 and order against
+        // llcompat's, an order that asks where, a local given a number
+        // too, stepped, or nil before it is given llcompat's, a
+        // parameter, and a -1 that is no find's.
+        const std::vector<std::string> none = found("local l = {1}\n"
+                                                    "if ll.ListFindList(l, {1}) == nil or ll.ListFindList(l, {1}) > 0 then print(1) end\n"
+                                                    "if llcompat.ListFindList(l, {1}) == -1 or llcompat.ListFindList(l, {1}) < 0 then print(2) end\n"
+                                                    "local j = ll.ListFindList(l, {1})\n"
+                                                    "j = 5\n"
+                                                    "local n = ll.ListFindList(l, {1})\n"
+                                                    "n -= 2\n"
+                                                    "local m\n"
+                                                    "m = llcompat.SubStringIndex(\"a\", \"b\")\n"
+                                                    "local function f(p) return p == -1 end\n"
+                                                    "if j == -1 or n == -1 or m == nil or ll.GetInventoryType(\"x\") == -1 then print(f(3)) end\n");
+        ensure("none: " + (none.empty() ? std::string() : none[0]), none.empty());
     }
 }

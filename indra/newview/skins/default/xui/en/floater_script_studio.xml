@@ -260,6 +260,8 @@
     <floater.string name="ProblemErrorsB">[COUNT] errors</floater.string>
     <floater.string name="ProblemWarningsA">1 warning</floater.string>
     <floater.string name="ProblemWarningsB">[COUNT] warnings</floater.string>
+    <floater.string name="MigrationLeftA">1 left from LSL</floater.string>
+    <floater.string name="MigrationLeftB">[COUNT] left from LSL</floater.string>
     <floater.string name="CrumbRootTip">[NAME]: click to go to the top; the arrow lists the script's declarations</floater.string>
     <floater.string name="CrumbTip">Go to [NAME]; the arrow lists other items at this level</floater.string>
     <floater.string name="GoToSymbolTitle">Go to Symbol</floater.string>
@@ -373,12 +375,18 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="TrailerChecking">Checking…</floater.string>
     <floater.string name="TrailerCheckingTip">Checking your latest changes. The problems shown are from the previous check.</floater.string>
     <floater.string name="TrailerProblemsTipNoKeys">Show the problems</floater.string>
+    <floater.string name="TrailerMigrationTip">Show what is left to see to from LSL: the converter's notes, LSL's habits, llcompat's calls</floater.string>
     <floater.string name="TrailerSource">Source</floater.string>
     <floater.string name="TrailerExpanded">Preprocessed</floater.string>
     <floater.string name="TrailerSourceTip">Showing the source. Click for the Preprocessed view, the code the server compiles ([KEYS])</floater.string>
     <floater.string name="TrailerSourceTipNoKeys">Showing the source. Click for the Preprocessed view, the code the server compiles</floater.string>
     <floater.string name="TrailerExpandedTip">Showing the preprocessed code the server compiles; read-only. Click for the source ([KEYS])</floater.string>
     <floater.string name="TrailerExpandedTipNoKeys">Showing the preprocessed code the server compiles; read-only. Click for the source</floater.string>
+    <floater.string name="TrailerPreprocessedEnveloped">A save preprocesses it: it was saved with the preprocessor before, and keeps its source.</floater.string>
+    <floater.string name="TrailerPreprocessedDirectives">A save preprocesses it: it has directives, which the server could compile no other way.</floater.string>
+    <floater.string name="TrailerPreprocessedSetting">A save preprocesses it: Build &gt; Preprocess on Save is on.</floater.string>
+    <floater.string name="TrailerNotPreprocessed">Not preprocessed on save</floater.string>
+    <floater.string name="TrailerNotPreprocessedTip">A save sends this script as written: it has no directive, was not saved with the preprocessor before, and Build &gt; Preprocess on Save is off. The Preprocessed view shows what the preprocessor would make of it, not what goes up.</floater.string>
     <floater.string name="ReferenceDeclaration">declaration</floater.string>
     <floater.string name="ReferenceDeclarationTip">Where [NAME] is declared</floater.string>
     <floater.string name="OutlineNoMatch">No symbol names match what you typed.</floater.string>
@@ -443,6 +451,8 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="NoticeUnloaded">This could not be loaded ([ERROR]). The text in this tab is kept; try again, or save a copy to keep it permanently.</floater.string>
     <floater.string name="NoticeRestore">Restore Them</floater.string>
     <floater.string name="NoticeRestoreTip">Restore the unsaved changes as one undo step</floater.string>
+    <floater.string name="NoticeRestoreSave">Restore This Save</floater.string>
+    <floater.string name="NoticeRestoreSaveTip">Put this save in the tab as one undo step; it is not saved until you save</floater.string>
     <floater.string name="NoticeDiscard">Discard</floater.string>
     <floater.string name="NoticeCompiledDiffers">This script's saved preprocessed code does not match its source: it was edited directly, or an include changed. Saving replaces it.</floater.string>
     <floater.string name="NoticeKeepSource">Keep Source</floater.string>
@@ -450,6 +460,52 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="NoticeCompare">Compare</floater.string>
     <floater.string name="NoticeCompareTip">Show both texts side by side, with changes marked; Escape closes the comparison</floater.string>
     <floater.string name="CompareNow">This tab now</floater.string>
+    <floater.string name="CompareUnsaved">[TITLE] (unsaved)</floater.string>
+    <floater.string name="FixAllAfter">After [FIXES]</floater.string>
+    <floater.string name="ConvertName">[NAME] (SLua)</floater.string>
+    <floater.string name="ConvertLSLTitle">[NAME], in LSL</floater.string>
+    <floater.string name="ConvertExpandedTitle">[NAME], in LSL as the preprocessor made it</floater.string>
+    <floater.string name="ConvertSLuaTitle">Written in SLua</floater.string>
+    <floater.string name="ConvertNotesA">1 place noted</floater.string>
+    <floater.string name="ConvertNotesB">[COUNT] places noted</floater.string>
+    <floater.string name="Converted">Wrote [NAME] as SLua in the new script [NEW], unsaved, beside the LSL: [NOTES] with "-- LSL:" comments. The LSL script is as it was. How it is written: Preferences, LSL to SLua.</floater.string>
+    <floater.string name="ConvertedExpanded">Wrote [NAME] as SLua in the new script [NEW] from what the preprocessor made of it, unsaved, beside that: [NOTES] with "-- LSL:" comments. The LSL script is as it was.</floater.string>
+    <floater.string name="ConvertFailed">Could not write [NAME] as SLua: line [LINE], [ERROR].</floater.string>
+    <floater.string name="RenameAfter">Renamed to [NAME]</floater.string>
+    <floater.string name="RenameChangesNotHere">[SCRIPT] is not open here, or has changed since the lookup; its occurrences are listed in References.</floater.string>
+    <floater.string name="FixAllPreviewed">[FIXES] for [NAME], shown beside the text. Apply makes them, as one step to undo.</floater.string>
+    <floater.string name="FixAllNotPreviewed">Nothing previewed is waiting to be applied. Ask for the fixes again to see them.</floater.string>
+    <floater.string name="FixAllNotMade">The fixes were not made: the text would not take them.</floater.string>
+    <floater.string name="FixAllChangedSince">The text changed after the preview, so its fixes were not made. Use Fix All again to see them for the text now.</floater.string>
+    <floater.string name="ActionApplyFixes">Apply</floater.string>
+    <floater.string name="ActionApplyFixesTip">Make the fixes previewed in [NAME], as one step to undo</floater.string>
+    <floater.string name="NoticeApplyFixes">Apply Fixes</floater.string>
+    <floater.string name="NoticeApplyFixesTip">Make the fixes shown, as one step to undo</floater.string>
+    <floater.string name="MigrationDone">Nothing is left from LSL in [NAME].</floater.string>
+    <floater.string name="MigrationDoneStrict">Nothing is left from LSL in [NAME]. Made --!strict, it is checked for every type Luau can work out.</floater.string>
+    <floater.string name="ActionMakeStrict">Make it --!strict</floater.string>
+    <floater.string name="ActionMakeStrictTip">Put --!strict at the head of [NAME]</floater.string>
+    <floater.string name="NoticeMakeStrict">Make It --!strict</floater.string>
+    <floater.string name="NoticeMakeStrictTip">Put --!strict at the head of the script</floater.string>
+    <floater.string name="HistoryNone">No saves of [NAME] are kept here yet. Each save from now on is kept for 30 days.</floater.string>
+    <floater.string name="HistoryTitle">Saves of [NAME]</floater.string>
+    <floater.string name="HistoryPlaceholder">Type a date or time to find a save</floater.string>
+    <floater.string name="HistoryBytesA">1 byte</floater.string>
+    <floater.string name="HistoryBytesB">[COUNT] bytes</floater.string>
+    <floater.string name="HistoryLongerA">1 byte longer than the save before</floater.string>
+    <floater.string name="HistoryLongerB">[COUNT] bytes longer than the save before</floater.string>
+    <floater.string name="HistoryShorterA">1 byte shorter than the save before</floater.string>
+    <floater.string name="HistoryShorterB">[COUNT] bytes shorter than the save before</floater.string>
+    <floater.string name="HistorySameLength">as long as the save before</floater.string>
+    <floater.string name="HistoryCurrent">what is saved now</floater.string>
+    <floater.string name="HistorySavedAt">Saved [WHEN]</floater.string>
+    <floater.string name="HistoryUnreadable">The save of [NAME] from [WHEN] could not be read.</floater.string>
+    <floater.string name="HistoryRestored">Put back the save of [NAME] from [WHEN]. Undo takes it back; it is not saved until you save.</floater.string>
+    <floater.string name="NoticeHistory">The save of [WHEN], beside this tab now.</floater.string>
+    <floater.string name="CompareNotLoaded">Could not load [NAME] to compare: [ERROR]</floater.string>
+    <floater.string name="ExplorerCompareTitle">Compare [NAME] with</floater.string>
+    <floater.string name="ExplorerComparePlaceholder">Type a name to find a script or notecard</floater.string>
+    <floater.string name="ExplorerNothingToCompare">Nothing listed in the Explorer is like [NAME] to compare it with. Pin or select the other object first.</floater.string>
     <floater.string name="CompareSaved">As last saved</floater.string>
     <floater.string name="CompareNothingSaved">There is no saved text to compare with: you undid past the last save, then made a change.</floater.string>
     <floater.string name="CompareKept">Unsaved changes, [WHEN]</floater.string>
@@ -573,6 +629,7 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="RequireNotPreprocessed">require("[NAME]") is saved as written, but the grid does not support require: turn on Build &gt; Preprocess on Save to include the module</floater.string>
     <floater.string name="PreprocHintExtensions">([WORD] is an extension: turn on Build > Preprocess on Save and Build > Extensions)</floater.string>
     <floater.string name="PreprocHintConst">([WORD] declares a constant, and lets a global be computed from other globals: turn on Build &gt; Preprocess on Save)</floater.string>
+    <floater.string name="PreprocHintDirective">(lines starting with # are the preprocessor's: turn on Build &gt; Preprocess on Save)</floater.string>
     <floater.string name="PreprocHintInline">([WORD] marks a function to be inlined at each call: turn on Build &gt; Preprocess on Save)</floater.string>
     <floater.string name="ClearRecentFiles">Clear Menu</floater.string>
     <floater.string name="OriginCompiler">Compiler</floater.string>
@@ -581,6 +638,7 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="OriginParser">Parser</floater.string>
     <floater.string name="OriginTypes">Types</floater.string>
     <floater.string name="OriginLint">Lint</floater.string>
+    <floater.string name="OriginMigration">From LSL</floater.string>
     <floater.string name="OriginDefinitions">Definitions</floater.string>
     <floater.string name="InGeneratedCode">Generated by the preprocessor</floater.string>
     <floater.string name="NoGeneratedView">That is in code generated by the preprocessor. The Preprocessed view shows it after the script is preprocessed.</floater.string>
@@ -619,9 +677,17 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="WeightsHeadEstimate">[NAME] on [TARGET]: about [SIZE,number,1] of [LIMIT] KB used, [SHARE].</floater.string>
     <floater.string name="WeightsHeadFailed">[NAME] does not compile for [TARGET]: [ERROR]</floater.string>
     <floater.string name="WeightsHeadError">Currently, [ERROR].</floater.string>
+    <floater.string name="WeightsHeadNoLines">Its lines are not weighed one by one: the compiler for [TARGET] records no lines.</floater.string>
     <floater.string name="WeightsHeadBefore">Measured before the preprocessor's optimizer, which runs on save.</floater.string>
     <floater.string name="WeightsHeadSent">Measured before the preprocessor's optimizer. As saved, it is [SENT,number,1] KB.</floater.string>
     <floater.string name="WeightsHeadTip">Code size only, not counting the lists and strings the script builds while it runs.</floater.string>
+    <floater.string name="WeightsHeadRegion">In the region, its object reserves [RESERVED,number,0] KB for all its scripts, as of [WHEN].</floater.string>
+    <floater.string name="WeightsHeadRegionUrls">In the region, its object reserves [RESERVED,number,0] KB and [URLS] URLs for all its scripts, as of [WHEN].</floater.string>
+    <floater.string name="WeightsHeadRegionTip">The region counts the memory of every script in the object, each at its limit (64 KB for Mono unless llSetMemoryLimit lowers it), not what it uses.</floater.string>
+    <floater.string name="ExplorerReserved">[RESERVED,number,0] KB reserved</floater.string>
+    <floater.string name="ExplorerTime">[TIME] ms a frame</floater.string>
+    <floater.string name="WeightsHeadRegionTime">Its scripts take [TIME] ms of the region's time a frame, as of [WHEN].</floater.string>
+    <floater.string name="WeightsHeadRegionTimeTip">The time is the region's own count for all the object's scripts, on average, as its Top Scripts list shows an estate manager.</floater.string>
     <floater.string name="WeightsTargetTip">[TARGET]: [BYTES] bytes of code, of [MAX] bytes of memory.</floater.string>
     <floater.string name="WeightsTargetEstimateTip">[TARGET]: about [BYTES] bytes of code, of [MAX] bytes of memory, estimated from the compiled code.</floater.string>
     <floater.string name="WeightsTargetFailedTip">Does not compile for [TARGET]: [ERROR]</floater.string>
@@ -714,6 +780,10 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
              name="open_recent"
              tear_off="false"
              width="200" />
+            <menu_item_call label="Local History..." layout="topleft" name="local_history">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="local_history" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="local_history" />
+            </menu_item_call>
             <menu_item_call label="Recover Unsaved Changes..." layout="topleft" name="recover">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="recover" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="recover" />
@@ -916,6 +986,15 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="change_all_occurrences" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="change_all_occurrences" />
             </menu_item_call>
+            <menu_item_separator layout="topleft" />
+            <menu_item_call label="Add Caret Above" layout="topleft" name="add_caret_above">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="add_caret_above" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="add_caret_above" />
+            </menu_item_call>
+            <menu_item_call label="Add Caret Below" layout="topleft" name="add_caret_below">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="add_caret_below" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="add_caret_below" />
+            </menu_item_call>
         </menu>
         <menu
          label="Code"
@@ -970,6 +1049,10 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="fix_all" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="fix_all" />
             </menu_item_call>
+            <menu_item_call label="Fix What Is Left From LSL" layout="topleft" name="fix_migration">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="fix_migration" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="fix_migration" />
+            </menu_item_call>
             <menu_item_separator layout="topleft" />
             <menu_item_call label="Format Document" layout="topleft" name="format">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="format" />
@@ -995,6 +1078,11 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                     <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="indent_tabs" />
                 </menu_item_call>
             </menu>
+            <menu_item_separator layout="topleft" />
+            <menu_item_call label="Convert to SLua..." layout="topleft" name="convert_slua">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="convert_slua" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="convert_slua" />
+            </menu_item_call>
         </menu>
         <menu
          label="Go"
@@ -1060,6 +1148,14 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
             <menu_item_call label="Previous Problem" layout="topleft" name="previous_problem">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_problem" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_problem" />
+            </menu_item_call>
+            <menu_item_call label="Next Left From LSL" layout="topleft" name="next_migration">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_migration" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_migration" />
+            </menu_item_call>
+            <menu_item_call label="Previous Left From LSL" layout="topleft" name="previous_migration">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_migration" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_migration" />
             </menu_item_call>
             <menu_item_call label="Next Misspelling" layout="topleft" name="next_misspelling">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_misspelling" />
@@ -2083,11 +2179,12 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                                      layout="topleft"
                                      left_pad="8"
                                      name="problems_scope"
-                                     tool_tip="Show problems for the active tab, or for all open scripts, grouped by script"
+                                     tool_tip="Show problems for the active tab, for all open scripts, or for the scripts of the object last checked, grouped by script"
                                      top_delta="-1"
                                      width="104">
                                         <combo_box.item label="This script" name="problems_scope_this" value="this" />
                                         <combo_box.item label="All open scripts" name="problems_scope_all" value="all" />
+                                        <combo_box.item label="Checked object" name="problems_scope_object" value="object" />
                                     </combo_box>
                                     <combo_box
                                      follows="left|top"
@@ -2168,6 +2265,17 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                                 <pane_list.columns label="" name="role" width="76" />
                                 <pane_list.columns dynamic_width="true" label="Text" name="text" />
                             </pane_list>
+                            <button
+                             follows="top|right"
+                             height="20"
+                             label="Show Changes"
+                             layout="topleft"
+                             left="318"
+                             name="references_changes"
+                             tool_tip="Compare the chosen occurrence's script, as it is, with how the checked renames would change it."
+                             top="1"
+                             visible="false"
+                             width="100" />
                             <button
                              follows="top|right"
                              height="20"

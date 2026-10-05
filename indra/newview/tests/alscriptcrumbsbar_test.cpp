@@ -65,11 +65,13 @@ namespace
             w = warnings;
         }
         std::optional<ALScriptWeight::Target> weightTarget(const Doc&) const override { return target; }
+        ALPreprocessor::Wanted                preprocessedWhy(const Doc&) const override { return wanted; }
 
         Names                                 chosen, pressed;
         std::string                           banner;
         S32                                   errors = 0, warnings = 0;
         std::optional<ALScriptWeight::Target> target;
+        ALPreprocessor::Wanted                wanted = ALPreprocessor::Wanted::No;
     };
 
     ALScriptSpan span(S32 line, S32 column, S32 end_line, S32 end_column)
@@ -384,6 +386,7 @@ namespace tut
         doc.weighing->weight = weight;
         doc.expandedEditor  = editor("expanded_a", "integer x;\n");
         doc.view            = Doc::View::Expanded;
+        told().wanted       = ALPreprocessor::Wanted::Setting;
         doc.uploaded.valid      = true;
         doc.uploaded.version    = doc.editor->document().version();
         doc.uploaded.codeBefore = 20480;
@@ -517,5 +520,49 @@ namespace tut
         Doc& other = tab("b");
         crumbs->showTrailer(other);
         ensure("another tab: its own", said > 2 && part("3 errors") != nullptr && part("Tab Size: 4") != nullptr);
+    }
+
+    template<> template<>
+    void alscriptcrumbsbar_object::test<9>()
+    {
+        set_test_name("what is left from LSL counted, pressed to show it; none, not said");
+        ALScriptCrumbsBar* crumbs = bar();
+        Doc&               doc    = tab("a");
+        crumbs->showTrailer(doc);
+        ensure("none: not said", trailer().find("left from LSL") == std::string::npos);
+        doc.shownMigration = 3;
+        crumbs->showTrailer(doc);
+        const Part* left = part("3 left from LSL");
+        ensure("counted", left != nullptr && left->value == "migration" && !left->toolTip.empty());
+        doc.shownMigration = 1;
+        crumbs->showTrailer(doc);
+        ensure("counted again", part("1 left from LSL") != nullptr);
+    }
+
+    template<> template<>
+    void alscriptcrumbsbar_object::test<10>()
+    {
+        set_test_name("the view's tip says why a save preprocesses the script; a preprocessed view of one a save sends as written says so, in the warning's colour");
+        ALScriptCrumbsBar* crumbs = bar();
+        Doc&               doc    = tab("a");
+        doc.expandedEditor        = editor("expanded_a", "integer x;\n");
+        doc.view                  = Doc::View::Expanded;
+        told().wanted             = ALPreprocessor::Wanted::Directives;
+        crumbs->showTrailer(doc);
+        ensure("not warned where a save preprocesses it", part("Not preprocessed on save") == nullptr);
+        const Part* view = part("Preprocessed");
+        ensure("why, on the view's tip: " + (view ? view->toolTip : std::string()), view && view->toolTip.find("it has directives") != std::string::npos);
+        told().wanted = ALPreprocessor::Wanted::Enveloped;
+        crumbs->showTrailer(doc);
+        ensure("saved with it before", part("Preprocessed") && part("Preprocessed")->toolTip.find("saved with the preprocessor before") != std::string::npos);
+        told().wanted = ALPreprocessor::Wanted::No;
+        crumbs->showTrailer(doc);
+        const Part* warned = part("Not preprocessed on save");
+        ensure("said where a save sends it as written", warned && warned->color == doc.editor->markColor(ALCodeEditor::Mark::Warning) &&
+                                                             warned->toolTip.find("as written") != std::string::npos);
+        doc.expandedEditor = nullptr;
+        doc.view = Doc::View::Source;
+        crumbs->showTrailer(doc);
+        ensure("nothing said with no preprocessed view", part("Not preprocessed on save") == nullptr);
     }
 }

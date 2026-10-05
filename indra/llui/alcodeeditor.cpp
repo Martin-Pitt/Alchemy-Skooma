@@ -36,7 +36,7 @@
 #include "lllocalcliprect.h"
 #include "llstl.h"
 #include "llrender2dutils.h"
-#include "alchoicelist.h"
+#include "alchoicepopup.h"
 #include "llstring.h"
 #include "lltooltip.h"
 #include "llui.h"
@@ -51,25 +51,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 static LLDefaultChildRegistry::Register<ALCodeEditor> r("code_editor");
-
-namespace
-{
-    // What is left to do as a scope ends, whichever way it ends.
-    template <typename F>
-    struct AtScopeEnd
-    {
-        F f;
-        ~AtScopeEnd() { f(); }
-    };
-    template <typename F>
-    AtScopeEnd<F> atScopeEnd(F f)
-    {
-        return AtScopeEnd<F>{ std::move(f) };
-    }
-}
 
 namespace
 {
@@ -91,9 +76,10 @@ namespace
     const S32 NOTE_GAP     = 16;
     const S32 COMPLETION_WIDTH   = 360;
     const S32 COMPLETION_ROWS    = 8;
-    // The box beside a list: a completion's documentation, a fix's preview.
-    const S32 SIDE_WIDTH         = 320;
-    const S32 SIDE_PAD           = 6;
+    // The completions' popup and the fixes', by their names among the
+    // editor's children.
+    const char* const COMPLETION_POPUP = "completion_popup";
+    const char* const FIX_POPUP        = "fix_popup";
     // What a line's problems offer, as the gutter keeps it.
     const U8  FIXES_ANY          = 1;
     const U8  FIXES_CHANGE       = 2;
@@ -181,6 +167,7 @@ ALCodeEditor::ALCodeEditor(const Params& p)
     mBracketIndex.attach(&document());
     // Copy and Cut with nothing selected take the line, as code editors do.
     setClipsLines(true);
+    setFeatures(this);
     layout().setInlayProvider([this](S32 line, std::vector<ALTextLayout::Inlay>& out) { provideInlays(line, out); });
     mChangedConnection = onTextChanged([this]() {
         if (completionOpen())
@@ -219,8 +206,9 @@ ALCodeEditor::ALCodeEditor(const Params& p)
 ALCodeEditor::~ALCodeEditor()
 {
     // The layout outlives this part of the editor, and asks the provider
-    // about this part's inlays.
+    // about this part's inlays; the view, its features.
     layout().setInlayProvider(nullptr);
+    setFeatures(nullptr);
     clearHandlers();
 }
 
@@ -264,7 +252,6 @@ void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
 
     // Decorations and highlights after the edit move along with the text;
     // the ones it cut into go.
-    const ALTextRange removed = edit.range.normalised();
     mDecorations.apply(edit);
     for (auto& layer : mHighlights)
     {
@@ -276,23 +263,16 @@ void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
     // is typed is the start of that text; one after the text before it
     // moves along, since what is typed extends that text. An edit that
     // takes the position with it takes the inlay.
+    // A batch's stretches each so, the text between them untouched.
     mInlays.apply(
         edit,
-        [&removed](InlayHint& h, const ALTextDocument::Edit& e) {
-            if (removed.empty())
+        [](InlayHint& h, const ALTextDocument::Edit& e) {
+            if (const std::optional<ALTextRange> taken = e.replacedAround(h.at); taken && taken->begin < h.at)
             {
-                if (removed.begin < h.at || (removed.begin == h.at && !h.before))
-                {
-                    h.at = e.slidPast(h.at);
-                }
-                return true;
+                return false;
             }
-            if (removed.end <= h.at)
-            {
-                h.at = e.slidPast(h.at);
-                return true;
-            }
-            return h.at <= removed.begin;
+            h.at = e.placed(h.at, !h.before);
+            return true;
         },
         [](InlayHint&) {});
     // The stops of a snippet or a call being filled in move with the text.
@@ -317,13 +297,13 @@ void ALCodeEditor::onEdit(const ALTextDocument::Edit& edit)
     // an edit that takes it.
     mAutoClosed.apply(
         edit,
-        [&removed](ALTextPos& at, const ALTextDocument::Edit& e) {
-            if (removed.end <= at)
+        [](ALTextPos& at, const ALTextDocument::Edit& e) {
+            if (e.replacedAround(at))
             {
-                at = e.slidPast(at);
-                return true;
+                return false;
             }
-            return at < removed.begin;
+            at = e.placed(at);
+            return true;
         },
         [](ALTextPos&) {});
 
@@ -780,6 +760,8 @@ S32 ALCodeEditor::heatWidth() const
 
 void ALCodeEditor::goToLine(S32 line)
 {
+    // One caret there, as goTo leaves.
+    singleSelection();
     setCaret(document().lineStart(line));
 }
 
@@ -1715,19 +1697,6 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
             }
         }
     }
-    // The places of a text being changed at once, as its stop is.
-    if (mSnippet.live())
-    {
-        for (const ALSnippetSession::Mirror& mirror : mSnippet.mirrors())
-        {
-            F32 x0, x1;
-            if (mirror.range.begin.line <= line && line <= mirror.range.end.line && spanOnRow(line, row, mirror.range, x0, x1))
-            {
-                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, highlightColor() % alpha);
-                gl_rect_2d(static_cast<S32>(left + x0), screen_top, static_cast<S32>(left + x1), screen_top - row_h, mBracketMatchColor.get() % alpha, false);
-            }
-        }
-    }
     for (S32 i = 0; i < static_cast<S32>(mSnippet.stops().size()); ++i)
     {
         F32 x0, x1;
@@ -1799,7 +1768,8 @@ void ALCodeEditor::drawRowExtras(S32 line, S32 row, const LLRect& text, S32 scre
         }
         else if (d.style == Decoration::Style::Squiggle)
         {
-            squiggle(left + x0, left + x1, screen_top - row_h + 2, d.color % alpha, text);
+            squiggle(left + x0, left + x1, squiggleMiddle(screen_top, layout().line(line).rows[static_cast<size_t>(row)].ascent), d.color % alpha,
+                     text);
         }
         else
         {
@@ -2008,7 +1978,42 @@ bool ALCodeEditor::foldAt(S32 line)
         setCaret(document().lineEnd(chosen->start));
     }
     applyFolds();
+    caretsOutOfFolds();
     return true;
+}
+
+void ALCodeEditor::caretsOutOfFolds()
+{
+    if (!layout().anyHidden())
+    {
+        return;
+    }
+    // Each one in what is folded away a caret at the end of the line above
+    // it that shows -- the fold's own line; those that meet there become
+    // one. All at once: the main one put alone would open again the folds
+    // the others are in.
+    size_t                   main  = 0;
+    std::vector<ALTextRange> all   = selectionsInOrder(&main);
+    bool                     moved = false;
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        const ALTextRange range = all[i].normalised();
+        if (!layout().hidden(range.begin.line) && !layout().hidden(range.end.line))
+        {
+            continue;
+        }
+        const S32 hidden = layout().hidden(range.begin.line) ? range.begin.line : range.end.line;
+        const S32 above  = layout().visibleFrom(hidden, -1);
+        const S32 below  = layout().visibleFrom(hidden, 1);
+        const ALTextPos to = above >= 0 ? document().lineEnd(above) : ALTextPos(below >= 0 ? below : 0, 0);
+        all[i]             = ALTextRange(to, to);
+        moved              = true;
+    }
+    if (moved)
+    {
+        placeSelections(all, main);
+        scrollToCaret();
+    }
 }
 
 bool ALCodeEditor::unfoldAt(S32 line)
@@ -2025,10 +2030,7 @@ void ALCodeEditor::foldAll()
 {
     folds().foldAll(document(), getTabWidth());
     applyFolds();
-    if (layout().hidden(caret().line))
-    {
-        setCaret(document().lineEnd(layout().visibleFrom(caret().line, -1)));
-    }
+    caretsOutOfFolds();
 }
 
 void ALCodeEditor::unfoldAll()
@@ -2045,7 +2047,71 @@ void ALCodeEditor::revealLine(S32 line)
     }
     else
     {
-        ALTextView::revealLine(line);
+        layout().setHidden(line, line, false);
+    }
+}
+
+bool ALCodeEditor::performFeature(ALEditorCommand command)
+{
+    typedef ALEditorCommand C;
+    switch (command)
+    {
+        case C::Fold:
+        case C::Unfold:
+        case C::FoldAll:
+        case C::UnfoldAll:
+            return performFold(command);
+        case C::NextFunction:
+        case C::PreviousFunction:
+        case C::SelectFunction:
+        case C::GoToMatchingBracket:
+        case C::ExpandSelection:
+        case C::ShrinkSelection:
+        case C::SelectNextOccurrence:
+        case C::ChangeAllOccurrences:
+            return performFunction(command);
+        case C::Complete:
+            return complete();
+        case C::SignatureHelp:
+            return signatureHelp();
+        case C::QuickFix:
+            return quickFix();
+        case C::GoToDefinition:
+        case C::FindReferences:
+        case C::Rename:
+            return performSymbol(command);
+        default:
+            return false;
+    }
+}
+
+bool ALCodeEditor::canPerformFeature(ALEditorCommand command) const
+{
+    typedef ALEditorCommand C;
+    switch (command)
+    {
+        case C::Fold:
+        case C::Unfold:
+        case C::FoldAll:
+        case C::UnfoldAll:
+            return canFold(command);
+        case C::NextFunction:
+        case C::PreviousFunction:
+        case C::SelectFunction:
+        case C::GoToMatchingBracket:
+        case C::ExpandSelection:
+        case C::ShrinkSelection:
+        case C::SelectNextOccurrence:
+        case C::ChangeAllOccurrences:
+            return canFunction(command);
+        case C::QuickFix:
+            return canQuickFix();
+        case C::GoToDefinition:
+        case C::FindReferences:
+        case C::Rename:
+            return canSymbol(command);
+        default:
+            return false;
     }
 }
 
@@ -2278,61 +2344,74 @@ bool ALCodeEditor::canFold(ALEditorCommand command) const
 
 bool ALCodeEditor::completionOpen() const
 {
-    return mCompletionList && mCompletionList->getVisible();
+    const ALChoicePopup* popup = popupFound(COMPLETION_POPUP);
+    return popup && popup->listShown();
 }
 
-ALChoiceList* ALCodeEditor::makeChoiceList(const std::string& name)
+bool ALCodeEditor::onCompletionList(S32 x, S32 y) const
 {
-    // A child, so it draws over the text and goes where the view goes. On
-    // the text engine, as the hover card is: the choices in the editor's
-    // face and the colours of their kinds, their details in the reading
-    // face after them.
-    ALChoiceList::Params list(LLUICtrlFactory::getDefaultParams<ALChoiceList>());
-    list.name(name);
-    list.rect(LLRect(0, 10, 10, 0));
-    list.visible(false);
-    list.follows.flags(FOLLOWS_NONE);
-    list.mouse_opaque(true);
-    list.font(getFont());
-    list.bg_visible(true);
-    list.bg_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
-    list.bg_readonly_color(LLUIColorTable::instance().getColor("CodeCompletionBgColor", LLColor4::black));
-    list.text_readonly_color(textColor());
-    list.context_menu(std::string());
-    list.h_pad(4);
-    list.v_pad(2);
-    ALChoiceList* made = LLUICtrlFactory::create<ALChoiceList>(list);
-    addChild(made);
-    return made;
+    const ALChoicePopup* popup = popupFound(COMPLETION_POPUP);
+    return popup && popup->onList(x, y);
 }
 
-ALChoiceList& ALCodeEditor::completionList()
+ALChoicePopup* ALCodeEditor::popupFound(std::string_view name) const
+{
+    return findChild<ALChoicePopup>(name, false);
+}
+
+ALChoicePopup& ALCodeEditor::makePopup(const char* name, const char* list, const char* side, bool menu_like)
+{
+    // A child, so it draws over the text and goes where the view goes; as
+    // large as the view, so that the list and the box beside it are put in
+    // the view's own coordinates.
+    ALChoicePopup::Params p;
+    p.name      = name;
+    p.rect      = getLocalRect();
+    p.visible   = false;
+    p.list_name = list;
+    p.side_name = side;
+    p.menu_like = menu_like;
+    p.font      = getFont();
+    ALChoicePopup* made = LLUICtrlFactory::create<ALChoicePopup>(p);
+    addChild(made);
+    return *made;
+}
+
+void ALCodeEditor::dress(ALChoicePopup& popup)
+{
+    // A list is one of the things the editor floats over its text, so it
+    // wears the editor's colours rather than the skin's. It took them from
+    // the colour table instead, which is a table the script themes never
+    // touch: on a light theme the completions stayed dark.
+    popup.setLook(getFont(), paint(Paint::Widget), textColor(), paint(Paint::WidgetSelection), paint(Paint::WidgetBorder));
+}
+
+ALChoicePopup& ALCodeEditor::completionPopup()
 {
     // Made the first time there is something to choose: most editors --
     // a tab not looked at, a read-only view -- never show one.
-    if (!mCompletionList)
+    if (ALChoicePopup* found = popupFound(COMPLETION_POPUP))
     {
-        mCompletionList = makeChoiceList("completions");
-        mCompletionList->onPicked([this](S32) { acceptCompletion(); });
-        mCompletionList->onChosen([this](S32) {
-            if (completionOpen())
-            {
-                showCompletionDoc();
-            }
-        });
+        return *found;
     }
-    return *mCompletionList;
+    ALChoicePopup& made = makePopup(COMPLETION_POPUP, "completions", "completion_doc", false);
+    made.list().onPicked([this](S32) { acceptCompletion(); });
+    made.list().onChosen([this](S32) {
+        if (completionOpen())
+        {
+            showCompletionDoc();
+        }
+    });
+    return made;
 }
 
 void ALCodeEditor::hideCompletionList()
 {
-    if (mCompletionList)
+    if (ALChoicePopup* popup = popupFound(COMPLETION_POPUP))
     {
-        mCompletionList->setVisible(false);
-        mCompletionList->setChoices({});
+        popup->hideList();
     }
     mCompletionModel.hide();
-    hideCompletionDoc();
 }
 
 void ALCodeEditor::closeCompletion()
@@ -2345,7 +2424,7 @@ void ALCodeEditor::closeCompletion()
 
 S32 ALCodeEditor::chosenCompletion() const
 {
-    return completionOpen() ? mCompletionList->chosen() : -1;
+    return completionOpen() ? popupFound(COMPLETION_POPUP)->list().chosen() : -1;
 }
 
 void ALCodeEditor::vocabularyCompletions(std::string_view prefix, std::vector<Completion>& out)
@@ -2463,14 +2542,15 @@ LLUIImagePtr ALCodeEditor::iconOf(const Completion& completion)
 
 void ALCodeEditor::listCompletions(bool keep_choice)
 {
-    completionList();
+    ALChoicePopup& popup = completionPopup();
+    ALChoiceList&  list  = popup.list();
     // What was chosen, by its word: an answer joined to the list may put
     // rows above it, and the row under the finger must stay the word the
     // finger is on.
     std::string was;
-    if (keep_choice && mCompletionList->chosen() >= 0 && mCompletionList->chosen() < mCompletionList->count())
+    if (keep_choice && list.chosen() >= 0 && list.chosen() < list.count())
     {
-        was = mCompletionList->choices()[mCompletionList->chosen()].text;
+        was = list.choices()[list.chosen()].text;
     }
     S32 chosen = 0;
     const std::vector<Completion>& completions = mCompletionModel.list();
@@ -2482,18 +2562,7 @@ void ALCodeEditor::listCompletions(bool keep_choice)
             break;
         }
     }
-    if (mCompletionList->getFont() != getFont())
-    {
-        mCompletionList->setFont(getFont());
-    }
-    // The list is one of the things the editor floats over its text, so
-    // it wears the editor's colours rather than the skin's. It took them
-    // from the colour table instead, which is a table the script themes
-    // never touch: on a light theme the completions stayed dark.
-    mCompletionList->setBackgroundColor(paint(Paint::Widget));
-    mCompletionList->setTextColor(textColor());
-    mCompletionList->setSelectionColor(paint(Paint::WidgetSelection));
-    mCompletionList->setBorderColor(paint(Paint::WidgetBorder));
+    dress(popup);
     std::vector<ALChoiceList::Choice> choices;
     choices.reserve(completions.size());
     for (const Completion& c : completions)
@@ -2514,90 +2583,25 @@ void ALCodeEditor::listCompletions(bool keep_choice)
         choices.push_back(std::move(choice));
     }
     // The list is shaped to the width its column is laid out for, then
-    // to the rows it holds.
+    // to the rows it holds, under the word being completed.
     const LLRect local = getLocalRect();
     const S32    width = llmin(COMPLETION_WIDTH, llmax(60, local.getWidth() - 8));
-    mCompletionList->setShape(LLRect(0, 40, width, 0));
-    mCompletionList->setChoices(std::move(choices), chosen);
-    placeCompletion();
-    mCompletionList->setVisible(true);
+    popup.fill(std::move(choices), chosen, width);
+    popup.showUnder(anchorOf(mCompletionModel.range().begin), llmin(static_cast<S32>(completions.size()), COMPLETION_ROWS), width);
     showCompletionDoc();
-}
-
-void ALCodeEditor::hideCompletionDoc()
-{
-    if (mCompletionDoc)
-    {
-        mCompletionDoc->setVisible(false);
-    }
-    mCompletionDocFor.clear();
-}
-
-ALTextView* ALCodeEditor::sideBox()
-{
-    const LLColor4 ground = paint(Paint::Widget);
-    if (!mCompletionDoc)
-    {
-        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
-        p.name                = "completion_doc";
-        p.rect                = LLRect(0, 20, SIDE_WIDTH, 0);
-        p.read_only           = true;
-        p.word_wrap           = true;
-        p.tab_stop            = false;
-        p.takes_focus         = false;
-        p.mouse_opaque        = true;
-        p.font                = LLFontGL::getFontSansSerif();
-        p.bg_visible          = true;
-        p.bg_color            = ground;
-        p.bg_readonly_color   = ground;
-        p.text_readonly_color = textColor();
-        p.h_pad               = SIDE_PAD;
-        p.v_pad               = SIDE_PAD - 2;
-        p.context_menu        = std::string();
-        mCompletionDoc        = LLUICtrlFactory::create<ALTextView>(p);
-        mCompletionDoc->setVisible(false);
-        mCompletionDoc->onLinkClicked([](const ALTextView::Substitution& link) {
-            if (!link.url.empty())
-            {
-                LLUrlAction::clickAction(link.url, false);
-            }
-        });
-        addChild(mCompletionDoc);
-    }
-    mCompletionDoc->setBackgroundColor(ground);
-    mCompletionDoc->setTextColor(textColor());
-    // Shared by a completion's words and a fix's preview: the preview's
-    // tints are its own.
-    mCompletionDoc->setLineTints({});
-    return mCompletionDoc;
-}
-
-void ALCodeEditor::placeSideBox(const LLRect& list)
-{
-    // Beside the list where there is room, on the right or else the
-    // left; else under it, or over it; as tall as it says, up to a
-    // limit, the rest cut.
-    ALTextView&  box   = *mCompletionDoc;
-    const LLRect local = getLocalRect();
-    const S32    width = llmin(SIDE_WIDTH, llmax(120, local.getWidth() - 8));
-    const S32    lines = box.document().lineCount();
-    box.setShape(LLRect(0, 40, width, 0));
-    for (S32 line = 0; line < lines; ++line)
-    {
-        box.layout().line(line);
-    }
-    const S32 height = llmin(box.layout().totalHeight() + 2 * (SIDE_PAD - 2) + 2, llmax(list.getHeight(), 200));
-    box.setShape(ALPlace::beside(list, width, height, local, 2));
-    box.setVisible(true);
 }
 
 void ALCodeEditor::showCompletionDoc()
 {
+    ALChoicePopup* popup = popupFound(COMPLETION_POPUP);
     const S32 index = chosenCompletion();
     const std::vector<Completion>& completions = mCompletionModel.list();
     if (index < 0 || index >= static_cast<S32>(completions.size()) || !completions[index].documentation || completions[index].documentation->empty())
     {
-        hideCompletionDoc();
+        if (popup)
+        {
+            popup->hideSide();
+        }
         return;
     }
     const Completion& c = completions[index];
@@ -2611,11 +2615,12 @@ void ALCodeEditor::showCompletionDoc()
     // The same row chosen as the list is made again -- a letter more
     // typed, an answer joined to it -- beside a list where it was: the box
     // as it stands, not lexed and read for links again.
-    if (mCompletionDoc && mCompletionDoc->getVisible() && says == mCompletionDocFor && mCompletionList->getRect() == mCompletionDocBeside)
+    if (popup->sideSays(says))
     {
         return;
     }
-    ALTextView& box = *sideBox();
+    dress(*popup);
+    ALTextView& box = popup->side();
     box.setText(says);
     std::vector<ALTextView::Style> styles;
     styleAsCode(box, 0, styles, c.text, c.kind);
@@ -2632,9 +2637,8 @@ void ALCodeEditor::showCompletionDoc()
     {
         box.linkUrlsOn(line);
     }
-    placeSideBox(mCompletionList->getRect());
-    mCompletionDocFor    = says;
-    mCompletionDocBeside = mCompletionList->getRect();
+    popup->placeSide();
+    popup->sideSaid(says);
 }
 
 void ALCodeEditor::supplyCompletions(const ALTextPos& at, std::vector<Completion> more)
@@ -2647,25 +2651,12 @@ void ALCodeEditor::supplyCompletions(const ALTextPos& at, std::vector<Completion
     refreshCompletion();
 }
 
-void ALCodeEditor::placeCompletion()
-{
-    const LLRect local = getLocalRect();
-    placeListAt(*mCompletionList, mCompletionModel.range().begin, llmin(static_cast<S32>(mCompletionModel.list().size()), COMPLETION_ROWS),
-                llmin(COMPLETION_WIDTH, llmax(60, local.getWidth() - 8)));
-}
-
-void ALCodeEditor::placeListAt(ALChoiceList& list, const ALTextPos& at, S32 rows, S32 width)
-{
-    // Under the row, or over it where under would run off the bottom;
-    // across, within the view.
-    list.setShape(ALPlace::under(anchorOf(at), width, list.heightFor(rows), getLocalRect()));
-}
-
 // --- quick fixes -----------------------------------------------------------------
 
 bool ALCodeEditor::fixesOpen() const
 {
-    return mFixList && mFixList->getVisible();
+    const ALChoicePopup* popup = popupFound(FIX_POPUP);
+    return popup && popup->listShown();
 }
 
 void ALCodeEditor::closeFixes()
@@ -2677,17 +2668,11 @@ void ALCodeEditor::closeFixes()
     {
         return;
     }
-    if (mFixList)
+    if (ALChoicePopup* popup = popupFound(FIX_POPUP))
     {
-        mFixList->setVisible(false);
-        mFixList->setChoices({});
+        popup->hideList();
     }
     mFixListModel.close();
-    // The preview is the side box's, which the completions share.
-    if (was)
-    {
-        hideCompletionDoc();
-    }
 }
 
 bool ALCodeEditor::openFixes(S32 line)
@@ -2725,36 +2710,33 @@ void ALCodeEditor::showFixes(S32 line, std::vector<Fix> fixes, S32 chosen)
     }
 }
 
-ALChoiceList& ALCodeEditor::fixList()
+ALChoicePopup& ALCodeEditor::fixPopup()
 {
     // The fixes offered at a problem, on a list of their own made the same
     // way the first time there are any: a fix is not a completion, and the
     // one list open at a time keeps its own keys.
-    if (!mFixList)
+    if (ALChoicePopup* found = popupFound(FIX_POPUP))
     {
-        mFixList = makeChoiceList("fixes");
-        // As a menu: the mouse over a fix previews it, and a click makes it.
-        mFixList->setMenuLike(true);
-        mFixList->onPicked([this](S32 index) { takeFix(index); });
-        mFixList->onChosen([this](S32) {
-            if (fixesOpen())
-            {
-                showFixPreview();
-            }
-        });
+        return *found;
     }
-    return *mFixList;
+    // As a menu: the mouse over a fix previews it, and a click makes it.
+    ALChoicePopup& made = makePopup(FIX_POPUP, "fixes", "fix_preview", true);
+    made.list().onPicked([this](S32 index) { takeFix(index); });
+    made.list().onChosen([this](S32) {
+        if (fixesOpen())
+        {
+            showFixPreview();
+        }
+    });
+    return made;
 }
 
 void ALCodeEditor::fillFixList(S32 chosen)
 {
-    fixList();
     // In the editor's colours, as the completions are; a suppression, and
     // the word that there is nothing, quieter than what makes a change.
-    mFixList->setBackgroundColor(paint(Paint::Widget));
-    mFixList->setTextColor(textColor());
-    mFixList->setSelectionColor(paint(Paint::WidgetSelection));
-    mFixList->setBorderColor(paint(Paint::WidgetBorder));
+    ALChoicePopup& popup = fixPopup();
+    dress(popup);
     const std::vector<Fix>&           fixes = mFixListModel.fixes();
     std::vector<ALChoiceList::Choice> choices;
     for (const Fix& fix : fixes)
@@ -2771,17 +2753,15 @@ void ALCodeEditor::fillFixList(S32 chosen)
     // As wide as its fixes and their notes, within the view: laid out at
     // the most there is room for, then measured.
     const S32 room = llmax(120, getLocalRect().getWidth() - 8);
-    mFixList->setShape(LLRect(0, 40, room, 0));
-    mFixList->setChoices(std::move(choices), llclamp(chosen, 0, llmax(0, static_cast<S32>(fixes.size()) - 1)));
-    const S32 width = llclamp(mFixList->widthFor(), 120, room);
+    popup.fill(std::move(choices), llclamp(chosen, 0, llmax(0, static_cast<S32>(fixes.size()) - 1)), room);
+    const S32 width = llclamp(popup.list().widthFor(), 120, room);
     // Under the caret where it is on the line, else under the line's text.
     const S32          line  = mFixListModel.line();
     const ALTextPos    caret = this->caret();
     const std::string& text  = document().line(llclamp(line, 0, document().lineCount() - 1));
     const size_t       lead  = text.find_first_not_of(" \t");
     const ALTextPos    at    = caret.line == line ? caret : ALTextPos(line, lead == std::string::npos ? 0 : static_cast<S32>(lead));
-    placeListAt(*mFixList, at, llmin(static_cast<S32>(fixes.size()), COMPLETION_ROWS), width);
-    mFixList->setVisible(true);
+    popup.showUnder(anchorOf(at), llmin(static_cast<S32>(fixes.size()), COMPLETION_ROWS), width);
     showFixPreview();
 }
 
@@ -2791,7 +2771,7 @@ void ALCodeEditor::noteFixes(U32 shown, const std::vector<std::string>& notes)
     {
         return;
     }
-    fillFixList(mFixList->chosen());
+    fillFixList(fixPopup().list().chosen());
 }
 
 void ALCodeEditor::supplyActions(const ALTextRange& at, std::vector<Fix> actions)
@@ -2801,7 +2781,7 @@ void ALCodeEditor::supplyActions(const ALTextRange& at, std::vector<Fix> actions
         return;
     }
     const bool                            open   = fixesOpen();
-    std::optional<ALFixListModel::Joined> joined = mFixListModel.join(at, caret(), std::move(actions), open, open ? mFixList->chosen() : -1);
+    std::optional<ALFixListModel::Joined> joined = mFixListModel.join(at, caret(), std::move(actions), open, open ? fixPopup().list().chosen() : -1);
     if (joined)
     {
         showFixes(caret().line, std::move(joined->fixes), joined->chosen);
@@ -2810,16 +2790,21 @@ void ALCodeEditor::supplyActions(const ALTextRange& at, std::vector<Fix> actions
 
 void ALCodeEditor::showFixPreview()
 {
-    const S32 index = fixesOpen() ? mFixList->chosen() : -1;
+    ALChoicePopup*          popup = popupFound(FIX_POPUP);
+    const S32               index = fixesOpen() ? popup->list().chosen() : -1;
     const std::vector<Fix>& fixes = mFixListModel.fixes();
     if (index < 0 || index >= static_cast<S32>(fixes.size()) || ALFixListModel::isNothing(fixes[index]))
     {
-        hideCompletionDoc();
+        if (popup)
+        {
+            popup->hideSide();
+        }
         return;
     }
     std::vector<char> kinds;
     const std::string says = ALFixListModel::previewOf(document(), fixes[index], kinds);
-    ALTextView& box = *sideBox();
+    dress(*popup);
+    ALTextView& box = popup->side();
     box.setText(says);
     // As a comparison shows it (ALDiffView): each line on the band its
     // kind is tinted, what goes as plain code faded, what comes coloured
@@ -2849,7 +2834,7 @@ void ALCodeEditor::showFixPreview()
     }
     box.setStyles(std::move(styles));
     box.setLineTints(std::move(tints));
-    placeSideBox(mFixList->getRect());
+    popup->placeSide();
 }
 
 void ALCodeEditor::takeFix(S32 index)
@@ -2965,7 +2950,7 @@ bool ALCodeEditor::returnAccepts() const
         return true;
     }
     // Not moved through: taken only where it changes what is typed.
-    const S32 index = mCompletionList->chosen();
+    const S32 index = chosenCompletion();
     if (index < 0 || index >= static_cast<S32>(mCompletionModel.list().size()))
     {
         return false;
@@ -3294,7 +3279,7 @@ bool ALCodeEditor::acceptCompletion()
     {
         return false;
     }
-    const S32 index = mCompletionList->chosen();
+    const S32 index = chosenCompletion();
     if (index < 0 || index >= static_cast<S32>(mCompletionModel.list().size()))
     {
         closeCompletion();
@@ -3309,6 +3294,31 @@ bool ALCodeEditor::acceptCompletion()
 
 void ALCodeEditor::complete(const Completion& chosen, const ALTextRange& range)
 {
+    if (hasOtherSelections())
+    {
+        // What it replaces either side of the main caret, which each other
+        // caret has replaced where its text reads the same.
+        const ALTextPos   at     = caret();
+        const std::string before = range.begin < at ? document().text(ALTextRange(range.begin, at)) : std::string();
+        const std::string after  = at < range.end ? document().text(ALTextRange(at, range.end)) : std::string();
+        undoJournal().beginGroup();
+        editEach([&](size_t, const ALTextRange& selection) {
+            ALTextRange over = selection.normalised();
+            if (over.empty())
+            {
+                const ALTextPos from(over.end.line, over.end.column - static_cast<S32>(before.size()));
+                const ALTextPos to(over.end.line, over.end.column + static_cast<S32>(after.size()));
+                if (from.column >= 0 && document().text(ALTextRange(from, over.end)) == before && document().text(ALTextRange(over.end, to)) == after)
+                {
+                    over = ALTextRange(from, to);
+                }
+            }
+            return std::optional<ALTextEditing::Change>(completionAt(chosen, over));
+        });
+        undoJournal().endGroup();
+        setFocus(true);
+        return;
+    }
     setSelection(range);
     if (!chosen.snippet.empty())
     {
@@ -3364,6 +3374,60 @@ void ALCodeEditor::complete(const Completion& chosen, const ALTextRange& range)
     setFocus(true);
 }
 
+ALTextEditing::Change ALCodeEditor::completionAt(const Completion& chosen, const ALTextRange& over)
+{
+    ALTextEditing::Change one;
+    if (!chosen.snippet.empty())
+    {
+        // Indented as the line it goes into, as insertSnippet has it; the
+        // caret on its first stop.
+        const std::string&                line     = document().line(over.begin.line);
+        const std::string                 indent   = line.substr(0, std::min(line.size(), line.find_first_not_of(" \t")));
+        const ALSnippetSession::Expansion expanded = ALSnippetSession::expand(chosen.snippet, over.begin, indent,
+                                                                              ALTextIndent::indentUnit(indent, { getTabWidth(), getSoftTabs() }));
+        const ALTextRange                 land     = expanded.stops.empty() ? expanded.landing : expanded.stops.front();
+        one.replacements.push_back({ over, expanded.text });
+        one.selects = true;
+        one.anchor  = land.begin;
+        one.caret   = land.end;
+        return one;
+    }
+    // A function called, as complete() calls it: its first parameter
+    // chosen, else the caret between its brackets where it takes anything.
+    const std::string& line   = document().line(over.end.line);
+    const bool         called = chosen.kind == ALSyntaxKind::Function && !(over.end.column < static_cast<S32>(line.size()) && line[over.end.column] == '(');
+    if (!called)
+    {
+        one.replacements.push_back({ over, chosen.text });
+        one.caret = ALTextEditing::endOf(over.begin, chosen.text);
+        return one;
+    }
+    const std::vector<std::string> names = parameterNames(chosen.detail, chosen.text);
+    const size_t                   open  = parameterListAt(chosen.detail, chosen.text);
+    const size_t after = open == std::string::npos ? std::string::npos : chosen.detail.find_first_not_of(' ', open + 1);
+    const bool   takes = open == std::string::npos || after == std::string::npos || chosen.detail[after] != ')';
+    std::string  call  = chosen.text + "(";
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+        call += (i > 0 ? ", " : "") + names[i];
+    }
+    call += ")";
+    one.replacements.push_back({ over, call });
+    const ALTextPos end = ALTextEditing::endOf(over.begin, call);
+    if (!names.empty())
+    {
+        const S32 from = over.begin.column + static_cast<S32>(chosen.text.size()) + 1;
+        one.selects    = true;
+        one.anchor     = ALTextPos(over.begin.line, from);
+        one.caret      = ALTextPos(over.begin.line, from + static_cast<S32>(names.front().size()));
+    }
+    else
+    {
+        one.caret = takes ? ALTextPos(end.line, end.column - 1) : end;
+    }
+    return one;
+}
+
 // --- snippets ------------------------------------------------------------------------
 
 void ALCodeEditor::insertSnippet(std::string_view body)
@@ -3393,10 +3457,9 @@ void ALCodeEditor::insertSnippet(std::string_view body)
     setSelection(mSnippet.stops()[0]);
 }
 
-void ALCodeEditor::syncMirrors(S32 index, bool grouped)
+void ALCodeEditor::syncMirrors(S32 index)
 {
-    // As one edit, one step to undo -- or part of the key's -- and the
-    // selection as it was.
+    // As one edit, one step to undo, and the selection as it was.
     std::string            wanted;
     const std::vector<S32> order = mSnippet.staleMirrors(index, document(), wanted);
     if (order.empty())
@@ -3411,22 +3474,17 @@ void ALCodeEditor::syncMirrors(S32 index, bool grouped)
         edits.emplace_back(mSnippet.mirrors()[static_cast<size_t>(k)].range, wanted);
     }
     // All of them as one edit.
-    if (grouped)
-    {
-        undoJournal().beginGroup();
-    }
+    undoJournal().beginGroup();
     mSnippet.syncingAll();
     editMany(std::move(edits), was.end);
     mSnippet.syncing(-1);
-    if (grouped)
-    {
-        undoJournal().endGroup();
-    }
+    undoJournal().endGroup();
     placeSelection(document().clamp(was.begin), document().clamp(was.end));
     afterEdit();
 }
 
-std::vector<ALTextRange> ALCodeEditor::placesOf(const std::string& wanted, bool whole, const ALTextPos& from, size_t most) const
+std::vector<ALTextRange> ALCodeEditor::placesOf(const std::string& wanted, bool whole, const ALTextPos& from, size_t most,
+                                                const std::vector<ALTextRange>& taken_in) const
 {
     std::vector<ALTextRange> out;
     const ALTextDocument&    doc   = document();
@@ -3435,23 +3493,12 @@ std::vector<ALTextRange> ALCodeEditor::placesOf(const std::string& wanted, bool 
     {
         return out;
     }
-    // Taken already: the stop and its mirrors.
-    const auto taken = [this](const ALTextRange& range) {
-        for (const ALTextRange& stop : mSnippet.stops())
-        {
-            if (range.begin < stop.end && stop.begin < range.end)
-            {
-                return true;
-            }
-        }
-        for (const ALSnippetSession::Mirror& mirror : mSnippet.mirrors())
-        {
-            if (range.begin < mirror.range.end && mirror.range.begin < range.end)
-            {
-                return true;
-            }
-        }
-        return false;
+    // Taken already: any over one of the selections.
+    const auto taken = [&taken_in](const ALTextRange& range) {
+        return std::any_of(taken_in.begin(), taken_in.end(), [&range](const ALTextRange& one) {
+            const ALTextRange r = one.normalised();
+            return range.begin < r.end && r.begin < range.end;
+        });
     };
     // Each line once, from `from` round to it again.
     for (S32 step = 0; step <= count && out.size() < most; ++step)
@@ -3493,7 +3540,20 @@ bool ALCodeEditor::selectNextOccurrence()
         {
             return false;
         }
-        setSelection(name);
+        // And at every other caret, its own.
+        size_t                   main = 0;
+        std::vector<ALTextRange> all  = selectionsInOrder(&main);
+        for (ALTextRange& one : all)
+        {
+            if (one.empty())
+            {
+                const ALTextRange word = identifierAt(one.end);
+                one                    = word.empty() ? document().wordAt(one.end) : word;
+            }
+        }
+        all[main] = name;
+        placeSelections(all, main);
+        setSelection(selection());
         mOccurrenceName = selection().normalised();
         return true;
     }
@@ -3501,26 +3561,19 @@ bool ALCodeEditor::selectNextOccurrence()
     {
         return false;
     }
-    const bool going = mSnippet.live() && mSnippet.stops().size() == 1 && mSnippet.stops()[0] == taken;
-    if (!going)
-    {
-        mSnippet.start({ taken }, taken.end);
-        mSnippet.setLive(true);
-    }
-    // After the last place taken, going round: they are taken in turn.
-    const ALTextPos                from = mSnippet.mirrors().empty() ? taken.end : mSnippet.mirrors().back().range.end;
-    const std::vector<ALTextRange> next = placesOf(document().text(taken), taken == mOccurrenceName, from, 1);
+    // After the main selection, going round, past those taken: the next
+    // one the main one, so that they are taken in turn.
+    std::vector<ALTextRange>       all   = selectionsInOrder();
+    const bool                     whole = taken == mOccurrenceName;
+    const std::vector<ALTextRange> next  = placesOf(document().text(taken), whole, taken.end, 1, all);
     if (next.empty())
     {
-        if (!going)
-        {
-            mSnippet.clear();
-        }
         return false;
     }
-    mSnippet.addMirror({ 0, next.front() });
-    setSelection(taken);
-    scrollToShow(next.front().begin);
+    all.push_back(next.front());
+    placeSelections(all, all.size() - 1);
+    setSelection(selection());
+    mOccurrenceName = whole ? selection().normalised() : ALTextRange();
     return true;
 }
 
@@ -3537,40 +3590,17 @@ bool ALCodeEditor::changeAllOccurrences()
     {
         return false;
     }
-    mSnippet.start({ taken }, taken.end);
-    const std::vector<ALTextRange> places = placesOf(document().text(taken), whole, taken.end, 1000);
-    if (places.empty())
+    // Every place, the one taken the main selection; the others there
+    // were let go of.
+    std::vector<ALTextRange> all = placesOf(document().text(taken), whole, taken.end, std::numeric_limits<size_t>::max(), { taken });
+    if (all.empty())
     {
-        mSnippet.clear();
         return false;
     }
-    for (const ALTextRange& place : places)
-    {
-        mSnippet.addMirror({ 0, place });
-    }
-    mSnippet.setLive(true);
-    setSelection(taken);
+    all.push_back(taken);
+    placeSelections(all, all.size() - 1);
+    setSelection(selection());
     return true;
-}
-
-void ALCodeEditor::undo()
-{
-    // A step back is the text as it was, the places with it: nothing to
-    // bring up to what the stop holds.
-    if (mSnippet.live())
-    {
-        clearPlaceholders();
-    }
-    ALTextView::undo();
-}
-
-void ALCodeEditor::redo()
-{
-    if (mSnippet.live())
-    {
-        clearPlaceholders();
-    }
-    ALTextView::redo();
 }
 
 void ALCodeEditor::dropPlaceholdersLeft()
@@ -4150,26 +4180,14 @@ void ALCodeEditor::dropTyping()
 
 bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
 {
-    // Every place of a text being changed at once: what the key did, and
-    // the places brought up to it, one step with the typing around it --
-    // but for a step back or forward, which ends it.
-    const ALEditorCommand command = keymap().lookup(key, mask);
-    const bool            live    = mSnippet.live() && command != ALEditorCommand::Undo && command != ALEditorCommand::Redo;
-    if (live)
-    {
-        undoJournal().beginTyping(selection());
-    }
-    const auto keep_up = atScopeEnd([this, live]() {
-        if (live)
-        {
-            if (mSnippet.live())
-            {
-                syncMirrors(mSnippet.at(), false);
-            }
-            undoJournal().endTyping();
-        }
-    });
     hideCard();
+    // At several carets the signature and a snippet's stops are not in
+    // play, each being about one place; the list is the main caret's.
+    if (hasOtherSelections() && typingText())
+    {
+        hideSignature();
+        clearPlaceholders();
+    }
     // The fixes listed take the keys that walk them and take one, in any
     // mode a modal keymap is in -- the list was asked for; any other key
     // lets them go and is the text's.
@@ -4183,20 +4201,20 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
                     closeFixes();
                     return true;
                 case KEY_UP:
-                    mFixList->moveChoice(-1, true);
+                    fixPopup().list().moveChoice(-1, true);
                     return true;
                 case KEY_DOWN:
-                    mFixList->moveChoice(1, true);
+                    fixPopup().list().moveChoice(1, true);
                     return true;
                 case KEY_PAGE_UP:
-                    mFixList->moveChoice(-COMPLETION_ROWS, false);
+                    fixPopup().list().moveChoice(-COMPLETION_ROWS, false);
                     return true;
                 case KEY_PAGE_DOWN:
-                    mFixList->moveChoice(COMPLETION_ROWS, false);
+                    fixPopup().list().moveChoice(COMPLETION_ROWS, false);
                     return true;
                 case KEY_RETURN:
                 case KEY_TAB:
-                    takeFix(mFixList->chosen());
+                    takeFix(fixPopup().list().chosen());
                     return true;
                 default:
                     break;
@@ -4246,7 +4264,7 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
 #endif
     if (completionOpen() && modalKeymap() && mask == REAL_CONTROL && (key == 'N' || key == 'P'))
     {
-        mCompletionList->moveChoice(key == 'N' ? 1 : -1, true);
+        completionPopup().list().moveChoice(key == 'N' ? 1 : -1, true);
         mCompletionMoved = true;
         return true;
     }
@@ -4258,19 +4276,19 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
                 closeCompletion();
                 return true;
             case KEY_UP:
-                mCompletionList->moveChoice(-1, true);
+                completionPopup().list().moveChoice(-1, true);
                 mCompletionMoved = true;
                 return true;
             case KEY_DOWN:
-                mCompletionList->moveChoice(1, true);
+                completionPopup().list().moveChoice(1, true);
                 mCompletionMoved = true;
                 return true;
             case KEY_PAGE_UP:
-                mCompletionList->moveChoice(-COMPLETION_ROWS, false);
+                completionPopup().list().moveChoice(-COMPLETION_ROWS, false);
                 mCompletionMoved = true;
                 return true;
             case KEY_PAGE_DOWN:
-                mCompletionList->moveChoice(COMPLETION_ROWS, false);
+                completionPopup().list().moveChoice(COMPLETION_ROWS, false);
                 mCompletionMoved = true;
                 return true;
             case KEY_RETURN:
@@ -4322,7 +4340,7 @@ bool ALCodeEditor::handleKeyHere(KEY key, MASK mask)
         taking                  = at >= 0 && at < static_cast<S32>(line.size()) ? line[static_cast<size_t>(at)] : 0;
     }
     const bool call_changes = hasSelection() || taking == '(' || taking == ',' || taking == ')';
-    if (key == KEY_BACKSPACE && mask == MASK_NONE && mAutoClose && deletePair())
+    if (key == KEY_BACKSPACE && mask == MASK_NONE && mAutoClose && (hasOtherSelections() ? deletePairs() : deletePair()))
     {
         if (mCards.signature() && mSignatureRequest && call_changes)
         {
@@ -4348,16 +4366,21 @@ bool ALCodeEditor::handleUnicodeCharHere(llwchar uni_char)
 {
     const bool typing   = typingText();
     const bool was_open = completionOpen();
-    // The pair, the character and its outdent one key typed, one with the
-    // typing around it -- and every place of a text being changed at once
-    // brought up to it in the same step.
-    undoJournal().beginTyping(selection());
-    const bool paired = typing && mAutoClose && uni_char < 0x80 && !isReadOnly() && typePair(static_cast<char>(uni_char));
-    const bool typed  = paired || ALTextView::handleUnicodeCharHere(uni_char);
-    if (typed && mSnippet.live())
+    // At several carets the signature and a snippet's stops, each about
+    // one place, go; the list stays, the main caret's, and what is chosen
+    // from it goes in at each.
+    const bool several = typing && hasOtherSelections();
+    if (several)
     {
-        syncMirrors(mSnippet.at(), false);
+        hideSignature();
+        clearPlaceholders();
     }
+    // The pair, the character and its outdent one key typed, one with the
+    // typing around it.
+    undoJournal().beginTyping(selection());
+    const bool paired = typing && mAutoClose && uni_char < 0x80 && !isReadOnly() &&
+                        (several ? typePairs(static_cast<char>(uni_char)) : typePair(static_cast<char>(uni_char)));
+    const bool typed  = paired || ALTextView::handleUnicodeCharHere(uni_char);
     undoJournal().endTyping();
     if (!typed)
     {
@@ -4394,40 +4417,35 @@ bool ALCodeEditor::handleUnicodeCharHere(llwchar uni_char)
     // A call begins, moves on to its next argument, or ends: asked again
     // then, and only then -- within an argument, the parameter shown
     // follows the caret here.
-    if (mSignatureRequest && (uni_char == '(' || uni_char == ',' || uni_char == ')'))
+    if (!several && mSignatureRequest && (uni_char == '(' || uni_char == ',' || uni_char == ')'))
     {
         mSignatureRequest(caret());
     }
     return true;
 }
 
-bool ALCodeEditor::typePair(char c)
+std::optional<ALCodeEditor::Paired> ALCodeEditor::pairAt(const ALTextRange& selection, char c)
 {
     const std::shared_ptr<const ALSyntaxGrammar> grammar = highlighter().grammar();
     if (!grammar || grammar->pairs().empty())
     {
-        return false;
+        return std::nullopt;
     }
     const auto&        pairs = grammar->pairs();
-    const ALTextPos    at    = caret();
+    const ALTextPos    at    = selection.end;
     const std::string& line  = document().line(at.line);
     const char         next  = at.column < static_cast<S32>(line.size()) ? line[at.column] : '\0';
     // Over the closer typing put in, rather than a second one.
-    if (!hasSelection() && next == c)
+    if (selection.empty() && next == c && std::find(mAutoClosed.begin(), mAutoClosed.end(), at) != mAutoClosed.end())
     {
-        const auto put = std::find(mAutoClosed.begin(), mAutoClosed.end(), at);
-        if (put != mAutoClosed.end())
+        for (const auto& [open, close] : pairs)
         {
-            for (const auto& [open, close] : pairs)
+            if (close == c)
             {
-                if (close == c)
-                {
-                    // Where the typing goes on from, for the key after.
-                    mAutoClosed.erase(put);
-                    setCaret(ALTextPos(at.line, at.column + 1));
-                    undoJournal().settle(selection());
-                    return true;
-                }
+                Paired paired;
+                paired.over         = true;
+                paired.change.caret = ALTextPos(at.line, at.column + 1);
+                return paired;
             }
         }
     }
@@ -4437,23 +4455,24 @@ bool ALCodeEditor::typePair(char c)
         {
             continue;
         }
-        if (hasSelection())
+        if (!selection.empty())
         {
             // The selection wrapped in the pair, and still chosen inside it.
-            const ALTextRange sel   = selection().normalised();
-            const std::string inner = document().text(sel);
-            insertText(std::string(1, open) + inner + std::string(1, close));
-            const ALTextPos end = caret();
-            setSelection(ALTextRange(ALTextPos(sel.begin.line, sel.begin.column + 1), ALTextPos(end.line, end.column - 1)));
-            undoJournal().settle(selection());
-            return true;
+            const ALTextRange sel   = selection.normalised();
+            const std::string inner = std::string(1, open) + document().text(sel);
+            Paired            paired;
+            paired.change.replacements.push_back({ sel, inner + std::string(1, close) });
+            paired.change.selects = true;
+            paired.change.anchor  = ALTextPos(sel.begin.line, sel.begin.column + 1);
+            paired.change.caret   = ALTextEditing::endOf(sel.begin, inner);
+            return paired;
         }
         // Not in a comment or a string, where it is prose; and only before
         // a blank, the line's end, or what closes or ends -- a bracket
         // opened before a word is about that word.
         if (inProse(at))
         {
-            return false;
+            return std::nullopt;
         }
         bool room = next == '\0' || isspace(static_cast<unsigned char>(next)) || strchr(";,", next) != nullptr;
         for (const auto& [o, closer] : pairs)
@@ -4462,49 +4481,184 @@ bool ALCodeEditor::typePair(char c)
         }
         if (!room)
         {
-            return false;
+            return std::nullopt;
         }
         // A quote after a letter is an apostrophe, and after itself is the
         // end of an empty string.
         if (open == close && at.column > 0 && (alIdentifierByte(line[at.column - 1]) || line[at.column - 1] == open))
         {
-            return false;
+            return std::nullopt;
         }
-        insertText(std::string(1, open) + std::string(1, close));
-        const ALTextPos inside(at.line, at.column + 1);
-        setCaret(inside);
-        undoJournal().settle(selection());
-        mAutoClosed.insert(inside);
-        return true;
+        Paired paired;
+        paired.change.replacements.push_back({ ALTextRange(at, at), std::string(1, open) + std::string(1, close) });
+        paired.change.caret = ALTextPos(at.line, at.column + 1);
+        paired.closes       = true;
+        return paired;
     }
-    return false;
+    return std::nullopt;
 }
 
-bool ALCodeEditor::deletePair()
+bool ALCodeEditor::typePair(char c)
 {
-    const std::shared_ptr<const ALSyntaxGrammar> grammar = highlighter().grammar();
-    const ALTextPos                              at      = caret();
-    const auto                                   put     = std::find(mAutoClosed.begin(), mAutoClosed.end(), at);
-    if (!grammar || hasSelection() || put == mAutoClosed.end() || at.column == 0)
+    const std::optional<Paired> paired = pairAt(selection(), c);
+    if (!paired)
     {
         return false;
+    }
+    if (paired->over)
+    {
+        // Where the typing goes on from, for the key after.
+        mAutoClosed.eraseIf([at = caret()](const ALTextPos& closer) { return closer == at; });
+        setCaret(paired->change.caret);
+        undoJournal().settle(selection());
+        return true;
+    }
+    insertText(paired->change.replacements.front().text);
+    if (paired->change.selects)
+    {
+        setSelection(ALTextRange(paired->change.anchor, paired->change.caret));
+    }
+    else
+    {
+        setCaret(paired->change.caret);
+    }
+    undoJournal().settle(selection());
+    if (paired->closes)
+    {
+        mAutoClosed.insert(caret());
+    }
+    return true;
+}
+
+bool ALCodeEditor::typePairs(char c)
+{
+    // Worked out at each before any is made.
+    const std::vector<ALTextRange>     all = selectionsInOrder();
+    std::vector<std::optional<Paired>> paired;
+    paired.reserve(all.size());
+    bool any = false;
+    for (const ALTextRange& one : all)
+    {
+        paired.push_back(pairAt(one, c));
+        any = any || paired.back().has_value();
+    }
+    if (!any)
+    {
+        return false;
+    }
+    // The closers typed over are let go of before the edit moves them.
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        if (paired[i] && paired[i]->over)
+        {
+            mAutoClosed.eraseIf([at = all[i].end](const ALTextPos& closer) { return closer == at; });
+        }
+    }
+    const std::string plain(1, c);
+    editEach([&](size_t i, const ALTextRange& selection) {
+        if (paired[i])
+        {
+            return std::optional<ALTextEditing::Change>(paired[i]->change);
+        }
+        const ALTextRange     over = selection.normalised();
+        ALTextEditing::Change one;
+        one.replacements.push_back({ over, plain });
+        one.caret = ALTextEditing::endOf(over.begin, plain);
+        return std::optional<ALTextEditing::Change>(std::move(one));
+    });
+    // Each closer put in, before the caret that was put inside its pair.
+    const std::vector<ALTextRange> now = selectionsInOrder();
+    if (now.size() == all.size())
+    {
+        for (size_t i = 0; i < now.size(); ++i)
+        {
+            if (paired[i] && paired[i]->closes)
+            {
+                mAutoClosed.insert(now[i].end);
+            }
+        }
+        // A plain one typed where none paired, brought out as it would be
+        // were it typed alone.
+        outdentEach(static_cast<llwchar>(static_cast<unsigned char>(c)), [&paired](size_t i) { return !paired[i]; });
+    }
+    undoJournal().settle(selection());
+    return true;
+}
+
+std::optional<ALTextRange> ALCodeEditor::pairAround(const ALTextPos& at)
+{
+    const std::shared_ptr<const ALSyntaxGrammar> grammar = highlighter().grammar();
+    if (!grammar || at.column == 0 || std::find(mAutoClosed.begin(), mAutoClosed.end(), at) == mAutoClosed.end())
+    {
+        return std::nullopt;
     }
     const std::string& line = document().line(at.line);
     if (at.column >= static_cast<S32>(line.size()))
     {
-        return false;
+        return std::nullopt;
     }
     for (const auto& [open, close] : grammar->pairs())
     {
         if (line[at.column - 1] == open && line[at.column] == close)
         {
-            mAutoClosed.erase(put);
-            setSelection(ALTextRange(ALTextPos(at.line, at.column - 1), ALTextPos(at.line, at.column + 1)));
-            insertText(std::string());
-            return true;
+            return ALTextRange(ALTextPos(at.line, at.column - 1), ALTextPos(at.line, at.column + 1));
         }
     }
-    return false;
+    return std::nullopt;
+}
+
+bool ALCodeEditor::deletePair()
+{
+    if (hasSelection())
+    {
+        return false;
+    }
+    const std::optional<ALTextRange> pair = pairAround(caret());
+    if (!pair)
+    {
+        return false;
+    }
+    mAutoClosed.eraseIf([at = caret()](const ALTextPos& closer) { return closer == at; });
+    setSelection(*pair);
+    insertText(std::string());
+    return true;
+}
+
+bool ALCodeEditor::deletePairs()
+{
+    const std::vector<ALTextRange>          all = selectionsInOrder();
+    std::vector<std::optional<ALTextRange>> pairs;
+    pairs.reserve(all.size());
+    bool any = false;
+    for (const ALTextRange& one : all)
+    {
+        pairs.push_back(one.empty() ? pairAround(one.end) : std::nullopt);
+        any = any || pairs.back().has_value();
+        if (pairs.back())
+        {
+            mAutoClosed.eraseIf([at = one.end](const ALTextPos& closer) { return closer == at; });
+        }
+    }
+    if (!any)
+    {
+        return false;
+    }
+    // One Backspace at each: the pair where there is one, else what a
+    // Backspace takes there.
+    undoJournal().beginTyping(selection(), true);
+    editEach([&](size_t i, const ALTextRange& selection) -> std::optional<ALTextEditing::Change> {
+        const std::optional<ALTextRange> range = pairs[i] ? pairs[i] : erasedBy(ALEditorCommand::DeleteLeft, selection);
+        if (!range || range->empty())
+        {
+            return std::nullopt;
+        }
+        ALTextEditing::Change one;
+        one.replacements.push_back({ range->normalised(), std::string() });
+        one.caret = range->normalised().begin;
+        return one;
+    });
+    undoJournal().endTyping();
+    return true;
 }
 
 bool ALCodeEditor::handleMouseDown(S32 x, S32 y, MASK mask)
@@ -4571,6 +4725,7 @@ bool ALCodeEditor::handleMouseDown(S32 x, S32 y, MASK mask)
         const ALTextPos from(line, 0);
         const ALTextPos to = line < last ? ALTextPos(line + 1, 0) : ALTextPos(line, static_cast<S32>(document().line(line).size()));
         setFocus(true);
+        singleSelection();
         if ((mask & MASK_SHIFT) && hasSelection())
         {
             const ALTextRange was = selection();
@@ -4596,6 +4751,7 @@ bool ALCodeEditor::handleMouseDown(S32 x, S32 y, MASK mask)
     if (mask == MASK_CONTROL && (mSymbolRequest || mLinkRequest) && text.pointInRect(x, y))
     {
         const ALTextPos at = posAtLocal(x, y, false);
+        singleSelection();
         if (mLinkRequest && !mLinkRequest(at, false).empty())
         {
             setFocus(true);
@@ -4681,7 +4837,7 @@ bool ALCodeEditor::handleToolTip(S32 x, S32 y, MASK mask)
 #endif
         return true;
     }
-    if (!text.pointInRect(x, y) || (mCompletionList && mCompletionList->getVisible() && mCompletionList->getRect().pointInRect(x, y)))
+    if (!text.pointInRect(x, y) || onCompletionList(x, y))
     {
         return ALTextView::handleToolTip(x, y, mask);
     }
@@ -4709,10 +4865,13 @@ bool ALCodeEditor::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
     {
         return mCard->handleScrollWheel(x - mCard->getRect().mLeft, y - mCard->getRect().mBottom, delta);
     }
-    if (completionOpen() && mCompletionList->getRect().pointInRect(x, y))
+    if (onCompletionList(x, y))
     {
-        const LLRect& rect = mCompletionList->getRect();
-        return mCompletionList->handleScrollWheel(x - rect.mLeft, y - rect.mBottom, delta);
+        // The popup is as large as the editor, so the list's rect is in the
+        // editor's coordinates.
+        ALChoiceList& list = completionPopup().list();
+        const LLRect& rect = list.getRect();
+        return list.handleScrollWheel(x - rect.mLeft, y - rect.mBottom, delta);
     }
     hideCard();
     mWheeled = true;
@@ -4828,8 +4987,15 @@ void ALCodeEditor::draw()
     {
         hideSignature();
     }
-    // A closer put in is typed over only on its own line.
-    mAutoClosed.eraseIf([this](const ALTextPos& at) { return at.line != caret().line; });
+    // A closer put in is typed over only on its own line: a caret's.
+    mAutoClosed.eraseIf([this](const ALTextPos& at) {
+        if (at.line == caret().line)
+        {
+            return false;
+        }
+        const std::vector<ALTextRange>& others = otherSelections();
+        return std::none_of(others.begin(), others.end(), [&at](const ALTextRange& other) { return other.end.line == at.line; });
+    });
     // The name under the caret lit once the caret has rested, and again
     // where the view has scrolled past the lines it was lit over.
     if (mLightsOccurrences &&
@@ -4840,7 +5006,7 @@ void ALCodeEditor::draw()
     }
     // The mouse rested long enough on the text: its card, once.
     if (mHoverCards && mHoverDelay >= 0.f && !mHoverTried && !mWheeled && mMouseX >= 0 && mMouseRest.getElapsedTimeF32() >= mHoverDelay && !cardShown() &&
-        textRect().pointInRect(mMouseX, mMouseY) && !(mCompletionList && mCompletionList->getVisible() && mCompletionList->getRect().pointInRect(mMouseX, mMouseY)))
+        textRect().pointInRect(mMouseX, mMouseY) && !onCompletionList(mMouseX, mMouseY))
     {
         mHoverTried = true;
         hoverCardAt(mMouseX, mMouseY);
@@ -4855,10 +5021,6 @@ void ALCodeEditor::draw()
         // Over the card rather than under it, so that its own ground
         // cannot paint the frame out along the edge it shares.
         gl_rect_2d(mCard->getRect(), paint(Paint::WidgetBorder) % getDrawContext().mAlpha, false);
-    }
-    if (mCompletionDoc && mCompletionDoc->getVisible())
-    {
-        gl_rect_2d(mCompletionDoc->getRect(), paint(Paint::WidgetBorder) % getDrawContext().mAlpha, false);
     }
 }
 

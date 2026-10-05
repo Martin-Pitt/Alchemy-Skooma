@@ -149,6 +149,7 @@ target_sources(
     alkeycapture.cpp
     alkeychord.cpp
     alkeymap.cpp
+    almenuslot.cpp
     alvimcommandline.cpp
     alvimexcommands.cpp
     alvimkeymap.cpp
@@ -158,10 +159,12 @@ target_sources(
     alvimsearch.cpp
     alxuiservice.cpp
     alchoicelist.cpp
+    alchoicepopup.cpp
     aloutputview.cpp
     alsyntaxgrammar.cpp
     alsyntaxhighlighter.cpp
     altabstrip.cpp
+    altextcarets.cpp
     altextdiff.cpp
     altextdocument.cpp
     altextediting.cpp
@@ -169,13 +172,12 @@ target_sources(
     altextgotoline.cpp
     altextindent.cpp
     altextlayout.cpp
+    altextruler.cpp
     altextsearch.cpp
     altextspelling.cpp
     altextview.cpp
     altextundo.cpp
     alnotecarditems.cpp
-    alscripttheme.cpp
-    alscriptsnippets.cpp
     alfieldeditors.cpp
     alfolderfilter.cpp
     alfollowscontrol.cpp
@@ -369,6 +371,7 @@ target_sources(
         alkeychord.h
         alkeymap.h
         allinetable.h
+        almenuslot.h
         alvimcommandline.h
         alvimexcommands.h
         alvimhost.h
@@ -380,24 +383,26 @@ target_sources(
         alvimtext.h
         alxuiservice.h
         alchoicelist.h
+        alchoicepopup.h
         aloutputview.h
         alsyntaxgrammar.h
         alsyntaxhighlighter.h
         altabstrip.h
+        altextcarets.h
         altextdiff.h
         altextdocument.h
         altextediting.h
+        altextfeatures.h
         altextfind.h
         altextgotoline.h
         altextindent.h
         altextlayout.h
+        altextruler.h
         altextsearch.h
         altextspelling.h
         altextview.h
         altextundo.h
         alnotecarditems.h
-        alscripttheme.h
-        alscriptsnippets.h
         alfieldeditors.h
         alfolderfilter.h
         alfollowscontrol.h
@@ -497,9 +502,9 @@ if(AL_BUILD_TESTS)
   al_add_test(alfenwicktree PROJECT llui LIBRARIES ${test_libs})
   al_add_test(allinetable PROJECT llui LIBRARIES ${test_libs})
   al_add_test(altextdocument UNIT PROJECT llui LIBRARIES ${test_libs})
+  al_add_test(altextcarets UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
   al_add_test(altextundo UNIT PROJECT llui SOURCES altextdocument.cpp LIBRARIES ${test_libs})
   al_add_test(alnotecarditems UNIT PROJECT llui LIBRARIES ${test_libs})
-  al_add_test(alscriptsnippets UNIT PROJECT llui LIBRARIES ${test_libs})
   al_add_test(
     alsyntaxhighlighter
     UNIT
@@ -571,6 +576,7 @@ if(AL_BUILD_TESTS)
     alkeycapture
     alscopebar
     aljumpbar
+    almenuslot
     alpanelist
     alspecimenlist
     altabstrip
@@ -605,7 +611,6 @@ if(AL_BUILD_TESTS)
     alfixlistmodel
     alfoldmodel
     alsnippetsession
-    alscripttheme
     alvimkeymap
     alvimmappings
     alvimpattern

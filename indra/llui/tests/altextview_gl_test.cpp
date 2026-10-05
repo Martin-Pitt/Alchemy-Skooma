@@ -29,6 +29,7 @@
 #include "../../llrender/tests/llheadlessgl_fixture.h"
 
 #include "../alcodeeditor.h"
+#include "../altextruler.h"
 #include "../altextview.h"
 #include "../llui.h"
 #include "../llfocusmgr.h"
@@ -58,6 +59,7 @@ namespace
     struct Painter : public ALTextView
     {
         using ALTextView::drawSquiggle;
+        using ALTextView::squiggleMiddle;
     };
 
     constexpr S32 W = ll_test::HeadlessGL::WIDTH;
@@ -341,10 +343,11 @@ namespace tut
             return ll_test::readFramebufferRGBA(W, H);
         };
         // Every pixel that differs between two frames lies within a line's
-        // band, a few pixels either way; and some do.
-        const auto only_on = [&](const std::string& what, const std::vector<U8>& a, const std::vector<U8>& b, S32 line) {
+        // band, a few pixels either way -- `below` more under it -- and
+        // some do.
+        const auto only_on = [&](const std::string& what, const std::vector<U8>& a, const std::vector<U8>& b, S32 line, S32 below = 0) {
             const S32 top    = editor->textRect().mTop - (editor->layout().lineTop(line) - editor->scrollY()) + 3;
-            const S32 bottom = top - 3 - editor->layout().lineHeight(line) - 3;
+            const S32 bottom = top - 3 - editor->layout().lineHeight(line) - 3 - below;
             bool      some   = false;
             for (S32 y = 0; y < H; ++y)
             {
@@ -384,7 +387,11 @@ namespace tut
         d.range = ALTextRange(ALTextPos(7, 8), ALTextPos(7, 13));
         d.color = LLColor4::red;
         editor->setDecorations({ d });
-        only_on("a squiggle", plain, frame(), 7);
+        // Under the text, where the line's descenders reach: past the row
+        // where the font's lines are closer than its letters are tall.
+        const LLFontGL* mono     = LLFontGL::getFontMonospace();
+        const S32       overhang = llmax(0, ll_round(mono->getDescenderHeight()) - (mono->getLineSpacing() - ll_round(mono->getAscenderHeight())));
+        only_on("a squiggle", plain, frame(), 7, overhang);
 
         std::list<LLVertexBufferData> capture;
         gGL.beginList(&capture);
@@ -395,5 +402,209 @@ namespace tut
         ensure("a handful of draws: " + std::to_string(capture.size()), capture.size() <= 25);
         gFocusMgr.setKeyboardFocus(nullptr);
         editor->die();
+    }
+
+    // The preview of the lines under the mouse on the map is drawn over the
+    // text beside the map: to its left where the map is on the right, to its
+    // right where it is on the left -- not off the view past it.
+    template<> template<>
+    void altextview_gl_object::test<6>()
+    {
+        ll_test::HeadlessUI& ui = ll_test::HeadlessUI::get(/*gl_textures=*/true);
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        std::string text;
+        for (S32 i = 0; i < 200; ++i)
+        {
+            text += "word word word word\n";
+        }
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name           = "view";
+        p.rect           = LLRect(0, H, W, 0);
+        p.default_text   = text;
+        ALTextView* view = LLUICtrlFactory::create<ALTextView>(p);
+        view->setFont(LLFontGL::getFontMonospace());
+        view->setScrollMap(true);
+        view->setScrollMapWidth(60);
+        view->setBackgroundColor(LLColor4(0.1f, 0.1f, 0.12f, 1.f));
+        view->setTextColor(LLColor4(0.9f, 0.9f, 0.9f, 1.f));
+        ALTextRuler* map = view->findChild<ALTextRuler>("ruler");
+        // Every pixel of the view, as it draws.
+        const auto drawn = [&]() {
+            gl().clearFramebuffer();
+            glEnable(GL_BLEND);
+            gGL.setSceneBlendType(LLRender::BT_ALPHA);
+            view->draw();
+            gGL.flush();
+            glDisable(GL_BLEND);
+            glFinish();
+            return ll_test::readFramebufferRGBA(W, H);
+        };
+        // How many pixels between two columns differ between two frames.
+        const auto changed = [&](const std::vector<U8>& a, const std::vector<U8>& b, S32 from, S32 to) {
+            S32 count = 0;
+            for (S32 y = 0; y < H; ++y)
+            {
+                for (S32 x = from; x < to; ++x)
+                {
+                    const size_t at = (static_cast<size_t>(y) * W + x) * 4;
+                    count += a[at] != b[at] || a[at + 1] != b[at + 1] || a[at + 2] != b[at + 2];
+                }
+            }
+            return count;
+        };
+        for (const bool left : { false, true })
+        {
+            view->setScrollMapOnLeft(left);
+            map->onMouseLeave(0, 0, MASK_NONE);
+            const std::vector<U8> plain = drawn();
+            map->handleHover(30, H / 2, MASK_NONE);
+            const std::vector<U8> shown = drawn();
+            const S32 text_from = left ? 60 : 0;
+            const S32 text_to   = left ? W : W - 60;
+            ensure(std::string("the preview over the text, the map on the ") + (left ? "left" : "right"),
+                   changed(plain, shown, text_from, text_to) > 1000);
+        }
+        view->die();
+    }
+
+    // A row's squiggle is under its text: nothing at or above the baseline,
+    // where a period's foot stands, and only the fade in the pixel under
+    // it; the line itself lower still.
+    template<> template<>
+    void altextview_gl_object::test<7>()
+    {
+        const S32              text_top = 150;
+        const S32              ascent   = 12;
+        const S32              baseline = text_top - ascent;
+        const S32              middle   = Painter::squiggleMiddle(text_top, ascent);
+        const std::vector<S32> now      = coverage([&] { Painter::drawSquiggle(40.f, 140.f, middle, LLColor4::white, LLRect(0, H, W, 0)); });
+        S32                    under    = 0;
+        S32                    drawn    = 0;
+        for (S32 x = 40; x < 140; ++x)
+        {
+            for (S32 y = baseline; y < text_top; ++y)
+            {
+                if (now[static_cast<size_t>(y) * W + x] != 0)
+                {
+                    fail("over the text at " + std::to_string(x) + "," + std::to_string(y));
+                }
+            }
+            under = llmax(under, now[static_cast<size_t>(baseline - 1) * W + x]);
+            for (S32 y = 0; y < baseline; ++y)
+            {
+                drawn = llmax(drawn, now[static_cast<size_t>(y) * W + x]);
+            }
+        }
+        ensure("drawn under the text", drawn == 255);
+        ensure("only the fade just under the baseline: " + std::to_string(under), under < 128);
+    }
+
+    // The carets besides the main one are drawn as it is, blinking with it:
+    // a frame with the main caret on one line and another on a second is
+    // the frame with the two the other way round. A selection besides the
+    // main one is washed as it is, on its own line only. And every caret
+    // in sight is the one draw.
+    template<> template<>
+    void altextview_gl_object::test<8>()
+    {
+        ll_test::HeadlessUI& ui = ll_test::HeadlessUI::get(/*gl_textures=*/true);
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        std::string text;
+        for (S32 i = 0; i < 12; ++i)
+        {
+            text += "integer value = f(x, [y, z]);\n";
+        }
+        ALTextView::Params p(LLUICtrlFactory::getDefaultParams<ALTextView>());
+        p.name         = "view";
+        p.rect         = LLRect(0, H, W, 0);
+        p.default_text = text;
+        // The skin's colours are not loaded here: the caret's is given.
+        p.cursor_color = LLUIColor(LLColor4::white);
+        ALTextView* view = LLUICtrlFactory::create<ALTextView>(p);
+        view->setFont(LLFontGL::getFontMonospace());
+        view->setSelectionColor(LLUIColor(LLColor4(0.2f, 0.4f, 0.9f, 0.6f)));
+        // Shown, and still from frame to frame.
+        view->setCaretBlink(false);
+        view->setFocus(true);
+
+        const auto frame = [&]() {
+            gl().clearFramebuffer();
+            glEnable(GL_BLEND);
+            gGL.setSceneBlendType(LLRender::BT_ALPHA);
+            view->draw();
+            gGL.flush();
+            glDisable(GL_BLEND);
+            glFinish();
+            return ll_test::readFramebufferRGBA(W, H);
+        };
+        // Every pixel that differs between two frames lies within a line's
+        // band, and some do.
+        const auto only_on = [&](const std::string& what, const std::vector<U8>& a, const std::vector<U8>& b, S32 line) {
+            const S32 top    = view->textRect().mTop - (view->layout().lineTop(line) - view->scrollY()) + 3;
+            const S32 bottom = top - 3 - view->layout().lineHeight(line) - 3;
+            bool      some   = false;
+            for (S32 y = 0; y < H; ++y)
+            {
+                for (S32 x = 0; x < W; ++x)
+                {
+                    const size_t i = (static_cast<size_t>(y) * W + x) * 4;
+                    if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2])
+                    {
+                        some = true;
+                        ensure(what + ": changed at " + std::to_string(x) + "," + std::to_string(y) + ", off line " + std::to_string(line),
+                               y <= top && y >= bottom);
+                    }
+                }
+            }
+            ensure(what + ": something changed", some);
+        };
+        const auto at = [](S32 line, S32 column) { return ALTextRange(ALTextPos(line, column), ALTextPos(line, column)); };
+
+        view->setSelection(at(4, 0));
+        const std::vector<U8> one = frame();
+        view->addSelection(at(2, 5));
+        const std::vector<U8> two = frame();
+        only_on("another caret", one, two, 2);
+        view->setSelections(at(2, 5), { at(4, 0) });
+        ensure("the two the other way round, the same frame", frame() == two);
+
+        const ALTextRange      span(ALTextPos(7, 2), ALTextPos(7, 10));
+        view->setSelections(at(4, 0), { span });
+        const std::vector<U8> other_span = frame();
+        only_on("another selection, its caret at its end", one, other_span, 7);
+        view->setSelections(span, { at(4, 0) });
+        ensure("the same as the main selection", frame() == other_span);
+
+        // A caret on every line: the carets are one draw, not one each.
+        std::vector<ALTextRange> many;
+        for (S32 line = 1; line < 12; ++line)
+        {
+            many.push_back(at(line, line));
+        }
+        view->setSelections(at(0, 0), many);
+        std::list<LLVertexBufferData> capture;
+        gGL.beginList(&capture);
+        view->draw();
+        gGL.flush();
+        gGL.endList();
+        glFinish();
+        const size_t with_many = capture.size();
+        capture.clear();
+        view->singleSelection();
+        gGL.beginList(&capture);
+        view->draw();
+        gGL.flush();
+        gGL.endList();
+        glFinish();
+        ensure("twelve carets cost what one does: " + std::to_string(with_many) + " against " + std::to_string(capture.size()),
+               with_many == capture.size());
+        gFocusMgr.setKeyboardFocus(nullptr);
+        view->die();
     }
 }

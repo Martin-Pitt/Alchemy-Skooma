@@ -27,6 +27,7 @@
 #include "../alscriptweightspane.h"
 
 #include "alpanelist.h"
+#include "alrecoverystore.h"
 #include "llfloater.h"
 #include "llpanel.h"
 #include "llscrolllistitem.h"
@@ -242,6 +243,14 @@ namespace tut
         parts->sortByColumn("change", false);
         parts->updateSort();
         ensure_equals("the new function moved most", cell(parts->getAllData()[0], 0), std::string("twice"));
+        // By name, as the names are shown.
+        parts->sortByColumn("part", true);
+        parts->updateSort();
+        const std::vector<std::string> names = column(parts, 0);
+        for (size_t i = 1; i < names.size(); ++i)
+        {
+            ensure("in the order of their names" + joined(names), LLStringUtil::compareDict(names[i - 1], names[i]) <= 0);
+        }
     }
 
     // Nothing to show says why, and holds nothing to choose.
@@ -322,5 +331,80 @@ namespace tut
         const std::string names = joined(column(list("weights_parts"), 0));
         ensure("the handler by its event: " + names, names.find("touch_start") != std::string::npos);
         ensure("the other with none: " + names, names.find(window.find<LLPanel>("weights_tab")->getString("WeightsPartUnnamed")) != std::string::npos);
+    }
+
+    // What the region reserves for the script's object, where it has said:
+    // after the code's size, for all of the object's scripts, with its URLs
+    // where it has any; its time, where it told an estate manager; and the
+    // tip saying how the region counts each.
+    template<> template<>
+    void alscriptweightspane_object::test<7>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        ALScriptWeightsPane&       pane  = weights();
+        ALScriptWeightsPane::Shown shown = lsl();
+        LLTextBox*                 head  = floater->findChild<LLTextBox>("weights_head", true);
+        pane.show(shown);
+        ensure("nothing of the region", head->getText().find("region") == std::string::npos);
+        ALScriptRegionUsage::Usage reserved;
+        reserved.memory = 131072;
+        reserved.when   = LLDate(1.8e9);
+        shown.region    = reserved;
+        shown.id        = "script-2";
+        pane.show(shown);
+        const std::string said = head->getText();
+        ensure("reserved, in KB" + said, said.find("reserves 128 KB for all its scripts") != std::string::npos);
+        ensure("as of when" + said, said.find(ALRecoveryEntry::sayWhen(reserved.when)) != std::string::npos);
+        ensure("no URLs said where there are none" + said, said.find("URLs") == std::string::npos);
+        ensure("the tip says how it counts", head->getToolTip().find("64 KB for Mono") != std::string::npos);
+        ensure("and nothing of time unasked", head->getToolTip().find("Top Scripts") == std::string::npos);
+        shown.region->urls = 3;
+        shown.id           = "script-3";
+        pane.show(shown);
+        ensure("and URLs where there are" + head->getText(), head->getText().find("128 KB and 3 URLs") != std::string::npos);
+        ensure("no time where the region said none" + head->getText(), head->getText().find("ms of the region") == std::string::npos);
+        shown.region->time     = 0.125f;
+        shown.region->timeWhen = LLDate(1.8e9);
+        shown.id               = "script-4";
+        pane.show(shown);
+        ensure("its time, said to an estate manager" + head->getText(), head->getText().find("take 0.125 ms of the region's time") != std::string::npos);
+        ensure("the tip says how both are counted", head->getToolTip().find("64 KB for Mono") != std::string::npos && head->getToolTip().find("Top Scripts") != std::string::npos);
+        ALScriptRegionUsage::Usage timed;
+        timed.time     = 0.5f;
+        timed.timeWhen = LLDate(1.8e9);
+        shown.region   = timed;
+        shown.id       = "script-5";
+        pane.show(shown);
+        ensure("time alone: no memory said" + head->getText(),
+               head->getText().find("reserves") == std::string::npos && head->getText().find("take 0.500 ms") != std::string::npos);
+        ensure("and the tip of the time alone", head->getToolTip().find("64 KB for Mono") == std::string::npos && head->getToolTip().find("Top Scripts") != std::string::npos);
+    }
+
+    // LSL on Luau's compiler records no lines, so its lines are not
+    // weighed one by one: said, where its heat would show nothing; not of
+    // a target whose lines merely weigh nothing.
+    template<> template<>
+    void alscriptweightspane_object::test<8>()
+    {
+        if (!ui.ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        ensure("the studio's window builds with its Weights tab", tab() != nullptr);
+        ALScriptWeightsPane& pane = weights();
+        ALScriptWeightsPane::Shown shown = lsl();
+        shown.weights[2].compiled = true;
+        shown.weights[2].error.clear();
+        shown.weights[2].total = 2048;
+        std::swap(shown.weights[0], shown.weights[2]);
+        pane.show(shown);
+        const std::string luau = floater->findChild<LLTextBox>("weights_head", true)->getText();
+        ensure("said for LSL on Luau: " + luau, luau.find("records no lines") != std::string::npos);
+        pane.show(lsl());
+        const std::string lso = floater->findChild<LLTextBox>("weights_head", true)->getText();
+        ensure("not for LSO: " + lso, lso.find("records no lines") == std::string::npos);
     }
 }
