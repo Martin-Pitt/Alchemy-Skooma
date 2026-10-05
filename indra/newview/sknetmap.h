@@ -111,6 +111,7 @@ private:
     void drawSelf();
     void drawSelfExtras();
     void drawPeople();
+    void drawVehicles();
     void drawTracking();
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();

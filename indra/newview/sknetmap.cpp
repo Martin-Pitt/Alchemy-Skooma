@@ -277,6 +277,7 @@ void SKNetMap::draw()
         SKMapScene::instance().drawFloorplan(mView);
         SKMapScene::instance().drawVoid(mView);
         mParcels->draw(mView);
+        drawVehicles();
         drawSelf();
         drawSelfExtras();
     }
@@ -454,6 +455,38 @@ void SKNetMap::drawSelfExtras()
             gGL.end();
         }
     }
+}
+
+void SKNetMap::drawVehicles()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVehicles", true);
+    if (!show)
+    {
+        return;
+    }
+    gGL.begin(LLRender::TRIANGLES);
+    for (const SKMapPeople::Vehicle& v : SKMapPeople::instance().vehicles())
+    {
+        if (SKMapVehicleGlyphs::glyphFor(v.mRoot))
+        {
+            continue;   // no glyph is drawn yet; the seam is for the outline capture
+        }
+        // The linkset's box at its live heading: hull, and a nose tick at its front.
+        auto at = [&](F32 x, F32 y) {
+            const LLVector3 p = LLVector3(x, y, 0.f) * v.mRot;
+            return mView.toWidget(v.mPos + LLVector3d(p.mV[VX], p.mV[VY], 0.0));
+        };
+        const LLVector2 a = at(v.mMin.mV[VX], v.mMin.mV[VY]), b = at(v.mMax.mV[VX], v.mMin.mV[VY]);
+        const LLVector2 c = at(v.mMax.mV[VX], v.mMax.mV[VY]), d = at(v.mMin.mV[VX], v.mMax.mV[VY]);
+        skmapdraw::colour(skmap::palette::VEH_CIVIL_HULL);
+        skmapdraw::triangle(a, b, c);
+        skmapdraw::triangle(a, c, d);
+        const F32 mid_y = (v.mMin.mV[VY] + v.mMax.mV[VY]) * 0.5f;
+        const F32 length = v.mMax.mV[VX] - v.mMin.mV[VX];
+        skmapdraw::colour(skmap::palette::VEH_CIVIL_TOP);
+        skmapdraw::line(at(v.mMax.mV[VX] - length * 0.25f, mid_y), at(v.mMax.mV[VX], mid_y), 2.f);
+    }
+    gGL.end();
 }
 
 void SKNetMap::collectDots()

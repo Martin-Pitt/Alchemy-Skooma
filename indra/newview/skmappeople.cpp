@@ -43,6 +43,7 @@
 #include "skmappalette.h"
 #include "skmapscene.h"
 #include "sknavmesh.h"
+#include "skworldcensus.h"
 
 namespace
 {
@@ -106,6 +107,93 @@ void SKMapPeople::idle()
     LL_PROFILE_ZONE_SCOPED;
     gatherPeople();
     updateCoverAhead();
+    gatherVehicles();
+}
+
+void SKMapPeople::gatherVehicles()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVehicles", true);
+    mVehicles.clear();
+    if (!show || !SKWorldCensus::instanceExists())
+    {
+        return;
+    }
+    // The census latches a linkset as a vehicle once it was crewed while physical or travelled,
+    // so a parked one stays; the roots are read again only when a new census lands.
+    if (const SKCensusSnapshotPtr snap = SKWorldCensus::instance().snapshot())
+    {
+        if (snap->mStamp != mVehicleStamp)
+        {
+            mVehicleStamp = snap->mStamp;
+            mVehicleRoots.clear();
+            for (const sknav::Feature& f : snap->mFeatures)
+            {
+                if (f.mKind == sknav::FeatureKind::VEHICLE)
+                {
+                    mVehicleRoots.insert(mVehicleRoots.end(), f.mRoots.begin(), f.mRoots.end());
+                }
+            }
+        }
+    }
+    std::map<LLUUID, BoxCache> boxes;
+    for (const LLUUID& id : mVehicleRoots)
+    {
+        LLViewerObject* root = gObjectList.findObject(id);
+        if (!root || root->isDead() || !root->isRoot())
+        {
+            continue;
+        }
+        Vehicle v;
+        v.mRoot = id;
+        v.mPos = root->getPositionGlobal();
+        v.mRot = root->getRotation();
+        // The union of the parts' boxes in the root's frame, cached by the parts' local ids.
+        U64 key = sknav::mix(sknav::SEED, root->getChildren().size());
+        for (const LLPointer<LLViewerObject>& child : root->getChildren())
+        {
+            if (!child->isAvatar())
+            {
+                key = sknav::mix(key, child->getLocalID());
+            }
+        }
+        auto cached = mBoxes.find(id);
+        if (cached == mBoxes.end() || cached->second.mKey != key)
+        {
+            BoxCache box;
+            box.mKey = key;
+            box.mMin = root->getScale() * -0.5f;
+            box.mMax = root->getScale() * 0.5f;
+            for (const LLPointer<LLViewerObject>& child : root->getChildren())
+            {
+                if (child->isAvatar())
+                {
+                    continue;
+                }
+                const LLVector3 half = child->getScale() * 0.5f;
+                for (S32 k = 0; k < 8; ++k)
+                {
+                    const LLVector3 corner((k & 1) ? half.mV[VX] : -half.mV[VX], (k & 2) ? half.mV[VY] : -half.mV[VY], (k & 4) ? half.mV[VZ] : -half.mV[VZ]);
+                    const LLVector3 p = child->getPosition() + corner * child->getRotation();
+                    box.mMin.set(llmin(box.mMin.mV[VX], p.mV[VX]), llmin(box.mMin.mV[VY], p.mV[VY]), llmin(box.mMin.mV[VZ], p.mV[VZ]));
+                    box.mMax.set(llmax(box.mMax.mV[VX], p.mV[VX]), llmax(box.mMax.mV[VY], p.mV[VY]), llmax(box.mMax.mV[VZ], p.mV[VZ]));
+                }
+            }
+            cached = mBoxes.insert_or_assign(id, box).first;
+        }
+        v.mMin = cached->second.mMin;
+        v.mMax = cached->second.mMax;
+        boxes[id] = cached->second;
+        // The crew, read live: loaded avatars seated on it.
+        for (const Person& p : mPeople)
+        {
+            if (p.mSitting && p.mSeatRoot == id)
+            {
+                v.mCrew.push_back(p.mId);
+            }
+        }
+        mVehicles.push_back(v);
+    }
+    mBoxes.swap(boxes);
 }
 
 void SKMapPeople::updateCoverAhead()

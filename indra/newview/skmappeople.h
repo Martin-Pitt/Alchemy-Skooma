@@ -25,6 +25,7 @@
 #ifndef SK_MAPPEOPLE_H
 #define SK_MAPPEOPLE_H
 
+#include "llquaternion.h"
 #include "llsingleton.h"
 #include "lluuid.h"
 #include "v3dmath.h"
@@ -32,7 +33,17 @@
 
 #include "skmapgeom.h"
 
+#include <map>
 #include <vector>
+
+/// A vehicle's captured outline, keyed by its root. A seam for the outline capture module.
+class SKMapVehicleGlyphs
+{
+public:
+    struct Glyph;
+    /// The outline captured for a vehicle, or null: none are captured yet, so the box draws.
+    static const Glyph* glyphFor(const LLUUID& root) { return nullptr; }
+};
 
 /// Main thread only. Does nothing while no map has drawn for a couple of seconds.
 class SKMapPeople : public LLSingleton<SKMapPeople>
@@ -61,6 +72,17 @@ public:
 
     /// Everyone but the agent, friends last.
     const std::vector<Person>& people() const { return mPeople; }
+
+    struct Vehicle
+    {
+        LLUUID mRoot;
+        LLVector3d mPos;
+        LLQuaternion mRot;
+        LLVector3 mMin, mMax;               ///< the linkset's box in the root's frame
+        std::vector<LLUUID> mCrew;          ///< loaded avatars seated on it
+    };
+    /// Linksets the census has seen driven this session, at their live pose.
+    const std::vector<Vehicle>& vehicles() const { return mVehicles; }
     /// Whether the agent stands where it can be hurt; general mode until the combat commit.
     bool combat() const { return false; }
     /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
@@ -76,11 +98,22 @@ private:
     void idle();
     void gatherPeople();
     void updateCoverAhead();
+    void gatherVehicles();
 
     std::vector<Person> mPeople;
     F64 mLastDrawn = -1.0e9;
     sknav::Cover mCoverAhead = sknav::Cover::NONE;
     F64 mCoverAt = -1.0e9;
+    std::vector<Vehicle> mVehicles;
+    std::vector<LLUUID> mVehicleRoots;
+    U64 mVehicleStamp = 0;
+    /// Linkset boxes by root, kept while the child set holds.
+    struct BoxCache
+    {
+        U64 mKey = 0;
+        LLVector3 mMin, mMax;
+    };
+    std::map<LLUUID, BoxCache> mBoxes;
 };
 
 #endif // SK_MAPPEOPLE_H
