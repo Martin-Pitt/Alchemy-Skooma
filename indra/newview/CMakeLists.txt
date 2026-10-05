@@ -1860,8 +1860,15 @@ if(AL_BUILD_VIEWER)
   )
 
   # <SK:Nexii> SKNetMap mini-map sources
-  list(APPEND viewer_SOURCES sknavpolys.cpp skmapview.cpp skmapgeom.cpp)
-  list(APPEND viewer_HEADERS sknavpolys.h skmapview.h skmapgeom.h)
+  list(APPEND viewer_SOURCES sknavpolys.cpp skmapview.cpp skmapgeom.cpp skmapraster.cpp)
+  list(
+    APPEND viewer_HEADERS
+    sknavpolys.h
+    skmapview.h
+    skmapgeom.h
+    skmapraster.h
+    skmappalette.h
+  )
   # </SK:Nexii>
 
   # The version as one line, for the hosted build's metadata.
@@ -2957,6 +2964,13 @@ if(AL_BUILD_TESTS)
     UNIT
     PROJECT ${test_project}
     SOURCES skmapview.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(
+    skmapraster
+    UNIT
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   # </SK:Nexii>
