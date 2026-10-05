@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="false"
  can_resize="false"
- height="286"
+ height="262"
  layout="topleft"
  name="floater_sk_ots_options"
  save_rect="true"
@@ -98,27 +98,16 @@
      top_pad="12"
      width="406" />
     <check_box
-     control_name="SKOTSReportEyeCamera"
-     follows="left|top"
-     height="16"
-     label="Aim from the eye (scripts see your eye, not the shoulder camera)"
-     layout="topleft"
-     left="12"
-     name="ots_report_eye"
-     tool_tip="Report a camera at your eye, aimed at what is under the crosshair, so weapons that fire from the camera fire from your avatar and cannot shoot around cover you are behind."
-     top_pad="8"
-     width="406" />
-    <check_box
      control_name="SKOTSAvatarConverge"
      follows="left|top"
      height="16"
      label="Snap aim onto the avatar under the crosshair"
      layout="topleft"
-     left="24"
+     left="12"
      name="ots_avatar_converge"
-     tool_tip="Aim from the eye converges on the hitbox of the avatar under the crosshair, not the wall behind them. Uses the same box as Avatar Hitboxes, a stand-in for the real physics shape."
+     tool_tip="Your shots, which always leave from your eye, converge on the hitbox of the avatar under the crosshair, not the wall behind them. Uses the same box as Avatar Hitboxes, a stand-in for the real physics shape."
      top_pad="8"
-     width="394" />
+     width="406" />
     <check_box
      control_name="SKOTSRememberLastView"
      follows="left|top"

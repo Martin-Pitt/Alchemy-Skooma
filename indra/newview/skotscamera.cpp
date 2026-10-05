@@ -46,6 +46,7 @@
 namespace
 {
     constexpr F32 CONVERGE_RANGE = 512.f;            // metres; open-sky fallback
+    constexpr F32 MIN_BEYOND_EYE = 0.3f;             // nearest a target may sit past the eye
     constexpr F32 MIN_CAMERA_DISTANCE = 0.3f;        // never pulled in closer than just behind the head
     constexpr F32 COLLISION_EASE_OUT_HALF_LIFE = 0.15f;
     constexpr S32 MAX_PHANTOM_SKIPS = 16;
@@ -177,16 +178,8 @@ namespace
     // Nearest avatar hitbox under the crosshair, in front of the shooter's eye. The box is the
     // one Avatar Hitboxes draws: object position, scale and rotation rather than the animated
     // body. A stand-in until the measured physics shape replaces it.
-    bool intersectAvatarHitbox(const LLVector3& cam_origin, const LLVector3& cam_at, F32 max_dist, F32& t_out)
+    bool intersectAvatarHitbox(const LLVector3& cam_origin, const LLVector3& cam_at, F32 eye_dist, F32 max_dist, F32& t_out)
     {
-        // The camera sits behind the shoulder, so someone standing behind the shooter can be in
-        // front of the camera; only boxes beyond the eye count.
-        F32 eye_dist = 0.1f;
-        if (isAgentAvatarValid() && gAgentAvatarp->mHeadp)
-        {
-            eye_dist = llmax(0.1f, (gAgentAvatarp->mHeadp->getWorldPosition() - cam_origin) * cam_at);
-        }
-
         bool found = false;
         for (LLCharacter* character : LLCharacter::sInstances)
         {
@@ -213,6 +206,12 @@ namespace
             }
         }
         return found;
+    }
+
+    LLVector3 eyePositionAgent()
+    {
+        return gAgentAvatarp->mHeadp ? gAgentAvatarp->mHeadp->getWorldPosition()
+                                     : gAgentAvatarp->getPositionAgent() + LLVector3(0.f, 0.f, 0.6f);
     }
 
     LLVector3 shoulderOffset(const LLVector3* sit_offset)
@@ -332,23 +331,30 @@ LLVector3 SKOTSCamera::focusPositionAgent(const LLVector3& root_agent, const LLQ
 
 LLVector3 SKOTSCamera::convergenceTarget(const LLVector3& cam_origin, const LLVector3& cam_at)
 {
+    // A shot leaves from the eye, which sits ahead of the camera along the crosshair ray; anything
+    // the ray meets before the eye (a pillar beside the shoulder, a doorframe) cannot be shot at
+    // and would turn the shot sideways or backwards, so the search starts at the eye.
+    F32 eye_dist = MIN_BEYOND_EYE;
+    if (isAgentAvatarValid())
+    {
+        eye_dist = llmax(eye_dist, (eyePositionAgent() - cam_origin) * cam_at);
+    }
+
     // Solid world geometry, then avatar hitboxes; attachments and phantom surfaces never take the aim.
     F32 dist = CONVERGE_RANGE;
     LLVector3 hit;
-    if (intersectSolidWorld(cam_origin, cam_origin + cam_at * CONVERGE_RANGE, true, hit))
+    if (intersectSolidWorld(cam_origin + cam_at * eye_dist, cam_origin + cam_at * CONVERGE_RANGE, true, hit))
     {
-        dist = llmax((hit - cam_origin) * cam_at, 0.f);
+        dist = (hit - cam_origin) * cam_at;
     }
 
-    // At point blank the eye-to-target angle blows up with the shoulder offset.
-    static LLCachedControl<F32> min_distance(gSavedSettings, "SKOTSConvergeMinDistance", 2.f);
-    dist = llmax(dist, (F32)min_distance);
-
-    // A hitbox is an authoritative target: exempt from the clamp and the smoothing, so the lock is
-    // immediate even at point blank. A wall in front of the target still wins.
+    // A hitbox in front of the wall is an authoritative target: exempt from the smoothing, so the
+    // lock is immediate even at point blank.
     static LLCachedControl<bool> avatar_converge(gSavedSettings, "SKOTSAvatarConverge", true);
     F32 avatar_dist = 0.f;
-    const bool on_avatar = avatar_converge && intersectAvatarHitbox(cam_origin, cam_at, dist, avatar_dist);
+    const bool on_avatar = avatar_converge && intersectAvatarHitbox(cam_origin, cam_at, eye_dist, dist, avatar_dist);
+
+    dist = llmax(dist, eye_dist + MIN_BEYOND_EYE);
 
     // Smooth the depth along the ray, not the point, so the target stays under the crosshair.
     // Advanced once per frame because more than one caller asks within a frame.
@@ -367,25 +373,29 @@ LLVector3 SKOTSCamera::convergenceTarget(const LLVector3& cam_origin, const LLVe
         smoothed = (F32)half_life > 0.f ? lerp(smoothed, dist, LLSmoothInterpolation::getInterpolant((F32)half_life)) : dist;
     }
 
-    return cam_origin + cam_at * smoothed;
+    return cam_origin + cam_at * llmax(smoothed, eye_dist + MIN_BEYOND_EYE);
 }
 
 bool SKOTSCamera::reportedCamera(LLVector3& pos, LLVector3& at, LLVector3& left, LLVector3& up)
 {
-    static LLCachedControl<bool> report_eye(gSavedSettings, "SKOTSReportEyeCamera", true);
-    // Seated, the region gets the true camera: vehicle turrets aim from llGetCameraPos and
-    // llGetCameraRot, and fire from the vehicle rather than the eye.
-    if (!report_eye || !isShoulder() || !isAgentAvatarValid() || !gAgentAvatarp->mHeadp
-        || gAgentAvatarp->isSitting() || gAgent.getTeleportState() != LLAgent::TELEPORT_NONE)
+    // Always in the shoulder view: reporting the shoulder camera would let camera-fired weapons
+    // shoot from behind and beside the avatar, around cover it is behind. Seated, the region gets
+    // the true camera instead: vehicle turrets aim from llGetCameraPos and llGetCameraRot, and
+    // fire from the vehicle rather than the eye.
+    if (!isShoulder() || !isAgentAvatarValid() || gAgentAvatarp->isSitting())
     {
         return false;
     }
 
-    const LLVector3 eye = gAgentAvatarp->mHeadp->getWorldPosition();
-    LLVector3 dir = convergenceTarget(pos, at) - eye;
-    if (dir.normalize() <= 0.f)
+    const LLVector3 eye = eyePositionAgent();
+    LLVector3 dir = at;
+    if (gAgent.getTeleportState() == LLAgent::TELEPORT_NONE) // no raycasts into a world being torn down
     {
-        return false;
+        dir = convergenceTarget(pos, at) - eye;
+        if (dir.normalize() <= 0.f)
+        {
+            dir = at;
+        }
     }
 
     LLCoordFrame frame;
