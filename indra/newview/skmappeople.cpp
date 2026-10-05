@@ -45,6 +45,7 @@
 #include "pipeline.h"
 #include "skmappalette.h"
 #include "skmapscene.h"
+#include "sknetmap.h"
 #include "sknavmesh.h"
 #include "skworldcensus.h"
 
@@ -248,6 +249,15 @@ void SKMapPeople::updateCoverAhead()
         cover = sknav::Cover::NONE;
     }
     mCoverAhead = cover;
+}
+
+void SKMapPeople::addPing(const LLVector3d& pos)
+{
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    mPings.erase(std::remove_if(mPings.begin(), mPings.end(), [now](const Ping& p) { return now - p.mTime > skmap::palette::PING_SECONDS; }),
+                 mPings.end());
+    mPings.push_back({ pos, now });
+    SKNetMap::firePing(pos);
 }
 
 void SKMapPeople::updateCombat()

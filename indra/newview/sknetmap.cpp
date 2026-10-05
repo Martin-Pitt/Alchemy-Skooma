@@ -277,6 +277,7 @@ void SKNetMap::draw()
         SKMapScene::instance().drawFloorplan(mView);
         SKMapScene::instance().drawVoid(mView);
         mParcels->draw(mView);
+        drawPings();
         drawVehicles();
         drawSelf();
         drawSelfExtras();
@@ -455,6 +456,41 @@ void SKNetMap::drawSelfExtras()
             gGL.end();
         }
     }
+}
+
+namespace
+{
+    SKNetMap::ping_signal_t sPingSignal;
+}
+
+// static
+boost::signals2::connection SKNetMap::setPingCallback(const ping_signal_t::slot_type& cb)
+{
+    return sPingSignal.connect(cb);
+}
+
+// static
+void SKNetMap::firePing(const LLVector3d& pos)
+{
+    sPingSignal(pos);
+}
+
+void SKNetMap::drawPings()
+{
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    gGL.begin(LLRender::TRIANGLES);
+    for (const SKMapPeople::Ping& ping : SKMapPeople::instance().pings())
+    {
+        const F32 t = static_cast<F32>((now - ping.mTime) / skmap::palette::PING_SECONDS);
+        if (t < 0.f || t >= 1.f)
+        {
+            continue;
+        }
+        // A ring that grows and fades.
+        skmapdraw::colour(skmap::palette::DOT_COMBAT, 1.f - t);
+        skmapdraw::ring(mView.toWidget(ping.mPos), lerp(skmap::palette::PING_FROM_PX, skmap::palette::PING_TO_PX, t), 1.5f, 32);
+    }
+    gGL.end();
 }
 
 void SKNetMap::drawVehicles()

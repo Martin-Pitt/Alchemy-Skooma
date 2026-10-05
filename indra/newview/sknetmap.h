@@ -29,6 +29,7 @@
 #include "llpointer.h"
 #include "lluuid.h"
 
+#include <boost/signals2.hpp>
 #include <memory>
 #include <vector>
 
@@ -89,6 +90,11 @@ public:
     void setChrome(bool chrome) { mChrome = chrome; }
 
     const skmap::MapView& view() const { return mView; }
+
+    /// Told of every ping the user places on a map, for whatever will carry it to allies.
+    typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;
+    static boost::signals2::connection setPingCallback(const ping_signal_t::slot_type& cb);
+    static void firePing(const LLVector3d& pos);
     /// Ease the pan back to the agent over a quarter second.
     void recentre();
     bool isPanned() const { return mPan.lengthSquared() > 1e-4f; }
@@ -113,6 +119,7 @@ private:
     void drawSelfExtras();
     void drawPeople();
     void drawVehicles();
+    void drawPings();
     /// The font the dots' codes are drawn in, at SKMapMarkerFontPx.
     static const LLFontGL* codeFont();
     void drawTracking();

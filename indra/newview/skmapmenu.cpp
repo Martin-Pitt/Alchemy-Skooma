@@ -45,6 +45,8 @@
 #include "llviewermenu.h"
 #include "llviewerparcelmgr.h"
 #include "rlvactions.h"
+#include "llviewercontrol.h"
+#include "skmappeople.h"
 #include "sknetmap.h"
 #include "skpopuppanes.h"
 
@@ -255,6 +257,13 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
     std::vector<SKPopupPaneSpec> panes;
     SKPopupPaneSpec spec;
     spec.mName = "map";
+    // Ping: a local marker for the user's own eyes, in combat only.
+    static LLCachedControl<bool> ping(gSavedSettings, "SKMapPing", true);
+    if (ping && SKMapPeople::instance().combat())
+    {
+        spec.mItems.push_back(action(label("ping"), [world]() { SKMapPeople::instance().addPing(world); }));
+        spec.mItems.push_back(separator());
+    }
     const bool location = RlvActions::canShowLocation();
     spec.mItems.push_back(action(label("about_land"),
                                  [world]() {

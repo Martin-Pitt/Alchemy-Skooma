@@ -93,6 +93,15 @@ public:
     const std::vector<Vehicle>& vehicles() const { return mVehicles; }
     /// Whether the agent stands where it can be hurt, or the debug switch forces it.
     bool combat() const { return mCombat; }
+    /// A local marker at a point, fading over 4 s. Nothing is sent anywhere.
+    void addPing(const LLVector3d& pos);
+    struct Ping
+    {
+        LLVector3d mPos;
+        F64 mTime = 0.0;
+    };
+    const std::vector<Ping>& pings() const { return mPings; }
+
     /// The user's ally groups: the active group's faction, or the group alone.
     const std::set<LLUUID>& candidates() const { return mCandidates; }
     /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
@@ -128,6 +137,7 @@ private:
     bool mGroupKnown = false;
     std::set<LLUUID> mCandidates;
     skmap::MarkerCodes mCodes;
+    std::vector<Ping> mPings;
     LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
     boost::signals2::connection mTeleportConnection;
     std::vector<LLUUID> mVehicleRoots;
