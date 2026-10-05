@@ -29,12 +29,14 @@
 #include "llpointer.h"
 #include "lluuid.h"
 
+#include <memory>
 #include <vector>
 
 #include "skmappalette.h"
 #include "skmapview.h"
 
 class LLViewerTexture;
+class SKMapObjects;
 
 class SKNetMap : public LLUICtrl
 {
@@ -97,6 +99,9 @@ private:
     void drawChromeTint();
     void drawChromeFrame();
 
+    void drawObjects();
+
+    std::unique_ptr<SKMapObjects> mObjects;
     std::vector<DrawnDot> mDots;
     bool mHovered = false;
     bool mChrome = false;

@@ -4793,6 +4793,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>SKMapLayerObjects</key>
+        <map>
+            <key>Comment</key>
+            <string>Object dots on the mini-map: 0 never, 1 only where the navmesh floorplan has not been built, 2 everywhere.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

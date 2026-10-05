@@ -48,6 +48,7 @@
 #include "llworld.h"
 #include "llworldmapview.h"
 #include "skmapmarkers.h"
+#include "skmapobjects.h"
 #include "skmappeople.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
@@ -171,7 +172,8 @@ namespace skmapdraw
 }
 
 SKNetMap::SKNetMap(const Params& p)
-    : LLUICtrl(p)
+    : LLUICtrl(p),
+      mObjects(std::make_unique<SKMapObjects>())
 {
 }
 
@@ -247,6 +249,7 @@ void SKNetMap::draw()
         gGL.getTextureSlot(0)->unbind();
         drawChromeTint();
         drawTerrain();
+        drawObjects();
         drawSelf();
         drawSelfExtras();
         drawPeople();
@@ -297,6 +300,19 @@ void SKNetMap::drawTerrain()
         gGL.end();
     }
     gGL.getTextureSlot(0)->unbind();
+}
+
+void SKNetMap::drawObjects()
+{
+    static LLCachedControl<U32> mode(gSavedSettings, "SKMapLayerObjects", 1);
+    if (mode == 0)
+    {
+        mObjects->release();
+        return;
+    }
+    mObjects->update(mView, SKMapPeople::instance().combat());
+    // Where no floorplan exists, until the floorplan says where it does: everywhere for now.
+    mObjects->draw(mView, nullptr);
 }
 
 void SKNetMap::drawSelf()
