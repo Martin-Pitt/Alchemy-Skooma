@@ -67,6 +67,11 @@ namespace SKOTSCamera
     // scripts that fire from the camera fire from the avatar. Returns false when not in use.
     bool reportedCamera(LLVector3& pos, LLVector3& at, LLVector3& left, LLVector3& up);
 
+    // Turns the body and head rotations sent to the region onto the reported aim. In mouselook
+    // llGetRot is the body rotation, so without this a gun aiming from it fires parallel to the
+    // crosshair ray, beside it by the shoulder offset.
+    void convergeRotations(const LLVector3& aim_at, LLQuaternion& body, LLQuaternion& head);
+
     // Camera animation bookkeeping: whether the last rendered frame was first person, and the
     // avatar frame at the start of an animation so a transition can follow the avatar.
     void onCameraUpdated(bool first_person);
