@@ -29,6 +29,7 @@
 #include "sknavbuild.h"
 #include "sknavexport.h"
 #include "sknavoverlay.h"
+#include "sknavpolys.h"
 #include "sknavskymap.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
@@ -84,6 +85,25 @@ public:
     /// Moves whenever the navmesh's published state changes: a tile publishes, fails or leaves, a
     /// mesh is torn down, air is evicted (it follows the camera), or feature links change.
     U64 revision() const { return mRevision; }
+
+    /// One published tile as the mini-map reads it.
+    struct PolyTile
+    {
+        LLUUID mMesh;
+        bool mTerrain = false;          ///< the region's own mesh
+        U64 mRegion = 0;                ///< region handle
+        LLVector3d mOrigin;             ///< mesh origin, global, on the 32 m lattice
+        sknav::TileKey mKey;
+        U64 mContentKey = 0;
+        LLVector3d mMin, mMax;          ///< tile footprint, global
+        std::shared_ptr<const sknav::TilePolys> mPolys;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments;
+        std::shared_ptr<const std::vector<sknav::DropLink>> mLinks;
+        std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
+    };
+    typedef std::function<void(const PolyTile&)> PolyTileFn;
+    /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
+    void polysIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const PolyTileFn& fn) const;
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the
@@ -277,6 +297,9 @@ private:
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
+        /// The Detour tile's polygons, extracted on first read and valid only for the publish
+        /// that set it: every path that adds or removes the Detour tile resets it.
+        mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
     };
 
     struct Mesh

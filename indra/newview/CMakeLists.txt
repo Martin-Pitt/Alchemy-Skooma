@@ -1859,6 +1859,11 @@ if(AL_BUILD_VIEWER)
     roles_constants.h
   )
 
+  # <SK:Nexii> SKNetMap mini-map sources
+  list(APPEND viewer_SOURCES sknavpolys.cpp)
+  list(APPEND viewer_HEADERS sknavpolys.h)
+  # </SK:Nexii>
+
   # The version as one line, for the hosted build's metadata.
   file(
     WRITE "${CMAKE_CURRENT_BINARY_DIR}/viewer_version.txt"
@@ -2944,6 +2949,9 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
+  # <SK:Nexii> SKNetMap mini-map unit tests
+  al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+  # </SK:Nexii>
   al_add_test(
     llslurl
     PROJECT ${test_project}
