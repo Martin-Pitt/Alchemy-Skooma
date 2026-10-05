@@ -232,7 +232,15 @@ void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const
     spec.mName = "moderate";
     spec.mParent = pane;
     spec.mItems.push_back(action(label("freeze"), [id]() { ALAvatarActions::parcelFreeze(id); }, false, false));
-    spec.mItems.push_back(action(label("parcel_eject"), nullptr, false, false));
+    // The ban option from the gate's own facts, re-read when chosen: no parcel is selected.
+    spec.mItems.push_back(action(label("parcel_eject"),
+                                 [person]() {
+                                     // -1: cached facts only, never a fresh request; uncached reads FAILED, so no ban.
+                                     S32 seq = -1;
+                                     const skmap::ModerationFacts facts = moderationFacts(person, seq);
+                                     ALAvatarActions::parcelEjectWithBan({ person.mId }, skmap::ejectOffersBan(facts));
+                                 },
+                                 false, false));
     spec.mItems.push_back(action(label("estate_kick"), [id]() { ALAvatarActions::estateKick(id); }, false, false));
     spec.mItems.push_back(action(label("estate_teleport_home"), [id]() { ALAvatarActions::estateTeleportHome(id); }, false, false));
     spec.mItems.push_back(action(label("estate_ban"), [id]() { ALAvatarActions::estateBan(id); }, false, false));
