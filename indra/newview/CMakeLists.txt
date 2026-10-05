@@ -1868,6 +1868,7 @@ if(AL_BUILD_VIEWER)
     skmapraster.cpp
     skmapribbons.cpp
     skmaplabels.cpp
+    skmapmarkers.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1878,6 +1879,7 @@ if(AL_BUILD_VIEWER)
     skmappalette.h
     skmapribbons.h
     skmaplabels.h
+    skmapmarkers.h
   )
   # </SK:Nexii>
 
@@ -2991,6 +2993,7 @@ if(AL_BUILD_TESTS)
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   # </SK:Nexii>
   al_add_test(
     llslurl
