@@ -59,6 +59,39 @@ namespace
     LLVector3d sAnimRootGlobal;
     LLQuaternion sAnimRot;
 
+    // Bullets are never something to aim at: the shooter's own fly straight down the crosshair ray,
+    // and incoming fire crosses it. SL bullets travel at 100-200 m/s as a single prim 3-14 m long
+    // and under 0.2 m thick; only that shape is stepped through, so everything else still counts.
+    // The shooter's own bullet just rezzed at the gun is known by shape alone, before the region
+    // has sent its velocity.
+    bool isProjectile(const LLViewerObject* obj)
+    {
+        constexpr F32 MIN_SPEED = 100.f;     // metres per second
+        constexpr F32 MIN_LENGTH = 3.f;
+        constexpr F32 MAX_LENGTH = 14.f;
+        constexpr F32 MAX_THICKNESS = 0.2f;
+        constexpr F32 MUZZLE_REACH = 3.f;    // how near the shooter a fresh bullet starts
+
+        if (obj->isAttachment())
+        {
+            return false;
+        }
+
+        const LLVector3& scale = obj->getScale();
+        const F32 longest = llmax(scale.mV[VX], scale.mV[VY], scale.mV[VZ]);
+        const F32 shortest = llmin(scale.mV[VX], scale.mV[VY], scale.mV[VZ]);
+        const F32 middle = scale.mV[VX] + scale.mV[VY] + scale.mV[VZ] - longest - shortest;
+        if (longest < MIN_LENGTH || longest > MAX_LENGTH || middle > MAX_THICKNESS)
+        {
+            return false;
+        }
+
+        const F32 reach = longest * 0.5f + MUZZLE_REACH;
+        const bool at_muzzle = obj->permYouOwner() && isAgentAvatarValid()
+            && (obj->getPositionAgent() - gAgentAvatarp->getPositionAgent()).lengthSquared() <= reach * reach;
+        return at_muzzle || obj->getVelocity().lengthSquared() >= MIN_SPEED * MIN_SPEED;
+    }
+
     // First solid surface along a segment through volumes and terrain. Avatars and their
     // attachments are never tested, so a ray from inside the wearer's body is safe, and
     // phantom prims are stepped through because shots and the camera pass through them.
@@ -120,7 +153,7 @@ namespace
             }
 
             const LLViewerObject* obj = drawable->getVObj();
-            if (obj && (obj->flagPhantom() || (seat_root && obj->getRootEdit() == seat_root)))
+            if (obj && (obj->flagPhantom() || (seat_root && obj->getRootEdit() == seat_root) || isProjectile(obj)))
             {
                 LLVector3 next = LLVector3(local_end.getF32ptr()) + dir * 0.05f;
                 seg_start.load3(next.mV);
