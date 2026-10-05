@@ -807,7 +807,25 @@ void SKNetMap::drawTracking()
     const LLTracker::ETrackingStatus status = LLTracker::getTrackingStatus();
     if (status == LLTracker::TRACKING_AVATAR)
     {
-        drawTrackingAt(LLAvatarTracker::instance().getGlobalPos(), track_colour);
+        // In combat only resolved allies are drawn, so a tracked avatar is too only when one.
+        const SKMapPeople& people = SKMapPeople::instance();
+        bool shown = !people.combat();
+        if (!shown)
+        {
+            const LLUUID& tracked = LLAvatarTracker::instance().getAvatarID();
+            for (const SKMapPeople::Person& p : people.people())
+            {
+                if (p.mId == tracked)
+                {
+                    shown = p.mAlly;
+                    break;
+                }
+            }
+        }
+        if (shown)
+        {
+            drawTrackingAt(LLAvatarTracker::instance().getGlobalPos(), track_colour);
+        }
     }
     else if (status == LLTracker::TRACKING_LANDMARK || status == LLTracker::TRACKING_LOCATION)
     {

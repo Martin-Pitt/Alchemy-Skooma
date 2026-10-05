@@ -33,7 +33,10 @@
 #include "llavataractions.h"
 #include "llcallbacklist.h"
 #include "llgroupmgr.h"
+#include "lldir.h"
+#include "llfile.h"
 #include "llviewercamera.h"
+#include "llviewerparcelmgr.h"
 #include "llviewercontrol.h"
 #include "llvoavatarself.h"
 #include "llviewerobjectlist.h"
@@ -101,10 +104,16 @@ void SKMapPeople::idle()
         if (!mPeople.empty())
         {
             mPeople.clear();
+            mVehicles.clear();
         }
+        mCombat = false;
+        mResolver.update(false, false, mCandidates, LLFrameTimer::getElapsedSeconds());
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
+    updateCombat();
+    updateCandidates();
+    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getElapsedSeconds());
     gatherPeople();
     updateCoverAhead();
     gatherVehicles();
@@ -183,7 +192,13 @@ void SKMapPeople::gatherVehicles()
         v.mMin = cached->second.mMin;
         v.mMax = cached->second.mMax;
         boxes[id] = cached->second;
-        // The crew, read live: loaded avatars seated on it.
+        // The crew, read live from the seated avatars; a vehicle crewed by nobody allied hides in combat.
+        const auto seat = mSeats.find(id);
+        v.mLook = skmap::vehicleLook(mCombat, seat != mSeats.end() && seat->second.second, seat != mSeats.end() && seat->second.first);
+        if (v.mLook == skmap::VehicleLook::HIDDEN)
+        {
+            continue;
+        }
         for (const Person& p : mPeople)
         {
             if (p.mSitting && p.mSeatRoot == id)
@@ -223,6 +238,49 @@ void SKMapPeople::updateCoverAhead()
     mCoverAhead = cover;
 }
 
+void SKMapPeople::updateCombat()
+{
+    // The check behind the health display: the agent's own parcel, nothing else. The debug
+    // switch can only turn combat on, never show anyone it would hide.
+    static LLCachedControl<bool> force(gSavedSettings, "SKMapDebugForceCombat", false);
+    LLViewerParcelMgr* parcels = LLViewerParcelMgr::getInstance();
+    mCombat = force || parcels->allowAgentDamage(gAgent.getRegion(), parcels->getAgentParcel());
+}
+
+void SKMapPeople::loadFactions()
+{
+    mFactionsLoaded = true;
+    // The user's own copy wins over the shipped one, when it holds a faction.
+    const std::string user = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "sk_slmc_factions.xml");
+    if (LLFile::isfile(user) && mFactions.load(user))
+    {
+        return;
+    }
+    if (!mFactions.load(gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "sk_slmc_factions.xml")))
+    {
+        LL_WARNS("SKMap") << "no faction table: allies are the active group's members only" << LL_ENDL;
+    }
+}
+
+void SKMapPeople::updateCandidates()
+{
+    const LLUUID group = gAgent.getGroupID();
+    if (mGroupKnown && group == mActiveGroup)
+    {
+        return;
+    }
+    if (!mFactionsLoaded)
+    {
+        loadFactions();
+    }
+    mGroupKnown = true;
+    mActiveGroup = group;
+    mCandidates = mFactions.candidatesFor(group);
+    const skmap::Faction* faction = mFactions.factionOf(group);
+    LL_INFOS("SKMap") << "active group " << group << ": " << (faction ? faction->mName : std::string("no faction")) << ", "
+                      << mCandidates.size() << " ally groups" << LL_ENDL;
+}
+
 void SKMapPeople::gatherPeople()
 {
     static LLCachedControl<bool> avatar_colours(gSavedSettings, "SKMapAvatarColors", true);
@@ -237,6 +295,7 @@ void SKMapPeople::gatherPeople()
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);
     mPeople.clear();
     mPeople.reserve(ids.size());
+    mSeats.clear();
     for (size_t i = 0; i < ids.size(); ++i)
     {
         if (ids[i] == gAgent.getID())
@@ -289,6 +348,19 @@ void SKMapPeople::gatherPeople()
         else
         {
             p.mColour = general;
+        }
+        p.mAlly = mCombat && mResolver.verdict(p.mId) == skmap::AllyVerdict::ALLY;
+        p.mVisibility = skmap::visibilityOf(mCombat, false, p.mAlly);
+        if (p.mSitting)
+        {
+            std::pair<bool, bool>& seat = mSeats[p.mSeatRoot];
+            seat.first = true;
+            seat.second = seat.second || p.mAlly;
+        }
+        // Hidden means hidden everywhere: not drawn, picked, listed, crewing or aiming.
+        if (p.mVisibility == skmap::Visibility::HIDDEN)
+        {
+            continue;
         }
         mPeople.push_back(p);
     }

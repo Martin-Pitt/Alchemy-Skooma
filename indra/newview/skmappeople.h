@@ -31,7 +31,10 @@
 #include "v3dmath.h"
 #include "v4color.h"
 
+#include "skmapallies.h"
+#include "skmapallyresolver.h"
 #include "skmapgeom.h"
+#include "skmappolicy.h"
 
 #include <map>
 #include <vector>
@@ -65,12 +68,14 @@ public:
         bool mFriend = false;
         LLColor4 mColour;                   ///< the general dot colour
         skmap::FloorRelation mFloor = skmap::FloorRelation::SAME;
+        bool mAlly = false;
+        skmap::Visibility mVisibility = skmap::Visibility::DOT;
     };
 
     void initSingleton() override;
     void cleanupSingleton() override;
 
-    /// Everyone but the agent, friends last.
+    /// Everyone but the agent the map may show, friends last. In combat that is allies only.
     const std::vector<Person>& people() const { return mPeople; }
 
     struct Vehicle
@@ -79,12 +84,15 @@ public:
         LLVector3d mPos;
         LLQuaternion mRot;
         LLVector3 mMin, mMax;               ///< the linkset's box in the root's frame
-        std::vector<LLUUID> mCrew;          ///< loaded avatars seated on it
+        std::vector<LLUUID> mCrew;          ///< seated avatars the map may show
+        skmap::VehicleLook mLook = skmap::VehicleLook::CIVILIAN;
     };
     /// Linksets the census has seen driven this session, at their live pose.
     const std::vector<Vehicle>& vehicles() const { return mVehicles; }
-    /// Whether the agent stands where it can be hurt; general mode until the combat commit.
-    bool combat() const { return false; }
+    /// Whether the agent stands where it can be hurt, or the debug switch forces it.
+    bool combat() const { return mCombat; }
+    /// The user's ally groups: the active group's faction, or the group alone.
+    const std::set<LLUUID>& candidates() const { return mCandidates; }
     /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
     sknav::Cover coverAhead() const { return mCoverAhead; }
 
@@ -99,12 +107,24 @@ private:
     void gatherPeople();
     void updateCoverAhead();
     void gatherVehicles();
+    void updateCombat();
+    void updateCandidates();
+    void loadFactions();
 
     std::vector<Person> mPeople;
     F64 mLastDrawn = -1.0e9;
     sknav::Cover mCoverAhead = sknav::Cover::NONE;
     F64 mCoverAt = -1.0e9;
     std::vector<Vehicle> mVehicles;
+    /// Seat roots of everyone near, shown or not: whether a vehicle is crewed, and by an ally.
+    std::map<LLUUID, std::pair<bool, bool>> mSeats;
+    bool mCombat = false;
+    SKMapAllyResolver mResolver;
+    skmap::FactionTable mFactions;
+    bool mFactionsLoaded = false;
+    LLUUID mActiveGroup;
+    bool mGroupKnown = false;
+    std::set<LLUUID> mCandidates;
     std::vector<LLUUID> mVehicleRoots;
     U64 mVehicleStamp = 0;
     /// Linkset boxes by root, kept while the child set holds.

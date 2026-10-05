@@ -1881,6 +1881,7 @@ if(AL_BUILD_VIEWER)
     skpopuppanes.cpp
     skmapmenu.cpp
     skmapparcelfacts.cpp
+    skmapallyresolver.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1904,6 +1905,7 @@ if(AL_BUILD_VIEWER)
     skpopuppanes.h
     skmapmenu.h
     skmapparcelfacts.h
+    skmapallyresolver.h
   )
   # </SK:Nexii>
 
