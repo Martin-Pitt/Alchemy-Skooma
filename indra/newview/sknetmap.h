@@ -61,6 +61,7 @@ public:
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+    bool handleToolTip(S32 x, S32 y, MASK mask) override;
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
 

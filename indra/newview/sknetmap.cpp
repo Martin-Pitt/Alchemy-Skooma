@@ -32,10 +32,16 @@
 #include "lllocalcliprect.h"
 #include "llrender.h"
 #include "llrender2dutils.h"
+#include "llresmgr.h"
+#include "lltooltip.h"
+#include "lltrans.h"
 #include "lluicolortable.h"
+#include "llurlmatch.h"
+#include "llurlregistry.h"
 
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "llappviewer.h"
 #include "llcallingcard.h"
 #include "llfloaterworldmap.h"
 #include "llsurface.h"
@@ -47,6 +53,11 @@
 #include "llviewerwindow.h"
 #include "llworld.h"
 #include "llworldmapview.h"
+#include "llparcel.h"
+#include "llslurl.h"
+#include "llviewerparcelmgr.h"
+#include "rlvactions.h"
+#include "rlvcommon.h"
 #include "skmapmarkers.h"
 #include "skmapobjects.h"
 #include "skmapparcels.h"
@@ -556,6 +567,97 @@ void SKNetMap::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHovered = false;
     LLUICtrl::onMouseLeave(x, y, mask);
+}
+
+bool SKNetMap::handleToolTip(S32 x, S32 y, MASK mask)
+{
+    // Nametags say who is under the cursor; the tooltip only says where it is.
+    if (gDisconnected || namesShown())
+    {
+        return false;
+    }
+    LLRect sticky_rect;
+    constexpr S32 SLOP = 4;
+    localPointToScreen(x - SLOP, y - SLOP, &sticky_rect.mLeft, &sticky_rect.mBottom);
+    sticky_rect.mRight = sticky_rect.mLeft + 2 * SLOP;
+    sticky_rect.mTop = sticky_rect.mBottom + 2 * SLOP;
+
+    std::string region_name_msg, parcel_name_msg, parcel_owner_msg, parcel_sale_price_msg, parcel_sale_area_msg;
+    const LLVector3d pos_global = mView.toGlobal(static_cast<F32>(x), static_cast<F32>(y));
+    if (LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(pos_global))
+    {
+        const std::string region_name = RlvActions::canShowLocation() ? region->getName() : RlvStrings::getString(RlvStringKeys::Hidden::Region);
+        if (!region_name.empty())
+        {
+            region_name_msg = LLTrans::getString("MinimapRegionNameMsg");
+            LLStringUtil::format(region_name_msg, { { "[REGION_NAME]", region_name } });
+        }
+        // As on the classic map, the parcel is named only while its lines show; else which
+        // parcel the tooltip means is ambiguous.
+        static LLCachedControl<bool> parcel_lines(gSavedSettings, "SKMapLayerParcels", false);
+        if (parcel_lines && RlvActions::canShowLocation())
+        {
+            LLViewerParcelMgr::getInstance()->setHoverParcel(pos_global);
+            if (LLParcel* parcel = LLViewerParcelMgr::getInstance()->getHoverParcel())
+            {
+                if (!parcel->getName().empty())
+                {
+                    parcel_name_msg = LLTrans::getString("MinimapParcelNameMsg");
+                    LLStringUtil::format(parcel_name_msg, { { "[PARCEL_NAME]", parcel->getName() } });
+                }
+                const LLUUID owner = parcel->getOwnerID();
+                static LLUrlMatch owner_match;
+                LLUrlRegistry::getInstance()->findUrl(LLSLURL("agent", owner, "inspect").getSLURLString(), owner_match);
+                if (!owner_match.empty())
+                {
+                    parcel_owner_msg = LLTrans::getString("MinimapParcelOwnerMsg");
+                    LLStringUtil::format(parcel_owner_msg, { { "[PARCEL_OWNER]", owner_match.getLabel() } });
+                }
+                if (parcel->getForSale())
+                {
+                    const LLUUID buyer = parcel->getAuthorizedBuyerID();
+                    if (buyer.isNull() || buyer == gAgent.getID() || owner == gAgent.getID())
+                    {
+                        const S32 price = parcel->getSalePrice();
+                        const S32 area = parcel->getArea();
+                        parcel_sale_price_msg = LLTrans::getString("MinimapParcelSalePriceMsg");
+                        LLStringUtil::format(parcel_sale_price_msg,
+                                             { { "[PRICE]", LLResMgr::getInstance()->getMonetaryString(price) },
+                                               { "[PRICE_PER_SQM]", llformat("%.1f", area > 0 ? F32(price) / area : 0.f) } });
+                        parcel_sale_area_msg = LLTrans::getString("MinimapParcelSaleAreaMsg");
+                        LLStringUtil::format(parcel_sale_area_msg, { { "[AREA]", llformat("%d", area) } });
+                    }
+                }
+            }
+        }
+    }
+    std::string hint;
+    if (gSavedSettings.getBOOL("DoubleClickTeleport"))
+    {
+        hint = LLTrans::getString("MinimapAltToolTipHintMsg");
+    }
+    else if (gSavedSettings.getBOOL("DoubleClickShowWorldMap"))
+    {
+        hint = LLTrans::getString("MinimapToolTipHintMsg");
+    }
+    auto line = [](const std::string& s) { return s.empty() ? std::string() : s + '\n'; };
+    LLStringUtil::format_map_t args;
+    args["[AGENT]"] = "";
+    args["[PARCEL_NAME_MSG]"] = line(parcel_name_msg);
+    args["[PARCEL_SALE_PRICE_MSG]"] = line(parcel_sale_price_msg);
+    args["[PARCEL_SALE_AREA_MSG]"] = line(parcel_sale_area_msg);
+    args["[PARCEL_OWNER_MSG]"] = line(parcel_owner_msg);
+    args["[REGION_NAME_MSG]"] = line(region_name_msg);
+    args["[TOOL_TIP_HINT_MSG]"] = line(hint);
+    std::string msg = LLTrans::getString("MinimapToolTipMsg");
+    LLStringUtil::format(msg, args);
+    LLStringUtil::trim(msg);
+    if (msg.empty())
+    {
+        return false;
+    }
+    LLToolTipMgr::instance().show(LLToolTip::Params().message(msg).sticky_rect(sticky_rect));
+    return true;
 }
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
