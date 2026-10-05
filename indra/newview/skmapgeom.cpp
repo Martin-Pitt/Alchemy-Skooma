@@ -1,0 +1,1158 @@
+/**
+ * @file skmapgeom.cpp
+ * @brief The mini-map's scene: navmesh polygons stitched into surfaces, components and layers.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "linden_common.h"
+
+#include "skmapgeom.h"
+
+#include "sknavbuild.h"
+
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+#include <deque>
+
+namespace skmap
+{
+    namespace
+    {
+        typedef std::pair<S32, S32> Cell;
+
+        struct UnionFind
+        {
+            std::vector<S32> mParent;
+            explicit UnionFind(size_t n) : mParent(n)
+            {
+                for (size_t i = 0; i < n; ++i)
+                {
+                    mParent[i] = static_cast<S32>(i);
+                }
+            }
+            S32 find(S32 a)
+            {
+                while (mParent[a] != a)
+                {
+                    mParent[a] = mParent[mParent[a]];
+                    a = mParent[a];
+                }
+                return a;
+            }
+            // The smaller root wins, so the result does not depend on the order of unions.
+            void unite(S32 a, S32 b)
+            {
+                a = find(a);
+                b = find(b);
+                if (a == b)
+                {
+                    return;
+                }
+                if (a < b)
+                {
+                    mParent[b] = a;
+                }
+                else
+                {
+                    mParent[a] = b;
+                }
+            }
+        };
+
+        F32 cross2(const LLVector2& o, const LLVector2& a, const LLVector2& b)
+        {
+            return (a.mV[VX] - o.mV[VX]) * (b.mV[VY] - o.mV[VY]) - (a.mV[VY] - o.mV[VY]) * (b.mV[VX] - o.mV[VX]);
+        }
+
+        LLVector2 plan(const LLVector3& v)
+        {
+            return LLVector2(v.mV[VX], v.mV[VY]);
+        }
+
+        /// Area-weighted median of (value, weight) pairs; ties by value.
+        F32 weightedMedian(std::vector<std::pair<F32, F32>> samples)
+        {
+            if (samples.empty())
+            {
+                return 0.f;
+            }
+            std::sort(samples.begin(), samples.end());
+            F32 total = 0.f;
+            for (const auto& s : samples)
+            {
+                total += llmax(s.second, 1e-6f);
+            }
+            F32 run = 0.f;
+            for (const auto& s : samples)
+            {
+                run += llmax(s.second, 1e-6f);
+                if (run >= total * 0.5f)
+                {
+                    return s.first;
+                }
+            }
+            return samples.back().first;
+        }
+
+        /// Separating axes: a convex polygon against an axis-aligned rectangle, in plan.
+        bool polyMeetsRect(const ScenePoly& poly, F32 x0, F32 y0, F32 x1, F32 y1)
+        {
+            if (poly.mMaxX < x0 || poly.mMinX > x1 || poly.mMaxY < y0 || poly.mMinY > y1)
+            {
+                return false;
+            }
+            const LLVector2 corners[4] = { LLVector2(x0, y0), LLVector2(x1, y0), LLVector2(x1, y1), LLVector2(x0, y1) };
+            const S32 n = poly.mVertCount;
+            for (S32 i = 0; i < n; ++i)
+            {
+                const LLVector2 a = plan(poly.mVerts[i]);
+                const LLVector2 b = plan(poly.mVerts[(i + 1) % n]);
+                const LLVector2 edge = b - a;
+                const LLVector2 normal(-edge.mV[VY], edge.mV[VX]);
+                F32 pmin = FLT_MAX, pmax = -FLT_MAX;
+                for (S32 k = 0; k < n; ++k)
+                {
+                    const F32 d = normal * plan(poly.mVerts[k]);
+                    pmin = llmin(pmin, d);
+                    pmax = llmax(pmax, d);
+                }
+                F32 rmin = FLT_MAX, rmax = -FLT_MAX;
+                for (const LLVector2& c : corners)
+                {
+                    const F32 d = normal * c;
+                    rmin = llmin(rmin, d);
+                    rmax = llmax(rmax, d);
+                }
+                if (rmax < pmin || rmin > pmax)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// The plan distance from a point to a convex polygon, 0 inside.
+        F32 planDistance(const Scene& scene, const ScenePoly& poly, const LLVector2& p)
+        {
+            if (polyContains(scene, poly, p))
+            {
+                return 0.f;
+            }
+            F32 best = FLT_MAX;
+            for (S32 i = 0; i < poly.mVertCount; ++i)
+            {
+                const LLVector2 a = plan(poly.mVerts[i]);
+                const LLVector2 b = plan(poly.mVerts[(i + 1) % poly.mVertCount]);
+                const LLVector2 ab = b - a;
+                const F32 len2 = ab * ab;
+                const F32 t = len2 > 0.f ? llclamp(((p - a) * ab) / len2, 0.f, 1.f) : 0.f;
+                best = llmin(best, (a + ab * t - p).length());
+            }
+            return best;
+        }
+
+        Cell cellOfLocal(const Scene& scene, const LLVector2& p)
+        {
+            return indexCell(scene.mOrigin.mdV[VX] + p.mV[VX], scene.mOrigin.mdV[VY] + p.mV[VY]);
+        }
+
+        /// The cells within reach of a scene-local point, row by row.
+        void cellsAround(const Scene& scene, const LLVector2& p, F32 reach, std::vector<Cell>& out)
+        {
+            out.clear();
+            const Cell lo = cellOfLocal(scene, p - LLVector2(reach, reach));
+            const Cell hi = cellOfLocal(scene, p + LLVector2(reach, reach));
+            for (S32 y = lo.second; y <= hi.second; ++y)
+            {
+                for (S32 x = lo.first; x <= hi.first; ++x)
+                {
+                    out.emplace_back(x, y);
+                }
+            }
+        }
+
+        /// The cells a polygon meets.
+        void polyCells(const Scene& scene, const ScenePoly& poly, std::vector<Cell>& out)
+        {
+            out.clear();
+            const Cell lo = cellOfLocal(scene, LLVector2(poly.mMinX, poly.mMinY));
+            const Cell hi = cellOfLocal(scene, LLVector2(poly.mMaxX, poly.mMaxY));
+            for (S32 y = lo.second; y <= hi.second; ++y)
+            {
+                for (S32 x = lo.first; x <= hi.first; ++x)
+                {
+                    const F32 x0 = static_cast<F32>(x * INDEX_CELL_M - scene.mOrigin.mdV[VX]);
+                    const F32 y0 = static_cast<F32>(y * INDEX_CELL_M - scene.mOrigin.mdV[VY]);
+                    if (polyMeetsRect(poly, x0, y0, x0 + INDEX_CELL_M, y0 + INDEX_CELL_M))
+                    {
+                        out.emplace_back(x, y);
+                    }
+                }
+            }
+        }
+
+        /// The polygon nearest a global point within reach in plan, closest in height.
+        S32 polyNear(const Scene& scene, const LLVector3d& pos, F32 reach)
+        {
+            const LLVector2 p = scene.toLocal(pos);
+            const F32 z = static_cast<F32>(pos.mdV[VZ]);
+            std::vector<Cell> cells;
+            cellsAround(scene, p, reach, cells);
+            S32 best = -1;
+            F32 best_dz = FLT_MAX;
+            for (const Cell& c : cells)
+            {
+                const auto it = scene.mIndex.find(c);
+                if (it == scene.mIndex.end())
+                {
+                    continue;
+                }
+                for (U32 id : it->second)
+                {
+                    const ScenePoly& poly = scene.mPolys[id];
+                    if (planDistance(scene, poly, p) > reach)
+                    {
+                        continue;
+                    }
+                    const F32 dz = std::fabs(poly.mZMean - z);
+                    if (dz < best_dz || (dz == best_dz && static_cast<S32>(id) < best))
+                    {
+                        best_dz = dz;
+                        best = static_cast<S32>(id);
+                    }
+                }
+            }
+            return best;
+        }
+
+        struct BorderEdge
+        {
+            U32 mPoly = 0;
+            F32 mLo = 0.f, mHi = 0.f;      ///< along the line
+            F32 mZLo = 0.f, mZHi = 0.f;    ///< heights at those ends
+            S8 mSide = 0;                  ///< which side of the line the polygon lies on
+            bool operator<(const BorderEdge& o) const { return mLo != o.mLo ? mLo < o.mLo : mPoly < o.mPoly; }
+            F32 zAt(F32 t) const
+            {
+                return mHi > mLo ? mZLo + (mZHi - mZLo) * (t - mLo) / (mHi - mLo) : mZLo;
+            }
+        };
+
+        /// Index every polygon by the 4 m cells it meets.
+        void buildIndex(Scene& scene, std::vector<std::vector<Cell>>& poly_cells)
+        {
+            poly_cells.assign(scene.mPolys.size(), {});
+            for (size_t i = 0; i < scene.mPolys.size(); ++i)
+            {
+                polyCells(scene, scene.mPolys[i], poly_cells[i]);
+                for (const Cell& c : poly_cells[i])
+                {
+                    scene.mIndex[c].push_back(static_cast<U32>(i));
+                }
+            }
+        }
+    }
+
+    std::pair<S32, S32> indexCell(F64 x, F64 y)
+    {
+        return { static_cast<S32>(std::floor(x / INDEX_CELL_M)), static_cast<S32>(std::floor(y / INDEX_CELL_M)) };
+    }
+
+    bool polyContains(const Scene& scene, const ScenePoly& poly, const LLVector2& p)
+    {
+        if (p.mV[VX] < poly.mMinX - 1e-4f || p.mV[VX] > poly.mMaxX + 1e-4f || p.mV[VY] < poly.mMinY - 1e-4f || p.mV[VY] > poly.mMaxY + 1e-4f)
+        {
+            return false;
+        }
+        bool pos = false, neg = false;
+        for (S32 i = 0; i < poly.mVertCount; ++i)
+        {
+            const F32 c = cross2(plan(poly.mVerts[i]), plan(poly.mVerts[(i + 1) % poly.mVertCount]), p);
+            pos = pos || c > 1e-5f;
+            neg = neg || c < -1e-5f;
+        }
+        return !(pos && neg);
+    }
+
+    F32 polyHeightAt(const Scene& scene, const ScenePoly& poly, const LLVector2& p)
+    {
+        for (U32 t = 0; t < poly.mTriCount; ++t)
+        {
+            const LLVector3* tri = &scene.mTris[(poly.mFirstTri + t) * 3];
+            const LLVector2 a = plan(tri[0]), b = plan(tri[1]), c = plan(tri[2]);
+            const F32 area = cross2(a, b, c);
+            if (std::fabs(area) < 1e-8f)
+            {
+                continue;
+            }
+            const F32 wa = cross2(b, c, p) / area;
+            const F32 wb = cross2(c, a, p) / area;
+            const F32 wc = 1.f - wa - wb;
+            if (wa >= -1e-4f && wb >= -1e-4f && wc >= -1e-4f)
+            {
+                return wa * tri[0].mV[VZ] + wb * tri[1].mV[VZ] + wc * tri[2].mV[VZ];
+            }
+        }
+        return poly.mZMean;
+    }
+
+    ScenePtr buildScene(const SceneInput& input)
+    {
+        auto scene = std::make_shared<Scene>();
+        Scene& s = *scene;
+        s.mOrigin = input.mOrigin;
+        s.mMin = input.mMin;
+        s.mMax = input.mMax;
+        s.mClimb = input.mClimb;
+
+        // Runs first: a polygon in a run is kept however tall it is.
+        std::map<std::pair<LLUUID, U64>, S32> run_ids;
+        std::vector<bool> run_home;
+        std::vector<std::vector<std::vector<S32>>> tile_runs(input.mTiles.size());
+        for (size_t ti = 0; ti < input.mTiles.size(); ++ti)
+        {
+            const TileInput& tile = input.mTiles[ti];
+            const size_t count = tile.mPolys ? tile.mPolys->mPolys.size() : 0;
+            tile_runs[ti].assign(count, {});
+            if (!tile.mFlights)
+            {
+                continue;
+            }
+            const LLVector3d offset = tile.mOrigin - s.mOrigin;
+            for (const sknav::Flight& f : *tile.mFlights)
+            {
+                LLVector2 mid;
+                for (const LLVector2& p : f.mFootprint)
+                {
+                    mid += p / static_cast<F32>(llmax(static_cast<size_t>(1), f.mFootprint.size()));
+                }
+                const F64 gx = tile.mOrigin.mdV[VX] + mid.mV[VX];
+                const F64 gy = tile.mOrigin.mdV[VY] + mid.mV[VY];
+                const bool home = gx >= tile.mMin.mdV[VX] && gx < tile.mMax.mdV[VX] && gy >= tile.mMin.mdV[VY] && gy < tile.mMax.mdV[VY];
+                const auto key = std::make_pair(tile.mMesh, f.mKey);
+                auto it = run_ids.find(key);
+                S32 id;
+                if (it == run_ids.end())
+                {
+                    id = static_cast<S32>(s.mRuns.size());
+                    run_ids.emplace(key, id);
+                    s.mRuns.emplace_back();
+                    run_home.push_back(false);
+                    s.mRuns.back().mMesh = tile.mMesh;
+                    s.mRuns.back().mKey = f.mKey;
+                }
+                else
+                {
+                    id = it->second;
+                }
+                SceneRun& run = s.mRuns[id];
+                if (it == run_ids.end() || (home && !run_home[id]))
+                {
+                    const LLVector3 o(static_cast<F32>(offset.mdV[VX]), static_cast<F32>(offset.mdV[VY]), static_cast<F32>(offset.mdV[VZ]));
+                    run.mStair = f.mKind == sknav::ConnectorKind::STAIR && f.mTreads >= 2;
+                    run.mTreads = f.mTreads;
+                    run.mBottomA = f.mBottomA + o;
+                    run.mBottomB = f.mBottomB + o;
+                    run.mTopA = f.mTopA + o;
+                    run.mTopB = f.mTopB + o;
+                    run.mRun = f.mRun;
+                    run.mRise = f.mRise;
+                    run_home[id] = home;
+                }
+                for (U16 p : f.mPolys)
+                {
+                    if (p < count)
+                    {
+                        tile_runs[ti][p].push_back(id);
+                    }
+                }
+            }
+        }
+
+        // Polygons, scene-local.
+        std::vector<std::vector<S32>> ids(input.mTiles.size());
+        for (size_t ti = 0; ti < input.mTiles.size(); ++ti)
+        {
+            const TileInput& tile = input.mTiles[ti];
+            if (!tile.mPolys)
+            {
+                continue;
+            }
+            const sknav::TilePolys& tp = *tile.mPolys;
+            ids[ti].assign(tp.mPolys.size(), -1);
+            const LLVector3d offset = tile.mOrigin - s.mOrigin;
+            const LLVector3 o(static_cast<F32>(offset.mdV[VX]), static_cast<F32>(offset.mdV[VY]), static_cast<F32>(offset.mdV[VZ]));
+            for (size_t pi = 0; pi < tp.mPolys.size(); ++pi)
+            {
+                const sknav::TilePolys::Poly& src = tp.mPolys[pi];
+                const bool in_run = !tile_runs[ti][pi].empty();
+                if (!in_run && src.mZMax - src.mZMin > RUNLESS_Z_SPAN_M)
+                {
+                    continue;
+                }
+                if (src.mVertCount < 3)
+                {
+                    continue;
+                }
+                ScenePoly poly;
+                poly.mTile = static_cast<U32>(ti);
+                poly.mIndex = static_cast<U16>(pi);
+                poly.mArea = src.mArea;
+                poly.mVertCount = src.mVertCount;
+                poly.mTerrainTile = tile.mTerrain;
+                poly.mWater = tile.mWater - static_cast<F32>(s.mOrigin.mdV[VZ]);
+                poly.mMinX = poly.mMinY = FLT_MAX;
+                poly.mMaxX = poly.mMaxY = -FLT_MAX;
+                F32 zsum = 0.f;
+                for (S32 v = 0; v < src.mVertCount; ++v)
+                {
+                    poly.mVerts[v] = tp.mVerts[src.mVerts[v]] + o;
+                    zsum += poly.mVerts[v].mV[VZ];
+                    poly.mMinX = llmin(poly.mMinX, poly.mVerts[v].mV[VX]);
+                    poly.mMinY = llmin(poly.mMinY, poly.mVerts[v].mV[VY]);
+                    poly.mMaxX = llmax(poly.mMaxX, poly.mVerts[v].mV[VX]);
+                    poly.mMaxY = llmax(poly.mMaxY, poly.mVerts[v].mV[VY]);
+                }
+                poly.mZMean = zsum / src.mVertCount;
+                poly.mZMin = src.mZMin + o.mV[VZ];
+                poly.mZMax = src.mZMax + o.mV[VZ];
+                // Shoelace area and centroid.
+                F32 a2 = 0.f;
+                LLVector2 c;
+                const LLVector2 p0 = plan(poly.mVerts[0]);
+                for (S32 v = 1; v + 1 < src.mVertCount; ++v)
+                {
+                    const LLVector2 p1 = plan(poly.mVerts[v]), p2 = plan(poly.mVerts[v + 1]);
+                    const F32 t = cross2(p0, p1, p2);
+                    a2 += t;
+                    c += (p0 + p1 + p2) * (t / 3.f);
+                }
+                if (std::fabs(a2) > 1e-8f)
+                {
+                    poly.mCentroid = c / a2;
+                }
+                else
+                {
+                    for (S32 v = 0; v < src.mVertCount; ++v)
+                    {
+                        poly.mCentroid += plan(poly.mVerts[v]) / static_cast<F32>(src.mVertCount);
+                    }
+                }
+                poly.mPlanArea = std::fabs(a2) * 0.5f;
+                poly.mFirstTri = static_cast<U32>(s.mTris.size() / 3);
+                const size_t first = static_cast<size_t>(src.mFirstTri) * 3;
+                for (size_t k = 0; k < static_cast<size_t>(src.mTriCount) * 3 && first + k < tp.mTris.size(); ++k)
+                {
+                    s.mTris.push_back(tp.mTris[first + k] + o);
+                }
+                poly.mTriCount = static_cast<U16>((s.mTris.size() / 3) - poly.mFirstTri);
+                if (in_run)
+                {
+                    poly.mRun = tile_runs[ti][pi].front();
+                }
+                ids[ti][pi] = static_cast<S32>(s.mPolys.size());
+                s.mPolys.push_back(poly);
+            }
+        }
+        for (size_t ti = 0; ti < input.mTiles.size(); ++ti)
+        {
+            for (size_t pi = 0; pi < tile_runs[ti].size(); ++pi)
+            {
+                if (ids[ti].empty() || ids[ti][pi] < 0)
+                {
+                    continue;
+                }
+                for (S32 r : tile_runs[ti][pi])
+                {
+                    s.mRuns[r].mPolys.push_back(static_cast<U32>(ids[ti][pi]));
+                }
+            }
+        }
+        for (SceneRun& run : s.mRuns)
+        {
+            std::sort(run.mPolys.begin(), run.mPolys.end());
+            run.mPolys.erase(std::unique(run.mPolys.begin(), run.mPolys.end()), run.mPolys.end());
+        }
+
+        // Stitches: Detour's own neighbours inside a tile, then border edges across lattice lines.
+        std::map<std::pair<S32, S32>, std::vector<BorderEdge>> lines;
+        for (size_t i = 0; i < s.mPolys.size(); ++i)
+        {
+            const ScenePoly& poly = s.mPolys[i];
+            const sknav::TilePolys::Poly& src = input.mTiles[poly.mTile].mPolys->mPolys[poly.mIndex];
+            for (S32 v = 0; v < poly.mVertCount; ++v)
+            {
+                const LLVector3& a = poly.mVerts[v];
+                const LLVector3& b = poly.mVerts[(v + 1) % poly.mVertCount];
+                const S16 n = src.mNeighbour[v];
+                if (n >= 0)
+                {
+                    const S32 other = static_cast<size_t>(n) < ids[poly.mTile].size() ? ids[poly.mTile][n] : -1;
+                    if (other > static_cast<S32>(i))
+                    {
+                        SceneStitch st;
+                        st.mA = static_cast<U32>(i);
+                        st.mB = static_cast<U32>(other);
+                        st.mZ = (a.mV[VZ] + b.mV[VZ]) * 0.5f;
+                        s.mStitches.push_back(st);
+                    }
+                    continue;
+                }
+                if (n != sknav::TilePolys::EDGE_BORDER)
+                {
+                    continue;
+                }
+                for (S32 axis = 0; axis < 2; ++axis)
+                {
+                    if (std::fabs(a.mV[axis] - b.mV[axis]) > LATTICE_TOLERANCE_M)
+                    {
+                        continue;
+                    }
+                    const F32 at = (a.mV[axis] + b.mV[axis]) * 0.5f;
+                    const F64 global = s.mOrigin.mdV[axis] + at;
+                    const S32 line = static_cast<S32>(std::floor(global / LATTICE_M + 0.5));
+                    if (std::fabs(global - line * static_cast<F64>(LATTICE_M)) > LATTICE_TOLERANCE_M)
+                    {
+                        continue;
+                    }
+                    const S32 along = 1 - axis;
+                    BorderEdge e;
+                    e.mPoly = static_cast<U32>(i);
+                    const bool forward = a.mV[along] <= b.mV[along];
+                    e.mLo = forward ? a.mV[along] : b.mV[along];
+                    e.mHi = forward ? b.mV[along] : a.mV[along];
+                    e.mZLo = forward ? a.mV[VZ] : b.mV[VZ];
+                    e.mZHi = forward ? b.mV[VZ] : a.mV[VZ];
+                    e.mSide = poly.mCentroid.mV[axis] < at ? -1 : 1;
+                    lines[{ axis, line }].push_back(e);
+                    break;
+                }
+            }
+        }
+        for (auto& entry : lines)
+        {
+            std::vector<BorderEdge>& edges = entry.second;
+            std::sort(edges.begin(), edges.end());
+            for (size_t i = 0; i < edges.size(); ++i)
+            {
+                for (size_t j = i + 1; j < edges.size() && edges[j].mLo < edges[i].mHi - STITCH_OVERLAP_M; ++j)
+                {
+                    if (edges[i].mSide == edges[j].mSide || edges[i].mPoly == edges[j].mPoly)
+                    {
+                        continue;
+                    }
+                    const F32 lo = llmax(edges[i].mLo, edges[j].mLo);
+                    const F32 hi = llmin(edges[i].mHi, edges[j].mHi);
+                    if (hi - lo <= STITCH_OVERLAP_M)
+                    {
+                        continue;
+                    }
+                    const F32 dlo = std::fabs(edges[i].zAt(lo) - edges[j].zAt(lo));
+                    const F32 dhi = std::fabs(edges[i].zAt(hi) - edges[j].zAt(hi));
+                    SceneStitch st;
+                    st.mA = llmin(edges[i].mPoly, edges[j].mPoly);
+                    st.mB = llmax(edges[i].mPoly, edges[j].mPoly);
+                    st.mStep = dlo > s.mClimb || dhi > s.mClimb;
+                    st.mZ = (edges[i].zAt(lo) + edges[i].zAt(hi) + edges[j].zAt(lo) + edges[j].zAt(hi)) * 0.25f;
+                    s.mStitches.push_back(st);
+                }
+            }
+        }
+        std::sort(s.mStitches.begin(), s.mStitches.end(), [](const SceneStitch& x, const SceneStitch& y) {
+            return x.mA != y.mA ? x.mA < y.mA : x.mB != y.mB ? x.mB < y.mB : x.mZ < y.mZ;
+        });
+
+        // Surfaces: polygons outside runs joined by edges that do not step.
+        const S32 npolys = static_cast<S32>(s.mPolys.size());
+        UnionFind polys_uf(npolys);
+        for (const SceneStitch& st : s.mStitches)
+        {
+            if (!st.mStep && s.mPolys[st.mA].mRun < 0 && s.mPolys[st.mB].mRun < 0)
+            {
+                polys_uf.unite(st.mA, st.mB);
+            }
+        }
+        std::map<S32, S32> surface_of_root;
+        for (S32 i = 0; i < npolys; ++i)
+        {
+            ScenePoly& poly = s.mPolys[i];
+            if (poly.mRun >= 0)
+            {
+                continue;
+            }
+            const S32 root = polys_uf.find(i);
+            auto it = surface_of_root.find(root);
+            if (it == surface_of_root.end())
+            {
+                it = surface_of_root.emplace(root, static_cast<S32>(s.mSurfaces.size())).first;
+                s.mSurfaces.emplace_back();
+            }
+            poly.mSurface = it->second;
+            SceneSurface& surface = s.mSurfaces[it->second];
+            surface.mPolys.push_back(static_cast<U32>(i));
+            surface.mTerrain = surface.mTerrain || (poly.mTerrainTile && poly.mArea == sknav::AREA_GROUND);
+        }
+
+        // A run's ends: the surfaces it touches nearest its bottom and its top.
+        std::vector<std::vector<std::pair<S32, F32>>> run_contacts(s.mRuns.size());
+        for (const SceneStitch& st : s.mStitches)
+        {
+            if (st.mStep)
+            {
+                continue;
+            }
+            const ScenePoly& a = s.mPolys[st.mA];
+            const ScenePoly& b = s.mPolys[st.mB];
+            if (a.mRun >= 0 && b.mRun < 0)
+            {
+                run_contacts[a.mRun].emplace_back(b.mSurface, st.mZ);
+            }
+            else if (b.mRun >= 0 && a.mRun < 0)
+            {
+                run_contacts[b.mRun].emplace_back(a.mSurface, st.mZ);
+            }
+        }
+        for (size_t r = 0; r < s.mRuns.size(); ++r)
+        {
+            SceneRun& run = s.mRuns[r];
+            const F32 zb = (run.mBottomA.mV[VZ] + run.mBottomB.mV[VZ]) * 0.5f;
+            const F32 zt = (run.mTopA.mV[VZ] + run.mTopB.mV[VZ]) * 0.5f;
+            std::map<S32, F32> contacts;    // surface -> the joint height nearest an end
+            for (const auto& contact : run_contacts[r])
+            {
+                auto it = contacts.find(contact.first);
+                const F32 near_end = llmin(std::fabs(contact.second - zb), std::fabs(contact.second - zt));
+                if (it == contacts.end() || near_end < llmin(std::fabs(it->second - zb), std::fabs(it->second - zt)))
+                {
+                    contacts[contact.first] = contact.second;
+                }
+            }
+            S32 bottom = -1, top = -1;
+            F32 best_b = FLT_MAX, best_t = FLT_MAX;
+            for (const auto& c : contacts)
+            {
+                const F32 db = std::fabs(c.second - zb);
+                const F32 dt = std::fabs(c.second - zt);
+                if (db < best_b)
+                {
+                    best_b = db;
+                    bottom = c.first;
+                }
+                if (dt < best_t)
+                {
+                    best_t = dt;
+                    top = c.first;
+                }
+            }
+            if (bottom >= 0 && bottom == top)
+            {
+                // One surface for both ends: it is the end it is nearer, and the other end
+                // takes the best of the rest, if any.
+                const bool is_bottom = best_b <= best_t;
+                S32 other = -1;
+                F32 best_o = FLT_MAX;
+                for (const auto& c : contacts)
+                {
+                    if (c.first == bottom)
+                    {
+                        continue;
+                    }
+                    const F32 d = std::fabs(c.second - (is_bottom ? zt : zb));
+                    if (d < best_o)
+                    {
+                        best_o = d;
+                        other = c.first;
+                    }
+                }
+                if (is_bottom)
+                {
+                    top = other;
+                }
+                else
+                {
+                    top = bottom;
+                    bottom = other;
+                }
+            }
+            run.mBottomSurface = bottom;
+            run.mTopSurface = top;
+            if (bottom < 0 && top < 0 && !run.mPolys.empty())
+            {
+                // A run touching no floor is a surface of its own, so it still draws.
+                const S32 id = static_cast<S32>(s.mSurfaces.size());
+                s.mSurfaces.emplace_back();
+                s.mSurfaces.back().mPolys = run.mPolys;
+                run.mBottomSurface = id;
+            }
+        }
+
+        for (SceneSurface& surface : s.mSurfaces)
+        {
+            std::vector<std::pair<F32, F32>> samples;
+            for (U32 id : surface.mPolys)
+            {
+                samples.emplace_back(s.mPolys[id].mZMean, s.mPolys[id].mPlanArea);
+                surface.mArea += s.mPolys[id].mPlanArea;
+            }
+            surface.mMedianZ = weightedMedian(samples);
+        }
+
+        // The index, needed from here on for picks; layers are filled in below.
+        std::vector<std::vector<Cell>> poly_cells;
+        buildIndex(s, poly_cells);
+
+        // Components: surfaces joined by runs and by ladders and elevators, never by drops.
+        const S32 nsurfaces = static_cast<S32>(s.mSurfaces.size());
+        UnionFind surf_uf(nsurfaces);
+        for (const SceneRun& run : s.mRuns)
+        {
+            if (run.mBottomSurface >= 0 && run.mTopSurface >= 0)
+            {
+                surf_uf.unite(run.mBottomSurface, run.mTopSurface);
+            }
+        }
+        auto surfaceOfPoly = [&](S32 id) -> S32 {
+            if (id < 0)
+            {
+                return -1;
+            }
+            const ScenePoly& poly = s.mPolys[id];
+            if (poly.mSurface >= 0)
+            {
+                return poly.mSurface;
+            }
+            if (poly.mRun >= 0)
+            {
+                const SceneRun& run = s.mRuns[poly.mRun];
+                return run.mBottomSurface >= 0 ? run.mBottomSurface : run.mTopSurface;
+            }
+            return -1;
+        };
+        std::vector<std::pair<S32, S32>> link_polys;
+        for (const FeatureLink& link : input.mFeatureLinks)
+        {
+            const S32 a = polyNear(s, link.mFrom, LINK_REACH_M);
+            const S32 b = polyNear(s, link.mTo, LINK_REACH_M);
+            const S32 sa = surfaceOfPoly(a), sb = surfaceOfPoly(b);
+            if (sa >= 0 && sb >= 0)
+            {
+                surf_uf.unite(sa, sb);
+                link_polys.emplace_back(a, b);
+            }
+        }
+        std::map<S32, S32> component_of_root;
+        for (S32 i = 0; i < nsurfaces; ++i)
+        {
+            const S32 root = surf_uf.find(i);
+            auto it = component_of_root.find(root);
+            if (it == component_of_root.end())
+            {
+                it = component_of_root.emplace(root, static_cast<S32>(component_of_root.size())).first;
+            }
+            s.mSurfaces[i].mComponent = it->second;
+        }
+        s.mComponents = static_cast<S32>(component_of_root.size());
+
+        // Surface footprints, for the touch test.
+        std::vector<std::set<Cell>> surface_cells(nsurfaces);
+        for (S32 i = 0; i < nsurfaces; ++i)
+        {
+            for (U32 id : s.mSurfaces[i].mPolys)
+            {
+                surface_cells[i].insert(poly_cells[id].begin(), poly_cells[id].end());
+            }
+        }
+
+        // Layers: per component, the terrain surfaces as one ground layer; every other surface
+        // grouped greedily by median height where footprints touch, whatever joins it, so a
+        // table top a step too high to climb still reads as part of its floor.
+        struct Building
+        {
+            S32 mLayer;
+            std::vector<std::pair<F32, F32>> mSamples;
+            F32 mMedian;
+            std::set<Cell> mCells;
+        };
+        std::map<S32, S32> ground_of_component;
+        std::vector<S32> members;
+        for (S32 i = 0; i < nsurfaces; ++i)
+        {
+            SceneSurface& surface = s.mSurfaces[i];
+            if (!surface.mTerrain)
+            {
+                members.push_back(i);
+                continue;
+            }
+            auto it = ground_of_component.find(surface.mComponent);
+            if (it == ground_of_component.end())
+            {
+                it = ground_of_component.emplace(surface.mComponent, static_cast<S32>(s.mLayers.size())).first;
+                s.mLayers.emplace_back();
+                s.mLayers.back().mGround = true;
+                s.mLayers.back().mComponent = surface.mComponent;
+            }
+            surface.mLayer = it->second;
+        }
+        std::stable_sort(members.begin(), members.end(), [&](S32 a, S32 b) { return s.mSurfaces[a].mMedianZ < s.mSurfaces[b].mMedianZ; });
+        std::vector<Building> open;
+        std::map<Cell, std::vector<S32>> open_cells;   // cell -> the buildings meeting it
+        for (S32 i : members)
+        {
+            const SceneSurface& surface = s.mSurfaces[i];
+            std::set<S32> nearby;
+            for (const Cell& c : surface_cells[i])
+            {
+                for (S32 dy = -1; dy <= 1; ++dy)
+                {
+                    for (S32 dx = -1; dx <= 1; ++dx)
+                    {
+                        const auto it = open_cells.find({ c.first + dx, c.second + dy });
+                        if (it != open_cells.end())
+                        {
+                            nearby.insert(it->second.begin(), it->second.end());
+                        }
+                    }
+                }
+            }
+            S32 best = -1;
+            F32 best_dz = FLT_MAX;
+            for (S32 k : nearby)
+            {
+                const F32 dz = std::fabs(surface.mMedianZ - open[k].mMedian);
+                if (dz < LAYER_GAP_M && dz < best_dz)
+                {
+                    best_dz = dz;
+                    best = k;
+                }
+            }
+            if (best < 0)
+            {
+                Building b;
+                b.mLayer = static_cast<S32>(s.mLayers.size());
+                b.mMedian = surface.mMedianZ;
+                s.mLayers.emplace_back();
+                s.mLayers.back().mComponent = surface.mComponent;
+                open.push_back(b);
+                best = static_cast<S32>(open.size()) - 1;
+            }
+            Building& b = open[best];
+            b.mSamples.emplace_back(surface.mMedianZ, surface.mArea);
+            b.mMedian = weightedMedian(b.mSamples);
+            for (const Cell& c : surface_cells[i])
+            {
+                if (b.mCells.insert(c).second)
+                {
+                    open_cells[c].push_back(best);
+                }
+            }
+            s.mSurfaces[i].mLayer = b.mLayer;
+        }
+        for (S32 i = 0; i < nsurfaces; ++i)
+        {
+            const S32 layer = s.mSurfaces[i].mLayer;
+            for (U32 id : s.mSurfaces[i].mPolys)
+            {
+                if (s.mPolys[id].mRun < 0)
+                {
+                    s.mPolys[id].mLayer = layer;
+                }
+            }
+        }
+        for (size_t r = 0; r < s.mRuns.size(); ++r)
+        {
+            SceneRun& run = s.mRuns[r];
+            const S32 bottom = run.mBottomSurface >= 0 ? s.mSurfaces[run.mBottomSurface].mLayer : -1;
+            const S32 top = run.mTopSurface >= 0 ? s.mSurfaces[run.mTopSurface].mLayer : -1;
+            run.mLayer = bottom >= 0 ? bottom : top;
+            run.mTopLayer = top;
+            for (U32 id : run.mPolys)
+            {
+                if (s.mPolys[id].mRun == static_cast<S32>(r))
+                {
+                    s.mPolys[id].mLayer = run.mLayer;
+                }
+            }
+            if (run.mLayer >= 0)
+            {
+                s.mLayers[run.mLayer].mRuns.push_back(static_cast<S32>(r));
+                if (top >= 0 && top != run.mLayer)
+                {
+                    s.mLayerLinks.emplace_back(llmin(run.mLayer, top), llmax(run.mLayer, top));
+                }
+            }
+        }
+        for (const auto& lp : link_polys)
+        {
+            const S32 la = s.mPolys[lp.first].mLayer, lb = s.mPolys[lp.second].mLayer;
+            if (la >= 0 && lb >= 0 && la != lb)
+            {
+                s.mLayerLinks.emplace_back(llmin(la, lb), llmax(la, lb));
+            }
+        }
+        std::sort(s.mLayerLinks.begin(), s.mLayerLinks.end());
+        s.mLayerLinks.erase(std::unique(s.mLayerLinks.begin(), s.mLayerLinks.end()), s.mLayerLinks.end());
+
+        // Layer polygons, base heights and footprints.
+        std::vector<std::vector<std::pair<F32, F32>>> layer_samples(s.mLayers.size());
+        for (size_t i = 0; i < s.mPolys.size(); ++i)
+        {
+            const ScenePoly& poly = s.mPolys[i];
+            if (poly.mLayer < 0)
+            {
+                continue;
+            }
+            SceneLayer& layer = s.mLayers[poly.mLayer];
+            layer.mPolys.push_back(static_cast<U32>(i));
+            layer.mArea += poly.mPlanArea;
+            layer.mFootprint.insert(poly_cells[i].begin(), poly_cells[i].end());
+            layer_samples[poly.mLayer].emplace_back(poly.mZMean, poly.mPlanArea);
+        }
+        for (size_t l = 0; l < s.mLayers.size(); ++l)
+        {
+            s.mLayers[l].mBaseZ = weightedMedian(layer_samples[l]);
+        }
+
+        // Draw order: ground first, then ascending base, the larger footprint later on a tie.
+        for (size_t l = 0; l < s.mLayers.size(); ++l)
+        {
+            if (!s.mLayers[l].mPolys.empty())
+            {
+                s.mOrder.push_back(static_cast<S32>(l));
+            }
+        }
+        std::sort(s.mOrder.begin(), s.mOrder.end(), [&](S32 a, S32 b) {
+            const SceneLayer& la = s.mLayers[a];
+            const SceneLayer& lb = s.mLayers[b];
+            if (la.mGround != lb.mGround)
+            {
+                return la.mGround;
+            }
+            if (la.mBaseZ != lb.mBaseZ)
+            {
+                return la.mBaseZ < lb.mBaseZ;
+            }
+            if (la.mArea != lb.mArea)
+            {
+                return la.mArea < lb.mArea;
+            }
+            return a < b;
+        });
+        return scene;
+    }
+
+    FloorHit floorAt(const Scene& scene, const LLVector3d& pos, F32 below, F32 above)
+    {
+        FloorHit hit;
+        const auto it = scene.mIndex.find(indexCell(pos.mdV[VX], pos.mdV[VY]));
+        if (it == scene.mIndex.end())
+        {
+            return hit;
+        }
+        const LLVector2 p = scene.toLocal(pos);
+        const F32 z = static_cast<F32>(pos.mdV[VZ]);
+        for (U32 id : it->second)
+        {
+            const ScenePoly& poly = scene.mPolys[id];
+            if (poly.mLayer < 0 || poly.mZMax < z - below || poly.mZMin > z + above || !polyContains(scene, poly, p))
+            {
+                continue;
+            }
+            const F32 h = polyHeightAt(scene, poly, p);
+            if (h < z - below || h > z + above)
+            {
+                continue;
+            }
+            if (!hit.mFound || h > hit.mZ)
+            {
+                hit.mFound = true;
+                hit.mZ = h;
+                hit.mPoly = static_cast<S32>(id);
+                hit.mLayer = poly.mLayer;
+            }
+        }
+        return hit;
+    }
+
+    FloorRelation floorRelation(const Scene& scene, const AgentFloor& agent, const LLVector3d& other, bool z_known)
+    {
+        if (!z_known)
+        {
+            return FloorRelation::UNKNOWN;
+        }
+        const FloorHit hit = floorAt(scene, other, 2.5f, 0.5f);
+        if (hit.mFound && agent.mFound)
+        {
+            const F32 dz = hit.mZ - agent.mZ;
+            if ((agent.mLayer >= 0 && hit.mLayer == agent.mLayer) || std::fabs(dz) < FLOOR_SAME_M)
+            {
+                return FloorRelation::SAME;
+            }
+            return dz > 0.f ? FloorRelation::ABOVE : FloorRelation::BELOW;
+        }
+        const F64 dz = other.mdV[VZ] - agent.mPos.mdV[VZ];
+        if (dz >= FLOOR_RAW_M)
+        {
+            return FloorRelation::ABOVE;
+        }
+        if (dz <= -FLOOR_RAW_M)
+        {
+            return FloorRelation::BELOW;
+        }
+        return FloorRelation::SAME;
+    }
+
+    LayerSelection selectLayers(const Scene& scene, const AgentFloor& agent, sknav::EnclosureBucket bucket, F32 fade)
+    {
+        LayerSelection out;
+        const F32 za = agent.mFound ? agent.mZ : static_cast<F32>(agent.mPos.mdV[VZ]);
+        const Cell start = indexCell(agent.mPos.mdV[VX], agent.mPos.mdV[VY]);
+        const LLVector2 p = scene.toLocal(agent.mPos);
+
+        if (bucket == sknav::EnclosureBucket::INDOORS || bucket == sknav::EnclosureBucket::SHELTERED)
+        {
+            out.mInside = true;
+        }
+        else if (bucket == sknav::EnclosureBucket::UNKNOWN)
+        {
+            const auto it = scene.mIndex.find(start);
+            if (it != scene.mIndex.end())
+            {
+                for (U32 id : it->second)
+                {
+                    const ScenePoly& poly = scene.mPolys[id];
+                    if (poly.mLayer >= 0 && scene.mLayers[poly.mLayer].mBaseZ > za + INSIDE_ABOVE_M && polyContains(scene, poly, p))
+                    {
+                        out.mInside = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (out.mInside && agent.mLayer >= 0)
+        {
+            // The storey: the agent's layer and what runs, ladders and elevators reach from it
+            // within reach above.
+            std::deque<S32> queue;
+            out.mStorey.insert(agent.mLayer);
+            queue.push_back(agent.mLayer);
+            while (!queue.empty())
+            {
+                const S32 l = queue.front();
+                queue.pop_front();
+                for (const auto& link : scene.mLayerLinks)
+                {
+                    const S32 other = link.first == l ? link.second : link.second == l ? link.first : -1;
+                    if (other >= 0 && !out.mStorey.count(other) && scene.mLayers[other].mBaseZ <= za + STOREY_REACH_M)
+                    {
+                        out.mStorey.insert(other);
+                        queue.push_back(other);
+                    }
+                }
+            }
+            std::vector<S32> above;
+            for (size_t l = 0; l < scene.mLayers.size(); ++l)
+            {
+                if (scene.mLayers[l].mBaseZ > za + INSIDE_ABOVE_M && !out.mStorey.count(static_cast<S32>(l)))
+                {
+                    above.push_back(static_cast<S32>(l));
+                }
+            }
+            auto covered = [&](const Cell& c) {
+                for (S32 l : above)
+                {
+                    if (scene.mLayers[l].mFootprint.count(c))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            auto holdsStorey = [&](const Cell& c) {
+                const auto it = scene.mIndex.find(c);
+                if (it == scene.mIndex.end())
+                {
+                    return false;
+                }
+                for (U32 id : it->second)
+                {
+                    if (out.mStorey.count(scene.mPolys[id].mLayer))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            // The interior: covered cells of the storey, flood-filled from the agent's.
+            std::set<Cell> interior;
+            if (!above.empty() && covered(start) && holdsStorey(start))
+            {
+                std::deque<Cell> cells;
+                interior.insert(start);
+                cells.push_back(start);
+                static const S32 DX[4] = { 1, -1, 0, 0 };
+                static const S32 DY[4] = { 0, 0, 1, -1 };
+                while (!cells.empty())
+                {
+                    const Cell c = cells.front();
+                    cells.pop_front();
+                    for (S32 k = 0; k < 4; ++k)
+                    {
+                        const Cell n(c.first + DX[k], c.second + DY[k]);
+                        if (std::abs(n.first - start.first) > INTERIOR_CAP_CELLS || std::abs(n.second - start.second) > INTERIOR_CAP_CELLS
+                            || interior.count(n) || !covered(n) || !holdsStorey(n))
+                        {
+                            continue;
+                        }
+                        interior.insert(n);
+                        cells.push_back(n);
+                    }
+                }
+            }
+            for (S32 l : above)
+            {
+                std::set<Cell> cut;
+                for (const Cell& c : scene.mLayers[l].mFootprint)
+                {
+                    if (interior.count(c))
+                    {
+                        cut.insert(c);
+                    }
+                }
+                if (!cut.empty())
+                {
+                    out.mCut[l] = std::move(cut);
+                }
+            }
+        }
+
+        for (S32 l : scene.mOrder)
+        {
+            const SceneLayer& layer = scene.mLayers[l];
+            if (layer.mGround || std::fabs(layer.mBaseZ - za) <= fade)
+            {
+                out.mDrawn.push_back(l);
+            }
+        }
+        return out;
+    }
+}
