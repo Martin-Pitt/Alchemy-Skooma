@@ -132,10 +132,56 @@ namespace skmap
         U32 mFirstTri = 0;                      ///< into Scene::mTris, three corners each
         U16 mTriCount = 0;
         F32 mWater = -1.0e4f;
+        U8 mOpenEdges = 0;                      ///< bit per edge with no neighbour inside the tile
         S32 mRun = -1;
         S32 mSurface = -1;
         S32 mLayer = -1;
     };
+
+    /// What a line on the map stands for.
+    enum class MarkKind : U8
+    {
+        WALL,
+        LEDGE,
+        OVERHANG,
+        DROP_EDGE,          ///< a ledge a drop link leaves from
+        DROP_POINT,         ///< a drop with no edge of its own: A where it leaves, B towards the landing
+        DOOR_JAMB,
+        DOOR_LEAF,
+        LADDER,             ///< a glyph at A
+        ELEVATOR,           ///< a glyph at A
+        VOID_BOUNDARY,      ///< a region edge with nothing across it
+        REGION_BOUNDARY,    ///< a region edge with another region across it
+    };
+
+    /// A line or glyph on the map, scene-local plan metres.
+    struct LineMark
+    {
+        MarkKind mKind = MarkKind::WALL;
+        LLVector2 mA, mB;
+        F32 mZ = 0.f;
+        F32 mHeight = 0.f;                      ///< the wall's height, the drop, the clearance
+        S8 mFloorSide = 0;                      ///< +1 when the floor lies left of A to B, -1 right, 0 none
+        S32 mLayer = -1;                        ///< -1 for boundaries
+    };
+
+    /// One iso-height segment; its height is mLevel * CONTOUR_STEP_M.
+    struct Contour
+    {
+        LLVector2 mA, mB;
+        S32 mLevel = 0;
+        S32 mLayer = -1;
+    };
+
+    constexpr F32 MARK_PLAN_M = 0.1f;           ///< a wall segment this close in plan lies on a polygon's edge
+    constexpr F32 MARK_Z_M = 0.5f;
+    constexpr F32 DROP_MATCH_M = 0.3f;
+    constexpr F32 DROP_MATCH_Z_M = 1.f;         ///< and no further than this in height, so a floor below is never taken
+    constexpr F32 DOOR_JAMB_M = 0.4f;
+    constexpr F32 BOUNDARY_STEP_M = 2.f;
+    constexpr F32 BOUNDARY_NEAR_M = 1.f;
+    constexpr F32 CONTOUR_STEP_M = 0.5f;
+    constexpr F32 FLAT_POLY_M = 0.05f;
 
     /// A stair or ramp, one per (mesh, flight key), scene-local.
     struct SceneRun
@@ -173,6 +219,8 @@ namespace skmap
         std::vector<U32> mPolys;
         std::vector<S32> mRuns;
         std::set<std::pair<S32, S32>> mFootprint;   ///< global 4 m cells its polygons meet
+        std::vector<U32> mMarks;                ///< into Scene::mMarks
+        std::vector<U32> mContours;             ///< into Scene::mContours
     };
 
     /// A polygon's edge joined to another's, inside a tile or across a lattice line.
@@ -200,6 +248,11 @@ namespace skmap
         S32 mComponents = 0;
         /// Global 4 m cell -> the polygons that meet it; each polygon knows its layer.
         std::map<std::pair<S32, S32>, std::vector<U32>> mIndex;
+        std::vector<LineMark> mMarks;           ///< owned by layers
+        std::vector<LineMark> mBoundaries;      ///< region and void edges, on no layer
+        std::vector<Contour> mContours;
+        /// Global 32 m lattice cells holding at least one published tile.
+        std::set<std::pair<S32, S32>> mBuilt;
 
         LLVector2 toLocal(const LLVector3d& global) const
         {

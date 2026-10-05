@@ -375,4 +375,142 @@ namespace tut
         skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
         ensure_equals("tall polygon dropped", s->mPolys.size(), static_cast<size_t>(1));
     }
+
+    WallSegment segment(F32 x0, F32 y0, F32 x1, F32 y1, EdgeKind kind, F32 value, F32 z = 0.f)
+    {
+        WallSegment w;
+        w.mA.set(x0, y0, z);
+        w.mB.set(x1, y1, z);
+        w.mKind = kind;
+        w.mValue = value;
+        return w;
+    }
+
+    DropLink dropFrom(F32 x, F32 y, F32 z, F32 tx, F32 ty, F32 tz)
+    {
+        DropLink d;
+        d.mFrom.set(x, y, z);
+        d.mTo.set(tx, ty, tz);
+        d.mHeight = z - tz;
+        return d;
+    }
+
+    // Marks: walls and ledges on their floor with the floor side; OPEN is never a mark.
+    template<> template<>
+    void skmapgeom_object::test<10>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 10.f, 10.f, 0.f, 0.f);
+        t.mSegments.push_back(segment(10.f, 0.f, 10.f, 10.f, EdgeKind::WALL, 2.f));
+        t.mSegments.push_back(segment(0.f, 0.f, 10.f, 0.f, EdgeKind::OPEN, 0.f));
+        t.mSegments.push_back(segment(10.f, 10.f, 0.f, 10.f, EdgeKind::LEDGE, 3.f));
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
+        ensure_equals("two marks", s->mMarks.size(), static_cast<size_t>(2));
+        ensure("a wall", s->mMarks[0].mKind == skmap::MarkKind::WALL && s->mMarks[0].mHeight == 2.f);
+        ensure_equals("floor to the left", static_cast<S32>(s->mMarks[0].mFloorSide), 1);
+        ensure("a ledge", s->mMarks[1].mKind == skmap::MarkKind::LEDGE);
+        ensure("on the floor's layer", s->mMarks[0].mLayer == s->mPolys[0].mLayer);
+        ensure_equals("the layer lists them", s->mLayers[s->mPolys[0].mLayer].mMarks.size(), static_cast<size_t>(2));
+        ensure("built set", s->mBuilt.count({ 0, 0 }) == 1 && s->mBuilt.size() == 1);
+    }
+
+    // Drops: links within 0.3 m make their segment a drop edge, once; a link with no segment
+    // is a drop point.
+    template<> template<>
+    void skmapgeom_object::test<11>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 10.f, 10.f, 0.f, 0.f);
+        t.mSegments.push_back(segment(10.f, 10.f, 0.f, 10.f, EdgeKind::LEDGE, 3.f));
+        t.mLinks.push_back(dropFrom(3.f, 10.2f, 0.f, 3.f, 11.f, -3.f));
+        t.mLinks.push_back(dropFrom(6.f, 9.9f, 0.f, 6.f, 11.f, -3.f));
+        t.mLinks.push_back(dropFrom(5.f, 5.f, 0.f, 5.f, 4.f, -3.f));
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
+        S32 edges = 0, points = 0, ledges = 0;
+        for (const skmap::LineMark& m : s->mMarks)
+        {
+            edges += m.mKind == skmap::MarkKind::DROP_EDGE;
+            points += m.mKind == skmap::MarkKind::DROP_POINT;
+            ledges += m.mKind == skmap::MarkKind::LEDGE;
+        }
+        ensure_equals("one drop edge", edges, 1);
+        ensure_equals("the ledge became it", ledges, 0);
+        ensure_equals("one drop point", points, 1);
+    }
+
+    // Contours at every 0.5 m on a terrain slope and a ramp, none on a stair run.
+    template<> template<>
+    void skmapgeom_object::test<12>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 10.f, 10.f, 0.f, 3.f, AREA_GROUND);
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(LAND, true, 0, 0) }));
+        std::set<S32> levels;
+        for (const skmap::Contour& c : s->mContours)
+        {
+            levels.insert(c.mLevel);
+        }
+        ensure("levels 0.5 to 2.5", levels == std::set<S32>({ 1, 2, 3, 4, 5 }));
+
+        auto runScene = [](ConnectorKind kind, U8 treads) {
+            TileMaker u;
+            const S32 lower = u.quad(0.f, 0.f, 10.f, 10.f, 0.f, 0.f);
+            const S32 run = u.quad(10.f, 0.f, 14.f, 10.f, 0.f, 3.f);
+            const S32 upper = u.quad(14.f, 0.f, 24.f, 10.f, 3.f, 3.f);
+            u.join(lower, 1, run, 3);
+            u.join(run, 1, upper, 3);
+            u.flight(kind, treads, LLVector3(10.f, 0.f, 0.f), LLVector3(10.f, 10.f, 0.f), LLVector3(14.f, 0.f, 3.f),
+                     LLVector3(14.f, 10.f, 3.f), { static_cast<U16>(run) }, 9);
+            return skmap::buildScene(input({ u.make(CLUSTER, false, 0, 0) }));
+        };
+        ensure("none on a stair", runScene(ConnectorKind::STAIR, 6)->mContours.empty());
+        ensure("on a ramp", !runScene(ConnectorKind::RAMP, 0)->mContours.empty());
+        ensure("none on flat object floors", runScene(ConnectorKind::STAIR, 6)->mContours.empty());
+    }
+
+    // Region edges: marked only where floors come near, void with nothing across, a dashed
+    // region edge once where another region lies across.
+    template<> template<>
+    void skmapgeom_object::test<13>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 10.f, 10.f, 0.f, 0.f, AREA_GROUND);
+        skmap::SceneInput in = input({ t.make(LAND, true, 0, 0) });
+        skmap::ScenePtr s = skmap::buildScene(in);
+        ensure("some boundaries", !s->mBoundaries.empty());
+        for (const skmap::LineMark& m : s->mBoundaries)
+        {
+            ensure("void", m.mKind == skmap::MarkKind::VOID_BOUNDARY);
+            ensure("only near the floor", m.mA.mV[VX] <= 12.f && m.mA.mV[VY] <= 12.f && m.mB.mV[VX] <= 12.f && m.mB.mV[VY] <= 12.f);
+            ensure("no layer", m.mLayer == -1);
+        }
+
+        in.mRegions.push_back({ LLVector3d(-256.0, 0.0, 0.0), 256.0 });
+        s = skmap::buildScene(in);
+        S32 region = 0, west_void = 0;
+        for (const skmap::LineMark& m : s->mBoundaries)
+        {
+            const bool west = std::fabs(m.mA.mV[VX]) < 1e-3f && std::fabs(m.mB.mV[VX]) < 1e-3f;
+            region += m.mKind == skmap::MarkKind::REGION_BOUNDARY && west;
+            west_void += m.mKind == skmap::MarkKind::VOID_BOUNDARY && west;
+        }
+        ensure_equals("one region edge", region, 1);
+        ensure_equals("no void across it", west_void, 0);
+    }
+
+    // Coverage is sampled a metre over each polygon's centroid.
+    template<> template<>
+    void skmapgeom_object::test<14>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 4.f, 4.f, 0.f, 0.f);
+        t.quad(20.f, 0.f, 24.f, 4.f, 0.f, 0.f);
+        skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) });
+        in.mCoverage = [](const LLVector3d& p) {
+            return p.mdV[VX] < 10.0 && std::fabs(p.mdV[VZ] - 1.0) < 1e-3 ? EnclosureBucket::INDOORS : EnclosureBucket::OUTDOORS;
+        };
+        skmap::ScenePtr s = skmap::buildScene(in);
+        ensure("indoors", s->mPolys[0].mCoverage == static_cast<U8>(EnclosureBucket::INDOORS));
+        ensure("outdoors", s->mPolys[1].mCoverage == static_cast<U8>(EnclosureBucket::OUTDOORS));
+    }
 }

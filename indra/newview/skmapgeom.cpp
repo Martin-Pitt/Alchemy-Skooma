@@ -257,6 +257,488 @@ namespace skmap
             }
         };
 
+        F32 segmentDistance(const LLVector2& p, const LLVector2& a, const LLVector2& b, F32* t_out = nullptr)
+        {
+            const LLVector2 ab = b - a;
+            const F32 len2 = ab * ab;
+            const F32 t = len2 > 0.f ? llclamp(((p - a) * ab) / len2, 0.f, 1.f) : 0.f;
+            if (t_out)
+            {
+                *t_out = t;
+            }
+            return (a + ab * t - p).length();
+        }
+
+        /// Any polygon of the scene within reach of a scene-local point, at any height.
+        bool anyPolyNear(const Scene& scene, const LLVector2& p, F32 reach)
+        {
+            std::vector<Cell> cells;
+            cellsAround(scene, p, reach, cells);
+            for (const Cell& c : cells)
+            {
+                const auto it = scene.mIndex.find(c);
+                if (it == scene.mIndex.end())
+                {
+                    continue;
+                }
+                for (U32 id : it->second)
+                {
+                    if (planDistance(scene, scene.mPolys[id], p) <= reach)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// The polygon whose open edge a floor segment lies on, or -1.
+        S32 segmentOwner(const Scene& scene, const LLVector2& a, const LLVector2& b, F32 za, F32 zb)
+        {
+            const LLVector2 mid = (a + b) * 0.5f;
+            const F32 zmid = (za + zb) * 0.5f;
+            std::vector<Cell> cells;
+            cellsAround(scene, mid, MARK_PLAN_M, cells);
+            S32 best = -1;
+            F32 best_d = FLT_MAX;
+            for (const Cell& c : cells)
+            {
+                const auto it = scene.mIndex.find(c);
+                if (it == scene.mIndex.end())
+                {
+                    continue;
+                }
+                for (U32 id : it->second)
+                {
+                    const ScenePoly& poly = scene.mPolys[id];
+                    if (zmid < poly.mZMin - MARK_Z_M || zmid > poly.mZMax + MARK_Z_M)
+                    {
+                        continue;
+                    }
+                    for (S32 v = 0; v < poly.mVertCount; ++v)
+                    {
+                        if (!(poly.mOpenEdges & (1 << v)))
+                        {
+                            continue;
+                        }
+                        const LLVector3& ea = poly.mVerts[v];
+                        const LLVector3& eb = poly.mVerts[(v + 1) % poly.mVertCount];
+                        F32 t = 0.f;
+                        const F32 d = segmentDistance(mid, plan(ea), plan(eb), &t);
+                        const F32 z = ea.mV[VZ] + (eb.mV[VZ] - ea.mV[VZ]) * t;
+                        if (d <= MARK_PLAN_M && std::fabs(z - zmid) <= MARK_Z_M && (d < best_d || (d == best_d && static_cast<S32>(id) < best)))
+                        {
+                            best_d = d;
+                            best = static_cast<S32>(id);
+                        }
+                    }
+                }
+            }
+            return best;
+        }
+
+        S32 layerNear(const Scene& scene, const LLVector2& p, F32 z, F32 reach)
+        {
+            const S32 id = polyNear(scene, scene.mOrigin + LLVector3d(p.mV[VX], p.mV[VY], z), reach);
+            return id >= 0 ? scene.mPolys[id].mLayer : -1;
+        }
+
+        S8 floorSide(const LLVector2& a, const LLVector2& b, const LLVector2& centroid)
+        {
+            return cross2(a, b, centroid) > 0.f ? 1 : -1;
+        }
+
+        /// Step 8: walls, ledges and overhangs on their floors, drop edges and points, doors,
+        /// ladder and elevator glyphs, and the region edges where floors meet them.
+        void classifyMarks(Scene& s, const SceneInput& input)
+        {
+            struct Seg
+            {
+                LLVector2 mA, mB;
+                F32 mZA = 0.f, mZB = 0.f;
+                sknav::EdgeKind mKind = sknav::EdgeKind::OPEN;
+                F32 mValue = 0.f;
+                S32 mOwner = -1;
+                bool mDrop = false;
+            };
+            std::vector<Seg> segs;
+            std::map<Cell, std::vector<U32>> seg_index;
+            for (const TileInput& tile : input.mTiles)
+            {
+                if (!tile.mSegments)
+                {
+                    continue;
+                }
+                const LLVector3d offset = tile.mOrigin - s.mOrigin;
+                const LLVector3 o(static_cast<F32>(offset.mdV[VX]), static_cast<F32>(offset.mdV[VY]), static_cast<F32>(offset.mdV[VZ]));
+                for (const sknav::WallSegment& w : *tile.mSegments)
+                {
+                    Seg seg;
+                    seg.mA = plan(w.mA + o);
+                    seg.mB = plan(w.mB + o);
+                    seg.mZA = w.mA.mV[VZ] + o.mV[VZ];
+                    seg.mZB = w.mB.mV[VZ] + o.mV[VZ];
+                    seg.mKind = w.mKind;
+                    seg.mValue = w.mValue;
+                    seg.mOwner = segmentOwner(s, seg.mA, seg.mB, seg.mZA, seg.mZB);
+                    const U32 id = static_cast<U32>(segs.size());
+                    segs.push_back(seg);
+                    const Cell lo = cellOfLocal(s, LLVector2(llmin(seg.mA.mV[VX], seg.mB.mV[VX]), llmin(seg.mA.mV[VY], seg.mB.mV[VY])));
+                    const Cell hi = cellOfLocal(s, LLVector2(llmax(seg.mA.mV[VX], seg.mB.mV[VX]), llmax(seg.mA.mV[VY], seg.mB.mV[VY])));
+                    for (S32 y = lo.second; y <= hi.second; ++y)
+                    {
+                        for (S32 x = lo.first; x <= hi.first; ++x)
+                        {
+                            seg_index[{ x, y }].push_back(id);
+                        }
+                    }
+                }
+            }
+
+            // Drops: a link's ledge is the nearest segment of any kind under its start.
+            for (const TileInput& tile : input.mTiles)
+            {
+                if (!tile.mLinks)
+                {
+                    continue;
+                }
+                const LLVector3d offset = tile.mOrigin - s.mOrigin;
+                const LLVector3 o(static_cast<F32>(offset.mdV[VX]), static_cast<F32>(offset.mdV[VY]), static_cast<F32>(offset.mdV[VZ]));
+                for (const sknav::DropLink& link : *tile.mLinks)
+                {
+                    if (link.mKind != sknav::LinkKind::DROP)
+                    {
+                        continue;
+                    }
+                    const LLVector2 from = plan(link.mFrom + o);
+                    const F32 fz = link.mFrom.mV[VZ] + o.mV[VZ];
+                    std::vector<Cell> cells;
+                    cellsAround(s, from, DROP_MATCH_M, cells);
+                    S32 best = -1;
+                    F32 best_d = FLT_MAX;
+                    for (const Cell& c : cells)
+                    {
+                        const auto it = seg_index.find(c);
+                        if (it == seg_index.end())
+                        {
+                            continue;
+                        }
+                        for (U32 id : it->second)
+                        {
+                            const Seg& seg = segs[id];
+                            F32 t = 0.f;
+                            const F32 d = segmentDistance(from, seg.mA, seg.mB, &t);
+                            const F32 z = seg.mZA + (seg.mZB - seg.mZA) * t;
+                            if (d <= DROP_MATCH_M && std::fabs(z - fz) <= DROP_MATCH_Z_M && (d < best_d || (d == best_d && static_cast<S32>(id) < best)))
+                            {
+                                best_d = d;
+                                best = static_cast<S32>(id);
+                            }
+                        }
+                    }
+                    if (best >= 0)
+                    {
+                        segs[best].mDrop = true;
+                        continue;
+                    }
+                    LineMark mark;
+                    mark.mKind = MarkKind::DROP_POINT;
+                    mark.mA = from;
+                    mark.mB = plan(link.mTo + o);
+                    mark.mZ = fz;
+                    mark.mHeight = link.mHeight;
+                    mark.mLayer = layerNear(s, from, fz, 0.5f);
+                    if (mark.mLayer >= 0)
+                    {
+                        s.mMarks.push_back(mark);
+                    }
+                }
+            }
+
+            for (const Seg& seg : segs)
+            {
+                if (!seg.mDrop && seg.mKind == sknav::EdgeKind::OPEN)
+                {
+                    continue;   // erosion and tile borders: never a line
+                }
+                LineMark mark;
+                mark.mKind = seg.mDrop ? MarkKind::DROP_EDGE
+                           : seg.mKind == sknav::EdgeKind::WALL ? MarkKind::WALL
+                           : seg.mKind == sknav::EdgeKind::LEDGE ? MarkKind::LEDGE
+                                                                 : MarkKind::OVERHANG;
+                mark.mA = seg.mA;
+                mark.mB = seg.mB;
+                mark.mZ = (seg.mZA + seg.mZB) * 0.5f;
+                mark.mHeight = seg.mValue;
+                if (seg.mOwner >= 0)
+                {
+                    const ScenePoly& poly = s.mPolys[seg.mOwner];
+                    mark.mLayer = poly.mLayer;
+                    mark.mFloorSide = floorSide(seg.mA, seg.mB, poly.mCentroid);
+                }
+                else if (seg.mDrop)
+                {
+                    mark.mLayer = layerNear(s, (seg.mA + seg.mB) * 0.5f, mark.mZ, 0.5f);
+                }
+                if (mark.mLayer >= 0)
+                {
+                    s.mMarks.push_back(mark);
+                }
+            }
+
+            // Doors: jambs and a leaf on the floor nearest the sill.
+            for (const DoorInput& door : input.mDoors)
+            {
+                const LLVector2 p = s.toLocal(door.mPlanePoint);
+                const F32 sill = static_cast<F32>(door.mSill - s.mOrigin.mdV[VZ]);
+                std::vector<Cell> cells;
+                cellsAround(s, p, 2.f, cells);
+                S32 layer = -1;
+                F32 best_dz = FLT_MAX;
+                S32 best_id = -1;
+                for (const Cell& c : cells)
+                {
+                    const auto it = s.mIndex.find(c);
+                    if (it == s.mIndex.end())
+                    {
+                        continue;
+                    }
+                    for (U32 id : it->second)
+                    {
+                        const ScenePoly& poly = s.mPolys[id];
+                        if (planDistance(s, poly, p) > 2.f)
+                        {
+                            continue;
+                        }
+                        const F32 dz = sill < poly.mZMin ? poly.mZMin - sill : sill > poly.mZMax ? sill - poly.mZMax : 0.f;
+                        if (dz < best_dz || (dz == best_dz && static_cast<S32>(id) < best_id))
+                        {
+                            best_dz = dz;
+                            best_id = static_cast<S32>(id);
+                            layer = poly.mLayer;
+                        }
+                    }
+                }
+                if (layer < 0)
+                {
+                    continue;
+                }
+                LineMark mark;
+                mark.mZ = sill;
+                mark.mLayer = layer;
+                if (door.mPlaneKnown)
+                {
+                    LLVector2 n(door.mNormal.mV[VX], door.mNormal.mV[VY]);
+                    if (n.normVec() < 1e-3f)
+                    {
+                        n.set(1.f, 0.f);
+                    }
+                    const LLVector2 t(-n.mV[VY], n.mV[VX]);
+                    const F32 half = door.mWidth * 0.5f;
+                    const LLVector2 ja = p - t * half, jb = p + t * half;
+                    for (const LLVector2& j : { ja, jb })
+                    {
+                        mark.mKind = MarkKind::DOOR_JAMB;
+                        mark.mA = j - n * (DOOR_JAMB_M * 0.5f);
+                        mark.mB = j + n * (DOOR_JAMB_M * 0.5f);
+                        s.mMarks.push_back(mark);
+                    }
+                    mark.mKind = MarkKind::DOOR_LEAF;
+                    if (door.mDouble)
+                    {
+                        mark.mA = ja;
+                        mark.mB = p;
+                        s.mMarks.push_back(mark);
+                        mark.mA = p;
+                        mark.mB = jb;
+                        s.mMarks.push_back(mark);
+                    }
+                    else
+                    {
+                        mark.mA = ja;
+                        mark.mB = jb;
+                        s.mMarks.push_back(mark);
+                    }
+                }
+                else
+                {
+                    const LLVector2 lo = s.toLocal(door.mMin), hi = s.toLocal(door.mMax);
+                    const LLVector2 c = (lo + hi) * 0.5f;
+                    mark.mKind = MarkKind::DOOR_LEAF;
+                    if (hi.mV[VX] - lo.mV[VX] >= hi.mV[VY] - lo.mV[VY])
+                    {
+                        mark.mA.set(lo.mV[VX], c.mV[VY]);
+                        mark.mB.set(hi.mV[VX], c.mV[VY]);
+                    }
+                    else
+                    {
+                        mark.mA.set(c.mV[VX], lo.mV[VY]);
+                        mark.mB.set(c.mV[VX], hi.mV[VY]);
+                    }
+                    s.mMarks.push_back(mark);
+                }
+            }
+
+            // Ladders and elevators: a glyph at each lower exit, on the floor under it.
+            std::set<std::pair<U8, std::pair<S32, std::pair<S32, S32>>>> seen;
+            for (const FeatureLink& link : input.mFeatureLinks)
+            {
+                const LLVector3d& lower = link.mFrom.mdV[VZ] <= link.mTo.mdV[VZ] ? link.mFrom : link.mTo;
+                const auto key = std::make_pair(static_cast<U8>(link.mKind),
+                                                std::make_pair(static_cast<S32>(std::floor(lower.mdV[VX] * 10.0)),
+                                                               std::make_pair(static_cast<S32>(std::floor(lower.mdV[VY] * 10.0)),
+                                                                              static_cast<S32>(std::floor(lower.mdV[VZ] * 10.0)))));
+                if (!seen.insert(key).second)
+                {
+                    continue;
+                }
+                const FloorHit hit = floorAt(s, lower, 2.5f, 0.5f);
+                LineMark mark;
+                mark.mKind = link.mKind == sknav::LinkKind::ELEVATOR ? MarkKind::ELEVATOR : MarkKind::LADDER;
+                mark.mA = s.toLocal(lower);
+                mark.mB = mark.mA;
+                mark.mZ = static_cast<F32>(lower.mdV[VZ] - s.mOrigin.mdV[VZ]);
+                mark.mLayer = hit.mFound ? hit.mLayer : layerNear(s, mark.mA, mark.mZ, LINK_REACH_M);
+                if (mark.mLayer >= 0)
+                {
+                    s.mMarks.push_back(mark);
+                }
+            }
+
+            for (size_t i = 0; i < s.mMarks.size(); ++i)
+            {
+                s.mLayers[s.mMarks[i].mLayer].mMarks.push_back(static_cast<U32>(i));
+            }
+
+            // Region edges where floors come within reach of them. A shared edge is drawn once,
+            // by the region on its south or west side.
+            auto inRegion = [&](F64 x, F64 y) {
+                for (const RegionSquare& r : input.mRegions)
+                {
+                    if (x >= r.mOrigin.mdV[VX] && x < r.mOrigin.mdV[VX] + r.mWidth && y >= r.mOrigin.mdV[VY] && y < r.mOrigin.mdV[VY] + r.mWidth)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (const RegionSquare& r : input.mRegions)
+            {
+                const F64 x0 = r.mOrigin.mdV[VX], y0 = r.mOrigin.mdV[VY], w = r.mWidth;
+                struct Side
+                {
+                    F64 mX, mY, mDX, mDY, mNX, mNY;
+                };
+                const Side sides[4] = {
+                    { x0, y0, 1.0, 0.0, 0.0, -1.0 },        // south
+                    { x0 + w, y0, 0.0, 1.0, 1.0, 0.0 },     // east
+                    { x0, y0 + w, 1.0, 0.0, 0.0, 1.0 },     // north
+                    { x0, y0, 0.0, 1.0, -1.0, 0.0 },        // west
+                };
+                for (const Side& side : sides)
+                {
+                    const bool owns_shared = side.mNX > 0.0 || side.mNY > 0.0;
+                    S32 open_kind = -1;     // 0 void, 1 region, -1 none
+                    F64 open_from = 0.0;
+                    auto close = [&](F64 to) {
+                        if (open_kind < 0)
+                        {
+                            return;
+                        }
+                        LineMark mark;
+                        mark.mKind = open_kind == 0 ? MarkKind::VOID_BOUNDARY : MarkKind::REGION_BOUNDARY;
+                        mark.mA = s.toLocal(LLVector3d(side.mX + side.mDX * open_from, side.mY + side.mDY * open_from, 0.0));
+                        mark.mB = s.toLocal(LLVector3d(side.mX + side.mDX * to, side.mY + side.mDY * to, 0.0));
+                        s.mBoundaries.push_back(mark);
+                        open_kind = -1;
+                    };
+                    for (F64 t = 0.0; t < w - 1e-6; t += BOUNDARY_STEP_M)
+                    {
+                        const F64 mt = llmin(t + BOUNDARY_STEP_M * 0.5, w);
+                        const F64 mx = side.mX + side.mDX * mt, my = side.mY + side.mDY * mt;
+                        S32 kind = -1;
+                        if (mx >= s.mMin.mdV[VX] && mx <= s.mMax.mdV[VX] && my >= s.mMin.mdV[VY] && my <= s.mMax.mdV[VY]
+                            && anyPolyNear(s, s.toLocal(LLVector3d(mx, my, 0.0)), BOUNDARY_NEAR_M))
+                        {
+                            const bool across = inRegion(mx + side.mNX * BOUNDARY_NEAR_M, my + side.mNY * BOUNDARY_NEAR_M);
+                            kind = across ? (owns_shared ? 1 : -1) : 0;
+                        }
+                        if (kind != open_kind)
+                        {
+                            close(t);
+                            if (kind >= 0)
+                            {
+                                open_kind = kind;
+                                open_from = t;
+                            }
+                        }
+                    }
+                    close(w);
+                }
+            }
+        }
+
+        /// Step 9: iso-height segments on terrain and ramps, every 0.5 m.
+        void sampleContours(Scene& s)
+        {
+            for (size_t i = 0; i < s.mPolys.size(); ++i)
+            {
+                const ScenePoly& poly = s.mPolys[i];
+                if (poly.mLayer < 0)
+                {
+                    continue;
+                }
+                const bool terrain = poly.mRun < 0 && poly.mSurface >= 0 && s.mSurfaces[poly.mSurface].mTerrain;
+                const bool ramp = poly.mRun >= 0 && !s.mRuns[poly.mRun].mStair;
+                if (!terrain && !ramp)
+                {
+                    continue;
+                }
+                if (!ramp && poly.mArea == sknav::AREA_OBJECT && poly.mZMax - poly.mZMin < FLAT_POLY_M)
+                {
+                    continue;
+                }
+                for (U32 t = 0; t < poly.mTriCount; ++t)
+                {
+                    const LLVector3* tri = &s.mTris[(poly.mFirstTri + t) * 3];
+                    const F32 lo = llmin(tri[0].mV[VZ], llmin(tri[1].mV[VZ], tri[2].mV[VZ]));
+                    const F32 hi = llmax(tri[0].mV[VZ], llmax(tri[1].mV[VZ], tri[2].mV[VZ]));
+                    const S32 k0 = static_cast<S32>(std::floor(lo / CONTOUR_STEP_M));
+                    const S32 k1 = static_cast<S32>(std::ceil(hi / CONTOUR_STEP_M));
+                    for (S32 k = k0; k <= k1; ++k)
+                    {
+                        const F32 level = k * CONTOUR_STEP_M;
+                        if (level <= lo || level >= hi)
+                        {
+                            continue;
+                        }
+                        LLVector2 pts[2];
+                        S32 n = 0;
+                        for (S32 e = 0; e < 3 && n < 2; ++e)
+                        {
+                            const LLVector3& a = tri[e];
+                            const LLVector3& b = tri[(e + 1) % 3];
+                            if ((a.mV[VZ] >= level) != (b.mV[VZ] >= level))
+                            {
+                                const F32 u = (level - a.mV[VZ]) / (b.mV[VZ] - a.mV[VZ]);
+                                pts[n++] = plan(a) + (plan(b) - plan(a)) * u;
+                            }
+                        }
+                        if (n == 2)
+                        {
+                            Contour c;
+                            c.mA = pts[0];
+                            c.mB = pts[1];
+                            c.mLevel = k;
+                            c.mLayer = poly.mLayer;
+                            s.mLayers[poly.mLayer].mContours.push_back(static_cast<U32>(s.mContours.size()));
+                            s.mContours.push_back(c);
+                        }
+                    }
+                }
+            }
+        }
+
         /// Index every polygon by the 4 m cells it meets.
         void buildIndex(Scene& scene, std::vector<std::vector<Cell>>& poly_cells)
         {
@@ -425,6 +907,10 @@ namespace skmap
                 F32 zsum = 0.f;
                 for (S32 v = 0; v < src.mVertCount; ++v)
                 {
+                    if (src.mNeighbour[v] < 0)
+                    {
+                        poly.mOpenEdges |= static_cast<U8>(1 << v);
+                    }
                     poly.mVerts[v] = tp.mVerts[src.mVerts[v]] + o;
                     zsum += poly.mVerts[v].mV[VZ];
                     poly.mMinX = llmin(poly.mMinX, poly.mVerts[v].mV[VX]);
@@ -956,6 +1442,22 @@ namespace skmap
             }
             return a < b;
         });
+
+        classifyMarks(s, input);
+        sampleContours(s);
+        for (ScenePoly& poly : s.mPolys)
+        {
+            if (input.mCoverage)
+            {
+                const LLVector3d at = s.mOrigin + LLVector3d(poly.mCentroid.mV[VX], poly.mCentroid.mV[VY], poly.mZMean + 1.f);
+                poly.mCoverage = static_cast<U8>(input.mCoverage(at));
+            }
+        }
+        for (const TileInput& tile : input.mTiles)
+        {
+            s.mBuilt.insert({ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),
+                              static_cast<S32>(std::floor((tile.mMin.mdV[VY] + 1.0) / LATTICE_M)) });
+        }
         return scene;
     }
 
