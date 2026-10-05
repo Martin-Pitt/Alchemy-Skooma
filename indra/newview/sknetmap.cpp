@@ -32,9 +32,11 @@
 #include "lllocalcliprect.h"
 #include "llrender.h"
 #include "llrender2dutils.h"
+#include "lluicolortable.h"
 
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "llcallingcard.h"
 #include "llfloaterworldmap.h"
 #include "llsurface.h"
 #include "lltracker.h"
@@ -44,6 +46,9 @@
 #include "llviewertexture.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
+#include "llworldmapview.h"
+#include "skmapmarkers.h"
+#include "skmappeople.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
 
@@ -226,6 +231,7 @@ void SKNetMap::draw()
     }
     LL_PROFILE_ZONE_SCOPED;
     updateView();
+    SKMapPeople::instance().noteDrawn();
 
     // The classic map's matrix setup: widget pixels, the UI scale and offset applied by hand.
     gGL.pushMatrix();
@@ -241,6 +247,9 @@ void SKNetMap::draw()
         gGL.getTextureSlot(0)->unbind();
         drawTerrain();
         drawSelf();
+        drawSelfExtras();
+        drawPeople();
+        drawTracking();
         drawNorth();
     }
     gGL.popMatrix();
@@ -321,6 +330,126 @@ void SKNetMap::drawSelf()
     skmapdraw::colour(skmap::palette::SELF_DOT);
     skmapdraw::disc(self, skmap::palette::SELF_DOT_RADIUS_PX);
     gGL.end();
+}
+
+void SKNetMap::drawSelfExtras()
+{
+    static LLCachedControl<bool> chat_rings(gSavedSettings, "SKMapLayerChatRings", false);
+    static LLCachedControl<bool> guide_line(gSavedSettings, "SKMapLayerGuideLine", false);
+    const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
+    if (chat_rings)
+    {
+        // The classic map's three rings.
+        static LLUIColor whisper_colour = LLUIColorTable::instance().getColor("MapWhisperRingColor", LLColor4::white);
+        static LLUIColor chat_colour = LLUIColorTable::instance().getColor("MapChatRingColor", LLColor4::white);
+        static LLUIColor shout_colour = LLUIColorTable::instance().getColor("MapShoutRingColor", LLColor4::white);
+        LLViewerRegion* region = gAgent.getRegion();
+        const F32 ppm = mView.pixelsPerMetre();
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.color4fv(whisper_colour.get().mV);
+        skmapdraw::ring(self, region->getWhisperRange() * ppm, 1.75f, 100);
+        gGL.color4fv(chat_colour.get().mV);
+        skmapdraw::ring(self, region->getChatRange() * ppm, 1.75f, 100);
+        gGL.color4fv(shout_colour.get().mV);
+        skmapdraw::ring(self, region->getShoutRange() * ppm, 1.75f, 100);
+        gGL.end();
+    }
+    if (guide_line)
+    {
+        // Along the camera, out to its far clip.
+        static LLUIColor line_colour = LLUIColorTable::instance().getColor("MapLineColor", LLColor4::red);
+        LLViewerCamera* camera = LLViewerCamera::getInstance();
+        const LLVector3 at = camera->getAtAxis();
+        LLVector2 dir = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
+        if (dir.normVec() > 1e-6f)
+        {
+            gGL.begin(LLRender::TRIANGLES);
+            gGL.color4fv(line_colour.get().mV);
+            skmapdraw::line(self, self + dir * (camera->getFar() * mView.pixelsPerMetre()), 1.f);
+            gGL.end();
+        }
+    }
+}
+
+void SKNetMap::drawPeople()
+{
+    static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
+    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+    constexpr F32 FONT_PX = 8.f;
+    constexpr F32 PADDING_PX = 0.5f;
+    mDots.clear();
+    for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+    {
+        const LLVector2 at = mView.toWidget(p.mPos);
+        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
+        const F32 radius = skmap::markerRadius(chevron, false, 0, 0.f, FONT_PX, PADDING_PX);
+        mDots.push_back({ p.mId, at, radius });
+        if (at.mV[VX] < -radius - 8.f || at.mV[VY] < -radius - 8.f || at.mV[VX] > mView.width() + radius + 8.f
+            || at.mV[VY] > mView.height() + radius + 8.f)
+        {
+            continue;
+        }
+        skmapdraw::shadow(at, radius);
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.color4f(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        if (triangles && p.mHasHeading)
+        {
+            LLVector2 ahead = mView.toWidgetOffset(std::cos(p.mHeading), std::sin(p.mHeading));
+            ahead.normVec();
+            const LLVector2 across(-ahead.mV[VY], ahead.mV[VX]);
+            const LLVector2 base = at + ahead * (radius + skmap::palette::HEADING_BASE_PX);
+            skmapdraw::triangle(at + ahead * (radius + skmap::palette::HEADING_TIP_PX), base + across * skmap::palette::HEADING_HALF_PX,
+                                base - across * skmap::palette::HEADING_HALF_PX);
+        }
+        skmapdraw::disc(at, radius);
+        if (chevron)
+        {
+            // Upright whatever the rotation: up for the floor above, down for the one below.
+            const F32 half = llmin(radius - skmap::palette::CHEVRON_STROKE_PX, FONT_PX * 0.3f);
+            const F32 dy = half * 0.55f;
+            const F32 sign = p.mFloor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
+            skmapdraw::colour(skmap::palette::CODE_INK);
+            const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
+            skmapdraw::line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
+            skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
+        }
+        gGL.end();
+    }
+}
+
+void SKNetMap::drawTrackingAt(const LLVector3d& pos, const LLColor4& colour)
+{
+    const LLVector2 at = mView.toWidget(pos);
+    const LLRect rect = getLocalRect();
+    if (at.mV[VX] < 0.f || at.mV[VY] < 0.f || at.mV[VX] >= rect.getWidth() || at.mV[VY] >= rect.getHeight())
+    {
+        const S32 x = ll_round(at.mV[VX]), y = ll_round(at.mV[VY]);
+        LLWorldMapView::drawTrackingCircle(rect, x, y, colour, 1, 10);
+        LLWorldMapView::drawTrackingArrow(rect, x, y, colour);
+    }
+    else
+    {
+        LLWorldMapView::drawTrackingDot(at.mV[VX], at.mV[VY], colour, static_cast<F32>(pos.mdV[VZ] - gAgent.getPositionGlobal().mdV[VZ]));
+    }
+}
+
+void SKNetMap::drawTracking()
+{
+    static LLUIColor track_colour = LLUIColorTable::instance().getColor("MapTrackColor", LLColor4::white);
+    if (gAgent.getAutoPilot())
+    {
+        drawTrackingAt(gAgent.getAutoPilotTargetGlobal(), track_colour);
+        return;
+    }
+    const LLTracker::ETrackingStatus status = LLTracker::getTrackingStatus();
+    if (status == LLTracker::TRACKING_AVATAR)
+    {
+        drawTrackingAt(LLAvatarTracker::instance().getGlobalPos(), track_colour);
+    }
+    else if (status == LLTracker::TRACKING_LANDMARK || status == LLTracker::TRACKING_LOCATION)
+    {
+        drawTrackingAt(LLTracker::getTrackedPositionGlobal(), track_colour);
+    }
 }
 
 void SKNetMap::drawNorth()

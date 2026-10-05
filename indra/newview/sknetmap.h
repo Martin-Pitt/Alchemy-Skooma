@@ -67,12 +67,27 @@ public:
     /// The widget's short side in pixels, for seeding the zoom from the classic scale.
     F32 shortSide() const { return static_cast<F32>(llmin(getRect().getWidth(), getRect().getHeight())); }
 
+    /// A person's dot as drawn this frame, in widget pixels.
+    struct DrawnDot
+    {
+        LLUUID mId;
+        LLVector2 mPos;
+        F32 mRadius = 3.f;
+    };
+    const std::vector<DrawnDot>& drawnDots() const { return mDots; }
+
 private:
     /// The view for this frame: the agent plus the pan, the zoom, the rotation.
     void updateView();
     void drawTerrain();
     void drawSelf();
+    void drawSelfExtras();
+    void drawPeople();
+    void drawTracking();
+    void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();
+
+    std::vector<DrawnDot> mDots;
 
     skmap::MapView mView;
     LLVector2 mPan;                     ///< metres east and north of the agent

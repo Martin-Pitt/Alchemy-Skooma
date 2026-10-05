@@ -4738,6 +4738,61 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKMapAvatarColors</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour mini-map dots by friend, muted and contact-set colours outside combat.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapHeadingTriangles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a small triangle ahead of each mini-map dot along the way the avatar faces.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapFloorChevrons</key>
+        <map>
+            <key>Comment</key>
+            <string>Mark mini-map dots on the floor above or below yours with a chevron.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerChatRings</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the whisper, chat and shout ranges round you on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerGuideLine</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a line from you along the camera on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>
