@@ -61,6 +61,8 @@ enum class SKNavSwatch : S32
     PORTAL_DOOR,            ///< a space's threshold at a door
     PORTAL_STAIR,           ///< where a flight meets a floor
     PORTAL_OPENING,         ///< any other opening; dashed without a lintel
+    PORTAL_LINK,            ///< a drawn connection from a flight's foot to an exit
+    PORTAL_DANGLING,        ///< a flight's lone end, with no exit at the other
     COUNT
 };
 

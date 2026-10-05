@@ -91,6 +91,9 @@ namespace sknav
     /// tile rasterises from them and the terrain already in the input.
     void finishTileInput(const std::vector<RecordPtr>& records, const LLVector3d& mesh_origin, TileBuildInput& input);
 
+    /// The tile's linkset roots that cue_of gives a NameCue, into mRootCues.
+    void tileRootCues(const std::function<U8(const LLUUID&)>& cue_of, TileBuildInput& input);
+
     /// A mesh's Detour mesh for one class, mesh-local, on the 32 m lattice. Null on failure.
     dtNavMesh* allocMeshNav();
 }

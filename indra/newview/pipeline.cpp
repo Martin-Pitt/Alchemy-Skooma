@@ -5427,11 +5427,13 @@ void LLPipeline::renderDebug()
 
     visible_selected_groups.clear();
 
+    // <SK:Nexii> Probe debug drawn after tonemapping in renderFinalize so its kind colours survive exposure.
     //draw reflection probes and links between them
-    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
-    {
-        mReflectionMapManager.renderDebug();
-    }
+    //if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
+    //{
+    //    mReflectionMapManager.renderDebug();
+    //}
+    // </SK:Nexii>
 
     static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
     if (render_ref_probe_volumes && !hud_only)
@@ -10604,6 +10606,13 @@ void LLPipeline::renderFinalize()
     {
         SKWorldCensus::instance().renderDebug();
         SKNavMesh::instance().renderDebug();
+    }
+    // </SK:Nexii>
+    // <SK:Nexii> Probe debug drawn after tonemapping so its kind colours survive exposure; occludes like the navmesh overlay.
+    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES))
+    {
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        mReflectionMapManager.renderDebug();
     }
     // </SK:Nexii>
     // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on

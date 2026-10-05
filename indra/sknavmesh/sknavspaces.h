@@ -56,6 +56,7 @@ namespace sknav
         F32 mClimbM = 0.75f;        ///< floors of linked cells within this
         F32 mWalkHeadM = 1.f;       ///< a walkable gap this tall is a floor an avatar stands on
         F32 mWalkOverlapM = 1.f;    ///< and links to one sharing this much air
+        F32 mStairMinRiseM = 0.5f;  ///< a flight's stair portals together must climb this: less is a step, not a staircase
         F32 mClearMaxM = 16.f;      ///< the feature transform reaches no further
         F32 mLintelDropM = 0.3f;    ///< a lintel is this far below the ceiling on both sides
         F32 mEStep = 0.3f;          ///< indoorness this different across a cut is a threshold
@@ -248,6 +249,29 @@ namespace sknav
         size_t bytes() const;
     };
     typedef std::shared_ptr<const RoomsProduct> RoomsProductPtr;
+
+    constexpr F32 STAIR_PAIR_REACH_M = 14.f;    ///< staircase ends this far apart in plan can belong to one flight
+    constexpr F32 STAIR_MAX_WIDTH_M = 12.f;     ///< a stair portal wider than this is a deck edge, not an entrance
+
+    /// One drawn connection inside a flight: from its foot portal to an exit,
+    /// both by index into the product's portals.
+    struct StairLink
+    {
+        U32 mFrom;
+        U32 mTo;
+    };
+
+    /// Pair stair portals into a flight's connections: taking the portals by
+    /// ascending sill, each joins the nearest still-unpaired end within
+    /// reach's plan distance, so a staircase's opposing ends meet and a
+    /// multi-storey well's foot serves each of its exits. Ends with nothing
+    /// in reach stay single.
+    std::vector<StairLink> stairPairs(const std::vector<Portal>& portals, const std::vector<U32>& indices, F32 reach);
+
+    /// A flight's stair portals as connections, paired by stairPairs over
+    /// each flight space's own portals. A flight with a single stair portal
+    /// makes no link, and neither does anything but a stair portal.
+    std::vector<StairLink> stairLinks(const RoomsProduct& product, F32 reach = STAIR_PAIR_REACH_M);
 
     struct RoomsInput
     {

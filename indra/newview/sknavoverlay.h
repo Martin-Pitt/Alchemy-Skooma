@@ -121,4 +121,16 @@ private:
     LLPointer<LLVertexBuffer> mLineVB;
 };
 
+/// A portal bar standing across a stair's run: one horizontal bar, `width`
+/// wide, square to the run at `centre`. What the ends of a staircase draw
+/// so its portal reads as more than a corner of the line.
+void skDrawStairBar(SKNavOverlayGeom& geom, const LLVector3& centre, const LLVector3& run, F32 width, const LLColor4& color);
+
+/// A staircase drawn as one: rails either side of its run with treads
+/// between them, and a portal bar at both ends. `path` is the run, foot to
+/// top - a spiral's helix sampled; `width` the flight's width; `lift` the
+/// height the glyph rides above the run.
+void skDrawStairGlyph(SKNavOverlayGeom& geom, const std::vector<LLVector3>& path, F32 width, const LLColor4& color,
+                      F32 lift);
+
 #endif // SK_NAVOVERLAY_H

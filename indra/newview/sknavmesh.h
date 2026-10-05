@@ -66,6 +66,10 @@ public:
     /// First reflection-probe placement pass, before the residual grid pass.
     void placeReflectionProbes();
 
+    /// The content keys of a mesh's tiles whose footprint meets the global
+    /// box, 0 for a tile not published under one.
+    void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
     void cleanupSingleton() override;
@@ -206,6 +210,7 @@ public:
 
 private:
     friend class SKNavRooms;
+    friend class SKNavRoomProbes;
 
     /// Why a tile needed building, for the update blip. A record beats the
     /// land and both beat the parameters, because a signature that moved with

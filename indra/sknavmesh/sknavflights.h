@@ -29,6 +29,7 @@
 #include "v2math.h"
 #include "v3math.h"
 
+#include <string>
 #include <vector>
 
 namespace sknav
@@ -36,30 +37,36 @@ namespace sknav
     constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
     constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< the crease angle: neighbours further apart are different slopes
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
+    constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a connector climbs at least this
+    constexpr F32 STAIR_GRADE_DEG = 30.f;   ///< without a name or treads, steeper is a stair
 
-    /// One tread of a flight, mesh-local SL metres.
-    struct FlightTread
-    {
-        F32 mZ = 0.f;           ///< the tread's height, area weighted
-        LLVector3 mNosingA;     ///< the edge it drops from, toward the tread below
-        LLVector3 mNosingB;
-        F32 mRise = 0.f;        ///< down to the tread or landing below
-        F32 mGoing = 0.f;       ///< between its two risers
-    };
+    enum SlopeGroupKind : U8 { SLOPE_GROUP, LANDING_GROUP, TREAD_GROUP };
 
-    /// A run of treads between landings: the map's stair product.
+    enum class ConnectorKind : U8 { STAIR, RAMP };
+    enum class ConnectorRule : U8 { NAME, TREADS, GRADE };     ///< what told stair from ramp
+    enum NameCue : U8 { CUE_NONE = 0, CUE_STAIR = 1, CUE_RAMP = 2 };
+
+    /// A stair or ramp between two floors, built from the partition's slope
+    /// and tread groups where they step off onto a floor at each end.
     struct Flight
     {
-        std::vector<FlightTread> mTreads;   ///< bottom to top
-        LLVector3 mTopNosingA;              ///< where the top tread meets the riser above it
-        LLVector3 mTopNosingB;
-        F32 mRise = 0.f;                    ///< mean rise per step, the top one included
-        F32 mPlane[3] = { 0.f, 0.f, 0.f };  ///< z = [0] x + [1] y + [2], fitted to the nosings
-        std::vector<LLVector2> mFootprint;  ///< convex hull of the treads in plan, counter-clockwise
+        LLVector3 mBottom;                  ///< the middle of where it steps off onto the lower floor
+        LLVector3 mTop;                     ///< and onto the upper one
+        LLVector3 mBottomA;                 ///< the bottom's extent across the run, at the floor
+        LLVector3 mBottomB;
+        LLVector3 mTopA;
+        LLVector3 mTopB;
+        F32 mRise = 0.f;                    ///< floor to floor
+        F32 mRun = 0.f;                     ///< bottom to top, in plan
+        F32 mPlane[3] = { 0.f, 0.f, 0.f };  ///< z = [0] x + [1] y + [2], through both ends along the run
+        std::vector<LLVector2> mFootprint;  ///< convex hull of its groups in plan, counter-clockwise
         F32 mZMin = 0.f;
         F32 mZMax = 0.f;
-        U64 mKey = 0;                       ///< from its bottom and top nosings: the same in every tile it crosses
-        U8 mCode = 0;                       ///< the area code its treads rasterise as
+        U64 mKey = 0;                       ///< from its ends, to the quarter metre
+        ConnectorKind mKind = ConnectorKind::STAIR;
+        ConnectorRule mRule = ConnectorRule::GRADE;
+        U8 mTreads = 0;                     ///< tread groups among its groups
+        std::vector<U8> mCodes;             ///< the area codes its groups rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced
     };
 
@@ -71,6 +78,8 @@ namespace sknav
         std::vector<U8> mCodes;     ///< per input triangle; 0 where it is not walkable
         std::vector<U8> mReal;      ///< code -> area; code 0 is null
         std::vector<S32> mRegion;   ///< per input triangle, -1 where it is not walkable
+        std::vector<S32> mGroup;    ///< per input triangle, its smoothing group; -1 where it is not walkable
+        std::vector<U8> mKind;      ///< per group: SLOPE_GROUP, LANDING_GROUP or TREAD_GROUP
         std::vector<Flight> mFlights;
         S32 mSlopes = 0;            ///< groups by kind
         S32 mLandings = 0;
@@ -83,15 +92,20 @@ namespace sknav
     /// regions, the rest keep one code per area. A two-sided triangle is
     /// walkable whichever way it faces. Codes run from 1 to below max_codes;
     /// every area keeps one of its own however many colours want one.
+    /// cues holds a NameCue per triangle from its object's name, or is empty.
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes = 63);
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes = 63,
+                                   const std::vector<U8>& cues = {});
 
-    /// Give each flight the polys that its code produced over its footprint.
+    /// The NameCue an object's name and description give: stair words, else ramp.
+    U8 nameCue(const std::string& name, const std::string& description);
+
+    /// Give each flight the polys that its codes produced over its footprint.
     /// centroids and codes are per poly, in the poly mesh's order; flights
     /// that got none are dropped.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
 
-    /// Mark FLIGHT on the walkable gaps a flight's treads stand for: inside
+    /// Mark FLIGHT on the walkable gaps a flight stands for: inside
     /// its footprint, with the floor on its plane. The grid and the flights
     /// share a frame.
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights);

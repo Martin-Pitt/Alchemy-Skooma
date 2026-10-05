@@ -144,6 +144,15 @@ namespace sknav
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out)
     {
         out = ReplayResult();
+        std::map<LLUUID, U8> cues;
+        for (const CensusRoot& root : census.mRoots)
+        {
+            cues[root.mId] = nameCue(root.mName, root.mDescription);
+        }
+        const auto cue_of = [&cues](const LLUUID& id) {
+            const auto it = cues.find(id);
+            return it == cues.end() ? static_cast<U8>(CUE_NONE) : it->second;
+        };
 
         // Clusters, and the viewer's against ours.
         Clock::time_point t0 = Clock::now();
@@ -241,6 +250,7 @@ namespace sknav
                 input->mTileSize = static_cast<F32>(TILE_M);
                 applyAirMode(census, options, tile, *input);
                 finishTileInput(lt.mRecords, mesh->mOrigin, *input);
+                tileRootCues(cue_of, *input);
                 tile.mInput = input;
             }
             meshes[mesh->mId] = std::move(mesh);
@@ -279,6 +289,7 @@ namespace sknav
                 }
                 applyAirMode(census, options, tile, *input);
                 finishTileInput(lt.mRecords, mesh->mOrigin, *input);
+                tileRootCues(cue_of, *input);
                 tile.mInput = input;
             }
             meshes[mesh->mId] = std::move(mesh);

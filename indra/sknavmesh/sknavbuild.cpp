@@ -118,8 +118,9 @@ namespace
         std::vector<S32> mTris;
         std::vector<U8> mAreas;       // per triangle, the Area of its source
         std::vector<U8> mTwoSided;    // per triangle, walkable from either side
+        std::vector<U8> mCues;        // per triangle, its object's NameCue
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -144,6 +145,7 @@ namespace
                 mTris.insert(mTris.end(), { v, v + 1, v + 2 });
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
                 mTwoSided.push_back(two_sided);
+                mCues.push_back(cue);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -190,6 +192,7 @@ namespace
             out.mTris.insert(out.mTris.end(), { base, base + 1, base + 2 });
             out.mAreas.push_back(soup.mAreas[t]);
             out.mTwoSided.push_back(soup.mTwoSided[t]);
+            out.mCues.push_back(soup.mCues[t]);
         }
         for (const auto& range : solids)
         {
@@ -714,8 +717,8 @@ namespace
     /// smaller than SLOPE_FRAGMENT_M2 is a sliver where regions overlap or a
     /// triangle clipped at a cell, and joins the neighbour of the same area
     /// that it shares most border with, smallest first, so a chain of
-    /// slivers folds into the patch it hangs off. A flight's code is kept
-    /// whatever its size, since a short flight is smaller than a sliver.
+    /// slivers folds into the patch it hangs off. A flight's codes are kept
+    /// whatever their size, since a short flight is smaller than a sliver.
     void mergeFragments(rcCompactHeightfield& chf, const std::vector<U8>& real, const std::vector<Flight>& flights)
     {
         std::vector<S32> cellOf(chf.spanCount);
@@ -796,7 +799,10 @@ namespace
         std::vector<U8> keep(real.size(), 0);
         for (const Flight& f : flights)
         {
-            keep[f.mCode] = 1;
+            for (const U8 c : f.mCodes)
+            {
+                keep[c] = 1;
+            }
         }
         for (const S32 p : order)
         {
@@ -979,7 +985,9 @@ namespace sknav
             tris.clear();
             emitRecord(*r, input.mMeshOrigin, tris);
             const S32 before = soup.ntris();
-            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull);
+            const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
+            soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
+                     cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE));
             if (r->mExclude && soup.ntris() > before)
             {
                 excluded.push_back({ before, soup.ntris(), r->mExclude });
@@ -1167,7 +1175,7 @@ namespace sknav
                     {
                         sl[v] = fromRecast(&from.mVerts[v * 3]);
                     }
-                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb);
+                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb, 63, from.mCues);
                 };
                 if (class_soup == &soup)
                 {

@@ -129,16 +129,52 @@ namespace sknav
         return false;
     }
 
+    LLVector3d Mark::helixAt(F64 fraction) const
+    {
+        const LLVector3d& foot = mVerts[0];
+        const LLVector3d& top = mVerts[1];
+        // The helix starts at the foot's angle about the axis and winds the
+        // turns the mark names, handed, the rise spread evenly along it.
+        const F64 angle = std::atan2(foot.mdV[VY] - mSpiralCentre.mdV[VY], foot.mdV[VX] - mSpiralCentre.mdV[VX]);
+        const F64 theta = angle + mSpiralHand * fraction * mSpiralTurns * 2.0 * F_PI;
+        return LLVector3d(mSpiralCentre.mdV[VX] + mSpiralRadius * std::cos(theta),
+                          mSpiralCentre.mdV[VY] + mSpiralRadius * std::sin(theta),
+                          foot.mdV[VZ] + fraction * (top.mdV[VZ] - foot.mdV[VZ]));
+    }
+
+    std::vector<LLVector3d> Mark::path() const
+    {
+        if (!mSpiral || mVerts.size() < 2 || mSpiralRadius <= 0.0)
+        {
+            return mVerts;
+        }
+        // One vertex every SPIRAL_PITCH_RAD of winding, then the stored top:
+        // a mark read back from its params stays honest about where it ends
+        // even if the top no longer sits on the circle exactly.
+        std::vector<LLVector3d> out;
+        const F64 sweep = std::fabs(mSpiralTurns) * 2.0 * F_PI;
+        const size_t steps = std::max<size_t>(1, (size_t)std::ceil(sweep / SPIRAL_PITCH_RAD));
+        out.reserve(steps + 1);
+        for (size_t i = 0; i < steps; ++i)
+        {
+            out.push_back(helixAt((F64)i / (F64)steps));
+        }
+        out.push_back(mVerts[1]);
+        return out;
+    }
+
     void Mark::extent(LLVector3d& min, LLVector3d& max) const
     {
-        if (mVerts.empty())
+        std::vector<LLVector3d> verts = path();
+        verts.insert(verts.end(), mExits.begin(), mExits.end());
+        if (verts.empty())
         {
             min.clear();
             max.clear();
             return;
         }
-        min = max = mVerts.front();
-        for (const LLVector3d& v : mVerts)
+        min = max = verts.front();
+        for (const LLVector3d& v : verts)
         {
             for (S32 axis = 0; axis < 3; ++axis)
             {
@@ -198,6 +234,16 @@ namespace sknav
         // Globals need ten digits for centimetres, whatever the caller left set.
         const std::streamsize precision = out.precision(std::max<std::streamsize>(out.precision(), 10));
         out << "\"marks\":[";
+        auto writeVertex = [&out, &locate](const LLVector3d& v) {
+            out << "{\"global\":[" << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
+            MarkPlace place;
+            if (locate && locate(v, place))
+            {
+                out << ",\"region\":\"" << jsonEscape(place.mRegion) << "\",\"regionGrid\":[" << place.mGridX << ',' << place.mGridY
+                    << "],\"local\":[" << place.mLocal.mV[VX] << ',' << place.mLocal.mV[VY] << ',' << place.mLocal.mV[VZ] << ']';
+            }
+            out << '}';
+        };
         for (size_t m = 0; m < marks.size(); ++m)
         {
             const Mark& mark = marks[m];
@@ -212,20 +258,35 @@ namespace sknav
                     << mark.mSpaceIds[1] << "],\"centre\":[" << mark.mPortalCentre.mdV[VX] << ','
                     << mark.mPortalCentre.mdV[VY] << ',' << mark.mPortalCentre.mdV[VZ] << ']';
             }
-            out << ",\"vertices\":[";
-            for (size_t i = 0; i < mark.mVerts.size(); ++i)
+            // A spiral stair's winding, named beside the sampled polyline so
+            // a reader keeps the true shape when the pitch it was sampled at
+            // is too coarse for it.
+            if (mark.mSpiral && mark.mVerts.size() >= 2)
             {
-                const LLVector3d& v = mark.mVerts[i];
-                out << (i ? "," : "") << "{\"global\":[" << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']';
-                MarkPlace place;
-                if (locate && locate(v, place))
-                {
-                    out << ",\"region\":\"" << jsonEscape(place.mRegion) << "\",\"regionGrid\":[" << place.mGridX << ',' << place.mGridY
-                        << "],\"local\":[" << place.mLocal.mV[VX] << ',' << place.mLocal.mV[VY] << ',' << place.mLocal.mV[VZ] << ']';
-                }
-                out << '}';
+                out << ",\"spiral\":{\"centre\":[" << mark.mSpiralCentre.mdV[VX] << ',' << mark.mSpiralCentre.mdV[VY] << ','
+                    << mark.mSpiralCentre.mdV[VZ] << "],\"radius\":" << mark.mSpiralRadius << ",\"turns\":" << mark.mSpiralTurns
+                    << ",\"hand\":" << (S32)mark.mSpiralHand << '}';
             }
-            out << "]}";
+            out << ",\"vertices\":[";
+            const std::vector<LLVector3d> path = mark.path();
+            for (size_t i = 0; i < path.size(); ++i)
+            {
+                out << (i ? "," : "");
+                writeVertex(path[i]);
+            }
+            out << ']';
+            // The ways up beyond the line's own end, written like vertices.
+            if (!mark.mExits.empty())
+            {
+                out << ",\"exits\":[";
+                for (size_t i = 0; i < mark.mExits.size(); ++i)
+                {
+                    out << (i ? "," : "");
+                    writeVertex(mark.mExits[i]);
+                }
+                out << ']';
+            }
+            out << '}';
         }
         out << ']';
         out.precision(precision);

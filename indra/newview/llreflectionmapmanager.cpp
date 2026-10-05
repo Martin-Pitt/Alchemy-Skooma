@@ -502,6 +502,8 @@ void LLReflectionMapManager::update()
         }
     }
 
+    updateRelevanceLinks(); // <SK:Nexii> Probe links: relevance flips (eclipse, census, nav rooms) rebuild the graph
+
     // Update distance to camera for all probes.
     //
     // This has to happen before the sort below, before the cube slot handout that follows it,
@@ -1572,6 +1574,8 @@ void LLReflectionMapManager::updateNeighbors(LLReflectionMap* probe)
         probe->mNeighbors.clear();
     }
 
+    probe->mLinkedRelevant = probe->isRelevant(); // <SK:Nexii> Probe links: relevance as this graph saw it
+
     // search for new neighbors
     if (probe->isRelevant())
     {
@@ -1589,6 +1593,84 @@ void LLReflectionMapManager::updateNeighbors(LLReflectionMap* probe)
         }
     }
 }
+
+// <SK:Nexii> Probe links: every probe whose relevance flipped since the graph last saw it is relinked, all in one sweep.
+void LLReflectionMapManager::updateRelevanceLinks()
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_DISPLAY;
+    std::vector<LLReflectionMap*> flipped;
+    for (auto& probe : mProbes)
+    {
+        if (probe != mDefaultProbe && probe->isRelevant() != probe->mLinkedRelevant)
+        {
+            flipped.push_back(probe);
+        }
+    }
+    if (flipped.empty())
+    {
+        return;
+    }
+    mRelevanceRelinks += static_cast<U32>(flipped.size());
+    std::vector<LLReflectionMap*> relevant;
+    for (LLReflectionMap* probe : flipped)
+    {
+        for (auto& other : probe->mNeighbors)
+        {
+            auto iter = std::find(other->mNeighbors.begin(), other->mNeighbors.end(), probe);
+            if (iter != other->mNeighbors.end())
+            {
+                other->mNeighbors.erase(iter);
+            }
+        }
+        probe->mNeighbors.clear();
+        probe->mNeighborOrigin = probe->mOrigin;
+        probe->mNeighborRadius = probe->mRadius;
+        probe->mLinkedRelevant = probe->isRelevant();
+        if (probe->mLinkedRelevant)
+        {
+            relevant.push_back(probe);
+        }
+    }
+    std::sort(relevant.begin(), relevant.end());
+    for (auto& other : mProbes)
+    {
+        if (other == mDefaultProbe || !other->isRelevant())
+        {
+            continue;
+        }
+        const bool other_flipped = std::binary_search(relevant.begin(), relevant.end(), other.get());
+        for (LLReflectionMap* probe : relevant)
+        {
+            // A pair of flipped probes is linked once, from its lower address.
+            if (probe == other || (other_flipped && other.get() > probe))
+            {
+                continue;
+            }
+            if (probe->intersects(other))
+            {
+                probe->mNeighbors.push_back(other);
+                other->mNeighbors.push_back(probe);
+            }
+        }
+    }
+}
+
+U32 LLReflectionMapManager::countNavOctreeLinks() const
+{
+    U32 links = 0;
+    for (const auto& probe : mProbes)
+    {
+        if (probe->mNavRooms && probe->isRelevant())
+        {
+            for (const auto& other : probe->mNeighbors)
+            {
+                links += (other != mDefaultProbe && !other->mViewerObject && !other->mNavRooms) ? 1 : 0;
+            }
+        }
+    }
+    return links;
+}
+// </SK:Nexii>
 
 void LLReflectionMapManager::updateUniforms()
 {
@@ -1947,15 +2029,6 @@ void renderReflectionProbe(LLReflectionMap* probe)
 
 namespace
 {
-    LLColor4 probeDebugColor(const LLReflectionMap* probe, const LLReflectionMap* fallback)
-    {
-        if (probe == fallback) return LLColor4(0.7f, 0.7f, 0.7f, 1.f);
-        if (probe->mBlockedByCensus) return LLColor4(1.f, 0.2f, 0.2f, 1.f);
-        if (probe->mViewerObject) return LLColor4(1.f, 0.3f, 1.f, 1.f);
-        if (probe->mNavRooms) return LLColor4(0.f, 1.f, 1.f, 1.f);
-        return LLColor4(1.f, 0.6f, 0.f, 1.f);
-    }
-
     // <SK:Nexii> Probe links: kind colours matching the scan-pulse display in reflectionProbeF.glsl.
     LLColor4 skProbeKindColor(LLReflectionMapManager::SKProbeKind kind)
     {
@@ -2166,7 +2239,8 @@ void LLReflectionMapManager::renderDebug()
 
     for (const auto& probe : mProbes)
     {
-        const LLColor4 color = probeDebugColor(probe, mDefaultProbe);
+        // Markers share the scan-pulse kind colours; a census-blocked probe stays red.
+        const LLColor4 color = probe->mBlockedByCensus && probe != mDefaultProbe ? LLColor4(1.f, 0.2f, 0.2f, 1.f) : skProbeKindColor(getSKProbeKind(probe));
         const LLVector3 origin(probe->mOrigin.getF32ptr());
         gGL.diffuseColor4fv(color.mV);
         gGL.begin(LLRender::LINES);
