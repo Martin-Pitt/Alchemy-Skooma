@@ -42,11 +42,18 @@ public:
     void setMinimized(bool minimize) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
 
+protected:
+    /// Records which base buttons the floater shows, so the chrome can hide them at rest.
+    void updateTitleButtons() override;
+
 private:
     /// Carry the classic map's settings over, once.
     void seed();
+    /// Whether the border, tint, grip and buttons show this frame.
+    bool chromeWanted() const;
 
     SKNetMap* mMap = nullptr;
+    bool mButtonShown[BUTTON_COUNT] = {};
 };
 
 #endif // SK_FLOATERMAP_H

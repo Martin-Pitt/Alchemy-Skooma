@@ -26,7 +26,12 @@
 
 #include "skfloatermap.h"
 
+#include "llbutton.h"
 #include "lldraghandle.h"
+#include "llfloaterreg.h"
+#include "llfocusmgr.h"
+#include "llresizebar.h"
+#include "llresizehandle.h"
 
 #include "llagentcamera.h"
 #include "llviewercontrol.h"
@@ -82,12 +87,56 @@ void SKFloaterMap::seed()
     LL_INFOS("SKMap") << "seeded the mini-map from the classic map's settings" << LL_ENDL;
 }
 
+void SKFloaterMap::updateTitleButtons()
+{
+    LLFloater::updateTitleButtons();
+    for (S32 i = 0; i < BUTTON_COUNT; ++i)
+    {
+        mButtonShown[i] = mButtons[i] && mButtons[i]->getVisible();
+    }
+}
+
+bool SKFloaterMap::chromeWanted() const
+{
+    if (!mMap)
+    {
+        return false;
+    }
+    if (mMap->isHovered() || mMap->namesShown() || isMinimized() || LLFloaterReg::instanceVisible("sk_map_settings"))
+    {
+        return true;
+    }
+    // A resize in progress keeps it, as does focus.
+    if (LLView* captor = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture()))
+    {
+        if ((dynamic_cast<LLResizeHandle*>(captor) || dynamic_cast<LLResizeBar*>(captor)) && captor->getParent() == this)
+        {
+            return true;
+        }
+    }
+    return gFocusMgr.childHasKeyboardFocus(this);
+}
+
 void SKFloaterMap::draw()
 {
     // In mouselook the map must not take the mouse from the world.
     const bool opaque = !gAgentCamera.cameraMouselook();
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
+
+    // Borderless at rest: the base buttons show only with the chrome.
+    const bool chrome = chromeWanted();
+    for (S32 i = 0; i < BUTTON_COUNT; ++i)
+    {
+        if (mButtons[i])
+        {
+            mButtons[i]->setVisible(chrome && mButtonShown[i]);
+        }
+    }
+    if (mMap)
+    {
+        mMap->setChrome(chrome);
+    }
     LLFloater::draw();
 }
 

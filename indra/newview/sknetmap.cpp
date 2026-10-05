@@ -245,12 +245,14 @@ void SKNetMap::draw()
     {
         LLLocalClipRect clip(getLocalRect());
         gGL.getTextureSlot(0)->unbind();
+        drawChromeTint();
         drawTerrain();
         drawSelf();
         drawSelfExtras();
         drawPeople();
         drawTracking();
         drawNorth();
+        drawChromeFrame();
     }
     gGL.popMatrix();
     gGL.popUIMatrix();
@@ -487,6 +489,54 @@ void SKNetMap::drawNorth()
                         std::fabs(north.mV[VY]) > 1e-4f ? hy / std::fabs(north.mV[VY]) : 1e9f);
     const LLVector2 at = centre + north * t;
     font->renderUTF8("N", 0, at.mV[VX], at.mV[VY], text, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW);
+}
+
+void SKNetMap::drawChromeTint()
+{
+    if (!mChrome)
+    {
+        return;
+    }
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::CHROME_TINT);
+    const LLVector2 a(0.f, 0.f), b(mView.width(), 0.f), c(mView.width(), mView.height()), d(0.f, mView.height());
+    skmapdraw::triangle(a, b, c);
+    skmapdraw::triangle(a, c, d);
+    gGL.end();
+}
+
+void SKNetMap::drawChromeFrame()
+{
+    if (!mChrome)
+    {
+        return;
+    }
+    const F32 w = mView.width(), h = mView.height(), px = skmap::palette::CHROME_BORDER_PX;
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::CHROME_BORDER);
+    skmapdraw::line(LLVector2(0.f, px * 0.5f), LLVector2(w, px * 0.5f), px);
+    skmapdraw::line(LLVector2(0.f, h - px * 0.5f), LLVector2(w, h - px * 0.5f), px);
+    skmapdraw::line(LLVector2(px * 0.5f, 0.f), LLVector2(px * 0.5f, h), px);
+    skmapdraw::line(LLVector2(w - px * 0.5f, 0.f), LLVector2(w - px * 0.5f, h), px);
+    // The grip: diagonal stripes in the bottom-right corner, over the floater's resize handle.
+    skmapdraw::colour(skmap::palette::GRIP);
+    for (F32 k = skmap::palette::GRIP_PITCH_PX; k <= skmap::palette::GRIP_PX; k += skmap::palette::GRIP_PITCH_PX)
+    {
+        skmapdraw::line(LLVector2(w - k, 1.f), LLVector2(w - 1.f, k), 1.f);
+    }
+    gGL.end();
+}
+
+void SKNetMap::onMouseEnter(S32 x, S32 y, MASK mask)
+{
+    mHovered = true;
+    LLUICtrl::onMouseEnter(x, y, mask);
+}
+
+void SKNetMap::onMouseLeave(S32 x, S32 y, MASK mask)
+{
+    mHovered = false;
+    LLUICtrl::onMouseLeave(x, y, mask);
 }
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)

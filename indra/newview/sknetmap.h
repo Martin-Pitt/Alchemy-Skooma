@@ -58,6 +58,14 @@ public:
     bool handleMouseUp(S32 x, S32 y, MASK mask) override;
     bool handleHover(S32 x, S32 y, MASK mask) override;
     bool handleDoubleClick(S32 x, S32 y, MASK mask) override;
+    void onMouseEnter(S32 x, S32 y, MASK mask) override;
+    void onMouseLeave(S32 x, S32 y, MASK mask) override;
+
+    bool isHovered() const { return mHovered; }
+    /// Whether nametags show; they bring the chrome with them.
+    bool namesShown() const { return false; }
+    /// The floater decides; the map draws the tint, border and grip.
+    void setChrome(bool chrome) { mChrome = chrome; }
 
     const skmap::MapView& view() const { return mView; }
     /// Ease the pan back to the agent over a quarter second.
@@ -86,8 +94,12 @@ private:
     void drawTracking();
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();
+    void drawChromeTint();
+    void drawChromeFrame();
 
     std::vector<DrawnDot> mDots;
+    bool mHovered = false;
+    bool mChrome = false;
 
     skmap::MapView mView;
     LLVector2 mPan;                     ///< metres east and north of the agent
