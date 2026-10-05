@@ -65,7 +65,9 @@
 #include "skmapobjects.h"
 #include "skmapparcels.h"
 #include "skmappeople.h"
+#include "skmapmenu.h"
 #include "skmapscene.h"
+#include "skpopuppanes.h"
 
 static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
 
@@ -889,7 +891,7 @@ void SKNetMap::onMouseLeave(S32 x, S32 y, MASK mask)
 bool SKNetMap::handleToolTip(S32 x, S32 y, MASK mask)
 {
     // Nametags say who is under the cursor; the tooltip only says where it is.
-    if (gDisconnected || namesShown())
+    if (gDisconnected || namesShown() || mouseNearPanes())
     {
         return false;
     }
@@ -975,6 +977,110 @@ bool SKNetMap::handleToolTip(S32 x, S32 y, MASK mask)
     }
     LLToolTipMgr::instance().show(LLToolTip::Params().message(msg).sticky_rect(sticky_rect));
     return true;
+}
+
+bool SKNetMap::panesOpen() const
+{
+    const SKPopupPanes* panes = mPopup.get();
+    return panes && panes->getVisible();
+}
+
+bool SKNetMap::mouseNearPanes() const
+{
+    SKPopupPanes* panes = mPopup.get();
+    if (!panes || !panes->getVisible())
+    {
+        return false;
+    }
+    // The classic map's tolerance: a few pixels round the popup count as on it.
+    constexpr S32 TOLERANCE = 10;
+    S32 px = 0, py = 0;
+    LLUI::getInstance()->getMousePositionLocal(panes, &px, &py);
+    for (S32 sx = -1; sx <= 1; sx += 2)
+    {
+        for (S32 sy = -1; sy <= 1; sy += 2)
+        {
+            if (panes->pointInView(px + sx * TOLERANCE, py + sy * TOLERANCE))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool SKNetMap::handleRightMouseDown(S32 x, S32 y, MASK mask)
+{
+    // Freeze the names on screen, or failing that the dots by the click, by value.
+    std::vector<LLUUID> ids = mHover.members();
+    const LLVector2 click(static_cast<F32>(x), static_cast<F32>(y));
+    if (ids.empty())
+    {
+        std::vector<std::pair<F32, LLUUID>> near_click;
+        for (const DrawnDot& d : mDots)
+        {
+            const F32 dist = dist_vec(d.mPos, click);
+            if (dist <= skmap::HOVER_ENTER_PX)
+            {
+                near_click.emplace_back(dist, d.mId);
+            }
+        }
+        std::sort(near_click.begin(), near_click.end());
+        for (const auto& n : near_click)
+        {
+            ids.push_back(n.second);
+        }
+    }
+    std::vector<SKMapMenu::Person> people;
+    for (const LLUUID& id : ids)
+    {
+        SKMapMenu::Person person;
+        person.mId = id;
+        person.mNameHidden = !RlvActions::canShowName(RlvActions::SNC_DEFAULT, id);
+        LLAvatarName av_name;
+        if (LLAvatarNameCache::get(id, &av_name))
+        {
+            person.mLabel = person.mNameHidden ? RlvStrings::getAnonym(av_name) : av_name.getDisplayName();
+        }
+        for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+        {
+            if (p.mId == id)
+            {
+                person.mPos = p.mPos;
+                break;
+            }
+        }
+        people.push_back(person);
+    }
+    mHover.suppress(click);
+    mLabels.clear();
+    mTagTexts.clear();
+    mPopupWorldPos = mView.toGlobal(click.mV[VX], click.mV[VY]);
+    if (SKPopupPanes* old = mPopup.get())
+    {
+        old->closeAll();
+    }
+    mPopup = SKMapMenu::open(this, x, y, mPopupWorldPos, people);
+    if (SKPopupPanes* panes = mPopup.get())
+    {
+        LLHandle<LLView> self = getHandle();
+        panes->setClosedCallback([self]() {
+            if (SKNetMap* map = dynamic_cast<SKNetMap*>(self.get()))
+            {
+                map->onPanesClosed();
+            }
+        });
+    }
+    return true;
+}
+
+void SKNetMap::onPanesClosed()
+{
+    S32 mx = 0, my = 0;
+    LLUI::getInstance()->getMousePositionLocal(this, &mx, &my);
+    mHover.suppress(LLVector2(static_cast<F32>(mx), static_cast<F32>(my)));
+    mLabels.clear();
+    mTagTexts.clear();
 }
 
 bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)

@@ -39,6 +39,7 @@
 class LLViewerTexture;
 class SKMapObjects;
 class SKMapParcels;
+class SKPopupPanes;
 
 class SKNetMap : public LLUICtrl
 {
@@ -81,7 +82,8 @@ public:
     /// Whether nametags show; they bring the chrome with them.
     bool namesShown() const { return !mHover.empty(); }
     /// Whether the right-click panes are open.
-    bool panesOpen() const { return false; }
+    bool panesOpen() const;
+    bool handleRightMouseDown(S32 x, S32 y, MASK mask) override;
     /// The floater decides; the map draws the tint, border and grip.
     void setChrome(bool chrome) { mChrome = chrome; }
 
@@ -123,6 +125,10 @@ private:
     void drawTags();
     /// A tag rectangle from the solver's window pixels, y down, to this widget's pixels.
     LLRect tagRect(const skmap::LabelLayout::Tag& tag) const;
+    /// The panes closed: the frozen people go, and names stay off until the pointer moves.
+    void onPanesClosed();
+    /// Within a few pixels of the open panes, where the tooltip keeps out of their way.
+    bool mouseNearPanes() const;
 
     void drawObjects();
 
@@ -145,6 +151,8 @@ private:
         F32 mHeight = 0.f;
     };
     std::vector<TagText> mTagTexts;
+    LLHandle<SKPopupPanes> mPopup;
+    LLVector3d mPopupWorldPos;
     std::string mFloorAboveLabel;
     std::string mFloorBelowLabel;
     std::string mFloorUnknownLabel;

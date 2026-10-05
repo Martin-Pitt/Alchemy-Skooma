@@ -1879,6 +1879,7 @@ if(AL_BUILD_VIEWER)
     skmapscene.cpp
     skpopuplayout.cpp
     skpopuppanes.cpp
+    skmapmenu.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1900,6 +1901,7 @@ if(AL_BUILD_VIEWER)
     skmapscene.h
     skpopuplayout.h
     skpopuppanes.h
+    skmapmenu.h
   )
   # </SK:Nexii>
 

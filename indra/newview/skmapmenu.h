@@ -1,0 +1,64 @@
+/**
+ * @file skmapmenu.h
+ * @brief The mini-map's right-click panes: the map, the people under the cursor, and their actions.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#ifndef SK_MAPMENU_H
+#define SK_MAPMENU_H
+
+#include "llhandle.h"
+#include "lluuid.h"
+#include "v3dmath.h"
+
+#include <string>
+#include <vector>
+
+class SKNetMap;
+class SKPopupPanes;
+struct SKPopupItem;
+struct SKPopupPaneSpec;
+
+/// Builds the panes from values frozen at the click: nothing in them follows the people after.
+class SKMapMenu
+{
+public:
+    /// A person as they were when the menu opened.
+    struct Person
+    {
+        LLUUID mId;
+        std::string mLabel;             ///< as shown, RLVa-anonymised when names are hidden
+        LLVector3d mPos;
+        bool mNameHidden = false;
+    };
+
+    /// Open the map pane at the widget point (x, y), and the people pane beside it when anyone
+    /// was frozen.
+    static LLHandle<SKPopupPanes> open(SKNetMap* map, S32 x, S32 y, const LLVector3d& world, const std::vector<Person>& people);
+
+    /// A label from panel_sk_map_popup.xml.
+    static std::string label(const std::string& name);
+
+private:
+    static void personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const Person& person);
+};
+
+#endif // SK_MAPMENU_H
