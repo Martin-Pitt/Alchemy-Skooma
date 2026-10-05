@@ -145,7 +145,7 @@ namespace
     // Runs in the crashing process under crashpad, once the scope is on the
     // event: what is only known now goes on the event itself, and the marker
     // the next launch reads is written here.
-    sentry_value_t on_crash(const sentry_ucontext_t*, sentry_value_t event, void*)
+    sentry_value_t on_crash(const sentry_ucontext_t*, sentry_value_t event, sentry_hint_t*, void*)
     {
         LLAppViewer* app = LLAppViewer::instance();
 
@@ -167,7 +167,9 @@ namespace
             set_event_tag(event, "mem_allocated_kb", std::to_string(LLMemory::getAllocatedMemKB().value()));
             set_event_tag(event, "mem_available_kb", std::to_string(available_kb));
             set_event_tag(event, "mem_max_physical_kb", std::to_string(LLMemory::getMaxMemKB().value()));
+#if LL_WINDOWS
             set_event_tag(event, "mem_available_commit_mb", std::to_string(LLMemory::getAvailableCommitMemMB().value()));
+#endif
         }
 
         if (!app->isSecondInstance() && !app->errorMarkerExists())
