@@ -32,6 +32,7 @@
 #include <memory>
 #include <vector>
 
+#include "skmaplabels.h"
 #include "skmappalette.h"
 #include "skmapview.h"
 
@@ -46,6 +47,17 @@ public:
 
     struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
     {
+        /// The nametag's second line for someone on another floor.
+        Optional<std::string> floor_above_label;
+        Optional<std::string> floor_below_label;
+        Optional<std::string> floor_unknown_label;
+
+        Params()
+            : floor_above_label("floor_above_label", "Floor above"),
+              floor_below_label("floor_below_label", "Floor below"),
+              floor_unknown_label("floor_unknown_label", "Floor unknown")
+        {
+        }
     };
 
 protected:
@@ -67,7 +79,9 @@ public:
 
     bool isHovered() const { return mHovered; }
     /// Whether nametags show; they bring the chrome with them.
-    bool namesShown() const { return false; }
+    bool namesShown() const { return !mHover.empty(); }
+    /// Whether the right-click panes are open.
+    bool panesOpen() const { return false; }
     /// The floater decides; the map draws the tint, border and grip.
     void setChrome(bool chrome) { mChrome = chrome; }
 
@@ -101,6 +115,14 @@ private:
     void drawChromeTint();
     void drawChromeFrame();
     void drawReadout();
+    /// Every drawn person's dot this frame, before anything is drawn.
+    void collectDots();
+    /// Who is under the pointer, and where their tags go.
+    void updateHover();
+    void drawConnectors();
+    void drawTags();
+    /// A tag rectangle from the solver's window pixels, y down, to this widget's pixels.
+    LLRect tagRect(const skmap::LabelLayout::Tag& tag) const;
 
     void drawObjects();
 
@@ -109,6 +131,23 @@ private:
     std::vector<DrawnDot> mDots;
     bool mHovered = false;
     bool mChrome = false;
+    skmap::HoverSet mHover;
+    skmap::LabelLayout mLabels;
+    bool mEscDown = false;
+    /// What each shown tag says, in hover order.
+    struct TagText
+    {
+        LLUUID mId;
+        std::string mCode;
+        std::string mName;
+        std::string mDetail;
+        F32 mWidth = 0.f;
+        F32 mHeight = 0.f;
+    };
+    std::vector<TagText> mTagTexts;
+    std::string mFloorAboveLabel;
+    std::string mFloorBelowLabel;
+    std::string mFloorUnknownLabel;
     F32 mDrawMs = 0.f;
 
     skmap::MapView mView;

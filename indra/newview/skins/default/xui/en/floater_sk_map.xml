@@ -21,6 +21,9 @@
     Mini-map
     </floater.string>
     <sk_net_map
+     floor_above_label="Floor above"
+     floor_below_label="Floor below"
+     floor_unknown_label="Floor unknown"
      follows="all"
      height="200"
      layout="topleft"

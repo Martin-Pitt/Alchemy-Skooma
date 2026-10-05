@@ -33,6 +33,7 @@
 #include "llrender.h"
 #include "llrender2dutils.h"
 #include "llresmgr.h"
+#include "llrootview.h"
 #include "lltooltip.h"
 #include "lltrans.h"
 #include "lluicolortable.h"
@@ -53,6 +54,8 @@
 #include "llviewerwindow.h"
 #include "llworld.h"
 #include "llworldmapview.h"
+#include "llavatarnamecache.h"
+#include "llkeyboard.h"
 #include "llparcel.h"
 #include "llslurl.h"
 #include "llviewerparcelmgr.h"
@@ -187,7 +190,10 @@ namespace skmapdraw
 SKNetMap::SKNetMap(const Params& p)
     : LLUICtrl(p),
       mObjects(std::make_unique<SKMapObjects>()),
-      mParcels(std::make_unique<SKMapParcels>())
+      mParcels(std::make_unique<SKMapParcels>()),
+      mFloorAboveLabel(p.floor_above_label),
+      mFloorBelowLabel(p.floor_below_label),
+      mFloorUnknownLabel(p.floor_unknown_label)
 {
 }
 
@@ -271,11 +277,20 @@ void SKNetMap::draw()
         mParcels->draw(mView);
         drawSelf();
         drawSelfExtras();
+    }
+    // Connectors run under the dots, and may leave the map for tags outside it.
+    collectDots();
+    updateHover();
+    drawConnectors();
+    {
+        LLLocalClipRect clip(getLocalRect());
         drawPeople();
         drawTracking();
         drawNorth();
         drawChromeFrame();
     }
+    // Tags sit wherever there is room in the window, over the map or the world.
+    drawTags();
     gGL.popMatrix();
     gGL.popUIMatrix();
     mDrawMs = draw_timer.getElapsedTimeF32() * 1000.f;
@@ -439,19 +454,31 @@ void SKNetMap::drawSelfExtras()
     }
 }
 
-void SKNetMap::drawPeople()
+void SKNetMap::collectDots()
 {
-    static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
     static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
     constexpr F32 FONT_PX = 8.f;
     constexpr F32 PADDING_PX = 0.5f;
     mDots.clear();
     for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
     {
-        const LLVector2 at = mView.toWidget(p.mPos);
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
-        const F32 radius = skmap::markerRadius(chevron, false, 0, 0.f, FONT_PX, PADDING_PX);
-        mDots.push_back({ p.mId, at, radius });
+        mDots.push_back({ p.mId, mView.toWidget(p.mPos), skmap::markerRadius(chevron, false, 0, 0.f, FONT_PX, PADDING_PX) });
+    }
+}
+
+void SKNetMap::drawPeople()
+{
+    static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
+    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+    constexpr F32 FONT_PX = 8.f;
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    for (size_t i = 0; i < people.size() && i < mDots.size(); ++i)
+    {
+        const SKMapPeople::Person& p = people[i];
+        const LLVector2 at = mDots[i].mPos;
+        const F32 radius = mDots[i].mRadius;
+        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         if (at.mV[VX] < -radius - 8.f || at.mV[VY] < -radius - 8.f || at.mV[VX] > mView.width() + radius + 8.f
             || at.mV[VY] > mView.height() + radius + 8.f)
         {
@@ -482,6 +509,239 @@ void SKNetMap::drawPeople()
             skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
         }
         gGL.end();
+    }
+}
+
+LLRect SKNetMap::tagRect(const skmap::LabelLayout::Tag& tag) const
+{
+    const LLRect screen = calcScreenRect();
+    const S32 height = gViewerWindow->getRootView()->getRect().getHeight();
+    const S32 left = ll_round(static_cast<F32>(tag.mX)) - screen.mLeft;
+    const S32 top = height - ll_round(static_cast<F32>(tag.mY)) - screen.mBottom;
+    return LLRect(left, top, left + ll_round(static_cast<F32>(tag.mW)), top - ll_round(static_cast<F32>(tag.mH)));
+}
+
+void SKNetMap::updateHover()
+{
+    static LLCachedControl<F32> enter(gSavedSettings, "SKMapHoverEnterPx", skmap::HOVER_ENTER_PX);
+    static LLCachedControl<F32> exit(gSavedSettings, "SKMapHoverExitPx", skmap::HOVER_EXIT_PX);
+    static LLCachedControl<U32> max_width(gSavedSettings, "SKMapNametagMaxWidth", 190);
+
+    S32 mx = 0, my = 0;
+    LLUI::getInstance()->getMousePositionLocal(this, &mx, &my);
+    const LLVector2 pointer(static_cast<F32>(mx), static_cast<F32>(my));
+    mHover.notePointer(pointer);
+
+    // Escape clears the names until the pointer moves; it keeps its usual meaning too.
+    const bool esc = gKeyboard && gKeyboard->getKeyDown(KEY_ESCAPE);
+    if (esc && !mEscDown && !mHover.empty() && !panesOpen())
+    {
+        mHover.suppress(pointer);
+    }
+    mEscDown = esc;
+
+    LLMouseHandler* captor = gFocusMgr.getMouseCapture();
+    if (!mHovered || gAgentCamera.cameraMouselook() || panesOpen() || (captor && captor != this) || mHover.suppressed())
+    {
+        mHover.clear();
+        mLabels.clear();
+        mTagTexts.clear();
+        return;
+    }
+
+    std::vector<skmap::HoverDot> dots;
+    dots.reserve(mDots.size());
+    for (const DrawnDot& d : mDots)
+    {
+        dots.push_back({ d.mId, d.mPos });
+    }
+    mHover.update(dots, pointer, enter, exit);
+    if (mHover.empty())
+    {
+        mLabels.clear();
+        mTagTexts.clear();
+        return;
+    }
+
+    // The solver works in window pixels, y down, over the whole window.
+    const LLRect window = gViewerWindow->getRootView()->getRect();
+    const F32 win_w = static_cast<F32>(window.getWidth()), win_h = static_cast<F32>(window.getHeight());
+    const LLRect screen = calcScreenRect();
+    auto down = [&](const LLVector2& local) { return LLVector2(screen.mLeft + local.mV[VX], win_h - (screen.mBottom + local.mV[VY])); };
+
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const F32 widest = skmap::tagMaxWidth(win_w, static_cast<F32>(max_width));
+    const F32 text_room = llmax(8.f, widest - 2.f * skmap::palette::TAG_PAD_X_PX);
+    auto fit = [&](const std::string& text, F32 room) {
+        if (font->getWidthF32(text) <= room)
+        {
+            return text;
+        }
+        // Cut with an ellipsis.
+        const std::string ellipsis = "\xe2\x80\xa6";
+        std::string cut = text;
+        while (!cut.empty() && font->getWidthF32(cut + ellipsis) > room)
+        {
+            // Drop one whole UTF-8 character: its continuation bytes, then its lead.
+            while (!cut.empty() && (static_cast<U8>(cut.back()) & 0xC0) == 0x80)
+            {
+                cut.pop_back();
+            }
+            if (!cut.empty())
+            {
+                cut.pop_back();
+            }
+        }
+        return cut + ellipsis;
+    };
+
+    std::vector<TagText> texts;
+    std::map<std::string, S32> name_counts;
+    for (const LLUUID& id : mHover.members())
+    {
+        TagText t;
+        t.mId = id;
+        LLAvatarName av_name;
+        if (LLAvatarNameCache::get(id, &av_name))
+        {
+            t.mName = RlvActions::canShowName(RlvActions::SNC_DEFAULT, id) ? av_name.getDisplayName() : RlvStrings::getAnonym(av_name);
+            t.mDetail = av_name.getUserName();
+        }
+        else
+        {
+            t.mName = LLTrans::getString("LoadingData");
+        }
+        name_counts[t.mName]++;
+        texts.push_back(t);
+    }
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    for (TagText& t : texts)
+    {
+        // A second line only when there is something to say: two people sharing a name show
+        // their usernames, else the floor they are on.
+        const bool shared = name_counts[t.mName] > 1 && RlvActions::canShowName(RlvActions::SNC_DEFAULT, t.mId);
+        std::string detail;
+        if (shared)
+        {
+            detail = t.mDetail;
+        }
+        else
+        {
+            for (const SKMapPeople::Person& p : people)
+            {
+                if (p.mId != t.mId)
+                {
+                    continue;
+                }
+                detail = p.mFloor == skmap::FloorRelation::ABOVE   ? mFloorAboveLabel
+                       : p.mFloor == skmap::FloorRelation::BELOW   ? mFloorBelowLabel
+                       : p.mFloor == skmap::FloorRelation::UNKNOWN ? mFloorUnknownLabel
+                                                                    : std::string();
+                break;
+            }
+        }
+        const F32 code_w = t.mCode.empty() ? 0.f : font->getWidthF32(t.mCode) + skmap::palette::TAG_CODE_GAP_PX;
+        t.mName = fit(t.mName, text_room - code_w);
+        t.mDetail = detail.empty() ? std::string() : fit(detail, text_room);
+        const F32 text_w = llmax(code_w + font->getWidthF32(t.mName), t.mDetail.empty() ? 0.f : font->getWidthF32(t.mDetail));
+        t.mWidth = std::ceil(text_w + 2.f * skmap::palette::TAG_PAD_X_PX);
+        t.mHeight = std::ceil(font->getLineHeight() * (t.mDetail.empty() ? 1.f : 2.f) + 2.f * skmap::palette::TAG_PAD_Y_PX);
+    }
+    mTagTexts.swap(texts);
+
+    skmap::LabelLayout::Input in;
+    in.mPointer = down(pointer);
+    in.mWidth = win_w;
+    in.mHeight = win_h;
+    in.mChrome = mChrome;
+    for (const TagText& t : mTagTexts)
+    {
+        for (const DrawnDot& d : mDots)
+        {
+            if (d.mId == t.mId)
+            {
+                in.mMembers.push_back({ t.mId, down(d.mPos), t.mWidth, t.mHeight });
+                break;
+            }
+        }
+    }
+    // Every drawn dot, then the cog and the grip, as the study keeps them clear.
+    for (const DrawnDot& d : mDots)
+    {
+        const LLVector2 p = down(d.mPos);
+        in.mObstacles.push_back({ p.mV[VX] - 5.0, p.mV[VY] - 5.0, 10.0, 10.0 });
+    }
+    const LLVector2 top_right = down(LLVector2(mView.width(), mView.height()));
+    const LLVector2 bottom_right = down(LLVector2(mView.width(), 0.f));
+    in.mObstacles.push_back({ top_right.mV[VX] - 28.0, top_right.mV[VY] + 2.0, 26.0, 26.0 });
+    in.mObstacles.push_back({ bottom_right.mV[VX] - 26.0, bottom_right.mV[VY] - 26.0, 26.0, 26.0 });
+    mLabels.update(in, LLFrameTimer::getFrameDeltaTimeF32());
+}
+
+void SKNetMap::drawConnectors()
+{
+    if (mLabels.tags().empty())
+    {
+        return;
+    }
+    const LLRect screen = calcScreenRect();
+    const F32 win_h = static_cast<F32>(gViewerWindow->getRootView()->getRect().getHeight());
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::CONNECTOR);
+    for (const skmap::LabelLayout::Tag& tag : mLabels.tags())
+    {
+        for (const DrawnDot& d : mDots)
+        {
+            if (d.mId != tag.mId)
+            {
+                continue;
+            }
+            const LLVector2 anchor(screen.mLeft + d.mPos.mV[VX], win_h - (screen.mBottom + d.mPos.mV[VY]));
+            const LLVector2 end = skmap::LabelLayout::connectorEnd(tag, anchor);
+            skmapdraw::line(d.mPos, LLVector2(end.mV[VX] - screen.mLeft, win_h - end.mV[VY] - screen.mBottom), 1.f);
+            break;
+        }
+    }
+    gGL.end();
+}
+
+void SKNetMap::drawTags()
+{
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const LLColor4 bg(skmap::palette::TAG_BG.mR, skmap::palette::TAG_BG.mG, skmap::palette::TAG_BG.mB, skmap::palette::TAG_BG.mA);
+    const LLColor4 text(skmap::palette::TAG_TEXT.mR, skmap::palette::TAG_TEXT.mG, skmap::palette::TAG_TEXT.mB, 1.f);
+    const LLColor4 code(skmap::palette::TAG_CODE.mR, skmap::palette::TAG_CODE.mG, skmap::palette::TAG_CODE.mB, 1.f);
+    const LLColor4 detail(skmap::palette::TAG_DETAIL.mR, skmap::palette::TAG_DETAIL.mG, skmap::palette::TAG_DETAIL.mB, 1.f);
+    for (const skmap::LabelLayout::Tag& tag : mLabels.tags())
+    {
+        const TagText* t = nullptr;
+        for (const TagText& candidate : mTagTexts)
+        {
+            if (candidate.mId == tag.mId)
+            {
+                t = &candidate;
+                break;
+            }
+        }
+        if (!t)
+        {
+            continue;
+        }
+        const LLRect r = tagRect(tag);
+        gl_rect_2d(r, bg, true);
+        F32 x = r.mLeft + skmap::palette::TAG_PAD_X_PX;
+        const F32 y = r.mTop - skmap::palette::TAG_PAD_Y_PX;
+        if (!t->mCode.empty())
+        {
+            font->renderUTF8(t->mCode, 0, x, y, code, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+            x += font->getWidthF32(t->mCode) + skmap::palette::TAG_CODE_GAP_PX;
+        }
+        font->renderUTF8(t->mName, 0, x, y, text, LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+        if (!t->mDetail.empty())
+        {
+            font->renderUTF8(t->mDetail, 0, r.mLeft + skmap::palette::TAG_PAD_X_PX, y - font->getLineHeight(), detail, LLFontGL::LEFT,
+                             LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::NO_SHADOW);
+        }
     }
 }
 

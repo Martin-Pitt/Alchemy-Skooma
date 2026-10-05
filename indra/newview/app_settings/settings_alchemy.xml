@@ -4969,6 +4969,39 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKMapHoverEnterPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels from a mini-map dot at which its name shows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKMapHoverExitPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels from a mini-map dot past which a shown name goes; more than the enter distance, so names do not flicker.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
+        <key>SKMapNametagMaxWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>The widest a mini-map nametag grows, in pixels; narrow windows use less.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>190</integer>
+        </map>
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

@@ -41,6 +41,7 @@
 #include "llworld.h"
 #include "pipeline.h"
 #include "skmappalette.h"
+#include "skmapscene.h"
 #include "sknavmesh.h"
 
 namespace
@@ -143,6 +144,8 @@ void SKMapPeople::gatherPeople()
     std::vector<LLVector3d> positions;
     LLWorld::getInstance()->getAvatars(&ids, &positions, agent, PEOPLE_REACH_M);
 
+    // Floors from the scene when there is one; the raw height difference otherwise.
+    const skmap::ScenePtr scene = SKMapScene::instanceExists() ? SKMapScene::instance().scene() : nullptr;
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);
     mPeople.clear();
     mPeople.reserve(ids.size());
@@ -178,6 +181,10 @@ void SKMapPeople::gatherPeople()
         if (!p.mZKnown)
         {
             p.mFloor = skmap::FloorRelation::UNKNOWN;
+        }
+        else if (scene && SKMapScene::instance().agentFloorCurrent())
+        {
+            p.mFloor = skmap::floorRelation(*scene, SKMapScene::instance().agentFloor(), p.mPos, true);
         }
         else
         {
