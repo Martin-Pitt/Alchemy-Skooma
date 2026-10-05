@@ -1713,17 +1713,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKOTSReportEyeCamera</key>
-        <map>
-            <key>Comment</key>
-            <string>Over-the-shoulder view: report the eye aimed at the crosshair as the camera, so camera-position weapons fire from the avatar rather than the shoulder</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <key>SKOTSRememberLastView</key>
         <map>
             <key>Comment</key>
@@ -1756,17 +1745,6 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
-        </map>
-        <key>SKOTSConvergeMinDistance</key>
-        <map>
-            <key>Comment</key>
-            <string>Over-the-shoulder view: nearest distance the aim converges at, so point-blank aim does not swing with the shoulder offset (metres)</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>2.0</real>
         </map>
         <key>SKOTSConvergeSmoothingHalfLife</key>
         <map>
