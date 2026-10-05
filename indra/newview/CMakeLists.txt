@@ -1869,6 +1869,7 @@ if(AL_BUILD_VIEWER)
     skmapribbons.cpp
     skmaplabels.cpp
     skmapmarkers.cpp
+    skmapallies.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1880,6 +1881,7 @@ if(AL_BUILD_VIEWER)
     skmapribbons.h
     skmaplabels.h
     skmapmarkers.h
+    skmapallies.h
   )
   # </SK:Nexii>
 
@@ -2994,6 +2996,13 @@ if(AL_BUILD_TESTS)
   )
   al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(
+    skmapallies
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES ${test_libs}
+    DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
+  )
   # </SK:Nexii>
   al_add_test(
     llslurl
