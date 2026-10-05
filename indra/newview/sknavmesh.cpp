@@ -227,7 +227,17 @@ bool SKNavMesh::wanted() const
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SKNavMeshEnabled", true);
     static LLCachedControl<bool> always(gSavedSettings, "SKNavMeshAlways", false);
-    return enabled && (always || overlayActive() || probesDemanded());
+    return enabled && (always || overlayActive() || probesDemanded() || !mConsumers.empty());
+}
+
+void SKNavMesh::addDemand(const std::string& who)
+{
+    mConsumers.insert(who);
+}
+
+void SKNavMesh::removeDemand(const std::string& who)
+{
+    mConsumers.erase(who);
 }
 
 bool SKNavMesh::probesDemanded()

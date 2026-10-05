@@ -39,6 +39,7 @@
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,13 @@ public:
 
     /// Polygon edges of the avatar class near the agent, from the debug pass.
     void renderDebug();
+
+    /// Keep the navmesh building while a consumer is registered (the mini-map while it is shown).
+    void addDemand(const std::string& who);
+    void removeDemand(const std::string& who);
+    /// Moves whenever the navmesh's published state changes: a tile publishes, fails or leaves, a
+    /// mesh is torn down, air is evicted (it follows the camera), or feature links change.
+    U64 revision() const { return mRevision; }
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the
@@ -395,6 +403,8 @@ private:
     bool mHasMark = false;
     std::unique_ptr<SKNavRooms> mRooms;
     std::unique_ptr<SKNavRoomProbes> mRoomProbes;
+    /// Consumers that keep the navmesh building whatever the overlay and probes want.
+    std::set<std::string> mConsumers;
 
     /// A counter over what the debug overlay draws: bumped whenever a tile
     /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps
