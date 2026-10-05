@@ -29,6 +29,9 @@
 #include "lluuid.h"
 #include "v3dmath.h"
 
+#include "skmappolicy.h"
+
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -57,8 +60,25 @@ public:
     /// A label from panel_sk_map_popup.xml.
     static std::string label(const std::string& name);
 
+    /// What the Moderate gate knows of a person now: powers live, parcel facts cached or asked for.
+    /// seq carries the person's parcel request from one refresh to the next.
+    static skmap::ModerationFacts moderationFacts(const Person& person, S32& seq);
+
 private:
-    static void personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const Person& person);
+    /// Where a person's Moderate rows sit, and their parcel request.
+    struct Gate
+    {
+        Person mPerson;
+        S32 mPane = -1;             ///< the pane holding the person's rows
+        S32 mRow = -1;              ///< the Moderate row in it
+        S32 mModerate = -1;         ///< the Moderate pane
+        S32 mSeq = 0;
+    };
+    typedef std::shared_ptr<std::vector<Gate>> GatesPtr;
+
+    static void personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const Person& person, std::vector<Gate>& gates);
+    /// Show, hide or mark checking each Moderate row by the gate, never enabling one on a guess.
+    static void applyGates(std::vector<SKPopupPaneSpec>& panes, std::vector<Gate>& gates);
 };
 
 #endif // SK_MAPMENU_H

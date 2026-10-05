@@ -31,6 +31,12 @@
 #include "lluictrlfactory.h"
 
 #include "alavataractions.h"
+#include "llagent.h"
+#include "llparcel.h"
+#include "llviewerregion.h"
+#include "llworld.h"
+#include "roles_constants.h"
+#include "skmapparcelfacts.h"
 #include "llavataractions.h"
 #include "llfloatersidepanelcontainer.h"
 #include "llfloaterworldmap.h"
@@ -104,7 +110,91 @@ std::string SKMapMenu::label(const std::string& name)
 }
 
 // static
-void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const Person& person)
+skmap::ModerationFacts SKMapMenu::moderationFacts(const Person& person, S32& seq)
+{
+    skmap::ModerationFacts f;
+    f.mAgent = gAgent.getID();
+    // Not isGodlike(): that counts the admin menu's override.
+    f.mGod = gAgent.isGodlikeWithoutAdminMenuFakery();
+    LLViewerRegion* region = LLWorld::getInstance()->getRegionFromPosGlobal(person.mPos);
+    if (!region)
+    {
+        f.mFacts = skmap::FactsState::FAILED;
+        return f;
+    }
+    const LLVector3 local = region->getPosRegionFromGlobal(person.mPos);
+    f.mEstate = skmap::estatePower(region->getOwner() == gAgent.getID(), region->isEstateManager(), person.mId == region->getOwner());
+    f.mClass = region->isOwnedSelf(local) ? skmap::ParcelClass::SELF
+             : region->isOwnedGroup(local) ? skmap::ParcelClass::GROUP
+                                           : skmap::ParcelClass::OTHER;
+    f.mInAgentParcel = LLViewerParcelMgr::getInstance()->inAgentParcel(person.mPos);
+
+    const skmap::ParcelFacts* known = nullptr;
+    skmap::ParcelFacts agent_parcel;
+    if (f.mInAgentParcel)
+    {
+        // The sim keeps the agent's own parcel current: no request.
+        if (LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel())
+        {
+            agent_parcel.mOwner = parcel->getOwnerID();
+            agent_parcel.mGroupOwned = parcel->getIsGroupOwned();
+            agent_parcel.mGroup = parcel->getGroupID();
+            known = &agent_parcel;
+        }
+    }
+    else if (f.mClass == skmap::ParcelClass::GROUP)
+    {
+        const std::pair<S32, S32> cell = skmap::parcelCellOf(local);
+        SKMapParcelFacts& facts = SKMapParcelFacts::instance();
+        known = facts.find(region->getRegionID(), cell.first, cell.second);
+        if (!known)
+        {
+            if (seq == 0)
+            {
+                seq = facts.request(region, cell.first, cell.second);
+                f.mFacts = seq ? skmap::FactsState::PENDING : skmap::FactsState::FAILED;
+                seq = seq ? seq : -1;   // refused: failed, and not asked again
+            }
+            else
+            {
+                f.mFacts = skmap::isMapParcelSeq(seq) && facts.pending(seq) ? skmap::FactsState::PENDING : skmap::FactsState::FAILED;
+            }
+        }
+    }
+    if (known)
+    {
+        f.mFacts = skmap::FactsState::KNOWN;
+        f.mOwner = known->mOwner;
+        f.mGroupOwned = known->mGroupOwned;
+        f.mOwnerPower = gAgent.hasPowerInGroup(known->mOwner, GP_LAND_ADMIN);
+        f.mOwnerBanPower = gAgent.hasPowerInGroup(known->mOwner, GP_LAND_MANAGE_BANNED);
+    }
+    return f;
+}
+
+// static
+void SKMapMenu::applyGates(std::vector<SKPopupPaneSpec>& panes, std::vector<Gate>& gates)
+{
+    const std::string checking = label("checking");
+    for (Gate& gate : gates)
+    {
+        const skmap::ModerationVisibility v = skmap::moderationVisibility(moderationFacts(gate.mPerson, gate.mSeq));
+        const skmap::GateState states[5] = { v.mFreeze, v.mEject, v.mEstate, v.mEstate, v.mEstate };
+        std::vector<SKPopupItem>& rows = panes[gate.mModerate].mItems;
+        for (size_t i = 0; i < rows.size() && i < 5; ++i)
+        {
+            rows[i].mVisible = states[i] != skmap::GateState::HIDDEN;
+            rows[i].mEnabled = states[i] == skmap::GateState::ENABLED;
+            rows[i].mDetail = states[i] == skmap::GateState::CHECKING ? checking : std::string();
+        }
+        std::vector<SKPopupItem>& person_rows = panes[gate.mPane].mItems;
+        person_rows[gate.mRow].mVisible = v.row();
+        person_rows[gate.mRow - 1].mVisible = v.row();
+    }
+}
+
+// static
+void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const Person& person, std::vector<Gate>& gates)
 {
     const LLUUID id = person.mId;
     const bool named = !person.mNameHidden;
@@ -123,16 +213,29 @@ void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const
     items.push_back(action(label("derender"), []() {}, true, false));
     items.push_back(action(label("report"), [id]() { ALAvatarActions::reportAbuse(id); }));
 
-    // The Moderate row and its pane; shown once the gate knows what the user may do.
+    // The Moderate row and its pane; the gate shows the row and its items only for powers the
+    // user certainly holds.
     const S32 moderate = static_cast<S32>(panes.size());
     SKPopupItem row = action(label("moderate"), nullptr, true, false);
     row.mDetail = label("more");
     row.mOpensPane = moderate;
     items.push_back(separator(false));
     items.push_back(row);
+    Gate gate;
+    gate.mPerson = person;
+    gate.mPane = pane;
+    gate.mRow = static_cast<S32>(items.size()) - 1;
+    gate.mModerate = moderate;
+    gates.push_back(gate);
+
     SKPopupPaneSpec spec;
     spec.mName = "moderate";
     spec.mParent = pane;
+    spec.mItems.push_back(action(label("freeze"), [id]() { ALAvatarActions::parcelFreeze(id); }, false, false));
+    spec.mItems.push_back(action(label("parcel_eject"), nullptr, false, false));
+    spec.mItems.push_back(action(label("estate_kick"), [id]() { ALAvatarActions::estateKick(id); }, false, false));
+    spec.mItems.push_back(action(label("estate_teleport_home"), [id]() { ALAvatarActions::estateTeleportHome(id); }, false, false));
+    spec.mItems.push_back(action(label("estate_ban"), [id]() { ALAvatarActions::estateBan(id); }, false, false));
     panes.push_back(spec);
 }
 
@@ -183,6 +286,7 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
                                  true, map->isPanned()));
     panes.push_back(spec);
 
+    auto gates = std::make_shared<std::vector<Gate>>();
     if (!people.empty())
     {
         SKPopupPaneSpec people_pane;
@@ -191,7 +295,7 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
         if (people.size() == 1)
         {
             panes[1].mItems.push_back(heading(people.front().mLabel));
-            personItems(panes, 1, people.front());
+            personItems(panes, 1, people.front(), *gates);
         }
         else
         {
@@ -207,9 +311,19 @@ LLHandle<SKPopupPanes> SKMapMenu::open(SKNetMap* map, S32 x, S32 y, const LLVect
                 person_pane.mName = "person";
                 person_pane.mParent = 1;
                 panes.push_back(person_pane);
-                personItems(panes, pane, person);
+                personItems(panes, pane, person, *gates);
             }
         }
     }
-    return SKPopupPanes::show(map, x, y, std::move(panes));
+    applyGates(panes, *gates);
+    LLHandle<SKPopupPanes> shown = SKPopupPanes::show(map, x, y, std::move(panes));
+    if (SKPopupPanes* view = shown.get())
+    {
+        // Only the Moderate rows change while open: "checking" turns enabled or goes.
+        if (!gates->empty())
+        {
+            view->setRefresh([gates](std::vector<SKPopupPaneSpec>& specs) { applyGates(specs, *gates); });
+        }
+    }
+    return shown;
 }
