@@ -1860,7 +1860,14 @@ if(AL_BUILD_VIEWER)
   )
 
   # <SK:Nexii> SKNetMap mini-map sources
-  list(APPEND viewer_SOURCES sknavpolys.cpp skmapview.cpp skmapgeom.cpp skmapraster.cpp)
+  list(
+    APPEND viewer_SOURCES
+    sknavpolys.cpp
+    skmapview.cpp
+    skmapgeom.cpp
+    skmapraster.cpp
+    skmapribbons.cpp
+  )
   list(
     APPEND viewer_HEADERS
     sknavpolys.h
@@ -1868,6 +1875,7 @@ if(AL_BUILD_VIEWER)
     skmapgeom.h
     skmapraster.h
     skmappalette.h
+    skmapribbons.h
   )
   # </SK:Nexii>
 
@@ -2968,6 +2976,13 @@ if(AL_BUILD_TESTS)
   )
   al_add_test(
     skmapraster
+    UNIT
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(
+    skmapribbons
     UNIT
     PROJECT ${test_project}
     SOURCES skmapgeom.cpp skmapview.cpp
