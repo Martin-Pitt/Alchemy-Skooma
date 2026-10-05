@@ -1860,8 +1860,8 @@ if(AL_BUILD_VIEWER)
   )
 
   # <SK:Nexii> SKNetMap mini-map sources
-  list(APPEND viewer_SOURCES sknavpolys.cpp)
-  list(APPEND viewer_HEADERS sknavpolys.h)
+  list(APPEND viewer_SOURCES sknavpolys.cpp skmapview.cpp)
+  list(APPEND viewer_HEADERS sknavpolys.h skmapview.h)
   # </SK:Nexii>
 
   # The version as one line, for the hosted build's metadata.
@@ -2951,6 +2951,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
   # <SK:Nexii> SKNetMap mini-map unit tests
   al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+  al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   # </SK:Nexii>
   al_add_test(
     llslurl
