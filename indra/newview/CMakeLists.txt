@@ -1877,6 +1877,8 @@ if(AL_BUILD_VIEWER)
     skmapobjects.cpp
     skmapparcels.cpp
     skmapscene.cpp
+    skpopuplayout.cpp
+    skpopuppanes.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1896,6 +1898,8 @@ if(AL_BUILD_VIEWER)
     skmapobjects.h
     skmapparcels.h
     skmapscene.h
+    skpopuplayout.h
+    skpopuppanes.h
   )
   # </SK:Nexii>
 
@@ -3018,6 +3022,7 @@ if(AL_BUILD_TESTS)
     DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
   )
   al_add_test(skmappolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(skpopuplayout UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   # </SK:Nexii>
   al_add_test(
     llslurl
