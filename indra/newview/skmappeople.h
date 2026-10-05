@@ -96,8 +96,8 @@ public:
     /// The cover a wall ahead of the agent along the camera gives, at 10 Hz; NONE when off.
     sknav::Cover coverAhead() const { return mCoverAhead; }
 
-    /// A map drew this frame: the idle work runs while one has, recently.
-    void noteDrawn();
+    /// A map drew this frame with this view: the idle work runs while one has, recently.
+    void noteDrawn(const skmap::MapView& view);
     bool active() const;
 
     static void onIdle(void*);
@@ -125,6 +125,8 @@ private:
     LLUUID mActiveGroup;
     bool mGroupKnown = false;
     std::set<LLUUID> mCandidates;
+    LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
+    boost::signals2::connection mTeleportConnection;
     std::vector<LLUUID> mVehicleRoots;
     U64 mVehicleStamp = 0;
     /// Linkset boxes by root, kept while the child set holds.

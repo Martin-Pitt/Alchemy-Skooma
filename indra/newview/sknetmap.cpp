@@ -256,7 +256,7 @@ void SKNetMap::draw()
     LL_PROFILE_ZONE_SCOPED;
     LLTimer draw_timer;
     updateView();
-    SKMapPeople::instance().noteDrawn();
+    SKMapPeople::instance().noteDrawn(mView);
     SKMapScene::instance().noteDrawn(*this);
 
     // The classic map's matrix setup: widget pixels, the UI scale and offset applied by hand.

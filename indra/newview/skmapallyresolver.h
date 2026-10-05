@@ -30,9 +30,13 @@
 
 #include "skmapallies.h"
 
+#include <boost/signals2.hpp>
 #include <map>
 #include <memory>
 #include <set>
+#include <vector>
+
+class LLVOAvatar;
 
 /// Main thread only, a member of SKMapPeople. Asks for nothing unless the map is shown in combat.
 class SKMapAllyResolver
@@ -47,8 +51,18 @@ public:
     bool rosterHit(const LLUUID& id) const;
     /// ALLY or UNKNOWN, never anything else.
     skmap::AllyVerdict verdict(const LLUUID& id) const;
-    /// Forget everything: rosters held, and in time the probe records.
+    /// Forget everything: rosters held and probe records.
     void clear();
+
+    /// A loaded avatar seen this idle, nearest first; in_view says the map shows it (with 10%
+    /// to spare), which is where probes are spent.
+    void noteAvatar(LLVOAvatar* avatar, bool in_view, F64 now);
+    /// After the avatars are noted: send what the budget allows.
+    void dispatch(F64 now);
+    /// The user teleported: every record goes.
+    void forgetRecords();
+    U32 probesInFlight() const { return static_cast<U32>(mBudget.inFlight()); }
+    U32 probesQueued() const { return static_cast<U32>(mBudget.queued()); }
 
 private:
     /// Keeps a roster LLGroupMgr would otherwise drop.
@@ -60,12 +74,22 @@ private:
 
     void updateRosters(bool active, bool combat, F64 now);
     void dropRosters();
+    /// An object's properties came in; only a root we asked about is read.
+    void onProperties(const LLUUID& object);
 
     std::set<LLUUID> mCandidates;
     std::map<LLUUID, std::unique_ptr<RosterObserver>> mObservers;
     std::map<LLUUID, F64> mRequested;      ///< group -> when its roster was last asked for
     LLUUID mWaiting;                        ///< the one roster asked and not complete yet
     F64 mLeftCombat = -1.0;
+
+    bool mActive = false;
+    std::map<LLUUID, skmap::AllyRecord> mRecords;
+    std::map<LLUUID, std::vector<LLUUID>> mRoots;   ///< per avatar, as last noted
+    std::map<LLUUID, LLUUID> mPendingRoots;         ///< root asked -> its wearer
+    std::set<LLUUID> mProbedRoots;                  ///< roots asked about before: the cache no longer answers them
+    skmap::ProbeBudget mBudget;
+    boost::signals2::connection mPropertiesConnection;
 };
 
 #endif // SK_MAPALLYRESOLVER_H

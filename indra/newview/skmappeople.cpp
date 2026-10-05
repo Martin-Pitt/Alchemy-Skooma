@@ -70,17 +70,27 @@ void SKMapPeople::initSingleton()
     ALObjectPropertiesCache::instance();
     LLGroupMgr::instance();
     gIdleCallbacks.addFunction(&SKMapPeople::onIdle, nullptr);
+    // Every probe record goes with a teleport.
+    mTeleportConnection = LLViewerParcelMgr::getInstance()->setTeleportFinishedCallback([this](const LLVector3d&, const bool&) {
+        mResolver.forgetRecords();
+    });
 }
 
 void SKMapPeople::cleanupSingleton()
 {
     gIdleCallbacks.deleteFunction(&SKMapPeople::onIdle, nullptr);
+    mTeleportConnection.disconnect();
+    mResolver.clear();
     mPeople.clear();
 }
 
-void SKMapPeople::noteDrawn()
+void SKMapPeople::noteDrawn(const skmap::MapView& view)
 {
     mLastDrawn = LLFrameTimer::getElapsedSeconds();
+    view.visibleBox(mViewMin, mViewMax);
+    const LLVector3d pad = (mViewMax - mViewMin) * 0.05;
+    mViewMin -= pad;
+    mViewMax += pad;
 }
 
 bool SKMapPeople::active() const
@@ -115,6 +125,7 @@ void SKMapPeople::idle()
     updateCandidates();
     mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getElapsedSeconds());
     gatherPeople();
+    mResolver.dispatch(LLFrameTimer::getElapsedSeconds());
     updateCoverAhead();
     gatherVehicles();
 }
@@ -292,6 +303,29 @@ void SKMapPeople::gatherPeople()
 
     // Floors from the scene when there is one; the raw height difference otherwise.
     const skmap::ScenePtr scene = SKMapScene::instanceExists() ? SKMapScene::instance().scene() : nullptr;
+    // The probe sees loaded avatars nearest first, so the nearest are asked about first.
+    if (mCombat)
+    {
+        std::vector<std::pair<F64, LLVOAvatar*>> loaded;
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            LLVOAvatar* avatar = ids[i] == gAgent.getID() ? nullptr : dynamic_cast<LLVOAvatar*>(gObjectList.findObject(ids[i]));
+            if (avatar && !avatar->isDead())
+            {
+                loaded.emplace_back(dist_vec_squared(positions[i], agent), avatar);
+            }
+        }
+        std::sort(loaded.begin(), loaded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        const F64 now = LLFrameTimer::getElapsedSeconds();
+        for (const auto& entry : loaded)
+        {
+            const LLVector3d p = entry.second->getPositionGlobal();
+            const bool in_view = p.mdV[VX] >= mViewMin.mdV[VX] && p.mdV[VX] <= mViewMax.mdV[VX] && p.mdV[VY] >= mViewMin.mdV[VY]
+                              && p.mdV[VY] <= mViewMax.mdV[VY];
+            mResolver.noteAvatar(entry.second, in_view, now);
+        }
+    }
+
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);
     mPeople.clear();
     mPeople.reserve(ids.size());
