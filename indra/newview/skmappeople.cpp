@@ -477,6 +477,14 @@ void SKMapPeople::gatherPeople()
     mPeople.clear();
     mPeople.reserve(ids.size());
     mSeats.clear();
+    // The user crews their own vehicle as an ally would, so it never reads as empty or hostile.
+    if (isAgentAvatarValid() && gAgentAvatarp->isSitting())
+    {
+        if (LLViewerObject* seat = static_cast<LLViewerObject*>(gAgentAvatarp->getParent()))
+        {
+            mSeats[seat->getRootEdit()->getID()] = { true, true };
+        }
+    }
     for (size_t i = 0; i < ids.size(); ++i)
     {
         if (ids[i] == gAgent.getID())
