@@ -369,13 +369,13 @@ void SKMapScene::updateSelection()
             bucket = e.mBucket;
         }
     }
-    if (mSelectedScene == &scene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket)
+    if (mSelectedScene.lock() == mScene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket)
     {
         return;
     }
     static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
     mSelection = skmap::selectLayers(scene, floor, bucket, fade);
-    mSelectedScene = &scene;
+    mSelectedScene = mScene;
     mSelectedCell = cell;
     mSelectedLayer = floor.mLayer;
     mSelectedBucket = bucket;

@@ -219,7 +219,8 @@ private:
     skmap::AgentFloor mAgent;
     U32 mAgentFrame = 0;            ///< the frame count mAgent was last refreshed in
     skmap::LayerSelection mSelection;
-    const skmap::Scene* mSelectedScene = nullptr;
+    /// Weak, so a later scene allocated where a freed one was is never taken for it.
+    std::weak_ptr<const skmap::Scene> mSelectedScene;
     std::pair<S32, S32> mSelectedCell = { 0, 0 };
     S32 mSelectedLayer = -2;
     sknav::EnclosureBucket mSelectedBucket = sknav::EnclosureBucket::UNKNOWN;
