@@ -409,24 +409,9 @@ bool SKOTSCamera::reportedCamera(LLVector3& pos, LLVector3& at, LLVector3& left,
 
 void SKOTSCamera::convergeRotations(const LLVector3& aim_at, LLQuaternion& body, LLQuaternion& head)
 {
-    // The correction is a few degrees at range but grows without bound at point blank, and the
-    // region also steers walking by the body rotation, so it is capped.
-    constexpr F32 MAX_BODY_TURN = 20.f * DEG_TO_RAD;
-
-    const LLVector3 body_at = LLVector3::x_axis * body;
+    // Uncapped: a gun aiming from llGetRot has to land on the crosshair at every range.
     LLQuaternion turn;
-    turn.shortestArc(body_at, aim_at);
-    F32 angle = 0.f;
-    LLVector3 axis;
-    turn.getAngleAxis(&angle, axis);
-    if (angle > F_PI)
-    {
-        angle -= F_TWO_PI;
-    }
-    if (fabsf(angle) > MAX_BODY_TURN)
-    {
-        turn.setAngleAxis(angle > 0.f ? MAX_BODY_TURN : -MAX_BODY_TURN, axis);
-    }
+    turn.shortestArc(LLVector3::x_axis * body, aim_at);
     body = body * turn;
 
     // The head is built from the look direction exactly as LLAgent::getHeadRotation does in mouselook.
