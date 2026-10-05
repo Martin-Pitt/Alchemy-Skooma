@@ -111,6 +111,7 @@ public:
         LLUUID mId;
         LLVector2 mPos;
         F32 mRadius = 3.f;
+        size_t mPerson = 0;     ///< its index in SKMapPeople::people()
     };
     const std::vector<DrawnDot>& drawnDots() const { return mDots; }
 
@@ -138,7 +139,7 @@ private:
     void drawChromeTint();
     void drawChromeFrame();
     void drawReadout();
-    /// Every drawn person's dot this frame, before anything is drawn.
+    /// Every person's dot that shows in the widget this frame, before anything is drawn.
     void collectDots();
     /// Who is under the pointer, and where their tags go.
     void updateHover();

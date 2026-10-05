@@ -669,13 +669,21 @@ void SKNetMap::collectDots()
     const F32 px = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const F32 pad = llclamp(static_cast<F32>(padding), 0.f, 3.f);
     mDots.clear();
-    for (const SKMapPeople::Person& p : SKMapPeople::instance().people())
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    for (size_t i = 0; i < people.size(); ++i)
     {
+        const SKMapPeople::Person& p = people[i];
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         const bool coded = labels && !p.mCode.empty();
         const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
-        mDots.push_back({ p.mId, mView.toWidget(p.mPos),
-                          skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad) });
+        const F32 radius = skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad);
+        const LLVector2 at = mView.toWidget(p.mPos);
+        // Only dots the clip leaves some of: hover, tags and picks never name an unseen one.
+        if (at.mV[VX] < -radius || at.mV[VY] < -radius || at.mV[VX] > mView.width() + radius || at.mV[VY] > mView.height() + radius)
+        {
+            continue;
+        }
+        mDots.push_back({ p.mId, at, radius, i });
     }
 }
 
@@ -686,17 +694,16 @@ void SKNetMap::drawPeople()
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     const F32 FONT_PX = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-    for (size_t i = 0; i < people.size() && i < mDots.size(); ++i)
+    for (const DrawnDot& d : mDots)
     {
-        const SKMapPeople::Person& p = people[i];
-        const LLVector2 at = mDots[i].mPos;
-        const F32 radius = mDots[i].mRadius;
-        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
-        if (at.mV[VX] < -radius - 8.f || at.mV[VY] < -radius - 8.f || at.mV[VX] > mView.width() + radius + 8.f
-            || at.mV[VY] > mView.height() + radius + 8.f)
+        if (d.mPerson >= people.size())
         {
             continue;
         }
+        const SKMapPeople::Person& p = people[d.mPerson];
+        const LLVector2 at = d.mPos;
+        const F32 radius = d.mRadius;
+        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         skmapdraw::shadow(at, radius);
         gGL.begin(LLRender::TRIANGLES);
         // Allies in combat are cyan; everyone else keeps the general colours.
@@ -744,16 +751,20 @@ void SKNetMap::drawPeopleCodes()
     }
     const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
-    for (size_t i = 0; i < people.size() && i < mDots.size(); ++i)
+    for (const DrawnDot& d : mDots)
     {
-        const SKMapPeople::Person& p = people[i];
+        if (d.mPerson >= people.size())
+        {
+            continue;
+        }
+        const SKMapPeople::Person& p = people[d.mPerson];
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         // The chevron replaces the code on the dot; the tag keeps it.
         if (chevron || p.mVisibility != skmap::Visibility::DOT_CODED || p.mCode.empty())
         {
             continue;
         }
-        const LLVector2 at = mDots[i].mPos;
+        const LLVector2 at = d.mPos;
         codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
                                LLFontGL::NO_SHADOW);
     }
