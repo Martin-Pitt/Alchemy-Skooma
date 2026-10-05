@@ -33,12 +33,14 @@
 
 #include "skmapgeom.h"
 #include "skmapraster.h"
+#include "skmapribbons.h"
 
 #include <deque>
 #include <map>
 #include <memory>
 #include <vector>
 
+class LLVertexBuffer;
 class LLViewerTexture;
 class SKNetMap;
 
@@ -129,6 +131,37 @@ private:
     /// Draw the cached bakes of a cell's children, or failing those their children, down two tiers.
     void drawFinerBakes(const skmap::MapView& view, S32 layer, const skmap::CellId& cell, const LLColor4& tint, F64 now);
 
+    /// The ribbon parameters for this frame: the zoom bucket, the eye height and the toggles.
+    skmap::RibbonParams ribbonParams(const skmap::MapView& view) const;
+    static U64 ribbonKey(U64 mark_hash, const skmap::RibbonParams& params);
+    /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
+    void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
+    /// Draw a buffer of scene-local metres built for the scene whose origin is given.
+    void drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const;
+    void postRibbons();
+    void uploadRibbons();
+
+    struct RibbonBuffer
+    {
+        LLPointer<LLVertexBuffer> mBuffer;
+        LLVector3d mOrigin;         ///< the origin of the scene it was built in
+        F64 mLastDrawn = 0.0;
+    };
+    struct RibbonRequest
+    {
+        S32 mLayer = -1;
+        U64 mKey = 0;
+        U64 mMarkHash = 0;
+        skmap::RibbonParams mParams;
+    };
+    struct RibbonResult
+    {
+        U64 mKey = 0;
+        U64 mMarkHash = 0;
+        LLVector3d mOrigin;
+        skmap::Ribbons mRibbons;
+    };
+
     struct Bake
     {
         LLPointer<LLViewerTexture> mTexture;
@@ -169,6 +202,12 @@ private:
     bool mBakeInFlight = false;
     U64 mBakeKeyInFlight = 0;
     std::deque<BakeResult> mUploads;
+
+    std::map<U64, RibbonBuffer> mRibbons;
+    std::map<U64, U64> mRibbonLatest;       ///< mark hash -> the key last built for it
+    std::vector<RibbonRequest> mRibbonWanted;
+    bool mRibbonInFlight = false;
+    std::deque<RibbonResult> mRibbonUploads;
 
     skmap::AgentFloor mAgent;
     U32 mAgentFrame = 0;            ///< the frame count mAgent was last refreshed in

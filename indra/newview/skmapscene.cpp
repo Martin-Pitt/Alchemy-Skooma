@@ -42,6 +42,8 @@
 
 #include "llimage.h"
 #include "llrender.h"
+#include "llvertexbuffer.h"
+#include "llvoavatarself.h"
 #include "llviewertexture.h"
 #include "skmappalette.h"
 
@@ -99,6 +101,10 @@ void SKMapScene::cleanupSingleton()
     mBakes.clear();
     mUploads.clear();
     mWanted.clear();
+    mRibbons.clear();
+    mRibbonLatest.clear();
+    mRibbonUploads.clear();
+    mRibbonWanted.clear();
 }
 
 void SKMapScene::noteDrawn(const SKNetMap& map)
@@ -637,6 +643,8 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
     skmap::cellsInBox(mTier, lo, hi, cells);
     const F64 now = LLFrameTimer::getElapsedSeconds();
     const LLVector3d centre = view.centre();
+    uploadRibbons();
+    const skmap::RibbonParams ribbon_params = ribbonParams(view);
 
     for (S32 l : mSelection.mDrawn)
     {
@@ -712,7 +720,165 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
                 drawFinerBakes(view, l, cell, tint, now);
             }
         }
+        gGL.getTextureSlot(0)->unbind();
+        drawRibbons(view, l, ribbon_params);
     }
     gGL.getTextureSlot(0)->unbind();
     postBake();
+    postRibbons();
+}
+
+skmap::RibbonParams SKMapScene::ribbonParams(const skmap::MapView& view) const
+{
+    static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
+    static LLCachedControl<F32> peek(gSavedSettings, "SKNavCoverPeek", 0.15f);
+    static LLCachedControl<bool> cover(gSavedSettings, "SKMapLayerCover", true);
+    static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", true);
+    skmap::RibbonParams p;
+    // Rebuilt per x1.1 zoom bucket, never per frame of a zoom.
+    p.mMpp = skmap::bucketMpp(skmap::zoomBucket(view.mpp()));
+    p.mEye = isAgentAvatarValid() ? gAgentAvatarp->mBodySize.mV[VZ] * 0.94f : 1.8f;
+    p.mClimb = climb;
+    p.mPeek = peek;
+    p.mCover = cover;
+    p.mDoors = doors;
+    return p;
+}
+
+U64 SKMapScene::ribbonKey(U64 mark_hash, const skmap::RibbonParams& params)
+{
+    U64 key = sknav::mix(mark_hash, static_cast<U64>(skmap::zoomBucket(params.mMpp)));
+    key = sknav::mix(key, static_cast<U64>(ll_round(params.mEye * 100.f)));
+    key = sknav::mix(key, static_cast<U64>(ll_round(params.mClimb * 100.f)));
+    key = sknav::mix(key, static_cast<U64>(ll_round(params.mPeek * 100.f)));
+    return sknav::mix(key, (params.mCover ? 1u : 0u) | (params.mDoors ? 2u : 0u));
+}
+
+void SKMapScene::drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const
+{
+    if (!vb || !vb->getNumVerts())
+    {
+        return;
+    }
+    // Scene-local metres to widget pixels, from the scene the buffer was built in: a cached buffer outlives a box re-snap.
+    const LLVector3d offset = origin - view.centre();
+    gGL.flush();
+    gGL.pushMatrix();
+    gGL.translatef(view.width() * 0.5f, view.height() * 0.5f, 0.f);
+    gGL.rotatef(view.rotation() * RAD_TO_DEG, 0.f, 0.f, 1.f);
+    gGL.scalef(view.pixelsPerMetre(), view.pixelsPerMetre(), 1.f);
+    gGL.translatef(static_cast<F32>(offset.mdV[VX]), static_cast<F32>(offset.mdV[VY]), 0.f);
+    gGL.getTextureSlot(0)->bindSampled(LLViewerFetchedTexture::sWhiteImagep, ALSamplers::BilinearClamp);
+    gGL.syncMatrices();
+    vb->setBuffer();
+    vb->drawArrays(LLRender::TRIANGLES, 0, vb->getNumVerts());
+    gGL.popMatrix();
+    gGL.getTextureSlot(0)->unbind();
+}
+
+void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params)
+{
+    if (layer < 0 || layer >= static_cast<S32>(mScene->mMarkHashes.size()))
+    {
+        return;
+    }
+    const U64 marks = mScene->mMarkHashes[layer];
+    const U64 key = ribbonKey(marks, params);
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    auto it = mRibbons.find(key);
+    if (it == mRibbons.end())
+    {
+        mRibbonWanted.push_back({ layer, key, marks, params });
+        // The old buffer keeps drawing until the new one lands.
+        const auto latest = mRibbonLatest.find(marks);
+        it = latest != mRibbonLatest.end() ? mRibbons.find(latest->second) : mRibbons.end();
+    }
+    if (it != mRibbons.end())
+    {
+        it->second.mLastDrawn = now;
+        drawBuffer(view, it->second.mBuffer, it->second.mOrigin);
+    }
+}
+
+void SKMapScene::postRibbons()
+{
+    if (mRibbonInFlight || mRibbonWanted.empty() || !mScene)
+    {
+        mRibbonWanted.clear();
+        return;
+    }
+    const LL::WorkQueue::ptr_t work = queue();
+    if (work)
+    {
+        const skmap::ScenePtr scene = mScene;
+        const RibbonRequest request = mRibbonWanted.front();
+        std::weak_ptr<bool> alive = mAlive;
+        const bool posted = work->post([this, scene, request, alive]() {
+            auto result = std::make_shared<RibbonResult>();
+            result->mKey = request.mKey;
+            result->mMarkHash = request.mMarkHash;
+            result->mOrigin = scene->mOrigin;
+            skmap::buildLayerRibbons(*scene, request.mLayer, request.mParams, result->mRibbons);
+            LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, result, alive]() {
+                if (!alive.expired())
+                {
+                    mRibbonInFlight = false;
+                    mRibbonUploads.push_back(std::move(*result));
+                }
+            });
+        });
+        mRibbonInFlight = posted;
+    }
+    mRibbonWanted.clear();
+}
+
+void SKMapScene::uploadRibbons()
+{
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    while (!mRibbonUploads.empty())
+    {
+        const RibbonResult& r = mRibbonUploads.front();
+        LLPointer<LLVertexBuffer> vb;
+        if (!r.mRibbons.mVerts.empty())
+        {
+            // The overlay's attribute set: what gUIProgram reads.
+            vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
+            LLStrider<LLVector3> positions;
+            LLStrider<LLVector2> texcoords;
+            LLStrider<LLColor4U> colours;
+            if (vb->allocateBuffer(static_cast<U32>(r.mRibbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
+                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
+            {
+                for (U32 i = 0; i < static_cast<U32>(r.mRibbons.mVerts.size()); ++i)
+                {
+                    positions[i] = r.mRibbons.mVerts[i];
+                    texcoords[i] = LLVector2(0.f, 0.f);
+                    colours[i] = r.mRibbons.mColours[i];
+                }
+                vb->unmapBuffer();
+            }
+            else
+            {
+                vb = nullptr;
+            }
+        }
+        RibbonBuffer& buffer = mRibbons[r.mKey];
+        buffer.mBuffer = vb;
+        buffer.mOrigin = r.mOrigin;
+        buffer.mLastDrawn = now;
+        mRibbonLatest[r.mMarkHash] = r.mKey;
+        mRibbonUploads.pop_front();
+    }
+    // Buffers not drawn for a while go.
+    for (auto it = mRibbons.begin(); it != mRibbons.end();)
+    {
+        if (now - it->second.mLastDrawn > 30.0)
+        {
+            it = mRibbons.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
