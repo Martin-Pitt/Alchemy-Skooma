@@ -31,6 +31,7 @@
 #include "lluictrlfactory.h"
 
 #include "alavataractions.h"
+#include "alderenderlist.h"
 #include "llagent.h"
 #include "llparcel.h"
 #include "llviewerregion.h"
@@ -210,7 +211,8 @@ void SKMapMenu::personItems(std::vector<SKPopupPaneSpec>& panes, S32 pane, const
     items.push_back(separator());
     items.push_back(action(label(LLAvatarActions::isBlocked(id) ? "unblock" : "block"), [id]() { LLAvatarActions::toggleBlock(id); },
                            LLAvatarActions::canBlock(id)));
-    items.push_back(action(label("derender"), []() {}, true, false));
+    const std::string name = person.mLabel;
+    items.push_back(action(label("derender"), [id, name]() { ALDerenderList::instance().addAvatar(id, name); }));
     items.push_back(action(label("report"), [id]() { ALAvatarActions::reportAbuse(id); }));
 
     // The Moderate row and its pane; the gate shows the row and its items only for powers the
