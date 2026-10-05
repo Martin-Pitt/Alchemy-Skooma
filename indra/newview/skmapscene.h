@@ -66,6 +66,8 @@ public:
 
     /// Draw the floorplan: the selected layers' baked cells, back to front.
     void drawFloorplan(const skmap::MapView& view);
+    /// Hatch outside every region, then the region and void edges.
+    void drawVoid(const skmap::MapView& view);
 
     /// Where the agent stands in the scene, refreshed each frame the map draws, whatever the layers.
     const skmap::AgentFloor& agentFloor() const { return mAgent; }
@@ -208,6 +210,11 @@ private:
     std::vector<RibbonRequest> mRibbonWanted;
     bool mRibbonInFlight = false;
     std::deque<RibbonResult> mRibbonUploads;
+
+    LLPointer<LLViewerTexture> mHatch;
+    LLPointer<LLVertexBuffer> mBoundaryBuffer;
+    LLVector3d mBoundaryOrigin;
+    U64 mBoundaryKey = 0;
 
     skmap::AgentFloor mAgent;
     U32 mAgentFrame = 0;            ///< the frame count mAgent was last refreshed in

@@ -267,6 +267,7 @@ void SKNetMap::draw()
         drawTerrain();
         drawObjects();
         SKMapScene::instance().drawFloorplan(mView);
+        SKMapScene::instance().drawVoid(mView);
         mParcels->draw(mView);
         drawSelf();
         drawSelfExtras();

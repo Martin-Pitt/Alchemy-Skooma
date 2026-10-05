@@ -103,6 +103,8 @@ void SKMapScene::cleanupSingleton()
     mWanted.clear();
     mRibbons.clear();
     mRibbonLatest.clear();
+    mHatch = nullptr;
+    mBoundaryBuffer = nullptr;
     mRibbonUploads.clear();
     mRibbonWanted.clear();
 }
@@ -902,4 +904,110 @@ void SKMapScene::uploadRibbons()
             ++it;
         }
     }
+}
+
+void SKMapScene::drawVoid(const skmap::MapView& view)
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerVoid", true);
+    if (!show || !LLWorld::instanceExists())
+    {
+        return;
+    }
+    if (mHatch.isNull())
+    {
+        // One diagonal stripe in an 8 x 8 tile, repeated in screen pixels.
+        const S32 n = skmap::palette::HATCH_PITCH_PX;
+        LLPointer<LLImageRaw> raw = new LLImageRaw(n, n, 4);
+        U8* data = raw->getData();
+        for (S32 y = 0; y < n; ++y)
+        {
+            for (S32 x = 0; x < n; ++x)
+            {
+                U8* p = &data[(y * n + x) * 4];
+                p[0] = p[1] = p[2] = 255;
+                p[3] = (x + y) % n == 0 ? 255 : 0;
+            }
+        }
+        mHatch = LLViewerTextureManager::getLocalTexture(raw.get(), false);
+    }
+    const std::vector<LLViewerRegion*> regions(LLWorld::getInstance()->getRegionList().begin(), LLWorld::getInstance()->getRegionList().end());
+    auto inRegion = [&regions](F64 x, F64 y) {
+        for (LLViewerRegion* region : regions)
+        {
+            const LLVector3d o = region->getOriginGlobal();
+            const F64 w = region->getWidth();
+            if (x >= o.mdV[VX] && x < o.mdV[VX] + w && y >= o.mdV[VY] && y < o.mdV[VY] + w)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    // World-aligned 16 m cells outside every region; the pattern runs in screen pixels.
+    constexpr F64 CELL = 16.0;
+    LLVector3d lo, hi;
+    view.visibleBox(lo, hi);
+    const S32 x0 = static_cast<S32>(std::floor(lo.mdV[VX] / CELL)), x1 = static_cast<S32>(std::floor(hi.mdV[VX] / CELL));
+    const S32 y0 = static_cast<S32>(std::floor(lo.mdV[VY] / CELL)), y1 = static_cast<S32>(std::floor(hi.mdV[VY] / CELL));
+    const F32 pitch = static_cast<F32>(skmap::palette::HATCH_PITCH_PX);
+    gGL.getTextureSlot(0)->bindSampled(mHatch, ALSamplers::PointWrap);
+    skmapdraw::colour(skmap::palette::HATCH);
+    gGL.begin(LLRender::TRIANGLES);
+    for (S32 cy = y0; cy <= y1; ++cy)
+    {
+        for (S32 cx = x0; cx <= x1; ++cx)
+        {
+            if (inRegion((cx + 0.5) * CELL, (cy + 0.5) * CELL))
+            {
+                continue;
+            }
+            const LLVector2 a = view.toWidget(LLVector3d(cx * CELL, cy * CELL, 0.0));
+            const LLVector2 b = view.toWidget(LLVector3d((cx + 1) * CELL, cy * CELL, 0.0));
+            const LLVector2 c = view.toWidget(LLVector3d((cx + 1) * CELL, (cy + 1) * CELL, 0.0));
+            const LLVector2 d = view.toWidget(LLVector3d(cx * CELL, (cy + 1) * CELL, 0.0));
+            for (const LLVector2* v : { &a, &b, &c, &a, &c, &d })
+            {
+                gGL.texCoord2f(v->mV[VX] / pitch, v->mV[VY] / pitch);
+                gGL.vertex2f(v->mV[VX], v->mV[VY]);
+            }
+        }
+    }
+    gGL.end();
+    gGL.getTextureSlot(0)->unbind();
+
+    // The region and void edges, rebuilt when the scene or the zoom bucket moves.
+    if (!mScene)
+    {
+        return;
+    }
+    skmap::RibbonParams params = ribbonParams(view);
+    const U64 key = sknav::mix(static_cast<U64>(mStats.mJobs), static_cast<U64>(skmap::zoomBucket(params.mMpp)));
+    if (key != mBoundaryKey)
+    {
+        mBoundaryKey = key;
+        mBoundaryOrigin = mScene->mOrigin;
+        skmap::Ribbons ribbons;
+        skmap::buildBoundaryRibbons(*mScene, params, ribbons);
+        mBoundaryBuffer = nullptr;
+        if (!ribbons.mVerts.empty())
+        {
+            LLPointer<LLVertexBuffer> vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
+            LLStrider<LLVector3> positions;
+            LLStrider<LLVector2> texcoords;
+            LLStrider<LLColor4U> colours;
+            if (vb->allocateBuffer(static_cast<U32>(ribbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
+                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
+            {
+                for (U32 i = 0; i < static_cast<U32>(ribbons.mVerts.size()); ++i)
+                {
+                    positions[i] = ribbons.mVerts[i];
+                    texcoords[i] = LLVector2(0.f, 0.f);
+                    colours[i] = ribbons.mColours[i];
+                }
+                vb->unmapBuffer();
+                mBoundaryBuffer = vb;
+            }
+        }
+    }
+    drawBuffer(view, mBoundaryBuffer, mBoundaryOrigin);
 }
