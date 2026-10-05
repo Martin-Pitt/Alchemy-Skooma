@@ -31,6 +31,7 @@
 #include "llcallingcard.h"
 #include "lldate.h"
 #include "lldir.h"
+#include "llfetchedgltfmaterial.h"
 #include "llfile.h"
 #include "llgltfmaterial.h"
 #include "llinventorymodel.h"
@@ -104,6 +105,24 @@ namespace skcapture
         return link;
     }
 
+    // The image a face draws: a PBR face its material's base colour, any other its own texture.
+    const LLViewerTexture* faceImage(const LLViewerObject* object, U8 f)
+    {
+        const LLTextureEntry* te = object->getTE(f);
+        if (const LLFetchedGLTFMaterial* gltf = te ? dynamic_cast<const LLFetchedGLTFMaterial*>(te->getGLTFRenderMaterial()) : nullptr)
+        {
+            return gltf->mBaseColorTexture.get();
+        }
+        return object->getTEImage(f);
+    }
+
+    // Whether a face's image has decoded: an undecoded image has no channels yet, and an
+    // empty slot falls back to the default image, so its alpha is unknown either way.
+    bool faceTextureLoaded(const LLViewerTexture* image)
+    {
+        return image && image->getComponents() > 0 && image != LLViewerFetchedTexture::sDefaultImagep.get();
+    }
+
     // Whether one face can be seen through: set to blend whatever its tint,
     // faint under blend, or the stock transparent texture.
     bool faceSeeThrough(const LLViewerObject* object, U8 f)
@@ -131,7 +150,7 @@ namespace skcapture
         {
             // A legacy material defaults to blend, so an opaque door with a
             // normal map reads as blended; only a texture with alpha is glass.
-            const LLViewerTexture* image = object->getTEImage(f);
+            const LLViewerTexture* image = faceImage(object, f);
             blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
                          image->getComponents() == 4;
         }
@@ -281,6 +300,8 @@ namespace
                 }
                 const LLTextureEntry* te = object->getTE(static_cast<U8>(i));
                 mFile << "{\"te\":" << i;
+                // A face past the prim's texture entries has no settings of its own and is not drawn.
+                mFile << ",\"teMissing\":" << (i >= object->getNumTEs() ? "true" : "false");
                 if (te)
                 {
                     mFile << ",\"alpha\":" << te->getColor().mV[VALPHA] << ",\"pbrAlpha\":" << facePbrAlpha(te)
@@ -289,8 +310,9 @@ namespace
                           << ",\"seeThrough\":" << (faceSeeThrough(object, static_cast<U8>(i)) ? "true" : "false");
                     // Whether the texture carries alpha at all: a prim made invisible by a fully
                     // transparent texture reads opaque by tint alone, and only the viewer knows the channels.
-                    const LLViewerTexture* image = object->getTEImage(static_cast<U8>(i));
-                    mFile << ",\"textureAlpha\":" << (image && image->getComponents() == 4 ? "true" : "false");
+                    const LLViewerTexture* image = faceImage(object, static_cast<U8>(i));
+                    mFile << ",\"textureAlpha\":" << (image && image->getComponents() == 4 ? "true" : "false")
+                          << ",\"textureLoaded\":" << (faceTextureLoaded(image) ? "true" : "false");
                     if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
                     {
                         mFile << ",\"baseColorTexture\":\"" << gltf->mTextureId[LLGLTFMaterial::GLTF_TEXTURE_INFO_BASE_COLOR] << '"';
