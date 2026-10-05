@@ -633,6 +633,13 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
+    // The baked settings: part of every bake key, so a toggle re-bakes lazily in view.
+    static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", true);
+    static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", true);
+    static LLCachedControl<bool> heatmap(gSavedSettings, "SKMapHeatmap", false);
+    mRasterParams.mStairs = stairs;
+    mRasterParams.mContours = contours;
+    mRasterParams.mHeatmap = heatmap;
     updateSelection();
     const skmap::Scene& scene = *mScene;
     const F32 za = mAgent.mFound ? mAgent.mZ : static_cast<F32>(mAgent.mPos.mdV[VZ]);
@@ -676,7 +683,21 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
             const F32 half = fade_m * 0.5f;
             fade = std::fabs(delta) <= half ? 1.f : 1.f - 0.5f * llclamp((std::fabs(delta) - half) / llmax(half, 1e-3f), 0.f, 1.f);
         }
-        const LLColor4 tint(m, m, m, fade);
+        LLColor4 tint(m, m, m, fade);
+        if (heatmap)
+        {
+            // Below the agent's floor towards blue, above towards red, from the neutral bake.
+            const skmap::PaletteColour& heat = delta < 0.f ? skmap::palette::HEAT_BELOW : skmap::palette::HEAT_ABOVE;
+            const skmap::PaletteColour& neutral = skmap::palette::HEAT_NEUTRAL;
+            const F32 k = std::fabs(std::tanh(delta / 8.f));
+            const F32 t[3] = { lerp(1.f, heat.mR / neutral.mR, k), lerp(1.f, heat.mG / neutral.mG, k), lerp(1.f, heat.mB / neutral.mB, k) };
+            // The factors reach 1.67, which the 8-bit vertex colour would clip: dim the whole tint instead, keeping the hue.
+            const F32 peak = m * llmax(t[0], llmax(t[1], t[2]));
+            const F32 scale = peak > 1.f ? m / peak : m;
+            tint.mV[0] = scale * t[0];
+            tint.mV[1] = scale * t[1];
+            tint.mV[2] = scale * t[2];
+        }
 
         for (const skmap::CellId& cell : cells)
         {
