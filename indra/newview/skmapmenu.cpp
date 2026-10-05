@@ -27,6 +27,7 @@
 #include "skmapmenu.h"
 
 #include "llfloaterreg.h"
+#include "llframetimer.h"
 #include "llpanel.h"
 #include "lluictrlfactory.h"
 
@@ -178,10 +179,23 @@ skmap::ModerationFacts SKMapMenu::moderationFacts(const Person& person, S32& seq
 // static
 void SKMapMenu::applyGates(std::vector<SKPopupPaneSpec>& panes, std::vector<Gate>& gates)
 {
+    // A request refused because eight were in flight is asked again a second later; one that
+    // timed out or failed is not, so a sim that never answers is not asked over and over.
+    constexpr F64 REFUSED_RETRY_S = 1.0;
+    const F64 now = LLFrameTimer::getElapsedSeconds();
     const std::string checking = label("checking");
     for (Gate& gate : gates)
     {
+        if (gate.mSeq == -1 && gate.mRefusedAt >= 0.0 && now - gate.mRefusedAt >= REFUSED_RETRY_S)
+        {
+            gate.mSeq = 0;
+        }
+        const bool asking = gate.mSeq == 0;
         const skmap::ModerationVisibility v = skmap::moderationVisibility(moderationFacts(gate.mPerson, gate.mSeq));
+        if (asking)
+        {
+            gate.mRefusedAt = gate.mSeq == -1 ? now : -1.0;
+        }
         const skmap::GateState states[5] = { v.mFreeze, v.mEject, v.mEstate, v.mEstate, v.mEstate };
         std::vector<SKPopupItem>& rows = panes[gate.mModerate].mItems;
         for (size_t i = 0; i < rows.size() && i < 5; ++i)

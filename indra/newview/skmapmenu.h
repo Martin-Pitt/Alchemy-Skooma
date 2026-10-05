@@ -73,6 +73,7 @@ private:
         S32 mRow = -1;              ///< the Moderate row in it
         S32 mModerate = -1;         ///< the Moderate pane
         S32 mSeq = 0;
+        F64 mRefusedAt = -1.0;      ///< when the request was refused at the in-flight cap
     };
     typedef std::shared_ptr<std::vector<Gate>> GatesPtr;
 
