@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ bg_alpha_image_overlay="DkGray_33"
+ background_visible="false"
+ can_minimize="true"
+ can_resize="true"
+ header_height="0"
+ chrome="true"
+ height="200"
+ layout="topleft"
+ min_height="128"
+ min_width="128"
+ name="sk_map"
+ title=""
+ help_topic="map"
+ save_rect="true"
+ save_visibility="true"
+ width="200">
+    <floater.string name="mini_map_caption">
+    Mini-map
+    </floater.string>
+    <sk_net_map
+     follows="all"
+     height="200"
+     layout="topleft"
+     left="0"
+     mouse_opaque="false"
+     name="sk_net_map"
+     top="0"
+     width="200"/>
+</floater>

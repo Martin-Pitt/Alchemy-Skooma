@@ -48,6 +48,7 @@
 #include "alfloaterscopes.h"
 #include "skfloaternavannotate.h" // <SK:Nexii> navmesh annotations
 #include "skfloaternavmesh.h" // <SK:Nexii> navmesh console
+#include "skfloatermap.h" // <SK:Nexii> SKNetMap mini-map
 #include "alfloaterregiontracker.h"
 #include "alfloatertransactionlog.h"
 #include "alfloaterwebprofile.h"
@@ -461,7 +462,10 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("message_tos", "floater_tos.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterTOS>);
     LLFloaterReg::add("moveview", "floater_moveview.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMove>);
     LLFloaterReg::add("mute_object_by_name", "floater_mute_object.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterGetBlockedObjectName>);
-    LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    // <SK:Nexii> SKNetMap replaces the classic mini-map
+    //LLFloaterReg::add("mini_map", "floater_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterMap>);
+    LLFloaterReg::add("mini_map", "floater_sk_map.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SKFloaterMap>);
+    // </SK:Nexii>
     LLFloaterReg::add("new_feature_notification", "floater_new_feature_notification.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloaterNewFeatureNotification>);
 
 

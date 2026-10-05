@@ -1871,6 +1871,8 @@ if(AL_BUILD_VIEWER)
     skmapmarkers.cpp
     skmapallies.cpp
     skmappolicy.cpp
+    sknetmap.cpp
+    skfloatermap.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1884,6 +1886,8 @@ if(AL_BUILD_VIEWER)
     skmapmarkers.h
     skmapallies.h
     skmappolicy.h
+    sknetmap.h
+    skfloatermap.h
   )
   # </SK:Nexii>
 

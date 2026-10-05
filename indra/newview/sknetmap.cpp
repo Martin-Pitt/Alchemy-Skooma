@@ -1,0 +1,460 @@
+/**
+ * @file sknetmap.cpp
+ * @brief The mini-map widget: view state, input and the draw, over the navmesh floorplan.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "sknetmap.h"
+
+#include "llfloaterreg.h"
+#include "llfocusmgr.h"
+#include "llfontgl.h"
+#include "lllocalcliprect.h"
+#include "llrender.h"
+#include "llrender2dutils.h"
+
+#include "llagent.h"
+#include "llagentcamera.h"
+#include "llfloaterworldmap.h"
+#include "llsurface.h"
+#include "lltracker.h"
+#include "llviewercamera.h"
+#include "llviewercontrol.h"
+#include "llviewerregion.h"
+#include "llviewertexture.h"
+#include "llviewerwindow.h"
+#include "llworld.h"
+
+static LLDefaultChildRegistry::Register<SKNetMap> r("sk_net_map");
+
+namespace
+{
+    constexpr S32 MOUSE_DRAG_SLOP = 2;
+    constexpr F64 RECENTRE_S = 0.25;
+
+    LLPointer<LLViewerTexture> sShadowSprite;
+
+    LLColor4 toColor4(const skmap::PaletteColour& c, F32 alpha = 1.f)
+    {
+        return LLColor4(c.mR, c.mG, c.mB, c.mA * alpha);
+    }
+}
+
+namespace skmapdraw
+{
+    void colour(const skmap::PaletteColour& c, F32 alpha)
+    {
+        gGL.color4f(c.mR, c.mG, c.mB, c.mA * alpha);
+    }
+
+    void triangle(const LLVector2& a, const LLVector2& b, const LLVector2& c)
+    {
+        gGL.vertex2f(a.mV[VX], a.mV[VY]);
+        gGL.vertex2f(b.mV[VX], b.mV[VY]);
+        gGL.vertex2f(c.mV[VX], c.mV[VY]);
+    }
+
+    void line(const LLVector2& a, const LLVector2& b, F32 width)
+    {
+        LLVector2 d = b - a;
+        if (d.normVec() < 1e-4f)
+        {
+            return;
+        }
+        const LLVector2 n(-d.mV[VY] * width * 0.5f, d.mV[VX] * width * 0.5f);
+        triangle(a - n, b - n, b + n);
+        triangle(a - n, b + n, a + n);
+    }
+
+    void disc(const LLVector2& centre, F32 radius, S32 steps)
+    {
+        for (S32 i = 0; i < steps; ++i)
+        {
+            const F32 a0 = F_TWO_PI * i / steps, a1 = F_TWO_PI * (i + 1) / steps;
+            triangle(centre, centre + LLVector2(std::cos(a0), std::sin(a0)) * radius, centre + LLVector2(std::cos(a1), std::sin(a1)) * radius);
+        }
+    }
+
+    void ring(const LLVector2& centre, F32 radius, F32 width, S32 steps)
+    {
+        const F32 inner = llmax(0.f, radius - width * 0.5f), outer = radius + width * 0.5f;
+        for (S32 i = 0; i < steps; ++i)
+        {
+            const F32 a0 = F_TWO_PI * i / steps, a1 = F_TWO_PI * (i + 1) / steps;
+            const LLVector2 d0(std::cos(a0), std::sin(a0)), d1(std::cos(a1), std::sin(a1));
+            triangle(centre + d0 * inner, centre + d0 * outer, centre + d1 * outer);
+            triangle(centre + d0 * inner, centre + d1 * outer, centre + d1 * inner);
+        }
+    }
+
+    LLViewerTexture* shadowSprite()
+    {
+        if (sShadowSprite.isNull())
+        {
+            // A gaussian disc whose falloff is the palette's blur, black with the shadow's alpha.
+            const S32 n = skmap::palette::SHADOW_SPRITE_PX;
+            LLPointer<LLImageRaw> raw = new LLImageRaw(n, n, 4);
+            U8* data = raw->getData();
+            const F32 sigma = n / 6.f;
+            for (S32 y = 0; y < n; ++y)
+            {
+                for (S32 x = 0; x < n; ++x)
+                {
+                    const F32 dx = x + 0.5f - n * 0.5f, dy = y + 0.5f - n * 0.5f;
+                    const F32 a = std::exp(-(dx * dx + dy * dy) / (2.f * sigma * sigma));
+                    U8* p = &data[(y * n + x) * 4];
+                    p[0] = p[1] = p[2] = 0;
+                    p[3] = static_cast<U8>(llclamp(a, 0.f, 1.f) * 255.f);
+                }
+            }
+            sShadowSprite = LLViewerTextureManager::getLocalTexture(raw.get(), false);
+        }
+        return sShadowSprite;
+    }
+
+    void shadow(const LLVector2& centre, F32 radius)
+    {
+        LLViewerTexture* sprite = shadowSprite();
+        if (!sprite)
+        {
+            return;
+        }
+        const F32 r = radius + skmap::palette::SHADOW_BLUR_PX;
+        gGL.getTextureSlot(0)->bindSampled(sprite, ALSamplers::BilinearClamp);
+        colour(skmap::palette::SHADOW);
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(centre.mV[VX] - r, centre.mV[VY] - r);
+        gGL.texCoord2f(1.f, 0.f);
+        gGL.vertex2f(centre.mV[VX] + r, centre.mV[VY] - r);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(centre.mV[VX] + r, centre.mV[VY] + r);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(centre.mV[VX] - r, centre.mV[VY] - r);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(centre.mV[VX] + r, centre.mV[VY] + r);
+        gGL.texCoord2f(0.f, 1.f);
+        gGL.vertex2f(centre.mV[VX] - r, centre.mV[VY] + r);
+        gGL.end();
+        gGL.getTextureSlot(0)->unbind();
+    }
+
+    void releaseTextures()
+    {
+        sShadowSprite = nullptr;
+    }
+}
+
+SKNetMap::SKNetMap(const Params& p)
+    : LLUICtrl(p)
+{
+}
+
+SKNetMap::~SKNetMap()
+{
+    if (hasMouseCapture())
+    {
+        gFocusMgr.setMouseCapture(nullptr);
+    }
+    skmapdraw::releaseTextures();
+}
+
+void SKNetMap::updateView()
+{
+    static LLCachedControl<F32> span(gSavedSettings, "SKMapZoomMeters", skmap::ZOOM_DEFAULT_M);
+    static LLCachedControl<bool> rotate(gSavedSettings, "SKMapRotate", false);
+
+    if (mEaseStart >= 0.0)
+    {
+        const F64 t = (LLFrameTimer::getElapsedSeconds() - mEaseStart) / RECENTRE_S;
+        if (t >= 1.0 || mPanning)
+        {
+            mPan = mPanning ? mPan : LLVector2::zero;
+            mEaseStart = -1.0;
+        }
+        else
+        {
+            const F32 k = static_cast<F32>(1.0 - t);
+            mPan = mEaseFrom * (k * k * (3.f - 2.f * k));
+        }
+    }
+
+    F32 rotation = 0.f;
+    if (rotate)
+    {
+        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+        rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
+    }
+    const LLVector3d centre = gAgent.getPositionGlobal() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
+    mView.set(centre, span, rotation, static_cast<F32>(getRect().getWidth()), static_cast<F32>(getRect().getHeight()));
+}
+
+void SKNetMap::recentre()
+{
+    if (isPanned())
+    {
+        mEaseFrom = mPan;
+        mEaseStart = LLFrameTimer::getElapsedSeconds();
+    }
+}
+
+void SKNetMap::draw()
+{
+    if (!LLWorld::instanceExists() || !gAgent.getRegion())
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    updateView();
+
+    // The classic map's matrix setup: widget pixels, the UI scale and offset applied by hand.
+    gGL.pushMatrix();
+    gGL.pushUIMatrix();
+    const LLVector3 offset = gGL.getUITranslation();
+    const LLVector3 scale = gGL.getUIScale();
+    gGL.loadIdentity();
+    gGL.loadUIIdentity();
+    gGL.scalef(scale.mV[0], scale.mV[1], scale.mV[2]);
+    gGL.translatef(offset.mV[0], offset.mV[1], offset.mV[2]);
+    {
+        LLLocalClipRect clip(getLocalRect());
+        gGL.getTextureSlot(0)->unbind();
+        drawTerrain();
+        drawSelf();
+        drawNorth();
+    }
+    gGL.popMatrix();
+    gGL.popUIMatrix();
+
+    LLUICtrl::draw();
+}
+
+void SKNetMap::drawTerrain()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerTerrain", true);
+    if (!show)
+    {
+        return;
+    }
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        const LLVector3d origin = region->getOriginGlobal();
+        const F64 w = region->getWidth();
+        const LLVector2 sw = mView.toWidget(origin);
+        const LLVector2 se = mView.toWidget(origin + LLVector3d(w, 0.0, 0.0));
+        const LLVector2 ne = mView.toWidget(origin + LLVector3d(w, w, 0.0));
+        const LLVector2 nw = mView.toWidget(origin + LLVector3d(0.0, w, 0.0));
+        const F32 grey = skmap::palette::TERRAIN_GREY;
+        // Dead regions keep the classic map's red tint.
+        const LLColor4 tint = region->isAlive() ? LLColor4(grey, grey, grey, skmap::palette::TERRAIN_ALPHA)
+                                                : LLColor4(grey, grey * 0.5f, grey * 0.5f, skmap::palette::TERRAIN_ALPHA);
+        gGL.getTextureSlot(0)->bindSampled(region->getLand().getSTexture(), ALSamplers::BilinearClamp);
+        gGL.color4fv(tint.mV);
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
+        gGL.texCoord2f(1.f, 0.f);
+        gGL.vertex2f(se.mV[VX], se.mV[VY]);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
+        gGL.texCoord2f(0.f, 0.f);
+        gGL.vertex2f(sw.mV[VX], sw.mV[VY]);
+        gGL.texCoord2f(1.f, 1.f);
+        gGL.vertex2f(ne.mV[VX], ne.mV[VY]);
+        gGL.texCoord2f(0.f, 1.f);
+        gGL.vertex2f(nw.mV[VX], nw.mV[VY]);
+        gGL.end();
+    }
+    gGL.getTextureSlot(0)->unbind();
+}
+
+void SKNetMap::drawSelf()
+{
+    const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
+    // The sight cone follows the camera's horizontal field of view, a fixed size on screen.
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3 at = camera->getAtAxis();
+    LLVector2 ahead = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
+    if (ahead.normVec() > 1e-6f)
+    {
+        const F32 half = std::atan(std::tan(camera->getView() * 0.5f) * camera->getAspect());
+        const F32 heading = std::atan2(ahead.mV[VY], ahead.mV[VX]);
+        const S32 steps = llmax(4, static_cast<S32>(half * 2.f / (F_PI / 24.f)));
+        const LLColor4 inner = toColor4(skmap::palette::SELF_CONE);
+        const LLColor4 outer(inner.mV[0], inner.mV[1], inner.mV[2], 0.f);
+        const F32 r = skmap::palette::SELF_CONE_PX;
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 i = 0; i < steps; ++i)
+        {
+            const F32 a0 = heading - half + 2.f * half * i / steps;
+            const F32 a1 = heading - half + 2.f * half * (i + 1) / steps;
+            gGL.color4fv(inner.mV);
+            gGL.vertex2f(self.mV[VX], self.mV[VY]);
+            gGL.color4fv(outer.mV);
+            gGL.vertex2f(self.mV[VX] + std::cos(a0) * r, self.mV[VY] + std::sin(a0) * r);
+            gGL.vertex2f(self.mV[VX] + std::cos(a1) * r, self.mV[VY] + std::sin(a1) * r);
+        }
+        gGL.end();
+    }
+    skmapdraw::shadow(self, skmap::palette::SELF_DOT_RADIUS_PX);
+    gGL.begin(LLRender::TRIANGLES);
+    skmapdraw::colour(skmap::palette::SELF_DOT);
+    skmapdraw::disc(self, skmap::palette::SELF_DOT_RADIUS_PX);
+    gGL.end();
+}
+
+void SKNetMap::drawNorth()
+{
+    static LLCachedControl<bool> compass(gSavedSettings, "SKMapCompassRing", false);
+    const LLVector2 centre(mView.width() * 0.5f, mView.height() * 0.5f);
+    LLVector2 north = mView.toWidgetOffset(0.f, 1.f);
+    north.normVec();
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const LLColor4 text = toColor4(skmap::palette::NORTH);
+    if (compass)
+    {
+        // A ring round the middle with the four cardinal letters on it.
+        const F32 radius = mView.shortSide() * 0.5f - 8.f;
+        gGL.begin(LLRender::TRIANGLES);
+        skmapdraw::colour(skmap::palette::CHROME_BORDER);
+        skmapdraw::ring(centre, radius, 1.f, 64);
+        gGL.end();
+        static const char* LETTERS[4] = { "N", "E", "S", "W" };
+        for (S32 k = 0; k < 4; ++k)
+        {
+            const F32 ax = k == 1 ? 1.f : k == 3 ? -1.f : 0.f;
+            const F32 ay = k == 0 ? 1.f : k == 2 ? -1.f : 0.f;
+            LLVector2 dir = mView.toWidgetOffset(ax, ay);
+            dir.normVec();
+            const LLVector2 at = centre + dir * radius;
+            font->renderUTF8(LETTERS[k], 0, at.mV[VX], at.mV[VY], text, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                             LLFontGL::DROP_SHADOW);
+        }
+        return;
+    }
+    // One N at the north edge, wherever the rotation puts it.
+    const F32 hx = mView.width() * 0.5f - 8.f, hy = mView.height() * 0.5f - 8.f;
+    const F32 t = llmin(std::fabs(north.mV[VX]) > 1e-4f ? hx / std::fabs(north.mV[VX]) : 1e9f,
+                        std::fabs(north.mV[VY]) > 1e-4f ? hy / std::fabs(north.mV[VY]) : 1e9f);
+    const LLVector2 at = centre + north * t;
+    font->renderUTF8("N", 0, at.mV[VX], at.mV[VY], text, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW);
+}
+
+bool SKNetMap::handleScrollWheel(S32 x, S32 y, LLScrollDelta delta)
+{
+    // Positive clicks zoom out, as the classic map.
+    const F32 span = skmap::zoomByNotches(gSavedSettings.getF32("SKMapZoomMeters"), delta.mPrecise);
+    gSavedSettings.setF32("SKMapZoomMeters", span);
+    return true;
+}
+
+bool SKNetMap::handleMouseDown(S32 x, S32 y, MASK mask)
+{
+    // Only a shift-drag pans; a plain click goes to the floater, which drags it.
+    if (!(mask & MASK_SHIFT))
+    {
+        return false;
+    }
+    gFocusMgr.setMouseCapture(this);
+    mMouseDown.set(x, y);
+    mEaseStart = -1.0;
+    return true;
+}
+
+bool SKNetMap::handleMouseUp(S32 x, S32 y, MASK mask)
+{
+    if (!hasMouseCapture())
+    {
+        return false;
+    }
+    if (mPanning)
+    {
+        // Put the cursor back where the drag began, inside the map.
+        LLRect clip = getLocalRect();
+        clip.stretch(-8);
+        S32 local_x = llclamp(mMouseDown.mX, clip.mLeft, clip.mRight);
+        S32 local_y = llclamp(mMouseDown.mY, clip.mBottom, clip.mTop);
+        LLUI::getInstance()->setMousePositionLocal(this, local_x, local_y);
+        mPanning = false;
+        static LLCachedControl<bool> auto_centre(gSavedSettings, "SKMapAutoCenter", true);
+        if (auto_centre)
+        {
+            recentre();
+        }
+    }
+    gViewerWindow->showCursor();
+    gFocusMgr.setMouseCapture(nullptr);
+    return true;
+}
+
+bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
+{
+    if (hasMouseCapture())
+    {
+        if (mPanning || std::abs(x - mMouseDown.mX) >= MOUSE_DRAG_SLOP || std::abs(y - mMouseDown.mY) >= MOUSE_DRAG_SLOP)
+        {
+            if (!mPanning)
+            {
+                mPanning = true;
+                gViewerWindow->hideCursor();
+            }
+            // The content follows the pointer, so the centre moves the other way.
+            const F32 dx = static_cast<F32>(gViewerWindow->getCurrentMouseDX());
+            const F32 dy = static_cast<F32>(gViewerWindow->getCurrentMouseDY());
+            const LLVector3d now = mView.toGlobal(mView.width() * 0.5f - dx, mView.height() * 0.5f - dy);
+            const LLVector3d agent = gAgent.getPositionGlobal();
+            mPan.set(static_cast<F32>(now.mdV[VX] - agent.mdV[VX]), static_cast<F32>(now.mdV[VY] - agent.mdV[VY]));
+            mView.set(agent + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0), mView.span(), mView.rotation(), mView.width(), mView.height());
+            gViewerWindow->moveCursorToCenter();
+        }
+    }
+    gViewerWindow->setCursor((mask & MASK_SHIFT) || mPanning ? UI_CURSOR_TOOLPAN : UI_CURSOR_CROSS);
+    return true;
+}
+
+bool SKNetMap::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    const LLVector3d pos_global = mView.toGlobal(static_cast<F32>(x), static_cast<F32>(y));
+    const bool teleport = gSavedSettings.getBOOL("DoubleClickTeleport");
+    const bool world_map = gSavedSettings.getBOOL("DoubleClickShowWorldMap");
+    if (teleport || world_map)
+    {
+        // Track the spot unless something is tracked already, as the classic map does.
+        if (!LLTracker::isTracking(nullptr))
+        {
+            if (LLFloaterWorldMap* map = LLFloaterWorldMap::getInstance())
+            {
+                map->trackLocation(pos_global);
+            }
+        }
+    }
+    if (teleport)
+    {
+        gAgent.teleportViaLocationLookAt(pos_global);
+    }
+    else if (world_map)
+    {
+        LLFloaterReg::showInstance("world_map");
+    }
+    return true;
+}
