@@ -1113,6 +1113,8 @@ void SKNetMap::drawReadout()
     lines.push_back(llformat("draw %.2f ms, cells %u, queue %u, uploads %u, cache %.1f MB", mDrawMs, stats.mCells, stats.mQueued,
                              stats.mUploads, stats.mCacheMB));
     lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
+    const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
+    lines.push_back(llformat("probes %u in flight, %u queued", resolver.probesInFlight(), resolver.probesQueued()));
     const LLFontGL* font = LLFontGL::getFontMonospace();
     F32 y = 4.f;
     for (auto it = lines.rbegin(); it != lines.rend(); ++it)

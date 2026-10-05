@@ -93,6 +93,8 @@ public:
     const std::vector<Vehicle>& vehicles() const { return mVehicles; }
     /// Whether the agent stands where it can be hurt, or the debug switch forces it.
     bool combat() const { return mCombat; }
+    /// The ally probes, for the debug readout.
+    const SKMapAllyResolver& resolver() const { return mResolver; }
     /// A local marker at a point, fading over 4 s. Nothing is sent anywhere.
     void addPing(const LLVector3d& pos);
     struct Ping
