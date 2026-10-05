@@ -351,15 +351,40 @@ void SKMapScene::updateSelection()
     const skmap::AgentFloor& floor = mAgent;
     const LLVector3d agent = floor.mPos;
     const std::pair<S32, S32> cell = skmap::indexCell(agent.mdV[VX], agent.mdV[VY]);
-    if (mSelectedScene == &scene && mSelectedCell == cell && mSelectedLayer == floor.mLayer)
+    // Inside or out, from the enclosure a metre over the agent.
+    sknav::EnclosureBucket bucket = sknav::EnclosureBucket::UNKNOWN;
+    if (const std::shared_ptr<const SKNavWorldView> view = SKNavMesh::instance().view())
+    {
+        sknav::Enclosure e;
+        if (view->enclosureAt(agent + LLVector3d(0.0, 0.0, 1.0), e))
+        {
+            bucket = e.mBucket;
+        }
+    }
+    if (mSelectedScene == &scene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket)
     {
         return;
     }
     static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
-    mSelection = skmap::selectLayers(scene, floor, sknav::EnclosureBucket::OUTDOORS, fade);
+    mSelection = skmap::selectLayers(scene, floor, bucket, fade);
     mSelectedScene = &scene;
     mSelectedCell = cell;
     mSelectedLayer = floor.mLayer;
+    mSelectedBucket = bucket;
+    // The cut's bounding box per layer, in global metres, so most cells skip the cell test.
+    mCutBoxes.clear();
+    for (const auto& entry : mSelection.mCut)
+    {
+        LLVector3d lo(DBL_MAX, DBL_MAX, 0.0), hi(-DBL_MAX, -DBL_MAX, 0.0);
+        for (const auto& c : entry.second)
+        {
+            lo.mdV[VX] = llmin(lo.mdV[VX], c.first * (F64)skmap::INDEX_CELL_M);
+            lo.mdV[VY] = llmin(lo.mdV[VY], c.second * (F64)skmap::INDEX_CELL_M);
+            hi.mdV[VX] = llmax(hi.mdV[VX], (c.first + 1) * (F64)skmap::INDEX_CELL_M);
+            hi.mdV[VY] = llmax(hi.mdV[VY], (c.second + 1) * (F64)skmap::INDEX_CELL_M);
+        }
+        mCutBoxes[entry.first] = { lo, hi };
+    }
 }
 
 U64 SKMapScene::bakeKey(S32 layer, const skmap::CellId& cell) const
@@ -516,6 +541,48 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
     gGL.end();
 }
 
+void SKMapScene::drawCellCut(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0,
+                             F32 v0, F32 u1, F32 v1, const LLColor4& tint, S32 layer) const
+{
+    const auto box = mCutBoxes.find(layer);
+    if (box == mCutBoxes.end() || box->second.second.mdV[VX] <= min.mdV[VX] || box->second.first.mdV[VX] >= max.mdV[VX]
+        || box->second.second.mdV[VY] <= min.mdV[VY] || box->second.first.mdV[VY] >= max.mdV[VY])
+    {
+        drawCell(view, texture, min, max, u0, v0, u1, v1, tint);
+        return;
+    }
+    // A part of the cell, its UVs mapped from the cell's.
+    auto part = [&](F64 x0, F64 y0, F64 x1, F64 y1) {
+        if (x1 <= x0 || y1 <= y0)
+        {
+            return;
+        }
+        auto u = [&](F64 x) { return u0 + (u1 - u0) * static_cast<F32>((x - min.mdV[VX]) / (max.mdV[VX] - min.mdV[VX])); };
+        auto v = [&](F64 y) { return v0 + (v1 - v0) * static_cast<F32>((y - min.mdV[VY]) / (max.mdV[VY] - min.mdV[VY])); };
+        drawCell(view, texture, LLVector3d(x0, y0, 0.0), LLVector3d(x1, y1, 0.0), u(x0), v(y0), u(x1), v(y1), tint);
+    };
+    // Up to four rectangles round the cut's box, then 4 m pieces inside it that are not cut.
+    const F64 bx0 = llmax(box->second.first.mdV[VX], min.mdV[VX]), by0 = llmax(box->second.first.mdV[VY], min.mdV[VY]);
+    const F64 bx1 = llmin(box->second.second.mdV[VX], max.mdV[VX]), by1 = llmin(box->second.second.mdV[VY], max.mdV[VY]);
+    part(min.mdV[VX], min.mdV[VY], max.mdV[VX], by0);
+    part(min.mdV[VX], by1, max.mdV[VX], max.mdV[VY]);
+    part(min.mdV[VX], by0, bx0, by1);
+    part(bx1, by0, max.mdV[VX], by1);
+    const auto& cut = mSelection.mCut.at(layer);
+    const F64 step = skmap::INDEX_CELL_M;
+    for (F64 y = by0; y < by1 - 1e-6; y += step)
+    {
+        for (F64 x = bx0; x < bx1 - 1e-6; x += step)
+        {
+            const auto c = skmap::indexCell(x + 0.5 * step, y + 0.5 * step);
+            if (!cut.count(c))
+            {
+                part(x, y, llmin(x + step, bx1), llmin(y + step, by1));
+            }
+        }
+    }
+}
+
 void SKMapScene::drawFinerBakes(const skmap::MapView& view, S32 layer, const skmap::CellId& cell, const LLColor4& tint, F64 now)
 {
     const S32 tier = cell.mTier - 1;
@@ -538,7 +605,7 @@ void SKMapScene::drawFinerBakes(const skmap::MapView& view, S32 layer, const skm
             continue;
         }
         it->second.mLastDrawn = now;
-        drawCell(view, it->second.mTexture, child.minCorner(), child.maxCorner(), 0.f, 0.f, 1.f, 1.f, tint);
+        drawCellCut(view, it->second.mTexture, child.minCorner(), child.maxCorner(), 0.f, 0.f, 1.f, 1.f, tint, layer);
     }
 }
 
@@ -615,7 +682,7 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
             if (it != mBakes.end())
             {
                 it->second.mLastDrawn = now;
-                drawCell(view, it->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint);
+                drawCellCut(view, it->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint, l);
                 mStats.mCells++;
                 continue;
             }
@@ -634,9 +701,9 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
                 const LLVector3d amin = up.minCorner();
                 const F64 size = skmap::tierCellSize(t);
                 ait->second.mLastDrawn = now;
-                drawCell(view, ait->second.mTexture, cmin, cmax, static_cast<F32>((cmin.mdV[VX] - amin.mdV[VX]) / size),
-                         static_cast<F32>((cmin.mdV[VY] - amin.mdV[VY]) / size), static_cast<F32>((cmax.mdV[VX] - amin.mdV[VX]) / size),
-                         static_cast<F32>((cmax.mdV[VY] - amin.mdV[VY]) / size), tint);
+                drawCellCut(view, ait->second.mTexture, cmin, cmax, static_cast<F32>((cmin.mdV[VX] - amin.mdV[VX]) / size),
+                            static_cast<F32>((cmin.mdV[VY] - amin.mdV[VY]) / size), static_cast<F32>((cmax.mdV[VX] - amin.mdV[VX]) / size),
+                            static_cast<F32>((cmax.mdV[VY] - amin.mdV[VY]) / size), tint, l);
                 covered = true;
             }
             if (!covered)

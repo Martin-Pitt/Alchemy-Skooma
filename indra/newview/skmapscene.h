@@ -123,6 +123,9 @@ private:
     /// Draw one layer's cell texture over a world rectangle, 2 x 2 sub-quads with per-vertex colour.
     void drawCell(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                   F32 u1, F32 v1, const LLColor4& tint) const;
+    /// The same, leaving out the layer's cut cells.
+    void drawCellCut(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
+                     F32 u1, F32 v1, const LLColor4& tint, S32 layer) const;
     /// Draw the cached bakes of a cell's children, or failing those their children, down two tiers.
     void drawFinerBakes(const skmap::MapView& view, S32 layer, const skmap::CellId& cell, const LLColor4& tint, F64 now);
 
@@ -173,7 +176,8 @@ private:
     const skmap::Scene* mSelectedScene = nullptr;
     std::pair<S32, S32> mSelectedCell = { 0, 0 };
     S32 mSelectedLayer = -2;
-    F32 mSelectedZ = 0.f;
+    sknav::EnclosureBucket mSelectedBucket = sknav::EnclosureBucket::UNKNOWN;
+    std::map<S32, std::pair<LLVector3d, LLVector3d>> mCutBoxes;
 };
 
 #endif // SK_MAPSCENE_H
