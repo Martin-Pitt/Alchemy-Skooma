@@ -296,10 +296,17 @@ void SKNetMap::draw()
         drawNorth();
         drawChromeFrame();
     }
-    // Tags sit wherever there is room in the window, over the map or the world.
-    drawTags();
     gGL.popMatrix();
     gGL.popUIMatrix();
+    // Text after the classic block: LLFontGL adds the view's origin itself, so inside it every
+    // glyph would land offset by the widget's own position.
+    {
+        LLLocalClipRect clip(getLocalRect());
+        drawPeopleCodes();
+        drawNorthText();
+    }
+    // Tags sit wherever there is room in the window, over the map or the world.
+    drawTags();
     mDrawMs = draw_timer.getElapsedTimeF32() * 1000.f;
     drawReadout();
 
@@ -676,7 +683,6 @@ void SKNetMap::drawPeople()
 {
     static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
     static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
-    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     const F32 FONT_PX = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
@@ -725,13 +731,31 @@ void SKNetMap::drawPeople()
             skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
         }
         gGL.end();
+    }
+}
+
+void SKNetMap::drawPeopleCodes()
+{
+    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+    static LLCachedControl<bool> labels(gSavedSettings, "SKMapMarkerLabels", true);
+    if (!labels)
+    {
+        return;
+    }
+    const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
+    const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    for (size_t i = 0; i < people.size() && i < mDots.size(); ++i)
+    {
+        const SKMapPeople::Person& p = people[i];
+        const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         // The chevron replaces the code on the dot; the tag keeps it.
-        if (!chevron && labels && ally_coded && !p.mCode.empty())
+        if (chevron || p.mVisibility != skmap::Visibility::DOT_CODED || p.mCode.empty())
         {
-            const LLColor4 ink(skmap::palette::CODE_INK.mR, skmap::palette::CODE_INK.mG, skmap::palette::CODE_INK.mB, 1.f);
-            codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
-                                   LLFontGL::NO_SHADOW);
+            continue;
         }
+        const LLVector2 at = mDots[i].mPos;
+        codeFont()->renderUTF8(p.mCode, 0, at.mV[VX], at.mV[VY], ink, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL,
+                               LLFontGL::NO_SHADOW);
     }
 }
 
@@ -1034,6 +1058,20 @@ void SKNetMap::drawTracking()
 void SKNetMap::drawNorth()
 {
     static LLCachedControl<bool> compass(gSavedSettings, "SKMapCompassRing", false);
+    if (compass)
+    {
+        // A ring round the middle; drawNorthText puts the four cardinal letters on it.
+        const LLVector2 centre(mView.width() * 0.5f, mView.height() * 0.5f);
+        gGL.begin(LLRender::TRIANGLES);
+        skmapdraw::colour(skmap::palette::CHROME_BORDER);
+        skmapdraw::ring(centre, mView.shortSide() * 0.5f - 8.f, 1.f, 64);
+        gGL.end();
+    }
+}
+
+void SKNetMap::drawNorthText()
+{
+    static LLCachedControl<bool> compass(gSavedSettings, "SKMapCompassRing", false);
     const LLVector2 centre(mView.width() * 0.5f, mView.height() * 0.5f);
     LLVector2 north = mView.toWidgetOffset(0.f, 1.f);
     north.normVec();
@@ -1041,12 +1079,7 @@ void SKNetMap::drawNorth()
     const LLColor4 text = toColor4(skmap::palette::NORTH);
     if (compass)
     {
-        // A ring round the middle with the four cardinal letters on it.
         const F32 radius = mView.shortSide() * 0.5f - 8.f;
-        gGL.begin(LLRender::TRIANGLES);
-        skmapdraw::colour(skmap::palette::CHROME_BORDER);
-        skmapdraw::ring(centre, radius, 1.f, 64);
-        gGL.end();
         static const char* LETTERS[4] = { "N", "E", "S", "W" };
         for (S32 k = 0; k < 4; ++k)
         {

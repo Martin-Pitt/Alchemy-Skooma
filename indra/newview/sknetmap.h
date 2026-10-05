@@ -121,6 +121,8 @@ private:
     void drawSelf();
     void drawSelfExtras();
     void drawPeople();
+    /// The allies' codes on their dots, drawn after the classic matrix block as all text is.
+    void drawPeopleCodes();
     void drawVehicles();
     void drawPings();
     void drawEvents();
@@ -131,6 +133,8 @@ private:
     void drawTracking();
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();
+    /// The N glyph or the compass letters, drawn after the classic matrix block.
+    void drawNorthText();
     void drawChromeTint();
     void drawChromeFrame();
     void drawReadout();
