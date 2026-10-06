@@ -412,12 +412,18 @@ void SKMapScene::updateSelection()
             bucket = e.mBucket;
         }
     }
-    if (mSelectedScene.lock() == mScene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket)
+    // The selection also reads the agent's height and the fade: flying straight up keeps the cell and finds no floor.
+    static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
+    const F32 za = floor.mFound ? floor.mZ : static_cast<F32>(agent.mdV[VZ]);
+    const S32 z_step = ll_round(za * 2.f);
+    if (mSelectedScene.lock() == mScene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket
+        && mSelectedZ == z_step && mSelectedFade == fade)
     {
         return;
     }
-    static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
     mSelection = skmap::selectLayers(scene, floor, bucket, fade);
+    mSelectedZ = z_step;
+    mSelectedFade = fade;
     mSelectedScene = mScene;
     mSelectedCell = cell;
     mSelectedLayer = floor.mLayer;

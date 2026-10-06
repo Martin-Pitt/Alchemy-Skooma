@@ -244,6 +244,8 @@ private:
     std::pair<S32, S32> mSelectedCell = { 0, 0 };
     S32 mSelectedLayer = -2;
     sknav::EnclosureBucket mSelectedBucket = sknav::EnclosureBucket::UNKNOWN;
+    S32 mSelectedZ = 0;                     ///< the agent's height in 0.5 m steps
+    F32 mSelectedFade = -1.f;
     std::map<S32, std::pair<LLVector3d, LLVector3d>> mCutBoxes;
     std::map<S32, U64> mCutHashes;          ///< per cut layer, a hash of its cut cells
 };
