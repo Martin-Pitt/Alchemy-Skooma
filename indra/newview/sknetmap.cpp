@@ -156,17 +156,10 @@ namespace skmapdraw
         return sShadowSprite;
     }
 
-    void shadow(const LLVector2& centre, F32 radius)
+    /// One shadow quad, inside a TRIANGLES batch with the sprite bound.
+    void shadowQuad(const LLVector2& centre, F32 radius)
     {
-        LLViewerTexture* sprite = shadowSprite();
-        if (!sprite)
-        {
-            return;
-        }
         const F32 r = radius + skmap::palette::SHADOW_BLUR_PX;
-        gGL.getTextureSlot(0)->bindSampled(sprite, ALSamplers::BilinearClamp);
-        colour(skmap::palette::SHADOW);
-        gGL.begin(LLRender::TRIANGLES);
         gGL.texCoord2f(0.f, 0.f);
         gGL.vertex2f(centre.mV[VX] - r, centre.mV[VY] - r);
         gGL.texCoord2f(1.f, 0.f);
@@ -179,8 +172,28 @@ namespace skmapdraw
         gGL.vertex2f(centre.mV[VX] + r, centre.mV[VY] + r);
         gGL.texCoord2f(0.f, 1.f);
         gGL.vertex2f(centre.mV[VX] - r, centre.mV[VY] + r);
+    }
+
+    /// Every shadow in one batch: one bind, and no shadow darkens a disc drawn before it.
+    template<typename Each>
+    void shadows(Each&& each)
+    {
+        LLViewerTexture* sprite = shadowSprite();
+        if (!sprite)
+        {
+            return;
+        }
+        gGL.getTextureSlot(0)->bindSampled(sprite, ALSamplers::BilinearClamp);
+        colour(skmap::palette::SHADOW);
+        gGL.begin(LLRender::TRIANGLES);
+        each();
         gGL.end();
         gGL.getTextureSlot(0)->unbind();
+    }
+
+    void shadow(const LLVector2& centre, F32 radius)
+    {
+        shadows([&]() { shadowQuad(centre, radius); });
     }
 
     void releaseTextures()
@@ -694,6 +707,16 @@ void SKNetMap::drawPeople()
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     const F32 FONT_PX = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
+    skmapdraw::shadows([&]() {
+        for (const DrawnDot& d : mDots)
+        {
+            if (d.mPerson < people.size())
+            {
+                skmapdraw::shadowQuad(d.mPos, d.mRadius);
+            }
+        }
+    });
+    gGL.begin(LLRender::TRIANGLES);
     for (const DrawnDot& d : mDots)
     {
         if (d.mPerson >= people.size())
@@ -704,8 +727,6 @@ void SKNetMap::drawPeople()
         const LLVector2 at = d.mPos;
         const F32 radius = d.mRadius;
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
-        skmapdraw::shadow(at, radius);
-        gGL.begin(LLRender::TRIANGLES);
         // Allies in combat are cyan; everyone else keeps the general colours.
         const bool ally_coded = p.mVisibility == skmap::Visibility::DOT_CODED;
         if (ally_coded)
@@ -737,8 +758,8 @@ void SKNetMap::drawPeople()
             skmapdraw::line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
             skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
         }
-        gGL.end();
     }
+    gGL.end();
 }
 
 void SKNetMap::drawPeopleCodes()
