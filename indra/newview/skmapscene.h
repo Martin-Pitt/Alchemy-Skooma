@@ -139,6 +139,8 @@ private:
     /// The ribbon parameters for this frame: the zoom bucket, the eye height and the toggles.
     skmap::RibbonParams ribbonParams(const skmap::MapView& view) const;
     static U64 ribbonKey(U64 mark_hash, const skmap::RibbonParams& params);
+    /// What a layer's lines are built from: its mark hash, and its cut when it has one.
+    U64 ribbonIdentity(S32 layer) const;
     /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
     void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
     /// Draw a buffer of scene-local metres built for the scene whose origin is given.
@@ -156,7 +158,7 @@ private:
     {
         S32 mLayer = -1;
         U64 mKey = 0;
-        U64 mMarkHash = 0;
+        U64 mMarkHash = 0;                  ///< the ribbon identity: marks, and the cut if any
         skmap::RibbonParams mParams;
     };
     struct RibbonResult
@@ -209,7 +211,7 @@ private:
     std::deque<BakeResult> mUploads;
 
     std::map<U64, RibbonBuffer> mRibbons;
-    std::map<U64, U64> mRibbonLatest;       ///< mark hash -> the key last built for it
+    std::map<U64, U64> mRibbonLatest;       ///< ribbon identity -> the key last built for it
     std::vector<RibbonRequest> mRibbonWanted;
     bool mRibbonInFlight = false;
     std::deque<RibbonResult> mRibbonUploads;
@@ -228,6 +230,7 @@ private:
     S32 mSelectedLayer = -2;
     sknav::EnclosureBucket mSelectedBucket = sknav::EnclosureBucket::UNKNOWN;
     std::map<S32, std::pair<LLVector3d, LLVector3d>> mCutBoxes;
+    std::map<S32, U64> mCutHashes;          ///< per cut layer, a hash of its cut cells
 };
 
 #endif // SK_MAPSCENE_H

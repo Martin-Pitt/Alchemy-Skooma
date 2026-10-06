@@ -381,8 +381,19 @@ void SKMapScene::updateSelection()
     mSelectedBucket = bucket;
     // The cut's bounding box per layer, in global metres, so most cells skip the cell test.
     mCutBoxes.clear();
+    mCutHashes.clear();
     for (const auto& entry : mSelection.mCut)
     {
+        if (entry.second.empty())
+        {
+            continue;
+        }
+        U64 hash = sknav::SEED;
+        for (const auto& c : entry.second)
+        {
+            hash = sknav::mix(sknav::mix(hash, static_cast<U32>(c.first)), static_cast<U32>(c.second));
+        }
+        mCutHashes[entry.first] = hash;
         LLVector3d lo(DBL_MAX, DBL_MAX, 0.0), hi(-DBL_MAX, -DBL_MAX, 0.0);
         for (const auto& c : entry.second)
         {
@@ -806,13 +817,21 @@ void SKMapScene::drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, cons
     gGL.getTextureSlot(0)->unbind();
 }
 
+U64 SKMapScene::ribbonIdentity(S32 layer) const
+{
+    const U64 marks = mScene->mMarkHashes[layer];
+    // A cut layer has lines of its own, never stood in for by its uncut ones.
+    const auto cut = mCutHashes.find(layer);
+    return cut != mCutHashes.end() ? sknav::mix(marks, cut->second) : marks;
+}
+
 void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params)
 {
     if (layer < 0 || layer >= static_cast<S32>(mScene->mMarkHashes.size()))
     {
         return;
     }
-    const U64 marks = mScene->mMarkHashes[layer];
+    const U64 marks = ribbonIdentity(layer);
     const U64 key = ribbonKey(marks, params);
     const F64 now = LLFrameTimer::getElapsedSeconds();
     auto it = mRibbons.find(key);
@@ -842,13 +861,19 @@ void SKMapScene::postRibbons()
     {
         const skmap::ScenePtr scene = mScene;
         const RibbonRequest request = mRibbonWanted.front();
+        // The cut as selected this frame, which is what the request's identity hashed.
+        std::shared_ptr<const skmap::CutCells> cut;
+        if (mCutHashes.count(request.mLayer))
+        {
+            cut = std::make_shared<const skmap::CutCells>(mSelection.mCut.at(request.mLayer));
+        }
         std::weak_ptr<bool> alive = mAlive;
-        const bool posted = work->post([this, scene, request, alive]() {
+        const bool posted = work->post([this, scene, request, cut, alive]() {
             auto result = std::make_shared<RibbonResult>();
             result->mKey = request.mKey;
             result->mMarkHash = request.mMarkHash;
             result->mOrigin = scene->mOrigin;
-            skmap::buildLayerRibbons(*scene, request.mLayer, request.mParams, result->mRibbons);
+            skmap::buildLayerRibbons(*scene, request.mLayer, request.mParams, result->mRibbons, cut.get());
             LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, result, alive]() {
                 if (!alive.expired())
                 {

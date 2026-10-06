@@ -29,10 +29,15 @@
 
 #include "v4coloru.h"
 
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace skmap
 {
+    /// Global 4 m cells whose marks are left out: a storey's cut over the interior.
+    typedef std::set<std::pair<S32, S32>> CutCells;
+
     /// What a layer's ribbons are built for. Widths are screen pixels times mMpp.
     struct RibbonParams
     {
@@ -71,11 +76,11 @@ namespace skmap
     constexpr F32 MERGE_GAP_M = 0.2f;
 
     /// The layer's marks merged into runs, with the length floor applied to walls, ledges,
-    /// overhangs and drop edges.
-    void mergeMarks(const Scene& scene, S32 layer, const RibbonParams& params, std::vector<MarkRun>& out);
+    /// overhangs and drop edges. A mark whose midpoint (a glyph's anchor) lies in a cut cell is left out.
+    void mergeMarks(const Scene& scene, S32 layer, const RibbonParams& params, std::vector<MarkRun>& out, const CutCells* cut = nullptr);
 
     /// One layer's ribbons: cover, ledges, drops, overhangs, doors and glyphs.
-    void buildLayerRibbons(const Scene& scene, S32 layer, const RibbonParams& params, Ribbons& out);
+    void buildLayerRibbons(const Scene& scene, S32 layer, const RibbonParams& params, Ribbons& out, const CutCells* cut = nullptr);
     /// The region and void edges: void solid, region dashed.
     void buildBoundaryRibbons(const Scene& scene, const RibbonParams& params, Ribbons& out);
 }

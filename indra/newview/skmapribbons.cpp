@@ -255,7 +255,7 @@ namespace skmap
         }
     }
 
-    void mergeMarks(const Scene& scene, S32 layer, const RibbonParams& params, std::vector<MarkRun>& out)
+    void mergeMarks(const Scene& scene, S32 layer, const RibbonParams& params, std::vector<MarkRun>& out, const CutCells* cut)
     {
         out.clear();
         if (layer < 0 || layer >= static_cast<S32>(scene.mLayers.size()))
@@ -268,6 +268,14 @@ namespace skmap
             if ((coverToggle(mark.mKind) && !params.mCover) || (doorToggle(mark.mKind) && !params.mDoors))
             {
                 continue;
+            }
+            if (cut && !cut->empty())
+            {
+                const LLVector2 at = lineKind(mark.mKind) ? (mark.mA + mark.mB) * 0.5f : mark.mA;
+                if (cut->count(indexCell(scene.mOrigin.mdV[VX] + at.mV[VX], scene.mOrigin.mdV[VY] + at.mV[VY])))
+                {
+                    continue;
+                }
             }
             MarkRun run;
             run.mKind = mark.mKind;
@@ -287,11 +295,11 @@ namespace skmap
                   out.end());
     }
 
-    void buildLayerRibbons(const Scene& scene, S32 layer, const RibbonParams& params, Ribbons& out)
+    void buildLayerRibbons(const Scene& scene, S32 layer, const RibbonParams& params, Ribbons& out, const CutCells* cut)
     {
         out.clear();
         std::vector<MarkRun> runs;
-        mergeMarks(scene, layer, params, runs);
+        mergeMarks(scene, layer, params, runs, cut);
         Writer w { out };
         const F32 mpp = params.mMpp;
         for (const MarkRun& run : runs)

@@ -186,4 +186,37 @@ namespace tut
         ensure("something drawn", !a.mVerts.empty());
         ensure("identical", a.mVerts == b.mVerts && a.mColours == b.mColours);
     }
+
+    // A cut cell drops the marks whose midpoint, or a glyph's anchor, lies in it; the rest stay.
+    template<> template<>
+    void skmapribbons_object::test<7>()
+    {
+        skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 2.f, 1.f, 6.f, 1.f), mark(skmap::MarkKind::LADDER, 20.f, 20.f, 20.f, 20.f),
+                                 mark(skmap::MarkKind::LEDGE, 3.f, 9.f, 9.f, 9.f) });
+        s.mOrigin.set(256.0, 512.0, 0.0);
+        std::vector<skmap::MarkRun> all, kept;
+        skmap::mergeMarks(s, 0, params(0.05f), all);
+        ensure_equals("three runs uncut", all.size(), static_cast<size_t>(3));
+
+        // The wall's midpoint is global (260, 513), cell (65, 128); the ladder is at (276, 532), cell (69, 133).
+        const skmap::CutCells wall_cut = { { 65, 128 } };
+        skmap::mergeMarks(s, 0, params(0.05f), kept, &wall_cut);
+        ensure_equals("the wall goes", kept.size(), static_cast<size_t>(2));
+        for (const skmap::MarkRun& r : kept)
+        {
+            ensure("no wall left", r.mKind != skmap::MarkKind::WALL);
+        }
+        const skmap::CutCells glyph_cut = { { 69, 133 } };
+        skmap::mergeMarks(s, 0, params(0.05f), kept, &glyph_cut);
+        ensure_equals("the ladder goes", kept.size(), static_cast<size_t>(2));
+
+        // An empty cut, or one elsewhere, builds what no cut builds.
+        skmap::Ribbons uncut, none, elsewhere;
+        const skmap::CutCells empty, distant = { { 0, 0 } };
+        skmap::buildLayerRibbons(s, 0, params(0.05f), uncut);
+        skmap::buildLayerRibbons(s, 0, params(0.05f), none, &empty);
+        skmap::buildLayerRibbons(s, 0, params(0.05f), elsewhere, &distant);
+        ensure("empty cut is no cut", uncut.mVerts == none.mVerts);
+        ensure("a far cut changes nothing", uncut.mVerts == elsewhere.mVerts);
+    }
 }
