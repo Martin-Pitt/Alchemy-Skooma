@@ -214,7 +214,7 @@ private:
 
     std::map<U64, RibbonBuffer> mRibbons;
     std::map<U64, U64> mRibbonLatest;       ///< ribbon identity -> the key last built for it
-    /// A layer of the previous scene that drew lines, kept so its successor can draw them while its own build.
+    /// A layer of the previous scene that drew lines, kept so its successor can draw them while its own builds.
     struct CarrySource
     {
         bool mGround = false;

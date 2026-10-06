@@ -47,6 +47,7 @@
 #include "llviewertexture.h"
 #include "skmappalette.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cstring>
@@ -323,9 +324,9 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
         return;     // superseded
     }
     // The layers that drew lines hand them on: layer indices do not survive a new scene, footprints do.
+    mCarrySources.clear();
     if (mScene && !mShownRibbons.empty())
     {
-        mCarrySources.clear();
         for (const auto& shown : mShownRibbons)
         {
             const skmap::SceneLayer& layer = mScene->mLayers[shown.first];
@@ -891,7 +892,9 @@ U64 SKMapScene::carriedRibbon(S32 layer)
     size_t best_hits = 0;
     for (const CarrySource& source : mCarrySources)
     {
-        if (source.mGround != here.mGround || source.mCut != cut_hash
+        // A layer that split hands its lines to one successor, not to each.
+        const bool claimed = std::any_of(mCarried.begin(), mCarried.end(), [&](const auto& c) { return c.second == source.mKey; });
+        if (claimed || source.mGround != here.mGround || source.mCut != cut_hash
             || (!here.mGround && std::fabs(source.mBaseZ - here.mBaseZ) > skmap::LAYER_GAP_M))
         {
             continue;
