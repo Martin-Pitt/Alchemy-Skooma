@@ -198,8 +198,8 @@ namespace tut
         skmap::mergeMarks(s, 0, params(0.05f), all);
         ensure_equals("three runs uncut", all.size(), static_cast<size_t>(3));
 
-        // The wall's midpoint is global (260, 513), cell (65, 128); the ladder is at (276, 532), cell (69, 133).
-        const skmap::CutCells wall_cut = { { 65, 128 } };
+        // The wall spans global x 258-262 at y 513, cells (64, 128) and (65, 128); the ladder is at (276, 532), cell (69, 133).
+        const skmap::CutCells wall_cut = { { 64, 128 }, { 65, 128 } };
         skmap::mergeMarks(s, 0, params(0.05f), kept, &wall_cut);
         ensure_equals("the wall goes", kept.size(), static_cast<size_t>(2));
         for (const skmap::MarkRun& r : kept)
@@ -218,5 +218,18 @@ namespace tut
         skmap::buildLayerRibbons(s, 0, params(0.05f), elsewhere, &distant);
         ensure("empty cut is no cut", uncut.mVerts == none.mVerts);
         ensure("a far cut changes nothing", uncut.mVerts == elsewhere.mVerts);
+
+        // A long wall loses only the cells the cut covers, global x 256-268 over cells 64-66.
+        skmap::Scene w = scene({ mark(skmap::MarkKind::WALL, 0.f, 1.f, 12.f, 1.f) });
+        w.mOrigin.set(256.0, 512.0, 0.0);
+        const skmap::CutCells middle = { { 65, 128 } };
+        skmap::mergeMarks(w, 0, params(0.05f), kept, &middle);
+        ensure_equals("both ends stay", kept.size(), static_cast<size_t>(2));
+        ensure("west end", std::fabs(kept[0].mA.mV[VX]) < 1e-4f && std::fabs(kept[0].mB.mV[VX] - 4.f) < 1e-4f);
+        ensure("east end", std::fabs(kept[1].mA.mV[VX] - 8.f) < 1e-4f && std::fabs(kept[1].mB.mV[VX] - 12.f) < 1e-4f);
+        const skmap::CutCells west = { { 64, 128 } };
+        skmap::mergeMarks(w, 0, params(0.05f), kept, &west);
+        ensure_equals("the uncut pieces join again", kept.size(), static_cast<size_t>(1));
+        ensure("from the cut's edge", std::fabs(kept[0].mA.mV[VX] - 4.f) < 1e-4f && std::fabs(kept[0].mB.mV[VX] - 12.f) < 1e-4f);
     }
 }

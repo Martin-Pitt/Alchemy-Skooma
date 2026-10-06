@@ -76,7 +76,7 @@ namespace skmap
     constexpr F32 MERGE_GAP_M = 0.2f;
 
     /// The layer's marks merged into runs, with the length floor applied to walls, ledges,
-    /// overhangs and drop edges. A mark whose midpoint (a glyph's anchor) lies in a cut cell is left out.
+    /// overhangs and drop edges. A line loses the parts that lie in cut cells, a glyph goes when its anchor does.
     void mergeMarks(const Scene& scene, S32 layer, const RibbonParams& params, std::vector<MarkRun>& out, const CutCells* cut = nullptr);
 
     /// One layer's ribbons: cover, ledges, drops, overhangs, doors and glyphs.

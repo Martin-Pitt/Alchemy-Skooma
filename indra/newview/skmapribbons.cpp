@@ -269,14 +269,6 @@ namespace skmap
             {
                 continue;
             }
-            if (cut && !cut->empty())
-            {
-                const LLVector2 at = lineKind(mark.mKind) ? (mark.mA + mark.mB) * 0.5f : mark.mA;
-                if (cut->count(indexCell(scene.mOrigin.mdV[VX] + at.mV[VX], scene.mOrigin.mdV[VY] + at.mV[VY])))
-                {
-                    continue;
-                }
-            }
             MarkRun run;
             run.mKind = mark.mKind;
             run.mA = mark.mA;
@@ -286,6 +278,61 @@ namespace skmap
             if (mark.mKind == MarkKind::WALL)
             {
                 run.mCover = sknav::coverClass(mark.mHeight, params.mEye, params.mClimb, params.mPeek);
+            }
+            if (cut && !cut->empty())
+            {
+                auto in_cut = [&](const LLVector2& p) {
+                    return cut->count(indexCell(scene.mOrigin.mdV[VX] + p.mV[VX], scene.mOrigin.mdV[VY] + p.mV[VY])) > 0;
+                };
+                if (!lineKind(mark.mKind))
+                {
+                    if (!in_cut(mark.mA))
+                    {
+                        out.push_back(run);
+                    }
+                    continue;
+                }
+                // A line is split at the global 4 m cell lines, so the cut drops exactly the cells it covers.
+                const LLVector2 d = mark.mB - mark.mA;
+                std::vector<F32> ts = { 0.f, 1.f };
+                for (S32 axis : { VX, VY })
+                {
+                    if (std::fabs(d.mV[axis]) < 1e-6f)
+                    {
+                        continue;
+                    }
+                    const F64 g0 = scene.mOrigin.mdV[axis] + mark.mA.mV[axis];
+                    const F64 g1 = scene.mOrigin.mdV[axis] + mark.mB.mV[axis];
+                    const F64 hi = llmax(g0, g1);
+                    for (F64 g = (std::floor(llmin(g0, g1) / INDEX_CELL_M) + 1.0) * INDEX_CELL_M; g < hi; g += INDEX_CELL_M)
+                    {
+                        ts.push_back(static_cast<F32>((g - g0) / (g1 - g0)));
+                    }
+                }
+                std::sort(ts.begin(), ts.end());
+                std::vector<MarkRun> pieces;
+                bool dropped = false;
+                for (size_t i = 0; i + 1 < ts.size(); ++i)
+                {
+                    if (ts[i + 1] - ts[i] < 1e-6f)
+                    {
+                        continue;
+                    }
+                    if (in_cut(mark.mA + d * ((ts[i] + ts[i + 1]) * 0.5f)))
+                    {
+                        dropped = true;
+                        continue;
+                    }
+                    MarkRun piece = run;
+                    piece.mA = ts[i] > 0.f ? mark.mA + d * ts[i] : mark.mA;
+                    piece.mB = ts[i + 1] < 1.f ? mark.mA + d * ts[i + 1] : mark.mB;
+                    pieces.push_back(piece);
+                }
+                if (dropped)
+                {
+                    out.insert(out.end(), pieces.begin(), pieces.end());
+                    continue;
+                }
             }
             out.push_back(run);
         }
