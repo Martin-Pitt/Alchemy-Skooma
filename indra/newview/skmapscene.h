@@ -234,6 +234,7 @@ private:
     LLPointer<LLVertexBuffer> mBoundaryBuffer;
     LLVector3d mBoundaryOrigin;
     U64 mBoundaryKey = 0;
+    U64 mBoundaryHash = 0;                  ///< the scene's region and void edges, in global centimetres
 
     skmap::AgentFloor mAgent;
     U32 mAgentFrame = 0;            ///< the frame count mAgent was last refreshed in

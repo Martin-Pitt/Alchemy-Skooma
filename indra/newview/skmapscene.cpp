@@ -350,6 +350,19 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     mShownRibbons.clear();
     mCarried.clear();
     mScene = scene;
+    // Global, so a box step that keeps the edges keeps their buffer.
+    U64 boundaries = sknav::SEED;
+    auto cm = [](F64 metres) { return static_cast<U64>(std::llround(metres * 100.0)); };
+    for (const skmap::LineMark& mark : scene->mBoundaries)
+    {
+        boundaries = sknav::mix(boundaries, static_cast<U64>(mark.mKind));
+        for (const LLVector2& p : { mark.mA, mark.mB })
+        {
+            boundaries = sknav::mix(boundaries, cm(scene->mOrigin.mdV[VX] + p.mV[VX]));
+            boundaries = sknav::mix(boundaries, cm(scene->mOrigin.mdV[VY] + p.mV[VY]));
+        }
+    }
+    mBoundaryHash = boundaries;
     mStats.mJobs++;
     mStats.mJobMs = millis;
     mStats.mPolys = static_cast<U32>(scene->mPolys.size());
@@ -1084,13 +1097,13 @@ void SKMapScene::drawVoid(const skmap::MapView& view)
     gGL.end();
     gGL.getTextureSlot(0)->unbind();
 
-    // The region and void edges, rebuilt when the scene or the zoom bucket moves.
+    // The region and void edges, rebuilt when they or the zoom bucket move, not on every landing.
     if (!mScene)
     {
         return;
     }
     skmap::RibbonParams params = ribbonParams(view);
-    const U64 key = sknav::mix(static_cast<U64>(mStats.mJobs), static_cast<U64>(skmap::zoomBucket(params.mMpp)));
+    const U64 key = sknav::mix(mBoundaryHash, static_cast<U64>(skmap::zoomBucket(params.mMpp)));
     if (key != mBoundaryKey)
     {
         mBoundaryKey = key;
