@@ -935,6 +935,15 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
                 it = mRibbons.find(carried);
             }
         }
+        // A cut that moved keeps the lines of the layer's previous cut; an uncut layer never stands in for a cut one.
+        if (it == mRibbons.end())
+        {
+            const auto shown = mShownRibbons.find(layer);
+            if (shown != mShownRibbons.end() && shown->second.second != 0)
+            {
+                it = mRibbons.find(shown->second.first);
+            }
+        }
     }
     if (it != mRibbons.end())
     {
