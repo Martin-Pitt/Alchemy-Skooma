@@ -954,11 +954,45 @@ void LLReflectionMapManager::invalidateNavRoomsProbe(LLReflectionMap* probe)
 void LLReflectionMapManager::updateCensusPlacement()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census placement");
-    const auto census = SKWorldCensus::instance().snapshot();
+    auto census = SKWorldCensus::instance().snapshot();
     if (mRenderReflectionProbeLevel < 2)
     {
         return;
     }
+    // Publish complete immutable indexes; never build or wait in the render loop.
+    if (!mSolidWorkers)
+    {
+        mSolidWorkers = std::make_unique<LL::ThreadPool>("ProbeSolids", 1);
+        mSolidWorkers->start();
+    }
+    auto workers = LL::WorkQueue::getInstance("ProbeSolids");
+    if (mSolidJob.valid() && mSolidJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        auto retired = std::move(mSolids);
+        mSolids = mSolidJob.get();
+        mSolidsCensus = std::move(mSolidJobCensus);
+        mNavRoomsDirty = true;
+        auto held = std::make_shared<std::shared_ptr<sknav::SolidLattice>>(std::move(retired));
+        workers->post([held]() { held->reset(); });
+    }
+    if (!mSolidJob.valid() && census != mSolidsCensus)
+    {
+        auto task = std::make_shared<std::packaged_task<std::shared_ptr<sknav::SolidLattice>()>>([census]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census lattice worker");
+            auto lattice = std::make_shared<sknav::SolidLattice>();
+            if (census) lattice->rebuild(census->mRecords);
+            return lattice;
+        });
+        auto future = task->get_future();
+        if (workers->tryPost([task]() { (*task)(); }))
+        {
+            mSolidJob = std::move(future);
+            mSolidJobCensus = census;
+        }
+    }
+    // Stamp tests with the snapshot the index actually describes.
+    census = mSolidsCensus;
     const bool refresh = mNavRoomsDirty || gFrameTimeSeconds >= mNextCensusPlacement;
     if (refresh)
     {
@@ -1000,26 +1034,6 @@ void LLReflectionMapManager::updateCensusPlacement()
             inf.mCentre.set(probe->mOrigin.getF32ptr());
             inf.mRadius = probe->mRadius;
             full_probes.push_back(inf);
-        }
-    }
-    // A lattice broad phase keeps the fine shape tests local, even for a
-    // census containing thousands of parts. Very large bodies stay separate.
-    // It is derived from one scan and rebuilt only when a new scan publishes:
-    // a refresh that finds the same scan reuses it, instead of re-indexing
-    // every record every time.
-    {
-        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rmmu - census lattice");
-        if (census != mSolidsCensus)
-        {
-            mSolidsCensus = census;
-            if (census)
-            {
-                mSolids->rebuild(census->mRecords);
-            }
-            else
-            {
-                mSolids->clear();
-            }
         }
     }
     // Re-testing a probe against the census can sweep a whole triangle soup,

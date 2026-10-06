@@ -33,6 +33,8 @@
 #include "aluniformbuffer.h"
 
 #include <memory>
+#include <future>
+#include "threadpool.h"
 
 class LLSpatialGroup;
 class LLViewerObject;
@@ -354,7 +356,10 @@ private:
     // The census's solid bodies as a tile lattice for the grid placement's
     // point tests, rebuilt only when the census publishes a new scan.
     // mSolidsCensus is the scan it was built from.
-    std::unique_ptr<sknav::SolidLattice> mSolids;
+    std::shared_ptr<sknav::SolidLattice> mSolids;
+    std::unique_ptr<LL::ThreadPool> mSolidWorkers;
+    std::future<std::shared_ptr<sknav::SolidLattice>> mSolidJob;
+    std::shared_ptr<const SKCensusSnapshot> mSolidJobCensus;
     std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
     void updateRelevanceLinks();
     U32 mRelevanceRelinks = 0;
