@@ -35,6 +35,7 @@
 #include "llviewerparceloverlay.h"
 #include "llviewerregion.h"
 #include "llworld.h"
+#include "sknavtypes.h"
 #include "sknetmap.h"
 #include "skmapview.h"
 
@@ -50,6 +51,17 @@ SKMapParcels::~SKMapParcels()
     mCollisionConnection.disconnect();
 }
 
+// static
+U64 SKMapParcels::regionsKey()
+{
+    U64 key = sknav::SEED;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        key = sknav::mix(sknav::mix(key, region->getHandle()), region->isAlive() ? 1u : 0u);
+    }
+    return key;
+}
+
 void SKMapParcels::rebuild()
 {
     // The classic map's rules (LLNetMap::renderPropertyLinesForRegion), as world-space geometry.
@@ -60,6 +72,7 @@ void SKMapParcels::rebuild()
     mFills.clear();
     mLastSale = show_sale;
     mLastCollision = show_collision;
+    mRegionsKey = regionsKey();
     const LLColor4U dead(255, 128, 128, 255);
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
@@ -81,28 +94,70 @@ void SKMapParcels::rebuild()
         const U8* collision = region->getHandle() == LLViewerParcelMgr::instance().getCollisionRegionHandle()
                                 ? LLViewerParcelMgr::instance().getCollisionBitmap()
                                 : nullptr;
+        auto at = [&](S32 col, S32 row) { return origin + LLVector3d(col * step, row * step, 0.0); };
+        // South lines merged along each row, west lines down each column.
         for (S32 row = 0; row < per_edge; ++row)
         {
-            for (S32 col = 0; col < per_edge; ++col)
+            S32 start = -1;
+            for (S32 col = 0; col <= per_edge; ++col)
             {
-                const S32 idx = row * per_edge + col;
-                const S32 cell = ownership[idx];
-                const bool for_sale = (cell & PARCEL_COLOR_MASK) == PARCEL_FOR_SALE;
-                const bool auction = (cell & PARCEL_COLOR_MASK) == PARCEL_AUCTION;
-                const bool collides = collision && (collision[idx / 8] & (1 << (idx % 8)));
-                const LLVector3d sw = origin + LLVector3d(col * step, row * step, 0.0);
-                if ((show_sale && (for_sale || auction)) || (show_collision && collides))
+                const bool on = col < per_edge && (ownership[row * per_edge + col] & PARCEL_SOUTH_LINE);
+                if (on && start < 0)
                 {
-                    const LLColor4U fill = for_sale ? LLColor4U(255, 255, 128, 192) : auction ? LLColor4U(128, 0, 255, 102) : LLColor4U(255, 128, 128, 192);
-                    mFills.push_back({ sw, sw + LLVector3d(step, step, 0.0), fill });
+                    start = col;
                 }
-                if (cell & PARCEL_SOUTH_LINE)
+                else if (!on && start >= 0)
                 {
-                    mLines.push_back({ sw, sw + LLVector3d(step, 0.0, 0.0), line_colour });
+                    mLines.push_back({ at(start, row), at(col, row), line_colour });
+                    start = -1;
                 }
-                if (cell & PARCEL_WEST_LINE)
+            }
+        }
+        for (S32 col = 0; col < per_edge; ++col)
+        {
+            S32 start = -1;
+            for (S32 row = 0; row <= per_edge; ++row)
+            {
+                const bool on = row < per_edge && (ownership[row * per_edge + col] & PARCEL_WEST_LINE);
+                if (on && start < 0)
                 {
-                    mLines.push_back({ sw, sw + LLVector3d(0.0, step, 0.0), line_colour });
+                    start = row;
+                }
+                else if (!on && start >= 0)
+                {
+                    mLines.push_back({ at(col, start), at(col, row), line_colour });
+                    start = -1;
+                }
+            }
+        }
+        // Fills merged along each row while the colour holds.
+        for (S32 row = 0; row < per_edge; ++row)
+        {
+            S32 start = -1;
+            LLColor4U run;
+            for (S32 col = 0; col <= per_edge; ++col)
+            {
+                bool filled = false;
+                LLColor4U fill;
+                if (col < per_edge)
+                {
+                    const S32 idx = row * per_edge + col;
+                    const S32 cell = ownership[idx];
+                    const bool for_sale = (cell & PARCEL_COLOR_MASK) == PARCEL_FOR_SALE;
+                    const bool auction = (cell & PARCEL_COLOR_MASK) == PARCEL_AUCTION;
+                    const bool collides = collision && (collision[idx / 8] & (1 << (idx % 8)));
+                    filled = (show_sale && (for_sale || auction)) || (show_collision && collides);
+                    fill = for_sale ? LLColor4U(255, 255, 128, 192) : auction ? LLColor4U(128, 0, 255, 102) : LLColor4U(255, 128, 128, 192);
+                }
+                if (start >= 0 && (!filled || fill != run))
+                {
+                    mFills.push_back({ at(start, row), at(col, row + 1), run });
+                    start = -1;
+                }
+                if (filled && start < 0)
+                {
+                    start = col;
+                    run = fill;
                 }
             }
         }
@@ -119,7 +174,7 @@ void SKMapParcels::draw(const skmap::MapView& view)
     {
         return;
     }
-    if (mDirty || mLastSale != show_sale || mLastCollision != show_collision)
+    if (mDirty || mLastSale != show_sale || mLastCollision != show_collision || regionsKey() != mRegionsKey)
     {
         rebuild();
     }
