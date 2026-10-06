@@ -103,6 +103,9 @@ void SKMapScene::cleanupSingleton()
     mWanted.clear();
     mRibbons.clear();
     mRibbonLatest.clear();
+    mShownRibbons.clear();
+    mCarrySources.clear();
+    mCarried.clear();
     mHatch = nullptr;
     mBoundaryBuffer = nullptr;
     mRibbonUploads.clear();
@@ -319,6 +322,33 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     {
         return;     // superseded
     }
+    // The layers that drew lines hand them on: layer indices do not survive a new scene, footprints do.
+    if (mScene && !mShownRibbons.empty())
+    {
+        mCarrySources.clear();
+        for (const auto& shown : mShownRibbons)
+        {
+            const skmap::SceneLayer& layer = mScene->mLayers[shown.first];
+            CarrySource source;
+            source.mGround = layer.mGround;
+            source.mBaseZ = layer.mBaseZ;
+            source.mKey = shown.second.first;
+            source.mCut = shown.second.second;
+            constexpr size_t SAMPLE = 64;
+            const size_t stride = llmax(static_cast<size_t>(1), layer.mFootprint.size() / SAMPLE);
+            size_t i = 0;
+            for (const auto& cell : layer.mFootprint)
+            {
+                if (i++ % stride == 0 && source.mSample.size() < SAMPLE)
+                {
+                    source.mSample.push_back(cell);
+                }
+            }
+            mCarrySources.push_back(std::move(source));
+        }
+    }
+    mShownRibbons.clear();
+    mCarried.clear();
     mScene = scene;
     mStats.mJobs++;
     mStats.mJobMs = millis;
@@ -379,6 +409,7 @@ void SKMapScene::updateSelection()
     mSelectedCell = cell;
     mSelectedLayer = floor.mLayer;
     mSelectedBucket = bucket;
+    mCarried.clear();       // carried lines match the cut, which may have moved
     // The cut's bounding box per layer, in global metres, so most cells skip the cell test.
     mCutBoxes.clear();
     mCutHashes.clear();
@@ -825,6 +856,42 @@ U64 SKMapScene::ribbonIdentity(S32 layer) const
     return cut != mCutHashes.end() ? sknav::mix(marks, cut->second) : marks;
 }
 
+U64 SKMapScene::carriedRibbon(S32 layer)
+{
+    const auto cached = mCarried.find(layer);
+    if (cached != mCarried.end())
+    {
+        return cached->second;
+    }
+    // The previous layer on the same kind of ground, at the same height and with the same cut, that shares
+    // the most footprint: overlap alone cannot tell stacked storeys apart.
+    const skmap::SceneLayer& here = mScene->mLayers[layer];
+    const auto cut = mCutHashes.find(layer);
+    const U64 cut_hash = cut != mCutHashes.end() ? cut->second : 0;
+    U64 best = 0;
+    size_t best_hits = 0;
+    for (const CarrySource& source : mCarrySources)
+    {
+        if (source.mGround != here.mGround || source.mCut != cut_hash
+            || (!here.mGround && std::fabs(source.mBaseZ - here.mBaseZ) > skmap::LAYER_GAP_M))
+        {
+            continue;
+        }
+        size_t hits = 0;
+        for (const auto& cell : source.mSample)
+        {
+            hits += here.mFootprint.count(cell);
+        }
+        if (hits > best_hits)
+        {
+            best_hits = hits;
+            best = source.mKey;
+        }
+    }
+    mCarried[layer] = best;
+    return best;
+}
+
 void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params)
 {
     if (layer < 0 || layer >= static_cast<S32>(mScene->mMarkHashes.size()))
@@ -841,11 +908,21 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
         // The old buffer keeps drawing until the new one lands.
         const auto latest = mRibbonLatest.find(marks);
         it = latest != mRibbonLatest.end() ? mRibbons.find(latest->second) : mRibbons.end();
+        // A layer whose marks changed with the scene draws what the layer it replaces drew.
+        if (it == mRibbons.end())
+        {
+            if (const U64 carried = carriedRibbon(layer))
+            {
+                it = mRibbons.find(carried);
+            }
+        }
     }
     if (it != mRibbons.end())
     {
         it->second.mLastDrawn = now;
         drawBuffer(view, it->second.mBuffer, it->second.mOrigin);
+        const auto cut = mCutHashes.find(layer);
+        mShownRibbons[layer] = { it->first, cut != mCutHashes.end() ? cut->second : 0 };
     }
 }
 

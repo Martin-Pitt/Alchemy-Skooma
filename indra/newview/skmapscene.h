@@ -141,6 +141,8 @@ private:
     static U64 ribbonKey(U64 mark_hash, const skmap::RibbonParams& params);
     /// What a layer's lines are built from: its mark hash, and its cut when it has one.
     U64 ribbonIdentity(S32 layer) const;
+    /// The buffer the previous scene drew for the layer that is now this one, or 0.
+    U64 carriedRibbon(S32 layer);
     /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
     void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
     /// Draw a buffer of scene-local metres built for the scene whose origin is given.
@@ -212,6 +214,18 @@ private:
 
     std::map<U64, RibbonBuffer> mRibbons;
     std::map<U64, U64> mRibbonLatest;       ///< ribbon identity -> the key last built for it
+    /// A layer of the previous scene that drew lines, kept so its successor can draw them while its own build.
+    struct CarrySource
+    {
+        bool mGround = false;
+        F32 mBaseZ = 0.f;
+        U64 mCut = 0;                       ///< its cut hash, 0 when uncut
+        U64 mKey = 0;                       ///< the buffer it drew
+        std::vector<std::pair<S32, S32>> mSample;   ///< up to 64 of its footprint cells
+    };
+    std::map<S32, std::pair<U64, U64>> mShownRibbons;   ///< layer -> (buffer key, cut hash) drawn for it last
+    std::vector<CarrySource> mCarrySources;
+    std::map<S32, U64> mCarried;            ///< layer -> its carried buffer, 0 for none, resolved once
     std::vector<RibbonRequest> mRibbonWanted;
     bool mRibbonInFlight = false;
     std::deque<RibbonResult> mRibbonUploads;
