@@ -508,6 +508,13 @@ void SKMapScene::evictBakes()
 void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                           F32 u1, F32 v1, const LLColor4& tint) const
 {
+    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
+    drawCellQuads(view, min, max, u0, v0, u1, v1, tint);
+}
+
+void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
+                               const LLColor4& tint) const
+{
     // 2 x 2 sub-quads, so the distance dim varies across a cell.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const F32 span = view.span();
@@ -527,7 +534,6 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
         u[j] = u0 + (u1 - u0) * j * 0.5f;
         v[j] = v0 + (v1 - v0) * j * 0.5f;
     }
-    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
     gGL.begin(LLRender::TRIANGLES);
     auto vert = [&](S32 j, S32 i) {
         gGL.color4fv(col[j][i].mV);
@@ -559,7 +565,8 @@ void SKMapScene::drawCellCut(const skmap::MapView& view, LLViewerTexture* textur
         drawCell(view, texture, min, max, u0, v0, u1, v1, tint);
         return;
     }
-    // A part of the cell, its UVs mapped from the cell's.
+    // A part of the cell, its UVs mapped from the cell's; one bind for all of them, as a bind flushes.
+    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
     auto part = [&](F64 x0, F64 y0, F64 x1, F64 y1) {
         if (x1 <= x0 || y1 <= y0)
         {
@@ -567,7 +574,7 @@ void SKMapScene::drawCellCut(const skmap::MapView& view, LLViewerTexture* textur
         }
         auto u = [&](F64 x) { return u0 + (u1 - u0) * static_cast<F32>((x - min.mdV[VX]) / (max.mdV[VX] - min.mdV[VX])); };
         auto v = [&](F64 y) { return v0 + (v1 - v0) * static_cast<F32>((y - min.mdV[VY]) / (max.mdV[VY] - min.mdV[VY])); };
-        drawCell(view, texture, LLVector3d(x0, y0, 0.0), LLVector3d(x1, y1, 0.0), u(x0), v(y0), u(x1), v(y1), tint);
+        drawCellQuads(view, LLVector3d(x0, y0, 0.0), LLVector3d(x1, y1, 0.0), u(x0), v(y0), u(x1), v(y1), tint);
     };
     // Up to four rectangles round the cut's box, then 4 m pieces inside it that are not cut.
     const F64 bx0 = llmax(box->second.first.mdV[VX], min.mdV[VX]), by0 = llmax(box->second.first.mdV[VY], min.mdV[VY]);

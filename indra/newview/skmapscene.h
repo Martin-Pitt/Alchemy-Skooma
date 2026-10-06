@@ -127,6 +127,9 @@ private:
     /// Draw one layer's cell texture over a world rectangle, 2 x 2 sub-quads with per-vertex colour.
     void drawCell(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                   F32 u1, F32 v1, const LLColor4& tint) const;
+    /// The same with the texture already bound.
+    void drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
+                       const LLColor4& tint) const;
     /// The same, leaving out the layer's cut cells.
     void drawCellCut(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                      F32 u1, F32 v1, const LLColor4& tint, S32 layer) const;
