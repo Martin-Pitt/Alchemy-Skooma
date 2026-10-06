@@ -89,6 +89,12 @@ namespace sknav
             std::unordered_map<U64, std::vector<Interval>> mCells;
         };
         /// Mutated only through a block this map alone holds.
+        /// Copy only while the source is quiescent, then give each copy one owner.
+        /// Published maps are read-only: writers must use a separate copy, and every
+        /// block mutation must pass through writable() to detach shared storage.
+        /// Never copy, read and mutate the same map instance concurrently. SkyView
+        /// holds raw cell pointers, so its source map must remain alive and unchanged
+        /// for the entire view lifetime; shared blocks alone do not keep a view valid.
         Block& writable(S64 x, S64 y);
 
         std::unordered_map<U64, std::shared_ptr<Block>> mBlocks;

@@ -81,6 +81,7 @@ target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::rec
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 
 if(AL_BUILD_TESTS)
+  al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
