@@ -152,7 +152,7 @@ namespace
 
     /// A building on the ground: land 0..32 at z 0, a storey over 8..16 at z 6 nothing joins,
     /// a neighbour's storey over 24..30 at z 6, and a stair up to a mezzanine at z 3.
-    skmap::ScenePtr building(bool with_mezzanine)
+    skmap::SceneInput buildingInput(bool with_mezzanine)
     {
         TileMaker t;
         const S32 land = t.quad(0.f, 0.f, 32.f, 32.f, 0.f, 0.f, AREA_GROUND);
@@ -173,7 +173,31 @@ namespace
         drop.mTo.set(16.5f, 12.f, 0.f);
         drop.mHeight = 6.f;
         t.mLinks.push_back(drop);
-        return skmap::buildScene(input({ t.make(LAND, true, 0, 0) }));
+        return input({ t.make(LAND, true, 0, 0) });
+    }
+
+    skmap::ScenePtr building(bool with_mezzanine)
+    {
+        return skmap::buildScene(buildingInput(with_mezzanine));
+    }
+
+    /// The same input moved whole: meshes, tiles, the analysis box and the regions.
+    skmap::SceneInput shifted(skmap::SceneInput in, const LLVector3d& by)
+    {
+        in.mOrigin += by;
+        in.mMin += by;
+        in.mMax += by;
+        for (TileInput& t : in.mTiles)
+        {
+            t.mOrigin += by;
+            t.mMin += by;
+            t.mMax += by;
+        }
+        for (skmap::RegionSquare& r : in.mRegions)
+        {
+            r.mOrigin += by;
+        }
+        return in;
     }
 }
 
@@ -701,5 +725,51 @@ namespace tut
         ensure("the ramp leaf re-keys", skmap::cellKey(*ra, rga, leaf) != skmap::cellKey(*rb, rgb, leaf));
         ensure("a far leaf does not", skmap::cellKey(*ra, rga, skmap::cellAt(0, 28.0, 28.0))
                                           == skmap::cellKey(*rb, rgb, skmap::cellAt(0, 28.0, 28.0)));
+    }
+
+    // The building at a mainland origin: every layer, footprint, floor and cut moves by whole
+    // cells, so nothing mixes scene-local and global coordinates.
+    template<> template<>
+    void skmapgeom_object::test<19>()
+    {
+        const LLVector3d by(255744.0, 256000.0, 0.0);
+        const S32 dx = static_cast<S32>(by.mdV[VX] / skmap::INDEX_CELL_M), dy = static_cast<S32>(by.mdV[VY] / skmap::INDEX_CELL_M);
+        skmap::ScenePtr a = skmap::buildScene(buildingInput(true));
+        skmap::ScenePtr b = skmap::buildScene(shifted(buildingInput(true), by));
+        ensure_equals("same layers", a->mLayers.size(), b->mLayers.size());
+        ensure("same order", a->mOrder == b->mOrder);
+        ensure_equals("same surfaces", a->mSurfaces.size(), b->mSurfaces.size());
+        ensure_equals("same runs", a->mRuns.size(), b->mRuns.size());
+        ensure_equals("same marks", a->mMarks.size(), b->mMarks.size());
+        auto move = [&](const std::set<std::pair<S32, S32>>& cells) {
+            std::set<std::pair<S32, S32>> out;
+            for (const auto& c : cells)
+            {
+                out.insert({ c.first + dx, c.second + dy });
+            }
+            return out;
+        };
+        for (size_t l = 0; l < a->mLayers.size(); ++l)
+        {
+            ensure("a footprint moves whole", move(a->mLayers[l].mFootprint) == b->mLayers[l].mFootprint);
+        }
+        for (const LLVector3d& p : { LLVector3d(13.0, 13.0, 0.0), LLVector3d(9.0, 15.0, 6.0), LLVector3d(27.0, 27.0, 6.0), LLVector3d(14.0, 10.0, 3.0) })
+        {
+            const S32 la = layerOf(*a, p);
+            ensure("a floor at home", la >= 0);
+            ensure_equals("the same floor abroad", layerOf(*b, p + by), la);
+        }
+        const skmap::LayerSelection sa = skmap::selectLayers(*a, agentAt(*a, LLVector3d(13.0, 13.0, 0.0)), EnclosureBucket::INDOORS, 30.f);
+        const skmap::LayerSelection sb = skmap::selectLayers(*b, agentAt(*b, LLVector3d(13.0, 13.0, 0.0) + by), EnclosureBucket::INDOORS, 30.f);
+        ensure("something cut", !sa.mCut.empty());
+        ensure("same drawn", sa.mDrawn == sb.mDrawn);
+        ensure("same storey", sa.mStorey == sb.mStorey);
+        ensure_equals("same cut layers", sa.mCut.size(), sb.mCut.size());
+        for (const auto& entry : sa.mCut)
+        {
+            const auto other = sb.mCut.find(entry.first);
+            ensure("the cut layer abroad", other != sb.mCut.end());
+            ensure("the cut moves whole", move(entry.second) == other->second);
+        }
     }
 }
