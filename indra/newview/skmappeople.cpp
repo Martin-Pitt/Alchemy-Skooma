@@ -119,7 +119,15 @@ void SKMapPeople::idle()
             mPeople.clear();
             mVehicles.clear();
         }
-        mCombat = false;
+        // Kept current, so the first frame after the map reopens on damage land already hides what combat hides.
+        if (LLWorld::instanceExists() && gAgent.getRegion())
+        {
+            updateCombat();
+        }
+        else
+        {
+            mCombat = false;
+        }
         mResolver.update(false, false, mCandidates, LLFrameTimer::getElapsedSeconds());
         return;
     }
