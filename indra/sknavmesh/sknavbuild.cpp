@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavbuild.h"
+#include "sknavbuildstats.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
@@ -522,7 +523,7 @@ namespace
     /// sim, read as a gap. Join the two sides across one such column when
     /// their tops are within the agent's climb and nothing stands at that
     /// level between them.
-    void bridgeCrevices(rcHeightfield& hf, S32 climb)
+    void bridgeCrevices(rcHeightfield& hf, S32 climb, U32* count = nullptr)
     {
         struct Bridge
         {
@@ -586,6 +587,10 @@ namespace
         for (const Bridge& bridge : bridges)
         {
             rcAddSpan(&ctx, hf, bridge.mX, bridge.mZ, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
+        }
+        if (count)
+        {
+            *count = static_cast<U32>(bridges.size());
         }
     }
 
@@ -909,6 +914,107 @@ namespace
         }
     }
 
+    /// The heightfield's spans and the bytes its column heads and span pools hold.
+    void measureHeightfield(const rcHeightfield& hf, ClassBuildStats& out)
+    {
+        out.mHfSpans = 0;
+        for (S32 c = 0; c < hf.width * hf.height; ++c)
+        {
+            for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+            {
+                ++out.mHfSpans;
+            }
+        }
+        out.mHfBytes = static_cast<size_t>(hf.width) * hf.height * sizeof(rcSpan*);
+        for (const rcSpanPool* pool = hf.pools; pool; pool = pool->next)
+        {
+            out.mHfBytes += sizeof(rcSpanPool);
+        }
+    }
+
+    /// AVATAR's walkable spans on the tile proper, and the spans under each poly:
+    /// those of the poly's region in the columns whose centres it covers.
+    void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, TileBuildStats& out)
+    {
+        std::vector<U32> index(chf.spanCount, U32_MAX);
+        for (S32 z = border; z < border + tile_cells; ++z)
+        {
+            for (S32 x = border; x < border + tile_cells; ++x)
+            {
+                const rcCompactCell& c = chf.cells[x + z * chf.width];
+                for (U32 i = c.index; i < c.index + c.count; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA)
+                    {
+                        continue;
+                    }
+                    StatSpan span;
+                    span.mX = static_cast<U16>(z - border);
+                    span.mY = static_cast<U16>(x - border);
+                    span.mTop = chf.spans[i].y;
+                    span.mRegion = chf.spans[i].reg;
+                    span.mCode = chf.areas[i];
+                    index[i] = static_cast<U32>(out.mSpans.size());
+                    out.mSpans.push_back(span);
+                }
+            }
+        }
+        out.mPolySpanStart.assign(1, 0);
+        for (S32 p = 0; p < pmesh.npolys; ++p)
+        {
+            const unsigned short* poly = &pmesh.polys[p * pmesh.nvp * 2];
+            S32 nv = 0;
+            F32 vx[16], vz[16];
+            S32 lo_x = INT_MAX, hi_x = INT_MIN, lo_z = INT_MAX, hi_z = INT_MIN;
+            for (; nv < pmesh.nvp && poly[nv] != RC_MESH_NULL_IDX; ++nv)
+            {
+                const unsigned short* v = &pmesh.verts[poly[nv] * 3];
+                vx[nv] = v[0];
+                vz[nv] = v[2];
+                lo_x = std::min<S32>(lo_x, v[0]);
+                hi_x = std::max<S32>(hi_x, v[0]);
+                lo_z = std::min<S32>(lo_z, v[2]);
+                hi_z = std::max<S32>(hi_z, v[2]);
+            }
+            F32 area = 0.f;
+            for (S32 k = 0; k < nv; ++k)
+            {
+                const S32 n = (k + 1) % nv;
+                area += vx[k] * vz[n] - vx[n] * vz[k];
+            }
+            const F32 sign = area < 0.f ? -1.f : 1.f;
+            out.mPolyArea.push_back(std::fabs(area) * 0.5f * pmesh.cs * pmesh.cs);
+            for (S32 z = lo_z; z < hi_z; ++z)
+            {
+                for (S32 x = lo_x; x < hi_x; ++x)
+                {
+                    const F32 px = x + 0.5f, pz = z + 0.5f;
+                    bool inside = true;
+                    for (S32 k = 0; k < nv && inside; ++k)
+                    {
+                        const S32 n = (k + 1) % nv;
+                        inside = sign * ((vx[n] - vx[k]) * (pz - vz[k]) - (vz[n] - vz[k]) * (px - vx[k])) >= 0.f;
+                    }
+                    const S32 cx = x + border, cz = z + border;
+                    if (!inside || cx < 0 || cz < 0 || cx >= chf.width || cz >= chf.height)
+                    {
+                        continue;
+                    }
+                    const rcCompactCell& c = chf.cells[cx + cz * chf.width];
+                    for (U32 i = c.index; i < c.index + c.count; ++i)
+                    {
+                        if (chf.spans[i].reg == pmesh.regs[p] && index[i] != U32_MAX)
+                        {
+                            out.mPolySpans.push_back(index[i]);
+                            break;
+                        }
+                    }
+                }
+            }
+            out.mPolySpanStart.push_back(static_cast<U32>(out.mPolySpans.size()));
+        }
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -961,7 +1067,20 @@ namespace sknav
         }
     }
 
-    TileBuildResult buildTile(const TileBuildInput& input)
+    const char* AirBuildStats::stageName(S32 stage)
+    {
+        static const char* names[NUM_STAGES] = { "extract", "fold", "flights", "clearance", "crop", "distil", "seams", "tops" };
+        return stage >= 0 && stage < NUM_STAGES ? names[stage] : "";
+    }
+
+    const char* ClassBuildStats::stageName(S32 stage)
+    {
+        static const char* names[NUM_STAGES] = { "partition", "rasterise", "fill", "cut", "bridges", "cull", "filters", "compact", "erode",
+                                                 "regions", "contours", "polymesh", "flightmap", "detail", "walls", "air", "edges", "detour" };
+        return stage >= 0 && stage < NUM_STAGES ? names[stage] : "";
+    }
+
+    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
     {
         const auto started = std::chrono::steady_clock::now();
         TileBuildResult result;
@@ -1062,10 +1181,48 @@ namespace sknav
             soup.add(tris, AREA_GROUND, t.mWater, false);
         }
         result.mTriangles = soup.ntris();
+        if (stats)
+        {
+            stats->mSoupMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
+        }
         if (soup.ntris() == 0)
         {
             result.mStatus = TileBuildResult::EMPTY;
             return result;
+        }
+        if (stats)
+        {
+            // Each excluded range's box, two cells wider, over the tile's cells.
+            const S32 n = static_cast<S32>(input.mTileSize / input.mCell);
+            const F32 x0 = input.mTileX * input.mTileSize, y0 = input.mTileY * input.mTileSize;
+            std::vector<U8> window(static_cast<size_t>(n) * n, 0);
+            for (const Excluded& e : excluded)
+            {
+                F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+                for (S32 t = e.mBegin * 3; t < e.mEnd * 3; ++t)
+                {
+                    const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+                    for (S32 k = 0; k < 3; ++k)
+                    {
+                        lo[k] = llmin(lo[k], v[k]);
+                        hi[k] = llmax(hi[k], v[k]);
+                    }
+                }
+                const S32 ix0 = std::max(0, static_cast<S32>(std::floor((lo[2] - x0) / input.mCell)) - 2);
+                const S32 ix1 = std::min(n, static_cast<S32>(std::ceil((hi[2] - x0) / input.mCell)) + 2);
+                const S32 iy0 = std::max(0, static_cast<S32>(std::floor((lo[0] - y0) / input.mCell)) - 2);
+                const S32 iy1 = std::min(n, static_cast<S32>(std::ceil((hi[0] - y0) / input.mCell)) + 2);
+                for (S32 iy = iy0; iy < iy1; ++iy)
+                {
+                    for (S32 ix = ix0; ix < ix1; ++ix)
+                    {
+                        window[ix + iy * n] = 1;
+                    }
+                }
+            }
+            stats->mExcludedRecords = static_cast<U32>(excluded.size());
+            stats->mExcludeWindowCells = static_cast<U32>(std::count(window.begin(), window.end(), 1));
+            stats->mTileCells = static_cast<U32>(window.size());
         }
 
         // Wall faces come from one class's heightfield, chosen by the input
@@ -1101,6 +1258,11 @@ namespace sknav
                 continue;
             }
             const ClassParams& p = input.mParams[cls];
+            ClassBuildStats* cstats = stats ? &stats->mClass[cls] : nullptr;
+            if (cstats)
+            {
+                cstats->mBuilt = true;
+            }
             rcConfig cfg;
             std::memset(&cfg, 0, sizeof(cfg));
             cfg.cs = input.mCell;
@@ -1161,6 +1323,7 @@ namespace sknav
                 class_solids = &filtered_solids;
                 result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
             }
+            StageClock clock(cstats ? cstats->mMs : nullptr);
             std::vector<U8> areas;
             markWalkable(*class_soup, cfg.walkableSlopeAngle, areas);
             // The slope partition splits the soup into regions before it is
@@ -1193,6 +1356,16 @@ namespace sknav
                         markWalkable(soup, widest, walkable);
                         shared_slopes = std::make_unique<SlopePartition>(partition(soup, walkable));
                         shared_climb = p.mClimb;
+                        if (stats)
+                        {
+                            std::vector<U8> used(256, 0);
+                            for (const U8 code : shared_slopes->mCodes)
+                            {
+                                used[code] = 1;
+                            }
+                            used[0] = 0;
+                            stats->mSharedCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
+                        }
                     }
                     slopes = *shared_slopes;
                     for (size_t t = 0; t < areas.size(); ++t)
@@ -1206,22 +1379,38 @@ namespace sknav
                 }
                 areas = slopes.mCodes;
             }
+            if (cstats)
+            {
+                std::vector<U8> used(256, 0);
+                for (const U8 code : areas)
+                {
+                    used[code] = 1;
+                }
+                used[0] = 0;
+                cstats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
+            }
+            clock.lap(ClassBuildStats::PARTITION);
             if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),
                                       class_soup->ntris(), *mem.hf, cfg.walkableClimb))
             {
                 result.mError = "rasterize";
                 return result;
             }
+            clock.lap(ClassBuildStats::RASTERISE);
             for (const auto& range : *class_solids)
             {
                 fillSolid(*mem.hf, *class_soup, range.first, range.second, cfg.walkableClimb);
             }
+            clock.lap(ClassBuildStats::FILL);
             for (const auto& range : cuts)
             {
                 cutVolume(*mem.hf, cut_soup, range.first, range.second);
             }
-            bridgeCrevices(*mem.hf, cfg.walkableClimb);
+            clock.lap(ClassBuildStats::CUT);
+            bridgeCrevices(*mem.hf, cfg.walkableClimb, cstats ? &cstats->mBridges : nullptr);
+            clock.lap(ClassBuildStats::BRIDGES);
             cullUnderground(*mem.hf, input.mTerrain);
+            clock.lap(ClassBuildStats::CULL);
             // The ledge filter marks a span a ledge when the height range of
             // its accessible neighbours exceeds the climb it is given, which
             // reads every slope steeper than atan(climb / two cells) as a
@@ -1235,6 +1424,7 @@ namespace sknav
             rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *mem.hf);
             rcFilterLedgeSpans(&ctx, cfg.walkableHeight, static_cast<int>(std::ceil(ledge_climb / cfg.ch)), *mem.hf);
             rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *mem.hf);
+            clock.lap(ClassBuildStats::FILTERS);
 
             mem.chf = rcAllocCompactHeightfield();
             if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf, *mem.chf))
@@ -1242,6 +1432,7 @@ namespace sknav
                 result.mError = "compact";
                 return result;
             }
+            clock.lap(ClassBuildStats::COMPACT);
             if (!slopes.mReal.empty())
             {
                 // the walls and the air read real areas off the heightfield
@@ -1259,6 +1450,7 @@ namespace sknav
                 result.mError = "erode";
                 return result;
             }
+            clock.lap(ClassBuildStats::ERODE);
             bool regions = false;
             switch (input.mPartition)
             {
@@ -1283,17 +1475,34 @@ namespace sknav
                 result.mError = "regions";
                 return result;
             }
+            clock.lap(ClassBuildStats::REGIONS);
             mem.cset = rcAllocContourSet();
             if (!rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
             {
                 result.mError = "contours";
                 return result;
             }
+            clock.lap(ClassBuildStats::CONTOURS);
             mem.pmesh = rcAllocPolyMesh();
             if (!rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
             {
                 result.mError = "polymesh";
                 return result;
+            }
+            clock.lap(ClassBuildStats::POLYMESH);
+            if (cstats)
+            {
+                measureHeightfield(*mem.hf, *cstats);
+                cstats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
+                cstats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
+                                    static_cast<size_t>(mem.chf->spanCount) * (sizeof(rcCompactSpan) + 1 + (mem.chf->dist ? 2 : 0));
+                cstats->mWalkableSpans =
+                    static_cast<U32>(mem.chf->spanCount - std::count(mem.chf->areas, mem.chf->areas + mem.chf->spanCount, RC_NULL_AREA));
+                if (cls == static_cast<S32>(AgentClass::AVATAR))
+                {
+                    recordPolySpans(*mem.chf, *mem.pmesh, cfg.borderSize, cfg.tileSize, *stats);
+                }
+                clock.restart();
             }
             if (!slopes.mReal.empty())
             {
@@ -1324,6 +1533,7 @@ namespace sknav
                     mem.pmesh->areas[i] = slopes.mReal[mem.pmesh->areas[i]];
                 }
             }
+            clock.lap(ClassBuildStats::FLIGHTMAP);
             mem.dmesh = rcAllocPolyMeshDetail();
             if (!rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
             {
@@ -1340,6 +1550,7 @@ namespace sknav
             {
                 mem.dmesh->verts[v * 3 + 1] -= cfg.ch;
             }
+            clock.lap(ClassBuildStats::DETAIL);
             result.mPolys[cls] = mem.pmesh->npolys;
             // Walls come off the same heightfield, before it goes: the faces
             // from the one class chosen above, the floor edges and the drops
@@ -1348,6 +1559,7 @@ namespace sknav
             {
                 extractWallFaces(*mem.hf, cfg.borderSize, input.mWallMinHeight, result.mFaces);
             }
+            clock.lap(ClassBuildStats::WALLS);
             if (air)
             {
                 const S32 overlap = static_cast<S32>(std::ceil(0.5f / cfg.ch));
@@ -1356,7 +1568,35 @@ namespace sknav
                                                          ? result.mFlights[cls]
                                                          : result.mFlights[static_cast<S32>(AgentClass::AVATAR)];
                 result.mAir = buildTileAir(*mem.hf, cfg.borderSize, input.mAirPad, cfg.walkableClimb, overlap,
-                                          static_cast<S32>(std::ceil(input.mAirMinGap / cfg.ch)), &flights);
+                                          static_cast<S32>(std::ceil(input.mAirMinGap / cfg.ch)), &flights, cstats ? &cstats->mAir : nullptr);
+            }
+            clock.lap(ClassBuildStats::AIR);
+            if (cstats)
+            {
+                cstats->mPolys = static_cast<U32>(mem.pmesh->npolys);
+                cstats->mVerts = static_cast<U32>(mem.pmesh->nverts);
+                cstats->mDetailTris = static_cast<U32>(mem.dmesh->ntris);
+                cstats->mFlights = static_cast<U32>(result.mFlights[cls].size());
+                for (const Flight& f : result.mFlights[cls])
+                {
+                    cstats->mFlightPolys += static_cast<U32>(f.mPolys.size());
+                    cstats->mFlightCodes += static_cast<U32>(f.mCodes.size());
+                }
+                if (cls == static_cast<S32>(AgentClass::AVATAR))
+                {
+                    stats->mPolyFlight.assign(mem.pmesh->npolys, 0);
+                    for (const Flight& f : result.mFlights[cls])
+                    {
+                        for (const U16 poly : f.mPolys)
+                        {
+                            if (poly < stats->mPolyFlight.size())
+                            {
+                                stats->mPolyFlight[poly] = 1;
+                            }
+                        }
+                    }
+                }
+                clock.restart();
             }
             if (mem.pmesh->npolys == 0)
             {
@@ -1368,6 +1608,7 @@ namespace sknav
                               cls == static_cast<S32>(AgentClass::AVATAR), input.mDropSpacing,
                               result.mSegments[cls], result.mLinks[cls]);
             }
+            clock.lap(ClassBuildStats::EDGES);
             for (int i = 0; i < mem.pmesh->npolys; ++i)
             {
                 const U8 area = mem.pmesh->areas[i] == RC_WALKABLE_AREA ? AREA_OBJECT : mem.pmesh->areas[i];
@@ -1446,9 +1687,19 @@ namespace sknav
             }
             result.mData[cls].assign(data, data + size);
             dtFree(data);
+            clock.lap(ClassBuildStats::DETOUR);
+            if (cstats)
+            {
+                cstats->mDetourBytes = static_cast<U32>(size);
+            }
         }
         result.mStatus = TileBuildResult::SUCCESS;
         result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+        if (stats)
+        {
+            stats->mExcludeMs = result.mExcludeMillis;
+            stats->mTotalMs = result.mMillis;
+        }
         return result;
     }
 }

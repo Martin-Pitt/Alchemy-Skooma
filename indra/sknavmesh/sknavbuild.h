@@ -157,8 +157,11 @@ namespace sknav
     /// narrow-step walk of twice the radius that must still fit inside it.
     S32 borderCells(F32 radius, F32 cell);
 
-    /// Run the pipeline. Safe on any thread; touches nothing but the input.
-    TileBuildResult buildTile(const TileBuildInput& input);
+    struct TileBuildStats;
+
+    /// Run the pipeline. Safe on any thread; touches nothing but the input
+    /// and, when given, the stats it measures itself into.
+    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats = nullptr);
 
     /// Tessellate an analytic record into triangles (mesh-local, given the
     /// mesh origin), or copy its soup. Exposed for tests.

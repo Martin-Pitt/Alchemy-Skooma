@@ -36,6 +36,8 @@ struct rcHeightfield;
 
 namespace sknav
 {
+    struct AirBuildStats;
+
     constexpr S32 AIR_MAX_LEVEL = 4;            ///< a level-4 leaf is 16 cells, 2 m at 0.125 m
     constexpr U16 AIR_HEIGHT_MAX = 8191;        ///< heights are 13 bits, 1023.9 m at 0.125 m
     constexpr U16 AIR_CEILING_OPEN = 0xffff;    ///< a distilled ceiling with nothing above in the tile
@@ -114,7 +116,7 @@ namespace sknav
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights = nullptr);
+                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

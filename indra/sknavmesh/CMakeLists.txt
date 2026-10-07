@@ -39,6 +39,7 @@ target_sources(
         sknavairdistil.h
         sknavannotate.h
         sknavbuild.h
+        sknavbuildstats.h
         sknavcensusio.h
         sknavcluster.h
         sknavenclosure.h
