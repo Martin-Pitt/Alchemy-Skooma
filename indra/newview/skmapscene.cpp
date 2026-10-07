@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <chrono>
 #include <cstring>
 
@@ -61,6 +62,7 @@ namespace
     const char* DEMAND = "sknetmap";
     constexpr F32 BAKE_MB = 0.25f;         ///< one 256 x 256 RGBA8 cell
     constexpr S32 FINER_FALLBACK_TIERS = 2; ///< how many finer tiers stand in for a cell not yet baked
+    constexpr F32 LAST_SHOWN_SLOT_M = 2.f;   ///< floors this close in height share a cell's last-shown bake
 
     F32 smoothstep(F32 e0, F32 e1, F32 x)
     {
@@ -101,6 +103,7 @@ void SKMapScene::cleanupSingleton()
     mScene.reset();
     mLastTiles.clear();
     mBakes.clear();
+    mLastShown.clear();
     mUploads.clear();
     mWanted.clear();
     mRibbons.clear();
@@ -606,6 +609,10 @@ void SKMapScene::evictBakes()
         }
         mBakes.erase(oldest);
     }
+    for (auto it = mLastShown.begin(); it != mLastShown.end();)
+    {
+        it = mBakes.count(it->second) ? std::next(it) : mLastShown.erase(it);
+    }
     mStats.mCacheMB = mBakes.size() * BAKE_MB;
 }
 
@@ -812,6 +819,8 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
             tint.mV[2] = scale * t[2];
         }
 
+        // A floor keeps its slot across scenes, where its layer index does not.
+        const S32 slot = layer.mGround ? INT_MIN : static_cast<S32>(std::floor(layer.mBaseZ / LAST_SHOWN_SLOT_M));
         for (const skmap::CellId& cell : cells)
         {
             const U64 key = bakeKey(l, cell);
@@ -820,16 +829,31 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
                 continue;
             }
             const LLVector3d cmin = cell.minCorner(), cmax = cell.maxCorner();
+            const auto shown = std::make_tuple(cell.mTier, cell.mX, cell.mY, slot);
             auto it = mBakes.find(key);
             if (it != mBakes.end())
             {
                 it->second.mLastDrawn = now;
                 drawCellCut(view, it->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint, l);
+                mLastShown[shown] = key;
                 mStats.mCells++;
                 continue;
             }
             const LLVector3d mid = (cmin + cmax) * 0.5;
             requestBake(l, cell, key, static_cast<F32>(std::hypot(mid.mdV[VX] - centre.mdV[VX], mid.mdV[VY] - centre.mdV[VY])));
+            // Meanwhile what this cell showed before, replaced in place when the new bake lands.
+            const auto last = mLastShown.find(shown);
+            if (last != mLastShown.end())
+            {
+                const auto lit = mBakes.find(last->second);
+                if (lit != mBakes.end())
+                {
+                    lit->second.mLastDrawn = now;
+                    drawCellCut(view, lit->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint, l);
+                    mStats.mCells++;
+                    continue;
+                }
+            }
             // Meanwhile the best coarser bake, through the part of it this cell covers.
             bool covered = false;
             for (S32 t = mTier + 1; t <= skmap::TIER_MAX && !covered; ++t)

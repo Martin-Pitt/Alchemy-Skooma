@@ -37,6 +37,7 @@
 
 #include <deque>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <vector>
 
@@ -209,6 +210,8 @@ private:
     skmap::RasterParams mRasterParams;
     S32 mTier = -1;
     std::map<U64, Bake> mBakes;
+    /// The bake each cell last showed per floor (tier, x, y, height slot): drawn in place while its re-bake is pending.
+    std::map<std::tuple<S32, S32, S32, S32>, U64> mLastShown;
     std::vector<BakeRequest> mWanted;       ///< this frame's missing cells
     bool mBakeInFlight = false;
     U64 mBakeKeyInFlight = 0;
