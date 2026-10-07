@@ -1661,11 +1661,14 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
 
 void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const
 {
+    LL_PROFILE_ZONE_SCOPED;
+    U32 tiles_seen = 0;
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
         for (const auto& t : mesh.mTiles)
         {
+            ++tiles_seen;
             const Tile& tile = t.second;
             if (tile.mBuilt && overlapsXY(tile.mMin, tile.mMax, min, max))
             {
@@ -1673,6 +1676,8 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
             }
         }
     }
+    LL_PROFILE_ZONE_NUM(mMeshes.size());
+    LL_PROFILE_ZONE_NUM(tiles_seen);
 }
 
 void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const PolyTileFn& fn) const
@@ -1737,14 +1742,17 @@ void SKNavMesh::wallFacesIn(const LLVector3d& min, const LLVector3d& max, const 
 
 void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const SegmentFn& fn) const
 {
+    LL_PROFILE_ZONE_SCOPED;
     const S32 c = static_cast<S32>(cls);
     constexpr S32 ACROSS = SegmentCells::ACROSS;
     std::vector<U32> picked;
+    U32 tiles_hit = 0, cells_built = 0, segments_read = 0;
     forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
         if (!tile.mSegments[c] || tile.mSegments[c]->empty())
         {
             return;
         }
+        ++tiles_hit;
         const F64 cell = (tile.mMax.mdV[VX] - tile.mMin.mdV[VX]) / ACROSS;
         if (cell <= 0.0)
         {
@@ -1758,6 +1766,9 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
         // a quarter of a second, so they are read through cells built on the first query.
         if (!tile.mSegmentCells[c] || tile.mSegmentCells[c]->mSource != tile.mSegments[c])
         {
+            LL_PROFILE_ZONE_NAMED("sknm - segment cells build");
+            LL_PROFILE_ZONE_NUM(tile.mSegments[c]->size());
+            ++cells_built;
             auto cells = std::make_shared<SegmentCells>();
             cells->mSource = tile.mSegments[c];
             const std::vector<WallSegment>& segments = *tile.mSegments[c];
@@ -1797,6 +1808,7 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
             std::sort(picked.begin(), picked.end());
             picked.erase(std::unique(picked.begin(), picked.end()), picked.end());
         }
+        segments_read += static_cast<U32>(picked.size());
         for (const U32 i : picked)
         {
             const WallSegment& seg = segments[i];
@@ -1808,6 +1820,9 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
             }
         }
     });
+    LL_PROFILE_ZONE_NUM(tiles_hit);
+    LL_PROFILE_ZONE_NUM(cells_built);
+    LL_PROFILE_ZONE_NUM(segments_read);
 }
 
 void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const
