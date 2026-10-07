@@ -1364,4 +1364,42 @@ template<> template<>
         }
         ensure("the landed coarse keeps", coarse_kept);
     }
+
+    /// A roofed 8 x 8 m room with a recess off its north wall, through a
+    /// slot under a lintel: the recess's inside is 2.5 m wide and depth deep.
+    Scene roomWithRecess(F32 slot, F32 depth)
+    {
+        Scene s;
+        s.wall(2.f, 2.f, 10.f, 2.25f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(9.75f, 2.f, 10.f, 10.f);
+        const F32 x0 = 6.f - slot * 0.5f, x1 = 6.f + slot * 0.5f;
+        s.wall(2.f, 9.75f, x0, 10.f);
+        s.wall(x1, 9.75f, 10.f, 10.f);
+        s.box(x0, 9.75f, x1, 10.f, 2.2f, 3.f, false);
+        s.wall(4.5f, 10.f, 4.75f, 10.f + depth + 0.25f);
+        s.wall(7.25f, 10.f, 7.5f, 10.f + depth + 0.25f);
+        s.wall(4.5f, 10.f + depth, 7.5f, 10.f + depth + 0.25f);
+        s.box(2.f, 2.f, 10.f, 10.f + depth + 0.25f, 3.f, 3.25f);
+        return s;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<35>()
+    {
+        set_test_name("a recess smaller than an avatar's floor joins its room, though the doorway into it has a lintel");
+        const Result r = run(roomWithRecess(1.f, 0.625f).input(1));
+        const Space* room = r.at(6.f, 6.f);
+        ensure("the room has a space", room != nullptr);
+        ensure("the recess is the room's", r.at(6.f, 10.3f) == room);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure("no space under an avatar's floor", sp.mFloorArea >= SpaceParams().mAvatarAreaM2);
+        }
+        // A closet as wide but deeper is a space of its own behind its doorway.
+        const Result deep = run(roomWithRecess(1.f, 3.f).input(1));
+        const Space* closet = deep.at(6.f, 11.5f);
+        ensure("the closet is its own space", closet && closet != deep.at(6.f, 6.f));
+        ensure_equals("behind one opening", deep.between(closet, deep.at(6.f, 6.f)).size(), 1u);
+    }
 }

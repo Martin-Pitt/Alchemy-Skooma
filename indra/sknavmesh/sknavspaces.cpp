@@ -627,6 +627,7 @@ namespace sknav
         void number();
         void unite(U32 a, U32 b);
         void edges();
+        void absorbFragments();
         void merge();
         bool demoteFlatFlights(F32 min_rise);
         std::vector<Run> runs(const std::vector<U32>& edge_ids, U32 ru) const;
@@ -2659,6 +2660,98 @@ namespace sknav
         return changed;
     }
 
+    void SpacesPass::State::absorbFragments()
+    {
+        // A region smaller than an avatar's floor is a fragment of a cut, not
+        // a space: smallest first, it joins the neighbour it shares the most
+        // boundary with before any cut is scored, flight or floor, and the
+        // joined region flies when most of its floor does.
+        const U32 total = static_cast<U32>(mSeeds.size());
+        const F64 cell_area = static_cast<F64>(mCell) * mCell;
+        const F64 min_area = params().mAvatarAreaM2;
+        std::unordered_map<U32, F64> area, flying;
+        std::unordered_map<U32, std::vector<U32>> members;
+        for (U32 s = 0; s < total; ++s)
+        {
+            const U32 r = mRegions.find(s);
+            const F64 a = mTiles[mSeeds[s].mTile].mRooms.mStats[mSeeds[s].mLocal].mCells * cell_area;
+            area[r] += a;
+            flying[r] += mSeeds[s].mFlight ? a : 0.0;
+            members[r].push_back(s);
+        }
+        std::unordered_map<U32, std::map<U32, U32>> nb;
+        for (const Edge& e : mEdges)
+        {
+            const U32 a = mRegions.find(e.mA), b = mRegions.find(e.mB);
+            if (a != b)
+            {
+                ++nb[a][b];
+                ++nb[b][a];
+            }
+        }
+        typedef std::pair<F64, U32> Item;
+        std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+        for (const auto& [r, a] : area)
+        {
+            if (a < min_area)
+            {
+                heap.emplace(a, r);
+            }
+        }
+        while (!heap.empty())
+        {
+            const Item top = heap.top();
+            heap.pop();
+            const U32 r = top.second;
+            if (mRegions.find(r) != r || top.first != area[r] || top.first >= min_area)
+            {
+                continue;
+            }
+            auto& mine = nb[r];
+            U32 best = NONE, best_w = 0;
+            for (const auto& [o, w] : mine)
+            {
+                if (w > best_w)
+                {
+                    best = o;
+                    best_w = w;
+                }
+            }
+            if (best == NONE)
+            {
+                continue;
+            }
+            mRegions.unite(r, best);
+            const U32 root = mRegions.find(r), gone = root == r ? best : r;
+            for (const auto& [o, w] : nb[gone])
+            {
+                if (o == root)
+                {
+                    continue;
+                }
+                nb[root][o] += w;
+                nb[o][root] += w;
+                nb[o].erase(gone);
+            }
+            nb[root].erase(gone);
+            nb.erase(gone);
+            area[root] += area[gone];
+            flying[root] += flying[gone];
+            std::vector<U32>& kept = members[root];
+            kept.insert(kept.end(), members[gone].begin(), members[gone].end());
+            members.erase(gone);
+            const bool flight = flying[root] * 2.0 > area[root];
+            for (U32 s : kept)
+            {
+                mSeeds[s].mFlight = flight;
+            }
+            if (area[root] < min_area)
+            {
+                heap.emplace(area[root], root);
+            }
+        }
+    }
+
     void SpacesPass::State::merge()
     {
         edges();
@@ -2701,6 +2794,7 @@ namespace sknav
             }
         }
         std::vector<std::unordered_map<U64, S32>>().swap(mShadow);
+        absorbFragments();
         const U32 total = static_cast<U32>(mSeeds.size());
         auto makePortal = [this](const Run& r, const Scored& s, PortalKind kind, U32 u, U32 v) {
             Portal q;
