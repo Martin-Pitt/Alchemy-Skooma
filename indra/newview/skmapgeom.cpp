@@ -1521,6 +1521,7 @@ namespace skmap
                     return it->second;
                 }
                 const sknav::Record& r = *recs[ri];
+                SK_SECTION_STAGE(SLICE);
                 SlicePtr sl;
                 if (cache)
                 {
@@ -1542,7 +1543,10 @@ namespace skmap
             {
                 SceneLayer& layer = s.mLayers[l];
                 // 4. The layer's local floor levels.
-                buildLevels(s, layer, layer.mLevels);
+                {
+                    SK_SECTION_STAGE(LEVELS);
+                    buildLevels(s, layer, layer.mLevels);
+                }
                 const LevelGrid& grid = layer.mLevels;
                 if (grid.mW == 0)
                 {
@@ -1550,6 +1554,9 @@ namespace skmap
                 }
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
+#if AL_BENCH
+                auto pairs_timer = std::make_unique<SectionStageTimer>(SectionStage::PAIRS);
+#endif
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
                 std::set<S32> planes;
@@ -1625,6 +1632,9 @@ namespace skmap
                 }
                 std::sort(pairs.begin(), pairs.end());
                 pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+#if AL_BENCH
+                pairs_timer.reset();
+#endif
 
                 // 6. Pieces, in (record, plane, group) order.
                 const S32 li = static_cast<S32>(l);
@@ -1648,6 +1658,7 @@ namespace skmap
                     bool demoted = false;
                     if (sl->mSheet)
                     {
+                        SK_SECTION_STAGE(SHEET);
                         // Outer loops before the loops nested in them, so each sees its ancestors' verdicts.
                         std::vector<std::pair<S32, size_t>> order;
                         for (size_t i = 0; i < sl->mLoops.size(); ++i)
@@ -1795,6 +1806,7 @@ namespace skmap
                         {
                             p += shift;
                         }
+                        SK_SECTION_STAGE(ISLAND);
                         if (isIsland(ring.data(), static_cast<U32>(ring.size()), g.mThickness, floor_at))
                         {
                             piece.mFlags |= PIECE_ISLAND;

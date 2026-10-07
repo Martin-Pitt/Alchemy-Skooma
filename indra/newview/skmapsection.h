@@ -28,6 +28,7 @@
 #include "sknavtypes.h"
 #include "v2math.h"
 
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <list>
@@ -180,6 +181,56 @@ namespace skmap
         std::map<Key, Entry> mEntries;
         std::list<Key> mLru;        ///< most recent first
     };
+
+#if AL_BENCH
+    /// Benchmark builds only: wall time per stage of a section build, kept while mOn is set.
+    enum class SectionStage : U8
+    {
+        LEVELS, PAIRS, SLICE, ZBINS, SHAPE, SEGMENTS, CHAIN, CLOSE, SIMPLIFY, NEST, SHEET, ISLAND, COUNT
+    };
+    struct SectionProfile
+    {
+        bool mOn = false;
+        F64 mMs[static_cast<size_t>(SectionStage::COUNT)] = {};
+        U64 mCalls[static_cast<size_t>(SectionStage::COUNT)] = {};
+    };
+    inline SectionProfile& sectionProfile()
+    {
+        static SectionProfile profile;
+        return profile;
+    }
+    class SectionStageTimer
+    {
+    public:
+        explicit SectionStageTimer(SectionStage stage)
+            : mStage(stage), mOn(sectionProfile().mOn)
+        {
+            if (mOn)
+            {
+                mStart = std::chrono::steady_clock::now();
+            }
+        }
+        ~SectionStageTimer()
+        {
+            if (mOn)
+            {
+                SectionProfile& p = sectionProfile();
+                p.mMs[static_cast<size_t>(mStage)] += std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - mStart).count();
+                p.mCalls[static_cast<size_t>(mStage)]++;
+            }
+        }
+
+    private:
+        SectionStage mStage;
+        bool mOn;
+        std::chrono::steady_clock::time_point mStart;
+    };
+#define SK_SECTION_STAGE_JOIN(a, b) a##b
+#define SK_SECTION_STAGE_NAME(line) SK_SECTION_STAGE_JOIN(sk_section_stage_timer_, line)
+#define SK_SECTION_STAGE(stage) skmap::SectionStageTimer SK_SECTION_STAGE_NAME(__LINE__)(skmap::SectionStage::stage)
+#else
+#define SK_SECTION_STAGE(stage) ((void)0)
+#endif
 }
 
 #endif // SK_MAPSECTION_H

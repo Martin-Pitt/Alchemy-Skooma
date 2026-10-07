@@ -3023,6 +3023,13 @@ if(AL_BUILD_TESTS)
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(skmapsection UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+  # The section build on a captured census (SKMAP_SECTION_CENSUS), cold and warm, with a fingerprint.
+  al_add_bench(
+    skmapsection
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp sknavpolys.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
   al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(

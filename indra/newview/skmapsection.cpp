@@ -452,6 +452,7 @@ namespace skmap
         void chain(const std::vector<Seg>& segs, std::vector<LLVector2>& nodes, std::vector<std::vector<S32>>& closed,
                    std::vector<std::vector<S32>>& open)
         {
+            SK_SECTION_STAGE(CHAIN);
             // Scratch kept per thread: a soup's slice is small and frequent, so allocations would dominate it.
             thread_local ChainScratch scratch;
             ChainScratch& w = scratch;
@@ -655,6 +656,7 @@ namespace skmap
             // Close what is left within 2 cm, nearest first; ties by the lower polyline index, then in the order the
             // ends are tried: tail to head, head to tail, tail to tail, head to head.
             const F64 close2 = static_cast<F64>(SECTION_CLOSE_M) * SECTION_CLOSE_M;
+            SK_SECTION_STAGE(CLOSE);
             while (!open.empty())
             {
                 bool found = false;
@@ -809,6 +811,7 @@ namespace skmap
 
         void simplifyLine(std::vector<LLVector2>& pts)
         {
+            SK_SECTION_STAGE(SIMPLIFY);
             if (pts.size() <= 2)
             {
                 return;
@@ -828,6 +831,7 @@ namespace skmap
 
         void simplifyLoop(std::vector<LLVector2>& pts)
         {
+            SK_SECTION_STAGE(SIMPLIFY);
             const size_t n = pts.size();
             if (n <= 3)
             {
@@ -1024,6 +1028,7 @@ namespace skmap
                     at += static_cast<U32>(llmax(count, 0));
                 }
                 std::vector<std::vector<D2>> bodies(rec.mConvexTris.size());
+                SK_SECTION_STAGE(SEGMENTS);
                 for (U32 k = 0; k < nids; ++k)
                 {
                     const U32 t = triAt(k);
@@ -1049,12 +1054,15 @@ namespace skmap
             }
 
             std::vector<Seg> segs;
-            for (U32 k = 0; k < nids; ++k)
             {
-                Seg seg;
-                if (triangleSegment(&tris[static_cast<size_t>(triAt(k)) * 3], c, seg))
+                SK_SECTION_STAGE(SEGMENTS);
+                for (U32 k = 0; k < nids; ++k)
                 {
-                    segs.push_back(seg);
+                    Seg seg;
+                    if (triangleSegment(&tris[static_cast<size_t>(triAt(k)) * 3], c, seg))
+                    {
+                        segs.push_back(seg);
+                    }
                 }
             }
             std::vector<LLVector2> nodes;
@@ -1107,6 +1115,7 @@ namespace skmap
                 s.mPts.insert(s.mPts.end(), pts.begin(), pts.end());
                 s.mLines.push_back(line);
             }
+            SK_SECTION_STAGE(NEST);
             windByNesting(s);
         }
     }
@@ -1282,6 +1291,13 @@ namespace skmap
     SliceResult sliceRecord(const sknav::Record& rec, F32 c, const ZBins* bins)
     {
         SliceResult s;
+        if (rec.mShape == sknav::Shape::TRIANGLES)
+        {
+            s.mSheet = !rec.mSolid;
+            sliceSoup(rec, c, bins, s);
+            return s;
+        }
+        SK_SECTION_STAGE(SHAPE);
         std::vector<LLVector2> loop;
         bool made = false;
         switch (rec.mShape)
@@ -1289,10 +1305,7 @@ namespace skmap
             case sknav::Shape::BOX: made = sliceBox(rec, c, loop); break;
             case sknav::Shape::SPHERE: made = sliceEllipsoid(rec, c, loop); break;
             case sknav::Shape::CYLINDER: made = sliceCylinder(rec, c, loop); break;
-            case sknav::Shape::TRIANGLES:
-                s.mSheet = !rec.mSolid;
-                sliceSoup(rec, c, bins, s);
-                return s;
+            case sknav::Shape::TRIANGLES: break;
         }
         if (made && std::fabs(loopArea(loop.data(), static_cast<U32>(loop.size()))) > 1e-12f)
         {
@@ -1780,6 +1793,7 @@ namespace skmap
             }
             else
             {
+                SK_SECTION_STAGE(ZBINS);
                 bins = std::make_shared<const ZBins>(buildZBins(*rec.mTriangles));
                 Entry e;
                 e.mBins = bins;
