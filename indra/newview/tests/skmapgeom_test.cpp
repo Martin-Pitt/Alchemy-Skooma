@@ -1202,4 +1202,45 @@ namespace tut
         ensure("no leaf there without it", skmap::cellKey(*none, layerOf(*none, LLVector3d(2.0, 2.0, 0.0)), far_leaf) == 0);
         ensure("its leaf exists", skmap::cellKey(*e, le, far_leaf) != 0);
     }
+
+    // Orphans: a navmesh wall line stays only where nothing the section cut stands behind it.
+    template<> template<>
+    void skmapgeom_object::test<27>()
+    {
+        TileMaker t;
+        t.quad(-4.f, -4.f, 8.f, 0.f, 0.f, 0.f);
+        WallSegment w;
+        w.mA.set(0.f, 0.f, 0.f);
+        w.mB.set(4.f, 0.f, 0.f);
+        w.mKind = EdgeKind::WALL;
+        w.mValue = 3.f;
+        t.mSegments.push_back(w);
+        auto walls = [&](const std::vector<RecordPtr>& recs) {
+            skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }, &recs));
+            std::vector<std::pair<F32, F32>> out;
+            for (const skmap::LineMark& m : s->mMarks)
+            {
+                if (m.mKind == skmap::MarkKind::WALL)
+                {
+                    ensure_equals("the floor side kept", static_cast<S32>(m.mFloorSide), -1);
+                    out.emplace_back(llmin(m.mA.mV[VX], m.mB.mV[VX]), llmax(m.mA.mV[VX], m.mB.mV[VX]));
+                }
+            }
+            return out;
+        };
+        auto span = [](F32 x0, F32 y0, F32 x1, F32 y1, U64 sig) {
+            return boxRecord(LLVector3((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, 1.5f), LLVector3((x1 - x0) * 0.5f, (y1 - y0) * 0.5f, 1.5f), sig);
+        };
+        auto same = [](F32 a, F32 b) { return std::fabs(a - b) < 1e-3f; };
+
+        ensure("covered all along", walls({ span(-0.5f, 0.375f, 4.5f, 0.625f, 1) }).empty());
+        std::vector<std::pair<F32, F32>> kept = walls({});
+        ensure("nothing behind: the whole wall", kept.size() == 1 && same(kept[0].first, 0.f) && same(kept[0].second, 4.f));
+        kept = walls({ span(-0.5f, 0.375f, 2.f, 0.625f, 1) });
+        ensure("half covered: the rest", kept.size() == 1 && same(kept[0].first, 2.5f) && same(kept[0].second, 4.f));
+        kept = walls({ span(-0.5f, 1.5f, 4.5f, 1.8f, 1) });
+        ensure("too far behind: the whole wall", kept.size() == 1 && same(kept[0].first, 0.f) && same(kept[0].second, 4.f));
+        kept = walls({ span(1.9f, 0.4f, 2.1f, 0.6f, 1) });
+        ensure("clutter covers nothing", kept.size() == 1 && same(kept[0].first, 0.f) && same(kept[0].second, 4.f));
+    }
 }

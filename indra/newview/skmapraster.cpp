@@ -39,7 +39,11 @@ namespace skmap
     {
         constexpr S32 N = CELL_TEXELS;
         constexpr S32 SUB = 2;                  ///< subsamples per texel a side
-        constexpr S32 M = N * SUB;
+        /// Floors and the section are rasterised this many texels past the cell, so an outline at the cell's border
+        /// sees the texels beyond it.
+        constexpr S32 PAD = 2;
+        constexpr S32 NP = N + 2 * PAD;
+        constexpr S32 MP = NP * SUB;
 
         /// Premultiplied float image, composited in place.
         struct Image
@@ -128,6 +132,64 @@ namespace skmap
             return LLVector2(v.mV[VX], v.mV[VY]);
         }
 
+        S64 floorDiv(S64 a, S64 b)
+        {
+            return a >= 0 ? a / b : -((-a + b - 1) / b);
+        }
+
+        /// A class mask's outline on the padded texel grid: partial texels, and inside texels (two subsamples or more)
+        /// with a 4-neighbour outside, grown by one texel.
+        void edgeBand(const std::vector<U8>& counts, std::vector<U8>& band)
+        {
+            std::vector<U8> edge(counts.size(), 0);
+            auto inside = [&](S32 x, S32 y) { return x >= 0 && x < NP && y >= 0 && y < NP && counts[static_cast<size_t>(y) * NP + x] >= 2; };
+            for (S32 y = 0; y < NP; ++y)
+            {
+                for (S32 x = 0; x < NP; ++x)
+                {
+                    const U8 c = counts[static_cast<size_t>(y) * NP + x];
+                    bool e = c > 0 && c < 4;
+                    if (!e && c >= 2)
+                    {
+                        e = !inside(x + 1, y) || !inside(x - 1, y) || !inside(x, y + 1) || !inside(x, y - 1);
+                    }
+                    edge[static_cast<size_t>(y) * NP + x] = e ? 1 : 0;
+                }
+            }
+            band = edge;
+            for (S32 y = 0; y < NP; ++y)
+            {
+                for (S32 x = 0; x < NP; ++x)
+                {
+                    if (edge[static_cast<size_t>(y) * NP + x])
+                    {
+                        continue;
+                    }
+                    const bool grown = (x + 1 < NP && edge[static_cast<size_t>(y) * NP + x + 1]) || (x > 0 && edge[static_cast<size_t>(y) * NP + x - 1])
+                                    || (y + 1 < NP && edge[static_cast<size_t>(y + 1) * NP + x]) || (y > 0 && edge[static_cast<size_t>(y - 1) * NP + x]);
+                    band[static_cast<size_t>(y) * NP + x] = grown ? 1 : 0;
+                }
+            }
+        }
+
+        /// Whether any global 1 m cell of a box lists the level.
+        bool anyListed(const LevelGrid& grid, const LLVector3d& origin, const LLVector2& lo, const LLVector2& hi, S32 k)
+        {
+            const S32 x0 = static_cast<S32>(std::floor(origin.mdV[VX] + lo.mV[VX])), x1 = static_cast<S32>(std::floor(origin.mdV[VX] + hi.mV[VX]));
+            const S32 y0 = static_cast<S32>(std::floor(origin.mdV[VY] + lo.mV[VY])), y1 = static_cast<S32>(std::floor(origin.mdV[VY] + hi.mV[VY]));
+            for (S32 y = y0; y <= y1; ++y)
+            {
+                for (S32 x = x0; x <= x1; ++x)
+                {
+                    if (levelListed(grid, x, y, k))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         /// The straight colour and alpha one subsample of a floor bakes to; only a graded (ramp) one is shaded by height.
         void floorColour(const ScenePoly& poly, F32 z, F32 base, bool graded, const RasterParams& params, F32 out[4])
         {
@@ -198,12 +260,14 @@ namespace skmap
         const F32 size = N * f.mTexel;
         const F32 sub = f.mTexel / SUB;
 
-        // 1-2. Fill, in painter order: ascending mean height, the larger area on a tie.
+        // 1-2. Fill, in painter order: ascending mean height, the larger area on a tie. Floors are found over the
+        // padded cell, so the section's floor rules hold in the margin too.
+        const F32 pad = PAD * f.mTexel;
         std::vector<U32> polys;
         for (U32 id : L.mPolys)
         {
             const ScenePoly& p = scene.mPolys[id];
-            if (p.mMaxX >= f.mX0 && p.mMinX <= f.mX0 + size && p.mMaxY >= f.mY0 && p.mMinY <= f.mY0 + size)
+            if (p.mMaxX >= f.mX0 - pad && p.mMinX <= f.mX0 + size + pad && p.mMaxY >= f.mY0 - pad && p.mMinY <= f.mY0 + size + pad)
             {
                 polys.push_back(id);
             }
@@ -225,8 +289,11 @@ namespace skmap
         {
             stats->mPolys = static_cast<S32>(polys.size());
         }
-        std::vector<S32> owner(static_cast<size_t>(M) * M, -1);
-        std::vector<F32> height(static_cast<size_t>(M) * M, 0.f);
+        // Subsample (i, j) of the padded grid has its centre PAD texels south-west of the cell's own.
+        const S32 off = PAD * SUB;
+        auto subCentre = [&](S32 i, S32 j) { return LLVector2(f.mX0 + (i - off + 0.5f) * sub, f.mY0 + (j - off + 0.5f) * sub); };
+        std::vector<S32> owner(static_cast<size_t>(MP) * MP, -1);
+        std::vector<F32> height(static_cast<size_t>(MP) * MP, 0.f);
         for (U32 id : polys)
         {
             const ScenePoly& poly = scene.mPolys[id];
@@ -239,15 +306,15 @@ namespace skmap
                 {
                     continue;
                 }
-                const S32 sx0 = llmax(0, static_cast<S32>(std::floor((llmin(a.mV[VX], llmin(b.mV[VX], c.mV[VX])) - f.mX0) / sub)));
-                const S32 sy0 = llmax(0, static_cast<S32>(std::floor((llmin(a.mV[VY], llmin(b.mV[VY], c.mV[VY])) - f.mY0) / sub)));
-                const S32 sx1 = llmin(M - 1, static_cast<S32>(std::floor((llmax(a.mV[VX], llmax(b.mV[VX], c.mV[VX])) - f.mX0) / sub)));
-                const S32 sy1 = llmin(M - 1, static_cast<S32>(std::floor((llmax(a.mV[VY], llmax(b.mV[VY], c.mV[VY])) - f.mY0) / sub)));
+                const S32 sx0 = llmax(0, static_cast<S32>(std::floor((llmin(a.mV[VX], llmin(b.mV[VX], c.mV[VX])) - f.mX0) / sub)) + off);
+                const S32 sy0 = llmax(0, static_cast<S32>(std::floor((llmin(a.mV[VY], llmin(b.mV[VY], c.mV[VY])) - f.mY0) / sub)) + off);
+                const S32 sx1 = llmin(MP - 1, static_cast<S32>(std::floor((llmax(a.mV[VX], llmax(b.mV[VX], c.mV[VX])) - f.mX0) / sub)) + off);
+                const S32 sy1 = llmin(MP - 1, static_cast<S32>(std::floor((llmax(a.mV[VY], llmax(b.mV[VY], c.mV[VY])) - f.mY0) / sub)) + off);
                 for (S32 sy = sy0; sy <= sy1; ++sy)
                 {
                     for (S32 sx = sx0; sx <= sx1; ++sx)
                     {
-                        const LLVector2 p(f.mX0 + (sx + 0.5f) * sub, f.mY0 + (sy + 0.5f) * sub);
+                        const LLVector2 p = subCentre(sx, sy);
                         const F32 wa = cross2(b, c, p) / area;
                         const F32 wb = cross2(c, a, p) / area;
                         const F32 wc = 1.f - wa - wb;
@@ -255,7 +322,7 @@ namespace skmap
                         {
                             continue;
                         }
-                        const size_t i = static_cast<size_t>(sy) * M + sx;
+                        const size_t i = static_cast<size_t>(sy) * MP + sx;
                         owner[i] = static_cast<S32>(id);
                         height[i] = wa * tri[0].mV[VZ] + wb * tri[1].mV[VZ] + wc * tri[2].mV[VZ];
                     }
@@ -270,7 +337,7 @@ namespace skmap
                 F32 sum[4] = { 0.f, 0.f, 0.f, 0.f };
                 for (S32 k = 0; k < SUB * SUB; ++k)
                 {
-                    const size_t i = static_cast<size_t>(y * SUB + k / SUB) * M + (x * SUB + k % SUB);
+                    const size_t i = static_cast<size_t>(y * SUB + k / SUB + off) * MP + (x * SUB + k % SUB + off);
                     if (owner[i] < 0)
                     {
                         continue;
@@ -417,6 +484,190 @@ namespace skmap
                 if (stats)
                 {
                     stats->mChevrons++;
+                }
+            }
+        }
+
+        // 7. The section: what the planes cut, as class masks over the padded cell, then fills and their outlines.
+        if (params.mSection && !L.mPieces.empty())
+        {
+            const size_t msize = static_cast<size_t>(MP) * MP;
+            std::vector<U8> full(msize, 0), low(msize, 0), prov(msize, 0), scratch;
+            std::vector<U16> loops;
+            std::vector<S8> winds;
+            const F32 px0 = f.mX0 - pad, py0 = f.mY0 - pad, pspan = NP * f.mTexel;
+            S32 pieces = 0;
+            for (U32 id : L.mPieces)
+            {
+                const SectionPiece& piece = scene.mPieces[id];
+                if (piece.mMax.mV[VX] < px0 || piece.mMin.mV[VX] > px0 + pspan || piece.mMax.mV[VY] < py0 || piece.mMin.mV[VY] > py0 + pspan)
+                {
+                    continue;
+                }
+                ++pieces;
+                const S32 i0 = llclamp(static_cast<S32>(std::floor((piece.mMin.mV[VX] - px0) / sub)) - 1, 0, MP - 1);
+                const S32 i1 = llclamp(static_cast<S32>(std::floor((piece.mMax.mV[VX] - px0) / sub)) + 1, 0, MP - 1);
+                const S32 j0 = llclamp(static_cast<S32>(std::floor((piece.mMin.mV[VY] - py0) / sub)) - 1, 0, MP - 1);
+                const S32 j1 = llclamp(static_cast<S32>(std::floor((piece.mMax.mV[VY] - py0) / sub)) + 1, 0, MP - 1);
+                const S32 w = i1 - i0 + 1, h = j1 - j0 + 1;
+                scratch.assign(static_cast<size_t>(w) * h, 0);
+                const bool lines = (piece.mFlags & PIECE_LINES) != 0;
+                if (lines)
+                {
+                    // Lines and demoted loops are stamped, never filled.
+                    loops.clear();
+                    winds.clear();
+                    const size_t nlines = piece.mSlice->mLines.size();
+                    for (U16 l : piece.mLines)
+                    {
+                        if (l >= nlines)
+                        {
+                            loops.push_back(static_cast<U16>(l - nlines));
+                            winds.push_back(0);
+                        }
+                    }
+                    fillCoverage(*piece.mSlice, loops, winds, true, piece.mShift, f.mX0 + (i0 - off) * sub, f.mY0 + (j0 - off) * sub, sub, w, h,
+                                 scratch);
+                }
+                else
+                {
+                    fillCoverage(*piece.mSlice, piece.mLoops, piece.mWind, false, piece.mShift, f.mX0 + (i0 - off) * sub,
+                                 f.mY0 + (j0 - off) * sub, sub, w, h, scratch);
+                }
+                const bool island = (piece.mFlags & PIECE_ISLAND) != 0;
+                const bool blob = (piece.mFlags & PIECE_BLOB) != 0;
+                const bool provisional = piece.mStyle == SectionStyle::PROVISIONAL;
+                const F32 plane = static_cast<F32>(sectionPlaneZ(piece.mPlane) - scene.mOrigin.mdV[VZ]);
+                const S32 low_level = piece.mPlane - SECTION_LOW_Q, high_level = piece.mPlane - SECTION_HIGH_Q;
+                // An island is gated by the levels around it rather than its own cells.
+                bool island_low = false, island_high = false;
+                if (island)
+                {
+                    const LLVector2 grow(LEVEL_CELL_M, LEVEL_CELL_M);
+                    island_low = anyListed(L.mLevels, scene.mOrigin, piece.mMin - grow, piece.mMax + grow, low_level);
+                    island_high = anyListed(L.mLevels, scene.mOrigin, piece.mMin - grow, piece.mMax + grow, high_level);
+                }
+                for (S32 j = 0; j < h; ++j)
+                {
+                    const S32 pj = j0 + j;
+                    for (S32 i = 0; i < w; ++i)
+                    {
+                        if (!scratch[static_cast<size_t>(j) * w + i])
+                        {
+                            continue;
+                        }
+                        const S32 pi = i0 + i;
+                        const size_t at = static_cast<size_t>(pj) * MP + pi;
+                        // Floor rules: nothing over walkable floor, but an island on its own raised top.
+                        if (owner[at] >= 0 && !(island && height[at] > plane - SECTION_HEADROOM_M))
+                        {
+                            continue;
+                        }
+                        bool low_role, high_role;
+                        if (island)
+                        {
+                            low_role = island_low;
+                            high_role = island_high;
+                        }
+                        else
+                        {
+                            const LLVector2 c = subCentre(pi, pj);
+                            const S32 gx = static_cast<S32>(std::floor(scene.mOrigin.mdV[VX] + c.mV[VX]));
+                            const S32 gy = static_cast<S32>(std::floor(scene.mOrigin.mdV[VY] + c.mV[VY]));
+                            low_role = levelListed(L.mLevels, gx, gy, low_level);
+                            high_role = levelListed(L.mLevels, gx, gy, high_level);
+                        }
+                        low_role = low_role && !blob;
+                        if (provisional)
+                        {
+                            prov[at] |= (low_role || high_role) ? 1 : 0;
+                            continue;
+                        }
+                        full[at] |= high_role ? 1 : 0;
+                        low[at] |= low_role ? 1 : 0;
+                    }
+                }
+            }
+
+            // Per padded texel, how many of its four subsamples are FULL, HALF and provisional.
+            const size_t tsize = static_cast<size_t>(NP) * NP;
+            std::vector<U8> cf(tsize, 0), ch(tsize, 0), cp(tsize, 0), cany(tsize, 0);
+            for (S32 y = 0; y < NP; ++y)
+            {
+                for (S32 x = 0; x < NP; ++x)
+                {
+                    U8 nf = 0, nh = 0, np = 0;
+                    for (S32 k = 0; k < SUB * SUB; ++k)
+                    {
+                        const size_t i = static_cast<size_t>(y * SUB + k / SUB) * MP + (x * SUB + k % SUB);
+                        nf += full[i];
+                        nh += (low[i] && !full[i]) ? 1 : 0;
+                        np += prov[i];
+                    }
+                    const size_t t = static_cast<size_t>(y) * NP + x;
+                    cf[t] = nf;
+                    ch[t] = nh;
+                    cp[t] = np;
+                    cany[t] = nf + nh;
+                }
+            }
+            std::vector<U8> full_edge, any_edge, prov_edge;
+            edgeBand(cf, full_edge);
+            edgeBand(cany, any_edge);
+            edgeBand(cp, prov_edge);
+            const bool flat = cell.mTier >= palette::SECTION_FLAT_TIER;
+            if (stats)
+            {
+                stats->mPieces = pieces;
+                stats->mSectionClass.assign(static_cast<size_t>(N) * N, 0);
+            }
+            for (S32 y = 0; y < N; ++y)
+            {
+                for (S32 x = 0; x < N; ++x)
+                {
+                    const size_t t = static_cast<size_t>(y + PAD) * NP + (x + PAD);
+                    const S64 gx = static_cast<S64>(cell.mX) * N + x, gy = static_cast<S64>(cell.mY) * N + y;
+                    U8 bits = 0;
+                    if (cf[t])
+                    {
+                        const PaletteColour& c = palette::SECTION_FULL;
+                        img.over(x, y, c.mR, c.mG, c.mB, palette::SECTION_FULL_ALPHA * cf[t] / 4.f);
+                        bits |= SECTION_TEXEL_FULL;
+                    }
+                    if (ch[t])
+                    {
+                        const PaletteColour& c = palette::SECTION_HALF;
+                        // The hatch runs "/", against the void hatch's "\", from global texels so it meets across cells.
+                        const bool hatch = ((gx - gy) & (palette::SECTION_HATCH_PITCH - 1)) < palette::SECTION_HATCH_LINE;
+                        const F32 a = flat ? palette::SECTION_HALF_FLAT_ALPHA
+                                           : palette::SECTION_HALF_TINT_ALPHA + (hatch ? palette::SECTION_HALF_HATCH_ALPHA : 0.f);
+                        img.over(x, y, c.mR, c.mG, c.mB, a * ch[t] / 4.f);
+                        bits |= SECTION_TEXEL_HALF;
+                    }
+                    if (any_edge[t] && !full_edge[t] && ch[t] > 0)
+                    {
+                        const PaletteColour& c = palette::SECTION_HALF;
+                        img.over(x, y, c.mR, c.mG, c.mB, palette::SECTION_HALF_EDGE_ALPHA);
+                        bits |= SECTION_TEXEL_HALF_EDGE;
+                    }
+                    if (full_edge[t])
+                    {
+                        const PaletteColour& c = palette::SECTION_FULL_EDGE;
+                        img.over(x, y, c.mR, c.mG, c.mB, palette::SECTION_FULL_EDGE_ALPHA);
+                        bits |= SECTION_TEXEL_FULL_EDGE;
+                    }
+                    if (prov_edge[t] && (floorDiv(gx + gy, palette::SECTION_DASH) & 1))
+                    {
+                        const PaletteColour& c = palette::SECTION_PROVISIONAL;
+                        img.over(x, y, c.mR, c.mG, c.mB, palette::SECTION_PROVISIONAL_ALPHA);
+                        bits |= SECTION_TEXEL_PROVISIONAL_EDGE;
+                    }
+                    if (stats)
+                    {
+                        stats->mSectionClass[static_cast<size_t>(y) * N + x] = bits;
+                        stats->mFullTexels += (bits & SECTION_TEXEL_FULL) ? 1 : 0;
+                        stats->mHalfTexels += (bits & SECTION_TEXEL_HALF) ? 1 : 0;
+                    }
                 }
             }
         }

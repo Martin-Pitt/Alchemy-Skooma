@@ -349,6 +349,55 @@ namespace skmap
             return cross2(a, b, centroid) > 0.f ? 1 : -1;
         }
 
+        /// The plan distance from a scene-local point to a section piece: 0 inside its fill, else to its nearest edge or line.
+        F32 pieceDistance(const SectionPiece& piece, const LLVector2& p)
+        {
+            const SliceResult& sl = *piece.mSlice;
+            const LLVector2 q = p - piece.mShift;
+            std::vector<std::pair<const SliceLoop*, bool>> edges;     // (run, closed)
+            if (piece.mFlags & PIECE_LINES)
+            {
+                const size_t nlines = sl.mLines.size();
+                for (U16 l : piece.mLines)
+                {
+                    edges.emplace_back(l < nlines ? &sl.mLines[l] : &sl.mLoops[l - nlines], l >= nlines);
+                }
+            }
+            else
+            {
+                S32 wind = 0;
+                for (size_t k = 0; k < piece.mLoops.size(); ++k)
+                {
+                    const SliceLoop& loop = sl.mLoops[piece.mLoops[k]];
+                    if (loopContains(&sl.mPts[loop.mFirst], loop.mCount, q))
+                    {
+                        wind += piece.mWind[k];
+                    }
+                    edges.emplace_back(&loop, true);
+                }
+                if (wind > 0)
+                {
+                    return 0.f;
+                }
+            }
+            F32 best = FLT_MAX;
+            for (const auto& e : edges)
+            {
+                const SliceLoop& run = *e.first;
+                if (run.mCount == 1)
+                {
+                    best = llmin(best, (q - sl.mPts[run.mFirst]).length());
+                    continue;
+                }
+                const U32 n = e.second ? run.mCount : run.mCount - 1;
+                for (U32 k = 0; k < n; ++k)
+                {
+                    best = llmin(best, segmentDistance(q, sl.mPts[run.mFirst + k], sl.mPts[run.mFirst + (k + 1) % run.mCount]));
+                }
+            }
+            return best;
+        }
+
         /// Step 8: walls, ledges and overhangs on their floors, drop edges and points, doors,
         /// ladder and elevator glyphs, and the region edges where floors meet them.
         void classifyMarks(Scene& s, const SceneInput& input)
@@ -456,6 +505,54 @@ namespace skmap
                 }
             }
 
+            // Orphans: with the section, a wall line stays only where no piece of its layer stands behind it.
+            std::vector<std::map<Cell, std::vector<U32>>> piece_cells;
+            if (s.mHasSection)
+            {
+                piece_cells.resize(s.mLayers.size());
+                for (size_t l = 0; l < s.mLayers.size(); ++l)
+                {
+                    for (U32 id : s.mLayers[l].mPieces)
+                    {
+                        const SectionPiece& piece = s.mPieces[id];
+                        if (piece.mFlags & PIECE_BLOB)
+                        {
+                            continue;   // clutter covers nothing
+                        }
+                        const LLVector2 grow(ORPHAN_REACH_M, ORPHAN_REACH_M);
+                        const Cell lo = cellOfLocal(s, piece.mMin - grow), hi = cellOfLocal(s, piece.mMax + grow);
+                        for (S32 y = lo.second; y <= hi.second; ++y)
+                        {
+                            for (S32 x = lo.first; x <= hi.first; ++x)
+                            {
+                                piece_cells[l][{ x, y }].push_back(id);
+                            }
+                        }
+                    }
+                }
+            }
+            auto covered = [&](S32 layer, const LLVector2& p) {
+                const auto it = piece_cells[layer].find(cellOfLocal(s, p));
+                if (it == piece_cells[layer].end())
+                {
+                    return false;
+                }
+                for (U32 id : it->second)
+                {
+                    const SectionPiece& piece = s.mPieces[id];
+                    if (p.mV[VX] < piece.mMin.mV[VX] - ORPHAN_REACH_M || p.mV[VX] > piece.mMax.mV[VX] + ORPHAN_REACH_M
+                        || p.mV[VY] < piece.mMin.mV[VY] - ORPHAN_REACH_M || p.mV[VY] > piece.mMax.mV[VY] + ORPHAN_REACH_M)
+                    {
+                        continue;
+                    }
+                    if (pieceDistance(piece, p) <= ORPHAN_REACH_M)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
             for (const Seg& seg : segs)
             {
                 if (!seg.mDrop && seg.mKind == sknav::EdgeKind::OPEN)
@@ -480,6 +577,32 @@ namespace skmap
                 else if (seg.mDrop)
                 {
                     mark.mLayer = layerNear(s, (seg.mA + seg.mB) * 0.5f, mark.mZ, 0.5f);
+                }
+                if (mark.mLayer >= 0 && mark.mKind == MarkKind::WALL && s.mHasSection && mark.mFloorSide != 0)
+                {
+                    // Probe every 0.5 m part 0.4 m off the floor; keep each run of parts nothing stands behind.
+                    const LLVector2 d = mark.mB - mark.mA;
+                    const F32 len = d.length();
+                    const S32 n = llmax(2, static_cast<S32>(std::ceil(len / ORPHAN_STEP_M)));
+                    const LLVector2 away = len > 0.f ? LLVector2(-d.mV[VY], d.mV[VX]) * (-mark.mFloorSide / len) : LLVector2();
+                    S32 start = -1;
+                    for (S32 k = 0; k <= n; ++k)
+                    {
+                        const bool cover = k == n || covered(mark.mLayer, mark.mA + d * ((k + 0.5f) / n) + away * ORPHAN_PROBE_M);
+                        if (!cover && start < 0)
+                        {
+                            start = k;
+                        }
+                        if (cover && start >= 0)
+                        {
+                            LineMark orphan = mark;
+                            orphan.mA = start > 0 ? mark.mA + d * (static_cast<F32>(start) / n) : mark.mA;
+                            orphan.mB = k < n ? mark.mA + d * (static_cast<F32>(k) / n) : mark.mB;
+                            s.mMarks.push_back(orphan);
+                            start = -1;
+                        }
+                    }
+                    continue;
                 }
                 if (mark.mLayer >= 0)
                 {

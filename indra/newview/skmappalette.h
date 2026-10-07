@@ -131,6 +131,14 @@ namespace skmap
         constexpr PaletteColour CHEVRON = withAlpha(rgba8(0xe8ecefff), 0.5f);
         constexpr F32 CHEVRON_SPACING_TEXELS = 40.f;
         constexpr F32 CHEVRON_HALF_WIDTH = 0.35f;   ///< of the run's width
+        constexpr PaletteColour SECTION_FULL = rgba8(0xdfe3e7ff);
+        constexpr PaletteColour SECTION_FULL_EDGE = rgba8(0xe6e9ecff);
+        constexpr PaletteColour SECTION_HALF = rgba8(0xc9cfd5ff);
+        constexpr PaletteColour SECTION_PROVISIONAL = rgba8(0x8a9097ff);
+        constexpr F32 SECTION_FULL_ALPHA = 0.55f, SECTION_FULL_EDGE_ALPHA = 0.95f;
+        constexpr F32 SECTION_HALF_TINT_ALPHA = 0.15f, SECTION_HALF_HATCH_ALPHA = 0.45f, SECTION_HALF_FLAT_ALPHA = 0.23f;
+        constexpr F32 SECTION_HALF_EDGE_ALPHA = 0.75f, SECTION_PROVISIONAL_ALPHA = 0.6f;
+        constexpr S32 SECTION_HATCH_PITCH = 16, SECTION_HATCH_LINE = 3, SECTION_DASH = 6, SECTION_FLAT_TIER = 5;
 
         // Line marks, drawn as ribbons.
         constexpr PaletteColour COVER_FULL = withAlpha(rgba8(0xe6e9ecff), 0.8f);

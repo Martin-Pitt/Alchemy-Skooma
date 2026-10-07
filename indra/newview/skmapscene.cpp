@@ -564,7 +564,8 @@ U64 SKMapScene::bakeKey(S32 layer, const skmap::CellId& cell) const
         return 0;
     }
     U64 key = sknav::mix(content, static_cast<U64>(cell.mTier));
-    key = sknav::mix(key, (mRasterParams.mStairs ? 1u : 0u) | (mRasterParams.mContours ? 2u : 0u) | (mRasterParams.mHeatmap ? 4u : 0u));
+    key = sknav::mix(key, (mRasterParams.mStairs ? 1u : 0u) | (mRasterParams.mContours ? 2u : 0u) | (mRasterParams.mHeatmap ? 4u : 0u)
+                              | (mRasterParams.mSection ? 8u : 0u));
     key = sknav::mix(key, skmap::RASTER_VERSION);
     return key ? key : 1;
 }
@@ -811,9 +812,11 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
     static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", true);
     static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", true);
     static LLCachedControl<bool> heatmap(gSavedSettings, "SKMapHeatmap", false);
+    static LLCachedControl<bool> cover(gSavedSettings, "SKMapLayerCover", true);
     mRasterParams.mStairs = stairs;
     mRasterParams.mContours = contours;
     mRasterParams.mHeatmap = heatmap;
+    mRasterParams.mSection = cover;
     updateSelection();
     const skmap::Scene& scene = *mScene;
     const F32 za = mAgent.mFound ? mAgent.mZ : static_cast<F32>(mAgent.mPos.mdV[VZ]);

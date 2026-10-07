@@ -32,7 +32,7 @@
 namespace skmap
 {
     /// Bumped whenever the raster draws differently, so old bakes are never reused.
-    constexpr U32 RASTER_VERSION = 1;
+    constexpr U32 RASTER_VERSION = 2;
 
     /// The settings a bake reads; each is part of the bake key.
     struct RasterParams
@@ -40,7 +40,12 @@ namespace skmap
         bool mStairs = true;
         bool mContours = true;
         bool mHeatmap = false;
+        bool mSection = true;       ///< the section's walls (the cover toggle)
     };
+
+    /// Per-texel section classes in RasterStats::mSectionClass.
+    constexpr U8 SECTION_TEXEL_HALF = 1, SECTION_TEXEL_FULL = 2, SECTION_TEXEL_HALF_EDGE = 4, SECTION_TEXEL_FULL_EDGE = 8,
+                 SECTION_TEXEL_PROVISIONAL_EDGE = 16;
 
     /// What a raster drew, for tests and the debug readout.
     struct RasterStats
@@ -49,6 +54,10 @@ namespace skmap
         S32 mRungs = 0;
         S32 mChevrons = 0;
         std::vector<S32> mContourLevels;    ///< sorted, unique
+        S32 mPieces = 0;                    ///< section pieces meeting the cell
+        S32 mFullTexels = 0;
+        S32 mHalfTexels = 0;
+        std::vector<U8> mSectionClass;      ///< N x N SECTION_TEXEL_* bits, row 0 south; a texel is FULL or HALF when any subsample is
     };
 
     /// The contour spacing for a texel size: about 16 texels (8 px), never under 0.5 m, from
