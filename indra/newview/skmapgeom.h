@@ -42,7 +42,7 @@
 
 namespace skmap
 {
-    constexpr F32 RUNLESS_Z_SPAN_M = 4.f;       ///< a polygon outside a run spanning more is dropped
+    constexpr F32 RUNLESS_Z_SPAN_M = 100.f;     ///< a polygon outside a run spanning more is a glitch and dropped
     constexpr F32 LATTICE_M = 32.f;
     constexpr F32 LATTICE_TOLERANCE_M = 0.02f;
     constexpr F32 STITCH_OVERLAP_M = 0.05f;

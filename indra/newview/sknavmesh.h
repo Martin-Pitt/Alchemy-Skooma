@@ -256,6 +256,16 @@ private:
         CAUSE_FAILED,       ///< the last build of it failed
     };
 
+    /// A tile's wall segments bucketed by the 2 m cells of its footprint their plan
+    /// AABBs touch, so a query over a few metres reads a few cells rather than the
+    /// whole tile. Built on first query, for the segment vector it holds.
+    struct SegmentCells
+    {
+        static constexpr S32 ACROSS = 16;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSource;
+        std::vector<U32> mCells[ACROSS * ACROSS];
+    };
+
     struct Tile
     {
         U64 mSignature = 0;     ///< what the tile should be built from
@@ -303,6 +313,8 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+        /// Checked against mSegments by identity, so a publish needs no reset here.
+        mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };
 
     struct Layout

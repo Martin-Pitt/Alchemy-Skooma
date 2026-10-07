@@ -30,6 +30,7 @@
 #include "../sknavlayout.h"
 
 #include <algorithm>
+#include <map>
 
 namespace
 {
@@ -239,4 +240,44 @@ namespace tut
             ensure("same tiles", x.mTiles == y.mTiles);
         }
     }
+
+    template<> template<>
+    void sknavcluster_object::test<9>()
+    {
+        set_test_name("tile range lookup matches inclusive linear overlap with translated negative keys");
+        std::map<TileKey, int> tiles;
+        for (S32 x = -8; x <= 8; ++x)
+            for (S32 y = -8; y <= 8; ++y)
+                if ((x + y) % 3) tiles[{x, y}] = 1;
+        tiles[{1000000, 1000000}] = 1;
+        const LLVector3d origin(256000., 512000., 0.);
+        for (F64 a : { -96., -31.5, 0., 32., 95.5 })
+        {
+            for (F64 width : { 0., 0.5, 32., 100. })
+            {
+                const auto mn = origin + LLVector3d(a, -32., 0.);
+                const auto mx = mn + LLVector3d(width, width, 0.);
+                std::vector<TileKey> expected, actual;
+                for (const auto& entry : tiles)
+                {
+                    const auto lo = meshTileMin(origin, entry.first);
+                    if (overlapsXY(lo, lo + LLVector3d(TILE_M, TILE_M, 0.), mn, mx)) expected.push_back(entry.first);
+                }
+                visitTilesIn(tiles, origin, mn, mx, [&](const TileKey& key, const int&) { actual.push_back(key); });
+                ensure("same tiles in the same order, including edges and corners", actual == expected);
+            }
+        }
+        size_t visited = 0;
+        visitTilesIn(tiles, origin, origin + LLVector3d(2., 2., 0.), origin + LLVector3d(1., 1., 0.),
+                     [&](const TileKey&, const int&) { ++visited; });
+        ensure_equals("inverted bounds are empty", visited, size_t(0));
+        tiles[{std::numeric_limits<S32>::max(), 0}] = 1;
+        visited = 0;
+        const F64 edge = static_cast<F64>(std::numeric_limits<S32>::max()) * TILE_M;
+        visitTilesIn(tiles, origin, origin + LLVector3d(edge + 1., 1., 0.),
+                     origin + LLVector3d(edge + 2., 2., 0.),
+                     [&](const TileKey&, const int&) { ++visited; });
+        ensure_equals("last representable column terminates without increment overflow", visited, size_t(1));
+    }
+
 }

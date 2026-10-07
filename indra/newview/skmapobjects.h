@@ -62,6 +62,7 @@ private:
     LLVector3d mCentre;             ///< global, at the last raster
     F32 mTexelsPerMetre = 0.f;
     F64 mLastUpdate = -1.0e9;
+    bool mLastCombat = false;       ///< the combat flag of the last raster
     S32 mSize = 0;
 };
 
