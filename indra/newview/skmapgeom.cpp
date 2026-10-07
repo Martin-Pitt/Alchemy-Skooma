@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <deque>
 
@@ -1574,16 +1575,37 @@ namespace skmap
 #endif
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
-                std::set<S32> planes;
-                auto take = [&](U32 ri, const std::set<S32>& qs) {
-                    const sknav::Record& r = *recs[ri];
-                    for (S32 q : qs)
+                // A box of cells' planes: its distinct levels, few, kept unsorted until the end.
+                std::vector<S32> levels_in, planes;
+                auto addLevels = [&](U32 c) {
+                    const S32 count = grid.mLists[c - 1];
+                    for (S32 k = 0; k < count; ++k)
                     {
-                        const F64 z = sectionPlaneZ(q);
-                        if (r.mMin.mdV[VZ] < z && z <= r.mMax.mdV[VZ])
+                        const S32 level = grid.mLists[c + k];
+                        if (std::find(levels_in.begin(), levels_in.end(), level) == levels_in.end())
                         {
-                            pairs.emplace_back(ri, q);
+                            levels_in.push_back(level);
                         }
+                    }
+                };
+                auto makePlanes = [&]() {
+                    planes.clear();
+                    for (S32 level : levels_in)
+                    {
+                        planes.push_back(level + SECTION_LOW_Q);
+                        planes.push_back(level + SECTION_HIGH_Q);
+                    }
+                    std::sort(planes.begin(), planes.end());
+                    planes.erase(std::unique(planes.begin(), planes.end()), planes.end());
+                };
+                // Plane heights rise with q, so a record's planes are one run of the sorted list.
+                auto take = [&](U32 ri) {
+                    const sknav::Record& r = *recs[ri];
+                    auto it = std::upper_bound(planes.begin(), planes.end(), r.mMin.mdV[VZ],
+                                               [](F64 z, S32 q) { return z < static_cast<F64>(sectionPlaneZ(q)); });
+                    for (; it != planes.end() && static_cast<F64>(sectionPlaneZ(*it)) <= r.mMax.mdV[VZ]; ++it)
+                    {
+                        pairs.emplace_back(ri, *it);
                     }
                 };
                 for (S32 by = by0; by <= by1; ++by)
@@ -1595,7 +1617,7 @@ namespace skmap
                         {
                             continue;
                         }
-                        planes.clear();
+                        levels_in.clear();
                         const S32 x0 = llmax(grid.mX0, bx * per_bucket - 1), x1 = llmin(grid.mX0 + grid.mW - 1, bx * per_bucket + per_bucket);
                         const S32 y0 = llmax(grid.mY0, by * per_bucket - 1), y1 = llmin(grid.mY0 + grid.mH - 1, by * per_bucket + per_bucket);
                         for (S32 y = y0; y <= y1; ++y)
@@ -1603,46 +1625,59 @@ namespace skmap
                             for (S32 x = x0; x <= x1; ++x)
                             {
                                 const U32 c = grid.mCell[static_cast<size_t>(y - grid.mY0) * grid.mW + (x - grid.mX0)];
-                                if (!c)
+                                if (c)
                                 {
-                                    continue;
-                                }
-                                const S32 count = grid.mLists[c - 1];
-                                for (S32 k = 0; k < count; ++k)
-                                {
-                                    planes.insert(grid.mLists[c + k] + SECTION_LOW_Q);
-                                    planes.insert(grid.mLists[c + k] + SECTION_HIGH_Q);
+                                    addLevels(c);
                                 }
                             }
                         }
-                        if (planes.empty())
+                        if (levels_in.empty())
                         {
                             continue;
                         }
+                        makePlanes();
                         for (U32 ri : bucket->second)
                         {
-                            take(ri, planes);
+                            take(ri);
                         }
                     }
                 }
                 // The large list meets every bucket, so it takes the planes of the whole layer once.
                 if (!large.empty())
                 {
-                    planes.clear();
-                    for (U32 c : grid.mCell)
+                    // Every list in the layer, so a bitmap over the level range rather than a search.
+                    S32 lo = INT_MAX, hi = INT_MIN;
+                    for (size_t i = 0; i < grid.mLists.size(); i += grid.mLists[i] + 1)
                     {
-                        if (c)
+                        for (S32 k = 1; k <= grid.mLists[i]; ++k)
                         {
-                            for (S32 k = 0; k < grid.mLists[c - 1]; ++k)
+                            lo = llmin(lo, grid.mLists[i + k]);
+                            hi = llmax(hi, grid.mLists[i + k]);
+                        }
+                    }
+                    levels_in.clear();
+                    if (lo <= hi)
+                    {
+                        std::vector<U8> listed(static_cast<size_t>(hi - lo) + 1, 0);
+                        for (size_t i = 0; i < grid.mLists.size(); i += grid.mLists[i] + 1)
+                        {
+                            for (S32 k = 1; k <= grid.mLists[i]; ++k)
                             {
-                                planes.insert(grid.mLists[c + k] + SECTION_LOW_Q);
-                                planes.insert(grid.mLists[c + k] + SECTION_HIGH_Q);
+                                listed[grid.mLists[i + k] - lo] = 1;
+                            }
+                        }
+                        for (size_t k = 0; k < listed.size(); ++k)
+                        {
+                            if (listed[k])
+                            {
+                                levels_in.push_back(lo + static_cast<S32>(k));
                             }
                         }
                     }
+                    makePlanes();
                     for (U32 ri : large)
                     {
-                        take(ri, planes);
+                        take(ri);
                     }
                 }
                 std::sort(pairs.begin(), pairs.end());
