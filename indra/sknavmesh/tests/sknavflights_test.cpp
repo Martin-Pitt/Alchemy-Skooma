@@ -691,11 +691,11 @@ namespace tut
             AirGap under;
             under.mFloor = 14;
             under.mCeiling = 15;
-            under.mFlags = AirGap::WALKABLE;
+            under.mFlags = AirGap::TOP;
             AirGap tread;
             tread.mFloor = static_cast<U16>(std::lround((2.f + 0.25f * x) / 0.125f));
             tread.mCeiling = 100;
-            tread.mFlags = AirGap::WALKABLE | AirGap::OPEN;
+            tread.mFlags = AirGap::TOP | AirGap::OPEN;
             g.mGaps.push_back(under);
             g.mGaps.push_back(tread);
             g.mStart[i + 1] = static_cast<U32>(g.mGaps.size());

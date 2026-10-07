@@ -103,7 +103,7 @@ namespace
         box->mShape = Shape::BOX;
         box->mNavRole = NavRole::EXCLUSION_VOLUME;
         box->mSolid = true;
-        box->mExclude = EXCLUDE_WEATHER;
+        box->mExclude = EXCLUDE_SOLID;
         box->mOrigin = r.mOrigin;
         box->mCenter.set(10.1f, 20.2f, 30.3f);
         box->mAxes[0].set(0.6f, 0.8f, 0.f);

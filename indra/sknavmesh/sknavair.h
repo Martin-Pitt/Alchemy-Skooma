@@ -45,7 +45,7 @@ namespace sknav
     {
         enum : U8
         {
-            WALKABLE = 1 << 0,  ///< the solid under the gap is floor to the class it came from
+            TOP = 1 << 0,       ///< the solid under the gap is floor at the air's slope and headroom
             OPEN = 1 << 1,      ///< nothing above within the tile; mCeiling is the tile's top
             OWN_SKY = 1 << 2,   ///< nothing above within this tile's column: the column's top gap
             FLIGHT = 1 << 3,    ///< on a stair flight; reserved, filled by the flight records

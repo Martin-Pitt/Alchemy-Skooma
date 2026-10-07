@@ -181,7 +181,7 @@ namespace sknav
                     for (U32 i = 0; i < b.mCount; ++i)
                     {
                         // Only air something can use makes a wall matter.
-                        const bool passable = (g[i].mFlags & (AirGap::WALKABLE | AirGap::OPEN)) || g[i].mCeiling - g[i].mFloor >= pass;
+                        const bool passable = (g[i].mFlags & (AirGap::TOP | AirGap::OPEN)) || g[i].mCeiling - g[i].mFloor >= pass;
                         GapAgg a;
                         a.mFloorMin = a.mFloorMax = clipHeight(g[i].mFloor);
                         a.mCeilMin = a.mCeilMax = clipHeight(g[i].mCeiling);

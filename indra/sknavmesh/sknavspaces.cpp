@@ -614,7 +614,7 @@ namespace sknav
         {
             return (g.mFlags & AirGap::OPEN) || g.mCeiling == AIR_CEILING_OPEN ? OPEN_TOP : g.mCeiling + mTiles[t].mZOff;
         }
-        bool floorGap(U32 t, const AirGap& g) const { return (g.mFlags & AirGap::WALKABLE) && ceilOf(t, g) - floorOf(t, g) >= mWalkHead; }
+        bool floorGap(U32 t, const AirGap& g) const { return (g.mFlags & AirGap::TOP) && ceilOf(t, g) - floorOf(t, g) >= mWalkHead; }
 
         /// The tile and fine cell a (possibly out of range) cell of tile t is,
         /// or -1 past the mesh's tiles and -2 in a tile without detail.

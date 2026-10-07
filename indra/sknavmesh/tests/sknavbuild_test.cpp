@@ -126,7 +126,7 @@ namespace
         for (U32 k = 0; k < l.mGapCount; ++k)
         {
             const AirGap& g = air.mGaps[l.mFirstGap + k];
-            if ((any_floor || (g.mFlags & AirGap::WALKABLE)) && std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
+            if ((any_floor || (g.mFlags & AirGap::TOP)) && std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
             {
                 return true;
             }

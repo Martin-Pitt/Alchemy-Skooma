@@ -106,7 +106,7 @@ namespace tut
         const AirGap* g = air.gaps(0, 1);
         ensure_equals("floor", g[0].mFloor, 5);
         ensure_equals("ceiling", g[0].mCeiling, 20);
-        ensure_equals("walkable, closed", g[0].mFlags, static_cast<U8>(AirGap::WALKABLE));
+        ensure_equals("walkable, closed", g[0].mFlags, static_cast<U8>(AirGap::TOP));
         ensure_equals("roof top", g[1].mFloor, 22);
         ensure_equals("open to the tile's top", g[1].mCeiling, 50);
         ensure_equals("open, own sky, not walkable", g[1].mFlags, static_cast<U8>(AirGap::OPEN | AirGap::OWN_SKY));

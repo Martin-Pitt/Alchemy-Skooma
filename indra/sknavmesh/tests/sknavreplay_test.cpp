@@ -431,7 +431,7 @@ namespace tut
                         {
                             for (U32 k = 0; k < leaf.mGapCount; ++k)
                             {
-                                fresh->mGaps[leaf.mFirstGap + k].mFlags &= static_cast<U8>(~AirGap::WALKABLE);
+                                fresh->mGaps[leaf.mFirstGap + k].mFlags &= static_cast<U8>(~AirGap::TOP);
                             }
                         }
                     }

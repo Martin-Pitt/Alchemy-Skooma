@@ -94,7 +94,7 @@ namespace
         AirGap g;
         g.mFloor = 4;
         g.mCeiling = AIR_CEILING_OPEN;
-        g.mFlags = AirGap::WALKABLE | AirGap::OPEN;
+        g.mFlags = AirGap::TOP | AirGap::OPEN;
         g.mClear = 7;
         g.mSeed = 3;
         a.mGaps = { g, g };

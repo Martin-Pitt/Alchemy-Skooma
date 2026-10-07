@@ -303,7 +303,7 @@ namespace sknav
         {
             case FeatureKind::DOOR: return EXCLUDE_AVATAR;
             case FeatureKind::ELEVATOR: return EXCLUDE_ALL;     // a riding car must rebuild nothing
-            case FeatureKind::VEHICLE: return EXCLUDE_AVATAR | EXCLUDE_WEATHER;
+            case FeatureKind::VEHICLE: return EXCLUDE_AVATAR | EXCLUDE_SOLID;
             default: return 0;
         }
     }

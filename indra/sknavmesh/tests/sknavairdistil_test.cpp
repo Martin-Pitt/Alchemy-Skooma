@@ -61,7 +61,7 @@ namespace
                 {
                     AirGap floor;
                     floor.mFloor = ix > 24 && ix < 40 ? static_cast<U16>((ix - 24) / 8) : 0;  // a step every metre, within climb
-                    floor.mFlags = AirGap::WALKABLE;
+                    floor.mFlags = AirGap::TOP;
                     if (ix >= 48 && iy >= 48)
                     {
                         floor.mCeiling = 24;
@@ -69,7 +69,7 @@ namespace
                         AirGap upper;
                         upper.mFloor = 26;
                         upper.mCeiling = 400;
-                        upper.mFlags = AirGap::WALKABLE | AirGap::OPEN | AirGap::OWN_SKY;
+                        upper.mFlags = AirGap::TOP | AirGap::OPEN | AirGap::OWN_SKY;
                         g.mGaps.push_back(upper);
                     }
                     else
@@ -165,7 +165,7 @@ namespace tut
                     for (U32 k = 0; k < l.mGapCount; ++k)
                     {
                         const AirGap& fine = g.gaps(ix, iy)[k];
-                        const bool usable = (fine.mFlags & (AirGap::WALKABLE | AirGap::OPEN)) || fine.mCeiling - fine.mFloor >= 8;
+                        const bool usable = (fine.mFlags & (AirGap::TOP | AirGap::OPEN)) || fine.mCeiling - fine.mFloor >= 8;
                         ensure("no merged usable cell touches a wall" + at, fine.mClear > 0 || !usable);
                     }
                 }

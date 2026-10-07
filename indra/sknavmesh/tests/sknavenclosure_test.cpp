@@ -118,7 +118,7 @@ namespace
                     {
                         AirGap gap;
                         gap.mFloor = static_cast<U16>(merged[i].mZ1 + 8);   // heights from -1 m
-                        gap.mFlags = merged[i].mWalk ? AirGap::WALKABLE : 0;
+                        gap.mFlags = merged[i].mWalk ? AirGap::TOP : 0;
                         if (i + 1 < merged.size())
                         {
                             gap.mCeiling = static_cast<U16>(merged[i + 1].mZ0 + 8);

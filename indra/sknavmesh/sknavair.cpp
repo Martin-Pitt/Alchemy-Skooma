@@ -60,7 +60,7 @@ namespace sknav
                     AirGap gap;
                     gap.mFloor = static_cast<U16>(s->smax);
                     const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
-                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::WALKABLE : 0;
+                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::TOP : 0;
                     if (area >= 1 && area <= 3)
                     {
                         gap.mFlags |= static_cast<U8>(area << AirGap::AREA_SHIFT);

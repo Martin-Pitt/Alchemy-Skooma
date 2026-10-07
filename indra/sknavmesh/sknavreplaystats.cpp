@@ -165,7 +165,7 @@ namespace
                         const S32 hi = lo < 0 ? -1 : openRun(air, leaves, ix, iy, gap, dx, dy, climb, overlap, 1);
                         if (lo >= 0 && hi >= 0 && lo + hi + 1 <= 2)
                         {
-                            found |= (gap.mFlags & AirGap::WALKABLE) ? 3 : 1;
+                            found |= (gap.mFlags & AirGap::TOP) ? 3 : 1;
                             break;
                         }
                     }

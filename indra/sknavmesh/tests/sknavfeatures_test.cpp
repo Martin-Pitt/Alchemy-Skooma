@@ -244,7 +244,7 @@ namespace tut
         ensure("not a fraction of words", !hoverShowsHealth("on/off"));
         ensure("a number on one side only", !hoverShowsHealth("page 2/x"));
         ensure("case-insensitive name", containsNoCase("[Ash] Ladder that works", "ladder"));
-        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_WEATHER) && excludeFor(FeatureKind::SEAT) == 0
+        ensure("masks", excludeFor(FeatureKind::VEHICLE) == (EXCLUDE_AVATAR | EXCLUDE_SOLID) && excludeFor(FeatureKind::SEAT) == 0
                && excludeFor(FeatureKind::ELEVATOR) == EXCLUDE_ALL);
     }
 

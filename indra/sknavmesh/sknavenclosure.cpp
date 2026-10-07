@@ -507,7 +507,7 @@ namespace sknav
                     mNodeTile[n] = static_cast<U32>(t);
                     mFloor[n] = g.mFloor + mZOffset[t];
                     mCeil[n] = ceilingUnits(g.mCeiling, mZOffset[t]);
-                    if ((g.mFlags & AirGap::WALKABLE) && mCeil[n] - mFloor[n] >= mWalkHead)
+                    if ((g.mFlags & AirGap::TOP) && mCeil[n] - mFloor[n] >= mWalkHead)
                     {
                         mNodeFlags[n] |= NODE_WALK;
                     }
