@@ -191,9 +191,9 @@ namespace skmap
 
         bool sliceBox(const sknav::Record& r, F64 c, std::vector<LLVector2>& out)
         {
-            static std::vector<std::pair<S32, S32>> edges;
-            if (edges.empty())
-            {
+            // Built once, before any caller can see it, so slicing stays safe on any thread.
+            static const std::vector<std::pair<S32, S32>> edges = [] {
+                std::vector<std::pair<S32, S32>> out;
                 for (S32 i = 0; i < 8; ++i)
                 {
                     for (S32 b = 0; b < 3; ++b)
@@ -201,11 +201,12 @@ namespace skmap
                         const S32 j = i ^ (1 << b);
                         if (i < j)
                         {
-                            edges.emplace_back(i, j);
+                            out.emplace_back(i, j);
                         }
                     }
                 }
-            }
+                return out;
+            }();
             std::vector<D3> v(8);
             for (S32 i = 0; i < 8; ++i)
             {
