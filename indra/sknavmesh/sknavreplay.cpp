@@ -155,8 +155,13 @@ namespace sknav
         };
 
         // Clusters, and the viewer's against ours.
+        std::vector<RegionSquare> squares;
+        for (const CensusRegion& region : census.mRegions)
+        {
+            squares.push_back({ region.mOrigin, region.mWidth });
+        }
         Clock::time_point t0 = Clock::now();
-        out.mClusters = cluster(census.mRecords, census.mClusterGap);
+        out.mClusters = cluster(census.mRecords, census.mClusterGap, TILE_M, regionWindow(squares, census.mVoidMargin));
         out.mStages.emplace_back("cluster", since(t0));
         std::unordered_map<const Record*, U32> index;
         for (size_t i = 0; i < census.mRecords.size(); ++i)
@@ -232,7 +237,11 @@ namespace sknav
             auto mesh = std::make_unique<ReplayMesh>();
             mesh->mId = c->mId;
             mesh->mOrigin = latticeOrigin(c->mMin);
-            layAirborne(*c, mesh->mOrigin, pad, laid);
+            if (!layAirborne(*c, mesh->mOrigin, pad, laid))
+            {
+                ++out.mRefused;
+                out.mClusterNotes.push_back(llformat("%s: refused, %zu tiles", c->mId.asString().c_str(), c->mTiles.size()));
+            }
             for (LaidTile& lt : laid)
             {
                 ReplayTile& tile = mesh->mTiles[lt.mKey];
@@ -256,18 +265,17 @@ namespace sknav
             meshes[mesh->mId] = std::move(mesh);
         }
         F64 terrain_ms = 0.0;
-        std::vector<RegionSquare> squares;
-        for (const CensusRegion& region : census.mRegions)
-        {
-            squares.push_back({ region.mOrigin, region.mWidth });
-        }
         for (const CensusRegion& region : census.mRegions)
         {
             auto mesh = std::make_unique<ReplayMesh>();
             mesh->mId = region.mId;
             mesh->mTerrain = true;
             mesh->mOrigin = latticeOrigin(region.mOrigin);
-            layRegion(region.mOrigin, region.mWidth, mesh->mOrigin, ground_records, pad, census.mVoidMargin, squares, laid);
+            if (!layRegion(region.mOrigin, region.mWidth, mesh->mOrigin, ground_records, pad, census.mVoidMargin, squares, laid))
+            {
+                ++out.mRefused;
+                out.mClusterNotes.push_back("region " + region.mId.asString() + ": refused, over the tile limit");
+            }
             for (LaidTile& lt : laid)
             {
                 ReplayTile& tile = mesh->mTiles[lt.mKey];
@@ -659,6 +667,10 @@ namespace sknav
     {
         std::ostringstream out;
         out << result.mMeshes.size() << " meshes, " << result.mTiles << " tiles (" << result.mEmpty << " empty, " << result.mFailed << " failed)\n";
+        if (result.mRefused)
+        {
+            out << result.mRefused << " meshes refused, over " << MAX_TILES_PER_MESH << " tiles\n";
+        }
         out << "clusters: " << result.mClustersSame << " same, " << result.mClustersDiffer << " differ, " << result.mClustersOnlyViewer
             << " only in the viewer, " << result.mClustersOnlyReplay << " only in the replay\n";
         for (const std::string& note : result.mClusterNotes)

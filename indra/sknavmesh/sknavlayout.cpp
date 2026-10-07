@@ -70,8 +70,22 @@ namespace sknav
 
     void RecordGrid::insert(const RecordPtr& r, F32 pad)
     {
-        const LLVector3d pmin = r->mMin - LLVector3d(pad, pad, 0);
-        const LLVector3d pmax = r->mMax + LLVector3d(pad, pad, 0);
+        insert(r, pad, LLVector3d(-1e12, -1e12, 0), LLVector3d(1e12, 1e12, 0));
+    }
+
+    void RecordGrid::insert(const RecordPtr& r, F32 pad, const LLVector3d& clip_min, const LLVector3d& clip_max)
+    {
+        LLVector3d pmin = r->mMin - LLVector3d(pad, pad, 0);
+        LLVector3d pmax = r->mMax + LLVector3d(pad, pad, 0);
+        for (S32 a = VX; a <= VY; ++a)
+        {
+            pmin.mdV[a] = std::max(pmin.mdV[a], clip_min.mdV[a]);
+            pmax.mdV[a] = std::min(pmax.mdV[a], clip_max.mdV[a]);
+            if (pmin.mdV[a] > pmax.mdV[a])
+            {
+                return;
+            }
+        }
         const TileKey k0 = tileOf(pmin), k1 = tileOf(pmax);
         for (S32 y = k0.mY; y <= k1.mY; ++y)
         {
@@ -103,14 +117,50 @@ namespace sknav
         return mix(mix(id, static_cast<U32>(key.mX)), static_cast<U32>(key.mY));
     }
 
-    void layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out)
+    S32 voidReachTiles(F32 void_margin)
+    {
+        return std::clamp(static_cast<S32>(std::ceil(void_margin / TILE_M)), 0, 16);
+    }
+
+    ClusterWindow regionWindow(const std::vector<RegionSquare>& regions, F32 void_margin)
+    {
+        ClusterWindow w;
+        if (regions.empty())
+        {
+            return w;
+        }
+        const F64 reach = voidReachTiles(void_margin) * TILE_M;
+        w.mMin = regions.front().mOrigin;
+        w.mMax = regions.front().mOrigin;
+        for (const RegionSquare& r : regions)
+        {
+            for (S32 a = VX; a <= VY; ++a)
+            {
+                w.mMin.mdV[a] = std::min(w.mMin.mdV[a], r.mOrigin.mdV[a] - reach);
+                w.mMax.mdV[a] = std::max(w.mMax.mdV[a], r.mOrigin.mdV[a] + r.mWidth + reach);
+            }
+        }
+        // A millimetre short, so a box ending on the far edge stops in the window's last tile.
+        w.mMax -= LLVector3d(0.001, 0.001, 0.0);
+        w.mMin.mdV[VZ] = w.mMax.mdV[VZ] = 0.0;
+        return w;
+    }
+
+    bool layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out)
     {
         out.clear();
+        if (cluster.mTiles.size() > static_cast<size_t>(MAX_TILES_PER_MESH))
+        {
+            return false;
+        }
         const S32 ox = tileIndex(mesh_origin.mdV[VX]), oy = tileIndex(mesh_origin.mdV[VY]);
+        // Only the cells the cluster tiles: a record far bigger than its
+        // cluster's clipped box is not spread over cells nobody queries.
+        const LLVector3d reach(TILE_M, TILE_M, 0.0);
         RecordGrid grid;
         for (const RecordPtr& r : cluster.mRecords)
         {
-            grid.insert(r, pad);
+            grid.insert(r, pad, cluster.mMin - reach, cluster.mMax + reach);
         }
         for (const auto& entry : cluster.mTiles)
         {
@@ -119,6 +169,7 @@ namespace sknav
             grid.query(entry.first, t.mRecords);
             out.push_back(std::move(t));
         }
+        return true;
     }
 
     namespace
@@ -152,7 +203,7 @@ namespace sknav
         }
     }
 
-    void layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
+    bool layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
                    F32 void_margin, const std::vector<RegionSquare>& regions, std::vector<LaidTile>& out)
     {
         out.clear();
@@ -161,7 +212,7 @@ namespace sknav
         // the structure was rezzed across the border. The void is meshed by
         // the region nearest to it, with whatever hangs out there from any
         // region: an estate's corner void takes every neighbour's surrounds.
-        const S32 reach = std::clamp(static_cast<S32>(std::ceil(void_margin / TILE_M)), 0, 16);
+        const S32 reach = voidReachTiles(void_margin);
         const S32 per_edge = static_cast<S32>(std::ceil(width / TILE_M));
         const LLVector3d land_min = region_origin - LLVector3d(pad, pad, 0);
         const LLVector3d land_max = region_origin + LLVector3d(width + pad, width + pad, 0);
@@ -179,11 +230,11 @@ namespace sknav
             // already comes in as its physics record.
             if (r->mRole != Role::SURROUND && overlapsXY(r->mMin, r->mMax, land_min, land_max))
             {
-                land_grid.insert(r, pad);
+                land_grid.insert(r, pad, land_min, land_max);
             }
             if (overlapsXY(r->mMin, r->mMax, void_min, void_max))
             {
-                void_grid.insert(r, pad);
+                void_grid.insert(r, pad, void_min, void_max);
                 x0 = std::min(x0, tileIndex(r->mMin.mdV[VX]) - ox);
                 x1 = std::max(x1, tileIndex(r->mMax.mdV[VX]) - ox);
                 y0 = std::min(y0, tileIndex(r->mMin.mdV[VY]) - oy);
@@ -227,6 +278,12 @@ namespace sknav
                 out.push_back(std::move(t));
             }
         }
+        if (out.size() > static_cast<size_t>(MAX_TILES_PER_MESH))
+        {
+            out.clear();
+            return false;
+        }
+        return true;
     }
 
     void tileRootCues(const std::function<U8(const LLUUID&)>& cue_of, TileBuildInput& input)

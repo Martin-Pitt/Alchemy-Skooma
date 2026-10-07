@@ -49,6 +49,15 @@ namespace sknav
 
     typedef std::shared_ptr<const Cluster> ClusterPtr;
 
+    /// The XY box clusters are joined and tiled within; the default clips nothing.
+    struct ClusterWindow
+    {
+        LLVector3d mMin{ 1.0, 1.0, 0.0 };
+        LLVector3d mMax{ 0.0, 0.0, 0.0 };
+
+        bool clips() const { return mMin.mdV[VX] <= mMax.mdV[VX] && mMin.mdV[VY] <= mMax.mdV[VY]; }
+    };
+
     struct ClusterSet
     {
         std::vector<ClusterPtr> mClusters;
@@ -64,8 +73,10 @@ namespace sknav
     /// Build the clusters of a census snapshot. DYNAMIC records, and records
     /// every class leaves out, are left out.
     /// gap is the AABB inflation in metres; tile is the lattice pitch (TILE_M in
-    /// the viewer, smaller in tests).
-    ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile = TILE_M);
+    /// the viewer, smaller in tests). A record's box is cut to the window before
+    /// it joins or tiles anything, so a kilometre-scale megaprim neither makes
+    /// tiles past it nor links things the window never sees.
+    ClusterSet cluster(const std::vector<RecordPtr>& records, F64 gap, F64 tile = TILE_M, const ClusterWindow& window = ClusterWindow());
 }
 
 #endif // SK_NAVCLUSTER_H

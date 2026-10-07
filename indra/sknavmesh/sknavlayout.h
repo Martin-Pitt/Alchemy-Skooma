@@ -63,6 +63,8 @@ namespace sknav
         std::unordered_map<TileKey, std::vector<RecordPtr>, TileKeyHash> mCells;
 
         void insert(const RecordPtr& r, F32 pad);
+        /// Only into the cells the XY box [clip_min, clip_max] touches.
+        void insert(const RecordPtr& r, F32 pad, const LLVector3d& clip_min, const LLVector3d& clip_max);
         void query(const TileKey& key, std::vector<RecordPtr>& out) const;
     };
 
@@ -78,7 +80,8 @@ namespace sknav
     };
 
     /// A cluster clear of the ground: every lattice tile its box overlaps.
-    void layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out);
+    /// False, with out empty, when that is more than a mesh can hold.
+    bool layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out);
 
     /// A connected region's land.
     struct RegionSquare
@@ -87,12 +90,20 @@ namespace sknav
         F64 mWidth = 256.0;
     };
 
+    /// How far past its edge a region meshes the void, whole tiles.
+    S32 voidReachTiles(F32 void_margin);
+
+    /// The regions' bounding box grown by the void a region meshes: no mesh
+    /// has a tile past it, so clusters are clipped to it.
+    ClusterWindow regionWindow(const std::vector<RegionSquare>& regions, F32 void_margin);
+
     /// A region's own mesh: its tiles over its land with every grounded record
     /// reaching over that land but the surrounds, plus the void within
     /// void_margin of its edge that no region's land covers and no other
     /// region is nearer to, with every grounded record reaching there
-    /// whichever region it was rezzed in.
-    void layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
+    /// whichever region it was rezzed in. False, with out empty, when that is
+    /// more than a mesh can hold.
+    bool layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
                    F32 void_margin, const std::vector<RegionSquare>& regions, std::vector<LaidTile>& out);
 
     /// Split a tile's records into shapes and cuts, and set the z range the
