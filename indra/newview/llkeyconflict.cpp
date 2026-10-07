@@ -827,6 +827,14 @@ void LLKeyConflictHandler::generatePlaceholders(ESourceMode load_mode)
         registerTemporaryControl("teleport_to");
     }
 
+    // <SK:Nexii> combat/ots: the over-the-shoulder view lives inside mouselook, so its actions are first person only
+    if (load_mode != MODE_FIRST_PERSON && load_mode != MODE_SAVED_SETTINGS)
+    {
+        registerTemporaryControl("ots_toggle_view");
+        registerTemporaryControl("ots_swap_shoulder");
+    }
+    // </SK:Nexii>
+
     if (load_mode == MODE_EDIT_AVATAR)
     {
         // no autopilot or teleport
