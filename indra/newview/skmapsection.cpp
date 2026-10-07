@@ -1890,8 +1890,10 @@ namespace skmap
             ++mSlices;
         }
         e.mKey = key;
-        Entry& stored = mEntries.emplace(key, std::move(e)).first->second;
-        linkNewest(stored);
+        const auto placed = mEntries.emplace(key, std::move(e));
+        // Only a miss inserts; relinking an entry already in the list would corrupt it.
+        llassert(placed.second);
+        linkNewest(placed.first->second);
     }
 
     void SectionCache::evict(const Key& keep_a, const Key& keep_b)
