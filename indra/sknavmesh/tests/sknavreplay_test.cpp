@@ -27,6 +27,7 @@
 #include "../test/lltut.h"
 
 #include "../sknavairdistil.h"
+#include "../sknavbuildstats.h"
 #include "../sknavflights.h"
 #include "../sknavannotate.h"
 #include "../sknavlayout.h"
@@ -35,11 +36,17 @@
 #include "../sknavtilecache.h"
 #include "sknavtestscene.h"
 
+#include "llbase64.h"
 #include "llstring.h"
+
+#include "DetourCommon.h"
+#include "DetourNavMesh.h"
+#include "DetourNavMeshQuery.h"
 
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <sstream>
 
@@ -771,11 +778,124 @@ namespace tut
                 }
                 if (tile.mStats)
                 {
-                    out << ",\"top_only_bridges\":" << tile.mStats->mTopOnlyBridges << ",\"avatar_only_bridges\":" << tile.mStats->mAvatarOnlyBridges
-                        << ",\"own_columns\":" << tile.mStats->mOwnColumns << ",\"excluded\":" << tile.mStats->mExcludedRecords;
+                    const TileBuildStats& st = *tile.mStats;
+                    out << ",\"top_only_bridges\":" << st.mTopOnlyBridges << ",\"avatar_only_bridges\":" << st.mAvatarOnlyBridges
+                        << ",\"own_columns\":" << st.mOwnColumns << ",\"excluded\":" << st.mExcludedRecords << ",\"window_cells\":" << st.mWindowCells
+                        << ",\"window_rect\":[" << st.mWindowRect[0] << ',' << st.mWindowRect[1] << ',' << st.mWindowRect[2] << ','
+                        << st.mWindowRect[3] << ']';
+                    // AVATAR's walkable spans after erosion, a digest per 2 m block of the tile.
+                    std::map<S32, U64> blocks;
+                    for (const StatSpan& s : st.mSpans)
+                    {
+                        U64& h = blocks[(s.mX / 16) + (s.mY / 16) * 1024];
+                        h = mix(h, static_cast<U64>(s.mX) | static_cast<U64>(s.mY) << 16 | static_cast<U64>(s.mTop) << 32);
+                    }
+                    out << ",\"span_blocks\":{";
+                    bool first = true;
+                    for (const auto& [b, h] : blocks)
+                    {
+                        out << (first ? "" : ",") << "\"" << b % 1024 << ',' << b / 1024 << "\":\"" << std::hex << h << std::dec << '"';
+                        first = false;
+                    }
+                    out << '}';
                 }
-                out << ",\"ms\":" << (tile.mStats ? tile.mStats->mTotalMs : 0.0) << "}\n";
+                std::vector<U64> keys;
+                for (const Flight& f : res.mFlights[0])
+                {
+                    keys.push_back(f.mKey);
+                }
+                std::sort(keys.begin(), keys.end());
+                out << ",\"flight_keys\":[";
+                for (size_t i = 0; i < keys.size(); ++i)
+                {
+                    out << (i ? ",\"" : "\"") << std::hex << keys[i] << std::dec << '"';
+                }
+                out << "],\"ms\":" << (tile.mStats ? tile.mStats->mTotalMs : 0.0) << "}\n";
             }
+        }
+
+        // The spans AVATAR's polys cover, per tile: x, y and top as three U16s, base64.
+        std::ofstream cover(LLStringUtil::getenv("SKNAV_REPLAY_DUMP_OUT") + ".cover", std::ios::binary);
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                if (!tile.mStats)
+                {
+                    continue;
+                }
+                const TileBuildStats& st = *tile.mStats;
+                std::vector<U8> covered(st.mSpans.size(), 0);
+                for (const U32 i : st.mPolySpans)
+                {
+                    covered[i] = 1;
+                }
+                std::vector<U8> packed;
+                for (size_t i = 0; i < st.mSpans.size(); ++i)
+                {
+                    if (covered[i])
+                    {
+                        for (const U16 v : { st.mSpans[i].mX, st.mSpans[i].mY, st.mSpans[i].mTop })
+                        {
+                            packed.push_back(static_cast<U8>(v));
+                            packed.push_back(static_cast<U8>(v >> 8));
+                        }
+                    }
+                }
+                cover << "{\"mesh\":\"" << mesh->mId << "\",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"spans\":\""
+                      << LLBase64::encode(packed.data(), packed.size()) << "\"}\n";
+            }
+        }
+
+        // Whether AVATAR's mesh crosses each door: from just before its plane
+        // to just past it, at its sill.
+        std::ofstream doors(LLStringUtil::getenv("SKNAV_REPLAY_DUMP_OUT") + ".doors", std::ios::binary);
+        for (const DoorEntity& d : c.mDoors)
+        {
+            S32 state = 0;  // 0 off every mesh, 1 one side on, 2 both on but no way through, 3 through
+            F32 length = 0.f;
+            for (const auto& mesh : r.mMeshes)
+            {
+                const dtNavMesh* nav = mesh->mNav[0];
+                if (!nav || !d.mPlaneKnown)
+                {
+                    continue;
+                }
+                dtNavMeshQuery* query = dtAllocNavMeshQuery();
+                query->init(nav, 4096);
+                dtQueryFilter filter;
+                const F32 ext[3] = { 0.4f, 1.f, 0.4f };
+                F32 at[2][3], snapped[2][3];
+                dtPolyRef ref[2] = { 0, 0 };
+                for (S32 k = 0; k < 2; ++k)
+                {
+                    const LLVector3d p = d.mPlanePoint + LLVector3d(d.mNormal * (k ? 0.75f : -0.75f)) + LLVector3d(0.0, 0.0, 0.3) - mesh->mOrigin;
+                    toRecast(LLVector3(static_cast<F32>(p.mdV[VX]), static_cast<F32>(p.mdV[VY]), static_cast<F32>(p.mdV[VZ])), at[k]);
+                    query->findNearestPoly(at[k], ext, &filter, &ref[k], snapped[k]);
+                }
+                const S32 on = (ref[0] ? 1 : 0) + (ref[1] ? 1 : 0);
+                S32 here = on == 2 ? 2 : on;
+                if (on == 2)
+                {
+                    dtPolyRef path[512];
+                    int n = 0;
+                    const dtStatus st = query->findPath(ref[0], ref[1], snapped[0], snapped[1], &filter, path, &n, 512);
+                    if (dtStatusSucceed(st) && !dtStatusDetail(st, DT_PARTIAL_RESULT) && n > 0 && path[n - 1] == ref[1])
+                    {
+                        here = 3;
+                        F32 straight[512 * 3];
+                        int ns = 0;
+                        query->findStraightPath(snapped[0], snapped[1], path, n, straight, nullptr, nullptr, &ns, 512);
+                        for (int i = 1; i < ns; ++i)
+                        {
+                            length += dtVdist(&straight[(i - 1) * 3], &straight[i * 3]);
+                        }
+                    }
+                }
+                dtFreeNavMeshQuery(query);
+                state = std::max(state, here);
+            }
+            doors << "{\"door\":\"" << d.mId << "\",\"state\":" << state << ",\"length\":" << length << "}\n";
         }
     }
 }

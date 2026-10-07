@@ -133,6 +133,8 @@ namespace sknav
         U32 mTopOnlyBridges = 0;
         U32 mAvatarOnlyBridges = 0;
         U32 mOwnColumns = 0;            ///< columns AVATAR reads from a copy of its own
+        U32 mWindowCells = 0;           ///< raster cells round the records AVATAR leaves out
+        S32 mWindowRect[4] = { 0, 0, 0, 0 };   ///< the window raster's cells, from the tile's corner: x0, z0, x1, z1
         ClassBuildStats mClass[2];
         /// AVATAR's walkable spans on the tile proper and, per poly, which of them it covers.
         std::vector<StatSpan> mSpans;

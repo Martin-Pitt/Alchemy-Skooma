@@ -106,8 +106,9 @@ namespace
         return t;
     }
 
-    // Whether the air has a floor the air's slope stands on at an SL point, within tol of z.
-    bool topFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f)
+    // Whether the air has a floor the air's slope stands on at an SL point, within tol of z;
+    // or with any_floor, a gap over any solid there.
+    bool topFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f, bool any_floor = false)
     {
         if (!r.mAir)
         {
@@ -125,12 +126,17 @@ namespace
         for (U32 k = 0; k < l.mGapCount; ++k)
         {
             const AirGap& g = air.mGaps[l.mFirstGap + k];
-            if ((g.mFlags & AirGap::WALKABLE) && std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
+            if ((any_floor || (g.mFlags & AirGap::WALKABLE)) && std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
             {
                 return true;
             }
         }
         return false;
+    }
+
+    bool airFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z)
+    {
+        return topFloorAt(r, x, y, z, 0.3f, true);
     }
 
     TileBuildInput tile(S32 tx, S32 ty)
@@ -1140,5 +1146,71 @@ namespace tut
         ensure("AVATAR's columns of its own", with_stats.mOwnColumns > 0);
         ensure("AVATAR's compact heightfield", with_stats.mClass[0].mChfHash == without_stats.mClass[0].mChfHash);
         ensure("AVATAR's tile, byte for byte", with_top.mData[0] == without.mData[0]);
+    }
+
+    // A door leaf AVATAR leaves out is rasterised once with everything else;
+    // AVATAR reads a window round it rasterised without it, and builds what
+    // it would with no leaf there at all: flush on the floor, against a jamb,
+    // under a lintel, first or last in the soup, or with nothing else round it.
+    template<> template<>
+    void sknavbuild_object::test<28>()
+    {
+        set_test_name("AVATAR builds round a left-out door leaf as if it were not there");
+        struct Case
+        {
+            const char* mName;
+            bool mFrame;        ///< jambs and a lintel touching the leaf
+            bool mLeafFirst;
+        };
+        const Case cases[] = { { "flush leaf", false, false }, { "framed leaf", true, false }, { "framed leaf first", true, true },
+                               { "leaf alone", false, true } };
+        for (const Case& c : cases)
+        {
+            const auto build = [&](bool leaf, TileBuildStats& stats) {
+                TileBuildInput in = tile(0, 0);
+                in.mPartition = Partition::WATERSHED;   // codes from the area alone, whatever else the soup holds
+                in.mTerrain = flat(0.f);
+                in.mAir = true;
+                in.mWallFaces = true;
+                auto door = std::make_shared<Record>(*box(15.9f, 12.f, 1.f, 16.1f, 14.f, 3.5f));
+                door->mExclude = EXCLUDE_AVATAR;
+                if (leaf && c.mLeafFirst)
+                {
+                    in.mRecords.push_back(door);
+                }
+                if (std::string(c.mName) != "leaf alone")
+                {
+                    in.mRecords.push_back(box(4.f, 4.f, 0.f, 28.f, 28.f, 1.f));
+                }
+                if (c.mFrame)
+                {
+                    in.mRecords.push_back(box(15.8f, 11.f, 1.f, 16.2f, 12.f, 4.f));   // jambs, touching the leaf's edges
+                    in.mRecords.push_back(box(15.8f, 14.f, 1.f, 16.2f, 15.f, 4.f));
+                    in.mRecords.push_back(box(15.8f, 12.f, 3.5f, 16.2f, 14.f, 4.f));  // lintel on its top
+                }
+                if (leaf && !c.mLeafFirst)
+                {
+                    in.mRecords.push_back(door);
+                }
+                return buildTile(in, &stats);
+            };
+            TileBuildStats with_stats, without_stats;
+            const TileBuildResult with_leaf = build(true, with_stats), without = build(false, without_stats);
+            ensure(std::string(c.mName) + ": built", with_leaf.mStatus == TileBuildResult::SUCCESS && without.mStatus == TileBuildResult::SUCCESS);
+            ensure(std::string(c.mName) + ": a window", with_stats.mWindowCells > 0 && without_stats.mWindowCells == 0);
+            ensure(std::string(c.mName) + ": AVATAR's compact heightfield", with_stats.mClass[0].mChfHash == without_stats.mClass[0].mChfHash);
+            ensure(std::string(c.mName) + ": AVATAR's tile, byte for byte", with_leaf.mData[0] == without.mData[0]);
+            // The air and the faces keep the leaf.
+            // Framed, the leaf closes the doorway's air; free, its top is a floor of the air's.
+            const bool kept = c.mFrame ? airFloorAt(without, 16.f, 13.f, 1.f) && !airFloorAt(with_leaf, 16.f, 13.f, 1.f)
+                                       : airFloorAt(with_leaf, 16.f, 13.f, 3.5f) && !airFloorAt(without, 16.f, 13.f, 3.5f);
+            ensure(std::string(c.mName) + ": the air keeps the leaf", kept);
+            bool faces_differ = with_leaf.mFaces.size() != without.mFaces.size();
+            for (size_t i = 0; !faces_differ && i < with_leaf.mFaces.size(); ++i)
+            {
+                faces_differ = with_leaf.mFaces[i].mMin != without.mFaces[i].mMin || with_leaf.mFaces[i].mMax != without.mFaces[i].mMax;
+            }
+            ensure(std::string(c.mName) + ": the leaf's faces", faces_differ);
+        }
     }
 }

@@ -1294,31 +1294,39 @@ namespace
     struct AreaSnapshot
     {
         std::vector<U8> mAreas;
+        std::vector<U32> mStart;    ///< per column, where its areas begin
 
         void take(const rcHeightfield& hf)
         {
             mAreas.clear();
+            mStart.assign(1, 0);
             for (S32 c = 0; c < hf.width * hf.height; ++c)
             {
                 for (const rcSpan* s = hf.spans[c]; s; s = s->next)
                 {
                     mAreas.push_back(static_cast<U8>(s->area));
                 }
+                mStart.push_back(static_cast<U32>(mAreas.size()));
             }
         }
 
-        void restore(rcHeightfield& hf) const
+        /// Every column's areas back, or only those of the columns marked.
+        void restore(rcHeightfield& hf, const std::vector<U8>* only = nullptr) const
         {
-            size_t i = 0;
             for (S32 c = 0; c < hf.width * hf.height; ++c)
             {
+                if (only && !(*only)[c])
+                {
+                    continue;
+                }
+                U32 i = mStart[c];
                 for (rcSpan* s = hf.spans[c]; s; s = s->next)
                 {
-                    llassert(i < mAreas.size());
+                    llassert(i < mStart[c + 1]);
                     s->area = mAreas[i++];
                 }
+                llassert(i == mStart[c + 1]);
             }
-            llassert(i == mAreas.size());
         }
     };
 
@@ -1629,8 +1637,9 @@ namespace sknav
         // but what the air leaves out, at AVATAR's grid widened to the air's
         // pad; AVATAR reads it through a view cropped to its own border, and
         // the surfaces only the air's slope walks carry codes it masks away.
-        // Where AVATAR leaves out records the air keeps - door leaves - it
-        // gets a raster of its own instead.
+        // Records AVATAR leaves out and the air keeps - door leaves - are
+        // rasterised again without them over a window round them, whose
+        // columns AVATAR's view reads instead.
         rcContext ctx(false);
         const S32 avatar = static_cast<S32>(AgentClass::AVATAR), weather = static_cast<S32>(AgentClass::WEATHER);
         const ClassParams& ap = input.mParams[avatar];
@@ -1649,67 +1658,71 @@ namespace sknav
         const rcConfig grid = tileConfig(input, ap, input.mAir ? std::max(cfg.borderSize, input.mAirPad) : cfg.borderSize);
         const S32 inset = grid.borderSize - cfg.borderSize;
 
-        // The raster's soup, and AVATAR's when it leaves out more.
-        const auto leaves_out = [&](U8 bit) {
-            return std::any_of(excluded.begin(), excluded.end(), [bit](const Excluded& e) { return (e.mClasses & bit) != 0; });
-        };
+        // The raster's soup, and per triangle of it whether AVATAR leaves it out.
         const U8 solid_bit = static_cast<U8>(1u << weather), avatar_bit = static_cast<U8>(1u << avatar);
-        const bool shared = !leaves_out(avatar_bit) && !leaves_out(solid_bit);
-        // The air's pass, and the raster when AVATAR has one of its own and nothing else reads it.
-        const bool top_pass = input.mAir || (input.mWallFaces && !shared);
-        const bool main_raster = shared || top_pass;
-        const auto filter_started = std::chrono::steady_clock::now();
-        Soup solid_soup, avatar_soup;
-        std::vector<std::pair<S32, S32>> solid_solids, avatar_solids;
+        Soup solid_soup;
+        std::vector<std::pair<S32, S32>> solid_solids;
         const Soup* main_soup = &soup;
         const std::vector<std::pair<S32, S32>>* main_solids = &solids;
-        if (leaves_out(solid_bit))
+        std::vector<U8> leaf_tri;
         {
-            filterSoup(soup, solids, excluded, solid_bit, solid_soup, solid_solids);
-            main_soup = &solid_soup;
-            main_solids = &solid_solids;
-        }
-        if (!shared)
-        {
-            filterSoup(soup, solids, excluded, avatar_bit, avatar_soup, avatar_solids);
-        }
-        if (leaves_out(solid_bit) || !shared)
-        {
-            result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
-            clock.restart();
+            const auto filter_started = std::chrono::steady_clock::now();
+            std::vector<U8> solid_drop(soup.ntris(), 0), avatar_drop(soup.ntris(), 0);
+            bool solid_any = false, avatar_any = false;
+            for (const Excluded& e : excluded)
+            {
+                const bool solid_out = (e.mClasses & solid_bit) != 0;
+                const bool avatar_out = !solid_out && (e.mClasses & avatar_bit) != 0;
+                std::fill(solid_drop.begin() + e.mBegin, solid_drop.begin() + e.mEnd, solid_out ? 1 : 0);
+                std::fill(avatar_drop.begin() + e.mBegin, avatar_drop.begin() + e.mEnd, avatar_out ? 1 : 0);
+                solid_any = solid_any || solid_out;
+                avatar_any = avatar_any || avatar_out;
+            }
+            if (solid_any)
+            {
+                filterSoup(soup, solids, excluded, solid_bit, solid_soup, solid_solids);
+                main_soup = &solid_soup;
+                main_solids = &solid_solids;
+            }
+            if (avatar_any)
+            {
+                for (S32 t = 0; t < soup.ntris(); ++t)
+                {
+                    if (!solid_drop[t])
+                    {
+                        leaf_tri.push_back(avatar_drop[t]);
+                    }
+                }
+            }
+            if (solid_any || avatar_any)
+            {
+                result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
+                clock.restart();
+            }
         }
 
-        // Each soup's area byte. The raster's partition is taken at the
-        // pinned slope; AVATAR's own soup keeps a partition at its own.
+        // The area byte of each triangle, the partition taken at the pinned slope.
         const bool partitioned = input.mPartition == Partition::SLOPE;
-        const auto partition = [&](const Soup& from, const std::vector<U8>& walkable) {
-            std::vector<LLVector3> sl(from.nverts());
-            for (S32 v = 0; v < from.nverts(); ++v)
-            {
-                sl[v] = fromRecast(&from.mVerts[v * 3]);
-            }
-            SlopePartition out = partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES, from.mCues);
-            shiftFlightCodes(out);
-            return out;
-        };
-        const auto encode = [&](const Soup& from, bool own, std::vector<U8>& codes, std::vector<U8>& real, std::vector<Flight>& flights) {
+        std::vector<U8> codes, real;
+        std::vector<Flight> flights;
+        {
             std::vector<U8> avatar_walk, top_walk;
-            markWalkable(from, ap.mSlope, avatar_walk);
-            markWalkable(from, tp.mSlope, top_walk);
+            markWalkable(*main_soup, ap.mSlope, avatar_walk);
+            markWalkable(*main_soup, tp.mSlope, top_walk);
             SlopePartition slopes;
             if (partitioned)
             {
                 std::vector<U8> walkable;
-                if (own)
+                markWalkable(*main_soup, llmax(partitionSlope(input), ap.mSlope), walkable);
+                std::vector<LLVector3> sl(main_soup->nverts());
+                for (S32 v = 0; v < main_soup->nverts(); ++v)
                 {
-                    walkable = avatar_walk;
+                    sl[v] = fromRecast(&main_soup->mVerts[v * 3]);
                 }
-                else
-                {
-                    markWalkable(from, llmax(partitionSlope(input), ap.mSlope), walkable);
-                }
-                slopes = partition(from, walkable);
-                if (stats && !own)
+                slopes = partitionSlopes(sl, main_soup->mTris, walkable, main_soup->mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES,
+                                         main_soup->mCues);
+                shiftFlightCodes(slopes);
+                if (stats)
                 {
                     std::vector<U8> used(256, 0);
                     for (const U8 code : slopes.mCodes)
@@ -1723,78 +1736,96 @@ namespace sknav
             codes = encodeAreas(avatar_walk, top_walk, partitioned ? &slopes.mCodes : nullptr);
             real = realAreas(partitioned ? &slopes.mReal : nullptr);
             flights = std::move(slopes.mFlights);
-        };
-        std::vector<U8> main_codes, real, avatar_codes, avatar_real;
-        std::vector<Flight> main_flights, avatar_flights;
-        if (main_raster)
-        {
-            encode(*main_soup, false, main_codes, real, main_flights);
         }
-        if (!shared)
-        {
-            encode(avatar_soup, true, avatar_codes, avatar_real, avatar_flights);
-        }
-        const std::vector<U8>& a_codes = shared ? main_codes : avatar_codes;
-        const std::vector<U8>& a_real = shared ? real : avatar_real;
-        std::vector<Flight>& flights = shared ? main_flights : avatar_flights;
         if (astats)
         {
             std::vector<U8> used(256, 0);
-            for (const U8 code : a_codes)
+            for (S32 t = 0; t < static_cast<S32>(codes.size()); ++t)
             {
-                used[code] = code >= AREA_CODE_BASE;
+                used[codes[t]] = codes[t] >= AREA_CODE_BASE && (leaf_tri.empty() || !leaf_tri[t]);
             }
             astats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
         }
         clock.lap(ClassBuildStats::PARTITION);
 
         Freed mem;
-        HeightfieldPtr own_hf, overlay;
-        mem.hf = makeHeightfield(main_raster ? grid : tileConfig(input, ap, 0));
+        HeightfieldPtr overlay;
+        mem.hf = makeHeightfield(grid);
         if (!mem.hf)
         {
             result.mError = "heightfield";
             return result;
         }
         rcHeightfield& hf = *mem.hf;
-        const RasterSource source{ main_soup, &main_codes, main_solids, &cut_soup, &cuts };
-        if (main_raster && !rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
+        const RasterSource source{ main_soup, &codes, main_solids, &cut_soup, &cuts };
+        if (!rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
         {
             result.mError = "rasterize";
             return result;
         }
-        if (!shared)
+
+        // The window: every cell a left-out triangle touches and one more
+        // round it is AVATAR's own; its raster reaches a cell further, so
+        // a bridge in the outer ring reads the columns past it complete.
+        const size_t columns = static_cast<size_t>(hf.width) * hf.height;
+        std::vector<U8> in_window, own_column;
+        if (!leaf_tri.empty())
         {
-            own_hf.reset(makeHeightfield(cfg));
-            const RasterSource own{ &avatar_soup, &avatar_codes, &avatar_solids, &cut_soup, &cuts };
-            if (!own_hf || !rasterisePasses(*own_hf, own, CellRect{ 0, 0, own_hf->width, own_hf->height }, cfg.walkableClimb, clock))
+            in_window.assign(columns, 0);
+            CellRect rect{ hf.width, hf.height, 0, 0 };
+            for (S32 t = 0; t < main_soup->ntris(); ++t)
+            {
+                if (!leaf_tri[t])
+                {
+                    continue;
+                }
+                const CellRect r = cellsOf(hf, *main_soup, t, t + 1);
+                for (S32 z = std::max(0, r.mZ0); z < std::min(hf.height, r.mZ1); ++z)
+                {
+                    for (S32 x = std::max(0, r.mX0); x < std::min(hf.width, r.mX1); ++x)
+                    {
+                        in_window[x + z * hf.width] = 1;
+                    }
+                }
+                rect = { std::min(rect.mX0, r.mX0 - 1), std::min(rect.mZ0, r.mZ0 - 1), std::max(rect.mX1, r.mX1 + 1), std::max(rect.mZ1, r.mZ1 + 1) };
+            }
+            overlay.reset(makeHeightfield(grid));
+            const RasterSource window{ main_soup, &codes, main_solids, &cut_soup, &cuts, &leaf_tri };
+            if (!overlay || !rasterisePasses(*overlay, window, rect, grid.walkableClimb, clock))
             {
                 result.mError = "rasterize";
                 return result;
             }
+            own_column = in_window;
+            if (stats)
+            {
+                stats->mWindowCells = static_cast<U32>(std::count(in_window.begin(), in_window.end(), 1));
+                stats->mWindowRect[0] = rect.mX0 - grid.borderSize;
+                stats->mWindowRect[1] = rect.mZ0 - grid.borderSize;
+                stats->mWindowRect[2] = rect.mX1 - grid.borderSize;
+                stats->mWindowRect[3] = rect.mZ1 - grid.borderSize;
+            }
         }
-        CropView view(cfg, shared ? inset : 0);
-        view.point(shared ? hf : *own_hf);
+        CropView view(cfg, inset);
+        view.point(hf, overlay.get(), &own_column);
 
-        // Both bridge lists off the unbridged raster. A column whose lists
+        // Both bridge lists off the unbridged views. A column whose lists
         // differ gets a copy of its own for AVATAR, so neither view lays the
         // other's bridges.
-        const std::vector<Bridge> top_bridges = main_raster ? findBridges(hf, grid.walkableClimb, 1) : std::vector<Bridge>();
+        const std::vector<Bridge> top_bridges = findBridges(hf, grid.walkableClimb, 1);
         const std::vector<Bridge> avatar_bridges = findBridges(view.mHf, cfg.walkableClimb, AREA_CODE_BASE);
-        std::vector<U8> own_column;
-        if (shared)
         {
-            const auto column = [&](const Bridge& b, S32 shift) { return (b.mX + shift) + (b.mZ + shift) * hf.width; };
+            const auto column = [&](const Bridge& b) { return b.mX + b.mZ * hf.width; };
             std::map<S32, std::vector<Bridge>> by_top, by_avatar;
             for (const Bridge& b : top_bridges)
             {
-                by_top[column(b, 0)].push_back(b);
+                by_top[column(b)].push_back(b);
             }
             for (Bridge b : avatar_bridges)
             {
                 b.mX += inset;
                 b.mZ += inset;
-                by_avatar[column(b, 0)].push_back(b);
+                by_avatar[column(b)].push_back(b);
             }
             std::vector<S32> differ;
             for (const auto& [c, list] : by_avatar)
@@ -1813,27 +1844,36 @@ namespace sknav
                     differ.push_back(c);
                 }
             }
-            if (!differ.empty())
+            if (!differ.empty() && !overlay)
             {
                 overlay.reset(makeHeightfield(grid));
-                own_column.assign(static_cast<size_t>(hf.width) * hf.height, 0);
-                for (const S32 c : differ)
+                if (!overlay)
+                {
+                    result.mError = "heightfield";
+                    return result;
+                }
+            }
+            if (own_column.empty() && !differ.empty())
+            {
+                own_column.assign(columns, 0);
+            }
+            for (const S32 c : differ)
+            {
+                if (!own_column[c])
                 {
                     own_column[c] = 1;
+                    overlay->spans[c] = nullptr;
                     copyColumn(hf, *overlay, c % hf.width, c / hf.width);
-                    const auto it = by_avatar.find(c);
-                    if (it != by_avatar.end())
-                    {
-                        addBridges(*overlay, it->second, cfg.walkableClimb);
-                    }
+                }
+            }
+            for (const auto& [c, list] : by_avatar)
+            {
+                if (!own_column.empty() && own_column[c])
+                {
+                    addBridges(*overlay, list, cfg.walkableClimb);
                 }
             }
             addBridges(hf, top_bridges, grid.walkableClimb);
-        }
-        else
-        {
-            addBridges(hf, top_bridges, grid.walkableClimb);
-            addBridges(*own_hf, avatar_bridges, cfg.walkableClimb);
         }
         if (astats)
         {
@@ -1843,7 +1883,7 @@ namespace sknav
         {
             tstats->mBridges = static_cast<U32>(top_bridges.size());
         }
-        if (stats && shared)
+        if (stats)
         {
             // The lists against each other over the cells AVATAR reads.
             std::vector<Bridge> top_in;
@@ -1871,13 +1911,10 @@ namespace sknav
         {
             cullUnderground(*overlay, input.mTerrain);
         }
-        if (own_hf)
-        {
-            cullUnderground(*own_hf, input.mTerrain);
-        }
         clock.lap(ClassBuildStats::CULL);
 
         // The air's filters first, kept aside, then AVATAR's over the same spans.
+        const bool top_pass = input.mAir;
         AreaSnapshot unfiltered, top_areas;
         if (top_pass)
         {
@@ -1886,10 +1923,7 @@ namespace sknav
             {
                 tstats->mBuilt = true;
             }
-            if (shared)
-            {
-                unfiltered.take(hf);
-            }
+            unfiltered.take(hf);
             filterSpans(hf, tp, grid.ch, grid.cs);
             top_clock.lap(ClassBuildStats::FILTERS);
             if (tstats)
@@ -1898,15 +1932,12 @@ namespace sknav
                 tstats->mHfAreaHash = hashHeightfield(hf, 0, 0, hf.width, hf.height, real);
                 top_clock.restart();
             }
-            if (shared)
-            {
-                top_areas.take(hf);
-                unfiltered.restore(hf);
-            }
+            top_areas.take(hf);
+            unfiltered.restore(hf);
             top_clock.lap(ClassBuildStats::FILTERS);
             clock.restart();
         }
-        view.point(shared ? hf : *own_hf, overlay.get(), &own_column);
+        view.point(hf, overlay.get(), &own_column);
         maskTopOnly(view.mHf);
         filterSpans(view.mHf, ap, cfg.ch, cfg.cs);
         clock.lap(ClassBuildStats::FILTERS);
@@ -1930,19 +1961,29 @@ namespace sknav
             return result;
         }
         clock.lap(ClassBuildStats::COMPACT);
-        // Faces off AVATAR's view where it shares the raster, else off the
-        // raster with the air's areas: the faces of every solid, real areas.
-        if (input.mWallFaces && shared)
+        // Faces off AVATAR's view with the window's columns back in, their
+        // areas the air's: the faces of every solid, door leaves included.
+        if (input.mWallFaces)
         {
-            extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, a_real.data());
+            if (!in_window.empty())
+            {
+                if (top_pass)
+                {
+                    top_areas.restore(hf, &in_window);
+                }
+                std::vector<U8> faces_own = own_column;
+                for (size_t c = 0; c < columns; ++c)
+                {
+                    faces_own[c] = own_column[c] && !in_window[c];
+                }
+                view.point(hf, overlay.get(), &faces_own);
+            }
+            extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, real.data());
+            view.point(hf, overlay.get(), &own_column);
         }
-        if (top_pass && shared)
+        if (top_pass)
         {
             top_areas.restore(hf);
-        }
-        if (input.mWallFaces && !shared)
-        {
-            extractWallFaces(hf, grid.borderSize, input.mWallMinHeight, result.mFaces, real.data());
         }
         clock.lap(ClassBuildStats::WALLS);
 
@@ -1957,7 +1998,7 @@ namespace sknav
         switch (input.mPartition)
         {
             case Partition::SLOPE:
-                mergeFragments(*mem.chf, a_real, flights);
+                mergeFragments(*mem.chf, real, flights);
                 if (astats)
                 {
                     clock.lap(ClassBuildStats::REGIONS);
@@ -2001,15 +2042,12 @@ namespace sknav
         if (astats)
         {
             measureHeightfield(hf, *astats);
-            for (const rcHeightfield* more : { own_hf.get(), overlay.get() })
+            if (overlay)
             {
-                if (more)
-                {
-                    ClassBuildStats extra;
-                    measureHeightfield(*more, extra);
-                    astats->mHfSpans += extra.mHfSpans;
-                    astats->mHfBytes += extra.mHfBytes;
-                }
+                ClassBuildStats extra;
+                measureHeightfield(*overlay, extra);
+                astats->mHfSpans += extra.mHfSpans;
+                astats->mHfBytes += extra.mHfBytes;
             }
             astats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
             astats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
@@ -2039,11 +2077,11 @@ namespace sknav
             result.mFlights[avatar] = std::move(flights);
             for (S32 i = 0; i < mem.chf->spanCount; ++i)
             {
-                mem.chf->areas[i] = a_real[mem.chf->areas[i]];
+                mem.chf->areas[i] = real[mem.chf->areas[i]];
             }
             for (S32 i = 0; i < mem.pmesh->npolys; ++i)
             {
-                mem.pmesh->areas[i] = a_real[mem.pmesh->areas[i]];
+                mem.pmesh->areas[i] = real[mem.pmesh->areas[i]];
             }
         }
         clock.lap(ClassBuildStats::FLIGHTMAP);
