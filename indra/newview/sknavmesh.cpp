@@ -790,14 +790,14 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 if (cluster)
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne worker");
-                    layAirborne(*cluster, origin, layout->mPad, layout->mTiles);
+                    layout->mRefused = !layAirborne(*cluster, origin, layout->mPad, layout->mTiles);
                 }
                 else
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region worker");
                     std::vector<RecordPtr> records;
                     for (const auto& c : *ground) records.insert(records.end(), c->mRecords.begin(), c->mRecords.end());
-                    layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin, *regions, layout->mTiles);
+                    layout->mRefused = !layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin, *regions, layout->mTiles);
                 }
                 for (const auto& tile : layout->mTiles)
                 {
@@ -866,7 +866,15 @@ void SKNavMesh::applyLayouts()
     {
         Mesh& mesh = *entry.second;
         if (mesh.mLayoutJob.valid() && mesh.mLayoutJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
             mesh.mPendingLayout = mesh.mLayoutJob.get();
+            if (mesh.mPendingLayout && mesh.mPendingLayout->mRefused)
+            {
+                mStats.mRefused++;
+                LL_WARNS("SKNav") << "mesh " << mesh.mId << " wants more than " << MAX_TILES_PER_MESH << " tiles; left unbuilt ("
+                                  << mStats.mRefused << " refused)" << LL_ENDL;
+            }
+        }
         if (!mesh.mPendingLayout) continue;
         auto& layout = *mesh.mPendingLayout;
         // A region or parameter change invalidates the whole result before publication.

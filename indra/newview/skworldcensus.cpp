@@ -428,8 +428,16 @@ void SKWorldCensus::finishScan()
     mScan.mActive = false;
     mScan.mPending.reset();
 
+    // Clusters stop where the region meshes' void does: a kilometre megaprim
+    // would otherwise tile kilometres and join whatever it overhangs.
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+    std::vector<sknav::RegionSquare> squares;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        squares.push_back({ region->getOriginGlobal(), region->getWidth() });
+    }
     LLTimer timer;
-    done->mClusters = cluster(done->mRecords, gap);
+    done->mClusters = cluster(done->mRecords, gap, sknav::TILE_M, sknav::regionWindow(squares, void_margin));
     done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
     done->mStats.mScanMs = mScan.mElapsedMs;
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());

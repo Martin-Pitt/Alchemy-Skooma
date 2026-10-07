@@ -220,6 +220,7 @@ public:
         U32 mInFlight = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
+        U32 mRefused = 0;       ///< layouts over MAX_TILES_PER_MESH, left unbuilt
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
@@ -310,6 +311,7 @@ private:
         std::vector<U64> mSignatures;
         std::set<sknav::TileKey> mKeys;
         size_t mNext = 0;
+        bool mRefused = false;      ///< more tiles than a mesh holds, so none
         U64 mCensus = 0, mWorld = 0, mLand = 0, mParams = 0;
         F32 mPad = 0.f, mVoidMargin = 0.f;
         F64 mMinZ = 0., mMaxZ = 0.;
