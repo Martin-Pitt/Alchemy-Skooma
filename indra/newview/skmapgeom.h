@@ -254,6 +254,7 @@ namespace skmap
     {
         F32 mMs = 0.f;
         U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mRecords = 0;
+        U32 mReused = 0;                ///< pairs whose pieces came whole from the last build
     };
 
     /// Whether the global 1 m cell lists floor level k.

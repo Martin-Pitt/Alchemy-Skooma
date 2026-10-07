@@ -339,8 +339,9 @@ int main(int, char**)
     // The minimum is what the code costs; the median shows how far other load on the machine moved it.
     std::printf("cold: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(cold_section), runs,
                 median(cold_section), least(cold_total), cold_stats.mSlices, cold_stats.mCacheHits);
-    std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(warm_section), runs,
-                median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits);
+    std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits, %u pairs reused\n",
+                least(warm_section), runs, median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits,
+                warm_stats.mReused);
     std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));

@@ -38,12 +38,32 @@
 
 namespace skmap
 {
+    /// What one (record, plane) pair's pieces are made from, besides the layer's floors.
+    struct PairSource
+    {
+        U64 mSignature = 0;
+        LLVector3d mOrigin;
+        LLUUID mPart, mRoot;
+        S32 mPlane = 0;
+        sknav::Shape mShape = sknav::Shape::TRIANGLES;
+        sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+
+        bool same(const sknav::Record& r, S32 q) const
+        {
+            return mPlane == q && mSignature == r.mSignature && mShape == r.mShape && mProvenance == r.mProvenance
+                && std::memcmp(mOrigin.mdV, r.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0 && mPart == r.mPart && mRoot == r.mRoot;
+        }
+    };
+    typedef std::shared_ptr<const std::vector<PairSource>> PairSources;
+
     /// The last scene build, for the next to take what an unchanged layer would only compute again.
     struct SectionMemo
     {
         ScenePtr mScene;
         /// (content hash, layer) for every layer of mScene with polygons, sorted.
         std::vector<std::pair<U64, S32>> mLayers;
+        /// Per layer of mScene, its pairs in order; null for a layer that made none.
+        std::vector<PairSources> mPairs;
     };
 
     namespace
@@ -1814,6 +1834,7 @@ namespace skmap
             std::vector<S32> last_layer(s.mLayers.size(), -1);
             if (next)
             {
+                next->mPairs.resize(s.mLayers.size());
                 SK_SECTION_STAGE(MEMO);
                 for (size_t l = 0; l < s.mLayers.size(); ++l)
                 {
@@ -1994,6 +2015,56 @@ namespace skmap
 
                 // 6. Pieces, in (record, plane, group) order.
                 SK_SECTION_STAGE(PIECES);
+                // The same floors cut by the same records at the same planes, in the same order, make the same pieces:
+                // the last build's, which hold the slices the cache would hand back.
+                if (next)
+                {
+                    const PairSources* had = last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
+                                                 ? &last->mPairs[last_layer[l]]
+                                                 : nullptr;
+                    bool same = had && *had && (*had)->size() == pairs.size();
+                    for (size_t k = 0; same && k < pairs.size(); ++k)
+                    {
+                        same = (**had)[k].same(*recs[pairs[k].first], pairs[k].second);
+                    }
+                    if (same)
+                    {
+                        next->mPairs[l] = *had;
+                        const Scene& ls = *last->mScene;
+                        const std::vector<U32>& ids = ls.mLayers[last_layer[l]].mPieces;
+                        const size_t want_reused = s.mPieces.size() + ids.size();
+                        if (want_reused > s.mPieces.capacity())
+                        {
+                            s.mPieces.reserve(llmax(want_reused, s.mPieces.capacity() + s.mPieces.capacity() / 2));
+                        }
+                        layer.mPieces.reserve(ids.size());
+                        for (U32 id : ids)
+                        {
+                            layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
+                            s.mPieces.push_back(ls.mPieces[id]);
+                        }
+                        for (const auto& pq : pairs)
+                        {
+                            planes_used.push_back(pq.second);
+                        }
+                        stats.mReused += static_cast<U32>(pairs.size());
+                        continue;
+                    }
+                    auto sources = std::make_shared<std::vector<PairSource>>(pairs.size());
+                    for (size_t k = 0; k < pairs.size(); ++k)
+                    {
+                        const sknav::Record& r = *recs[pairs[k].first];
+                        PairSource& src = (*sources)[k];
+                        src.mSignature = r.mSignature;
+                        src.mOrigin = r.mOrigin;
+                        src.mPart = r.mPart;
+                        src.mRoot = r.mRoot;
+                        src.mPlane = pairs[k].second;
+                        src.mShape = r.mShape;
+                        src.mProvenance = r.mProvenance;
+                    }
+                    next->mPairs[l] = std::move(sources);
+                }
                 const LayerIndex& index = layer_index[l];
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
                     return layerFloorAt(s, index, p, z);

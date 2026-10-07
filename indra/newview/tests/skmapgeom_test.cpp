@@ -1109,8 +1109,11 @@ namespace tut
         ensure("the same pieces, warm", samePieces(*plain, *warm));
         ensure("the cold build sliced", cold->mSectionStats.mSlices > 0);
         ensure_equals("the warm build sliced nothing", warm->mSectionStats.mSlices, 0u);
-        // An upright wall's two planes share one section, so the cold build already hits once.
-        ensure_equals("all hits", warm->mSectionStats.mCacheHits, cold->mSectionStats.mSlices + cold->mSectionStats.mCacheHits);
+        // An upright wall's two planes share one section, so the cold build already hits once; the warm build takes
+        // its unchanged layers' pieces whole, each pair at least as often as the cold build looked it up.
+        ensure("reused", warm->mSectionStats.mReused > 0);
+        ensure("all hits or reused", warm->mSectionStats.mCacheHits + warm->mSectionStats.mReused
+                                         >= cold->mSectionStats.mSlices + cold->mSectionStats.mCacheHits);
     }
 
     // What moves a leaf's key and what does not.
