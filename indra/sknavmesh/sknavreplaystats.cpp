@@ -500,6 +500,8 @@ namespace sknav
                 out << (first ? "" : ",") << "\n{\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"terrain\":" << (mesh.mTerrain ? "true" : "false")
                     << ",\"camera_m\":" << cameraDistance(census, tile) << ",\"status\":" << static_cast<S32>(r.mStatus) << ",\"tris\":" << r.mTriangles
                     << ",\"soup_ms\":" << st.mSoupMs << ",\"exclude_ms\":" << st.mExcludeMs << ",\"total_ms\":" << st.mTotalMs
+                    << ",\"raster_ms\":" << st.mRasterMs << ",\"poly_ms\":" << st.mPolyMs << ",\"held_bytes\":" << st.mHeldBytes
+                    << ",\"held_chf_bytes\":" << st.mHeldChfBytes << ",\"held_edge_bytes\":" << st.mHeldEdgeBytes
                     << ",\"excluded\":" << st.mExcludedRecords << ",\"window_cells\":" << st.mExcludeWindowCells << ",\"tile_cells\":" << st.mTileCells
                     << ",\"shared_codes\":" << st.mSharedCodes << ",\"classes\":[";
                 first = false;

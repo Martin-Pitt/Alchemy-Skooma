@@ -31,6 +31,9 @@
 
 #include "llstring.h"
 
+#include "Recast.h"
+#include "RecastAlloc.h"
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -795,5 +798,147 @@ namespace tut
             ensure(llformat("each as wide as its ramp: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.2f);
         }
         ensure("one up each ramp", along_x && along_y);
+    }
+
+    // The flight a stair builds stands on the raster before any polys; moved
+    // off its footprint, nothing of its codes is left under it.
+    template<> template<>
+    void sknavflights_object::test<23>()
+    {
+        set_test_name("a flight stands on the compact heightfield where its codes are, and not elsewhere");
+        TileBuildInput in = stairTile();
+        for (S32 k = 1; k <= 8; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
+        TileBuildResult r;
+        const TileRasterPtr raster = rasteriseTile(in, r);
+        ensure("rasterised: " + r.mError, raster && raster->mChf);
+        ensure_equals("one flight", raster->mFlights.size(), 1u);
+        ensure("it stands", raster->mStanding.size() == 1 && raster->mStanding[0] == 1);
+        const S32 border = borderCells(in.mParams[0].mRadius, in.mCell);
+        Flight moved = raster->mFlights[0];
+        for (LLVector2& p : moved.mFootprint)
+        {
+            p.mV[VY] += 8.f;
+        }
+        ensure("off its footprint it does not", !flightSurvives(*raster->mChf, border, moved, in.mParams[0].mClimb));
+        Flight raised = raster->mFlights[0];
+        raised.mZMin += 4.f;
+        raised.mZMax += 4.f;
+        ensure("nor above its heights", !flightSurvives(*raster->mChf, border, raised, in.mParams[0].mClimb));
+    }
+
+    namespace
+    {
+        U64 rasterDigest(const TileRaster& t)
+        {
+            U64 h = 1469598103934665603ULL;
+            const auto eat = [&](const void* p, size_t n) {
+                for (size_t i = 0; i < n; ++i)
+                {
+                    h = (h ^ static_cast<const U8*>(p)[i]) * 1099511628211ULL;
+                }
+            };
+            const rcCompactHeightfield& c = *t.mChf;
+            eat(c.cells, sizeof(rcCompactCell) * c.width * c.height);
+            eat(c.spans, sizeof(rcCompactSpan) * c.spanCount);
+            eat(c.areas, c.spanCount);
+            eat(t.mEdges.mRuns.data(), t.mEdges.mRuns.size() * sizeof(U16));
+            eat(t.mReal.data(), t.mReal.size());
+            return h;
+        }
+
+        bool sameTile(const TileBuildResult& a, const TileBuildResult& b)
+        {
+            if (a.mStatus != b.mStatus || a.mData[0] != b.mData[0] || a.mSegments[0].size() != b.mSegments[0].size() ||
+                a.mLinks[0].size() != b.mLinks[0].size() || a.mFlights[0].size() != b.mFlights[0].size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a.mFlights[0].size(); ++i)
+            {
+                if (a.mFlights[0][i].mPolys != b.mFlights[0][i].mPolys)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        TileBuildInput stagedStair()
+        {
+            TileBuildInput in = stairTile();
+            in.mAir = true;
+            in.mEdges[0] = true;
+            for (S32 k = 1; k <= 8; ++k)
+            {
+                in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 14.f, 0.f, 10.f + k * 0.3f, 18.f, k * 0.25f));
+            }
+            in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 17.f, 20.f, 2.25f));
+            in.mRecords.push_back(boxRecord(20.f, 4.f, 0.f, 21.f, 28.f, 3.f));
+            return in;
+        }
+
+        S32 sAllocsLeft = 0;
+        void* failingAlloc(size_t size, rcAllocHint)
+        {
+            return sAllocsLeft-- > 0 ? malloc(size) : nullptr;
+        }
+        void plainFree(void* p)
+        {
+            free(p);
+        }
+    }
+
+    // The raster stage hands the polygon stage a raster it never changes:
+    // polygonised twice, or after a polygon stage that failed, it makes the
+    // tile the whole pipeline makes.
+    template<> template<>
+    void sknavflights_object::test<24>()
+    {
+        set_test_name("a raster polygonises again to the same tile, and is left as it was");
+        const TileBuildInput in = stagedStair();
+        const TileBuildResult whole = buildTile(in);
+        ensure("built: " + whole.mError, whole.mStatus == TileBuildResult::SUCCESS && !whole.mFlights[0].empty());
+        TileBuildResult staged;
+        const TileRasterPtr raster = rasteriseTile(in, staged);
+        ensure("rasterised", raster != nullptr);
+        const U64 before = rasterDigest(*raster);
+        TileBuildResult first = staged, second = staged;
+        polygoniseTile(in, *raster, first);
+        polygoniseTile(in, *raster, second);
+        ensure("the first is the pipeline's tile", sameTile(first, whole));
+        ensure("the second is the first", sameTile(second, first));
+        ensure("the raster is as it was", rasterDigest(*raster) == before);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<25>()
+    {
+        set_test_name("a raster copy Recast's allocator refuses fails the polygon stage and leaves the raster whole");
+        const TileBuildInput in = stagedStair();
+        TileBuildResult staged;
+        const TileRasterPtr raster = rasteriseTile(in, staged);
+        ensure("rasterised", raster != nullptr);
+        const U64 before = rasterDigest(*raster);
+        // The copy's header, cells, spans and areas: refused at each in turn. Recast's own
+        // passes are not written to survive a refusal, so nothing later is.
+        bool failed_somewhere = false;
+        for (S32 allowed : { 0, 1, 2, 3 })
+        {
+            TileBuildResult refused = staged;
+            sAllocsLeft = allowed;
+            rcAllocSetCustom(failingAlloc, plainFree);
+            polygoniseTile(in, *raster, refused);
+            rcAllocSetCustom(nullptr, nullptr);
+            failed_somewhere = failed_somewhere || (refused.mStatus == TileBuildResult::FAILED && refused.mData[0].empty());
+            ensure(llformat("the raster is whole after %d allocations", allowed), rasterDigest(*raster) == before);
+        }
+        ensure("the copy was refused", failed_somewhere);
+        TileBuildResult again = staged;
+        polygoniseTile(in, *raster, again);
+        ensure("and polygonises as before", sameTile(again, buildTile(in)));
     }
 }

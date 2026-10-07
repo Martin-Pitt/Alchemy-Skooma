@@ -125,6 +125,12 @@ namespace sknav
         F64 mSoupMs = 0.0;
         F64 mExcludeMs = 0.0;
         F64 mTotalMs = 0.0;
+        F64 mRasterMs = 0.0;            ///< the raster stage, soup to the held raster
+        F64 mPolyMs = 0.0;              ///< the polygon stage
+        /// What the raster stage hands the polygon stage: all of it, its compact heightfield, its edge field.
+        size_t mHeldBytes = 0;
+        size_t mHeldChfBytes = 0;
+        size_t mHeldEdgeBytes = 0;
         U32 mExcludedRecords = 0;
         U32 mExcludeWindowCells = 0;    ///< tile cells within two of an excluded triangle's box
         U32 mTileCells = 0;

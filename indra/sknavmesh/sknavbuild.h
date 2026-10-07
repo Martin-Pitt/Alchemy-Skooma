@@ -34,6 +34,8 @@
 #include <string>
 #include <vector>
 
+struct rcCompactHeightfield;
+
 namespace sknav
 {
     /// The agent classes a tile builds a mesh for. Order is the index everywhere.
@@ -194,8 +196,40 @@ namespace sknav
 
     struct TileBuildStats;
 
-    /// Run the pipeline. Safe on any thread; touches nothing but the input
-    /// and, when given, the stats it measures itself into.
+    struct FreeCompact
+    {
+        void operator()(rcCompactHeightfield* chf) const;
+    };
+
+    /// What a tile's polygons are built from, once its raster is done: AVATAR's
+    /// compact heightfield after erosion, its areas still the partition's codes,
+    /// and what classifyEdges reads of AVATAR's view of the solid raster. Held
+    /// so the polygons can be built again without rasterising; immutable.
+    struct TileRaster
+    {
+        std::unique_ptr<rcCompactHeightfield, FreeCompact> mChf;
+        EdgeField mEdges;
+        std::vector<U8> mReal;          ///< code -> area
+        std::vector<Flight> mFlights;   ///< every flight the partition found, with no polys yet
+        std::vector<U8> mStanding;      ///< per flight, 1 where it still stands on mChf
+
+        size_t chfBytes() const;
+        size_t bytes() const;
+    };
+    typedef std::shared_ptr<const TileRaster> TileRasterPtr;
+
+    /// The raster stage: everything up to AVATAR's regions. Fills the result's
+    /// faces, ledges, run-off and air, and hands back what the polygon stage
+    /// reads; null when the tile is empty or the stage failed (result says which).
+    TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats = nullptr);
+
+    /// The polygon stage: regions to Detour data, flights and AVATAR's edges,
+    /// over a copy of the raster's compact heightfield, so a raster polygonises
+    /// any number of times to the same tile.
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats = nullptr);
+
+    /// Run the pipeline: both stages. Safe on any thread; touches nothing but
+    /// the input and, when given, the stats it measures itself into.
     TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats = nullptr);
 
     /// Tessellate an analytic record into triangles (mesh-local, given the

@@ -1423,6 +1423,46 @@ namespace
         return cfg;
     }
 
+    /// A deep copy of a compact heightfield, or null when Recast's allocator refuses.
+    rcCompactHeightfield* cloneCompact(const rcCompactHeightfield& src)
+    {
+        rcCompactHeightfield* out = rcAllocCompactHeightfield();
+        if (!out)
+        {
+            return nullptr;
+        }
+        out->width = src.width;
+        out->height = src.height;
+        out->spanCount = src.spanCount;
+        out->walkableHeight = src.walkableHeight;
+        out->walkableClimb = src.walkableClimb;
+        out->borderSize = src.borderSize;
+        out->maxDistance = src.maxDistance;
+        out->maxRegions = src.maxRegions;
+        rcVcopy(out->bmin, src.bmin);
+        rcVcopy(out->bmax, src.bmax);
+        out->cs = src.cs;
+        out->ch = src.ch;
+        const size_t cells = static_cast<size_t>(src.width) * src.height, spans = static_cast<size_t>(src.spanCount);
+        out->cells = static_cast<rcCompactCell*>(rcAlloc(sizeof(rcCompactCell) * cells, RC_ALLOC_PERM));
+        out->spans = static_cast<rcCompactSpan*>(rcAlloc(sizeof(rcCompactSpan) * spans, RC_ALLOC_PERM));
+        out->areas = static_cast<unsigned char*>(rcAlloc(spans, RC_ALLOC_PERM));
+        out->dist = src.dist ? static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * spans, RC_ALLOC_PERM)) : nullptr;
+        if (!out->cells || !out->spans || !out->areas || (src.dist && !out->dist))
+        {
+            rcFreeCompactHeightfield(out);
+            return nullptr;
+        }
+        std::memcpy(out->cells, src.cells, sizeof(rcCompactCell) * cells);
+        std::memcpy(out->spans, src.spans, sizeof(rcCompactSpan) * spans);
+        std::memcpy(out->areas, src.areas, spans);
+        if (src.dist)
+        {
+            std::memcpy(out->dist, src.dist, sizeof(unsigned short) * spans);
+        }
+        return out;
+    }
+
     struct Freed
     {
         rcHeightfield* hf = nullptr;
@@ -1443,6 +1483,32 @@ namespace
 
 namespace sknav
 {
+    void FreeCompact::operator()(rcCompactHeightfield* chf) const
+    {
+        rcFreeCompactHeightfield(chf);
+    }
+
+    size_t TileRaster::chfBytes() const
+    {
+        if (!mChf)
+        {
+            return 0;
+        }
+        const size_t spans = static_cast<size_t>(mChf->spanCount);
+        return sizeof(rcCompactHeightfield) + static_cast<size_t>(mChf->width) * mChf->height * sizeof(rcCompactCell) +
+               spans * (sizeof(rcCompactSpan) + 1 + (mChf->dist ? sizeof(unsigned short) : 0));
+    }
+
+    size_t TileRaster::bytes() const
+    {
+        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity();
+        for (const Flight& f : mFlights)
+        {
+            n += sizeof(Flight) + f.mFootprint.capacity() * sizeof(LLVector2) + f.mCodes.capacity() + f.mPolys.capacity() * sizeof(U16);
+        }
+        return n;
+    }
+
     F32 partitionSlope(const TileBuildInput& input)
     {
         if (input.mPartitionSlope > 0.f)
@@ -1502,10 +1568,9 @@ namespace sknav
         return stage >= 0 && stage < NUM_STAGES ? names[stage] : "";
     }
 
-    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
+    TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats)
     {
         const auto started = std::chrono::steady_clock::now();
-        TileBuildResult result;
         // An empty tile has no air to keep, which is an answer too.
         result.mAirBuilt = input.mAir;
 
@@ -1610,7 +1675,7 @@ namespace sknav
         if (soup.ntris() == 0)
         {
             result.mStatus = TileBuildResult::EMPTY;
-            return result;
+            return nullptr;
         }
         if (stats)
         {
@@ -1791,14 +1856,14 @@ namespace sknav
         if (!mem.hf)
         {
             result.mError = "heightfield";
-            return result;
+            return nullptr;
         }
         rcHeightfield& hf = *mem.hf;
         const RasterSource source{ main_soup, &codes, main_solids, &cut_soup, &cuts };
         if (!rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
         {
             result.mError = "rasterize";
-            return result;
+            return nullptr;
         }
 
         // The window: every cell a left-out triangle touches and one more
@@ -1831,7 +1896,7 @@ namespace sknav
             if (!overlay || !rasterisePasses(*overlay, window, rect, grid.walkableClimb, clock))
             {
                 result.mError = "rasterize";
-                return result;
+                return nullptr;
             }
             own_column = in_window;
             if (stats)
@@ -1887,7 +1952,7 @@ namespace sknav
                 if (!overlay)
                 {
                     result.mError = "heightfield";
-                    return result;
+                    return nullptr;
                 }
             }
             if (own_column.empty() && !differ.empty())
@@ -1995,7 +2060,7 @@ namespace sknav
         if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, view.mHf, *mem.chf))
         {
             result.mError = "compact";
-            return result;
+            return nullptr;
         }
         clock.lap(ClassBuildStats::COMPACT);
         // Which of the raster's spans AVATAR stands on, for the air: its own
@@ -2052,7 +2117,7 @@ namespace sknav
         if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
         {
             result.mError = "erode";
-            return result;
+            return nullptr;
         }
         clock.lap(ClassBuildStats::ERODE);
         if (input.mPartition == Partition::SLOPE)
@@ -2104,6 +2169,68 @@ namespace sknav
             clock.restart();
         }
 
+        // What the polygons are built from, kept; the heightfields go.
+        auto raster = std::make_shared<TileRaster>();
+        takeEdgeField(view.mHf, raster->mEdges);
+        raster->mReal = std::move(real);
+        raster->mFlights = std::move(flights);
+        raster->mStanding = std::move(standing);
+        raster->mChf.reset(mem.chf);
+        mem.chf = nullptr;
+        if (astats)
+        {
+            measureHeightfield(hf, *astats);
+            if (overlay)
+            {
+                ClassBuildStats extra;
+                measureHeightfield(*overlay, extra);
+                astats->mHfSpans += extra.mHfSpans;
+                astats->mHfBytes += extra.mHfBytes;
+            }
+        }
+        result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+        if (stats)
+        {
+            stats->mExcludeMs = result.mExcludeMillis;
+            stats->mRasterMs = result.mMillis;
+            stats->mTotalMs = result.mMillis;
+            stats->mHeldChfBytes = raster->chfBytes();
+            stats->mHeldEdgeBytes = raster->mEdges.bytes();
+            stats->mHeldBytes = raster->bytes();
+        }
+        return raster;
+    }
+
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats)
+    {
+        const auto started = std::chrono::steady_clock::now();
+        rcContext ctx(false);
+        const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+        const ClassParams& ap = input.mParams[avatar];
+        ClassBuildStats* astats = stats ? &stats->mClass[avatar] : nullptr;
+        StageClock clock(astats ? astats->mMs : nullptr);
+        const rcConfig cfg = tileConfig(input, ap, borderCells(ap.mRadius, input.mCell));
+        const std::vector<U8>& real = raster.mReal;
+        const std::vector<U8>& standing = raster.mStanding;
+        std::vector<Flight> flights = raster.mFlights;
+        const auto finish = [&]() {
+            result.mMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+            if (stats)
+            {
+                stats->mPolyMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
+                stats->mTotalMs = stats->mRasterMs + stats->mPolyMs;
+            }
+        };
+
+        // Regions rewrite the spans and the unfold their areas: a copy, so the raster can polygonise again.
+        Freed mem;
+        mem.chf = raster.mChf ? cloneCompact(*raster.mChf) : nullptr;
+        if (!mem.chf)
+        {
+            result.mError = "compact copy";
+            finish();
+            return;
+        }
         bool regions = false;
         switch (input.mPartition)
         {
@@ -2125,33 +2252,28 @@ namespace sknav
         if (!regions)
         {
             result.mError = "regions";
-            return result;
+            finish();
+            return;
         }
         clock.lap(ClassBuildStats::REGIONS);
         mem.cset = rcAllocContourSet();
-        if (!rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
+        if (!mem.cset || !rcBuildContours(&ctx, *mem.chf, cfg.maxSimplificationError, cfg.maxEdgeLen, *mem.cset))
         {
             result.mError = "contours";
-            return result;
+            finish();
+            return;
         }
         clock.lap(ClassBuildStats::CONTOURS);
         mem.pmesh = rcAllocPolyMesh();
-        if (!rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
+        if (!mem.pmesh || !rcBuildPolyMesh(&ctx, *mem.cset, cfg.maxVertsPerPoly, *mem.pmesh))
         {
             result.mError = "polymesh";
-            return result;
+            finish();
+            return;
         }
         clock.lap(ClassBuildStats::POLYMESH);
         if (astats)
         {
-            measureHeightfield(hf, *astats);
-            if (overlay)
-            {
-                ClassBuildStats extra;
-                measureHeightfield(*overlay, extra);
-                astats->mHfSpans += extra.mHfSpans;
-                astats->mHfBytes += extra.mHfBytes;
-            }
             astats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
             astats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
                                 static_cast<size_t>(mem.chf->spanCount) * (sizeof(rcCompactSpan) + 1 + (mem.chf->dist ? 2 : 0));
@@ -2215,10 +2337,11 @@ namespace sknav
         }
         clock.lap(ClassBuildStats::FLIGHTMAP);
         mem.dmesh = rcAllocPolyMeshDetail();
-        if (!rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
+        if (!mem.dmesh || !rcBuildPolyMeshDetail(&ctx, *mem.pmesh, *mem.chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *mem.dmesh))
         {
             result.mError = "detail";
-            return result;
+            finish();
+            return;
         }
         // Recast hands the detail vertices back one cell higher than the
         // polygon vertices they refine (RecastMeshDetail.cpp, "Is this
@@ -2259,17 +2382,12 @@ namespace sknav
         if (mem.pmesh->npolys == 0)
         {
             result.mStatus = TileBuildResult::SUCCESS;
-            result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
-            if (stats)
-            {
-                stats->mExcludeMs = result.mExcludeMillis;
-                stats->mTotalMs = result.mMillis;
-            }
-            return result;
+            finish();
+            return;
         }
         if (input.mEdges[avatar])
         {
-            classifyEdges(*mem.pmesh, view.mHf, *mem.chf, ap, input.mDropMax[avatar], true, input.mDropSpacing, result.mSegments[avatar],
+            classifyEdges(*mem.pmesh, raster.mEdges, *mem.chf, ap, input.mDropMax[avatar], true, input.mDropSpacing, result.mSegments[avatar],
                           result.mLinks[avatar]);
         }
         clock.lap(ClassBuildStats::EDGES);
@@ -2343,7 +2461,8 @@ namespace sknav
         if (!dtCreateNavMeshData(&params, &data, &size))
         {
             result.mError = "navmesh data";
-            return result;
+            finish();
+            return;
         }
         result.mData[avatar].assign(data, data + size);
         dtFree(data);
@@ -2353,11 +2472,15 @@ namespace sknav
             astats->mDetourBytes = static_cast<U32>(size);
         }
         result.mStatus = TileBuildResult::SUCCESS;
-        result.mMillis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
-        if (stats)
+        finish();
+    }
+
+    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats)
+    {
+        TileBuildResult result;
+        if (const TileRasterPtr raster = rasteriseTile(input, result, stats))
         {
-            stats->mExcludeMs = result.mExcludeMillis;
-            stats->mTotalMs = result.mMillis;
+            polygoniseTile(input, *raster, result, stats);
         }
         return result;
     }
