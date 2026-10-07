@@ -49,10 +49,12 @@
 #include "lltracker.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewertexture.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
+#include "llvoavatarself.h"
 #include "llworldmapview.h"
 #include "llavatarnamecache.h"
 #include "llkeyboard.h"
@@ -81,6 +83,17 @@ namespace
     LLColor4 toColor4(const skmap::PaletteColour& c, F32 alpha = 1.f)
     {
         return LLColor4(c.mR, c.mG, c.mB, c.mA * alpha);
+    }
+
+    // Half the avatar's wider horizontal extent on the map, so a close zoom draws its true footprint.
+    F32 footprintRadius(const LLViewerObject* avatar, F32 pixels_per_metre)
+    {
+        if (!avatar || !avatar->isAvatar())
+        {
+            return 0.f;
+        }
+        const LLVector3& scale = avatar->getScale();
+        return 0.5f * llmax(scale.mV[VX], scale.mV[VY]) * pixels_per_metre;
     }
 }
 
@@ -431,17 +444,18 @@ void SKNetMap::drawSelf()
         }
         dot = mid + d * t;
     }
-    skmapdraw::shadow(dot, skmap::palette::SELF_DOT_RADIUS_PX);
+    const F32 dot_radius = llmax(skmap::palette::SELF_DOT_RADIUS_PX, footprintRadius(gAgentAvatarp, mView.pixelsPerMetre()));
+    skmapdraw::shadow(dot, dot_radius);
     gGL.begin(LLRender::TRIANGLES);
     skmapdraw::colour(skmap::palette::SELF_DOT);
-    skmapdraw::disc(dot, skmap::palette::SELF_DOT_RADIUS_PX);
+    skmapdraw::disc(dot, dot_radius);
     if (off_map)
     {
         LLVector2 dir = self - dot;
         if (dir.normVec() > 1e-6f)
         {
             const LLVector2 side(-dir.mV[VY], dir.mV[VX]);
-            const F32 base = skmap::palette::SELF_DOT_RADIUS_PX + 1.f;
+            const F32 base = dot_radius + 1.f;
             const F32 tip = base + skmap::palette::SELF_EDGE_TRIANGLE_PX;
             const F32 w = skmap::palette::SELF_EDGE_TRIANGLE_PX * 0.6f;
             skmapdraw::triangle(dot + dir * tip, dot + dir * base + side * w, dot + dir * base - side * w);
@@ -721,7 +735,8 @@ void SKNetMap::collectDots()
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         const bool coded = labels && !p.mCode.empty();
         const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
-        const F32 radius = skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad);
+        const F32 radius = llmax(skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad),
+                                 footprintRadius(gObjectList.findObject(p.mId), mView.pixelsPerMetre()));
         const LLVector2 at = mView.toWidget(p.mPos);
         // Only dots the clip leaves some of: hover, tags and picks never name an unseen one.
         if (at.mV[VX] < -radius || at.mV[VY] < -radius || at.mV[VX] > mView.width() + radius || at.mV[VY] > mView.height() + radius)
