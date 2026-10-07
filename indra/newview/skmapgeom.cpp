@@ -1256,19 +1256,105 @@ namespace skmap
             return false;
         }
 
-        /// The topmost floor of one layer at a scene-local point.
-        bool layerFloorAt(const Scene& s, S32 layer, const LLVector2& p, F32& z)
+        /// One layer's share of Scene::mIndex on a dense grid of its cells, each list in the index's order.
+        struct LayerIndex
         {
-            const auto it = s.mIndex.find(cellOfLocal(s, p));
-            if (it == s.mIndex.end())
+            S32 mX0 = 0, mY0 = 0, mW = 0, mH = 0;
+            std::vector<U32> mFirst;        ///< per cell, into mPolys; one past the last cell at the end
+            std::vector<U32> mPolys;
+
+            /// The cell's polygons as [begin, end), empty off the grid.
+            std::pair<const U32*, const U32*> at(const Cell& c) const
             {
-                return false;
+                const S32 x = c.first - mX0, y = c.second - mY0;
+                if (x < 0 || x >= mW || y < 0 || y >= mH)
+                {
+                    return { nullptr, nullptr };
+                }
+                const size_t i = static_cast<size_t>(y) * mW + x;
+                return { mPolys.data() + mFirst[i], mPolys.data() + mFirst[i + 1] };
             }
-            bool found = false;
-            for (U32 id : it->second)
+        };
+
+        /// Every layer's index, from passes over the scene's.
+        void buildLayerIndexes(const Scene& s, std::vector<LayerIndex>& out)
+        {
+            out.assign(s.mLayers.size(), LayerIndex());
+            const S32 layers = static_cast<S32>(out.size());
+            std::vector<S32> lo_x(out.size(), INT_MAX), lo_y(out.size(), INT_MAX), hi_x(out.size(), INT_MIN), hi_y(out.size(), INT_MIN);
+            for (const auto& entry : s.mIndex)
             {
-                const ScenePoly& poly = s.mPolys[id];
-                if (poly.mLayer != layer || !polyContains(s, poly, p))
+                for (U32 id : entry.second)
+                {
+                    const S32 l = s.mPolys[id].mLayer;
+                    if (l >= 0 && l < layers)
+                    {
+                        lo_x[l] = llmin(lo_x[l], entry.first.first);
+                        lo_y[l] = llmin(lo_y[l], entry.first.second);
+                        hi_x[l] = llmax(hi_x[l], entry.first.first);
+                        hi_y[l] = llmax(hi_y[l], entry.first.second);
+                    }
+                }
+            }
+            for (size_t l = 0; l < out.size(); ++l)
+            {
+                LayerIndex& li = out[l];
+                if (lo_x[l] <= hi_x[l])
+                {
+                    li.mX0 = lo_x[l];
+                    li.mY0 = lo_y[l];
+                    li.mW = hi_x[l] - lo_x[l] + 1;
+                    li.mH = hi_y[l] - lo_y[l] + 1;
+                }
+                li.mFirst.assign(static_cast<size_t>(li.mW) * li.mH + 1, 0);
+            }
+            auto cellOf = [](const LayerIndex& li, const Cell& c) {
+                return static_cast<size_t>(c.second - li.mY0) * li.mW + (c.first - li.mX0);
+            };
+            for (const auto& entry : s.mIndex)
+            {
+                for (U32 id : entry.second)
+                {
+                    const S32 l = s.mPolys[id].mLayer;
+                    if (l >= 0 && l < layers)
+                    {
+                        out[l].mFirst[cellOf(out[l], entry.first) + 1]++;
+                    }
+                }
+            }
+            std::vector<std::vector<U32>> fill(out.size());
+            for (size_t l = 0; l < out.size(); ++l)
+            {
+                LayerIndex& li = out[l];
+                for (size_t i = 1; i < li.mFirst.size(); ++i)
+                {
+                    li.mFirst[i] += li.mFirst[i - 1];
+                }
+                li.mPolys.resize(li.mFirst.back());
+                fill[l].assign(li.mFirst.begin(), li.mFirst.end() - 1);
+            }
+            for (const auto& entry : s.mIndex)
+            {
+                for (U32 id : entry.second)
+                {
+                    const S32 l = s.mPolys[id].mLayer;
+                    if (l >= 0 && l < layers)
+                    {
+                        out[l].mPolys[fill[l][cellOf(out[l], entry.first)]++] = id;
+                    }
+                }
+            }
+        }
+
+        /// The topmost floor of one layer at a scene-local point.
+        bool layerFloorAt(const Scene& s, const LayerIndex& index, const LLVector2& p, F32& z)
+        {
+            const auto polys = index.at(cellOfLocal(s, p));
+            bool found = false;
+            for (const U32* it = polys.first; it != polys.second; ++it)
+            {
+                const ScenePoly& poly = s.mPolys[*it];
+                if (!polyContains(s, poly, p))
                 {
                     continue;
                 }
@@ -1557,6 +1643,12 @@ namespace skmap
                 return sl;
             };
 
+            // Floor lookups by layer, and a stamp per polygon so a sheet room's search visits each once.
+            std::vector<LayerIndex> layer_index;
+            buildLayerIndexes(s, layer_index);
+            std::vector<U32> poly_seen(s.mPolys.size(), 0);
+            U32 poly_stamp = 0;
+
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
             {
@@ -1690,8 +1782,8 @@ namespace skmap
 #endif
 
                 // 6. Pieces, in (record, plane, group) order.
-                const S32 li = static_cast<S32>(l);
-                auto floor_at = [&s, li](const LLVector2& p, F32& z) { return layerFloorAt(s, li, p, z); };
+                const LayerIndex& index = layer_index[l];
+                auto floor_at = [&s, &index](const LLVector2& p, F32& z) { return layerFloorAt(s, index, p, z); };
                 for (const auto& pq : pairs)
                 {
                     const sknav::Record& rec = *recs[pq.first];
@@ -1747,31 +1839,26 @@ namespace skmap
                             lo += shift;
                             hi += shift;
                             const Cell c0 = cellOfLocal(s, lo), c1 = cellOfLocal(s, hi);
-                            std::set<U32> seen_polys;
+                            ++poly_stamp;
                             bool walkable = false;
                             for (S32 cy = c0.second; cy <= c1.second && !walkable; ++cy)
                             {
                                 for (S32 cx = c0.first; cx <= c1.first && !walkable; ++cx)
                                 {
-                                    const auto it = s.mIndex.find({ cx, cy });
-                                    if (it == s.mIndex.end())
+                                    const auto polys = index.at({ cx, cy });
+                                    for (const U32* idp = polys.first; idp != polys.second; ++idp)
                                     {
-                                        continue;
-                                    }
-                                    for (U32 id : it->second)
-                                    {
+                                        const U32 id = *idp;
                                         const ScenePoly& poly = s.mPolys[id];
-                                        if (poly.mLayer != li || !seen_polys.insert(id).second)
+                                        if (poly_seen[id] == poly_stamp)
                                         {
                                             continue;
                                         }
-                                        std::vector<LLVector2> points = { poly.mCentroid };
-                                        for (S32 v = 0; v < poly.mVertCount; ++v)
+                                        poly_seen[id] = poly_stamp;
+                                        // Its centroid, then its corners.
+                                        for (S32 v = -1; v < poly.mVertCount; ++v)
                                         {
-                                            points.push_back(plan(poly.mVerts[v]));
-                                        }
-                                        for (const LLVector2& p : points)
-                                        {
+                                            const LLVector2 p = v < 0 ? poly.mCentroid : plan(poly.mVerts[v]);
                                             if (p.mV[VX] < lo.mV[VX] || p.mV[VX] > hi.mV[VX] || p.mV[VY] < lo.mV[VY] || p.mV[VY] > hi.mV[VY]
                                                 || polyHeightAt(s, poly, p) > plane - SECTION_HEADROOM_M)
                                             {
