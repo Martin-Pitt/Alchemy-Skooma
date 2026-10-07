@@ -119,6 +119,25 @@ namespace sknav
         return n;
     }
 
+    S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy)
+    {
+        if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
+        {
+            return -1;
+        }
+        const U32 key = airKey(ix, iy);
+        const auto it = std::upper_bound(air.mLeaves.begin(), air.mLeaves.end(), key,
+                                         [](U32 k, const AirLeaf& l) { return k < airKey(l.mX, l.mY); });
+        if (it == air.mLeaves.begin())
+        {
+            return -1;
+        }
+        // Solid blocks have no leaf, so the predecessor may end before the cell.
+        const AirLeaf& l = *(it - 1);
+        const S32 s = 1 << l.mLevel;
+        return ix < l.mX + s && iy < l.mY + s ? static_cast<S32>(it - 1 - air.mLeaves.begin()) : -1;
+    }
+
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out)
     {
         out.mOrigin = grid.mOrigin;

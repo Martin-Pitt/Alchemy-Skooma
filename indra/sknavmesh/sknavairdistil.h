@@ -51,8 +51,22 @@ namespace sknav
         U16 mY = 0;
         U8 mLevel = 0;
         U8 mGapCount = 0;
+        U16 mFine = 0;          ///< unused yet; fills what was padding
         U32 mFirstGap = 0;
     };
+
+    /// The Morton key of a cell: x in the even bits, y in the odd ones.
+    inline U32 airKey(U32 x, U32 y)
+    {
+        auto spread = [](U32 v) {
+            v &= 0xffff;
+            v = (v | (v << 8)) & 0x00ff00ff;
+            v = (v | (v << 4)) & 0x0f0f0f0f;
+            v = (v | (v << 2)) & 0x33333333;
+            return (v | (v << 1)) & 0x55555555;
+        };
+        return spread(x) | (spread(y) << 1);
+    }
 
     /// The gaps of the level-0 cells along one tile edge, in order along it,
     /// for stitching to the neighbour without its quadtree.
@@ -96,6 +110,10 @@ namespace sknav
         size_t bytes() const;
     };
     typedef std::shared_ptr<const TileAir> TileAirPtr;
+
+    /// The leaf covering a fine cell, or -1, by the last leaf whose key is at
+    /// most the cell's; leaves must be in key order.
+    S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy);
 
     /// Merge the fine grid into leaves of up to AIR_MAX_LEVEL. A block
     /// merges when every column has the same gaps with equal flags, floors

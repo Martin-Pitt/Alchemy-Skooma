@@ -31,6 +31,7 @@
 
 #include "Recast.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace
@@ -40,12 +41,11 @@ namespace
     const S32 CLIMB = 6;
     const S32 OVERLAP = 4;
 
-    /// A 64 x 64 room at 0.125 m: open floor, a wall across it at x = 20 with
+    /// A room at 0.125 m, 64 x 64 unless cropped: open floor, a wall across it at x = 20 with
     /// a doorway, a 0.25 m ramp of gentle floors, a mezzanine over one corner
     /// and a solid pillar.
-    AirGrid room()
+    AirGrid room(S32 w = 64, S32 h = 64)
     {
-        const S32 w = 64, h = 64;
         AirGrid g;
         g.mCell = g.mUnit = 0.125f;
         g.mWidth = w;
@@ -434,5 +434,32 @@ namespace tut
             ensure("ceiling over floor", (gap.mFlags & AirGap::OPEN) || gap.mCeiling > gap.mFloor);
         }
         ensure_equals("left fine", air.mGaps.size(), static_cast<size_t>(4));
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<10>()
+    {
+        set_test_name("a cell's leaf by key is the leaf covering it, on whole and ragged tiles");
+        for (const auto& size : { std::make_pair(64, 64), std::make_pair(50, 37) })
+        {
+            const AirGrid g = room(size.first, size.second);
+            TileAir air;
+            distilAir(g, CLIMB, air);
+            std::sort(air.mLeaves.begin(), air.mLeaves.end(), [](const AirLeaf& a, const AirLeaf& b) { return airKey(a.mX, a.mY) < airKey(b.mX, b.mY); });
+            std::vector<S32> leaf_of;
+            ensure("covered once", cover(air, leaf_of));
+            S32 solid = 0;
+            for (S32 iy = -1; iy <= g.mHeight; ++iy)
+            {
+                for (S32 ix = -1; ix <= g.mWidth; ++ix)
+                {
+                    const bool inside = ix >= 0 && iy >= 0 && ix < g.mWidth && iy < g.mHeight;
+                    const S32 want = inside ? leaf_of[ix + iy * g.mWidth] : -1;
+                    solid += inside && want < 0;
+                    ensure_equals(llformat("leaf at (%d, %d)", ix, iy), findLeafByKey(air, ix, iy), want);
+                }
+            }
+            ensure("the fixture has solid cells between leaves", solid > 0);
+        }
     }
 }
