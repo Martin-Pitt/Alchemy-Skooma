@@ -141,8 +141,9 @@ namespace skmap
     /// its outline. floor_at gives the topmost floor at a point, false where there is none.
     bool isIsland(const LLVector2* outer, U32 count, F32 thickness, const std::function<bool(const LLVector2&, F32&)>& floor_at);
 
-    /// Slices by (signature, shape, plane), with each large soup's z-bins. Confined to one worker thread, no lock; it
-    /// holds no record, so no soup outlives its snapshot. Least recently used out first, by bytes.
+    /// Slices by (signature, shape, plane), with each large soup's z-bins; an upright box or cylinder keeps one section
+    /// for every plane well inside its height. Confined to one worker thread, no lock; it holds no record, so no soup
+    /// outlives its snapshot. Least recently used out first, by bytes.
     class SectionCache
     {
     public:
@@ -158,7 +159,7 @@ namespace skmap
         {
             U64 mSignature = 0;
             U8 mShape = 0;
-            S32 mPlane = 0;         ///< INT_MIN: the record's z-bins
+            S32 mPlane = 0;         ///< INT_MIN: the record's z-bins; INT_MIN + 1: an upright prism's section
             bool operator<(const Key& o) const
             {
                 return mSignature != o.mSignature ? mSignature < o.mSignature : mShape != o.mShape ? mShape < o.mShape : mPlane < o.mPlane;

@@ -1493,6 +1493,45 @@ namespace skmap
         {
             return sizeof(ZBins) + (b.mStart.capacity() + b.mTris.capacity()) * sizeof(U32);
         }
+
+        /// The cache's key for the one section of an upright prism.
+        constexpr S32 PRISM_PLANE = INT_MIN + 1;
+
+        /// Whether the plane at c (record frame) cuts an exactly upright box or cylinder well inside its height, where
+        /// every such plane gives the same section: the box's crossings are its vertical edges' fixed ends, the
+        /// cylinder's centre moves along an axis with no plan component. A side leaning by any amount moves the section
+        /// with the plane; a plane within a hair of the top or bottom is left to the slicer's own half-open test.
+        bool prismInside(const sknav::Record& r, F64 c)
+        {
+            constexpr F64 MARGIN = 1e-4;
+            const F64 cz = r.mCenter.mV[VZ];
+            if (r.mShape == sknav::Shape::BOX)
+            {
+                if (r.mAxes[0].mV[VZ] != 0.f || r.mAxes[1].mV[VZ] != 0.f || r.mAxes[2].mV[VX] != 0.f || r.mAxes[2].mV[VY] != 0.f)
+                {
+                    return false;
+                }
+                const F64 h = std::fabs(static_cast<F64>(r.mHalf.mV[2]) * r.mAxes[2].mV[VZ]);
+                return h > MARGIN && c > cz - h + MARGIN && c < cz + h - MARGIN;
+            }
+            if (r.mShape == sknav::Shape::CYLINDER)
+            {
+                const D3 c0 = column(r, 0), c1 = column(r, 1), c2 = column(r, 2);
+                const F64 tol = 1e-5 * llmax(r.mHalf.mV[0], llmax(r.mHalf.mV[1], r.mHalf.mV[2]));
+                if (std::fabs(c0.z) > tol || std::fabs(c1.z) > tol || c2.x != 0.0 || c2.y != 0.0)
+                {
+                    return false;
+                }
+                // The centre plus a signed zero is the centre, unless the centre is itself zero.
+                if (r.mCenter.mV[VX] == 0.f || r.mCenter.mV[VY] == 0.f)
+                {
+                    return false;
+                }
+                const F64 g = std::fabs(c2.z);
+                return g > MARGIN && c > cz - g + MARGIN && c < cz + g - MARGIN;
+            }
+            return false;
+        }
     }
 
     void fillCoverage(const SliceResult& s, const std::vector<U16>& loops, const std::vector<S8>& winds, bool lines, const LLVector2& shift,
@@ -1853,7 +1892,10 @@ namespace skmap
 
     SlicePtr SectionCache::get(const sknav::Record& rec, S32 q, bool* hit)
     {
-        const Key key = { rec.mSignature, static_cast<U8>(rec.mShape), q };
+        const F32 c = sectionPlaneZ(q) - static_cast<F32>(rec.mOrigin.mdV[VZ]);
+        // An upright prism has one section for all its planes: slice it once.
+        const bool prism = prismInside(rec, c);
+        const Key key = { rec.mSignature, static_cast<U8>(rec.mShape), prism ? PRISM_PLANE : q };
         const auto found = mEntries.find(key);
         if (found != mEntries.end())
         {
@@ -1889,7 +1931,6 @@ namespace skmap
                 insert(bins_key, std::move(e));
             }
         }
-        const F32 c = sectionPlaneZ(q) - static_cast<F32>(rec.mOrigin.mdV[VZ]);
         auto slice = std::make_shared<SliceResult>(sliceRecord(rec, c, bins.get()));
         Entry e;
         e.mBytes = slice->bytes();

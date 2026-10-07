@@ -818,4 +818,33 @@ namespace tut
             ensure("binned through the cache", identical(*cache.get(stair, q), skmap::sliceRecord(stair, skmap::sectionPlaneZ(q))));
         }
     }
+
+    // An upright box or cylinder is sliced once for every plane well inside it, with the slicer's own answer at each.
+    template<> template<>
+    void skmapsection_object::test<23>()
+    {
+        const LLVector3 a0(0.866025404f, 0.5f, 0.f), a1(-0.5f, 0.866025404f, 0.f);
+        // The top is a plane's height, so the plane on it takes the slicer's half-open test.
+        Record upright = box(LLVector3(3.f, 2.f, 1.53125f), LLVector3(1.f, 0.2f, 1.53125f), a0, a1);
+        upright.mSignature = 31;
+        Record cylinder = analytic(Shape::CYLINDER, LLVector3(1.f, 1.f, 1.f), LLVector3(0.5f, 0.3f, 1.f), a0, a1);
+        cylinder.mSignature = 32;
+        Record leaning = rotatedBox();
+        leaning.mSignature = 33;
+        skmap::SectionCache cache;
+        for (const Record* r : { &upright, &cylinder, &leaning })
+        {
+            for (S32 q = -2; q <= 26; ++q)
+            {
+                ensure("as sliced directly", identical(*cache.get(*r, q), skmap::sliceRecord(*r, skmap::sectionPlaneZ(q))));
+            }
+        }
+        ensure("the top plane cuts the box", !cache.get(upright, 24)->mLoops.empty());
+        ensure("the plane over it does not", cache.get(upright, 25)->mLoops.empty());
+        bool hit = false;
+        const skmap::SlicePtr low = cache.get(upright, 3);
+        ensure("one box section", low == cache.get(upright, 11, &hit) && hit);
+        ensure("one cylinder section", cache.get(cylinder, 3) == cache.get(cylinder, 11));
+        ensure("a leaning box per plane", cache.get(leaning, 3) != cache.get(leaning, 11));
+    }
 }
