@@ -2010,18 +2010,24 @@ namespace skmap
                         src = &rewound;
                     }
 
-                    SectionPiece base;
-                    base.mSlice = sl;
-                    base.mShift = shift;
-                    base.mPlane = q;
-                    base.mStyle = rec.mProvenance == sknav::Provenance::BOX ? SectionStyle::PROVISIONAL : SectionStyle::SOLID;
-                    base.mSource = rec.mSignature;
-                    base.mPart = rec.mPart;
-                    base.mRoot = rec.mRoot;
+                    // Pieces are made in place, the layer listing each as it is made.
+                    const SectionStyle style = rec.mProvenance == sknav::Provenance::BOX ? SectionStyle::PROVISIONAL : SectionStyle::SOLID;
+                    auto newPiece = [&]() -> SectionPiece& {
+                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
+                        SectionPiece& piece = s.mPieces.emplace_back();
+                        piece.mSlice = sl;
+                        piece.mShift = shift;
+                        piece.mPlane = q;
+                        piece.mStyle = style;
+                        piece.mSource = rec.mSignature;
+                        piece.mPart = rec.mPart;
+                        piece.mRoot = rec.mRoot;
+                        return piece;
+                    };
                     for (size_t gi = 0; gi < src->mGroups.size(); ++gi)
                     {
                         const SliceGroup& g = src->mGroups[gi];
-                        SectionPiece piece = base;
+                        SectionPiece& piece = newPiece();
                         piece.mGroup = static_cast<U16>(gi);
                         piece.mLoops.reserve(1 + g.mHoles.size());
                         piece.mWind.reserve(1 + g.mHoles.size());
@@ -2059,12 +2065,10 @@ namespace skmap
                                 piece.mFlags |= PIECE_ISLAND_HIGH;
                             }
                         }
-                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                        s.mPieces.push_back(std::move(piece));
                     }
                     if (!src->mLines.empty() || demoted)
                     {
-                        SectionPiece piece = base;
+                        SectionPiece& piece = newPiece();
                         piece.mGroup = 0xffff;
                         piece.mFlags = PIECE_LINES;
                         LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
@@ -2092,8 +2096,6 @@ namespace skmap
                         }
                         piece.mMin = lo + shift;
                         piece.mMax = hi + shift;
-                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                        s.mPieces.push_back(std::move(piece));
                     }
                 }
             }
