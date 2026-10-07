@@ -117,10 +117,29 @@ namespace sknav
     void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
                        std::vector<WallSegment>& ledges, std::vector<DropLink>& links);
 
+    /// What classifyEdges reads of a heightfield: each column's solid runs,
+    /// and nothing of their areas. Recast space, as the heightfield's.
+    struct EdgeField
+    {
+        S32 mWidth = 0;
+        S32 mHeight = 0;
+        F32 mBmin[3] = { 0.f, 0.f, 0.f };
+        F32 mCs = 0.f;
+        F32 mCh = 0.f;
+        std::vector<U32> mStart;    ///< per column, where its runs begin; columns + 1
+        std::vector<U16> mRuns;     ///< smin, smax pairs, lowest first
+
+        size_t bytes() const;
+    };
+    void takeEdgeField(const rcHeightfield& hf, EdgeField& out);
+
     /// Walk every boundary edge of the polymesh, sample the column just
     /// outside, classify, and merge runs into segments. Ledge samples with a
     /// landing become drop links: the landing must be walkable in the class
     /// when walkable_landing, else any solid top will do (the weather class).
+    void classifyEdges(const rcPolyMesh& pmesh, const EdgeField& field, const rcCompactHeightfield& chf, const ClassParams& params,
+                       F32 drop_max, bool walkable_landing, F32 link_spacing,
+                       std::vector<WallSegment>& segments, std::vector<DropLink>& links);
     void classifyEdges(const rcPolyMesh& pmesh, const rcHeightfield& hf, const rcCompactHeightfield& chf, const ClassParams& params,
                        F32 drop_max, bool walkable_landing, F32 link_spacing,
                        std::vector<WallSegment>& segments, std::vector<DropLink>& links);

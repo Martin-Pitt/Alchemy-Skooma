@@ -62,6 +62,20 @@ namespace
         }
     }
 
+    void column(const EdgeField& hf, S32 cx, S32 cz, std::vector<Interval>& out)
+    {
+        out.clear();
+        if (cx < 0 || cz < 0 || cx >= hf.mWidth || cz >= hf.mHeight)
+        {
+            return;
+        }
+        const S32 c = cx + cz * hf.mWidth;
+        for (U32 i = hf.mStart[c]; i < hf.mStart[c + 1]; i += 2)
+        {
+            out.push_back({ hf.mBmin[1] + hf.mRuns[i] * hf.mCh, hf.mBmin[1] + hf.mRuns[i + 1] * hf.mCh });
+        }
+    }
+
     /// Whether the compact heightfield has a walkable floor at this column near y.
     bool walkableAt(const rcCompactHeightfield& chf, S32 cx, S32 cz, F32 y)
     {
@@ -89,7 +103,7 @@ namespace
         bool mLandingOk = false;
     };
 
-    Sample classify(const rcHeightfield& hf, S32 cx, S32 cz, F32 floor_y, const ClassParams& p)
+    Sample classify(const EdgeField& hf, S32 cx, S32 cz, F32 floor_y, const ClassParams& p)
     {
         Sample s;
         std::vector<Interval> solids;
@@ -460,10 +474,47 @@ namespace sknav
         }
     }
 
+    size_t EdgeField::bytes() const
+    {
+        return sizeof(EdgeField) + mStart.capacity() * sizeof(U32) + mRuns.capacity() * sizeof(U16);
+    }
+
+    void takeEdgeField(const rcHeightfield& hf, EdgeField& out)
+    {
+        out.mWidth = hf.width;
+        out.mHeight = hf.height;
+        rcVcopy(out.mBmin, hf.bmin);
+        out.mCs = hf.cs;
+        out.mCh = hf.ch;
+        const S32 columns = hf.width * hf.height;
+        out.mStart.assign(static_cast<size_t>(columns) + 1, 0);
+        out.mRuns.clear();
+        for (S32 c = 0; c < columns; ++c)
+        {
+            for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+            {
+                out.mRuns.push_back(static_cast<U16>(s->smin));
+                out.mRuns.push_back(static_cast<U16>(s->smax));
+            }
+            out.mStart[c + 1] = static_cast<U32>(out.mRuns.size());
+        }
+        out.mRuns.shrink_to_fit();
+    }
+
     void classifyEdges(const rcPolyMesh& pmesh, const rcHeightfield& hf, const rcCompactHeightfield& chf, const ClassParams& params,
                        F32 drop_max, bool walkable_landing, F32 link_spacing,
                        std::vector<WallSegment>& segments, std::vector<DropLink>& links)
     {
+        EdgeField field;
+        takeEdgeField(hf, field);
+        classifyEdges(pmesh, field, chf, params, drop_max, walkable_landing, link_spacing, segments, links);
+    }
+
+    void classifyEdges(const rcPolyMesh& pmesh, const EdgeField& field, const rcCompactHeightfield& chf, const ClassParams& params,
+                       F32 drop_max, bool walkable_landing, F32 link_spacing,
+                       std::vector<WallSegment>& segments, std::vector<DropLink>& links)
+    {
+        const EdgeField& hf = field;
         const S32 nvp = pmesh.nvp;
         // Erosion pulled the floor back from whatever bounds it by the agent
         // radius in whole cells, so the wall or the drop is that far beyond the
@@ -472,9 +523,9 @@ namespace sknav
         // the ledge filter takes another cell wherever the floor ends in air,
         // so what bounds the floor sits somewhere in that skirt. Probe outward
         // until something answers; nothing but the skirt means an open edge.
-        const F32 inset = std::ceil(params.mRadius / hf.cs) * hf.cs;
-        const F32 probes[3] = { inset + hf.cs * 0.75f, inset + hf.cs * 1.75f, inset + hf.cs * 2.75f };
-        const S32 landing_steps = static_cast<S32>(std::ceil(params.mRadius / hf.cs)) + 2;
+        const F32 inset = std::ceil(params.mRadius / hf.mCs) * hf.mCs;
+        const F32 probes[3] = { inset + hf.mCs * 0.75f, inset + hf.mCs * 1.75f, inset + hf.mCs * 2.75f };
+        const S32 landing_steps = static_cast<S32>(std::ceil(params.mRadius / hf.mCs)) + 2;
         F32 sinceLink = link_spacing;   // a link at the first landable sample, then one per spacing
         auto vert = [&](unsigned short v, F32* out) {
             out[0] = pmesh.bmin[0] + pmesh.verts[v * 3] * pmesh.cs;
@@ -517,13 +568,13 @@ namespace sknav
                 vert(poly[(j + 1) % n], b);
                 const F32 dx = b[0] - a[0], dz = b[2] - a[2];
                 const F32 len = std::sqrt(dx * dx + dz * dz);
-                if (len < hf.cs * 0.5f)
+                if (len < hf.mCs * 0.5f)
                 {
                     continue;
                 }
                 // Left-hand normal of a->b, flipped by the winding, points out.
                 const F32 nx = -dz / len * outward, nz = dx / len * outward;
-                const S32 steps = std::max(1, static_cast<S32>(len / hf.cs));
+                const S32 steps = std::max(1, static_cast<S32>(len / hf.mCs));
 
                 WallSegment current;
                 bool open = false;
@@ -537,8 +588,8 @@ namespace sknav
                     {
                         ox = px + nx * reach;
                         oz = pz + nz * reach;
-                        const S32 cx = static_cast<S32>(std::floor((ox - hf.bmin[0]) / hf.cs));
-                        const S32 cz = static_cast<S32>(std::floor((oz - hf.bmin[2]) / hf.cs));
+                        const S32 cx = static_cast<S32>(std::floor((ox - hf.mBmin[0]) / hf.mCs));
+                        const S32 cz = static_cast<S32>(std::floor((oz - hf.mBmin[2]) / hf.mCs));
                         s = classify(hf, cx, cz, py, params);
                         if (s.mKind != EdgeKind::OPEN)
                         {
@@ -573,7 +624,7 @@ namespace sknav
                     {
                         sinceLink = 0.f;
                         DropLink link;
-                        const F32 from[3] = { px - nx * hf.cs, py, pz - nz * hf.cs };
+                        const F32 from[3] = { px - nx * hf.mCs, py, pz - nz * hf.mCs };
                         const F32 to[3] = { ox, s.mLanding, oz };
                         link.mFrom = fromRecast(from);
                         link.mTo = fromRecast(to);
