@@ -161,9 +161,9 @@ namespace skmap
         constexpr PaletteColour FEATURE_GLYPH = withAlpha(rgba8(0xe6e9ecff), 0.85f);
         constexpr F32 FEATURE_GLYPH_PX = 8.f;
         constexpr PaletteColour VOID_BOUNDARY = withAlpha(rgba8(0xdfe3e6ff), 0.8f);
-        constexpr F32 VOID_BOUNDARY_PX = 3.f;
+        constexpr F32 VOID_BOUNDARY_PX = 1.f;
         constexpr PaletteColour REGION_BOUNDARY = withAlpha(rgba8(0xdfe3e6ff), 0.6f);
-        constexpr F32 REGION_BOUNDARY_PX = 2.5f;
+        constexpr F32 REGION_BOUNDARY_PX = 1.f;
         constexpr F32 REGION_DASH_ON_PX = 6.f;
         constexpr F32 REGION_DASH_OFF_PX = 4.f;
         constexpr F32 RIBBON_MIN_RUN_M = 2.f;
