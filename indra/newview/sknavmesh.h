@@ -241,6 +241,12 @@ public:
         F32 mLastBuildMs = 0.f;
         F32 mWorstBuildMs = 0.f;
         F32 mExcludeMs = 0.f;   ///< of the last build that left records out of a class, what that cost
+        F32 mLastRasterMs = 0.f;    ///< of the last build, its raster stage
+        F32 mLastPolyMs = 0.f;      ///< and its polygon stage
+        U32 mRasterTiles = 0;       ///< tiles holding their raster
+        size_t mRasterBytes = 0;
+        U32 mRasterEvicted = 0;     ///< rasters dropped for the budget or past the radius
+        U32 mReRasters = 0;         ///< builds of tiles whose raster had been dropped
     };
     const Stats& stats() const { return mStats; }
 
@@ -322,6 +328,10 @@ private:
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
         /// The Detour tile's bytes, which Detour reads but does not own.
         std::vector<U8> mDetour[sknav::NUM_CLASSES];
+        /// What the published polygons were built from, held near the camera
+        /// so they can be built again without rasterising (sknavbuild.h).
+        sknav::TileRasterPtr mRaster;
+        bool mRasterDropped = false;    ///< the raster went for the budget since the tile was built
         /// Checked against mSegments by identity, so a publish needs no reset here.
         mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };
@@ -384,6 +394,21 @@ private:
         F64 mNearness, mDistance;
     };
     std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
+    struct RasterCandidate
+    {
+        LLUUID mMesh;
+        U32 mGeneration;
+        sknav::TileKey mKey;
+        sknav::TileRasterPtr mRaster;
+        size_t mBytes;
+        F64 mDistance;
+    };
+    std::vector<RasterCandidate> mRasterScan;
+    /// Held rasters get a quarter of the air budget; past it the farthest go
+    /// until they fit in seven eighths of that, and past one and a half
+    /// radii any raster goes.
+    void evictRasters(size_t budget, F64 radius);
+    size_t mHeldRasterBytes = 0;
     std::future<std::shared_ptr<std::vector<AirCandidate>>> mEvictionJob;
     std::shared_ptr<std::vector<AirCandidate>> mPendingEvictions;
     size_t mNextEviction = 0;
@@ -446,7 +471,7 @@ private:
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
-                 U64 content_key = 0, bool loaded = false);
+                 U64 content_key = 0, bool loaded = false, sknav::TileRasterPtr raster = nullptr);
     /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.
     std::shared_ptr<sknav::TileDiskCache> diskCache();
     /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently

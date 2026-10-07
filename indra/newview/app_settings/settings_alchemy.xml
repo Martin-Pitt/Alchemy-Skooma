@@ -5255,10 +5255,11 @@
             <key>Value</key>
             <real>0.3</real>
         </map>
+        <!-- <SK:Nexii> Navmesh tile stages: one budget for the air and the held rasters -->
         <key>SKNavAirBudgetMB</key>
         <map>
             <key>Comment</key>
-            <string>Memory the navmesh's detailed air may hold before the least recently near tiles give theirs up, in MB.</string>
+            <string>Megabytes of detailed navmesh air and held tile rasters kept in memory. The rasters get at most a quarter of it, farthest from the camera dropped first; past what they leave, the tiles the camera has been least near give their air up to the disk cache, never within 1.5 times SKNavAirRadius.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -5266,6 +5267,7 @@
             <key>Value</key>
             <integer>512</integer>
         </map>
+        <!-- </SK:Nexii> -->
         <key>SKNavAirMinGap</key>
         <map>
             <key>Comment</key>
@@ -5287,17 +5289,6 @@
             <string>F32</string>
             <key>Value</key>
             <real>128.0</real>
-        </map>
-        <key>SKNavAirBudgetMB</key>
-        <map>
-            <key>Comment</key>
-            <string>Megabytes of detailed navmesh air kept in memory. Past it, the tiles the camera has been least near are evicted to the disk cache, never within 1.5 times SKNavAirRadius.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>512</integer>
         </map>
         <key>SKNavDiskCacheMB</key>
         <map>

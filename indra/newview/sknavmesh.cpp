@@ -339,16 +339,27 @@ void SKNavMesh::evictAir()
     const F64 dt = llclamp(static_cast<F64>(gFrameIntervalSeconds), 0.0, 1.0);
     if (!mEvictionScanReady && !scanTiles(mEvictionCursor, 0.001f, [&](Mesh& mesh, const TileKey& key, Tile& tile)
         {
-            if (!tile.mAir || tile.mInFlight) return;
+            if ((!tile.mAir && !tile.mRaster) || tile.mInFlight) return;
             const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
             const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
             const F64 distance = std::sqrt(dx * dx + dy * dy);
+            if (tile.mRaster)
+            {
+                mRasterScan.push_back({mesh.mId, mesh.mGeneration, key, tile.mRaster, tile.mRaster->bytes(), distance});
+            }
+            if (!tile.mAir) return;
             tile.mNearness = accumulateNearness(tile.mNearness, distance, radius, dt);
             mEvictionScan->push_back({mesh.mId, mesh.mGeneration, key, tile.mAir, nullptr, tile.mNearness, distance});
         })) return;
+    // One ledger: the held rasters first, then the air in what they leave of the budget.
+    const size_t whole = static_cast<size_t>(budget_mb) * 1048576;
+    if (!mEvictionScanReady)
+    {
+        evictRasters(whole, radius);
+    }
     mEvictionScanReady = true;
     auto held = mEvictionScan;
-    const size_t budget = static_cast<size_t>(budget_mb) * 1048576;
+    const size_t budget = whole - std::min(mHeldRasterBytes, whole);
     const F64 protect = 1.5 * radius;
     auto task = std::make_shared<std::packaged_task<std::shared_ptr<std::vector<AirCandidate>>()>>([held, budget, protect]()
     {
@@ -370,6 +381,40 @@ void SKNavMesh::evictAir()
         mEvictionJob = std::move(future);
         mEvictionScan.reset();
         mEvictionScanReady = false;
+    }
+}
+
+void SKNavMesh::evictRasters(size_t budget, F64 radius)
+{
+    std::vector<RasterCandidate> scan;
+    scan.swap(mRasterScan);
+    size_t total = 0;
+    for (const RasterCandidate& c : scan) total += c.mBytes;
+    const size_t cap = budget / 4;
+    const bool over = total > cap;
+    std::sort(scan.begin(), scan.end(), [](const RasterCandidate& a, const RasterCandidate& b) { return a.mDistance > b.mDistance; });
+    std::vector<TileRasterPtr> dropped;
+    for (const RasterCandidate& c : scan)
+    {
+        if (c.mDistance <= 1.5 * radius && (!over || total <= cap / 8 * 7)) break;
+        const auto mesh = mMeshes.find(c.mMesh);
+        if (mesh == mMeshes.end() || mesh->second->mGeneration != c.mGeneration) continue;
+        const auto found = mesh->second->mTiles.find(c.mKey);
+        if (found == mesh->second->mTiles.end()) continue;
+        Tile& tile = found->second;
+        // Never the raster of a tile with a build in flight.
+        if (tile.mInFlight || tile.mRaster != c.mRaster) continue;
+        dropped.push_back(std::move(tile.mRaster));
+        tile.mRaster.reset();
+        tile.mRasterDropped = true;
+        total -= c.mBytes;
+        ++mStats.mRasterEvicted;
+    }
+    mHeldRasterBytes = total;
+    if (!dropped.empty())
+    {
+        auto retired = std::make_shared<std::vector<TileRasterPtr>>(std::move(dropped));
+        retireOn(workerQueue(), std::move(retired));
     }
 }
 
@@ -1056,6 +1101,13 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     // A stored product Detour refused last time is built afresh, and overwritten.
     const bool skip_load = tile.mDiskRefused;
     tile.mDiskRefused = false;
+    // The raster is held only near the camera, where the polygons will be built again.
+    const bool hold = inAirRadius(tile);
+    if (tile.mRasterDropped)
+    {
+        ++mStats.mReRasters;
+        tile.mRasterDropped = false;
+    }
     struct Outcome
     {
         std::shared_ptr<TileBuildResult> mResult;
@@ -1064,10 +1116,12 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         bool mLoaded = false;
         bool mCorrupt = false;
         F32 mLoadMs = 0.f;
+        TileRasterPtr mRaster;
+        F32 mRasterMs = 0.f;
     };
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, cache, skip_load]()
+        [input, records, cache, skip_load, hold]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
             finishTileInput(*records, input->mMeshOrigin, *input);
@@ -1097,7 +1151,16 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                     out->mCorrupt = true;
                 }
             }
-            out->mResult = std::make_shared<TileBuildResult>(buildTile(*input));
+            out->mResult = std::make_shared<TileBuildResult>();
+            if (TileRasterPtr raster = rasteriseTile(*input, *out->mResult))
+            {
+                out->mRasterMs = out->mResult->mMillis;
+                polygoniseTile(*input, *raster, *out->mResult);
+                if (hold && out->mResult->mStatus == TileBuildResult::SUCCESS)
+                {
+                    out->mRaster = std::move(raster);
+                }
+            }
             if (cache && out->mResult->mStatus != TileBuildResult::FAILED)
             {
                 cache->store(content_key, packTileProduct(*out->mResult, content_key));
@@ -1116,7 +1179,12 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                 mStats.mDiskRebuilds++;
                 mStats.mDiskCorrupt += out->mCorrupt ? 1 : 0;
             }
-            publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded);
+            if (!out->mLoaded && out->mResult->mStatus == TileBuildResult::SUCCESS)
+            {
+                mStats.mLastRasterMs = out->mRasterMs;
+                mStats.mLastPolyMs = out->mResult->mMillis - out->mRasterMs;
+            }
+            publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded, std::move(out->mRaster));
         });
     if (posted)
     {
@@ -1127,7 +1195,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
 }
 
 void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, std::shared_ptr<TileBuildResult> result,
-                        U64 content_key, bool loaded)
+                        U64 content_key, bool loaded, TileRasterPtr raster)
 {
     bool refused = false;
     mInFlight = std::max(0, mInFlight - 1);
@@ -1169,6 +1237,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mRunoff.reset();
         tile.mAir.reset();
         tile.mAirCoarse.reset();
+        tile.mRaster.reset();
         tile.mContentKey = 0;
         tile.mAirBuilt = signature;
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
@@ -1233,6 +1302,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mAirCoarse.reset();
     }
     tile.mContentKey = refused ? 0 : content_key;
+    tile.mRaster = std::move(raster);
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
         tile.mSegments[cls] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[cls]));
@@ -1431,6 +1501,7 @@ void SKNavMesh::update()
             {
                 ++mScanningStats.mTiles;
                 if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
+                if (tile.mRaster) { ++mScanningStats.mRasterTiles; mScanningStats.mRasterBytes += tile.mRaster->bytes(); }
                 if (!tile.mBuilt) return;
                 ++mScanningStats.mTilesBuilt;
                 mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
@@ -1445,6 +1516,8 @@ void SKNavMesh::update()
             mStats.mTilesBuilt = mScanningStats.mTilesBuilt;
             mStats.mAirTiles = mScanningStats.mAirTiles;
             mStats.mAirBytes = mScanningStats.mAirBytes;
+        mStats.mRasterTiles = mScanningStats.mRasterTiles;
+        mStats.mRasterBytes = mScanningStats.mRasterBytes;
             mStats.mFaces = mScanningStats.mFaces;
             mStats.mSegments = mScanningStats.mSegments;
             mStats.mLinks = mScanningStats.mLinks;
@@ -1507,10 +1580,11 @@ bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
+                    mStats.mLastRasterMs, mStats.mLastPolyMs, mStats.mRasterTiles, mStats.mRasterBytes / 1048576.0, mStats.mRasterEvicted, mStats.mReRasters,
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
