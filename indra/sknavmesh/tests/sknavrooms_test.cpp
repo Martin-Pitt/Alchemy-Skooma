@@ -1419,4 +1419,58 @@ template<> template<>
         const Result wide = run(roomWithRecess(passage + 0.15f, 3.f).input(1));
         ensure("a doorway a passage wide still parts them", wide.at(6.f, 11.5f) != wide.at(6.f, 6.f));
     }
+
+    template<> template<>
+    void sknavrooms_object::test<37>()
+    {
+        set_test_name("an opening spans its aperture jamb to jamb, under its lintel, not the boundary the watershed drew");
+        // A 3 m doorway beside a wall stub that bends the watershed's boundary.
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 9.75f, 18.f, 10.f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(17.75f, 2.f, 18.f, 10.f);
+        s.wall(10.f, 2.f, 10.25f, 3.f);
+        s.wall(10.f, 6.f, 10.25f, 10.f);
+        s.wall(7.f, 2.75f, 10.f, 3.f);
+        s.box(10.f, 3.f, 10.25f, 6.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 10.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        const Space* a = r.at(6.f, 6.f);
+        const Space* b = r.at(14.f, 6.f);
+        ensure("two rooms", a && b && a != b);
+        const std::vector<const Portal*> p = r.between(a, b);
+        ensure_equals("one opening", p.size(), 1u);
+        const Portal& q = *p[0];
+        ensure("an opening", q.mKind == PortalKind::OPENING);
+        ensure("its width is the clear width", std::fabs(q.mWidth - 3.f) < 0.02f);
+        ensure("its ends on the jambs", std::fabs(std::min(q.mA.mV[VY], q.mB.mV[VY]) - 3.f) < 0.02f && std::fabs(std::max(q.mA.mV[VY], q.mB.mV[VY]) - 6.f) < 0.02f);
+        ensure("its centre midway between them", std::fabs(q.mCentre.mV[VY] - 4.5f) < 0.02f);
+        ensure("in the wall", q.mCentre.mV[VX] > 9.9f && q.mCentre.mV[VX] < 10.35f);
+        ensure("square to it", std::fabs(q.mNormal.mV[VX]) > 0.99f);
+        ensure("its head the lintel", std::fabs(q.mHead - 2.2f) < 0.15f);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<38>()
+    {
+        set_test_name("a causeway between two pavilions, under a beam, is an opening walled on neither side: floor that ends is no jamb");
+        // Roofed both sides, so the outdoor rule leaves the cut alone; nothing below the causeway.
+        Scene s;
+        s.mGround[2] = s.mGround[0];
+        s.box(2.f, 2.f, 12.f, 14.f, 1.75f, 2.f);
+        s.box(12.f, 7.f, 14.f, 9.f, 1.75f, 2.f);
+        s.box(14.f, 2.f, 24.f, 14.f, 1.75f, 2.f);
+        s.box(2.f, 2.f, 12.f, 14.f, 4.5f, 4.75f, false);
+        s.box(14.f, 2.f, 24.f, 14.f, 4.5f, 4.75f, false);
+        s.box(12.75f, 7.f, 13.25f, 9.f, 3.9f, 4.2f, false);
+        const Result r = run(s.input(1));
+        const Space* west = r.at(5.f, 8.f, 2.5f);
+        const Space* east = r.at(20.f, 8.f, 2.5f);
+        ensure("two pavilions", west && east && west != east);
+        const std::vector<const Portal*> p = r.between(west, east);
+        ensure_equals("one cut on the causeway", p.size(), 1u);
+        ensure("an opening, for its lintel", p[0]->mKind == PortalKind::OPENING && p[0]->lintel());
+        ensure("walled on neither side", !p[0]->walled());
+    }
 }

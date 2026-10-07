@@ -57,6 +57,8 @@ namespace
     constexpr F32 WALL_END_RUN_M = 0.5f;    ///< a wall runs this far behind its end, or it is a post
     constexpr S32 STAIR_END_UNITS = 2;      ///< a floor this close to a tread it meets is at an end of the flight
     constexpr F32 SCORE_REACH_M = 2.5f;     ///< a cut's probes land no further than this from it
+    constexpr F32 JAMB_TOP_M = 1.5f;        ///< a jamb stands solid from a step above the floor to this
+    constexpr S32 APERTURE_ANGLES = 18;     ///< chords tried within 45 degrees either side of a cut
     constexpr F32 MEMO_BLOCK_SHARE = 0.5f;  ///< a pass cutting more of its mesh's tiles than this reads no memo
 
     enum Stage : S32
@@ -197,6 +199,9 @@ namespace
         U8 mCues = 0;
         F32 mHead = 0.f;
         S32 mDoor = -1;
+        bool mAperture = false;     ///< solid jambs either side: the cut spans mJambA to mJambB
+        LLVector2 mJambA;
+        LLVector2 mJambB;
     };
 
     struct Probe
@@ -614,6 +619,10 @@ namespace sknav
         bool probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const;
         /// Whether solid stands between lo and hi (mesh units) over a fine cell.
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
+        /// Whether solid stands between lo and hi (mesh units) at a point.
+        bool solidAt(F32 x, F32 y, S32 lo, S32 hi) const;
+        /// The aperture a cut lies in: the shortest chord through it between solid jambs.
+        bool aperture(const Run& run, LLVector2& a, LLVector2& b) const;
 
         void prepare();
         void runBatch(size_t b);
@@ -768,6 +777,81 @@ namespace sknav
             {
                 return false;
             }
+        }
+        return true;
+    }
+
+    bool SpacesPass::State::solidAt(F32 x, F32 y, S32 lo, S32 hi) const
+    {
+        TileKey key;
+        key.mX = tileIndex(x);
+        key.mY = tileIndex(y);
+        const U32 t = tileAt(key);
+        if (t == NONE)
+        {
+            return false;
+        }
+        const TileAir& a = air(t);
+        return blocked(t, static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell)), static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell)), lo, hi);
+    }
+
+    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b) const
+    {
+        // Across a doorway the shortest chord between solid on both sides runs
+        // jamb to jamb; tried near the cut's own direction, then again from
+        // the chord's middle. A floor's edge is no jamb: nothing stands there.
+        const S32 lo = run.mFloor + mClimb + 1, hi = run.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        auto solid = [&](const LLVector2& from, const LLVector2& dir, F32 t) {
+            const LLVector2 q = from + dir * t;
+            return solidAt(q.mV[VX], q.mV[VY], lo, hi);
+        };
+        // To the first solid along dir, its face found to a sixty-fourth of a cell.
+        auto march = [&](const LLVector2& from, const LLVector2& dir, F32& t_out) {
+            const F32 step = mCell * 0.5f;
+            for (F32 t = step; t <= SCORE_REACH_M; t += step)
+            {
+                if (solid(from, dir, t))
+                {
+                    F32 free = t - step, hit = t;
+                    while (hit - free > mCell / 64.f)
+                    {
+                        const F32 mid = (free + hit) * 0.5f;
+                        (solid(from, dir, mid) ? hit : free) = mid;
+                    }
+                    t_out = hit;
+                    return true;
+                }
+            }
+            return false;
+        };
+        const F32 base = std::atan2(run.mD.mV[VY], run.mD.mV[VX]);
+        LLVector2 c = run.mC;
+        for (S32 pass = 0; pass < 2; ++pass)
+        {
+            if (solidAt(c.mV[VX], c.mV[VY], lo, hi))
+            {
+                return false;
+            }
+            // Nearer the cut's own direction wins a tie.
+            F32 best = 1e30f;
+            for (S32 i = 0; i <= 2 * APERTURE_ANGLES; ++i)
+            {
+                const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
+                const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
+                const LLVector2 u(std::cos(th), std::sin(th));
+                F32 t0, t1;
+                if (march(c, u, t0) && march(c, -u, t1) && t0 + t1 < best - mCell * 0.25f)
+                {
+                    best = t0 + t1;
+                    a = c - u * t1;
+                    b = c + u * t0;
+                }
+            }
+            if (best > 1e29f)
+            {
+                return false;
+            }
+            c = (a + b) * 0.5f;
         }
         return true;
     }
@@ -2457,17 +2541,9 @@ namespace sknav
         {
             lintel = lintel && (std::isnan(s) || s >= head + drop);
         }
-        bool jambs = true;
-        for (S32 k = 0; k < 2 && jambs; ++k)
-        {
-            const LLVector2 end = k == 0 ? run.mA : run.mB;
-            const F32 sgn = k == 0 ? -1.f : 1.f;
-            for (F32 t : { 0.3f, 0.8f })
-            {
-                const LLVector2 at = end + run.mD * (sgn * t);
-                jambs = jambs && !probe(at.mV[VX], at.mV[VY], run.mFloor, mClimb, pr);
-            }
-        }
+        // Walled both sides means solid jambs, not just floor that ends.
+        LLVector2 jamb_a, jamb_b;
+        const bool jambs = aperture(run, jamb_a, jamb_b) && dist_vec(jamb_a, jamb_b) >= 2.f * p.mAgentRadiusM;
         F32 es[2];
         for (S32 k = 0; k < 2; ++k)
         {
@@ -2532,6 +2608,9 @@ namespace sknav
         out.mCues = (lintel ? CUE_LINTEL : 0) | (jambs ? CUE_JAMBS : 0) | (estep ? CUE_E_STEP : 0) | (door >= 0 ? CUE_DOOR : 0);
         out.mHead = lintel ? head : 0.f;
         out.mDoor = door;
+        out.mAperture = jambs;
+        out.mJambA = jamb_a;
+        out.mJambB = jamb_b;
         if (door >= 0)
         {
             out.mPortal = true;
@@ -2811,6 +2890,22 @@ namespace sknav
             q.mSill = fz;
             q.mHead = s.mHead;
             q.mCues = s.mCues;
+            if (kind == PortalKind::OPENING && s.mAperture)
+            {
+                // An opening spans its aperture, jamb to jamb, not the boundary the watershed drew.
+                const LLVector2 c = (s.mJambA + s.mJambB) * 0.5f;
+                LLVector2 n(s.mJambA.mV[VY] - s.mJambB.mV[VY], s.mJambB.mV[VX] - s.mJambA.mV[VX]);
+                n.normVec();
+                if (n * r.mN < 0.f)
+                {
+                    n = -n;
+                }
+                q.mCentre.set(c.mV[VX], c.mV[VY], fz);
+                q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+                q.mA.set(s.mJambA.mV[VX], s.mJambA.mV[VY], fz);
+                q.mB.set(s.mJambB.mV[VX], s.mJambB.mV[VY], fz);
+                q.mWidth = dist_vec(s.mJambA, s.mJambB);
+            }
             mPortals.push_back(q);
             mPortalDoor.push_back(kind == PortalKind::DOOR ? s.mDoor : -1);
         };
@@ -2955,7 +3050,7 @@ namespace sknav
                         }
                         std::nth_element(floor_side.begin(), floor_side.begin() + floor_side.size() / 2, floor_side.end());
                         const S32 ff = floor_side[floor_side.size() / 2];
-                        if (!best || r.mEdges > best->mEdges)
+                        if (r.mWidth >= passage && (!best || r.mEdges > best->mEdges))
                         {
                             best = &r;
                         }
