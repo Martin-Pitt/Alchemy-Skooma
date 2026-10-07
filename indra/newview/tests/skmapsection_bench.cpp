@@ -67,6 +67,11 @@ namespace
         return v.empty() ? 0.0 : v[v.size() / 2];
     }
 
+    F64 least(const std::vector<F64>& v)
+    {
+        return v.empty() ? 0.0 : *std::min_element(v.begin(), v.end());
+    }
+
     U64 bits(F32 f)
     {
         U32 u;
@@ -324,15 +329,37 @@ int main(int, char**)
     }
     std::printf("scene: %zu polys, %zu layers, %u records, %u planes, %u pieces\n", scene->mPolys.size(), scene->mLayers.size(),
                 cold_stats.mRecords, cold_stats.mPlanes, cold_stats.mPieces);
-    std::printf("cold: section %.2f ms (median of %d), scene %.2f ms; %u slices, %u hits\n", median(cold_section), runs,
-                median(cold_total), cold_stats.mSlices, cold_stats.mCacheHits);
-    std::printf("warm: section %.2f ms (median of %d), scene %.2f ms; %u slices, %u hits\n", median(warm_section), runs,
-                median(warm_total), warm_stats.mSlices, warm_stats.mCacheHits);
+    // The minimum is what the code costs; the median shows how far other load on the machine moved it.
+    std::printf("cold: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(cold_section), runs,
+                median(cold_section), least(cold_total), cold_stats.mSlices, cold_stats.mCacheHits);
+    std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(warm_section), runs,
+                median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits);
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
     std::printf("fingerprint warm exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_warm.mExact),
                 static_cast<unsigned long long>(fp_warm.mQuant));
 
+    if (std::getenv("SKMAP_SECTION_LAYERS"))
+    {
+        size_t cells = 0;
+        for (size_t l = 0; l < scene->mLayers.size(); ++l)
+        {
+            const skmap::SceneLayer& layer = scene->mLayers[l];
+            const size_t n = static_cast<size_t>(layer.mLevels.mW) * layer.mLevels.mH;
+            cells += n;
+            size_t listed = 0;
+            for (U32 c : layer.mLevels.mCell)
+            {
+                listed += c ? 1 : 0;
+            }
+            if (n > 20000 || layer.mPieces.size() > 2000)
+            {
+                std::printf("layer %3zu: %5zu polys, grid %4d x %4d (%zu cells, %zu listed), %zu pieces\n", l, layer.mPolys.size(),
+                            layer.mLevels.mW, layer.mLevels.mH, n, listed, layer.mPieces.size());
+            }
+        }
+        std::printf("grid cells over all layers: %zu\n", cells);
+    }
     // Where the time goes; the clocks themselves cost a little, so these runs are kept out of the medians.
     skmap::SectionProfile& profile = skmap::sectionProfile();
     {

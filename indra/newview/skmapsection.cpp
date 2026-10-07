@@ -1532,44 +1532,48 @@ namespace skmap
             return;
         }
         std::sort(samples.begin(), samples.end());
-        // Equal levels first add up.
-        std::vector<std::pair<S32, U32>> levels;
-        for (const auto& s : samples)
+        if (samples.front().first == samples.back().first)
         {
-            if (!levels.empty() && levels.back().first == s.first)
-            {
-                levels.back().second += s.second;
-            }
-            else
-            {
-                levels.push_back(s);
-            }
+            out.push_back(samples.front().first);   // one level, the common case
+            return;
         }
         struct Run
         {
             S32 mLowest, mBest;
             U32 mBestCount, mTotal;
         };
-        std::vector<Run> runs;
-        for (const auto& l : levels)
+        // Called once per level cell, so the runs live in scratch kept per thread.
+        thread_local std::vector<Run> scratch;
+        std::vector<Run>& runs = scratch;
+        runs.clear();
+        // Equal levels first add up, then join the current run.
+        for (size_t i = 0; i < samples.size();)
         {
-            if (!runs.empty() && l.first - runs.back().mLowest <= LEVEL_MERGE_CELLS)
+            const S32 level = samples[i].first;
+            U32 count = 0;
+            for (; i < samples.size() && samples[i].first == level; ++i)
+            {
+                count += samples[i].second;
+            }
+            if (!runs.empty() && level - runs.back().mLowest <= LEVEL_MERGE_CELLS)
             {
                 Run& r = runs.back();
-                r.mTotal += l.second;
-                if (l.second > r.mBestCount)
+                r.mTotal += count;
+                if (count > r.mBestCount)
                 {
-                    r.mBest = l.first;
-                    r.mBestCount = l.second;
+                    r.mBest = level;
+                    r.mBestCount = count;
                 }
                 continue;
             }
-            runs.push_back({ l.first, l.first, l.second, l.second });
+            runs.push_back({ level, level, count, count });
         }
-        std::stable_sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) {
+        // No two runs share a best level, so the order is total and needs no stable sort.
+        const size_t keep = llmin(runs.size(), static_cast<size_t>(LEVEL_MAX));
+        std::partial_sort(runs.begin(), runs.begin() + keep, runs.end(), [](const Run& a, const Run& b) {
             return a.mTotal != b.mTotal ? a.mTotal > b.mTotal : a.mBest < b.mBest;
         });
-        for (size_t i = 0; i < runs.size() && i < static_cast<size_t>(LEVEL_MAX); ++i)
+        for (size_t i = 0; i < keep; ++i)
         {
             out.push_back(runs[i].mBest);
         }

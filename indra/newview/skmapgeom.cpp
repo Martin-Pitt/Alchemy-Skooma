@@ -1362,15 +1362,30 @@ namespace skmap
                 std::copy(merge_out.begin(), merge_out.end(), slots.begin() + i * LEVEL_MAX);
                 seen[i] = 1;
             };
+            // Gathers a cell's levels; true when they are all one level, which needs no merge.
+            auto gather = [&](size_t i) {
+                merge_in.clear();
+                bool one = true;
+                for (S32 k = head[i]; k >= 0; k = links[k].mNext)
+                {
+                    one = one && links[k].mLevel == links[head[i]].mLevel;
+                    merge_in.emplace_back(links[k].mLevel, 1u);
+                }
+                if (one)
+                {
+                    counts[i] = 1;
+                    slots[i * LEVEL_MAX] = merge_in.front().first;
+                    seen[i] = 1;
+                }
+                return one;
+            };
             std::sort(sampled.begin(), sampled.end());
             for (size_t i : sampled)
             {
-                merge_in.clear();
-                for (S32 k = head[i]; k >= 0; k = links[k].mNext)
+                if (!gather(i))
                 {
-                    merge_in.emplace_back(links[k].mLevel, 1u);
+                    store(i);
                 }
-                store(i);
             }
             std::vector<size_t> frontier = sampled;
             for (S32 ring = 0; ring < SECTION_REACH_CELLS && !frontier.empty(); ++ring)
@@ -1410,12 +1425,12 @@ namespace skmap
                 std::sort(reached.begin(), reached.end());
                 for (size_t i : reached)
                 {
-                    merge_in.clear();
-                    for (S32 k = head[i]; k >= 0; k = links[k].mNext)
-                    {
-                        merge_in.emplace_back(links[k].mLevel, 1u);
-                    }
+                    const bool one = gather(i);
                     head[i] = -1;
+                    if (one)
+                    {
+                        continue;
+                    }
                     std::sort(merge_in.begin(), merge_in.end());
                     merge_in.erase(std::unique(merge_in.begin(), merge_in.end()), merge_in.end());
                     store(i);
