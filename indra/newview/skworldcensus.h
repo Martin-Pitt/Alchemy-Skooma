@@ -30,7 +30,9 @@
 #include "sknavcluster.h"
 #include "sknavfeatures.h"
 #include "sknavtypes.h"
+#include "threadpool_fwd.h"
 
+#include <future>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -79,7 +81,8 @@ typedef std::shared_ptr<const SKCensusSnapshot> SKCensusSnapshotPtr;
 
 /// Runs a time-sliced scan of the object list under a per-frame budget and
 /// swaps in a whole snapshot when one completes. Readers keep the previous
-/// snapshot meanwhile. Main thread only.
+/// snapshot meanwhile. Live object access stays on the main thread; clustering
+/// runs on immutable records on a worker.
 class SKWorldCensus : public LLSingleton<SKWorldCensus>
 {
     LLSINGLETON(SKWorldCensus);
@@ -216,6 +219,11 @@ private:
 
     SKCensusSnapshotPtr mSnapshot;
     Scan mScan;
+    // Only one job in flight; no new scan until its snapshot is published or discarded.
+    std::unique_ptr<LL::ThreadPool> mClusterWorkers;
+    std::future<std::shared_ptr<SKCensusSnapshot>> mClusterJob;
+    std::vector<U64> mClusterRegions;
+    bool mDiscardClusterJob = false;
     std::unordered_map<LLUUID, PartCache> mParts;
     std::unordered_map<LLUUID, Rest> mRest;
     std::unordered_map<LLUUID, sknav::NavRole> mRoles;

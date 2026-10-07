@@ -53,6 +53,7 @@
 #include "sknavmarkobjects.h"
 #include "sknavmesh.h"
 #include "skphysicsshape.h"
+#include "threadpool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -313,7 +314,35 @@ bool SKWorldCensus::sameRegions(const std::vector<U64>& regions) const
 void SKWorldCensus::update()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - update");
-    if (!wanted() || !LLWorld::instanceExists() || !gAgent.getRegion())
+    const bool enabled = wanted() && LLWorld::instanceExists() && gAgent.getRegion();
+    if (mClusterJob.valid())
+    {
+        mDiscardClusterJob = mDiscardClusterJob || !enabled || !sameRegions(mClusterRegions);
+        if (mClusterJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        {
+            if (enabled && mRolesWanted) requestRoles();
+            return;
+        }
+        auto done = mClusterJob.get();
+        SKCensusSnapshotPtr retired;
+        if (!mDiscardClusterJob)
+        {
+            done->mStamp = ++mStamp;
+            retired = std::move(mSnapshot);
+            mSnapshot = std::move(done);
+        }
+        else
+        {
+            retired = std::move(done);
+        }
+        // Large tile maps must also be destroyed off-thread. Explicitly reset
+        // the payload there even if the queue retains a copy of the callable.
+        auto held = std::make_shared<SKCensusSnapshotPtr>(std::move(retired));
+        LL::WorkQueue::getInstance("CensusClusters")->post([held]() { held->reset(); });
+        mClusterRegions.clear();
+        mDiscardClusterJob = false;
+    }
+    if (!enabled)
     {
         if (mScan.mActive)
         {
@@ -380,6 +409,7 @@ void SKWorldCensus::beginScan()
 
 void SKWorldCensus::abandonScan()
 {
+    mDiscardClusterJob = true;
     mScan.mPending.reset();
     mScan.mObjects.clear();
     mScan.mActive = false;
@@ -436,9 +466,8 @@ void SKWorldCensus::finishScan()
     {
         squares.push_back({ region->getOriginGlobal(), region->getWidth() });
     }
+    const auto window = sknav::regionWindow(squares, void_margin);
     LLTimer timer;
-    done->mClusters = cluster(done->mRecords, gap, sknav::TILE_M, sknav::regionWindow(squares, void_margin));
-    done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
     done->mStats.mScanMs = mScan.mElapsedMs;
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());
     done->mStats.mRolesKnown = static_cast<U32>(mRoles.size());
@@ -446,7 +475,6 @@ void SKWorldCensus::finishScan()
     gatherCrew();
     classify(*done);
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
-    done->mStamp = ++mStamp;
 
     // Parts and roots not seen for a minute leave the caches, and a root's
     // history ten minutes out of sight unless it is a vehicle or a working
@@ -469,7 +497,29 @@ void SKWorldCensus::finishScan()
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
     }
-    mSnapshot = done;
+    if (!mClusterWorkers)
+    {
+        mClusterWorkers = std::make_unique<LL::ThreadPool>("CensusClusters", 1);
+        mClusterWorkers->start();
+    }
+    // All viewer-derived data is now detached. The worker owns this unpublished
+    // snapshot and never accesses the census, settings or live viewer objects.
+    auto task = std::make_shared<std::packaged_task<std::shared_ptr<SKCensusSnapshot>()>>(
+        [done, cluster_gap = static_cast<F32>(gap), window]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - cluster worker");
+            LLTimer timer;
+            done->mClusters = cluster(done->mRecords, cluster_gap, sknav::TILE_M, window);
+            done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
+            return done;
+        });
+    auto future = task->get_future();
+    if (LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
+    {
+        mClusterJob = std::move(future);
+        mClusterRegions = mScan.mRegions;
+        mDiscardClusterJob = false;
+    }
 }
 
 bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
