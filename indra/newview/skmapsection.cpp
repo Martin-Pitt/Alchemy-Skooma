@@ -466,14 +466,40 @@ namespace skmap
         {
             std::vector<U64> mKeys;
             std::vector<std::pair<S32, S32>> mEnds, mJoined;
-            std::vector<S32> mParent, mIncident, mFwd, mBack;
+            std::vector<S32> mParent, mIncident, mFwd, mBack, mMerged;
             std::vector<U32> mFirst, mFill, mNextFree;
             std::vector<U8> mUsed;
         };
 
+        /// Paths of node ids packed in one array, so a list of them reuses its storage from slice to slice.
+        struct PathList
+        {
+            std::vector<S32> mNodes;
+            std::vector<std::pair<U32, U32>> mRuns;     ///< first node, count
+
+            void clear()
+            {
+                mNodes.clear();
+                mRuns.clear();
+            }
+            size_t size() const { return mRuns.size(); }
+            bool empty() const { return mRuns.empty(); }
+            const S32* data(size_t i) const { return mNodes.data() + mRuns[i].first; }
+            U32 count(size_t i) const { return mRuns[i].second; }
+            S32 front(size_t i) const { return mNodes[mRuns[i].first]; }
+            S32 back(size_t i) const { return mNodes[mRuns[i].first + mRuns[i].second - 1]; }
+            void erase(size_t i) { mRuns.erase(mRuns.begin() + i); }
+            template<typename It>
+            void append(It begin, It end)
+            {
+                mNodes.insert(mNodes.end(), begin, end);
+            }
+            /// Closes the run begun at first.
+            void finish(size_t first) { mRuns.emplace_back(static_cast<U32>(first), static_cast<U32>(mNodes.size() - first)); }
+        };
+
         /// Segments into closed paths (front == back) and open ones: exact ends, a 1 mm snap, then a 2 cm close nearest first.
-        void chain(const std::vector<Seg>& segs, std::vector<LLVector2>& nodes, std::vector<std::vector<S32>>& closed,
-                   std::vector<std::vector<S32>>& open)
+        void chain(const std::vector<Seg>& segs, std::vector<LLVector2>& nodes, PathList& closed, PathList& open)
         {
             SK_SECTION_STAGE(CHAIN);
             // Scratch kept per thread: a soup's slice is small and frequent, so allocations would dominate it.
@@ -671,9 +697,11 @@ namespace skmap
                         break;
                     }
                 }
-                std::vector<S32> path(back.rbegin(), back.rend());
-                path.insert(path.end(), fwd.begin(), fwd.end());
-                (is_closed ? closed : open).push_back(std::move(path));
+                PathList& out = is_closed ? closed : open;
+                const size_t first = out.mNodes.size();
+                out.append(back.rbegin(), back.rend());
+                out.append(fwd.begin(), fwd.end());
+                out.finish(first);
             }
 
             // Close what is left within 2 cm, nearest first; ties by the lower polyline index, then in the order the
@@ -701,8 +729,8 @@ namespace skmap
                 };
                 // One end of path i against an end of path j >= i; a path's own pair is its tail against its head.
                 auto pair = [&](S32 i, bool head_i, S32 j, bool head_j) {
-                    const LLVector2& p = nodes[head_i ? open[i].front() : open[i].back()];
-                    const LLVector2& q = nodes[head_j ? open[j].front() : open[j].back()];
+                    const LLVector2& p = nodes[head_i ? open.front(i) : open.back(i)];
+                    const LLVector2& q = nodes[head_j ? open.front(j) : open.back(j)];
                     const F64 d = dist2(p, q);
                     if (i == j)
                     {
@@ -737,15 +765,15 @@ namespace skmap
                     std::map<GridKey, std::vector<End>> ends_grid;
                     for (size_t i = 0; i < open.size(); ++i)
                     {
-                        ends_grid[gridOf(nodes[open[i].front()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), true });
-                        ends_grid[gridOf(nodes[open[i].back()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), false });
+                        ends_grid[gridOf(nodes[open.front(i)], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), true });
+                        ends_grid[gridOf(nodes[open.back(i)], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), false });
                     }
                     for (size_t i = 0; i < open.size(); ++i)
                     {
                         const S32 si = static_cast<S32>(i);
                         for (bool head : { true, false })
                         {
-                            const GridKey g = gridOf(nodes[head ? open[i].front() : open[i].back()], SECTION_CLOSE_M);
+                            const GridKey g = gridOf(nodes[head ? open.front(i) : open.back(i)], SECTION_CLOSE_M);
                             for (S64 dx = -1; dx <= 1; ++dx)
                             {
                                 for (S64 dy = -1; dy <= 1; ++dy)
@@ -775,37 +803,44 @@ namespace skmap
                 }
                 if (best_how == 0)
                 {
-                    std::vector<S32> p = std::move(open[best_i]);
-                    open.erase(open.begin() + best_i);
-                    p.push_back(p.front());
-                    closed.push_back(std::move(p));
+                    const S32* p = open.data(best_i);
+                    const size_t first = closed.mNodes.size();
+                    closed.append(p, p + open.count(best_i));
+                    closed.append(p, p + 1);
+                    closed.finish(first);
+                    open.erase(best_i);
                     continue;
                 }
-                const std::vector<S32>& pi = open[best_i];
-                const std::vector<S32>& pj = open[best_j];
-                std::vector<S32> merged;
+                const S32* pi = open.data(best_i);
+                const S32* pi_end = pi + open.count(best_i);
+                const S32* pj = open.data(best_j);
+                const S32* pj_end = pj + open.count(best_j);
+                std::vector<S32>& merged = w.mMerged;
+                merged.clear();
                 switch (best_how)
                 {
                     case 1:
-                        merged = pi;
-                        merged.insert(merged.end(), pj.begin(), pj.end());
+                        merged.insert(merged.end(), pi, pi_end);
+                        merged.insert(merged.end(), pj, pj_end);
                         break;
                     case 2:
-                        merged = pj;
-                        merged.insert(merged.end(), pi.begin(), pi.end());
+                        merged.insert(merged.end(), pj, pj_end);
+                        merged.insert(merged.end(), pi, pi_end);
                         break;
                     case 3:
-                        merged = pi;
-                        merged.insert(merged.end(), pj.rbegin(), pj.rend());
+                        merged.insert(merged.end(), pi, pi_end);
+                        merged.insert(merged.end(), std::make_reverse_iterator(pj_end), std::make_reverse_iterator(pj));
                         break;
                     default:
-                        merged.assign(pi.rbegin(), pi.rend());
-                        merged.insert(merged.end(), pj.begin(), pj.end());
+                        merged.insert(merged.end(), std::make_reverse_iterator(pi_end), std::make_reverse_iterator(pi));
+                        merged.insert(merged.end(), pj, pj_end);
                         break;
                 }
-                open.erase(open.begin() + best_j);
-                open.erase(open.begin() + best_i);
-                open.push_back(std::move(merged));
+                open.erase(best_j);
+                open.erase(best_i);
+                const size_t first = open.mNodes.size();
+                open.append(merged.begin(), merged.end());
+                open.finish(first);
             }
         }
 
@@ -839,7 +874,9 @@ namespace skmap
             {
                 return;
             }
-            std::vector<LLVector2> out;
+            thread_local std::vector<LLVector2> scratch;
+            std::vector<LLVector2>& out = scratch;
+            out.clear();
             out.push_back(pts.front());
             for (size_t i = 1; i + 1 < pts.size(); ++i)
             {
@@ -860,7 +897,9 @@ namespace skmap
             {
                 return;
             }
-            std::vector<LLVector2> out;
+            thread_local std::vector<LLVector2> scratch;
+            std::vector<LLVector2>& out = scratch;
+            out.clear();
             size_t removed = 0;
             for (size_t i = 0; i < n; ++i)
             {
@@ -1076,7 +1115,16 @@ namespace skmap
                 return;
             }
 
-            std::vector<Seg> segs;
+            // Scratch kept per thread: most soups are a dozen triangles, so allocations would dominate their slices.
+            struct SoupScratch
+            {
+                std::vector<Seg> mSegs;
+                std::vector<LLVector2> mNodes, mPts;
+                PathList mClosed, mOpen;
+            };
+            thread_local SoupScratch scratch;
+            std::vector<Seg>& segs = scratch.mSegs;
+            segs.clear();
             {
                 SK_SECTION_STAGE(SEGMENTS);
                 for (U32 k = 0; k < nids; ++k)
@@ -1088,16 +1136,23 @@ namespace skmap
                     }
                 }
             }
-            std::vector<LLVector2> nodes;
-            std::vector<std::vector<S32>> closed, open;
+            std::vector<LLVector2>& nodes = scratch.mNodes;
+            PathList& closed = scratch.mClosed;
+            PathList& open = scratch.mOpen;
+            nodes.clear();
+            closed.clear();
+            open.clear();
             chain(segs, nodes, closed, open);
-            std::vector<LLVector2> pts;
-            for (const std::vector<S32>& path : closed)
+            s.mPts.reserve(closed.mNodes.size() + open.mNodes.size());
+            std::vector<LLVector2>& pts = scratch.mPts;
+            for (size_t pi = 0; pi < closed.size(); ++pi)
             {
+                const S32* path = closed.data(pi);
+                const size_t path_size = closed.count(pi);
                 pts.clear();
-                if (path.size() >= 4)
+                if (path_size >= 4)
                 {
-                    for (size_t k = 0; k + 1 < path.size(); ++k)
+                    for (size_t k = 0; k + 1 < path_size; ++k)
                     {
                         pts.push_back(nodes[path[k]]);
                     }
@@ -1114,9 +1169,9 @@ namespace skmap
                     continue;
                 }
                 // A closed path of fewer than three distinct points is a line.
-                for (S32 id : path)
+                for (size_t k = 0; k < path_size; ++k)
                 {
-                    pts.push_back(nodes[id]);
+                    pts.push_back(nodes[path[k]]);
                 }
                 SliceLoop line;
                 line.mFirst = static_cast<U32>(s.mPts.size());
@@ -1124,12 +1179,13 @@ namespace skmap
                 s.mPts.insert(s.mPts.end(), pts.begin(), pts.end());
                 s.mLines.push_back(line);
             }
-            for (const std::vector<S32>& path : open)
+            for (size_t pi = 0; pi < open.size(); ++pi)
             {
-                pts.clear();
-                for (S32 id : path)
+                const S32* path = open.data(pi);
+                pts.resize(open.count(pi));
+                for (size_t k = 0; k < pts.size(); ++k)
                 {
-                    pts.push_back(nodes[id]);
+                    pts[k] = nodes[path[k]];
                 }
                 simplifyLine(pts);
                 SliceLoop line;
@@ -1199,8 +1255,12 @@ namespace skmap
     void windByNesting(SliceResult& s, const std::vector<bool>* active)
     {
         const size_t n = s.mLoops.size();
-        std::vector<F32> area(n);
-        std::vector<LLVector2> lo(n), hi(n);
+        // Scratch kept per thread: every soup's slice nests its loops.
+        thread_local std::vector<F32> area;
+        thread_local std::vector<LLVector2> lo, hi;
+        area.resize(n);
+        lo.resize(n);
+        hi.resize(n);
         for (size_t i = 0; i < n; ++i)
         {
             const SliceLoop& l = s.mLoops[i];
