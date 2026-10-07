@@ -200,6 +200,10 @@ namespace tut
         ensure("a room moved 3 m re-places", shouldReplace(first[0].mOrigin, first[0].mRadius, moved[0].mOrigin, moved[0].mRadius, params));
         ensure("a radius off by a quarter re-places", shouldReplace(first[0].mOrigin, 8.f, first[0].mOrigin, 10.f, params));
         ensure("a radius off by a tenth holds", !shouldReplace(first[0].mOrigin, 8.f, first[0].mOrigin, 8.8f, params));
+        ensure("a radius change alone keeps the capture", !shouldRecapture(first[0].mOrigin, 8.f, first[0].mOrigin, params));
+        ensure("a shift small against the sphere keeps it", !shouldRecapture(LLVector3::zero, 12.f, LLVector3(2.5f, 0.f, 0.f), params));
+        ensure("a shift past a quarter of it recaptures", shouldRecapture(LLVector3::zero, 12.f, LLVector3(3.5f, 0.f, 0.f), params));
+        ensure("a small sphere still recaptures past a metre", shouldRecapture(LLVector3::zero, 2.f, LLVector3(1.2f, 0.f, 0.f), params));
     }
 
     template<> template<>

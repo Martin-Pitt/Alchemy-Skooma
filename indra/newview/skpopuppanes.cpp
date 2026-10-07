@@ -451,9 +451,12 @@ bool SKPopupPanes::handleMouseDown(S32 x, S32 y, MASK mask)
 
 bool SKPopupPanes::handleMouseUp(S32 x, S32 y, MASK mask)
 {
+    // Only a click that began in the panes acts; dragging between rows before release is fine, as in a menu.
+    const bool pressed = mMouseDownInside;
+    mMouseDownInside = false;
     S32 pane, row;
     hit(x, y, pane, row);
-    if (pane < 0 || row < 0)
+    if (pane < 0 || row < 0 || !pressed)
     {
         return pane >= 0;
     }

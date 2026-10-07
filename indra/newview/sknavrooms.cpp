@@ -26,6 +26,8 @@
 
 #include "sknavrooms.h"
 
+#include "sknavlayout.h"
+
 #include "llagent.h"
 #include "llbase64.h"
 #include "llthread.h"
@@ -282,6 +284,20 @@ namespace
         deg = std::fmod(deg, 360.f);
         return deg < 0.f ? deg + 360.f : deg;
     }
+}
+
+bool SKNavRooms::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        const MeshState& s = m.second;
+        if ((s.mDirty || s.mInFlight) && overlapsXY(s.mMin, s.mMax, min, max) &&
+            s.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= s.mMax.mdV[VZ])
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 SKNavWorldViewPtr SKNavRooms::view() const

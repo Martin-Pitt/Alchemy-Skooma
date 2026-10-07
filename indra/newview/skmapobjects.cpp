@@ -117,11 +117,13 @@ void SKMapObjects::update(const skmap::MapView& view, bool combat)
 {
     resize(view);
     const F64 now = LLFrameTimer::getElapsedSeconds();
-    if (now - mLastUpdate < UPDATE_S)
+    // A combat change redraws at once, so physical objects never linger into combat.
+    if (now - mLastUpdate < UPDATE_S && combat == mLastCombat)
     {
         return;
     }
     mLastUpdate = now;
+    mLastCombat = combat;
     mCentre = view.centre();
     // The image covers the widget's diagonal at the current scale.
     const F32 diagonal = std::sqrt(view.width() * view.width() + view.height() * view.height());

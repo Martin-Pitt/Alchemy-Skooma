@@ -127,6 +127,9 @@ private:
     /// Draw one layer's cell texture over a world rectangle, 2 x 2 sub-quads with per-vertex colour.
     void drawCell(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                   F32 u1, F32 v1, const LLColor4& tint) const;
+    /// The same with the texture already bound.
+    void drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
+                       const LLColor4& tint) const;
     /// The same, leaving out the layer's cut cells.
     void drawCellCut(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                      F32 u1, F32 v1, const LLColor4& tint, S32 layer) const;
@@ -136,6 +139,10 @@ private:
     /// The ribbon parameters for this frame: the zoom bucket, the eye height and the toggles.
     skmap::RibbonParams ribbonParams(const skmap::MapView& view) const;
     static U64 ribbonKey(U64 mark_hash, const skmap::RibbonParams& params);
+    /// What a layer's lines are built from: its mark hash, and its cut when it has one.
+    U64 ribbonIdentity(S32 layer) const;
+    /// The buffer the previous scene drew for the layer that is now this one, or 0.
+    U64 carriedRibbon(S32 layer);
     /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
     void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
     /// Draw a buffer of scene-local metres built for the scene whose origin is given.
@@ -153,7 +160,7 @@ private:
     {
         S32 mLayer = -1;
         U64 mKey = 0;
-        U64 mMarkHash = 0;
+        U64 mMarkHash = 0;                  ///< the ribbon identity: marks, and the cut if any
         skmap::RibbonParams mParams;
     };
     struct RibbonResult
@@ -206,7 +213,19 @@ private:
     std::deque<BakeResult> mUploads;
 
     std::map<U64, RibbonBuffer> mRibbons;
-    std::map<U64, U64> mRibbonLatest;       ///< mark hash -> the key last built for it
+    std::map<U64, U64> mRibbonLatest;       ///< ribbon identity -> the key last built for it
+    /// A layer of the previous scene that drew lines, kept so its successor can draw them while its own builds.
+    struct CarrySource
+    {
+        bool mGround = false;
+        F32 mBaseZ = 0.f;
+        U64 mCut = 0;                       ///< its cut hash, 0 when uncut
+        U64 mKey = 0;                       ///< the buffer it drew
+        std::vector<std::pair<S32, S32>> mSample;   ///< up to 64 of its footprint cells
+    };
+    std::map<S32, std::pair<U64, U64>> mShownRibbons;   ///< layer -> (buffer key, cut hash) drawn for it last
+    std::vector<CarrySource> mCarrySources;
+    std::map<S32, U64> mCarried;            ///< layer -> its carried buffer, 0 for none, resolved once
     std::vector<RibbonRequest> mRibbonWanted;
     bool mRibbonInFlight = false;
     std::deque<RibbonResult> mRibbonUploads;
@@ -215,6 +234,7 @@ private:
     LLPointer<LLVertexBuffer> mBoundaryBuffer;
     LLVector3d mBoundaryOrigin;
     U64 mBoundaryKey = 0;
+    U64 mBoundaryHash = 0;                  ///< the scene's region and void edges, in global centimetres
 
     skmap::AgentFloor mAgent;
     U32 mAgentFrame = 0;            ///< the frame count mAgent was last refreshed in
@@ -224,7 +244,10 @@ private:
     std::pair<S32, S32> mSelectedCell = { 0, 0 };
     S32 mSelectedLayer = -2;
     sknav::EnclosureBucket mSelectedBucket = sknav::EnclosureBucket::UNKNOWN;
+    S32 mSelectedZ = 0;                     ///< the agent's height in 0.5 m steps
+    F32 mSelectedFade = -1.f;
     std::map<S32, std::pair<LLVector3d, LLVector3d>> mCutBoxes;
+    std::map<S32, U64> mCutHashes;          ///< per cut layer, a hash of its cut cells
 };
 
 #endif // SK_MAPSCENE_H

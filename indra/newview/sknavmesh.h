@@ -73,6 +73,9 @@ public:
     /// The content keys of a mesh's tiles whose footprint meets the global
     /// box, 0 for a tile not published under one.
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+    /// Whether anything meeting the global box is still on its way: a tile
+    /// queued or building, or a rooms pass not yet landed over it.
+    bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
@@ -220,6 +223,7 @@ public:
         U32 mInFlight = 0;
         U32 mBuilds = 0;
         U32 mFailures = 0;
+        U32 mRefused = 0;       ///< layouts over MAX_TILES_PER_MESH, left unbuilt
         U32 mFaces = 0;
         U32 mSegments = 0;
         U32 mLinks = 0;
@@ -253,6 +257,16 @@ private:
         CAUSE_TERRAIN,      ///< the land under the tile moved
         CAUSE_PARAMS,       ///< the build parameters moved
         CAUSE_FAILED,       ///< the last build of it failed
+    };
+
+    /// A tile's wall segments bucketed by the 2 m cells of its footprint their plan
+    /// AABBs touch, so a query over a few metres reads a few cells rather than the
+    /// whole tile. Built on first query, for the segment vector it holds.
+    struct SegmentCells
+    {
+        static constexpr S32 ACROSS = 16;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSource;
+        std::vector<U32> mCells[ACROSS * ACROSS];
     };
 
     struct Tile
@@ -302,6 +316,8 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+        /// Checked against mSegments by identity, so a publish needs no reset here.
+        mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };
 
     struct Layout
@@ -310,6 +326,7 @@ private:
         std::vector<U64> mSignatures;
         std::set<sknav::TileKey> mKeys;
         size_t mNext = 0;
+        bool mRefused = false;      ///< more tiles than a mesh holds, so none
         U64 mCensus = 0, mWorld = 0, mLand = 0, mParams = 0;
         F32 mPad = 0.f, mVoidMargin = 0.f;
         F64 mMinZ = 0., mMaxZ = 0.;

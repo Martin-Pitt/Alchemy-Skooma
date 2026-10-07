@@ -123,6 +123,8 @@ namespace sknav
         U32 mTiles = 0;
         U32 mEmpty = 0;
         U32 mFailed = 0;
+        /// Meshes left out for wanting more than MAX_TILES_PER_MESH tiles.
+        U32 mRefused = 0;
         /// Wall-clock milliseconds per stage, in order.
         std::vector<std::pair<std::string, F64>> mStages;
     };

@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="868"
+ min_height="928"
  min_width="300"
- height="888"
+ height="948"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -347,6 +347,41 @@
     tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
    <text
     name="export_status"
+    height="26"
+    word_wrap="true"
+    use_ellipses="false"
+    type="string"
+    follows="left|top|right"
+    layout="topleft"
+    left="12"
+    top_pad="4"
+    width="292">
+   </text>
+   <combo_box
+    follows="left|top"
+    layout="topleft"
+    left="12"
+    top_pad="8"
+    height="23"
+    width="200"
+    name="capture_kind"
+    tool_tip="What to capture: the selected linkset or the one the camera points at with its crew, or the selected or pointed-at avatar's attachments (yourself if none)">
+    <combo_box.item label="Vehicle and crew" value="0" name="capture_vehicle" />
+    <combo_box.item label="Worn attachments" value="1" name="capture_attachments" />
+    <combo_box.item label="Avatar" value="2" name="capture_avatar" />
+   </combo_box>
+   <button
+    follows="left|top"
+    layout="topleft"
+    left_pad="4"
+    top_delta="0"
+    height="23"
+    width="88"
+    name="capture_button"
+    label="Export"
+    tool_tip="Write triangles and each face's transparency to sknav-capture-&lt;kind&gt;-&lt;id&gt;.json in the logs folder: a vehicle in its root's frame, worn attachments each in their own root's frame, an avatar in its body frame" />
+   <text
+    name="capture_status"
     height="26"
     word_wrap="true"
     use_ellipses="false"

@@ -116,6 +116,7 @@ namespace sknav
         OCTREE,         ///< automatic, one per octree node
         NAV_SPHERE,     ///< automatic, held by a navmesh room part
         NAV_BOX,        ///< reserved: navmesh room boxes do not exist yet
+        CLUSTER,        ///< automatic, a fill over one cell of a census cluster
         COUNT
     };
     const char* probeKindName(ProbeKind kind);

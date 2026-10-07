@@ -26,6 +26,7 @@
 
 #include "sknavmesh.h"
 
+#include "skcaptureexport.h"
 #include "sknavannotate.h"
 #include "sknavannotator.h"
 #include "sknavcensusio.h"
@@ -84,6 +85,9 @@
 namespace
 {
     using namespace sknav;
+    using skcapture::faceAlphaMode;
+    using skcapture::facePbrAlpha;
+    using skcapture::linkNumber;
 
     template<typename T>
     void retireOn(const LL::WorkQueue::ptr_t& workers, T value)
@@ -115,43 +119,6 @@ namespace
             && std::fabs(a.mdV[VZ] - b.mdV[VZ]) <= 0.05;
     }
 
-    // How the renderer will blend a face, which is what decides whether it
-    // can be seen through: a PBR material's own mode wins over a legacy
-    // material's, and with neither the face is blended only if its tint or
-    // its texture carries alpha, which only the texture can say.
-    const char* faceAlphaMode(const LLTextureEntry* te)
-    {
-        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-        {
-            switch (gltf->mAlphaMode)
-            {
-                case LLGLTFMaterial::ALPHA_MODE_BLEND: return "pbr-blend";
-                case LLGLTFMaterial::ALPHA_MODE_MASK: return "pbr-mask";
-                default: return "pbr-opaque";
-            }
-        }
-        const LLMaterialPtr material = te->getMaterialParams();
-        if (material.notNull())
-        {
-            switch (material->getDiffuseAlphaMode())
-            {
-                case LLMaterial::DIFFUSE_ALPHA_MODE_NONE: return "none";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_BLEND: return "blend";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_MASK: return "mask";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_EMISSIVE: return "emissive";
-                default: break;
-            }
-        }
-        return "default";
-    }
-
-    // The PBR base colour's alpha, which multiplies the tint on a PBR face.
-    F32 facePbrAlpha(const LLTextureEntry* te)
-    {
-        const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial();
-        return gltf ? gltf->mBaseColor.mV[VW] : 1.f;
-    }
-
     constexpr F32 EXPORT_REACH_M = 16.f; ///< the object export's surroundings: half the side of the cube about the point
 
     /// Whether a triangle's box meets the cube of half side reach about the origin.
@@ -167,29 +134,6 @@ namespace
             }
         }
         return true;
-    }
-
-    S32 linkNumber(const LLViewerObject* object)
-    {
-        // SL numbers the root 1 and its children from 2 in child order.
-        const LLViewerObject* parent = static_cast<const LLViewerObject*>(object->getParent());
-        if (!parent)
-        {
-            return 1;
-        }
-        S32 link = 2;
-        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
-        {
-            if (child.get() == object)
-            {
-                break;
-            }
-            if (!child->isAvatar())
-            {
-                ++link;
-            }
-        }
-        return link;
     }
 }
 
@@ -790,14 +734,14 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                 if (cluster)
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay airborne worker");
-                    layAirborne(*cluster, origin, layout->mPad, layout->mTiles);
+                    layout->mRefused = !layAirborne(*cluster, origin, layout->mPad, layout->mTiles);
                 }
                 else
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region worker");
                     std::vector<RecordPtr> records;
                     for (const auto& c : *ground) records.insert(records.end(), c->mRecords.begin(), c->mRecords.end());
-                    layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin, *regions, layout->mTiles);
+                    layout->mRefused = !layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin, *regions, layout->mTiles);
                 }
                 for (const auto& tile : layout->mTiles)
                 {
@@ -866,7 +810,15 @@ void SKNavMesh::applyLayouts()
     {
         Mesh& mesh = *entry.second;
         if (mesh.mLayoutJob.valid() && mesh.mLayoutJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        {
             mesh.mPendingLayout = mesh.mLayoutJob.get();
+            if (mesh.mPendingLayout && mesh.mPendingLayout->mRefused)
+            {
+                mStats.mRefused++;
+                LL_WARNS("SKNav") << "mesh " << mesh.mId << " wants more than " << MAX_TILES_PER_MESH << " tiles; left unbuilt ("
+                                  << mStats.mRefused << " refused)" << LL_ENDL;
+            }
+        }
         if (!mesh.mPendingLayout) continue;
         auto& layout = *mesh.mPendingLayout;
         // A region or parameter change invalidates the whole result before publication.
@@ -1539,6 +1491,21 @@ void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, 
     }
 }
 
+bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        for (const auto& t : m.second->mTiles)
+        {
+            if ((t.second.mInFlight || t.second.mSignature != t.second.mBuilt) && overlaps3D(t.second.mMin, t.second.mMax, min, max))
+            {
+                return true;
+            }
+        }
+    }
+    return mRooms->settlingIn(min, max);
+}
+
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
@@ -1549,7 +1516,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
@@ -1712,41 +1679,44 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
 
 void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const
 {
+    LL_PROFILE_ZONE_SCOPED;
+    U32 tiles_seen = 0;
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey&, const Tile& tile)
         {
-            const Tile& tile = t.second;
+            ++tiles_seen;
             if (tile.mBuilt && overlapsXY(tile.mMin, tile.mMax, min, max))
             {
                 fn(mesh, tile);
             }
-        }
+        });
     }
+    LL_PROFILE_ZONE_NUM(mMeshes.size());
+    LL_PROFILE_ZONE_NUM(tiles_seen);
 }
 
 void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const PolyTileFn& fn) const
 {
-    // Not through forEachTileIn: the tile key is the map key, and a Tile does not hold it.
+    // Keep the key for Detour lookup while querying only the requested rectangle.
     const S32 c = static_cast<S32>(cls);
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
         {
-            const Tile& tile = t.second;
             if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max) || !tile.mSegments[c])
             {
-                continue;
+                return;
             }
             if (!tile.mPolyCache[c])
             {
                 // Detour's x runs along Recast x, which is SL y.
-                const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(t.first.mY, t.first.mX, 0) : nullptr;
+                const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(key.mY, key.mX, 0) : nullptr;
                 if (!dt_tile || !dt_tile->header)
                 {
-                    continue;   // nothing to hand out, so the cell is not counted as built
+                    return;   // nothing to hand out, so the cell is not counted as built
                 }
                 tile.mPolyCache[c] = extractTilePolys(*dt_tile);
             }
@@ -1755,7 +1725,7 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             out.mTerrain = mesh.mTerrain;
             out.mRegion = mesh.mRegion;
             out.mOrigin = mesh.mOrigin;
-            out.mKey = t.first;
+            out.mKey = key;
             out.mContentKey = tile.mContentKey;
             out.mMin = tile.mMin;
             out.mMax = tile.mMax;
@@ -1764,7 +1734,7 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             out.mLinks = tile.mLinks[c];
             out.mFlights = tile.mFlights[c];
             fn(out);
-        }
+        });
     }
 }
 
@@ -1788,14 +1758,76 @@ void SKNavMesh::wallFacesIn(const LLVector3d& min, const LLVector3d& max, const 
 
 void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const SegmentFn& fn) const
 {
+    LL_PROFILE_ZONE_SCOPED;
     const S32 c = static_cast<S32>(cls);
+    constexpr S32 ACROSS = SegmentCells::ACROSS;
+    std::vector<U32> picked;
+    U32 tiles_hit = 0, cells_built = 0, segments_read = 0;
     forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
-        if (!tile.mSegments[c])
+        if (!tile.mSegments[c] || tile.mSegments[c]->empty())
         {
             return;
         }
-        for (const WallSegment& seg : *tile.mSegments[c])
+        ++tiles_hit;
+        const F64 cell = (tile.mMax.mdV[VX] - tile.mMin.mdV[VX]) / ACROSS;
+        if (cell <= 0.0)
         {
+            return;
+        }
+        const auto cell_range = [&](F64 lo, F64 hi, F64 origin, S32& first, S32& last) {
+            first = llclamp(static_cast<S32>(std::floor((lo - origin) / cell)), 0, ACROSS - 1);
+            last = llclamp(static_cast<S32>(std::floor((hi - origin) / cell)), 0, ACROSS - 1);
+        };
+        // A hub tile holds segments by the hundred thousand; one linear pass an idle was
+        // a quarter of a second, so they are read through cells built on the first query.
+        if (!tile.mSegmentCells[c] || tile.mSegmentCells[c]->mSource != tile.mSegments[c])
+        {
+            LL_PROFILE_ZONE_NAMED("sknm - segment cells build");
+            LL_PROFILE_ZONE_NUM(tile.mSegments[c]->size());
+            ++cells_built;
+            auto cells = std::make_shared<SegmentCells>();
+            cells->mSource = tile.mSegments[c];
+            const std::vector<WallSegment>& segments = *tile.mSegments[c];
+            for (U32 i = 0; i < segments.size(); ++i)
+            {
+                const LLVector3d a = mesh.mOrigin + LLVector3d(segments[i].mA), b = mesh.mOrigin + LLVector3d(segments[i].mB);
+                S32 x0, x1, y0, y1;
+                cell_range(llmin(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VX], b.mdV[VX]), tile.mMin.mdV[VX], x0, x1);
+                cell_range(llmin(a.mdV[VY], b.mdV[VY]), llmax(a.mdV[VY], b.mdV[VY]), tile.mMin.mdV[VY], y0, y1);
+                for (S32 y = y0; y <= y1; ++y)
+                {
+                    for (S32 x = x0; x <= x1; ++x)
+                    {
+                        cells->mCells[y * ACROSS + x].push_back(i);
+                    }
+                }
+            }
+            tile.mSegmentCells[c] = std::move(cells);
+        }
+        const SegmentCells& cells = *tile.mSegmentCells[c];
+        const std::vector<WallSegment>& segments = *cells.mSource;
+        S32 x0, x1, y0, y1;
+        cell_range(min.mdV[VX], max.mdV[VX], tile.mMin.mdV[VX], x0, x1);
+        cell_range(min.mdV[VY], max.mdV[VY], tile.mMin.mdV[VY], y0, y1);
+        picked.clear();
+        for (S32 y = y0; y <= y1; ++y)
+        {
+            for (S32 x = x0; x <= x1; ++x)
+            {
+                const std::vector<U32>& bucket = cells.mCells[y * ACROSS + x];
+                picked.insert(picked.end(), bucket.begin(), bucket.end());
+            }
+        }
+        // A segment crossing several of the query's cells is in each; once is enough.
+        if (x1 > x0 || y1 > y0)
+        {
+            std::sort(picked.begin(), picked.end());
+            picked.erase(std::unique(picked.begin(), picked.end()), picked.end());
+        }
+        segments_read += static_cast<U32>(picked.size());
+        for (const U32 i : picked)
+        {
+            const WallSegment& seg = segments[i];
             const LLVector3d a = mesh.mOrigin + LLVector3d(seg.mA), b = mesh.mOrigin + LLVector3d(seg.mB);
             if (overlapsXY(LLVector3d(llmin(a.mdV[VX], b.mdV[VX]), llmin(a.mdV[VY], b.mdV[VY]), 0.0),
                            LLVector3d(llmax(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VY], b.mdV[VY]), 0.0), min, max))
@@ -1804,6 +1836,9 @@ void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentCl
             }
         }
     });
+    LL_PROFILE_ZONE_NUM(tiles_hit);
+    LL_PROFILE_ZONE_NUM(cells_built);
+    LL_PROFILE_ZONE_NUM(segments_read);
 }
 
 void SKNavMesh::flightsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const FlightFn& fn) const

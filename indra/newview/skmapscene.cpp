@@ -47,6 +47,7 @@
 #include "llviewertexture.h"
 #include "skmappalette.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cstring>
@@ -103,6 +104,9 @@ void SKMapScene::cleanupSingleton()
     mWanted.clear();
     mRibbons.clear();
     mRibbonLatest.clear();
+    mShownRibbons.clear();
+    mCarrySources.clear();
+    mCarried.clear();
     mHatch = nullptr;
     mBoundaryBuffer = nullptr;
     mRibbonUploads.clear();
@@ -319,7 +323,47 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     {
         return;     // superseded
     }
+    // The layers that drew lines hand them on: layer indices do not survive a new scene, footprints do.
+    mCarrySources.clear();
+    if (mScene && !mShownRibbons.empty())
+    {
+        for (const auto& shown : mShownRibbons)
+        {
+            const skmap::SceneLayer& layer = mScene->mLayers[shown.first];
+            CarrySource source;
+            source.mGround = layer.mGround;
+            source.mBaseZ = layer.mBaseZ;
+            source.mKey = shown.second.first;
+            source.mCut = shown.second.second;
+            constexpr size_t SAMPLE = 64;
+            const size_t stride = llmax(static_cast<size_t>(1), layer.mFootprint.size() / SAMPLE);
+            size_t i = 0;
+            for (const auto& cell : layer.mFootprint)
+            {
+                if (i++ % stride == 0 && source.mSample.size() < SAMPLE)
+                {
+                    source.mSample.push_back(cell);
+                }
+            }
+            mCarrySources.push_back(std::move(source));
+        }
+    }
+    mShownRibbons.clear();
+    mCarried.clear();
     mScene = scene;
+    // Global, so a box step that keeps the edges keeps their buffer.
+    U64 boundaries = sknav::SEED;
+    auto cm = [](F64 metres) { return static_cast<U64>(std::llround(metres * 100.0)); };
+    for (const skmap::LineMark& mark : scene->mBoundaries)
+    {
+        boundaries = sknav::mix(boundaries, static_cast<U64>(mark.mKind));
+        for (const LLVector2& p : { mark.mA, mark.mB })
+        {
+            boundaries = sknav::mix(boundaries, cm(scene->mOrigin.mdV[VX] + p.mV[VX]));
+            boundaries = sknav::mix(boundaries, cm(scene->mOrigin.mdV[VY] + p.mV[VY]));
+        }
+    }
+    mBoundaryHash = boundaries;
     mStats.mJobs++;
     mStats.mJobMs = millis;
     mStats.mPolys = static_cast<U32>(scene->mPolys.size());
@@ -369,20 +413,38 @@ void SKMapScene::updateSelection()
             bucket = e.mBucket;
         }
     }
-    if (mSelectedScene.lock() == mScene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket)
+    // The selection also reads the agent's height and the fade: flying straight up keeps the cell and finds no floor.
+    static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
+    const F32 za = floor.mFound ? floor.mZ : static_cast<F32>(agent.mdV[VZ]);
+    const S32 z_step = ll_round(za * 2.f);
+    if (mSelectedScene.lock() == mScene && mSelectedCell == cell && mSelectedLayer == floor.mLayer && mSelectedBucket == bucket
+        && mSelectedZ == z_step && mSelectedFade == fade)
     {
         return;
     }
-    static LLCachedControl<F32> fade(gSavedSettings, "SKMapVerticalFade", 30.f);
     mSelection = skmap::selectLayers(scene, floor, bucket, fade);
+    mSelectedZ = z_step;
+    mSelectedFade = fade;
     mSelectedScene = mScene;
     mSelectedCell = cell;
     mSelectedLayer = floor.mLayer;
     mSelectedBucket = bucket;
+    mCarried.clear();       // carried lines match the cut, which may have moved
     // The cut's bounding box per layer, in global metres, so most cells skip the cell test.
     mCutBoxes.clear();
+    mCutHashes.clear();
     for (const auto& entry : mSelection.mCut)
     {
+        if (entry.second.empty())
+        {
+            continue;
+        }
+        U64 hash = sknav::SEED;
+        for (const auto& c : entry.second)
+        {
+            hash = sknav::mix(sknav::mix(hash, static_cast<U32>(c.first)), static_cast<U32>(c.second));
+        }
+        mCutHashes[entry.first] = hash;
         LLVector3d lo(DBL_MAX, DBL_MAX, 0.0), hi(-DBL_MAX, -DBL_MAX, 0.0);
         for (const auto& c : entry.second)
         {
@@ -508,6 +570,13 @@ void SKMapScene::evictBakes()
 void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0,
                           F32 u1, F32 v1, const LLColor4& tint) const
 {
+    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
+    drawCellQuads(view, min, max, u0, v0, u1, v1, tint);
+}
+
+void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
+                               const LLColor4& tint) const
+{
     // 2 x 2 sub-quads, so the distance dim varies across a cell.
     const LLVector3d agent = gAgent.getPositionGlobal();
     const F32 span = view.span();
@@ -527,7 +596,6 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
         u[j] = u0 + (u1 - u0) * j * 0.5f;
         v[j] = v0 + (v1 - v0) * j * 0.5f;
     }
-    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
     gGL.begin(LLRender::TRIANGLES);
     auto vert = [&](S32 j, S32 i) {
         gGL.color4fv(col[j][i].mV);
@@ -559,7 +627,8 @@ void SKMapScene::drawCellCut(const skmap::MapView& view, LLViewerTexture* textur
         drawCell(view, texture, min, max, u0, v0, u1, v1, tint);
         return;
     }
-    // A part of the cell, its UVs mapped from the cell's.
+    // A part of the cell, its UVs mapped from the cell's; one bind for all of them, as a bind flushes.
+    gGL.getTextureSlot(0)->bindSampled(texture, ALSamplers::BilinearClamp);
     auto part = [&](F64 x0, F64 y0, F64 x1, F64 y1) {
         if (x1 <= x0 || y1 <= y0)
         {
@@ -567,7 +636,7 @@ void SKMapScene::drawCellCut(const skmap::MapView& view, LLViewerTexture* textur
         }
         auto u = [&](F64 x) { return u0 + (u1 - u0) * static_cast<F32>((x - min.mdV[VX]) / (max.mdV[VX] - min.mdV[VX])); };
         auto v = [&](F64 y) { return v0 + (v1 - v0) * static_cast<F32>((y - min.mdV[VY]) / (max.mdV[VY] - min.mdV[VY])); };
-        drawCell(view, texture, LLVector3d(x0, y0, 0.0), LLVector3d(x1, y1, 0.0), u(x0), v(y0), u(x1), v(y1), tint);
+        drawCellQuads(view, LLVector3d(x0, y0, 0.0), LLVector3d(x1, y1, 0.0), u(x0), v(y0), u(x1), v(y1), tint);
     };
     // Up to four rectangles round the cut's box, then 4 m pieces inside it that are not cut.
     const F64 bx0 = llmax(box->second.first.mdV[VX], min.mdV[VX]), by0 = llmax(box->second.first.mdV[VY], min.mdV[VY]);
@@ -799,13 +868,59 @@ void SKMapScene::drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, cons
     gGL.getTextureSlot(0)->unbind();
 }
 
+U64 SKMapScene::ribbonIdentity(S32 layer) const
+{
+    const U64 marks = mScene->mMarkHashes[layer];
+    // A cut layer has lines of its own, never stood in for by its uncut ones.
+    const auto cut = mCutHashes.find(layer);
+    return cut != mCutHashes.end() ? sknav::mix(marks, cut->second) : marks;
+}
+
+U64 SKMapScene::carriedRibbon(S32 layer)
+{
+    const auto cached = mCarried.find(layer);
+    if (cached != mCarried.end())
+    {
+        return cached->second;
+    }
+    // The previous layer on the same kind of ground, at the same height and with the same cut, that shares
+    // the most footprint: overlap alone cannot tell stacked storeys apart.
+    const skmap::SceneLayer& here = mScene->mLayers[layer];
+    const auto cut = mCutHashes.find(layer);
+    const U64 cut_hash = cut != mCutHashes.end() ? cut->second : 0;
+    U64 best = 0;
+    size_t best_hits = 0;
+    for (const CarrySource& source : mCarrySources)
+    {
+        // A layer that split hands its lines to one successor, not to each.
+        const bool claimed = std::any_of(mCarried.begin(), mCarried.end(), [&](const auto& c) { return c.second == source.mKey; });
+        if (claimed || source.mGround != here.mGround || source.mCut != cut_hash
+            || (!here.mGround && std::fabs(source.mBaseZ - here.mBaseZ) > skmap::LAYER_GAP_M))
+        {
+            continue;
+        }
+        size_t hits = 0;
+        for (const auto& cell : source.mSample)
+        {
+            hits += here.mFootprint.count(cell);
+        }
+        if (hits > best_hits)
+        {
+            best_hits = hits;
+            best = source.mKey;
+        }
+    }
+    mCarried[layer] = best;
+    return best;
+}
+
 void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params)
 {
     if (layer < 0 || layer >= static_cast<S32>(mScene->mMarkHashes.size()))
     {
         return;
     }
-    const U64 marks = mScene->mMarkHashes[layer];
+    const U64 marks = ribbonIdentity(layer);
     const U64 key = ribbonKey(marks, params);
     const F64 now = LLFrameTimer::getElapsedSeconds();
     auto it = mRibbons.find(key);
@@ -815,11 +930,30 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
         // The old buffer keeps drawing until the new one lands.
         const auto latest = mRibbonLatest.find(marks);
         it = latest != mRibbonLatest.end() ? mRibbons.find(latest->second) : mRibbons.end();
+        // A layer whose marks changed with the scene draws what the layer it replaces drew.
+        if (it == mRibbons.end())
+        {
+            if (const U64 carried = carriedRibbon(layer))
+            {
+                it = mRibbons.find(carried);
+            }
+        }
+        // A cut that moved keeps the lines of the layer's previous cut; an uncut layer never stands in for a cut one.
+        if (it == mRibbons.end())
+        {
+            const auto shown = mShownRibbons.find(layer);
+            if (shown != mShownRibbons.end() && shown->second.second != 0)
+            {
+                it = mRibbons.find(shown->second.first);
+            }
+        }
     }
     if (it != mRibbons.end())
     {
         it->second.mLastDrawn = now;
         drawBuffer(view, it->second.mBuffer, it->second.mOrigin);
+        const auto cut = mCutHashes.find(layer);
+        mShownRibbons[layer] = { it->first, cut != mCutHashes.end() ? cut->second : 0 };
     }
 }
 
@@ -835,13 +969,19 @@ void SKMapScene::postRibbons()
     {
         const skmap::ScenePtr scene = mScene;
         const RibbonRequest request = mRibbonWanted.front();
+        // The cut as selected this frame, which is what the request's identity hashed.
+        std::shared_ptr<const skmap::CutCells> cut;
+        if (mCutHashes.count(request.mLayer))
+        {
+            cut = std::make_shared<const skmap::CutCells>(mSelection.mCut.at(request.mLayer));
+        }
         std::weak_ptr<bool> alive = mAlive;
-        const bool posted = work->post([this, scene, request, alive]() {
+        const bool posted = work->post([this, scene, request, cut, alive]() {
             auto result = std::make_shared<RibbonResult>();
             result->mKey = request.mKey;
             result->mMarkHash = request.mMarkHash;
             result->mOrigin = scene->mOrigin;
-            skmap::buildLayerRibbons(*scene, request.mLayer, request.mParams, result->mRibbons);
+            skmap::buildLayerRibbons(*scene, request.mLayer, request.mParams, result->mRibbons, cut.get());
             LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, result, alive]() {
                 if (!alive.expired())
                 {
@@ -975,13 +1115,13 @@ void SKMapScene::drawVoid(const skmap::MapView& view)
     gGL.end();
     gGL.getTextureSlot(0)->unbind();
 
-    // The region and void edges, rebuilt when the scene or the zoom bucket moves.
+    // The region and void edges, rebuilt when they or the zoom bucket move, not on every landing.
     if (!mScene)
     {
         return;
     }
     skmap::RibbonParams params = ribbonParams(view);
-    const U64 key = sknav::mix(static_cast<U64>(mStats.mJobs), static_cast<U64>(skmap::zoomBucket(params.mMpp)));
+    const U64 key = sknav::mix(mBoundaryHash, static_cast<U64>(skmap::zoomBucket(params.mMpp)));
     if (key != mBoundaryKey)
     {
         mBoundaryKey = key;
