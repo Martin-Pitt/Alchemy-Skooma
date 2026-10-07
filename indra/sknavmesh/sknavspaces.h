@@ -233,6 +233,7 @@ namespace sknav
         std::vector<Portal> mPortals;
         std::vector<RoomsTile> mTiles;      ///< sorted by key
         std::vector<SeedLink> mLinks;
+        std::vector<SeedLink> mApart;       ///< seeds either side of an aperture cut, kept apart while both their tiles' air stands
         F32 mMillis = 0.f;
         U32 mSeeds = 0;
         U32 mDirtyTiles = 0;

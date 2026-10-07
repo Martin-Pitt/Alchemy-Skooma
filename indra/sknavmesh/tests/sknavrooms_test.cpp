@@ -1233,6 +1233,146 @@ namespace tut
         ensure("walled on neither side", !p[0]->walled());
     }
 
+    /// Two roofed rooms either side of a partition with a 2 m doorway under
+    /// a lintel, both opening without one onto a corridor along their north
+    /// side: the rooms meet through the doorway and around through the corridor.
+    Scene loopedRooms(F32 lintel_z = 2.2f)
+    {
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 14.f, 18.f, 14.25f);
+        s.wall(2.f, 2.f, 2.25f, 14.25f);
+        s.wall(17.75f, 2.f, 18.f, 14.25f);
+        s.wall(2.f, 10.f, 4.f, 10.25f);
+        s.wall(6.f, 10.f, 14.f, 10.25f);
+        s.wall(16.f, 10.f, 18.f, 10.25f);
+        s.wall(10.f, 2.25f, 10.25f, 5.f);
+        s.wall(10.f, 7.f, 10.25f, 10.f);
+        s.box(10.f, 5.f, 10.25f, 7.f, lintel_z, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 14.25f, 3.f, 3.25f);
+        return s;
+    }
+
+    /// The spaces pass again over the same air, reading the last pass.
+    Result rerun(const Scene& s, const Result& first)
+    {
+        std::shared_ptr<EnclosureInput> in = s.input(1);
+        for (EnclosureInput::Tile& t : in->mTiles)
+        {
+            if (const RoomsTile* was = first.mRooms->tile(t.mKey))
+            {
+                t.mAir = was->mAir;
+            }
+        }
+        EnclosurePass pass(in);
+        while (!pass.step(1u << 30))
+        {
+        }
+        Result r;
+        r.mEnc = pass.takeProduct();
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mPrevious = first.mRooms;
+        r.mRooms = computeSpaces(rooms, r.mEnc);
+        return r;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<43>()
+    {
+        set_test_name("a doorway under a lintel parts its rooms though they meet again around it, and stays cut on the next pass");
+        const Scene s = loopedRooms();
+        const Result r = run(s.input(1));
+        const Space* west = r.at(6.f, 6.f);
+        const Space* east = r.at(14.f, 6.f);
+        ensure("two rooms", west && east && west != east);
+        ensure_equals("one aperture cut", r.mRooms->mApart.size(), 1u);
+        bool doorway = false;
+        for (const Portal* q : r.between(west, east))
+        {
+            doorway = doorway || (q->mKind == PortalKind::OPENING && q->lintel() && std::fabs(q->mCentre.mV[VY] - 6.f) < 0.1f &&
+                                  q->mCentre.mV[VX] > 9.9f && q->mCentre.mV[VX] < 10.35f && std::fabs(q->mWidth - 2.f) < 0.05f);
+        }
+        ensure("an opening on the doorway, jamb to jamb", doorway);
+        // A pass that cuts no tile again keeps the cut.
+        const Result again = rerun(s, r);
+        ensure_equals("nothing cut again", again.mRooms->mDirtyTiles, 0u);
+        ensure("still two rooms", again.at(6.f, 6.f) && again.at(6.f, 6.f) != again.at(14.f, 6.f));
+        ensure_equals("the cut kept", again.mRooms->mApart.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<44>()
+    {
+        set_test_name("a beam across a corridor is no doorway: its walls run on along both sides");
+        Scene s;
+        s.wall(2.f, 2.f, 20.f, 2.25f);
+        s.wall(2.f, 4.f, 20.f, 4.25f);
+        s.wall(2.f, 2.f, 2.25f, 4.25f);
+        s.wall(19.75f, 2.f, 20.f, 4.25f);
+        s.box(10.f, 2.25f, 10.25f, 4.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 20.f, 4.25f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+        ensure("one corridor", r.at(5.f, 3.f) && r.at(5.f, 3.f) == r.at(15.f, 3.f));
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<45>()
+    {
+        set_test_name("a beam from a wall's end to a post is no doorway: a jamb's wall runs on past it");
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 9.75f, 18.f, 10.f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(17.75f, 2.f, 18.f, 10.f);
+        s.wall(10.f, 2.25f, 10.25f, 5.f);
+        s.wall(9.9f, 7.f, 10.35f, 7.4f);
+        s.box(10.f, 5.f, 10.25f, 7.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 10.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+        // The same gap between two walls is one.
+        s.wall(10.f, 7.4f, 10.25f, 9.75f);
+        const Result walled = run(s.input(1));
+        ensure_equals("a doorway's cut", walled.mRooms->mApart.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<46>()
+    {
+        set_test_name("an arch between open yards, or a lintel higher than a door's, cuts nothing");
+        // The looped rooms unroofed: open sky either side of the doorway.
+        Scene yards = loopedRooms();
+        yards.mSolids.pop_back();
+        const Result open = run(yards.input(1));
+        ensure("no cut under open sky", open.mRooms->mApart.empty());
+        // Roofed, with the lintel 3.75 m up under a 4.5 m ceiling.
+        Scene hall = loopedRooms(3.75f);
+        hall.mSolids.pop_back();
+        for (Solid& w : hall.mSolids)
+        {
+            w.mZ1 = std::max(w.mZ1, 4.5f);
+        }
+        hall.box(2.f, 2.f, 18.f, 14.25f, 4.5f, 4.75f);
+        const Result high = run(hall.input(1));
+        ensure("no cut under a lintel that high", high.mRooms->mApart.empty());
+        ensure("the door-high one is cut", run(loopedRooms().input(1)).mRooms->mApart.size() == 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<47>()
+    {
+        set_test_name("a ceiling sloping across a doorway is no lintel to cut at");
+        Scene s = loopedRooms();
+        s.mSolids.erase(std::find_if(s.mSolids.begin(), s.mSolids.end(), [](const Solid& w) { return w.mZ0 == 2.2f; }));
+        for (S32 k = 0; k < 4; ++k)
+        {
+            s.box(10.f, 5.f + 0.5f * k, 10.25f, 5.5f + 0.5f * k, 2.f + 0.2f * k, 3.f, false);
+        }
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+    }
+
     template<> template<>
     void sknavrooms_object::test<30>()
     {

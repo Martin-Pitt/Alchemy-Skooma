@@ -59,6 +59,10 @@ namespace
     constexpr F32 SCORE_REACH_M = 2.5f;     ///< a cut's probes land no further than this from it
     constexpr F32 JAMB_TOP_M = 1.5f;        ///< a jamb stands solid from a step above the floor to this
     constexpr S32 APERTURE_ANGLES = 18;     ///< chords tried within 45 degrees either side of a cut
+    constexpr F32 APERTURE_MAX_M = 3.f;     ///< a doorway cut from its lintel is no wider than this
+    constexpr F32 APERTURE_HEAD_M = 3.5f;   ///< and its lintel no higher than this over its sill
+    constexpr F32 JAMB_WALL_M = 0.75f;      ///< a jamb's wall is thinner than twice this across the cut
+    constexpr F32 JAMB_RUN_M = 1.f;         ///< and runs on this far along it past the jamb, or the jamb is a post
     constexpr F32 MEMO_BLOCK_SHARE = 0.5f;  ///< a pass cutting more of its mesh's tiles than this reads no memo
 
     enum Stage : S32
@@ -494,7 +498,7 @@ namespace sknav
 
     size_t RoomsProduct::bytes() const
     {
-        size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal);
+        size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal) + mApart.capacity() * sizeof(SeedLink);
         for (const Space& s : mSpaces)
         {
             n += sizeof(Space) + s.mPortals.capacity() * sizeof(U32) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
@@ -633,10 +637,27 @@ namespace sknav
         void cutSeeds(size_t b);
         void wallEnds();
         U32 mWallEndCuts = 0;
+        void apertureCuts();
+        bool jambEnds(const Run& r) const;
+        /// The first floor off a cut on one side whose ceiling clears its lintel.
+        bool pastLintel(const Run& r, F32 sgn, Probe& out) const;
+        /// How far along its normal a cut sits from the middle of the wall its jambs end.
+        F32 wallMiddle(const Run& r) const;
+        U32 mApertureCuts = 0;
+        std::vector<Run> mForced;       ///< aperture cuts, whose sides no merge joins
+        /// The floor cell of a work tile at a point, within a climb of floor, or NONE.
+        U32 cellAt(const LLVector2& q, S32 floor) const;
+        /// Sever the links crossing a cut, noting each for undo when asked.
+        void sever(const Run& r, std::vector<std::pair<U32, U32>>* undo);
         void number();
         void unite(U32 a, U32 b);
         void edges();
         void absorbFragments();
+        void collectApart();
+        bool keptApart(UnionFind& uf, U32 u, U32 v) const;
+        /// Drop the cuts that keep two regions apart.
+        void releaseApart(UnionFind& uf, U32 u, U32 v);
+        std::vector<std::pair<U32, U32>> mApart;   ///< seeds either side of an aperture cut
         void merge();
         bool demoteFlatFlights(F32 min_rise);
         std::vector<Run> runs(const std::vector<U32>& edge_ids, U32 ru) const;
@@ -1210,61 +1231,345 @@ namespace sknav
             }
             used[pq.second.first] = used[pq.second.second] = true;
             ++mWallEndCuts;
-            // Sever the links crossing the segment, from the cells along it.
-            std::vector<U32> near_cells;
-            for (F32 t = 0.f; t <= r.mWidth; t += mCell * 0.5f)
+            sever(r, nullptr);
+        }
+    }
+
+    U32 SpacesPass::State::cellAt(const LLVector2& q, S32 floor) const
+    {
+        TileKey k;
+        k.mX = tileIndex(q.mV[VX]);
+        k.mY = tileIndex(q.mV[VY]);
+        const U32 it = tileAt(k);
+        if (it == NONE || !mTiles[it].mWork)
+        {
+            return NONE;
+        }
+        const TileInfo& ti = mTiles[it];
+        const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
+        const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
+        if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
+        {
+            return NONE;
+        }
+        const S32 col = ix + iy * ti.mAir->mWidth;
+        for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+        {
+            if (std::abs(mCells[c].mFloor - floor) <= mClimb)
             {
-                for (F32 side : { -1.f, 0.f, 1.f })
-                {
-                    const LLVector2 q = r.mA + r.mD * t + r.mN * (side * mCell);
-                    TileKey k;
-                    k.mX = tileIndex(q.mV[VX]);
-                    k.mY = tileIndex(q.mV[VY]);
-                    const U32 it = tileAt(k);
-                    if (it == NONE || !mTiles[it].mWork)
-                    {
-                        continue;
-                    }
-                    const TileInfo& ti = mTiles[it];
-                    const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
-                    const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
-                    if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
-                    {
-                        continue;
-                    }
-                    const S32 col = ix + iy * ti.mAir->mWidth;
-                    for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
-                    {
-                        if (std::abs(mCells[c].mFloor - r.mFloor) <= mClimb)
-                        {
-                            near_cells.push_back(c);
-                        }
-                    }
-                }
+                return c;
             }
-            for (U32 c : near_cells)
+        }
+        return NONE;
+    }
+
+    void SpacesPass::State::sever(const Run& r, std::vector<std::pair<U32, U32>>* undo)
+    {
+        // Sever the links crossing the segment, from the cells along it.
+        std::vector<U32> near_cells;
+        for (F32 t = 0.f; t <= r.mWidth; t += mCell * 0.5f)
+        {
+            for (F32 side : { -1.f, 0.f, 1.f })
             {
-                const Cell& cell = mCells[c];
-                const TileInfo& ti = mTiles[cell.mTile];
-                const LLVector2 pc(cellX(ti, cell.mX), cellY(ti, cell.mY));
-                for (S32 d = 0; d < 4; ++d)
+                const LLVector2 q = r.mA + r.mD * t + r.mN * (side * mCell);
+                TileKey k;
+                k.mX = tileIndex(q.mV[VX]);
+                k.mY = tileIndex(q.mV[VY]);
+                const U32 it = tileAt(k);
+                if (it == NONE || !mTiles[it].mWork)
                 {
-                    const U32 o = mLink[c * 4 + d];
-                    if (o == NONE)
+                    continue;
+                }
+                const TileInfo& ti = mTiles[it];
+                const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
+                const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
+                if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
+                {
+                    continue;
+                }
+                const S32 col = ix + iy * ti.mAir->mWidth;
+                for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+                {
+                    if (std::abs(mCells[c].mFloor - r.mFloor) <= mClimb)
                     {
-                        continue;
-                    }
-                    const LLVector2 po(pc.mV[VX] + DX[d] * mCell, pc.mV[VY] + DY[d] * mCell);
-                    const F32 sc = (pc - r.mA) * r.mN, so = (po - r.mA) * r.mN;
-                    const F32 along = ((pc + po) * 0.5f - r.mA) * r.mD;
-                    if ((sc < 0.f) != (so < 0.f) && along >= 0.f && along <= r.mWidth)
-                    {
-                        mLink[c * 4 + d] = NONE;
-                        mLink[o * 4 + (d ^ 1)] = NONE;
+                        near_cells.push_back(c);
                     }
                 }
             }
         }
+        for (U32 c : near_cells)
+        {
+            const Cell& cell = mCells[c];
+            const TileInfo& ti = mTiles[cell.mTile];
+            const LLVector2 pc(cellX(ti, cell.mX), cellY(ti, cell.mY));
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const U32 o = mLink[c * 4 + d];
+                if (o == NONE)
+                {
+                    continue;
+                }
+                const LLVector2 po(pc.mV[VX] + DX[d] * mCell, pc.mV[VY] + DY[d] * mCell);
+                const F32 sc = (pc - r.mA) * r.mN, so = (po - r.mA) * r.mN;
+                const F32 along = ((pc + po) * 0.5f - r.mA) * r.mD;
+                if ((sc < 0.f) != (so < 0.f) && along >= 0.f && along <= r.mWidth)
+                {
+                    if (undo)
+                    {
+                        undo->emplace_back(c * 4 + d, o);
+                        undo->emplace_back(o * 4 + (d ^ 1), c);
+                    }
+                    mLink[c * 4 + d] = NONE;
+                    mLink[o * 4 + (d ^ 1)] = NONE;
+                }
+            }
+        }
+    }
+
+    void SpacesPass::State::apertureCuts()
+    {
+        // A doorway whose rooms the watershed sees as one basin makes no
+        // saddle to cut at: find it from below, where the ceiling drops to a
+        // lintel, take the aperture between its jambs, and sever the floor
+        // there when a lintel spans it, floor runs through it, its jambs are
+        // the ends of a wall across it rather than the sides of a corridor
+        // along it, and each side then holds an avatar's floor.
+        const SpaceParams& p = params();
+        const S32 drop = static_cast<S32>(std::lround(p.mLintelDropM / mUnit));
+        const F32 grid = 0.5f;
+        std::unordered_set<U64> tried;
+        std::vector<LLVector2> cuts;
+        std::vector<std::pair<U32, U32>> undo;
+        std::vector<U32> stack;
+        std::unordered_set<U32> seen;
+        const F32 passage = 2.f * p.mAgentRadiusM;
+        const U32 min_cells = static_cast<U32>(std::ceil(p.mAvatarAreaM2 / (mCell * mCell)));
+        // Floor reached from a point without crossing a severed link, up to what an avatar needs.
+        auto holds = [&](const LLVector2& at, S32 floor) {
+            const U32 start = cellAt(at, floor);
+            if (start == NONE || !mAvatar[start])
+            {
+                return false;
+            }
+            seen.clear();
+            seen.insert(start);
+            stack.assign(1, start);
+            while (!stack.empty() && seen.size() < min_cells)
+            {
+                const U32 k = stack.back();
+                stack.pop_back();
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    const U32 o = mLink[k * 4 + d];
+                    if (o != NONE && mAvatar[o] && seen.insert(o).second)
+                    {
+                        stack.push_back(o);
+                    }
+                }
+            }
+            return seen.size() >= min_cells;
+        };
+        const size_t n = mCells.size();
+        for (U32 c = 0; c < n; ++c)
+        {
+            const Cell& cell = mCells[c];
+            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP)
+            {
+                continue;
+            }
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const U32 o = mLink[c * 4 + d];
+                if (o == NONE || mCells[o].mCeil < cell.mCeil + drop)
+                {
+                    continue;
+                }
+                const TileInfo& ti = mTiles[cell.mTile];
+                const LLVector2 at(cellX(ti, cell.mX), cellY(ti, cell.mY));
+                const U64 key = (static_cast<U64>(static_cast<U32>(static_cast<S32>(std::floor(at.mV[VX] / grid)))) << 40) ^
+                                (static_cast<U64>(static_cast<U32>(static_cast<S32>(std::floor(at.mV[VY] / grid)))) << 20) ^
+                                (static_cast<U64>(static_cast<U32>(cell.mFloor / (mClimb + 1))) << 1) ^ static_cast<U64>(d >> 1);
+                if (!tried.insert(key).second)
+                {
+                    continue;
+                }
+                // The edge of the lintel need not lie between its jambs: try
+                // the chord from each step back under it, and keep the
+                // shortest a doorway's jambs end.
+                Run probe_run;
+                probe_run.mD.set(static_cast<F32>(-DY[d]), static_cast<F32>(DX[d]));
+                probe_run.mFloor = cell.mFloor;
+                const LLVector2 back(static_cast<F32>(-DX[d]), static_cast<F32>(-DY[d]));
+                Run r;
+                r.mWidth = 1e30f;
+                Probe under;
+                for (F32 t = 0.f; t <= JAMB_WALL_M + 1e-3f; t += mCell)
+                {
+                    probe_run.mC = at + back * t;
+                    if (!probe(probe_run.mC.mV[VX], probe_run.mC.mV[VY], cell.mFloor, mClimb, under) || under.mCeil >= cell.mCeil + drop)
+                    {
+                        break;
+                    }
+                    Run q;
+                    if (!aperture(probe_run, q.mA, q.mB))
+                    {
+                        continue;
+                    }
+                    q.mD = q.mB - q.mA;
+                    q.mWidth = q.mD.normVec();
+                    q.mN.set(-q.mD.mV[VY], q.mD.mV[VX]);
+                    q.mC = (q.mA + q.mB) * 0.5f;
+                    q.mFloor = cell.mFloor;
+                    if (q.mWidth >= passage && q.mWidth <= APERTURE_MAX_M && q.mWidth < r.mWidth && jambEnds(q))
+                    {
+                        r = q;
+                    }
+                }
+                bool near_cut = r.mWidth > APERTURE_MAX_M;
+                for (const LLVector2& q : cuts)
+                {
+                    near_cut = near_cut || dist_vec(q, r.mC) < APERTURE_MAX_M * 0.5f;
+                }
+                if (near_cut)
+                {
+                    continue;
+                }
+                r.mKey = mix(mix(mix(SEED, 0x41505254ll), static_cast<U64>(std::lround(r.mC.mV[VX] * 8.f))), static_cast<U64>(std::lround(r.mC.mV[VY] * 8.f)));
+                // Floor all the way across, under a lintel as level as a door's: a sloping ceiling is no lintel.
+                bool open = true;
+                Probe pr;
+                S32 ceil_lo = INT_MAX, ceil_hi = INT_MIN;
+                for (F32 t = mCell; t < r.mWidth - mCell * 0.5f && open; t += mCell)
+                {
+                    const LLVector2 q = r.mA + r.mD * t;
+                    open = probe(q.mV[VX], q.mV[VY], r.mFloor, mClimb, pr);
+                    ceil_lo = std::min(ceil_lo, pr.mCeil);
+                    ceil_hi = std::max(ceil_hi, pr.mCeil);
+                }
+                if (!open || ceil_hi - ceil_lo > drop)
+                {
+                    continue;
+                }
+                const Scored s = score(r);
+                if (!(s.mCues & CUE_LINTEL) || !(s.mCues & CUE_JAMBS) || s.mDoor >= 0 || s.mHead - r.mFloor * mUnit > APERTURE_HEAD_M)
+                {
+                    continue;
+                }
+                // A doorway leads in under a roof: an arch between two stretches of open sky parts nothing.
+                Probe in_a, in_b;
+                if (!pastLintel(r, 1.f, in_a) || !pastLintel(r, -1.f, in_b) || (in_a.mCeil >= OPEN_TOP && in_b.mCeil >= OPEN_TOP))
+                {
+                    continue;
+                }
+                // Cut down the middle of the wall, not along a face of it, so the run cut there stands under the lintel.
+                const LLVector2 shift = r.mN * wallMiddle(r);
+                Probe mid;
+                if (probe(r.mC.mV[VX] + shift.mV[VX], r.mC.mV[VY] + shift.mV[VY], r.mFloor, mClimb, mid) && mid.mCeil + drop <= std::min(in_a.mCeil, in_b.mCeil))
+                {
+                    r.mA += shift;
+                    r.mB += shift;
+                    r.mC += shift;
+                }
+                undo.clear();
+                sever(r, &undo);
+                const F32 side = 0.5f;
+                if (undo.empty() || !holds(r.mC + r.mN * side, r.mFloor) || !holds(r.mC - r.mN * side, r.mFloor))
+                {
+                    for (const auto& u : undo)
+                    {
+                        mLink[u.first] = u.second;
+                    }
+                    continue;
+                }
+                cuts.push_back(r.mC);
+                mForced.push_back(r);
+                ++mApertureCuts;
+            }
+        }
+    }
+
+    bool SpacesPass::State::pastLintel(const Run& r, F32 sgn, Probe& out) const
+    {
+        // The first floor off the cut, on one side, whose ceiling clears the lintel.
+        Probe at;
+        if (!probe(r.mC.mV[VX], r.mC.mV[VY], r.mFloor, mClimb, at))
+        {
+            return false;
+        }
+        const S32 drop = static_cast<S32>(std::lround(params().mLintelDropM / mUnit));
+        for (F32 t = mCell; t <= SCORE_REACH_M * 0.5f; t += mCell)
+        {
+            const LLVector2 q = r.mC + r.mN * (sgn * t);
+            if (probe(q.mV[VX], q.mV[VY], r.mFloor, mClimb, out) && out.mCeil >= at.mCeil + drop)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    F32 SpacesPass::State::wallMiddle(const Run& r) const
+    {
+        // Just inside each jamb, the wall's faces either side of the cut.
+        const S32 lo = r.mFloor + mClimb + 1, hi = r.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        F32 sum = 0.f;
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const LLVector2 j = k == 0 ? r.mA - r.mD * (mCell * 1.5f) : r.mB + r.mD * (mCell * 1.5f);
+            F32 face[2] = { 0.f, 0.f };
+            for (S32 side = 0; side < 2; ++side)
+            {
+                const F32 sgn = side == 0 ? 1.f : -1.f;
+                for (F32 t = mCell * 0.25f; t <= JAMB_WALL_M; t += mCell * 0.25f)
+                {
+                    face[side] = t;
+                    const LLVector2 q = j + r.mN * (sgn * t);
+                    if (!solidAt(q.mV[VX], q.mV[VY], lo, hi))
+                    {
+                        break;
+                    }
+                }
+            }
+            sum += 0.5f * (face[0] - face[1]);
+        }
+        return 0.5f * sum;
+    }
+
+    bool SpacesPass::State::jambEnds(const Run& r) const
+    {
+        // A jamb ends a wall that runs across the cut: just inside it, solid,
+        // and a step off the wall to one side at least, air at a door's
+        // height. A corridor's walls run on along both sides of a beam.
+        const S32 lo = r.mFloor + mClimb + 1, hi = r.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const LLVector2 out = k == 0 ? -r.mD : r.mD;
+            bool ends = false;
+            for (const F32 depth : { 1.f, 1.5f })
+            {
+                const LLVector2 j = (k == 0 ? r.mA : r.mB) + out * (mCell * depth);
+                if (!solidAt(j.mV[VX], j.mV[VY], lo, hi))
+                {
+                    continue;
+                }
+                for (F32 sgn : { 1.f, -1.f })
+                {
+                    const LLVector2 q = j + r.mN * (sgn * JAMB_WALL_M);
+                    ends = ends || !solidAt(q.mV[VX], q.mV[VY], lo, hi);
+                }
+            }
+            // And the wall runs on past the jamb along the cut, or it is a post.
+            for (F32 t = mCell * 1.5f; ends && t <= JAMB_RUN_M + 1e-3f; t += mCell)
+            {
+                const LLVector2 j = (k == 0 ? r.mA : r.mB) + out * t;
+                ends = solidAt(j.mV[VX], j.mV[VY], lo, hi);
+            }
+            if (!ends)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool SpacesPass::State::recut()
@@ -1324,6 +1629,7 @@ namespace sknav
             ti.mSeedLabels.clear();
         }
         mShadow[0].clear();
+        mForced.clear();
         mLabelBase = 0;
         mBatch = 0;
         return true;
@@ -1643,6 +1949,7 @@ namespace sknav
         }
 
         wallEnds();
+        apertureCuts();
         // The watershed over the clearance, off flights: descend its levels,
         // grow the regions there are into what each level exposes, then seed
         // new ones from what is left.
@@ -2739,6 +3046,76 @@ namespace sknav
         return changed;
     }
 
+    void SpacesPass::State::collectApart()
+    {
+        // An aperture cut keeps its sides apart: whatever else they meet
+        // through, the regions either side never merge into one.
+        mApart.clear();
+        for (const Run& r : mForced)
+        {
+            U32 sides[2];
+            S32 found = 0;
+            // Each side's seed is the first past the lintel, out of the cut's own strip.
+            for (const F32 sgn : { 1.f, -1.f })
+            {
+                Probe pr;
+                if (pastLintel(r, sgn, pr) && mTiles[pr.mTile].mRooms.mSeeds[pr.mGap])
+                {
+                    sides[found++] = mTiles[pr.mTile].mSeedBase + mTiles[pr.mTile].mRooms.mSeeds[pr.mGap] - 1;
+                }
+            }
+            if (found == 2 && mRegions.find(sides[0]) != mRegions.find(sides[1]))
+            {
+                mApart.emplace_back(sides[0], sides[1]);
+            }
+        }
+        // A pass that cuts no tile again keeps the cuts an earlier one made there.
+        if (mInput->mPrevious)
+        {
+            for (const SeedLink& l : mInput->mPrevious->mApart)
+            {
+                const U32 a = tileAt(l.mA), b = tileAt(l.mB);
+                if (a == NONE || b == NONE || mTiles[a].mDirty || mTiles[b].mDirty || l.mSeedA > mTiles[a].mRooms.mStats.size() ||
+                    l.mSeedB > mTiles[b].mRooms.mStats.size())
+                {
+                    continue;
+                }
+                const U32 sa = mTiles[a].mSeedBase + l.mSeedA - 1, sb = mTiles[b].mSeedBase + l.mSeedB - 1;
+                if (mRegions.find(sa) != mRegions.find(sb))
+                {
+                    mApart.emplace_back(sa, sb);
+                }
+            }
+        }
+    }
+
+    bool SpacesPass::State::keptApart(UnionFind& uf, U32 u, U32 v) const
+    {
+        u = uf.find(u);
+        v = uf.find(v);
+        for (const auto& pq : mApart)
+        {
+            const U32 a = uf.find(pq.first), b = uf.find(pq.second);
+            if ((a == u && b == v) || (a == v && b == u))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void SpacesPass::State::releaseApart(UnionFind& uf, U32 u, U32 v)
+    {
+        u = uf.find(u);
+        v = uf.find(v);
+        mApart.erase(std::remove_if(mApart.begin(), mApart.end(),
+                                    [&](const std::pair<U32, U32>& pq) {
+                                        const U32 a = uf.find(pq.first), b = uf.find(pq.second);
+                                        return (a == u && b == v) || (a == v && b == u);
+                                    }),
+                     mApart.end());
+    }
+
     void SpacesPass::State::absorbFragments()
     {
         // A region smaller than an avatar's floor is a fragment of a cut, not
@@ -2787,14 +3164,28 @@ namespace sknav
                 continue;
             }
             auto& mine = nb[r];
-            U32 best = NONE, best_w = 0;
+            U32 best = NONE, best_w = 0, held = NONE, held_w = 0;
             for (const auto& [o, w] : mine)
             {
-                if (w > best_w)
+                if (keptApart(mRegions, r, o))
+                {
+                    if (w > held_w)
+                    {
+                        held = o;
+                        held_w = w;
+                    }
+                }
+                else if (w > best_w)
                 {
                     best = o;
                     best_w = w;
                 }
+            }
+            if (best == NONE && held != NONE)
+            {
+                // A side too small to be a space of its own: the cut it was held by goes.
+                releaseApart(mRegions, r, held);
+                best = held;
             }
             if (best == NONE)
             {
@@ -2873,7 +3264,9 @@ namespace sknav
             }
         }
         std::vector<std::unordered_map<U64, S32>>().swap(mShadow);
+        collectApart();
         absorbFragments();
+        auto kept_apart = [this](UnionFind& uf, U32 u, U32 v) { return keptApart(uf, u, v); };
         const F32 passage = 2.f * params().mAgentRadiusM;
         const U32 total = static_cast<U32>(mSeeds.size());
         auto makePortal = [this](const Run& r, const Scored& s, PortalKind kind, U32 u, U32 v) {
@@ -3087,7 +3480,19 @@ namespace sknav
                         any = true;
                     }
                 }
-                if (!any && wide && round_uf.unite(g.mU, g.mV))
+                const bool held = !any && wide && kept_apart(round_uf, g.mU, g.mV);
+                if (held)
+                {
+                    // Held apart by a cut elsewhere: where else they meet is an opening.
+                    for (const Run& r : groupRuns(g.mU))
+                    {
+                        if (r.mWidth >= passage)
+                        {
+                            makePortal(r, score(r), PortalKind::OPENING, g.mU, g.mV);
+                        }
+                    }
+                }
+                if (!held && !any && wide && round_uf.unite(g.mU, g.mV))
                 {
                     ++merged;
                 }
@@ -3108,6 +3513,15 @@ namespace sknav
                 round = 0;
             }
             mRegions = round_uf;
+        }
+        for (const auto& pq : mApart)
+        {
+            SeedLink l;
+            l.mA = mTiles[mSeeds[pq.first].mTile].mKey;
+            l.mSeedA = static_cast<U16>(mSeeds[pq.first].mLocal + 1);
+            l.mB = mTiles[mSeeds[pq.second].mTile].mKey;
+            l.mSeedB = static_cast<U16>(mSeeds[pq.second].mLocal + 1);
+            mProduct->mApart.push_back(l);
         }
         // A flight that touches no floor is no stair: drops, low headroom or
         // steps past climb part it from every floor, so no contact can link it.
