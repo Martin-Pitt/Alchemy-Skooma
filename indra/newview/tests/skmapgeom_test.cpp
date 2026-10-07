@@ -1351,9 +1351,21 @@ namespace tut
     {
         skmap::ScenePtr s = wallLine({ { -3.f, 0.f, 0.f, 3.f }, { 0.f, 3.f, 0.f, 0.9f }, { 3.f, 6.f, 0.f, 3.f }, { 0.f, 3.f, 2.2f, 3.f } }, true);
         ensure("one layer", s->mOrder.size() == 1);
-        ensure_equals("one half entry", s->mSectionReport.size(), static_cast<size_t>(1));
-        const skmap::SectionReport& r = s->mSectionReport[0];
+        std::vector<const skmap::SectionReport*> half, full;
+        for (const skmap::SectionReport& e : s->mSectionReport)
+        {
+            (e.mFull ? full : half).push_back(&e);
+        }
+        ensure_equals("one half entry", half.size(), static_cast<size_t>(1));
+        ensure_equals("two full entries", full.size(), static_cast<size_t>(2));
+        for (const skmap::SectionReport* e : full)
+        {
+            ensure("a side wall", e->mPart == partId(1) || e->mPart == partId(3));
+            ensure_approximately_equals_range("full from the floor's high plane", e->mHigh, 1.4375f, 1e-4f);
+        }
+        const skmap::SectionReport& r = *half[0];
         ensure("the sill", r.mPart == partId(2));
+        ensure_approximately_equals_range("half from the floor's low plane", r.mLow, 0.4375f, 1e-4f);
         ensure_approximately_equals_range("lintel", r.mLintel, 2.2f, 0.01f);
         ensure_approximately_equals_range("thickness", r.mThickness, 0.2727f, 0.001f);
         ensure_approximately_equals_range("length", r.mLength, 3.f, 0.001f);
@@ -1371,7 +1383,8 @@ namespace tut
         skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
         in.mSectionReport = true;
         skmap::ScenePtr s = skmap::buildScene(in);
-        ensure_equals("one half entry", s->mSectionReport.size(), static_cast<size_t>(1));
+        ensure_equals("one entry", s->mSectionReport.size(), static_cast<size_t>(1));
+        ensure("it is half", !s->mSectionReport[0].mFull);
         ensure_equals("no lintel", s->mSectionReport[0].mLintel, -1.f);
         ensure_approximately_equals_range("thickness", s->mSectionReport[0].mThickness, 0.1852f, 0.001f);
         ensure_equals("no opening", s->mSectionStats.mHalfOpenings, 0u);

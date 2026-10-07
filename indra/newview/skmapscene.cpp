@@ -29,6 +29,8 @@
 #include "alobjectproperties.h"
 #include "llagent.h"
 #include "llcallbacklist.h"
+#include "lldate.h"
+#include "lldir.h"
 #include "llgroupmgr.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
@@ -467,6 +469,32 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     logSection(*scene);
 }
 
+namespace
+{
+    /// A JSON string literal: quotes, backslashes and control characters escaped.
+    std::string jsonString(const std::string& in)
+    {
+        std::string out = "\"";
+        for (const char ch : in)
+        {
+            if (ch == '"' || ch == '\\')
+            {
+                out += '\\';
+                out += ch;
+            }
+            else if (static_cast<unsigned char>(ch) < 0x20)
+            {
+                out += llformat("\\u%04x", static_cast<unsigned>(ch));
+            }
+            else
+            {
+                out += ch;
+            }
+        }
+        return out + "\"";
+    }
+}
+
 void SKMapScene::logSection(const skmap::Scene& scene)
 {
     static LLCachedControl<bool> section_log(gSavedSettings, "SKMapSectionLog", false);
@@ -474,55 +502,86 @@ void SKMapScene::logSection(const skmap::Scene& scene)
     {
         return;
     }
-    // Logged again only when the report itself changes: its parts and their boxes to the decimetre.
+    if (!mSectionLog)
+    {
+        const std::string name = "sk-section-" + LLDate::now().toHTTPDateString(std::string("%Y%m%dT%H%M%SZ")) + ".jsonl";
+        const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, name);
+        mSectionLog = std::make_unique<llofstream>(path.c_str(), std::ios::out | std::ios::app);
+        if (mSectionLog->is_open())
+        {
+            LL_INFOS("SKMapSection") << "writing the section log to " << path << LL_ENDL;
+        }
+        else
+        {
+            LL_WARNS("SKMapSection") << "cannot open the section log " << path << LL_ENDL;
+        }
+    }
+    if (!mSectionLog->is_open())
+    {
+        return;
+    }
+    // Pieces are written again only when the report changes: its parts, classes, lintels and boxes to the decimetre.
     U64 hash = sknav::SEED;
     auto dm = [](F64 metres) { return static_cast<U64>(std::llround(metres * 10.0)); };
     for (const skmap::SectionReport& r : scene.mSectionReport)
     {
         hash = sknav::mix(hash, r.mPart.getCRC32());
+        hash = sknav::mix(hash, (r.mFull ? 1u : 0u) | (r.mLintel >= 0.f ? 2u : 0u));
         for (const LLVector2& p : { r.mMin, r.mMax })
         {
             hash = sknav::mix(hash, dm(scene.mOrigin.mdV[VX] + p.mV[VX]));
             hash = sknav::mix(hash, dm(scene.mOrigin.mdV[VY] + p.mV[VY]));
         }
     }
-    if (hash == mSectionLogged)
-    {
-        return;
-    }
+    const bool changed = hash != mSectionLogged;
     mSectionLogged = hash;
+
+    // Every scene gets its line, so cold and warm build costs can both be read back.
     const skmap::SectionStats& st = scene.mSectionStats;
-    LL_INFOS("SKMapSection") << "section " << st.mMs << " ms, " << st.mRecords << " records, " << st.mPlanes << " planes, " << st.mPieces
-                             << " pieces, " << st.mSlices << " sliced, " << st.mCacheHits << " cached; full " << st.mFullRecords << ", half "
-                             << st.mHalfRecords << " (" << st.mHalfOpenings << " under a lintel), islands " << st.mIslands << LL_ENDL;
-    // The half-cover entries near the agent, nearest first.
-    constexpr F64 NEAR_M = 32.0;
-    constexpr size_t MAX_LINES = 64;
     const LLVector3d agent = gAgent.getPositionGlobal();
-    std::vector<std::pair<F64, const skmap::SectionReport*>> nearby;
-    for (const skmap::SectionReport& r : scene.mSectionReport)
+    const LLViewerRegion* region = gAgent.getRegion();
+    llofstream& out = *mSectionLog;
+    out << llformat("{\"type\":\"scene\",\"utc\":%s,\"region\":%s,\"handle\":%llu,\"agent\":[%.2f,%.2f,%.2f],\"ms\":%.3f,\"records\":%u,"
+                    "\"planes\":%u,\"slices\":%u,\"hits\":%u,\"pieces\":%u,\"full\":%u,\"half\":%u,\"openings\":%u,\"islands\":%u,"
+                    "\"changed\":%s}",
+                    jsonString(LLDate::now().asString()).c_str(), jsonString(region ? region->getName() : std::string()).c_str(),
+                    static_cast<unsigned long long>(region ? region->getHandle() : 0), agent.mdV[VX], agent.mdV[VY], agent.mdV[VZ], st.mMs,
+                    st.mRecords, st.mPlanes, st.mSlices, st.mCacheHits, st.mPieces, st.mFullRecords, st.mHalfRecords, st.mHalfOpenings,
+                    st.mIslands, changed ? "true" : "false")
+        << '\n';
+    if (changed)
     {
-        const F64 x = scene.mOrigin.mdV[VX] + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]);
-        const F64 y = scene.mOrigin.mdV[VY] + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]);
-        const F64 d = std::hypot(x - agent.mdV[VX], y - agent.mdV[VY]);
-        if (d <= NEAR_M)
+        // The entries near the agent, nearest first.
+        constexpr F64 NEAR_M = 32.0;
+        constexpr size_t MAX_ENTRIES = 256;
+        std::vector<std::pair<F64, const skmap::SectionReport*>> nearby;
+        for (const skmap::SectionReport& r : scene.mSectionReport)
         {
-            nearby.emplace_back(d, &r);
+            const F64 x = scene.mOrigin.mdV[VX] + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]);
+            const F64 y = scene.mOrigin.mdV[VY] + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]);
+            const F64 d = std::hypot(x - agent.mdV[VX], y - agent.mdV[VY]);
+            if (d <= NEAR_M)
+            {
+                nearby.emplace_back(d, &r);
+            }
+        }
+        std::stable_sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        const F64 ox = scene.mOrigin.mdV[VX], oy = scene.mOrigin.mdV[VY];
+        for (size_t i = 0; i < nearby.size() && i < MAX_ENTRIES; ++i)
+        {
+            const skmap::SectionReport& r = *nearby[i].second;
+            const std::string lintel = r.mLintel >= 0.f ? llformat("%.3f", r.mLintel) : std::string("null");
+            out << llformat("{\"type\":\"piece\",\"class\":\"%s\",\"part\":\"%s\",\"root\":\"%s\",\"shape\":%u,\"prov\":%u,\"solid\":%s,"
+                            "\"island\":%s,\"floor\":%.4f,\"low\":%.4f,\"high\":%.4f,\"top\":%.3f,\"thick\":%.4f,\"long\":%.3f,\"lintel\":%s,"
+                            "\"min\":[%.2f,%.2f],\"max\":[%.2f,%.2f],\"at\":[%.2f,%.2f]}",
+                            r.mFull ? "full" : "half", r.mPart.asString().c_str(), r.mRoot.asString().c_str(), r.mShape, r.mProvenance,
+                            r.mSolid ? "true" : "false", r.mIsland ? "true" : "false", r.mFloor, r.mLow, r.mHigh, r.mRecordTop, r.mThickness,
+                            r.mLength, lintel.c_str(), ox + r.mMin.mV[VX], oy + r.mMin.mV[VY], ox + r.mMax.mV[VX], oy + r.mMax.mV[VY],
+                            ox + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]), oy + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]))
+                << '\n';
         }
     }
-    std::stable_sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    for (size_t i = 0; i < nearby.size() && i < MAX_LINES; ++i)
-    {
-        const skmap::SectionReport& r = *nearby[i].second;
-        const F64 x = scene.mOrigin.mdV[VX] + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]);
-        const F64 y = scene.mOrigin.mdV[VY] + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]);
-        const std::string lintel = r.mLintel >= 0.f ? llformat("%.2f", r.mLintel) : std::string("none");
-        LL_INFOS("SKMapSection") << llformat("half: part %s root %s shape %u prov %u solid %d island %d floor %.3f cuts %.4f/%.4f top %.2f "
-                                             "thick %.3f long %.2f lintel %s at %.1f,%.1f",
-                                             r.mPart.asString().c_str(), r.mRoot.asString().c_str(), r.mShape, r.mProvenance, r.mSolid ? 1 : 0,
-                                             r.mIsland ? 1 : 0, r.mFloor, r.mLow, r.mHigh, r.mRecordTop, r.mThickness, r.mLength, lintel.c_str(), x, y)
-                                 << LL_ENDL;
-    }
+    out.flush();
 }
 
 void SKMapScene::updateAgentFloor()

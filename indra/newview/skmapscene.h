@@ -25,6 +25,7 @@
 #ifndef SK_MAPSCENE_H
 #define SK_MAPSCENE_H
 
+#include "llfile.h"
 #include "llframetimer.h"
 #include "llsingleton.h"
 #include "threadpool.h"
@@ -119,7 +120,7 @@ private:
     };
     Trigger currentTrigger() const;
 
-    /// With SKMapSectionLog on, the scene's half-cover report near the agent, once per change.
+    /// With SKMapSectionLog on, a line per scene and the report near the agent when it changed, to sk-section-*.jsonl.
     void logSection(const skmap::Scene& scene);
 
     LL::WorkQueue::ptr_t queue();
@@ -204,6 +205,7 @@ private:
     std::unique_ptr<LL::ThreadPool> mPool;
     /// The section's slices, made on the first post and used only on the worker.
     std::shared_ptr<skmap::SectionCache> mSectionCache;
+    std::unique_ptr<llofstream> mSectionLog;    ///< opened on the first scene logged
     U64 mSectionLogged = 0;                 ///< the hash of the last report logged
     std::shared_ptr<bool> mAlive;
     U32 mGeneration = 0;

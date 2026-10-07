@@ -1205,12 +1205,6 @@ void SKNetMap::drawReadout()
     lines.push_back(llformat("draw %.2f ms, cells %u, queue %u, uploads %u, cache %.1f MB", mDrawMs, stats.mCells, stats.mQueued,
                              stats.mUploads, stats.mCacheMB));
     lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
-    if (stats.mSection)
-    {
-        lines.push_back(llformat("section %.1f ms, %u planes, %u pieces, %u sliced, %u cached; full %u, half %u (%u under a lintel), islands %u",
-                                 stats.mSectionMs, stats.mPlanes, stats.mPieces, stats.mSlices, stats.mCacheHits, stats.mFullRecords,
-                                 stats.mHalfRecords, stats.mHalfOpenings, stats.mIslands));
-    }
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
     lines.push_back(llformat("probes %u in flight, %u queued", resolver.probesInFlight(), resolver.probesQueued()));
     const LLFontGL* font = LLFontGL::getFontMonospace();

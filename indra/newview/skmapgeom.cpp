@@ -1810,10 +1810,11 @@ namespace skmap
                     const U32 ri = piece_record[layer.mPieces[a]];
                     size_t b = a;
                     S32 full = -1, half = -1;
+                    bool island = false;
                     for (; b < layer.mPieces.size() && piece_record[layer.mPieces[b]] == ri; ++b)
                     {
                         const SectionPiece& piece = s.mPieces[layer.mPieces[b]];
-                        stats.mIslands += (piece.mFlags & PIECE_ISLAND) ? 1 : 0;
+                        island = island || (piece.mFlags & PIECE_ISLAND);
                         if ((piece.mFlags & (PIECE_BLOB | PIECE_LINES)) || piece.mStyle != SectionStyle::SOLID)
                         {
                             continue;
@@ -1829,26 +1830,28 @@ namespace skmap
                         }
                     }
                     a = b;
-                    if (full >= 0)
-                    {
-                        stats.mFullRecords++;
-                        continue;
-                    }
-                    if (half < 0)
+                    stats.mIslands += island ? 1 : 0;
+                    if (full < 0 && half < 0)
                     {
                         continue;
                     }
-                    stats.mHalfRecords++;
-                    const SectionPiece& piece = s.mPieces[half];
+                    const bool is_full = full >= 0;
+                    (is_full ? stats.mFullRecords : stats.mHalfRecords)++;
+                    if (is_full && !input.mSectionReport)
+                    {
+                        continue;
+                    }
+                    const SectionPiece& piece = s.mPieces[is_full ? full : half];
                     const sknav::Record& rec = *recs[ri];
                     SectionReport report;
+                    report.mFull = is_full;
                     report.mPart = rec.mPart;
                     report.mRoot = rec.mRoot;
                     report.mMin = piece.mMin;
                     report.mMax = piece.mMax;
-                    const S32 k = piece.mPlane - SECTION_LOW_Q;
+                    const S32 k = piece.mPlane - (is_full ? SECTION_HIGH_Q : SECTION_LOW_Q);
                     report.mFloor = k * SECTION_CELL_M;
-                    report.mLow = sectionPlaneZ(piece.mPlane);
+                    report.mLow = sectionPlaneZ(k + SECTION_LOW_Q);
                     report.mHigh = sectionPlaneZ(k + SECTION_HIGH_Q);
                     report.mRecordTop = static_cast<F32>(rec.mMax.mdV[VZ]);
                     report.mThickness = piece.mThickness;
@@ -1895,7 +1898,7 @@ namespace skmap
                     {
                         consider(other);
                     }
-                    stats.mHalfOpenings += report.mLintel >= 0.f ? 1 : 0;
+                    stats.mHalfOpenings += !is_full && report.mLintel >= 0.f ? 1 : 0;
                     if (input.mSectionReport)
                     {
                         s.mSectionReport.push_back(report);

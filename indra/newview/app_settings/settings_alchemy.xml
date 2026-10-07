@@ -5160,7 +5160,7 @@
         <key>SKMapSectionLog</key>
         <map>
             <key>Comment</key>
-            <string>Log the mini-map section's half-cover pieces near you, with what stands over each, to check how windows and low walls classify.</string>
+            <string>Write the mini-map section's cover classification near you to sk-section-*.jsonl in the logs folder, for an agent to check how windows and low walls classify.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
