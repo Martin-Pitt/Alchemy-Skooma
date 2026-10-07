@@ -1867,6 +1867,7 @@ if(AL_BUILD_VIEWER)
     skmapgeom.cpp
     skmapraster.cpp
     skmapribbons.cpp
+    skmapsection.cpp
     skmaplabels.cpp
     skmapmarkers.cpp
     skmapallies.cpp
@@ -1892,6 +1893,7 @@ if(AL_BUILD_VIEWER)
     skmapraster.h
     skmappalette.h
     skmapribbons.h
+    skmapsection.h
     skmaplabels.h
     skmapmarkers.h
     skmapallies.h
@@ -3003,21 +3005,29 @@ if(AL_BUILD_TESTS)
     skmapgeom
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapview.cpp
+    SOURCES skmapview.cpp skmapsection.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(
     skmapraster
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapgeom.cpp skmapview.cpp
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(
     skmapribbons
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapgeom.cpp skmapview.cpp
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(skmapsection UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+  # The section build on a captured census (SKMAP_SECTION_CENSUS), cold and warm, with a fingerprint.
+  al_add_bench(
+    skmapsection
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp sknavpolys.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})

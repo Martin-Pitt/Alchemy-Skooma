@@ -126,10 +126,14 @@ namespace skmap
     {
         const F64 aspect = short_side_px > 0.f ? llclamp(static_cast<F64>(long_side_px) / short_side_px, 1.0, 2.0) : 1.0;
         const F64 reach = ANALYSIS_REACH_M * aspect + ANALYSIS_MARGIN_M;
-        const F64 x0 = llmin(agent.mdV[VX], centre.mdV[VX]) - reach;
-        const F64 y0 = llmin(agent.mdV[VY], centre.mdV[VY]) - reach;
-        const F64 x1 = llmax(agent.mdV[VX], centre.mdV[VX]) + reach;
-        const F64 y1 = llmax(agent.mdV[VY], centre.mdV[VY]) + reach;
+        // A camera far from the agent (cammed away, or mid-teleport across the grid) gets a box of its own:
+        // spanning both would grow without bound.
+        const F64 dx = agent.mdV[VX] - centre.mdV[VX], dy = agent.mdV[VY] - centre.mdV[VY];
+        const LLVector3d& near_agent = dx * dx + dy * dy <= ANALYSIS_JOIN_M * ANALYSIS_JOIN_M ? agent : centre;
+        const F64 x0 = llmin(near_agent.mdV[VX], centre.mdV[VX]) - reach;
+        const F64 y0 = llmin(near_agent.mdV[VY], centre.mdV[VY]) - reach;
+        const F64 x1 = llmax(near_agent.mdV[VX], centre.mdV[VX]) + reach;
+        const F64 y1 = llmax(near_agent.mdV[VY], centre.mdV[VY]) + reach;
         // Heights are open: the box is a plan footprint.
         min.set(snapDown(x0, ANALYSIS_SNAP_M), snapDown(y0, ANALYSIS_SNAP_M), -1.0e4);
         max.set(snapUp(x1, ANALYSIS_SNAP_M), snapUp(y1, ANALYSIS_SNAP_M), 1.0e5);

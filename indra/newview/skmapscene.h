@@ -37,6 +37,7 @@
 
 #include <deque>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <vector>
 
@@ -94,7 +95,7 @@ private:
     void idle();
     void updateDemand(bool want);
     void maybePost();
-    void gather(skmap::SceneInput& in) const;
+    void gather(skmap::SceneInput& in);
     void land(const skmap::ScenePtr& scene, U32 generation, F32 millis);
 
     /// What a scene was built from: a new job goes out when any of it moves.
@@ -105,10 +106,11 @@ private:
         U64 mViewRevision = 0;
         U64 mCensus = 0;
         U64 mRegions = 0;
+        bool mSection = false;
         bool operator==(const Trigger& o) const
         {
             return mMin == o.mMin && mMax == o.mMax && mNavRevision == o.mNavRevision && mViewRevision == o.mViewRevision
-                && mCensus == o.mCensus && mRegions == o.mRegions;
+                && mCensus == o.mCensus && mRegions == o.mRegions && mSection == o.mSection;
         }
     };
     Trigger currentTrigger() const;
@@ -146,7 +148,8 @@ private:
     /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
     void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
     /// Draw a buffer of scene-local metres built for the scene whose origin is given.
-    void drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const;
+    struct RibbonBuffer;
+    void drawBuffer(const skmap::MapView& view, RibbonBuffer& buffer) const;
     void postRibbons();
     void uploadRibbons();
 
@@ -155,6 +158,8 @@ private:
         LLPointer<LLVertexBuffer> mBuffer;
         LLVector3d mOrigin;         ///< the origin of the scene it was built in
         F64 mLastDrawn = 0.0;
+        std::shared_ptr<const skmap::Ribbons> mSource;  ///< kept to rewrite positions at a new scale
+        F32 mMpp = 0.f;             ///< the scale the buffer's positions were last written at
     };
     struct RibbonRequest
     {
@@ -190,6 +195,8 @@ private:
     };
 
     std::unique_ptr<LL::ThreadPool> mPool;
+    /// The section's slices, made on the first post and used only on the worker.
+    std::shared_ptr<skmap::SectionCache> mSectionCache;
     std::shared_ptr<bool> mAlive;
     U32 mGeneration = 0;
     bool mInFlight = false;
@@ -197,6 +204,8 @@ private:
     Trigger mPosted;
     bool mHasPosted = false;
     skmap::ScenePtr mScene;
+    /// Each tile's last published copy and when it was last seen, carried while the navmesh rebuilds it.
+    std::map<std::pair<LLUUID, sknav::TileKey>, std::pair<skmap::TileInput, F64>> mLastTiles;
     bool mDemanding = false;
     F64 mLastDrawn = -1.0e9;
     LLVector3d mMapCentre;
@@ -207,6 +216,8 @@ private:
     skmap::RasterParams mRasterParams;
     S32 mTier = -1;
     std::map<U64, Bake> mBakes;
+    /// The bake each cell last showed per floor (tier, x, y, height slot): drawn in place while its re-bake is pending.
+    std::map<std::tuple<S32, S32, S32, S32>, U64> mLastShown;
     std::vector<BakeRequest> mWanted;       ///< this frame's missing cells
     bool mBakeInFlight = false;
     U64 mBakeKeyInFlight = 0;
@@ -231,8 +242,7 @@ private:
     std::deque<RibbonResult> mRibbonUploads;
 
     LLPointer<LLViewerTexture> mHatch;
-    LLPointer<LLVertexBuffer> mBoundaryBuffer;
-    LLVector3d mBoundaryOrigin;
+    RibbonBuffer mBoundary;
     U64 mBoundaryKey = 0;
     U64 mBoundaryHash = 0;                  ///< the scene's region and void edges, in global centimetres
 

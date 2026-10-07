@@ -34,7 +34,7 @@
 namespace skmap
 {
     constexpr F32 ZOOM_MIN_M = 4.f;         ///< the shortest span the map shows
-    constexpr F32 ZOOM_MAX_M = 512.f;
+    constexpr F32 ZOOM_MAX_M = 2048.f;     ///< eight regions; the floorplan reaches only its analysis box, region tiles beyond
     constexpr F32 ZOOM_DEFAULT_M = 128.f;
     constexpr F32 ZOOM_STEP = 1.1f;         ///< per wheel notch, and the ribbon bucket ratio
 
@@ -46,6 +46,7 @@ namespace skmap
     constexpr F64 ANALYSIS_SNAP_M = 64.0;
     constexpr F64 ANALYSIS_MARGIN_M = 32.0;
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
+    constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
 
     /// A tier's texel in metres: 1/32 m at tier 0 to 2 m at tier 6.
     F32 tierTexel(S32 tier);
@@ -85,7 +86,7 @@ namespace skmap
     void analysisBox(const LLVector3d& agent, const LLVector3d& centre, F32 long_side_px, F32 short_side_px, LLVector3d& min,
                      LLVector3d& max);
 
-    /// A span after wheel notches, ×1.1 each, clamped to 4..512 m. Positive notches zoom out.
+    /// A span after wheel notches, ×1.1 each, clamped to 4..2048 m. Positive notches zoom out.
     F32 zoomByNotches(F32 span, F32 notches);
     /// The ×1.1 bucket a scale falls in, and back: ribbons are rebuilt only when it moves.
     S32 zoomBucket(F32 mpp);

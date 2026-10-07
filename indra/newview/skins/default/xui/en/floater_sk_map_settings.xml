@@ -70,21 +70,11 @@
              label_width="110"
              layout="topleft"
              left="8"
-             max_val="512"
+             max_val="2048"
              min_val="4"
              name="sk_zoom_meters"
              text_width="40"
              top="8"
-             width="308" />
-            <check_box
-             control_name="SKMapRotate"
-             follows="left|top"
-             height="16"
-             label="Turn with the camera"
-             layout="topleft"
-             left="8"
-             name="sk_rotate"
-             top_pad="5"
              width="308" />
             <check_box
              control_name="SKMapAutoCenter"

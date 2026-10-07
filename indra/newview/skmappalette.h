@@ -62,6 +62,8 @@ namespace skmap
         constexpr S32 SHADOW_SPRITE_PX = 32;
         constexpr PaletteColour SELF_DOT = rgba8(0xffffffff);
         constexpr F32 SELF_DOT_RADIUS_PX = 2.6f;
+        constexpr F32 SELF_EDGE_INSET_PX = 10.f;      ///< the off-map self marker stops this far inside the edge
+        constexpr F32 SELF_EDGE_TRIANGLE_PX = 5.f;    ///< length of its triangle pointing to the avatar
         constexpr PaletteColour SELF_CONE = rgba8(0xffffff4d);
         constexpr F32 SELF_CONE_PX = 56.f;
         constexpr F32 DOT_RADIUS_PX = 3.f;
@@ -120,9 +122,6 @@ namespace skmap
         constexpr F32 LEDGE_HALO_ALPHA = 0.18f;
         constexpr F32 LEDGE_HALO_TEXELS = 12.f;
         constexpr F32 LEDGE_HALO_MAX_M = 2.f;
-        constexpr F32 WALL_HALO_ALPHA = 0.22f;
-        constexpr F32 WALL_HALO_TEXELS = 8.f;
-        constexpr F32 WALL_HALO_MAX_M = 1.5f;
         constexpr PaletteColour CONTOUR = { 0.85f, 0.88f, 0.80f, 0.30f };
         constexpr PaletteColour RUNG_CASING = withAlpha(rgba8(0x202428ff), 0.75f);
         constexpr PaletteColour RUNG_CORE = withAlpha(rgba8(0xe8ecefff), 0.75f);
@@ -132,6 +131,14 @@ namespace skmap
         constexpr PaletteColour CHEVRON = withAlpha(rgba8(0xe8ecefff), 0.5f);
         constexpr F32 CHEVRON_SPACING_TEXELS = 40.f;
         constexpr F32 CHEVRON_HALF_WIDTH = 0.35f;   ///< of the run's width
+        constexpr PaletteColour SECTION_FULL = rgba8(0xdfe3e7ff);
+        constexpr PaletteColour SECTION_FULL_EDGE = rgba8(0xe6e9ecff);
+        constexpr PaletteColour SECTION_HALF = rgba8(0xc9cfd5ff);
+        constexpr PaletteColour SECTION_PROVISIONAL = rgba8(0x8a9097ff);
+        constexpr F32 SECTION_FULL_ALPHA = 0.55f, SECTION_FULL_EDGE_ALPHA = 0.95f;
+        constexpr F32 SECTION_HALF_TINT_ALPHA = 0.15f, SECTION_HALF_HATCH_ALPHA = 0.45f, SECTION_HALF_FLAT_ALPHA = 0.23f;
+        constexpr F32 SECTION_HALF_EDGE_ALPHA = 0.75f, SECTION_PROVISIONAL_ALPHA = 0.6f;
+        constexpr S32 SECTION_HATCH_PITCH = 16, SECTION_HATCH_LINE = 3, SECTION_DASH = 6, SECTION_FLAT_TIER = 5;
 
         // Line marks, drawn as ribbons.
         constexpr PaletteColour COVER_FULL = withAlpha(rgba8(0xe6e9ecff), 0.8f);
@@ -155,16 +162,20 @@ namespace skmap
         constexpr F32 OVERHANG_PX = 1.f;
         constexpr F32 OVERHANG_ON_PX = 2.f;
         constexpr F32 OVERHANG_OFF_PX = 3.f;
-        constexpr PaletteColour DOOR_JAMB = rgba8(0xe6e9ecff);
-        constexpr F32 DOOR_JAMB_PX = 1.5f;
-        constexpr PaletteColour DOOR_LEAF = rgba8(0xb0b6bcff);
-        constexpr F32 DOOR_LEAF_PX = 1.f;
+        constexpr PaletteColour DOOR = withAlpha(rgba8(0xb48cf0ff), 0.95f);   ///< lavender: no wall, floor, people or drop colour
+        constexpr F32 DOOR_SHUT_PX = 3.f;           ///< walls' baked edges are 0.65-1.7 px
+        constexpr F32 DOOR_LEAF_PX = 2.f;
+        constexpr F32 DOOR_JAMB_PX = 2.f;
+        constexpr F32 DOOR_THRESHOLD_PX = 1.f;
+        constexpr F32 DOOR_DASH_PX = 3.f;
+        constexpr F32 DOOR_SWING_PX = 1.f;
+        constexpr F32 DOOR_SWING_ALPHA = 0.45f;
         constexpr PaletteColour FEATURE_GLYPH = withAlpha(rgba8(0xe6e9ecff), 0.85f);
         constexpr F32 FEATURE_GLYPH_PX = 8.f;
         constexpr PaletteColour VOID_BOUNDARY = withAlpha(rgba8(0xdfe3e6ff), 0.8f);
-        constexpr F32 VOID_BOUNDARY_PX = 3.f;
+        constexpr F32 VOID_BOUNDARY_PX = 1.f;
         constexpr PaletteColour REGION_BOUNDARY = withAlpha(rgba8(0xdfe3e6ff), 0.6f);
-        constexpr F32 REGION_BOUNDARY_PX = 2.5f;
+        constexpr F32 REGION_BOUNDARY_PX = 1.f;
         constexpr F32 REGION_DASH_ON_PX = 6.f;
         constexpr F32 REGION_DASH_OFF_PX = 4.f;
         constexpr F32 RIBBON_MIN_RUN_M = 2.f;

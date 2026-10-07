@@ -34,6 +34,7 @@
 #include "llviewerregion.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "sknavlayout.h"
 #include "sknavmesh.h"
 #include "sknavrooms.h"
 #include "sknetmap.h"
@@ -49,6 +50,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <chrono>
 #include <cstring>
 
@@ -61,6 +63,7 @@ namespace
     const char* DEMAND = "sknetmap";
     constexpr F32 BAKE_MB = 0.25f;         ///< one 256 x 256 RGBA8 cell
     constexpr S32 FINER_FALLBACK_TIERS = 2; ///< how many finer tiers stand in for a cell not yet baked
+    constexpr F32 LAST_SHOWN_SLOT_M = 2.f;   ///< floors this close in height share a cell's last-shown bake
 
     F32 smoothstep(F32 e0, F32 e1, F32 x)
     {
@@ -97,9 +100,13 @@ void SKMapScene::cleanupSingleton()
         mPool->close();
         mPool.reset();
     }
+    // The pool has joined its worker, the cache's only user.
+    mSectionCache.reset();
     updateDemand(false);
     mScene.reset();
+    mLastTiles.clear();
     mBakes.clear();
+    mLastShown.clear();
     mUploads.clear();
     mWanted.clear();
     mRibbons.clear();
@@ -108,7 +115,7 @@ void SKMapScene::cleanupSingleton()
     mCarrySources.clear();
     mCarried.clear();
     mHatch = nullptr;
-    mBoundaryBuffer = nullptr;
+    mBoundary = RibbonBuffer();
     mRibbonUploads.clear();
     mRibbonWanted.clear();
 }
@@ -203,6 +210,8 @@ SKMapScene::Trigger SKMapScene::currentTrigger() const
         regions ^= sknav::mix(sknav::SEED, region->getHandle());
     }
     t.mRegions = regions;
+    static LLCachedControl<bool> section(gSavedSettings, "SKMapSection", true);
+    t.mSection = section;
     return t;
 }
 
@@ -239,9 +248,16 @@ void SKMapScene::maybePost()
     const U32 generation = ++mGeneration;
     std::weak_ptr<bool> alive = mAlive;
     std::shared_ptr<const skmap::SceneInput> job = input;
-    const bool posted = work->post([this, job, generation, alive]() {
+    if (!mSectionCache)
+    {
+        mSectionCache = std::make_shared<skmap::SectionCache>();
+    }
+    std::shared_ptr<skmap::SectionCache> cache = mSectionCache;
+    const bool posted = work->post([this, job, cache, generation, alive]() mutable {
         const auto start = std::chrono::steady_clock::now();
-        skmap::ScenePtr scene = skmap::buildScene(*job);
+        skmap::ScenePtr scene = skmap::buildScene(*job, cache.get());
+        // The last reference to the census snapshot drops here, on the worker.
+        job.reset();
         const F32 millis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - start).count();
         LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, scene, generation, millis, alive]() {
             if (!alive.expired())
@@ -259,7 +275,7 @@ void SKMapScene::maybePost()
     }
 }
 
-void SKMapScene::gather(skmap::SceneInput& in) const
+void SKMapScene::gather(skmap::SceneInput& in)
 {
     LL_PROFILE_ZONE_SCOPED;
     const SKNavMesh& navmesh = SKNavMesh::instance();
@@ -283,6 +299,43 @@ void SKMapScene::gather(skmap::SceneInput& in) const
         }
         in.mTiles.push_back(t);
     });
+    // A tile being rebuilt is unpublished for a moment; carry its last copy so the floorplan
+    // does not drop to object boxes for that moment.
+    constexpr F64 CARRY_TILE_S = 10.0;
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const size_t published = in.mTiles.size();
+    size_t carried = 0;
+    std::set<std::pair<LLUUID, sknav::TileKey>> seen;
+    for (const skmap::TileInput& t : in.mTiles)
+    {
+        seen.insert({ t.mMesh, t.mKey });
+        mLastTiles[{ t.mMesh, t.mKey }] = { t, now };
+    }
+    for (auto it = mLastTiles.begin(); it != mLastTiles.end();)
+    {
+        if (seen.count(it->first))
+        {
+            ++it;
+            continue;
+        }
+        if (now - it->second.second > CARRY_TILE_S)
+        {
+            it = mLastTiles.erase(it);
+            continue;
+        }
+        const skmap::TileInput& t = it->second.first;
+        if (t.mMax.mdV[VX] > in.mMin.mdV[VX] && t.mMin.mdV[VX] < in.mMax.mdV[VX] && t.mMax.mdV[VY] > in.mMin.mdV[VY]
+            && t.mMin.mdV[VY] < in.mMax.mdV[VY])
+        {
+            in.mTiles.push_back(t);
+            ++carried;
+        }
+        ++it;
+    }
+    if (carried > 0)
+    {
+        LL_INFOS("SKMap") << "scene input: " << published << " tiles published, " << carried << " carried while unpublished" << LL_ENDL;
+    }
     navmesh.linksIn(in.mMin, in.mMax, sknav::AgentClass::AVATAR,
                     [&in](const LLVector3d& from, const LLVector3d& to, F32, sknav::LinkKind kind) {
                         if (kind == sknav::LinkKind::LADDER || kind == sknav::LinkKind::ELEVATOR)
@@ -290,7 +343,7 @@ void SKMapScene::gather(skmap::SceneInput& in) const
                             in.mFeatureLinks.push_back({ from, to, kind });
                         }
                     });
-    navmesh.doorsIn(in.mMin, in.mMax, [&in](const sknav::DoorEntity& door) {
+    auto addDoor = [&in](const sknav::DoorEntity& door) {
         skmap::DoorInput d;
         d.mMin = door.mMin;
         d.mMax = door.mMax;
@@ -300,8 +353,32 @@ void SKMapScene::gather(skmap::SceneInput& in) const
         d.mWidth = door.mWidth;
         d.mSill = door.mSill;
         d.mDouble = door.mDouble;
+        d.mLeaves = door.mLeaves;
         in.mDoors.push_back(d);
-    });
+    };
+    // With the section, records and doors come from one census snapshot, so a leaf and its record never disagree.
+    static LLCachedControl<bool> section(gSavedSettings, "SKMapSection", true);
+    SKCensusSnapshotPtr snap;
+    if (section && SKWorldCensus::instanceExists())
+    {
+        snap = SKWorldCensus::instance().snapshot();
+    }
+    if (snap)
+    {
+        in.mRecords = std::shared_ptr<const std::vector<sknav::RecordPtr>>(snap, &snap->mRecords);
+        for (const sknav::DoorEntity& door : snap->mDoors)
+        {
+            if (sknav::overlapsXY(door.mMin, door.mMax, in.mMin, in.mMax) && door.mMin.mdV[VZ] <= in.mMax.mdV[VZ]
+                && in.mMin.mdV[VZ] <= door.mMax.mdV[VZ])
+            {
+                addDoor(door);
+            }
+        }
+    }
+    else
+    {
+        navmesh.doorsIn(in.mMin, in.mMax, addDoor);
+    }
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         in.mRegions.push_back({ region->getOriginGlobal(), static_cast<F64>(region->getWidth()) });
@@ -350,6 +427,10 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     }
     mShownRibbons.clear();
     mCarried.clear();
+    if (mScene && scene->mBuilt.size() < mScene->mBuilt.size())
+    {
+        LL_INFOS("SKMap") << "scene landed with " << scene->mBuilt.size() << " built cells, down from " << mScene->mBuilt.size() << LL_ENDL;
+    }
     mScene = scene;
     // Global, so a box step that keeps the edges keeps their buffer.
     U64 boundaries = sknav::SEED;
@@ -376,7 +457,25 @@ void SKMapScene::updateAgentFloor()
     const LLVector3d agent = gAgent.getPositionGlobal();
     skmap::AgentFloor floor;
     floor.mPos = agent;
-    const skmap::FloorHit hit = skmap::floorAt(scene, agent, 2.5f, 0.5f);
+    floor.mFloorPos = agent;
+    // A jump lifts the agent clear of the usual reach: look further down unless flying.
+    const F32 below = gAgent.getFlying() ? 2.5f : 8.f;
+    skmap::FloorHit hit = skmap::floorAt(scene, agent, below, 0.5f);
+    // The navmesh is eroded by the agent's radius, so against a wall the agent stands just off it:
+    // look a little way around before calling the agent off every floor.
+    for (F32 r : { 0.4f, 0.8f })
+    {
+        for (S32 k = 0; k < 8 && !hit.mFound; ++k)
+        {
+            const F32 a = F_TWO_PI * k / 8.f;
+            const LLVector3d at = agent + LLVector3d(std::cos(a) * r, std::sin(a) * r, 0.0);
+            hit = skmap::floorAt(scene, at, below, 0.5f);
+            if (hit.mFound)
+            {
+                floor.mFloorPos = at;
+            }
+        }
+    }
     if (hit.mFound)
     {
         floor.mFound = true;
@@ -465,7 +564,8 @@ U64 SKMapScene::bakeKey(S32 layer, const skmap::CellId& cell) const
         return 0;
     }
     U64 key = sknav::mix(content, static_cast<U64>(cell.mTier));
-    key = sknav::mix(key, (mRasterParams.mStairs ? 1u : 0u) | (mRasterParams.mContours ? 2u : 0u) | (mRasterParams.mHeatmap ? 4u : 0u));
+    key = sknav::mix(key, (mRasterParams.mStairs ? 1u : 0u) | (mRasterParams.mContours ? 2u : 0u) | (mRasterParams.mHeatmap ? 4u : 0u)
+                              | (mRasterParams.mSection ? 8u : 0u));
     key = sknav::mix(key, skmap::RASTER_VERSION);
     return key ? key : 1;
 }
@@ -564,6 +664,10 @@ void SKMapScene::evictBakes()
         }
         mBakes.erase(oldest);
     }
+    for (auto it = mLastShown.begin(); it != mLastShown.end();)
+    {
+        it = mBakes.count(it->second) ? std::next(it) : mLastShown.erase(it);
+    }
     mStats.mCacheMB = mBakes.size() * BAKE_MB;
 }
 
@@ -577,8 +681,8 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
 void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
                                const LLColor4& tint) const
 {
-    // 2 x 2 sub-quads, so the distance dim varies across a cell.
-    const LLVector3d agent = gAgent.getPositionGlobal();
+    // 2 x 2 sub-quads, so the distance dim varies across a cell. It fades from the map centre, the camera.
+    const LLVector3d agent = view.centre();
     const F32 span = view.span();
     LLVector2 px[3][3];
     LLColor4 col[3][3];
@@ -708,9 +812,11 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
     static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", true);
     static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", true);
     static LLCachedControl<bool> heatmap(gSavedSettings, "SKMapHeatmap", false);
+    static LLCachedControl<bool> cover(gSavedSettings, "SKMapLayerCover", true);
     mRasterParams.mStairs = stairs;
     mRasterParams.mContours = contours;
     mRasterParams.mHeatmap = heatmap;
+    mRasterParams.mSection = cover;
     updateSelection();
     const skmap::Scene& scene = *mScene;
     const F32 za = mAgent.mFound ? mAgent.mZ : static_cast<F32>(mAgent.mPos.mdV[VZ]);
@@ -731,8 +837,8 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
         F32 base = layer.mBaseZ;
         if (layer.mGround)
         {
-            const LLVector2 p = scene.toLocal(mAgent.mPos);
-            const auto it = scene.mIndex.find(skmap::indexCell(mAgent.mPos.mdV[VX], mAgent.mPos.mdV[VY]));
+            const LLVector2 p = scene.toLocal(mAgent.mFloorPos);
+            const auto it = scene.mIndex.find(skmap::indexCell(mAgent.mFloorPos.mdV[VX], mAgent.mFloorPos.mdV[VY]));
             if (it != scene.mIndex.end())
             {
                 F32 best = -FLT_MAX;
@@ -770,6 +876,8 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
             tint.mV[2] = scale * t[2];
         }
 
+        // A floor keeps its slot across scenes, where its layer index does not.
+        const S32 slot = layer.mGround ? INT_MIN : static_cast<S32>(std::floor(layer.mBaseZ / LAST_SHOWN_SLOT_M));
         for (const skmap::CellId& cell : cells)
         {
             const U64 key = bakeKey(l, cell);
@@ -778,16 +886,31 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
                 continue;
             }
             const LLVector3d cmin = cell.minCorner(), cmax = cell.maxCorner();
+            const auto shown = std::make_tuple(cell.mTier, cell.mX, cell.mY, slot);
             auto it = mBakes.find(key);
             if (it != mBakes.end())
             {
                 it->second.mLastDrawn = now;
                 drawCellCut(view, it->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint, l);
+                mLastShown[shown] = key;
                 mStats.mCells++;
                 continue;
             }
             const LLVector3d mid = (cmin + cmax) * 0.5;
             requestBake(l, cell, key, static_cast<F32>(std::hypot(mid.mdV[VX] - centre.mdV[VX], mid.mdV[VY] - centre.mdV[VY])));
+            // Meanwhile what this cell showed before, replaced in place when the new bake lands.
+            const auto last = mLastShown.find(shown);
+            if (last != mLastShown.end())
+            {
+                const auto lit = mBakes.find(last->second);
+                if (lit != mBakes.end())
+                {
+                    lit->second.mLastDrawn = now;
+                    drawCellCut(view, lit->second.mTexture, cmin, cmax, 0.f, 0.f, 1.f, 1.f, tint, l);
+                    mStats.mCells++;
+                    continue;
+                }
+            }
             // Meanwhile the best coarser bake, through the part of it this cell covers.
             bool covered = false;
             for (S32 t = mTier + 1; t <= skmap::TIER_MAX && !covered; ++t)
@@ -846,12 +969,63 @@ U64 SKMapScene::ribbonKey(U64 mark_hash, const skmap::RibbonParams& params)
     return sknav::mix(key, (params.mCover ? 1u : 0u) | (params.mDoors ? 2u : 0u));
 }
 
-void SKMapScene::drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const
+namespace
 {
+    /// A ribbon buffer for these triangles, positions written at the scale given.
+    LLPointer<LLVertexBuffer> makeRibbonBuffer(const skmap::Ribbons& ribbons, F32 mpp)
+    {
+        if (ribbons.mVerts.empty())
+        {
+            return nullptr;
+        }
+        // The overlay's attribute set: what gUIProgram reads.
+        LLPointer<LLVertexBuffer> vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
+        LLStrider<LLVector3> positions;
+        LLStrider<LLVector2> texcoords;
+        LLStrider<LLColor4U> colours;
+        if (!vb->allocateBuffer(static_cast<U32>(ribbons.mVerts.size()), 0) || !vb->getVertexStrider(positions)
+            || !vb->getTexCoord0Strider(texcoords) || !vb->getColorStrider(colours))
+        {
+            return nullptr;
+        }
+        for (U32 i = 0; i < static_cast<U32>(ribbons.mVerts.size()); ++i)
+        {
+            positions[i] = ribbons.at(i, mpp);
+            texcoords[i] = LLVector2(0.f, 0.f);
+            colours[i] = ribbons.mColours[i];
+        }
+        vb->unmapBuffer();
+        // The upload bound the buffer without its attributes: make the next setBuffer() set them up.
+        LLVertexBuffer::unbind();
+        return vb;
+    }
+}
+
+void SKMapScene::drawBuffer(const skmap::MapView& view, RibbonBuffer& buffer) const
+{
+    LLVertexBuffer* vb = buffer.mBuffer;
     if (!vb || !vb->getNumVerts())
     {
         return;
     }
+    // Widths are screen pixels: when the zoom has moved since the positions were written, move them out or in.
+    const F32 mpp = view.mpp();
+    if (buffer.mSource && std::fabs(mpp - buffer.mMpp) > buffer.mMpp * 0.002f)
+    {
+        LLStrider<LLVector3> positions;
+        if (vb->getVertexStrider(positions))
+        {
+            for (U32 i = 0; i < static_cast<U32>(buffer.mSource->mVerts.size()); ++i)
+            {
+                positions[i] = buffer.mSource->at(i, mpp);
+            }
+            vb->unmapBuffer();
+            // As in makeRibbonBuffer: otherwise the draw below reads through the last buffer's attributes.
+            LLVertexBuffer::unbind();
+            buffer.mMpp = mpp;
+        }
+    }
+    const LLVector3d& origin = buffer.mOrigin;
     // Scene-local metres to widget pixels, from the scene the buffer was built in: a cached buffer outlives a box re-snap.
     const LLVector3d offset = origin - view.centre();
     gGL.flush();
@@ -951,7 +1125,7 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
     if (it != mRibbons.end())
     {
         it->second.mLastDrawn = now;
-        drawBuffer(view, it->second.mBuffer, it->second.mOrigin);
+        drawBuffer(view, it->second);
         const auto cut = mCutHashes.find(layer);
         mShownRibbons[layer] = { it->first, cut != mCutHashes.end() ? cut->second : 0 };
     }
@@ -1000,33 +1174,12 @@ void SKMapScene::uploadRibbons()
     const F64 now = LLFrameTimer::getElapsedSeconds();
     while (!mRibbonUploads.empty())
     {
-        const RibbonResult& r = mRibbonUploads.front();
-        LLPointer<LLVertexBuffer> vb;
-        if (!r.mRibbons.mVerts.empty())
-        {
-            // The overlay's attribute set: what gUIProgram reads.
-            vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
-            LLStrider<LLVector3> positions;
-            LLStrider<LLVector2> texcoords;
-            LLStrider<LLColor4U> colours;
-            if (vb->allocateBuffer(static_cast<U32>(r.mRibbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
-                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
-            {
-                for (U32 i = 0; i < static_cast<U32>(r.mRibbons.mVerts.size()); ++i)
-                {
-                    positions[i] = r.mRibbons.mVerts[i];
-                    texcoords[i] = LLVector2(0.f, 0.f);
-                    colours[i] = r.mRibbons.mColours[i];
-                }
-                vb->unmapBuffer();
-            }
-            else
-            {
-                vb = nullptr;
-            }
-        }
+        RibbonResult& r = mRibbonUploads.front();
+        auto source = std::make_shared<const skmap::Ribbons>(std::move(r.mRibbons));
         RibbonBuffer& buffer = mRibbons[r.mKey];
-        buffer.mBuffer = vb;
+        buffer.mBuffer = makeRibbonBuffer(*source, source->mMpp);
+        buffer.mMpp = source->mMpp;
+        buffer.mSource = std::move(source);
         buffer.mOrigin = r.mOrigin;
         buffer.mLastDrawn = now;
         mRibbonLatest[r.mMarkHash] = r.mKey;
@@ -1125,29 +1278,12 @@ void SKMapScene::drawVoid(const skmap::MapView& view)
     if (key != mBoundaryKey)
     {
         mBoundaryKey = key;
-        mBoundaryOrigin = mScene->mOrigin;
-        skmap::Ribbons ribbons;
-        skmap::buildBoundaryRibbons(*mScene, params, ribbons);
-        mBoundaryBuffer = nullptr;
-        if (!ribbons.mVerts.empty())
-        {
-            LLPointer<LLVertexBuffer> vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
-            LLStrider<LLVector3> positions;
-            LLStrider<LLVector2> texcoords;
-            LLStrider<LLColor4U> colours;
-            if (vb->allocateBuffer(static_cast<U32>(ribbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
-                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
-            {
-                for (U32 i = 0; i < static_cast<U32>(ribbons.mVerts.size()); ++i)
-                {
-                    positions[i] = ribbons.mVerts[i];
-                    texcoords[i] = LLVector2(0.f, 0.f);
-                    colours[i] = ribbons.mColours[i];
-                }
-                vb->unmapBuffer();
-                mBoundaryBuffer = vb;
-            }
-        }
+        auto ribbons = std::make_shared<skmap::Ribbons>();
+        skmap::buildBoundaryRibbons(*mScene, params, *ribbons);
+        mBoundary.mOrigin = mScene->mOrigin;
+        mBoundary.mBuffer = makeRibbonBuffer(*ribbons, ribbons->mMpp);
+        mBoundary.mMpp = ribbons->mMpp;
+        mBoundary.mSource = std::move(ribbons);
     }
-    drawBuffer(view, mBoundaryBuffer, mBoundaryOrigin);
+    drawBuffer(view, mBoundary);
 }

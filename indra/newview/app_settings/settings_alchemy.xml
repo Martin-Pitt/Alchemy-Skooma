@@ -4686,24 +4686,13 @@
         <key>SKMapZoomMeters</key>
         <map>
             <key>Comment</key>
-            <string>Metres the mini-map shows across its short side, 4 to 512.</string>
+            <string>Metres the mini-map shows across its short side, 4 to 2048.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
             <real>128.0</real>
-        </map>
-        <key>SKMapRotate</key>
-        <map>
-            <key>Comment</key>
-            <string>Turn the mini-map with the camera instead of keeping north up.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
         </map>
         <key>SKMapAutoCenter</key>
         <map>
@@ -5156,6 +5145,19 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- <SK:Nexii> SKNetMap mini-map section cut -->
+        <key>SKMapSection</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw mini-map walls as a section through the objects at 0.5 and 1.5 m over each floor; off draws the navmesh's wall lines.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKNavCensusAlways</key>
         <map>
             <key>Comment</key>

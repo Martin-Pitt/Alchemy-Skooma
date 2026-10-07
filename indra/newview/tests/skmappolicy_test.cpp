@@ -162,19 +162,19 @@ namespace tut
         classic["AlchemyMinimapRenderObjects"] = false;
         const LLSD seeded = seedFromClassic(classic, 200.f);
         ensure("128 at 200 px is 400 m", std::fabs(seeded["SKMapZoomMeters"].asReal() - 400.0) < 1e-6);
-        ensure("rotate", seeded["SKMapRotate"].asBoolean());
+        ensure("rotate is not seeded: the map always turns", !seeded.has("SKMapRotate"));
         ensure("auto-centre", !seeded["SKMapAutoCenter"].asBoolean());
         ensure("parcels", seeded["SKMapLayerParcels"].asBoolean() && seeded["SKMapLayerParcelsForSale"].asBoolean());
         ensure("collision", !seeded["SKMapLayerParcelsCollision"].asBoolean());
         ensure("chat rings and guide line", seeded["SKMapLayerChatRings"].asBoolean() && seeded["SKMapLayerGuideLine"].asBoolean());
         ensure_equals("objects off", seeded["SKMapLayerObjects"].asInteger(), 0);
-        classic["MiniMapScale"] = 32.0;
+        classic["MiniMapScale"] = 8.0;
         classic["AlchemyMinimapRenderObjects"] = true;
         const LLSD again = seedFromClassic(classic, 200.f);
-        ensure("clamped at 512", std::fabs(again["SKMapZoomMeters"].asReal() - 512.0) < 1e-6);
+        ensure("clamped at 2048", std::fabs(again["SKMapZoomMeters"].asReal() - 2048.0) < 1e-6);
         ensure_equals("objects where no floorplan", again["SKMapLayerObjects"].asInteger(), 1);
         ensure("idempotent", llsd_equals(seedFromClassic(classic, 200.f), again));
-        ensure("a key missing stays missing", !seedFromClassic(LLSD::emptyMap(), 200.f).has("SKMapRotate"));
+        ensure("a key missing stays missing", !seedFromClassic(LLSD::emptyMap(), 200.f).has("SKMapAutoCenter"));
     }
 
     // The Moderate gate, every branch.

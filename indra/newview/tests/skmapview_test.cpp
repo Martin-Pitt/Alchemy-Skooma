@@ -148,19 +148,25 @@ namespace tut
         skmap::analysisBox(agent, agent, 800.f, 200.f, wmin, wmax);
         ensure("aspect clamped at 2", wmax.mdV[VX] - wmin.mdV[VX] <= 2.0 * (512.0 + 32.0) + 128.0);
         ensure("aspect reaches", wmax.mdV[VX] - agent.mdV[VX] >= 512.0);
+        // A camera across the grid (a teleport, a far cam) does not stretch the box to cover the agent too.
+        LLVector3d fmin, fmax, cmin, cmax;
+        skmap::analysisBox(agent + LLVector3d(21000.0, -9000.0, 0.0), centre, 200.f, 200.f, fmin, fmax);
+        skmap::analysisBox(centre, centre, 200.f, 200.f, cmin, cmax);
+        ensure("a far agent leaves the box to the centre", fmin == cmin && fmax == cmax);
+        ensure("bounded", fmax.mdV[VX] - fmin.mdV[VX] <= 2.0 * (256.0 + 32.0) + 128.0);
     }
 
-    // The zoom stays inside 4..512 m and steps by 1.1.
+    // The zoom stays inside 4..2048 m and steps by 1.1.
     template<> template<>
     void skmapview_object::test<6>()
     {
         ensure_equals("floor", skmap::zoomByNotches(4.f, -5.f), 4.f);
-        ensure_equals("ceiling", skmap::zoomByNotches(512.f, 3.f), 512.f);
+        ensure_equals("ceiling", skmap::zoomByNotches(2048.f, 3.f), 2048.f);
         ensure("one notch out", std::fabs(skmap::zoomByNotches(100.f, 1.f) - 110.f) < 1e-3f);
         ensure("one notch in", std::fabs(skmap::zoomByNotches(110.f, -1.f) - 100.f) < 1e-3f);
         skmap::MapView view;
-        view.set(LLVector3d(), 2000.f, 0.f, 100.f, 100.f);
-        ensure_equals("view clamps", view.span(), 512.f);
+        view.set(LLVector3d(), 5000.f, 0.f, 100.f, 100.f);
+        ensure_equals("view clamps", view.span(), 2048.f);
         const S32 b = skmap::zoomBucket(0.5f);
         ensure("bucket round trip", std::fabs(skmap::bucketMpp(b) - 0.5f) < 0.03f);
         ensure("bucket steps", skmap::zoomBucket(0.5f * 1.1f) == b + 1);

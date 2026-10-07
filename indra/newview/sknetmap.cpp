@@ -49,10 +49,12 @@
 #include "lltracker.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 #include "llviewertexture.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
+#include "llvoavatarself.h"
 #include "llworldmapview.h"
 #include "llavatarnamecache.h"
 #include "llkeyboard.h"
@@ -81,6 +83,17 @@ namespace
     LLColor4 toColor4(const skmap::PaletteColour& c, F32 alpha = 1.f)
     {
         return LLColor4(c.mR, c.mG, c.mB, c.mA * alpha);
+    }
+
+    // Half the avatar's wider horizontal extent on the map, so a close zoom draws its true footprint.
+    F32 footprintRadius(const LLViewerObject* avatar, F32 pixels_per_metre)
+    {
+        if (!avatar || !avatar->isAvatar())
+        {
+            return 0.f;
+        }
+        const LLVector3& scale = avatar->getScale();
+        return 0.5f * llmax(scale.mV[VX], scale.mV[VY]) * pixels_per_metre;
     }
 }
 
@@ -224,7 +237,6 @@ SKNetMap::~SKNetMap()
 void SKNetMap::updateView()
 {
     static LLCachedControl<F32> span(gSavedSettings, "SKMapZoomMeters", skmap::ZOOM_DEFAULT_M);
-    static LLCachedControl<bool> rotate(gSavedSettings, "SKMapRotate", false);
 
     if (mEaseStart >= 0.0)
     {
@@ -241,13 +253,10 @@ void SKNetMap::updateView()
         }
     }
 
-    F32 rotation = 0.f;
-    if (rotate)
-    {
-        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
-        rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
-    }
-    const LLVector3d centre = gAgent.getPositionGlobal() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
+    // The map follows the camera: centred on it and turned so its facing is up.
+    const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+    const F32 rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
+    const LLVector3d centre = gAgentCamera.getCameraPositionGlobal() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
     mView.set(centre, span, rotation, static_cast<F32>(getRect().getWidth()), static_cast<F32>(getRect().getHeight()));
 }
 
@@ -386,8 +395,8 @@ void SKNetMap::drawObjects()
 
 void SKNetMap::drawSelf()
 {
-    const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
-    // The sight cone follows the camera's horizontal field of view, a fixed size on screen.
+    const LLVector2 eye = mView.toWidget(gAgentCamera.getCameraPositionGlobal());
+    // The sight cone sits at the camera and spans its horizontal field of view, a fixed size on screen.
     LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLVector3 at = camera->getAtAxis();
     LLVector2 ahead = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
@@ -405,17 +414,66 @@ void SKNetMap::drawSelf()
             const F32 a0 = heading - half + 2.f * half * i / steps;
             const F32 a1 = heading - half + 2.f * half * (i + 1) / steps;
             gGL.color4fv(inner.mV);
-            gGL.vertex2f(self.mV[VX], self.mV[VY]);
+            gGL.vertex2f(eye.mV[VX], eye.mV[VY]);
             gGL.color4fv(outer.mV);
-            gGL.vertex2f(self.mV[VX] + std::cos(a0) * r, self.mV[VY] + std::sin(a0) * r);
-            gGL.vertex2f(self.mV[VX] + std::cos(a1) * r, self.mV[VY] + std::sin(a1) * r);
+            gGL.vertex2f(eye.mV[VX] + std::cos(a0) * r, eye.mV[VY] + std::sin(a0) * r);
+            gGL.vertex2f(eye.mV[VX] + std::cos(a1) * r, eye.mV[VY] + std::sin(a1) * r);
         }
         gGL.end();
     }
-    skmapdraw::shadow(self, skmap::palette::SELF_DOT_RADIUS_PX);
+
+    // Our avatar; when the camera has left it off the map, pinned to the edge with a triangle pointing to it.
+    const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
+    const F32 inset = skmap::palette::SELF_EDGE_INSET_PX;
+    const LLVector2 lo(inset, inset), hi(mView.width() - inset, mView.height() - inset);
+    const bool off_map = self.mV[VX] < lo.mV[VX] || self.mV[VY] < lo.mV[VY] || self.mV[VX] > hi.mV[VX] || self.mV[VY] > hi.mV[VY];
+    LLVector2 dot = self;
+    if (off_map)
+    {
+        // Along the line from the map's centre, stopped at the inset edge.
+        const LLVector2 mid(mView.width() * 0.5f, mView.height() * 0.5f);
+        const LLVector2 d = self - mid;
+        F32 t = 1.f;
+        if (std::fabs(d.mV[VX]) > 1e-6f)
+        {
+            t = llmin(t, (hi.mV[VX] - mid.mV[VX]) / std::fabs(d.mV[VX]));
+        }
+        if (std::fabs(d.mV[VY]) > 1e-6f)
+        {
+            t = llmin(t, (hi.mV[VY] - mid.mV[VY]) / std::fabs(d.mV[VY]));
+        }
+        dot = mid + d * t;
+    }
+    const F32 dot_radius = llmax(skmap::palette::SELF_DOT_RADIUS_PX, footprintRadius(gAgentAvatarp, mView.pixelsPerMetre()));
+    skmapdraw::shadow(dot, dot_radius);
     gGL.begin(LLRender::TRIANGLES);
     skmapdraw::colour(skmap::palette::SELF_DOT);
-    skmapdraw::disc(self, skmap::palette::SELF_DOT_RADIUS_PX);
+    skmapdraw::disc(dot, dot_radius);
+    if (off_map)
+    {
+        LLVector2 dir = self - dot;
+        if (dir.normVec() > 1e-6f)
+        {
+            const LLVector2 side(-dir.mV[VY], dir.mV[VX]);
+            const F32 base = dot_radius + 1.f;
+            const F32 tip = base + skmap::palette::SELF_EDGE_TRIANGLE_PX;
+            const F32 w = skmap::palette::SELF_EDGE_TRIANGLE_PX * 0.6f;
+            skmapdraw::triangle(dot + dir * tip, dot + dir * base + side * w, dot + dir * base - side * w);
+        }
+    }
+    else if (!gAgentCamera.cameraMouselook())
+    {
+        // Out of mouselook the camera's facing is not ours, so a triangle shows where the avatar faces.
+        const LLVector3 facing = gAgent.getAtAxis();
+        LLVector2 ahead = mView.toWidgetOffset(facing.mV[VX], facing.mV[VY]);
+        if (ahead.normVec() > 1e-6f)
+        {
+            const LLVector2 across(-ahead.mV[VY], ahead.mV[VX]);
+            const LLVector2 base = dot + ahead * (dot_radius + skmap::palette::HEADING_BASE_PX);
+            skmapdraw::triangle(dot + ahead * (dot_radius + skmap::palette::HEADING_TIP_PX), base + across * skmap::palette::HEADING_HALF_PX,
+                                base - across * skmap::palette::HEADING_HALF_PX);
+        }
+    }
     gGL.end();
 }
 
@@ -466,7 +524,7 @@ void SKNetMap::drawSelfExtras()
     }
     if (guide_line)
     {
-        // Along the camera, out to its far clip.
+        // From the camera along its facing, out to its far clip.
         static LLUIColor line_colour = LLUIColorTable::instance().getColor("MapLineColor", LLColor4::red);
         LLViewerCamera* camera = LLViewerCamera::getInstance();
         const LLVector3 at = camera->getAtAxis();
@@ -475,7 +533,8 @@ void SKNetMap::drawSelfExtras()
         {
             gGL.begin(LLRender::TRIANGLES);
             gGL.color4fv(line_colour.get().mV);
-            skmapdraw::line(self, self + dir * (camera->getFar() * mView.pixelsPerMetre()), 1.f);
+            const LLVector2 eye = mView.toWidget(gAgentCamera.getCameraPositionGlobal());
+            skmapdraw::line(eye, eye + dir * (camera->getFar() * mView.pixelsPerMetre()), 1.f);
             gGL.end();
         }
     }
@@ -689,7 +748,8 @@ void SKNetMap::collectDots()
         const bool chevron = chevrons && (p.mFloor == skmap::FloorRelation::ABOVE || p.mFloor == skmap::FloorRelation::BELOW);
         const bool coded = labels && !p.mCode.empty();
         const F32 text_w = coded ? codeFont()->getWidthF32(p.mCode) : 0.f;
-        const F32 radius = skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad);
+        const F32 radius = llmax(skmap::markerRadius(chevron, coded, static_cast<U32>(p.mCode.size()), text_w, px, pad),
+                                 footprintRadius(gObjectList.findObject(p.mId), mView.pixelsPerMetre()));
         const LLVector2 at = mView.toWidget(p.mPos);
         // Only dots the clip leaves some of: hover, tags and picks never name an unseen one.
         if (at.mV[VX] < -radius || at.mV[VY] < -radius || at.mV[VX] > mView.width() + radius || at.mV[VY] > mView.height() + radius)

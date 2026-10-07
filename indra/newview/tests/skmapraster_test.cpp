@@ -85,7 +85,8 @@ namespace
             w.mValue = value;
             mSegments.push_back(w);
         }
-        skmap::ScenePtr scene(const LLUUID& mesh, bool terrain, F32 water = -100.f) const
+        skmap::ScenePtr scene(const LLUUID& mesh, bool terrain, F32 water = -100.f, const std::vector<RecordPtr>* records = nullptr,
+                              const std::vector<skmap::DoorInput>& doors = {}) const
         {
             TileInput t;
             t.mMesh = mesh;
@@ -103,7 +104,99 @@ namespace
             in.mMax.set(128.0, 128.0, 1.0e5);
             in.mTiles.push_back(t);
             in.mRegions.push_back({ LLVector3d(0.0, 0.0, 0.0), 256.0 });
+            if (records)
+            {
+                in.mRecords = std::make_shared<const std::vector<RecordPtr>>(*records);
+            }
+            in.mDoors = doors;
             return skmap::buildScene(in);
+        }
+        skmap::ScenePtr section(const std::vector<RecordPtr>& records, const std::vector<skmap::DoorInput>& doors = {}) const
+        {
+            return scene(CLUSTER, false, -100.f, &records, doors);
+        }
+    };
+
+    LLUUID partId(U64 signature)
+    {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "00000000-0000-0000-0000-%012llx", static_cast<unsigned long long>(signature));
+        return LLUUID(buf);
+    }
+
+    Record boxOf(const LLVector3& c, const LLVector3& h, U64 signature, const LLVector3& a0 = LLVector3(1.f, 0.f, 0.f),
+                 const LLVector3& a1 = LLVector3(0.f, 1.f, 0.f), const LLVector3& a2 = LLVector3(0.f, 0.f, 1.f))
+    {
+        Record r;
+        r.mRole = Role::NAV;
+        r.mShape = Shape::BOX;
+        r.mSolid = true;
+        r.mCenter = c;
+        r.mHalf = h;
+        r.mAxes[0] = a0;
+        r.mAxes[1] = a1;
+        r.mAxes[2] = a2;
+        r.mMin.set(DBL_MAX, DBL_MAX, DBL_MAX);
+        r.mMax.set(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+        for (S32 i = 0; i < 8; ++i)
+        {
+            LLVector3 p = c;
+            for (S32 b = 0; b < 3; ++b)
+            {
+                p += r.mAxes[b] * (((i >> b) & 1) ? h.mV[b] : -h.mV[b]);
+            }
+            for (S32 k = 0; k < 3; ++k)
+            {
+                r.mMin.mdV[k] = llmin(r.mMin.mdV[k], static_cast<F64>(p.mV[k]));
+                r.mMax.mdV[k] = llmax(r.mMax.mdV[k], static_cast<F64>(p.mV[k]));
+            }
+        }
+        r.mSignature = signature;
+        r.mPart = partId(signature);
+        return r;
+    }
+
+    RecordPtr box(const LLVector3& c, const LLVector3& h, U64 signature)
+    {
+        return std::make_shared<const Record>(boxOf(c, h, signature));
+    }
+
+    RecordPtr soupOf(const std::vector<LLVector3>& tris, bool solid, U64 signature)
+    {
+        Record r;
+        r.mRole = Role::NAV;
+        r.mShape = Shape::TRIANGLES;
+        r.mSolid = solid;
+        r.mTriangles = std::make_shared<const std::vector<LLVector3>>(tris);
+        r.mMin.set(DBL_MAX, DBL_MAX, DBL_MAX);
+        r.mMax.set(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+        for (const LLVector3& p : tris)
+        {
+            for (S32 k = 0; k < 3; ++k)
+            {
+                r.mMin.mdV[k] = llmin(r.mMin.mdV[k], static_cast<F64>(p.mV[k]));
+                r.mMax.mdV[k] = llmax(r.mMax.mdV[k], static_cast<F64>(p.mV[k]));
+            }
+        }
+        r.mSignature = signature;
+        r.mPart = partId(signature);
+        return std::make_shared<const Record>(r);
+    }
+
+    /// The scene-local centre of a texel of a cell, for a scene whose origin is 0.
+    LLVector2 texelAt(const skmap::CellId& cell, S32 x, S32 y)
+    {
+        const LLVector3d lo = cell.minCorner();
+        const F32 t = skmap::tierTexel(cell.mTier);
+        return LLVector2(static_cast<F32>(lo.mdV[VX]) + (x + 0.5f) * t, static_cast<F32>(lo.mdV[VY]) + (y + 0.5f) * t);
+    }
+
+    struct Box2
+    {
+        F32 x0, y0, x1, y1;
+        bool holds(const LLVector2& p, F32 inset = 0.f) const
+        {
+            return p.mV[VX] > x0 + inset && p.mV[VX] < x1 - inset && p.mV[VY] > y0 + inset && p.mV[VY] < y1 - inset;
         }
     };
 
@@ -224,7 +317,7 @@ namespace tut
         ensure("deep is darker in straight luma", luma(at_depth.at(128, 192)) < luma(at_surface.at(128, 64)));
     }
 
-    // A ledge's halo lightens only off its floor; a wall's darkens only on it.
+    // A ledge's halo lightens only off its floor; a wall has no halo.
     template<> template<>
     void skmapraster_object::test<4>()
     {
@@ -242,7 +335,7 @@ namespace tut
         wall.wall(4.f, 0.f, 4.f, 8.f, EdgeKind::WALL, 3.f);
         s = wall.scene(CLUSTER, false);
         r = bake(*s, s->mPolys[0].mLayer, TIER0);
-        ensure("dark on the floor", brightness(r.at(125, 128)) < brightness(r.at(32, 128)));
+        ensure("floor untouched by the wall", std::equal(r.at(125, 128), r.at(125, 128) + 4, r.at(32, 128)));
         ensure_equals("nothing past the wall", static_cast<S32>(r.at(134, 128)[3]), 0);
     }
 
@@ -373,5 +466,373 @@ namespace tut
         // Row 16 is y = 0.5 m, clear of the chevrons.
         const Raster up = bake(*ramp, ramp->mRuns[0].mLayer, skmap::CellId{ 0, 1, 0 }, no_contours);
         ensure("the ramp brightens uphill", brightness(up.at(189, 16)) > brightness(up.at(67, 16)) + 6);
+    }
+
+    // The section moves every bake key once.
+    template<> template<>
+    void skmapraster_object::test<9>()
+    {
+        ensure_equals("raster version", skmap::RASTER_VERSION, 2u);
+    }
+
+    // Two overlapping walls are one solid: full throughout, no outline on the faces buried in each other.
+    template<> template<>
+    void skmapraster_object::test<10>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 8.f, 3.5f, 0.f, 0.f);
+        skmap::ScenePtr s = t.section({ box(LLVector3(4.f, 4.f, 1.5f), LLVector3(3.f, 0.15f, 1.5f), 1),
+                                        box(LLVector3(6.85f, 6.f, 1.5f), LLVector3(0.15f, 2.15f, 1.5f), 2) });
+        const Raster r = bake(*s, s->mPolys[0].mLayer, TIER0);
+        ensure("classes recorded", r.mStats.mSectionClass.size() == 256u * 256u && r.mStats.mFullTexels > 0);
+        const Box2 a = { 1.f, 3.85f, 7.f, 4.15f }, b = { 6.7f, 3.85f, 7.f, 8.15f };
+        // Inside by more than so many texels; the outline band itself reaches up to two texels in.
+        auto deep = [&](const LLVector2& p, F32 texels) {
+            const F32 t1 = skmap::tierTexel(0) * texels * 1.01f;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    const LLVector2 q = p + LLVector2(dx * t1, dy * t1);
+                    if (!a.holds(q) && !b.holds(q))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        S32 checked = 0, buried = 0;
+        for (S32 y = 0; y < 256; ++y)
+        {
+            for (S32 x = 0; x < 256; ++x)
+            {
+                const LLVector2 p = texelAt(TIER0, x, y);
+                const U8 bits = r.mStats.mSectionClass[y * 256 + x];
+                const bool on_x = std::fabs(p.mV[VX] - 6.7f) < 0.02f && p.mV[VY] > 3.9f && p.mV[VY] < 4.1f;
+                const bool on_y = std::fabs(p.mV[VY] - 4.15f) < 0.02f && p.mV[VX] > 6.75f && p.mV[VX] < 6.95f;
+                if (on_x || on_y)
+                {
+                    ensure("full on a buried face", (bits & skmap::SECTION_TEXEL_FULL) != 0);
+                    ensure("no outline on a buried face", (bits & skmap::SECTION_TEXEL_FULL_EDGE) == 0);
+                    ++buried;
+                }
+                if (deep(p, 1.f))
+                {
+                    ensure("full inside the union", (bits & skmap::SECTION_TEXEL_FULL) != 0);
+                    ++checked;
+                }
+                if (deep(p, 2.f))
+                {
+                    ensure("no outline inside the union", (bits & skmap::SECTION_TEXEL_FULL_EDGE) == 0);
+                }
+            }
+        }
+        ensure("texels checked", checked > 1000);
+        ensure("the buried faces checked", buried > 4);
+    }
+
+    // A 2 cm sheet still covers every row it crosses at 0.5 m texels.
+    template<> template<>
+    void skmapraster_object::test<11>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 16.f, 4.5f, 0.f, 0.f);
+        std::vector<RecordPtr> recs = { std::make_shared<const Record>(boxOf(LLVector3(8.f, 8.f, 1.5f), LLVector3(2.f, 0.01f, 1.5f), 1,
+                                                                             LLVector3(0.866025404f, 0.5f, 0.f), LLVector3(-0.5f, 0.866025404f, 0.f))) };
+        skmap::ScenePtr s = t.section(recs);
+        const skmap::CellId cell = { 4, 0, 0 };
+        const Raster r = bake(*s, s->mPolys[0].mLayer, cell);
+        const F32 reach = 2.f * 0.5f + 0.01f * 0.866025404f;
+        for (S32 y = static_cast<S32>(std::floor((8.f - reach) / 0.5f)); y <= static_cast<S32>(std::floor((8.f + reach) / 0.5f)); ++y)
+        {
+            bool full = false;
+            for (S32 x = 0; x < 256; ++x)
+            {
+                full = full || (r.mStats.mSectionClass[y * 256 + x] & skmap::SECTION_TEXEL_FULL);
+            }
+            ensure("a full texel in every row", full);
+        }
+    }
+
+    // A 1.1 m wall is half cover, hatched; the cover toggle hides the whole section.
+    template<> template<>
+    void skmapraster_object::test<12>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 8.f, 3.f, 0.f, 0.f);
+        skmap::ScenePtr s = t.section({ box(LLVector3(4.f, 4.f, 0.55f), LLVector3(2.f, 0.1f, 0.55f), 1) });
+        const S32 layer = s->mPolys[0].mLayer;
+        const Raster r = bake(*s, layer, TIER0);
+        ensure("half texels", r.mStats.mHalfTexels > 0);
+        ensure_equals("no full texels", r.mStats.mFullTexels, 0);
+        S32 lo = 255, hi = 0;
+        for (S32 x = 70; x < 186; ++x)
+        {
+            ensure("the wall's middle row is half", (r.mStats.mSectionClass[128 * 256 + x] & skmap::SECTION_TEXEL_HALF) != 0);
+            lo = llmin(lo, static_cast<S32>(r.at(x, 128)[3]));
+            hi = llmax(hi, static_cast<S32>(r.at(x, 128)[3]));
+        }
+        ensure("hatched", hi > lo + 10);
+
+        skmap::RasterParams off;
+        off.mSection = false;
+        const Raster hidden = bake(*s, layer, TIER0, off);
+        ensure_equals("no section with cover off", hidden.mStats.mHalfTexels + hidden.mStats.mFullTexels, 0);
+        ensure_equals("classes recorded", hidden.mStats.mSectionClass.size(), static_cast<size_t>(256 * 256));
+        for (U8 bits : hidden.mStats.mSectionClass)
+        {
+            ensure_equals("no bits", static_cast<S32>(bits), 0);
+        }
+    }
+
+    // Nothing is cut over walkable floor, except an island on its own top.
+    template<> template<>
+    void skmapraster_object::test<13>()
+    {
+        auto clear = [](const Raster& r, const Box2& area, const char* what) {
+            S32 n = 0;
+            for (S32 y = 0; y < 256; ++y)
+            {
+                for (S32 x = 0; x < 256; ++x)
+                {
+                    if (area.holds(texelAt(TIER0, x, y), skmap::tierTexel(0)))
+                    {
+                        ensure(what, r.mStats.mSectionClass[y * 256 + x] == 0);
+                        ++n;
+                    }
+                }
+            }
+            ensure("texels looked at", n > 0);
+        };
+        auto bits = [](const Raster& r, F32 x, F32 y) {
+            return r.mStats.mSectionClass[static_cast<S32>(y * 32.f) * 256 + static_cast<S32>(x * 32.f)];
+        };
+
+        // (a) A wedge under its own ramp: the hill's body is floor all the way.
+        {
+            std::vector<LLVector3> tris;
+            for (const LLVector3& v : { LLVector3(0.f, 0.f, 0.f), LLVector3(8.f, 0.f, 0.f), LLVector3(8.f, 0.f, 8.f),
+                                        LLVector3(0.f, 4.f, 0.f), LLVector3(8.f, 4.f, 8.f), LLVector3(8.f, 4.f, 0.f) })
+            {
+                tris.push_back(v);
+            }
+            auto quad = [&](const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d) {
+                for (const LLVector3& v : { a, b, c, a, c, d })
+                {
+                    tris.push_back(v);
+                }
+            };
+            const LLVector3 p0a(0.f, 0.f, 0.f), p1a(8.f, 0.f, 0.f), p2a(8.f, 0.f, 8.f), p0b(0.f, 4.f, 0.f), p1b(8.f, 4.f, 0.f), p2b(8.f, 4.f, 8.f);
+            quad(p0a, p0b, p1b, p1a);
+            quad(p1a, p1b, p2b, p2a);
+            quad(p2a, p2b, p0b, p0a);
+            TileMaker t;
+            t.quad(0.f, 0.f, 8.f, 4.f, 0.f, 8.f);
+            skmap::ScenePtr s = t.section({ soupOf(tris, true, 1) });
+            const Raster r = bake(*s, s->mPolys[0].mLayer, TIER0);
+            ensure("the wedge was cut", r.mStats.mPieces > 0);
+            clear(r, { 0.f, 0.f, 8.f, 4.f }, "nothing over the ramp");
+        }
+        // (b) A 1 m stage: a hatched rim where its skirt is, nothing over its top.
+        {
+            TileMaker t;
+            t.quad(0.f, 0.f, 8.f, 2.975f, 0.f, 0.f);
+            t.quad(0.f, 7.025f, 8.f, 8.f, 0.f, 0.f);
+            t.quad(0.f, 2.975f, 3.025f, 7.025f, 0.f, 0.f);
+            t.quad(6.975f, 2.975f, 8.f, 7.025f, 0.f, 0.f);
+            t.quad(3.775f, 3.725f, 6.225f, 6.275f, 1.f, 1.f);
+            skmap::ScenePtr s = t.section({ box(LLVector3(5.f, 5.f, 0.5f), LLVector3(1.6f, 1.65f, 0.5f), 1) });
+            std::set<S32> layers;
+            for (const skmap::ScenePoly& p : s->mPolys)
+            {
+                layers.insert(p.mLayer);
+            }
+            ensure("one layer", layers.size() == 1);
+            const Raster r = bake(*s, *layers.begin(), TIER0);
+            ensure_equals("nothing at the stage centre", static_cast<S32>(bits(r, 5.f, 5.f)), 0);
+            ensure("half inside its west face", (bits(r, 3.6f, 5.f) & skmap::SECTION_TEXEL_HALF) != 0);
+        }
+        // (c) The crate you can stand on: half over its top.
+        {
+            TileMaker t;
+            const S32 south = t.quad(0.f, 0.f, 8.f, 3.5f, 0.f, 0.f);
+            const S32 north = t.quad(0.f, 4.5f, 8.f, 8.f, 0.f, 0.f);
+            const S32 west = t.quad(0.f, 3.5f, 3.5f, 4.5f, 0.f, 0.f);
+            const S32 east = t.quad(4.5f, 3.5f, 8.f, 4.5f, 0.f, 0.f);
+            const S32 top = t.quad(3.5f, 3.5f, 4.5f, 4.5f, 0.75f, 0.75f);
+            t.join(top, 0, south, 2);
+            t.join(top, 2, north, 0);
+            t.join(top, 3, west, 1);
+            t.join(top, 1, east, 3);
+            skmap::ScenePtr s = t.section({ box(LLVector3(4.f, 4.f, 0.35f), LLVector3(0.5f, 0.5f, 0.35f), 1) });
+            const Raster r = bake(*s, s->mPolys[top].mLayer, TIER0);
+            const U8 b = bits(r, 4.f, 4.f);
+            ensure("half over the crate", (b & skmap::SECTION_TEXEL_HALF) != 0 && !(b & skmap::SECTION_TEXEL_FULL));
+        }
+        // (d) Stair treads: never cover.
+        {
+            TileMaker t;
+            const S32 floor = t.quad(1.f, 2.f, 4.f, 6.f, 0.f, 0.f);
+            std::vector<RecordPtr> recs;
+            S32 prev = floor;
+            for (S32 i = 0; i < 5; ++i)
+            {
+                const F32 x0 = 4.f + 0.3f * i, top = 0.25f * (i + 1);
+                const S32 tread = t.quad(x0, 3.f, x0 + 0.3f, 5.f, top, top);
+                t.join(prev, 1, tread, 3);
+                prev = tread;
+                recs.push_back(box(LLVector3(x0 + 0.15f, 4.f, top * 0.5f), LLVector3(0.15f, 1.f, top * 0.5f), 10 + i));
+            }
+            const S32 landing = t.quad(5.5f, 2.f, 8.5f, 6.f, 1.25f, 1.25f);
+            t.join(prev, 1, landing, 3);
+            skmap::ScenePtr s = t.section(recs);
+            const Raster r = bake(*s, s->mPolys[floor].mLayer, TIER0);
+            for (S32 i = 0; i < 5; ++i)
+            {
+                clear(r, { 4.f + 0.3f * i, 3.f, 4.3f + 0.3f * i, 5.f }, "nothing over a tread");
+            }
+        }
+    }
+
+    // A placeholder box is a dashed outline, never a fill.
+    template<> template<>
+    void skmapraster_object::test<14>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 8.f, 3.f, 0.f, 0.f);
+        Record placeholder = boxOf(LLVector3(4.f, 5.f, 1.5f), LLVector3(2.f, 1.f, 1.5f), 1);
+        placeholder.mProvenance = Provenance::BOX;
+        skmap::ScenePtr s = t.section({ std::make_shared<const Record>(placeholder) });
+        const Raster r = bake(*s, s->mPolys[0].mLayer, TIER0);
+        S32 edges = 0;
+        for (U8 bits : r.mStats.mSectionClass)
+        {
+            edges += (bits & skmap::SECTION_TEXEL_PROVISIONAL_EDGE) ? 1 : 0;
+            ensure("no fill", !(bits & (skmap::SECTION_TEXEL_HALF | skmap::SECTION_TEXEL_FULL)));
+        }
+        ensure("a dashed outline", edges > 0);
+    }
+
+    // A wall across a cell border has no outline along the border on either side.
+    template<> template<>
+    void skmapraster_object::test<15>()
+    {
+        TileMaker t;
+        t.quad(0.f, 4.f, 3.f, 12.f, 0.f, 0.f);
+        skmap::ScenePtr s = t.section({ box(LLVector3(4.f, 8.f, 1.5f), LLVector3(0.15f, 3.f, 1.5f), 1) });
+        const S32 layer = s->mPolys[0].mLayer;
+        const skmap::CellId south = { 0, 0, 0 }, north = { 0, 0, 1 };
+        const Raster a = bake(*s, layer, south);
+        const Raster b = bake(*s, layer, north);
+        S32 n = 0;
+        for (S32 x = 0; x < 256; ++x)
+        {
+            const F32 cx = texelAt(south, x, 0).mV[VX];
+            if (cx < 3.9f || cx > 4.1f)
+            {
+                continue;
+            }
+            for (const U8 bits : { a.mStats.mSectionClass[255 * 256 + x], b.mStats.mSectionClass[x] })
+            {
+                ensure("full at the seam", (bits & skmap::SECTION_TEXEL_FULL) != 0);
+                ensure("no outline at the seam", (bits & skmap::SECTION_TEXEL_FULL_EDGE) == 0);
+            }
+            ++n;
+        }
+        ensure("seam texels checked", n > 4);
+    }
+
+    // A door's leaf never reaches the bake: the doorway is a gap.
+    template<> template<>
+    void skmapraster_object::test<16>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 3.625f, 8.f, 0.f, 0.f);
+        t.quad(4.375f, 0.f, 8.f, 8.f, 0.f, 0.f);
+        Record leaf = boxOf(LLVector3(4.f, 4.f, 1.1f), LLVector3(0.03f, 0.6f, 1.1f), 3);
+        leaf.mFeature = FeatureKind::DOOR;
+        skmap::DoorInput door;
+        door.mPlanePoint.set(4.0, 4.0, 0.0);
+        door.mNormal.set(1.f, 0.f, 0.f);
+        door.mWidth = 1.2f;
+        door.mMin.set(3.97, 3.4, 0.0);
+        door.mMax.set(4.03, 4.6, 2.2);
+        door.mLeaves = { leaf.mPart };
+        skmap::ScenePtr s = t.section({ box(LLVector3(4.f, 1.7f, 1.5f), LLVector3(0.125f, 1.7f, 1.5f), 1),
+                                        box(LLVector3(4.f, 6.3f, 1.5f), LLVector3(0.125f, 1.7f, 1.5f), 2), std::make_shared<const Record>(leaf) },
+                                      { door });
+        ensure("the leaf went to its door", s->mDoorLeaves.size() == 1 && s->mDoorLeaves[0].size() == 1);
+        const Raster r = bake(*s, s->mPolys[0].mLayer, TIER0);
+        ensure("the walls are cut", r.mStats.mFullTexels > 0);
+        for (S32 y = 0; y < 256; ++y)
+        {
+            for (S32 x = 0; x < 256; ++x)
+            {
+                const LLVector2 p = texelAt(TIER0, x, y);
+                if (p.mV[VX] >= 3.97f && p.mV[VX] <= 4.03f && p.mV[VY] >= 3.55f && p.mV[VY] <= 4.45f)
+                {
+                    ensure_equals("nothing in the doorway", static_cast<S32>(r.mStats.mSectionClass[y * 256 + x]), 0);
+                }
+            }
+        }
+    }
+
+    // A sheet room around floor is demoted to a line; a room whose walls have both faces keeps its ring, hole and all.
+    template<> template<>
+    void skmapraster_object::test<17>()
+    {
+        auto rect = [](std::vector<LLVector3>& out, F32 x0, F32 y0, F32 x1, F32 y1) {
+            const LLVector2 c[4] = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 } };
+            for (S32 i = 0; i < 4; ++i)
+            {
+                const LLVector2& p = c[i];
+                const LLVector2& q = c[(i + 1) % 4];
+                const LLVector3 a(p.mV[VX], p.mV[VY], 0.f), b(q.mV[VX], q.mV[VY], 0.f), d(q.mV[VX], q.mV[VY], 3.f), e(p.mV[VX], p.mV[VY], 3.f);
+                for (const LLVector3& v : { a, b, d, a, d, e })
+                {
+                    out.push_back(v);
+                }
+            }
+        };
+        auto pieces = [](const skmap::Scene& s, S32 plane, S32& filled, S32& lines, size_t& loops) {
+            filled = lines = 0;
+            loops = 0;
+            for (const skmap::SectionPiece& p : s.mPieces)
+            {
+                if (p.mPlane != plane)
+                {
+                    continue;
+                }
+                if (p.mFlags & skmap::PIECE_LINES)
+                {
+                    ++lines;
+                }
+                else
+                {
+                    ++filled;
+                    loops = p.mLoops.size();
+                }
+            }
+        };
+        const S32 low = skmap::SECTION_LOW_Q;
+        TileMaker t;
+        t.quad(0.f, 0.f, 8.f, 8.f, 0.f, 0.f);
+        S32 filled = 0, lines = 0;
+        size_t loops = 0;
+
+        std::vector<LLVector3> sheet;
+        rect(sheet, 1.f, 1.f, 7.f, 7.f);
+        pieces(*t.section({ soupOf(sheet, false, 1) }), low, filled, lines, loops);
+        ensure_equals("the sheet room fills nothing", filled, 0);
+        ensure_equals("the sheet room is a line", lines, 1);
+
+        std::vector<LLVector3> thick;
+        rect(thick, 1.f, 1.f, 7.f, 7.f);
+        rect(thick, 1.3f, 1.3f, 6.7f, 6.7f);
+        pieces(*t.section({ soupOf(thick, false, 1) }), low, filled, lines, loops);
+        ensure_equals("one filled ring", filled, 1);
+        ensure_equals("with its hole", loops, static_cast<size_t>(2));
+        ensure_equals("nothing demoted", lines, 0);
     }
 }
