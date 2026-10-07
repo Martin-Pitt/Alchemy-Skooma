@@ -461,6 +461,19 @@ void SKNetMap::drawSelf()
             skmapdraw::triangle(dot + dir * tip, dot + dir * base + side * w, dot + dir * base - side * w);
         }
     }
+    else if (!gAgentCamera.cameraMouselook())
+    {
+        // Out of mouselook the camera's facing is not ours, so a triangle shows where the avatar faces.
+        const LLVector3 facing = gAgent.getAtAxis();
+        LLVector2 ahead = mView.toWidgetOffset(facing.mV[VX], facing.mV[VY]);
+        if (ahead.normVec() > 1e-6f)
+        {
+            const LLVector2 across(-ahead.mV[VY], ahead.mV[VX]);
+            const LLVector2 base = dot + ahead * (dot_radius + skmap::palette::HEADING_BASE_PX);
+            skmapdraw::triangle(dot + ahead * (dot_radius + skmap::palette::HEADING_TIP_PX), base + across * skmap::palette::HEADING_HALF_PX,
+                                base - across * skmap::palette::HEADING_HALF_PX);
+        }
+    }
     gGL.end();
 }
 
