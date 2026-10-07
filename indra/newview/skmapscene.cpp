@@ -421,7 +421,10 @@ void SKMapScene::updateAgentFloor()
     const LLVector3d agent = gAgent.getPositionGlobal();
     skmap::AgentFloor floor;
     floor.mPos = agent;
-    skmap::FloorHit hit = skmap::floorAt(scene, agent, 2.5f, 0.5f);
+    floor.mFloorPos = agent;
+    // A jump lifts the agent clear of the usual reach: look further down unless flying.
+    const F32 below = gAgent.getFlying() ? 2.5f : 8.f;
+    skmap::FloorHit hit = skmap::floorAt(scene, agent, below, 0.5f);
     // The navmesh is eroded by the agent's radius, so against a wall the agent stands just off it:
     // look a little way around before calling the agent off every floor.
     for (F32 r : { 0.4f, 0.8f })
@@ -429,7 +432,12 @@ void SKMapScene::updateAgentFloor()
         for (S32 k = 0; k < 8 && !hit.mFound; ++k)
         {
             const F32 a = F_TWO_PI * k / 8.f;
-            hit = skmap::floorAt(scene, agent + LLVector3d(std::cos(a) * r, std::sin(a) * r, 0.0), 2.5f, 0.5f);
+            const LLVector3d at = agent + LLVector3d(std::cos(a) * r, std::sin(a) * r, 0.0);
+            hit = skmap::floorAt(scene, at, below, 0.5f);
+            if (hit.mFound)
+            {
+                floor.mFloorPos = at;
+            }
         }
     }
     if (hit.mFound)
@@ -790,8 +798,8 @@ void SKMapScene::drawFloorplan(const skmap::MapView& view)
         F32 base = layer.mBaseZ;
         if (layer.mGround)
         {
-            const LLVector2 p = scene.toLocal(mAgent.mPos);
-            const auto it = scene.mIndex.find(skmap::indexCell(mAgent.mPos.mdV[VX], mAgent.mPos.mdV[VY]));
+            const LLVector2 p = scene.toLocal(mAgent.mFloorPos);
+            const auto it = scene.mIndex.find(skmap::indexCell(mAgent.mFloorPos.mdV[VX], mAgent.mFloorPos.mdV[VY]));
             if (it != scene.mIndex.end())
             {
                 F32 best = -FLT_MAX;
@@ -948,6 +956,8 @@ namespace
             colours[i] = ribbons.mColours[i];
         }
         vb->unmapBuffer();
+        // The upload bound the buffer without its attributes: make the next setBuffer() set them up.
+        LLVertexBuffer::unbind();
         return vb;
     }
 }
@@ -971,6 +981,8 @@ void SKMapScene::drawBuffer(const skmap::MapView& view, RibbonBuffer& buffer) co
                 positions[i] = buffer.mSource->at(i, mpp);
             }
             vb->unmapBuffer();
+            // As in makeRibbonBuffer: otherwise the draw below reads through the last buffer's attributes.
+            LLVertexBuffer::unbind();
             buffer.mMpp = mpp;
         }
     }

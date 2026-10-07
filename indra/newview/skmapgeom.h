@@ -297,6 +297,7 @@ namespace skmap
     struct AgentFloor
     {
         LLVector3d mPos;                        ///< raw position, global
+        LLVector3d mFloorPos;                   ///< where the floor was read, which may be beside mPos against a wall
         bool mFound = false;                    ///< a scene floor (or the navmesh's) was found
         S32 mLayer = -1;                        ///< -1 when the floor came from outside the scene
         F32 mZ = 0.f;
