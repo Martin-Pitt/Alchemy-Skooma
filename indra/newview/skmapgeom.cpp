@@ -938,7 +938,7 @@ namespace skmap
         return poly.mZMean;
     }
 
-    ScenePtr buildScene(const SceneInput& input)
+    ScenePtr buildScene(const SceneInput& input, SectionCache*)
     {
         auto scene = std::make_shared<Scene>();
         Scene& s = *scene;

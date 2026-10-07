@@ -106,10 +106,11 @@ private:
         U64 mViewRevision = 0;
         U64 mCensus = 0;
         U64 mRegions = 0;
+        bool mSection = false;
         bool operator==(const Trigger& o) const
         {
             return mMin == o.mMin && mMax == o.mMax && mNavRevision == o.mNavRevision && mViewRevision == o.mViewRevision
-                && mCensus == o.mCensus && mRegions == o.mRegions;
+                && mCensus == o.mCensus && mRegions == o.mRegions && mSection == o.mSection;
         }
     };
     Trigger currentTrigger() const;
@@ -194,6 +195,8 @@ private:
     };
 
     std::unique_ptr<LL::ThreadPool> mPool;
+    /// The section's slices, made on the first post and used only on the worker.
+    std::shared_ptr<skmap::SectionCache> mSectionCache;
     std::shared_ptr<bool> mAlive;
     U32 mGeneration = 0;
     bool mInFlight = false;

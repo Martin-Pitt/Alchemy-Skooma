@@ -25,6 +25,7 @@
 #ifndef SK_MAPGEOM_H
 #define SK_MAPGEOM_H
 
+#include "skmapsection.h"
 #include "skmapview.h"
 #include "sknavpolys.h"
 
@@ -90,6 +91,7 @@ namespace skmap
         F32 mWidth = 0.f;
         F64 mSill = 0.0;
         bool mDouble = false;
+        std::vector<LLUUID> mLeaves;            ///< sorted
     };
 
     struct RegionSquare
@@ -111,6 +113,8 @@ namespace skmap
         std::vector<RegionSquare> mRegions;
         F32 mClimb = 0.75f;
         CoverageFn mCoverage;                   ///< null reads as UNKNOWN everywhere
+        std::shared_ptr<const std::vector<sknav::RecordPtr>> mRecords;  ///< aliases the census snapshot's; null: no section
+        bool mSectionReport = false;            ///< collect the cover report
     };
 
     /// One navmesh polygon in scene-local metres.
@@ -270,8 +274,8 @@ namespace skmap
     constexpr F32 HASH_REACH_M = 2.f;           ///< what a leaf's raster reads past its edge: the halo cap
 
     /// Analyse the input into a scene. Pure and deterministic: the same input gives the same
-    /// scene. It takes no view, zoom or agent: content never depends on them.
-    ScenePtr buildScene(const SceneInput& input);
+    /// scene, with or without a slice cache. It takes no view, zoom or agent: content never depends on them.
+    ScenePtr buildScene(const SceneInput& input, SectionCache* cache = nullptr);
 
     /// The content hash of a layer's bake cell, or 0 when the layer has nothing there.
     U64 cellKey(const Scene& scene, S32 layer, const CellId& cell);

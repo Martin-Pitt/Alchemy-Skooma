@@ -34,6 +34,7 @@
 #include "llviewerregion.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "sknavlayout.h"
 #include "sknavmesh.h"
 #include "sknavrooms.h"
 #include "sknetmap.h"
@@ -99,6 +100,8 @@ void SKMapScene::cleanupSingleton()
         mPool->close();
         mPool.reset();
     }
+    // The pool has joined its worker, the cache's only user.
+    mSectionCache.reset();
     updateDemand(false);
     mScene.reset();
     mLastTiles.clear();
@@ -207,6 +210,8 @@ SKMapScene::Trigger SKMapScene::currentTrigger() const
         regions ^= sknav::mix(sknav::SEED, region->getHandle());
     }
     t.mRegions = regions;
+    static LLCachedControl<bool> section(gSavedSettings, "SKMapSection", true);
+    t.mSection = section;
     return t;
 }
 
@@ -243,9 +248,16 @@ void SKMapScene::maybePost()
     const U32 generation = ++mGeneration;
     std::weak_ptr<bool> alive = mAlive;
     std::shared_ptr<const skmap::SceneInput> job = input;
-    const bool posted = work->post([this, job, generation, alive]() {
+    if (!mSectionCache)
+    {
+        mSectionCache = std::make_shared<skmap::SectionCache>();
+    }
+    std::shared_ptr<skmap::SectionCache> cache = mSectionCache;
+    const bool posted = work->post([this, job, cache, generation, alive]() mutable {
         const auto start = std::chrono::steady_clock::now();
-        skmap::ScenePtr scene = skmap::buildScene(*job);
+        skmap::ScenePtr scene = skmap::buildScene(*job, cache.get());
+        // The last reference to the census snapshot drops here, on the worker.
+        job.reset();
         const F32 millis = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - start).count();
         LL::WorkQueue::postMaybe(LL::WorkQueue::getInstance("mainloop"), [this, scene, generation, millis, alive]() {
             if (!alive.expired())
@@ -331,7 +343,7 @@ void SKMapScene::gather(skmap::SceneInput& in)
                             in.mFeatureLinks.push_back({ from, to, kind });
                         }
                     });
-    navmesh.doorsIn(in.mMin, in.mMax, [&in](const sknav::DoorEntity& door) {
+    auto addDoor = [&in](const sknav::DoorEntity& door) {
         skmap::DoorInput d;
         d.mMin = door.mMin;
         d.mMax = door.mMax;
@@ -341,8 +353,32 @@ void SKMapScene::gather(skmap::SceneInput& in)
         d.mWidth = door.mWidth;
         d.mSill = door.mSill;
         d.mDouble = door.mDouble;
+        d.mLeaves = door.mLeaves;
         in.mDoors.push_back(d);
-    });
+    };
+    // With the section, records and doors come from one census snapshot, so a leaf and its record never disagree.
+    static LLCachedControl<bool> section(gSavedSettings, "SKMapSection", true);
+    SKCensusSnapshotPtr snap;
+    if (section && SKWorldCensus::instanceExists())
+    {
+        snap = SKWorldCensus::instance().snapshot();
+    }
+    if (snap)
+    {
+        in.mRecords = std::shared_ptr<const std::vector<sknav::RecordPtr>>(snap, &snap->mRecords);
+        for (const sknav::DoorEntity& door : snap->mDoors)
+        {
+            if (sknav::overlapsXY(door.mMin, door.mMax, in.mMin, in.mMax) && door.mMin.mdV[VZ] <= in.mMax.mdV[VZ]
+                && in.mMin.mdV[VZ] <= door.mMax.mdV[VZ])
+            {
+                addDoor(door);
+            }
+        }
+    }
+    else
+    {
+        navmesh.doorsIn(in.mMin, in.mMax, addDoor);
+    }
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {
         in.mRegions.push_back({ region->getOriginGlobal(), static_cast<F64>(region->getWidth()) });
