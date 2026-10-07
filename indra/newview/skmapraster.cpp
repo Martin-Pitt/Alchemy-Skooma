@@ -292,41 +292,38 @@ namespace skmap
             }
         }
 
-        // 3. Halos: light past a ledge, away from its floor; dark inside a wall, on its floor.
-        std::vector<F32> light(static_cast<size_t>(N) * N, 0.f), dark(static_cast<size_t>(N) * N, 0.f);
+        // 3. Halos: light past a ledge, away from its floor.
+        std::vector<F32> light(static_cast<size_t>(N) * N, 0.f);
         for (U32 m : L.mMarks)
         {
             const LineMark& mark = scene.mMarks[m];
-            const bool ledge = mark.mKind == MarkKind::LEDGE;
-            if ((!ledge && mark.mKind != MarkKind::WALL) || mark.mFloorSide == 0)
+            if (mark.mKind != MarkKind::LEDGE || mark.mFloorSide == 0)
             {
                 continue;
             }
-            const F32 w = ledge ? llmin(palette::LEDGE_HALO_TEXELS * f.mTexel, palette::LEDGE_HALO_MAX_M)
-                                : llmin(palette::WALL_HALO_TEXELS * f.mTexel, palette::WALL_HALO_MAX_M);
-            const F32 a0 = ledge ? palette::LEDGE_HALO_ALPHA : palette::WALL_HALO_ALPHA;
+            const F32 w = llmin(palette::LEDGE_HALO_TEXELS * f.mTexel, palette::LEDGE_HALO_MAX_M);
+            const F32 a0 = palette::LEDGE_HALO_ALPHA;
             S32 x0, y0, x1, y1;
             if (!f.range(llmin(mark.mA.mV[VX], mark.mB.mV[VX]) - w, llmin(mark.mA.mV[VY], mark.mB.mV[VY]) - w,
                          llmax(mark.mA.mV[VX], mark.mB.mV[VX]) + w, llmax(mark.mA.mV[VY], mark.mB.mV[VY]) + w, x0, y0, x1, y1))
             {
                 continue;
             }
-            std::vector<F32>& halo = ledge ? light : dark;
             for (S32 y = y0; y <= y1; ++y)
             {
                 for (S32 x = x0; x <= x1; ++x)
                 {
                     const LLVector2 p = f.texelCentre(x, y);
                     const F32 side = cross2(mark.mA, mark.mB, p) * mark.mFloorSide;
-                    // A ledge's halo lies off the floor, a wall's on it.
-                    if ((ledge && side >= 0.f) || (!ledge && side <= 0.f))
+                    // A ledge's halo lies off the floor.
+                    if (side >= 0.f)
                     {
                         continue;
                     }
                     const F32 d = segmentDistance(p, mark.mA, mark.mB);
                     if (d < w)
                     {
-                        F32& h = halo[static_cast<size_t>(y) * N + x];
+                        F32& h = light[static_cast<size_t>(y) * N + x];
                         h = llmax(h, a0 * (1.f - d / w));
                     }
                 }
@@ -336,9 +333,7 @@ namespace skmap
         {
             for (S32 x = 0; x < N; ++x)
             {
-                const size_t i = static_cast<size_t>(y) * N + x;
-                img.over(x, y, 0.f, 0.f, 0.f, dark[i]);
-                img.over(x, y, 1.f, 1.f, 1.f, light[i]);
+                img.over(x, y, 1.f, 1.f, 1.f, light[static_cast<size_t>(y) * N + x]);
             }
         }
 

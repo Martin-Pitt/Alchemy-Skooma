@@ -122,9 +122,6 @@ namespace skmap
         constexpr F32 LEDGE_HALO_ALPHA = 0.18f;
         constexpr F32 LEDGE_HALO_TEXELS = 12.f;
         constexpr F32 LEDGE_HALO_MAX_M = 2.f;
-        constexpr F32 WALL_HALO_ALPHA = 0.22f;
-        constexpr F32 WALL_HALO_TEXELS = 8.f;
-        constexpr F32 WALL_HALO_MAX_M = 1.5f;
         constexpr PaletteColour CONTOUR = { 0.85f, 0.88f, 0.80f, 0.30f };
         constexpr PaletteColour RUNG_CASING = withAlpha(rgba8(0x202428ff), 0.75f);
         constexpr PaletteColour RUNG_CORE = withAlpha(rgba8(0xe8ecefff), 0.75f);
