@@ -47,11 +47,17 @@ namespace skmap
         S32 mPlane = 0;
         sknav::Shape mShape = sknav::Shape::TRIANGLES;
         sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+        U32 mFirst = 0, mCount = 0;     ///< the pair's pieces in its layer's run
 
         bool same(const sknav::Record& r, S32 q) const
         {
             return mPlane == q && mSignature == r.mSignature && mShape == r.mShape && mProvenance == r.mProvenance
                 && std::memcmp(mOrigin.mdV, r.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0 && mPart == r.mPart && mRoot == r.mRoot;
+        }
+        bool same(const PairSource& o) const
+        {
+            return mPlane == o.mPlane && mSignature == o.mSignature && mShape == o.mShape && mProvenance == o.mProvenance
+                && std::memcmp(mOrigin.mdV, o.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0 && mPart == o.mPart && mRoot == o.mRoot;
         }
     };
     typedef std::shared_ptr<const std::vector<PairSource>> PairSources;
@@ -1661,6 +1667,16 @@ namespace skmap
             return h;
         }
 
+        /// A pair source's lookup hash, over what PairSource::same compares.
+        U64 sourceHash(const PairSource& p)
+        {
+            U64 h = hashStep(sknav::SEED, p.mSignature);
+            h = hashStep(h, static_cast<U32>(p.mPlane) | (static_cast<U64>(p.mShape) << 32) | (static_cast<U64>(p.mProvenance) << 40));
+            h = hashWords(h, p.mOrigin.mdV, sizeof(p.mOrigin.mdV));
+            h = hashWords(h, p.mPart.mData, sizeof(p.mPart.mData));
+            return hashWords(h, p.mRoot.mData, sizeof(p.mRoot.mData));
+        }
+
         /// What a layer's floor levels and floor lookups read: the origin and its polygons' corners and detail
         /// triangles, in order. Everything else the section reads of a polygon is made from these.
         U64 layerHash(const Scene& s, const SceneLayer& layer)
@@ -1938,6 +1954,7 @@ namespace skmap
             std::vector<std::pair<S32, size_t>> order;
             std::vector<LLVector2> ring;
             std::vector<U64> pair_keys, key_scratch;
+            std::vector<std::pair<U64, U32>> by_source;
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
@@ -2106,6 +2123,9 @@ namespace skmap
 
                 // 6. Pieces, in (record, plane, group) order.
                 SK_SECTION_STAGE(PIECES);
+                std::vector<PairSource>* fresh = nullptr;
+                const std::vector<PairSource>* old_sources = nullptr;
+                const std::vector<SectionPiece>* old_run = nullptr;
                 // The same floors cut by the same records at the same planes, in the same order, make the same pieces:
                 // the last build's, which hold the slices the cache would hand back.
                 if (next)
@@ -2130,7 +2150,21 @@ namespace skmap
                         stats.mReused += static_cast<U32>(pairs.size());
                         continue;
                     }
+                    // Otherwise, on the same floors, each pair the last build also had makes the pieces it made then:
+                    // a pair's pieces read its record, its plane and the layer's floors, never the other pairs.
+                    if (had && *had)
+                    {
+                        old_sources = had->get();
+                        old_run = last->mRuns[last_layer[l]].get();
+                        by_source.clear();
+                        for (size_t k = 0; k < old_sources->size(); ++k)
+                        {
+                            by_source.emplace_back(sourceHash((*old_sources)[k]), static_cast<U32>(k));
+                        }
+                        std::sort(by_source.begin(), by_source.end());
+                    }
                     auto sources = std::make_shared<std::vector<PairSource>>(pairs.size());
+                    fresh = sources.get();
                     for (size_t k = 0; k < pairs.size(); ++k)
                     {
                         const sknav::Record& r = *recs[pairs[k].first];
@@ -2158,8 +2192,31 @@ namespace skmap
                 // The layer's run, with room for about one and a half pieces per pair.
                 auto run = std::make_shared<std::vector<SectionPiece>>();
                 run->reserve(pairs.size() + pairs.size() / 2);
-                for (const auto& pq : pairs)
+                for (size_t pk = 0; pk < pairs.size(); ++pk)
                 {
+                    const auto& pq = pairs[pk];
+                    if (fresh)
+                    {
+                        (*fresh)[pk].mFirst = static_cast<U32>(run->size());
+                    }
+                    if (old_run)
+                    {
+                        const PairSource& src = (*fresh)[pk];
+                        const U64 h = sourceHash(src);
+                        const PairSource* found = nullptr;
+                        for (auto it = std::lower_bound(by_source.begin(), by_source.end(), std::make_pair(h, 0u));
+                             it != by_source.end() && it->first == h && !found; ++it)
+                        {
+                            found = (*old_sources)[it->second].same(src) ? &(*old_sources)[it->second] : nullptr;
+                        }
+                        if (found)
+                        {
+                            run->insert(run->end(), old_run->begin() + found->mFirst, old_run->begin() + found->mFirst + found->mCount);
+                            planes_used.push_back(pq.second);
+                            stats.mReused++;
+                            continue;
+                        }
+                    }
                     const sknav::Record& rec = *recs[pq.first];
                     const S32 q = pq.second;
                     const SlicePtr sl = sliceOf(pq.first, q);
@@ -2371,6 +2428,13 @@ namespace skmap
                         }
                         piece.mMin = lo + shift;
                         piece.mMax = hi + shift;
+                    }
+                }
+                if (fresh)
+                {
+                    for (size_t pk = 0; pk < fresh->size(); ++pk)
+                    {
+                        (*fresh)[pk].mCount = static_cast<U32>((pk + 1 < fresh->size() ? (*fresh)[pk + 1].mFirst : run->size()) - (*fresh)[pk].mFirst);
                     }
                 }
                 appendRun(s, run, layer);
