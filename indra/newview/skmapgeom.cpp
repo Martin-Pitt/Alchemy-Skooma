@@ -1554,12 +1554,23 @@ namespace skmap
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
                 std::set<S32> planes;
+                auto take = [&](U32 ri, const std::set<S32>& qs) {
+                    const sknav::Record& r = *recs[ri];
+                    for (S32 q : qs)
+                    {
+                        const F64 z = sectionPlaneZ(q);
+                        if (r.mMin.mdV[VZ] < z && z <= r.mMax.mdV[VZ])
+                        {
+                            pairs.emplace_back(ri, q);
+                        }
+                    }
+                };
                 for (S32 by = by0; by <= by1; ++by)
                 {
                     for (S32 bx = bx0; bx <= bx1; ++bx)
                     {
                         const auto bucket = buckets.find({ bx, by });
-                        if (bucket == buckets.end() && large.empty())
+                        if (bucket == buckets.end())
                         {
                             continue;
                         }
@@ -1587,28 +1598,30 @@ namespace skmap
                         {
                             continue;
                         }
-                        auto take = [&](U32 ri) {
-                            const sknav::Record& r = *recs[ri];
-                            for (S32 q : planes)
-                            {
-                                const F64 z = sectionPlaneZ(q);
-                                if (r.mMin.mdV[VZ] < z && z <= r.mMax.mdV[VZ])
-                                {
-                                    pairs.emplace_back(ri, q);
-                                }
-                            }
-                        };
-                        if (bucket != buckets.end())
+                        for (U32 ri : bucket->second)
                         {
-                            for (U32 ri : bucket->second)
+                            take(ri, planes);
+                        }
+                    }
+                }
+                // The large list meets every bucket, so it takes the planes of the whole layer once.
+                if (!large.empty())
+                {
+                    planes.clear();
+                    for (U32 c : grid.mCell)
+                    {
+                        if (c)
+                        {
+                            for (S32 k = 0; k < grid.mLists[c - 1]; ++k)
                             {
-                                take(ri);
+                                planes.insert(grid.mLists[c + k] + SECTION_LOW_Q);
+                                planes.insert(grid.mLists[c + k] + SECTION_HIGH_Q);
                             }
                         }
-                        for (U32 ri : large)
-                        {
-                            take(ri);
-                        }
+                    }
+                    for (U32 ri : large)
+                    {
+                        take(ri, planes);
                     }
                 }
                 std::sort(pairs.begin(), pairs.end());

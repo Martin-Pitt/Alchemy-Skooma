@@ -1405,4 +1405,22 @@ namespace tut
         ensure_equals("openings", off->mSectionStats.mHalfOpenings, on->mSectionStats.mHalfOpenings);
         ensure_equals("islands", off->mSectionStats.mIslands, on->mSectionStats.mIslands);
     }
+
+    // A record over more than 8 x 8 buckets is cut at the layer's planes, once each.
+    template<> template<>
+    void skmapgeom_object::test<34>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 32.f, 32.f, 0.f, 0.f);
+        std::vector<RecordPtr> recs = { boxRecord(LLVector3(16.f, 16.f, 1.5f), LLVector3(40.f, 40.f, 1.5f), 1),
+                                        boxRecord(LLVector3(16.f, 16.f, -9.5f), LLVector3(40.f, 40.f, 0.5f), 2) };
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }, &recs));
+        std::multiset<S32> planes;
+        for (const skmap::SectionPiece* p : piecesOf(*s, 1))
+        {
+            planes.insert(p->mPlane);
+        }
+        ensure("the low and high planes, once each", planes == std::multiset<S32>({ skmap::SECTION_LOW_Q, skmap::SECTION_HIGH_Q }));
+        ensure("nothing below the floor", piecesOf(*s, 2).empty());
+    }
 }
