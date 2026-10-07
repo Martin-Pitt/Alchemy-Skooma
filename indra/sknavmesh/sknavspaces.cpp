@@ -27,6 +27,7 @@
 #include "sknavspaces.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -626,8 +627,78 @@ namespace sknav
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
         /// Whether solid stands between lo and hi (mesh units) at a point.
         bool solidAt(F32 x, F32 y, S32 lo, S32 hi) const;
-        /// The aperture a cut lies in: the shortest chord through it between solid jambs.
-        bool aperture(const Run& run, LLVector2& a, LLVector2& b) const;
+        /// The aperture a cut lies in: the shortest chord through it between solid jambs, framed for callers trying many cuts on few bearings.
+        bool aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed = false) const;
+        static constexpr S32 RAYS = 2 * APERTURE_ANGLES + 1;
+        static constexpr S32 WINDOW = 64;       ///< cells a side of a window, a row of them to a word
+        static constexpr size_t RAY_FANS = 4;
+        static constexpr S32 BAND = 4;          ///< samples a march reads the cells of at once
+        /// How many cells round its centre's a ray's samples can be read from.
+        S32 frameReach() const { return static_cast<S32>(std::ceil(SCORE_REACH_M / mCell)) + 2; }
+        /// The rays aperture tries about a bearing, and as rows of bits the cells round the centre's each side's and each band's samples can be read from.
+        struct RayFan
+        {
+            F32 mBase = 0.f;
+            std::array<LLVector2, RAYS> mDirs;
+            S32 mBandCount = 0;
+            std::vector<U64> mMasks;                    ///< per mask and row
+            std::vector<std::pair<S32, S32>> mSpans;    ///< per mask, its first and last row
+            S32 sideMask(S32 side) const { return side; }
+            S32 bandMask(S32 side, S32 i, S32 band) const { return 2 + (side * RAYS + i) * mBandCount + band; }
+            /// The band's samples and all nearer.
+            S32 reachMask(S32 side, S32 i, S32 band) const { return 2 + (2 * RAYS + side * RAYS + i) * mBandCount + band; }
+        };
+        mutable std::vector<RayFan> mFans;      ///< for the last few bearings
+        mutable size_t mFanNext = 0;
+        const RayFan& rayFan(F32 base) const;
+        /// Where solid stands between lo and hi over a window of a tile's cells, a row of bits a word.
+        struct Window
+        {
+            U32 mTile = NONE;
+            const TileAir* mAir = nullptr;
+            S32 mX0 = 0, mY0 = 0;
+            U64 mRows[WINDOW];
+        };
+        mutable Window mWindows[4];
+        mutable S32 mWindowCount = 0, mWindowsLo = INT_MIN, mWindowsHi = INT_MIN;
+        /// Where a centre's frame of reach cells either side lies in the windows of the tiles its samples can read.
+        struct Frame
+        {
+            struct Place
+            {
+                S32 mWindow, mX, mY;
+            };
+            Place mPlaces[4];
+            S32 mCount = 0;
+            bool mOneTile = false;      ///< every sample reads the one tile
+        };
+        void frameAt(const LLVector2& c, S32 lo, S32 hi, Frame& frame) const;
+        /// Where solid stands between lo and hi over a tile's cells, filled eight by eight cells as first read.
+        struct SolidMap
+        {
+            S32 mWords = 0, mBlocksW = 0;
+            std::vector<U64> mBits;
+            std::vector<U8> mFilled;    ///< per block of eight by eight cells
+            /// Cells x0 to x1 of row iy, from bit 0.
+            U64 row(S32 iy, S32 x0, S32 x1) const;
+        };
+        struct SolidKey
+        {
+            U32 mTile;
+            S32 mLo, mHi;
+            bool operator==(const SolidKey& o) const { return mTile == o.mTile && mLo == o.mLo && mHi == o.mHi; }
+        };
+        struct SolidKeyHash
+        {
+            size_t operator()(const SolidKey& k) const
+            {
+                const U64 h = (static_cast<U64>(k.mTile) * 0x9E3779B97F4A7C15ull) ^ ((static_cast<U64>(static_cast<U32>(k.mLo)) << 32 | static_cast<U32>(k.mHi)) * 0xC2B2AE3D27D4EB4Full);
+                return static_cast<size_t>(h ^ (h >> 29));
+            }
+        };
+        mutable std::unordered_map<SolidKey, SolidMap, SolidKeyHash> mSolidMaps;
+        /// The tile's solid map, its cells x0 to x1 by y0 to y1 filled.
+        const SolidMap& solidMap(U32 t, S32 x0, S32 x1, S32 y0, S32 y1, S32 lo, S32 hi) const;
 
         void prepare();
         void runBatch(size_t b);
@@ -817,36 +888,332 @@ namespace sknav
         return blocked(t, static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell)), static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell)), lo, hi);
     }
 
-    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b) const
+    const SpacesPass::State::SolidMap& SpacesPass::State::solidMap(U32 t, S32 x0, S32 x1, S32 y0, S32 y1, S32 lo, S32 hi) const
+    {
+        SolidMap& m = mSolidMaps[SolidKey{ t, lo, hi }];
+        const TileAir& a = air(t);
+        if (m.mFilled.empty())
+        {
+            m.mWords = (a.mWidth + 63) >> 6;
+            m.mBlocksW = (a.mWidth + 7) >> 3;
+            m.mBits.assign(static_cast<size_t>(m.mWords) * a.mHeight, 0);
+            m.mFilled.assign(static_cast<size_t>(m.mBlocksW) * ((a.mHeight + 7) >> 3), 0);
+        }
+        for (S32 by = y0 >> 3; by <= y1 >> 3; ++by)
+        {
+            for (S32 bx = x0 >> 3; bx <= x1 >> 3; ++bx)
+            {
+                U8& filled = m.mFilled[static_cast<size_t>(bx + by * m.mBlocksW)];
+                if (filled)
+                {
+                    continue;
+                }
+                filled = 1;
+                for (S32 iy = by * 8; iy < std::min(by * 8 + 8, a.mHeight); ++iy)
+                {
+                    for (S32 ix = bx * 8; ix < std::min(bx * 8 + 8, a.mWidth); ++ix)
+                    {
+                        if (blocked(t, ix, iy, lo, hi))
+                        {
+                            m.mBits[static_cast<size_t>(iy * m.mWords + (ix >> 6))] |= 1ull << (ix & 63);
+                        }
+                    }
+                }
+            }
+        }
+        return m;
+    }
+
+    U64 SpacesPass::State::SolidMap::row(S32 iy, S32 x0, S32 x1) const
+    {
+        const U64* r = &mBits[static_cast<size_t>(iy * mWords)];
+        const S32 word = x0 >> 6, off = x0 & 63;
+        U64 v = r[word] >> off;
+        if (off && word + 1 < mWords)
+        {
+            v |= r[word + 1] << (64 - off);
+        }
+        const S32 n = x1 - x0 + 1;
+        return n >= 64 ? v : v & ((1ull << n) - 1);
+    }
+
+    const SpacesPass::State::RayFan& SpacesPass::State::rayFan(F32 base) const
+    {
+        for (const RayFan& f : mFans)
+        {
+            if (f.mBase == base)
+            {
+                return f;
+            }
+        }
+        RayFan* slot = nullptr;
+        if (mFans.size() < RAY_FANS)
+        {
+            mFans.reserve(RAY_FANS);
+            slot = &mFans.emplace_back();
+        }
+        else
+        {
+            slot = &mFans[mFanNext];
+            mFanNext = (mFanNext + 1) % RAY_FANS;
+        }
+        RayFan& f = *slot;
+        f.mBase = base;
+        for (S32 i = 0; i < RAYS; ++i)
+        {
+            const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
+            const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
+            f.mDirs[i].set(std::cos(th), std::sin(th));
+        }
+        // A sample is read from the cell its offset from the centre falls in or the next, wherever in its cell the centre lies.
+        const S32 reach = frameReach();
+        S32 samples = 0;
+        for (F32 t = mCell * 0.5f; t <= SCORE_REACH_M; t += mCell * 0.5f)
+        {
+            ++samples;
+        }
+        f.mBandCount = (samples + BAND - 1) / BAND;
+        const S32 masks = 2 + 4 * RAYS * f.mBandCount;
+        f.mMasks.assign(static_cast<size_t>(masks) * WINDOW, 0);
+        f.mSpans.assign(masks, std::make_pair(WINDOW, -1));
+        for (S32 side = 0; side < 2 && 2 * reach < WINDOW; ++side)
+        {
+            for (S32 i = 0; i < RAYS; ++i)
+            {
+                const LLVector2 dir = side ? -f.mDirs[i] : f.mDirs[i];
+                S32 j = 0;
+                for (F32 t = mCell * 0.5f; t <= SCORE_REACH_M; t += mCell * 0.5f, ++j)
+                {
+                    const F32 x = dir.mV[VX] * t / mCell, y = dir.mV[VY] * t / mCell;
+                    for (S32 dy = static_cast<S32>(std::floor(y - 0.01f)); dy <= static_cast<S32>(std::floor(y + 1.01f)); ++dy)
+                    {
+                        for (S32 dx = static_cast<S32>(std::floor(x - 0.01f)); dx <= static_cast<S32>(std::floor(x + 1.01f)); ++dx)
+                        {
+                            auto set = [&](S32 mask) {
+                                f.mMasks[static_cast<size_t>(mask * WINDOW + dy + reach)] |= 1ull << (dx + reach);
+                                f.mSpans[mask].first = std::min(f.mSpans[mask].first, dy + reach);
+                                f.mSpans[mask].second = std::max(f.mSpans[mask].second, dy + reach);
+                            };
+                            set(f.sideMask(side));
+                            set(f.bandMask(side, i, j / BAND));
+                            for (S32 band = j / BAND; band < f.mBandCount; ++band)
+                            {
+                                set(f.reachMask(side, i, band));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return f;
+    }
+
+    void SpacesPass::State::frameAt(const LLVector2& c, S32 lo, S32 hi, Frame& frame) const
+    {
+        // Windows are kept while frames fall inside them, and built anew round a frame that leaves them.
+        const S32 reach = frameReach();
+        const F32 r = (reach + 1) * mCell;
+        const F32 x0 = c.mV[VX] - r, x1 = c.mV[VX] + r, y0 = c.mV[VY] - r, y1 = c.mV[VY] + r;
+        frame.mCount = 0;
+        bool fits = mWindowsLo == lo && mWindowsHi == hi;
+        for (S32 ky = tileIndex(y0); ky <= tileIndex(y1); ++ky)
+        {
+            for (S32 kx = tileIndex(x0); kx <= tileIndex(x1); ++kx)
+            {
+                TileKey key;
+                key.mX = kx;
+                key.mY = ky;
+                const U32 it = tileAt(key);
+                if (it == NONE)
+                {
+                    continue;
+                }
+                const TileAir& ta = air(it);
+                const S32 ic = static_cast<S32>(std::floor((c.mV[VX] - ta.mOrigin.mV[VX]) / mCell));
+                const S32 jc = static_cast<S32>(std::floor((c.mV[VY] - ta.mOrigin.mV[VY]) / mCell));
+                S32 w = 0;
+                while (w < mWindowCount && mWindows[w].mTile != it)
+                {
+                    ++w;
+                }
+                fits = fits && w < mWindowCount && ic - reach >= mWindows[w].mX0 && ic + reach < mWindows[w].mX0 + WINDOW &&
+                       jc - reach >= mWindows[w].mY0 && jc + reach < mWindows[w].mY0 + WINDOW;
+                Frame::Place& place = frame.mPlaces[frame.mCount++];
+                place.mWindow = w;
+                place.mX = ic - reach;
+                place.mY = jc - reach;
+            }
+        }
+        frame.mOneTile = frame.mCount == 1 && tileIndex(x0) == tileIndex(x1) && tileIndex(y0) == tileIndex(y1);
+        if (fits)
+        {
+            for (S32 k = 0; k < frame.mCount; ++k)
+            {
+                Frame::Place& place = frame.mPlaces[k];
+                place.mX -= mWindows[place.mWindow].mX0;
+                place.mY -= mWindows[place.mWindow].mY0;
+            }
+            return;
+        }
+        mWindowsLo = lo;
+        mWindowsHi = hi;
+        mWindowCount = 0;
+        S32 k = 0;
+        for (S32 ky = tileIndex(y0); ky <= tileIndex(y1); ++ky)
+        {
+            for (S32 kx = tileIndex(x0); kx <= tileIndex(x1); ++kx)
+            {
+                TileKey key;
+                key.mX = kx;
+                key.mY = ky;
+                const U32 it = tileAt(key);
+                if (it == NONE)
+                {
+                    continue;
+                }
+                Frame::Place& place = frame.mPlaces[k++];
+                place.mWindow = mWindowCount++;
+                Window& win = mWindows[place.mWindow];
+                const TileAir& ta = air(it);
+                win.mTile = it;
+                win.mAir = &ta;
+                win.mX0 = place.mX - (WINDOW - (2 * reach + 1)) / 2;
+                win.mY0 = place.mY - (WINDOW - (2 * reach + 1)) / 2;
+                place.mX -= win.mX0;
+                place.mY -= win.mY0;
+                std::fill(win.mRows, win.mRows + WINDOW, 0ull);
+                const S32 gx0 = std::max(win.mX0, 0), gx1 = std::min(win.mX0 + WINDOW - 1, ta.mWidth - 1);
+                const S32 gy0 = std::max(win.mY0, 0), gy1 = std::min(win.mY0 + WINDOW - 1, ta.mHeight - 1);
+                if (gx0 <= gx1 && gy0 <= gy1)
+                {
+                    const SolidMap& m = solidMap(it, gx0, gx1, gy0, gy1, lo, hi);
+                    for (S32 iy = gy0; iy <= gy1; ++iy)
+                    {
+                        win.mRows[iy - win.mY0] = m.row(iy, gx0, gx1) << (gx0 - win.mX0);
+                    }
+                }
+                // Off the grid, the cells a point of the tile's footprint can still be read from, through its neighbours.
+                const S32 fx0 = std::max(win.mX0, static_cast<S32>(std::floor((static_cast<F32>(kx * TILE_M) - ta.mOrigin.mV[VX]) / mCell)) - 1);
+                const S32 fx1 = std::min(win.mX0 + WINDOW - 1, static_cast<S32>(std::floor((static_cast<F32>((kx + 1) * TILE_M) - ta.mOrigin.mV[VX]) / mCell)) + 1);
+                const S32 fy0 = std::max(win.mY0, static_cast<S32>(std::floor((static_cast<F32>(ky * TILE_M) - ta.mOrigin.mV[VY]) / mCell)) - 1);
+                const S32 fy1 = std::min(win.mY0 + WINDOW - 1, static_cast<S32>(std::floor((static_cast<F32>((ky + 1) * TILE_M) - ta.mOrigin.mV[VY]) / mCell)) + 1);
+                for (S32 iy = fy0; iy <= fy1; ++iy)
+                {
+                    const bool row_off = iy < 0 || iy >= ta.mHeight;
+                    for (S32 ix = fx0; ix <= fx1; ++ix)
+                    {
+                        if (!row_off && ix >= 0 && ix < ta.mWidth)
+                        {
+                            ix = ta.mWidth - 1;     // the grid's own cells are in already
+                            continue;
+                        }
+                        if (blocked(it, ix, iy, lo, hi))
+                        {
+                            win.mRows[iy - win.mY0] |= 1ull << (ix - win.mX0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed) const
     {
         // Across a doorway the shortest chord between solid on both sides runs
         // jamb to jamb; tried near the cut's own direction, then again from
         // the chord's middle. A floor's edge is no jamb: nothing stands there.
         const S32 lo = run.mFloor + mClimb + 1, hi = run.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        const F32 step = mCell * 0.5f;
+        // Framed, a call reads its samples' cells in bulk, unless they are too fine for a window's rows.
+        const F32 base = std::atan2(run.mD.mV[VY], run.mD.mV[VX]);
+        framed = framed && 2 * frameReach() < WINDOW;
+        LLVector2 own[RAYS];
+        const RayFan* fan = framed ? &rayFan(base) : nullptr;
+        const LLVector2* dirs = framed ? fan->mDirs.data() : own;
+        for (S32 i = 0; i < RAYS && !framed; ++i)
+        {
+            const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
+            const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
+            own[i].set(std::cos(th), std::sin(th));
+        }
+        Frame frame;
+        // solidAt, read from the windows.
         auto solid = [&](const LLVector2& from, const LLVector2& dir, F32 t) {
             const LLVector2 q = from + dir * t;
-            return solidAt(q.mV[VX], q.mV[VY], lo, hi);
-        };
-        // To the first solid along dir, its face found to a sixty-fourth of a cell.
-        auto march = [&](const LLVector2& from, const LLVector2& dir, F32& t_out) {
-            const F32 step = mCell * 0.5f;
-            for (F32 t = step; t <= SCORE_REACH_M; t += step)
+            if (!framed)
             {
-                if (solid(from, dir, t))
+                return solidAt(q.mV[VX], q.mV[VY], lo, hi);
+            }
+            const Frame::Place* place = frame.mPlaces;
+            if (!frame.mOneTile)
+            {
+                TileKey key;
+                key.mX = tileIndex(q.mV[VX]);
+                key.mY = tileIndex(q.mV[VY]);
+                const U32 it = tileAt(key);
+                while (place != frame.mPlaces + frame.mCount && mWindows[place->mWindow].mTile != it)
                 {
-                    F32 free = t - step, hit = t;
-                    while (hit - free > mCell / 64.f)
-                    {
-                        const F32 mid = (free + hit) * 0.5f;
-                        (solid(from, dir, mid) ? hit : free) = mid;
-                    }
-                    t_out = hit;
-                    return true;
+                    ++place;
+                }
+                if (place == frame.mPlaces + frame.mCount)
+                {
+                    return false;
                 }
             }
-            return false;
+            const Window& w = mWindows[place->mWindow];
+            const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - w.mAir->mOrigin.mV[VX]) / mCell));
+            const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - w.mAir->mOrigin.mV[VY]) / mCell));
+            return ((w.mRows[iy - w.mY0] >> (ix - w.mX0)) & 1) != 0;
         };
-        const F32 base = std::atan2(run.mD.mV[VY], run.mD.mV[VX]);
+        // Whether any cell the samples a mask holds can be read from is solid.
+        auto reads = [&](S32 mask) {
+            if (!framed)
+            {
+                return true;
+            }
+            const U64* m = &fan->mMasks[static_cast<size_t>(mask * WINDOW)];
+            const auto& span = fan->mSpans[mask];
+            U64 hit = 0;
+            for (S32 k = 0; k < frame.mCount; ++k)
+            {
+                const Frame::Place& place = frame.mPlaces[k];
+                const U64* rows = mWindows[place.mWindow].mRows + place.mY;
+                for (S32 r = span.first; r <= span.second; ++r)
+                {
+                    hit |= (m[r] << place.mX) & rows[r];
+                }
+            }
+            return hit != 0;
+        };
+        // The first solid sample along a ray, 0 when there is none short of limit.
+        auto march = [&](const LLVector2& from, S32 side, S32 i, F32 limit) {
+            const LLVector2 dir = side ? -dirs[i] : dirs[i];
+            S32 j = 0, band = -1;
+            bool any = false;
+            for (F32 t = step; t <= SCORE_REACH_M && t - step < limit; t += step, ++j)
+            {
+                if (j / BAND != band)
+                {
+                    band = j / BAND;
+                    any = !framed || reads(fan->bandMask(side, i, band));
+                }
+                if (any && solid(from, dir, t))
+                {
+                    return t;
+                }
+            }
+            return 0.f;
+        };
+        // That sample's face, found to a sixty-fourth of a cell.
+        auto face = [&](const LLVector2& from, const LLVector2& dir, F32 t) {
+            F32 free = t - step, hit = t;
+            while (hit - free > mCell / 64.f)
+            {
+                const F32 mid = (free + hit) * 0.5f;
+                (solid(from, dir, mid) ? hit : free) = mid;
+            }
+            return hit;
+        };
         LLVector2 c = run.mC;
         for (S32 pass = 0; pass < 2; ++pass)
         {
@@ -854,15 +1221,44 @@ namespace sknav
             {
                 return false;
             }
+            if (framed)
+            {
+                frameAt(c, lo, hi, frame);
+            }
+            // With nothing solid within reach one way, no ray finds a jamb.
+            if (framed && (!reads(fan->sideMask(0)) || !reads(fan->sideMask(1))))
+            {
+                return false;
+            }
             // Nearer the cut's own direction wins a tie.
             F32 best = 1e30f;
-            for (S32 i = 0; i <= 2 * APERTURE_ANGLES; ++i)
+            for (S32 i = 0; i < RAYS; ++i)
             {
-                const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
-                const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
-                const LLVector2 u(std::cos(th), std::sin(th));
-                F32 t0, t1;
-                if (march(c, u, t0) && march(c, -u, t1) && t0 + t1 < best - mCell * 0.25f)
+                const F32 limit = best - mCell * 0.25f;
+                if (framed)
+                {
+                    // The bands a march short of limit can reach, and a band more.
+                    const S32 last = limit < SCORE_REACH_M + step ? std::min(fan->mBandCount - 1, static_cast<S32>(limit / step) / BAND + 1) : fan->mBandCount - 1;
+                    if (!reads(fan->reachMask(0, i, last)) || !reads(fan->reachMask(1, i, last)))
+                    {
+                        continue;
+                    }
+                }
+                const LLVector2& u = dirs[i];
+                const LLVector2 v = -u;
+                // Each face lies within a step short of its sample, so faces too far apart for a shorter chord go unsought.
+                const F32 s0 = march(c, 0, i, limit);
+                if (s0 == 0.f)
+                {
+                    continue;
+                }
+                const F32 s1 = march(c, 1, i, limit - (s0 - step) + mCell / 32.f);
+                if (s1 == 0.f || (s0 - step) + (s1 - step) >= limit + mCell / 64.f)
+                {
+                    continue;
+                }
+                const F32 t0 = face(c, u, s0), t1 = face(c, v, s1);
+                if (t0 + t1 < limit)
                 {
                     best = t0 + t1;
                     a = c - u * t1;
@@ -1412,7 +1808,7 @@ namespace sknav
                         break;
                     }
                     Run q;
-                    if (!aperture(probe_run, q.mA, q.mB))
+                    if (!aperture(probe_run, q.mA, q.mB, mInput->mFrameApertures))
                     {
                         continue;
                     }
@@ -4676,6 +5072,8 @@ namespace sknav
                 s.mCells.clear();
                 s.mCells.shrink_to_fit();
                 s.mTiles.clear();
+                s.mSolidMaps = {};
+                s.mWindowCount = 0;
             }
         }
         return s.mStage == STAGE_DONE;
