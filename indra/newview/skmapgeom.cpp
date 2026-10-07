@@ -89,6 +89,8 @@ namespace skmap
         std::vector<std::pair<U64, S32>> mLayers;
         /// Per layer of mScene, its pairs in order; null for a layer that made none.
         std::vector<PairSources> mPairs;
+        /// Per layer of mScene, its run of pieces; null with its pairs.
+        std::vector<SectionPieces::Run> mRuns;
         /// The records the section kept, in snapshot order.
         std::shared_ptr<const std::vector<KeptRecord>> mKept;
     };
@@ -1696,20 +1698,15 @@ namespace skmap
             return true;
         }
 
-        /// A layer's pieces as the last build made them, appended to this scene's.
-        void reusePieces(Scene& s, const Scene& last, S32 last_layer, SceneLayer& layer)
+        /// A layer's run of pieces, appended to the scene's and listed by the layer.
+        void appendRun(Scene& s, const SectionPieces::Run& run, SceneLayer& layer)
         {
-            const std::vector<U32>& ids = last.mLayers[last_layer].mPieces;
-            const size_t want = s.mPieces.size() + ids.size();
-            if (want > s.mPieces.capacity())
+            const size_t first = s.mPieces.size();
+            s.mPieces.append(run);
+            layer.mPieces.resize(s.mPieces.size() - first);
+            for (size_t k = 0; k < layer.mPieces.size(); ++k)
             {
-                s.mPieces.reserve(llmax(want, s.mPieces.capacity() + s.mPieces.capacity() / 2));
-            }
-            layer.mPieces.reserve(ids.size());
-            for (U32 id : ids)
-            {
-                layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                s.mPieces.push_back(last.mPieces[id]);
+                layer.mPieces[k] = static_cast<U32>(first + k);
             }
         }
 
@@ -1905,6 +1902,7 @@ namespace skmap
             if (next)
             {
                 next->mPairs.resize(s.mLayers.size());
+                next->mRuns.resize(s.mLayers.size());
                 SK_SECTION_STAGE(MEMO);
                 for (size_t l = 0; l < s.mLayers.size(); ++l)
                 {
@@ -1966,7 +1964,8 @@ namespace skmap
                     SK_SECTION_STAGE(PIECES);
                     const PairSources& had = last->mPairs[last_layer[l]];
                     next->mPairs[l] = had;
-                    reusePieces(s, *last->mScene, last_layer[l], layer);
+                    next->mRuns[l] = last->mRuns[last_layer[l]];
+                    appendRun(s, next->mRuns[l], layer);
                     for (const PairSource& src : *had)
                     {
                         planes_used.push_back(src.mPlane);
@@ -2115,7 +2114,8 @@ namespace skmap
                     if (same)
                     {
                         next->mPairs[l] = *had;
-                        reusePieces(s, *last->mScene, last_layer[l], layer);
+                        next->mRuns[l] = last->mRuns[last_layer[l]];
+                        appendRun(s, next->mRuns[l], layer);
                         for (const auto& pq : pairs)
                         {
                             planes_used.push_back(pq.second);
@@ -2142,12 +2142,9 @@ namespace skmap
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
                     return layerFloorAt(s, index, p, z);
                 };
-                // Room for this layer's pieces, about one and a half per pair, growing geometrically.
-                const size_t want = s.mPieces.size() + pairs.size() + pairs.size() / 2;
-                if (want > s.mPieces.capacity())
-                {
-                    s.mPieces.reserve(llmax(want, s.mPieces.capacity() + s.mPieces.capacity() / 2));
-                }
+                // The layer's run, with room for about one and a half pieces per pair.
+                auto run = std::make_shared<std::vector<SectionPiece>>();
+                run->reserve(pairs.size() + pairs.size() / 2);
                 for (const auto& pq : pairs)
                 {
                     const sknav::Record& rec = *recs[pq.first];
@@ -2279,8 +2276,7 @@ namespace skmap
                     // Pieces are made in place, the layer listing each as it is made.
                     const SectionStyle style = rec.mProvenance == sknav::Provenance::BOX ? SectionStyle::PROVISIONAL : SectionStyle::SOLID;
                     auto newPiece = [&]() -> SectionPiece& {
-                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                        SectionPiece& piece = s.mPieces.emplace_back();
+                        SectionPiece& piece = run->emplace_back();
                         piece.mSlice = sl;
                         piece.mShift = shift;
                         piece.mPlane = q;
@@ -2363,6 +2359,11 @@ namespace skmap
                         piece.mMin = lo + shift;
                         piece.mMax = hi + shift;
                     }
+                }
+                appendRun(s, run, layer);
+                if (next)
+                {
+                    next->mRuns[l] = std::move(run);
                 }
             }
             std::sort(planes_used.begin(), planes_used.end());
