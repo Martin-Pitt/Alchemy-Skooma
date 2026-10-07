@@ -1150,7 +1150,6 @@ namespace skmap
             closed.clear();
             open.clear();
             chain(segs, nodes, closed, open);
-            s.mPts.reserve(closed.mNodes.size() + open.mNodes.size());
             std::vector<LLVector2>& pts = scratch.mPts;
             for (size_t pi = 0; pi < closed.size(); ++pi)
             {
