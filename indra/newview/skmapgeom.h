@@ -253,6 +253,24 @@ namespace skmap
     {
         F32 mMs = 0.f;
         U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mRecords = 0;
+        U32 mFullRecords = 0, mHalfRecords = 0, mHalfOpenings = 0, mIslands = 0;
+    };
+
+    /// A record the section reads as half cover on a layer, with what stands over it, to check how windows and low
+    /// walls classify. The class comes from the planes and the level gates near the piece only, not from the
+    /// per-subsample floor rules the bake applies.
+    struct SectionReport
+    {
+        LLUUID mPart, mRoot;
+        LLVector2 mMin, mMax;            ///< scene-local, the HALF piece's bbox
+        F32 mFloor = 0.f;                ///< k * 0.125
+        F32 mLow = 0.f, mHigh = 0.f;     ///< plane z
+        F32 mRecordTop = 0.f;            ///< the record's max z
+        F32 mThickness = 0.f, mLength = 0.f;    ///< group thickness; long side of its bbox
+        /// Bottom of the lowest other kept record over its bbox (grown 0.05 m) with bottom in (mHigh, mFloor + 3]; -1 for none.
+        F32 mLintel = -1.f;
+        U8 mShape = 0, mProvenance = 0;
+        bool mSolid = false, mIsland = false;
     };
 
     /// Whether the global 1 m cell lists floor level k.
@@ -311,6 +329,7 @@ namespace skmap
         bool mHasSection = false;
         std::vector<SectionPiece> mPieces;
         SectionStats mSectionStats;
+        std::vector<SectionReport> mSectionReport;  ///< only when SceneInput::mSectionReport
         /// Per SceneInput::mDoors entry, its leaf records, empty when none were found.
         std::vector<std::vector<sknav::RecordPtr>> mDoorLeaves;
 

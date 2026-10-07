@@ -211,7 +211,9 @@ SKMapScene::Trigger SKMapScene::currentTrigger() const
     }
     t.mRegions = regions;
     static LLCachedControl<bool> section(gSavedSettings, "SKMapSection", true);
+    static LLCachedControl<bool> section_log(gSavedSettings, "SKMapSectionLog", false);
     t.mSection = section;
+    t.mSectionLog = section_log;
     return t;
 }
 
@@ -365,6 +367,8 @@ void SKMapScene::gather(skmap::SceneInput& in)
     }
     if (snap)
     {
+        static LLCachedControl<bool> section_log(gSavedSettings, "SKMapSectionLog", false);
+        in.mSectionReport = section_log;
         in.mRecords = std::shared_ptr<const std::vector<sknav::RecordPtr>>(snap, &snap->mRecords);
         for (const sknav::DoorEntity& door : snap->mDoors)
         {
@@ -449,6 +453,76 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     mStats.mJobMs = millis;
     mStats.mPolys = static_cast<U32>(scene->mPolys.size());
     mStats.mLayers = static_cast<U32>(scene->mOrder.size());
+    const skmap::SectionStats& section = scene->mSectionStats;
+    mStats.mSection = scene->mHasSection;
+    mStats.mSectionMs = section.mMs;
+    mStats.mPlanes = section.mPlanes;
+    mStats.mSlices = section.mSlices;
+    mStats.mCacheHits = section.mCacheHits;
+    mStats.mPieces = section.mPieces;
+    mStats.mFullRecords = section.mFullRecords;
+    mStats.mHalfRecords = section.mHalfRecords;
+    mStats.mHalfOpenings = section.mHalfOpenings;
+    mStats.mIslands = section.mIslands;
+    logSection(*scene);
+}
+
+void SKMapScene::logSection(const skmap::Scene& scene)
+{
+    static LLCachedControl<bool> section_log(gSavedSettings, "SKMapSectionLog", false);
+    if (!section_log || !scene.mHasSection)
+    {
+        return;
+    }
+    // Logged again only when the report itself changes: its parts and their boxes to the decimetre.
+    U64 hash = sknav::SEED;
+    auto dm = [](F64 metres) { return static_cast<U64>(std::llround(metres * 10.0)); };
+    for (const skmap::SectionReport& r : scene.mSectionReport)
+    {
+        hash = sknav::mix(hash, r.mPart.getCRC32());
+        for (const LLVector2& p : { r.mMin, r.mMax })
+        {
+            hash = sknav::mix(hash, dm(scene.mOrigin.mdV[VX] + p.mV[VX]));
+            hash = sknav::mix(hash, dm(scene.mOrigin.mdV[VY] + p.mV[VY]));
+        }
+    }
+    if (hash == mSectionLogged)
+    {
+        return;
+    }
+    mSectionLogged = hash;
+    const skmap::SectionStats& st = scene.mSectionStats;
+    LL_INFOS("SKMapSection") << "section " << st.mMs << " ms, " << st.mRecords << " records, " << st.mPlanes << " planes, " << st.mPieces
+                             << " pieces, " << st.mSlices << " sliced, " << st.mCacheHits << " cached; full " << st.mFullRecords << ", half "
+                             << st.mHalfRecords << " (" << st.mHalfOpenings << " under a lintel), islands " << st.mIslands << LL_ENDL;
+    // The half-cover entries near the agent, nearest first.
+    constexpr F64 NEAR_M = 32.0;
+    constexpr size_t MAX_LINES = 64;
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    std::vector<std::pair<F64, const skmap::SectionReport*>> nearby;
+    for (const skmap::SectionReport& r : scene.mSectionReport)
+    {
+        const F64 x = scene.mOrigin.mdV[VX] + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]);
+        const F64 y = scene.mOrigin.mdV[VY] + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]);
+        const F64 d = std::hypot(x - agent.mdV[VX], y - agent.mdV[VY]);
+        if (d <= NEAR_M)
+        {
+            nearby.emplace_back(d, &r);
+        }
+    }
+    std::stable_sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < nearby.size() && i < MAX_LINES; ++i)
+    {
+        const skmap::SectionReport& r = *nearby[i].second;
+        const F64 x = scene.mOrigin.mdV[VX] + 0.5 * (r.mMin.mV[VX] + r.mMax.mV[VX]);
+        const F64 y = scene.mOrigin.mdV[VY] + 0.5 * (r.mMin.mV[VY] + r.mMax.mV[VY]);
+        const std::string lintel = r.mLintel >= 0.f ? llformat("%.2f", r.mLintel) : std::string("none");
+        LL_INFOS("SKMapSection") << llformat("half: part %s root %s shape %u prov %u solid %d island %d floor %.3f cuts %.4f/%.4f top %.2f "
+                                             "thick %.3f long %.2f lintel %s at %.1f,%.1f",
+                                             r.mPart.asString().c_str(), r.mRoot.asString().c_str(), r.mShape, r.mProvenance, r.mSolid ? 1 : 0,
+                                             r.mIsland ? 1 : 0, r.mFloor, r.mLow, r.mHigh, r.mRecordTop, r.mThickness, r.mLength, lintel.c_str(), x, y)
+                                 << LL_ENDL;
+    }
 }
 
 void SKMapScene::updateAgentFloor()

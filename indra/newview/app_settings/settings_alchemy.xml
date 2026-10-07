@@ -5157,6 +5157,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>SKMapSectionLog</key>
+        <map>
+            <key>Comment</key>
+            <string>Log the mini-map section's half-cover pieces near you, with what stands over each, to check how windows and low walls classify.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <!-- </SK:Nexii> -->
         <key>SKNavCensusAlways</key>
         <map>
