@@ -28,8 +28,9 @@
 // fresh section cache) and warm (the same cache again). The fingerprint hashes
 // every section piece, the layers' floor levels and every bake cell key, so a
 // change that is meant to be faster only can show it produced the same scene.
-// Without the variable, or from an unoptimised build, it exits 125, which CTest
-// reads as skipped.
+// SKMAP_SECTION_EXPECT, when set, is the exact fingerprint the build must give;
+// a mismatch exits 3. Without the census variable, or from an unoptimised build,
+// it exits 125, which CTest reads as skipped.
 
 #include "linden_common.h"
 
@@ -248,6 +249,7 @@ namespace
     {
         static const char* names[] = { "levels", "pairs", "slice (misses)", "  z-bins", "  analytic shapes", "  soup segments",
                                        "  chain", "    of it pass 3", "  simplify", "  nesting", "sheet rooms", "islands" };
+        static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(skmap::SectionStage::COUNT), "a name per stage");
         return names[static_cast<size_t>(stage)];
     }
 
@@ -305,6 +307,7 @@ int main(int, char**)
     skmap::ScenePtr scene;
     Fingerprint fp_cold, fp_warm;
     skmap::SectionStats cold_stats, warm_stats;
+    size_t cache_bytes = 0, cache_slices = 0;
     for (S32 r = 0; r < runs; ++r)
     {
         skmap::SectionCache cache;
@@ -316,6 +319,8 @@ int main(int, char**)
         if (r == 0)
         {
             fp_cold = fingerprint(*scene);
+            cache_bytes = cache.bytes();
+            cache_slices = cache.entries();
         }
         t0 = clock_type::now();
         scene = skmap::buildScene(in, &cache);
@@ -334,6 +339,7 @@ int main(int, char**)
                 median(cold_section), least(cold_total), cold_stats.mSlices, cold_stats.mCacheHits);
     std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(warm_section), runs,
                 median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits);
+    std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
     std::printf("fingerprint warm exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_warm.mExact),
@@ -378,5 +384,15 @@ int main(int, char**)
     // The capture is valid only while the census is: release the scene before it.
     scene.reset();
     in.mRecords.reset();
-    return fp_cold.mExact == fp_warm.mExact ? 0 : 2;
+    if (fp_cold.mExact != fp_warm.mExact)
+    {
+        return 2;
+    }
+    const char* expect = std::getenv("SKMAP_SECTION_EXPECT");
+    if (expect && *expect && std::strtoull(expect, nullptr, 16) != fp_cold.mExact)
+    {
+        std::printf("fingerprint differs from SKMAP_SECTION_EXPECT %s\n", expect);
+        return 3;
+    }
+    return 0;
 }
