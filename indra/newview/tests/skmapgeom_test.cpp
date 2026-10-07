@@ -1066,6 +1066,8 @@ namespace tut
 
         const std::vector<const skmap::SectionPiece*> crate = piecesOf(*s, 2, 3);
         ensure("the crate at the low plane", crate.size() == 1 && (crate[0]->mFlags & skmap::PIECE_ISLAND));
+        ensure("the ground around it gates it low", (crate[0]->mFlags & skmap::PIECE_ISLAND_LOW) != 0);
+        ensure("and not high", (crate[0]->mFlags & skmap::PIECE_ISLAND_HIGH) == 0);
         ensure("the crate not at the high plane", piecesOf(*s, 2, 11).empty());
 
         const std::vector<const skmap::SectionPiece*> post = piecesOf(*s, 3, 3);

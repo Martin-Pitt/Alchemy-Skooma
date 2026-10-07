@@ -221,6 +221,8 @@ namespace skmap
     /// How a section piece draws: a real shape, or an object-cache placeholder box.
     enum class SectionStyle : U8 { SOLID, PROVISIONAL };
     constexpr U8 PIECE_ISLAND = 1 << 0, PIECE_BLOB = 1 << 1, PIECE_LINES = 1 << 2;
+    /// An island's gates, from the levels around it (bbox + 1 m): flags, so the leaf hash sees them change.
+    constexpr U8 PIECE_ISLAND_LOW = 1 << 3, PIECE_ISLAND_HIGH = 1 << 4;
 
     /// One loop group of one record cut at one plane, on one layer; or that cut's lines.
     struct SectionPiece

@@ -172,24 +172,6 @@ namespace skmap
             }
         }
 
-        /// Whether any global 1 m cell of a box lists the level.
-        bool anyListed(const LevelGrid& grid, const LLVector3d& origin, const LLVector2& lo, const LLVector2& hi, S32 k)
-        {
-            const S32 x0 = static_cast<S32>(std::floor(origin.mdV[VX] + lo.mV[VX])), x1 = static_cast<S32>(std::floor(origin.mdV[VX] + hi.mV[VX]));
-            const S32 y0 = static_cast<S32>(std::floor(origin.mdV[VY] + lo.mV[VY])), y1 = static_cast<S32>(std::floor(origin.mdV[VY] + hi.mV[VY]));
-            for (S32 y = y0; y <= y1; ++y)
-            {
-                for (S32 x = x0; x <= x1; ++x)
-                {
-                    if (levelListed(grid, x, y, k))
-                    {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
         /// The straight colour and alpha one subsample of a floor bakes to; only a graded (ramp) one is shaded by height.
         void floorColour(const ScenePoly& poly, F32 z, F32 base, bool graded, const RasterParams& params, F32 out[4])
         {
@@ -540,13 +522,7 @@ namespace skmap
                 const F32 plane = static_cast<F32>(sectionPlaneZ(piece.mPlane) - scene.mOrigin.mdV[VZ]);
                 const S32 low_level = piece.mPlane - SECTION_LOW_Q, high_level = piece.mPlane - SECTION_HIGH_Q;
                 // An island is gated by the levels around it rather than its own cells.
-                bool island_low = false, island_high = false;
-                if (island)
-                {
-                    const LLVector2 grow(LEVEL_CELL_M, LEVEL_CELL_M);
-                    island_low = anyListed(L.mLevels, scene.mOrigin, piece.mMin - grow, piece.mMax + grow, low_level);
-                    island_high = anyListed(L.mLevels, scene.mOrigin, piece.mMin - grow, piece.mMax + grow, high_level);
-                }
+                const bool island_low = (piece.mFlags & PIECE_ISLAND_LOW) != 0, island_high = (piece.mFlags & PIECE_ISLAND_HIGH) != 0;
                 for (S32 j = 0; j < h; ++j)
                 {
                     const S32 pj = j0 + j;

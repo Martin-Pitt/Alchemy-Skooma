@@ -1786,6 +1786,15 @@ namespace skmap
                         if (isIsland(ring.data(), static_cast<U32>(ring.size()), g.mThickness, floor_at))
                         {
                             piece.mFlags |= PIECE_ISLAND;
+                            const LLVector2 grow(LEVEL_CELL_M, LEVEL_CELL_M);
+                            if (anyLevelNear(s, grid, piece.mMin - grow, piece.mMax + grow, q - SECTION_LOW_Q))
+                            {
+                                piece.mFlags |= PIECE_ISLAND_LOW;
+                            }
+                            if (anyLevelNear(s, grid, piece.mMin - grow, piece.mMax + grow, q - SECTION_HIGH_Q))
+                            {
+                                piece.mFlags |= PIECE_ISLAND_HIGH;
+                            }
                         }
                         layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
                         s.mPieces.push_back(std::move(piece));
