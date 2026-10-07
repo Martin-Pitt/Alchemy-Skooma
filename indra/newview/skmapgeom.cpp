@@ -1648,6 +1648,10 @@ namespace skmap
             buildLayerIndexes(s, layer_index);
             std::vector<U32> poly_seen(s.mPolys.size(), 0);
             U32 poly_stamp = 0;
+            // Per pair and per piece, reused.
+            std::vector<bool> active;
+            std::vector<std::pair<S32, size_t>> order;
+            std::vector<LLVector2> ring;
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
@@ -1783,7 +1787,15 @@ namespace skmap
 
                 // 6. Pieces, in (record, plane, group) order.
                 const LayerIndex& index = layer_index[l];
-                auto floor_at = [&s, &index](const LLVector2& p, F32& z) { return layerFloorAt(s, index, p, z); };
+                const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
+                    return layerFloorAt(s, index, p, z);
+                };
+                // Room for this layer's pieces, about one and a half per pair, growing geometrically.
+                const size_t want = s.mPieces.size() + pairs.size() + pairs.size() / 2;
+                if (want > s.mPieces.capacity())
+                {
+                    s.mPieces.reserve(llmax(want, 2 * s.mPieces.capacity()));
+                }
                 for (const auto& pq : pairs)
                 {
                     const sknav::Record& rec = *recs[pq.first];
@@ -1798,13 +1810,13 @@ namespace skmap
                     const F32 plane = static_cast<F32>(sectionPlaneZ(q) - s.mOrigin.mdV[VZ]);
 
                     // Sheet rooms: a closed sheet around walkable floor with headroom through the plane is a wall line.
-                    std::vector<bool> active(sl->mLoops.size(), true);
+                    active.assign(sl->mLoops.size(), true);
                     bool demoted = false;
                     if (sl->mSheet)
                     {
                         SK_SECTION_STAGE(SHEET);
                         // Outer loops before the loops nested in them, so each sees its ancestors' verdicts.
-                        std::vector<std::pair<S32, size_t>> order;
+                        order.clear();
                         for (size_t i = 0; i < sl->mLoops.size(); ++i)
                         {
                             S32 depth = 0;
@@ -1925,6 +1937,8 @@ namespace skmap
                         const SliceGroup& g = src->mGroups[gi];
                         SectionPiece piece = base;
                         piece.mGroup = static_cast<U16>(gi);
+                        piece.mLoops.reserve(1 + g.mHoles.size());
+                        piece.mWind.reserve(1 + g.mHoles.size());
                         piece.mLoops.push_back(g.mOuter);
                         piece.mLoops.insert(piece.mLoops.end(), g.mHoles.begin(), g.mHoles.end());
                         for (U16 id : piece.mLoops)
@@ -1940,7 +1954,7 @@ namespace skmap
                             piece.mFlags |= PIECE_BLOB;
                         }
                         const SliceLoop& outer = src->mLoops[g.mOuter];
-                        std::vector<LLVector2> ring(src->mPts.begin() + outer.mFirst, src->mPts.begin() + outer.mFirst + outer.mCount);
+                        ring.assign(src->mPts.begin() + outer.mFirst, src->mPts.begin() + outer.mFirst + outer.mCount);
                         for (LLVector2& p : ring)
                         {
                             p += shift;
