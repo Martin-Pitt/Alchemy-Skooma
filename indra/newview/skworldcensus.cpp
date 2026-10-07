@@ -1002,6 +1002,9 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             q.scaleVec(scale);
             q = q * rot + pos;
             tris->push_back(q);
+        }
+        for (const LLVector3& q : *tris)
+        {
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;
