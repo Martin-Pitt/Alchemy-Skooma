@@ -735,7 +735,7 @@ namespace tut
                         flight = mix(vec(vec(flight, f.mBottom), f.mTop), f.mKey);
                         for (const U8 code : f.mCodes)
                         {
-                            flight = mix(flight, code);
+                            flight = mix(flight, code >= AREA_CODE_BASE ? code - AREA_TOP_ONLY : code);   // the partition's own code
                         }
                         for (const U16 p : f.mPolys)
                         {

@@ -1031,4 +1031,34 @@ namespace tut
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
         ensure("the block's faces", !r.mFaces.empty());
     }
+
+    // A surface only the air's slope walks shares AVATAR's raster without
+    // changing AVATAR: where its top merges with a floor's and stands higher,
+    // the floor's code still wins, as the null it used to be did.
+    template<> template<>
+    void sknavbuild_object::test<25>()
+    {
+        set_test_name("a TOP-only surface merged over a floor leaves AVATAR as it was");
+        const auto build = [](F32 top_slope) {
+            TileBuildInput in = tile(0, 0);
+            in.mTerrain = flat(0.f);
+            in.mPartitionSlope = 89.f;
+            in.mParams[0].mSlope = 74.f;
+            in.mParams[1].mSlope = top_slope;
+            in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 1.f));
+            // An 80 degree face rising half a metre off the platform, inside the merge threshold.
+            std::vector<LLVector3> face;
+            for (F32 x = 11.f; x < 19.f; x += 1.f)
+            {
+                const LLVector3 a(x, 10.5f, 1.f), b(x + 0.088f, 10.5f, 1.5f), c(x + 0.088f, 19.5f, 1.5f), d(x, 19.5f, 1.f);
+                face.insert(face.end(), { a, b, c, a, c, d });
+            }
+            in.mRecords.push_back(soup(face, Provenance::EXACT));
+            return buildTile(in);
+        };
+        const TileBuildResult with_top = build(89.f), without = build(74.f);
+        ensure("built", with_top.mStatus == TileBuildResult::SUCCESS && without.mStatus == TileBuildResult::SUCCESS);
+        ensure_equals("AVATAR's polys", with_top.mPolys[0], without.mPolys[0]);
+        ensure("AVATAR's tile, byte for byte", with_top.mData[0] == without.mData[0]);
+    }
 }

@@ -44,6 +44,14 @@ namespace sknav
     /// are 1 << area, so a query filter can pick them.
     enum Area : U8 { AREA_NONE = 0, AREA_GROUND = 1, AREA_OBJECT = 2, AREA_SUBMERGED = 3 };
 
+    /// The solid raster's area byte. 1-3 are surfaces only the air's slope
+    /// walks, each its own Area; from AREA_CODE_BASE up are AVATAR's, the slope
+    /// partition's codes moved past them. A stamp palette spans 1-63.
+    constexpr U8 AREA_TOP_ONLY = 3;
+    constexpr U8 AREA_CODE_BASE = AREA_TOP_ONLY + 1;
+    constexpr U8 AREA_CODE_MAX = 63;
+    constexpr S32 PARTITION_MAX_CODES = AREA_CODE_MAX - AREA_TOP_ONLY;
+
     struct ClassParams
     {
         F32 mHeight = 2.f;      ///< metres of headroom a floor needs

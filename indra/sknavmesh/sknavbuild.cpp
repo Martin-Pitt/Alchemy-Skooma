@@ -584,6 +584,79 @@ namespace
         return true;
     }
 
+    /// A span of a surface only the air's slope walks becomes none, as
+    /// though AVATAR had rasterised it unwalkable.
+    void maskTopOnly(rcHeightfield& hf)
+    {
+        for (S32 c = 0; c < hf.width * hf.height; ++c)
+        {
+            for (rcSpan* s = hf.spans[c]; s; s = s->next)
+            {
+                if (s->area < AREA_CODE_BASE)
+                {
+                    s->area = RC_NULL_AREA;
+                }
+            }
+        }
+    }
+
+    /// Move a partition's flights onto the codes encodeAreas gives their triangles.
+    void shiftFlightCodes(SlopePartition& slopes)
+    {
+        for (Flight& f : slopes.mFlights)
+        {
+            for (U8& code : f.mCodes)
+            {
+                llassert(code >= 1 && code + AREA_TOP_ONLY <= AREA_CODE_MAX);
+                code = static_cast<U8>(code + AREA_TOP_ONLY);
+            }
+        }
+    }
+
+    /// The area byte each triangle rasterises as. A merge keeps the higher of
+    /// two codes when their tops meet, so AVATAR's codes sit above every
+    /// TOP-only one: masking 1-3 to none after the merge leaves exactly the
+    /// raster AVATAR would have made on its own.
+    std::vector<U8> encodeAreas(const std::vector<U8>& avatar_walk, const std::vector<U8>& top_walk, const std::vector<U8>* codes)
+    {
+        std::vector<U8> out(avatar_walk.size(), RC_NULL_AREA);
+        for (size_t t = 0; t < out.size(); ++t)
+        {
+            if (avatar_walk[t])
+            {
+                out[t] = static_cast<U8>((codes ? (*codes)[t] : avatar_walk[t]) + AREA_TOP_ONLY);
+            }
+            else if (top_walk[t])
+            {
+                out[t] = top_walk[t];
+            }
+        }
+        return out;
+    }
+
+    /// The real area of every area byte encodeAreas makes, from the partition's own table.
+    std::vector<U8> realAreas(const std::vector<U8>* partition_real)
+    {
+        std::vector<U8> out(AREA_CODE_MAX + 1, RC_NULL_AREA);
+        for (S32 c = 1; c <= AREA_CODE_MAX; ++c)
+        {
+            const S32 code = c - AREA_TOP_ONLY;
+            if (c <= AREA_TOP_ONLY)
+            {
+                out[c] = static_cast<U8>(c);
+            }
+            else if (!partition_real)
+            {
+                out[c] = static_cast<U8>(code <= AREA_SUBMERGED ? code : RC_NULL_AREA);
+            }
+            else if (code < static_cast<S32>(partition_real->size()))
+            {
+                out[c] = (*partition_real)[code];
+            }
+        }
+        return out;
+    }
+
     /// A walkable span in the column already within the agent's climb of both
     /// surfaces: they are joined through it and need no bridge.
     bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
@@ -1472,13 +1545,18 @@ namespace sknav
                 result.mExcludeMillis += std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - filter_started).count();
             }
             StageClock clock(cstats ? cstats->mMs : nullptr);
-            std::vector<U8> areas;
-            markWalkable(*class_soup, cfg.walkableSlopeAngle, areas);
+            // What AVATAR walks, and what the air's slope walks besides.
+            const bool avatar_cls = cls == static_cast<S32>(AgentClass::AVATAR);
+            const F32 avatar_slope = input.mParams[static_cast<S32>(AgentClass::AVATAR)].mSlope;
+            std::vector<U8> avatar_walk, top_walk;
+            markWalkable(*class_soup, avatar_slope, avatar_walk);
+            markWalkable(*class_soup, llmax(avatar_slope, input.mParams[static_cast<S32>(AgentClass::WEATHER)].mSlope), top_walk);
             // The slope partition splits the soup into regions before it is
             // rasterised: each walkable triangle goes in as its region's code
             // and comes back out as its area once the poly mesh is built.
             SlopePartition slopes;
-            if (input.mPartition == Partition::SLOPE)
+            const bool partitioned = input.mPartition == Partition::SLOPE;
+            if (partitioned)
             {
                 const auto partition = [&](const Soup& from, const std::vector<U8>& walkable) {
                     std::vector<LLVector3> sl(from.nverts());
@@ -1486,7 +1564,10 @@ namespace sknav
                     {
                         sl[v] = fromRecast(&from.mVerts[v * 3]);
                     }
-                    return partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb, 63, from.mCues);
+                    SlopePartition out = partitionSlopes(sl, from.mTris, walkable, from.mTwoSided, AREA_OBJECT, p.mClimb,
+                                                         PARTITION_MAX_CODES, from.mCues);
+                    shiftFlightCodes(out);
+                    return out;
                 };
                 if (class_soup == &soup)
                 {
@@ -1516,23 +1597,20 @@ namespace sknav
                         }
                     }
                     slopes = *shared_slopes;
-                    for (size_t t = 0; t < areas.size(); ++t)
-                    {
-                        slopes.mCodes[t] = areas[t] ? slopes.mCodes[t] : 0;
-                    }
                 }
                 else
                 {
-                    slopes = partition(*class_soup, areas);
+                    slopes = partition(*class_soup, avatar_cls ? avatar_walk : top_walk);
                 }
-                areas = slopes.mCodes;
             }
+            std::vector<U8> areas = encodeAreas(avatar_walk, top_walk, partitioned ? &slopes.mCodes : nullptr);
+            const std::vector<U8> real = realAreas(partitioned ? &slopes.mReal : nullptr);
             if (cstats)
             {
                 std::vector<U8> used(256, 0);
                 for (const U8 code : areas)
                 {
-                    used[code] = 1;
+                    used[code] = !avatar_cls || code >= AREA_CODE_BASE;
                 }
                 used[0] = 0;
                 cstats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
@@ -1543,6 +1621,10 @@ namespace sknav
             {
                 result.mError = "rasterize";
                 return result;
+            }
+            if (avatar_cls)
+            {
+                maskTopOnly(*mem.hf);
             }
             bridgeCrevices(*mem.hf, cfg.walkableClimb, cstats ? &cstats->mBridges : nullptr);
             clock.lap(ClassBuildStats::BRIDGES);
@@ -1568,8 +1650,7 @@ namespace sknav
                 code_lut.resize(64);
                 for (S32 a = 0; a < 64; ++a)
                 {
-                    const bool real = cls != static_cast<S32>(AgentClass::AVATAR) && a < static_cast<S32>(slopes.mReal.size());
-                    code_lut[a] = real ? slopes.mReal[a] : static_cast<U8>(a);
+                    code_lut[a] = avatar_cls ? static_cast<U8>(a >= AREA_CODE_BASE ? a - AREA_TOP_ONLY : 0) : real[a];
                 }
                 cstats->mHfHash = hashHeightfield(*mem.hf, 0, 0, mem.hf->width, mem.hf->height, {});
                 cstats->mHfAreaHash = hashHeightfield(*mem.hf, 0, 0, mem.hf->width, mem.hf->height, code_lut);
@@ -1583,15 +1664,12 @@ namespace sknav
                 return result;
             }
             clock.lap(ClassBuildStats::COMPACT);
-            if (!slopes.mReal.empty())
+            // the walls and the air read real areas off the heightfield
+            for (S32 c = 0; c < mem.hf->width * mem.hf->height; ++c)
             {
-                // the walls and the air read real areas off the heightfield
-                for (S32 c = 0; c < mem.hf->width * mem.hf->height; ++c)
+                for (rcSpan* s = mem.hf->spans[c]; s; s = s->next)
                 {
-                    for (rcSpan* s = mem.hf->spans[c]; s; s = s->next)
-                    {
-                        s->area = slopes.mReal[s->area];
-                    }
+                    s->area = real[s->area];
                 }
             }
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
@@ -1605,7 +1683,7 @@ namespace sknav
             switch (input.mPartition)
             {
                 case Partition::SLOPE:
-                    mergeFragments(*mem.chf, slopes.mReal, slopes.mFlights);
+                    mergeFragments(*mem.chf, real, slopes.mFlights);
                     if (cstats)
                     {
                         clock.lap(ClassBuildStats::REGIONS);
@@ -1660,7 +1738,6 @@ namespace sknav
                 }
                 clock.restart();
             }
-            if (!slopes.mReal.empty())
             {
                 // each flight's polys by their code, then unfold the codes:
                 // everything past here reads real areas
@@ -1682,11 +1759,11 @@ namespace sknav
                 result.mFlights[cls] = std::move(slopes.mFlights);
                 for (S32 i = 0; i < mem.chf->spanCount; ++i)
                 {
-                    mem.chf->areas[i] = slopes.mReal[mem.chf->areas[i]];
+                    mem.chf->areas[i] = real[mem.chf->areas[i]];
                 }
                 for (S32 i = 0; i < mem.pmesh->npolys; ++i)
                 {
-                    mem.pmesh->areas[i] = slopes.mReal[mem.pmesh->areas[i]];
+                    mem.pmesh->areas[i] = real[mem.pmesh->areas[i]];
                 }
             }
             clock.lap(ClassBuildStats::FLIGHTMAP);
