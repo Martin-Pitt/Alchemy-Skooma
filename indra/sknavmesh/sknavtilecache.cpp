@@ -415,7 +415,7 @@ namespace sknav
     }
 
     // Whoever adds a field to TileBuildInput keys it below, then updates this size.
-    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 256, "a new TileBuildInput field must go into tileContentKey");
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 264, "a new TileBuildInput field must go into tileContentKey");
 
     U64 tileContentKey(const TileBuildInput& input)
     {
@@ -434,6 +434,7 @@ namespace sknav
         h = quant(h, input.mZMax, KEY_POSITION_M);
         h = mixF32(h, input.mCell);
         h = mix(h, static_cast<U64>(input.mPartition));
+        h = mixF32(h, input.mPartitionSlope);
         for (const auto& [root, cue] : input.mRootCues)
         {
             h = mixId(h, root);

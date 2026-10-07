@@ -1074,6 +1074,16 @@ namespace
 
 namespace sknav
 {
+    F32 partitionSlope(const TileBuildInput& input)
+    {
+        if (input.mPartitionSlope > 0.f)
+        {
+            return input.mPartitionSlope;
+        }
+        const S32 cls = static_cast<S32>(input.mAir ? AgentClass::WEATHER : AgentClass::AVATAR);
+        return input.mParams[cls].mSlope;
+    }
+
     S32 borderCells(F32 radius, F32 cell)
     {
         const S32 r = static_cast<S32>(std::ceil(radius / cell));
@@ -1382,11 +1392,11 @@ namespace sknav
                 if (class_soup == &soup)
                 {
                     // Classes on the shared soup share one partition, taken at
-                    // the most permissive slope of them; each masks out what
-                    // it cannot walk.
+                    // the slope the input pins, never below what a class built
+                    // here walks; each masks out what it cannot walk.
                     if (!shared_slopes || shared_climb != p.mClimb)
                     {
-                        F32 widest = 0.f;
+                        F32 widest = partitionSlope(input);
                         for (S32 c = 0; c < NUM_CLASSES; ++c)
                         {
                             widest = input.mClasses[c] ? llmax(widest, input.mParams[c].mSlope) : widest;
