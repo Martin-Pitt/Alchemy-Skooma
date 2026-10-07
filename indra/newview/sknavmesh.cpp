@@ -1738,13 +1738,68 @@ void SKNavMesh::wallFacesIn(const LLVector3d& min, const LLVector3d& max, const 
 void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const SegmentFn& fn) const
 {
     const S32 c = static_cast<S32>(cls);
+    constexpr S32 ACROSS = SegmentCells::ACROSS;
+    std::vector<U32> picked;
     forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
-        if (!tile.mSegments[c])
+        if (!tile.mSegments[c] || tile.mSegments[c]->empty())
         {
             return;
         }
-        for (const WallSegment& seg : *tile.mSegments[c])
+        const F64 cell = (tile.mMax.mdV[VX] - tile.mMin.mdV[VX]) / ACROSS;
+        if (cell <= 0.0)
         {
+            return;
+        }
+        const auto cell_range = [&](F64 lo, F64 hi, F64 origin, S32& first, S32& last) {
+            first = llclamp(static_cast<S32>(std::floor((lo - origin) / cell)), 0, ACROSS - 1);
+            last = llclamp(static_cast<S32>(std::floor((hi - origin) / cell)), 0, ACROSS - 1);
+        };
+        // A hub tile holds segments by the hundred thousand; one linear pass an idle was
+        // a quarter of a second, so they are read through cells built on the first query.
+        if (!tile.mSegmentCells[c] || tile.mSegmentCells[c]->mSource != tile.mSegments[c])
+        {
+            auto cells = std::make_shared<SegmentCells>();
+            cells->mSource = tile.mSegments[c];
+            const std::vector<WallSegment>& segments = *tile.mSegments[c];
+            for (U32 i = 0; i < segments.size(); ++i)
+            {
+                const LLVector3d a = mesh.mOrigin + LLVector3d(segments[i].mA), b = mesh.mOrigin + LLVector3d(segments[i].mB);
+                S32 x0, x1, y0, y1;
+                cell_range(llmin(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VX], b.mdV[VX]), tile.mMin.mdV[VX], x0, x1);
+                cell_range(llmin(a.mdV[VY], b.mdV[VY]), llmax(a.mdV[VY], b.mdV[VY]), tile.mMin.mdV[VY], y0, y1);
+                for (S32 y = y0; y <= y1; ++y)
+                {
+                    for (S32 x = x0; x <= x1; ++x)
+                    {
+                        cells->mCells[y * ACROSS + x].push_back(i);
+                    }
+                }
+            }
+            tile.mSegmentCells[c] = std::move(cells);
+        }
+        const SegmentCells& cells = *tile.mSegmentCells[c];
+        const std::vector<WallSegment>& segments = *cells.mSource;
+        S32 x0, x1, y0, y1;
+        cell_range(min.mdV[VX], max.mdV[VX], tile.mMin.mdV[VX], x0, x1);
+        cell_range(min.mdV[VY], max.mdV[VY], tile.mMin.mdV[VY], y0, y1);
+        picked.clear();
+        for (S32 y = y0; y <= y1; ++y)
+        {
+            for (S32 x = x0; x <= x1; ++x)
+            {
+                const std::vector<U32>& bucket = cells.mCells[y * ACROSS + x];
+                picked.insert(picked.end(), bucket.begin(), bucket.end());
+            }
+        }
+        // A segment crossing several of the query's cells is in each; once is enough.
+        if (x1 > x0 || y1 > y0)
+        {
+            std::sort(picked.begin(), picked.end());
+            picked.erase(std::unique(picked.begin(), picked.end()), picked.end());
+        }
+        for (const U32 i : picked)
+        {
+            const WallSegment& seg = segments[i];
             const LLVector3d a = mesh.mOrigin + LLVector3d(seg.mA), b = mesh.mOrigin + LLVector3d(seg.mB);
             if (overlapsXY(LLVector3d(llmin(a.mdV[VX], b.mdV[VX]), llmin(a.mdV[VY], b.mdV[VY]), 0.0),
                            LLVector3d(llmax(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VY], b.mdV[VY]), 0.0), min, max))
