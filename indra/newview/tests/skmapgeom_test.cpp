@@ -122,7 +122,7 @@ namespace
         }
     };
 
-    skmap::SceneInput input(const std::vector<TileInput>& tiles)
+    skmap::SceneInput input(const std::vector<TileInput>& tiles, const std::vector<RecordPtr>* records = nullptr)
     {
         skmap::SceneInput in;
         in.mOrigin.set(0.0, 0.0, 0.0);
@@ -130,7 +130,108 @@ namespace
         in.mMax.set(128.0, 128.0, 1.0e5);
         in.mTiles = tiles;
         in.mRegions.push_back({ LLVector3d(0.0, 0.0, 0.0), 256.0 });
+        if (records)
+        {
+            in.mRecords = std::make_shared<const std::vector<RecordPtr>>(*records);
+        }
         return in;
+    }
+
+    LLUUID partId(U64 signature)
+    {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "00000000-0000-0000-0000-%012llx", static_cast<unsigned long long>(signature));
+        return LLUUID(buf);
+    }
+
+    /// A census box at region-local metres, its AABB from its corners.
+    Record boxRecordOf(const LLVector3& c, const LLVector3& h, U64 signature, const LLVector3& a0 = LLVector3(1.f, 0.f, 0.f),
+                       const LLVector3& a1 = LLVector3(0.f, 1.f, 0.f), const LLVector3& a2 = LLVector3(0.f, 0.f, 1.f))
+    {
+        Record r;
+        r.mRole = Role::NAV;
+        r.mShape = Shape::BOX;
+        r.mSolid = true;
+        r.mCenter = c;
+        r.mHalf = h;
+        r.mAxes[0] = a0;
+        r.mAxes[1] = a1;
+        r.mAxes[2] = a2;
+        r.mMin.set(DBL_MAX, DBL_MAX, DBL_MAX);
+        r.mMax.set(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+        for (S32 i = 0; i < 8; ++i)
+        {
+            LLVector3 p = c;
+            for (S32 b = 0; b < 3; ++b)
+            {
+                p += r.mAxes[b] * (((i >> b) & 1) ? h.mV[b] : -h.mV[b]);
+            }
+            for (S32 k = 0; k < 3; ++k)
+            {
+                r.mMin.mdV[k] = llmin(r.mMin.mdV[k], static_cast<F64>(p.mV[k]));
+                r.mMax.mdV[k] = llmax(r.mMax.mdV[k], static_cast<F64>(p.mV[k]));
+            }
+        }
+        r.mSignature = signature;
+        r.mPart = partId(signature);
+        r.mRoot = partId(signature + 1000000);
+        return r;
+    }
+
+    RecordPtr boxRecord(const LLVector3& c, const LLVector3& h, U64 signature)
+    {
+        return std::make_shared<const Record>(boxRecordOf(c, h, signature));
+    }
+
+    std::vector<const skmap::SectionPiece*> piecesOf(const skmap::Scene& s, U64 signature, S32 plane = INT_MIN)
+    {
+        std::vector<const skmap::SectionPiece*> out;
+        for (const skmap::SectionPiece& p : s.mPieces)
+        {
+            if (p.mSource == signature && (plane == INT_MIN || p.mPlane == plane))
+            {
+                out.push_back(&p);
+            }
+        }
+        return out;
+    }
+
+    std::vector<S32> levelsAt(const skmap::LevelGrid& g, S32 gx, S32 gy)
+    {
+        std::vector<S32> out;
+        const S32 x = gx - g.mX0, y = gy - g.mY0;
+        if (x < 0 || x >= g.mW || y < 0 || y >= g.mH)
+        {
+            return out;
+        }
+        const U32 c = g.mCell[static_cast<size_t>(y) * g.mW + x];
+        if (c)
+        {
+            out.assign(g.mLists.begin() + c, g.mLists.begin() + c + g.mLists[c - 1]);
+        }
+        return out;
+    }
+
+    bool samePieces(const skmap::Scene& a, const skmap::Scene& b)
+    {
+        if (a.mPieces.size() != b.mPieces.size())
+        {
+            return false;
+        }
+        for (size_t i = 0; i < a.mPieces.size(); ++i)
+        {
+            const skmap::SectionPiece& p = a.mPieces[i];
+            const skmap::SectionPiece& q = b.mPieces[i];
+            if (p.mSource != q.mSource || p.mPlane != q.mPlane || p.mLoops != q.mLoops || p.mWind != q.mWind || p.mLines != q.mLines
+                || p.mFlags != q.mFlags || p.mGroup != q.mGroup || p.mStyle != q.mStyle || p.mShift != q.mShift || p.mMin != q.mMin
+                || p.mMax != q.mMax || p.mSlice->mPts.size() != q.mSlice->mPts.size()
+                || (!p.mSlice->mPts.empty()
+                    && std::memcmp(p.mSlice->mPts.data(), q.mSlice->mPts.data(), p.mSlice->mPts.size() * sizeof(LLVector2)) != 0))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     S32 layerOf(const skmap::Scene& s, const LLVector3d& at)
@@ -783,5 +884,322 @@ namespace tut
         skmap::ScenePtr s = skmap::buildScene(input({ t.make(LAND, true, 0, 0) }));
         ensure_equals("only the hillside is kept", s->mPolys.size(), static_cast<size_t>(1));
         ensure("the hillside is ground", layerOf(*s, LLVector3d(10.0, 10.0, 4.0)) >= 0);
+    }
+
+    // With no records the scene is today's: no section, and every wall segment keeps its wall mark.
+    template<> template<>
+    void skmapgeom_object::test<21>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 16.f, 16.f, 0.f, 0.f);
+        for (const auto& seg : { std::make_pair(LLVector3(0.f, 0.f, 0.f), LLVector3(16.f, 0.f, 0.f)),
+                                 std::make_pair(LLVector3(16.f, 0.f, 0.f), LLVector3(16.f, 16.f, 0.f)),
+                                 std::make_pair(LLVector3(0.f, 16.f, 0.f), LLVector3(0.f, 0.f, 0.f)) })
+        {
+            WallSegment w;
+            w.mA = seg.first;
+            w.mB = seg.second;
+            w.mKind = EdgeKind::WALL;
+            w.mValue = 3.f;
+            t.mSegments.push_back(w);
+        }
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
+        ensure("no section", !s->mHasSection);
+        ensure("no pieces", s->mPieces.empty());
+        for (const skmap::SceneLayer& layer : s->mLayers)
+        {
+            ensure("no level grid", layer.mLevels.mW == 0 && layer.mPieces.empty());
+        }
+        size_t walls = 0;
+        for (const skmap::LineMark& m : s->mMarks)
+        {
+            walls += m.mKind == skmap::MarkKind::WALL ? 1 : 0;
+        }
+        ensure_equals("every wall segment a wall mark", walls, static_cast<size_t>(3));
+    }
+
+    // Only static avatar obstacles are cut; a placeholder is provisional; a claimed door leaf goes to its door.
+    template<> template<>
+    void skmapgeom_object::test<22>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 40.f, 6.f, 0.f, 0.f);
+        const LLVector3 h(0.5f, 0.1f, 1.5f);
+        auto at = [&](F32 x, U64 sig) { return boxRecordOf(LLVector3(x, 7.f, 1.5f), h, sig); };
+        std::vector<RecordPtr> recs;
+        Record dynamic = at(2.f, 1);
+        dynamic.mDynamic = true;
+        Record vehicle = at(5.f, 2);
+        vehicle.mExclude = EXCLUDE_ALL;
+        vehicle.mFeature = FeatureKind::VEHICLE;
+        Record elevator = at(8.f, 3);
+        elevator.mExclude = EXCLUDE_ALL;
+        elevator.mFeature = FeatureKind::ELEVATOR;
+        Record exclusion = at(11.f, 4);
+        exclusion.mNavRole = NavRole::EXCLUSION_VOLUME;
+        Record surround = at(14.f, 5);
+        surround.mRole = Role::SURROUND;
+        Record placeholder = at(17.f, 6);
+        placeholder.mProvenance = Provenance::BOX;
+        Record leaf = at(20.f, 7);
+        leaf.mFeature = FeatureKind::DOOR;
+        leaf.mDynamic = true;
+        Record plain = at(23.f, 8);
+        for (const Record& r : { dynamic, vehicle, elevator, exclusion, surround, placeholder, leaf, plain })
+        {
+            recs.push_back(std::make_shared<const Record>(r));
+        }
+        skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
+        skmap::DoorInput door;
+        door.mPlanePoint.set(20.0, 7.0, 0.0);
+        door.mNormal.set(0.f, 1.f, 0.f);
+        door.mWidth = 1.f;
+        door.mMin.set(19.5, 6.9, 0.0);
+        door.mMax.set(20.5, 7.1, 3.0);
+        door.mLeaves = { leaf.mPart };
+        in.mDoors.push_back(door);
+        skmap::ScenePtr s = skmap::buildScene(in);
+        ensure("a section", s->mHasSection);
+        for (U64 sig : { 1ull, 2ull, 3ull, 4ull, 5ull, 7ull })
+        {
+            ensure("left out", piecesOf(*s, sig).empty());
+        }
+        ensure("the placeholder is cut", !piecesOf(*s, 6).empty());
+        for (const skmap::SectionPiece* p : piecesOf(*s, 6))
+        {
+            ensure("provisional", p->mStyle == skmap::SectionStyle::PROVISIONAL);
+        }
+        ensure("a plain wall is solid", !piecesOf(*s, 8).empty() && piecesOf(*s, 8)[0]->mStyle == skmap::SectionStyle::SOLID);
+        ensure_equals("one door's leaves", s->mDoorLeaves.size(), static_cast<size_t>(1));
+        ensure("the leaf is its door's", s->mDoorLeaves[0].size() == 1 && s->mDoorLeaves[0][0]->mSignature == 7);
+
+        // The same leaf unclaimed and at rest is an ordinary wall.
+        leaf.mDynamic = false;
+        recs[6] = std::make_shared<const Record>(leaf);
+        skmap::SceneInput unclaimed = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
+        skmap::ScenePtr u = skmap::buildScene(unclaimed);
+        ensure("an unclaimed leaf is cut", !piecesOf(*u, 7).empty());
+    }
+
+    // The level field: Recast's lattice, six cells of reach, and a ramp's levels following it.
+    template<> template<>
+    void skmapgeom_object::test<23>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 16.f, 16.f, 30.375f, 30.375f);
+        std::vector<RecordPtr> recs = { boxRecord(LLVector3(8.f, 17.f, 31.5f), LLVector3(4.f, 0.1f, 1.5f), 1) };
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }, &recs));
+        const S32 l = layerOf(*s, LLVector3d(8.0, 8.0, 30.375));
+        ensure("the floor's layer", l >= 0);
+        const skmap::LevelGrid& g = s->mLayers[l].mLevels;
+        for (S32 y = 0; y < 16; ++y)
+        {
+            for (S32 x = 0; x < 16; ++x)
+            {
+                ensure("one level, 243", levelsAt(g, x, y) == std::vector<S32>({ 243 }));
+            }
+        }
+        ensure("six cells beyond", levelsAt(g, 21, 8) == std::vector<S32>({ 243 }));
+        ensure("seven beyond, nothing", levelsAt(g, 22, 8).empty());
+        ensure("listed", skmap::levelListed(g, 21, 8, 243) && !skmap::levelListed(g, 22, 8, 243));
+        ensure_approximately_equals_range("low plane", skmap::sectionPlaneZ(246), 30.8125f, 1e-5f);
+        ensure_approximately_equals_range("high plane", skmap::sectionPlaneZ(254), 31.8125f, 1e-5f);
+        std::set<S32> planes;
+        for (const skmap::SectionPiece* p : piecesOf(*s, 1))
+        {
+            planes.insert(p->mPlane);
+        }
+        ensure("cut at 246 and 254", planes == std::set<S32>({ 246, 254 }));
+
+        TileMaker ramp;
+        ramp.quad(0.f, 0.f, 12.f, 4.f, 0.f, 3.f);
+        skmap::ScenePtr r = skmap::buildScene(input({ ramp.make(CLUSTER, false, 0, 0) }, &recs));
+        const skmap::LevelGrid& rg = r->mLayers[layerOf(*r, LLVector3d(1.0, 1.0, 0.25))].mLevels;
+        for (S32 x = 0; x < 12; ++x)
+        {
+            ensure("levels follow the ramp", levelsAt(rg, x, 1) == std::vector<S32>({ skmap::sectionLevel(0.25f * (x + 0.5f)) }));
+        }
+    }
+
+    /// A wall beside a floor and a post; a crate whose top joins the floor around it.
+    skmap::SceneInput piecesInput(std::vector<RecordPtr>& recs)
+    {
+        TileMaker t;
+        t.quad(0.f, 4.5f, 16.f, 12.f, 0.f, 0.f);
+        const S32 south = t.quad(20.f, 0.f, 28.f, 3.5f, 0.f, 0.f);
+        const S32 north = t.quad(20.f, 4.5f, 28.f, 8.f, 0.f, 0.f);
+        const S32 west = t.quad(20.f, 3.5f, 23.5f, 4.5f, 0.f, 0.f);
+        const S32 east = t.quad(24.5f, 3.5f, 28.f, 4.5f, 0.f, 0.f);
+        const S32 top = t.quad(23.5f, 3.5f, 24.5f, 4.5f, 0.75f, 0.75f);
+        t.join(top, 0, south, 2);
+        t.join(top, 2, north, 0);
+        t.join(top, 3, west, 1);
+        t.join(top, 1, east, 3);
+        recs = { boxRecord(LLVector3(8.f, 4.f, 1.5f), LLVector3(4.f, 0.1f, 1.5f), 1), boxRecord(LLVector3(24.f, 4.f, 0.35f), LLVector3(0.5f, 0.5f, 0.35f), 2),
+                 boxRecord(LLVector3(14.f, 3.f, 0.5f), LLVector3(0.05f, 0.05f, 0.5f), 3) };
+        return input({ t.make(CLUSTER, false, 0, 0) }, &recs);
+    }
+
+    // Pieces: a wall at both planes, a climbable crate as an island at the low one, a post as clutter.
+    template<> template<>
+    void skmapgeom_object::test<24>()
+    {
+        std::vector<RecordPtr> recs;
+        skmap::ScenePtr s = skmap::buildScene(piecesInput(recs));
+        std::set<S32> layers;
+        for (const LLVector3d& p : { LLVector3d(21.0, 1.0, 0.0), LLVector3d(21.0, 6.0, 0.0), LLVector3d(21.0, 4.0, 0.0),
+                                     LLVector3d(26.0, 4.0, 0.0), LLVector3d(24.0, 4.0, 0.75) })
+        {
+            layers.insert(layerOf(*s, p));
+        }
+        ensure("the crate's floors are one layer", layers.size() == 1 && *layers.begin() >= 0);
+
+        std::set<S32> wall_planes;
+        for (const skmap::SectionPiece* p : piecesOf(*s, 1))
+        {
+            wall_planes.insert(p->mPlane);
+            ensure_approximately_equals_range("wall thickness", p->mThickness, 0.1951f, 1e-4f);
+            ensure_equals("wall flags", static_cast<S32>(p->mFlags), 0);
+        }
+        ensure("the wall at 3 and 11", wall_planes == std::set<S32>({ 3, 11 }));
+
+        const std::vector<const skmap::SectionPiece*> crate = piecesOf(*s, 2, 3);
+        ensure("the crate at the low plane", crate.size() == 1 && (crate[0]->mFlags & skmap::PIECE_ISLAND));
+        ensure("the crate not at the high plane", piecesOf(*s, 2, 11).empty());
+
+        const std::vector<const skmap::SectionPiece*> post = piecesOf(*s, 3, 3);
+        ensure("the post is clutter", post.size() == 1 && (post[0]->mFlags & skmap::PIECE_BLOB));
+    }
+
+    // Pure: no cache, a fresh cache and a warm one build the same scene.
+    template<> template<>
+    void skmapgeom_object::test<25>()
+    {
+        std::vector<RecordPtr> recs;
+        const skmap::SceneInput in = piecesInput(recs);
+        skmap::SectionCache cache;
+        skmap::ScenePtr plain = skmap::buildScene(in);
+        skmap::ScenePtr cold = skmap::buildScene(in, &cache);
+        skmap::ScenePtr warm = skmap::buildScene(in, &cache);
+        ensure("pieces made", !plain->mPieces.empty());
+        ensure("the same keys, cold", plain->mCellHashes == cold->mCellHashes);
+        ensure("the same keys, warm", plain->mCellHashes == warm->mCellHashes);
+        ensure("the same pieces, cold", samePieces(*plain, *cold));
+        ensure("the same pieces, warm", samePieces(*plain, *warm));
+        ensure("the cold build sliced", cold->mSectionStats.mSlices > 0);
+        ensure_equals("the warm build sliced nothing", warm->mSectionStats.mSlices, 0u);
+        ensure_equals("all hits", warm->mSectionStats.mCacheHits, cold->mSectionStats.mSlices);
+    }
+
+    // What moves a leaf's key and what does not.
+    template<> template<>
+    void skmapgeom_object::test<26>()
+    {
+        // (a) A new snapshot of the same records moves nothing and slices nothing.
+        std::vector<RecordPtr> recs;
+        const skmap::SceneInput in = piecesInput(recs);
+        skmap::SectionCache cache;
+        skmap::ScenePtr a = skmap::buildScene(in, &cache);
+        std::vector<RecordPtr> again;
+        for (const RecordPtr& r : recs)
+        {
+            again.push_back(std::make_shared<const Record>(*r));
+        }
+        skmap::SceneInput in2 = in;
+        in2.mRecords = std::make_shared<const std::vector<RecordPtr>>(again);
+        skmap::ScenePtr b = skmap::buildScene(in2, &cache);
+        ensure("a new snapshot keeps every key", a->mCellHashes == b->mCellHashes);
+        ensure_equals("and hits the cache", b->mSectionStats.mSlices, 0u);
+
+        // (b) The box and its origin moved 64 m.
+        skmap::SceneInput moved = in;
+        const LLVector3d by(64.0, 0.0, 0.0);
+        moved.mOrigin += by;
+        moved.mMin += by;
+        moved.mMax += by;
+        skmap::ScenePtr m = skmap::buildScene(moved, &cache);
+        ensure_equals("a box step slices nothing", m->mSectionStats.mSlices, 0u);
+        ensure_equals("same layers", a->mCellHashes.size(), m->mCellHashes.size());
+        size_t compared = 0;
+        for (size_t l = 0; l < a->mCellHashes.size(); ++l)
+        {
+            for (const auto& entry : a->mCellHashes[l])
+            {
+                const auto it = m->mCellHashes[l].find(entry.first);
+                if (it != m->mCellHashes[l].end())
+                {
+                    ensure("a leaf keeps its key across a box step", it->second == entry.second);
+                    ++compared;
+                }
+            }
+        }
+        ensure("leaves compared", compared > 0);
+
+        // (c) One record re-signed and moved 0.5 m: only leaves near its old and new boxes move.
+        std::vector<RecordPtr> shifted_recs = recs;
+        Record wall = *recs[0];
+        wall.mCenter += LLVector3(0.5f, 0.f, 0.f);
+        wall.mMin.mdV[VX] += 0.5;
+        wall.mMax.mdV[VX] += 0.5;
+        wall.mSignature = 101;
+        shifted_recs[0] = std::make_shared<const Record>(wall);
+        skmap::SceneInput in3 = in;
+        in3.mRecords = std::make_shared<const std::vector<RecordPtr>>(shifted_recs);
+        skmap::ScenePtr c = skmap::buildScene(in3, &cache);
+        const F64 x0 = llmin(recs[0]->mMin.mdV[VX], wall.mMin.mdV[VX]) - skmap::HASH_REACH_M;
+        const F64 x1 = llmax(recs[0]->mMax.mdV[VX], wall.mMax.mdV[VX]) + skmap::HASH_REACH_M;
+        const F64 y0 = recs[0]->mMin.mdV[VY] - skmap::HASH_REACH_M, y1 = recs[0]->mMax.mdV[VY] + skmap::HASH_REACH_M;
+        size_t changed = 0;
+        for (size_t l = 0; l < a->mCellHashes.size(); ++l)
+        {
+            std::set<skmap::CellId> cells;
+            for (const auto& e : a->mCellHashes[l])
+            {
+                cells.insert(e.first);
+            }
+            for (const auto& e : c->mCellHashes[l])
+            {
+                cells.insert(e.first);
+            }
+            for (const skmap::CellId& cell : cells)
+            {
+                if (cell.mTier != 0 || skmap::cellKey(*a, static_cast<S32>(l), cell) == skmap::cellKey(*c, static_cast<S32>(l), cell))
+                {
+                    continue;
+                }
+                ++changed;
+                const LLVector3d lo = cell.minCorner(), hi = cell.maxCorner();
+                ensure("only near the record", lo.mdV[VX] <= x1 && hi.mdV[VX] >= x0 && lo.mdV[VY] <= y1 && hi.mdV[VY] >= y0);
+            }
+        }
+        ensure("something moved", changed > 0);
+
+        // (d) A floor 2.5 m beyond a leaf rises 1 m: the leaf's key moves through the levels alone.
+        auto floors = [](F32 z) {
+            TileMaker t;
+            t.quad(0.f, 0.f, 5.f, 8.f, 0.f, 0.f);
+            t.quad(10.5f, 0.f, 12.f, 8.f, z, z);
+            return t.make(CLUSTER, false, 0, 0);
+        };
+        std::vector<RecordPtr> low_wall = { boxRecord(LLVector3(6.5f, 4.f, 0.8f), LLVector3(0.1f, 3.f, 0.8f), 1) };
+        skmap::ScenePtr d0 = skmap::buildScene(input({ floors(0.f) }, &low_wall));
+        skmap::ScenePtr d1 = skmap::buildScene(input({ floors(1.f) }, &low_wall));
+        const S32 l0 = layerOf(*d0, LLVector3d(2.0, 2.0, 0.0)), l1 = layerOf(*d1, LLVector3d(2.0, 2.0, 0.0));
+        ensure("one layer", l0 >= 0 && l0 == layerOf(*d0, LLVector3d(11.0, 2.0, 0.0)) && l1 == layerOf(*d1, LLVector3d(11.0, 2.0, 1.0)));
+        ensure("the same pieces", samePieces(*d0, *d1));
+        const skmap::CellId leaf = skmap::cellAt(0, 6.5, 4.0);
+        ensure("the leaf holds a piece", skmap::cellKey(*d0, l0, leaf) != 0);
+        ensure("the leaf's key moves", skmap::cellKey(*d0, l0, leaf) != skmap::cellKey(*d1, l1, leaf));
+
+        // (e) A box 4 m from any floor still gets a leaf.
+        TileMaker tiny;
+        tiny.quad(0.f, 0.f, 5.f, 5.f, 0.f, 0.f);
+        std::vector<RecordPtr> distant = { boxRecord(LLVector3(9.5f, 2.5f, 1.5f), LLVector3(0.5f, 0.5f, 1.5f), 1) };
+        skmap::ScenePtr e = skmap::buildScene(input({ tiny.make(CLUSTER, false, 0, 0) }, &distant));
+        skmap::ScenePtr none = skmap::buildScene(input({ tiny.make(CLUSTER, false, 0, 0) }));
+        const S32 le = layerOf(*e, LLVector3d(2.0, 2.0, 0.0));
+        const skmap::CellId far_leaf = skmap::cellAt(0, 9.5, 2.5);
+        ensure("no leaf there without it", skmap::cellKey(*none, layerOf(*none, LLVector3d(2.0, 2.0, 0.0)), far_leaf) == 0);
+        ensure("its leaf exists", skmap::cellKey(*e, le, far_leaf) != 0);
     }
 }

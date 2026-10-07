@@ -3005,21 +3005,21 @@ if(AL_BUILD_TESTS)
     skmapgeom
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapview.cpp
+    SOURCES skmapview.cpp skmapsection.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(
     skmapraster
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapgeom.cpp skmapview.cpp
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(
     skmapribbons
     UNIT
     PROJECT ${test_project}
-    SOURCES skmapgeom.cpp skmapview.cpp
+    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp
     LIBRARIES sknavmesh ${test_libs}
   )
   al_add_test(skmapsection UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})

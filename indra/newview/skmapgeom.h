@@ -214,6 +214,46 @@ namespace skmap
         F32 mArea = 0.f;
     };
 
+    /// How a section piece draws: a real shape, or an object-cache placeholder box.
+    enum class SectionStyle : U8 { SOLID, PROVISIONAL };
+    constexpr U8 PIECE_ISLAND = 1 << 0, PIECE_BLOB = 1 << 1, PIECE_LINES = 1 << 2;
+
+    /// One loop group of one record cut at one plane, on one layer; or that cut's lines.
+    struct SectionPiece
+    {
+        SlicePtr mSlice;                 ///< record frame, shared with the cache
+        std::vector<U16> mLoops;         ///< this piece's loops; empty for PIECE_LINES
+        std::vector<S8> mWind;           ///< their winding in this layer (after sheet-room demotion)
+        /// PIECE_LINES only: below the slice's line count a line, from there a demoted loop (id minus the line count).
+        std::vector<U16> mLines;
+        LLVector2 mShift;                ///< record frame -> scene-local plan
+        S32 mPlane = 0;                  ///< q
+        SectionStyle mStyle = SectionStyle::SOLID;
+        U8 mFlags = 0;
+        U16 mGroup = 0;                  ///< the slice's group, 0xffff for the lines
+        U64 mSource = 0;                 ///< record signature
+        LLUUID mPart, mRoot;             ///< for the report
+        F32 mThickness = 0.f;
+        LLVector2 mMin, mMax;            ///< scene-local
+    };
+
+    /// Floor levels per global 1 m cell. mCell: 0 = no levels, else 1 + offset into mLists where [count, k0, k1, ...] is stored.
+    struct LevelGrid
+    {
+        S32 mX0 = 0, mY0 = 0, mW = 0, mH = 0;
+        std::vector<U32> mCell;
+        std::vector<S32> mLists;
+    };
+
+    struct SectionStats
+    {
+        F32 mMs = 0.f;
+        U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mRecords = 0;
+    };
+
+    /// Whether the global 1 m cell lists floor level k.
+    bool levelListed(const LevelGrid& grid, S32 gx, S32 gy, S32 k);
+
     struct SceneLayer
     {
         bool mGround = false;
@@ -225,6 +265,8 @@ namespace skmap
         std::set<std::pair<S32, S32>> mFootprint;   ///< global 4 m cells its polygons meet
         std::vector<U32> mMarks;                ///< into Scene::mMarks
         std::vector<U32> mContours;             ///< into Scene::mContours
+        std::vector<U32> mPieces;               ///< into Scene::mPieces; empty without a section
+        LevelGrid mLevels;                      ///< empty without a section
     };
 
     /// A polygon's edge joined to another's, inside a tile or across a lattice line.
@@ -262,6 +304,11 @@ namespace skmap
         std::vector<std::map<CellId, U64>> mCellHashes;
         /// Per layer, a hash over its line marks: the ribbons are keyed by it.
         std::vector<U64> mMarkHashes;
+        bool mHasSection = false;
+        std::vector<SectionPiece> mPieces;
+        SectionStats mSectionStats;
+        /// Per SceneInput::mDoors entry, its leaf records, empty when none were found.
+        std::vector<std::vector<sknav::RecordPtr>> mDoorLeaves;
 
         LLVector2 toLocal(const LLVector3d& global) const
         {

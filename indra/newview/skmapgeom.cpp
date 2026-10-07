@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <deque>
 
@@ -814,9 +815,9 @@ namespace skmap
                     const U64 ribbon = sknav::mix(sknav::mix(r, static_cast<U64>(quantise(mark.mHeight, 100.0))),
                                                   static_cast<U64>(static_cast<S64>(mark.mFloorSide)));
                     mark_records.push_back(ribbon);
-                    if (mark.mKind != MarkKind::LEDGE && mark.mKind != MarkKind::WALL)
+                    if (mark.mKind != MarkKind::LEDGE)
                     {
-                        continue;   // the raster's halos read only these
+                        continue;   // the raster's halo reads only these
                     }
                     leavesOf(llmin(mark.mA.mV[VX], mark.mB.mV[VX]), llmin(mark.mA.mV[VY], mark.mB.mV[VY]),
                              llmax(mark.mA.mV[VX], mark.mB.mV[VX]), llmax(mark.mA.mV[VY], mark.mB.mV[VY]), leaves);
@@ -825,6 +826,67 @@ namespace skmap
                         marks[c].push_back(r);
                     }
                 }
+                // Section pieces: leaves are made from them too, so a piece far from any floor still bakes.
+                for (U32 id : layer.mPieces)
+                {
+                    const SectionPiece& piece = s.mPieces[id];
+                    U64 r = sknav::mix(sknav::SEED, piece.mSource);
+                    r = sknav::mix(r, static_cast<U64>(static_cast<S64>(piece.mPlane)));
+                    r = sknav::mix(r, static_cast<U64>(piece.mStyle));
+                    r = sknav::mix(r, piece.mFlags);
+                    r = sknav::mix(r, piece.mGroup);
+                    r = sknav::mix(r, static_cast<U64>(quantise(s.mOrigin.mdV[VX] + piece.mShift.mV[VX], 100.0)));
+                    r = sknav::mix(r, static_cast<U64>(quantise(s.mOrigin.mdV[VY] + piece.mShift.mV[VY], 100.0)));
+                    for (size_t k = 0; k < piece.mLoops.size(); ++k)
+                    {
+                        r = sknav::mix(sknav::mix(r, piece.mLoops[k]), static_cast<U64>(static_cast<S64>(piece.mWind[k])));
+                    }
+                    for (U16 line : piece.mLines)
+                    {
+                        r = sknav::mix(r, line);
+                    }
+                    leavesOf(piece.mMin.mV[VX], piece.mMin.mV[VY], piece.mMax.mV[VX], piece.mMax.mV[VY], leaves);
+                    for (const CellId& c : leaves)
+                    {
+                        records[c].push_back(r);
+                    }
+                }
+                // The floor levels each leaf's own 1 m cells list; a node mixes its 3 x 3 leaves, which covers the levels' reach.
+                const LevelGrid& grid = layer.mLevels;
+                std::map<std::pair<S32, S32>, U64> leaf_levels;
+                auto levelsOfLeaf = [&](S32 lx, S32 ly) {
+                    const auto it = leaf_levels.find({ lx, ly });
+                    if (it != leaf_levels.end())
+                    {
+                        return it->second;
+                    }
+                    U64 h = sknav::SEED;
+                    const S32 side = static_cast<S32>(tierCellSize(TIER_MIN) / LEVEL_CELL_M);
+                    for (S32 gy = ly * side; gy < (ly + 1) * side; ++gy)
+                    {
+                        for (S32 gx = lx * side; gx < (lx + 1) * side; ++gx)
+                        {
+                            const S32 x = gx - grid.mX0, y = gy - grid.mY0;
+                            if (x < 0 || x >= grid.mW || y < 0 || y >= grid.mH)
+                            {
+                                continue;
+                            }
+                            const U32 c = grid.mCell[static_cast<size_t>(y) * grid.mW + x];
+                            if (!c)
+                            {
+                                continue;
+                            }
+                            h = sknav::mix(sknav::mix(h, static_cast<U64>(static_cast<S64>(gx))), static_cast<U64>(static_cast<S64>(gy)));
+                            for (S32 k = 0; k <= grid.mLists[c - 1]; ++k)
+                            {
+                                h = sknav::mix(h, static_cast<U64>(static_cast<S64>(grid.mLists[c - 1 + k])));
+                            }
+                        }
+                    }
+                    leaf_levels.emplace(std::make_pair(lx, ly), h);
+                    return h;
+                };
+
                 std::sort(mark_records.begin(), mark_records.end());
                 U64 mark_hash = sknav::SEED;
                 for (U64 r : mark_records)
@@ -850,6 +912,16 @@ namespace skmap
                         for (U64 r : mit->second)
                         {
                             h = sknav::mix(h, r);
+                        }
+                    }
+                    if (grid.mW > 0)
+                    {
+                        for (S32 dy = -1; dy <= 1; ++dy)
+                        {
+                            for (S32 dx = -1; dx <= 1; ++dx)
+                            {
+                                h = sknav::mix(h, levelsOfLeaf(entry.first.mX + dx, entry.first.mY + dy));
+                            }
                         }
                     }
                     nodes[entry.first] = h ? h : 1;
@@ -880,6 +952,568 @@ namespace skmap
             }
         }
 
+        S32 floorDivInt(S32 a, S32 b)
+        {
+            return a >= 0 ? a / b : -((-a + b - 1) / b);
+        }
+
+        S32 cellIndex(F64 v, F64 size)
+        {
+            return static_cast<S32>(std::floor(v / size));
+        }
+
+        /// The topmost floor of one layer at a scene-local point.
+        bool layerFloorAt(const Scene& s, S32 layer, const LLVector2& p, F32& z)
+        {
+            const auto it = s.mIndex.find(cellOfLocal(s, p));
+            if (it == s.mIndex.end())
+            {
+                return false;
+            }
+            bool found = false;
+            for (U32 id : it->second)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                if (poly.mLayer != layer || !polyContains(s, poly, p))
+                {
+                    continue;
+                }
+                const F32 h = polyHeightAt(s, poly, p);
+                if (!found || h > z)
+                {
+                    z = h;
+                    found = true;
+                }
+            }
+            return found;
+        }
+
+        /// The layer's floor levels per global 1 m cell, spread six cells off the floor by a multi-source search.
+        void buildLevels(const Scene& s, const SceneLayer& layer, LevelGrid& grid)
+        {
+            grid = LevelGrid();
+            if (layer.mPolys.empty())
+            {
+                return;
+            }
+            const F64 ox = s.mOrigin.mdV[VX], oy = s.mOrigin.mdV[VY], oz = s.mOrigin.mdV[VZ];
+            F64 lo_x = DBL_MAX, lo_y = DBL_MAX, hi_x = -DBL_MAX, hi_y = -DBL_MAX;
+            for (U32 id : layer.mPolys)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                lo_x = llmin(lo_x, ox + poly.mMinX);
+                lo_y = llmin(lo_y, oy + poly.mMinY);
+                hi_x = llmax(hi_x, ox + poly.mMaxX);
+                hi_y = llmax(hi_y, oy + poly.mMaxY);
+            }
+            grid.mX0 = cellIndex(lo_x, LEVEL_CELL_M) - SECTION_REACH_CELLS;
+            grid.mY0 = cellIndex(lo_y, LEVEL_CELL_M) - SECTION_REACH_CELLS;
+            grid.mW = cellIndex(hi_x, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mX0 + 1;
+            grid.mH = cellIndex(hi_y, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mY0 + 1;
+            const S32 w = grid.mW, h = grid.mH;
+            const size_t n = static_cast<size_t>(w) * h;
+
+            // Samples: each polygon's height at every cell centre it holds, or at its centroid when it holds none.
+            // Cells keep linked lists of samples, so a terrain-sized grid allocates nothing per cell.
+            struct Link
+            {
+                S32 mLevel;
+                S32 mNext;
+            };
+            std::vector<Link> links;
+            std::vector<S32> head(n, -1);
+            std::vector<size_t> sampled;
+            auto add = [&](size_t i, S32 k) {
+                if (head[i] < 0)
+                {
+                    sampled.push_back(i);
+                }
+                links.push_back({ k, head[i] });
+                head[i] = static_cast<S32>(links.size()) - 1;
+            };
+            for (U32 id : layer.mPolys)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                const S32 cx0 = static_cast<S32>(std::ceil(ox + poly.mMinX - 0.5)), cx1 = static_cast<S32>(std::floor(ox + poly.mMaxX - 0.5));
+                const S32 cy0 = static_cast<S32>(std::ceil(oy + poly.mMinY - 0.5)), cy1 = static_cast<S32>(std::floor(oy + poly.mMaxY - 0.5));
+                bool any = false;
+                for (S32 cy = cy0; cy <= cy1; ++cy)
+                {
+                    for (S32 cx = cx0; cx <= cx1; ++cx)
+                    {
+                        const LLVector2 c(static_cast<F32>(cx + 0.5 - ox), static_cast<F32>(cy + 0.5 - oy));
+                        if (!polyContains(s, poly, c))
+                        {
+                            continue;
+                        }
+                        add(static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0), sectionLevel(static_cast<F32>(polyHeightAt(s, poly, c) + oz)));
+                        any = true;
+                    }
+                }
+                if (!any)
+                {
+                    const S32 cx = cellIndex(ox + poly.mCentroid.mV[VX], LEVEL_CELL_M), cy = cellIndex(oy + poly.mCentroid.mV[VY], LEVEL_CELL_M);
+                    add(static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0),
+                        sectionLevel(static_cast<F32>(polyHeightAt(s, poly, poly.mCentroid) + oz)));
+                }
+            }
+            // Up to LEVEL_MAX levels per cell, in fixed slots.
+            std::vector<S32> slots(n * LEVEL_MAX, 0);
+            std::vector<U8> counts(n, 0);
+            std::vector<U8> seen(n, 0);
+            std::vector<std::pair<S32, U32>> merge_in;
+            std::vector<S32> merge_out;
+            auto store = [&](size_t i) {
+                mergeLevels(merge_in, merge_out);
+                counts[i] = static_cast<U8>(merge_out.size());
+                std::copy(merge_out.begin(), merge_out.end(), slots.begin() + i * LEVEL_MAX);
+                seen[i] = 1;
+            };
+            std::sort(sampled.begin(), sampled.end());
+            for (size_t i : sampled)
+            {
+                merge_in.clear();
+                for (S32 k = head[i]; k >= 0; k = links[k].mNext)
+                {
+                    merge_in.emplace_back(links[k].mLevel, 1u);
+                }
+                store(i);
+            }
+            std::vector<size_t> frontier = sampled;
+            for (S32 ring = 0; ring < SECTION_REACH_CELLS && !frontier.empty(); ++ring)
+            {
+                // Each new cell takes the union of its frontier neighbours' levels, each counted once.
+                links.clear();
+                std::vector<size_t> reached;
+                for (size_t f : frontier)
+                {
+                    const S32 fx = static_cast<S32>(f % w), fy = static_cast<S32>(f / w);
+                    for (S32 dy = -1; dy <= 1; ++dy)
+                    {
+                        for (S32 dx = -1; dx <= 1; ++dx)
+                        {
+                            const S32 x = fx + dx, y = fy + dy;
+                            if (x < 0 || x >= w || y < 0 || y >= h)
+                            {
+                                continue;
+                            }
+                            const size_t i = static_cast<size_t>(y) * w + x;
+                            if (seen[i])
+                            {
+                                continue;
+                            }
+                            if (head[i] < 0)
+                            {
+                                reached.push_back(i);
+                            }
+                            for (S32 k = 0; k < counts[f]; ++k)
+                            {
+                                links.push_back({ slots[f * LEVEL_MAX + k], head[i] });
+                                head[i] = static_cast<S32>(links.size()) - 1;
+                            }
+                        }
+                    }
+                }
+                std::sort(reached.begin(), reached.end());
+                for (size_t i : reached)
+                {
+                    merge_in.clear();
+                    for (S32 k = head[i]; k >= 0; k = links[k].mNext)
+                    {
+                        merge_in.emplace_back(links[k].mLevel, 1u);
+                    }
+                    head[i] = -1;
+                    std::sort(merge_in.begin(), merge_in.end());
+                    merge_in.erase(std::unique(merge_in.begin(), merge_in.end()), merge_in.end());
+                    store(i);
+                }
+                frontier.swap(reached);
+            }
+            grid.mCell.assign(n, 0);
+            for (size_t i = 0; i < n; ++i)
+            {
+                if (!counts[i])
+                {
+                    continue;
+                }
+                grid.mCell[i] = static_cast<U32>(grid.mLists.size()) + 1;
+                grid.mLists.push_back(counts[i]);
+                grid.mLists.insert(grid.mLists.end(), slots.begin() + i * LEVEL_MAX, slots.begin() + i * LEVEL_MAX + counts[i]);
+            }
+        }
+
+        /// The layers' section: records filtered, bucketed, sliced at the planes their cells' floor levels ask for, and
+        /// cut into pieces; door leaves set aside for the door marks.
+        void buildSection(Scene& s, const SceneInput& input, SectionCache* cache)
+        {
+            LL_PROFILE_ZONE_SCOPED;
+            const auto started = std::chrono::steady_clock::now();
+            SectionStats& stats = s.mSectionStats;
+            const std::vector<sknav::RecordPtr>& recs = *input.mRecords;
+
+            // 1. Door leaves first: a swinging leaf is dynamic and must still reach its door.
+            s.mDoorLeaves.assign(input.mDoors.size(), {});
+            std::map<LLUUID, size_t> leaf_door;
+            for (size_t i = 0; i < input.mDoors.size(); ++i)
+            {
+                for (const LLUUID& id : input.mDoors[i].mLeaves)
+                {
+                    leaf_door.emplace(id, i);
+                }
+            }
+            // 2. What stands still and blocks avatars, near the box.
+            const F64 reach = SECTION_REACH_CELLS * LEVEL_CELL_M;
+            std::vector<U32> kept;
+            for (size_t i = 0; i < recs.size(); ++i)
+            {
+                const sknav::Record* r = recs[i].get();
+                if (!r)
+                {
+                    continue;
+                }
+                if (r->mFeature == sknav::FeatureKind::DOOR)
+                {
+                    const auto it = leaf_door.find(r->mPart);
+                    if (it != leaf_door.end())
+                    {
+                        s.mDoorLeaves[it->second].push_back(recs[i]);
+                        continue;
+                    }
+                }
+                if (r->mRole != sknav::Role::NAV || r->mDynamic || (r->mExclude & sknav::EXCLUDE_ALL) == sknav::EXCLUDE_ALL
+                    || r->mNavRole == sknav::NavRole::MATERIAL_VOLUME || r->mNavRole == sknav::NavRole::EXCLUSION_VOLUME
+                    || r->mNavRole == sknav::NavRole::DYNAMIC)
+                {
+                    continue;
+                }
+                if (r->mMax.mdV[VX] < input.mMin.mdV[VX] - reach || r->mMin.mdV[VX] > input.mMax.mdV[VX] + reach
+                    || r->mMax.mdV[VY] < input.mMin.mdV[VY] - reach || r->mMin.mdV[VY] > input.mMax.mdV[VY] + reach)
+                {
+                    continue;
+                }
+                kept.push_back(static_cast<U32>(i));
+            }
+            stats.mRecords = static_cast<U32>(kept.size());
+
+            // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees.
+            std::map<Cell, std::vector<U32>> buckets;
+            std::vector<U32> large;
+            for (U32 i : kept)
+            {
+                const sknav::Record& r = *recs[i];
+                const S32 bx0 = cellIndex(r.mMin.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(r.mMax.mdV[VX], RECORD_BUCKET_M);
+                const S32 by0 = cellIndex(r.mMin.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(r.mMax.mdV[VY], RECORD_BUCKET_M);
+                if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
+                {
+                    large.push_back(i);
+                    continue;
+                }
+                for (S32 by = by0; by <= by1; ++by)
+                {
+                    for (S32 bx = bx0; bx <= bx1; ++bx)
+                    {
+                        buckets[{ bx, by }].push_back(i);
+                    }
+                }
+            }
+
+            // One slice per (record, plane) for the whole scene, from the cache when there is one.
+            std::map<std::pair<U32, S32>, SlicePtr> slices;
+            std::set<S32> planes_used;
+            auto sliceOf = [&](U32 ri, S32 q) {
+                const auto key = std::make_pair(ri, q);
+                const auto it = slices.find(key);
+                if (it != slices.end())
+                {
+                    return it->second;
+                }
+                const sknav::Record& r = *recs[ri];
+                SlicePtr sl;
+                if (cache)
+                {
+                    bool hit = false;
+                    sl = cache->get(r, q, &hit);
+                    (hit ? stats.mCacheHits : stats.mSlices)++;
+                }
+                else
+                {
+                    sl = std::make_shared<SliceResult>(sliceRecord(r, sectionPlaneZ(q) - static_cast<F32>(r.mOrigin.mdV[VZ])));
+                    stats.mSlices++;
+                }
+                slices.emplace(key, sl);
+                return sl;
+            };
+
+            const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
+            for (size_t l = 0; l < s.mLayers.size(); ++l)
+            {
+                SceneLayer& layer = s.mLayers[l];
+                // 4. The layer's local floor levels.
+                buildLevels(s, layer, layer.mLevels);
+                const LevelGrid& grid = layer.mLevels;
+                if (grid.mW == 0)
+                {
+                    continue;
+                }
+                // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
+                std::vector<std::pair<U32, S32>> pairs;
+                const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
+                const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
+                std::set<S32> planes;
+                for (S32 by = by0; by <= by1; ++by)
+                {
+                    for (S32 bx = bx0; bx <= bx1; ++bx)
+                    {
+                        const auto bucket = buckets.find({ bx, by });
+                        if (bucket == buckets.end() && large.empty())
+                        {
+                            continue;
+                        }
+                        planes.clear();
+                        const S32 x0 = llmax(grid.mX0, bx * per_bucket - 1), x1 = llmin(grid.mX0 + grid.mW - 1, bx * per_bucket + per_bucket);
+                        const S32 y0 = llmax(grid.mY0, by * per_bucket - 1), y1 = llmin(grid.mY0 + grid.mH - 1, by * per_bucket + per_bucket);
+                        for (S32 y = y0; y <= y1; ++y)
+                        {
+                            for (S32 x = x0; x <= x1; ++x)
+                            {
+                                const U32 c = grid.mCell[static_cast<size_t>(y - grid.mY0) * grid.mW + (x - grid.mX0)];
+                                if (!c)
+                                {
+                                    continue;
+                                }
+                                const S32 count = grid.mLists[c - 1];
+                                for (S32 k = 0; k < count; ++k)
+                                {
+                                    planes.insert(grid.mLists[c + k] + SECTION_LOW_Q);
+                                    planes.insert(grid.mLists[c + k] + SECTION_HIGH_Q);
+                                }
+                            }
+                        }
+                        if (planes.empty())
+                        {
+                            continue;
+                        }
+                        auto take = [&](U32 ri) {
+                            const sknav::Record& r = *recs[ri];
+                            for (S32 q : planes)
+                            {
+                                const F64 z = sectionPlaneZ(q);
+                                if (r.mMin.mdV[VZ] < z && z <= r.mMax.mdV[VZ])
+                                {
+                                    pairs.emplace_back(ri, q);
+                                }
+                            }
+                        };
+                        if (bucket != buckets.end())
+                        {
+                            for (U32 ri : bucket->second)
+                            {
+                                take(ri);
+                            }
+                        }
+                        for (U32 ri : large)
+                        {
+                            take(ri);
+                        }
+                    }
+                }
+                std::sort(pairs.begin(), pairs.end());
+                pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+
+                // 6. Pieces, in (record, plane, group) order.
+                const S32 li = static_cast<S32>(l);
+                auto floor_at = [&s, li](const LLVector2& p, F32& z) { return layerFloorAt(s, li, p, z); };
+                for (const auto& pq : pairs)
+                {
+                    const sknav::Record& rec = *recs[pq.first];
+                    const S32 q = pq.second;
+                    planes_used.insert(q);
+                    const SlicePtr sl = sliceOf(pq.first, q);
+                    if (sl->mLoops.empty() && sl->mLines.empty())
+                    {
+                        continue;
+                    }
+                    const LLVector2 shift(static_cast<F32>(rec.mOrigin.mdV[VX] - s.mOrigin.mdV[VX]),
+                                          static_cast<F32>(rec.mOrigin.mdV[VY] - s.mOrigin.mdV[VY]));
+                    const F32 plane = static_cast<F32>(sectionPlaneZ(q) - s.mOrigin.mdV[VZ]);
+
+                    // Sheet rooms: a closed sheet around walkable floor with headroom through the plane is a wall line.
+                    std::vector<bool> active(sl->mLoops.size(), true);
+                    bool demoted = false;
+                    if (sl->mSheet)
+                    {
+                        for (size_t i = 0; i < sl->mLoops.size(); ++i)
+                        {
+                            const SliceLoop& loop = sl->mLoops[i];
+                            const LLVector2* pts = &sl->mPts[loop.mFirst];
+                            LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+                            for (U32 k = 0; k < loop.mCount; ++k)
+                            {
+                                lo.set(llmin(lo.mV[VX], pts[k].mV[VX]), llmin(lo.mV[VY], pts[k].mV[VY]));
+                                hi.set(llmax(hi.mV[VX], pts[k].mV[VX]), llmax(hi.mV[VY], pts[k].mV[VY]));
+                            }
+                            lo += shift;
+                            hi += shift;
+                            const Cell c0 = cellOfLocal(s, lo), c1 = cellOfLocal(s, hi);
+                            std::set<U32> seen_polys;
+                            bool walkable = false;
+                            for (S32 cy = c0.second; cy <= c1.second && !walkable; ++cy)
+                            {
+                                for (S32 cx = c0.first; cx <= c1.first && !walkable; ++cx)
+                                {
+                                    const auto it = s.mIndex.find({ cx, cy });
+                                    if (it == s.mIndex.end())
+                                    {
+                                        continue;
+                                    }
+                                    for (U32 id : it->second)
+                                    {
+                                        const ScenePoly& poly = s.mPolys[id];
+                                        if (poly.mLayer != li || !seen_polys.insert(id).second)
+                                        {
+                                            continue;
+                                        }
+                                        std::vector<LLVector2> points = { poly.mCentroid };
+                                        for (S32 v = 0; v < poly.mVertCount; ++v)
+                                        {
+                                            points.push_back(plan(poly.mVerts[v]));
+                                        }
+                                        for (const LLVector2& p : points)
+                                        {
+                                            if (p.mV[VX] < lo.mV[VX] || p.mV[VX] > hi.mV[VX] || p.mV[VY] < lo.mV[VY] || p.mV[VY] > hi.mV[VY]
+                                                || polyHeightAt(s, poly, p) > plane - SECTION_HEADROOM_M)
+                                            {
+                                                continue;
+                                            }
+                                            const LLVector2 local = p - shift;
+                                            if (!loopContains(pts, loop.mCount, local))
+                                            {
+                                                continue;
+                                            }
+                                            // Outside every loop nested in this one.
+                                            bool in_child = false;
+                                            for (size_t j = 0; j < sl->mLoops.size() && !in_child; ++j)
+                                            {
+                                                S32 up = sl->mLoops[j].mParent;
+                                                while (up >= 0 && up != static_cast<S32>(i))
+                                                {
+                                                    up = sl->mLoops[up].mParent;
+                                                }
+                                                if (j != i && up == static_cast<S32>(i))
+                                                {
+                                                    in_child = loopContains(&sl->mPts[sl->mLoops[j].mFirst], sl->mLoops[j].mCount, local);
+                                                }
+                                            }
+                                            if (!in_child)
+                                            {
+                                                walkable = true;
+                                                break;
+                                            }
+                                        }
+                                        if (walkable)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (walkable)
+                            {
+                                active[i] = false;
+                                demoted = true;
+                            }
+                        }
+                    }
+                    const SliceResult* src = sl.get();
+                    SliceResult rewound;
+                    if (demoted)
+                    {
+                        rewound = *sl;
+                        windByNesting(rewound, &active);
+                        src = &rewound;
+                    }
+
+                    SectionPiece base;
+                    base.mSlice = sl;
+                    base.mShift = shift;
+                    base.mPlane = q;
+                    base.mStyle = rec.mProvenance == sknav::Provenance::BOX ? SectionStyle::PROVISIONAL : SectionStyle::SOLID;
+                    base.mSource = rec.mSignature;
+                    base.mPart = rec.mPart;
+                    base.mRoot = rec.mRoot;
+                    for (size_t gi = 0; gi < src->mGroups.size(); ++gi)
+                    {
+                        const SliceGroup& g = src->mGroups[gi];
+                        SectionPiece piece = base;
+                        piece.mGroup = static_cast<U16>(gi);
+                        piece.mLoops.push_back(g.mOuter);
+                        piece.mLoops.insert(piece.mLoops.end(), g.mHoles.begin(), g.mHoles.end());
+                        for (U16 id : piece.mLoops)
+                        {
+                            piece.mWind.push_back(src->mLoops[id].mWind);
+                        }
+                        piece.mThickness = g.mThickness;
+                        piece.mMin = g.mMin + shift;
+                        piece.mMax = g.mMax + shift;
+                        const LLVector2 extent = g.mMax - g.mMin;
+                        if (g.mArea < CLUTTER_AREA_M2 && llmax(extent.mV[VX], extent.mV[VY]) < CLUTTER_EXTENT_M)
+                        {
+                            piece.mFlags |= PIECE_BLOB;
+                        }
+                        const SliceLoop& outer = src->mLoops[g.mOuter];
+                        std::vector<LLVector2> ring(src->mPts.begin() + outer.mFirst, src->mPts.begin() + outer.mFirst + outer.mCount);
+                        for (LLVector2& p : ring)
+                        {
+                            p += shift;
+                        }
+                        if (isIsland(ring.data(), static_cast<U32>(ring.size()), g.mThickness, floor_at))
+                        {
+                            piece.mFlags |= PIECE_ISLAND;
+                        }
+                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
+                        s.mPieces.push_back(std::move(piece));
+                    }
+                    if (!src->mLines.empty() || demoted)
+                    {
+                        SectionPiece piece = base;
+                        piece.mGroup = 0xffff;
+                        piece.mFlags = PIECE_LINES;
+                        LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+                        auto grow = [&](const SliceLoop& run) {
+                            for (U32 k = 0; k < run.mCount; ++k)
+                            {
+                                const LLVector2& p = src->mPts[run.mFirst + k];
+                                lo.set(llmin(lo.mV[VX], p.mV[VX]), llmin(lo.mV[VY], p.mV[VY]));
+                                hi.set(llmax(hi.mV[VX], p.mV[VX]), llmax(hi.mV[VY], p.mV[VY]));
+                            }
+                        };
+                        const size_t nlines = src->mLines.size();
+                        for (size_t i = 0; i < nlines; ++i)
+                        {
+                            piece.mLines.push_back(static_cast<U16>(i));
+                            grow(src->mLines[i]);
+                        }
+                        for (size_t i = 0; i < active.size(); ++i)
+                        {
+                            if (!active[i])
+                            {
+                                piece.mLines.push_back(static_cast<U16>(nlines + i));
+                                grow(src->mLoops[i]);
+                            }
+                        }
+                        piece.mMin = lo + shift;
+                        piece.mMax = hi + shift;
+                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
+                        s.mPieces.push_back(std::move(piece));
+                    }
+                }
+            }
+            stats.mPlanes = static_cast<U32>(planes_used.size());
+            stats.mPieces = static_cast<U32>(s.mPieces.size());
+            s.mHasSection = true;
+            stats.mMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
+        }
+
         /// Index every polygon by the 4 m cells it meets.
         void buildIndex(Scene& scene, std::vector<std::vector<Cell>>& poly_cells)
         {
@@ -898,6 +1532,29 @@ namespace skmap
     std::pair<S32, S32> indexCell(F64 x, F64 y)
     {
         return { static_cast<S32>(std::floor(x / INDEX_CELL_M)), static_cast<S32>(std::floor(y / INDEX_CELL_M)) };
+    }
+
+    bool levelListed(const LevelGrid& grid, S32 gx, S32 gy, S32 k)
+    {
+        const S32 x = gx - grid.mX0, y = gy - grid.mY0;
+        if (x < 0 || x >= grid.mW || y < 0 || y >= grid.mH)
+        {
+            return false;
+        }
+        const U32 c = grid.mCell[static_cast<size_t>(y) * grid.mW + x];
+        if (!c)
+        {
+            return false;
+        }
+        const S32 count = grid.mLists[c - 1];
+        for (S32 i = 0; i < count; ++i)
+        {
+            if (grid.mLists[c + i] == k)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     bool polyContains(const Scene& scene, const ScenePoly& poly, const LLVector2& p)
@@ -938,7 +1595,7 @@ namespace skmap
         return poly.mZMean;
     }
 
-    ScenePtr buildScene(const SceneInput& input, SectionCache*)
+    ScenePtr buildScene(const SceneInput& input, SectionCache* cache)
     {
         auto scene = std::make_shared<Scene>();
         Scene& s = *scene;
@@ -1584,6 +2241,10 @@ namespace skmap
             return a < b;
         });
 
+        if (input.mRecords)
+        {
+            buildSection(s, input, cache);
+        }
         classifyMarks(s, input);
         sampleContours(s);
         for (ScenePoly& poly : s.mPolys)
