@@ -1387,6 +1387,48 @@ namespace tut
         }
     }
 
+    /// The looped rooms four times over four tiles, once across the corner
+    /// they share, each moved off the cell grid so the doorways' jambs and
+    /// middles fall inside cells.
+    Scene town()
+    {
+        Scene s;
+        for (const LLVector2& at : { LLVector2(22.03f, 24.07f), LLVector2(1.11f, 44.29f), LLVector2(40.53f, 1.71f), LLVector2(0.37f, 0.93f) })
+        {
+            for (Solid b : loopedRooms().mSolids)
+            {
+                b.mX0 += at.mV[VX];
+                b.mX1 += at.mV[VX];
+                b.mY0 += at.mV[VY];
+                b.mY1 += at.mV[VY];
+                s.mSolids.push_back(b);
+            }
+        }
+        return s;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<50>()
+    {
+        set_test_name("doorways cut from below find, reading their cells in bulk, what they find reading every sample");
+        for (const Scene& s : { loopedRooms(), town() })
+        {
+            const S32 tiles = s.mSolids.size() > 11 ? 2 : 1;
+            auto framed = std::make_shared<RoomsInput>(), sampled = std::make_shared<RoomsInput>();
+            sampled->mFrameApertures = false;
+            const Result a = run(s.input(tiles, tiles), framed);
+            const Result b = run(s.input(tiles, tiles), sampled);
+            ensure("some doorway cut from below", !b.mRooms->mApart.empty());
+            ensure_equals("as many cuts", a.mRooms->mApart.size(), b.mRooms->mApart.size());
+            for (size_t i = 0; i < a.mRooms->mApart.size(); ++i)
+            {
+                const SeedLink &p = a.mRooms->mApart[i], &q = b.mRooms->mApart[i];
+                ensure("the same cut", p.mA == q.mA && p.mB == q.mB && p.mSeedA == q.mSeedA && p.mSeedB == q.mSeedB);
+            }
+            ensure("the same spaces and portals, to the bit", dump(a) == dump(b));
+        }
+    }
+
     template<> template<>
     void sknavrooms_object::test<30>()
     {
