@@ -1477,34 +1477,36 @@ void SKNavMesh::update()
     }
     mRooms->update(*this);
 
-    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
-    mStats.mMeshes = static_cast<U32>(mMeshes.size());
-    mStats.mInFlight = mInFlight;
-    mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
-    mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
-    // Keep the last complete counts while a bounded scan runs; partial totals would look like lost tiles.
-    if (scanTiles(mStatsCursor, 0.0005f, [&](Mesh&, const TileKey&, Tile& tile)
-        {
-            ++mScanningStats.mTiles;
-            if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
-            if (!tile.mBuilt) return;
-            ++mScanningStats.mTilesBuilt;
-            mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
-            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-            {
-                mScanningStats.mSegments += tile.mSegments[cls] ? static_cast<U32>(tile.mSegments[cls]->size()) : 0;
-                mScanningStats.mLinks += tile.mLinks[cls] ? static_cast<U32>(tile.mLinks[cls]->size()) : 0;
-            }
-        }))
     {
-        mStats.mTiles = mScanningStats.mTiles;
-        mStats.mTilesBuilt = mScanningStats.mTilesBuilt;
-        mStats.mAirTiles = mScanningStats.mAirTiles;
-        mStats.mAirBytes = mScanningStats.mAirBytes;
-        mStats.mFaces = mScanningStats.mFaces;
-        mStats.mSegments = mScanningStats.mSegments;
-        mStats.mLinks = mScanningStats.mLinks;
-        mScanningStats = {};
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
+        mStats.mMeshes = static_cast<U32>(mMeshes.size());
+        mStats.mInFlight = mInFlight;
+        mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
+        mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
+        // Keep the last complete counts while a bounded scan runs; partial totals would look like lost tiles.
+        if (scanTiles(mStatsCursor, 0.0005f, [&](Mesh&, const TileKey&, Tile& tile)
+            {
+                ++mScanningStats.mTiles;
+                if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
+                if (!tile.mBuilt) return;
+                ++mScanningStats.mTilesBuilt;
+                mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    mScanningStats.mSegments += tile.mSegments[cls] ? static_cast<U32>(tile.mSegments[cls]->size()) : 0;
+                    mScanningStats.mLinks += tile.mLinks[cls] ? static_cast<U32>(tile.mLinks[cls]->size()) : 0;
+                }
+            }))
+        {
+            mStats.mTiles = mScanningStats.mTiles;
+            mStats.mTilesBuilt = mScanningStats.mTilesBuilt;
+            mStats.mAirTiles = mScanningStats.mAirTiles;
+            mStats.mAirBytes = mScanningStats.mAirBytes;
+            mStats.mFaces = mScanningStats.mFaces;
+            mStats.mSegments = mScanningStats.mSegments;
+            mStats.mLinks = mScanningStats.mLinks;
+            mScanningStats = {};
+        }
     }
 
     static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);
