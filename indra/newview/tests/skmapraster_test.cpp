@@ -579,6 +579,7 @@ namespace tut
         off.mSection = false;
         const Raster hidden = bake(*s, layer, TIER0, off);
         ensure_equals("no section with cover off", hidden.mStats.mHalfTexels + hidden.mStats.mFullTexels, 0);
+        ensure_equals("classes recorded", hidden.mStats.mSectionClass.size(), static_cast<size_t>(256 * 256));
         for (U8 bits : hidden.mStats.mSectionClass)
         {
             ensure_equals("no bits", static_cast<S32>(bits), 0);

@@ -471,6 +471,10 @@ namespace skmap
         }
 
         // 7. The section: what the planes cut, as class masks over the padded cell, then fills and their outlines.
+        if (stats)
+        {
+            stats->mSectionClass.assign(static_cast<size_t>(N) * N, 0);
+        }
         if (params.mSection && !L.mPieces.empty())
         {
             const size_t msize = static_cast<size_t>(MP) * MP;
@@ -595,7 +599,6 @@ namespace skmap
             if (stats)
             {
                 stats->mPieces = pieces;
-                stats->mSectionClass.assign(static_cast<size_t>(N) * N, 0);
             }
             for (S32 y = 0; y < N; ++y)
             {
