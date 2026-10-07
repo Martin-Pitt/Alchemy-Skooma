@@ -134,7 +134,7 @@ namespace sknav
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr);
+                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

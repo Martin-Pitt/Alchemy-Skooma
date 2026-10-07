@@ -168,8 +168,7 @@ namespace tut
         }
     }
 
-    // Too far to drop for the avatar; the weather class reaches further and
-    // needs no headroom at the landing.
+    // Too far to drop for the avatar.
     template<> template<>
     void sknavwalls_object::test<4>()
     {
@@ -184,7 +183,6 @@ namespace tut
         summarise(r.mSegments[AVATAR], EdgeKind::LEDGE, ledge_len, drop);
         ensure(llformat("still a ledge: %.1f m at %.2f", ledge_len, drop), ledge_len > 40.f && std::fabs(drop - 15.f) < 0.6f);
         ensure("15 m is too far to jump", r.mLinks[AVATAR].empty());
-        ensure(llformat("but not too far for water: %zu", r.mLinks[WEATHER].size()), !r.mLinks[WEATHER].empty());
     }
 
     // A wall of two boxes with a gap too short to crawl through is one wall

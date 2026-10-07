@@ -32,7 +32,7 @@
 
 namespace sknav
 {
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out)
+    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut)
     {
         // Recast (x, y, z) is SL (y, z, x): a heightfield row along Recast x is
         // a run along SL y, so SL ix is Recast z and SL iy is Recast x.
@@ -59,10 +59,11 @@ namespace sknav
                 {
                     AirGap gap;
                     gap.mFloor = static_cast<U16>(s->smax);
+                    const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
                     gap.mFlags = s->area != RC_NULL_AREA ? AirGap::WALKABLE : 0;
-                    if (s->area >= 1 && s->area <= 3)
+                    if (area >= 1 && area <= 3)
                     {
-                        gap.mFlags |= static_cast<U8>(s->area << AirGap::AREA_SHIFT);
+                        gap.mFlags |= static_cast<U8>(area << AirGap::AREA_SHIFT);
                     }
                     if (s->next)
                     {

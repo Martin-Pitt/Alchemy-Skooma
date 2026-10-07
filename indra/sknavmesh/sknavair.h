@@ -88,7 +88,8 @@ namespace sknav
     /// Read the gaps off a heightfield after its filters have run, so the
     /// walkable flag is the class's own. Gaps below the lowest solid are not
     /// air anything stands in and are left out.
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out);
+    /// A raster whose spans carry codes passes the code -> area table as area_lut.
+    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut = nullptr);
 
     /// Whether two gaps of lateral neighbours connect: floors within climb
     /// and at least overlap units of air shared above both.

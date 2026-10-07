@@ -205,7 +205,7 @@ namespace sknav
         return Cover::NONE;
     }
 
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out)
+    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out, const U8* area_lut)
     {
         // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z. Faces of one side, one
         // across-column and one z-interval merge along the wall's direction.
@@ -229,6 +229,7 @@ namespace sknav
                     column(hf, cx + DX[side], cz + DZ[side], theirs);
                     for (const rcSpan* s = first; s; s = s->next)
                     {
+                        const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
                         // Subtract the neighbour's solids from this span's interval.
                         F32 lo = hf.bmin[1] + s->smin * hf.ch;
                         const F32 hi = hf.bmin[1] + s->smax * hf.ch;
@@ -241,14 +242,14 @@ namespace sknav
                             if (t.mBottom > lo)
                             {
                                 const S32 along = alongZ ? cz : cx, across = alongZ ? cx : cz;
-                                runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, t.mBottom, static_cast<U8>(s->area) });
+                                runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, t.mBottom, area });
                             }
                             lo = std::max(lo, t.mTop);
                         }
                         if (lo < hi)
                         {
                             const S32 along = alongZ ? cz : cx, across = alongZ ? cx : cz;
-                            runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, hi, static_cast<U8>(s->area) });
+                            runs[{ across, static_cast<S32>(std::lround(lo / hf.ch)) }].push_back({ along, along, across, lo, hi, area });
                         }
                     }
                 }

@@ -132,6 +132,7 @@ namespace sknav
         /// Bridges the air's list lays that AVATAR's, found on the same raster, does not, and the reverse.
         U32 mTopOnlyBridges = 0;
         U32 mAvatarOnlyBridges = 0;
+        U32 mOwnColumns = 0;            ///< columns AVATAR reads from a copy of its own
         ClassBuildStats mClass[2];
         /// AVATAR's walkable spans on the tile proper and, per poly, which of them it covers.
         std::vector<StatSpan> mSpans;

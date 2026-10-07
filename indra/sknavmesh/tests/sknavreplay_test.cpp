@@ -771,7 +771,8 @@ namespace tut
                 }
                 if (tile.mStats)
                 {
-                    out << ",\"top_only_bridges\":" << tile.mStats->mTopOnlyBridges << ",\"avatar_only_bridges\":" << tile.mStats->mAvatarOnlyBridges;
+                    out << ",\"top_only_bridges\":" << tile.mStats->mTopOnlyBridges << ",\"avatar_only_bridges\":" << tile.mStats->mAvatarOnlyBridges
+                        << ",\"own_columns\":" << tile.mStats->mOwnColumns << ",\"excluded\":" << tile.mStats->mExcludedRecords;
                 }
                 out << ",\"ms\":" << (tile.mStats ? tile.mStats->mTotalMs : 0.0) << "}\n";
             }

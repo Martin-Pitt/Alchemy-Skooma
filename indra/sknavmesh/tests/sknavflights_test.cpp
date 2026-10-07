@@ -534,9 +534,12 @@ namespace tut
             in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.4f, 15.4f, 0.f, 10.f + k * 0.4f, 16.6f, k * 0.25f));
         }
         in.mRecords.push_back(boxRecord(11.2f, 13.f, 0.f, 15.f, 19.f, 1.f));
+        // No erosion and little headroom, so only the fragment merge could lose it.
+        in.mParams[0].mHeight = 0.5f;
+        in.mParams[0].mRadius = 0.f;
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
-        const S32 w = static_cast<S32>(AgentClass::WEATHER);
+        const S32 w = static_cast<S32>(AgentClass::AVATAR);
         ensure_equals("one flight", r.mFlights[w].size(), 1u);
         ensure_equals("three treads", static_cast<S32>(r.mFlights[w][0].mTreads), 3);
         ensure("polys", !r.mFlights[w][0].mPolys.empty());

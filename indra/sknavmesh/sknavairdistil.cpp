@@ -461,12 +461,12 @@ namespace sknav
     }
 
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights, AirBuildStats* stats)
+                            const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut)
     {
         StageClock clock(stats ? stats->mMs : nullptr);
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
         AirGrid padded, grid;
-        extractAir(hf, border_cells - pad, padded);
+        extractAir(hf, border_cells - pad, padded, area_lut);
         clock.lap(AirBuildStats::EXTRACT);
         if (padded.empty())
         {

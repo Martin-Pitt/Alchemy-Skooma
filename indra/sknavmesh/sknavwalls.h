@@ -104,7 +104,9 @@ namespace sknav
     /// is the cell size times the tangent of the slope, so half a metre keeps
     /// everything steeper than about seventy-five degrees at a 0.125 m cell
     /// and throws the terracing away.
-    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out);
+    /// A raster whose spans carry codes passes the code -> area table as area_lut.
+    void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out,
+                          const U8* area_lut = nullptr);
 
     /// Walk every boundary edge of the polymesh, sample the column just
     /// outside, classify, and merge runs into segments. Ledge samples with a
