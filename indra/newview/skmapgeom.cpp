@@ -1880,7 +1880,7 @@ namespace skmap
                 const size_t want = s.mPieces.size() + pairs.size() + pairs.size() / 2;
                 if (want > s.mPieces.capacity())
                 {
-                    s.mPieces.reserve(llmax(want, 2 * s.mPieces.capacity()));
+                    s.mPieces.reserve(llmax(want, s.mPieces.capacity() + s.mPieces.capacity() / 2));
                 }
                 for (const auto& pq : pairs)
                 {
