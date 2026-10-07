@@ -1527,14 +1527,16 @@ namespace skmap
             }
 
             // One slice per (record, plane) for the whole scene, from the cache when there is one.
-            std::map<std::pair<U32, S32>, SlicePtr> slices;
-            std::set<S32> planes_used;
+            // Per record its few planes' slices, searched in place: a map over every pair costs more than the search.
+            std::vector<std::vector<std::pair<S32, SlicePtr>>> slices(recs.size());
+            std::vector<S32> planes_used;
             auto sliceOf = [&](U32 ri, S32 q) {
-                const auto key = std::make_pair(ri, q);
-                const auto it = slices.find(key);
-                if (it != slices.end())
+                for (const auto& known : slices[ri])
                 {
-                    return it->second;
+                    if (known.first == q)
+                    {
+                        return known.second;
+                    }
                 }
                 const sknav::Record& r = *recs[ri];
                 SK_SECTION_STAGE(SLICE);
@@ -1550,7 +1552,8 @@ namespace skmap
                     sl = std::make_shared<SliceResult>(sliceRecord(r, sectionPlaneZ(q) - static_cast<F32>(r.mOrigin.mdV[VZ])));
                     stats.mSlices++;
                 }
-                slices.emplace(key, sl);
+                slices[ri].emplace_back(q, sl);
+                planes_used.push_back(q);
                 return sl;
             };
 
@@ -1693,7 +1696,6 @@ namespace skmap
                 {
                     const sknav::Record& rec = *recs[pq.first];
                     const S32 q = pq.second;
-                    planes_used.insert(q);
                     const SlicePtr sl = sliceOf(pq.first, q);
                     if (sl->mLoops.empty() && sl->mLines.empty())
                     {
@@ -1908,7 +1910,8 @@ namespace skmap
                     }
                 }
             }
-            stats.mPlanes = static_cast<U32>(planes_used.size());
+            std::sort(planes_used.begin(), planes_used.end());
+            stats.mPlanes = static_cast<U32>(std::unique(planes_used.begin(), planes_used.end()) - planes_used.begin());
             stats.mPieces = static_cast<U32>(s.mPieces.size());
             s.mHasSection = true;
             stats.mMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();

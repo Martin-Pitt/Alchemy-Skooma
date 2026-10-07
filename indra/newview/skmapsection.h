@@ -34,6 +34,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -164,6 +165,13 @@ namespace skmap
             }
             bool operator==(const Key& o) const { return mSignature == o.mSignature && mShape == o.mShape && mPlane == o.mPlane; }
         };
+        struct KeyHash
+        {
+            size_t operator()(const Key& k) const
+            {
+                return static_cast<size_t>(sknav::mix(sknav::mix(k.mSignature, k.mShape), static_cast<U32>(k.mPlane)));
+            }
+        };
         struct Entry
         {
             SlicePtr mSlice;
@@ -178,7 +186,7 @@ namespace skmap
         size_t mBudget;
         size_t mBytes = 0;
         size_t mSlices = 0;
-        std::map<Key, Entry> mEntries;
+        std::unordered_map<Key, Entry, KeyHash> mEntries;
         std::list<Key> mLru;        ///< most recent first
     };
 
