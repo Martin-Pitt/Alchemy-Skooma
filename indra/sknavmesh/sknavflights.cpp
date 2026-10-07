@@ -493,6 +493,8 @@ namespace
     constexpr F64 MAX_RISER_M = 0.4;        ///< treads further apart than this are platforms
     constexpr F64 MAX_GOING_M = 0.6;        ///< and deeper than this, seating
     constexpr F64 MIN_RUN_M = 0.5;
+    constexpr F64 BURIED_DZ = 0.1;          ///< a floor this far above a flight's slope covers it
+    constexpr F64 EXPOSED_STEP_M = 0.1;     ///< where a sunk flight comes out of its floor, found to this
 
     /// Height of walkable triangle t at a point in plan: over it, or within NEAR_XY of an edge.
     bool nearZ(const Partitioner& P, S32 t, F64 px, F64 py, F64& z)
@@ -827,6 +829,67 @@ namespace
                     zt = s >= s1 - band ? std::max(zt, v.z) : zt;
                 }
             }
+            // A flight sunk into a floor ends where its slope comes out of it: past
+            // that the surface underfoot is the floor's, so the ends are the first
+            // and last places along the centreline with no floor just above.
+            {
+                const S32 unit = r;
+                const auto bodyZ = [&](F64 s, F64& z) {
+                    const F64 x = s * ux + lc * px, y = s * uy + lc * py;
+                    trianglesNear(P, x, y, nearby);
+                    bool got = false, buried = false;
+                    for (const S32 i : nearby)
+                    {
+                        F64 zi = 0;
+                        if (grp[i] >= 0 && cand[grp[i]] && find(grp[i]) == unit && P.zAt(i, x, y, zi) && (!got || zi > z))
+                        {
+                            z = zi;
+                            got = true;
+                        }
+                    }
+                    for (const S32 i : nearby)
+                    {
+                        F64 zi = 0;
+                        buried = buried || (got && grp[i] >= 0 && !cand[grp[i]] && P.zAt(i, x, y, zi) && zi - z > BURIED_DZ && zi - z <= FLOOR_UP);
+                    }
+                    return got && !buried;
+                };
+                F64 lo = s1 + 1.0, hi = s0 - 1.0, zlo = 0, zhi = 0;
+                for (F64 s = s0; s <= s1; s += EXPOSED_STEP_M)
+                {
+                    F64 z = 0;
+                    if (bodyZ(s, z))
+                    {
+                        lo = s;
+                        zlo = z;
+                        break;
+                    }
+                }
+                for (F64 s = s1; s >= s0; s -= EXPOSED_STEP_M)
+                {
+                    F64 z = 0;
+                    if (bodyZ(s, z))
+                    {
+                        hi = s;
+                        zhi = z;
+                        break;
+                    }
+                }
+                if (hi - lo >= MIN_RUN_M && zhi > zlo)
+                {
+                    if (lo > s0 + EXPOSED_STEP_M)
+                    {
+                        s0 = lo;
+                        zb = zlo;
+                    }
+                    if (hi < s1 - EXPOSED_STEP_M)
+                    {
+                        s1 = hi;
+                        zt = zhi;
+                    }
+                }
+            }
+
             F64 by_cue[3] = { 0, 0, 0 };
             std::vector<U8> member_codes;
             std::vector<LLVector2> plan;

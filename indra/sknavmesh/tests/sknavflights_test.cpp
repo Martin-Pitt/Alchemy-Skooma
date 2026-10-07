@@ -758,6 +758,24 @@ namespace tut
     template<> template<>
     void sknavflights_object::test<21>()
     {
+        set_test_name("a ramp sunk into its landing ends where it comes out of it, not on the floor below");
+        // The ramp runs on under the landing slab down to a lower floor that it never reaches underfoot.
+        Soup s;
+        s.box(-5, -2, -0.5f, -0.8f, 2, -0.3f);
+        s.box(-0.8f, -2, -0.5f, 1.2f, 2, 0.6f);
+        s.quad(LLVector3(-0.8f, -0.75f, -0.3f), LLVector3(4.8f, -0.75f, 1.8f), LLVector3(4.8f, 0.75f, 1.8f), LLVector3(-0.8f, 0.75f, -0.3f));
+        s.box(4.8f, -2, 0, 8, 2, 1.8f);
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure(llformat("bottom on the landing where the ramp reaches it: %.2f %.2f %.2f", f.mBottom.mV[VX], f.mBottom.mV[VY], f.mBottom.mV[VZ]),
+               near3(f.mBottom, LLVector3(1.6f, 0.f, 0.6f)));
+        ensure(llformat("top %.2f %.2f %.2f", f.mTop.mV[VX], f.mTop.mV[VY], f.mTop.mV[VZ]), near3(f.mTop, LLVector3(4.8f, 0.f, 1.8f)));
+    }
+
+    template<> template<>
+    void sknavflights_object::test<22>()
+    {
         set_test_name("two ramps at right angles from one step are two flights, the step joining neither across the turn");
         Soup s;
         s.box(-6, -6, -0.5f, 8, 8, 0);
