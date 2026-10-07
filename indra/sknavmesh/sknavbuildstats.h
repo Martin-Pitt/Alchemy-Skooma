@@ -101,6 +101,10 @@ namespace sknav
         U32 mFlightPolys = 0;
         U32 mFlightCodes = 0;
         U32 mCodes = 0;             ///< distinct area codes rasterised
+        /// Normalised digests of the heightfield after its filters and of the compact one before regions.
+        U64 mHfHash = 0;            ///< spans and whether each is walkable
+        U64 mHfAreaHash = 0;        ///< spans and their area codes as the class reads them
+        U64 mChfHash = 0;
         AirBuildStats mAir;
 
         static const char* stageName(S32 stage);

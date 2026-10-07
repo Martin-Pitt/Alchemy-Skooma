@@ -680,4 +680,97 @@ namespace tut
         std::cout << tiles << " tiles, " << differ << " differ measured from unmeasured" << std::endl;
         ensure_equals("tiles that differ", differ, 0u);
     }
+
+    // SKNAV_REPLAY_DUMP names a census, SKNAV_REPLAY_DUMP_OUT a file: one line of
+    // digests per tile, so two builds of the pipeline can be diffed tile by tile.
+    template<> template<>
+    void sknavreplay_object::test<9>()
+    {
+        set_test_name("dump every tile's product digests, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_DUMP");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mAir = LLStringUtil::getenv("SKNAV_REPLAY_AIR") == "radius" ? AirMode::RADIUS : AirMode::EVERYWHERE;
+        options.mRounds = 1;
+        options.mStats = true;
+        ReplayResult r;
+        replayCensus(c, options, r);
+        std::ofstream out(LLStringUtil::getenv("SKNAV_REPLAY_DUMP_OUT"), std::ios::binary);
+        ensure("output", out.good());
+        const auto bytes = [](const std::vector<U8>& v) {
+            U64 h = mix(0, v.size());
+            for (const U8 b : v)
+            {
+                h = mix(h, b);
+            }
+            return h;
+        };
+        const auto vec = [](U64 h, const LLVector3& v) { return mixF32(mixF32(mixF32(h, v.mV[0]), v.mV[1]), v.mV[2]); };
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult& res = *tile.mResult;
+                out << "{\"mesh\":\"" << mesh->mId << "\",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"status\":" << static_cast<S32>(res.mStatus)
+                    << ",\"air_built\":" << res.mAirBuilt;
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    U64 seg = 0, link = 0, flight = 0;
+                    for (const WallSegment& g : res.mSegments[cls])
+                    {
+                        seg = mix(mixF32(vec(vec(seg, g.mA), g.mB), g.mValue), static_cast<U64>(g.mKind) | static_cast<U64>(g.mArea) << 8);
+                    }
+                    for (const DropLink& l : res.mLinks[cls])
+                    {
+                        link = mix(mixF32(vec(vec(link, l.mFrom), l.mTo), l.mHeight), static_cast<U64>(l.mKind));
+                    }
+                    for (const Flight& f : res.mFlights[cls])
+                    {
+                        flight = mix(vec(vec(flight, f.mBottom), f.mTop), f.mKey);
+                        for (const U8 code : f.mCodes)
+                        {
+                            flight = mix(flight, code);
+                        }
+                        for (const U16 p : f.mPolys)
+                        {
+                            flight = mix(flight, p);
+                        }
+                    }
+                    const ClassBuildStats* cs = tile.mStats ? &tile.mStats->mClass[cls] : nullptr;
+                    out << ",\"c" << cls << "\":{\"polys\":" << res.mPolys[cls] << ",\"detour\":\"" << std::hex << bytes(res.mData[cls])
+                        << "\",\"segments\":\"" << seg << "\",\"links\":\"" << link << "\",\"flights\":\"" << flight << "\",\"hf\":\""
+                        << (cs ? cs->mHfHash : 0) << "\",\"hf_area\":\"" << (cs ? cs->mHfAreaHash : 0) << "\",\"chf\":\""
+                        << (cs ? cs->mChfHash : 0) << "\"" << std::dec << ",\"nseg\":" << res.mSegments[cls].size()
+                        << ",\"nlink\":" << res.mLinks[cls].size() << ",\"nflight\":" << res.mFlights[cls].size()
+                        << ",\"bridges\":" << (cs ? cs->mBridges : 0) << "}";
+                }
+                U64 face = 0;
+                for (const WallFace& f : res.mFaces)
+                {
+                    face = mix(vec(vec(face, f.mMin), f.mMax), static_cast<U64>(f.mSide) | static_cast<U64>(f.mArea) << 8);
+                }
+                out << ",\"faces\":\"" << std::hex << face << std::dec << "\",\"nface\":" << res.mFaces.size();
+                if (res.mAir)
+                {
+                    U64 walk = 0, area = 0, rest = 0;
+                    for (const AirGap& g : res.mAir->mGaps)
+                    {
+                        walk = mix(walk, static_cast<U64>(g.mFloor) | static_cast<U64>(g.mFlags & 1) << 16);
+                        area = mix(area, g.mFlags & AirGap::AREA_MASK);
+                        rest = mix(rest, static_cast<U64>(g.mCeiling) | static_cast<U64>(g.mFlags & 0x0e) << 16 | static_cast<U64>(g.mClear) << 24);
+                    }
+                    out << ",\"air\":\"" << std::hex << bytes(packTileAir(*res.mAir)) << "\",\"air_walk\":\"" << walk << "\",\"air_area\":\"" << area
+                        << "\",\"air_rest\":\"" << rest << std::dec << "\",\"gaps\":" << res.mAir->mGaps.size()
+                        << ",\"leaves\":" << res.mAir->mLeaves.size();
+                }
+                out << ",\"ms\":" << (tile.mStats ? tile.mStats->mTotalMs : 0.0) << "}\n";
+            }
+        }
+    }
 }

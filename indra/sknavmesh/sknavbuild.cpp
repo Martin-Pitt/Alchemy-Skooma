@@ -933,6 +933,44 @@ namespace
         }
     }
 
+    /// A digest of the spans in a cell rectangle, relative to its corner, with
+    /// each area passed through a lookup; empty lookup keeps only walkability.
+    U64 hashHeightfield(const rcHeightfield& hf, S32 x0, S32 z0, S32 x1, S32 z1, const std::vector<U8>& lut)
+    {
+        U64 h = 0x9e3779b97f4a7c15ull;
+        for (S32 z = z0; z < z1; ++z)
+        {
+            for (S32 x = x0; x < x1; ++x)
+            {
+                h = mix(h, static_cast<U64>((x - x0) | (z - z0) << 16));
+                for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
+                {
+                    const U8 a = lut.empty() ? (s->area != RC_NULL_AREA) : lut[s->area];
+                    h = mix(h, static_cast<U64>(s->smin) | static_cast<U64>(s->smax) << 16 | static_cast<U64>(a) << 32);
+                }
+            }
+        }
+        return h;
+    }
+
+    /// A digest of a compact heightfield: cells, spans, links and areas through a lookup.
+    U64 hashCompact(const rcCompactHeightfield& chf, const std::vector<U8>& lut)
+    {
+        U64 h = mix(0x9e3779b97f4a7c15ull, static_cast<U64>(chf.width) | static_cast<U64>(chf.height) << 32);
+        h = mixF32(mixF32(mixF32(h, chf.bmin[0]), chf.bmin[1]), chf.bmin[2]);
+        for (S32 c = 0; c < chf.width * chf.height; ++c)
+        {
+            h = mix(h, static_cast<U64>(chf.cells[c].index) | static_cast<U64>(chf.cells[c].count) << 32);
+        }
+        for (S32 i = 0; i < chf.spanCount; ++i)
+        {
+            const rcCompactSpan& s = chf.spans[i];
+            const U8 a = lut.empty() ? chf.areas[i] : lut[chf.areas[i]];
+            h = mix(h, static_cast<U64>(s.y) | static_cast<U64>(s.con) << 16 | static_cast<U64>(s.h) << 40 | static_cast<U64>(a) << 48);
+        }
+        return h;
+    }
+
     /// AVATAR's walkable spans on the tile proper, and the spans under each poly:
     /// those of the poly's region in the columns whose centres it covers.
     void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, TileBuildStats& out)
@@ -1426,6 +1464,19 @@ namespace sknav
             rcFilterLedgeSpans(&ctx, cfg.walkableHeight, static_cast<int>(std::ceil(ledge_climb / cfg.ch)), *mem.hf);
             rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *mem.hf);
             clock.lap(ClassBuildStats::FILTERS);
+            std::vector<U8> code_lut;
+            if (cstats)
+            {
+                code_lut.resize(64);
+                for (S32 a = 0; a < 64; ++a)
+                {
+                    const bool real = cls != static_cast<S32>(AgentClass::AVATAR) && a < static_cast<S32>(slopes.mReal.size());
+                    code_lut[a] = real ? slopes.mReal[a] : static_cast<U8>(a);
+                }
+                cstats->mHfHash = hashHeightfield(*mem.hf, 0, 0, mem.hf->width, mem.hf->height, {});
+                cstats->mHfAreaHash = hashHeightfield(*mem.hf, 0, 0, mem.hf->width, mem.hf->height, code_lut);
+                clock.restart();
+            }
 
             mem.chf = rcAllocCompactHeightfield();
             if (!rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *mem.hf, *mem.chf))
@@ -1457,6 +1508,12 @@ namespace sknav
             {
                 case Partition::SLOPE:
                     mergeFragments(*mem.chf, slopes.mReal, slopes.mFlights);
+                    if (cstats)
+                    {
+                        clock.lap(ClassBuildStats::REGIONS);
+                        cstats->mChfHash = hashCompact(*mem.chf, code_lut);
+                        clock.restart();
+                    }
                     regions = rcBuildDistanceField(&ctx, *mem.chf) &&
                               rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                     break;
