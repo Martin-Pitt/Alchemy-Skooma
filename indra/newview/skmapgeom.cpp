@@ -1538,7 +1538,6 @@ namespace skmap
             };
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
-            std::vector<U32> piece_record;      // per piece, its record's index
             for (size_t l = 0; l < s.mLayers.size(); ++l)
             {
                 SceneLayer& layer = s.mLayers[l];
@@ -1811,7 +1810,6 @@ namespace skmap
                         }
                         layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
                         s.mPieces.push_back(std::move(piece));
-                        piece_record.push_back(pq.first);
                     }
                     if (!src->mLines.empty() || demoted)
                     {
@@ -1845,108 +1843,6 @@ namespace skmap
                         piece.mMax = hi + shift;
                         layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
                         s.mPieces.push_back(std::move(piece));
-                        piece_record.push_back(pq.first);
-                    }
-                }
-
-                // The cover each record gives on this layer, from its pieces' planes and the levels near them.
-                for (size_t a = 0; a < layer.mPieces.size();)
-                {
-                    const U32 ri = piece_record[layer.mPieces[a]];
-                    size_t b = a;
-                    S32 full = -1, half = -1;
-                    bool island = false;
-                    for (; b < layer.mPieces.size() && piece_record[layer.mPieces[b]] == ri; ++b)
-                    {
-                        const SectionPiece& piece = s.mPieces[layer.mPieces[b]];
-                        island = island || (piece.mFlags & PIECE_ISLAND);
-                        if ((piece.mFlags & (PIECE_BLOB | PIECE_LINES)) || piece.mStyle != SectionStyle::SOLID)
-                        {
-                            continue;
-                        }
-                        const LLVector2 grow(LEVEL_CELL_M, LEVEL_CELL_M);
-                        if (full < 0 && anyLevelNear(s, grid, piece.mMin - grow, piece.mMax + grow, piece.mPlane - SECTION_HIGH_Q))
-                        {
-                            full = static_cast<S32>(layer.mPieces[b]);
-                        }
-                        if (half < 0 && anyLevelNear(s, grid, piece.mMin - grow, piece.mMax + grow, piece.mPlane - SECTION_LOW_Q))
-                        {
-                            half = static_cast<S32>(layer.mPieces[b]);
-                        }
-                    }
-                    a = b;
-                    stats.mIslands += island ? 1 : 0;
-                    if (full < 0 && half < 0)
-                    {
-                        continue;
-                    }
-                    const bool is_full = full >= 0;
-                    (is_full ? stats.mFullRecords : stats.mHalfRecords)++;
-                    if (is_full && !input.mSectionReport)
-                    {
-                        continue;
-                    }
-                    const SectionPiece& piece = s.mPieces[is_full ? full : half];
-                    const sknav::Record& rec = *recs[ri];
-                    SectionReport report;
-                    report.mFull = is_full;
-                    report.mPart = rec.mPart;
-                    report.mRoot = rec.mRoot;
-                    report.mMin = piece.mMin;
-                    report.mMax = piece.mMax;
-                    const S32 k = piece.mPlane - (is_full ? SECTION_HIGH_Q : SECTION_LOW_Q);
-                    report.mFloor = k * SECTION_CELL_M;
-                    report.mLow = sectionPlaneZ(k + SECTION_LOW_Q);
-                    report.mHigh = sectionPlaneZ(k + SECTION_HIGH_Q);
-                    report.mRecordTop = static_cast<F32>(rec.mMax.mdV[VZ]);
-                    report.mThickness = piece.mThickness;
-                    report.mLength = llmax(piece.mMax.mV[VX] - piece.mMin.mV[VX], piece.mMax.mV[VY] - piece.mMin.mV[VY]);
-                    report.mShape = static_cast<U8>(rec.mShape);
-                    report.mProvenance = static_cast<U8>(rec.mProvenance);
-                    report.mSolid = rec.mSolid;
-                    report.mIsland = (piece.mFlags & PIECE_ISLAND) != 0;
-                    // A lintel: the lowest other record over the piece starting above the high plane and within 3 m of the floor.
-                    const F64 x0 = s.mOrigin.mdV[VX] + piece.mMin.mV[VX] - 0.05, x1 = s.mOrigin.mdV[VX] + piece.mMax.mV[VX] + 0.05;
-                    const F64 y0 = s.mOrigin.mdV[VY] + piece.mMin.mV[VY] - 0.05, y1 = s.mOrigin.mdV[VY] + piece.mMax.mV[VY] + 0.05;
-                    auto consider = [&](U32 other) {
-                        if (other == ri)
-                        {
-                            return;
-                        }
-                        const sknav::Record& o = *recs[other];
-                        const F64 bottom = o.mMin.mdV[VZ];
-                        if (o.mMax.mdV[VX] < x0 || o.mMin.mdV[VX] > x1 || o.mMax.mdV[VY] < y0 || o.mMin.mdV[VY] > y1 || bottom <= report.mHigh
-                            || bottom > report.mFloor + 3.0)
-                        {
-                            return;
-                        }
-                        if (report.mLintel < 0.f || bottom < report.mLintel)
-                        {
-                            report.mLintel = static_cast<F32>(bottom);
-                        }
-                    };
-                    for (S32 by = cellIndex(y0, RECORD_BUCKET_M); by <= cellIndex(y1, RECORD_BUCKET_M); ++by)
-                    {
-                        for (S32 bx = cellIndex(x0, RECORD_BUCKET_M); bx <= cellIndex(x1, RECORD_BUCKET_M); ++bx)
-                        {
-                            const auto bucket = buckets.find({ bx, by });
-                            if (bucket != buckets.end())
-                            {
-                                for (U32 other : bucket->second)
-                                {
-                                    consider(other);
-                                }
-                            }
-                        }
-                    }
-                    for (U32 other : large)
-                    {
-                        consider(other);
-                    }
-                    stats.mHalfOpenings += !is_full && report.mLintel >= 0.f ? 1 : 0;
-                    if (input.mSectionReport)
-                    {
-                        s.mSectionReport.push_back(report);
                     }
                 }
             }

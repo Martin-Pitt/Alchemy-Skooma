@@ -5157,17 +5157,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKMapSectionLog</key>
-        <map>
-            <key>Comment</key>
-            <string>Write the mini-map section's cover classification near you to sk-section-*.jsonl in the logs folder, for an agent to check how windows and low walls classify.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <!-- </SK:Nexii> -->
         <key>SKNavCensusAlways</key>
         <map>

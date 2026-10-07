@@ -31,7 +31,6 @@
 #include "sknavbuild.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 namespace
@@ -1327,83 +1326,6 @@ namespace tut
         ensure_equals("two jambs", marksOf(*s, skmap::MarkKind::DOOR_JAMB).size(), static_cast<size_t>(2));
         ensure_equals("one leaf", marksOf(*s, skmap::MarkKind::DOOR_LEAF).size(), static_cast<size_t>(1));
         ensure("no state", marksOf(*s, skmap::MarkKind::DOOR_SHUT).empty() && marksOf(*s, skmap::MarkKind::DOOR_THRESHOLD).empty());
-    }
-
-    /// Floor at 0 either side of a wall line along y = 0, and the given wall boxes, x0..x1 by 0.3 m, z0..z1.
-    skmap::ScenePtr wallLine(const std::vector<std::array<F32, 4>>& walls, bool report)
-    {
-        TileMaker t;
-        t.quad(-4.f, -4.f, 7.f, -0.5f, 0.f, 0.f);
-        t.quad(-4.f, 0.5f, 7.f, 4.f, 0.f, 0.f);
-        std::vector<RecordPtr> recs;
-        U64 sig = 1;
-        for (const std::array<F32, 4>& w : walls)
-        {
-            recs.push_back(boxRecord(LLVector3((w[0] + w[1]) * 0.5f, 0.f, (w[2] + w[3]) * 0.5f),
-                                     LLVector3((w[1] - w[0]) * 0.5f, 0.15f, (w[3] - w[2]) * 0.5f), sig++));
-        }
-        skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
-        in.mSectionReport = report;
-        return skmap::buildScene(in);
-    }
-
-    // A window: the sill reads half cover with the head over it as its lintel; the walls either side read full.
-    template<> template<>
-    void skmapgeom_object::test<31>()
-    {
-        skmap::ScenePtr s = wallLine({ { -3.f, 0.f, 0.f, 3.f }, { 0.f, 3.f, 0.f, 0.9f }, { 3.f, 6.f, 0.f, 3.f }, { 0.f, 3.f, 2.2f, 3.f } }, true);
-        ensure("one layer", s->mOrder.size() == 1);
-        std::vector<const skmap::SectionReport*> half, full;
-        for (const skmap::SectionReport& e : s->mSectionReport)
-        {
-            (e.mFull ? full : half).push_back(&e);
-        }
-        ensure_equals("one half entry", half.size(), static_cast<size_t>(1));
-        ensure_equals("two full entries", full.size(), static_cast<size_t>(2));
-        for (const skmap::SectionReport* e : full)
-        {
-            ensure("a side wall", e->mPart == partId(1) || e->mPart == partId(3));
-            ensure_approximately_equals_range("full from the floor's high plane", e->mHigh, 1.4375f, 1e-4f);
-        }
-        const skmap::SectionReport& r = *half[0];
-        ensure("the sill", r.mPart == partId(2));
-        ensure_approximately_equals_range("half from the floor's low plane", r.mLow, 0.4375f, 1e-4f);
-        ensure_approximately_equals_range("lintel", r.mLintel, 2.2f, 0.01f);
-        ensure_approximately_equals_range("thickness", r.mThickness, 0.2727f, 0.001f);
-        ensure_approximately_equals_range("length", r.mLength, 3.f, 0.001f);
-        ensure_equals("one opening", s->mSectionStats.mHalfOpenings, 1u);
-        ensure_equals("the two walls are full", s->mSectionStats.mFullRecords, 2u);
-    }
-
-    // A lone half wall has nothing over it.
-    template<> template<>
-    void skmapgeom_object::test<32>()
-    {
-        TileMaker t;
-        t.quad(-4.f, -4.f, 7.f, -0.5f, 0.f, 0.f);
-        std::vector<RecordPtr> recs = { boxRecord(LLVector3(1.25f, 0.f, 0.55f), LLVector3(1.25f, 0.1f, 0.55f), 1) };
-        skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
-        in.mSectionReport = true;
-        skmap::ScenePtr s = skmap::buildScene(in);
-        ensure_equals("one entry", s->mSectionReport.size(), static_cast<size_t>(1));
-        ensure("it is half", !s->mSectionReport[0].mFull);
-        ensure_equals("no lintel", s->mSectionReport[0].mLintel, -1.f);
-        ensure_approximately_equals_range("thickness", s->mSectionReport[0].mThickness, 0.1852f, 0.001f);
-        ensure_equals("no opening", s->mSectionStats.mHalfOpenings, 0u);
-    }
-
-    // The report is collected only when asked for; the counts always are.
-    template<> template<>
-    void skmapgeom_object::test<33>()
-    {
-        const std::vector<std::array<F32, 4>> walls = { { -3.f, 0.f, 0.f, 3.f }, { 0.f, 3.f, 0.f, 0.9f }, { 3.f, 6.f, 0.f, 3.f }, { 0.f, 3.f, 2.2f, 3.f } };
-        skmap::ScenePtr on = wallLine(walls, true);
-        skmap::ScenePtr off = wallLine(walls, false);
-        ensure("no report", off->mSectionReport.empty());
-        ensure_equals("full", off->mSectionStats.mFullRecords, on->mSectionStats.mFullRecords);
-        ensure_equals("half", off->mSectionStats.mHalfRecords, on->mSectionStats.mHalfRecords);
-        ensure_equals("openings", off->mSectionStats.mHalfOpenings, on->mSectionStats.mHalfOpenings);
-        ensure_equals("islands", off->mSectionStats.mIslands, on->mSectionStats.mIslands);
     }
 
     // A record over more than 8 x 8 buckets is cut at the layer's planes, once each.

@@ -25,7 +25,6 @@
 #ifndef SK_MAPSCENE_H
 #define SK_MAPSCENE_H
 
-#include "llfile.h"
 #include "llframetimer.h"
 #include "llsingleton.h"
 #include "threadpool.h"
@@ -87,9 +86,6 @@ public:
         U32 mUploads = 0;           ///< uploads last frame
         U32 mBakes = 0;             ///< bakes since start
         F32 mCacheMB = 0.f;
-        bool mSection = false;      ///< the latest scene has a section
-        F32 mSectionMs = 0.f;
-        U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mFullRecords = 0, mHalfRecords = 0, mHalfOpenings = 0, mIslands = 0;
     };
     const Stats& stats() const { return mStats; }
 
@@ -111,17 +107,13 @@ private:
         U64 mCensus = 0;
         U64 mRegions = 0;
         bool mSection = false;
-        bool mSectionLog = false;
         bool operator==(const Trigger& o) const
         {
             return mMin == o.mMin && mMax == o.mMax && mNavRevision == o.mNavRevision && mViewRevision == o.mViewRevision
-                && mCensus == o.mCensus && mRegions == o.mRegions && mSection == o.mSection && mSectionLog == o.mSectionLog;
+                && mCensus == o.mCensus && mRegions == o.mRegions && mSection == o.mSection;
         }
     };
     Trigger currentTrigger() const;
-
-    /// With SKMapSectionLog on, a line per scene and the report near the agent when it changed, to sk-section-*.jsonl.
-    void logSection(const skmap::Scene& scene);
 
     LL::WorkQueue::ptr_t queue();
     /// Where the agent stands in the scene, at most one navmesh read.
@@ -205,8 +197,6 @@ private:
     std::unique_ptr<LL::ThreadPool> mPool;
     /// The section's slices, made on the first post and used only on the worker.
     std::shared_ptr<skmap::SectionCache> mSectionCache;
-    std::unique_ptr<llofstream> mSectionLog;    ///< opened on the first scene logged
-    U64 mSectionLogged = 0;                 ///< the hash of the last report logged
     std::shared_ptr<bool> mAlive;
     U32 mGeneration = 0;
     bool mInFlight = false;
