@@ -689,6 +689,7 @@ namespace
         }
     }
 
+    constexpr AgentClass AIR_SOURCE_CLASS = AgentClass::WEATHER;  ///< the class whose heightfield the air is read from
     constexpr F32 SLOPE_FRAGMENT_M2 = 1.f;  ///< smaller patches join the neighbour they share most border with
 
     /// Visit each span with its cell coordinates.
@@ -1085,7 +1086,7 @@ namespace sknav
         const auto started = std::chrono::steady_clock::now();
         TileBuildResult result;
         // An empty tile has no air to keep, which is an answer too.
-        result.mAirBuilt = input.mAir && input.mClasses[static_cast<S32>(AgentClass::WEATHER)];
+        result.mAirBuilt = input.mAir && input.mClasses[static_cast<S32>(AIR_SOURCE_CLASS)];
 
         // Gather the soup in Recast space.
         Soup soup;
@@ -1279,7 +1280,7 @@ namespace sknav
             cfg.detailSampleDist = input.mDetailSampleCells * cfg.cs;
             cfg.detailSampleMaxError = input.mDetailMaxErrorCells * cfg.ch;
             cfg.borderSize = borderCells(p.mRadius, cfg.cs);
-            const bool air = input.mAir && cls == static_cast<S32>(AgentClass::WEATHER);
+            const bool air = input.mAir && cls == static_cast<S32>(AIR_SOURCE_CLASS);
             if (air)
             {
                 cfg.borderSize = std::max(cfg.borderSize, input.mAirPad);
