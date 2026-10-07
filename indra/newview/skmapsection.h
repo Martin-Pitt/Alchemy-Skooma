@@ -148,6 +148,8 @@ namespace skmap
     {
     public:
         explicit SectionCache(size_t budget = SECTION_CACHE_BYTES);
+        SectionCache(const SectionCache&) = delete;
+        SectionCache& operator=(const SectionCache&) = delete;
         /// The record's slice at plane q, sliced on a miss.
         SlicePtr get(const sknav::Record& rec, S32 q, bool* hit = nullptr);
         size_t bytes() const { return mBytes; }
@@ -173,13 +175,18 @@ namespace skmap
                 return static_cast<size_t>(sknav::mix(sknav::mix(k.mSignature, k.mShape), static_cast<U32>(k.mPlane)));
             }
         };
+        /// Linked newest to oldest through the entries themselves: the map's nodes never move.
         struct Entry
         {
             SlicePtr mSlice;
             std::shared_ptr<const ZBins> mBins;
             size_t mBytes = 0;
-            std::list<Key>::iterator mLru;
+            Key mKey;
+            Entry* mNewer = nullptr;
+            Entry* mOlder = nullptr;
         };
+        void unlink(Entry& e);
+        void linkNewest(Entry& e);
         void touch(Entry& e);
         void insert(const Key& key, Entry e);
         void evict(const Key& keep_a, const Key& keep_b);
@@ -188,7 +195,8 @@ namespace skmap
         size_t mBytes = 0;
         size_t mSlices = 0;
         std::unordered_map<Key, Entry, KeyHash> mEntries;
-        std::list<Key> mLru;        ///< most recent first
+        Entry* mNewest = nullptr;
+        Entry* mOldest = nullptr;
     };
 
 #if AL_BENCH

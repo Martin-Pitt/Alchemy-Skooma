@@ -1859,41 +1859,61 @@ namespace skmap
     {
     }
 
+    void SectionCache::unlink(Entry& e)
+    {
+        (e.mNewer ? e.mNewer->mOlder : mNewest) = e.mOlder;
+        (e.mOlder ? e.mOlder->mNewer : mOldest) = e.mNewer;
+        e.mNewer = e.mOlder = nullptr;
+    }
+
+    void SectionCache::linkNewest(Entry& e)
+    {
+        e.mOlder = mNewest;
+        e.mNewer = nullptr;
+        (mNewest ? mNewest->mNewer : mOldest) = &e;
+        mNewest = &e;
+    }
+
     void SectionCache::touch(Entry& e)
     {
-        mLru.splice(mLru.begin(), mLru, e.mLru);
+        if (mNewest != &e)
+        {
+            unlink(e);
+            linkNewest(e);
+        }
     }
 
     void SectionCache::insert(const Key& key, Entry e)
     {
-        mLru.push_front(key);
-        e.mLru = mLru.begin();
         mBytes += e.mBytes;
         if (e.mSlice)
         {
             ++mSlices;
         }
-        mEntries[key] = std::move(e);
+        e.mKey = key;
+        Entry& stored = mEntries.emplace(key, std::move(e)).first->second;
+        linkNewest(stored);
     }
 
     void SectionCache::evict(const Key& keep_a, const Key& keep_b)
     {
-        auto it = mLru.end();
-        while (mBytes > mBudget && it != mLru.begin())
+        // Oldest first, as the list was walked from its end.
+        Entry* e = mOldest;
+        while (mBytes > mBudget && e)
         {
-            --it;
-            if (*it == keep_a || *it == keep_b)
+            Entry* newer = e->mNewer;
+            if (!(e->mKey == keep_a) && !(e->mKey == keep_b))
             {
-                continue;
+                mBytes -= e->mBytes;
+                if (e->mSlice)
+                {
+                    --mSlices;
+                }
+                unlink(*e);
+                const Key key = e->mKey;
+                mEntries.erase(key);
             }
-            const auto entry = mEntries.find(*it);
-            mBytes -= entry->second.mBytes;
-            if (entry->second.mSlice)
-            {
-                --mSlices;
-            }
-            mEntries.erase(entry);
-            it = mLru.erase(it);
+            e = newer;
         }
     }
 
