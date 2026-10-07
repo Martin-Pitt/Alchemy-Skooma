@@ -1537,6 +1537,49 @@ namespace skmap
             }
         }
 
+        /// (record, plane) as one key that sorts as the pair does.
+        U64 pairKey(U32 ri, S32 q)
+        {
+            return (static_cast<U64>(ri) << 32) | (static_cast<U32>(q) ^ 0x80000000u);
+        }
+
+        /// Ascending; a radix sort of 16-bit digits for many keys, skipping a digit every key shares.
+        void sortKeys(std::vector<U64>& keys, std::vector<U64>& tmp)
+        {
+            constexpr size_t RADIX_MIN = 4096;
+            if (keys.size() < RADIX_MIN)
+            {
+                std::sort(keys.begin(), keys.end());
+                return;
+            }
+            tmp.resize(keys.size());
+            std::vector<U32> count(65536);
+            for (S32 shift = 0; shift < 64; shift += 16)
+            {
+                std::fill(count.begin(), count.end(), 0u);
+                for (U64 k : keys)
+                {
+                    count[(k >> shift) & 0xffff]++;
+                }
+                if (count[(keys[0] >> shift) & 0xffff] == keys.size())
+                {
+                    continue;
+                }
+                U32 at = 0;
+                for (U32& c : count)
+                {
+                    const U32 n = c;
+                    c = at;
+                    at += n;
+                }
+                for (U64 k : keys)
+                {
+                    tmp[count[(k >> shift) & 0xffff]++] = k;
+                }
+                keys.swap(tmp);
+            }
+        }
+
         /// The layers' section: records filtered, bucketed, sliced at the planes their cells' floor levels ask for, and
         /// cut into pieces; door leaves set aside for the door marks.
         void buildSection(Scene& s, const SceneInput& input, SectionCache* cache)
@@ -1652,6 +1695,7 @@ namespace skmap
             std::vector<bool> active;
             std::vector<std::pair<S32, size_t>> order;
             std::vector<LLVector2> ring;
+            std::vector<U64> pair_keys, key_scratch;
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
@@ -1669,6 +1713,7 @@ namespace skmap
                 }
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
+                pair_keys.clear();
 #if AL_BENCH
                 auto pairs_timer = std::make_unique<SectionStageTimer>(SectionStage::PAIRS);
 #endif
@@ -1704,7 +1749,7 @@ namespace skmap
                                                [](F64 z, S32 q) { return z < static_cast<F64>(sectionPlaneZ(q)); });
                     for (; it != planes.end() && static_cast<F64>(sectionPlaneZ(*it)) <= r.mMax.mdV[VZ]; ++it)
                     {
-                        pairs.emplace_back(ri, *it);
+                        pair_keys.push_back(pairKey(ri, *it));
                     }
                 };
                 for (S32 by = by0; by <= by1; ++by)
@@ -1779,8 +1824,14 @@ namespace skmap
                         take(ri);
                     }
                 }
-                std::sort(pairs.begin(), pairs.end());
-                pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+                // A record over several buckets is found once per bucket: sort the keys and keep each once.
+                sortKeys(pair_keys, key_scratch);
+                pair_keys.erase(std::unique(pair_keys.begin(), pair_keys.end()), pair_keys.end());
+                pairs.reserve(pair_keys.size());
+                for (U64 k : pair_keys)
+                {
+                    pairs.emplace_back(static_cast<U32>(k >> 32), static_cast<S32>(static_cast<U32>(k) ^ 0x80000000u));
+                }
 #if AL_BENCH
                 pairs_timer.reset();
 #endif
