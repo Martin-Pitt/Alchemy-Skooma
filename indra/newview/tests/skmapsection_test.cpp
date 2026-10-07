@@ -847,4 +847,38 @@ namespace tut
         ensure("one cylinder section", cache.get(cylinder, 3) == cache.get(cylinder, 11));
         ensure("a leaning box per plane", cache.get(leaning, 3) != cache.get(leaning, 11));
     }
+
+    // The cache evicts the least recently used slice, a hit counting as a use.
+    template<> template<>
+    void skmapsection_object::test<24>()
+    {
+        Record r[4] = { rotatedBox(), rotatedBox(), rotatedBox(), rotatedBox() };
+        for (S32 i = 0; i < 4; ++i)
+        {
+            r[i].mSignature = 200 + i;
+        }
+        const size_t each = skmap::SectionCache().get(r[0], 3)->bytes();
+        skmap::SectionCache cache(3 * each);
+        bool hit = false;
+        for (S32 i = 0; i < 3; ++i)
+        {
+            cache.get(r[i], 3);
+        }
+        ensure_equals("three kept", cache.entries(), static_cast<size_t>(3));
+        cache.get(r[0], 3, &hit);
+        ensure("the first is still there", hit);
+        cache.get(r[1], 3, &hit);
+        ensure("the second is still there", hit);
+        cache.get(r[3], 3, &hit);
+        ensure("a fourth misses", !hit);
+        ensure_equals("still three", cache.entries(), static_cast<size_t>(3));
+        cache.get(r[0], 3, &hit);
+        ensure("used, so kept", hit);
+        cache.get(r[1], 3, &hit);
+        ensure("used, so kept too", hit);
+        cache.get(r[3], 3, &hit);
+        ensure("the newest kept", hit);
+        cache.get(r[2], 3, &hit);
+        ensure("the least recently used went", !hit);
+    }
 }
