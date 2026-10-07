@@ -485,6 +485,105 @@ namespace
         }
     }
 
+    /// A rectangle of heightfield cells, half-open.
+    struct CellRect
+    {
+        S32 mX0 = 0;
+        S32 mZ0 = 0;
+        S32 mX1 = 0;
+        S32 mZ1 = 0;
+        bool covers(const rcHeightfield& hf) const { return mX0 <= 0 && mZ0 <= 0 && mX1 >= hf.width && mZ1 >= hf.height; }
+    };
+
+    /// What a raster is made of: the soup with an area code per triangle, its
+    /// closed bodies, the exclusion volumes cut out of it, and optionally the
+    /// triangles to leave out.
+    struct RasterSource
+    {
+        const Soup* mSoup = nullptr;
+        const std::vector<U8>* mCodes = nullptr;
+        const std::vector<std::pair<S32, S32>>* mSolids = nullptr;
+        const Soup* mCutSoup = nullptr;
+        const std::vector<std::pair<S32, S32>>* mCuts = nullptr;
+        const std::vector<U8>* mDrop = nullptr;
+    };
+
+    /// The cells a triangle range's bounding box covers, a cell wider each way.
+    CellRect cellsOf(const rcHeightfield& hf, const Soup& soup, S32 tri_begin, S32 tri_end)
+    {
+        F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (S32 t = tri_begin * 3; t < tri_end * 3; ++t)
+        {
+            const F32* v = &soup.mVerts[soup.mTris[t] * 3];
+            for (S32 k = 0; k < 3; ++k)
+            {
+                lo[k] = std::min(lo[k], v[k]);
+                hi[k] = std::max(hi[k], v[k]);
+            }
+        }
+        return { static_cast<S32>(std::floor((lo[0] - hf.bmin[0]) / hf.cs)) - 1, static_cast<S32>(std::floor((lo[2] - hf.bmin[2]) / hf.cs)) - 1,
+                 static_cast<S32>(std::floor((hi[0] - hf.bmin[0]) / hf.cs)) + 2, static_cast<S32>(std::floor((hi[2] - hf.bmin[2]) / hf.cs)) + 2 };
+    }
+
+    bool overlaps(const CellRect& a, const CellRect& b)
+    {
+        return a.mX0 < b.mX1 && b.mX0 < a.mX1 && a.mZ0 < b.mZ1 && b.mZ0 < a.mZ1;
+    }
+
+    /// Rasterise, fill and cut, in that order, every triangle, body and cut of
+    /// the source that touches the rectangle. The columns inside it come out
+    /// exactly as a raster of the whole source would make them, provided the
+    /// heightfield has the same grid; columns outside it are incomplete.
+    bool rasterisePasses(rcHeightfield& hf, const RasterSource& src, const CellRect& rect, S32 climb, StageClock& clock)
+    {
+        rcContext ctx(false);
+        const Soup& soup = *src.mSoup;
+        const bool whole = rect.covers(hf);
+        if (whole && !src.mDrop)
+        {
+            if (!rcRasterizeTriangles(&ctx, soup.mVerts.data(), soup.nverts(), soup.mTris.data(), src.mCodes->data(), soup.ntris(), hf, climb))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            std::vector<S32> tris;
+            std::vector<U8> codes;
+            for (S32 t = 0; t < soup.ntris(); ++t)
+            {
+                if ((src.mDrop && (*src.mDrop)[t]) || (!whole && !overlaps(rect, cellsOf(hf, soup, t, t + 1))))
+                {
+                    continue;
+                }
+                tris.insert(tris.end(), soup.mTris.begin() + t * 3, soup.mTris.begin() + t * 3 + 3);
+                codes.push_back((*src.mCodes)[t]);
+            }
+            if (!tris.empty() && !rcRasterizeTriangles(&ctx, soup.mVerts.data(), soup.nverts(), tris.data(), codes.data(),
+                                                       static_cast<S32>(codes.size()), hf, climb))
+            {
+                return false;
+            }
+        }
+        clock.lap(ClassBuildStats::RASTERISE);
+        for (const auto& range : *src.mSolids)
+        {
+            if ((src.mDrop && range.first < range.second && (*src.mDrop)[range.first]) ||
+                (!whole && !overlaps(rect, cellsOf(hf, soup, range.first, range.second))))
+            {
+                continue;
+            }
+            fillSolid(hf, soup, range.first, range.second, climb);
+        }
+        clock.lap(ClassBuildStats::FILL);
+        for (const auto& range : *src.mCuts)
+        {
+            cutVolume(hf, *src.mCutSoup, range.first, range.second);
+        }
+        clock.lap(ClassBuildStats::CUT);
+        return true;
+    }
+
     /// A walkable span in the column already within the agent's climb of both
     /// surfaces: they are joined through it and need no bridge.
     bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
@@ -1439,23 +1538,12 @@ namespace sknav
                 cstats->mCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
             }
             clock.lap(ClassBuildStats::PARTITION);
-            if (!rcRasterizeTriangles(&ctx, class_soup->mVerts.data(), class_soup->nverts(), class_soup->mTris.data(), areas.data(),
-                                      class_soup->ntris(), *mem.hf, cfg.walkableClimb))
+            const RasterSource source{ class_soup, &areas, class_solids, &cut_soup, &cuts };
+            if (!rasterisePasses(*mem.hf, source, CellRect{ 0, 0, mem.hf->width, mem.hf->height }, cfg.walkableClimb, clock))
             {
                 result.mError = "rasterize";
                 return result;
             }
-            clock.lap(ClassBuildStats::RASTERISE);
-            for (const auto& range : *class_solids)
-            {
-                fillSolid(*mem.hf, *class_soup, range.first, range.second, cfg.walkableClimb);
-            }
-            clock.lap(ClassBuildStats::FILL);
-            for (const auto& range : cuts)
-            {
-                cutVolume(*mem.hf, cut_soup, range.first, range.second);
-            }
-            clock.lap(ClassBuildStats::CUT);
             bridgeCrevices(*mem.hf, cfg.walkableClimb, cstats ? &cstats->mBridges : nullptr);
             clock.lap(ClassBuildStats::BRIDGES);
             cullUnderground(*mem.hf, input.mTerrain);
