@@ -172,6 +172,7 @@ namespace sknav
         /// as they were, without the detail, until the detail comes back.
         std::vector<TileEnclosure> mKept;
         EnclosureParams mParams;
+        bool mTimeSeams = false;    ///< time the seam stitching on its own, for seamMillis
     };
 
     /// The per-mesh pass, in steps so a worker can yield between them: the
@@ -189,6 +190,8 @@ namespace sknav
         bool done() const;
         /// Worker milliseconds by stage, for the stats.
         F32 stageMillis(S32 stage) const;
+        /// Of the graph stage, the seams' share; zero unless the input asked for it.
+        F32 seamMillis() const;
         static const char* stageName(S32 stage);
         static constexpr S32 NUM_STAGES = 6;
         EnclosureProductPtr product() const;

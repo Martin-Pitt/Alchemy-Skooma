@@ -462,6 +462,7 @@ namespace sknav
         std::vector<std::pair<U32, U32>> mWalkSeeds;     ///< from neighbouring meshes, kept for the depth flood
         std::vector<U8> mCover;         ///< share of sky roofed over, in 1/255; 255 under the gap's own low ceiling, 0 with no sky map
         std::vector<std::pair<U32, U32>> mSkyWalkSeeds;  ///< walkable gaps under some sky, at the depth their cover starts them
+        F64 mSeamMs = 0.0;              ///< seam stitching, when the input times it
 
         const EnclosureParams& params() const { return mInput->mParams; }
         const TileAir& air(size_t t) const { return *mInput->mTiles[t].mAir; }
@@ -988,7 +989,16 @@ namespace sknav
                 while (mCursor < tiles && budget > 0)
                 {
                     graphTile(mCursor);
-                    seamTile(mCursor);
+                    if (in.mTimeSeams)
+                    {
+                        const auto t0 = std::chrono::steady_clock::now();
+                        seamTile(mCursor);
+                        mSeamMs += std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    }
+                    else
+                    {
+                        seamTile(mCursor);
+                    }
                     budget -= static_cast<S64>(air(mCursor).mGaps.size()) * 2;
                     ++mCursor;
                 }
@@ -1250,6 +1260,11 @@ namespace sknav
     F32 EnclosurePass::stageMillis(S32 stage) const
     {
         return stage >= 0 && stage < NUM_STAGES ? static_cast<F32>(mState->mStageMs[stage]) : 0.f;
+    }
+
+    F32 EnclosurePass::seamMillis() const
+    {
+        return static_cast<F32>(mState->mSeamMs);
     }
 
     const char* EnclosurePass::stageName(S32 stage)
