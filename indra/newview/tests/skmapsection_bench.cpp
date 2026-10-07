@@ -247,8 +247,10 @@ namespace
 
     const char* stageName(skmap::SectionStage stage)
     {
-        static const char* names[] = { "levels", "pairs", "slice (misses)", "  z-bins", "  analytic shapes", "  soup segments",
-                                       "  chain", "    of it pass 3", "  simplify", "  nesting", "sheet rooms", "islands" };
+        static const char* names[] = { "filter and buckets", "layer indexes", "levels", "  samples", "  spread", "  pack", "pairs",
+                                       "  sort", "pieces", "  slice", "    z-bins", "    analytic shapes", "    soup segments", "    chain",
+                                       "      nodes", "      snap", "      walk", "      close", "    simplify", "    nesting",
+                                       "  sheet rooms", "  islands", "cell hashes (scene)" };
         static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(skmap::SectionStage::COUNT), "a name per stage");
         return names[static_cast<size_t>(stage)];
     }

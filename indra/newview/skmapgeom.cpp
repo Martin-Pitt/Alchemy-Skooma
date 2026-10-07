@@ -1393,6 +1393,7 @@ namespace skmap
             const S32 w = grid.mW, h = grid.mH;
             const size_t n = static_cast<size_t>(w) * h;
 
+            SK_SECTION_STAGE_START(samples_timer, LEVEL_SAMPLES);
             // Samples: each polygon's height at every cell centre it holds, or at its centroid when it holds none.
             // Cells keep linked lists of samples, so a terrain-sized grid allocates nothing per cell.
             struct Link
@@ -1474,6 +1475,8 @@ namespace skmap
                     store(i);
                 }
             }
+            SK_SECTION_STAGE_STOP(samples_timer);
+            SK_SECTION_STAGE_START(spread_timer, LEVEL_SPREAD);
             // The ring a cell was stored in: 1 for the sampled cells, ring + 2 for those the search reaches.
             std::vector<U8> stored(n, 0);
             for (size_t i : sampled)
@@ -1553,6 +1556,8 @@ namespace skmap
                 }
                 frontier.swap(reached);
             }
+            SK_SECTION_STAGE_STOP(spread_timer);
+            SK_SECTION_STAGE(LEVEL_PACK);
             grid.mCell.assign(n, 0);
             size_t listed = 0;
             for (size_t i = 0; i < n; ++i)
@@ -1624,6 +1629,7 @@ namespace skmap
             SectionStats& stats = s.mSectionStats;
             const std::vector<sknav::RecordPtr>& recs = *input.mRecords;
 
+            SK_SECTION_STAGE_START(filter_timer, FILTER);
             // 1. Door leaves first: a swinging leaf is dynamic and must still reach its door.
             s.mDoorLeaves.assign(input.mDoors.size(), {});
             std::map<LLUUID, size_t> leaf_door;
@@ -1690,6 +1696,7 @@ namespace skmap
                 }
             }
 
+            SK_SECTION_STAGE_STOP(filter_timer);
             // One slice per (record, plane) for the whole scene, from the cache when there is one.
             // Per record its few planes' slices, searched in place: a map over every pair costs more than the search.
             std::vector<std::vector<std::pair<S32, SlicePtr>>> slices(recs.size());
@@ -1723,7 +1730,10 @@ namespace skmap
 
             // Floor lookups by layer, and a stamp per polygon so a sheet room's search visits each once.
             std::vector<LayerIndex> layer_index;
-            buildLayerIndexes(s, layer_index);
+            {
+                SK_SECTION_STAGE(LAYER_INDEX);
+                buildLayerIndexes(s, layer_index);
+            }
             std::vector<U32> poly_seen(s.mPolys.size(), 0);
             U32 poly_stamp = 0;
             // Per pair and per piece, reused.
@@ -1749,9 +1759,7 @@ namespace skmap
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
                 pair_keys.clear();
-#if AL_BENCH
-                auto pairs_timer = std::make_unique<SectionStageTimer>(SectionStage::PAIRS);
-#endif
+                SK_SECTION_STAGE_START(pairs_timer, PAIRS);
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
                 // A box of cells' planes: its distinct levels, few, kept unsorted until the end.
@@ -1860,18 +1868,20 @@ namespace skmap
                     }
                 }
                 // A record over several buckets is found once per bucket: sort the keys and keep each once.
-                sortKeys(pair_keys, key_scratch);
-                pair_keys.erase(std::unique(pair_keys.begin(), pair_keys.end()), pair_keys.end());
-                pairs.reserve(pair_keys.size());
-                for (U64 k : pair_keys)
                 {
-                    pairs.emplace_back(static_cast<U32>(k >> 32), static_cast<S32>(static_cast<U32>(k) ^ 0x80000000u));
+                    SK_SECTION_STAGE(PAIR_SORT);
+                    sortKeys(pair_keys, key_scratch);
+                    pair_keys.erase(std::unique(pair_keys.begin(), pair_keys.end()), pair_keys.end());
+                    pairs.reserve(pair_keys.size());
+                    for (U64 k : pair_keys)
+                    {
+                        pairs.emplace_back(static_cast<U32>(k >> 32), static_cast<S32>(static_cast<U32>(k) ^ 0x80000000u));
+                    }
                 }
-#if AL_BENCH
-                pairs_timer.reset();
-#endif
+                SK_SECTION_STAGE_STOP(pairs_timer);
 
                 // 6. Pieces, in (record, plane, group) order.
+                SK_SECTION_STAGE(PIECES);
                 const LayerIndex& index = layer_index[l];
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
                     return layerFloorAt(s, index, p, z);
@@ -2847,7 +2857,10 @@ namespace skmap
                 poly.mCoverage = static_cast<U8>(input.mCoverage(at));
             }
         }
-        hashCells(s, input);
+        {
+            SK_SECTION_STAGE(HASH);
+            hashCells(s, input);
+        }
         for (const TileInput& tile : input.mTiles)
         {
             s.mBuilt.insert({ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),

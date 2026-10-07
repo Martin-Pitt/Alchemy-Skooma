@@ -502,6 +502,7 @@ namespace skmap
         void chain(const std::vector<Seg>& segs, std::vector<LLVector2>& nodes, PathList& closed, PathList& open)
         {
             SK_SECTION_STAGE(CHAIN);
+            SK_SECTION_STAGE_START(nodes_timer, CHAIN_NODES);
             // Scratch kept per thread: a soup's slice is small and frequent, so allocations would dominate it.
             thread_local ChainScratch scratch;
             ChainScratch& w = scratch;
@@ -549,6 +550,8 @@ namespace skmap
                 const S32 b = node(sg.mB);
                 ends.emplace_back(a, b);
             }
+            SK_SECTION_STAGE_STOP(nodes_timer);
+            SK_SECTION_STAGE_START(snap_timer, CHAIN_SNAP);
             // Nodes within the snap join; each component keeps its lowest id, whatever the order of the joins.
             const size_t n = nodes.size();
             std::vector<S32>& parent = w.mParent;
@@ -615,6 +618,8 @@ namespace skmap
                     joined.emplace_back(a, b);
                 }
             }
+            SK_SECTION_STAGE_STOP(snap_timer);
+            SK_SECTION_STAGE_START(walk_timer, CHAIN_WALK);
             // Each node's segments in segment order, packed.
             std::vector<U32>& first = w.mFirst;
             first.assign(n + 1, 0);
@@ -707,6 +712,7 @@ namespace skmap
             // Close what is left within 2 cm, nearest first; ties by the lower polyline index, then in the order the
             // ends are tried: tail to head, head to tail, tail to tail, head to head.
             const F64 close2 = static_cast<F64>(SECTION_CLOSE_M) * SECTION_CLOSE_M;
+            SK_SECTION_STAGE_STOP(walk_timer);
             SK_SECTION_STAGE(CLOSE);
             while (!open.empty())
             {

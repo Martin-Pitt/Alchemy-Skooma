@@ -34,6 +34,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -203,7 +204,8 @@ namespace skmap
     /// Benchmark builds only: wall time per stage of a section build, kept while mOn is set.
     enum class SectionStage : U8
     {
-        LEVELS, PAIRS, SLICE, ZBINS, SHAPE, SEGMENTS, CHAIN, CLOSE, SIMPLIFY, NEST, SHEET, ISLAND, COUNT
+        FILTER, LAYER_INDEX, LEVELS, LEVEL_SAMPLES, LEVEL_SPREAD, LEVEL_PACK, PAIRS, PAIR_SORT, PIECES, SLICE, ZBINS, SHAPE, SEGMENTS,
+        CHAIN, CHAIN_NODES, CHAIN_SNAP, CHAIN_WALK, CLOSE, SIMPLIFY, NEST, SHEET, ISLAND, HASH, COUNT
     };
     struct SectionProfile
     {
@@ -245,8 +247,13 @@ namespace skmap
 #define SK_SECTION_STAGE_JOIN(a, b) a##b
 #define SK_SECTION_STAGE_NAME(line) SK_SECTION_STAGE_JOIN(sk_section_stage_timer_, line)
 #define SK_SECTION_STAGE(stage) skmap::SectionStageTimer SK_SECTION_STAGE_NAME(__LINE__)(skmap::SectionStage::stage)
+/// A stage that ends before its scope does.
+#define SK_SECTION_STAGE_START(var, stage) std::optional<skmap::SectionStageTimer> var(std::in_place, skmap::SectionStage::stage)
+#define SK_SECTION_STAGE_STOP(var) var.reset()
 #else
 #define SK_SECTION_STAGE(stage) ((void)0)
+#define SK_SECTION_STAGE_START(var, stage) ((void)0)
+#define SK_SECTION_STAGE_STOP(var) ((void)0)
 #endif
 }
 
