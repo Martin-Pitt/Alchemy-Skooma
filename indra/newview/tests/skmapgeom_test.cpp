@@ -389,12 +389,12 @@ namespace tut
         ensure("coarse unknown", skmap::floorRelation(*s, ground, LLVector3d(5.0, 5.0, 5.3), false) == skmap::FloorRelation::UNKNOWN);
     }
 
-    // A polygon outside every run spanning more than 4 m in height is dropped.
+    // A polygon outside every run spanning more than 100 m in height is a glitch and dropped.
     template<> template<>
     void skmapgeom_object::test<9>()
     {
         TileMaker t;
-        t.quad(0.f, 0.f, 4.f, 4.f, 0.f, 6.f);
+        t.quad(0.f, 0.f, 4.f, 4.f, 0.f, 150.f);
         t.quad(10.f, 0.f, 14.f, 4.f, 0.f, 0.f);
         skmap::ScenePtr s = skmap::buildScene(input({ t.make(CLUSTER, false, 0, 0) }));
         ensure_equals("tall polygon dropped", s->mPolys.size(), static_cast<size_t>(1));
@@ -771,5 +771,17 @@ namespace tut
             ensure("the cut layer abroad", other != sb.mCut.end());
             ensure("the cut moves whole", move(entry.second) == other->second);
         }
+    }
+
+    // Hillside ground spanning several metres stays; a glitched polygon hundreds of metres tall does not.
+    template<> template<>
+    void skmapgeom_object::test<20>()
+    {
+        TileMaker t;
+        t.quad(0.f, 0.f, 20.f, 20.f, 0.f, 8.f, AREA_GROUND);
+        t.quad(20.f, 0.f, 22.f, 2.f, 0.f, 500.f, AREA_GROUND);
+        skmap::ScenePtr s = skmap::buildScene(input({ t.make(LAND, true, 0, 0) }));
+        ensure_equals("only the hillside is kept", s->mPolys.size(), static_cast<size_t>(1));
+        ensure("the hillside is ground", layerOf(*s, LLVector3d(10.0, 10.0, 4.0)) >= 0);
     }
 }
