@@ -142,9 +142,13 @@ namespace skmap
     /// its outline. floor_at gives the topmost floor at a point, false where there is none.
     bool isIsland(const LLVector2* outer, U32 count, F32 thickness, const std::function<bool(const LLVector2&, F32&)>& floor_at);
 
+    /// What the scene builder keeps of its last build for the next; it defines the type.
+    struct SectionMemo;
+
     /// Slices by (signature, shape, plane), with each large soup's z-bins; an upright box or cylinder keeps one section
-    /// for every plane well inside its height. Confined to one worker thread, no lock; it holds no record, so no soup
-    /// outlives its snapshot. Least recently used out first, by bytes.
+    /// for every plane well inside its height. Confined to one worker thread, no lock; it holds no record but the last
+    /// scene's door leaves, which the map holds as long, so no soup outlives its snapshot by more than a build. Least
+    /// recently used out first, by bytes.
     class SectionCache
     {
     public:
@@ -156,6 +160,8 @@ namespace skmap
         size_t bytes() const { return mBytes; }
         /// Slices held.
         size_t entries() const { return mSlices; }
+        /// The last scene build's memo, kept on the same worker; outside the byte budget, as it is one scene's worth.
+        std::shared_ptr<SectionMemo>& memo() { return mMemo; }
 
     private:
         struct Key
@@ -198,13 +204,14 @@ namespace skmap
         std::unordered_map<Key, Entry, KeyHash> mEntries;
         Entry* mNewest = nullptr;
         Entry* mOldest = nullptr;
+        std::shared_ptr<SectionMemo> mMemo;
     };
 
 #if AL_BENCH
     /// Benchmark builds only: wall time per stage of a section build, kept while mOn is set.
     enum class SectionStage : U8
     {
-        FILTER, LAYER_INDEX, LEVELS, LEVEL_SAMPLES, LEVEL_SPREAD, LEVEL_PACK, PAIRS, PAIR_SORT, PIECES, SLICE, ZBINS, SHAPE, SEGMENTS,
+        FILTER, LAYER_INDEX, MEMO, LEVELS, LEVEL_SAMPLES, LEVEL_SPREAD, LEVEL_PACK, PAIRS, PAIR_SORT, PIECES, SLICE, ZBINS, SHAPE, SEGMENTS,
         CHAIN, CHAIN_NODES, CHAIN_SNAP, CHAIN_WALK, CLOSE, SIMPLIFY, NEST, SHEET, ISLAND, HASH, COUNT
     };
     struct SectionProfile

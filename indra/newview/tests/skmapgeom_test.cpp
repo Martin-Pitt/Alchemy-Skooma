@@ -234,6 +234,25 @@ namespace
         return true;
     }
 
+    bool sameLevels(const skmap::Scene& a, const skmap::Scene& b)
+    {
+        if (a.mLayers.size() != b.mLayers.size())
+        {
+            return false;
+        }
+        for (size_t l = 0; l < a.mLayers.size(); ++l)
+        {
+            const skmap::LevelGrid& p = a.mLayers[l].mLevels;
+            const skmap::LevelGrid& q = b.mLayers[l].mLevels;
+            if (p.mX0 != q.mX0 || p.mY0 != q.mY0 || p.mW != q.mW || p.mH != q.mH || p.mCell != q.mCell || p.mLists != q.mLists
+                || a.mLayers[l].mPieces != b.mLayers[l].mPieces)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     S32 layerOf(const skmap::Scene& s, const LLVector3d& at)
     {
         const skmap::FloorHit hit = skmap::floorAt(s, at, 0.5f, 0.5f);
@@ -1345,5 +1364,51 @@ namespace tut
         }
         ensure("the low and high planes, once each", planes == std::multiset<S32>({ skmap::SECTION_LOW_Q, skmap::SECTION_HIGH_Q }));
         ensure("nothing below the floor", piecesOf(*s, 2).empty());
+    }
+
+    // A warm build takes a layer from the last build only when that layer is the same: whatever moved, it builds what
+    // a build without a cache builds.
+    template<> template<>
+    void skmapgeom_object::test<35>()
+    {
+        auto floors = [](F32 z) {
+            TileMaker t;
+            t.quad(0.f, 0.f, 5.f, 8.f, 0.f, 0.f);
+            t.quad(10.5f, 0.f, 12.f, 8.f, z, z);
+            return t.make(CLUSTER, false, 0, 0);
+        };
+        const std::vector<RecordPtr> walls = { boxRecord(LLVector3(6.5f, 4.f, 0.8f), LLVector3(0.1f, 3.f, 0.8f), 1),
+                                               boxRecord(LLVector3(2.5f, 4.f, 0.4f), LLVector3(0.5f, 0.5f, 0.4f), 2),
+                                               boxRecord(LLVector3(11.f, 4.f, 1.5f), LLVector3(0.3f, 0.3f, 1.5f), 3) };
+        std::vector<RecordPtr> moved_wall = walls;
+        Record wall = *walls[0];
+        wall.mCenter += LLVector3(0.5f, 0.f, 0.f);
+        wall.mMin.mdV[VX] += 0.5;
+        wall.mMax.mdV[VX] += 0.5;
+        wall.mSignature = 101;
+        moved_wall[0] = std::make_shared<const Record>(wall);
+        std::vector<RecordPtr> reordered = { walls[2], walls[0], walls[1] };
+        const std::vector<RecordPtr> fewer = { walls[1], walls[2] };
+        skmap::SceneInput shifted = input({ floors(0.f) }, &walls);
+        const LLVector3d by(64.0, 0.0, 0.0);
+        shifted.mOrigin += by;
+        shifted.mMin += by;
+        shifted.mMax += by;
+
+        skmap::SectionCache cache;
+        auto check = [&](const skmap::SceneInput& in, const char* what) {
+            skmap::ScenePtr plain = skmap::buildScene(in);
+            skmap::ScenePtr warm = skmap::buildScene(in, &cache);
+            ensure(what, !plain->mPieces.empty() && samePieces(*plain, *warm) && sameLevels(*plain, *warm)
+                             && plain->mCellHashes == warm->mCellHashes);
+        };
+        check(input({ floors(0.f) }, &walls), "cold");
+        check(input({ floors(0.f) }, &walls), "the same again");
+        check(input({ floors(1.f) }, &walls), "a floor rose");
+        check(input({ floors(1.f) }, &moved_wall), "a wall moved");
+        check(input({ floors(1.f) }, &reordered), "the records in another order");
+        check(input({ floors(1.f) }, &fewer), "a record gone");
+        check(shifted, "the origin moved");
+        check(input({ floors(0.f) }, &walls), "back where it began");
     }
 }

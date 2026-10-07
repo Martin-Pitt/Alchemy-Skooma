@@ -33,10 +33,19 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <deque>
 
 namespace skmap
 {
+    /// The last scene build, for the next to take what an unchanged layer would only compute again.
+    struct SectionMemo
+    {
+        ScenePtr mScene;
+        /// (content hash, layer) for every layer of mScene with polygons, sorted.
+        std::vector<std::pair<U64, S32>> mLayers;
+    };
+
     namespace
     {
         typedef std::pair<S32, S32> Cell;
@@ -1577,6 +1586,69 @@ namespace skmap
             }
         }
 
+        /// One word into a lookup hash, its bits spread both ways.
+        U64 hashStep(U64 h, U64 v)
+        {
+            h = (h ^ v) * 0x9e3779b97f4a7c15ull;
+            return h ^ (h >> 29);
+        }
+
+        /// Whole 32-bit words, two at a time.
+        U64 hashWords(U64 h, const void* data, size_t bytes)
+        {
+            const U8* p = static_cast<const U8*>(data);
+            for (; bytes >= 8; bytes -= 8, p += 8)
+            {
+                U64 v;
+                std::memcpy(&v, p, sizeof(v));
+                h = hashStep(h, v);
+            }
+            if (bytes >= 4)
+            {
+                U32 v;
+                std::memcpy(&v, p, sizeof(v));
+                h = hashStep(h, v);
+            }
+            return h;
+        }
+
+        /// What a layer's floor levels and floor lookups read: the origin and its polygons' corners and detail
+        /// triangles, in order. Everything else the section reads of a polygon is made from these.
+        U64 layerHash(const Scene& s, const SceneLayer& layer)
+        {
+            U64 h = hashWords(sknav::SEED, s.mOrigin.mdV, sizeof(s.mOrigin.mdV));
+            for (U32 id : layer.mPolys)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                h = hashStep(h, poly.mVertCount | (static_cast<U64>(poly.mTriCount) << 8));
+                h = hashWords(h, poly.mVerts, poly.mVertCount * sizeof(LLVector3));
+                h = hashWords(h, &s.mTris[static_cast<size_t>(poly.mFirstTri) * 3], poly.mTriCount * 3 * sizeof(LLVector3));
+            }
+            return h;
+        }
+
+        /// Whether two layers hash the same because they are the same, to the bit.
+        bool sameLayer(const Scene& a, const SceneLayer& la, const Scene& b, const SceneLayer& lb)
+        {
+            if (la.mPolys.size() != lb.mPolys.size() || std::memcmp(a.mOrigin.mdV, b.mOrigin.mdV, sizeof(a.mOrigin.mdV)) != 0)
+            {
+                return false;
+            }
+            for (size_t k = 0; k < la.mPolys.size(); ++k)
+            {
+                const ScenePoly& p = a.mPolys[la.mPolys[k]];
+                const ScenePoly& q = b.mPolys[lb.mPolys[k]];
+                if (p.mVertCount != q.mVertCount || p.mTriCount != q.mTriCount
+                    || std::memcmp(p.mVerts, q.mVerts, p.mVertCount * sizeof(LLVector3)) != 0
+                    || std::memcmp(&a.mTris[static_cast<size_t>(p.mFirstTri) * 3], &b.mTris[static_cast<size_t>(q.mFirstTri) * 3],
+                                   p.mTriCount * 3 * sizeof(LLVector3)) != 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         /// (record, plane) as one key that sorts as the pair does.
         U64 pairKey(U32 ri, S32 q)
         {
@@ -1622,7 +1694,7 @@ namespace skmap
 
         /// The layers' section: records filtered, bucketed, sliced at the planes their cells' floor levels ask for, and
         /// cut into pieces; door leaves set aside for the door marks.
-        void buildSection(Scene& s, const SceneInput& input, SectionCache* cache)
+        void buildSection(Scene& s, const SceneInput& input, SectionCache* cache, SectionMemo* next)
         {
             LL_PROFILE_ZONE_SCOPED;
             const auto started = std::chrono::steady_clock::now();
@@ -1736,6 +1808,39 @@ namespace skmap
             }
             std::vector<U32> poly_seen(s.mPolys.size(), 0);
             U32 poly_stamp = 0;
+
+            // A layer whose polygons the last build had, to the bit, has the floor levels it had.
+            const SectionMemo* last = cache ? cache->memo().get() : nullptr;
+            std::vector<S32> last_layer(s.mLayers.size(), -1);
+            if (next)
+            {
+                SK_SECTION_STAGE(MEMO);
+                for (size_t l = 0; l < s.mLayers.size(); ++l)
+                {
+                    const SceneLayer& layer = s.mLayers[l];
+                    if (layer.mPolys.empty())
+                    {
+                        continue;
+                    }
+                    const U64 h = layerHash(s, layer);
+                    next->mLayers.emplace_back(h, static_cast<S32>(l));
+                    if (!last)
+                    {
+                        continue;
+                    }
+                    const auto range = std::equal_range(last->mLayers.begin(), last->mLayers.end(), std::make_pair(h, 0),
+                                                        [](const std::pair<U64, S32>& a, const std::pair<U64, S32>& b) { return a.first < b.first; });
+                    for (auto it = range.first; it != range.second; ++it)
+                    {
+                        if (sameLayer(s, layer, *last->mScene, last->mScene->mLayers[it->second]))
+                        {
+                            last_layer[l] = it->second;
+                            break;
+                        }
+                    }
+                }
+                std::sort(next->mLayers.begin(), next->mLayers.end());
+            }
             // Per pair and per piece, reused.
             std::vector<bool> active;
             std::vector<std::pair<S32, size_t>> order;
@@ -1749,7 +1854,14 @@ namespace skmap
                 // 4. The layer's local floor levels.
                 {
                     SK_SECTION_STAGE(LEVELS);
-                    buildLevels(s, layer, layer.mLevels);
+                    if (last_layer[l] >= 0)
+                    {
+                        layer.mLevels = last->mScene->mLayers[last_layer[l]].mLevels;
+                    }
+                    else
+                    {
+                        buildLevels(s, layer, layer.mLevels);
+                    }
                 }
                 const LevelGrid& grid = layer.mLevels;
                 if (grid.mW == 0)
@@ -2843,9 +2955,11 @@ namespace skmap
             return a < b;
         });
 
+        std::shared_ptr<SectionMemo> memo;
         if (input.mRecords)
         {
-            buildSection(s, input, cache);
+            memo = cache ? std::make_shared<SectionMemo>() : nullptr;
+            buildSection(s, input, cache, memo.get());
         }
         classifyMarks(s, input);
         sampleContours(s);
@@ -2865,6 +2979,12 @@ namespace skmap
         {
             s.mBuilt.insert({ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),
                               static_cast<S32>(std::floor((tile.mMin.mdV[VY] + 1.0) / LATTICE_M)) });
+        }
+        if (memo)
+        {
+            // The scene is finished and never changes again: the next build may read it.
+            memo->mScene = scene;
+            cache->memo() = std::move(memo);
         }
         return scene;
     }

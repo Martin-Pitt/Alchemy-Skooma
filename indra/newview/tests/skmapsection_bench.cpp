@@ -247,7 +247,7 @@ namespace
 
     const char* stageName(skmap::SectionStage stage)
     {
-        static const char* names[] = { "filter and buckets", "layer indexes", "levels", "  samples", "  spread", "  pack", "pairs",
+        static const char* names[] = { "filter and buckets", "layer indexes", "last build's layers", "levels", "  samples", "  spread", "  pack", "pairs",
                                        "  sort", "pieces", "  slice", "    z-bins", "    analytic shapes", "    soup segments", "    chain",
                                        "      nodes", "      snap", "      walk", "      close", "    simplify", "    nesting",
                                        "  sheet rooms", "  islands", "cell hashes (scene)" };
