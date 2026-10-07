@@ -421,7 +421,17 @@ void SKMapScene::updateAgentFloor()
     const LLVector3d agent = gAgent.getPositionGlobal();
     skmap::AgentFloor floor;
     floor.mPos = agent;
-    const skmap::FloorHit hit = skmap::floorAt(scene, agent, 2.5f, 0.5f);
+    skmap::FloorHit hit = skmap::floorAt(scene, agent, 2.5f, 0.5f);
+    // The navmesh is eroded by the agent's radius, so against a wall the agent stands just off it:
+    // look a little way around before calling the agent off every floor.
+    for (F32 r : { 0.4f, 0.8f })
+    {
+        for (S32 k = 0; k < 8 && !hit.mFound; ++k)
+        {
+            const F32 a = F_TWO_PI * k / 8.f;
+            hit = skmap::floorAt(scene, agent + LLVector3d(std::cos(a) * r, std::sin(a) * r, 0.0), 2.5f, 0.5f);
+        }
+    }
     if (hit.mFound)
     {
         floor.mFound = true;
