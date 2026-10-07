@@ -186,6 +186,11 @@ cmake_dependent_option(
 option(AL_ENABLE_TRACY_ON_DEMAND "Use on-demand Tracy profiling." ON)
 option(AL_ENABLE_TRACY_LOCAL_ONLY "Disallow remote Tracy profiling." ON)
 option(AL_ENABLE_TRACY_GPU "Use Tracy GPU profiling" OFF)
+option(
+  AL_ENABLE_TRACY_MEMORY
+  "Report every allocation to Tracy (multiplies capture size; a stalled profiler then backs up in the viewer)"
+  OFF
+)
 option(AL_BUILD_TRACY_GUI "Enable building Tracy profiler GUI" OFF)
 
 # Debug logging stays available in Release builds of the Test channel only.

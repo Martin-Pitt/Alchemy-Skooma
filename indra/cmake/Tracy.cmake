@@ -9,6 +9,10 @@ if(AL_USE_TRACY)
     target_compile_definitions(ll::tracy INTERFACE LL_PROFILER_ENABLE_TRACY_OPENGL=1)
   endif()
 
+  if(AL_ENABLE_TRACY_MEMORY)
+    target_compile_definitions(ll::tracy INTERFACE LL_PROFILER_ENABLE_TRACY_MEMORY=1)
+  endif()
+
   # See: indra/llcommon/llprofiler.h
   # Additionally we only want tracy support in RelWithDebInfo and Release builds.
   target_compile_definitions(

@@ -50,6 +50,7 @@ set(
   AL_ENABLE_TRACY_ON_DEMAND
   AL_ENABLE_TRACY_LOCAL_ONLY
   AL_ENABLE_TRACY_GPU
+  AL_ENABLE_TRACY_MEMORY
   AL_BUILD_TRACY_GUI
   AL_ENABLE_SIGNING
   AL_USE_VELOPACK
@@ -235,6 +236,9 @@ function(al_configuration_report)
     endif()
     if(AL_ENABLE_TRACY_GPU)
       list(APPEND tracy "GPU")
+    endif()
+    if(AL_ENABLE_TRACY_MEMORY)
+      list(APPEND tracy "memory")
     endif()
     if(AL_BUILD_TRACY_GUI)
       list(APPEND tracy "GUI")

@@ -175,7 +175,7 @@
 #define LL_PROFILER_GPU_CONTEXT_NAMED(name) (void)name;
 #endif // LL_PROFILER_ENABLE_TRACY_OPENGL
 
-#if LL_PROFILER_CONFIGURATION >= LL_PROFILER_CONFIG_TRACY
+#if LL_PROFILER_CONFIGURATION >= LL_PROFILER_CONFIG_TRACY && LL_PROFILER_ENABLE_TRACY_MEMORY
 #define LL_PROFILE_ALLOC(ptr, size)             TracyAlloc(ptr, size)
 #define LL_PROFILE_FREE(ptr)                    TracyFree(ptr)
 #else
