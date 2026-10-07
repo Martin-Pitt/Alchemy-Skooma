@@ -62,13 +62,13 @@ namespace skmap
             return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
         }
 
-        F64 signedArea(const std::vector<D2>& p)
+        F64 signedArea(const D2* p, size_t n)
         {
             F64 s = 0.0;
-            for (size_t i = 0; i < p.size(); ++i)
+            for (size_t i = 0; i < n; ++i)
             {
                 const D2& a = p[i];
-                const D2& b = p[(i + 1) % p.size()];
+                const D2& b = p[(i + 1) % n];
                 s += a.x * b.y - a.y * b.x;
             }
             return 0.5 * s;
@@ -83,63 +83,84 @@ namespace skmap
             s.mLoops.push_back(loop);
         }
 
-        /// Monotone chain, counter-clockwise; false when fewer than three distinct points remain.
-        bool hull2d(std::vector<D2> pts, std::vector<LLVector2>& out)
+        /// Monotone chain over pts[0, n), sorted in place, counter-clockwise; false when fewer than three distinct points
+        /// remain. The lower chain then the upper, each without its last point, as two separate chains would give.
+        bool hull2d(D2* pts, size_t n, std::vector<LLVector2>& out)
         {
             out.clear();
-            std::sort(pts.begin(), pts.end());
-            pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
-            if (pts.size() < 3)
+            std::sort(pts, pts + n);
+            n = static_cast<size_t>(std::unique(pts, pts + n) - pts);
+            if (n < 3)
             {
                 return false;
             }
-            std::vector<D2> lower, upper;
-            for (const D2& p : pts)
+            // Small hulls on the stack; a decomposition body's many crossings in scratch kept per thread.
+            constexpr size_t SMALL = 64;
+            D2 small[2 * SMALL + 1];
+            thread_local std::vector<D2> large;
+            D2* h = small;
+            if (n > SMALL)
             {
-                while (lower.size() >= 2 && cross(lower[lower.size() - 2], lower.back(), p) <= 0.0)
-                {
-                    lower.pop_back();
-                }
-                lower.push_back(p);
+                large.resize(2 * n + 1);
+                h = large.data();
             }
-            for (auto it = pts.rbegin(); it != pts.rend(); ++it)
+            size_t k = 0;
+            for (size_t i = 0; i < n; ++i)
             {
-                while (upper.size() >= 2 && cross(upper[upper.size() - 2], upper.back(), *it) <= 0.0)
+                while (k >= 2 && cross(h[k - 2], h[k - 1], pts[i]) <= 0.0)
                 {
-                    upper.pop_back();
+                    --k;
                 }
-                upper.push_back(*it);
+                h[k++] = pts[i];
             }
-            std::vector<D2> h(lower.begin(), lower.end() - 1);
-            h.insert(h.end(), upper.begin(), upper.end() - 1);
-            if (h.size() < 3 || std::fabs(signedArea(h)) < 1e-12)
+            // The upper chain starts at the last point, which it never pops.
+            const size_t base = k;
+            for (size_t i = n - 1; i-- > 0;)
+            {
+                while (k > base && cross(h[k - 2], h[k - 1], pts[i]) <= 0.0)
+                {
+                    --k;
+                }
+                h[k++] = pts[i];
+            }
+            --k;    // the first point again
+            if (k < 3 || std::fabs(signedArea(h, k)) < 1e-12)
             {
                 return false;
             }
-            for (const D2& p : h)
+            for (size_t i = 0; i < k; ++i)
             {
-                out.emplace_back(static_cast<F32>(p.x), static_cast<F32>(p.y));
+                out.emplace_back(static_cast<F32>(h[i].x), static_cast<F32>(h[i].y));
             }
             return true;
         }
 
-        /// A convex polytope's section: each straddling edge's crossing, taken from its lower end, then the hull.
-        bool sliceEdges(const std::vector<D3>& v, const std::vector<std::pair<S32, S32>>& edges, F64 c, std::vector<LLVector2>& out)
+        bool hull2d(std::vector<D2>& pts, std::vector<LLVector2>& out)
         {
-            std::vector<D2> pts;
-            for (const auto& e : edges)
+            return hull2d(pts.data(), pts.size(), out);
+        }
+
+        /// The most edges a convex polytope here has: a tilted cylinder's prism at the largest tessellation.
+        constexpr size_t MAX_EDGES = 3 * 64;
+
+        /// A convex polytope's section: each straddling edge's crossing, taken from its lower end, then the hull.
+        bool sliceEdges(const D3* v, const std::pair<S32, S32>* edges, size_t count, F64 c, std::vector<LLVector2>& out)
+        {
+            D2 pts[MAX_EDGES];
+            size_t n = 0;
+            for (size_t i = 0; i < count; ++i)
             {
-                const D3& p = v[e.first];
-                const D3& q = v[e.second];
+                const D3& p = v[edges[i].first];
+                const D3& q = v[edges[i].second];
                 if ((p.z >= c) != (q.z >= c))
                 {
                     const D3& lo = p.z < q.z ? p : q;
                     const D3& hi = p.z < q.z ? q : p;
                     const F64 t = (c - lo.z) / (hi.z - lo.z);
-                    pts.push_back({ lo.x + t * (hi.x - lo.x), lo.y + t * (hi.y - lo.y) });
+                    pts[n++] = { lo.x + t * (hi.x - lo.x), lo.y + t * (hi.y - lo.y) };
                 }
             }
-            return pts.size() >= 3 && hull2d(pts, out);
+            return n >= 3 && hull2d(pts, n, out);
         }
 
         S32 tessellation(F64 r)
@@ -207,7 +228,7 @@ namespace skmap
                 }
                 return out;
             }();
-            std::vector<D3> v(8);
+            D3 v[8];
             for (S32 i = 0; i < 8; ++i)
             {
                 D3 p = d3(r.mCenter);
@@ -221,7 +242,7 @@ namespace skmap
                 }
                 v[i] = p;
             }
-            return sliceEdges(v, edges, c, out);
+            return sliceEdges(v, edges.data(), edges.size(), c, out);
         }
 
         /// The axis vector h_i a_i.
@@ -301,20 +322,21 @@ namespace skmap
                 const F64 bx = al * d / (s * s), by = be * d / (s * s);
                 const F64 k = std::sqrt(llmax(0.0, 1.0 - d * d / (s * s))) / s;
                 const F64 px = -be * k, py = al * k;
-                std::vector<D2> pts;
+                D2 pts[4];
+                size_t n = 0;
                 for (S32 sign : { 1, -1 })
                 {
                     const F64 qu = bx + sign * px, qv = by + sign * py;
                     for (S32 sw : { -1, 1 })
                     {
-                        pts.push_back({ centre.x + qu * c0.x + qv * c1.x + sw * c2.x, centre.y + qu * c0.y + qv * c1.y + sw * c2.y });
+                        pts[n++] = { centre.x + qu * c0.x + qv * c1.x + sw * c2.x, centre.y + qu * c0.y + qv * c1.y + sw * c2.y };
                     }
                 }
-                return hull2d(pts, out);
+                return hull2d(pts, n, out);
             }
             // Tilted: the inscribed prism sliced like a box; the section stretches by 1 / |a2.z| and so does the bound.
             const S32 n = tessellation(llmax(r.mHalf.mV[0], r.mHalf.mV[1]) / llmax(std::fabs(static_cast<F64>(r.mAxes[2].mV[VZ])), 0.2));
-            std::vector<D3> v(2 * n);
+            D3 v[2 * 64];
             for (S32 i = 0; i < n; ++i)
             {
                 const F64 t = 2.0 * PI_64 * i / n;
@@ -323,20 +345,21 @@ namespace skmap
                 v[i] = { ring.x - c2.x, ring.y - c2.y, ring.z - c2.z };
                 v[n + i] = { ring.x + c2.x, ring.y + c2.y, ring.z + c2.z };
             }
-            std::vector<std::pair<S32, S32>> edges;
+            std::pair<S32, S32> edges[MAX_EDGES];
+            size_t count = 0;
             for (S32 i = 0; i < n; ++i)
             {
-                edges.emplace_back(i, (i + 1) % n);
+                edges[count++] = { i, (i + 1) % n };
             }
             for (S32 i = 0; i < n; ++i)
             {
-                edges.emplace_back(n + i, n + (i + 1) % n);
+                edges[count++] = { n + i, n + (i + 1) % n };
             }
             for (S32 i = 0; i < n; ++i)
             {
-                edges.emplace_back(i, n + i);
+                edges[count++] = { i, n + i };
             }
-            return sliceEdges(v, edges, c, out);
+            return sliceEdges(v, edges, count, c, out);
         }
 
         struct Seg
@@ -1042,7 +1065,7 @@ namespace skmap
                     bodies[body].push_back({ seg.mB.mV[VX], seg.mB.mV[VY] });
                 }
                 std::vector<LLVector2> hull;
-                for (const std::vector<D2>& pts : bodies)
+                for (std::vector<D2>& pts : bodies)
                 {
                     if (pts.size() >= 3 && hull2d(pts, hull))
                     {
@@ -1298,7 +1321,8 @@ namespace skmap
             return s;
         }
         SK_SECTION_STAGE(SHAPE);
-        std::vector<LLVector2> loop;
+        thread_local std::vector<LLVector2> loop;
+        loop.clear();
         bool made = false;
         switch (rec.mShape)
         {
