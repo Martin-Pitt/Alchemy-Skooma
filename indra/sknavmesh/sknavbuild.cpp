@@ -2055,17 +2055,59 @@ namespace sknav
             return result;
         }
         clock.lap(ClassBuildStats::ERODE);
+        if (input.mPartition == Partition::SLOPE)
+        {
+            mergeFragments(*mem.chf, real, flights);
+            clock.lap(ClassBuildStats::REGIONS);
+            if (astats)
+            {
+                astats->mChfHash = hashCompact(*mem.chf, code_lut);
+                clock.restart();
+            }
+        }
+
+        // The air off the raster with the air's areas, marked with the flights
+        // still standing on AVATAR's floor, before any polys exist.
+        std::vector<U8> standing(flights.size(), 0);
+        for (size_t f = 0; f < flights.size(); ++f)
+        {
+            standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
+        }
+        if (input.mAir)
+        {
+            StageClock top_clock(tstats ? tstats->mMs : nullptr);
+            std::vector<Flight> marked;
+            for (size_t f = 0; f < flights.size(); ++f)
+            {
+                if (standing[f])
+                {
+                    marked.push_back(flights[f]);
+                }
+            }
+            const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
+            result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
+                                      static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
+                                      tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor);
+            top_clock.lap(ClassBuildStats::AIR);
+            clock.restart();
+        }
+        // Where the air's floors end over a drop, and the run-off down them.
+        if (input.mRunoff && top_pass)
+        {
+            // Off the floors before the ledge filter: a roof's rim over a long
+            // drop is where weather runs off, though the filter takes it.
+            StageClock top_clock(tstats ? tstats->mMs : nullptr);
+            top_ledges.restore(hf);
+            extractRunoff(hf, grid.borderSize, grid.walkableClimb, static_cast<S32>(std::ceil(tp.mHeight / grid.ch)), input.mRunoffMax,
+                          input.mDropSpacing, result.mLedges, result.mRunoff);
+            top_clock.lap(ClassBuildStats::EDGES);
+            clock.restart();
+        }
+
         bool regions = false;
         switch (input.mPartition)
         {
             case Partition::SLOPE:
-                mergeFragments(*mem.chf, real, flights);
-                if (astats)
-                {
-                    clock.lap(ClassBuildStats::REGIONS);
-                    astats->mChfHash = hashCompact(*mem.chf, code_lut);
-                    clock.restart();
-                }
                 regions = rcBuildDistanceField(&ctx, *mem.chf) &&
                           rcBuildRegions(&ctx, *mem.chf, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea);
                 break;
@@ -2134,7 +2176,33 @@ namespace sknav
                 }
                 centroids[i] /= static_cast<F32>(llmax(nv, 1));
             }
+            std::vector<U64> stood;
+            for (size_t f = 0; f < flights.size(); ++f)
+            {
+                if (standing[f])
+                {
+                    stood.push_back(flights[f].mKey);
+                }
+            }
             mapFlightPolys(flights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), ap.mClimb);
+            if (stats)
+            {
+                // The air's flights against the polys': region removal can take a standing flight's polys.
+                for (const U64 key : stood)
+                {
+                    if (std::none_of(flights.begin(), flights.end(), [&](const Flight& f) { return f.mKey == key; }))
+                    {
+                        stats->mFlightStandOnly.push_back(key);
+                    }
+                }
+                for (const Flight& f : flights)
+                {
+                    if (std::find(stood.begin(), stood.end(), f.mKey) == stood.end())
+                    {
+                        stats->mFlightPolysOnly.push_back(f.mKey);
+                    }
+                }
+            }
             result.mFlights[avatar] = std::move(flights);
             for (S32 i = 0; i < mem.chf->spanCount; ++i)
             {
@@ -2164,30 +2232,6 @@ namespace sknav
         }
         clock.lap(ClassBuildStats::DETAIL);
         result.mPolys[avatar] = mem.pmesh->npolys;
-
-        // The air off the raster with the air's areas, the avatar's flights on it.
-        if (input.mAir)
-        {
-            StageClock top_clock(tstats ? tstats->mMs : nullptr);
-            const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
-            result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
-                                      static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &result.mFlights[avatar],
-                                      tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor);
-            top_clock.lap(ClassBuildStats::AIR);
-            clock.restart();
-        }
-        // Where the air's floors end over a drop, and the run-off down them.
-        if (input.mRunoff && top_pass)
-        {
-            // Off the floors before the ledge filter: a roof's rim over a long
-            // drop is where weather runs off, though the filter takes it.
-            StageClock top_clock(tstats ? tstats->mMs : nullptr);
-            top_ledges.restore(hf);
-            extractRunoff(hf, grid.borderSize, grid.walkableClimb, static_cast<S32>(std::ceil(tp.mHeight / grid.ch)), input.mRunoffMax,
-                          input.mDropSpacing, result.mLedges, result.mRunoff);
-            top_clock.lap(ClassBuildStats::EDGES);
-            clock.restart();
-        }
         if (astats)
         {
             astats->mPolys = static_cast<U32>(mem.pmesh->npolys);

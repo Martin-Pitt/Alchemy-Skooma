@@ -758,6 +758,19 @@ namespace tut
                     out << ",\"top\":{\"hf\":\"" << std::hex << ts.mHfHash << "\",\"hf_area\":\"" << ts.mHfAreaHash << std::dec
                         << "\",\"bridges\":" << ts.mBridges << "}";
                 }
+                if (tile.mStats)
+                {
+                    const auto keys = [&](const char* name, const std::vector<U64>& list) {
+                        out << ",\"" << name << "\":[";
+                        for (size_t k = 0; k < list.size(); ++k)
+                        {
+                            out << (k ? "," : "") << '"' << std::hex << list[k] << std::dec << '"';
+                        }
+                        out << ']';
+                    };
+                    keys("stand_only", tile.mStats->mFlightStandOnly);
+                    keys("polys_only", tile.mStats->mFlightPolysOnly);
+                }
                 out << ",\"nledge\":" << res.mLedges.size() << ",\"nrunoff\":" << res.mRunoff.size();
                 U64 face = 0;
                 for (const WallFace& f : res.mFaces)

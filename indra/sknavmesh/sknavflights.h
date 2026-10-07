@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+struct rcCompactHeightfield;
+
 namespace sknav
 {
     constexpr F32 SLOPE_LEVEL_DEG = 8.f;    ///< below this a surface is a floor, not a climb
@@ -104,6 +106,12 @@ namespace sknav
     /// centroids and codes are per poly, in the poly mesh's order; flights
     /// that got none are dropped.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
+
+    /// Whether a flight still stands on the compact heightfield before its
+    /// regions are built: a span of the tile proper carrying one of its codes
+    /// inside its footprint, within climb of its heights. The air marks the
+    /// flights that do, before any polys exist.
+    bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb);
 
     /// Mark FLIGHT on the walkable gaps a flight stands for: inside
     /// its footprint, with the floor on its plane. The grid and the flights

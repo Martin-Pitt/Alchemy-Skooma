@@ -28,6 +28,8 @@
 
 #include "llstring.h"
 
+#include "Recast.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -1381,6 +1383,32 @@ namespace sknav
             }
         }
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
+    }
+
+    bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb)
+    {
+        for (S32 z = border; z < chf.height - border; ++z)
+        {
+            for (S32 x = border; x < chf.width - border; ++x)
+            {
+                const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                {
+                    if (std::find(flight.mCodes.begin(), flight.mCodes.end(), chf.areas[i]) == flight.mCodes.end())
+                    {
+                        continue;
+                    }
+                    // Recast x is SL y, Recast z SL x.
+                    const LLVector2 at(chf.bmin[2] + (z + 0.5f) * chf.cs, chf.bmin[0] + (x + 0.5f) * chf.cs);
+                    const F32 top = chf.bmin[1] + chf.spans[i].y * chf.ch;
+                    if (top >= flight.mZMin - climb && top <= flight.mZMax + climb && outside(flight.mFootprint, at) < 0.25f)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights)

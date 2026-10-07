@@ -144,6 +144,9 @@ namespace sknav
         std::vector<U32> mPolySpans;
         std::vector<F32> mPolyArea;     ///< m², from its outline
         std::vector<U8> mPolyFlight;    ///< 1 where a flight claimed the poly
+        /// Flights the air marks that got no polys, and the reverse, by key.
+        std::vector<U64> mFlightStandOnly;
+        std::vector<U64> mFlightPolysOnly;
     };
 }
 
