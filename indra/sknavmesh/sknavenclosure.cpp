@@ -612,7 +612,8 @@ namespace sknav
     void EnclosurePass::State::seamTile(size_t t)
     {
         // Across the +x and +y seams, gap by gap along the neighbours' level-0
-        // strips: the strip's k-th gap is the covering leaf's k-th.
+        // strips: the strip's k-th gap is the covering leaf's k-th. The key
+        // only finds the leaf; a cell whose counts disagree is skipped.
         const EnclosureInput& in = *mInput;
         const TileAir& a = air(t);
         std::vector<GraphEdge> edges;
@@ -640,8 +641,8 @@ namespace sknav
                 {
                     continue;
                 }
-                const S32 la = side == 0 ? findAirLeaf(a, a.mWidth - 1, i) : findAirLeaf(a, i, a.mHeight - 1);
-                const S32 lb = side == 0 ? findAirLeaf(b, 0, j) : findAirLeaf(b, j, 0);
+                const S32 la = side == 0 ? findLeafByKey(a, a.mWidth - 1, i) : findLeafByKey(a, i, a.mHeight - 1);
+                const S32 lb = side == 0 ? findLeafByKey(b, 0, j) : findLeafByKey(b, j, 0);
                 if (la < 0 || lb < 0 || a.mLeaves[la].mGapCount != sa.count(i) || b.mLeaves[lb].mGapCount != sb.count(j))
                 {
                     continue;
