@@ -285,6 +285,7 @@ namespace sknav
         std::vector<std::pair<LLVector3d, LLVector3d>> mLifts;  ///< elevator shafts, global boxes
         RoomsProductPtr mPrevious;
         SpaceParams mParams;
+        bool mFrameApertures = true;    ///< doorways cut from below read their cells in bulk; off, a sample at a time, as a check
     };
 
     /// The spaces pass over an enclosure product: the feature transform and
