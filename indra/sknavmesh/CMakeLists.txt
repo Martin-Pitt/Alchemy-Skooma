@@ -23,6 +23,7 @@ target_sources(
     sknavprobecache.cpp
     sknavprobes.cpp
     sknavreplay.cpp
+    sknavreplaystats.cpp
     sknavskymap.cpp
     sknavspaces.cpp
     sknavtilecache.cpp
@@ -50,6 +51,7 @@ target_sources(
         sknavprobecache.h
         sknavprobes.h
         sknavreplay.h
+        sknavreplaystats.h
         sknavskymap.h
         sknavspaces.h
         sknavtilecache.h

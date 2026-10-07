@@ -312,10 +312,19 @@ namespace sknav
         std::vector<std::thread> pool;
         for (S32 k = 0; k < threads; ++k)
         {
-            pool.emplace_back([&jobs, &next]() {
+            pool.emplace_back([&jobs, &next, &options]() {
                 for (size_t i = next++; i < jobs.size(); i = next++)
                 {
-                    jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput));
+                    if (options.mStats)
+                    {
+                        auto stats = std::make_shared<TileBuildStats>();
+                        jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput, stats.get()));
+                        jobs[i]->mStats = stats;
+                    }
+                    else
+                    {
+                        jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput));
+                    }
                 }
             });
         }
@@ -441,6 +450,7 @@ namespace sknav
                 input->mSky = sky;
                 input->mPrevious = mesh.mEnclosure;
                 input->mParams = census.mEnclosure;
+                input->mTimeSeams = options.mStats;
                 for (const auto& t : mesh.mTiles)
                 {
                     const TileBuildResult& r = *t.second.mResult;
@@ -476,6 +486,24 @@ namespace sknav
                 {
                     spaces_stage_ms[kind][k] += spaces.stageMillis(k);
                     slowest_stage_ms[kind][k] = slowest ? spaces.stageMillis(k) : slowest_stage_ms[kind][k];
+                }
+                if (options.mStats)
+                {
+                    ReplayRoomsRun run;
+                    run.mRound = round;
+                    run.mTiles = static_cast<U32>(input->mTiles.size());
+                    run.mEnclosureMs = product->mMillis;
+                    run.mSeamMs = pass.seamMillis();
+                    run.mSpacesMs = mesh_ms;
+                    for (S32 k = 0; k < EnclosurePass::NUM_STAGES; ++k)
+                    {
+                        run.mEnclosureStageMs[k] = pass.stageMillis(k);
+                    }
+                    for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+                    {
+                        run.mSpacesStageMs[k] = spaces.stageMillis(k);
+                    }
+                    mesh.mRoomsRuns.push_back(run);
                 }
                 mesh.mEnclosure = product;
                 mesh.mRooms = spaces.product();

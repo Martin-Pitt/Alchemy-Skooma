@@ -31,6 +31,7 @@
 #include "../sknavannotate.h"
 #include "../sknavlayout.h"
 #include "../sknavreplay.h"
+#include "../sknavreplaystats.h"
 #include "../sknavtilecache.h"
 #include "sknavtestscene.h"
 
@@ -478,6 +479,12 @@ namespace tut
         {
             options.mAir = AirMode::EVERYWHERE;
         }
+        const std::string threads = LLStringUtil::getenv("SKNAV_REPLAY_THREADS");
+        if (!threads.empty())
+        {
+            options.mThreads = std::stoi(threads);
+        }
+        options.mStats = !LLStringUtil::getenv("SKNAV_REPLAY_STATS").empty();
         ReplayResult r;
         replayCensus(c, options, r);
         std::string dir = LLStringUtil::getenv("SKNAV_REPLAY_OUT");
@@ -502,6 +509,25 @@ namespace tut
             stats << (i ? "," : "") << '"' << r.mStages[i].first << "\":" << r.mStages[i].second;
         }
         stats << "}}\n";
+        if (options.mStats)
+        {
+            // SKNAV_REPLAY_STATS: the measurements; SKNAV_REPLAY_EDITS names "record op" lines to rebuild with.
+            std::ofstream measure(dir + "replay-measure.json", std::ios::binary);
+            writeReplayStats(measure, c, r);
+            const std::string edits_path = LLStringUtil::getenv("SKNAV_REPLAY_EDITS");
+            if (!edits_path.empty())
+            {
+                std::ifstream in(edits_path);
+                std::vector<ReplayEdit> edits;
+                U32 record = 0, op = 0;
+                while (in >> record >> op)
+                {
+                    edits.push_back({ record, static_cast<ReplayEdit::Op>(op) });
+                }
+                std::ofstream edit_out(dir + "replay-edits.json", std::ios::binary);
+                writeReplayEdits(edit_out, c, r, edits);
+            }
+        }
         std::cout << "\n" << replaySummary(r) << "-> " << dir << "sknavmesh-export.json" << std::endl;
     }
 
@@ -611,5 +637,47 @@ namespace tut
                 }
             }
         }
+    }
+
+    // SKNAV_REPLAY_IDENTITY names a census: every tile built while measuring
+    // itself must pack to the same product as the tile built without.
+    template<> template<>
+    void sknavreplay_object::test<8>()
+    {
+        set_test_name("a tile measuring itself builds the tile it builds without, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_IDENTITY");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mAir = AirMode::EVERYWHERE;
+        options.mRounds = 1;
+        options.mStats = true;
+        ReplayResult r;
+        replayCensus(c, options, r);
+        const auto packed = [](TileBuildResult result) {
+            result.mMillis = 0.f;
+            result.mExcludeMillis = 0.f;
+            return packTileProduct(result, 0);
+        };
+        U32 tiles = 0, differ = 0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult plain = buildTile(*tile.mInput);
+                const bool same = packed(plain) == packed(*tile.mResult) && plain.mStatus == tile.mResult->mStatus &&
+                                  (!plain.mAir) == (!tile.mResult->mAir) &&
+                                  (!plain.mAir || packTileAir(*plain.mAir) == packTileAir(*tile.mResult->mAir));
+                differ += same ? 0 : 1;
+                ++tiles;
+            }
+        }
+        std::cout << tiles << " tiles, " << differ << " differ measured from unmeasured" << std::endl;
+        ensure_equals("tiles that differ", differ, 0u);
     }
 }

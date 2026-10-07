@@ -25,6 +25,7 @@
 #ifndef SK_NAVREPLAY_H
 #define SK_NAVREPLAY_H
 
+#include "sknavbuildstats.h"
 #include "sknavcensusio.h"
 #include "sknavcluster.h"
 #include "sknavskymap.h"
@@ -59,6 +60,8 @@ namespace sknav
         /// Rounds after the first rebuild this many tiles of every mesh, as
         /// though their air had moved, and run every mesh, neighboured or not.
         U32 mDirtyTiles = 0;
+        /// Every tile build measures itself, and the rooms passes are timed per mesh.
+        bool mStats = false;
     };
 
     struct ReplayTile
@@ -69,6 +72,19 @@ namespace sknav
         bool mOverLand = true;
         std::shared_ptr<const TileBuildInput> mInput;
         std::shared_ptr<const TileBuildResult> mResult;
+        std::shared_ptr<const TileBuildStats> mStats;   ///< when the replay measures
+    };
+
+    /// One run of the rooms passes over a mesh, when the replay measures.
+    struct ReplayRoomsRun
+    {
+        S32 mRound = 0;
+        U32 mTiles = 0;
+        F64 mEnclosureMs = 0.0;
+        F64 mSeamMs = 0.0;
+        F64 mSpacesMs = 0.0;
+        F64 mEnclosureStageMs[EnclosurePass::NUM_STAGES] = {};
+        F64 mSpacesStageMs[SpacesPass::NUM_STAGES] = {};
     };
 
     /// One mesh as SKNavMesh lays it out, with what its passes made.
@@ -84,6 +100,7 @@ namespace sknav
         EnclosureProductPtr mEnclosure;
         RoomsProductPtr mRooms;
         WindProductPtr mWind;
+        std::vector<ReplayRoomsRun> mRoomsRuns;
 
         ReplayMesh() = default;
         ReplayMesh(const ReplayMesh&) = delete;
