@@ -36,9 +36,9 @@
 
 namespace sknav
 {
-    /// The agent classes a tile is built for. Order is the index everywhere.
-    enum class AgentClass : U8 { AVATAR = 0, WEATHER = 1 };
-    constexpr S32 NUM_CLASSES = 2;
+    /// The agent classes a tile builds a mesh for. Order is the index everywhere.
+    enum class AgentClass : U8 { AVATAR = 0 };
+    constexpr S32 NUM_CLASSES = 1;
 
     /// Recast area ids: what a walkable polygon stands on. Detour poly flags
     /// are 1 << area, so a query filter can pick them.
@@ -59,6 +59,15 @@ namespace sknav
         F32 mClimb = 0.75f;     ///< metres of step that still connects
         F32 mSlope = 45.f;      ///< degrees, steeper is a wall
     };
+
+    /// What the air stands on: nearly everything, since weather runs down
+    /// whatever it lands on, under half a metre of headroom. The raster's
+    /// TOP surfaces; a truly vertical face has no top and is a wall face.
+    constexpr F32 TOP_HEIGHT_M = 0.5f;
+    constexpr F32 TOP_SLOPE_DEG = 89.f;
+
+    /// Metres of padding the air reads past a tile, so its clearance there is exact.
+    constexpr F32 AIR_PAD_M = 2.f;
 
     /// A terrain height window: samples at mSpacing from mOrigin (mesh-local
     /// x, y), mWidth by mHeight, row-major. Empty when the tile has no terrain.
@@ -108,19 +117,24 @@ namespace sknav
         /// navmesh rather than built, so they never become a surface.
         std::vector<RecordPtr> mCuts;
         TerrainWindow mTerrain;
-        bool mClasses[NUM_CLASSES] = { true, false };
         ClassParams mParams[NUM_CLASSES];
-        /// Walls (sknavwalls.h). Faces are class-independent and cost a pass
-        /// over the raw heightfield; edges and drops are per class.
+        /// What the raster's TOP surfaces are; its climb is AVATAR's, its radius unused.
+        ClassParams mTopParams = { TOP_HEIGHT_M, 0.f, 0.75f, TOP_SLOPE_DEG };
+        /// Walls (sknavwalls.h). Faces, ledges and run-off come off the solid
+        /// raster; AVATAR's edges and drops off its mesh.
         bool mWallFaces = false;
-        bool mEdges[NUM_CLASSES] = { false, false };
-        F32 mDropMax[NUM_CLASSES] = { 10.f, 24.f };
+        bool mEdges[NUM_CLASSES] = { false };
+        F32 mDropMax[NUM_CLASSES] = { 10.f };
         F32 mDropSpacing = 2.f;
-        /// The air grid (sknavair.h), off the WEATHER heightfield, which keeps
-        /// the door leaves that split rooms. Nothing when WEATHER is not built.
+        /// Where the raster's TOP floors end over a drop, and where weather
+        /// runs off them, down to mRunoffMax metres.
+        bool mRunoff = false;
+        F32 mRunoffMax = 24.f;
+        /// The air grid (sknavair.h), off the solid raster, which keeps the
+        /// door leaves that split rooms.
         bool mAir = false;
-        /// Cells WEATHER reads past the tile when it keeps the air, so the
-        /// clearance on the tile is exact; AVATAR's heightfield never grows.
+        /// Cells the raster reads past the tile when it keeps the air, so the
+        /// clearance on the tile is exact; AVATAR reads its own border of it.
         S32 mAirPad = 16;
         /// Closed gaps lower than this are folded into the solid around them.
         F32 mAirMinGap = 0.5f;
@@ -130,14 +144,17 @@ namespace sknav
     {
         enum Status { SUCCESS, EMPTY, FAILED } mStatus = FAILED;
         std::string mError;
-        /// Detour tile data per class; empty for a class not built or with no polys.
+        /// Detour tile data per class; empty for a class with no polys.
         std::vector<U8> mData[NUM_CLASSES];
-        S32 mPolys[NUM_CLASSES] = { 0, 0 };
+        S32 mPolys[NUM_CLASSES] = { 0 };
         S32 mTriangles = 0;                 ///< rasterised
         F32 mMillis = 0.f;
         F32 mExcludeMillis = 0.f;           ///< of mMillis, building the soups a class leaves records out of
         /// Exposed vertical surfaces of the tile's solids, mesh-local SL metres.
         std::vector<WallFace> mFaces;
+        /// The raster's TOP floor edges over a drop, and the run-off down them.
+        std::vector<WallSegment> mLedges;
+        std::vector<DropLink> mRunoff;
         /// Floor edges with what lies beyond them, and where a floor can be left.
         std::vector<WallSegment> mSegments[NUM_CLASSES];
         std::vector<DropLink> mLinks[NUM_CLASSES];
@@ -169,8 +186,11 @@ namespace sknav
     /// narrow-step walk of twice the radius that must still fit inside it.
     S32 borderCells(F32 radius, F32 cell);
 
-    /// The slope the tile's shared partition is taken at.
+    /// The slope the tile's partition is taken at.
     F32 partitionSlope(const TileBuildInput& input);
+
+    /// The air's pad in cells: AIR_PAD_M, whole cells.
+    S32 airPadCells(F32 cell);
 
     struct TileBuildStats;
 

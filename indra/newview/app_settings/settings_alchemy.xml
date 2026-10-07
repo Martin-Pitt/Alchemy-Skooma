@@ -5332,17 +5332,6 @@
             <key>Value</key>
             <integer>500</integer>
         </map>
-        <key>SKNavBuildWeather</key>
-        <map>
-            <key>Comment</key>
-            <string>Also build the weather class of the navmesh (0.5 m headroom, no erosion) past SKNavAirRadius, where the air does not need it.</string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <key>SKNavBuildsInFlight</key>
         <map>
             <key>Comment</key>
@@ -5420,28 +5409,6 @@
             <key>Value</key>
             <real>74.0</real>
         </map>
-        <key>SKNavWeatherSlope</key>
-        <map>
-            <key>Comment</key>
-            <string>Degrees of slope the weather class still treats as floor. Weather runs down whatever it lands on, so this sits as high as a heightfield allows.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>89.0</real>
-        </map>
-        <key>SKNavWeatherHeight</key>
-        <map>
-            <key>Comment</key>
-            <string>Metres of headroom the weather class of the navmesh needs.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.5</real>
-        </map>
         <key>SKNavBuildWalls</key>
         <map>
             <key>Comment</key>
@@ -5486,6 +5453,30 @@
             <key>Value</key>
             <real>2.0</real>
         </map>
+        <!-- <SK:Nexii> Navmesh solid raster: its faces, ledges and run-off -->
+        <key>SKNavBuildRaster</key>
+        <map>
+            <key>Comment</key>
+            <string>Build the solid raster's wall faces, ledges and run-off with every navmesh tile, for the surfaces weather paints and drains along.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKNavOverlayRunoff</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the solid raster's ledges and the run-off down them on the navmesh overlay.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKNavWeatherDropMax</key>
         <map>
             <key>Comment</key>
@@ -5759,17 +5750,6 @@
             <key>Value</key>
             <real>256.0</real>
         </map>
-        <key>SKNavWeatherRadius</key>
-        <map>
-            <key>Comment</key>
-            <string>Radius of the weather class, in metres. Zero skips erosion entirely, which keeps the surface against the walls it drains down; one cell (0.125) is the alternative if that leaves degenerate polygons.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.0</real>
-        </map>
         <key>SKNavGroundedMargin</key>
         <map>
             <key>Comment</key>
@@ -5780,17 +5760,6 @@
             <string>F32</string>
             <key>Value</key>
             <real>5.0</real>
-        </map>
-        <key>SKNavOverlayClass</key>
-        <map>
-            <key>Comment</key>
-            <string>Which agent class the navmesh overlay draws: 0 avatar, 1 weather.</string>
-            <key>Persist</key>
-            <integer>0</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>0</integer>
         </map>
         <key>SKNavOverlayLinks</key>
         <map>

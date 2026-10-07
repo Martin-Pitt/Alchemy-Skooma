@@ -62,10 +62,13 @@ namespace sknav
         TileAirPtr mAir;
         const TileEnclosure* mEnclosure = nullptr;     ///< the answers for exactly this air
         U64 mEnclosureGeneration = 0;
-        const dtNavMesh* mNav[NUM_CLASSES] = { nullptr, nullptr };
-        const std::vector<WallSegment>* mSegments[NUM_CLASSES] = { nullptr, nullptr };
-        const std::vector<DropLink>* mLinks[NUM_CLASSES] = { nullptr, nullptr };
-        const std::vector<Flight>* mFlights[NUM_CLASSES] = { nullptr, nullptr };
+        const dtNavMesh* mNav[NUM_CLASSES] = { nullptr };
+        const std::vector<WallSegment>* mSegments[NUM_CLASSES] = { nullptr };
+        const std::vector<DropLink>* mLinks[NUM_CLASSES] = { nullptr };
+        const std::vector<Flight>* mFlights[NUM_CLASSES] = { nullptr };
+        /// The raster's ledges and run-off.
+        const std::vector<WallSegment>* mLedges = nullptr;
+        const std::vector<DropLink>* mRunoff = nullptr;
     };
 
     /// The Recast area a Detour poly's flags stand for.

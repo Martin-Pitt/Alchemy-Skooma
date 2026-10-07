@@ -170,7 +170,7 @@ bool SKNavMesh::overlayActive()
     // A layer of its own is enough. The walls, the wall faces and the census
     // boxes all read the built mesh, and none of them needs the surface drawn
     // in the way of what they are for.
-    return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces")
+    return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces") || gSavedSettings.getBOOL("SKNavOverlayRunoff")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
         || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
         || gSavedSettings.getBOOL("SKNavOverlayWind");
@@ -287,6 +287,8 @@ void SKNavMesh::evictAir()
                 {
                     TileBuildResult mProduct;
                     decltype(Tile::mFaces) mFaces;
+                    decltype(Tile::mLedges) mLedges;
+                    decltype(Tile::mRunoff) mRunoff;
                     decltype(Tile::mSegments) mSegments;
                     decltype(Tile::mLinks) mLinks;
                     decltype(Tile::mFlights) mFlights;
@@ -297,6 +299,8 @@ void SKNavMesh::evictAir()
                 spill->mProduct.mAir = tile.mAir;
                 spill->mProduct.mAirBuilt = true;
                 spill->mFaces = tile.mFaces;
+                spill->mLedges = tile.mLedges;
+                spill->mRunoff = tile.mRunoff;
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
                     spill->mProduct.mPolys[cls] = tile.mPolys[cls];
@@ -313,6 +317,8 @@ void SKNavMesh::evictAir()
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill air worker");
                     if (spill->mFaces) spill->mProduct.mFaces = *spill->mFaces;
+                    if (spill->mLedges) spill->mProduct.mLedges = *spill->mLedges;
+                    if (spill->mRunoff) spill->mProduct.mRunoff = *spill->mRunoff;
                     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                     {
                         if (spill->mSegments[cls]) spill->mProduct.mSegments[cls] = *spill->mSegments[cls];
@@ -418,12 +424,16 @@ U64 SKNavMesh::paramsSignature() const
     h = mixF32(h, probe.mDetailSampleCells);
     h = mixF32(h, probe.mWallMinHeight);
     h = mix(h, probe.mWallFaces);
+    h = mix(h, probe.mRunoff);
+    h = mixF32(h, probe.mRunoffMax);
+    h = mixF32(h, probe.mTopParams.mHeight);
+    h = mixF32(h, probe.mTopParams.mSlope);
+    h = mix(h, static_cast<U64>(probe.mAirPad));
     h = mix(h, probe.mAir);
     h = mixF32(h, probe.mAirMinGap);
     h = mixF32(h, probe.mDropSpacing);
     for (S32 c = 0; c < NUM_CLASSES; ++c)
     {
-        h = mix(h, probe.mClasses[c]);
         h = mix(h, probe.mEdges[c]);
         h = mixF32(h, probe.mDropMax[c]);
         h = mixF32(h, probe.mParams[c].mHeight);
@@ -440,10 +450,7 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAvatarRadius", 0.3f);
     static LLCachedControl<F32> climb(gSavedSettings, "SKNavClimb", 0.75f);
     static LLCachedControl<F32> slope(gSavedSettings, "SKNavSlope", 74.f);
-    static LLCachedControl<F32> weatherSlope(gSavedSettings, "SKNavWeatherSlope", 89.f);
-    static LLCachedControl<F32> weatherRadius(gSavedSettings, "SKNavWeatherRadius", 0.125f);
-    static LLCachedControl<F32> weatherHeight(gSavedSettings, "SKNavWeatherHeight", 0.5f);
-    static LLCachedControl<bool> weather_on(gSavedSettings, "SKNavBuildWeather", false);
+    static LLCachedControl<bool> raster_layers(gSavedSettings, "SKNavBuildRaster", false);
     static LLCachedControl<bool> walls(gSavedSettings, "SKNavBuildWalls", true);
     static LLCachedControl<F32> dropAvatar(gSavedSettings, "SKNavDropMax", 10.f);
     static LLCachedControl<F32> dropWeather(gSavedSettings, "SKNavWeatherDropMax", 24.f);
@@ -466,32 +473,21 @@ void SKNavMesh::fillParams(TileBuildInput& input) const
     }
     height = std::ceil(height / input.mCell) * input.mCell;
 
-    input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = true;
     input.mParams[static_cast<S32>(AgentClass::AVATAR)] = { height, radius, climb,
                                                             llclamp(static_cast<F32>(slope), 1.f, 89.9f) };
-    // The air is read off the weather class, so the navmesh always builds that class.
+    // The air is read off the solid raster near the camera; its pad is metres, whatever the cell.
     input.mAir = true;
+    input.mAirPad = airPadCells(input.mCell);
     static LLCachedControl<F32> airMinGap(gSavedSettings, "SKNavAirMinGap", 0.5f);
     input.mAirMinGap = llclamp(static_cast<F32>(airMinGap), 0.f, 4.f);
-    input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
-    // Weather runs down whatever it lands on, so nearly everything is floor to
-    // it. A face that is truly vertical still cannot be a walkable polygon of
-    // a heightfield - it has no top - which is what the wall faces are for.
-    //
-    // Its radius is zero: weather has no width, and erosion would hold it a
-    // cell short of the walls it is supposed to drain down. That does skip
-    // rcErodeWalkableArea, which is a suspect whenever this class produces
-    // degenerate polygons - SKNavWeatherRadius at 0.125 is the experiment.
-    input.mParams[static_cast<S32>(AgentClass::WEATHER)] = { weatherHeight, llmax(static_cast<F32>(weatherRadius), 0.f),
-                                                             climb,
-                                                             llclamp(static_cast<F32>(weatherSlope), 1.f, 89.9f) };
+    input.mTopParams.mClimb = climb;
 
-    // Faces are for the weather class's readers, edges and drops for both.
-    input.mWallFaces = walls && weather_on;
+    // The raster's faces, ledges and run-off are for Atmo's readers; AVATAR's edges and drops for the map.
+    input.mWallFaces = walls && raster_layers;
+    input.mRunoff = walls && raster_layers;
+    input.mRunoffMax = dropWeather;
     input.mEdges[static_cast<S32>(AgentClass::AVATAR)] = walls;
-    input.mEdges[static_cast<S32>(AgentClass::WEATHER)] = walls && weather_on;
     input.mDropMax[static_cast<S32>(AgentClass::AVATAR)] = dropAvatar;
-    input.mDropMax[static_cast<S32>(AgentClass::WEATHER)] = dropWeather;
     input.mDropSpacing = llmax(0.5f, static_cast<F32>(dropSpacing));
 }
 
@@ -1020,12 +1016,10 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
-    // Air is built eagerly near the camera; a tile further out keeps any it
-    // has, and without it needs WEATHER only if weather itself is on.
+    // Air is built eagerly near the camera; a tile further out keeps any it has.
     if (input->mAir && !tile.mAir && !inAirRadius(tile))
     {
         input->mAir = false;
-        input->mClasses[static_cast<S32>(AgentClass::WEATHER)] = gSavedSettings.getBOOL("SKNavBuildWeather");
     }
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
@@ -1174,6 +1168,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         // The walls of the build before this one describe geometry that has
         // changed; drop them rather than answer with them.
         tile.mFaces.reset();
+        tile.mLedges.reset();
+        tile.mRunoff.reset();
         tile.mAir.reset();
         tile.mAirCoarse.reset();
         tile.mContentKey = 0;
@@ -1227,6 +1223,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+    tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
+    tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
     tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
     tile.mAirBuilt = result->mAirBuilt ? signature : 0;
     // A tile rebuilt without its air keeps the tops it had only while its input holds.
@@ -1756,6 +1754,35 @@ void SKNavMesh::wallFacesIn(const LLVector3d& min, const LLVector3d& max, const 
     });
 }
 
+void SKNavMesh::runoffIn(const LLVector3d& min, const LLVector3d& max, const SegmentFn& ledge_fn, const LinkFn& link_fn) const
+{
+    forEachTileIn(min, max, [&](const Mesh& mesh, const Tile& tile) {
+        if (tile.mLedges)
+        {
+            for (const WallSegment& seg : *tile.mLedges)
+            {
+                const LLVector3d a = mesh.mOrigin + LLVector3d(seg.mA), b = mesh.mOrigin + LLVector3d(seg.mB);
+                if (overlapsXY(LLVector3d(llmin(a.mdV[VX], b.mdV[VX]), llmin(a.mdV[VY], b.mdV[VY]), 0.0),
+                               LLVector3d(llmax(a.mdV[VX], b.mdV[VX]), llmax(a.mdV[VY], b.mdV[VY]), 0.0), min, max))
+                {
+                    ledge_fn(a, b, seg.mKind, seg.mValue);
+                }
+            }
+        }
+        if (tile.mRunoff)
+        {
+            for (const DropLink& link : *tile.mRunoff)
+            {
+                const LLVector3d from = mesh.mOrigin + LLVector3d(link.mFrom), to = mesh.mOrigin + LLVector3d(link.mTo);
+                if (overlapsXY(from, from, min, max))
+                {
+                    link_fn(from, to, link.mHeight, link.mKind);
+                }
+            }
+        }
+    });
+}
+
 void SKNavMesh::segmentsIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const SegmentFn& fn) const
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -2057,10 +2084,6 @@ void SKNavMesh::findExits(FeatureSpan& span) const
     {
         span.mExits[cls].clear();
         span.mLinks[cls].clear();
-        if (!probe.mClasses[cls])
-        {
-            continue;
-        }
         const F64 climb = probe.mParams[cls].mClimb;
         const F64 out = probe.mParams[cls].mRadius + 0.05;
         const F64 x0 = span.mMin.mdV[VX] - out, x1 = span.mMax.mdV[VX] + out;
@@ -2597,7 +2620,7 @@ std::string SKNavMesh::markUnderCamera()
         const Tile& tile = it->second;
         out << (mesh.mTerrain ? "region mesh " : "cluster mesh ") << mesh.mId << " tile " << key.mX << "," << key.mY
             << " records " << tile.mRecords.size() << " z " << tile.mMin.mdV[VZ] << ".." << tile.mMax.mdV[VZ]
-            << " polys " << tile.mPolys[0] << "/" << tile.mPolys[1] << " built " << (tile.mBuilt == tile.mSignature)
+            << " polys " << tile.mPolys[0] << " built " << (tile.mBuilt == tile.mSignature)
             << " in flight " << tile.mInFlight << " " << tile.mMillis << " ms\n";
         // What the tile itself was built from, as far as the mark reaches. The
         // census's list above reads the live snapshot; a surface in the mesh
@@ -2981,7 +3004,6 @@ std::string SKNavMesh::exportCensus() const
     census.mRange = snap->mRange;
     fillParams(census.mParams);
     census.mAirRadius = air_radius;
-    census.mBuildWeather = gSavedSettings.getBOOL("SKNavBuildWeather");
     census.mClusterGap = gap;
     census.mGroundedMargin = grounded_margin;
     census.mVoidMargin = void_margin;
@@ -3507,17 +3529,15 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_spaces(gSavedSettings, "SKNavOverlaySpaces", false);
     static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
     static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
+    static LLCachedControl<bool> show_runoff(gSavedSettings, "SKNavOverlayRunoff", false);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
     // their own and draw whether or not the surface is in the way.
     const bool navmesh = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_NAVMESH);
 
-    // Which class the overlay shows. WEATHER is only there to look at when
-    // it is being built (SKNavBuildWeather); the console says so.
-    static LLCachedControl<U32> which(gSavedSettings, "SKNavOverlayClass", 0);
-    const S32 cls = llclamp(static_cast<S32>(which), 0, NUM_CLASSES - 1);
-    const AgentClass agent_class = static_cast<AgentClass>(cls);
+    const AgentClass agent_class = AgentClass::AVATAR;
+    const S32 cls = static_cast<S32>(agent_class);
     // The overlay is read by camming about, so it draws around the camera
     // alone: the agent parks wherever it was left, and a copy of the drawing
     // around it too only got in the way of what the camera came to look at.
@@ -3562,7 +3582,7 @@ void SKNavMesh::refreshOverlay()
     key = mix(key, mRevision);
     key = mix(key, static_cast<U64>(cls));
     key = mix(key, (navmesh ? 1ull : 0ull) | (show_world ? 2ull : 0ull) | (show_walls ? 4ull : 0ull)
-                       | (show_faces ? 8ull : 0ull) | (show_links ? 16ull : 0ull));
+                       | (show_faces ? 8ull : 0ull) | (show_links ? 16ull : 0ull) | (show_runoff ? 32ull : 0ull));
     key = mixF32(key, static_cast<F32>(reach));
     key = mixF32(key, llclamp(static_cast<F32>(edge_width), 1.f, 8.f));
     key = mixF32(key, fov_y);
@@ -3849,6 +3869,33 @@ void SKNavMesh::refreshOverlay()
                               kind == LinkKind::DROP ? drop : climb_link);
             }
         });
+    }
+    if (show_runoff)
+    {
+        // The raster's own layer: where the air's floors end over a drop, and the run-off down them.
+        const LLVector3 lift(0.f, 0.f, 0.06f);
+        LLVector3d qmin, qmax;
+        for (S32 axis = 0; axis < 3; ++axis)
+        {
+            qmin.mdV[axis] = camera.mdV[axis] - reach;
+            qmax.mdV[axis] = camera.mdV[axis] + reach;
+        }
+        const LLColor4 ledge = strength(skNavSwatchColor(SKNavSwatch::LEDGE), 0.8f);
+        const LLColor4 runoff = strength(skNavSwatchColor(SKNavSwatch::SUBMERGED), 1.f);
+        runoffIn(
+            qmin, qmax,
+            [&](const LLVector3d& a, const LLVector3d& b, EdgeKind, F32) {
+                if (within(a))
+                {
+                    mOverlay.line(gAgent.getPosAgentFromGlobal(a) + lift, gAgent.getPosAgentFromGlobal(b) + lift, ledge);
+                }
+            },
+            [&](const LLVector3d& from, const LLVector3d& to, F32, LinkKind) {
+                if (within(from))
+                {
+                    mOverlay.line(gAgent.getPosAgentFromGlobal(from) + lift, gAgent.getPosAgentFromGlobal(to), runoff);
+                }
+            });
     }
 
     if (mHasMark)

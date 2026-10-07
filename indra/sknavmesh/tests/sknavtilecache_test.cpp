@@ -123,8 +123,10 @@ namespace
         r.mTriangles = 99;
         r.mMillis = 12.5f;
         r.mFaces.push_back({ LLVector3(1.f, 2.f, 3.f), LLVector3(1.f, 4.f, 6.f), 2, 1 });
-        r.mSegments[1].push_back({ LLVector3(0.f, 0.f, 1.f), LLVector3(3.f, 0.f, 1.f), EdgeKind::LEDGE, -1.f, 2 });
+        r.mSegments[0].push_back({ LLVector3(0.f, 0.f, 1.f), LLVector3(3.f, 0.f, 1.f), EdgeKind::LEDGE, -1.f, 2 });
         r.mLinks[0].push_back({ LLVector3(1.f, 1.f, 5.f), LLVector3(2.f, 1.f, 1.f), 4.f, LinkKind::DROP });
+        r.mLedges.push_back({ LLVector3(5.f, 0.f, 9.f), LLVector3(5.f, 2.f, 9.f), EdgeKind::LEDGE, 8.5f, 0 });
+        r.mRunoff.push_back({ LLVector3(5.f, 1.f, 9.f), LLVector3(5.0625f, 1.f, 0.5f), 8.5f, LinkKind::DROP });
         Flight f;
         f.mKey = 0x1234567890abcdefull;
         f.mCodes = { 5, 7 };
@@ -177,13 +179,15 @@ namespace tut
         TileBuildResult out;
         ensure("unpacks", unpackTileProduct(bytes.data(), bytes.size(), 42, out));
         ensure_equals("status", out.mStatus, TileBuildResult::SUCCESS);
-        ensure("detour", out.mData[0] == in.mData[0] && out.mData[1].empty());
+        ensure("detour", out.mData[0] == in.mData[0]);
         ensure_equals("polys", out.mPolys[0], 7);
         ensure_equals("triangles", out.mTriangles, 99);
         ensure_equals("faces", out.mFaces.size(), size_t(1));
         ensure("face", out.mFaces[0].mMax == in.mFaces[0].mMax && out.mFaces[0].mSide == 2 && out.mFaces[0].mArea == 1);
-        ensure_equals("segments", out.mSegments[1].size(), size_t(1));
-        ensure("segment", out.mSegments[1][0].mKind == EdgeKind::LEDGE && out.mSegments[1][0].mValue == -1.f && out.mSegments[1][0].mB == in.mSegments[1][0].mB);
+        ensure_equals("segments", out.mSegments[0].size(), size_t(1));
+        ensure("segment", out.mSegments[0][0].mKind == EdgeKind::LEDGE && out.mSegments[0][0].mValue == -1.f && out.mSegments[0][0].mB == in.mSegments[0][0].mB);
+        ensure("ledge", out.mLedges.size() == 1 && out.mLedges[0].mB == in.mLedges[0].mB && out.mLedges[0].mValue == 8.5f);
+        ensure("run-off", out.mRunoff.size() == 1 && out.mRunoff[0].mTo == in.mRunoff[0].mTo && out.mRunoff[0].mHeight == 8.5f);
         ensure("link", out.mLinks[0].size() == 1 && out.mLinks[0][0].mTo == in.mLinks[0][0].mTo && out.mLinks[0][0].mHeight == 4.f);
         ensure_equals("flight", out.mFlights[0].size(), 1u);
         const Flight& f = out.mFlights[0][0];
@@ -192,7 +196,6 @@ namespace tut
         ensure("flight kind", f.mKind == ConnectorKind::RAMP && f.mRule == ConnectorRule::NAME && f.mTreads == 3);
         ensure("flight footprint", f.mFootprint.size() == 3 && f.mFootprint[2] == LLVector2(1.f, 1.f));
         ensure("flight polys", f.mPolys == std::vector<U16>({ 3, 7 }));
-        ensure("no flights in the other class", out.mFlights[1].empty());
         ensure("air built", out.mAirBuilt && out.mAir);
         const TileAir& a = *out.mAir;
         const TileAir& b = *in.mAir;

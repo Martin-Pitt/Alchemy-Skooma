@@ -65,12 +65,12 @@ namespace sknav
     void writeExportHeader(std::ostream& file, const std::string& exported, const LLVector3d& agent, F32 height, F32 radius, F32 climb, F32 slope,
                            F32 cell)
     {
-        file << "{\"format\":\"sknavmesh-export\",\"version\":1,\"exported\":\"" << exported << '"';
+        file << "{\"format\":\"sknavmesh-export\",\"version\":2,\"exported\":\"" << exported << '"';
         file << ",\"agent\":";
         writeVec3d(file, agent);
         file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb << ",\"slope\":" << slope
              << ",\"cell\":" << cell << '}';
-        file << ",\"classes\":[\"avatar\",\"weather\"]";
+        file << ",\"classes\":[\"avatar\"]";
         file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
         file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
         file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
@@ -104,6 +104,34 @@ namespace sknav
             }
             file << ']';
         }
+        if (tile.mLedges)
+        {
+            file << ",\"ledges\":[";
+            for (size_t i = 0; i < tile.mLedges->size(); ++i)
+            {
+                const WallSegment& seg = (*tile.mLedges)[i];
+                file << (i ? "," : "") << "{\"a\":";
+                writeVec3d(file, mesh_origin + LLVector3d(seg.mA));
+                file << ",\"b\":";
+                writeVec3d(file, mesh_origin + LLVector3d(seg.mB));
+                file << ",\"drop\":" << seg.mValue << '}';
+            }
+            file << ']';
+        }
+        if (tile.mRunoff)
+        {
+            file << ",\"runoff\":[";
+            for (size_t i = 0; i < tile.mRunoff->size(); ++i)
+            {
+                const DropLink& link = (*tile.mRunoff)[i];
+                file << (i ? "," : "") << "{\"from\":";
+                writeVec3d(file, mesh_origin + LLVector3d(link.mFrom));
+                file << ",\"to\":";
+                writeVec3d(file, mesh_origin + LLVector3d(link.mTo));
+                file << ",\"height\":" << link.mHeight << '}';
+            }
+            file << ']';
+        }
         if (tile.mAir)
         {
             // The distilled records, packed little-endian and base64'd; the
@@ -123,7 +151,7 @@ namespace sknav
         }
         for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
         {
-            file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{";
+            file << ",\"avatar\":{";
             const dtNavMesh* nav = tile.mNav[cls];
             // Detour x runs along Recast x, which is SL y, so the tile at
             // this lattice key sits at (mY, mX).
@@ -386,7 +414,7 @@ namespace sknav
         {
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
             {
-                file << ",\"" << (cls == 0 ? "avatar" : "weather") << "\":{\"exits\":[";
+                file << ",\"avatar\":{\"exits\":[";
                 for (size_t i = 0; i < exits[cls].size(); ++i)
                 {
                     if (i)

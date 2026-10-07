@@ -96,11 +96,11 @@ namespace
         c.mAgent = REGION + LLVector3d(10.0, 10.0, GROUND);
         c.mCamera = c.mAgent;
         c.mParams.mCell = 0.25f;                 // coarser than the viewer, to keep the test quick
-        c.mParams.mClasses[1] = true;
-        c.mParams.mParams[1] = { 0.5f, 0.f, 0.75f, 89.f };
+        c.mParams.mTopParams = { 0.5f, 0.f, 0.75f, 89.f };
         c.mParams.mAir = true;
         c.mParams.mWallFaces = true;
-        c.mParams.mEdges[0] = c.mParams.mEdges[1] = true;
+        c.mParams.mEdges[0] = true;
+        c.mParams.mRunoff = true;
         c.mEnclosure.mWalkHeadM = 2.f;
 
         CensusRegion r;
@@ -361,14 +361,9 @@ namespace tut
         all.mAir = AirMode::EVERYWHERE;
         replayCensus(c, all, everywhere);
         const ReplayTile& far_tile = meshOf(near_only, skybox)->mTiles.begin()->second;
-        ensure("no air past the radius", !far_tile.mResult->mAirBuilt && !far_tile.mInput->mClasses[1]);
+        ensure("no air past the radius", !far_tile.mResult->mAirBuilt && !far_tile.mInput->mAir);
         ensure("the region's tiles keep theirs", meshOf(near_only, id(900))->mTiles.at(TileKey{ 0, 0 }).mResult->mAirBuilt);
         ensure("air everywhere when asked", meshOf(everywhere, skybox)->mTiles.begin()->second.mResult->mAirBuilt);
-        c.mBuildWeather = true;
-        ReplayResult weather;
-        replayCensus(c, ReplayOptions(), weather);
-        const ReplayTile& w = meshOf(weather, skybox)->mTiles.begin()->second;
-        ensure("WEATHER still built when it is on", !w.mInput->mAir && w.mInput->mClasses[1]);
     }
 
     template<> template<>
@@ -757,6 +752,13 @@ namespace tut
                         << ",\"nlink\":" << res.mLinks[cls].size() << ",\"nflight\":" << res.mFlights[cls].size()
                         << ",\"bridges\":" << (cs ? cs->mBridges : 0) << "}";
                 }
+                if (tile.mStats)
+                {
+                    const ClassBuildStats& ts = tile.mStats->mTop;
+                    out << ",\"top\":{\"hf\":\"" << std::hex << ts.mHfHash << "\",\"hf_area\":\"" << ts.mHfAreaHash << std::dec
+                        << "\",\"bridges\":" << ts.mBridges << "}";
+                }
+                out << ",\"nledge\":" << res.mLedges.size() << ",\"nrunoff\":" << res.mRunoff.size();
                 U64 face = 0;
                 for (const WallFace& f : res.mFaces)
                 {
@@ -772,6 +774,22 @@ namespace tut
                         area = mix(area, g.mFlags & AirGap::AREA_MASK);
                         rest = mix(rest, static_cast<U64>(g.mCeiling) | static_cast<U64>(g.mFlags & 0x0e) << 16 | static_cast<U64>(g.mClear) << 24);
                     }
+                    // The air as it was before AVATAR's floor was marked on it, and that mark apart.
+                    TileAir plain = *res.mAir;
+                    U32 avatar_floors = 0;
+                    for (AirGap& g : plain.mGaps)
+                    {
+                        avatar_floors += (g.mFlags & 0x40) ? 1 : 0;
+                        g.mFlags &= static_cast<U8>(~0x40);
+                    }
+                    for (S32 k = 0; k < 4; ++k)
+                    {
+                        for (AirGap& g : plain.mSeams[k].mGaps)
+                        {
+                            g.mFlags &= static_cast<U8>(~0x40);
+                        }
+                    }
+                    out << ",\"air_plain\":\"" << std::hex << bytes(packTileAir(plain)) << std::dec << "\",\"avatar_floors\":" << avatar_floors;
                     out << ",\"air\":\"" << std::hex << bytes(packTileAir(*res.mAir)) << "\",\"air_walk\":\"" << walk << "\",\"air_area\":\"" << area
                         << "\",\"air_rest\":\"" << rest << std::dec << "\",\"gaps\":" << res.mAir->mGaps.size()
                         << ",\"leaves\":" << res.mAir->mLeaves.size();

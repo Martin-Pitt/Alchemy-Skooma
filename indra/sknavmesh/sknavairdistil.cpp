@@ -223,7 +223,9 @@ namespace sknav
                         for (S32 k = 1; k < 4; ++k)
                         {
                             const GapAgg& o = below.mGaps[kids[k]->mFirst + i];
-                            ok = ok && o.mFlags == a.mFlags;
+                            // AVATAR's floor is carried, not compared: the air keeps the leaves it always had.
+                            ok = ok && (o.mFlags & ~AirGap::AVATAR_FLOOR) == (a.mFlags & ~AirGap::AVATAR_FLOOR);
+                            a.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
                             a.mFloorMin = std::min(a.mFloorMin, o.mFloorMin);
                             a.mFloorMax = std::max(a.mFloorMax, o.mFloorMax);
                             a.mCeilMin = std::min(a.mCeilMin, o.mCeilMin);
@@ -461,12 +463,12 @@ namespace sknav
     }
 
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut)
+                            const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut, const SpanFlags* extra)
     {
         StageClock clock(stats ? stats->mMs : nullptr);
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
         AirGrid padded, grid;
-        extractAir(hf, border_cells - pad, padded, area_lut);
+        extractAir(hf, border_cells - pad, padded, area_lut, extra);
         clock.lap(AirBuildStats::EXTRACT);
         if (padded.empty())
         {
@@ -549,8 +551,8 @@ namespace sknav
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"flags\":{\"walkable\":1,\"open\":2,\"own_sky\":4,"
-             "\"flight\":8,\"area_shift\":4,\"area_mask\":48},\"ceiling_open\":"
+        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
+             "\"flight\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64},\"ceiling_open\":"
           << AIR_CEILING_OPEN << ",\"sections\":[[\"leaves\",\"leaf\"," << air.mLeaves.size() << "],[\"gaps\",\"gap\"," << air.mGaps.size() << "]";
         const char* names[4] = { "seam_neg_x", "seam_pos_x", "seam_neg_y", "seam_pos_y" };
         for (S32 s = 0; s < 4; ++s)

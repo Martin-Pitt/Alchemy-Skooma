@@ -39,12 +39,9 @@ namespace sknav
         F32 border = 0.f;
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
-            if (params.mClasses[c])
-            {
-                border = std::max(border, borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
-            }
+            border = std::max(border, borderCells(params.mParams[c].mRadius, params.mCell) * params.mCell);
         }
-        // WEATHER reads its air past the tile, and a seam column there needs its ground.
+        // The raster reads its air past the tile, and a seam column there needs its ground.
         if (params.mAir)
         {
             border = std::max(border, params.mAirPad * params.mCell);

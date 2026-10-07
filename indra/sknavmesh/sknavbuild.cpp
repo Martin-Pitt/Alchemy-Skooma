@@ -1346,13 +1346,23 @@ namespace
     /// below either slope limit - and cuts lines and holes out of exactly the
     /// steep ground the agent walks. Matched to the slope, it only fires past
     /// the limit, where the slope test has already said no.
-    void filterSpans(rcHeightfield& hf, const ClassParams& p, F32 ch, F32 cs)
+    /// The ledge and headroom filters only clear areas, on tests that read no
+    /// area but the span's own, so in either order they clear the same spans;
+    /// before_ledges keeps the areas between them.
+    void filterSpans(rcHeightfield& hf, const ClassParams& p, F32 ch, F32 cs, AreaSnapshot* before_ledges = nullptr)
     {
         rcContext ctx(false);
         const S32 climb = static_cast<S32>(std::floor(p.mClimb / ch));
         const S32 height = static_cast<S32>(std::ceil(p.mHeight / ch));
         const F32 ledge_climb = llmax(p.mClimb, 2.f * cs * std::tan(p.mSlope * DEG_TO_RAD));
         rcFilterLowHangingWalkableObstacles(&ctx, climb, hf);
+        if (before_ledges)
+        {
+            rcFilterWalkableLowHeightSpans(&ctx, height, hf);
+            before_ledges->take(hf);
+            rcFilterLedgeSpans(&ctx, height, static_cast<int>(std::ceil(ledge_climb / ch)), hf);
+            return;
+        }
         rcFilterLedgeSpans(&ctx, height, static_cast<int>(std::ceil(ledge_climb / ch)), hf);
         rcFilterWalkableLowHeightSpans(&ctx, height, hf);
     }
@@ -1439,8 +1449,12 @@ namespace sknav
         {
             return input.mPartitionSlope;
         }
-        const S32 cls = static_cast<S32>(input.mAir ? AgentClass::WEATHER : AgentClass::AVATAR);
-        return input.mParams[cls].mSlope;
+        return input.mAir ? input.mTopParams.mSlope : input.mParams[static_cast<S32>(AgentClass::AVATAR)].mSlope;
+    }
+
+    S32 airPadCells(F32 cell)
+    {
+        return static_cast<S32>(std::ceil(AIR_PAD_M / cell - 1e-4f));
     }
 
     S32 borderCells(F32 radius, F32 cell)
@@ -1641,13 +1655,13 @@ namespace sknav
         // rasterised again without them over a window round them, whose
         // columns AVATAR's view reads instead.
         rcContext ctx(false);
-        const S32 avatar = static_cast<S32>(AgentClass::AVATAR), weather = static_cast<S32>(AgentClass::WEATHER);
+        const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
         const ClassParams& ap = input.mParams[avatar];
-        ClassParams tp = input.mParams[weather];
+        ClassParams tp = input.mTopParams;
         tp.mSlope = llmax(tp.mSlope, ap.mSlope);
         tp.mClimb = ap.mClimb;
         ClassBuildStats* astats = stats ? &stats->mClass[avatar] : nullptr;
-        ClassBuildStats* tstats = stats ? &stats->mClass[weather] : nullptr;
+        ClassBuildStats* tstats = stats ? &stats->mTop : nullptr;
         StageClock clock(astats ? astats->mMs : nullptr);
         if (astats)
         {
@@ -1659,7 +1673,7 @@ namespace sknav
         const S32 inset = grid.borderSize - cfg.borderSize;
 
         // The raster's soup, and per triangle of it whether AVATAR leaves it out.
-        const U8 solid_bit = static_cast<U8>(1u << weather), avatar_bit = static_cast<U8>(1u << avatar);
+        const U8 solid_bit = EXCLUDE_SOLID, avatar_bit = EXCLUDE_AVATAR;
         Soup solid_soup;
         std::vector<std::pair<S32, S32>> solid_solids;
         const Soup* main_soup = &soup;
@@ -1937,8 +1951,8 @@ namespace sknav
         clock.lap(ClassBuildStats::CULL);
 
         // The air's filters first, kept aside, then AVATAR's over the same spans.
-        const bool top_pass = input.mAir;
-        AreaSnapshot unfiltered, top_areas;
+        const bool top_pass = input.mAir || input.mRunoff;
+        AreaSnapshot unfiltered, top_areas, top_ledges;
         if (top_pass)
         {
             StageClock top_clock(tstats ? tstats->mMs : nullptr);
@@ -1947,7 +1961,7 @@ namespace sknav
                 tstats->mBuilt = true;
             }
             unfiltered.take(hf);
-            filterSpans(hf, tp, grid.ch, grid.cs);
+            filterSpans(hf, tp, grid.ch, grid.cs, input.mRunoff ? &top_ledges : nullptr);
             top_clock.lap(ClassBuildStats::FILTERS);
             if (tstats)
             {
@@ -1984,6 +1998,30 @@ namespace sknav
             return result;
         }
         clock.lap(ClassBuildStats::COMPACT);
+        // Which of the raster's spans AVATAR stands on, for the air: its own
+        // where it shares the span, else a span of its own column at that top.
+        SpanFlags avatar_floor;
+        if (top_pass)
+        {
+            avatar_floor.mStart.assign(1, 0);
+            for (S32 c = 0; c < hf.width * hf.height; ++c)
+            {
+                const S32 x = c % hf.width - inset, z = c / hf.width - inset;
+                const bool inside = x >= 0 && z >= 0 && x < cfg.width && z < cfg.height;
+                const bool own = inside && !own_column.empty() && own_column[c];
+                for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+                {
+                    bool walk = inside && !own && s->area != RC_NULL_AREA;
+                    for (const rcSpan* o = own ? overlay->spans[c] : nullptr; o && !walk; o = o->next)
+                    {
+                        walk = o->smax == s->smax && o->area != RC_NULL_AREA;
+                    }
+                    avatar_floor.mFlags.push_back(walk ? AirGap::AVATAR_FLOOR : 0);
+                }
+                avatar_floor.mStart.push_back(static_cast<U32>(avatar_floor.mFlags.size()));
+            }
+            clock.restart();
+        }
         // Faces off AVATAR's view with the window's columns back in, their
         // areas the air's: the faces of every solid, door leaves included.
         if (input.mWallFaces)
@@ -2134,8 +2172,20 @@ namespace sknav
             const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
             result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
                                       static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &result.mFlights[avatar],
-                                      tstats ? &tstats->mAir : nullptr, real.data());
+                                      tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor);
             top_clock.lap(ClassBuildStats::AIR);
+            clock.restart();
+        }
+        // Where the air's floors end over a drop, and the run-off down them.
+        if (input.mRunoff && top_pass)
+        {
+            // Off the floors before the ledge filter: a roof's rim over a long
+            // drop is where weather runs off, though the filter takes it.
+            StageClock top_clock(tstats ? tstats->mMs : nullptr);
+            top_ledges.restore(hf);
+            extractRunoff(hf, grid.borderSize, grid.walkableClimb, static_cast<S32>(std::ceil(tp.mHeight / grid.ch)), input.mRunoffMax,
+                          input.mDropSpacing, result.mLedges, result.mRunoff);
+            top_clock.lap(ClassBuildStats::EDGES);
             clock.restart();
         }
         if (astats)

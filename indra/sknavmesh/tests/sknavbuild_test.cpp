@@ -106,6 +106,27 @@ namespace
         return t;
     }
 
+    // The flags of the air's gap over a floor at an SL point within tol of z, or 0 with none.
+    U8 airFlagsAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f)
+    {
+        if (!r.mAir)
+        {
+            return 0;
+        }
+        const TileAir& air = *r.mAir;
+        const S32 leaf = findLeafByKey(air, static_cast<S32>(std::floor((x - air.mOrigin.mV[VX]) / air.mCell)),
+                                       static_cast<S32>(std::floor((y - air.mOrigin.mV[VY]) / air.mCell)));
+        for (U32 k = 0; leaf >= 0 && k < air.mLeaves[leaf].mGapCount; ++k)
+        {
+            const AirGap& g = air.mGaps[air.mLeaves[leaf].mFirstGap + k];
+            if (std::fabs(air.mOrigin.mV[VZ] + g.mFloor * air.mUnit - z) <= tol)
+            {
+                return g.mFlags;
+            }
+        }
+        return 0;
+    }
+
     // Whether the air has a floor the air's slope stands on at an SL point, within tol of z;
     // or with any_floor, a gap over any solid there.
     bool topFloorAt(const TileBuildResult& r, F32 x, F32 y, F32 z, F32 tol = 0.3f, bool any_floor = false)
@@ -147,10 +168,6 @@ namespace
         in.mZMin = -1.f;
         in.mZMax = 12.f;
         in.mCell = 0.25f; // coarser than the viewer, to keep the tests quick
-        in.mClasses[0] = true;
-        in.mClasses[1] = true;
-        in.mParams[1].mHeight = 0.5f;
-        in.mParams[1].mRadius = 0.f;
         return in;
     }
 
@@ -262,6 +279,7 @@ namespace tut
         ensure_equals("built: " + r.mError, static_cast<int>(r.mStatus), static_cast<int>(TileBuildResult::SUCCESS));
         ensure("avatar polys", r.mPolys[0] > 0);
         ensure("the block's top is a floor to the air", topFloorAt(r, 15.f, 16.f, 2.f));
+        ensure("and AVATAR stands on it", (airFlagsAt(r, 15.f, 16.f, 2.f) & AirGap::AVATAR_FLOOR) != 0);
 
         Mesh m;
         m.add(r.mData[0]);
@@ -414,7 +432,7 @@ namespace tut
         TileBuildInput in = tile(0, 0);
         in.mTerrain = flat(0.f);
         in.mParams[0].mSlope = 74.f;
-        in.mParams[1].mSlope = 89.f;
+        in.mTopParams.mSlope = 89.f;
         in.mRecords.push_back(soup(ramp, Provenance::EXACT));
         in.mAir = true;
         const TileBuildResult r = buildTile(in);
@@ -422,6 +440,7 @@ namespace tut
 
         F32 snapped[3];
         ensure("the air stands on the steep ramp", topFloorAt(r, 8.f, 5.6f, 10.f, 0.5f));
+        ensure("which is no floor of AVATAR's", !(airFlagsAt(r, 8.f, 5.6f, 10.f, 0.5f) & AirGap::AVATAR_FLOOR));
 
         Mesh avatar;
         avatar.add(r.mData[0]);
@@ -571,7 +590,7 @@ namespace tut
         // The viewer's own numbers at its cell, coarse: height 1.25 m erodes
         // with a radius of 2 cells here, and the step is one cell.
         in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
-        in.mParams[1] = { 0.5f, 0.125f, 0.75f, 89.f };
+        in.mTopParams = { 0.5f, 0.f, 0.75f, 89.f };
         // The slab spans the tile so the seam can only be crossed, never
         // round: land to the north, its top a step up to the south.
         in.mRecords.push_back(box(0.f, -2.f, -0.5f, 36.f, 16.05f, 0.5f));
@@ -606,7 +625,7 @@ namespace tut
         in.mZMin = 0.f;
         in.mZMax = 12.f;
         in.mParams[0] = { 1.25f, 0.3f, 0.75f, 74.f };
-        in.mParams[1] = { 0.5f, 0.125f, 0.75f, 89.f };
+        in.mTopParams = { 0.5f, 0.f, 0.75f, 89.f };
         // The land: 5.375 m at the seam (y 6.2), rising a metre by y 8.2.
         TerrainWindow t;
         t.mOrigin.set(-2.f, -2.f, 0.f);
@@ -673,7 +692,6 @@ namespace tut
     {
         TileBuildInput in = tile(0, 0);
         in.mCell = 0.125f; // the viewer's cell: the sampling this is about
-        in.mClasses[1] = false;
         in.mTerrain = flat(0.f);
         in.mRecords.push_back(box(10.f, 4.f, -0.5f, 10.3f, 28.f, 0.5f));
         in.mRecords.push_back(box(16.f, 4.f, -0.5f, 18.f, 28.f, 0.5f));
@@ -1047,13 +1065,11 @@ namespace tut
             ensure(llformat("exclude %d: but not inside the hull", exclude), !topFloorAt(r, 25.f, 25.f, 1.f, 0.6f));
         }
     }
-    // With WEATHER not built and a record AVATAR leaves out, the faces come
-    // from AVATAR rather than from a class that has no heightfield.
+    // A record AVATAR leaves out still has faces: they come off the raster.
     template<> template<>
     void sknavbuild_object::test<24>()
     {
         TileBuildInput in = tile(0, 0);
-        in.mClasses[static_cast<S32>(AgentClass::WEATHER)] = false;
         in.mWallFaces = true;
         in.mTerrain = flat(0.f);
         in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 4.f));
@@ -1077,7 +1093,7 @@ namespace tut
             in.mTerrain = flat(0.f);
             in.mPartitionSlope = 89.f;
             in.mParams[0].mSlope = 74.f;
-            in.mParams[1].mSlope = top_slope;
+            in.mTopParams.mSlope = top_slope;
             in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 1.f));
             // An 80 degree face rising half a metre off the platform, inside the merge threshold.
             std::vector<LLVector3> face;
@@ -1132,7 +1148,7 @@ namespace tut
             in.mAir = true;
             in.mPartitionSlope = 89.f;
             in.mParams[0].mSlope = 74.f;
-            in.mParams[1].mSlope = top_slope;
+            in.mTopParams.mSlope = top_slope;
             in.mRecords.push_back(box(8.f, 10.f, 0.f, 11.9f, 20.f, 1.f));
             // One column of crevice, then an 80 degree face whose first column tops out half a metre up.
             const LLVector3 a(12.3f, 10.f, 1.f), b(12.388f, 10.f, 1.5f), c(12.388f, 20.f, 1.5f), d(12.3f, 20.f, 1.f);

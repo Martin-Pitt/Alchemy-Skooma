@@ -237,9 +237,6 @@ namespace
         in.mZMax = 6.f;
         in.mCell = 0.25f;
         in.mPartition = Partition::SLOPE;
-        in.mClasses[1] = true;
-        in.mParams[1].mHeight = 0.5f;
-        in.mParams[1].mRadius = 0.f;
         TerrainWindow t;
         t.mOrigin.set(-2.f, -2.f, 0.f);
         t.mWidth = t.mHeight = 37;
@@ -634,7 +631,7 @@ namespace tut
         tin.mZMin = -20.f;
         tin.mZMax = 40.f;
         tin.mParams[0].mSlope = 74.f;
-        tin.mParams[1].mSlope = 89.f;
+        tin.mTopParams.mSlope = 89.f;
         tin.mRecords.push_back(r);
         std::ofstream out(path + ".time");
         for (S32 k = 0; k < 3; ++k)
@@ -726,7 +723,7 @@ namespace tut
         in.mRecords.push_back(boxRecord(12.4f, 12.f, 0.f, 16.f, 20.f, 2.25f));
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
-        ensure("a flight", !r.mFlights[0].empty() || !r.mFlights[1].empty());
+        ensure("a flight", !r.mFlights[0].empty());
         ensure("air", r.mAir != nullptr);
         U32 marked = 0, stray = 0;
         for (const AirLeaf& leaf : r.mAir->mLeaves)

@@ -138,6 +138,8 @@ public:
     /// the exits of each span. The span links are a table beside the tiles,
     /// not Detour off-mesh connections: paths do not use them yet.
     void linksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const LinkFn& fn) const;
+    /// The solid raster's ledges and the run-off down them.
+    void runoffIn(const LLVector3d& min, const LLVector3d& max, const SegmentFn& ledge_fn, const LinkFn& link_fn) const;
     /// Stair flights whose footprint meets the box, with the mesh origin
     /// their mesh-local positions are relative to. A flight across a tile
     /// seam comes once, as the copy of the tile holding its footprint's
@@ -274,7 +276,7 @@ private:
         U64 mSignature = 0;     ///< what the tile should be built from
         U64 mBuilt = 0;         ///< what it was built from; 0 = nothing published
         bool mInFlight = false;
-        S32 mPolys[sknav::NUM_CLASSES] = { 0, 0 };
+        S32 mPolys[sknav::NUM_CLASSES] = { 0 };
         F32 mMillis = 0.f;
         LLVector3d mMin;        ///< global, for scheduling by distance and drawing
         LLVector3d mMax;
@@ -304,6 +306,8 @@ private:
         /// Published with the tile, mesh-local; shared so a read hands them
         /// out without copying and a rebuild never rewrites one in place.
         std::shared_ptr<const std::vector<sknav::WallFace>> mFaces;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mLedges;
+        std::shared_ptr<const std::vector<sknav::DropLink>> mRunoff;
         sknav::TileAirPtr mAir;         ///< within SKNavAirRadius, until evicted
         sknav::TileAirPtr mAirCoarse;   ///< the solid tops an evicted tile keeps for the sky map
         U64 mContentKey = 0;            ///< the session-stable key of what was published (sknavtilecache.h)
@@ -342,8 +346,8 @@ private:
         U64 mRegion = 0;                    ///< the region that owns it, for lifetime
         U32 mGeneration = 0;                ///< results carry it; a torn-down mesh rejects old ones
         LLVector3d mOrigin;                 ///< global, on the lattice
-        dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr, nullptr };
-        dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
+        dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr };
+        dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
         F32 mLastSeen = 0.f;
         // What the region pass's layout and tile re-sign were last laid

@@ -458,14 +458,15 @@ namespace sknav
         for (S32 k = 0; k < NUM_CLASSES; ++k)
         {
             const ClassParams& cp = p.mParams[k];
-            out << (k ? "," : "") << "{\"name\":\"" << (k ? "weather" : "avatar") << "\",\"built\":" << boolText(p.mClasses[k])
-                << ",\"height\":" << cp.mHeight << ",\"radius\":" << cp.mRadius << ",\"climb\":" << cp.mClimb << ",\"slope\":" << cp.mSlope
-                << ",\"edges\":" << boolText(p.mEdges[k]) << ",\"drop_max\":" << p.mDropMax[k] << '}';
+            out << (k ? "," : "") << "{\"name\":\"avatar\",\"built\":true,\"height\":" << cp.mHeight << ",\"radius\":" << cp.mRadius
+                << ",\"climb\":" << cp.mClimb << ",\"slope\":" << cp.mSlope << ",\"edges\":" << boolText(p.mEdges[k])
+                << ",\"drop_max\":" << p.mDropMax[k] << '}';
         }
-        out << "]}";
+        out << "],\"top\":{\"height\":" << p.mTopParams.mHeight << ",\"slope\":" << p.mTopParams.mSlope << ",\"runoff\":"
+            << boolText(p.mRunoff) << ",\"runoff_max\":" << p.mRunoffMax << "}}";
 
         const EnclosureParams& e = c.mEnclosure;
-        out << ",\"settings\":{\"air_radius\":" << c.mAirRadius << ",\"build_weather\":" << boolText(c.mBuildWeather) << ",\"cluster_gap\":" << c.mClusterGap << ",\"grounded_margin\":" << c.mGroundedMargin
+        out << ",\"settings\":{\"air_radius\":" << c.mAirRadius << ",\"cluster_gap\":" << c.mClusterGap << ",\"grounded_margin\":" << c.mGroundedMargin
             << ",\"void_margin\":" << c.mVoidMargin << "},\"enclosure\":{\"sky_decay\":" << e.mSkyDecayM << ",\"depth_full\":" << e.mDepthFullM
             << ",\"climb\":" << e.mClimbM << ",\"walk_head\":" << e.mWalkHeadM << ",\"walk_overlap\":" << e.mWalkOverlapM
             << ",\"carry_overlap\":" << e.mCarryOverlapM << ",\"carry_rise\":" << e.mCarryRiseM << ",\"sky_reach\":" << e.mSkyReachM
@@ -729,25 +730,38 @@ namespace sknav
             S32 k = 0;
             for (Elem ce : rd.array(pe, "classes"))
             {
-                if (k >= NUM_CLASSES)
+                if (k < NUM_CLASSES)
                 {
-                    break;
+                    p.mParams[k].mHeight = rd.f32(ce, "height");
+                    p.mParams[k].mRadius = rd.f32(ce, "radius");
+                    p.mParams[k].mClimb = rd.f32(ce, "climb");
+                    p.mParams[k].mSlope = rd.f32(ce, "slope");
+                    p.mEdges[k] = rd.flag(ce, "edges");
+                    p.mDropMax[k] = rd.f32(ce, "drop_max");
                 }
-                p.mClasses[k] = rd.flag(ce, "built");
-                p.mParams[k].mHeight = rd.f32(ce, "height");
-                p.mParams[k].mRadius = rd.f32(ce, "radius");
-                p.mParams[k].mClimb = rd.f32(ce, "climb");
-                p.mParams[k].mSlope = rd.f32(ce, "slope");
-                p.mEdges[k] = rd.flag(ce, "edges");
-                p.mDropMax[k] = rd.f32(ce, "drop_max");
+                else if (version < 4)
+                {
+                    // The WEATHER class of an older census: what the air stood on, and its drainage.
+                    p.mTopParams.mHeight = rd.f32(ce, "height");
+                    p.mTopParams.mSlope = rd.f32(ce, "slope");
+                    p.mRunoff = rd.flag(ce, "edges");
+                    p.mRunoffMax = rd.f32(ce, "drop_max");
+                }
                 ++k;
+            }
+            Elem te;
+            if (version >= 4 && rd.member(pe, "top", te))
+            {
+                p.mTopParams.mHeight = rd.f32(te, "height");
+                p.mTopParams.mSlope = rd.f32(te, "slope");
+                p.mRunoff = rd.flag(te, "runoff");
+                p.mRunoffMax = rd.f32(te, "runoff_max");
             }
         }
         Elem se;
         if (rd.member(doc, "settings", se))
         {
             c.mAirRadius = rd.f32(se, "air_radius");
-            c.mBuildWeather = rd.flag(se, "build_weather");
             c.mClusterGap = rd.num(se, "cluster_gap");
             c.mGroundedMargin = rd.f32(se, "grounded_margin");
             c.mVoidMargin = rd.f32(se, "void_margin");

@@ -186,14 +186,78 @@ namespace sknav
             return static_cast<U32>(a) | static_cast<U32>(b) << 8 | static_cast<U32>(c) << 16 | static_cast<U32>(d) << 24;
         }
         constexpr U32 TAG_META = tag('M', 'E', 'T', 'A');
-        constexpr U32 TAG_DETOUR[NUM_CLASSES] = { tag('D', 'T', '0', ' '), tag('D', 'T', '1', ' ') };
+        constexpr U32 TAG_DETOUR[NUM_CLASSES] = { tag('D', 'T', '0', ' ') };
         constexpr U32 TAG_FACES = tag('F', 'A', 'C', 'E');
-        constexpr U32 TAG_SEGMENTS[NUM_CLASSES] = { tag('S', 'E', 'G', '0'), tag('S', 'E', 'G', '1') };
-        constexpr U32 TAG_LINKS[NUM_CLASSES] = { tag('L', 'N', 'K', '0'), tag('L', 'N', 'K', '1') };
+        constexpr U32 TAG_SEGMENTS[NUM_CLASSES] = { tag('S', 'E', 'G', '0') };
+        constexpr U32 TAG_LINKS[NUM_CLASSES] = { tag('L', 'N', 'K', '0') };
         constexpr U32 TAG_AIR = tag('A', 'I', 'R', ' ');
-        constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0'), tag('F', 'L', 'T', '1') };
+        constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0') };
+        constexpr U32 TAG_LEDGES = tag('L', 'D', 'G', ' ');
+        constexpr U32 TAG_RUNOFF = tag('R', 'U', 'N', ' ');
 
         constexpr size_t GAP_BYTES = 8;
+
+        void writeSegments(Writer& w, const std::vector<WallSegment>& segments)
+        {
+            w.pod(static_cast<U32>(segments.size()));
+            for (const WallSegment& g : segments)
+            {
+                w.vec(g.mA);
+                w.vec(g.mB);
+                w.pod(static_cast<U8>(g.mKind));
+                w.pod(g.mValue);
+                w.pod(g.mArea);
+            }
+        }
+
+        bool readSegments(Reader& sec, std::vector<WallSegment>& out)
+        {
+            U32 n = 0;
+            bool ok = sec.count(n, 30);
+            out.resize(ok ? n : 0);
+            for (WallSegment& g : out)
+            {
+                U8 kind = 0;
+                sec.vec(g.mA);
+                sec.vec(g.mB);
+                sec.pod(kind);
+                sec.pod(g.mValue);
+                sec.pod(g.mArea);
+                ok = ok && kind <= static_cast<U8>(EdgeKind::OVERHANG);
+                g.mKind = static_cast<EdgeKind>(kind);
+            }
+            return ok;
+        }
+
+        void writeLinks(Writer& w, const std::vector<DropLink>& links)
+        {
+            w.pod(static_cast<U32>(links.size()));
+            for (const DropLink& l : links)
+            {
+                w.vec(l.mFrom);
+                w.vec(l.mTo);
+                w.pod(l.mHeight);
+                w.pod(static_cast<U8>(l.mKind));
+            }
+        }
+
+        bool readLinks(Reader& sec, std::vector<DropLink>& out)
+        {
+            U32 n = 0;
+            bool ok = sec.count(n, 29);
+            out.resize(ok ? n : 0);
+            for (DropLink& l : out)
+            {
+                U8 kind = 0;
+                sec.vec(l.mFrom);
+                sec.vec(l.mTo);
+                sec.pod(l.mHeight);
+                sec.pod(kind);
+                ok = ok && kind <= static_cast<U8>(LinkKind::ELEVATOR);
+                l.mKind = static_cast<LinkKind>(kind);
+            }
+            return ok;
+        }
 
         void writeGaps(Writer& w, const std::vector<AirGap>& gaps)
         {
@@ -443,9 +507,13 @@ namespace sknav
         h = mixF32(h, input.mDetailSampleCells);
         h = mixF32(h, input.mDetailMaxErrorCells);
         h = mixF32(h, input.mWallMinHeight);
+        h = mixF32(h, input.mTopParams.mHeight);
+        h = mixF32(h, input.mTopParams.mClimb);
+        h = mixF32(h, input.mTopParams.mSlope);
+        h = mix(h, input.mRunoff);
+        h = mixF32(h, input.mRunoffMax);
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
-            h = mix(h, input.mClasses[c]);
             h = mixF32(h, input.mParams[c].mHeight);
             h = mixF32(h, input.mParams[c].mRadius);
             h = mixF32(h, input.mParams[c].mClimb);
@@ -520,26 +588,11 @@ namespace sknav
         for (S32 c = 0; c < NUM_CLASSES; ++c)
         {
             s = w.open(TAG_SEGMENTS[c]);
-            w.pod(static_cast<U32>(result.mSegments[c].size()));
-            for (const WallSegment& g : result.mSegments[c])
-            {
-                w.vec(g.mA);
-                w.vec(g.mB);
-                w.pod(static_cast<U8>(g.mKind));
-                w.pod(g.mValue);
-                w.pod(g.mArea);
-            }
+            writeSegments(w, result.mSegments[c]);
             w.close(s);
 
             s = w.open(TAG_LINKS[c]);
-            w.pod(static_cast<U32>(result.mLinks[c].size()));
-            for (const DropLink& l : result.mLinks[c])
-            {
-                w.vec(l.mFrom);
-                w.vec(l.mTo);
-                w.pod(l.mHeight);
-                w.pod(static_cast<U8>(l.mKind));
-            }
+            writeLinks(w, result.mLinks[c]);
             w.close(s);
 
             s = w.open(TAG_FLIGHTS[c]);
@@ -580,6 +633,13 @@ namespace sknav
             }
             w.close(s);
         }
+
+        s = w.open(TAG_LEDGES);
+        writeSegments(w, result.mLedges);
+        w.close(s);
+        s = w.open(TAG_RUNOFF);
+        writeLinks(w, result.mRunoff);
+        w.close(s);
 
         if (result.mAir)
         {
@@ -654,19 +714,7 @@ namespace sknav
                 }
                 else if (t == TAG_SEGMENTS[c])
                 {
-                    ok = sec.count(n, 30);
-                    res.mSegments[c].resize(ok ? n : 0);
-                    for (WallSegment& g : res.mSegments[c])
-                    {
-                        U8 kind;
-                        sec.vec(g.mA);
-                        sec.vec(g.mB);
-                        sec.pod(kind);
-                        sec.pod(g.mValue);
-                        sec.pod(g.mArea);
-                        ok = ok && kind <= static_cast<U8>(EdgeKind::OVERHANG);
-                        g.mKind = static_cast<EdgeKind>(kind);
-                    }
+                    ok = readSegments(sec, res.mSegments[c]);
                 }
                 else if (t == TAG_FLIGHTS[c])
                 {
@@ -707,18 +755,7 @@ namespace sknav
                 }
                 else if (t == TAG_LINKS[c])
                 {
-                    ok = sec.count(n, 29);
-                    res.mLinks[c].resize(ok ? n : 0);
-                    for (DropLink& l : res.mLinks[c])
-                    {
-                        U8 kind;
-                        sec.vec(l.mFrom);
-                        sec.vec(l.mTo);
-                        sec.pod(l.mHeight);
-                        sec.pod(kind);
-                        ok = ok && kind <= static_cast<U8>(LinkKind::ELEVATOR);
-                        l.mKind = static_cast<LinkKind>(kind);
-                    }
+                    ok = readLinks(sec, res.mLinks[c]);
                 }
             }
             if (t == TAG_FACES)
@@ -732,6 +769,14 @@ namespace sknav
                     sec.pod(f.mSide);
                     sec.pod(f.mArea);
                 }
+            }
+            else if (t == TAG_LEDGES)
+            {
+                ok = readSegments(sec, res.mLedges);
+            }
+            else if (t == TAG_RUNOFF)
+            {
+                ok = readLinks(sec, res.mRunoff);
             }
             else if (t == TAG_AIR)
             {

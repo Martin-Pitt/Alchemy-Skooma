@@ -44,9 +44,9 @@ class dtNavMesh;
 namespace sknav
 {
     /// Which tiles build their air. RADIUS is the viewer's rule: a tile further
-    /// than the census's air radius from its camera builds no air, and WEATHER
-    /// only when SKNavBuildWeather was on. EVERYWHERE builds air in every
-    /// tile, for offline experiments; it no longer matches a navmesh export.
+    /// than the census's air radius from its camera builds no air. EVERYWHERE
+    /// builds air in every tile, for offline experiments; it no longer matches
+    /// a navmesh export.
     enum class AirMode : U8 { RADIUS, EVERYWHERE };
 
     struct ReplayOptions
@@ -94,7 +94,7 @@ namespace sknav
         bool mTerrain = false;
         LLVector3d mOrigin;
         std::map<TileKey, ReplayTile> mTiles;
-        dtNavMesh* mNav[NUM_CLASSES] = { nullptr, nullptr };
+        dtNavMesh* mNav[NUM_CLASSES] = { nullptr };
         LLVector3d mAirMin;         ///< the footprint of its tiles with air
         LLVector3d mAirMax;
         EnclosureProductPtr mEnclosure;

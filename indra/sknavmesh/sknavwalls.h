@@ -108,6 +108,15 @@ namespace sknav
     void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out,
                           const U8* area_lut = nullptr);
 
+    /// Where the walkable tops of a raster end over a drop: a side whose
+    /// neighbour column has nothing within climb cells of the top or in
+    /// headroom cells over it. Runs over one drop merge into LEDGE segments,
+    /// valued by the drop to the highest solid below, < 0 with none; every
+    /// spacing metres along a run a link runs off down to it, drop_max at
+    /// most. Recast space in, SL mesh-local out; the border left out.
+    void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
+                       std::vector<WallSegment>& ledges, std::vector<DropLink>& links);
+
     /// Walk every boundary edge of the polymesh, sample the column just
     /// outside, classify, and merge runs into segments. Ledge samples with a
     /// landing become drop links: the landing must be walkable in the class

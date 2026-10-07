@@ -129,12 +129,13 @@ namespace sknav
     /// cells_per_top columns a side.
     void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out);
 
-    /// Everything a tile's air is built from its WEATHER heightfield: gaps
+    /// Everything a tile's air is built from the solid raster: gaps
     /// read pad_cells past the tile so clearance is exact on it, slivers
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr);
+                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr,
+                            const SpanFlags* extra = nullptr);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

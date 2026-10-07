@@ -66,13 +66,12 @@ namespace
         c.mParams.mAir = true;
         c.mParams.mAirPad = 12;
         c.mParams.mAirMinGap = 0.375f;
-        c.mParams.mClasses[1] = true;
         c.mParams.mParams[0] = { 1.875f, 0.3f, 0.75f, 74.f };
-        c.mParams.mParams[1] = { 0.5f, 0.125f, 0.7f, 89.f };
+        c.mParams.mTopParams = { 0.625f, 0.f, 0.75f, 88.f };
         c.mParams.mEdges[0] = true;
-        c.mParams.mDropMax[1] = 20.f;
+        c.mParams.mRunoff = true;
+        c.mParams.mRunoffMax = 20.f;
         c.mAirRadius = 96.f;
-        c.mBuildWeather = true;
         c.mClusterGap = 0.45;
         c.mGroundedMargin = 4.f;
         c.mVoidMargin = 128.f;
@@ -256,7 +255,8 @@ namespace tut
         ensure_equals("sealed", back.mEnclosure.mSealedIndoors, c.mEnclosure.mSealedIndoors);
         ensure_equals("gap", back.mClusterGap, c.mClusterGap);
         ensure_equals("air radius", back.mAirRadius, c.mAirRadius);
-        ensure("build weather", back.mBuildWeather);
+        ensure("the raster's floors", back.mParams.mTopParams.mHeight == 0.625f && back.mParams.mTopParams.mSlope == 88.f);
+        ensure("run-off", back.mParams.mRunoff && back.mParams.mRunoffMax == 20.f);
         ensure_equals("void margin", back.mVoidMargin, c.mVoidMargin);
         ensure("camera", back.mCamera == c.mCamera);
         ensure_equals("stamp", back.mStamp, c.mStamp);
@@ -296,7 +296,7 @@ namespace tut
         ensure_equals("spans", back.mSpans.size(), 1u);
         const CensusSpan& s = back.mSpans[0];
         ensure("span", s.mId == c.mSpans[0].mId && s.mKind == LinkKind::ELEVATOR && s.mExits[0] == c.mSpans[0].mExits[0] &&
-                           s.mLinks[0] == c.mSpans[0].mLinks[0] && s.mExits[1].empty());
+                           s.mLinks[0] == c.mSpans[0].mLinks[0]);
     }
 
     template<> template<>
@@ -451,7 +451,7 @@ namespace tut
 
         // A version 1 file has no root table and still reads.
         std::string old = text;
-        old.replace(old.find("\"version\":3"), 11, "\"version\":1");
+        old.replace(old.find("\"version\":4"), 11, "\"version\":1");
         old.erase(old.find(",\"roots\":"), old.find(",\"features\":") - old.find(",\"roots\":"));
         ensure("version 1 reads: " + error, readCensus(old, back, &error));
         ensure("no roots", back.mRoots.empty() && back.mRecords.size() == c.mRecords.size());
@@ -507,7 +507,7 @@ namespace tut
 
         // A version 2 file has no probes and still reads.
         std::string old = text;
-        old.replace(old.find("\"version\":3"), 11, "\"version\":2");
+        old.replace(old.find("\"version\":4"), 11, "\"version\":2");
         old.erase(old.find(",\"probes\":"), old.find(",\"features\":") - old.find(",\"probes\":"));
         ensure("version 2 reads: " + error, readCensus(old, back, &error));
         ensure("no probes", back.mProbes.empty() && back.mRecords.size() == c.mRecords.size());

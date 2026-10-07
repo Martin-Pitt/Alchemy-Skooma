@@ -51,6 +51,7 @@ namespace sknav
             FLIGHT = 1 << 3,    ///< on a stair flight; reserved, filled by the flight records
             AREA_SHIFT = 4,     ///< two bits of the Recast area under the gap, 0 when it is not floor
             AREA_MASK = 3 << AREA_SHIFT,
+            AVATAR_FLOOR = 1 << 6,  ///< AVATAR walks the solid under the gap, before its erosion
         };
         U16 mFloor = 0;
         U16 mCeiling = 0;
@@ -88,8 +89,16 @@ namespace sknav
     /// Read the gaps off a heightfield after its filters have run, so the
     /// walkable flag is the class's own. Gaps below the lowest solid are not
     /// air anything stands in and are left out.
+    /// Flags to add to the gap over each span of a heightfield, column by
+    /// column in the heightfield's order, bottom up.
+    struct SpanFlags
+    {
+        std::vector<U32> mStart;    ///< per column, where its spans' flags begin; columns + 1
+        std::vector<U8> mFlags;
+    };
+
     /// A raster whose spans carry codes passes the code -> area table as area_lut.
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut = nullptr);
+    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut = nullptr, const SpanFlags* extra = nullptr);
 
     /// Whether two gaps of lateral neighbours connect: floors within climb
     /// and at least overlap units of air shared above both.

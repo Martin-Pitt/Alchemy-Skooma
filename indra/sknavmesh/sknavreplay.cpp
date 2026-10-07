@@ -108,13 +108,12 @@ namespace sknav
             return dx * dx + dy * dy <= static_cast<F64>(census.mAirRadius) * census.mAirRadius;
         }
 
-        /// The viewer's launch: air near the camera, and past it WEATHER only if it is built for itself.
+        /// The viewer's launch: air near the camera only.
         void applyAirMode(const CensusFile& census, const ReplayOptions& options, ReplayTile& tile, TileBuildInput& input)
         {
             if (options.mAir == AirMode::RADIUS && input.mAir && !inAirRadius(census, tile.mMin, tile.mMax))
             {
                 input.mAir = false;
-                input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = census.mBuildWeather;
             }
         }
 
@@ -610,6 +609,8 @@ namespace sknav
                 if (r.mStatus != TileBuildResult::FAILED)
                 {
                     tile.mFaces = &r.mFaces;
+                    tile.mLedges = &r.mLedges;
+                    tile.mRunoff = &r.mRunoff;
                     tile.mAir = r.mAirBuilt ? r.mAir : nullptr;
                     if (tile.mAir && mesh.mEnclosure)
                     {

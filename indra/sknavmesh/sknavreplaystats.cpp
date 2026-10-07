@@ -503,11 +503,10 @@ namespace sknav
                     << ",\"excluded\":" << st.mExcludedRecords << ",\"window_cells\":" << st.mExcludeWindowCells << ",\"tile_cells\":" << st.mTileCells
                     << ",\"shared_codes\":" << st.mSharedCodes << ",\"classes\":[";
                 first = false;
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                {
-                    out << (cls ? "," : "");
-                    writeClass(out, st.mClass[cls]);
-                }
+                // AVATAR, then the raster's own passes where WEATHER's used to be.
+                writeClass(out, st.mClass[0]);
+                out << ',';
+                writeClass(out, st.mTop);
                 out << ']';
                 const TileAir* air = r.mAirBuilt && r.mAir ? r.mAir.get() : nullptr;
                 const TileEnclosure* enc = mesh.mEnclosure ? mesh.mEnclosure->tile(key) : nullptr;
@@ -642,7 +641,7 @@ namespace sknav
             }
         }
 
-        // The coarse product past the radius: the same tile's air built at 1 m, WEATHER only.
+        // The coarse product past the radius: the same tile's air built at 1 m, AVATAR's polys with it.
         out << "],\"air_leaf_sink\":" << sink << ",\"coarse\":[";
         first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
@@ -658,25 +657,25 @@ namespace sknav
                 input.mCell = 1.f;
                 input.mAirPad = 2;
                 input.mAir = true;
-                input.mClasses[static_cast<S32>(AgentClass::AVATAR)] = false;
-                input.mClasses[static_cast<S32>(AgentClass::WEATHER)] = true;
+                input.mAirPad = airPadCells(input.mCell);
                 input.mWallFaces = false;
-                input.mEdges[0] = input.mEdges[1] = false;
+                input.mRunoff = false;
+                input.mEdges[0] = false;
                 TileBuildStats stats;
                 const auto t0 = Clock::now();
                 const TileBuildResult coarse = buildTile(input, &stats);
                 const F64 ms = since(t0);
-                const ClassBuildStats& w = stats.mClass[static_cast<S32>(AgentClass::WEATHER)];
-                F64 raster = 0.0;
-                for (S32 s = ClassBuildStats::RASTERISE; s <= ClassBuildStats::FILTERS; ++s)
+                const ClassBuildStats& w = stats.mTop;
+                F64 raster = w.mMs[ClassBuildStats::FILTERS];
+                for (S32 s = ClassBuildStats::RASTERISE; s <= ClassBuildStats::CULL; ++s)
                 {
-                    raster += w.mMs[s];
+                    raster += stats.mClass[0].mMs[s];
                 }
                 out << (first ? "" : ",") << "\n{\"mesh\":" << m << ",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"camera_m\":" << cameraDistance(census, tile)
                     << ",\"ms\":" << ms << ",\"soup_ms\":" << stats.mSoupMs << ",\"raster_ms\":" << raster << ",\"air_ms\":" << w.mMs[ClassBuildStats::AIR]
                     << ",\"polys_ms\":" << (stats.mTotalMs - stats.mSoupMs - raster - w.mMs[ClassBuildStats::AIR])
                     << ",\"air_bytes\":" << (coarse.mAir ? coarse.mAir->bytes() : 0) << ",\"air_leaves\":" << (coarse.mAir ? coarse.mAir->mLeaves.size() : 0)
-                    << ",\"hf_bytes\":" << w.mHfBytes << '}';
+                    << ",\"hf_bytes\":" << stats.mClass[0].mHfBytes << '}';
                 first = false;
             }
         }
