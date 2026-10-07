@@ -1990,6 +1990,7 @@ namespace skmap
                     {
                         planes_used.push_back(src.mPlane);
                     }
+                    stats.mPairs += static_cast<U32>(had->size());
                     stats.mReused += static_cast<U32>(had->size());
                     continue;
                 }
@@ -2120,6 +2121,7 @@ namespace skmap
                     }
                 }
                 SK_SECTION_STAGE_STOP(pairs_timer);
+                stats.mPairs += static_cast<U32>(pairs.size());
 
                 // 6. Pieces, in (record, plane, group) order.
                 SK_SECTION_STAGE(PIECES);

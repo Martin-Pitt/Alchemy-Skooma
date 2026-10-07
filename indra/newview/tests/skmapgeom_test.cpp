@@ -224,7 +224,8 @@ namespace
             const skmap::SectionPiece& q = b.mPieces[i];
             if (p.mSource != q.mSource || p.mPlane != q.mPlane || p.mLoops != q.mLoops || p.mWind != q.mWind || p.mLines != q.mLines
                 || p.mFlags != q.mFlags || p.mGroup != q.mGroup || p.mStyle != q.mStyle || p.mShift != q.mShift || p.mMin != q.mMin
-                || p.mMax != q.mMax || p.mSlice->mPts.size() != q.mSlice->mPts.size()
+                || p.mMax != q.mMax || p.mPart != q.mPart || p.mRoot != q.mRoot || p.mThickness != q.mThickness
+                || p.mSlice->mPts.size() != q.mSlice->mPts.size()
                 || (!p.mSlice->mPts.empty()
                     && std::memcmp(p.mSlice->mPts.data(), q.mSlice->mPts.data(), p.mSlice->mPts.size() * sizeof(LLVector2)) != 0))
             {
@@ -1109,11 +1110,12 @@ namespace tut
         ensure("the same pieces, warm", samePieces(*plain, *warm));
         ensure("the cold build sliced", cold->mSectionStats.mSlices > 0);
         ensure_equals("the warm build sliced nothing", warm->mSectionStats.mSlices, 0u);
-        // An upright wall's two planes share one section, so the cold build already hits once; the warm build takes
-        // its unchanged layers' pieces whole, each pair at least as often as the cold build looked it up.
-        ensure("reused", warm->mSectionStats.mReused > 0);
-        ensure("all hits or reused", warm->mSectionStats.mCacheHits + warm->mSectionStats.mReused
-                                         >= cold->mSectionStats.mSlices + cold->mSectionStats.mCacheHits);
+        // The warm build takes its unchanged layers' pieces whole: every pair the cold build made, and no lookup.
+        ensure("the cold build made pairs", cold->mSectionStats.mPairs > 0);
+        ensure_equals("the cold build reused nothing", cold->mSectionStats.mReused, 0u);
+        ensure_equals("the same pairs", warm->mSectionStats.mPairs, cold->mSectionStats.mPairs);
+        ensure_equals("every pair reused", warm->mSectionStats.mReused, cold->mSectionStats.mPairs);
+        ensure_equals("the warm build looked nothing up", warm->mSectionStats.mCacheHits, 0u);
     }
 
     // What moves a leaf's key and what does not.
@@ -1392,6 +1394,24 @@ namespace tut
         moved_wall[0] = std::make_shared<const Record>(wall);
         std::vector<RecordPtr> reordered = { walls[2], walls[0], walls[1] };
         const std::vector<RecordPtr> fewer = { walls[1], walls[2] };
+        // One thing changed and the signature kept, as a restamp can: each is a fact the pieces carry or are made from.
+        auto changed = [&](const std::function<void(Record&)>& change) {
+            std::vector<RecordPtr> out = walls;
+            Record r = *walls[0];
+            change(r);
+            out[0] = std::make_shared<const Record>(r);
+            return out;
+        };
+        const std::vector<RecordPtr> rerooted = changed([](Record& r) { r.mRoot.generate(); });
+        const std::vector<RecordPtr> reparted = changed([](Record& r) { r.mPart.generate(); });
+        const std::vector<RecordPtr> exact = changed([](Record& r) { r.mProvenance = Provenance::BOX; });
+        // Another region's origin under the same region-local shape: the same signature, a piece half a metre east.
+        const std::vector<RecordPtr> rebased = changed([](Record& r) {
+            r.mOrigin.mdV[VX] += 0.5;
+            r.mMin.mdV[VX] += 0.5;
+            r.mMax.mdV[VX] += 0.5;
+        });
+        const std::vector<RecordPtr> surround = changed([](Record& r) { r.mRole = Role::SURROUND; });
         skmap::SceneInput shifted = input({ floors(0.f) }, &walls);
         const LLVector3d by(64.0, 0.0, 0.0);
         shifted.mOrigin += by;
@@ -1404,13 +1424,27 @@ namespace tut
             skmap::ScenePtr warm = skmap::buildScene(in, &cache);
             ensure(what, !plain->mPieces.empty() && samePieces(*plain, *warm) && sameLevels(*plain, *warm)
                              && plain->mCellHashes == warm->mCellHashes);
+            return warm->mSectionStats;
         };
         check(input({ floors(0.f) }, &walls), "cold");
-        check(input({ floors(0.f) }, &walls), "the same again");
+        const skmap::SectionStats again = check(input({ floors(0.f) }, &walls), "the same again");
+        ensure("the same again, every pair reused", again.mReused > 0 && again.mReused == again.mPairs && again.mCacheHits == 0);
         check(input({ floors(1.f) }, &walls), "a floor rose");
         check(input({ floors(1.f) }, &moved_wall), "a wall moved");
         check(input({ floors(1.f) }, &reordered), "the records in another order");
         check(input({ floors(1.f) }, &fewer), "a record gone");
+        check(input({ floors(1.f) }, &walls), "a record back");
+        // The other walls' pairs come from the last build; the changed one's never do.
+        for (const auto& one : { std::make_pair(&rerooted, "re-rooted"), std::make_pair(&reparted, "another part"),
+                                 std::make_pair(&exact, "provenance changed"), std::make_pair(&rebased, "another origin") })
+        {
+            const skmap::SectionStats st = check(input({ floors(1.f) }, one.first), one.second);
+            ensure(one.second, st.mReused > 0 && st.mReused < st.mPairs);
+            check(input({ floors(1.f) }, &walls), "and back");
+        }
+        // Left out by its role, so the others' pairs are all the last build's.
+        const skmap::SectionStats left = check(input({ floors(1.f) }, &surround), "no longer navmesh");
+        ensure("no longer navmesh, the rest reused", left.mReused > 0 && left.mReused == left.mPairs);
         check(shifted, "the origin moved");
         check(input({ floors(0.f) }, &walls), "back where it began");
     }
