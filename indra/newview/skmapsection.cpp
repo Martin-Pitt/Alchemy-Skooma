@@ -1318,29 +1318,118 @@ namespace skmap
             }
             return true;
         };
+        // Each loop's depth, and its smallest container: of equal areas the lowest index, as a scan in index order keeps.
+        thread_local std::vector<S32> depth;
+        depth.assign(n, 0);
+        auto nest = [&](size_t i, size_t j) {
+            if (j == i || !contains(j, i))
+            {
+                return;
+            }
+            ++depth[i];
+            SliceLoop& l = s.mLoops[i];
+            if (l.mParent < 0 || area[j] < area[l.mParent] || (area[j] == area[l.mParent] && static_cast<S32>(j) < l.mParent))
+            {
+                l.mParent = static_cast<S32>(j);
+            }
+        };
+        thread_local std::vector<U32> order, live;
+        order.clear();
+        bool finite = true;
+        F32 largest = 0.f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            s.mLoops[i].mParent = -1;
+            if (on(i))
+            {
+                order.push_back(static_cast<U32>(i));
+                largest = llmax(largest, area[i]);
+                finite = finite && s.mLoops[i].mCount > 0 && std::isfinite(lo[i].mV[VX]) && std::isfinite(lo[i].mV[VY])
+                      && std::isfinite(hi[i].mV[VX]) && std::isfinite(hi[i].mV[VY]);
+            }
+        }
+        // Many loops are swept along the axis their boxes overlap least on: only a loop whose box spans this one's
+        // lower edge there can hold it, and the pairs the sweep passes over fail the box test, so it finds what
+        // testing every pair finds. Boxes that are empty or not finite cannot be ordered, so they keep the plain scan.
+        constexpr size_t SWEEP_MIN = 32;
+        if (order.size() <= SWEEP_MIN || !finite)
+        {
+            for (U32 i : order)
+            {
+                for (U32 j : order)
+                {
+                    nest(i, j);
+                }
+            }
+        }
+        else
+        {
+            // The axis whose boxes are shortest against their spread: fewest boxes live at once.
+            S32 axis = VX;
+            F64 best = DBL_MAX;
+            for (S32 a : { VX, VY })
+            {
+                F64 a0 = DBL_MAX, a1 = -DBL_MAX, sum = 0.0;
+                for (U32 i : order)
+                {
+                    a0 = llmin(a0, static_cast<F64>(lo[i].mV[a]));
+                    a1 = llmax(a1, static_cast<F64>(hi[i].mV[a]));
+                    sum += static_cast<F64>(hi[i].mV[a]) - lo[i].mV[a];
+                }
+                const F64 crowd = a1 > a0 ? sum / (a1 - a0) : DBL_MAX;
+                if (crowd < best)
+                {
+                    best = crowd;
+                    axis = a;
+                }
+            }
+            std::sort(order.begin(), order.end(),
+                      [&](U32 a, U32 b) { return lo[a].mV[axis] != lo[b].mV[axis] ? lo[a].mV[axis] < lo[b].mV[axis] : a < b; });
+            live.clear();
+            for (size_t g = 0; g < order.size();)
+            {
+                const F32 x = lo[order[g]].mV[axis];
+                size_t e = g;
+                while (e < order.size() && lo[order[e]].mV[axis] == x)
+                {
+                    ++e;
+                }
+                // A box ending before x holds nothing from here on.
+                size_t kept = 0;
+                for (U32 j : live)
+                {
+                    if (hi[j].mV[axis] >= x)
+                    {
+                        live[kept++] = j;
+                    }
+                }
+                live.resize(kept);
+                // Only a loop with area can hold another, and only one smaller than the largest can be held: a soup cut
+                // along a face gives thousands of flat copies of one loop, every box the same.
+                for (size_t k = g; k < e; ++k)
+                {
+                    if (area[order[k]] > 0.f)
+                    {
+                        live.push_back(order[k]);
+                    }
+                }
+                for (size_t k = g; k < e; ++k)
+                {
+                    if (area[order[k]] < largest)
+                    {
+                        for (U32 j : live)
+                        {
+                            nest(order[k], j);
+                        }
+                    }
+                }
+                g = e;
+            }
+        }
         for (size_t i = 0; i < n; ++i)
         {
             SliceLoop& l = s.mLoops[i];
-            l.mParent = -1;
-            if (!on(i))
-            {
-                l.mWind = 0;
-                continue;
-            }
-            S32 depth = 0;
-            for (size_t j = 0; j < n; ++j)
-            {
-                if (j == i || !on(j) || !contains(j, i))
-                {
-                    continue;
-                }
-                ++depth;
-                if (l.mParent < 0 || area[j] < area[l.mParent])
-                {
-                    l.mParent = static_cast<S32>(j);
-                }
-            }
-            l.mWind = depth % 2 == 0 ? 1 : -1;
+            l.mWind = !on(i) ? 0 : depth[i] % 2 == 0 ? 1 : -1;
         }
         buildGroups(s);
     }

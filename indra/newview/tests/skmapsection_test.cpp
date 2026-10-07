@@ -881,4 +881,150 @@ namespace tut
         cache.get(r[2], 3, &hit);
         ensure("the least recently used went", !hit);
     }
+
+    /// Nesting as every pair is tested, in index order: the reference the box sweep must match.
+    void nestEveryPair(skmap::SliceResult& s, const std::vector<bool>* active)
+    {
+        const size_t n = s.mLoops.size();
+        std::vector<F32> a(n);
+        std::vector<LLVector2> lo(n, LLVector2(FLT_MAX, FLT_MAX)), hi(n, LLVector2(-FLT_MAX, -FLT_MAX));
+        for (size_t i = 0; i < n; ++i)
+        {
+            const skmap::SliceLoop& l = s.mLoops[i];
+            a[i] = std::fabs(skmap::loopArea(&s.mPts[l.mFirst], l.mCount));
+            for (U32 k = 0; k < l.mCount; ++k)
+            {
+                const LLVector2& p = s.mPts[l.mFirst + k];
+                lo[i].set(llmin(lo[i].mV[VX], p.mV[VX]), llmin(lo[i].mV[VY], p.mV[VY]));
+                hi[i].set(llmax(hi[i].mV[VX], p.mV[VX]), llmax(hi[i].mV[VY], p.mV[VY]));
+            }
+        }
+        auto on = [&](size_t i) { return !active || (i < active->size() && (*active)[i]); };
+        for (size_t i = 0; i < n; ++i)
+        {
+            skmap::SliceLoop& l = s.mLoops[i];
+            l.mParent = -1;
+            if (!on(i))
+            {
+                l.mWind = 0;
+                continue;
+            }
+            S32 depth = 0;
+            for (size_t j = 0; j < n; ++j)
+            {
+                if (j == i || !on(j) || !(lo[j].mV[VX] <= lo[i].mV[VX] && hi[i].mV[VX] <= hi[j].mV[VX] && lo[j].mV[VY] <= lo[i].mV[VY]
+                                          && hi[i].mV[VY] <= hi[j].mV[VY]) || a[j] <= a[i])
+                {
+                    continue;
+                }
+                bool inside = true;
+                for (U32 k = 0; k < l.mCount && inside; ++k)
+                {
+                    inside = skmap::loopContains(&s.mPts[s.mLoops[j].mFirst], s.mLoops[j].mCount, s.mPts[l.mFirst + k]);
+                }
+                if (!inside)
+                {
+                    continue;
+                }
+                ++depth;
+                if (l.mParent < 0 || a[j] < a[l.mParent])
+                {
+                    l.mParent = static_cast<S32>(j);
+                }
+            }
+            l.mWind = depth % 2 == 0 ? 1 : -1;
+        }
+    }
+
+    // Many loops are nested by a sweep over their boxes; it finds the parents and winds testing every pair finds,
+    // through shared edges, equal areas, copies, flat loops, loops left out and overlaps that are not containment.
+    template<> template<>
+    void skmapsection_object::test<25>()
+    {
+        U32 seed = 12345;
+        auto next = [&](U32 m) {
+            seed = seed * 1664525u + 1013904223u;
+            return (seed >> 8) % m;
+        };
+        skmap::SliceResult s;
+        for (S32 k = 0; k < 300; ++k)
+        {
+            const F32 x = 0.5f * next(40), y = 0.5f * next(40), w = 0.5f * (1 + next(12)), h = 0.5f * (1 + next(12));
+            std::vector<LLVector2> pts;
+            if (next(10) == 0)
+            {
+                pts = { LLVector2(x, y), LLVector2(x, y + 0.5f * h), LLVector2(x, y + h) };   // flat, as a face cut along gives
+            }
+            else if (next(3) == 0)
+            {
+                pts = { LLVector2(x, y), LLVector2(x + w, y), LLVector2(x, y + h) };
+            }
+            else
+            {
+                pts = { LLVector2(x, y), LLVector2(x + w, y), LLVector2(x + w, y + h), LLVector2(x, y + h) };
+            }
+            const S32 copies = next(8) == 0 ? 2 : 1;
+            for (S32 c = 0; c < copies; ++c)
+            {
+                skmap::SliceLoop l;
+                l.mFirst = static_cast<U32>(s.mPts.size());
+                l.mCount = static_cast<U32>(pts.size());
+                s.mPts.insert(s.mPts.end(), pts.begin(), pts.end());
+                s.mLoops.push_back(l);
+            }
+        }
+        std::vector<bool> some(s.mLoops.size());
+        for (size_t i = 0; i < some.size(); ++i)
+        {
+            some[i] = next(5) != 0;
+        }
+        // And the same turned on its side: the sweep runs along whichever axis the boxes crowd less, so one of the
+        // two sweeps along x and the other along y.
+        skmap::SliceResult turned = s;
+        for (LLVector2& p : turned.mPts)
+        {
+            std::swap(p.mV[VX], p.mV[VY]);
+        }
+        const std::vector<bool>* modes[] = { nullptr, &some };
+        const skmap::SliceResult* sources[] = { &s, &turned };
+        for (const skmap::SliceResult* source : sources)
+        {
+            for (const std::vector<bool>* active : modes)
+            {
+                skmap::SliceResult swept = *source, plain = *source;
+                skmap::windByNesting(swept, active);
+                nestEveryPair(plain, active);
+                ensure("the same parents and winds", sameLoops(swept.mLoops, plain.mLoops));
+                S32 nested = 0;
+                for (const skmap::SliceLoop& l : plain.mLoops)
+                {
+                    nested += l.mParent >= 0 ? 1 : 0;
+                }
+                ensure("some loops nest", nested > 10);
+                // A group per +1 loop, its holes its -1 children in index order.
+                size_t g = 0, holes = 0;
+                for (size_t i = 0; i < plain.mLoops.size(); ++i)
+                {
+                    if (plain.mLoops[i].mWind != 1)
+                    {
+                        continue;
+                    }
+                    std::vector<U16> want;
+                    for (size_t j = 0; j < plain.mLoops.size(); ++j)
+                    {
+                        if (plain.mLoops[j].mWind == -1 && plain.mLoops[j].mParent == static_cast<S32>(i))
+                        {
+                            want.push_back(static_cast<U16>(j));
+                        }
+                    }
+                    holes += want.size();
+                    ensure("a group per outer loop", g < swept.mGroups.size() && swept.mGroups[g].mOuter == i);
+                    ensure("its holes in order", swept.mGroups[g].mHoles == want);
+                    ++g;
+                }
+                ensure_equals("no other groups", swept.mGroups.size(), g);
+                ensure("some holes", holes > 0);
+            }
+        }
+    }
 }
