@@ -440,18 +440,13 @@ bool SKOTSCamera::reportedCamera(LLVector3& pos, LLVector3& at, LLVector3& left,
     return true;
 }
 
-void SKOTSCamera::convergeRotations(const LLVector3& aim_at, LLQuaternion& body, LLQuaternion& head)
+void SKOTSCamera::convergeHead(const LLVector3& aim_at, LLQuaternion& head)
 {
-    // Uncapped: a gun aiming from llGetRot has to land on the crosshair at every range.
-    LLQuaternion turn;
-    turn.shortestArc(LLVector3::x_axis * body, aim_at);
-    body = body * turn;
-
-    // The head is built from the look direction exactly as LLAgent::getHeadRotation does in mouselook.
-    const LLVector3 look = LLVector3::x_axis * body;
-    const LLVector3 up = look % gAgent.getFrameAgent().getLeftAxis();
-    const LLVector3 left = up % look;
-    head = LLQuaternion(look, left, up);
+    // Built from the look direction exactly as LLAgent::getHeadRotation does in mouselook.
+    LLVector3 up = aim_at % gAgent.getFrameAgent().getLeftAxis();
+    up.normalize();
+    const LLVector3 left = up % aim_at;
+    head = LLQuaternion(aim_at, left, up);
 }
 
 void SKOTSCamera::onCameraUpdated(bool first_person)
