@@ -3592,13 +3592,13 @@ void send_agent_update(bool force_send, bool send_reliable)
     LLVector3 camera_at = LLViewerCamera::getInstance()->getAtAxis();
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
-    // <SK:Nexii> Over-the-shoulder view reports the eye aimed at the crosshair, and turns the body and head the same way,
-    // so weapons aiming from llGetCameraRot or llGetRot both fire from the avatar onto the crosshair
+    // <SK:Nexii> Over-the-shoulder view reports the eye aimed at the crosshair and turns the head the same way; the body
+    // is left alone, since the region moves the avatar along it
     LLVector3 camera_left = LLViewerCamera::getInstance()->getLeftAxis();
     LLVector3 camera_up = LLViewerCamera::getInstance()->getUpAxis();
     if (SKOTSCamera::reportedCamera(camera_pos_agent, camera_at, camera_left, camera_up))
     {
-        SKOTSCamera::convergeRotations(camera_at, body_rotation, head_rotation);
+        SKOTSCamera::convergeHead(camera_at, head_rotation);
     }
     // </SK:Nexii>
     U8 render_state = gAgent.getRenderState();
