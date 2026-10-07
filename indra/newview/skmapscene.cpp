@@ -112,7 +112,7 @@ void SKMapScene::cleanupSingleton()
     mCarrySources.clear();
     mCarried.clear();
     mHatch = nullptr;
-    mBoundaryBuffer = nullptr;
+    mBoundary = RibbonBuffer();
     mRibbonUploads.clear();
     mRibbonWanted.clear();
 }
@@ -912,12 +912,59 @@ U64 SKMapScene::ribbonKey(U64 mark_hash, const skmap::RibbonParams& params)
     return sknav::mix(key, (params.mCover ? 1u : 0u) | (params.mDoors ? 2u : 0u));
 }
 
-void SKMapScene::drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const
+namespace
 {
+    /// A ribbon buffer for these triangles, positions written at the scale given.
+    LLPointer<LLVertexBuffer> makeRibbonBuffer(const skmap::Ribbons& ribbons, F32 mpp)
+    {
+        if (ribbons.mVerts.empty())
+        {
+            return nullptr;
+        }
+        // The overlay's attribute set: what gUIProgram reads.
+        LLPointer<LLVertexBuffer> vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
+        LLStrider<LLVector3> positions;
+        LLStrider<LLVector2> texcoords;
+        LLStrider<LLColor4U> colours;
+        if (!vb->allocateBuffer(static_cast<U32>(ribbons.mVerts.size()), 0) || !vb->getVertexStrider(positions)
+            || !vb->getTexCoord0Strider(texcoords) || !vb->getColorStrider(colours))
+        {
+            return nullptr;
+        }
+        for (U32 i = 0; i < static_cast<U32>(ribbons.mVerts.size()); ++i)
+        {
+            positions[i] = ribbons.at(i, mpp);
+            texcoords[i] = LLVector2(0.f, 0.f);
+            colours[i] = ribbons.mColours[i];
+        }
+        vb->unmapBuffer();
+        return vb;
+    }
+}
+
+void SKMapScene::drawBuffer(const skmap::MapView& view, RibbonBuffer& buffer) const
+{
+    LLVertexBuffer* vb = buffer.mBuffer;
     if (!vb || !vb->getNumVerts())
     {
         return;
     }
+    // Widths are screen pixels: when the zoom has moved since the positions were written, move them out or in.
+    const F32 mpp = view.mpp();
+    if (buffer.mSource && std::fabs(mpp - buffer.mMpp) > buffer.mMpp * 0.002f)
+    {
+        LLStrider<LLVector3> positions;
+        if (vb->getVertexStrider(positions))
+        {
+            for (U32 i = 0; i < static_cast<U32>(buffer.mSource->mVerts.size()); ++i)
+            {
+                positions[i] = buffer.mSource->at(i, mpp);
+            }
+            vb->unmapBuffer();
+            buffer.mMpp = mpp;
+        }
+    }
+    const LLVector3d& origin = buffer.mOrigin;
     // Scene-local metres to widget pixels, from the scene the buffer was built in: a cached buffer outlives a box re-snap.
     const LLVector3d offset = origin - view.centre();
     gGL.flush();
@@ -1017,7 +1064,7 @@ void SKMapScene::drawRibbons(const skmap::MapView& view, S32 layer, const skmap:
     if (it != mRibbons.end())
     {
         it->second.mLastDrawn = now;
-        drawBuffer(view, it->second.mBuffer, it->second.mOrigin);
+        drawBuffer(view, it->second);
         const auto cut = mCutHashes.find(layer);
         mShownRibbons[layer] = { it->first, cut != mCutHashes.end() ? cut->second : 0 };
     }
@@ -1066,33 +1113,12 @@ void SKMapScene::uploadRibbons()
     const F64 now = LLFrameTimer::getElapsedSeconds();
     while (!mRibbonUploads.empty())
     {
-        const RibbonResult& r = mRibbonUploads.front();
-        LLPointer<LLVertexBuffer> vb;
-        if (!r.mRibbons.mVerts.empty())
-        {
-            // The overlay's attribute set: what gUIProgram reads.
-            vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
-            LLStrider<LLVector3> positions;
-            LLStrider<LLVector2> texcoords;
-            LLStrider<LLColor4U> colours;
-            if (vb->allocateBuffer(static_cast<U32>(r.mRibbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
-                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
-            {
-                for (U32 i = 0; i < static_cast<U32>(r.mRibbons.mVerts.size()); ++i)
-                {
-                    positions[i] = r.mRibbons.mVerts[i];
-                    texcoords[i] = LLVector2(0.f, 0.f);
-                    colours[i] = r.mRibbons.mColours[i];
-                }
-                vb->unmapBuffer();
-            }
-            else
-            {
-                vb = nullptr;
-            }
-        }
+        RibbonResult& r = mRibbonUploads.front();
+        auto source = std::make_shared<const skmap::Ribbons>(std::move(r.mRibbons));
         RibbonBuffer& buffer = mRibbons[r.mKey];
-        buffer.mBuffer = vb;
+        buffer.mBuffer = makeRibbonBuffer(*source, source->mMpp);
+        buffer.mMpp = source->mMpp;
+        buffer.mSource = std::move(source);
         buffer.mOrigin = r.mOrigin;
         buffer.mLastDrawn = now;
         mRibbonLatest[r.mMarkHash] = r.mKey;
@@ -1191,29 +1217,12 @@ void SKMapScene::drawVoid(const skmap::MapView& view)
     if (key != mBoundaryKey)
     {
         mBoundaryKey = key;
-        mBoundaryOrigin = mScene->mOrigin;
-        skmap::Ribbons ribbons;
-        skmap::buildBoundaryRibbons(*mScene, params, ribbons);
-        mBoundaryBuffer = nullptr;
-        if (!ribbons.mVerts.empty())
-        {
-            LLPointer<LLVertexBuffer> vb = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR);
-            LLStrider<LLVector3> positions;
-            LLStrider<LLVector2> texcoords;
-            LLStrider<LLColor4U> colours;
-            if (vb->allocateBuffer(static_cast<U32>(ribbons.mVerts.size()), 0) && vb->getVertexStrider(positions)
-                && vb->getTexCoord0Strider(texcoords) && vb->getColorStrider(colours))
-            {
-                for (U32 i = 0; i < static_cast<U32>(ribbons.mVerts.size()); ++i)
-                {
-                    positions[i] = ribbons.mVerts[i];
-                    texcoords[i] = LLVector2(0.f, 0.f);
-                    colours[i] = ribbons.mColours[i];
-                }
-                vb->unmapBuffer();
-                mBoundaryBuffer = vb;
-            }
-        }
+        auto ribbons = std::make_shared<skmap::Ribbons>();
+        skmap::buildBoundaryRibbons(*mScene, params, *ribbons);
+        mBoundary.mOrigin = mScene->mOrigin;
+        mBoundary.mBuffer = makeRibbonBuffer(*ribbons, ribbons->mMpp);
+        mBoundary.mMpp = ribbons->mMpp;
+        mBoundary.mSource = std::move(ribbons);
     }
-    drawBuffer(view, mBoundaryBuffer, mBoundaryOrigin);
+    drawBuffer(view, mBoundary);
 }

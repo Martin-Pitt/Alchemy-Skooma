@@ -57,33 +57,54 @@ namespace skmap
             return kind == MarkKind::DOOR_JAMB || kind == MarkKind::DOOR_LEAF || kind == MarkKind::LADDER || kind == MarkKind::ELEVATOR;
         }
 
+        /// Anchors in metres, offsets from them in screen pixels at mMpp.
         struct Writer
         {
             Ribbons& mOut;
+            F32 mMpp;
 
-            void tri(const LLVector2& a, const LLVector2& b, const LLVector2& c, const LLColor4U& colour)
+            void vert(const LLVector2& anchor, const LLVector2& px, const LLColor4U& colour)
             {
-                mOut.mVerts.emplace_back(a.mV[VX], a.mV[VY], 0.f);
-                mOut.mVerts.emplace_back(b.mV[VX], b.mV[VY], 0.f);
-                mOut.mVerts.emplace_back(c.mV[VX], c.mV[VY], 0.f);
-                mOut.mColours.push_back(colour);
-                mOut.mColours.push_back(colour);
+                mOut.mVerts.emplace_back(anchor.mV[VX] + px.mV[VX] * mMpp, anchor.mV[VY] + px.mV[VY] * mMpp, 0.f);
+                mOut.mOffsets.push_back(px);
                 mOut.mColours.push_back(colour);
             }
 
-            void line(const LLVector2& a, const LLVector2& b, F32 width, const LLColor4U& colour)
+            void tri(const LLVector2& a, const LLVector2& pa, const LLVector2& b, const LLVector2& pb, const LLVector2& c,
+                     const LLVector2& pc, const LLColor4U& colour)
+            {
+                vert(a, pa, colour);
+                vert(b, pb, colour);
+                vert(c, pc, colour);
+            }
+
+            /// From a to b in metres, width in pixels.
+            void line(const LLVector2& a, const LLVector2& b, F32 width_px, const LLColor4U& colour)
             {
                 LLVector2 d = b - a;
                 if (d.normVec() < 1e-6f)
                 {
                     return;
                 }
-                const LLVector2 n(-d.mV[VY] * width * 0.5f, d.mV[VX] * width * 0.5f);
-                tri(a - n, b - n, b + n, colour);
-                tri(a - n, b + n, a + n, colour);
+                const LLVector2 n(-d.mV[VY] * width_px * 0.5f, d.mV[VX] * width_px * 0.5f);
+                tri(a, -n, b, -n, b, n, colour);
+                tri(a, -n, b, n, a, n, colour);
             }
 
-            /// On and off along a to b, in metres, starting on.
+            /// A glyph stroke: one anchor in metres, its ends and width in pixels.
+            void stroke(const LLVector2& anchor, const LLVector2& pa, const LLVector2& pb, F32 width_px, const LLColor4U& colour)
+            {
+                LLVector2 d = pb - pa;
+                if (d.normVec() < 1e-6f)
+                {
+                    return;
+                }
+                const LLVector2 n(-d.mV[VY] * width_px * 0.5f, d.mV[VX] * width_px * 0.5f);
+                tri(anchor, pa - n, anchor, pb - n, anchor, pb + n, colour);
+                tri(anchor, pa - n, anchor, pb + n, anchor, pa + n, colour);
+            }
+
+            /// On and off along a to b, in metres, starting on; width in pixels.
             void dashed(const LLVector2& a, const LLVector2& b, F32 width, F32 on, F32 off, const LLColor4U& colour)
             {
                 LLVector2 d = b - a;
@@ -208,9 +229,8 @@ namespace skmap
             }
         }
 
-        void glyphs(Writer& w, const MarkRun& run, const RibbonParams& p)
+        void glyphs(Writer& w, const MarkRun& run)
         {
-            const F32 mpp = p.mMpp;
             switch (run.mKind)
             {
                 case MarkKind::DROP_POINT:
@@ -220,32 +240,31 @@ namespace skmap
                     {
                         dir.set(0.f, -1.f);
                     }
-                    const F32 half = palette::DROP_POINT_PX * 0.5f * mpp;
+                    const F32 half = palette::DROP_POINT_PX * 0.5f;
                     const LLVector2 across(-dir.mV[VY], dir.mV[VX]);
-                    w.tri(run.mA + dir * half, run.mA - dir * half + across * half, run.mA - dir * half - across * half,
+                    w.tri(run.mA, dir * half, run.mA, -dir * half + across * half, run.mA, -dir * half - across * half,
                           colour4u(palette::DROP_EDGE));
                     break;
                 }
                 case MarkKind::LADDER:
                 {
-                    const F32 h = palette::FEATURE_GLYPH_PX * 0.5f * mpp;
-                    const F32 width = 1.5f * mpp;
+                    const F32 h = palette::FEATURE_GLYPH_PX * 0.5f;
+                    const F32 width = 1.5f;
                     const LLColor4U c = colour4u(palette::FEATURE_GLYPH);
-                    w.line(run.mA + LLVector2(-h, -h), run.mA + LLVector2(-h, h), width, c);
-                    w.line(run.mA + LLVector2(h, -h), run.mA + LLVector2(h, h), width, c);
-                    w.line(run.mA + LLVector2(-h, 0.f), run.mA + LLVector2(h, 0.f), width, c);
+                    w.stroke(run.mA, LLVector2(-h, -h), LLVector2(-h, h), width, c);
+                    w.stroke(run.mA, LLVector2(h, -h), LLVector2(h, h), width, c);
+                    w.stroke(run.mA, LLVector2(-h, 0.f), LLVector2(h, 0.f), width, c);
                     break;
                 }
                 case MarkKind::ELEVATOR:
                 {
-                    const F32 h = palette::FEATURE_GLYPH_PX * 0.5f * mpp;
-                    const F32 width = 1.5f * mpp;
+                    const F32 h = palette::FEATURE_GLYPH_PX * 0.5f;
+                    const F32 width = 1.5f;
                     const LLColor4U c = colour4u(palette::FEATURE_GLYPH);
-                    const LLVector2 corners[4] = { run.mA + LLVector2(-h, -h), run.mA + LLVector2(h, -h), run.mA + LLVector2(h, h),
-                                                   run.mA + LLVector2(-h, h) };
+                    const LLVector2 corners[4] = { LLVector2(-h, -h), LLVector2(h, -h), LLVector2(h, h), LLVector2(-h, h) };
                     for (S32 k = 0; k < 4; ++k)
                     {
-                        w.line(corners[k], corners[(k + 1) % 4], width, c);
+                        w.stroke(run.mA, corners[k], corners[(k + 1) % 4], width, c);
                     }
                     break;
                 }
@@ -347,7 +366,8 @@ namespace skmap
         out.clear();
         std::vector<MarkRun> runs;
         mergeMarks(scene, layer, params, runs, cut);
-        Writer w { out };
+        out.mMpp = params.mMpp;
+        Writer w { out, params.mMpp };
         const F32 mpp = params.mMpp;
         for (const MarkRun& run : runs)
         {
@@ -361,64 +381,64 @@ namespace skmap
                 case MarkKind::WALL:
                     if (run.mCover == sknav::Cover::FULL)
                     {
-                        w.line(run.mA, run.mB, palette::COVER_FULL_PX * mpp, colour4u(palette::COVER_FULL));
+                        w.line(run.mA, run.mB, palette::COVER_FULL_PX, colour4u(palette::COVER_FULL));
                     }
                     else if (run.mCover == sknav::Cover::HALF)
                     {
                         const LLColor4U c = colour4u(palette::COVER_HALF);
-                        w.line(run.mA, run.mB, palette::COVER_HALF_PX * mpp, c);
+                        w.line(run.mA, run.mB, palette::COVER_HALF_PX, c);
                         if (mpp < palette::HALF_GLYPH_MAX_MPP && run.mFloorSide != 0)
                         {
                             // A half shield on the floor side: a half disc.
                             const F32 spacing = llmax(2.f, palette::HALF_GLYPH_PX * mpp);
-                            const F32 r = palette::HALF_GLYPH_SIZE_PX * 0.5f * mpp;
+                            const F32 r = palette::HALF_GLYPH_SIZE_PX * 0.5f;
                             for (F32 t = spacing * 0.5f; t < length; t += spacing)
                             {
                                 const LLVector2 centre = run.mA + dir * t;
                                 for (S32 k = 0; k < 6; ++k)
                                 {
                                     const F32 a0 = F_PI * k / 6.f, a1 = F_PI * (k + 1) / 6.f;
-                                    w.tri(centre, centre + dir * (r * std::cos(a0)) + floor_side * (r * std::sin(a0)),
-                                          centre + dir * (r * std::cos(a1)) + floor_side * (r * std::sin(a1)), c);
+                                    w.tri(centre, LLVector2::zero, centre, dir * (r * std::cos(a0)) + floor_side * (r * std::sin(a0)), centre,
+                                          dir * (r * std::cos(a1)) + floor_side * (r * std::sin(a1)), c);
                                 }
                             }
                         }
                     }
                     else
                     {
-                        w.line(run.mA, run.mB, palette::COVER_LOW_PX * mpp, colour4u(palette::COVER_LOW));
+                        w.line(run.mA, run.mB, palette::COVER_LOW_PX, colour4u(palette::COVER_LOW));
                     }
                     break;
                 case MarkKind::LEDGE:
                 {
                     const LLColor4U c = colour4u(palette::LEDGE);
-                    w.line(run.mA, run.mB, palette::LEDGE_PX * mpp, c);
+                    w.line(run.mA, run.mB, palette::LEDGE_PX, c);
                     if (mpp < palette::LEDGE_TICK_MAX_MPP && run.mFloorSide != 0)
                     {
                         const F32 spacing = palette::LEDGE_TICK_SPACING_PX * mpp;
                         for (F32 t = spacing * 0.5f; t < length; t += spacing)
                         {
                             const LLVector2 at = run.mA + dir * t;
-                            w.line(at, at - floor_side * (palette::LEDGE_TICK_PX * mpp), palette::LEDGE_PX * mpp, c);
+                            w.stroke(at, LLVector2::zero, -floor_side * palette::LEDGE_TICK_PX, palette::LEDGE_PX, c);
                         }
                     }
                     break;
                 }
                 case MarkKind::DROP_EDGE:
-                    w.line(run.mA, run.mB, palette::DROP_EDGE_PX * mpp, colour4u(palette::DROP_EDGE));
+                    w.line(run.mA, run.mB, palette::DROP_EDGE_PX, colour4u(palette::DROP_EDGE));
                     break;
                 case MarkKind::OVERHANG:
-                    w.dashed(run.mA, run.mB, palette::OVERHANG_PX * mpp, palette::OVERHANG_ON_PX * mpp, palette::OVERHANG_OFF_PX * mpp,
+                    w.dashed(run.mA, run.mB, palette::OVERHANG_PX, palette::OVERHANG_ON_PX * mpp, palette::OVERHANG_OFF_PX * mpp,
                              colour4u(palette::OVERHANG));
                     break;
                 case MarkKind::DOOR_JAMB:
-                    w.line(run.mA, run.mB, palette::DOOR_JAMB_PX * mpp, colour4u(palette::DOOR_JAMB));
+                    w.line(run.mA, run.mB, palette::DOOR_JAMB_PX, colour4u(palette::DOOR_JAMB));
                     break;
                 case MarkKind::DOOR_LEAF:
-                    w.line(run.mA, run.mB, palette::DOOR_LEAF_PX * mpp, colour4u(palette::DOOR_LEAF));
+                    w.line(run.mA, run.mB, palette::DOOR_LEAF_PX, colour4u(palette::DOOR_LEAF));
                     break;
                 default:
-                    glyphs(w, run, params);
+                    glyphs(w, run);
                     break;
             }
         }
@@ -427,17 +447,18 @@ namespace skmap
     void buildBoundaryRibbons(const Scene& scene, const RibbonParams& params, Ribbons& out)
     {
         out.clear();
-        Writer w { out };
+        out.mMpp = params.mMpp;
+        Writer w { out, params.mMpp };
         const F32 mpp = params.mMpp;
         for (const LineMark& mark : scene.mBoundaries)
         {
             if (mark.mKind == MarkKind::VOID_BOUNDARY)
             {
-                w.line(mark.mA, mark.mB, palette::VOID_BOUNDARY_PX * mpp, colour4u(palette::VOID_BOUNDARY));
+                w.line(mark.mA, mark.mB, palette::VOID_BOUNDARY_PX, colour4u(palette::VOID_BOUNDARY));
             }
             else
             {
-                w.dashed(mark.mA, mark.mB, palette::REGION_BOUNDARY_PX * mpp, palette::REGION_DASH_ON_PX * mpp,
+                w.dashed(mark.mA, mark.mB, palette::REGION_BOUNDARY_PX, palette::REGION_DASH_ON_PX * mpp,
                          palette::REGION_DASH_OFF_PX * mpp, colour4u(palette::REGION_BOUNDARY));
             }
         }

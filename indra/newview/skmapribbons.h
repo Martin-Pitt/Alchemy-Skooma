@@ -49,15 +49,26 @@ namespace skmap
         bool mDoors = true;         ///< doors, ladders and elevators
     };
 
-    /// Triangles in scene-local metres, z 0, three vertices each, colour per vertex.
+    /// Triangles in scene-local metres at the build scale, z 0, three vertices each, colour per vertex.
+    /// Each vertex also keeps its offset from its line in screen pixels, so a draw at another scale moves it by
+    /// mOffsets[i] * (mpp - mMpp) and widths stay constant on screen while a zoom outruns the rebuild.
     struct Ribbons
     {
         std::vector<LLVector3> mVerts;
+        std::vector<LLVector2> mOffsets;
         std::vector<LLColor4U> mColours;
+        F32 mMpp = 1.f;
         void clear()
         {
             mVerts.clear();
+            mOffsets.clear();
             mColours.clear();
+        }
+        /// Vertex i as drawn at another scale.
+        LLVector3 at(size_t i, F32 mpp) const
+        {
+            const F32 k = mpp - mMpp;
+            return LLVector3(mVerts[i].mV[VX] + mOffsets[i].mV[VX] * k, mVerts[i].mV[VY] + mOffsets[i].mV[VY] * k, 0.f);
         }
     };
 

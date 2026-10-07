@@ -147,7 +147,8 @@ private:
     /// Draw a layer's ribbon buffer, or the last one built for its marks while a new one is made.
     void drawRibbons(const skmap::MapView& view, S32 layer, const skmap::RibbonParams& params);
     /// Draw a buffer of scene-local metres built for the scene whose origin is given.
-    void drawBuffer(const skmap::MapView& view, LLVertexBuffer* vb, const LLVector3d& origin) const;
+    struct RibbonBuffer;
+    void drawBuffer(const skmap::MapView& view, RibbonBuffer& buffer) const;
     void postRibbons();
     void uploadRibbons();
 
@@ -156,6 +157,8 @@ private:
         LLPointer<LLVertexBuffer> mBuffer;
         LLVector3d mOrigin;         ///< the origin of the scene it was built in
         F64 mLastDrawn = 0.0;
+        std::shared_ptr<const skmap::Ribbons> mSource;  ///< kept to rewrite positions at a new scale
+        F32 mMpp = 0.f;             ///< the scale the buffer's positions were last written at
     };
     struct RibbonRequest
     {
@@ -236,8 +239,7 @@ private:
     std::deque<RibbonResult> mRibbonUploads;
 
     LLPointer<LLViewerTexture> mHatch;
-    LLPointer<LLVertexBuffer> mBoundaryBuffer;
-    LLVector3d mBoundaryOrigin;
+    RibbonBuffer mBoundary;
     U64 mBoundaryKey = 0;
     U64 mBoundaryHash = 0;                  ///< the scene's region and void edges, in global centimetres
 
