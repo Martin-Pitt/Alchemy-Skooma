@@ -1402,4 +1402,21 @@ template<> template<>
         ensure("the closet is its own space", closet && closet != deep.at(6.f, 6.f));
         ensure_equals("behind one opening", deep.between(closet, deep.at(6.f, 6.f)).size(), 1u);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<36>()
+    {
+        set_test_name("a slot narrower than an avatar passes is no portal, and blocks no merge");
+        const F32 passage = 2.f * SpaceParams().mAgentRadiusM;
+        const Result r = run(roomWithRecess(0.5f, 3.f).input(1));
+        const Space* room = r.at(6.f, 6.f);
+        ensure("the room has a space", room != nullptr);
+        ensure("the closet behind the slot is the room's", r.at(6.f, 11.5f) == room);
+        for (const Portal& q : r.mRooms->mPortals)
+        {
+            ensure("no portal narrower than a passage", q.mWidth >= passage);
+        }
+        const Result wide = run(roomWithRecess(passage + 0.15f, 3.f).input(1));
+        ensure("a doorway a passage wide still parts them", wide.at(6.f, 11.5f) != wide.at(6.f, 6.f));
+    }
 }

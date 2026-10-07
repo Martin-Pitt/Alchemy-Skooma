@@ -748,6 +748,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     rooms->mMeshOrigin = mesh.mOrigin;
     rooms->mPrevious = state.mRooms;
     rooms->mParams.mWalkHeadM = input->mParams.mWalkHeadM;
+    rooms->mParams.mAgentRadiusM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mRadius;
     const LLVector3d dlo(state.mMin.mdV[VX], state.mMin.mdV[VY], -1e9), dhi(state.mMax.mdV[VX], state.mMax.mdV[VY], 1e9);
     navmesh.doorsIn(dlo, dhi, [&rooms](const DoorEntity& d) { rooms->mDoors.push_back(d); });
     rooms->mLifts = lifts(dlo, dhi);

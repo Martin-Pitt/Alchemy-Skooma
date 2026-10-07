@@ -2795,6 +2795,7 @@ namespace sknav
         }
         std::vector<std::unordered_map<U64, S32>>().swap(mShadow);
         absorbFragments();
+        const F32 passage = 2.f * params().mAgentRadiusM;
         const U32 total = static_cast<U32>(mSeeds.size());
         auto makePortal = [this](const Run& r, const Scored& s, PortalKind kind, U32 u, U32 v) {
             Portal q;
@@ -2958,7 +2959,7 @@ namespace sknav
                         {
                             best = &r;
                         }
-                        if (r.mEdges < STAIR_RUN_EDGES || (ff > fs_lo + 1 && ff < fs_hi - 1) || (fs_lo == fs_hi && std::abs(ff - fs_lo) > STAIR_END_UNITS))
+                        if (r.mEdges < STAIR_RUN_EDGES || r.mWidth < passage || (ff > fs_lo + 1 && ff < fs_hi - 1) || (fs_lo == fs_hi && std::abs(ff - fs_lo) > STAIR_END_UNITS))
                         {
                             continue;
                         }
@@ -2979,8 +2980,9 @@ namespace sknav
                 bool any = false;
                 for (const Run& r : groupRuns(g.mU))
                 {
+                    // Narrower than an avatar passes is no way through, and blocks no merge.
                     const Scored s = score(r);
-                    if (s.mPortal)
+                    if (s.mPortal && (s.mKind == PortalKind::DOOR || r.mWidth >= passage))
                     {
                         makePortal(r, s, s.mKind, g.mU, g.mV);
                         any = true;

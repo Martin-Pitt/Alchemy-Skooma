@@ -526,6 +526,7 @@ namespace sknav
         rooms->mMeshOrigin = mesh.mOrigin;
         rooms->mPrevious = mesh.mRooms;
         rooms->mParams.mWalkHeadM = census.mEnclosure.mWalkHeadM;
+        rooms->mParams.mAgentRadiusM = census.mParams.mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius;
         const LLVector3d dlo(mesh.mAirMin.mdV[VX], mesh.mAirMin.mdV[VY], -1e9), dhi(mesh.mAirMax.mdV[VX], mesh.mAirMax.mdV[VY], 1e9);
         for (const DoorEntity& d : census.mDoors)
         {
