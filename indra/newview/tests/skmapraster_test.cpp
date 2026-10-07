@@ -776,4 +776,62 @@ namespace tut
             }
         }
     }
+
+    // A sheet room around floor is demoted to a line; a room whose walls have both faces keeps its ring, hole and all.
+    template<> template<>
+    void skmapraster_object::test<17>()
+    {
+        auto rect = [](std::vector<LLVector3>& out, F32 x0, F32 y0, F32 x1, F32 y1) {
+            const LLVector2 c[4] = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 } };
+            for (S32 i = 0; i < 4; ++i)
+            {
+                const LLVector2& p = c[i];
+                const LLVector2& q = c[(i + 1) % 4];
+                const LLVector3 a(p.mV[VX], p.mV[VY], 0.f), b(q.mV[VX], q.mV[VY], 0.f), d(q.mV[VX], q.mV[VY], 3.f), e(p.mV[VX], p.mV[VY], 3.f);
+                for (const LLVector3& v : { a, b, d, a, d, e })
+                {
+                    out.push_back(v);
+                }
+            }
+        };
+        auto pieces = [](const skmap::Scene& s, S32 plane, S32& filled, S32& lines, size_t& loops) {
+            filled = lines = 0;
+            loops = 0;
+            for (const skmap::SectionPiece& p : s.mPieces)
+            {
+                if (p.mPlane != plane)
+                {
+                    continue;
+                }
+                if (p.mFlags & skmap::PIECE_LINES)
+                {
+                    ++lines;
+                }
+                else
+                {
+                    ++filled;
+                    loops = p.mLoops.size();
+                }
+            }
+        };
+        const S32 low = skmap::SECTION_LOW_Q;
+        TileMaker t;
+        t.quad(0.f, 0.f, 8.f, 8.f, 0.f, 0.f);
+        S32 filled = 0, lines = 0;
+        size_t loops = 0;
+
+        std::vector<LLVector3> sheet;
+        rect(sheet, 1.f, 1.f, 7.f, 7.f);
+        pieces(*t.section({ soupOf(sheet, false, 1) }), low, filled, lines, loops);
+        ensure_equals("the sheet room fills nothing", filled, 0);
+        ensure_equals("the sheet room is a line", lines, 1);
+
+        std::vector<LLVector3> thick;
+        rect(thick, 1.f, 1.f, 7.f, 7.f);
+        rect(thick, 1.3f, 1.3f, 6.7f, 6.7f);
+        pieces(*t.section({ soupOf(thick, false, 1) }), low, filled, lines, loops);
+        ensure_equals("one filled ring", filled, 1);
+        ensure_equals("with its hole", loops, static_cast<size_t>(2));
+        ensure_equals("nothing demoted", lines, 0);
+    }
 }

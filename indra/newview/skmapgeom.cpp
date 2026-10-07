@@ -1636,8 +1636,31 @@ namespace skmap
                     bool demoted = false;
                     if (sl->mSheet)
                     {
+                        // Outer loops before the loops nested in them, so each sees its ancestors' verdicts.
+                        std::vector<std::pair<S32, size_t>> order;
                         for (size_t i = 0; i < sl->mLoops.size(); ++i)
                         {
+                            S32 depth = 0;
+                            for (S32 up = sl->mLoops[i].mParent; up >= 0; up = sl->mLoops[up].mParent)
+                            {
+                                ++depth;
+                            }
+                            order.emplace_back(depth, i);
+                        }
+                        std::sort(order.begin(), order.end());
+                        for (const auto& entry : order)
+                        {
+                            const size_t i = entry.second;
+                            // Inside an odd number of kept loops it bounds a hole, such as a thick wall's inner face: floor in it is not filled.
+                            S32 kept_above = 0;
+                            for (S32 up = sl->mLoops[i].mParent; up >= 0; up = sl->mLoops[up].mParent)
+                            {
+                                kept_above += active[up] ? 1 : 0;
+                            }
+                            if (kept_above % 2)
+                            {
+                                continue;
+                            }
                             const SliceLoop& loop = sl->mLoops[i];
                             const LLVector2* pts = &sl->mPts[loop.mFirst];
                             LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
