@@ -3595,8 +3595,8 @@ void SKNavMesh::refreshOverlay()
     {
         const SKNavAnnotator& annotator = SKNavAnnotator::instance();
         mRooms->gatherSpaces(mOverlay, camera, reach, opaque,
-                             [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b) {
-                                 return annotator.portalCrossed(mesh, space_a, space_b);
+                             [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) {
+                                 return annotator.portalCrossed(mesh, space_a, space_b, centre);
                              });
     }
     if (show_wind)

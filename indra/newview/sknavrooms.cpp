@@ -1178,7 +1178,7 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 // strike the annotator draws over it on top.
                 const std::vector<U32>& ids = m.mProduct->mSpaceIds;
                 if (!ids.empty() && p.mSpaces[0] < ids.size() && p.mSpaces[1] < ids.size()
-                    && crossed(m.mId, ids[p.mSpaces[0]], ids[p.mSpaces[1]]))
+                    && crossed(m.mId, ids[p.mSpaces[0]], ids[p.mSpaces[1]], (a + b) * 0.5 - LLVector3d(0.0, 0.0, 0.15)))
                 {
                     color = LLColor4(0.35f, 0.35f, 0.35f, opaque ? 1.f : 0.3f);
                     const LLVector3 pa = gAgent.getPosAgentFromGlobal(a), pb = gAgent.getPosAgentFromGlobal(b);

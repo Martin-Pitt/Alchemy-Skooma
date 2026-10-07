@@ -180,7 +180,7 @@ public:
     /// openings cyan, dashed without a lintel. Agent coordinates. Portals
     /// the filter says are crossed out draw greyed, under the strike the
     /// annotator draws over them.
-    typedef std::function<bool(const LLUUID& mesh, U32 space_a, U32 space_b)> PortalCrossedFn;
+    typedef std::function<bool(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre)> PortalCrossedFn;
     void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
                       const PortalCrossedFn& crossed = {}) const;
 

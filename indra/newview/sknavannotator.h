@@ -110,7 +110,7 @@ public:
     void clickPortal();
     /// Whether a portal mark crosses the cut between these two spaces of a
     /// mesh, either way round. What the spaces overlay asks while it draws.
-    bool portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b) const;
+    bool portalCrossed(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) const;
 
     /// Draw the marks, the one being placed and the hover point, in the
     /// world pass after the navmesh overlay.
@@ -138,6 +138,9 @@ private:
     void syncTool();
 
     sknav::MarkSet mMarks;
+    /// Per mesh, the spaces product its crosses were last held against.
+    std::map<LLUUID, const void*> mCrossesChecked;
+    void staleCrosses();
     sknav::Mark mPending;
     bool mArmed = false;
     sknav::MarkType mNewType = sknav::MarkType::MISSED_OPENING;
