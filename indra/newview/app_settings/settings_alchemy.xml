@@ -4694,17 +4694,6 @@
             <key>Value</key>
             <real>128.0</real>
         </map>
-        <key>SKMapRotate</key>
-        <map>
-            <key>Comment</key>
-            <string>Turn the mini-map with the camera instead of keeping north up.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <key>SKMapAutoCenter</key>
         <map>
             <key>Comment</key>

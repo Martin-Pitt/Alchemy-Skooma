@@ -62,6 +62,8 @@ namespace skmap
         constexpr S32 SHADOW_SPRITE_PX = 32;
         constexpr PaletteColour SELF_DOT = rgba8(0xffffffff);
         constexpr F32 SELF_DOT_RADIUS_PX = 2.6f;
+        constexpr F32 SELF_EDGE_INSET_PX = 10.f;      ///< the off-map self marker stops this far inside the edge
+        constexpr F32 SELF_EDGE_TRIANGLE_PX = 5.f;    ///< length of its triangle pointing to the avatar
         constexpr PaletteColour SELF_CONE = rgba8(0xffffff4d);
         constexpr F32 SELF_CONE_PX = 56.f;
         constexpr F32 DOT_RADIUS_PX = 3.f;

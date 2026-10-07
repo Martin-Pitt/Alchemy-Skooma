@@ -77,16 +77,6 @@
              top="8"
              width="308" />
             <check_box
-             control_name="SKMapRotate"
-             follows="left|top"
-             height="16"
-             label="Turn with the camera"
-             layout="topleft"
-             left="8"
-             name="sk_rotate"
-             top_pad="5"
-             width="308" />
-            <check_box
              control_name="SKMapAutoCenter"
              follows="left|top"
              height="16"

@@ -108,7 +108,6 @@ namespace skmap
             out["SKMapZoomMeters"] = llclamp(metres, 4.0, 512.0);
         }
         static const char* TOGGLES[][2] = {
-            { "MiniMapRotate", "SKMapRotate" },
             { "MiniMapAutoCenter", "SKMapAutoCenter" },
             { "MiniMapShowPropertyLines", "SKMapLayerParcels" },
             { "AlchemyMiniMapForSaleParcels", "SKMapLayerParcelsForSale" },
