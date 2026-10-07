@@ -854,8 +854,15 @@ namespace skmap
             {
                 return true;
             }
-            const F64 turn = std::atan2(std::fabs(ax * by - ay * bx), ax * bx + ay * by);
-            if (turn >= SECTION_MERGE_DEG * DEG_TO_RAD)
+            const F64 sine = std::fabs(ax * by - ay * bx), cosine = ax * bx + ay * by;
+            // The turn against the merge angle without atan2 unless it is within a hair of it: a turn of 90 degrees
+            // or more, or a tangent clearly either side of the angle's, decides alone.
+            static const F64 tan_merge = std::tan(static_cast<F64>(SECTION_MERGE_DEG * DEG_TO_RAD));
+            if (cosine < 0.0 || (cosine > 0.0 && sine > cosine * tan_merge * (1.0 + 1e-7)))
+            {
+                return false;
+            }
+            if (!(cosine > 0.0 && sine < cosine * tan_merge * (1.0 - 1e-7)) && std::atan2(sine, cosine) >= SECTION_MERGE_DEG * DEG_TO_RAD)
             {
                 return false;
             }
