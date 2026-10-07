@@ -80,12 +80,20 @@ namespace sknav
     /// A cluster clear of the ground: every lattice tile its box overlaps.
     void layAirborne(const Cluster& cluster, const LLVector3d& mesh_origin, F32 pad, std::vector<LaidTile>& out);
 
+    /// A connected region's land.
+    struct RegionSquare
+    {
+        LLVector3d mOrigin;
+        F64 mWidth = 256.0;
+    };
+
     /// A region's own mesh: its tiles over its land with every grounded record
-    /// reaching over that land, plus the void past its edge within void_margin
-    /// as far as the region's own records reach, where no other region's land
-    /// is (land_at says where there is).
+    /// reaching over that land but the surrounds, plus the void within
+    /// void_margin of its edge that no region's land covers and no other
+    /// region is nearer to, with every grounded record reaching there
+    /// whichever region it was rezzed in.
     void layRegion(const LLVector3d& region_origin, F64 width, const LLVector3d& mesh_origin, const std::vector<RecordPtr>& ground_records, F32 pad,
-                   F32 void_margin, const std::function<bool(const LLVector3d&)>& land_at, std::vector<LaidTile>& out);
+                   F32 void_margin, const std::vector<RegionSquare>& regions, std::vector<LaidTile>& out);
 
     /// Split a tile's records into shapes and cuts, and set the z range the
     /// tile rasterises from them and the terrain already in the input.

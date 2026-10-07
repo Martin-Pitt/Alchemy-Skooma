@@ -761,9 +761,9 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     {
         (grounded(*cluster) ? *ground : airborne).push_back(cluster);
     }
-    auto regions = std::make_shared<std::vector<std::pair<LLVector3d, F64>>>();
+    auto regions = std::make_shared<std::vector<RegionSquare>>();
     for (auto* region : LLWorld::getInstance()->getRegionList())
-        regions->emplace_back(region->getOriginGlobal(), region->getWidth());
+        regions->push_back({ region->getOriginGlobal(), region->getWidth() });
 
     const auto submit = [&](Mesh& mesh, ClusterPtr cluster, LLViewerRegion* region)
     {
@@ -797,14 +797,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - lay region worker");
                     std::vector<RecordPtr> records;
                     for (const auto& c : *ground) records.insert(records.end(), c->mRecords.begin(), c->mRecords.end());
-                    layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin,
-                        [regions](const LLVector3d& p)
-                        {
-                            for (const auto& r : *regions)
-                                if (p.mdV[VX] >= r.first.mdV[VX] && p.mdV[VY] >= r.first.mdV[VY] &&
-                                    p.mdV[VX] < r.first.mdV[VX] + r.second && p.mdV[VY] < r.first.mdV[VY] + r.second) return true;
-                            return false;
-                        }, layout->mTiles);
+                    layRegion(region_origin, width, origin, records, layout->mPad, layout->mVoidMargin, *regions, layout->mTiles);
                 }
                 for (const auto& tile : layout->mTiles)
                 {

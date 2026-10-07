@@ -256,14 +256,18 @@ namespace sknav
             meshes[mesh->mId] = std::move(mesh);
         }
         F64 terrain_ms = 0.0;
+        std::vector<RegionSquare> squares;
+        for (const CensusRegion& region : census.mRegions)
+        {
+            squares.push_back({ region.mOrigin, region.mWidth });
+        }
         for (const CensusRegion& region : census.mRegions)
         {
             auto mesh = std::make_unique<ReplayMesh>();
             mesh->mId = region.mId;
             mesh->mTerrain = true;
             mesh->mOrigin = latticeOrigin(region.mOrigin);
-            layRegion(region.mOrigin, region.mWidth, mesh->mOrigin, ground_records, pad, census.mVoidMargin,
-                      [&census](const LLVector3d& p) { return census.regionAt(p.mdV[VX], p.mdV[VY]) != nullptr; }, laid);
+            layRegion(region.mOrigin, region.mWidth, mesh->mOrigin, ground_records, pad, census.mVoidMargin, squares, laid);
             for (LaidTile& lt : laid)
             {
                 ReplayTile& tile = mesh->mTiles[lt.mKey];
