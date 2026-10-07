@@ -1344,13 +1344,15 @@ namespace skmap
             {
                 order.push_back(static_cast<U32>(i));
                 largest = llmax(largest, area[i]);
+                // A point that is not a number can drop out of a box but never out of the area.
                 finite = finite && s.mLoops[i].mCount > 0 && std::isfinite(lo[i].mV[VX]) && std::isfinite(lo[i].mV[VY])
-                      && std::isfinite(hi[i].mV[VX]) && std::isfinite(hi[i].mV[VY]);
+                      && std::isfinite(hi[i].mV[VX]) && std::isfinite(hi[i].mV[VY]) && !std::isnan(area[i]);
             }
         }
         // Many loops are swept along the axis their boxes overlap least on: only a loop whose box spans this one's
         // lower edge there can hold it, and the pairs the sweep passes over fail the box test, so it finds what
-        // testing every pair finds. Boxes that are empty or not finite cannot be ordered, so they keep the plain scan.
+        // testing every pair finds. Boxes that are empty or not finite, or areas not a number, cannot be ordered, so
+        // they keep the plain scan.
         constexpr size_t SWEEP_MIN = 32;
         if (order.size() <= SWEEP_MIN || !finite)
         {

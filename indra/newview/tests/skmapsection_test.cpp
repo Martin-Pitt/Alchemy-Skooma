@@ -34,6 +34,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -1026,5 +1027,34 @@ namespace tut
                 ensure("some holes", holes > 0);
             }
         }
+    }
+
+    // A loop with a point that is not a number has a finite box but no area; the sweep cannot order it, so it nests
+    // what testing every pair nests. Whether that holds the square depends on how the compiler orders NaN, so only
+    // the agreement is checked.
+    template<> template<>
+    void skmapsection_object::test<26>()
+    {
+        skmap::SliceResult s;
+        auto add = [&](const std::vector<LLVector2>& pts) {
+            skmap::SliceLoop l;
+            l.mFirst = static_cast<U32>(s.mPts.size());
+            l.mCount = static_cast<U32>(pts.size());
+            s.mPts.insert(s.mPts.end(), pts.begin(), pts.end());
+            s.mLoops.push_back(l);
+        };
+        for (S32 k = 0; k < 40; ++k)
+        {
+            const F32 x = 20.f + 2.f * k;
+            add({ LLVector2(x, 0.f), LLVector2(x + 1.f, 0.f), LLVector2(x + 1.f, 1.f), LLVector2(x, 1.f) });
+        }
+        // First, so the box's minimum forgets it; with IEEE comparisons the crossing test still finds (5, 5) inside.
+        const F32 nan = std::numeric_limits<F32>::quiet_NaN();
+        add({ LLVector2(nan, nan), LLVector2(0.f, 0.f), LLVector2(10.f, 0.f), LLVector2(10.f, 10.f), LLVector2(0.f, 10.f) });
+        add({ LLVector2(4.f, 4.f), LLVector2(6.f, 4.f), LLVector2(6.f, 6.f), LLVector2(4.f, 6.f) });
+        skmap::SliceResult swept = s, plain = s;
+        skmap::windByNesting(swept, nullptr);
+        nestEveryPair(plain, nullptr);
+        ensure("the same parents and winds", sameLoops(swept.mLoops, plain.mLoops));
     }
 }
