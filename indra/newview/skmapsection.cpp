@@ -1023,6 +1023,19 @@ namespace skmap
         void buildGroups(SliceResult& s)
         {
             s.mGroups.clear();
+            // Each loop's holes in index order, linked through the holes: one pass rather than a search per loop.
+            thread_local std::vector<S32> first_hole, next_hole;
+            first_hole.assign(s.mLoops.size(), -1);
+            next_hole.assign(s.mLoops.size(), -1);
+            for (size_t j = s.mLoops.size(); j-- > 0;)
+            {
+                const SliceLoop& hole = s.mLoops[j];
+                if (hole.mWind == -1 && hole.mParent >= 0 && static_cast<size_t>(hole.mParent) < s.mLoops.size())
+                {
+                    next_hole[j] = first_hole[hole.mParent];
+                    first_hole[hole.mParent] = static_cast<S32>(j);
+                }
+            }
             for (size_t i = 0; i < s.mLoops.size(); ++i)
             {
                 const SliceLoop& outer = s.mLoops[i];
@@ -1042,15 +1055,12 @@ namespace skmap
                     g.mMin.set(llmin(g.mMin.mV[VX], op[k].mV[VX]), llmin(g.mMin.mV[VY], op[k].mV[VY]));
                     g.mMax.set(llmax(g.mMax.mV[VX], op[k].mV[VX]), llmax(g.mMax.mV[VY], op[k].mV[VY]));
                 }
-                for (size_t j = 0; j < s.mLoops.size(); ++j)
+                for (S32 j = first_hole[i]; j >= 0; j = next_hole[j])
                 {
                     const SliceLoop& hole = s.mLoops[j];
-                    if (hole.mWind == -1 && hole.mParent == static_cast<S32>(i))
-                    {
-                        g.mHoles.push_back(static_cast<U16>(j));
-                        area -= std::fabs(loopArea(&s.mPts[hole.mFirst], hole.mCount));
-                        perimeter += loopLength(&s.mPts[hole.mFirst], hole.mCount);
-                    }
+                    g.mHoles.push_back(static_cast<U16>(j));
+                    area -= std::fabs(loopArea(&s.mPts[hole.mFirst], hole.mCount));
+                    perimeter += loopLength(&s.mPts[hole.mFirst], hole.mCount);
                 }
                 g.mArea = area;
                 g.mPerimeter = perimeter;
