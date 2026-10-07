@@ -105,7 +105,7 @@ namespace skmap
         if (classic.has("MiniMapScale") && classic["MiniMapScale"].asReal() > 0.0)
         {
             const F64 metres = 256.0 * widget_short_px / classic["MiniMapScale"].asReal();
-            out["SKMapZoomMeters"] = llclamp(metres, 4.0, 512.0);
+            out["SKMapZoomMeters"] = llclamp(metres, 4.0, 2048.0);
         }
         static const char* TOGGLES[][2] = {
             { "MiniMapAutoCenter", "SKMapAutoCenter" },

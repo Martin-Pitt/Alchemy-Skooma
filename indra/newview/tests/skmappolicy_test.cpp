@@ -168,10 +168,10 @@ namespace tut
         ensure("collision", !seeded["SKMapLayerParcelsCollision"].asBoolean());
         ensure("chat rings and guide line", seeded["SKMapLayerChatRings"].asBoolean() && seeded["SKMapLayerGuideLine"].asBoolean());
         ensure_equals("objects off", seeded["SKMapLayerObjects"].asInteger(), 0);
-        classic["MiniMapScale"] = 32.0;
+        classic["MiniMapScale"] = 8.0;
         classic["AlchemyMinimapRenderObjects"] = true;
         const LLSD again = seedFromClassic(classic, 200.f);
-        ensure("clamped at 512", std::fabs(again["SKMapZoomMeters"].asReal() - 512.0) < 1e-6);
+        ensure("clamped at 2048", std::fabs(again["SKMapZoomMeters"].asReal() - 2048.0) < 1e-6);
         ensure_equals("objects where no floorplan", again["SKMapLayerObjects"].asInteger(), 1);
         ensure("idempotent", llsd_equals(seedFromClassic(classic, 200.f), again));
         ensure("a key missing stays missing", !seedFromClassic(LLSD::emptyMap(), 200.f).has("SKMapAutoCenter"));

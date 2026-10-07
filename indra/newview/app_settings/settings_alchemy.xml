@@ -4686,7 +4686,7 @@
         <key>SKMapZoomMeters</key>
         <map>
             <key>Comment</key>
-            <string>Metres the mini-map shows across its short side, 4 to 512.</string>
+            <string>Metres the mini-map shows across its short side, 4 to 2048.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
