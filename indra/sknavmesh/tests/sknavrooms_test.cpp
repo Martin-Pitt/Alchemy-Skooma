@@ -1374,6 +1374,20 @@ namespace tut
     }
 
     template<> template<>
+    void sknavrooms_object::test<48>()
+    {
+        set_test_name("no stair portal is wider than a staircase, though a deck-wide flight meets its floors along 14 m");
+        Scene s;
+        s.box(20.f, 0.f, 28.f, 16.f, 3.f, 3.25f);
+        s.flight(12.f, 20.f, 1.f, 15.f, 3.25f);
+        const Result r = run(s.input(1));
+        for (const Portal& q : r.mRooms->mPortals)
+        {
+            ensure("no stair portal wider than a staircase", q.mKind != PortalKind::STAIR || q.mWidth <= STAIR_MAX_WIDTH_M);
+        }
+    }
+
+    template<> template<>
     void sknavrooms_object::test<30>()
     {
         set_test_name("a flight's links run from its foot to each exit; a lone end makes none");

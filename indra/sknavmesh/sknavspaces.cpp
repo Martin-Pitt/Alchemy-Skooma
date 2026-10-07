@@ -3443,6 +3443,11 @@ namespace sknav
                         }
                         std::nth_element(floor_side.begin(), floor_side.begin() + floor_side.size() / 2, floor_side.end());
                         const S32 ff = floor_side[floor_side.size() / 2];
+                        // A staircase is never wider than this: a wider contact runs along a deck or round a corner.
+                        if (r.mWidth > STAIR_MAX_WIDTH_M)
+                        {
+                            continue;
+                        }
                         if (r.mWidth >= passage && (!best || r.mEdges > best->mEdges))
                         {
                             best = &r;
