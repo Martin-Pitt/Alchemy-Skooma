@@ -62,7 +62,7 @@ class LLEventPoll;
 class LLVLComposition;
 class LLViewerObject;
 class LLMessageSystem;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLViewerParcelOverlay;
 class LLSurface;
 class LLVOCache;

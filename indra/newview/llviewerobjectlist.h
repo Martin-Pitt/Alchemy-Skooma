@@ -43,7 +43,7 @@
 #include "llcoros.h"
 
 class LLCamera;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLDebugBeacon;
 class LLVOCacheEntry;
 
@@ -121,7 +121,7 @@ public:
 
     bool hasMapObjectInRegion(LLViewerRegion* regionp) ;
     void clearAllMapObjectsInRegion(LLViewerRegion* regionp) ;
-    void renderObjectsForMap(LLNetMap &netmap);
+    //void renderObjectsForMap(LLNetMap &netmap); // <SK:Nexii> SKNetMap retired the classic mini-map
     void renderObjectBounds(const LLVector3 &center);
 
     void addDebugBeacon(const LLVector3 &pos_agent, const std::string &string,

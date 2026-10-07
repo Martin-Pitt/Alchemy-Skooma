@@ -38,7 +38,7 @@
 #include "llvoavatar.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
-#include "llnetmap.h"
+//#include "llnetmap.h" // <SK:Nexii> SKNetMap retired the classic mini-map
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "pipeline.h"
@@ -1901,6 +1901,8 @@ void LLViewerObjectList::clearAllMapObjectsInRegion(LLViewerRegion* regionp)
 }
 
 
+// <SK:Nexii> SKNetMap retired the classic mini-map, the only caller
+#if 0
 void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
 {
     static const LLUIColor above_water_color = LLUIColorTable::instance().getColor( "NetMapOtherOwnAboveWater" );
@@ -2051,6 +2053,8 @@ void LLViewerObjectList::renderObjectsForMap(LLNetMap &netmap)
             approx_radius );
     }
 }
+#endif
+// </SK:Nexii>
 
 void LLViewerObjectList::renderObjectBounds(const LLVector3 &center)
 {

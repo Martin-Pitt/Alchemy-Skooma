@@ -39,7 +39,7 @@ class LLFilterEditor;
 class LLGroupList;
 class LLMenuButton;
 class LLTabContainer;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLAccordionCtrl;
 class LLAccordionCtrlTab;
 
@@ -156,7 +156,7 @@ private:
     LLAvatarList*           mNearbyList;
     LLAvatarList*           mRecentList;
     LLGroupList*            mGroupList;
-    LLNetMap*               mMiniMap;
+    //LLNetMap*               mMiniMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 
     LLAccordionCtrl*        mFriendsAccordion = nullptr;
     LLAccordionCtrlTab*     mFriendsAllTab = nullptr;

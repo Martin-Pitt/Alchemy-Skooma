@@ -637,7 +637,7 @@ if(AL_BUILD_VIEWER)
     llfloaterimnearbychathandler.cpp
     llfloaterimnearbychatlistener.cpp
     llnearbyvoicemoderation.cpp
-    llnetmap.cpp
+    # llnetmap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationalerthandler.cpp
     llnotificationgrouphandler.cpp
     llnotificationhandlerutil.cpp
@@ -1501,7 +1501,7 @@ if(AL_BUILD_VIEWER)
     llnamelistctrl.h
     llnavigationbar.h
     llnearbyvoicemoderation.h
-    llnetmap.h
+    # llnetmap.h # <SK:Nexii> SKNetMap retired the classic mini-map
     llnotificationhandler.h
     llnotificationlistitem.h
     llnotificationlistview.h

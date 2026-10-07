@@ -44,7 +44,7 @@
 class LLViewerRegion;
 class LLVector3d;
 class LLMessageSystem;
-class LLNetMap;
+//class LLNetMap; // <SK:Nexii> SKNetMap retired the classic mini-map
 class LLHost;
 
 class LLViewerObject;
