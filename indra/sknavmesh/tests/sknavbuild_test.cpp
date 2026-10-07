@@ -29,6 +29,7 @@
 #include "../sknavairdistil.h"
 #include "../sknavbuild.h"
 #include "../sknavbuildstats.h"
+#include "../sknavlayout.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
@@ -1228,5 +1229,44 @@ namespace tut
             }
             ensure(std::string(c.mName) + ": the leaf's faces", faces_differ);
         }
+    }
+
+    // A tile is swapped into Detour with the caller holding its bytes: a
+    // replacement Detour refuses leaves the old tile in, under its old ref,
+    // where the old way took it out first and had nothing to put back.
+    template<> template<>
+    void sknavbuild_object::test<29>()
+    {
+        set_test_name("a tile Detour refuses leaves the one it replaces in place");
+        TileBuildInput in = tile(0, 0);
+        in.mTerrain = flat(0.f);
+        in.mRecords.push_back(box(10.f, 10.f, 0.f, 20.f, 20.f, 1.f));
+        const TileBuildResult a = buildTile(in);
+        in.mRecords.push_back(box(4.f, 4.f, 0.f, 8.f, 8.f, 2.f));
+        const TileBuildResult b = buildTile(in);
+        ensure("built", a.mStatus == TileBuildResult::SUCCESS && b.mStatus == TileBuildResult::SUCCESS && a.mData[0] != b.mData[0]);
+        dtNavMesh* nav = allocMeshNav();
+        ensure("a navmesh", nav != nullptr);
+        // Detour links the tile inside its bytes, so they are followed by address.
+        std::vector<U8> held, next = a.mData[0];
+        const U8* bytes = next.data();
+        ensure("the first tile goes in", swapDetourTile(*nav, 0, 0, held, next) && held.data() == bytes && next.empty());
+        const dtTileRef first = nav->getTileRefAt(0, 0, 0);
+        ensure("Detour reads the held bytes", first && nav->getTileAt(0, 0, 0)->data == held.data());
+
+        std::vector<U8> refused = b.mData[0];
+        refused[0] ^= 0xff;     // the header's magic
+        ensure("a broken tile is refused", !swapDetourTile(*nav, 0, 0, held, refused));
+        ensure("and left with the caller", !refused.empty() && refused[0] == static_cast<U8>(b.mData[0][0] ^ 0xff));
+        ensure("the old tile is back under its ref", nav->getTileRefAt(0, 0, 0) == first && nav->getTileAt(0, 0, 0)->data == held.data());
+        ensure_equals("with its polys", nav->getTileAt(0, 0, 0)->header->polyCount, a.mPolys[0]);
+
+        next = b.mData[0];
+        bytes = next.data();
+        ensure("a good tile replaces it", swapDetourTile(*nav, 0, 0, held, next) && held.data() == bytes);
+        ensure_equals("Detour reads the new one", nav->getTileAt(0, 0, 0)->header->polyCount, b.mPolys[0]);
+        std::vector<U8> none;
+        ensure("an empty tile takes it out", swapDetourTile(*nav, 0, 0, held, none) && held.empty() && !nav->getTileRefAt(0, 0, 0));
+        dtFreeNavMesh(nav);
     }
 }

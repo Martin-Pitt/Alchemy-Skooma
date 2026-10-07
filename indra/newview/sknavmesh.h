@@ -320,6 +320,8 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+        /// The Detour tile's bytes, which Detour reads but does not own.
+        std::vector<U8> mDetour[sknav::NUM_CLASSES];
         /// Checked against mSegments by identity, so a publish needs no reset here.
         mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };

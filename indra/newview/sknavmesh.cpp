@@ -304,10 +304,7 @@ void SKNavMesh::evictAir()
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
                     spill->mProduct.mPolys[cls] = tile.mPolys[cls];
-                    const dtNavMesh* nav = mesh->second->mNav[cls];
-                    const dtMeshTile* data = nav ? nav->getTileAt(candidate.mKey.mY, candidate.mKey.mX, 0) : nullptr;
-                    if (data && data->data && data->dataSize > 0)
-                        spill->mProduct.mData[cls].assign(data->data, data->data + data->dataSize);
+                    spill->mProduct.mData[cls] = tile.mDetour[cls];
                     spill->mSegments[cls] = tile.mSegments[cls];
                     spill->mLinks[cls] = tile.mLinks[cls];
                     spill->mFlights[cls] = tile.mFlights[cls];
@@ -1188,39 +1185,42 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         mRevision++;                // the tile's walls are gone: the overlay moved
         return;
     }
+    bool kept = false;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
-        tile.mPolys[cls] = result->mPolys[cls];
-        tile.mPolyCache[cls].reset();   // the Detour tile is replaced below
-        const std::vector<U8>& data = result->mData[cls];
-        if (!mesh.mNav[cls] && data.empty())
+        if (!mesh.mNav[cls] && result->mData[cls].empty())
         {
+            tile.mPolys[cls] = result->mPolys[cls];
             continue;
         }
         if (!ensureNav(mesh, cls))
         {
+            tile.mPolys[cls] = result->mPolys[cls];
             continue;
         }
-        dtNavMesh* nav = mesh.mNav[cls];
-        // Detour's x runs along Recast x, which is SL y.
-        const dtTileRef old = nav->getTileRefAt(key.mY, key.mX, 0);
-        if (old)
+        // Detour's x runs along Recast x, which is SL y. The tile keeps its bytes: refused, the old tile stays.
+        const bool swapped = swapDetourTile(*mesh.mNav[cls], key.mY, key.mX, tile.mDetour[cls], result->mData[cls]);
+        if (!swapped)
         {
-            nav->removeTile(old, nullptr, nullptr);
-        }
-        if (!data.empty())
-        {
-            unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
-            std::memcpy(copy, data.data(), data.size());
-            if (!dtStatusSucceed(nav->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
+            mStats.mFailures++;
+            refused = loaded;
+            LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
+            if (!tile.mDetour[cls].empty())
             {
-                dtFree(copy);
-                tile.mPolys[cls] = 0;
-                mStats.mFailures++;
-                refused = loaded;
-                LL_WARNS("SKNav") << "addTile failed for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
+                kept = true;
+                continue;
             }
         }
+        tile.mPolys[cls] = swapped ? result->mPolys[cls] : 0;
+        tile.mPolyCache[cls].reset();
+    }
+    // A refused tile leaves the published one whole, products and all: built again only from a fresh build.
+    if (kept)
+    {
+        tile.mBuilt = refused ? 0 : signature;
+        tile.mDiskRefused = refused;
+        tileBlip(mesh, tile);
+        return;
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
     tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));

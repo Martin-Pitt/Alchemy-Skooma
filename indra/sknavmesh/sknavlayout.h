@@ -149,6 +149,13 @@ namespace sknav
 
     /// A mesh's Detour mesh for one class, mesh-local, on the 32 m lattice. Null on failure.
     dtNavMesh* allocMeshNav();
+
+    /// Put next in Detour tile (tx, ty)'s place, the caller owning the bytes of
+    /// both: Detour gets them without DT_TILE_FREE_DATA. held is the tile's
+    /// bytes now in Detour, or empty. On success held takes next and the old
+    /// bytes go; when Detour refuses next, the old tile goes back under its old
+    /// ref and next is left as it was. Empty next takes the tile out.
+    bool swapDetourTile(dtNavMesh& nav, S32 tx, S32 ty, std::vector<U8>& held, std::vector<U8>& next);
 }
 
 #endif // SK_NAVLAYOUT_H

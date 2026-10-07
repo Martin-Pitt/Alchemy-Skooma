@@ -349,6 +349,34 @@ namespace sknav
         input.mZMax = zmax + 3.f;
     }
 
+    bool swapDetourTile(dtNavMesh& nav, S32 tx, S32 ty, std::vector<U8>& held, std::vector<U8>& next)
+    {
+        const dtTileRef old = nav.getTileRefAt(tx, ty, 0);
+        if (old)
+        {
+            unsigned char* data = nullptr;
+            int size = 0;
+            nav.removeTile(old, &data, &size);
+            llassert(held.empty() || data == held.data());
+        }
+        if (next.empty())
+        {
+            std::vector<U8>().swap(held);
+            return true;
+        }
+        if (dtStatusSucceed(nav.addTile(next.data(), static_cast<int>(next.size()), 0, 0, nullptr)))
+        {
+            held.swap(next);
+            std::vector<U8>().swap(next);
+            return true;
+        }
+        if (old && !held.empty() && !dtStatusSucceed(nav.addTile(held.data(), static_cast<int>(held.size()), 0, old, nullptr)))
+        {
+            std::vector<U8>().swap(held);
+        }
+        return false;
+    }
+
     dtNavMesh* allocMeshNav()
     {
         dtNavMesh* nav = dtAllocNavMesh();
