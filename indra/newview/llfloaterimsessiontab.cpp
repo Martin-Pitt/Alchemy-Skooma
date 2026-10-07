@@ -48,6 +48,7 @@
 #include "llfloaterimnearbychat.h"
 #include "llgroupiconctrl.h"
 #include "lllayoutstack.h"
+#include "lllogchat.h"
 #include "llnotificationsutil.h"
 #include "llpanelemojicomplete.h"
 #include "lltoolbarview.h"
@@ -618,25 +619,8 @@ void LLFloaterIMSessionTab::deleteAllChildren()
 
 std::string LLFloaterIMSessionTab::appendTime()
 {
-    std::string timeStr;
-    static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
-    if (use_24h)
-    {
-        timeStr = "[" + LLTrans::getString("TimeHour") + "]:"
-            "[" + LLTrans::getString("TimeMin") + "]";
-    }
-    else
-    {
-        timeStr = "[" + LLTrans::getString("TimeHour12") + "]:"
-            "[" + LLTrans::getString("TimeMin") + "] ["
-            + LLTrans::getString("TimeAMPM") + "]";
-    }
-
-    LLSD substitution;
-    substitution["datetime"] = (S32)time_corrected();
-    LLStringUtil::format(timeStr, substitution);
-
-    return timeStr;
+    // Keep the original precision so the display preference can change later.
+    return LLLogChat::timestamp2LogString(0, false, true);
 }
 
 void LLFloaterIMSessionTab::appendMessage(const LLChat& chat, const LLSD& args)
@@ -944,6 +928,11 @@ bool LLFloaterIMSessionTab::onIMShowModesMenuItemEnable(const LLSD& userdata)
 {
     std::string item = userdata.asString();
     bool plain_text = gSavedSettings.getS32("AlchemyChatHistoryStyle") >= 1;
+    if (item == "AlchemyIMShowSeconds")
+    {
+        // Expanded headers always show the time; plain text only when asked.
+        return !plain_text || gSavedSettings.getBOOL("IMShowTime");
+    }
     bool is_not_names = (item != "IMShowNamesForP2PConv");
     return (plain_text && (is_not_names || mIsP2PChat));
 }

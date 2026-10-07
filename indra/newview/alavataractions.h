@@ -78,6 +78,9 @@ public:
     static void parcelFreezeMultiple(const uuid_vec_t& ids);
     static void parcelEject(const LLUUID& avatar_id);
     static void parcelEjectMultiple(const uuid_vec_t& ids);
+    // <SK:Nexii> SKNetMap Moderate gate: eject with the ban option the caller already knows, without selecting the parcel
+    static void parcelEjectWithBan(const uuid_vec_t& ids, bool ban_enabled);
+    // </SK:Nexii>
 
     // Estate actions
     static bool canManageAvatarsEstate(const LLUUID& avatar_id);

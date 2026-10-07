@@ -24,8 +24,11 @@
 
 #pragma once
 
+#include "alcodeeditor.h"
 #include "alscriptanalysis.h"
+#include "alscriptregionusage.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptweight.h"
 
 #include <functional>
 #include <memory>
@@ -33,8 +36,42 @@
 #include <string>
 #include <vector>
 
+class ALScriptStudioAnalysis;
+class ALScriptStudioSaves;
 class ALScriptStudioServices;
 class ALScriptWeightsPane;
+
+// What the script weighs (ALScriptStudioWeighing).
+struct ALScriptStudioDoc::Weighing
+{
+    // For its target, as the last weighing said of the text at
+    // `version`; whether what was weighed is what a save compiles --
+    // not where the optimizer changes it after -- and whether it is
+    // what a preprocessor's run made to be sent, which a check's
+    // weighing of the same text, before the optimizer, does not
+    // replace; and a weighing on its way.
+    std::optional<ALScriptWeight> weight;
+    U32                           version = 0;
+    bool                          exact   = false;
+    bool                          sent    = false;
+    bool                          asking  = false;
+    // The version its weights were last asked for, by a weigh or with
+    // a check: a tab come to the front is weighed once for its text.
+    U32                           askedFor = 0;
+    // What the Weights tab lists: each target the last check's text
+    // was weighed for, its own first, in the source's places, of the
+    // text at `allVersion`; and each target's as the text was last
+    // saved, where it was weighed while it was that text -- what
+    // "since the save" counts from.
+    std::vector<ALScriptWeight> all;
+    U32                         allVersion = 0;
+    std::vector<ALScriptWeight> saved;
+    // What a save would send, in bytes, as the last check measured
+    // it, and the text and the expansion it was measured of: what the
+    // trailer says once it is past half of what a script may be.
+    size_t                             assetBytes = 0;
+    std::optional<std::pair<U32, U32>> assetMeasured;
+};
 
 // A Script Studio window's weighing, as the tab's part `doc.weighing` keeps
 // it: what a script comes to for the target it is compiled for, weighed with
@@ -48,20 +85,12 @@ class ALScriptStudioWeighing
 public:
     typedef ALScriptStudioDoc Doc;
 
-    // What weighing asks of the window beyond its services.
+    // What weighing asks of the window itself, beyond what it is given.
     class Window
     {
     public:
-        // The analyzers asked to weigh a tab as its check has it; and a
-        // question of their own put to them, answered later.
-        virtual void askWeights(Doc& doc)                                                                                         = 0;
-        virtual void askAnalysis(ALScriptAnalysis::Request request, std::function<void(const ALScriptAnalysis::Result&)> answered) = 0;
-        // Whether a tab is a fragment of LSL -- an include's functions --
-        // which is not weighed; whether the preprocessor makes what it
-        // sends; and the name an include is shown by.
-        virtual bool        lslFragment(const Doc& doc) const                          = 0;
-        virtual bool        preprocessed(const Doc& doc) const                         = 0;
-        virtual std::string includeName(const Doc& doc, const std::string& path) const = 0;
+        // The analyzers asked to weigh a tab as its check has it.
+        virtual void askWeights(Doc& doc) = 0;
         // The settings: whether the preprocessor's optimizer runs after
         // the check's expansion; the viewer's version, which an envelope
         // says; and whether the editors show the weights as notes and heat.
@@ -69,19 +98,19 @@ public:
         virtual std::string programVersion() const = 0;
         virtual bool        weightNotes() const    = 0;
         virtual bool        weightHeat() const     = 0;
-        // The Problems told of a tab's weight; and a save told, which warns
-        // where it is over its limit.
-        virtual void refreshProblems(Doc& doc) = 0;
-        virtual void warnOverWeight(Doc& doc)  = 0;
         // The Weights tab: whether it is looked at, and the pane.
         virtual bool                 weightsShown() const = 0;
         virtual ALScriptWeightsPane* weightsPane()        = 0;
+        // What the region reserves for a tab's script's object, as it last
+        // said, and asked again where that is old; nothing where it has not
+        // said, or the script is in no object.
+        virtual std::optional<ALScriptRegionUsage::Usage> regionOf(const Doc&) { return std::nullopt; }
 
     protected:
         ~Window() = default;
     };
 
-    ALScriptStudioWeighing(ALScriptStudioServices& services, Window& window);
+    ALScriptStudioWeighing(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, ALScriptStudioSaves& saves, Window& window);
 
     // The target a tab is weighed for; none for one that is not weighed --
     // not loaded, a notecard, a fragment, a target there is no weigher for.
@@ -104,6 +133,16 @@ public:
     // What a save would send, in bytes, measured again where the text or
     // its expansion changed since.
     void measureAsset(Doc& doc);
+    // What a save would send, as a save measured it: one refused for its
+    // size, which the trailer says.
+    static void measuredBySave(Doc& doc, size_t bytes) { doc.weighing->assetBytes = bytes; }
+    // Its weights asked for with a check of the text at `version`, in the
+    // same job, rather than again when it comes to the front.
+    static void askedWithCheck(Doc& doc, U32 version) { doc.weighing->askedFor = version; }
+    // What a run of the preprocessor makes to be sent is made differently
+    // now -- its settings changed -- and the check's weighing of the text
+    // is taken again in place of what the last run made.
+    static void sendsDifferently(Doc& doc) { doc.weighing->sent = false; }
     // The fixes an editor's list shows, to be weighed once nothing more is
     // coming to it.
     void fixesShown(const std::string& id, U32 shown, const std::vector<ALCodeEditor::Fix>& fixes);
@@ -125,6 +164,8 @@ private:
     void weighFixes(Doc& doc, U32 shown, const std::vector<ALCodeEditor::Fix>& fixes);
 
     ALScriptStudioServices& mServices;
+    ALScriptStudioAnalysis& mAnalysis;
+    ALScriptStudioSaves&    mSaves;
     Window&                 mWindow;
     // The fix list last shown, to be weighed once nothing more is coming
     // to it.

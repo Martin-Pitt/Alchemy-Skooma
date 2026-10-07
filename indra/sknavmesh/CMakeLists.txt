@@ -20,6 +20,7 @@ target_sources(
     sknavfeatures.cpp
     sknavflights.cpp
     sknavlayout.cpp
+    sknavprobecache.cpp
     sknavprobes.cpp
     sknavreplay.cpp
     sknavskymap.cpp
@@ -45,6 +46,7 @@ target_sources(
         sknavfeatures.h
         sknavflights.h
         sknavlayout.h
+        sknavprobecache.h
         sknavprobes.h
         sknavreplay.h
         sknavskymap.h
@@ -79,6 +81,7 @@ target_link_libraries(sknavmesh PRIVATE al::flags PUBLIC llmath llcommon ll::rec
 target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 
 if(AL_BUILD_TESTS)
+  al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -90,7 +93,10 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavprobecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobes PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavprobeinvariants PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavprobeseval PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavreplay PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)

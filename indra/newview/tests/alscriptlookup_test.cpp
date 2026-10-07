@@ -38,50 +38,9 @@
 
 #include <sstream>
 
-// A script's id is the bridge's name for it, and the bridge is the viewer's.
-std::string ALScriptRef::id() const
-{
-    return object.asString() + "_" + item.asString();
-}
-
-// What the preprocessor calls a script and a file, as it spells them; the
-// preprocessor itself is the viewer's.
-bool ALScriptPreprocessor::refOf(const std::string& path, ALScriptRef& ref)
-{
-    if (path.rfind("object:", 0) == 0)
-    {
-        const size_t colon = path.find(':', 7);
-        if (colon == std::string::npos)
-        {
-            return false;
-        }
-        ref.object.set(path.substr(7, colon - 7));
-        ref.item.set(path.substr(colon + 1));
-        return ref.object.notNull() && ref.item.notNull();
-    }
-    if (path.rfind("inventory:", 0) == 0)
-    {
-        ref.object.setNull();
-        ref.item.set(path.substr(10));
-        return ref.item.notNull();
-    }
-    return false;
-}
-
-std::string ALScriptPreprocessor::pathOf(const ALScriptRef& ref)
-{
-    return ref.inInventory() ? "inventory:" + ref.item.asString() : "object:" + ref.object.asString() + ":" + ref.item.asString();
-}
-
-bool ALScriptPreprocessor::fileOf(const std::string& path, std::string& file)
-{
-    if (path.rfind("disk:", 0) != 0)
-    {
-        return false;
-    }
-    file = path.substr(5);
-    return !file.empty();
-}
+// A script's id, and what the preprocessor calls a script and a file, as
+// the studio's tests' stubs of the viewer's spell them
+// (alscriptpaths_stub.cpp).
 
 namespace
 {
@@ -91,8 +50,11 @@ namespace
 
     // The window, faked: the scripts it offers, and each question it was
     // asked, held for the test to answer.
-    struct FakeLookupWindow : public ALScriptLookup::Window
+    struct FakeLookupWindow : public ALScriptLookup::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietAnalysis
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         struct Load
         {
             ALScriptRef                                                          ref;
@@ -160,7 +122,6 @@ namespace
             }
             return ALScriptPlaces::Lines(std::make_shared<const std::string>(text));
         }
-        void holdPreview(Doc& doc) override { held.push_back(doc.id); }
         void showFound(Doc& doc, const Found& found) override
         {
             shownIn = doc.id;
@@ -176,13 +137,20 @@ namespace
             previewed = std::move(preview_of);
         }
         void previewRename(Doc& doc, const Found& found, const std::string& new_name, const std::string& said,
-                           std::function<void(const std::vector<size_t>&)> apply_kept) override
+                           std::function<void(const std::vector<size_t>&)>                     apply_kept,
+                           std::function<void(const std::string&, const std::vector<size_t>&)> show_changes) override
         {
             previewIn   = doc.id;
             previewOf   = found;
             previewName = new_name;
             previewSaid = said;
             apply       = std::move(apply_kept);
+            changes     = std::move(show_changes);
+        }
+        void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                     const std::string& right_title) override
+        {
+            compared.push_back(doc.id + ": " + left + " | " + right + " (" + left_title + " | " + right_title + ")");
         }
         Doc* openFileTab(const std::string& path, bool lua) override
         {
@@ -202,7 +170,7 @@ namespace
         std::vector<Load>                                  loads;
         std::vector<Expand>                                expands;
         std::vector<Ask>                                   asks;
-        Names                                              asked, held, filesOpened, activated;
+        Names                                              asked, filesOpened, activated;
         std::string                                        shownIn, askedName;
         Found                                              shown;
         S32                                                shows = 0;
@@ -212,6 +180,8 @@ namespace
         std::string                                        previewIn, previewName, previewSaid;
         Found                                              previewOf;
         std::function<void(const std::vector<size_t>&)>    apply;
+        std::function<void(const std::string&, const std::vector<size_t>&)> changes;
+        Names                                              compared;
         std::function<Doc*(const std::string&)>            whenFileOpened;
     };
 
@@ -305,11 +275,14 @@ namespace tut
 {
     struct alscriptlookup_data
     {
-        al_studio_test::StudioWindow    window;
-        al_studio_test::FakeServices    services;
-        FakeLookupWindow                studio;
-        std::unique_ptr<ALScriptLookup> unit;
-        const LLUUID                    object{ "11111111-1111-1111-1111-111111111111" };
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
+        al_studio_test::StudioWindow                      window;
+        al_studio_test::FakeServices                      services;
+        FakeLookupWindow                                  studio;
+        std::unique_ptr<al_studio_test::StudioNavigation> navigation;
+        std::unique_ptr<ALScriptLookup>                   unit;
+        const LLUUID                                      object{ "11111111-1111-1111-1111-111111111111" };
         const ALScriptRef               a{ object, LLUUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") };
         const ALScriptRef               b{ object, LLUUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") };
         const ALScriptRef               c{ object, LLUUID("cccccccc-cccc-cccc-cccc-cccccccccccc") };
@@ -319,7 +292,7 @@ namespace tut
 
         alscriptlookup_data()
         {
-            ALScriptStudioWords::Sources& sources = ALScriptStudioWords::sources();
+            auto& sources = viewer.slots;
             sources.keywords                      = [](bool lua) {
                 LLSD keywords;
                 keywords["functions"][lua ? "ll.Say" : "llSay"] = LLSD().with("return", "");
@@ -330,7 +303,6 @@ namespace tut
         }
         ~alscriptlookup_data()
         {
-            ALScriptStudioWords::sources() = ALScriptStudioWords::Sources();
             ALScriptStudioWords::forget();
             gFocusMgr.setKeyboardFocus(nullptr);
         }
@@ -340,7 +312,8 @@ namespace tut
             {
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
-            unit = std::make_unique<ALScriptLookup>(services, studio);
+            navigation = std::make_unique<al_studio_test::StudioNavigation>(services);
+            unit       = std::make_unique<ALScriptLookup>(services, studio, studio, navigation->unit, studio);
             return *unit;
         }
         Doc& tab(const std::string& id, const ALScriptRef& ref, const std::string& text, const std::string& name = std::string())
@@ -411,8 +384,9 @@ namespace tut
         set_test_name("a name declared nowhere shared looked up in the script alone, answered at once and shown, the preview held");
         make();
         studio.others = { { b, "B" } };
+        tab("a", a, A_TEXT, "A").preview = true;
         Doc& doc      = lookUp(ALEditorCommand::FindReferences, false);
-        ensure("the preview held", studio.held == Names{ "a" });
+        ensure("the preview held", !doc.preview);
         ensure("nothing else asked", studio.asked.empty() && studio.loads.empty());
         ensure_equals("shown", studio.shows, 1);
         ensure_equals("in its tab", studio.shownIn, std::string("a"));
@@ -422,7 +396,7 @@ namespace tut
         ensure("in order", studio.shown.places.size() == 2 && studio.shown.places[0].span.line == 0);
         ensure("not declared", !studio.shown.hasDefinition);
         ensure("said", !services.statuses.empty() && has(services.statuses.back(), "ReferencesFound [COUNT]=2"));
-        ensure("done with", doc.lookup.command == ALEditorCommand::None && doc.lookup.pending == 0);
+        ensure("done with", doc.lookup->command == ALEditorCommand::None && doc.lookup->pending == 0);
     }
 
     template<> template<>
@@ -452,7 +426,7 @@ namespace tut
         const ALScriptAnalysis::Request& asked = studio.asks[0].request;
         ensure("where the declaration went", asked.kind == ALScriptAnalysis::Kind::References && asked.line == 0 && asked.column == 8);
         ensure_equals("by who asked and the script", asked.id, "lookup:" + doc.id + ":" + b.id());
-        ensure_equals("of this lookup", asked.version, doc.lookup.generation);
+        ensure_equals("of this lookup", asked.version, doc.lookup->generation);
 
         studio.asks[0].answered(answer({ span(0, 8, 5), span(1, 8, 5) }));
         ensure_equals("shown", studio.shows, 1);
@@ -480,11 +454,11 @@ namespace tut
         ensure("the open one expanded at once", studio.expands.size() == 1 && studio.expands[0].request.sourceText() == open.editor->text());
         ensure("from its tab's own copy, not another", studio.expands[0].request.source == open.snapshot());
         ensure_equals("the other read", studio.loads.size(), size_t(1));
-        ensure("both waited for", doc.lookup.pending == 2 && studio.shows == 0);
+        ensure("both waited for", doc.lookup->pending == 2 && studio.shows == 0);
 
         studio.expands[0].expanded(expansion("B", ALScriptPreprocessor::pathOf(b), B_TEXT, "inc.lsl", inc, "integer count;\n"));
         studio.asks[0].answered(answer({ span(0, 8, 5) }));
-        ensure("still one to come", studio.shows == 0 && doc.lookup.pending == 1);
+        ensure("still one to come", studio.shows == 0 && doc.lookup->pending == 1);
         studio.loads[0].loaded(LLUUID::null, "");
         ensure_equals("an empty one passed over", studio.shows, 1);
         ensure_equals("one place", studio.shown.places.size(), size_t(1));
@@ -521,9 +495,9 @@ namespace tut
         ensure("no declaration in it: nothing asked", studio.asks.empty());
         ensure_equals("shown without it", studio.shows, 2);
 
-        const U32 generation = doc.lookup.generation;
+        const U32 generation = doc.lookup->generation;
         lookUp(ALEditorCommand::FindReferences);
-        ensure("a new generation", doc.lookup.generation != generation);
+        ensure("a new generation", doc.lookup->generation != generation);
         studio.loads.back().loaded(LLUUID::null, B_TEXT);
         // A lookup of another tab's, still waiting on its read, as this
         // one waits on its expansion: both current, and both gone with it.
@@ -608,8 +582,9 @@ namespace tut
         ensure_equals("said once", services.reports.size(), size_t(1));
         const al_studio_test::FakeServices::Said& said = services.reports[0];
         ensure("the counts", has(said.text, "RenamedIn [NAME]=total [PLACES]=Places [COUNT]=6 [SCRIPTS]=Scripts [COUNT]=4"));
-        ensure("opened", has(said.text, "; RenamedOpened [NAME]=total [PLACES]=Places [COUNT]=6 [SCRIPTS]=Scripts [COUNT]=2"));
-        ensure("left", has(said.text, "; RenamedLeft [NAME]=total [PLACES]=Places [COUNT]=6 [SCRIPTS]=Scripts [COUNT]=2."));
+        ensure("opened, a clause joined on", has(said.text, "[SECOND]=RenamedOpened [NAME]=total [PLACES]=Places [COUNT]=6 [SCRIPTS]=Scripts [COUNT]=2"));
+        ensure("left, another", has(said.text, "[SECOND]=RenamedLeft [NAME]=total [PLACES]=Places [COUNT]=6 [SCRIPTS]=Scripts [COUNT]=2"));
+        ensure("as the language joins clauses and ends a sentence", has(said.text, "Sentence [TEXT]=JoinClauses [FIRST]=JoinClauses"));
         ensure("a failure where any was left", said.failure);
         ensure("its tab brought forward", studio.activated == Names{ "a" });
     }
@@ -681,17 +656,17 @@ namespace tut
         studio.others = { { b, "B" }, { c, "C" }, { d, "D" }, { e, "E" }, { f, "F" } };
         Doc& doc      = lookUp(ALEditorCommand::FindReferences);
         ensure_equals("no more than so many read at once", studio.loads.size(), size_t(ALScriptLookup::AT_ONCE));
-        ensure_equals("every one waited for", doc.lookup.pending, S32(5));
+        ensure_equals("every one waited for", doc.lookup->pending, S32(5));
         // One that does not name it: passed over, and the next read.
         studio.loads[0].loaded(LLUUID::null, "default { }\n");
         ensure_equals("the next begun", studio.loads.size(), size_t(ALScriptLookup::AT_ONCE + 1));
-        ensure_equals("one fewer waited for", doc.lookup.pending, S32(4));
+        ensure_equals("one fewer waited for", doc.lookup->pending, S32(4));
         studio.loads[1].loaded(LLUUID::null, "");
         studio.loads[2].loaded(LLUUID::null, "");
         ensure_equals("and on", studio.loads.size(), size_t(5));
         studio.loads[3].loaded(LLUUID::null, "");
         studio.loads[4].loaded(LLUUID::null, "");
-        ensure("all done with: shown", doc.lookup.pending == 0 && studio.shows == 1);
+        ensure("all done with: shown", doc.lookup->pending == 0 && studio.shows == 1);
 
         // Begun again with some still to read: what the first had not
         // begun is let go of, and its answers dropped.
@@ -822,5 +797,40 @@ namespace tut
         const ALScriptPlaces::Lines tab(&open);
         ensure("a tab's", tab.line(1) == "y" && !tab.has(2));
         ensure("nothing: no lines", !ALScriptPlaces::Lines().has(0));
+    }
+
+    template<> template<>
+    void alscriptlookup_object::test<15>()
+    {
+        set_test_name("a rename previewed shows what it makes of a file, at the places kept: here, or in another open and unchanged; not in one that is not");
+        make();
+        Doc& doc  = tab("a", a, A_TEXT, "A");
+        Doc& open = tab("b", b, "foo() { count = 2; }\nbar() { total = count; }\n", "B");
+        const std::string pb = ALScriptPreprocessor::pathOf(b), pd = ALScriptPreprocessor::pathOf(d);
+        unit->start(doc, ALEditorCommand::Rename, refsOf("count"), false, std::string(), span(0, 8, 5),
+                    { place("", 0, 8), place("", 1, 26), place(pb, 0, 8, 5, "B"), place(pb, 1, 16, 5, "B"), place(pd, 2, 4, 5, "D") },
+                    doc.editor->document().version());
+        studio.previewed("sum");
+        ensure("offered", (bool)studio.changes);
+
+        studio.changes("", { 1, 2, 3 });
+        ensure_equals("here, at the one of its own kept", studio.compared.size(), 1U);
+        ensure_equals("beside it as it is", studio.compared.back(),
+                      "a: " + std::string(A_TEXT) + " | integer count;\ndefault { state_entry() { sum = 1; } }\n (CompareNow | RenameAfter [NAME]=sum [SCRIPT]=A)");
+        ensure("in its tab, brought forward", studio.activated.back() == "a");
+        ensure("nothing changed", doc.editor->text() == A_TEXT);
+
+        studio.changes(pb, { 2, 3 });
+        ensure_equals("another open", studio.compared.back(),
+                      "b: foo() { count = 2; }\nbar() { total = count; }\n | foo() { sum = 2; }\nbar() { total = sum; }\n (CompareNow | RenameAfter [NAME]=sum [SCRIPT]=B)");
+        ensure("in its tab", studio.activated.back() == "b");
+
+        const size_t before = studio.compared.size();
+        studio.changes(pd, { 4 });
+        ensure("not open: said, not shown", studio.compared.size() == before && has(services.statuses.back(), "RenameChangesNotHere [NAME]=sum [SCRIPT]=D") &&
+                                                services.statusFailures.back());
+        open.editor->insertText("// ");
+        studio.changes(pb, { 2, 3 });
+        ensure("changed since: said", studio.compared.size() == before && has(services.statuses.back(), "RenameChangesNotHere"));
     }
 }

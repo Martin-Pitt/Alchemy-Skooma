@@ -25,11 +25,13 @@
 #include "linden_common.h"
 
 #include "../alfindbar.h"
+#include "../altextruler.h"
 #include "../altextview.h"
 #include "../llclipboard.h"
 
 #include "../llbutton.h"
 #include "../llfocusmgr.h"
+#include "../lllineeditor.h"
 #include "../llpanel.h"
 #include "../lluictrlfactory.h"
 #include "../llurlaction.h"
@@ -40,6 +42,8 @@
 
 #include "../test/lltut.h"
 
+#include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -50,6 +54,31 @@ const std::string gViewTestAnonName("Anon");
 const std::string& rlvGetAnonym(const LLAvatarName& av_name)
 {
     return gViewTestAnonName;
+}
+
+namespace ll_test
+{
+    // What a test reaches inside the view for: how long Next Misspelling
+    // may check lines for, and its going on as the next frame would.
+    struct TextViewProbe
+    {
+        static void misspellingBudget(ALTextView& view, F32 seconds) { view.mMisspellingBudget = seconds; }
+        static bool seeking(const ALTextView& view) { return view.mMisspellingSought.has_value(); }
+        static void trimLayout(ALTextView& view) { view.trimLayout(); }
+        // Every selection, the main one among them, in the order they begin.
+        static std::vector<ALTextRange> selections(const ALTextView& view) { return view.selectionsInOrder(); }
+        static S32  heldMost() { return ALTextView::LAYOUT_HELD_MOST; }
+        // What a frame does before it draws, of what a test reaches:
+        // Next Misspelling gone on with, and the primary selection offered.
+        static void nextFrame(ALTextView& view)
+        {
+            if (view.mMisspellingSought)
+            {
+                view.seekMisspelling();
+            }
+            view.publishPrimary();
+        }
+    };
 }
 
 namespace tut
@@ -468,6 +497,7 @@ namespace tut
         ensure("the press is taken", v.handleMouseDown(394, 10, MASK_NONE));
         ensure("and scrolls the text down", v.scrollY() > 0);
         v.handleMouseUp(394, 10, MASK_NONE);
+        ensure("and lets the mouse go", gFocusMgr.getMouseCapture() == nullptr);
         v.setText("short\n");
         ensure("no ruler for a short text", v.textRect().getWidth() > width);
     }
@@ -1171,9 +1201,15 @@ namespace tut
         LLClipboard& clipboard = LLClipboard::instance();
         const std::string copied = "copied";
         clipboard.copyToClipboard(copied, 0, static_cast<S32>(copied.size()));
+        const std::string elsewhere = "elsewhere";
+        clipboard.copyToClipboard(elsewhere, 0, static_cast<S32>(elsewhere.size()), true);
         ALTextView& v = make("alpha beta\ngamma\n");
+        v.setSelection(ALTextRange(ALTextPos(0, 9), ALTextPos(0, 10)));
         v.setSelection(ALTextRange(ALTextPos(0, 6), ALTextPos(0, 10)));
         std::string primary;
+        clipboard.pasteFromClipboard(primary, true);
+        ensure_equals("offered once a frame, not at each change", primary, elsewhere);
+        ll_test::TextViewProbe::nextFrame(v);
         ensure("selected", clipboard.pasteFromClipboard(primary, true));
         ensure_equals("is the primary selection", primary, std::string("beta"));
         std::string held;
@@ -1567,5 +1603,821 @@ namespace tut
         ensure_equals("where it was asked to be", v.scrollY(), asked);
         v.setScrollX(0.f);
         ensure_equals("and stays", v.scrollY(), asked);
+    }
+
+    template<> template<>
+    void altextview_object::test<52>()
+    {
+        set_test_name("a word is asked of the checker once however often it is met, and again once the dictionary changes; so many are kept and no more");
+        ALTextView&                v = make("");
+        std::map<std::string, int> asked;
+        v.setSpellChecker([&](const std::string& word) {
+            ++asked[word];
+            return word != "teh";
+        });
+        v.setSpellCheck(true);
+        v.setText("teh cat and teh dog\nthe cat and the dog\nteh end");
+        ensure_equals("the misspellings as ever", v.misspellings(0).size(), size_t(2));
+        ensure("the next line has none", v.misspellings(1).empty());
+        ensure_equals("and the last one", v.misspellings(2).size(), size_t(1));
+        const std::map<std::string, int> once = { { "and", 1 }, { "cat", 1 }, { "dog", 1 }, { "end", 1 }, { "teh", 1 }, { "the", 1 } };
+        ensure("each word asked once", asked == once);
+        v.recheckSpelling();
+        ensure_equals("the same answer", v.misspellings(0).size(), size_t(2));
+        ensure_equals("asked again once the dictionary changed", asked["teh"], 2);
+
+        // More words than are kept: the first of them asked again when
+        // next met, the last not.
+        auto word = [](size_t n) {
+            std::string out = "zz";
+            do
+            {
+                out += static_cast<char>('a' + n % 26);
+                n /= 26;
+            } while (n > 0);
+            return out;
+        };
+        const size_t many = ALTextSpelling::WORDS_KEPT + 10;
+        std::string  text;
+        for (size_t n = 0; n < many; ++n)
+        {
+            text += word(n) + " ";
+        }
+        v.setText(text);
+        asked.clear();
+        ensure("every one right", v.misspellings(0).empty());
+        ensure_equals("every one asked", asked.size(), many);
+        v.setCaret(ALTextPos(0, 0));
+        v.insertText(word(0) + " " + word(many - 1) + "\n");
+        ensure("the new line checked", v.misspellings(0).empty());
+        ensure_equals("the first let go of, and asked again", asked[word(0)], 2);
+        ensure_equals("the last still kept", asked[word(many - 1)], 1);
+    }
+
+    template<> template<>
+    void altextview_object::test<53>()
+    {
+        set_test_name("Next Misspelling checks lines for so long, then goes on a frame at a time; an edit or a moved selection drops it");
+        ALTextView& v = make("all fine\nall fine\nall fine\nall fine\nall fine\nteh end\n");
+        v.setSpellChecker([](const std::string& word) { return word != "teh"; });
+        v.setSpellCheck(true);
+        // No time at all: a line newly checked each time, and no more.
+        ll_test::TextViewProbe::misspellingBudget(v, 0.f);
+        bool cut = false;
+        ensure("cut short", !v.misspellingFrom(ALTextPos(0, 0), true, &cut) && cut);
+        std::optional<ALTextRange> found;
+        S32                        asks = 1;
+        for (; !found && asks < 20; ++asks)
+        {
+            found = v.misspellingFrom(ALTextPos(0, 0), true, &cut);
+        }
+        ensure("found, the same search asked again", found && *found == ALTextRange(ALTextPos(5, 0), ALTextPos(5, 3)) && !cut);
+        ensure_equals("a line further each time", asks, 6);
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        ensure("still looking", ll_test::TextViewProbe::seeking(v) && v.selection().empty());
+        S32 frames = 0;
+        for (; ll_test::TextViewProbe::seeking(v) && frames < 20; ++frames)
+        {
+            ll_test::TextViewProbe::nextFrame(v);
+        }
+        ensure("found in the frames after", v.selection() == ALTextRange(ALTextPos(5, 0), ALTextPos(5, 3)));
+        ensure_equals("a line a frame", frames, 5);
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        v.setCaret(ALTextPos(1, 2));
+        ll_test::TextViewProbe::nextFrame(v);
+        ensure("the caret moved: dropped", !ll_test::TextViewProbe::seeking(v) && v.selection().empty() && v.caret() == ALTextPos(1, 2));
+
+        v.recheckSpelling();
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        v.document().insert(ALTextPos(3, 0), "x");
+        ll_test::TextViewProbe::nextFrame(v);
+        ensure("the text changed: dropped", !ll_test::TextViewProbe::seeking(v) && v.selection().empty());
+
+        // None at all: it looks through every line, then stops.
+        v.setText("all fine\nall fine\nall fine");
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        for (frames = 0; ll_test::TextViewProbe::seeking(v) && frames < 20; ++frames)
+        {
+            ll_test::TextViewProbe::nextFrame(v);
+        }
+        ensure("none: it stopped, and nothing selected", !ll_test::TextViewProbe::seeking(v) && frames < 20 && v.selection().empty());
+
+        // With the time it has, all at once as before.
+        ll_test::TextViewProbe::misspellingBudget(v, ALTextView::MISSPELLING_BUDGET);
+        v.setText("all fine\nteh");
+        v.setCaret(ALTextPos(0, 0));
+        key(KEY_F7);
+        ensure("at once", !ll_test::TextViewProbe::seeking(v) && v.selection() == ALTextRange(ALTextPos(1, 0), ALTextPos(1, 3)));
+    }
+
+    template<> template<>
+    void altextview_object::test<54>()
+    {
+        set_test_name("scrolled end to end, the view holds only so many lines' glyphs, and none out of sight; no line's top moves for it");
+        std::string lines;
+        for (int i = 0; i < 5000; ++i)
+        {
+            lines += "line " + std::to_string(i) + "\n";
+        }
+        ALTextView& v     = make(lines.c_str());
+        const S32   total = v.layout().totalHeight();
+        const S32   step  = llmax(1, v.textRect().getHeight());
+        S32         most  = 0;
+        // A screenful at a time, each laid out as a frame draws it.
+        for (S32 y = 0; y < total; y += step)
+        {
+            v.setScrollY(y);
+            ll_test::TextViewProbe::trimLayout(v);
+            for (S32 l = v.firstVisibleLine(); l <= v.lastVisibleLine(); ++l)
+            {
+                v.layout().line(l);
+            }
+            most = llmax(most, v.layout().linesHeld());
+        }
+        // Trimmed before a frame lays out its screen, as draw() does: so
+        // many past what is in sight, and the next screen.
+        const S32 screen = v.lastVisibleLine() - v.firstVisibleLine() + 1;
+        ensure("never more than so many held", most <= ll_test::TextViewProbe::heldMost() + 2 * screen);
+        ensure("fewer than were laid out", most < 5000);
+        ensure_equals("the column as tall", v.layout().totalHeight(), total);
+        ensure("what is in sight held", v.layout().line(v.firstVisibleLine()).valid);
+
+        v.setVisible(false);
+        ensure_equals("out of sight: none held", v.layout().linesHeld(), 0);
+        ensure_equals("and the column as tall", v.layout().totalHeight(), total);
+        v.setVisible(true);
+        ensure("laid out again when asked", !v.layout().line(v.firstVisibleLine()).rows.empty());
+    }
+
+    template<> template<>
+    void altextview_object::test<55>()
+    {
+        set_test_name("a cap on the bytes: typing and pasting go in as far as they fit, cut at a character; several stretches at once not at all; what shortens the text, a text put in whole and an undo are not held to it");
+        ALTextView& v = make("hello");
+        S32         fulls = 0;
+        boost::signals2::scoped_connection heard = v.onFull([&fulls]() { ++fulls; });
+        v.setMaxBytes(10);
+        v.setCaret(ALTextPos(0, 5));
+        type("abcdefgh");
+        ensure_equals("typed as far as it fits", v.text(), std::string("helloabcde"));
+        ensure("and said", fulls > 0);
+
+        v.setMaxBytes(8);
+        v.setText("hello");
+        v.setCaret(ALTextPos(0, 5));
+        fulls = 0;
+        v.insertText("\xC3\xA9\xC3\xA9");
+        ensure_equals("cut where a character starts", v.text(), std::string("hello\xC3\xA9"));
+        ensure_equals("said once", fulls, 1);
+
+        // Full: a change of several stretches that would grow it is not
+        // made; one that does not grow it is.
+        v.setText("abcdefgh");
+        fulls = 0;
+        ensure("several stretches at once, not made", !v.replaceAll({ { ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)), "xx" }, { ALTextRange(ALTextPos(0, 4), ALTextPos(0, 4)), "y" } }));
+        ensure_equals("the text as it was", v.text(), std::string("abcdefgh"));
+        ensure_equals("and said", fulls, 1);
+        ensure("the same length again, made", v.replaceAll({ { ALTextRange(ALTextPos(0, 0), ALTextPos(0, 2)), "zz" } }));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        v.insertText("123");
+        ensure_equals("a selection typed over by as much", v.text(), std::string("123defgh"));
+        v.deleteRange(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        ensure_equals("a deletion", v.text(), std::string("defgh"));
+        v.undo();
+        ensure_equals("undone past nothing it would hold to", v.text(), std::string("123defgh"));
+
+        v.setText("far more than eight bytes");
+        ensure_equals("a text put in whole, whatever its size", v.text(), std::string("far more than eight bytes"));
+        v.setMaxBytes(0);
+        v.setCaret(ALTextPos(0, 0));
+        type("no cap ");
+        ensure_equals("and with no cap, nothing held", v.text(), std::string("no cap far more than eight bytes"));
+    }
+
+    template<> template<>
+    void altextview_object::test<56>()
+    {
+        set_test_name("a key the find field does not take is the field's: Control-A and undo leave the text alone, finding still finds");
+        ALTextView& v = make("one\ntwo\n");
+        v.setCaret(ALTextPos(0, 3));
+        type("!");
+        ensure_equals("typed", v.document().line(0), std::string("one!"));
+        v.showFind(false);
+        LLLineEditor* field = v.findBar()->findChild<LLLineEditor>("find");
+        ensure("the find field", field != nullptr);
+        field->setFocus(true);
+        ensure("it has the keyboard", field->hasFocus());
+        // As the window gives a key: to what has the keyboard, and on up.
+        field->handleKey('A', MASK_CONTROL, false);
+        ensure("the text not all selected", !v.hasSelection());
+        field->handleKey('Z', MASK_CONTROL, false);
+        ensure_equals("nor undone", v.document().line(0), std::string("one!"));
+        ensure("Control-F still the text's", field->handleKey('F', MASK_CONTROL, false));
+        v.setFocus(true);
+        ensure("from the text itself, undo is the text's", v.handleKey('Z', MASK_CONTROL, false));
+        ensure_equals("undone", v.document().line(0), std::string("one"));
+    }
+
+    template<> template<>
+    void altextview_object::test<57>()
+    {
+        set_test_name("find is never seeded with an atom's placeholder: a selection holding one keeps the last query, and the word at the "
+                      "caret stops at one");
+        const std::string text = "see" + ALTextView::atomPlaceholder() + "here word";
+        ALTextView&       v    = make(text.c_str());
+        ALTextView::Atom  item;
+        item.at    = ALTextPos(0, 3);
+        item.width = 20;
+        v.addAtom(item);
+        const S32 after = 3 + static_cast<S32>(ALTextView::atomPlaceholder().size());
+
+        v.setSelection(ALTextRange(ALTextPos(0, after + 5), ALTextPos(0, after + 9)));
+        key('F', MASK_CONTROL);
+        ensure_equals("a selection of text seeds it", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 3), ALTextPos(0, after)));
+        v.showFind(false);
+        ensure_equals("the atom alone: the last query kept", v.findBar()->query(), std::string("word"));
+        v.setSelection(ALTextRange(ALTextPos(0, 0), ALTextPos(0, after + 2)));
+        v.showFind(false);
+        ensure_equals("text with it: kept too", v.findBar()->query(), std::string("word"));
+
+        v.setCaret(ALTextPos(0, after));
+        v.showFind(false);
+        ensure_equals("the word after it, without it", v.findBar()->query(), std::string("here"));
+        v.setCaret(ALTextPos(0, 3));
+        v.showFind(false);
+        ensure_equals("the word before it, without it", v.findBar()->query(), std::string("see"));
+    }
+
+    template<> template<>
+    void altextview_object::test<58>()
+    {
+        set_test_name("a view with no features does none of their commands and offers none, and a caret on a hidden line shows it");
+        ALTextView& v = make("one\ntwo\nthree\n");
+        ensure("no features", v.features() == nullptr);
+        for (const ALEditorCommand command : { ALEditorCommand::Fold, ALEditorCommand::UnfoldAll, ALEditorCommand::NextFunction,
+                                               ALEditorCommand::GoToMatchingBracket, ALEditorCommand::QuickFix, ALEditorCommand::GoToDefinition,
+                                               ALEditorCommand::Rename })
+        {
+            ensure("none could be done", !v.canPerform(command));
+            ensure("nor is done", !v.perform(command));
+        }
+        ensure("no completion, nor what a call takes", !v.perform(ALEditorCommand::Complete) && !v.perform(ALEditorCommand::SignatureHelp));
+        v.layout().setHidden(1, 1, true);
+        v.setCaret(ALTextPos(1, 1));
+        ensure("the caret's line shown again", !v.layout().hidden(1) && v.caret() == ALTextPos(1, 1));
+    }
+
+    template<> template<>
+    void altextview_object::test<59>()
+    {
+        set_test_name("the ruler is a child view at the right edge, shown while the text is taller than the view; the map takes its place, "
+                      "at the right or the left, shown always");
+        std::string tall;
+        for (S32 i = 0; i < 100; ++i)
+        {
+            tall += llformat("line %d\n", i);
+        }
+        ALTextView&  v     = make("short\n", 400, 200);
+        ALTextRuler* ruler = v.findChild<ALTextRuler>("ruler");
+        ensure("the view has one", ruler && ruler->getParent() == &v);
+        ensure("hidden for a short text", !ruler->getVisible());
+        v.setText(tall);
+        ensure("shown for a tall one", ruler->getVisible());
+        ensure("down the right edge, the text short of it", ruler->getRect() == LLRect(400 - ALTextRuler::WIDTH, 200, 400, 0) &&
+                                                             v.textRect().mRight <= ruler->getRect().mLeft);
+        v.setScrollMap(true);
+        v.setScrollMapWidth(80);
+        ensure("the map on the right", ruler->getVisible() && ruler->getRect() == LLRect(320, 200, 400, 0));
+        v.setScrollMapOnLeft(true);
+        ensure("and on the left, the text past it", ruler->getRect() == LLRect(0, 200, 80, 0) && v.textRect().mLeft >= 80);
+        v.setText("short\n");
+        ensure("the map shown for a short text too", ruler->getVisible());
+        v.setScrollMap(false);
+        ensure("and the ruler hidden again", !ruler->getVisible());
+    }
+
+    template<> template<>
+    void altextview_object::test<60>()
+    {
+        set_test_name("a press on the map takes the view there and a drag follows, holding the mouse until it is let go; no tip on it");
+        std::string tall;
+        for (S32 i = 0; i < 300; ++i)
+        {
+            tall += llformat("line %d\n", i);
+        }
+        ALTextView& v = make(tall.c_str(), 400, 200);
+        v.setScrollMap(true);
+        v.setScrollMapWidth(80);
+        ALTextRuler* ruler = v.findChild<ALTextRuler>("ruler");
+        ensure("the press is taken", v.handleMouseDown(360, 100, MASK_NONE));
+        ensure("by the map, which holds the mouse", gFocusMgr.getMouseCapture() == ruler && ruler->dragging());
+        const S32 pressed = v.scrollY();
+        ensure("the text scrolled to the press", pressed > 0);
+        // The drag goes to what holds the mouse, in its own coordinates.
+        ruler->handleHover(40, 20, MASK_NONE);
+        ensure("a drag down the map follows", v.scrollY() > pressed);
+        ruler->handleMouseUp(40, 20, MASK_NONE);
+        ensure("let go", gFocusMgr.getMouseCapture() == nullptr && !ruler->dragging());
+        ensure("no tip on the map", v.handleToolTip(360, 100, MASK_NONE));
+    }
+
+    // Ranges as text, for a failure to say what it found.
+    static std::string rangesSaid(const std::vector<ALTextRange>& all)
+    {
+        std::string out;
+        for (const ALTextRange& r : all)
+        {
+            out += llformat("%d:%d-%d:%d ", r.begin.line, r.begin.column, r.end.line, r.end.column);
+        }
+        return out;
+    }
+
+    static ALTextRange caretRange(S32 line, S32 column)
+    {
+        return ALTextRange(ALTextPos(line, column), ALTextPos(line, column));
+    }
+
+    template<> template<>
+    void altextview_object::test<61>()
+    {
+        set_test_name("the selections besides the main one slide with an edit at the main caret, are taken in where it meets them, and go with a new text");
+        ALTextView& v = make("alpha beta\ngamma delta\n");
+        v.setCaret(ALTextPos(0, 0));
+        v.addSelection(caretRange(1, 0));
+        v.addSelection(ALTextRange(ALTextPos(1, 6), ALTextPos(1, 11)));
+        ensure_equals("two besides it", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(1, 0), ALTextRange(ALTextPos(1, 6), ALTextPos(1, 11)) }));
+        ensure("the main one where it was", v.selection() == caretRange(0, 0));
+
+        // Put in at the main caret alone, as a caller does.
+        v.insertText("xy\n");
+        ensure_equals("put in at the main caret only", v.text(), std::string("xy\nalpha beta\ngamma delta\n"));
+        ensure_equals("the others a line down", rangesSaid(v.otherSelections()),
+                      rangesSaid({ caretRange(2, 0), ALTextRange(ALTextPos(2, 6), ALTextPos(2, 11)) }));
+
+        // The main one selected backwards over part of the other selection:
+        // one selection over both, run the main one's way.
+        v.setSelection(ALTextRange(ALTextPos(2, 8), ALTextPos(2, 3)));
+        ensure_equals("the main one over both, backwards", rangesSaid({ v.selection() }), rangesSaid({ ALTextRange(ALTextPos(2, 11), ALTextPos(2, 3)) }));
+        ensure_equals("the caret it does not reach left", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(2, 0) }));
+
+        // One added where the main one is: nothing more.
+        v.addSelection(caretRange(2, 5));
+        ensure_equals("taken in", v.otherSelections().size(), static_cast<size_t>(1));
+        ensure("one caret again", v.singleSelection() && !v.hasOtherSelections());
+        ensure("and nothing to let go of now", !v.singleSelection());
+
+        v.setSelections(caretRange(0, 0), { caretRange(1, 1) });
+        v.setText("new");
+        ensure("none with a new text", !v.hasOtherSelections());
+    }
+
+    template<> template<>
+    void altextview_object::test<62>()
+    {
+        set_test_name("undo puts the other selections back as they were before the step, and redo as they were after it");
+        ALTextView& v = make("one\ntwo\nthree\n");
+        const std::vector<ALTextRange> before = { caretRange(1, 3), ALTextRange(ALTextPos(2, 5), ALTextPos(2, 0)) };
+        v.setSelections(caretRange(0, 3), before);
+        v.insertText("X\n");
+        const std::vector<ALTextRange> after = { caretRange(2, 3), ALTextRange(ALTextPos(3, 5), ALTextPos(3, 0)) };
+        ensure_equals("slid down a line", rangesSaid(v.otherSelections()), rangesSaid(after));
+
+        v.undo();
+        ensure_equals("the text back", v.text(), std::string("one\ntwo\nthree\n"));
+        ensure("the main caret back", v.selection() == caretRange(0, 3));
+        ensure_equals("the others as they were before", rangesSaid(v.otherSelections()), rangesSaid(before));
+        v.redo();
+        ensure("the main caret after", v.selection() == caretRange(1, 0));
+        ensure_equals("the others as they were after", rangesSaid(v.otherSelections()), rangesSaid(after));
+
+        // A step made with none: undone, none; the one before it, the
+        // others it had.
+        v.singleSelection();
+        v.undoJournal().breakRun();
+        v.insertText("Y");
+        v.undo();
+        ensure("none before a step made with none", !v.hasOtherSelections());
+        v.undo();
+        ensure_equals("and the step before puts its own back", rangesSaid(v.otherSelections()), rangesSaid(before));
+    }
+
+    template<> template<>
+    void altextview_object::test<63>()
+    {
+        set_test_name("typing at every caret: each selection typed over, a run of it one step to undo, and undo and redo putting every caret back");
+        ALTextView& v = make("one\ntwo\nthree\n");
+        const std::vector<ALTextRange> before = { caretRange(1, 3), ALTextRange(ALTextPos(2, 0), ALTextPos(2, 5)) };
+        v.setSelections(caretRange(0, 3), before);
+        type("ab");
+        ensure_equals("at each", v.text(), std::string("oneab\ntwoab\nab\n"));
+        ensure("the main caret after it", v.selection() == caretRange(0, 5));
+        const std::vector<ALTextRange> after = { caretRange(1, 5), caretRange(2, 2) };
+        ensure_equals("each other after it", rangesSaid(v.otherSelections()), rangesSaid(after));
+        v.undo();
+        ensure_equals("one step", v.text(), std::string("one\ntwo\nthree\n"));
+        ensure("the main caret back", v.selection() == caretRange(0, 3));
+        ensure_equals("and the others", rangesSaid(v.otherSelections()), rangesSaid(before));
+        v.redo();
+        ensure_equals("forward", v.text(), std::string("oneab\ntwoab\nab\n"));
+        ensure_equals("each after it again", rangesSaid(v.otherSelections()), rangesSaid(after));
+    }
+
+    template<> template<>
+    void altextview_object::test<64>()
+    {
+        set_test_name("Backspace and Delete at every caret: a run of them one step apart from the typing; what is selected taken whole");
+        ALTextView& v = make("abc\nabc\nabc");
+        v.setSelections(caretRange(0, 3), { caretRange(1, 3), caretRange(2, 3) });
+        type("x");
+        key(KEY_BACKSPACE);
+        key(KEY_BACKSPACE);
+        ensure_equals("two taken at each", v.text(), std::string("ab\nab\nab"));
+        v.undo();
+        ensure_equals("the run of them one step", v.text(), std::string("abcx\nabcx\nabcx"));
+        v.undo();
+        ensure_equals("the typing another", v.text(), std::string("abc\nabc\nabc"));
+
+        v.setSelections(caretRange(0, 0), { caretRange(1, 1), ALTextRange(ALTextPos(2, 3), ALTextPos(2, 1)) });
+        key(KEY_DELETE);
+        ensure_equals("one forward at each caret, the selection whole", v.text(), std::string("bc\nac\na"));
+        ensure_equals("each where it erased", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(1, 1), caretRange(2, 1) }));
+    }
+
+    template<> template<>
+    void altextview_object::test<65>()
+    {
+        set_test_name("Return and Tab at every caret: each line broken and indented as it was; a tab at each caret, the lines of each selection a level in, and out with Shift-Tab");
+        ALTextView& v = make("  one\n  two");
+        v.setSelections(caretRange(0, 5), { caretRange(1, 5) });
+        key(KEY_RETURN);
+        ensure_equals("each line broken, the new one as far in", v.text(), std::string("  one\n  \n  two\n  "));
+        ensure("the main caret on its new line", v.selection() == caretRange(1, 2));
+        ensure_equals("the other on its", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(3, 2) }));
+
+        v.setText("a\nb\nc");
+        v.setSelections(caretRange(0, 1), { caretRange(2, 0) });
+        key(KEY_TAB);
+        ensure_equals("a tab to the next stop at each caret", v.text(), std::string("a   \nb\n    c"));
+        v.setText("a\nb\nc");
+        v.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(1, 1)), { caretRange(2, 1) });
+        key(KEY_TAB);
+        ensure_equals("the selection's lines in, a tab at the caret", v.text(), std::string("    a\n    b\nc   "));
+        ensure("the selection with its lines", v.selection() == ALTextRange(ALTextPos(0, 4), ALTextPos(1, 5)));
+        key(KEY_TAB, MASK_SHIFT);
+        ensure_equals("out again, every selection's lines", v.text(), std::string("a\nb\nc   "));
+        v.undo();
+        v.undo();
+        ensure_equals("each a step", v.text(), std::string("a\nb\nc"));
+    }
+
+    template<> template<>
+    void altextview_object::test<66>()
+    {
+        set_test_name("the caret's motions at every caret: up and down each keeping its own column, Home, End and the arrows, a selection extended at each and collapsed; those a motion brings together one");
+        ALTextView& v = make("hello world\nhi\nhello world\nx\nhello world");
+        v.setSelections(caretRange(0, 8), { caretRange(2, 8) });
+        key(KEY_DOWN);
+        ensure("the main caret down to the short line's end", v.selection() == caretRange(1, 2));
+        ensure_equals("the other to its", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(3, 1) }));
+        key(KEY_DOWN);
+        ensure("each back in its own column", v.selection() == caretRange(2, 8));
+        ensure_equals("the other too", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(4, 8) }));
+        key(KEY_HOME);
+        key(KEY_RIGHT, MASK_SHIFT);
+        key(KEY_RIGHT, MASK_SHIFT);
+        ensure("extended at the main", v.selection() == ALTextRange(ALTextPos(2, 0), ALTextPos(2, 2)));
+        ensure_equals("and at the other", rangesSaid(v.otherSelections()), rangesSaid({ ALTextRange(ALTextPos(4, 0), ALTextPos(4, 2)) }));
+        key(KEY_LEFT);
+        ensure("collapsed to its start", v.selection() == caretRange(2, 0));
+        ensure_equals("both", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(4, 0) }));
+        key(KEY_END);
+        ensure_equals("to each line's end", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(4, 11) }));
+        v.perform(ALEditorCommand::MoveWordLeft);
+        ensure("a word back at each", v.selection() == caretRange(2, 6));
+        v.perform(ALEditorCommand::MoveDocStart);
+        ensure("all at the start, one", v.selection() == caretRange(0, 0) && !v.hasOtherSelections());
+    }
+
+    template<> template<>
+    void altextview_object::test<67>()
+    {
+        set_test_name("the commands over lines at every caret: duplicated, moved, deleted, joined and commented once for each line, every caret going with its line");
+        ALTextView& v = make("a\nb\nc\nd\ne");
+        v.setSelections(caretRange(0, 0), { caretRange(0, 1), caretRange(3, 0) });
+        v.perform(ALEditorCommand::DuplicateLine);
+        ensure_equals("each line once", v.text(), std::string("a\na\nb\nc\nd\nd\ne"));
+        ensure_equals("each caret on its copy", rangesSaid(ll_test::TextViewProbe::selections(v)), rangesSaid({ caretRange(1, 0), caretRange(1, 1), caretRange(5, 0) }));
+        v.perform(ALEditorCommand::MoveLineDown);
+        ensure_equals("each copy down past the next", v.text(), std::string("a\nb\na\nc\nd\ne\nd"));
+        v.undo();
+        v.undo();
+        ensure_equals("each a step", v.text(), std::string("a\nb\nc\nd\ne"));
+        v.setSelections(caretRange(0, 0), { caretRange(3, 0) });
+        v.perform(ALEditorCommand::DeleteLine);
+        ensure_equals("each caret's line gone", v.text(), std::string("b\nc\ne"));
+        ensure_equals("each on the line that took its place", rangesSaid(ll_test::TextViewProbe::selections(v)), rangesSaid({ caretRange(0, 0), caretRange(2, 0) }));
+        v.perform(ALEditorCommand::JoinLines);
+        ensure_equals("each caret's line joined to the next", v.text(), std::string("b c\ne"));
+
+        v.setSyntax("lsl");
+        v.setText("a;\n  b;\nc;");
+        v.setSelections(caretRange(0, 1), { caretRange(2, 2) });
+        v.perform(ALEditorCommand::ToggleComment);
+        ensure_equals("in at each caret's line", v.text(), std::string("// a;\n  b;\n// c;"));
+        v.perform(ALEditorCommand::ToggleComment);
+        ensure_equals("and out", v.text(), std::string("a;\n  b;\nc;"));
+        ensure_equals("each caret where it was in its text", rangesSaid(ll_test::TextViewProbe::selections(v)), rangesSaid({ caretRange(0, 1), caretRange(2, 2) }));
+    }
+
+    template<> template<>
+    void altextview_object::test<68>()
+    {
+        set_test_name("copy, cut and paste at every selection: copied one to a line, and pasted one to each where there is a line for each, else the whole at each");
+        LLClipboard& clipboard = LLClipboard::instance();
+        ALTextView&  v         = make("one two\nthree four");
+        v.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)), { ALTextRange(ALTextPos(1, 0), ALTextPos(1, 5)) });
+        v.copy();
+        std::string clip;
+        ensure("copied", clipboard.pasteFromClipboard(clip));
+        ensure_equals("one to a line, in order", clip, std::string("one\nthree"));
+        v.setSelections(caretRange(0, 7), { caretRange(1, 10) });
+        v.paste();
+        ensure_equals("a line at each", v.text(), std::string("one twoone\nthree fourthree"));
+        ensure_equals("each caret after its line", rangesSaid(ll_test::TextViewProbe::selections(v)), rangesSaid({ caretRange(0, 10), caretRange(1, 15) }));
+
+        v.setText("x\ny\nz");
+        v.setSelections(caretRange(0, 1), { caretRange(1, 1), caretRange(2, 1) });
+        v.paste();
+        ensure_equals("two lines for three carets: the whole at each", v.text(), std::string("xone\nthree\nyone\nthree\nzone\nthree"));
+
+        v.setText("a1 a2 a3");
+        v.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 2)), { ALTextRange(ALTextPos(0, 6), ALTextPos(0, 8)) });
+        v.cut();
+        ensure_equals("each cut", v.text(), std::string(" a2 "));
+        ensure("and copied", clipboard.pasteFromClipboard(clip) && clip == "a1\na3");
+        v.undo();
+        ensure_equals("one step", v.text(), std::string("a1 a2 a3"));
+    }
+
+    template<> template<>
+    void altextview_object::test<69>()
+    {
+        set_test_name("a command that acts at one place acts at the main caret and lets the others go; select all takes them in");
+        ALTextView& v = make("one\ntwo\nthree");
+        v.setSelections(caretRange(1, 0), { caretRange(0, 0), caretRange(2, 0) });
+        v.perform(ALEditorCommand::NextMisspelling);
+        ensure("the others let go", !v.hasOtherSelections());
+        ensure("the main one where it was", v.selection() == caretRange(1, 0));
+        v.setSelections(caretRange(1, 0), { caretRange(0, 0), caretRange(2, 0) });
+        v.perform(ALEditorCommand::Fold);
+        ensure("folding keeps them", v.otherSelections().size() == 2);
+        v.selectAll();
+        ensure("select all takes them in", !v.hasOtherSelections() && v.selection().normalised() == ALTextRange(ALTextPos(0, 0), ALTextPos(2, 5)));
+    }
+
+    template<> template<>
+    void altextview_object::test<70>()
+    {
+        set_test_name("Alt-click adds a caret or takes the one there away, any other click is one caret; Escape is one caret before it lets the selection go; Control-Alt with up and down adds carets, each keeping its column");
+        ALTextView& v = make("hello world\nhi\nhello world\nx\nhello world");
+        const auto click = [&](S32 line, S32 column, MASK mask) {
+            S32 x = 0, y = 0;
+            pointOf(line, column, x, y);
+            v.handleMouseDown(x, y, mask);
+            v.handleMouseUp(x, y, mask);
+        };
+        click(0, 3, MASK_NONE);
+        click(2, 3, MASK_ALT);
+        ensure("the new caret the main one", v.selection() == caretRange(2, 3));
+        ensure_equals("the first beside it", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(0, 3) }));
+        click(2, 3, MASK_ALT);
+        ensure("taken away again, the one before it main", v.selection() == caretRange(0, 3) && !v.hasOtherSelections());
+        click(0, 3, MASK_ALT);
+        ensure("the last is not taken away", v.selection() == caretRange(0, 3));
+        click(4, 5, MASK_ALT);
+        click(1, 1, MASK_NONE);
+        ensure("a plain click: one caret", v.selection() == caretRange(1, 1) && !v.hasOtherSelections());
+
+        v.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 5)), { caretRange(2, 0) });
+        key(KEY_ESCAPE);
+        ensure("Escape: one caret, its selection kept", !v.hasOtherSelections() && v.hasSelection());
+        key(KEY_ESCAPE);
+        ensure("and then the selection let go", !v.hasSelection());
+
+        v.setCaret(ALTextPos(0, 8));
+        key(KEY_DOWN, MASK_CONTROL | MASK_ALT);
+        ensure("a caret below, at the short line's end, the main one", v.selection() == caretRange(1, 2));
+        key(KEY_DOWN, MASK_CONTROL | MASK_ALT);
+        ensure("and below that, back in its column", v.selection() == caretRange(2, 8));
+        ensure_equals("each kept", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(0, 8), caretRange(1, 2) }));
+        type("!");
+        ensure_equals("typed at each", v.text(), std::string("hello wo!rld\nhi!\nhello wo!rld\nx\nhello world"));
+        v.setCaret(ALTextPos(4, 2));
+        v.singleSelection();
+        ensure("nothing below the last line", !v.perform(ALEditorCommand::AddCaretBelow));
+        key(KEY_UP, MASK_CONTROL | MASK_ALT);
+        ensure("one above it", v.selection() == caretRange(3, 1) && v.otherSelections().size() == 1);
+        v.setReadOnly(true);
+        ensure("none in a read-only text", !v.perform(ALEditorCommand::AddCaretAbove) && !v.canPerform(ALEditorCommand::AddCaretAbove));
+    }
+
+    template<> template<>
+    void altextview_object::test<71>()
+    {
+        set_test_name("Alt-Return in the find bar selects every match, each a selection, the current one the main one, the keyboard back on the text");
+        ALTextView& v = make("cat dog cat bird cat");
+        v.showFind(false);
+        v.findBar()->setQuery("cat");
+        ensure("three found", v.findMatches().size() == 3);
+        ensure("taken", v.findBar()->handleKeyHere(KEY_RETURN, MASK_ALT));
+        ensure_equals("each a selection", ll_test::TextViewProbe::selections(v).size(), static_cast<size_t>(3));
+        ensure("the keyboard on the text", v.keyboardOnText());
+        type("cow");
+        ensure_equals("typed over each", v.text(), std::string("cow dog cow bird cow"));
+    }
+
+    static ALTextRange spanRange(S32 line, S32 anchor, S32 caret)
+    {
+        return ALTextRange(ALTextPos(line, anchor), ALTextPos(line, caret));
+    }
+
+    template<> template<>
+    void altextview_object::test<72>()
+    {
+        set_test_name("Shift-Alt-drag selects a column from the anchor's x to the mouse's on each row, a tab counted as drawn and a short row a caret at its end, the mouse's row the main one; typing goes in at each, as one step");
+        ALTextView& v = make("abcdefgh\nab\n\tcdefgh\nabcdefgh");
+        S32 x, y;
+        pointOf(0, 3, x, y);
+        v.handleMouseDown(x, y, MASK_NONE);
+        v.handleMouseUp(x, y, MASK_NONE);
+        // Six columns in, on the line whose tab is four wide: after "cd".
+        S32 x6, y6, x_line2, y_line2;
+        pointOf(0, 6, x6, y6);
+        pointOf(2, 0, x_line2, y_line2);
+        ensure("pressed", v.handleMouseDown(x6, y_line2, MASK_SHIFT | MASK_ALT));
+        ensure_equals("from column three to six on each row", rangesSaid(ll_test::TextViewProbe::selections(v)),
+                      rangesSaid({ spanRange(0, 3, 6), caretRange(1, 2), spanRange(2, 1, 3) }));
+        ensure("the mouse's row the main one", v.selection() == spanRange(2, 1, 3));
+        // Dragged back over the short row, to column one.
+        S32 x1, y1, x_line1, y_line1;
+        pointOf(0, 1, x1, y1);
+        pointOf(1, 0, x_line1, y_line1);
+        ensure("dragged", v.handleHover(x1, y_line1, MASK_SHIFT | MASK_ALT));
+        ensure_equals("each from three back to one", rangesSaid(ll_test::TextViewProbe::selections(v)),
+                      rangesSaid({ spanRange(0, 3, 1), spanRange(1, 2, 1) }));
+        v.handleMouseUp(x1, y_line1, MASK_SHIFT | MASK_ALT);
+        ensure("capture released", !v.hasMouseCapture());
+        type("X");
+        ensure_equals("typed at each", v.text(), std::string("aXdefgh\naX\n\tcdefgh\nabcdefgh"));
+        v.undo();
+        ensure_equals("one step", v.text(), std::string("abcdefgh\nab\n\tcdefgh\nabcdefgh"));
+
+        pointOf(3, 2, x, y);
+        v.handleMouseDown(x, y, MASK_NONE);
+        v.handleMouseUp(x, y, MASK_NONE);
+        ensure("a plain click is one caret again", !v.hasOtherSelections());
+        v.setReadOnly(true);
+        v.handleMouseDown(x6, y_line2, MASK_SHIFT | MASK_ALT);
+        v.handleMouseUp(x6, y_line2, MASK_SHIFT | MASK_ALT);
+        ensure("no column in a read-only text", !v.hasOtherSelections());
+    }
+
+    template<> template<>
+    void altextview_object::test<73>()
+    {
+        set_test_name("Control-Shift-Alt with an arrow grows a column a column or a row at a time from the selection there is, past a short row and over a tab and a wide character as drawn; a row further than the text is refused");
+        ALTextView& v = make("abcdefgh\nab\n\tcdefgh\nabcdefgh");
+        const MASK column = MASK_CONTROL | MASK_SHIFT | MASK_ALT;
+        v.setCaret(ALTextPos(0, 3));
+        key(KEY_RIGHT, column);
+        key(KEY_RIGHT, column);
+        key(KEY_RIGHT, column);
+        ensure("three columns on its row", v.selection() == spanRange(0, 3, 6) && !v.hasOtherSelections());
+        key(KEY_DOWN, column);
+        key(KEY_DOWN, column);
+        ensure_equals("and two rows down", rangesSaid(ll_test::TextViewProbe::selections(v)),
+                      rangesSaid({ spanRange(0, 3, 6), caretRange(1, 2), spanRange(2, 1, 3) }));
+        type("X");
+        ensure_equals("typed at each", v.text(), std::string("abcXgh\nabX\n\tXefgh\nabcdefgh"));
+        v.undo();
+        ensure_equals("one step", v.text(), std::string("abcdefgh\nab\n\tcdefgh\nabcdefgh"));
+
+        // One caret first: the undone column's selections are back, and a
+        // caret put among them would be taken into the one it touches.
+        v.singleSelection();
+        v.setCaret(ALTextPos(0, 3));
+        key(KEY_DOWN, column);
+        key(KEY_RIGHT, column);
+        key(KEY_RIGHT, column);
+        key(KEY_RIGHT, column);
+        key(KEY_LEFT, column);
+        ensure_equals("a row, then two columns", rangesSaid(ll_test::TextViewProbe::selections(v)),
+                      rangesSaid({ spanRange(0, 3, 5), caretRange(1, 2) }));
+        key(KEY_UP, column);
+        key(KEY_LEFT, column);
+        key(KEY_LEFT, column);
+        key(KEY_LEFT, column);
+        ensure("back to its row and past where it began", v.selection() == spanRange(0, 3, 2) && !v.hasOtherSelections());
+        ensure("no row above the first", !v.perform(ALEditorCommand::ColumnSelectUp));
+
+        // From a selection that is not a column: its anchor and caret the
+        // corners. Column one is nearer the tab's start than its end.
+        v.setSelection(spanRange(3, 1, 4));
+        key(KEY_UP, column);
+        ensure_equals("the tab, as drawn, above three columns", rangesSaid(ll_test::TextViewProbe::selections(v)),
+                      rangesSaid({ spanRange(2, 0, 1), spanRange(3, 1, 4) }));
+        ensure("the moving corner's row the main one", v.selection() == spanRange(2, 0, 1));
+
+        // Wide characters count as wide as the font draws them: the two of
+        // them selected, the row below gets as many columns as they are
+        // drawn across, to the nearest -- not one a character, nor a byte.
+        v.setText("\xe4\xb8\xad\xe6\x96\x87xy\nabcdefgh");
+        const F32 width   = v.layout().columnWidth();
+        const F32 columns = v.layout().xOf(0, 6) / width;
+        if (llabs(columns - std::floor(columns) - 0.5f) > 0.1f)
+        {
+            v.singleSelection();
+            v.setSelection(spanRange(0, 0, 6));
+            key(KEY_DOWN, column);
+            ensure_equals("as many columns as they are drawn across", rangesSaid({ v.selection() }),
+                          rangesSaid({ spanRange(1, 0, ll_round(columns)) }));
+        }
+
+        v.setReadOnly(true);
+        ensure("none in a read-only text", !v.canPerform(ALEditorCommand::ColumnSelectDown) && !v.perform(ALEditorCommand::ColumnSelectDown));
+    }
+
+    template<> template<>
+    void altextview_object::test<74>()
+    {
+        set_test_name("with several carets a composition stands at the main one only, the others moving aside for it and back, and what it commits is typed at each");
+        ALTextView& v = make("abcd\nabcd");
+        v.setSelections(caretRange(0, 1), { caretRange(0, 3), caretRange(1, 1) });
+        LLPreeditor& ime = v.preeditor();
+        ime.updatePreedit("XY", { 2 }, { false }, 2);
+        ensure_equals("at the main caret only", v.text(), std::string("aXYbcd\nabcd"));
+        ensure_equals("the others moved aside for it", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(0, 5), caretRange(1, 1) }));
+        ime.resetPreedit();
+        ensure_equals("gone", v.text(), std::string("abcd\nabcd"));
+        ensure_equals("and they back", rangesSaid(v.otherSelections()), rangesSaid({ caretRange(0, 3), caretRange(1, 1) }));
+        ensure("the main one where it began", v.selection() == caretRange(0, 1));
+        ensure("none of it an edit", !v.isDirty());
+        // What the input method commits comes as typed characters.
+        type("Z");
+        ensure_equals("committed: typed at each", v.text(), std::string("aZbcZd\naZbcd"));
+    }
+
+    template<> template<>
+    void altextview_object::test<75>()
+    {
+        set_test_name("with several selections the find bar is seeded from the main one");
+        ALTextView& v = make("cat dog\nbird cat");
+        v.setSelections(spanRange(0, 4, 7), { spanRange(1, 0, 4) });
+        v.showFind(false);
+        ensure_equals("the main selection's text", v.findBar()->query(), std::string("dog"));
+        v.hideFind();
+        v.setSelections(caretRange(1, 6), { spanRange(0, 4, 7) });
+        v.showFind(false);
+        ensure_equals("the word at the main caret, not another's selection", v.findBar()->query(), std::string("cat"));
+    }
+
+    template<> template<>
+    void altextview_object::test<77>()
+    {
+        set_test_name("Tab with several: a caret on a line a selection indents goes in with the line; one elsewhere puts its tab in");
+        ALTextView& v = make("abcdefgh\nxy");
+        v.setSelections(spanRange(0, 3, 6), { caretRange(0, 1), caretRange(1, 1) });
+        v.perform(ALEditorCommand::Indent);
+        ensure_equals("the selection's line indented once", v.document().line(0), std::string("    abcdefgh"));
+        ensure_equals("the selection over what it held", v.selectedText(), std::string("def"));
+        const std::vector<ALTextRange>& others = v.otherSelections();
+        ensure("the caret on its line moved with it", std::ranges::find(others, caretRange(0, 5)) != others.end());
+        const std::string& second = v.document().line(1);
+        ensure("a tab put in at the caret elsewhere: " + second, second.size() > 2 && second.front() == 'x' && second.back() == 'y');
+    }
+
+    template<> template<>
+    void altextview_object::test<76>()
+    {
+        set_test_name("the find bar's next and previous let the other carets go, as F3 does");
+        ALTextView& v = make("cat dog\nbird cat");
+        v.setSelections(spanRange(0, 0, 3), { caretRange(1, 2) });
+        v.showFind(false);
+        ensure("found from the bar", v.findNext(true));
+        ensure("the other caret let go", !v.hasOtherSelections());
+        ensure("at the next match", v.selection().normalised() == spanRange(1, 5, 8));
+        v.setSelections(spanRange(1, 5, 8), { caretRange(0, 5) });
+        ensure("found back from the bar", v.findNext(false));
+        ensure("the other caret let go going back", !v.hasOtherSelections());
+        ensure("at the match before", v.selection().normalised() == spanRange(0, 0, 3));
     }
 }

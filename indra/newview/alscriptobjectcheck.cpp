@@ -26,10 +26,11 @@
 
 #include "alscriptobjectcheck.h"
 
+#include "alscriptstudioanalysis.h"
 #include "alscriptstudiochecking.h"
 #include "alscriptstudioservices.h"
 
-ALScriptObjectCheck::ALScriptObjectCheck(ALScriptStudioServices& services, Window& window) : mServices(services), mWindow(window) {}
+ALScriptObjectCheck::ALScriptObjectCheck(ALScriptStudioServices& services, ALScriptStudioAnalysis& analysis, Window& window) : mServices(services), mAnalysis(analysis), mWindow(window) {}
 
 void ALScriptObjectCheck::check(const LLUUID& root, const std::string& name)
 {
@@ -125,9 +126,9 @@ void ALScriptObjectCheck::begin(const Window::Listed::One& one)
 
 void ALScriptObjectCheck::checkRead(const Window::Listed::One& one, const Window::Read& read)
 {
-    // Read as a tab reads it: as the preprocessor makes it where it runs,
-    // or where the script went up in its envelope; as written otherwise.
-    if (!read.enveloped && !mWindow.preprocessing())
+    // Read as a tab reads it: as the preprocessor makes it where a save
+    // would run it (ALPreprocessor::wanted); as written otherwise.
+    if (ALPreprocessor::wanted(read.text, read.lua, read.enveloped, mWindow.preprocessing()) == ALPreprocessor::Wanted::No)
     {
         ask(one, read, nullptr);
         return;
@@ -202,7 +203,7 @@ void ALScriptObjectCheck::ask(const Window::Listed::One& one, const Window::Read
     const std::weak_ptr<bool> alive      = mAlive;
     const U32                 generation = mGeneration;
     const bool                lua        = read.lua;
-    mWindow.askAnalysis(std::move(request), [this, alive, generation, one, lua, expansion](const ALScriptAnalysis::Result& result) {
+    mAnalysis.askAnalysis(std::move(request), [this, alive, generation, one, lua, expansion](const ALScriptAnalysis::Result& result) {
         if (alive.lock() && generation == mGeneration)
         {
             answered(one, lua, result, expansion);

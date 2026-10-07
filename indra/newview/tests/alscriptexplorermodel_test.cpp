@@ -48,7 +48,7 @@ namespace tut
     struct alscriptexplorermodel_data
     {
         typedef ALScriptExplorerModel Model;
-        typedef std::function<void(const ALScriptWorkspace::Contents&)> Told;
+        typedef std::function<void(const ALScriptContents&)> Told;
 
         // The world: each object in sight by its root, its prims the root
         // first; what is selected; the prims of the scripts open; the prims
@@ -70,7 +70,7 @@ namespace tut
 
         alscriptexplorermodel_data() : index(fake()), model(index)
         {
-            heardConnection = index.onHeard([this](const ALScriptWorkspace::Contents& contents) { lastHeard = model.contents(contents); });
+            heardConnection = index.onHeard([this](const ALScriptContents& contents) { lastHeard = model.contents(contents); });
         }
 
         ALScriptContentsIndex::World fake()
@@ -104,7 +104,7 @@ namespace tut
 
         // An answer, through the index: to every ask of its prim not
         // answered yet, or to one made for it.
-        Model::Heard feed(const ALScriptWorkspace::Contents& contents)
+        Model::Heard feed(const ALScriptContents& contents)
         {
             if (pending[contents.prim].empty())
             {
@@ -167,13 +167,13 @@ namespace tut
         // What a prim says it holds.
         void holds(const LLUUID& prim, std::vector<std::string> names, bool fetched = true)
         {
-            ALScriptWorkspace::Contents contents;
+            ALScriptContents contents;
             contents.prim    = prim;
             contents.fetched = fetched;
             U32 n            = 1000;
             for (const std::string& name : names)
             {
-                ALScriptWorkspace::Item item;
+                ALScriptContents::Item item;
                 item.id     = id(n++ + static_cast<U32>(prim.mData[0]) * 50);
                 item.name   = name;
                 item.script = name.ends_with(".lsl") || name.ends_with(".luau");
@@ -363,7 +363,7 @@ namespace tut
         selected           = { chair };
         list();
         model.openWhenListed(chair, LLUUID::null, "new.lsl", std::string("default {}"));
-        ALScriptWorkspace::Contents contents;
+        ALScriptContents contents;
         contents.prim    = chair;
         contents.fetched = true;
         contents.items.push_back({ id(500), "old.lsl", true, false });
@@ -378,7 +378,7 @@ namespace tut
         ensure("the one known to run not asked again", askedRunning.size() == 2 && askedRunning[1].item == id(501));
         heard = feed(contents);
         ensure("once", heard.opening.empty());
-        ensure("a prim not listed is no answer", !model.contents(ALScriptWorkspace::Contents{ id(77) }).listed);
+        ensure("a prim not listed is no answer", !model.contents(ALScriptContents{ id(77) }).listed);
         ensure("what runs, known", model.knownRunning(ALScriptRef(chair, id(500))) == std::optional<bool>(true) &&
                                        !model.knownRunning(ALScriptRef(chair, id(501))));
         model.forgetRunning();
@@ -523,10 +523,10 @@ namespace tut
         selected = { house, lone };
         list();
         ask(false, false);
-        ALScriptWorkspace::Contents contents;
+        ALScriptContents contents;
         contents.prim    = id(11);
         contents.fetched = true;
-        ALScriptWorkspace::Item locked;
+        ALScriptContents::Item locked;
         locked.id     = id(2000);
         locked.name   = "locked.lsl";
         locked.modify = false;
@@ -587,5 +587,72 @@ namespace tut
         again.list(listing);
         const std::vector<Model::Row> all = again.rows(std::string());
         ensure("listed away, with its region", !all.empty() && !all[0].present && all[0].region == "Morris");
+    }
+
+    template<> template<>
+    void alscriptexplorermodel_object::test<14>()
+    {
+        set_test_name("two scripts or two notecards compare; what one compares with is its kind elsewhere, its name first; and where each is");
+        const LLUUID door  = object(10, "Door", 2);
+        const LLUUID lamp  = object(20, "Lamp");
+        selected           = { door, lamp };
+        list();
+        ask(false, false);
+        holds(id(10), { "open.lsl", "notes" });
+        holds(id(11), { "open.lsl" });
+        holds(id(20), { "blink.lsl", "open.lsl", "notes" });
+        const auto choiceOf = [this](const LLUUID& prim, const std::string& name) {
+            Model::Choice one;
+            for (const auto& object : model.objects())
+            {
+                for (const auto& part : object.prims)
+                {
+                    if (part.id == prim)
+                    {
+                        one.root = object.root;
+                    }
+                }
+            }
+            one.prim = prim;
+            for (const ALScriptContents::Item& item : index.items(prim))
+            {
+                if (item.name == name)
+                {
+                    one.item   = item.id;
+                    one.name   = item.name;
+                    one.script = item.script;
+                }
+            }
+            return one;
+        };
+        const Model::Choice here   = choiceOf(id(10), "open.lsl");
+        const Model::Choice child  = choiceOf(id(11), "open.lsl");
+        const Model::Choice notes  = choiceOf(id(10), "notes");
+        const Model::Choice there  = choiceOf(id(20), "open.lsl");
+        const Model::Choice blink  = choiceOf(id(20), "blink.lsl");
+        Model::Choice       prim;
+        prim.root = door;
+        prim.prim = id(11);
+
+        const auto pair = Model::comparing({ here, there });
+        ensure("two scripts, in their order", pair && pair->first.ref() == here.ref() && pair->second.ref() == there.ref());
+        ensure("not a script and a notecard", !Model::comparing({ here, notes }));
+        ensure("not one", !Model::comparing({ here }));
+        ensure("not three", !Model::comparing({ here, there, blink }));
+        ensure("not a prim", !Model::comparing({ here, prim }));
+        ensure("not the same twice", !Model::comparing({ here, here }));
+
+        const std::vector<Model::Choice> others = model.comparableWith(here);
+        std::string                      said;
+        for (const Model::Choice& one : others)
+        {
+            said += (said.empty() ? "" : " ") + model.placeOf(one) + "/" + one.name;
+        }
+        ensure_equals("scripts only, its name first, not itself", said,
+                      std::string("Door \xE2\x96\xB8 Door.1/open.lsl Lamp/open.lsl Lamp/blink.lsl"));
+        ensure_equals("a notecard's are notecards", model.comparableWith(notes).size(), 1U);
+        ensure("a prim compares with nothing", model.comparableWith(prim).empty());
+        ensure_equals("a root's place is its object", model.placeOf(here), std::string("Door"));
+        ensure_equals("a child's has its prim", model.placeOf(child), std::string("Door \xE2\x96\xB8 Door.1"));
     }
 }

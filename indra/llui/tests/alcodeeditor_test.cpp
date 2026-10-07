@@ -27,6 +27,7 @@
 #include "../alcodeeditor.h"
 
 #include "../alchoicelist.h"
+#include "../alchoicepopup.h"
 #include "../alfindbar.h"
 #include "../alsurface.h"
 #include "../llclipboard.h"
@@ -423,7 +424,7 @@ namespace tut
     {
         set_test_name("a dot opens the members of the name before it, and a function accepted comes with its brackets");
         ALCodeEditor& e = make("", "slua");
-        e.highlighter().words().set("function", { "ll.Say", "ll.Abs", "print" });
+        e.highlighter().ownWords().set("function", { "ll.Say", "ll.Abs", "print" });
         std::vector<std::pair<ALTextPos, std::string>> asked;
         e.setCompletionRequest([&](const ALTextPos& at, std::string_view prefix) { asked.emplace_back(at, std::string(prefix)); });
         std::vector<ALTextPos> signatures;
@@ -662,7 +663,7 @@ namespace tut
         ALCodeEditor& f = make("default { state_entry() { llSay(0, \"a\\tb\"); } }\n");
         const ALTextRange escaped = f.stringAt(ALTextPos(0, 36));
         ensure_equals("the whole literal", f.document().text(escaped), std::string("\"a\\tb\""));
-        ensure_equals("the tab counted once, and the source said", f.stringSize(escaped), std::string("3 bytes, 6 as written"));
+        ensure_equals("the tab counted once, and the source said", f.stringSize(escaped), std::string("3 bytes, 6 in source"));
 
         // And the card comes up on the comma, where no word is.
         const LLRect text = f.textRect();
@@ -1239,7 +1240,7 @@ namespace tut
     {
         set_test_name("with nobody to ask, the grammar's words are found by their parts as the document's are");
         ALCodeEditor& e = make("", "lsl");
-        e.highlighter().words().set("function", { "llSetPos", "llSay" });
+        e.highlighter().ownWords().set("function", { "llSetPos", "llSay" });
         type("setp");
         key(' ', MASK_CONTROL);
         bool found = false;
@@ -1285,7 +1286,7 @@ namespace tut
         ensure_equals("three", e.fixes().size(), static_cast<size_t>(3));
         ensure_equals("the preferred first", e.fixes().front().title, std::string("Insert ';'"));
         ensure_equals("the suppression last", e.fixes().back().title, std::string("Suppress it"));
-        const ALTextView* box = e.findChild<ALTextView>("completion_doc", false);
+        const ALTextView* box = e.findChild<ALTextView>("fix_preview");
         ensure("previewed", box && box->getVisible());
         ensure_equals("as a diff", box->text(), std::string("- integer a = 1\n+ integer a = 1;"));
         key(KEY_DOWN);
@@ -1362,6 +1363,14 @@ namespace tut
         nearest.edits.emplace_back(ALTextRange(ALTextPos(12, 0), ALTextPos(12, 4)), "B");
         ensure_equals("together", ALCodeEditor::previewOf(farest.document(), nearest, kinds),
                       std::string("- line 10\n- line 11\n- line 12\n+ A 10\n+ line 11\n+ B 12"));
+        // Deep in a block, the lines' indentation in common taken off.
+        ALCodeEditor&     nested = make("{\n    {\n        one;\n            two;\n    }\n}\n");
+        ALCodeEditor::Fix called;
+        called.edits.emplace_back(ALTextRange(ALTextPos(2, 8), ALTextPos(2, 11)), "one()");
+        ensure_equals("at the left", ALCodeEditor::previewOf(nested.document(), called, kinds), std::string("- one;\n+ one();"));
+        called.edits.emplace_back(ALTextRange(ALTextPos(3, 12), ALTextPos(3, 15)), "two()");
+        ensure_equals("each as far in as it is past the least", ALCodeEditor::previewOf(nested.document(), called, kinds),
+                      std::string("- one;\n-     two;\n+ one();\n+     two();"));
     }
 
     template<> template<>
@@ -1832,7 +1841,7 @@ namespace tut
         key(' ', MASK_CONTROL);
         ensure("open", e.completionOpen());
         ensure_equals("the row is taller", e.layout().rowHeightOf(1, 0), 3 * e.layout().rowHeight());
-        const LLView* list = e.findChild<LLView>("completions", false);
+        const LLView* list = e.findChild<LLView>("completions");
         ensure("the list", list != nullptr);
         ensure_equals("under the row, not over its text", list->getRect().mTop,
                       e.textRect().mTop - e.layout().lineTop(1) - e.layout().rowHeightOf(1, 0));
@@ -2175,6 +2184,21 @@ namespace tut
         e.setCaret(ALTextPos(3, 0));
         e.paste();
         ensure_equals("a selection copied goes in where the caret is", e.text(), std::string("two\nthree\ne\ntwotwo"));
+
+        // Several, one selecting something: what is copied is what a cut
+        // takes, the selections' text, not a caret's line too.
+        e.setText("alpha\nbeta");
+        e.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 2)), { ALTextRange(ALTextPos(1, 1), ALTextPos(1, 1)) });
+        e.copy();
+        LLClipboard::instance().pasteFromClipboard(held);
+        ensure_equals("the selection's alone", held, std::string("al"));
+        e.cut();
+        ensure_equals("and the cut takes that alone", e.text(), std::string("pha\nbeta"));
+
+        // A jump to a line leaves one caret there.
+        e.setSelections(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 1)), { ALTextRange(ALTextPos(1, 1), ALTextPos(1, 1)) });
+        e.goToLine(1);
+        ensure("one caret, at the line", !e.hasOtherSelections() && e.caret() == ALTextPos(1, 0));
     }
 
     template<> template<>
@@ -2221,8 +2245,14 @@ namespace tut
         e.setCaret(ALTextPos(0, 10));
         key(KEY_RIGHT, part);
         ensure("a part", e.caret() == ALTextPos(0, 12));
+#if LL_DARWIN
         key(KEY_RIGHT, part | MASK_SHIFT);
-        ensure("and a part selected", e.selection().normalised() == ALTextRange(ALTextPos(0, 12), ALTextPos(0, 15)));
+#else
+        // A key of its own only on the Mac: Control-Shift-Alt with an
+        // arrow grows a column elsewhere.
+        e.perform(ALEditorCommand::SelectSubwordRight);
+#endif
+        ensure("and a part selected",e.selection().normalised() == ALTextRange(ALTextPos(0, 12), ALTextPos(0, 15)));
         e.setCaret(ALTextPos(0, 18));
         key(KEY_BACKSPACE, word);
         ensure_equals("a word taken back is the name", e.text(), std::string("ll.Say(0, );"));
@@ -2296,7 +2326,7 @@ namespace tut
     template<> template<>
     void alcodeeditor_object::test<65>()
     {
-        set_test_name("Select Next Occurrence takes the name, then its places in turn, going round; what is typed goes into every place taken, one step; Change All takes every place");
+        set_test_name("Select Next Occurrence takes the name, then its places in turn, going round, each a selection; what is typed goes into every place taken, one step; Change All selects every place");
         ALCodeEditor& e = make("local x = 1\nx = x + xy\nprint(x)", "slua");
         e.setAutoComplete(false);
         e.setAutoClose(false);
@@ -2304,29 +2334,31 @@ namespace tut
         key('D', MASK_CONTROL);
         ensure_equals("the name", e.selectedText(), std::string("x"));
         key('D', MASK_CONTROL);
-        ensure("the next place taken, the selection kept", e.selection().normalised() == ALTextRange(ALTextPos(1, 0), ALTextPos(1, 1)));
+        ensure("the next place taken, the main selection now", e.selection().normalised() == ALTextRange(ALTextPos(1, 4), ALTextPos(1, 5)));
+        ensure("the first kept beside it", e.otherSelections().size() == 1 && e.otherSelections()[0] == ALTextRange(ALTextPos(1, 0), ALTextPos(1, 1)));
         type("count");
         ensure_equals("typed into both, not into the longer name", e.text(), std::string("local x = 1\ncount = count + xy\nprint(x)"));
         e.undo();
         ensure_equals("one step back takes back both", e.text(), std::string("local x = 1\nx = x + xy\nprint(x)"));
-        ensure("and ends it", e.placeholders().empty());
 
         e.setCaret(ALTextPos(2, 6));
+        e.singleSelection();
         key('D', MASK_CONTROL);
         key('D', MASK_CONTROL);
         key('D', MASK_CONTROL);
         type("n");
         ensure_equals("going round from the last to the first", e.text(), std::string("local n = 1\nn = x + xy\nprint(n)"));
         key(KEY_ESCAPE);
-        ensure("Escape lets go", e.placeholders().empty());
+        ensure("Escape lets go", !e.hasOtherSelections());
 
         e.setText("local x = 1\nx = x + xy\nprint(\"x\")");
         e.setCaret(ALTextPos(0, 6));
         key('L', MASK_CONTROL | MASK_SHIFT);
+        ensure_equals("Change All: every place selected", e.otherSelections().size(), static_cast<size_t>(3));
         type("n");
-        ensure_equals("Change All: every place of the name, as written", e.text(), std::string("local n = 1\nn = n + xy\nprint(\"n\")"));
-        e.setCaret(ALTextPos(2, 0));
-        ensure("the caret off the line: let go", e.placeholders().empty());
+        ensure_equals("every place of the name, as written", e.text(), std::string("local n = 1\nn = n + xy\nprint(\"n\")"));
+        e.goTo(ALTextPos(2, 0));
+        ensure("gone elsewhere: one caret", !e.hasOtherSelections());
         type("-- ");
         ensure_equals("and typing is typing again", e.document().line(2), std::string("-- print(\"n\")"));
     }
@@ -2514,5 +2546,204 @@ namespace tut
             same("wrapped row " + std::to_string(r) + " after the opener", deeper, again.rows[r]);
         }
     }
-}
 
+    template<> template<>
+    void alcodeeditor_object::test<70>()
+    {
+        set_test_name("an editor makes its completion and fix lists the first time each is shown, not before");
+        ALCodeEditor& e = make("integer count;\nllSay(0, co");
+        ensure("no completion list yet", e.findChild<LLView>("completions") == nullptr);
+        ensure("no fix list yet", e.findChild<LLView>("fixes") == nullptr);
+        ensure("neither open", !e.completionOpen() && !e.fixesOpen());
+        e.setCaret(e.document().end());
+        key(' ', MASK_CONTROL);
+        ensure("the completions listed", e.completionOpen() && e.findChild<LLView>("completions") != nullptr);
+        ensure("and still no fix list", e.findChild<LLView>("fixes") == nullptr);
+        key(KEY_ESCAPE);
+        e.setFixProvider([](S32 line, std::vector<ALCodeEditor::Fix>& out) {
+            ALCodeEditor::Fix semi;
+            semi.title = "Insert ';'";
+            semi.value = "semi";
+            semi.edits.emplace_back(ALTextRange(ALTextPos(line, 0), ALTextPos(line, 0)), ";");
+            out = { semi };
+        });
+        e.setFixable(1, true, true);
+        ensure("the fixes listed", e.handleKeyHere('.', MASK_CONTROL) && e.fixesOpen() && e.findChild<LLView>("fixes") != nullptr);
+    }
+    template<> template<>
+    void alcodeeditor_object::test<71>()
+    {
+        set_test_name("the next occurrence taken comes out from under the pinned headers, not scrolled to the top under them");
+        std::string text = "default\n{\n    state_entry()\n    {\n";
+        for (int i = 0; i < 80; ++i)
+        {
+            text += "        llOwnerSay(\"line " + std::to_string(i) + "\");\n";
+        }
+        text += "    }\n}\n";
+        ALCodeEditor& e = make(text.c_str());
+        e.setStickyHeaders(true);
+        const S32 row_h = e.layout().rowHeight();
+        // The last llOwnerSay taken, then the next round past the end: the
+        // first, a line above the view.
+        e.setCaret(ALTextPos(83, 10));
+        e.perform(ALEditorCommand::SelectNextOccurrence);
+        e.perform(ALEditorCommand::SelectNextOccurrence);
+        const S32 below = e.layout().lineTop(4) - e.scrollY();
+        ensure("in sight", below < e.textRect().getHeight());
+        ensure("below the handler's state pinned over it: " + std::to_string(below) + " of " + std::to_string(row_h), below >= row_h);
+    }
+
+    template<> template<>
+    void alcodeeditor_object::test<72>()
+    {
+        set_test_name("the completion list and the box beside it are one child view, as large as the editor and seen through: a press "
+                      "on the list is the list's, one beside it the text's; the fixes have one of their own");
+        ALCodeEditor& e = make("integer count;\ninteger total;\nllSay(0, co");
+        e.setCaret(e.document().end());
+        key(' ', MASK_CONTROL);
+        ensure("open", e.completionOpen());
+        ALChoicePopup* popup = e.findChild<ALChoicePopup>("completion_popup", false);
+        ensure("found by its name among the editor's children", popup != nullptr);
+        ensure("as large as the editor", popup->getRect() == e.getLocalRect());
+        ensure("holding the list", popup->findChild<ALChoiceList>("completions", false) == &popup->list());
+        const LLRect list = popup->list().getRect();
+        const LLRect text = e.textRect();
+        const S32    row  = e.layout().rowHeight();
+        // On the list: the list's, the list staying open.
+        const ALTextPos caret = e.caret();
+        ensure("a press on the list is taken", e.handleMouseDown(list.mLeft + 8, list.mTop - row / 2, MASK_NONE));
+        e.handleMouseUp(list.mLeft + 8, list.mTop - row / 2, MASK_NONE);
+        ensure("by the list, the text as it was", e.completionOpen() && e.caret() == caret);
+        // On the first line, well above the list: the text's.
+        const S32 x = text.mLeft + 2;
+        const S32 y = text.mTop - row / 2;
+        ensure("the first line is not under the list", !list.pointInRect(x, y));
+        e.handleMouseDown(x, y, MASK_NONE);
+        e.handleMouseUp(x, y, MASK_NONE);
+        ensure("a press beside the list is the text's", !e.completionOpen() && e.caret().line == 0);
+        ensure("the popup hidden with its list", !popup->getVisible());
+
+        e.setFixProvider([](S32 line, std::vector<ALCodeEditor::Fix>& out) {
+            ALCodeEditor::Fix semi;
+            semi.title = "Insert ';'";
+            semi.value = "semi";
+            semi.edits.emplace_back(ALTextRange(ALTextPos(line, 0), ALTextPos(line, 0)), ";");
+            out = { semi };
+        });
+        e.setFixable(0, true, true);
+        ensure("the fixes listed", e.handleKeyHere('.', MASK_CONTROL) && e.fixesOpen());
+        ALChoicePopup* fixes = e.findChild<ALChoicePopup>("fix_popup", false);
+        ensure("on a popup of their own", fixes && fixes != popup && fixes->findChild<ALChoiceList>("fixes", false) == &fixes->list());
+        ensure("previewed in its own box", fixes->sideShown() && e.findChild<ALTextView>("fix_preview") == &fixes->side());
+        key(KEY_ESCAPE);
+        ensure("and the box goes with the list", !fixes->sideShown() && !fixes->getVisible());
+    }
+
+    template<> template<>
+    void alcodeeditor_object::test<73>()
+    {
+        set_test_name("pairs at every caret: closed, typed over and taken away together at each, a selection wrapped; a character typed as ever where it pairs nothing");
+        ALCodeEditor& e = make("a\nb\nc");
+        e.setAutoClose(true);
+        e.setSelections(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 1)), { ALTextRange(ALTextPos(1, 1), ALTextPos(1, 1)), ALTextRange(ALTextPos(2, 1), ALTextPos(2, 1)) });
+        type("(");
+        ensure_equals("closed at each", e.text(), std::string("a()\nb()\nc()"));
+        ensure("the main caret between", e.caret() == ALTextPos(0, 2));
+        type("x)");
+        ensure_equals("each closer typed over", e.text(), std::string("a(x)\nb(x)\nc(x)"));
+        ensure("past it", e.caret() == ALTextPos(0, 4));
+        type("[");
+        key(KEY_BACKSPACE);
+        ensure_equals("one Backspace takes each pair", e.text(), std::string("a(x)\nb(x)\nc(x)"));
+        e.undo();
+        ensure_equals("the Backspace undone", e.text(), std::string("a(x)[]\nb(x)[]\nc(x)[]"));
+
+        e.setText("one two");
+        e.setSelections(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)), { ALTextRange(ALTextPos(0, 4), ALTextPos(0, 7)) });
+        type("\"");
+        ensure_equals("each selection wrapped", e.text(), std::string("\"one\" \"two\""));
+        e.setText("x\n// y");
+        e.setSelections(ALTextRange(ALTextPos(0, 1), ALTextPos(0, 1)), { ALTextRange(ALTextPos(1, 4), ALTextPos(1, 4)) });
+        type("(");
+        ensure_equals("closed where it is code, typed as ever in the comment", e.text(), std::string("x()\n// y("));
+
+        // A closer typed over at one caret and typed plain at another: the
+        // plain one comes out as it would alone.
+        e.setText("{\n        \nx");
+        e.setCaret(ALTextPos(2, 1));
+        type("{");
+        e.setSelections(ALTextRange(ALTextPos(2, 2), ALTextPos(2, 2)), { ALTextRange(ALTextPos(1, 8), ALTextPos(1, 8)) });
+        type("}");
+        ensure_equals("typed over at one", e.document().line(2), std::string("x{}"));
+        ensure_equals("brought out at the other", e.document().line(1), std::string("}"));
+    }
+
+    template<> template<>
+    void alcodeeditor_object::test<74>()
+    {
+        set_test_name("Select Next Occurrence at several carets takes the word at each, then the next place as the main one; a completion accepted goes in at each caret, its first parameter chosen at each");
+        ALCodeEditor& e = make("one\none two\none", "slua");
+        e.setAutoComplete(false);
+        e.setAutoClose(false);
+        const auto at = [](S32 line, S32 column) { return ALTextRange(ALTextPos(line, column), ALTextPos(line, column)); };
+        e.setSelections(at(0, 1), { at(2, 1) });
+        key('D', MASK_CONTROL);
+        ensure("the word at the main caret", e.selection() == ALTextRange(ALTextPos(0, 0), ALTextPos(0, 3)));
+        ensure("and at the other", e.otherSelections().size() == 1 && e.otherSelections()[0] == ALTextRange(ALTextPos(2, 0), ALTextPos(2, 3)));
+        key('D', MASK_CONTROL);
+        ensure("the next place not taken, the main one", e.selection() == ALTextRange(ALTextPos(1, 0), ALTextPos(1, 3)) && e.otherSelections().size() == 2);
+        type("1");
+        ensure_equals("typed at each", e.text(), std::string("1\n1 two\n1"));
+
+        e.setText("myC\n  myC");
+        e.setCompletionProvider([](const ALTextPos&, std::string_view, std::vector<ALCodeEditor::Completion>& out) {
+            ALCodeEditor::Completion c;
+            c.text   = "myCall";
+            c.kind   = ALSyntaxKind::Function;
+            c.detail = "myCall(integer channel, string msg)";
+            out.push_back(c);
+        });
+        e.setSelections(at(0, 3), { at(1, 5) });
+        key(' ', MASK_CONTROL);
+        ensure("the list at the main caret, the other kept", e.completionOpen() && e.hasOtherSelections());
+        ensure("the call offered", !e.completions().empty() && e.completions()[0].text == "myCall");
+        key(KEY_RETURN);
+        ensure_equals("in at each, over what was typed", e.text(), std::string("myCall(channel, msg)\n  myCall(channel, msg)"));
+        ensure("the first parameter chosen at the main caret", e.selection() == ALTextRange(ALTextPos(0, 7), ALTextPos(0, 14)));
+        ensure("and at the other", e.otherSelections().size() == 1 && e.otherSelections()[0] == ALTextRange(ALTextPos(1, 9), ALTextPos(1, 16)));
+        e.undo();
+        ensure_equals("one step", e.text(), std::string("myC\n  myC"));
+    }
+
+    template<> template<>
+    void alcodeeditor_object::test<75>()
+    {
+        set_test_name("a caret besides the main one put on a line folded away opens it, as the main one does; folding moves the others out to the fold's line, as it does the main one");
+        ALCodeEditor& e = make("default\n{\n    state_entry()\n    {\n        llSay(0, \"a\");\n        llSay(0, \"b\");\n    }\n}\nx");
+        const auto caretAt = [](S32 line, S32 column) { return ALTextRange(ALTextPos(line, column), ALTextPos(line, column)); };
+        ensure("folds", e.foldAt(2));
+        e.setSelections(caretAt(8, 0), { caretAt(4, 8) });
+        ensure("the other caret's line opened", !e.isFolded(2) && !e.layout().hidden(4));
+
+        e.setSelections(caretAt(8, 0), { caretAt(4, 8), ALTextRange(ALTextPos(5, 8), ALTextPos(5, 13)) });
+        ensure("folds again", e.foldAt(2));
+        ensure("the main one where it was", e.selection() == caretAt(8, 0));
+        ensure("the others out of the fold, at the end of its line, as one", e.otherSelections().size() == 1 && e.otherSelections()[0] == caretAt(2, 17));
+        ensure("and the fold kept", e.isFolded(2));
+
+        e.unfoldAll();
+        e.setSelections(caretAt(8, 0), { caretAt(4, 8) });
+        e.foldAll();
+        ensure("folding all moves them out as well", e.otherSelections().size() == 1 && !e.layout().hidden(e.otherSelections()[0].end.line));
+        ensure("into sight above", e.otherSelections()[0] == caretAt(0, 7));
+
+        // The main one folded away too: every block folds, none opened
+        // again for a caret in it.
+        e.setText("f()\n{\n    llSay(0, \"a\");\n}\ng()\n{\n    llSay(0, \"b\");\n}\n");
+        e.setSelections(caretAt(2, 4), { caretAt(6, 4) });
+        e.foldAll();
+        ensure("both folded", e.isFolded(0) && e.isFolded(4));
+        ensure("the main one at its fold's line", e.selection() == caretAt(0, 3));
+        ensure("the other at its own", e.otherSelections().size() == 1 && e.otherSelections()[0] == caretAt(4, 3));
+    }
+}

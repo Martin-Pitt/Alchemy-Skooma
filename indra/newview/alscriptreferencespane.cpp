@@ -26,8 +26,10 @@
 
 #include "alscriptreferencespane.h"
 
+#include "alcodeeditor.h"
 #include "alpanefolds.h"
 #include "alpanelist.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioplaces.h"
 #include "alscriptstudioservices.h"
 #include "llbutton.h"
@@ -49,15 +51,12 @@ bool ALScriptReferencesPane::postBuild()
     mHead      = getChild<LLTextBox>("references_head");
     mRename    = getChild<LLButton>("references_rename");
     mCancel    = getChild<LLButton>("references_cancel");
+    mChanges   = getChild<LLButton>("references_changes");
     mHeadRight = mHead->getRect().mRight;
     // The window this is a tab of, found through the view tree, as what
     // the tab asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The References tab", mServices, mWindow))
     {
-        LL_WARNS() << "The References tab is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     // A box ticked, where a rename is previewed, is read before the place
@@ -75,6 +74,7 @@ bool ALScriptReferencesPane::postBuild()
     });
     mRename->setCommitCallback([this](LLUICtrl*, const LLSD&) { renamePreviewed(); });
     mCancel->setCommitCallback([this](LLUICtrl*, const LLSD&) { cancelPreview(); });
+    mChanges->setCommitCallback([this](LLUICtrl*, const LLSD&) { showChanges(); });
     // Return and a double-click go to the place chosen, to type there, and
     // escape goes back to the script without going anywhere.
     mList->setGo([this]() { choose(true); });
@@ -123,7 +123,8 @@ void ALScriptReferencesPane::take(Found found)
     {
         place.id = ++id;
     }
-    mApply = nullptr;
+    mApply       = nullptr;
+    mShowChanges = nullptr;
     mNewName.clear();
     mSaid.clear();
     mLeftOut.clear();
@@ -131,14 +132,29 @@ void ALScriptReferencesPane::take(Found found)
 }
 
 void ALScriptReferencesPane::preview(Found found, const std::string& new_name, const std::string& said,
-                                     std::function<void(const std::vector<size_t>& kept)> apply)
+                                     std::function<void(const std::vector<size_t>& kept)>                          apply,
+                                     std::function<void(const std::string& file, const std::vector<size_t>& kept)> changes)
 {
     take(std::move(found));
-    mNewName = new_name;
-    mSaid    = said;
-    mApply   = std::move(apply);
+    mNewName     = new_name;
+    mSaid        = said;
+    mApply       = std::move(apply);
+    mShowChanges = std::move(changes);
     showButtons();
     fill();
+}
+
+void ALScriptReferencesPane::showChanges()
+{
+    if (!previewing() || !mShowChanges)
+    {
+        return;
+    }
+    // The file of the row chosen, or the script it was looked up from.
+    readBoxes();
+    const LLScrollListItem* item  = mList->getFirstSelected();
+    const size_t            index = item ? placeWith(static_cast<U32>(item->getValue().asInteger()), false) : mFound.places.size();
+    mShowChanges(index < mFound.places.size() ? mFound.places[index].file : std::string(), kept());
 }
 
 std::vector<size_t> ALScriptReferencesPane::kept() const
@@ -209,6 +225,7 @@ void ALScriptReferencesPane::renamePreviewed()
     const std::vector<size_t> chosen = kept();
     const auto                apply  = std::move(mApply);
     mApply                           = nullptr;
+    mShowChanges                     = nullptr;
     mLeftOut.clear();
     showButtons();
     fill();
@@ -217,7 +234,8 @@ void ALScriptReferencesPane::renamePreviewed()
 
 void ALScriptReferencesPane::cancelPreview()
 {
-    mApply = nullptr;
+    mApply       = nullptr;
+    mShowChanges = nullptr;
     mLeftOut.clear();
     showButtons();
     fill();
@@ -225,15 +243,16 @@ void ALScriptReferencesPane::cancelPreview()
 
 void ALScriptReferencesPane::showButtons()
 {
-    if (!mRename || !mCancel || !mHead)
+    if (!mRename || !mCancel || !mHead || !mChanges)
     {
         return;
     }
     const bool shown = previewing();
     mRename->setVisible(shown);
     mCancel->setVisible(shown);
+    mChanges->setVisible(shown && mShowChanges);
     LLRect head = mHead->getRect();
-    head.mRight = shown ? mRename->getRect().mLeft - 4 : mHeadRight;
+    head.mRight = shown ? (mChanges->getVisible() ? mChanges : mRename)->getRect().mLeft - 4 : mHeadRight;
     mHead->setRect(head);
 }
 
@@ -361,7 +380,7 @@ void ALScriptReferencesPane::slide(Doc& doc, const std::string& path, const ALTe
     bool         changed = false;
     const auto   mine    = [&](const std::string& file) { return file.empty() ? doc.id == mFound.from : file == path; };
     const auto   slide   = [&](ALScriptSpan& span) {
-        ALTextRange       range(ALTextPos(span.line, span.column), ALTextPos(span.endLine, span.endColumn));
+        ALTextRange       range = ALScriptPlaces::rangeOf(span);
         const ALTextRange was = range;
         if (!edit.slide(range))
         {

@@ -1094,6 +1094,9 @@ bool LLPipeline::allocateScreenBufferInternal(U32 resX, U32 resY)
         // See LLViwerTextureList::updateImagesCreateTextures and LLImageGL::scaleDown
         mDownResMap.allocate(1024, 1024, GL_RGBA8);
 
+        if (!mPreviewMap.allocate(MAX_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH, GL_SRGB8_ALPHA8, true, false,
+                                  ALTextureSlot::TT_TEXTURE, LLRenderTarget::MIPS_NONE, mainDepthFormat())) return false;
+
         mBakeMap.allocate(LLAvatarAppearanceDefines::SCRATCH_TEX_WIDTH, LLAvatarAppearanceDefines::SCRATCH_TEX_HEIGHT, GL_RGBA8);
     }
     //HACK make screenbuffer allocations start failing after 30 seconds
@@ -1367,6 +1370,7 @@ void LLPipeline::releaseGLBuffers()
 
     mDownResMap.release();
 
+    mPreviewMap.release();
     mBakeMap.release();
 
     for (U32 i = 0; i < 3; i++)
@@ -5423,11 +5427,13 @@ void LLPipeline::renderDebug()
 
     visible_selected_groups.clear();
 
+    // <SK:Nexii> Probe debug drawn after tonemapping in renderFinalize so its kind colours survive exposure.
     //draw reflection probes and links between them
-    if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
-    {
-        mReflectionMapManager.renderDebug();
-    }
+    //if (gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES) && !hud_only)
+    //{
+    //    mReflectionMapManager.renderDebug();
+    //}
+    // </SK:Nexii>
 
     static LLCachedControl<bool> render_ref_probe_volumes(gSavedSettings, "RenderReflectionProbeVolumes");
     if (render_ref_probe_volumes && !hud_only)
@@ -5435,6 +5441,16 @@ void LLPipeline::renderDebug()
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("probe debug display");
 
         bindDeferredShader(gReflectionProbeDisplayProgram, NULL);
+        // <SK:Nexii> Probe volume display: camera to agent space, so its blend hatching stays put on surfaces.
+        static LLStaticHashedString sk_probe_inv_view("sk_probe_inv_view");
+        LLMatrix4a inv_view = LLViewerCamera::getCurrent().getModelview();
+        inv_view.invert();
+        const GLint inv_view_loc = gReflectionProbeDisplayProgram.getUniformLocation(sk_probe_inv_view);
+        if (inv_view_loc >= 0)
+        {
+            glUniformMatrix4fv(inv_view_loc, 1, GL_FALSE, inv_view.getF32ptr());
+        }
+        // </SK:Nexii>
         mScreenTriangleVB->setBuffer();
 
         LLGLEnable blend(GL_BLEND);
@@ -6149,12 +6165,28 @@ static F32 calc_light_dist(LLVOVolume* light, const LLVector3& cam_pos, F32 max_
     return dist;
 }
 
+// How much of a nearby light shows for its fade clock (see calcNearbyLights): none at 0
+// rising to all of it at LIGHT_FADE_TIME, and all of it at -0 falling to none at
+// -LIGHT_FADE_TIME.
+static F32 light_fade_brightness(F32 fade)
+{
+    if (fade >= LIGHT_FADE_TIME)
+    {
+        return 1.f;
+    }
+    return llclamp(fade >= 0.f ? fade / LIGHT_FADE_TIME : 1.f + fade / LIGHT_FADE_TIME, 0.f, 1.f);
+}
+
 void LLPipeline::calcNearbyLights(LLCamera& camera)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWPOOL;
     assertInitialized();
 
-    if (gCubeSnapshot || LLPipeline::sRenderingHUDs || LLApp::isExiting())
+    // The nearby set is the frame camera's, and its fade clock runs once a frame. Probe faces
+    // and impostor bakes render from cameras of their own and take the set as the frame left
+    // it: a bake runs before the frame's deferred lighting, which would otherwise draw the
+    // set in the bake camera's order.
+    if (gCubeSnapshot || LLPipeline::sImpostorRender || LLPipeline::sRenderingHUDs || LLApp::isExiting())
     {
         return;
     }
@@ -6165,8 +6197,7 @@ void LLPipeline::calcNearbyLights(LLCamera& camera)
     {
         // mNearbyLight (and all light_set_t's) are sorted such that
         // begin() == the closest light and rbegin() == the farthest light
-        const S32 MAX_LOCAL_LIGHTS = 6;
-        LLVector3 cam_pos = camera.getOrigin();
+        const LLVector3& cam_pos = camera.getOrigin();
 
         F32 max_dist;
         if (LLPipeline::sRenderDeferred)
@@ -6179,6 +6210,11 @@ void LLPipeline::calcNearbyLights(LLCamera& camera)
         }
 
         // UPDATE THE EXISTING NEARBY LIGHTS
+        // Distance is the set's sort key, so a light cannot be updated where it stands: each
+        // one is lifted out by its node, given its new distance and fade, and dropped into
+        // updated_lights in its new order. The node moves with it, so nothing is reallocated.
+        light_set_t updated_lights;
+        const F32 frame_interval = gFrameIntervalSeconds.value();
         for (light_set_t::iterator iter = mNearbyLights.begin();
             iter != mNearbyLights.end();)
         {
@@ -6219,7 +6255,8 @@ void LLPipeline::calcNearbyLights(LLCamera& camera)
 
             F32 dist = calc_light_dist(volight, cam_pos, max_dist);
             F32 fade = light->fade;
-            // actual fade gets decreased/increased by setupHWLights
+            // actual fade gets decreased/increased below, once a frame for every light;
+            // setupHWLights only reads it
             // light->fade value is 'time'.
             // >=0 and light will become visible as value increases
             // <0 and light will fade out
@@ -6249,8 +6286,19 @@ void LLPipeline::calcNearbyLights(LLCamera& camera)
                 }
             }
 
-            ++iter; // Advance to next light
+            // advance the fade in whichever direction it now runs; a fully visible light
+            // holds, and one that reaches -LIGHT_FADE_TIME is erased next frame
+            if (fade < LIGHT_FADE_TIME)
+            {
+                fade += (fade >= 0.f) ? frame_interval : -frame_interval;
+            }
+
+            light_set_t::node_type node = mNearbyLights.extract(iter++);
+            node.value().dist = dist;
+            node.value().fade = fade;
+            updated_lights.insert(std::move(node));
         }
+        mNearbyLights.swap(updated_lights);
 
         // FIND NEW LIGHTS THAT ARE IN RANGE
         for (LLDrawable::ordered_drawable_set_t::iterator iter = mLights.begin();
@@ -6426,23 +6474,8 @@ void LLPipeline::setupHWLights()
             LLColor4  light_color = light->getLightLinearColor() * light_scale;
             light_color.mV[3] = 0.0f;
 
-            F32 fade = iter->fade;
-            if (fade < LIGHT_FADE_TIME)
-            {
-                // fade in/out light
-                if (fade >= 0.f)
-                {
-                    fade = fade / LIGHT_FADE_TIME;
-                    ((Light*) (&(*iter)))->fade += gFrameIntervalSeconds.value();
-                }
-                else
-                {
-                    fade = 1.f + fade / LIGHT_FADE_TIME;
-                    ((Light*) (&(*iter)))->fade -= gFrameIntervalSeconds.value();
-                }
-                fade = llclamp(fade,0.f,1.f);
-                light_color *= fade;
-            }
+            // fade in/out light
+            light_color *= light_fade_brightness(iter->fade);
 
             if (light_color.magVecSquared() < 0.001f)
             {
@@ -10575,6 +10608,13 @@ void LLPipeline::renderFinalize()
         SKNavMesh::instance().renderDebug();
     }
     // </SK:Nexii>
+    // <SK:Nexii> Probe debug drawn after tonemapping so its kind colours survive exposure; occludes like the navmesh overlay.
+    if (hasRenderDebugMask(LLPipeline::RENDER_DEBUG_REFLECTION_PROBES))
+    {
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        mReflectionMapManager.renderDebug();
+    }
+    // </SK:Nexii>
     // <SK:Nexii> navmesh annotations: marks draw whether or not the overlay is on
     if (SKNavAnnotator::instanceExists())
     {
@@ -11180,9 +11220,17 @@ void LLPipeline::renderDeferredLighting()
 
         if (local_light_count > 0 && (!gCubeSnapshot || probe_level > 0))
         {
+            // A projector's colour is worked out with its fade where it is sorted, and carried
+            // to the pass that draws it.
+            struct SpotLight
+            {
+                LLPointer<LLDrawable> drawable;
+                LLColor3              col;
+            };
+
             static std::vector<LLVector4>        fullscreen_lights;
-            static LLDrawable::drawable_vector_t spot_lights;
-            static LLDrawable::drawable_vector_t fullscreen_spot_lights;
+            static std::vector<SpotLight>        spot_lights;
+            static std::vector<SpotLight>        fullscreen_spot_lights;
             static std::vector<LLVector4>        light_colors;
 
             gGL.setSceneBlendType(LLRender::BT_ADD);
@@ -11244,8 +11292,11 @@ void LLPipeline::renderDeferredLighting()
                     const F32 *c = center.getF32ptr();
                     F32        s = volume->getLightRadius() * 1.5f;
 
-                    // send light color to shader in linear space
+                    // send light color to shader in linear space, faded in or out with the
+                    // light's fade clock -- a light fading out past the draw distance dims to
+                    // nothing before calcNearbyLights erases it, and a new one rises from nothing
                     LLColor3 col = volume->getLightLinearColor() * light_scale;
+                    col *= light_fade_brightness(iter->fade);
 
                     if (col.magVecSquared() < 0.001f)
                     {
@@ -11273,7 +11324,7 @@ void LLPipeline::renderDeferredLighting()
                         if (volume->isLightSpotlight())
                         {
                             drawablep->getVOVolume()->updateSpotLightPriority();
-                            spot_lights.push_back(drawablep);
+                            spot_lights.push_back({ drawablep, col });
                             continue;
                         }
 
@@ -11291,7 +11342,7 @@ void LLPipeline::renderDeferredLighting()
                         if (volume->isLightSpotlight())
                         {
                             drawablep->getVOVolume()->updateSpotLightPriority();
-                            fullscreen_spot_lights.push_back(drawablep);
+                            fullscreen_spot_lights.push_back({ drawablep, col });
                             continue;
                         }
 
@@ -11321,8 +11372,9 @@ void LLPipeline::renderDeferredLighting()
 
                 spot_shader.enableTexture(LLShaderMgr::DEFERRED_PROJECTION);
 
-                for (LLDrawable* drawablep : spot_lights)
+                for (const SpotLight& spot : spot_lights)
                 {
+                    LLDrawable* drawablep = spot.drawable;
                     LLVOVolume *volume = drawablep->getVOVolume();
 
                     LLVector4a center;
@@ -11334,12 +11386,9 @@ void LLPipeline::renderDeferredLighting()
 
                     setupSpotLight(spot_shader, drawablep);
 
-                    // send light color to shader in linear space
-                    LLColor3 col = volume->getLightLinearColor() * light_scale;
-
                     spot_shader.uniform3fv(LLShaderMgr::LIGHT_CENTER, 1, c);
                     spot_shader.uniform1f(LLShaderMgr::LIGHT_SIZE, s);
-                    spot_shader.uniform3fv(LLShaderMgr::DIFFUSE_COLOR, 1, col.mV);
+                    spot_shader.uniform3fv(LLShaderMgr::DIFFUSE_COLOR, 1, spot.col.mV);
                     spot_shader.uniform1f(LLShaderMgr::LIGHT_FALLOFF, volume->getLightFalloff(DEFERRED_LIGHT_FALLOFF));
 
                     gGL.syncMatrices();
@@ -11398,8 +11447,9 @@ void LLPipeline::renderDeferredLighting()
 
                 mScreenTriangleVB->setBuffer();
 
-                for (LLDrawable* drawablep : fullscreen_spot_lights)
+                for (const SpotLight& spot : fullscreen_spot_lights)
                 {
+                    LLDrawable* drawablep = spot.drawable;
                     LLVOVolume* volume = drawablep->getVOVolume();
                     LLVector3   center = drawablep->getPositionAgent();
                     F32         light_size_final = volume->getLightRadius() * 1.5f;
@@ -11412,12 +11462,9 @@ void LLPipeline::renderDeferredLighting()
 
                     setupSpotLight(multi_spot_shader, drawablep);
 
-                    // send light color to shader in linear space
-                    LLColor3 col = volume->getLightLinearColor() * light_scale;
-
                     multi_spot_shader.uniform3fv(LLShaderMgr::LIGHT_CENTER, 1, tc.getF32ptr());
                     multi_spot_shader.uniform1f(LLShaderMgr::LIGHT_SIZE, light_size_final);
-                    multi_spot_shader.uniform3fv(LLShaderMgr::DIFFUSE_COLOR, 1, col.mV);
+                    multi_spot_shader.uniform3fv(LLShaderMgr::DIFFUSE_COLOR, 1, spot.col.mV);
                     multi_spot_shader.uniform1f(LLShaderMgr::LIGHT_FALLOFF, light_falloff_final);
 
                     mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);

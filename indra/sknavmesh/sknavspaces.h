@@ -237,7 +237,10 @@ namespace sknav
         U32 mDirtyTiles = 0;
         U32 mCells = 0;                     ///< level-0 cells the transform ran over
         U32 mReused = 0;                    ///< runs and scores taken from the last pass's memo
-        SpacesDrawPtr mDraw;                ///< what the overlay draws, built once with the pass
+        SpacesDrawPtr mDraw;                ///< what the overlay draws, built once with the pass.
+                                            ///< Landed products are replaced, never rewritten, and the
+                                            ///< draw copies what it read, so it cannot go stale beside
+                                            ///< them; a pass that would change it lands a new product.
         std::shared_ptr<const MergeMemo> mMemo;
 
         /// The space with this id, or null.

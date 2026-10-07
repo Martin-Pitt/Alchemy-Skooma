@@ -431,6 +431,7 @@ bool SKNavWind::sampleAt(const LLVector3d& pos, F32 heading_deg, Sample& out) co
 
 void SKNavRooms::gatherWind(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, F32 heading_deg, bool opaque) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather wind");
     if (!mView)
     {
         return;
@@ -537,12 +538,14 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     {
         return;
     }
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - update");
     static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
     if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - revision walk");
         mSeenRevision = navmesh.mRevision;
         mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
@@ -578,6 +581,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             U64 doors = SEED;
             if (sig != SEED)
             {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - doors and lifts");
                 const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
                 navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
                     doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
@@ -635,6 +639,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         MeshState& state = entry.second;
         if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post");
             if (state.mAirSignature == SEED)
             {
                 // Its air is gone: nothing to answer with.
@@ -662,6 +667,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         const bool quiet = !state.mDirty && !state.mInFlight && (now - state.mWindChanged) * 1000.0 >= wind_settle_ms;
         if (quiet && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post wind");
             postWind(state);
         }
     }
@@ -669,6 +675,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     // The view's sky map is the copy the last pass was handed, not one per publish.
     if (mViewDirty)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - rebuild view");
         rebuildView();
     }
 }
@@ -1037,6 +1044,7 @@ std::string SKNavRooms::statsLine() const
 
 void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, U32 mode, bool opaque) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather overlay");
     if (!mView || mode == 0)
     {
         return;
@@ -1107,6 +1115,7 @@ void SKNavRooms::gatherOverlay(SKNavOverlayGeom& geom, const LLVector3d& camera,
 void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
                               const PortalCrossedFn& crossed) const
 {
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("rooms - gather spaces");
     if (!mView)
     {
         return;
@@ -1198,8 +1207,9 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 geom.edge(pa + dir * d, pa + dir * llmin(d + 0.3f, len), color);
             }
         }
-        // A flight drawn as its connections: the foot portal to every exit,
-        // and a stub over a lone end with nothing at the other.
+        // A flight drawn as one staircase: rails either side of the run between
+        // its ends with treads between them, the portals standing as bars.
+        // A lone end with nothing at the other draws a stub over itself.
         for (const StairLink& l : stairLinks(*m.mRooms))
         {
             const LLVector3d ca = m.mOrigin + LLVector3d(m.mRooms->mPortals[l.mFrom].mCentre) + LLVector3d(0.0, 0.0, 0.3);
@@ -1213,7 +1223,11 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
             {
                 color.mV[VALPHA] = 1.f;
             }
-            geom.edge(gAgent.getPosAgentFromGlobal(ca), gAgent.getPosAgentFromGlobal(cb), color);
+            const F32 width = llclamp(llmin(m.mRooms->mPortals[l.mFrom].mWidth, m.mRooms->mPortals[l.mTo].mWidth), 0.8f, 2.4f);
+            std::vector<LLVector3> path;
+            path.push_back(gAgent.getPosAgentFromGlobal(ca));
+            path.push_back(gAgent.getPosAgentFromGlobal(cb));
+            skDrawStairGlyph(geom, path, width, color, 0.f);
         }
         for (const Space& sp : m.mRooms->mSpaces)
         {

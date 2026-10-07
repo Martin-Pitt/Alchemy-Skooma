@@ -1,0 +1,189 @@
+/**
+ * @file skmapribbons_test.cpp
+ * @brief Mini-map ribbons: widths in screen pixels, run merging, the length floor, cover, dashes.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "linden_common.h"
+
+#include "../test/lltut.h"
+
+#include "../skmapribbons.h"
+
+#include <cmath>
+
+namespace
+{
+    skmap::LineMark mark(skmap::MarkKind kind, F32 x0, F32 y0, F32 x1, F32 y1, F32 height = 2.f, S8 side = 1)
+    {
+        skmap::LineMark m;
+        m.mKind = kind;
+        m.mA.set(x0, y0);
+        m.mB.set(x1, y1);
+        m.mHeight = height;
+        m.mFloorSide = side;
+        m.mLayer = 0;
+        return m;
+    }
+
+    /// A scene of one layer holding the given marks.
+    skmap::Scene scene(const std::vector<skmap::LineMark>& marks)
+    {
+        skmap::Scene s;
+        s.mLayers.resize(1);
+        for (const skmap::LineMark& m : marks)
+        {
+            s.mLayers[0].mMarks.push_back(static_cast<U32>(s.mMarks.size()));
+            s.mMarks.push_back(m);
+        }
+        return s;
+    }
+
+    skmap::RibbonParams params(F32 mpp, F32 eye = 1.7f)
+    {
+        skmap::RibbonParams p;
+        p.mMpp = mpp;
+        p.mEye = eye;
+        p.mClimb = 0.75f;
+        p.mPeek = 0.15f;
+        return p;
+    }
+}
+
+namespace tut
+{
+    struct skmapribbons_data {};
+    typedef test_group<skmapribbons_data> skmapribbons_group;
+    typedef skmapribbons_group::object skmapribbons_object;
+    tut::skmapribbons_group g("skmapribbons");
+
+    // A ribbon's width in metres is its pixel width times the scale.
+    template<> template<>
+    void skmapribbons_object::test<1>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 10.f, 0.f, 2.f) });
+        for (F32 mpp : { 0.05f, 0.5f, 2.f })
+        {
+            skmap::Ribbons r;
+            skmap::buildLayerRibbons(s, 0, params(mpp * 0.999f), r);
+            ensure_equals("one quad", r.mVerts.size(), static_cast<size_t>(6));
+            F32 lo = 1e9f, hi = -1e9f;
+            for (const LLVector3& v : r.mVerts)
+            {
+                lo = llmin(lo, v.mV[VY]);
+                hi = llmax(hi, v.mV[VY]);
+            }
+            ensure("3 px of full cover", std::fabs((hi - lo) - 3.f * mpp * 0.999f) < 1e-4f);
+            ensure_equals("colour per vertex", r.mColours.size(), r.mVerts.size());
+        }
+    }
+
+    // Consecutive collinear marks of one kind merge; a turn or another kind does not.
+    template<> template<>
+    void skmapribbons_object::test<2>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 5.f, 0.f), mark(skmap::MarkKind::WALL, 5.1f, 0.f, 10.f, 0.f),
+                                       mark(skmap::MarkKind::WALL, 10.f, 0.f, 10.f, 6.f), mark(skmap::MarkKind::LEDGE, 10.f, 6.f, 16.f, 6.f),
+                                       mark(skmap::MarkKind::WALL, 15.f, 0.f, 10.1f, 0.f, 2.f, -1) });
+        std::vector<skmap::MarkRun> runs;
+        skmap::mergeMarks(s, 0, params(0.1f), runs);
+        ensure_equals("three runs", runs.size(), static_cast<size_t>(3));
+        ensure("merged across the gap and the reversed mark", std::fabs(runs[0].length() - 15.f) < 1e-3f);
+        ensure("the turn stays apart", std::fabs(runs[1].length() - 6.f) < 1e-3f);
+        ensure("the ledge is its own", runs[2].mKind == skmap::MarkKind::LEDGE);
+    }
+
+    // Runs shorter than max(2 m, 3 px) are dropped.
+    template<> template<>
+    void skmapribbons_object::test<3>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 1.5f, 0.f), mark(skmap::MarkKind::WALL, 0.f, 10.f, 2.5f, 10.f),
+                                       mark(skmap::MarkKind::DROP_EDGE, 0.f, 20.f, 1.f, 20.f) });
+        std::vector<skmap::MarkRun> runs;
+        skmap::mergeMarks(s, 0, params(0.1f), runs);
+        ensure_equals("2 m floor", runs.size(), static_cast<size_t>(1));
+        skmap::mergeMarks(s, 0, params(1.f), runs);
+        ensure_equals("3 px floor at 1 m a pixel", runs.size(), static_cast<size_t>(0));
+    }
+
+    // Cover against the eye height: 2 m is full at 1.7 m, 1 m is half, 0.5 m is none.
+    template<> template<>
+    void skmapribbons_object::test<4>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 4.f, 0.f, 2.f), mark(skmap::MarkKind::WALL, 0.f, 10.f, 4.f, 10.f, 1.f),
+                                       mark(skmap::MarkKind::WALL, 0.f, 20.f, 4.f, 20.f, 0.5f) });
+        std::vector<skmap::MarkRun> runs;
+        skmap::mergeMarks(s, 0, params(0.05f, 1.7f), runs);
+        ensure_equals("three runs", runs.size(), static_cast<size_t>(3));
+        ensure("full", runs[0].mCover == sknav::Cover::FULL);
+        ensure("half", runs[1].mCover == sknav::Cover::HALF);
+        ensure("none", runs[2].mCover == sknav::Cover::NONE);
+        // Half cover draws its shields close up, and only then.
+        skmap::Ribbons close_up, far_out;
+        skmap::buildLayerRibbons(scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 4.f, 0.f, 1.f) }), 0, params(0.05f), close_up);
+        skmap::buildLayerRibbons(scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 4.f, 0.f, 1.f) }), 0, params(0.2f), far_out);
+        ensure("shields close up", close_up.mVerts.size() > 6);
+        ensure_equals("just the line far out", far_out.mVerts.size(), static_cast<size_t>(6));
+        skmap::RibbonParams off = params(0.05f);
+        off.mCover = false;
+        skmap::buildLayerRibbons(s, 0, off, close_up);
+        ensure("cover off", close_up.mVerts.empty());
+    }
+
+    // Region edges dash 6 px on and 4 off; void edges are solid.
+    template<> template<>
+    void skmapribbons_object::test<5>()
+    {
+        skmap::Scene s;
+        skmap::LineMark region = mark(skmap::MarkKind::REGION_BOUNDARY, 0.f, 0.f, 100.f, 0.f);
+        region.mLayer = -1;
+        s.mBoundaries.push_back(region);
+        skmap::Ribbons r;
+        skmap::buildBoundaryRibbons(s, params(1.f), r);
+        ensure_equals("ten dashes", r.mVerts.size(), static_cast<size_t>(60));
+        F32 lo = 1e9f, hi = -1e9f;
+        for (size_t i = 0; i < 6; ++i)
+        {
+            lo = llmin(lo, r.mVerts[i].mV[VX]);
+            hi = llmax(hi, r.mVerts[i].mV[VX]);
+        }
+        ensure("6 m on at 1 m a pixel", std::fabs(hi - lo - 6.f) < 1e-4f);
+        ensure("next dash 10 m on", std::fabs(r.mVerts[6].mV[VX] - 10.f) < 1e-4f || std::fabs(r.mVerts[7].mV[VX] - 10.f) < 1e-4f);
+
+        s.mBoundaries.front().mKind = skmap::MarkKind::VOID_BOUNDARY;
+        skmap::buildBoundaryRibbons(s, params(1.f), r);
+        ensure_equals("void is solid", r.mVerts.size(), static_cast<size_t>(6));
+    }
+
+    // The same marks build the same triangles.
+    template<> template<>
+    void skmapribbons_object::test<6>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::WALL, 0.f, 0.f, 5.f, 0.f), mark(skmap::MarkKind::LEDGE, 0.f, 3.f, 6.f, 3.f),
+                                       mark(skmap::MarkKind::OVERHANG, 0.f, 6.f, 6.f, 6.f), mark(skmap::MarkKind::DROP_POINT, 1.f, 1.f, 1.f, 0.f),
+                                       mark(skmap::MarkKind::LADDER, 2.f, 2.f, 2.f, 2.f), mark(skmap::MarkKind::DOOR_LEAF, 0.f, 9.f, 1.f, 9.f) });
+        skmap::Ribbons a, b;
+        skmap::buildLayerRibbons(s, 0, params(0.05f), a);
+        skmap::buildLayerRibbons(s, 0, params(0.05f), b);
+        ensure("something drawn", !a.mVerts.empty());
+        ensure("identical", a.mVerts == b.mVerts && a.mColours == b.mColours);
+    }
+}

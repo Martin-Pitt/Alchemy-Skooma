@@ -25,8 +25,10 @@
 #pragma once
 
 #include "alscriptstudiodoc.h"
+#include "alpreprocessor.h"
 #include "alscriptweight.h"
 #include "aljumpbar.h"
+#include "almenuslot.h"
 #include "llmenugl.h"
 #include "llpanel.h"
 
@@ -66,6 +68,8 @@ public:
         virtual std::string                           vimBanner() const                                        = 0;
         virtual void                                  problemCounts(const Doc& doc, S32& errors, S32& warnings) const = 0;
         virtual std::optional<ALScriptWeight::Target> weightTarget(const Doc& doc) const                        = 0;
+        // Why a save preprocesses the tab, or that it does not.
+        virtual ALPreprocessor::Wanted                preprocessedWhy(const Doc& doc) const                     = 0;
 
     protected:
         ~Window() = default;
@@ -82,11 +86,10 @@ public:
     };
 
     explicit ALScriptCrumbsBar(const LLPanel::Params& params = getDefaultParams());
-    ~ALScriptCrumbsBar() override;
     bool postBuild() override;
 
     // The path of the tab in front's caret, as the caret's unit found it
-    // (doc.caret.crumbPath), and its trailer: the crumbs made again only
+    // (doc.caret->crumbPath), and its trailer: the crumbs made again only
     // where the path, the outline, the tab or its name has changed -- it
     // is asked on every key -- and the trailer every time.
     void showPath(Doc& doc);
@@ -129,7 +132,7 @@ private:
     ALScriptStudioServices* mServices = nullptr;
     Window*                 mWindow   = nullptr;
     ALJumpBar*              mBar      = nullptr;
-    LLHandle<LLContextMenu> mIndentMenu;
+    ALMenuSlot              mIndentMenu;
     Tips                    mTips;
     // Whose path the bar shows, so that a tab come to the front is shown
     // there whatever its own path was when last shown; and the path, the
@@ -156,8 +159,9 @@ private:
         U8          indentFrom = 0;
         // The problems'.
         bool        checking = false;
-        S32         errors   = 0;
-        S32         warnings = 0;
+        S32         errors    = 0;
+        S32         warnings  = 0;
+        S32         migration = 0;
         // The weight's, or the optimizer's.
         std::optional<ALScriptWeight::Target> target;
         bool                                  optimized  = false;
@@ -173,9 +177,10 @@ private:
         // What a save sends.
         bool                                  notecard   = false;
         size_t                                assetBytes = 0;
-        // The views'.
+        // The views', and whether a save preprocesses, and why.
         bool                                  expandable = false;
         bool                                  expanded   = false;
+        ALPreprocessor::Wanted                wanted     = ALPreprocessor::Wanted::No;
         // The colours the weight and the size are said in past a limit.
         LLColor4                              errorColor;
         LLColor4                              warningColor;

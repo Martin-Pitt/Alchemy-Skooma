@@ -122,9 +122,6 @@
 // [/RLVa:KB]
 
 #include "llweb.h"
-// [SL:KB] - Patch: Build-AssetRecovery | Checked: 2011-11-24 (Catznip-3.2)
-#include "llfloaterassetrecovery.h"
-// [/SL:KB]
 #include "llspellcheck.h"
 #include "llscenemonitor.h"
 #include "llavatarrenderinfoaccountant.h"
@@ -135,7 +132,9 @@
 
 // Linden library includes
 #include "llavatarnamecache.h"
+#include "alrecovery.h"
 #include "alregex.h"
+#include "alscriptstudio.h"
 #include "alxmlmergelog.h"
 #include "lldiriterator.h"
 #include "llexperiencecache.h"
@@ -992,6 +991,9 @@ bool LLAppViewer::init()
     // Load translations for tooltips
     LLFloater::initClass();
     LLUrlFloaterDispatchHandler::registerInDispatcher();
+    // What Script Studio asks of the viewer, for its windows and the
+    // preferences' preview alike.
+    ALScriptStudio::attachViewer();
 
     /////////////////////////////////////////////////
 
@@ -1167,7 +1169,8 @@ bool LLAppViewer::init()
             unsupported = true;
         }
 
-        if (gSysCPU.getMHz() < minCPU)
+        // A clock the system would not report is unknown, not slow.
+        if (gSysCPU.getMHz() > 0 && gSysCPU.getMHz() < minCPU)
         {
             minSpecs += LLNotifications::instance().getGlobalString("UnsupportedCPU");
             minSpecs += "\n";
@@ -3680,7 +3683,7 @@ bool LLAppViewer::initWindow()
     gViewerWindow->initBase();
 
     // show viewer window
-    //gViewerWindow->getWindow()->show();
+    gViewerWindow->getWindow()->show();
 
     LL_INFOS("AppInit") << "Window initialization done." << LL_ENDL;
 
@@ -6836,9 +6839,9 @@ void LLAppViewer::handleLoginComplete()
     mOnLoginCompleted();
     mOnLoginCompleted.disconnect_all_slots(); // No longer needed
 
-// [SL:KB] - Patch: Build-AssetRecovery | Checked: 2011-11-24 (Catznip-3.2)
-    LLAssetRecoverQueue::recoverIfNeeded();
-// [/SL:KB]
+    // What the legacy editors' old backups left in the temp folder, taken
+    // into the recovery store, to be offered with everything else kept.
+    ALRecovery::importLegacyBackups(LLFile::tmpdir());
 
     writeDebugInfo();
 

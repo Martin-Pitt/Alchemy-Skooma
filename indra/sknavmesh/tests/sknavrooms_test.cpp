@@ -1284,4 +1284,84 @@ template<> template<>
         }
         ensure("the fills cover the room's floor", area > 60.f);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<34>()
+    {
+        set_test_name("a pass over again leaves the landed products and their draw untouched");
+        // The rooms product's draw is only ever fresh if landed products are
+        // replaced rather than rewritten: a pass that mutates the answers a
+        // landed draw was traced from would leave the two disagreeing.
+        Scene s;
+        s.wall(2.f, 2.f, 14.f, 2.25f);
+        s.wall(2.f, 25.75f, 6.f, 26.f);
+        s.wall(2.f, 2.f, 2.25f, 4.f);
+        s.wall(2.f, 5.f, 2.25f, 26.f);
+        s.box(2.f, 4.f, 2.25f, 5.f, 2.2f, 3.f, false);
+        s.wall(13.75f, 2.f, 14.f, 8.f);
+        s.wall(6.f, 7.75f, 14.f, 8.f);
+        s.wall(5.75f, 8.f, 6.f, 26.f);
+        s.box(2.f, 2.f, 14.f, 8.f, 3.f, 3.25f);
+        s.box(2.f, 8.f, 6.f, 26.f, 3.f, 3.25f);
+        const Result first = run(s.input(1));
+        ensure("the first draw", first.mRooms->mDraw != nullptr);
+        const std::vector<SpacesDraw::Fill> fills = first.mRooms->mDraw->mFills;
+        std::vector<size_t> runs;
+        std::vector<PlanEdge> flat;
+        for (const SpaceDraw& sd : first.mRooms->mDraw->mSpaces)
+        {
+            runs.push_back(sd.mOutline.size());
+            flat.insert(flat.end(), sd.mOutline.begin(), sd.mOutline.end());
+        }
+        std::vector<U16> coarse;
+        for (const TileEnclosure& t : first.mEnc->mTiles)
+        {
+            for (const CoarseGap& g : t.mCoarse.mGaps)
+            {
+                coarse.push_back(g.mSpace);
+            }
+        }
+
+        // A second pass, reading the first's products as its previous, must
+        // answer the same world without touching what it read.
+        std::shared_ptr<EnclosureInput> enc_in = s.input(1);
+        enc_in->mPrevious = first.mEnc;
+        auto rooms_in = std::make_shared<RoomsInput>();
+        rooms_in->mPrevious = first.mRooms;
+        const Result second = run(enc_in, rooms_in);
+        ensure("the second draw", second.mRooms->mDraw != nullptr);
+        ensure("a different product, not a rewritten one", second.mRooms != first.mRooms);
+
+        const std::vector<SpacesDraw::Fill>& now_fills = first.mRooms->mDraw->mFills;
+        ensure("the landed fills keep", fills.size() == now_fills.size() &&
+               (fills.empty() || std::memcmp(fills.data(), now_fills.data(), fills.size() * sizeof(SpacesDraw::Fill)) == 0));
+
+        std::vector<PlanEdge> now_flat;
+        bool kept = first.mRooms->mDraw->mSpaces.size() == runs.size();
+        for (size_t k = 0; kept && k < first.mRooms->mDraw->mSpaces.size(); ++k)
+        {
+            const std::vector<PlanEdge>& outline = first.mRooms->mDraw->mSpaces[k].mOutline;
+            kept = outline.size() == runs[k];
+            now_flat.insert(now_flat.end(), outline.begin(), outline.end());
+        }
+        kept = kept && now_flat.size() == flat.size();
+        for (size_t k = 0; kept && k < flat.size(); ++k)
+        {
+            kept = std::fabs(now_flat[k].mX0 - flat[k].mX0) < 1e-4f && std::fabs(now_flat[k].mY0 - flat[k].mY0) < 1e-4f &&
+                   std::fabs(now_flat[k].mX1 - flat[k].mX1) < 1e-4f && std::fabs(now_flat[k].mY1 - flat[k].mY1) < 1e-4f &&
+                   std::fabs(now_flat[k].mZ - flat[k].mZ) < 1e-4f;
+        }
+        ensure("the landed outlines keep", kept);
+
+        size_t c = 0;
+        bool coarse_kept = true;
+        for (const TileEnclosure& t : first.mEnc->mTiles)
+        {
+            for (const CoarseGap& g : t.mCoarse.mGaps)
+            {
+                coarse_kept = coarse_kept && c < coarse.size() && coarse[c++] == g.mSpace;
+            }
+        }
+        ensure("the landed coarse keeps", coarse_kept);
+    }
 }

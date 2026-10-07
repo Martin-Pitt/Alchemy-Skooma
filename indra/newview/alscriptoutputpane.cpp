@@ -28,10 +28,12 @@
 
 #include "alscriptmessages.h"
 #include "alscriptstudiodoc.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alstringmatch.h"
 #include "llbutton.h"
 #include "llfloater.h"
+#include "llfontgl.h"
 #include "llclipboard.h"
 #include "llcombobox.h"
 #include "llfiltereditor.h"
@@ -59,6 +61,18 @@ namespace
         strftime(buffer, sizeof(buffer), "%H:%M:%S", &local);
         return buffer;
     }
+
+    // The row over the log: its ends' margin and the gap between its
+    // controls; what a button adds to its words; how narrow the two lists
+    // may go, still saying which is picked; and how wide the words' box
+    // stays before they do, and at the least.
+    constexpr S32 ROW_EDGE    = 2;
+    constexpr S32 ROW_GAP     = 6;
+    constexpr S32 BUTTON_PAD  = 20;
+    constexpr S32 WHOSE_LEAST = 100;
+    constexpr S32 KIND_LEAST  = 80;
+    constexpr S32 FIND_WANTS  = 120;
+    constexpr S32 FIND_LEAST  = 60;
 }
 
 static LLPanelInjector<ALScriptOutputPane> t_script_studio_output("script_studio_output");
@@ -71,14 +85,15 @@ bool ALScriptOutputPane::postBuild()
     mWhose = getChild<LLComboBox>("output_filter");
     mKind  = getChild<LLComboBox>("output_kind");
     mFind  = getChild<LLFilterEditor>("output_find");
+    mClear = getChild<LLButton>("output_clear");
+    mCopy  = getChild<LLButton>("output_copy");
+    mWhoseWidth = mWhose->getRect().getWidth();
+    mKindWidth  = mKind->getRect().getWidth();
+    layoutRow();
     // The window this is a tab of, found through the view tree, as what
     // the tab asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The Output tab", mServices, mWindow))
     {
-        LL_WARNS() << "The Output tab is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     mView->setPlaceholder(mServices->words("NoOutput"));
@@ -92,13 +107,13 @@ bool ALScriptOutputPane::postBuild()
     }
     mKind->selectFirstItem();
     mView->onEntryChosen([this](const ALOutputView::Entry& entry) { choose(entry); });
-    getChild<LLButton>("output_clear")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+    mClear->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         // What was said goes; whose words are listened to stays.
         mView->clearEntries();
         mUnread = false;
         mWindow->outputUnreadChanged();
     });
-    getChild<LLButton>("output_copy")->setCommitCallback([this](LLUICtrl*, const LLSD&) {
+    mCopy->setCommitCallback([this](LLUICtrl*, const LLSD&) {
         // What the pane shows through its filters, as it reads, on the
         // clipboard; nothing shown leaves the clipboard as it was.
         std::string all;
@@ -126,7 +141,7 @@ bool ALScriptOutputPane::postBuild()
 
 
 
-ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::RuntimeEvent& event)
+ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptRuntimeEvent& event)
 {
     static const LLUIColor runtime_color = LLUIColorTable::instance().getColor("CodeMarkRuntime", LLColor4::magenta);
     static const LLUIColor owner_color   = LLUIColorTable::instance().getColor("ObjectChatColor", LLColor4::white);
@@ -179,7 +194,7 @@ ALScriptOutputPane::Place ALScriptOutputPane::heard(const ALScriptWorkspace::Run
 
     // One line of the log, or more where the script said more; the
     // script's name a link to it, at the line of a run-time error.
-    using Channel = ALScriptWorkspace::RuntimeEvent::Channel;
+    using Channel = ALScriptRuntimeEvent::Channel;
     ALOutputView::Entry entry;
     entry.time = clockOf(event.time);
     // Whose: the object, the prim of it that spoke where that is not its
@@ -332,6 +347,8 @@ void ALScriptOutputPane::said(const std::string& text, bool failure, const ALScr
                                   : action == "compare_saved" ? "ActionCompareSaved"
                                   : action == "reload_world"  ? "ActionReloadWorld"
                                   : action == "compare_world" ? "ActionCompareWorld"
+                                  : action == "apply_fixes"   ? "ActionApplyFixes"
+                                  : action == "make_strict"   ? "ActionMakeStrict"
                                                               : "ActionExport";
         const std::string label = mServices->words(key);
         const size_t      last  = entry.text.rfind('\n');
@@ -366,6 +383,53 @@ void ALScriptOutputPane::markUnread()
         mUnread = true;
         mWindow->outputUnreadChanged();
     }
+}
+
+void ALScriptOutputPane::reshape(S32 width, S32 height, bool called_from_parent)
+{
+    LLPanel::reshape(width, height, called_from_parent);
+    layoutRow();
+}
+
+void ALScriptOutputPane::layoutRow()
+{
+    if (!mCopy)
+    {
+        return;
+    }
+    // The buttons as wide as their words, against the right edge; the
+    // words' box has what is left of the middle, and where that is too
+    // little, whose words narrows first and then the kind, as the Problems
+    // filter row gives its box the rest.
+    const LLFontGL* font  = LLFontGL::getFontSansSerifSmall();
+    S32             right = getRect().getWidth() - ROW_EDGE;
+    for (LLButton* button : { mCopy, mClear })
+    {
+        const S32    width = font->getWidth(button->getLabelUnselected()) + BUTTON_PAD;
+        const LLRect was   = button->getRect();
+        button->setShape(LLRect(right - width, was.mTop, right, was.mBottom));
+        right -= width + ROW_GAP;
+    }
+    const S32 middle = right - ROW_EDGE;
+    S32       whose  = mWhoseWidth;
+    S32       kind   = mKindWidth;
+    S32       short_by = whose + kind + 2 * ROW_GAP + FIND_WANTS - middle;
+    if (short_by > 0)
+    {
+        const S32 from_whose = llclamp(short_by, 0, llmax(0, whose - WHOSE_LEAST));
+        whose -= from_whose;
+        short_by -= from_whose;
+        kind -= llclamp(short_by, 0, llmax(0, kind - KIND_LEAST));
+    }
+    S32 left = ROW_EDGE;
+    for (auto [list, width] : { std::pair<LLUICtrl*, S32>{ mWhose, whose }, std::pair<LLUICtrl*, S32>{ mKind, kind } })
+    {
+        const LLRect was = list->getRect();
+        list->setShape(LLRect(left, was.mTop, left + width, was.mBottom));
+        left += width + ROW_GAP;
+    }
+    const LLRect was = mFind->getRect();
+    mFind->setShape(LLRect(left, was.mTop, left + llmax(FIND_LEAST, right - left), was.mBottom));
 }
 
 void ALScriptOutputPane::pump()

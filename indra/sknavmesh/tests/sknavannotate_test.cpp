@@ -200,4 +200,84 @@ namespace tut
         ensure("a wrong portal is a point near it", markTypeKind(MarkType::WRONG) == MarkKind::POINT);
         ensure("a crossed portal names the cut", markTypeKind(MarkType::CROSS) == MarkKind::PORTAL);
     }
+
+    template<> template<>
+    void sknavannotate_object::test<7>()
+    {
+        set_test_name("a spiral stair's path winds about its centre and ends on the stored top");
+        Mark spiral = make(MarkKind::LINE, { LLVector3d(12.0, 10.0, 2.0), LLVector3d(12.0, 10.0, 8.0) });
+        spiral.mType = MarkType::STAIR;
+        spiral.mSpiral = true;
+        spiral.mSpiralCentre.set(10.0, 10.0, 2.0);
+        spiral.mSpiralRadius = 2.0;
+        spiral.mSpiralTurns = 1.0;
+        spiral.mSpiralHand = 1;
+        // The foot sits on the circle, one turn right-handed from it to the top.
+        ensure("the helix starts at the foot", (spiral.helixAt(0.0) - spiral.mVerts[0]).magVecSquared() < 1e-18);
+        // F_PI is float precision, so a helix point sits within a part in a
+        // million of the ideal.
+        const LLVector3d half = spiral.helixAt(0.5);
+        ensure("half a turn reaches the far side", std::fabs(half.mdV[VX] - 8.0) < 1e-5 && std::fabs(half.mdV[VY] - 10.0) < 1e-5);
+        ensure("halfway up", std::fabs(half.mdV[VZ] - 5.0) < 1e-9);
+        const LLVector3d at_end = spiral.helixAt(1.0);
+        ensure("a full turn lands at the foot's angle", std::fabs(at_end.mdV[VX] - 12.0) < 1e-5 && std::fabs(at_end.mdV[VY] - 10.0) < 1e-5);
+        ensure("up the whole climb", std::fabs(at_end.mdV[VZ] - 8.0) < 1e-9);
+        const std::vector<LLVector3d> path = spiral.path();
+        ensure("sampled, foot first", path.size() >= 4 && path.front() == spiral.mVerts[0]);
+        F64 sweep = 0.0;
+        F64 last_z = path.front().mdV[VZ];
+        for (size_t i = 1; i < path.size(); ++i)
+        {
+            const LLVector3d here = path[i] - spiral.mSpiralCentre;
+            const LLVector3d was = path[i - 1] - spiral.mSpiralCentre;
+            const F64 theta = std::atan2(here.mdV[VY], here.mdV[VX]);
+            const F64 prior = std::atan2(was.mdV[VY], was.mdV[VX]);
+            const F64 turn = std::fabs(theta - prior);
+            sweep += turn < F_PI ? turn : 2 * F_PI - turn;
+            ensure("climbs as it winds", path[i].mdV[VZ] > last_z);
+            last_z = path[i].mdV[VZ];
+        }
+        ensure("a turn is a turn", std::fabs(sweep - 2 * F_PI) < 4 * SPIRAL_PITCH_RAD);
+        // The stored top is kept even where it has come off the circle.
+        spiral.mVerts[1].set(12.0, 10.5, 8.0);
+        ensure("the path ends on the stored top", spiral.path().back() == spiral.mVerts[1]);
+        // A left-handed helix winds the other way from the same foot.
+        spiral.mVerts[1].set(12.0, 10.0, 8.0);
+        spiral.mSpiralHand = -1;
+        const LLVector3d other = spiral.helixAt(0.5);
+        ensure("handedness winds the other way", std::fabs(other.mdV[VX] - 8.0) < 1e-5 && std::fabs(other.mdV[VY] - 10.0) < 1e-5);
+        // Not a spiral, the path is the vertices as they are.
+        spiral.mSpiral = false;
+        ensure_equals("a straight line's path is its verts", spiral.path().size(), 2u);
+    }
+
+    template<> template<>
+    void sknavannotate_object::test<8>()
+    {
+        set_test_name("a stair's exits and spiral are written beside its vertices");
+        Mark stair = make(MarkKind::LINE, { LLVector3d(256000.0, 256000.0, 20.0), LLVector3d(256004.0, 256000.0, 26.0) });
+        stair.mId = 9;
+        stair.mType = MarkType::STAIR;
+        stair.mSpiral = true;
+        stair.mSpiralCentre.set(256002.0, 255998.0, 20.0);
+        stair.mSpiralRadius = 2.0;
+        stair.mSpiralTurns = 2.0;
+        stair.mSpiralHand = -1;
+        stair.mExits.push_back(LLVector3d(256010.0, 256000.0, 32.0));
+        stair.mExits.push_back(LLVector3d(256012.0, 256000.0, 38.0));
+        ensure("two turns sample the climb", stair.path().size() > 8u);
+        std::ostringstream out;
+        writeMarks(out, std::vector<Mark>{ stair }, nullptr);
+        const std::string text = out.str();
+        ensure("the spiral is named", text.find("\"spiral\":{\"centre\":[256002,255998,20],\"radius\":2,\"turns\":2,\"hand\":-1}") != std::string::npos);
+        ensure("the exits are written", text.find("\"exits\":[{\"global\":[256010,256000,32]},{\"global\":[256012,256000,38]}]") != std::string::npos);
+        // A straight stair writes no spiral and no exits it does not have.
+        Mark straight = make(MarkKind::LINE, { LLVector3d(1, 2, 3), LLVector3d(4, 5, 6) });
+        straight.mId = 10;
+        straight.mType = MarkType::STAIR;
+        std::ostringstream plain;
+        writeMarks(plain, std::vector<Mark>{ straight }, nullptr);
+        ensure("no spiral on a straight stair", plain.str().find("\"spiral\"") == std::string::npos);
+        ensure("no exits when there are none", plain.str().find("\"exits\"") == std::string::npos);
+    }
 }

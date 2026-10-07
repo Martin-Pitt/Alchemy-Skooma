@@ -24,14 +24,17 @@
 
 #pragma once
 
+#include "alquickopen.h"
 #include "alscriptexplorermodel.h"
 #include "alscriptrecompile.h"
+#include "almenuslot.h"
 #include "llui.h"
 #include "llhandle.h"
 #include "llpanel.h"
 
 #include <boost/signals2.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -73,6 +76,17 @@ public:
         virtual void itemDeleted(const ALScriptRef& ref) = 0;
         // Whether an item is open with unsaved changes in any of them.
         virtual bool unsavedAnywhere(const ALScriptRef& ref) const = 0;
+        // The first item open, or brought forward, and set beside the second
+        // as the region has it, each under its title.
+        virtual void compareItems(const ALScriptRef& first, const std::string& name, const std::string& first_title, const ALScriptRef& second,
+                                  const std::string& second_title) = 0;
+        // An item opened, or brought forward, and its saves offered to
+        // compare with it (ALScriptStudioHistory).
+        virtual void showHistory(const ALScriptRef& ref, const std::string& name) = 0;
+        // A list to pick from, over the editors: what is chosen, and what
+        // Shift-Return is pressed on.
+        virtual void pick(std::vector<ALQuickOpen::Candidate> candidates, const std::string& placeholder, const std::string& title,
+                          std::function<void(const std::string& value)> chosen, std::function<void(const std::string& value)> dropped) = 0;
         // Every script of an object checked, its problems listed.
         virtual void checkScripts(const LLUUID& root) = 0;
         // The scripts, and every script of the prims -- each prim with its
@@ -89,7 +103,6 @@ public:
     // Studio window it finds through the view tree, whose services it uses
     // and which it asks what it does not do itself.
     explicit ALScriptExplorerPane(const LLPanel::Params& params = getDefaultParams());
-    ~ALScriptExplorerPane() override;
     bool postBuild() override;
     // The keys a tree of files answers to past the tree's own -- the arrows,
     // F2, typing a name -- while the tree has the keyboard: return opens
@@ -132,7 +145,7 @@ private:
     // seen (pump).
     void fill();
     void fillWhenSeen();
-    void contentsHeard(const ALScriptWorkspace::Contents& contents);
+    void contentsHeard(const ALScriptContents& contents);
     void rereadNames();
     void askName(const LLUUID& id);
     // What to call an object that has never said its name here: what a pin
@@ -147,6 +160,14 @@ private:
     void onChosen();
     void act(const std::string& action);
     bool enabled(const std::string& action) const;
+    // Whether the agent may read a row's item: copy it, and modify a
+    // script too; true for a row that is not an item.
+    bool readable(const Choice& row) const;
+    // Two items compared, the one open already set beside the other where
+    // one is (Model::comparing); and one compared with what is picked of
+    // those like it (Model::comparableWith).
+    void compare(const Choice& first, const Choice& second);
+    void compareWith(const Choice& row);
     void showMenu(S32 x, S32 y);
     void refreshButtons();
     // Whether a script runs, as far as the studio knows: its tab's word,
@@ -156,7 +177,7 @@ private:
     // A script or notecard made in a prim, named through a dialog and
     // opened once the region lists it.
     void create(const LLUUID& prim, bool notecard, bool lua);
-    void created(const ALScriptWorkspace::Created& made, const std::optional<std::string>& opening);
+    void created(const ALScriptCreated& made, const std::optional<std::string>& opening);
     // The name a row was given where it stands, taken.
     void renamed(const Choice& row, const std::string& was, std::string name);
     void remove(const std::vector<Choice>& rows);
@@ -198,8 +219,8 @@ private:
     Window*                 mWindow   = nullptr;
     ALScriptExplorerTree*   mTree     = nullptr;
     LLFilterEditor*         mFilter   = nullptr;
-    Model                   mModel{ ALScriptWorkspace::instance().contentsIndex() };
-    LLHandle<LLContextMenu> mMenu;
+    Model                   mModel;
+    ALMenuSlot              mMenu;
     // Answers have come that the list does not show yet: it is filled a
     // moment after it was last filled.
     bool                    mStale  = false;
@@ -226,5 +247,6 @@ private:
     boost::signals2::scoped_connection mSelectionConnection;
     boost::signals2::scoped_connection mRunningConnection;
     boost::signals2::scoped_connection mHeardConnection;
+    boost::signals2::scoped_connection mRegionUsageConnection;
     boost::signals2::scoped_connection mPresenceConnection;
 };

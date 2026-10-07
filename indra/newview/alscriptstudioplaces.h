@@ -26,7 +26,7 @@
 
 #include "alscriptanalysis.h"
 #include "alscriptstudiodoc.h"
-#include "alscriptworkspace.h"
+#include "alscripttypes.h"
 
 #include <memory>
 #include <string>
@@ -39,7 +39,13 @@
 // name is declared.
 namespace ALScriptPlaces
 {
+    // A span of a script -- a problem's, an edit's, a symbol's -- as a range
+    // of its text: the one way one becomes the other.
     ALTextRange rangeOf(const ALScriptSpan& span);
+    // Whether a span holds a place, its ends included; and whether it holds
+    // the whole of another.
+    bool        holds(const ALScriptSpan& span, const ALTextPos& pos);
+    bool        within(const ALScriptSpan& inner, const ALScriptSpan& outer);
     std::string lineOf(const std::string& text, S32 line);
     std::string lineOf(const ALTextDocument& text, S32 line);
     // A text's lines, found once, for the many places a name has in one
@@ -81,7 +87,7 @@ namespace ALScriptPlaces
     // What a loaded script's author wrote: the source out of the envelope
     // where one wrapped it, the text as it came otherwise, and nothing
     // where it could not be read.
-    std::string sourceOf(const ALScriptWorkspace::Loaded& loaded);
+    std::string sourceOf(const ALScriptLoaded& loaded);
     // An outline entry as a picker's value, and back: by where it was and
     // what it is called, so that an outline made again while a list is up
     // -- a check answering -- still finds it, or nothing.

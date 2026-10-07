@@ -26,8 +26,20 @@
 
 #include "alscriptstudiodoc.h"
 
+#include "alcodeeditor.h"
+#include "aldiffview.h"
+#include "alnotecardembedded.h"
+#include "alscriptexternaleditor.h"
 #include "alscriptfixes.h"
+#include "alscriptlintpass.h"
+#include "alscriptlookup.h"
+#include "alscriptstudiocaret.h"
+#include "alscriptstudiochecking.h"
+#include "alscriptstudioorphans.h"
+#include "alscriptstudioplaces.h"
+#include "alscriptstudiorecovery.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudioweighing.h"
 #include "lldate.h"
 #include "llfocusmgr.h"
 
@@ -36,6 +48,10 @@
 
 // static
 const std::string ALScriptStudioDoc::GENERATED = "generated:";
+
+// Out of line, where each unit's part is whole.
+ALScriptStudioDoc::ALScriptStudioDoc()  = default;
+ALScriptStudioDoc::~ALScriptStudioDoc() = default;
 
 // static
 const char* ALScriptStudioDoc::levelName(Level level)
@@ -63,15 +79,18 @@ ALScriptStudioDoc::Level ALScriptStudioDoc::levelOf(ALScriptProblem::Severity se
 ALScriptStudioDoc::Shown ALScriptStudioDoc::analysisRow(const ALScriptProblem& problem, bool lua, const ALScriptStudioServices& services)
 {
     Shown row;
-    row.level  = levelOf(problem.severity);
-    row.origin = problem.source == ALScriptProblem::Source::Parser  ? services.words("OriginParser")
-                 : problem.source == ALScriptProblem::Source::Types ? services.words("OriginTypes")
-                                                                    : services.words("OriginLint");
+    row.level     = levelOf(problem.severity);
+    row.migration = lua && ALScriptLintPass::migration(problem);
+    row.origin    = row.migration                                      ? services.words("OriginMigration")
+                    : problem.source == ALScriptProblem::Source::Parser ? services.words("OriginParser")
+                    : problem.source == ALScriptProblem::Source::Types  ? services.words("OriginTypes")
+                                                                        : services.words("OriginLint");
     // A lint's name says what to look up, or what a NOLINT comment turns
     // off: Luau's own, LSL's as its key has it. An error's number says
     // nothing to whoever reads it.
     std::string name = ALScriptFixes::lintName(problem, lua);
-    if (name.empty() && !problem.code.empty() && problem.code.find_first_not_of("0123456789") != std::string::npos)
+    if (name.empty() && problem.source != ALScriptProblem::Source::Assistant && !problem.code.empty() &&
+        problem.code.find_first_not_of("0123456789") != std::string::npos)
     {
         name = problem.code;
     }
@@ -85,6 +104,21 @@ ALScriptStudioDoc::Shown ALScriptStudioDoc::analysisRow(const ALScriptProblem& p
     row.file      = problem.file;
     row.key       = problem.key;
     return row;
+}
+
+bool ALScriptStudioDoc::unsaved() const
+{
+    return (editor && editor->isDirty()) || targetChosen || experienceChosen;
+}
+
+ALCodeEditor* ALScriptStudioDoc::shownText() const
+{
+    switch (shownView())
+    {
+        case View::Compare:  return compareView->shown();
+        case View::Expanded: return expandedEditor;
+        default:             return editor;
+    }
 }
 
 bool ALScriptStudioDoc::hasKeyboard() const
@@ -102,7 +136,7 @@ bool ALScriptStudioDoc::hasKeyboard() const
 bool ALScriptStudioDoc::checkRunning(F64 now) const
 {
     constexpr F64 SAID_AFTER = 0.4;
-    return loaded && !notecard && check.requestedVersion != check.analysisVersion && check.askedAt > 0.0 && now - check.askedAt >= SAID_AFTER;
+    return loaded && !notecard && check->requestedVersion != check->analysisVersion && check->askedAt > 0.0 && now - check->askedAt >= SAID_AFTER;
 }
 
 const ALSourceMap* ALScriptStudioDoc::runningMap() const
@@ -225,6 +259,14 @@ std::shared_ptr<const std::string> ALScriptStudioDoc::snapshot() const
     return held;
 }
 
+void ALScriptStudioDoc::carryItemsTo(ALScriptStudioDoc& to) const
+{
+    if (items)
+    {
+        to.carriedEmbedded = items->items();
+    }
+}
+
 // static
 std::optional<ALScriptStudioDoc::Named> ALScriptStudioDoc::namedIn(const ALTextDocument& text, const ALTextPos& at, bool lua,
                                                                    const std::vector<ALPreprocessor::Required>& calls)
@@ -258,7 +300,7 @@ std::optional<ALScriptStudioDoc::Named> ALScriptStudioDoc::namedIn(const ALTextD
     }
     for (const ALPreprocessor::Required& call : calls)
     {
-        const ALTextRange stretch(ALTextPos(call.line, call.column), ALTextPos(call.endLine, call.endColumn));
+        const ALTextRange stretch = ALScriptPlaces::rangeOf(call);
         if (!(at < stretch.begin) && !(stretch.end < at))
         {
             Named named;
@@ -309,19 +351,21 @@ std::string ALScriptStudioDoc::foundAs(const std::string& name, std::optional<bo
 
 void ALScriptStudioDoc::setShown(std::vector<Shown> rows)
 {
-    shown         = std::move(rows);
-    shownErrors   = 0;
-    shownWarnings = 0;
-    for (const Shown& one : shown)
+    shownRows      = std::make_shared<const std::vector<Shown>>(std::move(rows));
+    shownErrors    = 0;
+    shownWarnings  = 0;
+    shownMigration = 0;
+    for (const Shown& one : *shownRows)
     {
         shownErrors += one.level == Level::Error ? 1 : 0;
         shownWarnings += one.level == Level::Warning ? 1 : 0;
+        shownMigration += one.migration && one.file.empty() ? 1 : 0;
     }
 }
 
 const ALScriptStudioDoc::Shown* ALScriptStudioDoc::findShown(S32 line, S32 column, const std::string& file, const std::string& message) const
 {
-    for (const Shown& one : shown)
+    for (const Shown& one : shown())
     {
         if (one.line == line && one.column == column && one.file == file && one.message == message)
         {
@@ -335,10 +379,10 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
 {
     std::vector<const ALScriptFix*> taken;
     const U32                       now       = editor->document().version();
-    const bool                      only_safe = pick.forSave || pick.key.empty();
-    for (const Shown& one : shown)
+    const bool                      only_safe = pick.forSave || (pick.key.empty() && !pick.migration);
+    for (const Shown& one : shown())
     {
-        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key))
+        if (!one.file.empty() || one.fixesFor != now || (!pick.key.empty() && one.key != pick.key) || (pick.migration && !one.migration))
         {
             continue;
         }
@@ -359,8 +403,8 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
         }
     }
     // One step of edits that never meet: of two that would, the first.
-    const auto begin_of = [](const ALScriptEdit& edit) { return ALTextPos(edit.line, edit.column); };
-    const auto end_of   = [](const ALScriptEdit& edit) { return ALTextPos(edit.endLine, edit.endColumn); };
+    const auto begin_of = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).begin; };
+    const auto end_of   = [](const ALScriptEdit& edit) { return ALScriptPlaces::rangeOf(edit).end; };
     std::vector<const ALScriptFix*> kept;
     std::vector<ALTextRange>        claimed;
     for (const ALScriptFix* fix : taken)
@@ -382,10 +426,4 @@ std::vector<const ALScriptFix*> ALScriptStudioDoc::pickFixes(const FixPick& pick
         kept.push_back(fix);
     }
     return kept;
-}
-
-// static
-ALCodeEditor::Mark ALScriptStudioDoc::markOf(Level level)
-{
-    return level == Level::Error ? ALCodeEditor::Mark::Error : level == Level::Warning ? ALCodeEditor::Mark::Warning : ALCodeEditor::Mark::Note;
 }

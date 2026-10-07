@@ -32,7 +32,14 @@ if(AL_BUILD_VIEWER)
     "${CMAKE_CURRENT_SOURCE_DIR}/skins/default/html/common/equirectangular/js/OrbitControls.js"
     COPYONLY
   )
+endif()
 
+# What the tests read from this source tree as the viewer does: the grid's
+# LSL definitions, and the fonts the UI tests lay text out in with
+# LLUI_TEST_APP_DIR as their application directory. Staged for a build of
+# the tests alone as well, which would otherwise find no definitions and
+# lay text out in whatever fonts the host has.
+if(AL_BUILD_VIEWER OR AL_BUILD_TESTS)
   # LSL Definitions
   find_package(unofficial-lsl-definitions CONFIG REQUIRED)
   configure_file(
@@ -61,7 +68,9 @@ if(AL_BUILD_VIEWER)
   message(VERBOSE "Copying fonts from ${ALCHEMY_FONTS_DIR}")
   file(GLOB FONT_FILE_GLOB_LIST "${ALCHEMY_FONTS_DIR}/*")
   file(COPY ${FONT_FILE_GLOB_LIST} DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+endif()
 
+if(AL_BUILD_VIEWER)
   # Copy over the Emoji/shortcodes mapping XML files (and create dependency
   # if they are changed, CMake will run again and copy over new versions)
   find_package(unofficial-emoji-shortcodes CONFIG REQUIRED)
@@ -143,6 +152,7 @@ if(AL_BUILD_VIEWER)
     alchatautocomplete.cpp
     alchatbar.cpp
     alchatcommand.cpp
+    alchattimestamp.cpp
     alcheatcodes.cpp
     alclassifieditem.cpp
     alcolorwheelctrl.cpp
@@ -182,6 +192,7 @@ if(AL_BUILD_VIEWER)
     alscriptincluderesolver.cpp
     alscriptinventoryindex.cpp
     alscriptkeymap.cpp
+    alscriptkeypresets.cpp
     alpanelscriptkeymap.cpp
     alscriptlookup.cpp
     alscriptobjectcheck.cpp
@@ -190,30 +201,42 @@ if(AL_BUILD_VIEWER)
     alscriptmodules.cpp
     alscriptnoticebar.cpp
     alscriptitemdrop.cpp
-    alscriptnotecardtab.cpp
-    alscriptnotecardworld.cpp
+    alnotecardembedded.cpp
+    alnotecardworld.cpp
     alscriptoutlinepane.cpp
     alscriptoutputpane.cpp
     alscriptpreprocessor.cpp
     alscriptproblemspane.cpp
     alscriptreferencespane.cpp
+    alscriptregionusage.cpp
     alscriptsaveflow.cpp
     alscriptsearch.cpp
     alscriptsearchpane.cpp
+    alscriptsnippets.cpp
+    alscriptstudioaccount.cpp
     alscriptstudiocaret.cpp
     alscriptstudiochecking.cpp
     alscriptstudiocommands.cpp
     alscriptstudiodoc.cpp
     alscriptstudiofileio.cpp
+    alscriptstudioglue.cpp
     alscriptstudiofiles.cpp
     alscriptstudioorphans.cpp
     alscriptstudioplaces.cpp
+    alscriptstudiohistory.cpp
     alscriptstudiorecovery.cpp
+    alrecovery.cpp
+    alrecoverykeeper.cpp
     alscriptstudiosaving.cpp
+    alscriptstudioviewer.cpp
     alscriptstudiovim.cpp
+    alfollowednotecard.cpp
+    alscriptstudiosnippetnotecard.cpp
     alscriptstudiovimrc.cpp
     alscriptstudioweighing.cpp
     alscriptstudiowords.cpp
+    alscripttheme.cpp
+    alscripttypes.cpp
     alscriptweightspane.cpp
     alscriptworkspace.cpp
     alterrainsurfacemaps.cpp
@@ -378,7 +401,6 @@ if(AL_BUILD_VIEWER)
     llflexibleobject.cpp
     llfloater360capture.cpp
     llfloaterabout.cpp
-    llfloaterassetrecovery.cpp
     llfloateravatarwelcomepack.cpp
     llfloaterbvhpreview.cpp
     llfloaterauction.cpp
@@ -426,7 +448,6 @@ if(AL_BUILD_VIEWER)
     llfloatergesture.cpp
     llfloatergestureautocompletepicker.cpp
     llfloatergodtools.cpp
-    llfloatergotoline.cpp
     llfloatergridstatus.cpp
     llfloatergroupbulkban.cpp
     llfloatergroupinvite.cpp
@@ -491,10 +512,8 @@ if(AL_BUILD_VIEWER)
     llfloatersaveprefpreset.cpp
     llfloatersceneloadstats.cpp
     llfloaterscriptdebug.cpp
-    llfloaterscriptedprefs.cpp
     llfloaterscripting.cpp
     llfloaterscriptlimits.cpp
-    llfloatersearchreplace.cpp
     llfloatersellland.cpp
     llfloatersettingscolor.cpp
     llfloatersettingsdebug.cpp
@@ -577,6 +596,7 @@ if(AL_BUILD_VIEWER)
     llkeyconflict.cpp
     lllandmarkactions.cpp
     lllandmarklist.cpp
+    lllivelslfile.cpp
     lllegacyatmospherics.cpp
     lllistcontextmenu.cpp
     lllistview.cpp
@@ -747,7 +767,6 @@ if(AL_BUILD_VIEWER)
     llpreviewanim.cpp
     llpreviewgesture.cpp
     llpreviewnotecard.cpp
-    llpreviewscript.cpp
     llpreviewsound.cpp
     llpreviewtexture.cpp
     llproductinforequest.cpp
@@ -764,7 +783,6 @@ if(AL_BUILD_VIEWER)
     llscenemonitor.cpp
     llsceneview.cpp
     llscreenchannel.cpp
-    llscripteditor.cpp
     llscripteditorws.cpp
     llscriptfloater.cpp
     llscrollingpanelparam.cpp
@@ -961,6 +979,7 @@ if(AL_BUILD_VIEWER)
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
     sknavannotator.cpp
+    sknavmarkobjects.cpp
     sknavmesh.cpp
     sknavoverlay.cpp
     sknavpalette.cpp
@@ -989,6 +1008,7 @@ if(AL_BUILD_VIEWER)
     alchatautocomplete.h
     alchatbar.h
     alchatcommand.h
+    alchattimestamp.h
     alclassifieditem.h
     alcolorwheelctrl.h
     alcolorwheelmodel.h
@@ -1028,6 +1048,7 @@ if(AL_BUILD_VIEWER)
     alscriptinventoryindex.h
     alscriptjobqueue.h
     alscriptkeymap.h
+    alscriptkeypresets.h
     alpanelscriptkeymap.h
     alscriptlookup.h
     alscriptobjectcheck.h
@@ -1036,30 +1057,48 @@ if(AL_BUILD_VIEWER)
     alscriptmodules.h
     alscriptnoticebar.h
     alscriptitemdrop.h
-    alscriptnotecardtab.h
+    alnotecardembedded.h
+    alnotecardworld.h
     alscriptoutlinepane.h
     alscriptoutputpane.h
     alscriptpreprocessor.h
     alscriptproblemspane.h
     alscriptreferencespane.h
+    alscriptregionusage.h
     alscriptsaveflow.h
     alscriptsearch.h
     alscriptsearchpane.h
+    alscriptsnippets.h
+    alscriptstudio.h
+    alscriptstudioaccount.h
     alscriptstudiocaret.h
     alscriptstudiochecking.h
     alscriptstudiocommands.h
     alscriptstudiodoc.h
     alscriptstudiofileio.h
+    alscriptstudioglue.h
     alscriptstudiofiles.h
     alscriptstudioorphans.h
+    alscriptstudiopane.h
     alscriptstudioplaces.h
+    alscriptstudiohistory.h
     alscriptstudiorecovery.h
+    alrecovery.h
+    alrecoverykeeper.h
     alscriptstudiosaving.h
     alscriptstudiovim.h
+    alfollowednotecard.h
+    alscriptstudiosnippetnotecard.h
     alscriptstudiovimrc.h
     alscriptstudioweighing.h
     alscriptstudiowords.h
+    alscriptstudioanalysis.h
+    alscriptstudiosaves.h
     alscriptstudioservices.h
+    alscriptstudiotabs.h
+    alscriptstudioviewer.h
+    alscripttheme.h
+    alscripttypes.h
     alscriptweightspane.h
     alscriptworkspace.h
     alterrainsurfacemaps.h
@@ -1228,7 +1267,6 @@ if(AL_BUILD_VIEWER)
     llflexibleobject.h
     llfloater360capture.h
     llfloaterabout.h
-    llfloaterassetrecovery.h
     llfloateravatarwelcomepack.h
     llfloaterbvhpreview.h
     llfloaterauction.h
@@ -1276,7 +1314,6 @@ if(AL_BUILD_VIEWER)
     llfloatergesture.h
     llfloatergestureautocompletepicker.h
     llfloatergodtools.h
-    llfloatergotoline.h
     llfloatergridstatus.h
     llfloatergroupbulkban.h
     llfloatergroupinvite.h
@@ -1345,10 +1382,8 @@ if(AL_BUILD_VIEWER)
     llfloatersaveprefpreset.h
     llfloatersceneloadstats.h
     llfloaterscriptdebug.h
-    llfloaterscriptedprefs.h
     llfloaterscripting.h
     llfloaterscriptlimits.h
-    llfloatersearchreplace.h
     llfloatersellland.h
     llfloatersettingscolor.h
     llfloatersettingsdebug.h
@@ -1429,6 +1464,7 @@ if(AL_BUILD_VIEWER)
     llkeyconflict.h
     lllandmarkactions.h
     lllandmarklist.h
+    lllivelslfile.h
     lllightconstants.h
     lllistcontextmenu.h
     lllistview.h
@@ -1585,7 +1621,6 @@ if(AL_BUILD_VIEWER)
     llpreviewanim.h
     llpreviewgesture.h
     llpreviewnotecard.h
-    llpreviewscript.h
     llpreviewsound.h
     llpreviewtexture.h
     llproductinforequest.h
@@ -1604,7 +1639,6 @@ if(AL_BUILD_VIEWER)
     llscenemonitor.h
     llsceneview.h
     llscreenchannel.h
-    llscripteditor.h
     llscripteditorws.h
     llscriptfloater.h
     llscriptruntimeperms.h
@@ -1804,6 +1838,7 @@ if(AL_BUILD_VIEWER)
     skfloaternavannotate.h
     skfloaternavmesh.h
     sknavannotator.h
+    sknavmarkobjects.h
     sknavmesh.h
     sknavoverlay.h
     sknavpalette.h
@@ -1823,6 +1858,58 @@ if(AL_BUILD_VIEWER)
     rlvui.h
     roles_constants.h
   )
+
+  # <SK:Nexii> SKNetMap mini-map sources
+  list(
+    APPEND viewer_SOURCES
+    sknavpolys.cpp
+    skmapview.cpp
+    skmapgeom.cpp
+    skmapraster.cpp
+    skmapribbons.cpp
+    skmaplabels.cpp
+    skmapmarkers.cpp
+    skmapallies.cpp
+    skmappolicy.cpp
+    sknetmap.cpp
+    skfloatermap.cpp
+    skmappeople.cpp
+    skmapobjects.cpp
+    skmapparcels.cpp
+    skmapscene.cpp
+    skpopuplayout.cpp
+    skpopuppanes.cpp
+    skmapmenu.cpp
+    skmapparcelfacts.cpp
+    skmapallyresolver.cpp
+    skfloatermapsettings.cpp
+  )
+  list(
+    APPEND viewer_HEADERS
+    sknavpolys.h
+    skmapview.h
+    skmapgeom.h
+    skmapraster.h
+    skmappalette.h
+    skmapribbons.h
+    skmaplabels.h
+    skmapmarkers.h
+    skmapallies.h
+    skmappolicy.h
+    sknetmap.h
+    skfloatermap.h
+    skmappeople.h
+    skmapobjects.h
+    skmapparcels.h
+    skmapscene.h
+    skpopuplayout.h
+    skpopuppanes.h
+    skmapmenu.h
+    skmapparcelfacts.h
+    skmapallyresolver.h
+    skfloatermapsettings.h
+  )
+  # </SK:Nexii>
 
   # The version as one line, for the hosted build's metadata.
   file(
@@ -2443,11 +2530,53 @@ if(AL_BUILD_TESTS)
   )
   set(test_project ${AL_VIEWER_BINARY_NAME})
 
+  # What Script Studio's tests have in common -- a tab, its save's flow, a
+  # notecard's items, the places and words, the account's recovery, and
+  # the units a unit under test is given --
+  # built once for all of them, rather than once in each. Static: a test
+  # takes only the objects it uses, so one that fakes part of them keeps
+  # its fakes.
+  add_library(
+    al_studio_test_common
+    STATIC
+    alnotecardembedded.cpp
+    alrecovery.cpp
+    alscriptexternaleditor.cpp
+    alscriptlookup.cpp
+    alscriptnavigation.cpp
+    alscriptnoticebar.cpp
+    alscriptsaveflow.cpp
+    alscriptstudiodoc.cpp
+    alscriptstudiofileio.cpp
+    alscriptstudiofiles.cpp
+    alscriptstudioorphans.cpp
+    alscriptstudioplaces.cpp
+    alscriptstudiorecovery.cpp
+    alscriptstudioviewer.cpp
+    alscriptstudioweighing.cpp
+    alscriptstudiowords.cpp
+    alscriptweightspane.cpp
+    tests/alscriptpaths_stub.cpp
+    tests/alscriptstudio_stubs.cpp
+  )
+  get_property(studio_test_includes TARGET ${test_project} PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
+  target_include_directories(
+    al_studio_test_common
+    PRIVATE
+      ${studio_test_includes}
+      ${INDRA_SOURCE_DIR}/test
+      ${INDRA_SOURCE_DIR}/llmath
+      ${INDRA_SOURCE_DIR}/llui
+  )
+  target_link_libraries(al_studio_test_common PRIVATE al::flags PUBLIC llui alscript ${test_libs})
+  set_target_properties(al_studio_test_common PROPERTIES FOLDER "Tests/${test_project}")
+
   # A unit test compiles one viewer source file on its own. Each line is one
   # such file and its test under tests/.
   foreach(
     test
     alagentlocationformat
+    alchattimestamp
     alcolorwheelmodel
     alcrashreporter
     alcurvemodel
@@ -2504,14 +2633,13 @@ if(AL_BUILD_TESTS)
     alscriptitemdrop
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
-  # A notecard's items in its Script Studio tab, over a fake of the
-  # viewer's side and the studio's own window.
+  # A notecard's items in its text, over a fake of the viewer's side.
   al_add_test(
-    alscriptnotecardtab
+    alnotecardembedded
     UNIT
     PROJECT ${test_project}
     LIBRARIES llui alscript ${test_libs}
@@ -2526,6 +2654,10 @@ if(AL_BUILD_TESTS)
     PROJECT ${test_project}
     LIBRARIES llui alscript ${test_libs}
   )
+
+  # What the region reserves for the objects in hand, the world faked: the
+  # answers read, each object asked once a minute, the attachments at once.
+  al_add_test(alscriptregionusage UNIT PROJECT ${test_project} LIBRARIES llui alscript ${test_libs})
 
   # What the Script Studio's explorer lists, and the rows it makes of them,
   # with nothing of the world.
@@ -2554,8 +2686,7 @@ if(AL_BUILD_TESTS)
     alscriptoutputpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2565,8 +2696,7 @@ if(AL_BUILD_TESTS)
     alscriptproblemspane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2576,8 +2706,26 @@ if(AL_BUILD_TESTS)
     alscriptsearchpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptsearch.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    SOURCES alscriptsearch.cpp
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # A window's unsaved text kept in a recovery store of the test's.
+  al_add_test(
+    alrecoverykeeper
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+  )
+
+  # A Script Studio window's saves kept in a history of the test's, listed,
+  # compared and put back over tabs of their own editors.
+  al_add_test(
+    alscriptstudiohistory
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2587,8 +2735,21 @@ if(AL_BUILD_TESTS)
     alscriptstudiorecovery
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptnotecardtab.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
+  )
+
+  # The scripter's snippets: the shipped and their own, read, written and
+  # kept whole on disk.
+  al_add_test(alscriptsnippets UNIT PROJECT ${test_project} LIBRARIES llui ${test_libs})
+
+  # Script Studio's themes: their colours, the shipped ones legible, and
+  # every skin's script colours read against what they are drawn on.
+  al_add_test(
+    alscripttheme
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2601,6 +2762,7 @@ if(AL_BUILD_TESTS)
     alscriptkeymap
     UNIT
     PROJECT ${test_project}
+    SOURCES alscriptkeypresets.cpp
     LIBRARIES llui ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
@@ -2615,8 +2777,7 @@ if(AL_BUILD_TESTS)
     alscriptstudiosaving
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2626,14 +2787,13 @@ if(AL_BUILD_TESTS)
     alscriptstudiofiles
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiofileio.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
+
+  # What of Script Studio's state is an account's own, kept apart from the
+  # shared and put back over it.
+  al_add_test(alscriptstudioaccount UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
 
   # Script Studio's navigation: the history of places, back and forward,
   # and previews opened as a list is walked.
@@ -2641,8 +2801,7 @@ if(AL_BUILD_TESTS)
     alscriptnavigation
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2652,13 +2811,7 @@ if(AL_BUILD_TESTS)
     alscriptlookup
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2668,8 +2821,7 @@ if(AL_BUILD_TESTS)
     alscriptreferencespane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2679,12 +2831,7 @@ if(AL_BUILD_TESTS)
     alscriptoutlinepane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2694,8 +2841,7 @@ if(AL_BUILD_TESTS)
     alscriptcrumbsbar
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiodoc.cpp alscriptstudioplaces.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2705,13 +2851,7 @@ if(AL_BUILD_TESTS)
     alscriptinspectorpane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2721,13 +2861,7 @@ if(AL_BUILD_TESTS)
     alscriptstudiocaret
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2751,13 +2885,7 @@ if(AL_BUILD_TESTS)
     alscriptstudiochecking
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2767,14 +2895,8 @@ if(AL_BUILD_TESTS)
     alscriptobjectcheck
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiochecking.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    SOURCES alscriptstudiochecking.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2785,13 +2907,7 @@ if(AL_BUILD_TESTS)
     alscriptrecompile
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudioplaces.cpp
-      alscriptstudiowords.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2801,12 +2917,7 @@ if(AL_BUILD_TESTS)
     alscriptstudioorphans
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnoticebar.cpp
-      alscriptnotecardtab.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiorecovery.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2816,8 +2927,7 @@ if(AL_BUILD_TESTS)
     alscriptstudiowords
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptnotecardtab.cpp alscriptsaveflow.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2827,12 +2937,7 @@ if(AL_BUILD_TESTS)
     alscriptstudioweighing
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptweightspane.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2842,12 +2947,7 @@ if(AL_BUILD_TESTS)
     alscriptexternaleditor
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES
-      alscriptnotecardtab.cpp
-      alscriptsaveflow.cpp
-      alscriptstudiodoc.cpp
-      alscriptstudiofileio.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2857,8 +2957,8 @@ if(AL_BUILD_TESTS)
     alscriptstudiovim
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptstudiocommands.cpp alscriptstudiodoc.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
+    SOURCES alscriptstudiocommands.cpp
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2868,8 +2968,7 @@ if(AL_BUILD_TESTS)
     alscriptstudiodoc
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
-    SOURCES alscriptsaveflow.cpp
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2879,7 +2978,7 @@ if(AL_BUILD_TESTS)
     alscriptweightspane
     UNIT
     PROJECT ${test_project}
-    LIBRARIES llui alscript ${test_libs}
+    LIBRARIES al_studio_test_common llui alscript ${test_libs}
     DEFINES "LLUI_TEST_APP_DIR=\"${INDRA_SOURCE_DIR}/newview\""
   )
 
@@ -2897,6 +2996,42 @@ if(AL_BUILD_TESTS)
   al_add_test(llsecapi PROJECT ${test_project} LIBRARIES ${test_libs} SOURCES llsecapi.cpp)
   # The recastnavigation port links and runs: a floor, a block, a path round it.
   al_add_test(sknavrecast PROJECT ${test_project} LIBRARIES ll::recast)
+  # <SK:Nexii> SKNetMap mini-map unit tests
+  al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
+  al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(
+    skmapgeom
+    UNIT
+    PROJECT ${test_project}
+    SOURCES skmapview.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(
+    skmapraster
+    UNIT
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(
+    skmapribbons
+    UNIT
+    PROJECT ${test_project}
+    SOURCES skmapgeom.cpp skmapview.cpp
+    LIBRARIES sknavmesh ${test_libs}
+  )
+  al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(
+    skmapallies
+    UNIT
+    PROJECT ${test_project}
+    LIBRARIES ${test_libs}
+    DEFINES "SKMAP_APP_SETTINGS=\"${CMAKE_CURRENT_SOURCE_DIR}/app_settings\""
+  )
+  al_add_test(skmappolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  al_add_test(skpopuplayout UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  # </SK:Nexii>
   al_add_test(
     llslurl
     PROJECT ${test_project}

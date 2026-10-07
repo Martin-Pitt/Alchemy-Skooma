@@ -213,10 +213,9 @@
 #include "llpanelgroupnotices.h"
 #include "llparcel.h"
 #include "llpreview.h"
-#include "alfloaterscriptstudio.h"
+#include "alscriptstudio.h"
 #include "alscripttempfiles.h"
 #include "alscriptworkspace.h"
-#include "llpreviewscript.h"
 #include "llproxy.h"
 #include "llproductinforequest.h"
 #include "llqueryflags.h"
@@ -2759,7 +2758,7 @@ bool idle_startup()
         // What Script Studio kept of a session that ended before its scripts
         // were saved, offered back now the world is in; and the copies such
         // a session gave an editor outside, taken out of the temp folder.
-        ALFloaterScriptStudio::offerRecovery();
+        ALScriptStudio::offerRecovery();
         ALScriptWorkspace::instance().tempFiles().sweep();
 
         LLAgentPicksInfo::getInstance()->requestNumberOfPicks();
@@ -3238,7 +3237,7 @@ void register_viewer_callbacks(LLMessageSystem* msg)
     msg->setHandlerFuncFast(_PREHASH_ParcelObjectOwnersReply,       LLPanelLandObjects::processParcelObjectOwnersReply);
 
     msg->setHandlerFuncFast(_PREHASH_InitiateDownload,              process_initiate_download);
-    msg->setHandlerFuncFast(_PREHASH_LandStatReply,                 LLFloaterTopObjects::handle_land_reply);
+    msg->setHandlerFuncFast(_PREHASH_LandStatReply,                 ALScriptWorkspace::processLandStatReply);
     msg->setHandlerFuncFast(_PREHASH_GenericMessage,                process_generic_message);
     msg->setHandlerFuncFast(_PREHASH_GenericStreamingMessage,       process_generic_streaming_message);
     msg->setHandlerFuncFast(_PREHASH_LargeGenericMessage,           process_large_generic_message);

@@ -147,7 +147,7 @@ namespace
             x += 0.3f;
         }
         z += 0.25f;
-        s.box(x, -0.75f, 0, x + 1.5f, 0.75f, z);
+        s.box(x, -2.f, 0, x + 1.5f, 2.f, z);
         x += 1.5f;
         for (S32 k = 0; k < 5; ++k)
         {
@@ -249,15 +249,20 @@ namespace
         return in;
     }
 
-    std::vector<size_t> treadCounts(const SlopePartition& p)
+    std::vector<F32> rises(const SlopePartition& p)
     {
-        std::vector<size_t> n;
+        std::vector<F32> n;
         for (const Flight& f : p.mFlights)
         {
-            n.push_back(f.mTreads.size());
+            n.push_back(std::round(f.mRise * 100.f) / 100.f);
         }
         std::sort(n.begin(), n.end());
         return n;
+    }
+
+    bool near3(const LLVector3& a, const LLVector3& b, F32 tol = 0.2f)
+    {
+        return (a - b).length() < tol;
     }
 }
 
@@ -273,24 +278,19 @@ namespace tut
     template<> template<>
     void sknavflights_object::test<1>()
     {
-        set_test_name("a straight flight is one flight of eight treads between two landings");
+        set_test_name("a straight flight is one stair from the foot of its treads to the landing at their top");
         const SlopePartition p = straight().partition();
         ensure_equals("flights", p.mFlights.size(), 1u);
         ensure_equals("landings", p.mLandings, 2);
         const Flight& f = p.mFlights[0];
-        ensure_equals("treads", f.mTreads.size(), 8u);
-        for (size_t k = 0; k < f.mTreads.size(); ++k)
-        {
-            const FlightTread& t = f.mTreads[k];
-            ensure(llformat("tread %d at %.3f", (S32)k, t.mZ), std::fabs(t.mZ - 0.25f * (k + 1)) < 1e-3f);
-            ensure(llformat("rise %.3f", t.mRise), std::fabs(t.mRise - 0.25f) < 1e-3f);
-            // the nosing is the tread's lower edge, across the flight at x = 0.3 k
-            ensure(llformat("nosing x %.3f", t.mNosingA.mV[VX]), std::fabs(t.mNosingA.mV[VX] - 0.3f * k) < 1e-3f);
-            ensure("nosing across", std::fabs(t.mNosingA.mV[VX] - t.mNosingB.mV[VX]) < 1e-3f);
-        }
+        ensure("a stair by its treads", f.mKind == ConnectorKind::STAIR && f.mRule == ConnectorRule::TREADS && f.mTreads == 8);
+        ensure(llformat("bottom %.2f %.2f %.2f", f.mBottom.mV[VX], f.mBottom.mV[VY], f.mBottom.mV[VZ]), near3(f.mBottom, LLVector3(0.f, 0.f, 0.f)));
+        ensure(llformat("top %.2f %.2f %.2f", f.mTop.mV[VX], f.mTop.mV[VY], f.mTop.mV[VZ]), near3(f.mTop, LLVector3(2.4f, 0.f, 2.25f)));
+        ensure(llformat("rise %.3f", f.mRise), std::fabs(f.mRise - 2.25f) < 1e-3f);
+        ensure(llformat("bottom edge across the flight: %.2f", (f.mBottomB - f.mBottomA).length()),
+               std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.1f && std::fabs(f.mBottomA.mV[VX] - f.mBottomB.mV[VX]) < 0.05f);
         ensure(llformat("plane climbs along x: %.3f %.3f", f.mPlane[0], f.mPlane[1]),
-               std::fabs(f.mPlane[0] - 0.25f / 0.3f) < 0.01f && std::fabs(f.mPlane[1]) < 0.01f);
-        ensure(llformat("mean rise %.3f", f.mRise), std::fabs(f.mRise - 0.25f) < 1e-3f);
+               std::fabs(f.mPlane[0] - 2.25f / 2.4f) < 0.05f && std::fabs(f.mPlane[1]) < 0.01f);
         ensure("footprint", f.mFootprint.size() >= 4);
         // treads share their flight's region; landings keep their own
         std::set<S32> regions;
@@ -309,7 +309,7 @@ namespace tut
     {
         set_test_name("a mid-flight landing splits the stair into two flights");
         const SlopePartition p = midflight().partition();
-        ensure("two flights of five", treadCounts(p) == std::vector<size_t>({ 5, 5 }));
+        ensure("two flights of a metre and a half", rises(p) == std::vector<F32>({ 1.5f, 1.5f }));
         ensure_equals("landings", p.mLandings, 3);
     }
 
@@ -318,26 +318,29 @@ namespace tut
     {
         set_test_name("a wide stair's treads are treads by depth, not area");
         const SlopePartition p = straight(6, 0.2f, 0.3f, 4.f).partition();
-        ensure("one flight of six", treadCounts(p) == std::vector<size_t>({ 6 }));
+        ensure("one flight of six", p.mFlights.size() == 1 && p.mFlights[0].mTreads == 6 && rises(p) == std::vector<F32>({ 1.4f }));
         ensure_equals("landings", p.mLandings, 2);
     }
 
     template<> template<>
     void sknavflights_object::test<4>()
     {
-        set_test_name("a curb top stays a landing; only the threshold between two risers is a tread");
+        set_test_name("a curb top stays a landing, and a climb that small is no stair");
         const SlopePartition p = curb().partition();
         ensure("one tread: the threshold between the two risers", p.mTreads == 1);
         ensure_equals("road, sidewalk and porch are landings", p.mLandings, 3);
-        ensure("a step that size is no flight", p.mFlights.empty() && p.mFlat == 1);
+        ensure("a step that size is no flight", p.mFlights.empty());
     }
 
     template<> template<>
     void sknavflights_object::test<5>()
     {
-        set_test_name("a ramp is a slope group, not a flight");
+        set_test_name("a gentle slope group between two floors is a ramp");
         const SlopePartition p = ramp().partition();
-        ensure_equals("flights", p.mFlights.size(), 0u);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure("a ramp by its grade", f.mKind == ConnectorKind::RAMP && f.mRule == ConnectorRule::GRADE);
+        ensure("from foot to top", near3(f.mBottom, LLVector3(0.f, 0.f, 0.f)) && near3(f.mTop, LLVector3(4.f, 0.f, 1.5f)));
         ensure_equals("landings", p.mLandings, 2);
         ensure_equals("slopes", p.mSlopes, 1);
     }
@@ -345,14 +348,11 @@ namespace tut
     template<> template<>
     void sknavflights_object::test<6>()
     {
-        set_test_name("a spiral is one flight of twelve treads");
+        set_test_name("a spiral has no straight run, so it makes no flight");
         const SlopePartition p = spiral().partition();
-        ensure("one flight of twelve", treadCounts(p) == std::vector<size_t>({ 12 }));
+        ensure_equals("treads", p.mTreads, 12);
         ensure_equals("landings", p.mLandings, 2);
-        for (const FlightTread& t : p.mFlights[0].mTreads)
-        {
-            ensure(llformat("rise %.3f", t.mRise), std::fabs(t.mRise - 0.22f) < 1e-3f);
-        }
+        ensure_equals("flights", p.mFlights.size(), 0u);
     }
 
     template<> template<>
@@ -419,18 +419,24 @@ namespace tut
         ensure("the flight differs from both landings", flight_code != bottom_code && flight_code != top_code);
         ensure_equals("the ground's code is the ground's", p.mReal[ground_code], (U8)1);
         ensure("the flight's code is an object's", p.mReal[flight_code] == OBJECT);
-        ensure_equals("the flight carries its code", p.mFlights[0].mCode, flight_code);
+        const std::vector<U8>& fc = p.mFlights[0].mCodes;
+        ensure("the flight carries its code", std::find(fc.begin(), fc.end(), flight_code) != fc.end());
     }
 
     template<> template<>
     void sknavflights_object::test<9>()
     {
-        set_test_name("polys map to a flight by code over its footprint");
+        set_test_name("polys map to a flight by its codes over its footprint");
         SlopePartition p = straight().partition();
-        const U8 code = p.mFlights[0].mCode;
+        const U8 code = p.mFlights[0].mCodes.front();
+        U8 other = 1;
+        while (std::find(p.mFlights[0].mCodes.begin(), p.mFlights[0].mCodes.end(), other) != p.mFlights[0].mCodes.end())
+        {
+            ++other;
+        }
         const std::vector<LLVector3> centroids = { LLVector3(1.2f, 0.f, 1.f), LLVector3(1.2f, 0.f, 1.f), LLVector3(-2.f, 0.f, 0.f),
                                                    LLVector3(1.2f, 5.f, 1.f), LLVector3(1.2f, 0.f, 9.f) };
-        const std::vector<U8> codes = { code, static_cast<U8>(code + 1), code, code, code };
+        const std::vector<U8> codes = { code, other, code, code, code };
         mapFlightPolys(p.mFlights, centroids, codes, 0.75f);
         ensure_equals("flight kept", p.mFlights.size(), 1u);
         ensure("only the poly on the flight", p.mFlights[0].mPolys == std::vector<U16>({ 0 }));
@@ -465,11 +471,11 @@ namespace tut
                 << p.mTreads << " flights " << p.mFlights.size() << '\n';
             for (const Flight& f : p.mFlights)
             {
-                out << "flight " << f.mTreads.size() << ' ' << f.mRise << ' ' << f.mZMin << ' ' << f.mZMax;
-                for (const FlightTread& t : f.mTreads)
+                out << "flight " << static_cast<S32>(f.mKind) << ' ' << static_cast<S32>(f.mRule) << ' ' << static_cast<S32>(f.mTreads) << ' '
+                    << f.mRise << ' ' << f.mRun;
+                for (const LLVector3& v : { f.mBottom, f.mTop })
                 {
-                    const LLVector3 m = (t.mNosingA + t.mNosingB) * 0.5f;
-                    out << ' ' << m.mV[VX] << ' ' << m.mV[VY] << ' ' << t.mZ;
+                    out << ' ' << v.mV[VX] << ' ' << v.mV[VY] << ' ' << v.mV[VZ];
                 }
                 out << '\n';
             }
@@ -508,7 +514,7 @@ namespace tut
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
         ensure_equals("one flight", r.mFlights[0].size(), 1u);
         const Flight& f = r.mFlights[0][0];
-        ensure_equals("eight treads", f.mTreads.size(), 8u);
+        ensure("a stair of eight treads", f.mKind == ConnectorKind::STAIR && f.mTreads == 8);
         ensure("polys", !f.mPolys.empty());
         for (const U16 p : f.mPolys)
         {
@@ -522,17 +528,17 @@ namespace tut
     {
         set_test_name("a short narrow flight is smaller than a sliver and still survives");
         TileBuildInput in = stairTile();
-        // three 0.25 m steps on 0.3 m treads, 0.9 m wide, then a landing
+        // three 0.25 m steps on 0.4 m treads, 1.2 m wide, then a landing
         for (S32 k = 1; k <= 3; ++k)
         {
-            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 15.5f, 0.f, 10.f + k * 0.3f, 16.4f, k * 0.25f));
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.4f, 15.4f, 0.f, 10.f + k * 0.4f, 16.6f, k * 0.25f));
         }
-        in.mRecords.push_back(boxRecord(10.9f, 13.f, 0.f, 15.f, 19.f, 1.f));
+        in.mRecords.push_back(boxRecord(11.2f, 13.f, 0.f, 15.f, 19.f, 1.f));
         const TileBuildResult r = buildTile(in);
         ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
         const S32 w = static_cast<S32>(AgentClass::WEATHER);
         ensure_equals("one flight", r.mFlights[w].size(), 1u);
-        ensure_equals("three treads", r.mFlights[w][0].mTreads.size(), 3u);
+        ensure_equals("three treads", static_cast<S32>(r.mFlights[w][0].mTreads), 3);
         ensure("polys", !r.mFlights[w][0].mPolys.empty());
     }
 
@@ -551,7 +557,8 @@ namespace tut
         {
             s.mT.push_back(base + i);
         }
-        ensure("two flights of eight", treadCounts(s.partition()) == std::vector<size_t>({ 8, 8 }));
+        const SlopePartition p = s.partition();
+        ensure("two flights of eight", p.mFlights.size() == 2 && p.mFlights[0].mTreads == 8 && p.mFlights[1].mTreads == 8);
     }
 
     template<> template<>
@@ -743,10 +750,8 @@ namespace tut
         const SlopePartition p = s.partition();
         ensure_equals("the shallow treads still chain", p.mTreads, 8);
         ensure_equals("but no flight comes of them", p.mFlights.size(), 0u);
-        ensure_equals("dropped as flat", p.mFlat, 1);
         const SlopePartition real = straight().partition();
         ensure_equals("a staircase still makes its flight", real.mFlights.size(), 1u);
         ensure("it rises half a metre", real.mFlights[0].mZMax - real.mFlights[0].mZMin >= FLIGHT_MIN_RISE_M);
-        ensure_equals("and nothing was dropped", real.mFlat, 0);
     }
 }

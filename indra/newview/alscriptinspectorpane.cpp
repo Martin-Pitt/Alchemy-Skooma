@@ -27,6 +27,8 @@
 #include "alscriptinspectorpane.h"
 
 #include "alcodeeditor.h"
+#include "alscriptstudiocaret.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiowords.h"
 #include "altextview.h"
@@ -45,12 +47,8 @@ bool ALScriptInspectorPane::postBuild()
     mSymbol = getChild<ALTextView>("symbol");
     // The window this is a pane of, found through the view tree, as what
     // the pane asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The inspector", mServices, mWindow))
     {
-        LL_WARNS() << "The inspector is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     // The declaration, in the script the inspector is about or in the
@@ -65,7 +63,7 @@ void ALScriptInspectorPane::inspected(Doc& doc, const ALScriptAnalysis::Result& 
     // Still about the word the caret is on, and this script: by the
     // source's place it was asked about, which the result's is not where
     // the analyzer read the expansion.
-    if (!mServices || &doc != mServices->frontDoc() || at != doc.caret.inspectAt)
+    if (!mServices || &doc != mServices->frontDoc() || at != doc.caret->inspectAt)
     {
         return;
     }
@@ -124,7 +122,7 @@ void ALScriptInspectorPane::inspected(Doc& doc, const ALScriptAnalysis::Result& 
         }
     }
     // What is wrong where the caret is, said under the name.
-    const std::string problems = problemsAt(doc, doc.caret.inspectAt);
+    const std::string problems = problemsAt(doc, doc.caret->inspectAt);
     if (!problems.empty())
     {
         text += (text.empty() ? "" : "\n\n") + problems;
@@ -181,7 +179,7 @@ std::string ALScriptInspectorPane::problemsAt(const Doc& doc, const ALTextPos& a
     for (const ALCodeEditor::Decoration* each : doc.editor->decorationsOn(at.line))
     {
         const ALCodeEditor::Decoration& decoration = *each;
-        if (decoration.style == ALCodeEditor::Decoration::Style::Squiggle && !decoration.message.empty() && decoration.range.contains(at))
+        if (decoration.underlined() && !decoration.message.empty() && decoration.range.contains(at))
         {
             LLStringUtil::format_map_t args;
             args["[MESSAGE]"] = decoration.message;

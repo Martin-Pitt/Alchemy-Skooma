@@ -313,7 +313,7 @@
         <key>ALScriptPreprocEnabled</key>
         <map>
             <key>Comment</key>
-            <string>Script Studio runs the preprocessor over every script it saves, uploading the expanded code with the source kept in Firestorm's envelope. A script that came wrapped is preprocessed on saving whatever this says.</string>
+            <string>Script Studio runs the preprocessor over every script it saves, uploading the expanded code with the source kept in Firestorm's envelope. A script that came wrapped, or that has a directive of the preprocessor's, is preprocessed on saving whatever this says.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -475,6 +475,17 @@
             <key>Value</key>
             <map />
         </map>
+        <key>ALScriptStudioKeymapPreset</key>
+        <map>
+            <key>Comment</key>
+            <string>The editor whose keys Script Studio takes over its own: studio, vscode, visual_studio, jetbrains or xcode. A person's own keys stay over them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>studio</string>
+        </map>
         <key>ALScriptStudioTabWidth</key>
         <map>
             <key>Comment</key>
@@ -563,6 +574,83 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>ALScriptConvertLLTimers</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua puts llSetTimerEvent's timer on LLTimers, calling the timer handler of the state the script is in, rather than the timer event llcompat.SetTimerEvent sets going.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptConvertDetectedTable</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua reads what was detected from the handler's detected table, detected[i + 1]:getKey(), where the call stands in the handler, rather than through llcompat.Detected*.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptConvertSLuaCalls</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua calls SLua's ll rather than llcompat where it means the same: a boolean answer, a constant index moved on by one, a find asked only whether it found, read against nil.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptConvertIdioms</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua writes what SLua has in a call's stead where it means the same: math, vector and quaternion's functions, ^, print, os.time and table.find.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptConvertHandlerFields</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua assigns handlers to LLEvents' fields (LLEvents.touch_start = function ...), one for each event, rather than putting them on with LLEvents:on.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>ALScriptConvertTypes</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua writes Luau types on locals, parameters and what functions return, from LSL's types.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>ALScriptConvertComments</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua writes a -- LSL: comment over each place where SLua means something else than LSL did, or has a way of its own.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>ALScriptStudioAutoClose</key>
         <map>
             <key>Comment</key>
@@ -610,13 +698,13 @@
         <key>ALScriptStudioVimClipboard</key>
         <map>
             <key>Comment</key>
-            <string>In Script Studio's vim mode, what is yanked, deleted and put with no register named goes by the system clipboard, as vim's clipboard=unnamed; off, it stays the editor's own, and only "+ and "* reach the clipboard. :set clipboard changes it for the session.</string>
+            <string>In Script Studio's vim mode, what is yanked, deleted and put with no register named goes by the system clipboard, as vim's clipboard=unnamed; off, as vim has it, it stays the editor's own, and only "+ and "* reach the clipboard. :set clipboard changes it for the session.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
             <string>Boolean</string>
             <key>Value</key>
-            <integer>1</integer>
+            <integer>0</integer>
         </map>
         <key>ALScriptStudioHoverCards</key>
         <map>
@@ -772,10 +860,10 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>ALScriptStudioEnabled</key>
+        <key>ALScriptStudioRestoreTabs</key>
         <map>
             <key>Comment</key>
-            <string>Open scripts from inventory and objects in Script Studio; off, the legacy script editor opens them instead.</string>
+            <string>Script Studio opens again the tabs that were open when it was last put away, and says how many came back; off, it opens with what it was opened for alone.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -1271,6 +1359,17 @@
         <map>
             <key>Comment</key>
             <string>Marks unnamed objects in chat and IMs.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>AlchemyTurnTowardSelectedObjects</key>
+        <map>
+            <key>Comment</key>
+            <string>Automatically turn the avatar toward selected objects when the camera is not focused on the avatar.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -1919,7 +2018,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>-3.0</real>
+            <real>-2.0</real>
         </map>
         <key>AlchemyExposureMaxEV</key>
         <map>
@@ -1930,7 +2029,7 @@
             <key>Type</key>
             <string>F32</string>
             <key>Value</key>
-            <real>4.0</real>
+            <real>2.0</real>
         </map>
         <key>AlchemyExposureLowPercent</key>
         <map>
@@ -4401,6 +4500,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>AlchemyIMShowSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Show seconds in chat timestamps and include seconds in chat logs.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>ChatOOCPrefix</key>
         <map>
             <key>Comment</key>
@@ -4561,6 +4671,490 @@
             <string>String</string>
             <key>Value</key>
             <string>All</string>
+        </map>
+        <key>SKMapSeeded</key>
+        <map>
+            <key>Comment</key>
+            <string>Whether the mini-map has taken the classic map's settings over; it does so once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapZoomMeters</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres the mini-map shows across its short side, 4 to 512.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>128.0</real>
+        </map>
+        <key>SKMapRotate</key>
+        <map>
+            <key>Comment</key>
+            <string>Turn the mini-map with the camera instead of keeping north up.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapAutoCenter</key>
+        <map>
+            <key>Comment</key>
+            <string>Ease the mini-map back onto you after a shift-drag pan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapCompassRing</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a compass ring with the four cardinal letters in place of the single N on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerTerrain</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the regions' terrain tiles under the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapAvatarColors</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour mini-map dots by friend, muted and contact-set colours outside combat.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapHeadingTriangles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a small triangle ahead of each mini-map dot along the way the avatar faces.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapFloorChevrons</key>
+        <map>
+            <key>Comment</key>
+            <string>Mark mini-map dots on the floor above or below yours with a chevron.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerChatRings</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the whisper, chat and shout ranges round you on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerGuideLine</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a line from you along the camera on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerObjects</key>
+        <map>
+            <key>Comment</key>
+            <string>Object dots on the mini-map: 0 never, 1 only where the navmesh floorplan has not been built, 2 everywhere.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerParcels</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw parcel boundary lines on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsForSale</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade parcels for sale and at auction on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerParcelsCollision</key>
+        <map>
+            <key>Comment</key>
+            <string>Shade the parcels you are banned from or not allowed on, on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapDebugReadout</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the mini-map's timings and counts in its corner.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerFloorplan</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the navmesh floorplan on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapVerticalFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres above or below your floor over which other floors fade on the mini-map; past it they are not drawn.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKMapBakeBudgetMB</key>
+        <map>
+            <key>Comment</key>
+            <string>Megabytes of baked mini-map floorplan cells kept, least recently drawn dropped first.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>96</integer>
+        </map>
+        <key>SKMapBakeUploadsPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Baked mini-map cells uploaded to the GPU per frame at most.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
+        <key>SKMapLayerCover</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw cover, ledges and drop edges on the mini-map, cover judged against your own eye height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerDoors</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw doors, ladders and elevators on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerStairs</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw stair rungs and ramp chevrons on the mini-map floorplan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerContours</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw height contours on terrain and ramps on the mini-map floorplan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapHeatmap</key>
+        <map>
+            <key>Comment</key>
+            <string>Colour the mini-map floorplan by height against your floor: blue below, red above.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapLayerVoid</key>
+        <map>
+            <key>Comment</key>
+            <string>Hatch the space outside every region and draw region and void edges on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapCoverAhead</key>
+        <map>
+            <key>Comment</key>
+            <string>Mark on the mini-map the cover a wall just ahead of you along the camera gives.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapHoverEnterPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels from a mini-map dot at which its name shows.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>10.0</real>
+        </map>
+        <key>SKMapHoverExitPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels from a mini-map dot past which a shown name goes; more than the enter distance, so names do not flicker.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>12.0</real>
+        </map>
+        <key>SKMapNametagMaxWidth</key>
+        <map>
+            <key>Comment</key>
+            <string>The widest a mini-map nametag grows, in pixels; narrow windows use less.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>190</integer>
+        </map>
+        <key>SKMapLayerVehicles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw vehicles the census has seen driven as outlines on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapDebugForceCombat</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug: put the mini-map in combat mode on safe land. It only turns combat on; non-allies stay hidden.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapAllyRoster</key>
+        <map>
+            <key>Comment</key>
+            <string>In combat, count members of your ally groups you belong to as allies, by the group rosters.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapAllyProbeRate</key>
+        <map>
+            <key>Comment</key>
+            <string>Attachment group requests a second at most, for telling allies in combat.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>4.0</real>
+        </map>
+        <key>SKMapAllyProbeUntitled</key>
+        <map>
+            <key>Comment</key>
+            <string>In combat, ask about avatars wearing no group title as well.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapMarkerLabels</key>
+        <map>
+            <key>Comment</key>
+            <string>In combat, mark each ally's dot and nametag with a short code that stays with them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapMarkerFontPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixel size of the codes on mini-map dots, 8 to 11.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>SKMapMarkerPaddingPx</key>
+        <map>
+            <key>Comment</key>
+            <string>Pixels between a code and the edge of its mini-map dot, 0 to 3.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKMapMarkerCodeHold</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds an ally keeps their code after leaving the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>120.0</real>
+        </map>
+        <key>SKMapPing</key>
+        <map>
+            <key>Comment</key>
+            <string>Offer Ping in the mini-map menu in combat: a marker on your own map, sent to nobody.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapKillLineSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a combat event's line from shooter to target fades over on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKMapDeathIconSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a kill or death mark stays on the mini-map.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.0</real>
+        </map>
+        <key>SKMapLayerFiringLines</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw a faint line on the mini-map from each person drawn to what they aim at; in combat, allies only.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapLayerProjectiles</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw fast physical objects on the mini-map as streaks and thrown ones as dots; never in combat.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
         </map>
         <key>SKNavCensusAlways</key>
         <map>
@@ -4979,7 +5573,7 @@
             <key>Type</key>
             <string>U32</string>
             <key>Value</key>
-            <integer>128</integer>
+            <integer>240</integer>
         </map>
         <key>SKNavOverlayFeatures</key>
         <map>

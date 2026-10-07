@@ -28,7 +28,9 @@
 #include "llsingleton.h"
 #include "sknavbuild.h"
 #include "sknavexport.h"
+#include "sknavlayout.h"
 #include "sknavoverlay.h"
+#include "sknavpolys.h"
 #include "sknavskymap.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
@@ -36,9 +38,11 @@
 #include "threadpool.h"
 
 #include <functional>
+#include <future>
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -66,12 +70,42 @@ public:
     /// First reflection-probe placement pass, before the residual grid pass.
     void placeReflectionProbes();
 
+    /// The content keys of a mesh's tiles whose footprint meets the global
+    /// box, 0 for a tile not published under one.
+    void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
     void cleanupSingleton() override;
 
     /// Polygon edges of the avatar class near the agent, from the debug pass.
     void renderDebug();
+
+    /// Keep the navmesh building while a consumer is registered (the mini-map while it is shown).
+    void addDemand(const std::string& who);
+    void removeDemand(const std::string& who);
+    /// Moves whenever the navmesh's published state changes: a tile publishes, fails or leaves, a
+    /// mesh is torn down, air is evicted (it follows the camera), or feature links change.
+    U64 revision() const { return mRevision; }
+
+    /// One published tile as the mini-map reads it.
+    struct PolyTile
+    {
+        LLUUID mMesh;
+        bool mTerrain = false;          ///< the region's own mesh
+        U64 mRegion = 0;                ///< region handle
+        LLVector3d mOrigin;             ///< mesh origin, global, on the 32 m lattice
+        sknav::TileKey mKey;
+        U64 mContentKey = 0;
+        LLVector3d mMin, mMax;          ///< tile footprint, global
+        std::shared_ptr<const sknav::TilePolys> mPolys;
+        std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments;
+        std::shared_ptr<const std::vector<sknav::DropLink>> mLinks;
+        std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
+    };
+    typedef std::function<void(const PolyTile&)> PolyTileFn;
+    /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
+    void polysIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const PolyTileFn& fn) const;
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the
@@ -206,6 +240,7 @@ public:
 
 private:
     friend class SKNavRooms;
+    friend class SKNavRoomProbes;
 
     /// Why a tile needed building, for the update blip. A record beats the
     /// land and both beat the parameters, because a signature that moved with
@@ -264,6 +299,20 @@ private:
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
+        /// The Detour tile's polygons, extracted on first read and valid only for the publish
+        /// that set it: every path that adds or removes the Detour tile resets it.
+        mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+    };
+
+    struct Layout
+    {
+        std::vector<sknav::LaidTile> mTiles;
+        std::vector<U64> mSignatures;
+        std::set<sknav::TileKey> mKeys;
+        size_t mNext = 0;
+        U64 mCensus = 0, mWorld = 0, mLand = 0, mParams = 0;
+        F32 mPad = 0.f, mVoidMargin = 0.f;
+        F64 mMinZ = 0., mMaxZ = 0.;
     };
 
     struct Mesh
@@ -280,8 +329,58 @@ private:
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr, nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
         F32 mLastSeen = 0.f;
+        // What the region pass's layout and tile re-sign were last laid
+        // against. While all of these stand, the pass would rebuild exactly
+        // what already stands, so it is skipped whole.
+        U64 mLayoutCensus = 0;
+        U64 mLayoutWorld = 0;
+        U64 mLayoutLand = 0;
+        U64 mLayoutParams = 0;
+        F32 mLayoutVoidMargin = 0.f;
+        std::future<std::shared_ptr<Layout>> mLayoutJob;
+        std::shared_ptr<Layout> mPendingLayout;
+        std::map<sknav::TileKey, Tile>::iterator mDropCursor;
+        bool mDropping = false;
         ~Mesh();
     };
+
+    struct TileCursor
+    {
+        LLUUID mMesh;
+        sknav::TileKey mKey;
+        bool mStarted = false;
+    };
+    bool scanTiles(TileCursor& cursor, F32 seconds, const std::function<void(Mesh&, const sknav::TileKey&, Tile&)>& visit);
+    TileCursor mTerrainCursor, mScheduleCursor, mStatsCursor, mEvictionCursor, mSkyCursor;
+    struct AirCandidate
+    {
+        LLUUID mMesh;
+        U32 mGeneration;
+        sknav::TileKey mKey;
+        sknav::TileAirPtr mAir, mCoarse;
+        F64 mNearness, mDistance;
+    };
+    std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
+    std::future<std::shared_ptr<std::vector<AirCandidate>>> mEvictionJob;
+    std::shared_ptr<std::vector<AirCandidate>> mPendingEvictions;
+    size_t mNextEviction = 0;
+    struct SkyContributor { LLVector3d mOrigin; sknav::TileAirPtr mAir; };
+    std::shared_ptr<std::map<U64, SkyContributor>> mSkyScan;
+    U64 mSkyScanRevision = 0;
+    bool mSkyScanReady = false, mEvictionScanReady = false;
+    struct BuildCandidate
+    {
+        LLUUID mMesh;
+        U32 mGeneration;
+        sknav::TileKey mKey;
+        F64 mDistance;
+    };
+    std::shared_ptr<std::vector<BuildCandidate>> mScheduleScan, mBuildCandidates;
+    std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
+    bool mScheduleScanReady = false;
+    size_t mNextCandidate = 0;
+    F32 mCandidateTime = 0.f;
+    Stats mScanningStats;
 
     typedef sknav::ExportCounts ExportCounts;
     /// One tile as a JSON object, shared by every export so their formats
@@ -306,6 +405,7 @@ private:
     /// work: they are pure and independent, one per core.
     LL::WorkQueue::ptr_t workerQueue();
     void reconcile(const SKCensusSnapshotPtr& snap);
+    void applyLayouts();
     /// Whether a cluster stands on the ground under it, within
     /// SKNavGroundedMargin. A grounded structure is meshed with the region so
     /// that one mesh holds the ground, the walls that block it and the floors
@@ -320,9 +420,6 @@ private:
     static bool changedRecord(const std::vector<sknav::RecordPtr>& before, const std::vector<sknav::RecordPtr>& after, LLVector3d& out);
     /// A rising blip for a tile that was just built, coloured by why.
     void tileBlip(const Mesh& mesh, const Tile& tile) const;
-    /// Tiles the mesh no longer wants leave its Detour meshes. True when any
-    /// did, which is a change the debug overlay's cache has to hear about.
-    static bool dropTiles(Mesh& mesh, const std::map<sknav::TileKey, Tile>& wanted);
     void schedule();
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
@@ -378,10 +475,19 @@ private:
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
     U64 mSkyRevision = 0;
+    struct SkyResult
+    {
+        sknav::SkyMap mMap;
+        std::map<U64, sknav::TileAirPtr> mTiles;
+        U64 mRevision = 0;
+    };
+    std::future<std::shared_ptr<SkyResult>> mSkyJob;
     LLVector3d mMark;
     bool mHasMark = false;
     std::unique_ptr<SKNavRooms> mRooms;
     std::unique_ptr<SKNavRoomProbes> mRoomProbes;
+    /// Consumers that keep the navmesh building whatever the overlay and probes want.
+    std::set<std::string> mConsumers;
 
     /// A counter over what the debug overlay draws: bumped whenever a tile
     /// publishes, fails or leaves, or a mesh is torn down. The overlay keeps

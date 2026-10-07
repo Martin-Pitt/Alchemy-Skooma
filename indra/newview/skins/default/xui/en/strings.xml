@@ -367,41 +367,104 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="CodeStringHead">string</string>
 	<string name="CodeFixLink">Fix: [TITLE]</string>
 	<string name="CodeFixNone">Nothing to fix or refactor here</string>
-	<string name="CodeInlayWrite">Ctrl-double-click to write '[TEXT]' in</string>
-	<string name="CodeInlayWriteMac">Command-double-click to write '[TEXT]' in</string>
+	<string name="CodeInlayWrite">Ctrl-double-click to insert '[TEXT]'</string>
+	<string name="CodeInlayWriteMac">Command-double-click to insert '[TEXT]'</string>
 	<string name="CodeDeprecated">(deprecated)</string>
 	<string name="CodeStringBytesA">[COUNT] byte</string>
 	<string name="CodeStringBytesB">[COUNT] bytes</string>
 	<string name="CodeStringCharactersA">[COUNT] character</string>
 	<string name="CodeStringCharactersB">[COUNT] characters</string>
-	<string name="CodeStringWritten">[COUNT] as written</string>
+	<string name="CodeStringWritten">[COUNT] in source</string>
 
 	<!-- The find bar over an editor's top right corner (alfindbar.cpp):
 	     its tips, its fields' labels and what its count says. -->
-	<string name="FindBarReplaceToo">Replace as well</string>
+	<string name="FindBarReplaceToo">Toggle replace</string>
 	<string name="FindBarFind">Find</string>
 	<string name="FindBarCase">Match case</string>
 	<string name="FindBarWord">Match whole words</string>
 	<string name="FindBarPattern">Match a regular expression</string>
-	<string name="FindBarPrevious">The one before (shift-return)</string>
-	<string name="FindBarNext">The next (return)</string>
-	<string name="FindBarInSelection">In the selection only</string>
+	<string name="FindBarPrevious">Previous match (shift-return)</string>
+	<string name="FindBarNext">Next match (return)</string>
+	<string name="FindBarInSelection">Find in selection</string>
 	<string name="FindBarClose">Close (escape)</string>
 	<string name="FindBarReplace">Replace</string>
 	<string name="FindBarKeepCase">Keep each match's case: HELLO, Hello or hello</string>
-	<string name="FindBarReplaceOne">Replace this one and find the next</string>
-	<string name="FindBarReplaceAll">Replace every one, as one step to undo</string>
-	<string name="FindBarBadPattern">Not a pattern</string>
+	<string name="FindBarReplaceOne">Replace this match and find the next</string>
+	<string name="FindBarReplaceAll">Replace all matches as one undo step</string>
+	<string name="FindBarBadPattern">Invalid regular expression</string>
 	<string name="FindBarNone">No results</string>
 	<string name="FindBarOf">[CURRENT] of [TOTAL]</string>
 	<string name="ScriptWordSleep">The script sleeps [SECONDS] s after this</string>
-	<string name="ScriptWordGodMode">Only a god may call this</string>
-	<string name="FindBarWrappedToTop">Went round the end, on from the top</string>
-	<string name="FindBarWrappedToBottom">Went round the start, back from the bottom</string>
+	<string name="ScriptWordGodMode">Requires god mode</string>
+	<string name="FindBarWrappedToTop">Reached the end; continued from the top</string>
+	<string name="FindBarWrappedToBottom">Reached the start; continued from the bottom</string>
 
 	<!-- The row of tabs over an editor (altabstrip.cpp): the button that
 	     lists them all once they run past it. -->
-	<string name="TabStripList">Every tab, to pick one from</string>
+	<!-- Script Studio's editor colors, as the preferences list them (ALScriptTheme::labelOf). -->
+	<string name="ScriptColorLabel_ScriptText">Text</string>
+	<string name="ScriptColorLabel_ScriptBackground">Background</string>
+	<string name="ScriptColorLabel_ScriptBgReadOnlyColor">Background, read-only</string>
+	<string name="ScriptColorLabel_ScriptCursorColor">Caret</string>
+	<string name="ScriptColorLabel_ScriptSelectionColor">Selection</string>
+	<string name="ScriptColorLabel_ScriptSelectionInactiveColor">Selection, unfocused</string>
+	<string name="ScriptColorLabel_ScriptCurrentLineColor">Current line</string>
+	<string name="ScriptColorLabel_ScriptGutterColor">Gutter</string>
+	<string name="ScriptColorLabel_ScriptLineNumberColor">Line numbers</string>
+	<string name="ScriptColorLabel_ScriptActiveLineNumberColor">Caret's line number</string>
+	<string name="ScriptColorLabel_ScriptBracketMatchColor">Matching bracket</string>
+	<string name="ScriptColorLabel_ScriptFindMatchColor">Find match</string>
+	<string name="ScriptColorLabel_ScriptFoldColor">Fold marks</string>
+	<string name="ScriptColorLabel_ScriptIndentGuideColor">Indent guides</string>
+	<string name="ScriptColorLabel_ScriptWhitespaceColor">Whitespace</string>
+	<string name="ScriptColorLabel_ScriptHighlightColor">Highlighted references</string>
+	<string name="ScriptColorLabel_ScriptChangedColor">Changed lines</string>
+	<string name="ScriptColorLabel_ScriptStickyHeaderColor">Sticky headers</string>
+	<string name="ScriptColorLabel_ScriptInlayHintColor">Parameter name hints</string>
+	<string name="ScriptColorLabel_ScriptInlayHintBgColor">Parameter name hints, background</string>
+	<string name="ScriptColorLabel_ScriptHeatColor">Memory heat</string>
+	<string name="ScriptColorLabel_ScriptErrorColor">Errors</string>
+	<string name="ScriptColorLabel_ScriptWarningColor">Warnings</string>
+	<string name="ScriptColorLabel_ScriptNoteColor">Notes</string>
+	<string name="ScriptColorLabel_ScriptRuntimeErrorColor">Run-time errors</string>
+	<string name="ScriptColorLabel_ScriptWidgetColor">Pop-ups</string>
+	<string name="ScriptColorLabel_ScriptWidgetBorderColor">Pop-ups, border</string>
+	<string name="ScriptColorLabel_ScriptWidgetSelectionColor">Pop-ups, chosen row</string>
+	<string name="ScriptColorLabel_ScriptBracket1Color">Rainbow brackets, level 1</string>
+	<string name="ScriptColorLabel_ScriptBracket2Color">Rainbow brackets, level 2</string>
+	<string name="ScriptColorLabel_ScriptBracket3Color">Rainbow brackets, level 3</string>
+	<string name="ScriptColorLabel_ScriptComment">Comment</string>
+	<string name="ScriptColorLabel_ScriptDocComment">Doc comment</string>
+	<string name="ScriptColorLabel_ScriptString">String</string>
+	<string name="ScriptColorLabel_ScriptEscape">Escape</string>
+	<string name="ScriptColorLabel_ScriptNumber">Number</string>
+	<string name="ScriptColorLabel_ScriptKeyword">Keyword</string>
+	<string name="ScriptColorLabel_ScriptControl">Control</string>
+	<string name="ScriptColorLabel_ScriptType">Type</string>
+	<string name="ScriptColorLabel_ScriptConstant">Constant</string>
+	<string name="ScriptColorLabel_ScriptFunction">Function</string>
+	<string name="ScriptColorLabel_ScriptEvent">Event</string>
+	<string name="ScriptColorLabel_ScriptLabel">Label</string>
+	<string name="ScriptColorLabel_ScriptOperator">Operator</string>
+	<string name="ScriptColorLabel_ScriptPunctuation">Punctuation</string>
+	<string name="ScriptColorLabel_ScriptPreprocessor">Preprocessor</string>
+	<string name="ScriptColorLabel_ScriptTag">Tag</string>
+	<string name="ScriptColorLabel_ScriptAttribute">Attribute</string>
+	<string name="ScriptColorLabel_ScriptAttributeValue">Attribute value</string>
+	<string name="ScriptColorLabel_ScriptEntity">Entity</string>
+	<string name="ScriptColorLabel_ScriptVariable">Variable</string>
+	<string name="ScriptColorLabel_ScriptParameter">Parameter</string>
+	<string name="ScriptColorLabel_ScriptProperty">Property</string>
+	<string name="ScriptColorLabel_ScriptDeprecated">Deprecated</string>
+	<string name="ScriptColorLabel_ScriptInvalid">Invalid</string>
+	<string name="ScriptColorLabel_ScriptNamespace">Namespace</string>
+	<string name="ScriptColorLabel_ScriptState">State</string>
+	<string name="ScriptColorLabel_ScriptGlobalVariable">Global variable</string>
+	<string name="ScriptColorLabel_ScriptPath">Path</string>
+	<!-- A command's keys in a tip, and a tip with them after it. -->
+	<string name="KeysInTip">([KEYS])</string>
+	<string name="TipWithKeys">[TIP] ([KEYS])</string>
+	<string name="TabStripList">All tabs</string>
 	<string name="QuickOpenNone">Nothing matches</string>
 
 	<!-- The vim keymap's words, in the band under the editor's text
@@ -431,10 +494,11 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="VimNoFileUnderCursor">E446: No file name under cursor</string>
 	<string name="VimNoSpellCheck">E756: Spell checking is not enabled</string>
 	<string name="VimNoMisspelling">No misspelled words</string>
+	<string name="VimMisspellingCut">Still checking the spelling: search again to go on</string>
 	<string name="VimNoSuggestions">Sorry, no suggestions</string>
 	<string name="VimNotAddable">E764: Cannot add this word</string>
 	<string name="VimNothingInRegister">E353: Nothing in register [REGISTER]</string>
-	<string name="VimCountTooLarge">Too large a count: it would put in [SIZE] MB</string>
+	<string name="VimCountTooLarge">Too large a count: it would put in [SIZE,number,1] MB</string>
 	<string name="VimBadPattern">E486: [ERROR]</string>
 	<string name="VimPatternNotFound">E486: Pattern not found: [PATTERN]</string>
 	<string name="VimUnknownOption">E518: Unknown option: [OPTION]</string>
@@ -473,7 +537,9 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="VimLetOnly">Only mapleader and maplocalleader are set with :let</string>
 	<string name="VimrcLine">line [NUMBER]: [ERROR]</string>
 	<string name="VimrcTooLarge">The vimrc is too large to read.</string>
-	<string name="VimrcNotNotecard">The vimrc's item is not a notecard that can be read.</string>
+	<string name="VimrcNotNotecard">The vimrc item is not a readable notecard.</string>
+	<string name="SnippetsFollowedNotNotecard">The followed snippets item is not a readable notecard.</string>
+	<string name="SnippetsFollowedNotSnippets">The followed notecard holds no snippets Script Studio can read.</string>
 
 	<!-- Script Studio's own words about a script, from the alscript
 	     library: each problem carries a key and the words it is about,
@@ -503,6 +569,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="PreprocExpectedValue">expected a value in preprocessor expression</string>
 	<string name="PreprocIfNeedsExpression">#if with no expression</string>
 	<string name="PreprocIfWithoutEndif">#if without #endif at the end of the file</string>
+	<string name="PreprocBackslashSpace">backslash and newline separated by space</string>
 	<string name="PreprocIntegerTooLarge">integer constant '[1]' is too large for its type</string>
 	<string name="PreprocBadCharacter">'[1]' is not a character constant</string>
 	<string name="PreprocVaArgsNotAName">'__VA_ARGS__' cannot be used as a macro name</string>
@@ -522,7 +589,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="PreprocModuleInWorld">could not find module '[1]': one so named is in the object or the inventory, but modules from there are off. Modules come from folders on disk: turn on Build &gt; Include from Disk, and add the folder with Build &gt; Add Include Folder...</string>
 	<string name="PreprocIncludeNotFetched">include file '[1]' could not be fetched, and the script is not sent without it</string>
 	<string name="CompileQueueSkippedSaving">Skipped "[SCRIPT_NAME]": a save of it is on its way, which a recompile would land over.</string>
-	<string name="CompileQueueUnsavedInStudio">"[SCRIPT_NAME]" has changes not saved in Script Studio; what compiles is the server's text, without them.</string>
+	<string name="CompileQueueUnsavedInStudio">Script Studio has unsaved changes to "[SCRIPT_NAME]"; the recompile uses the version saved on the server, without them.</string>
 	<string name="BridgeSentCompiledAsIs">The compiled half was changed and its source was not, so it went up as it is rather than as its source expands.</string>
 	<string name="PreprocIncludeSentWithout">include file '[1]' could not be fetched, and the script went up without it</string>
 	<string name="PreprocObjectUnanswered">the object this script is in did not say what it holds -- it did not answer in time, or is out of view -- so no include was looked for in it; save again once it answers</string>
@@ -586,6 +653,7 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="OptimizerRemovedWhile">removed a while loop whose condition is always false</string>
 	<string name="OptimizerRenamed">renamed the [1] [2] to [3]</string>
 	<string name="OptimizerSimplified">simplified [1] to [2]</string>
+	<string name="OptimizerSubstitutedLocal">put the value of [1] where it is read, and removed it</string>
 	<string name="OptimizerSwappedBranches">swapped the branches of if ([1]) and dropped the !</string>
 	<string name="OptimizerSwappedOnXor">wrote if ([1]) as if ([2]), its branches swapped</string>
 	<string name="OptimizerTurnedEmptyBranch">turned an empty if branch around</string>
@@ -632,6 +700,20 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="ScriptFixRequire">Require '[1]'</string>
 	<string name="ScriptFixRequireField">Take '[1]' from '[2]'</string>
 	<string name="ScriptFixInclude">Include '[1]'</string>
+	<string name="ScriptFixCompoundAssign">Write it [1] [2]= ...</string>
+	<string name="ScriptFixHoistCall">Work out [1] once, before the loop</string>
+	<string name="ScriptFixCompareZero">Compare it: [1] ~= 0</string>
+	<string name="ScriptFixEqualsZero">Ask whether it is 0: [1] == 0</string>
+	<string name="ScriptFixAskFound">Write it [1] [2]</string>
+	<string name="ScriptFixWriteIt">Write it [1]</string>
+	<string name="ScriptFixDeclareFirst">Declare local [1] before it is first named</string>
+	<string name="ScriptFixUnbracket">Take out the brackets</string>
+	<string name="ScriptFixRemoveElse">Take out the empty else</string>
+	<string name="ScriptFixStringParts">Put [1]'s pieces in a table, joined once after the loop</string>
+	<string name="ScriptFixKeepCall">Keep [1] in a local, [2]</string>
+	<string name="ScriptFixNoteDone">Done: take the note out</string>
+	<string name="ScriptFixNoteLint">[1], and take the note out</string>
+	<string name="ScriptFixMakeStrict">Make the script --!strict</string>
 	<string name="ScriptActionAnnotate">Declare it as '[1]'</string>
 	<string name="ScriptActionExtract">Put it in a local, '[1]'</string>
 	<string name="ScriptActionInterpolate">Write it as an interpolated string</string>
@@ -702,6 +784,17 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LSLSyntaxUnexpected">Did not expect [1] here.</string>
 	<string name="LSLSyntaxUnexpectedWanted">Did not expect [1] here; expected [2].</string>
 	<string name="LSLParameterUntyped">The parameter '[1]' needs its type before it: integer, float, string, key, vector, rotation or list.</string>
+	<string name="LSLSlLoopInvariantCall">[1] is worked out again on every turn of the loop, though nothing in the loop changes what it is given: a local set before the loop works it out once</string>
+	<string name="LSLSlSleepingCall">[1] makes the script sleep [2] s each call; [3] does the same without the sleep</string>
+	<string name="LSLSlSleepingCallOften">[1] makes the script sleep [2] s each time it runs here, in a loop or the timer event; [3] does the same without the sleep</string>
+	<string name="LSLSlSleepingTexture">[1] makes the script sleep [2] s each call; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LSLSlSleepingTextureOften">[1] makes the script sleep [2] s each time it runs here, in a loop or the timer event; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LSLSlMergeablePrimParams">These [1] calls to [2] could be one, with all their rules, and PRIM_LINK_TARGET where the link changes</string>
+	<string name="LSLSlCostlyListen">This listens on channel 0 for anyone, so the script wakes for every line of chat nearby. A name, a key, or another channel hears less</string>
+	<string name="LSLSlFastTimer">A timer every [1] s, under a tenth of a second, fires every few of the region's 45 frames a second, and the time it takes is time other scripts there wait for</string>
+	<string name="LSLSlFastSensor">A sensor sweeping every [1] s, under a second, searches round the object that often: once a second or less is plenty for most</string>
+	<string name="LSLSlStringBuild">[1] is joined to with + in a loop, which copies all of it each time round. In SLua the pieces put in a table and joined once, with table.concat, are quicker</string>
+	<string name="LSLSlRepeatedCall">[1] is called [2] times here, and answers the same each time: a local set once holds it</string>
 	<string name="LuauLintUnknownGlobalAssign">Unknown global '[1]'; consider assigning to it first</string>
 	<string name="LuauLintDeprecatedGlobal">Global '[1]' is deprecated, use '[2]' instead</string>
 	<string name="LuauLintDeprecatedGlobalPlain">Global '[1]' is deprecated</string>
@@ -788,6 +881,48 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LuauLintDeprecatedFunctionUse">Function '[1]' is deprecated, use '[2]' instead</string>
 	<string name="LuauLintDeprecatedFunctionReason">Function '[1]' is deprecated. [2]</string>
 	<string name="LuauLintDeprecatedFunction">Function '[1]' is deprecated</string>
+	<string name="LuauLintSlCompoundAssign">Luau's [2]= says this once: [1] [2]= ...</string>
+	<string name="LuauLintSlNumberTruth">[1] is a number, and Luau counts every number true, 0 too: [1] ~= 0 asks whether it is not 0</string>
+	<string name="LuauLintSlNumberTruthNot">not [1] is always false: [1] is a number, and Luau counts every number true, 0 too. [1] == 0 asks whether it is 0</string>
+	<string name="LuauLintSlNilSentinel">[1] == [4] never holds: [2] answers [3] where it finds nothing, not [4]. [1] == [3] asks whether it found nothing</string>
+	<string name="LuauLintSlNilSentinelAlways">[1] ~= [4] always holds: [2] answers [3] where it finds nothing, not [4]. [1] ~= [3] asks whether it found something</string>
+	<string name="LuauLintSlNilSentinelOrder">Comparing [1] with a number is an error where [2] finds nothing: it answers nil there, not -1. [1] [5] asks the same</string>
+	<string name="LuauLintSlTableCompare">[1] == {} is always false: {} is a new table, equal to no other. [2] asks whether [1] is empty</string>
+	<string name="LuauLintSlTableCompareAlways">[1] ~= {} is always true: {} is a new table, equal to no other. [2] asks whether [1] has anything in it</string>
+	<string name="LuauLintSlTableCompareItems">[1] can never equal a table built where it is compared: a new table is equal to no other. LSL compared lists by their lengths alone, which #[1] gives</string>
+	<string name="LuauLintSlZeroIndex">[1][0] is nothing: Luau's lists count from 1, where LSL's counted from 0. [1][1] is the first</string>
+	<string name="LuauLintSlZeroIndexLoop">This loop counts from 0 to [1] - 1, as LSL's lists did, but Luau's count from 1: [2] reads nothing at 0 and never the last. for [3] = 1, [1] counts as Luau does</string>
+	<string name="LuauLintSlZeroIndexSub">[1] counts from 1 and takes 0 as 1, so it ends a character sooner than LSL's llGetSubString with the same numbers</string>
+	<string name="LuauLintSlZeroIndexArg">[1] counts from 1 in SLua, as Luau does: its first is 1, not 0</string>
+	<string name="LuauLintSlZeroIndexFound">[1] is never 0: [2] answers from 1, where LSL's answered from 0, so its first is 1</string>
+	<string name="LuauLintSlCompatCall">[1] is LSL's, kept for scripts moved from it; ll's means the same here: [2]</string>
+	<string name="LuauLintSlBooleanNumber">[1] == [2] never holds: [1] is true or false, never a number as LSL's truths were</string>
+	<string name="LuauLintSlBooleanNumberAlways">[1] ~= [2] always holds: [1] is true or false, never a number as LSL's truths were</string>
+	<string name="LuauLintSlBooleanNumberChoice">[1] asks no more than [2]: its 1 or 0 is made only to be compared</string>
+	<string name="LuauLintSlGlobalAssign">This makes [1] a global. A local is quicker for Luau to read</string>
+	<string name="LuauLintSlGlobalFunction">function [1] makes a global. local function [1] is quicker for Luau to call</string>
+	<string name="LuauLintSlForIndexAssign">[1] is set here, but the for gives [1] its own next value each time round, whatever it was set to: LSL's for went on from it. A while loop does</string>
+	<string name="LuauLintSlGlobalInFunction">[1] is made a global inside a function. A local of the script's, declared before the first function that names it, is shared the same and quicker for Luau to read</string>
+	<string name="LuauLintSlGlobalFunctionInScope">function [1] here makes a global, and only once this runs. local function [1] keeps it to this block</string>
+	<string name="LuauLintSlParenCondition">Luau's [1] needs no brackets round its condition, where LSL's did</string>
+	<string name="LuauLintSlAlmostSwapped">[1] = [2] and then [2] = [1] leave both [2]: a swap is [3]</string>
+	<string name="LuauLintSlMustUse">[1] changes nothing and only answers, and nothing reads its answer here</string>
+	<string name="LuauLintSlGeneralizedFor">Luau's for walks a table given as it is: in [1] says what in [2] says</string>
+	<string name="LuauLintSlGeneralizedForList">Luau's for walks a table given as it is: in [1] walks a list as in [2] does, where the list has no gaps</string>
+	<string name="LuauLintSlEmptyBlock">This [1]'s block is empty: it does nothing</string>
+	<string name="LuauLintSlIndexDivision">[1] may be a fraction, which a list has nothing at: Luau's / divides as floats do, where LSL's integers divided whole. [2] rounds down</string>
+	<string name="LuauLintSlVectorProduct">[1] multiplies each part of two vectors, and gives a vector: LSL's * of two vectors was their dot product, a number. vector.dot([2], [3]) is LSL's</string>
+	<string name="LuauLintSlVectorCross">[1] is each part's remainder in SLua: LSL's % of two vectors was their cross product. vector.cross([2], [3]) is LSL's</string>
+	<string name="LuauLintSlSleepingCall">[1] makes the script sleep [2] s each call; [3] does the same without the sleep</string>
+	<string name="LuauLintSlSleepingCallOften">[1] makes the script sleep [2] s each time it runs here, in a loop or a timer; [3] does the same without the sleep</string>
+	<string name="LuauLintSlSleepingTexture">[1] makes the script sleep [2] s each call; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LuauLintSlSleepingTextureOften">[1] makes the script sleep [2] s each time it runs here, in a loop or a timer; [3] sets a face's texture with no sleep, given its repeats, offsets and rotation too</string>
+	<string name="LuauLintSlMergeablePrimParams">These [1] calls to [2] could be one, with all their rules, and PRIM_LINK_TARGET where the link changes</string>
+	<string name="LuauLintSlCostlyListen">This listens on channel 0 for anyone, so the script wakes for every line of chat nearby. A name, a key, or another channel hears less</string>
+	<string name="LuauLintSlFastTimer">A timer every [1] s, under a tenth of a second, fires every few of the region's 45 frames a second, and the time it takes is time other scripts there wait for</string>
+	<string name="LuauLintSlFastSensor">A sensor sweeping every [1] s, under a second, searches round the object that often: once a second or less is plenty for most</string>
+	<string name="LuauLintSlStringBuild">[1] is joined to with .. in a loop, which makes a new string each time round. SLua's way is to put the pieces in a table and join them once, with table.concat</string>
+	<string name="LuauLintSlRepeatedCall">[1] is called [2] times here, and answers the same each time: a local set once holds it</string>
 	<string name="LuauUnexpectedDidYouMean">Unexpected '[1]'; did you mean '[2]'?</string>
 	<string name="LuauUnknownGlobalAssign">Unknown global '[1]'; consider assigning to it first</string>
 	<string name="LuauUnknownType">Unknown type '[1]'</string>
@@ -839,6 +974,57 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="LuauFailsAtRuntimeIn">in the function '[1]', 'the argument '[2]' is used in a way that will error at runtime</string>
 	<string name="LuauFailsAtRuntime">the argument '[1]' is used in a way that will error at runtime</string>
 
+	<!-- What the LSL to SLua converter notes where the two languages differ
+	     (allsltoslua.cpp): in a comment marked LSL over the line, and at the
+	     LSL's place. [1], [2], [3] are names, the definitions' own words, or code -->
+	<string name="SluaSharedAssigned">set where the assignment's value is used</string>
+	<string name="SluaSharedCalled">read where a call of the script's in the same statement changes it</string>
+	<string name="SluaSharedHeld">given a list another may hold</string>
+	<string name="SluaSharedGiven">given to another variable</string>
+	<string name="SluaSharedReturned">returned by a function</string>
+	<string name="SluaSharedKept">passed to a function of the script's that keeps it</string>
+	<string name="SluaKeyText">LSL's keys held any text; SLua's uuid() stops the script on text that is no UUID, as it would here, where only a uuid will do.</string>
+	<string name="SluaUuidText">uuid() stops the script on text that is no UUID, where LSL's keys held any text; touuid() answers nil instead.</string>
+	<string name="SluaDetectedTable">detected[n] is what LSL read with llDetected*(n - 1): SLua counts it from 1, and one past its end is an error, where LSL answered nothing.</string>
+	<string name="SluaMathDomain">math.sqrt, math.log and math.log10 answer nan or -inf out of their range, where LSL answered 0 or stopped with a math error.</string>
+	<string name="SluaAbsent">SLua has no [1], in ll or in llcompat: it is left out.</string>
+	<string name="SluaUse">SLua would use [1] for [2].</string>
+	<string name="SluaCompatOnlyTimer">SLua's ll has no SetTimerEvent; llcompat's is LSL's. SLua's own timers are LLTimers:every(seconds, callback) and LLTimers:once, several at a time.</string>
+	<string name="SluaCompatOnly">SLua's ll has no [1]; llcompat.[1] is LSL's.</string>
+	<string name="SluaDetected">llcompat.Detected* count from 0, as LSL's did. SLua's own way is the handler's detected table: detected[n + 1]:getKey(), :getName(), :getPos() and the rest.</string>
+	<string name="SluaDeprecatedForWhy">SLua deprecates ll.[1], for [2]: [3]</string>
+	<string name="SluaDeprecatedFor">SLua deprecates ll.[1], for [2].</string>
+	<string name="SluaDeprecatedWhy">SLua deprecates ll.[1]: [2]</string>
+	<string name="SluaDeprecated">SLua deprecates ll.[1].</string>
+	<string name="SluaIndexFound">llcompat.[1] counts from 0 and says -1 for none, as LSL did; ll.[1] counts from 1 and says nil.</string>
+	<string name="SluaIndex">llcompat.[1] takes indexes from 0, as LSL did; ll.[1] takes them from 1.</string>
+	<string name="SluaBool">llcompat.[1] answers 1 or 0, as LSL did; ll.[1] answers true or false.</string>
+	<string name="SluaBoolList">llcompat.[1]'s list has 1 or 0 where LSL's did; ll.[1]'s has true or false there.</string>
+	<string name="SluaRightFirst">LSL ran the right side of this before the left, and Luau runs the left first: one side changes what the other reads.</string>
+	<string name="SluaBit32">bit32 answers 0 to 4294967295; LSL's integers were signed, from -2147483648.</string>
+	<string name="SluaIntegerDivision">// rounds down, and LSL's integer / rounded toward zero: they differ where the answer is negative.</string>
+	<string name="SluaModulo">Luau's % takes the divisor's sign, and LSL's took the dividend's: they differ where one is negative.</string>
+	<string name="SluaListCompare">LSL compares lists by their lengths alone, and != answers the difference of them.</string>
+	<string name="SluaShortCircuit">[1] leaves its right side unrun once the left decides it; LSL ran both sides, the right one first.</string>
+	<string name="SluaUuid">SLua's uuid holds a key; LSL's key could hold any text.</string>
+	<string name="SluaAssignInExpression">SLua's assignments are statements: this one is made by a function called where it stood.</string>
+	<string name="SluaStringBuild">[1] is built with .. in a loop, which makes a new string each time. SLua's way is to put the pieces in a table and join them once, with table.concat.</string>
+	<string name="SluaMemoryHack">([1] = [2]) + [1] spared LSO's memory, clearing [1] once LSL, going right to left, had read it. Luau goes left to right and needs no such thing: the clearing is left out.</string>
+	<string name="SluaStateSame">a change to the state the script is in; a script of one state has no other to go to.</string>
+	<string name="SluaJump">jump [1]: SLua has no goto, and this jump is neither out of a loop nor to its next turn. Rewrite it.</string>
+	<string name="SluaListCopy">LSL's lists were values, and [1] is [2], so each + makes a new list of it, as LSL did. Where nothing else holds it, table.insert([1], x) grows it in place.</string>
+	<string name="SluaStateExit">state_exit runs as a script leaves a state, and this one has no other: it never ran.</string>
+	<string name="SluaTimer">the timer event, set going by llcompat.SetTimerEvent; LLTimers:every is SLua's own.</string>
+	<string name="SluaStates">LSL let go of a state's listens, sensor repeats and targets as it left the state; setState does not. Remove them yourself where the script relied on it.</string>
+	<string name="SluaTimers">SLua's LLTimers can run several timers at once: LLTimers:every(seconds, callback), LLTimers:once(seconds, callback) and LLTimers:off(timer).</string>
+	<string name="SluaTimerStates">the timer event, set going by llcompat.SetTimerEvent, keeps going from state to state, as LSL's did; LLTimers:every is SLua's own.</string>
+	<string name="SluaHeader">Written from LSL by Script Studio. Each "-- LSL:" comment marks a place where
+SLua means something else than LSL did, or has a way of its own: read it, then
+delete it. LSL's integers wrapped at 32 bits and its floats were single
+precision; SLua's numbers are doubles, which do neither.</string>
+	<string name="SluaHeaderPlain">Written from LSL by Script Studio. LSL's integers wrapped at 32 bits and its
+floats were single precision; SLua's numbers are doubles, which do neither.</string>
+
 	<!-- What the script workspace says when a load, a save or a queue
 	     cannot go ahead (alscriptworkspace.cpp), and the analyzers when
 	     their definitions are missing (alscriptanalysis.cpp) -->
@@ -851,22 +1037,22 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="WorkspaceAssetUnreadable">the asset could not be read</string>
 	<string name="WorkspaceNotecardUnreadable">the notecard could not be read</string>
 	<string name="WorkspaceNotecardUnwritable">the notecard could not be written</string>
-	<string name="WorkspaceNotecardTooLarge">the notecard's text is [SIZE] bytes, and a notecard may hold at most [LIMIT]: past that, no viewer could open it again</string>
+	<string name="WorkspaceNotecardTooLarge">the notecard text is [SIZE] bytes and the limit is [LIMIT] bytes; a larger notecard cannot be opened again</string>
 	<string name="WorkspaceUploadFailed">the upload failed</string>
-	<string name="WorkspaceScriptTooLarge">the script is [SIZE] bytes, and a script may be at most [LIMIT]</string>
-	<string name="WorkspaceNoRegion">no region</string>
+	<string name="WorkspaceScriptTooLarge">the script is [SIZE] bytes and the limit is [LIMIT] bytes</string>
+	<string name="WorkspaceNoRegion">not connected to a region</string>
 	<string name="WorkspaceRegionCannotUpdateScripts">the region cannot update scripts</string>
 	<string name="WorkspaceTransferFolder">Passed between objects</string>
 	<string name="WorkspaceTransferNoFolder">no folder could be made in the trash for what passes between the objects</string>
-	<string name="WorkspaceExperienceUnknown">the region did not say what experience the script runs under, and a save that did not say it would take it away</string>
+	<string name="WorkspaceExperienceUnknown">the region did not say which experience the script uses, and saving without it would remove the script from that experience</string>
 	<string name="WorkspaceRegionCannotUpdateNotecards">the region cannot update notecards</string>
 	<string name="WorkspaceRegionCannotMakeNotecard">the region cannot make a notecard in an object</string>
 	<string name="WorkspaceNameNeeded">a name is needed</string>
-	<string name="WorkspaceObjectNotModifiable">the object may not be changed</string>
-	<string name="WorkspaceNoTrash">no trash folder</string>
+	<string name="WorkspaceObjectNotModifiable">you do not have permission to modify the object</string>
+	<string name="WorkspaceNoTrash">no Trash folder</string>
 	<string name="WorkspaceNothingToDo">nothing to do</string>
 	<string name="WorkspaceQueueCannotOpen">the queue could not be opened</string>
-	<string name="WorkspaceQueueWouldNotStart">the queue would not start</string>
+	<string name="WorkspaceQueueWouldNotStart">the queue could not start</string>
 	<string name="AnalysisNoLuauDefinitions">No Luau definitions at [PATH]</string>
 	<string name="AnalysisNoLSLBuiltins">No LSL builtins</string>
 
@@ -886,6 +1072,18 @@ If you feel this is an error, please contact support@secondlife.com</string>
 	<string name="XUIEditAlreadyCarries">the element already carries [NAME]</string>
 	<string name="XUIEditSameName">that is the name it has</string>
 	<string name="XUIEditWouldCrossEdge">[NAME] would cross the edge it is measured from, which moves the element to the other side of its parent rather than by [COUNT] pixels</string>
+
+	<!-- A notecard's items, as buttons in its text, and a notecard full, in
+	     the notecard window and in Script Studio (alnotecardembedded.cpp) -->
+	<string name="EmbeddedItemOpenTip">[NAME], embedded in the notecard: click to open it</string>
+	<string name="EmbeddedItemPlayTip">[NAME], embedded in the notecard: click to play it and copy it to your inventory</string>
+	<string name="EmbeddedItemCopyTip">[NAME], embedded in the notecard: click to copy it to your inventory</string>
+	<string name="NotecardReadOnlyDrop">This notecard cannot be changed</string>
+	<string name="NotecardDropNoCopy">You cannot copy this item, so it cannot be added to the notecard</string>
+	<string name="NotecardCopyUnsaved">Save the notecard first: [NAME] can only be copied from a saved notecard</string>
+	<string name="NotecardCopyFailed">[NAME] could not be copied: not connected to a region</string>
+	<string name="NotecardCopyRefused">[NAME] could not be copied: [ERROR]</string>
+	<string name="NotecardFull">[NAME] is full: a notecard holds at most [LIMIT] bytes</string>
 
 	<!-- ToolTips for notecards -->
 	<string name="TooltipNotecardNotAllowedTypeDrop">
@@ -3265,9 +3463,6 @@ If you continue to receive this message, please contact Second Life support for 
 	<string name="CompileSuccessful">Compile successful!</string>
 	<string name="CompileSuccessfulSaving">Compile successful, saving...</string>
 	<string name="SaveComplete">Save complete.</string>
-	<string name="UploadFailed">File upload failed: </string>
-	<string name="ObjectOutOfRange">Script (object out of range)</string>
-	<string name="ScriptWasDeleted">Script (deleted from inventory)</string>
 	
 	<!-- god tools -->
 	<string name="GodToolsObjectOwnedBy">Object [OBJECT] owned by [OWNER]</string>
@@ -3390,7 +3585,6 @@ If you continue to receive this message, please contact Second Life support for 
     <string name="ATTACH_HIND_RFOOT">Right Hind Foot</string>
 
 	<!-- script editor -->
-	<string name="CursorPos">Line [LINE], Column [COLUMN]</string>
 
 	<!-- panel dir browser -->
 	<string name="PanelDirCountFound">[COUNT] found</string>
@@ -4649,7 +4843,7 @@ Try enclosing path to the editor with double quotes.
  <string name="ExternalEditorCommandParseError">Error parsing the external editor command.</string>
  <string name="ExternalEditorFailedToRun">External editor failed to run.</string>
  <string name="ExternalEditorFailedToStart">Failed to start the WebSocket server. Ensure the ExternalWebsocketSyncEnable setting is on.</string>
- <string name="VSCodeLaunchFailed">Failed to launch VS Code. Ensure the 'code' command is available on your PATH.</string>
+ <string name="VSCodeLaunchFailed">Could not start VS Code. Make sure the 'code' command is on your PATH.</string>
 
  <!--  Machine translation of chat messahes -->
  <string name="TranslationFailed">Translation failed: [REASON]</string>
@@ -4828,6 +5022,7 @@ name="Command_360_Capture_Label">360 snapshot</string>
   <string name="Command_Report_Abuse_Label">Report Abuse</string>
   <string name="Command_SceneExplorer_Label">Scene Explorer</string>
   <string name="Command_Scripts_Label">My Scripts</string>
+  <string name="Command_ScriptStudio_Label">Script Studio</string>
   <string name="Command_Stats_Label">Statistics</string>
   <string name="Command_Search_Label">Search</string>
   <string name="Command_Snapshot_Label">Snapshot</string>
@@ -4873,6 +5068,7 @@ name="Command_360_Capture_Label">360 snapshot</string>
   <string name="Command_Report_Abuse_Tooltip">Report Abuse</string>
   <string name="Command_SceneExplorer_Tooltip">Browse and filter everything in the region</string>
   <string name="Command_Scripts_Tooltip">Scripts attached to your avatar</string>
+  <string name="Command_ScriptStudio_Tooltip">Write, check and save scripts</string>
   <string name="Command_Stats_Tooltip">Statistics like FPS, network usage and sim performance</string>
   <string name="Command_Search_Tooltip">Find places, events, people</string>
   <string name="Command_Snapshot_Tooltip">Open the snapshot floater</string>

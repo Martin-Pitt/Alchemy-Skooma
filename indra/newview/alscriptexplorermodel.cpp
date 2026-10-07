@@ -212,7 +212,7 @@ void ALScriptExplorerModel::openWhenListed(const LLUUID& prim, const LLUUID& ite
     mOpenWhenListed.push_back(OpenWhenListed{ prim, item, name, std::move(text) });
 }
 
-ALScriptExplorerModel::Heard ALScriptExplorerModel::contents(const ALScriptWorkspace::Contents& contents)
+ALScriptExplorerModel::Heard ALScriptExplorerModel::contents(const ALScriptContents& contents)
 {
     Heard      heard;
     const auto at = mPrimAt.find(contents.prim);
@@ -450,7 +450,7 @@ std::vector<ALScriptExplorerModel::Row> ALScriptExplorerModel::rows(const std::s
     return out;
 }
 
-std::optional<ALScriptWorkspace::Item> ALScriptExplorerModel::itemAt(const ALScriptRef& ref) const
+std::optional<ALScriptContents::Item> ALScriptExplorerModel::itemAt(const ALScriptRef& ref) const
 {
     for (const Item& item : mIndex.items(ref.object))
     {
@@ -629,6 +629,74 @@ LLUUID ALScriptExplorerModel::primOf(const LLSD& row)
         return LLUUID::null;
     }
     return row.has("prim") ? row["prim"].asUUID() : row["root"].asUUID();
+}
+
+// --- comparing -----------------------------------------------------------------
+
+// static
+std::optional<std::pair<ALScriptExplorerModel::Choice, ALScriptExplorerModel::Choice>> ALScriptExplorerModel::comparing(
+    const std::vector<Choice>& rows)
+{
+    if (rows.size() != 2 || !rows[0].isItem() || !rows[1].isItem() || rows[0].script != rows[1].script || rows[0].ref() == rows[1].ref())
+    {
+        return std::nullopt;
+    }
+    return std::make_pair(rows[0], rows[1]);
+}
+
+std::vector<ALScriptExplorerModel::Choice> ALScriptExplorerModel::comparableWith(const Choice& row) const
+{
+    std::vector<Choice> out;
+    if (!row.isItem())
+    {
+        return out;
+    }
+    for (const Object& object : mObjects)
+    {
+        for (const Prim& prim : object.prims)
+        {
+            for (const Item& item : mIndex.items(prim.id))
+            {
+                if (item.script != row.script || (prim.id == row.prim && item.id == row.item))
+                {
+                    continue;
+                }
+                Choice one;
+                one.root   = object.root;
+                one.prim   = prim.id;
+                one.item   = item.id;
+                one.name   = item.name;
+                one.script = item.script;
+                one.lua    = item.lua;
+                out.push_back(std::move(one));
+            }
+        }
+    }
+    // A copy of the same script is what is usually looked for.
+    std::stable_partition(out.begin(), out.end(), [&row](const Choice& one) { return one.name == row.name; });
+    return out;
+}
+
+std::string ALScriptExplorerModel::placeOf(const Choice& row) const
+{
+    const Object* object = objectAt(row.root);
+    if (!object)
+    {
+        return std::string();
+    }
+    std::string place = object->name;
+    if (row.prim.notNull() && row.prim != row.root)
+    {
+        for (const Prim& prim : object->prims)
+        {
+            if (prim.id == row.prim && !prim.name.empty())
+            {
+                place += " \xE2\x96\xB8 " + prim.name;
+                break;
+            }
+        }
+    }
+    return place;
 }
 
 // --- pins --------------------------------------------------------------------------

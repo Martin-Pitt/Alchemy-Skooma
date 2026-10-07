@@ -17,6 +17,7 @@ target_sources(
     allslconsts.cpp
     allslcosts.cpp
     allsleffects.cpp
+    allsllintpass.cpp
     allslinliner.cpp
     almessagemap.cpp
     allsloptimizer.cpp
@@ -25,16 +26,19 @@ target_sources(
     alluauservice.cpp
     allslexports.cpp
     allslservice.cpp
+    allsltoslua.cpp
     allsltraits.cpp
     allslvalues.cpp
     alpreprocessor.cpp
     alscriptenvelope.cpp
     alscriptfixes.cpp
     alscriptformatter.cpp
+    alscriptlexicon.cpp
+    alscriptlintpass.cpp
     alscriptmessages.cpp
     alscriptnameindex.cpp
     alscriptsnapshot.cpp
-    alscriptrecovery.cpp
+    alnotecardformat.cpp
     alscriptweight.cpp
     alscriptstack.cpp
     alscripttempfiles.cpp
@@ -56,15 +60,19 @@ target_sources(
         allslconsts.h
         allslcosts.h
         allsleffects.h
+        allsllintpass.h
         allslinliner.h
         almessagemap.h
         allsloptimizer.h
         allsltraits.inc
+        allsluuids.inc
+        allsleventtext.inc
         alluauconfig.h
         alluauexports.h
         alluauservice.h
         allslexports.h
         allslservice.h
+        allsltoslua.h
         allsltraits.h
         allslvalues.h
         alpreprocessor.h
@@ -73,10 +81,13 @@ target_sources(
         alscriptfixes.h
         alscriptformatter.h
         alscriptjoblane.h
+        alscriptlexicon.h
+        alscriptlintpass.h
         alscriptmessages.h
         alscriptnameindex.h
         alscriptsnapshot.h
-        alscriptrecovery.h
+        alscriptspan.h
+        alnotecardformat.h
         alscriptproblem.h
         alscriptstack.h
         alscriptsymbol.h
@@ -96,17 +107,22 @@ if(AL_BUILD_TESTS)
   # the lsl-definitions port ships.
   find_package(unofficial-lsl-definitions CONFIG REQUIRED)
   set(definitions_defines "AL_LSL_DEFINITIONS_DIR=\"${LSL_DEFINITIONS_DIR}\"")
+  # The templates Script Studio offers for a new script, which must check.
+  set(
+    templates_define
+    "AL_SCRIPT_TEMPLATES_DIR=\"${INDRA_SOURCE_DIR}/newview/app_settings/script_templates\""
+  )
   al_add_test(
     alluauservice
     PROJECT alscript
     LIBRARIES alscript llcommon
-    DEFINES ${definitions_defines}
+    DEFINES ${definitions_defines} ${templates_define}
   )
   al_add_test(
     allslservice
     PROJECT alscript
     LIBRARIES alscript llcommon
-    DEFINES ${definitions_defines}
+    DEFINES ${definitions_defines} ${templates_define}
   )
   # Each fix made over a real check, applied, and the text checked again.
   al_add_test(
@@ -115,9 +131,17 @@ if(AL_BUILD_TESTS)
     LIBRARIES alscript llcommon
     DEFINES ${definitions_defines}
   )
-  # The SLua checks again with Luau's new type solver, which a scripter may
-  # choose (ALScriptLuauSolver): the same tests, told by the environment.
-  foreach(test alluauservice alscriptfixes)
+  # The studio's own lints, each over real checks, with its fix made.
+  al_add_test(
+    alscriptlintpass
+    PROJECT alscript
+    LIBRARIES alscript llcommon
+    DEFINES ${definitions_defines}
+  )
+  # The SLua checks, and LSL written again as SLua, again with Luau's new
+  # type solver, which a scripter may choose (ALScriptLuauSolver): the same
+  # tests, told by the environment.
+  foreach(test alluauservice alscriptfixes alscriptlintpass allsltoslua)
     add_test(
       NAME INTEGRATION_TEST_RUNNER_${test}_newsolver
       COMMAND $<TARGET_FILE:INTEGRATION_TEST_${test}>
@@ -154,8 +178,9 @@ if(AL_BUILD_TESTS)
   al_add_test(almessagemap PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alluauconfig PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptformatter PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alscriptlexicon PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscriptmessages PROJECT alscript LIBRARIES alscript llcommon)
-  al_add_test(alscriptrecovery PROJECT alscript LIBRARIES alscript llcommon)
+  al_add_test(alnotecardformat PROJECT alscript LIBRARIES alscript llcommon)
   al_add_test(alscripttempfiles PROJECT alscript LIBRARIES alscript llcommon)
   # The preprocessor against C11's 6.10, clause by clause.
   al_add_test(alpreprocessorc11 PROJECT alscript LIBRARIES alscript llcommon)
@@ -186,6 +211,15 @@ if(AL_BUILD_TESTS)
   # grid's builtins loaded.
   al_add_test(
     allsloptimizer
+    PROJECT alscript
+    LIBRARIES alscript llcommon
+    DEFINES ${definitions_defines} "AL_ALSCRIPT_TEST_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\""
+  )
+  # LSL written again as SLua, each result checked as SLua against the
+  # grid's definitions; and Tailslide's own test scripts under
+  # tests/tailslide/, for their breadth.
+  al_add_test(
+    allsltoslua
     PROJECT alscript
     LIBRARIES alscript llcommon
     DEFINES ${definitions_defines} "AL_ALSCRIPT_TEST_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\""

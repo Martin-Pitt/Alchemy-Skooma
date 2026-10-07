@@ -30,17 +30,21 @@
 #include "lldate.h"
 #include "llhudobject.h"
 #include "llhudtext.h"
+#include "llmaniptranslate.h"
 #include "llrender.h"
 #include "llregionhandle.h"
 #include "llfocusmgr.h"
+#include "llselectmgr.h"
 #include "lltoolfocus.h"
 #include "lltoolmgr.h"
+#include "lltoolselect.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
 #include "llworld.h"
 #include "sknavmesh.h"
+#include "sknavmarkobjects.h"
 #include "sknavoverlay.h"
 #include "sknavrooms.h"
 
@@ -49,36 +53,6 @@
 namespace
 {
     using namespace sknav;
-
-    LLColor4 typeColor(MarkType type)
-    {
-        switch (type)
-        {
-            case MarkType::MISSED_OPENING: return LLColor4(0.2f, 1.f, 0.3f, 1.f);
-            case MarkType::WRONG: return LLColor4(1.f, 0.2f, 0.2f, 1.f);
-            case MarkType::DOOR: return LLColor4(0.8f, 0.4f, 0.2f, 1.f);
-            case MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
-            case MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
-            case MarkType::RAMP: return LLColor4(0.3f, 0.5f, 0.9f, 1.f);
-            case MarkType::LADDER: return LLColor4(1.f, 1.f, 0.3f, 1.f);
-            case MarkType::ELEVATOR: return LLColor4(0.7f, 0.5f, 1.f, 1.f);
-            case MarkType::LEDGE: return LLColor4(1.f, 0.45f, 0.45f, 1.f);
-            case MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
-            case MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
-            case MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
-            case MarkType::STREET: return LLColor4(0.75f, 0.75f, 0.75f, 1.f);
-            case MarkType::BRIDGE: return LLColor4(0.8f, 0.6f, 0.4f, 1.f);
-            case MarkType::BALCONY: return LLColor4(1.f, 0.8f, 0.6f, 1.f);
-            case MarkType::COURTYARD: return LLColor4(0.6f, 0.9f, 0.7f, 1.f);
-            case MarkType::WATER_BODY: return LLColor4(0.2f, 0.5f, 1.f, 1.f);
-            case MarkType::WALKABLE: return LLColor4(0.1f, 0.9f, 0.6f, 1.f);
-            case MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
-            case MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
-            case MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
-            case MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
-            default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
-        }
-    }
 
     LLVector3 agentOf(const LLVector3d& global)
     {
@@ -115,6 +89,33 @@ namespace
                 break;
             default:
                 break;
+        }
+    }
+
+    // The extra a stair draws over its line: the flight as treads between
+    // rails with portal bars at the ends, and a ray and bar for each way up
+    // beyond the line's own end. The prims carry the line itself; this is
+    // what the line alone does not say.
+    void drawStairExtras(SKNavOverlayGeom& geom, const Mark& mark, const LLColor4& color)
+    {
+        const std::vector<LLVector3d> path = mark.path();
+        if (path.size() < 2)
+        {
+            return;
+        }
+        std::vector<LLVector3> run;
+        run.reserve(path.size());
+        for (const LLVector3d& v : path)
+        {
+            run.push_back(agentOf(v));
+        }
+        skDrawStairGlyph(geom, run, 1.2f, color, 0.06f);
+        const LLVector3 foot = run.front();
+        for (const LLVector3d& exit : mark.mExits)
+        {
+            const LLVector3 at = agentOf(exit);
+            geom.edge(foot, at, color);
+            skDrawStairBar(geom, at, at - foot, 1.2f, color);
         }
     }
 
@@ -229,6 +230,36 @@ namespace
         {
             cross(geom, a, 0.3f, color);
         }
+    }
+}
+
+LLColor4 skNavMarkColor(sknav::MarkType type)
+{
+    switch (type)
+    {
+        case sknav::MarkType::MISSED_OPENING: return LLColor4(0.2f, 1.f, 0.3f, 1.f);
+        case sknav::MarkType::WRONG: return LLColor4(1.f, 0.2f, 0.2f, 1.f);
+        case sknav::MarkType::DOOR: return LLColor4(0.8f, 0.4f, 0.2f, 1.f);
+        case sknav::MarkType::WINDOW: return LLColor4(0.4f, 1.f, 1.f, 1.f);
+        case sknav::MarkType::STAIR: return LLColor4(0.3f, 0.7f, 1.f, 1.f);
+        case sknav::MarkType::RAMP: return LLColor4(0.3f, 0.5f, 0.9f, 1.f);
+        case sknav::MarkType::LADDER: return LLColor4(1.f, 1.f, 0.3f, 1.f);
+        case sknav::MarkType::ELEVATOR: return LLColor4(0.7f, 0.5f, 1.f, 1.f);
+        case sknav::MarkType::LEDGE: return LLColor4(1.f, 0.45f, 0.45f, 1.f);
+        case sknav::MarkType::INDOOR: return LLColor4(0.9f, 0.8f, 0.5f, 1.f);
+        case sknav::MarkType::SHELTERED: return LLColor4(0.6f, 0.6f, 1.f, 1.f);
+        case sknav::MarkType::OUTDOOR: return LLColor4(0.5f, 0.9f, 0.5f, 1.f);
+        case sknav::MarkType::STREET: return LLColor4(0.75f, 0.75f, 0.75f, 1.f);
+        case sknav::MarkType::BRIDGE: return LLColor4(0.8f, 0.6f, 0.4f, 1.f);
+        case sknav::MarkType::BALCONY: return LLColor4(1.f, 0.8f, 0.6f, 1.f);
+        case sknav::MarkType::COURTYARD: return LLColor4(0.6f, 0.9f, 0.7f, 1.f);
+        case sknav::MarkType::WATER_BODY: return LLColor4(0.2f, 0.5f, 1.f, 1.f);
+        case sknav::MarkType::WALKABLE: return LLColor4(0.1f, 0.9f, 0.6f, 1.f);
+        case sknav::MarkType::NOT_WALKABLE: return LLColor4(0.9f, 0.1f, 0.5f, 1.f);
+        case sknav::MarkType::MERGE: return LLColor4(1.f, 0.6f, 0.1f, 1.f);
+        case sknav::MarkType::SPLIT: return LLColor4(1.f, 0.3f, 0.9f, 1.f);
+        case sknav::MarkType::CROSS: return LLColor4(1.f, 0.15f, 0.1f, 1.f);
+        default: return LLColor4(0.9f, 0.9f, 0.9f, 1.f);
     }
 }
 
@@ -478,15 +509,7 @@ void SKNavAnnotator::remove(U32 id)
         {
             mSelected = 0;
         }
-        touch();
-    }
-}
-
-void SKNavAnnotator::select(U32 id)
-{
-    if (id != mSelected)
-    {
-        mSelected = id;
+        SKNavMarkObjects::instance().despawnMark(id);
         touch();
     }
 }
@@ -496,6 +519,196 @@ void SKNavAnnotator::clear()
     mMarks.clear();
     mPending = Mark();
     mSelected = 0;
+    mFollowProxySelection = false;
+    mExitPick = false;
+    mExitPickArmed = false;
+    SKNavMarkObjects::instance().despawnAll();
+    touch();
+}
+
+bool SKNavAnnotator::selectionHasProxy() const
+{
+    if (!SKNavMarkObjects::instanceExists())
+    {
+        return false;
+    }
+    SKNavMarkObjects& bodies = SKNavMarkObjects::instance();
+    for (LLObjectSelection::iterator iter = LLSelectMgr::getInstance()->getSelection()->begin();
+         iter != LLSelectMgr::getInstance()->getSelection()->end(); ++iter)
+    {
+        LLViewerObject* object = (*iter)->getObject();
+        if (object && bodies.isMarkProxy(object))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavAnnotator::syncSelection()
+{
+    if (!SKNavMarkObjects::instanceExists())
+    {
+        return;
+    }
+    SKNavMarkObjects& bodies = SKNavMarkObjects::instance();
+    U32 from_objects = 0;
+    for (LLObjectSelection::iterator iter = LLSelectMgr::getInstance()->getSelection()->begin();
+         iter != LLSelectMgr::getInstance()->getSelection()->end(); ++iter)
+    {
+        LLViewerObject* object = (*iter)->getObject();
+        if (object && bodies.isMarkProxy(object))
+        {
+            from_objects = bodies.markIdOf(object);
+            break;
+        }
+    }
+    if (from_objects)
+    {
+        mFollowProxySelection = true;
+        if (mSelected != from_objects)
+        {
+            mSelected = from_objects;
+            touch();
+        }
+    }
+    else if (mFollowProxySelection && mSelected)
+    {
+        mSelected = 0;
+        mFollowProxySelection = false;
+        touch();
+    }
+}
+
+void SKNavAnnotator::select(U32 id)
+{
+    if (mSelected == id && !mFollowProxySelection && (id == 0 || !selectionHasProxy()))
+    {
+        return;
+    }
+    mSelected = id;
+    mFollowProxySelection = false;
+    mExitPick = false;
+    // The body follows the list: a mark picked there selects its object,
+    // so the highlight and the gizmos come with it.
+    LLViewerObject* root = id && SKNavMarkObjects::instanceExists() ? SKNavMarkObjects::instance().rootProxy(id) : nullptr;
+    if (root)
+    {
+        LLSelectMgr::getInstance()->deselectAll();
+        LLSelectMgr::getInstance()->selectObjectAndFamily(root, false, true);
+    }
+    else if (id == 0)
+    {
+        LLSelectMgr::getInstance()->deselectAll();
+    }
+    touch();
+}
+
+void SKNavAnnotator::armExitPick()
+{
+    Mark* mark = mMarks.find(mSelected);
+    if (!mark || mark->mType != MarkType::STAIR || !mark->complete())
+    {
+        return;
+    }
+    // The click has to reach our tool for the exit to land, so a floater
+    // used without placing first brings the tool up, and puts it away when
+    // the exit is picked or let go.
+    mExitPickArmed = mArmed;
+    if (!mArmed)
+    {
+        arm(true);
+    }
+    mExitPick = true;
+    touch();
+}
+
+void SKNavAnnotator::cancelExitPick()
+{
+    if (mExitPick)
+    {
+        mExitPick = false;
+        if (!mExitPickArmed)
+        {
+            arm(false);
+        }
+        touch();
+    }
+}
+
+void SKNavAnnotator::addExit(const LLVector3d& at)
+{
+    mExitPick = false;
+    Mark* mark = mMarks.find(mSelected);
+    if (!mark || mark->mType != MarkType::STAIR || !mark->complete())
+    {
+        if (!mExitPickArmed)
+        {
+            arm(false);
+        }
+        return;
+    }
+    if (!mExitPickArmed)
+    {
+        arm(false);
+    }
+    mark->mExits.push_back(at);
+    touch();
+}
+
+void SKNavAnnotator::setSpiral(bool on)
+{
+    Mark* mark = mMarks.find(mSelected);
+    if (!mark || mark->mType != MarkType::STAIR || !mark->complete() || mark->mSpiral == on)
+    {
+        return;
+    }
+    mark->mSpiral = on;
+    if (on)
+    {
+        // A helix about the run: the axis a metre to the side of the foot,
+        // a turn of it from foot to top, right-handed, until edited.
+        const LLVector3d& foot = mark->mVerts[0];
+        const LLVector3d& top = mark->mVerts[1];
+        LLVector3d run(top - foot);
+        run.mdV[VZ] = 0.0;
+        const F64 len = run.magVec();
+        const LLVector3d across = len > 1e-6 ? LLVector3d(-run.mdV[VY], run.mdV[VX], 0.0) * (1.0 / len) : LLVector3d(1.0, 0.0, 0.0);
+        mark->mSpiralCentre = foot + across * 1.0;
+        mark->mSpiralRadius = 1.0;
+        mark->mSpiralTurns = 1.0;
+        mark->mSpiralHand = 1;
+        // The top winds to where a turn of the helix ends, at the height
+        // it already had.
+        const LLVector3d wound = mark->helixAt(1.0);
+        mark->mVerts[1].set(wound.mdV[VX], wound.mdV[VY], top.mdV[VZ]);
+    }
+    touch();
+}
+
+void SKNavAnnotator::setSpiralTurns(F64 turns)
+{
+    Mark* mark = mMarks.find(mSelected);
+    if (!mark || !mark->mSpiral || mark->mVerts.size() < 2)
+    {
+        return;
+    }
+    mark->mSpiralTurns = llclamp(turns, sknav::SPIRAL_MIN_TURNS, sknav::SPIRAL_MAX_TURNS);
+    const LLVector3d wound = mark->helixAt(1.0);
+    mark->mVerts[1].set(wound.mdV[VX], wound.mdV[VY], mark->mVerts[1].mdV[VZ]);
+    touch();
+}
+
+void SKNavAnnotator::setSpiralHand(S8 hand)
+{
+    Mark* mark = mMarks.find(mSelected);
+    if (!mark || !mark->mSpiral || mark->mVerts.size() < 2)
+    {
+        return;
+    }
+    mark->mSpiralHand = hand >= 0 ? 1 : -1;
+    const LLVector3d wound = mark->helixAt(1.0);
+    mark->mVerts[1].set(wound.mdV[VX], wound.mdV[VY], mark->mVerts[1].mdV[VZ]);
     touch();
 }
 
@@ -531,7 +744,7 @@ void SKNavAnnotator::syncLabels()
         mark.extent(lo, hi);
         // Over the top of the mark, so the label clears it.
         label->setPositionGlobal(LLVector3d((lo.mdV[VX] + hi.mdV[VX]) * 0.5, (lo.mdV[VY] + hi.mdV[VY]) * 0.5, hi.mdV[VZ] + 0.4));
-        LLColor4 color = typeColor(mark.mType);
+        LLColor4 color = skNavMarkColor(mark.mType);
         if (mark.mId == mSelected)
         {
             color = LLColor4::white;
@@ -543,6 +756,10 @@ void SKNavAnnotator::syncLabels()
 
 void SKNavAnnotator::render()
 {
+    // The bodies follow the marks and the marks the bodies, once a frame,
+    // and the annotation follows what the objects picked.
+    SKNavMarkObjects::instance().sync(*this);
+    syncSelection();
     syncLabels();
     if (mMarks.empty() && mPending.mVerts.empty() && !mHasHover)
     {
@@ -550,38 +767,42 @@ void SKNavAnnotator::render()
     }
 
     LLViewerCamera* camera = LLViewerCamera::getInstance();
-    SKNavOverlayGeom geom;
-    geom.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    // Three gathers: the ghost every mark leaves under geometry, what
+    // stands over the world besides the bodies, and the selected mark and
+    // the one being placed, wider, over everything.
+    SKNavOverlayGeom ghost, front, bold;
+    ghost.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    front.setEdgeWidth(4.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
+    bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
     for (const Mark& mark : mMarks.marks())
     {
-        if (mark.mId == mSelected)
-        {
-            continue;
-        }
+        const bool selected = mark.mId == mSelected;
+        const LLColor4 color = skNavMarkColor(mark.mType);
+        // A mark is findable through a wall: its own shape, faint, behind.
         if (mark.mKind == MarkKind::PORTAL)
         {
-            drawPortal(geom, mark, typeColor(mark.mType));
+            drawPortal(ghost, mark, color);
         }
         else
         {
-            drawMark(geom, mark, typeColor(mark.mType));
+            drawMark(ghost, mark, color);
+        }
+        // Over the world the bodies carry the shape; what they cannot say
+        // draws here - a portal's strike and a stair's flight.
+        if (mark.mKind == MarkKind::PORTAL)
+        {
+            drawPortal(selected ? bold : front, mark, selected ? LLColor4::white : color);
+        }
+        else if (mark.mType == MarkType::STAIR)
+        {
+            drawStairExtras(selected ? bold : front, mark, selected ? LLColor4::white : color);
+        }
+        else if (selected)
+        {
+            drawMark(bold, mark, LLColor4::white);
         }
     }
 
-    // The selected mark and the one being placed, wider and in white over the rest.
-    SKNavOverlayGeom bold;
-    bold.setEdgeWidth(7.f, camera->getOrigin(), camera->getView(), camera->getViewHeightInPixels());
-    if (const Mark* selected = mMarks.find(mSelected))
-    {
-        if (selected->mKind == MarkKind::PORTAL)
-        {
-            drawPortal(bold, *selected, LLColor4::white);
-        }
-        else
-        {
-            drawMark(bold, *selected, LLColor4::white);
-        }
-    }
     if (!mPending.mVerts.empty())
     {
         Mark preview = mPending;
@@ -589,7 +810,11 @@ void SKNavAnnotator::render()
         {
             preview.mVerts.push_back(mHover);
         }
-        drawMark(bold, preview, typeColor(preview.mType));
+        drawMark(bold, preview, skNavMarkColor(preview.mType));
+        if (preview.mType == MarkType::STAIR)
+        {
+            drawStairExtras(bold, preview, skNavMarkColor(preview.mType));
+        }
     }
     if (mHasHover && mArmed)
     {
@@ -607,14 +832,13 @@ void SKNavAnnotator::render()
         LLGLDisable cull(GL_CULL_FACE);
         {
             LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-            geom.draw();
+            front.draw();
             bold.draw();
         }
         {
             // Behind geometry, fainter, so a mark inside a wall is still found.
             LLGLDepthTest behind(GL_TRUE, GL_FALSE, GL_GREATER);
-            geom.draw(0.6f, 0.4f);
-            bold.draw(0.6f, 0.4f);
+            ghost.draw(0.6f, 0.4f);
         }
     }
     SKNavOverlayGeom::unbindShader();
@@ -645,6 +869,12 @@ void SKNavAnnotator::pickType(MarkType type)
         mPending = Mark();
     }
     mPending.mType = type;
+    // The selection was the last mark's; the type is for the next one.
+    if (mPending.mVerts.empty())
+    {
+        LLSelectMgr::getInstance()->deselectAll();
+        mFollowProxySelection = false;
+    }
     touch();
     arm(true);
 }
@@ -668,8 +898,21 @@ void SKNavAnnotator::writeMarks(std::ostream& out) const
 }
 
 SKToolNavAnnotate::SKToolNavAnnotate()
-    : LLTool(std::string("NavAnnotate"))
+    : LLToolComposite(std::string("NavAnnotate"))
 {
+    // The gizmo the selected mark's points move with, and the inert child
+    // the placing runs under.
+    mManip = new LLManipTranslate(this);
+    mPlace = new LLTool(std::string("NavAnnotatePlace"), this);
+    mCur = mDefault = mPlace;
+}
+
+SKToolNavAnnotate::~SKToolNavAnnotate()
+{
+    delete mManip;
+    mManip = nullptr;
+    delete mPlace;
+    mPlace = nullptr;
 }
 
 bool SKToolNavAnnotate::pick(S32 x, S32 y, LLVector3d& out) const
@@ -692,24 +935,72 @@ bool SKToolNavAnnotate::handleMouseDown(S32 x, S32 y, MASK mask)
     }
     // Off the button just pressed, so Enter and Esc reach the tool.
     gFocusMgr.setKeyboardFocus(nullptr);
-    SKNavAnnotator& annotator = SKNavAnnotator::instance();
-    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
-    {
-        // The hovered cut toggles whether or not the world behind it picked.
-        annotator.clickPortal();
-        return true;
-    }
-    LLVector3d at;
-    if (pick(x, y, at))
-    {
-        annotator.click(at);
-    }
+    mMouseDown = true;
+    gViewerWindow->pickAsync(x, y, mask, pickCallback, /*pick_transparent*/ false, /*pick_rigged*/ false,
+                             /*pick_unselectable*/ true, /*pick_reflection_probes*/ false);
     return true;
 }
 
 bool SKToolNavAnnotate::handleMouseUp(S32 x, S32 y, MASK mask)
 {
-    return true;
+    mMouseDown = false;
+    return LLToolComposite::handleMouseUp(x, y, mask);
+}
+
+void SKToolNavAnnotate::pickCallback(const LLPickInfo& pick_info)
+{
+    SKToolNavAnnotate* self = SKToolNavAnnotate::getInstance();
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
+    const bool held = self->mMouseDown;
+    self->mMouseDown = false;
+    const S32 x = pick_info.mMousePt.mX, y = pick_info.mMousePt.mY;
+    LLViewerObject* hit = pick_info.getObject();
+    const bool mark_hit = hit && SKNavMarkObjects::instanceExists() && SKNavMarkObjects::instance().isMarkProxy(hit);
+    if (mark_hit)
+    {
+        annotator.cancelExitPick();
+        // A mark's body answers like an object does: the handle clicked
+        // selects that point alone, a beam the whole mark.
+        LLToolSelect::handleObjectSelection(pick_info, SKNavMarkObjects::instance().isVertexHandle(hit), false);
+        if (held)
+        {
+            // The button is still down: with the gizmo under it, the drag
+            // begins here, as a build click does.
+            self->mManip->highlightManipulators(x, y);
+            if (self->mManip->getHighlightedPart() != LLManip::LL_NO_PART && self->mManip->canAffectSelection())
+            {
+                self->setCurrentTool(self->mManip);
+                self->mManip->handleMouseDownOnPart(x, y, pick_info.mKeyMask);
+            }
+        }
+        return;
+    }
+    if (annotator.armed() && markTypeKind(annotator.newType()) == MarkKind::PORTAL)
+    {
+        // The hovered cut toggles whether or not the world behind it picked.
+        annotator.clickPortal();
+        return;
+    }
+    if (hit && annotator.exitPickPending())
+    {
+        annotator.addExit(pick_info.mPosGlobal);
+        return;
+    }
+    if (hit && !annotator.placingPending() && annotator.selectionHasProxy())
+    {
+        // A click on the world with a mark selected deselects it, the way a
+        // click away does; the next click places.
+        LLSelectMgr::getInstance()->deselectAll();
+        return;
+    }
+    if (hit)
+    {
+        annotator.click(pick_info.mPosGlobal);
+        return;
+    }
+    // The click went past the world entirely.
+    LLSelectMgr::getInstance()->deselectAll();
+    annotator.cancelExitPick();
 }
 
 bool SKToolNavAnnotate::handleDoubleClick(S32 x, S32 y, MASK mask)
@@ -731,14 +1022,29 @@ bool SKToolNavAnnotate::handleDoubleClick(S32 x, S32 y, MASK mask)
 
 bool SKToolNavAnnotate::handleHover(S32 x, S32 y, MASK mask)
 {
+    SKNavAnnotator& annotator = SKNavAnnotator::instance();
     if (mask & MASK_ALT)
     {
         SKNavAnnotator::instance().setHover(false, LLVector3d());
         return LLToolCamera::getInstance()->handleHover(x, y, mask);
     }
+    if (mManip->hasMouseCapture())
+    {
+        return mManip->handleHover(x, y, mask);
+    }
+    // A selected mark's gizmo stands on the selection the way a build
+    // tool's does, pre-highlighting under the cursor.
+    if (annotator.selectionHasProxy())
+    {
+        // The placement hover stands down while the gizmo answers.
+        annotator.setHover(false, LLVector3d());
+        setCurrentTool(mManip);
+        mManip->highlightManipulators(x, y);
+        return mManip->handleHover(x, y, mask);
+    }
+    setCurrentTool(mPlace);
     LLVector3d at;
     const bool hit = pick(x, y, at);
-    SKNavAnnotator& annotator = SKNavAnnotator::instance();
     annotator.setHover(hit, at);
     annotator.hoverPortal(x, y);
     gViewerWindow->setCursor(UI_CURSOR_CROSS);
@@ -761,14 +1067,53 @@ bool SKToolNavAnnotate::handleKey(KEY key, MASK mask)
     }
     if (key == KEY_ESCAPE && mask == MASK_NONE)
     {
-        // A mark half placed goes first; with none, the tool itself does.
-        if (!annotator.cancel())
+        // A mark half placed goes first; with none, an exit pick does;
+        // with neither, the selection does; with nothing selected, the
+        // tool does.
+        if (annotator.cancel())
         {
-            annotator.arm(false);
+            return true;
         }
+        if (annotator.exitPickPending())
+        {
+            annotator.cancelExitPick();
+            return true;
+        }
+        if (annotator.selectionHasProxy())
+        {
+            LLSelectMgr::getInstance()->deselectAll();
+            return true;
+        }
+        annotator.arm(false);
         return true;
     }
-    return LLTool::handleKey(key, mask);
+    return LLToolComposite::handleKey(key, mask);
+}
+
+LLTool* SKToolNavAnnotate::getOverrideTool(MASK mask)
+{
+    // Ctrl and Ctrl+Shift work the other gizmos over the same selection,
+    // as they do over an object's.
+    if (mask == MASK_CONTROL)
+    {
+        return LLToolCompRotate::getInstance();
+    }
+    if (mask == (MASK_CONTROL | MASK_SHIFT))
+    {
+        return LLToolCompScale::getInstance();
+    }
+    return LLToolComposite::getOverrideTool(mask);
+}
+
+void SKToolNavAnnotate::render()
+{
+    // The gizmo draws while a mark's body is selected and it is the tool
+    // at work; the marks themselves draw from the pipeline's call on the
+    // annotator.
+    if (mCur == mManip && SKNavAnnotator::instance().selectionHasProxy())
+    {
+        mManip->render();
+    }
 }
 
 void SKToolNavAnnotate::handleSelect()

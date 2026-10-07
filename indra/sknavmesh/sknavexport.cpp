@@ -207,24 +207,24 @@ namespace sknav
                         file << ',';
                     }
                     first = false;
-                    file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"rise\":" << f.mRise << ",\"plane\":[" << f.mPlane[0] << ','
-                         << f.mPlane[1] << ','
+                    static const char* const KINDS[] = { "stair", "ramp" };
+                    static const char* const RULES[] = { "name", "treads", "grade" };
+                    file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"kind\":\"" << KINDS[static_cast<S32>(f.mKind)]
+                         << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":" << static_cast<S32>(f.mTreads)
+                         << ",\"rise\":" << f.mRise << ",\"run\":" << f.mRun << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
                          << mesh_origin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh_origin.mdV[VX] - f.mPlane[1] * mesh_origin.mdV[VY]
-                         << "],\"treads\":[";
-                    for (size_t i = 0; i < f.mTreads.size(); ++i)
-                    {
-                        const FlightTread& t = f.mTreads[i];
-                        file << (i ? "," : "") << "{\"z\":" << mesh_origin.mdV[VZ] + t.mZ << ",\"rise\":" << t.mRise << ",\"going\":" << t.mGoing
-                             << ",\"nosing\":[";
-                        writeVec3d(file, mesh_origin + LLVector3d(t.mNosingA));
-                        file << ',';
-                        writeVec3d(file, mesh_origin + LLVector3d(t.mNosingB));
-                        file << "]}";
-                    }
-                    file << "],\"top\":[";
-                    writeVec3d(file, mesh_origin + LLVector3d(f.mTopNosingA));
+                         << "],\"bottom\":";
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mBottom));
+                    file << ",\"top\":";
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mTop));
+                    file << ",\"bottom_edge\":[";
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mBottomA));
                     file << ',';
-                    writeVec3d(file, mesh_origin + LLVector3d(f.mTopNosingB));
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mBottomB));
+                    file << "],\"top_edge\":[";
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mTopA));
+                    file << ',';
+                    writeVec3d(file, mesh_origin + LLVector3d(f.mTopB));
                     file << "],\"footprint\":[";
                     for (size_t i = 0; i < f.mFootprint.size(); ++i)
                     {

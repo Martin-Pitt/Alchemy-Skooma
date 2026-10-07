@@ -202,6 +202,7 @@ public:
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
     S32 mNumDeadObjects;
+    const std::vector<LLPointer<LLViewerObject>>& getMapObjects() const { return mMapObjects; } // <SK:Nexii> SKNetMap reads the map objects for its fallback layer
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects

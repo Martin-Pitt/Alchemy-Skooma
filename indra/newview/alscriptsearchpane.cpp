@@ -31,6 +31,7 @@
 #include "alpanelist.h"
 #include "alscopebar.h"
 #include "alscriptmessages.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "llbutton.h"
 #include "llfloater.h"
@@ -64,12 +65,8 @@ bool ALScriptSearchPane::postBuild()
     mReplace     = getChild<LLButton>("search_replace");
     // The window this is a tab of, found through the view tree, as what
     // the tab asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The Search tab", mServices, mWindow))
     {
-        LL_WARNS() << "The Search tab is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     buildSentence();
@@ -87,6 +84,16 @@ bool ALScriptSearchPane::postBuild()
     // the keyboard leaving the box, which the skin says.
     mReplace->setCommitCallback([this](LLUICtrl*, const LLSD&) { askReplaceAll(); });
     mReplacement->setCommitCallback([this](LLUICtrl*, const LLSD&) { askReplaceAll(); });
+    // Replace All as wide as its words, where the skin's are longer, and
+    // the box beside it the rest: both follow the edges from here.
+    {
+        const LLRect button = mReplace->getRect();
+        const LLRect box    = mReplacement->getRect();
+        const S32    gap    = button.mLeft - box.mRight;
+        const S32    width  = llmax(button.getWidth(), LLFontGL::getFontSansSerifSmall()->getWidth(mReplace->getLabelUnselected()) + 20);
+        mReplace->setShape(LLRect(button.mRight - width, button.mTop, button.mRight, button.mBottom));
+        mReplacement->setShape(LLRect(box.mLeft, box.mTop, llmax(box.mLeft + 60, button.mRight - width - gap), box.mBottom));
+    }
     mBar->onChanged([this]() { onChanged(); });
     mResults->setCommitCallback([this](LLUICtrl*, const LLSD&) { choose(false); });
     // Return and a double-click go to the place chosen, to type there, and
@@ -243,16 +250,45 @@ void ALScriptSearchPane::searchIncludes(const ALScriptRef& ref, const std::strin
     }
     for (const Window::Included& one : mWindow->includesOf(ref, file, name, text, lua))
     {
-        if (mIncludesSearched.insert(one.path).second)
+        if (!mIncludesSearched.insert(one.path).second)
         {
-            const ALScriptSearch::Kept kept = mSearch.search(ALScriptRef(), one.name, mServices->words("SearchIncluded"), ALTextDocument(one.text), 0,
-                                                             std::string(), false, false, one.path);
-            if (kept == ALScriptSearch::Kept::Added)
-            {
-                addRows(mSearch.found().size() - 1);
-            }
+            continue;
         }
+        // Sought away from the main thread, as a script not open is, and
+        // counted as to come until the answer is back: an include can be a
+        // library many times the script's size.
+        mSearch.asked();
+        const U32               generation = mSearch.generation();
+        const LLHandle<LLPanel> handle     = getHandle();
+        const std::string       where      = mServices->words("SearchIncluded");
+        mWindow->matchApart(std::make_shared<const std::string>(one.text), mSearch.query(), mSearch.options(),
+                            [handle, generation, where, name = one.name, path = one.path](ALScriptSearch::Matched found) {
+                                if (ALScriptSearchPane* pane = ALViewType::as<ALScriptSearchPane>(handle.get()))
+                                {
+                                    pane->includeMatched(generation, where, name, path, std::move(found));
+                                }
+                            });
     }
+}
+
+void ALScriptSearchPane::includeMatched(U32 generation, const std::string& where, const std::string& name, const std::string& path,
+                                        ALScriptSearch::Matched found)
+{
+    if (!mSearch.answered(generation))
+    {
+        return;
+    }
+    // Kept as its own, without its text: Replace All leaves an include be.
+    const ALScriptSearch::Kept kept = mSearch.keep(ALScriptRef(), name, where, std::move(found), 0, std::string(), nullptr, false, path);
+    if (mSearch.badPattern())
+    {
+        mCount->setToolTip(mSearch.patternError());
+    }
+    else if (kept == ALScriptSearch::Kept::Added)
+    {
+        addRows(mSearch.found().size() - 1);
+    }
+    settled();
 }
 
 void ALScriptSearchPane::run()
@@ -463,7 +499,8 @@ void ALScriptSearchPane::addRows(size_t index)
         row["columns"][0]["column"] = "where";
         row["columns"][0]["value"]  = found.where;
         row["columns"][1]["column"] = "line";
-        row["columns"][1]["value"]  = llformat("%d:%d", match.begin.line + 1, match.begin.column + 1);
+        row["columns"][1]["value"]  = llformat("%d:%d", mServices->shownLine(match.begin.line, found.notecard && found.file.empty() && !found.ref.isNull()),
+                                               match.begin.column + 1);
         row["columns"][2]["column"] = "text";
         row["columns"][2]["value"]  = found.lines[i];
         LLScrollListItem* item      = mResults->addElement(row);
@@ -641,7 +678,8 @@ bool ALScriptSearchPane::refreshRows(size_t index)
         {
             return false;
         }
-        line->setValue(llformat("%d:%d", match.begin.line + 1, match.begin.column + 1));
+        line->setValue(llformat("%d:%d", mServices->shownLine(match.begin.line, found.notecard && found.file.empty() && !found.ref.isNull()),
+                                match.begin.column + 1));
         text->setValue(found.lines[place]);
         const S32 at     = found.at[place];
         const S32 length = at < 0 || at >= static_cast<S32>(found.lines[place].size())
@@ -711,14 +749,14 @@ ALScriptSearchPane::Doc* ALScriptSearchPane::tabOf(const ALScriptSearch::Found& 
 
 bool ALScriptSearchPane::replaceable(const ALScriptSearch::Found& one)
 {
-    // Places found, in a script -- a notecard is left as it is -- that may
-    // be changed where it is open.
-    if (one.places.empty() || one.notecard)
+    // Places found, in a script or a notecard in the world -- a text file
+    // is left as it is -- that may be changed where it is open.
+    if (one.places.empty() || (one.notecard && one.ref.isNull()))
     {
         return false;
     }
     const Doc* doc = tabOf(one);
-    return !doc || (!doc->notecard && doc->modifiable);
+    return !doc || ((!doc->notecard || doc->itemNotecard()) && doc->modifiable);
 }
 
 void ALScriptSearchPane::askReplaceAll()
@@ -741,7 +779,7 @@ void ALScriptSearchPane::askReplaceAll()
     }
     LLSD args;
     args["PLACES"]  = mServices->counted("Places", places);
-    args["SCRIPTS"] = mServices->counted("Scripts", scripts);
+    args["SCRIPTS"] = mServices->counted("ScriptsNotecards", scripts);
     args["WITH"]    = mReplacement->getText();
     mWindow->confirmReplaceAll(args, [this]() { replaceAll(); });
 }
@@ -762,6 +800,8 @@ void ALScriptSearchPane::replaceAll()
     // since the search is left alone, and said so.
     const std::vector<ALScriptSearch::Found> found = mSearch.found();
     S32                                      places = 0, scripts = 0, opened = 0, left = 0;
+    // The tabs it opens made once, as the last is opened.
+    ALScriptStudioServices::TabsHeld held(*mServices);
     for (const ALScriptSearch::Found& one : found)
     {
         Doc*                here  = tabOf(one);
@@ -771,7 +811,7 @@ void ALScriptSearchPane::replaceAll()
         now.at = here ? ALScriptSearch::Now::At::Here : there ? ALScriptSearch::Now::At::Elsewhere : ALScriptSearch::Now::At::Closed;
         if (tab)
         {
-            now.notecard   = tab->notecard;
+            now.plainText  = tab->notecard && !tab->itemNotecard();
             now.loaded     = tab->loaded;
             now.modifiable = tab->modifiable;
             now.text       = &tab->editor->document();
@@ -821,19 +861,19 @@ void ALScriptSearchPane::replaceAll()
     // What was done, a clause for each thing there is to say.
     LLStringUtil::format_map_t args;
     args["[PLACES]"]  = mServices->counted("Places", places);
-    args["[SCRIPTS]"] = mServices->counted("Scripts", scripts);
+    args["[SCRIPTS]"] = mServices->counted("ScriptsNotecards", scripts);
     std::string said  = mServices->words("SearchReplaced", args);
     if (opened > 0)
     {
-        args["[SCRIPTS]"] = mServices->counted("Scripts", opened);
-        said += "; " + mServices->words("SearchReplacedOpened", args);
+        args["[SCRIPTS]"] = mServices->counted("ScriptsNotecards", opened);
+        said = mServices->clauses(said, mServices->words("SearchReplacedOpened", args));
     }
     if (left > 0)
     {
-        args["[SCRIPTS]"] = mServices->counted("Scripts", left);
-        said += "; " + mServices->words("SearchReplacedLeft", args);
+        args["[SCRIPTS]"] = mServices->counted("ScriptsNotecards", left);
+        said = mServices->clauses(said, mServices->words("SearchReplacedLeft", args));
     }
-    mServices->report(said + ".", left > 0);
+    mServices->report(mServices->sentence(said), left > 0);
     // Whatever stood before, the places have moved: looked for again.
     run();
 }

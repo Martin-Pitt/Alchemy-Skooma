@@ -121,6 +121,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>ALScriptStudioSnippetsNotecard</key>
+        <map>
+            <key>Comment</key>
+            <string>The snippet notecard in inventory that Script Studio follows, by its item; empty for none. Its snippets are offered beside the viewer's and your own as it stands; its text is kept on disk with the asset it was read from, and fetched again only when the notecard has a new one.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string></string>
+        </map>
         <key>ALScriptStudioVimrcNotecard</key>
         <map>
             <key>Comment</key>
@@ -329,6 +340,17 @@
             <string>String</string>
             <key>Value</key>
             <string>00000000-0000-0000-0000-000000000000</string>
+        </map>
+        <key>ALScriptStudioAccountState</key>
+        <map>
+            <key>Comment</key>
+            <string>Script Studio's state that is this account's own, by grid: the tabs open, the windows popped out, the pinned objects and the scripts opened lately. The window's shape and switches are ALScriptStudioState, shared.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>LLSD</string>
+            <key>Value</key>
+            <map />
         </map>
     </map>
 </llsd>

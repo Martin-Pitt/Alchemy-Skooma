@@ -715,4 +715,131 @@ namespace tut
         std::optional<ALTextUndo::History> read = ALTextUndo::historyFrom(undo.asLLSD(), doc.text());
         ensure("and it is a history of the text", read.has_value());
     }
+
+    template<> template<>
+    void altextundo_object::test<23>()
+    {
+        set_test_name("a group closed to wait goes on with its step where nothing came between; not after a change, a save, an undo or another's group");
+        doc.setText("abc");
+        // One group, closed, then gone on with: one step.
+        undo.beginGroup();
+        type(ALTextPos(0, 0), "1");
+        undo.endGroup();
+        const U64 step = undo.groupStep();
+        ensure("the group's step", step != 0);
+        undo.resumeGroup(step);
+        type(ALTextPos(0, 1), "2");
+        undo.endGroup();
+        ensure_equals("still that step", undo.groupStep(), step);
+        undo.undo();
+        ensure_equals("both undone as one", doc.text(), std::string("abc"));
+        undo.redo();
+        ensure("undone and redone, nothing to go on with", undo.groupStep() == 0);
+
+        // A change between: a step of its own, and the next group's own.
+        undo.beginGroup();
+        type(ALTextPos(0, 0), "x");
+        undo.endGroup();
+        const U64 before = undo.groupStep();
+        type(ALTextPos(0, 6), "y", 10.0);
+        ensure("a change after it", undo.groupStep() == 0);
+        undo.resumeGroup(before);
+        type(ALTextPos(0, 0), "z");
+        undo.endGroup();
+        ensure("a step of its own", undo.groupStep() != before);
+        undo.undo();
+        ensure_equals("only the last", doc.text(), std::string("x12abcy"));
+
+        // Saved between: another step.
+        undo.beginGroup();
+        type(ALTextPos(0, 0), "s");
+        undo.endGroup();
+        const U64 saved = undo.groupStep();
+        undo.savePoint();
+        ensure("a save", undo.groupStep() == 0);
+        undo.resumeGroup(saved);
+        type(ALTextPos(0, 0), "t");
+        undo.endGroup();
+        undo.undo();
+        ensure_equals("the save kept apart", doc.text(), std::string("sx12abcy"));
+
+        // Another group's step between.
+        undo.beginGroup();
+        type(ALTextPos(0, 0), "p");
+        undo.endGroup();
+        const U64 mine = undo.groupStep();
+        undo.beginGroup();
+        type(ALTextPos(0, 0), "q");
+        undo.endGroup();
+        undo.resumeGroup(mine);
+        type(ALTextPos(0, 0), "r");
+        undo.endGroup();
+        undo.undo();
+        ensure_equals("not the other's", doc.text(), std::string("qpsx12abcy"));
+    }
+
+    template<> template<>
+    void altextundo_object::test<24>()
+    {
+        set_test_name("a step keeps the other selections before and after: a run the first's before and the last's after; written and read back");
+        doc.setText("abc\nabc\nabc");
+        const auto at = [](S32 line, S32 column) { return ALTextRange(ALTextPos(line, column), ALTextPos(line, column)); };
+        const auto said = [](const std::vector<ALTextRange>& all) {
+            std::string out;
+            for (const ALTextRange& r : all)
+            {
+                out += llformat("%d:%d-%d:%d ", r.begin.line, r.begin.column, r.end.line, r.end.column);
+            }
+            return out;
+        };
+        // Typed at the main caret, with others on the lines below: each
+        // edit noted with the others as they stood, and settled with them
+        // as they stand after.
+        now += 0.1;
+        ALTextDocument::Edit first = doc.insert(ALTextPos(0, 1), "x");
+        undo.record(first, at(0, 1), first.endAfter(), now, { at(1, 1), ALTextRange(ALTextPos(2, 3), ALTextPos(2, 0)) });
+        undo.settle(at(0, 2), { at(1, 2), ALTextRange(ALTextPos(2, 4), ALTextPos(2, 0)) });
+        now += 0.1;
+        ALTextDocument::Edit second = doc.insert(ALTextPos(0, 2), "y");
+        undo.record(second, at(0, 2), second.endAfter(), now, { at(1, 2) });
+        undo.settle(at(0, 3), { at(1, 3) });
+        // Said again without them: they stay as they were said.
+        undo.settle(at(0, 3));
+
+        std::vector<ALTextRange> others;
+        std::optional<ALTextRange> back = undo.undo(&others);
+        ensure("one step", back.has_value() && doc.text() == "abc\nabc\nabc");
+        ensure_equals("the others as they stood before the run", said(others), said({ at(1, 1), ALTextRange(ALTextPos(2, 3), ALTextPos(2, 0)) }));
+        std::optional<ALTextRange> ahead = undo.redo(&others);
+        ensure("and forward", ahead.has_value() && *ahead == at(0, 3));
+        ensure_equals("as they stood after it", said(others), said({ at(1, 3) }));
+
+        // Written out and read back over the same text.
+        ALTextDocument copy(doc.text());
+        ALTextUndo     again(copy);
+        ensure("read back", again.fromLLSD(undo.asLLSD()));
+        std::istringstream notation(undo.asNotation());
+        LLSD               written;
+        ensure("and in notation", LLSDSerialize::fromNotation(written, notation, LLSDSerialize::SIZE_UNLIMITED) > 0 &&
+                                      written["undo"][0]["others_after"].size() == 1);
+        again.undo(&others);
+        ensure_equals("the others before, read back", said(others), said({ at(1, 1), ALTextRange(ALTextPos(2, 3), ALTextPos(2, 0)) }));
+        again.redo(&others);
+        ensure_equals("and after", said(others), said({ at(1, 3) }));
+
+        // A step whose others after were never said: a redo leaves the
+        // caret alone; and one with none has none.
+        now += 5.0;
+        ALTextDocument::Edit third = doc.insert(ALTextPos(0, 0), "z");
+        undo.record(third, at(0, 0), third.endAfter(), now, { at(2, 0) });
+        undo.settle(at(0, 1));
+        undo.undo(&others);
+        ensure_equals("before, as noted", said(others), said({ at(2, 0) }));
+        undo.redo(&others);
+        ensure("after, none", others.empty());
+        now += 5.0;
+        type(ALTextPos(0, 0), "w");
+        undo.undo(&others);
+        ensure("none where there were none", others.empty());
+    }
 }

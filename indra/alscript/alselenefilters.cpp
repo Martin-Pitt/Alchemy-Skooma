@@ -28,6 +28,7 @@
 #include "alselenefilters.h"
 
 #include "alluauconfig.h"
+#include "alscriptlintpass.h"
 
 #include <utility>
 
@@ -155,6 +156,38 @@ uint64_t ALSeleneFilters::luauLints(const Directive& directive)
     for (const std::string& name : directive.lints)
     {
         out |= luauLints(name);
+    }
+    return out;
+}
+
+// static
+uint64_t ALSeleneFilters::slLints(std::string_view name)
+{
+    uint64_t out = ALScriptLintPass::bit(name);
+    for (const ALScriptLintPass::Rule& rule : ALScriptLintPass::rules())
+    {
+        // Selene's names for the rule, a blank between each.
+        for (std::string_view names = rule.selene ? rule.selene : ""; !names.empty();)
+        {
+            const size_t           cut  = names.find(' ');
+            const std::string_view each = names.substr(0, cut);
+            names                       = cut == std::string_view::npos ? std::string_view() : names.substr(cut + 1);
+            if (name == each)
+            {
+                out |= ALScriptLintPass::bit(rule.name);
+            }
+        }
+    }
+    return out;
+}
+
+// static
+uint64_t ALSeleneFilters::slLints(const Directive& directive)
+{
+    uint64_t out = 0;
+    for (const std::string& name : directive.lints)
+    {
+        out |= slLints(name);
     }
     return out;
 }

@@ -157,7 +157,7 @@ namespace tut
         set_test_name("what was found listed under what was looked up, the declaration marked; nothing, with the question it answers");
         ALScriptReferencesPane* refs = pane();
         refs->show(found());
-        ensure_equals("the head", head(), std::string("3 places where count stands, in 2 scripts."));
+        ensure_equals("the head", head(), std::string("3 occurrences of count in 2 scripts."));
         ensure("the window told", window.pane().counts == 1);
         ensure_equals("each place", lines(), joined(Names{ "A 1:9", "A 2:5", "B 1:9" }));
         const std::vector<LLScrollListItem*> rows = refs->list()->getAllData();
@@ -175,7 +175,7 @@ namespace tut
         refs->show(in_b);
         ensure("declared in B: A's first line not it", cell(refs->list()->getAllData()[0], 2).empty());
         refs->forget();
-        ensure_equals("nothing", head(), std::string("Nothing looked up yet. Put the caret on a name and press Find References."));
+        ensure_equals("nothing", head(), std::string("Nothing to show yet. Put the caret on a name and choose Find References."));
         ensure("no rows", refs->list()->getItemCount() == 0 && refs->found().from.empty());
         ensure("told each time", window.pane().counts == 4);
     }
@@ -342,8 +342,30 @@ namespace tut
 
         applied = false;
         refs->preview(found(), "total", "Rename 3 places", [&](const std::vector<size_t>&) { applied = true; });
+        ensure("no Show Changes where none is given", !window.find<LLButton>("references_changes")->getVisible());
         window.find<LLButton>("references_cancel")->onCommit();
         ensure("Cancel makes nothing", !applied && !refs->previewing());
+
+        // Show Changes: the chosen row's file, or the script's own with
+        // none chosen, and the places kept.
+        std::vector<std::string> files;
+        std::vector<size_t>      shown;
+        refs->preview(found(), "total", "Rename 3 places", [](const std::vector<size_t>&) {},
+                      [&](const std::string& file, const std::vector<size_t>& kept) {
+                          files.push_back(file);
+                          shown = kept;
+                      });
+        LLButton* changes = window.find<LLButton>("references_changes");
+        ensure("Show Changes shown", changes && changes->getVisible());
+        changes->onCommit();
+        refs->list()->selectNthItem(2);
+        refs->setKept(1, false);
+        refs->list()->selectNthItem(2);
+        changes->onCommit();
+        ensure("its own, then the chosen row's", files == std::vector<std::string>({ std::string(), B }));
+        ensure("with the places kept", shown == std::vector<size_t>({ 0, 2 }));
+        window.find<LLButton>("references_cancel")->onCommit();
+        ensure("gone with the preview", !changes->getVisible());
         ensure("each row as found", cell(refs->list()->getAllData()[0], 3) == "integer count;" && refs->list()->getAllData()[0]->getColumn(2)->getValue().asString() != "1");
     }
 

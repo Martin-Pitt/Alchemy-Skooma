@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "alscriptworkspace.h"
+#include "alscripttypes.h"
 #include "llstring.h"
 
 #include <optional>
@@ -55,6 +55,38 @@ public:
     // form its count takes in the viewer's language, [COUNT] filled in too.
     virtual std::string words(const std::string& name, const LLStringUtil::format_map_t& args = LLStringUtil::format_map_t()) const = 0;
     virtual std::string counted(const char* name, S32 count, LLStringUtil::format_map_t args = LLStringUtil::format_map_t()) const = 0;
+    // Pieces joined as the viewer's language joins them, by the window's
+    // words, not in English's order and punctuation: two clauses of a
+    // sentence, a list, a label and what it labels, a sentence ended, and
+    // sentences one after another. An empty piece leaves the other alone.
+    std::string joined(const char* how, const std::string& first, const std::string& second) const
+    {
+        if (first.empty() || second.empty())
+        {
+            return first.empty() ? second : first;
+        }
+        return words(how, { { "[FIRST]", first }, { "[SECOND]", second } });
+    }
+    std::string clauses(const std::string& first, const std::string& second) const { return joined("JoinClauses", first, second); }
+    std::string sentences(const std::string& first, const std::string& second) const { return joined("JoinSentences", first, second); }
+    std::string listed(const std::vector<std::string>& items) const
+    {
+        std::string out;
+        for (const std::string& item : items)
+        {
+            out = joined("JoinList", out, item);
+        }
+        return out;
+    }
+    std::string labelled(const std::string& label, const std::string& text) const
+    {
+        return label.empty() ? text : words("Labelled", { { "[LABEL]", label }, { "[TEXT]", text } });
+    }
+    std::string sentence(const std::string& text) const { return text.empty() ? text : words("Sentence", { { "[TEXT]", text } }); }
+    // A line, counted from 0 as the text holds it, as a list shows it:
+    // from 1, or from 0 for a notecard where the window counts a
+    // notecard's lines as scripts read them.
+    virtual S32 shownLine(S32 line, bool notecard) const { return line + 1; }
 
     // --- the tabs ----------------------------------------------------------------
 
@@ -75,6 +107,22 @@ public:
                             bool focus = true) = 0;
     // A place in a script, gone to once the script is open, or now.
     virtual void goToPlace(const ALScriptRef& ref, const std::string& name, S32 line, S32 column, S32 length) = 0;
+    // Many tabs opened at once: while held, what each would make again --
+    // the strip, the toolbar, the lists -- waits, and is made once as the
+    // last lets go (Held below). Nothing where tabs make nothing.
+    virtual void holdTabs() {}
+    virtual void letGoOfTabs() {}
+    class TabsHeld
+    {
+    public:
+        explicit TabsHeld(ALScriptStudioServices& services) : mServices(services) { mServices.holdTabs(); }
+        ~TabsHeld() { mServices.letGoOfTabs(); }
+        TabsHeld(const TabsHeld&)            = delete;
+        TabsHeld& operator=(const TabsHeld&) = delete;
+
+    private:
+        ALScriptStudioServices& mServices;
+    };
     // A list's row chosen and its place shown: the keyboard left in the
     // list to walk on, or, `to_editor`, taken to the script to type there.
     virtual void revealed(LLUICtrl* list, bool to_editor) = 0;

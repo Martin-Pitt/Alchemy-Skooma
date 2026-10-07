@@ -28,10 +28,13 @@
 
 #include "alpanefolds.h"
 #include "alpanelist.h"
+#include "alscriptstudiocaret.h"
+#include "alscriptstudiopane.h"
 #include "alscriptstudioservices.h"
 #include "alscriptstudiowords.h"
 #include "alstringmatch.h"
 #include "llcombobox.h"
+#include "lltextbox.h"
 #include "llfiltereditor.h"
 #include "llfloater.h"
 #include "llfontgl.h"
@@ -51,14 +54,24 @@ bool ALScriptOutlinePane::postBuild()
     mFilter = getChild<LLFilterEditor>("outline_filter");
     mSort   = getChild<LLComboBox>("outline_sort");
     mSort->selectFirstItem();
+    // The heading as wide as its word, which a translation may make
+    // longer, and the sort and the filter after it; the filter keeps the
+    // right edge.
+    if (LLTextBox* head = findChild<LLTextBox>("outline_head"))
+    {
+        const LLRect was   = head->getRect();
+        const S32    right = was.mLeft + llmax(was.getWidth(), head->getTextPixelWidth() + 2);
+        head->setShape(LLRect(was.mLeft, was.mTop, right, was.mBottom));
+        const LLRect sort = mSort->getRect();
+        mSort->setShape(LLRect(right + 2, sort.mTop, right + 2 + sort.getWidth(), sort.mBottom));
+        const LLRect filter = mFilter->getRect();
+        const S32    left   = right + 2 + sort.getWidth() + 4;
+        mFilter->setShape(LLRect(left, filter.mTop, llmax(left + 40, filter.mRight), filter.mBottom));
+    }
     // The window this is a pane of, found through the view tree, as what
     // the pane asks of it.
-    LLFloater* window = getParentByType<LLFloater>();
-    mServices         = dynamic_cast<ALScriptStudioServices*>(window);
-    mWindow           = dynamic_cast<Window*>(window);
-    if (!mServices || !mWindow)
+    if (!ALScriptStudioPane::findWindow(*this, "The outline", mServices, mWindow))
     {
-        LL_WARNS() << "The outline is not in a Script Studio window" << LL_ENDL;
         return true;
     }
     mFilter->setCommitCallback([this](LLUICtrl*, const LLSD&) {
@@ -191,7 +204,7 @@ void ALScriptOutlinePane::show(Doc& doc)
             for (const size_t i : level)
             {
                 rows.push_back({ i, depth });
-                if (!children[i].empty() && !doc.caret.outlineFolded.contains(mKeys[i]))
+                if (!children[i].empty() && !doc.outlineFolded.contains(mKeys[i]))
                 {
                     walk(children[i], depth + 1);
                 }
@@ -214,7 +227,7 @@ void ALScriptOutlinePane::show(Doc& doc)
     {
         const ALScriptOutlineEntry& entry  = doc.outline[row.index];
         const bool                  parent = filter.empty() && mParents[row.index];
-        const std::string arrow = !parent ? std::string("   ") : doc.caret.outlineFolded.contains(mKeys[row.index]) ? folded : open;
+        const std::string arrow = !parent ? std::string("   ") : doc.outlineFolded.contains(mKeys[row.index]) ? folded : open;
         ALPaneList::Row   one;
         one.key = doc.id + "\x1f" + mKeys[row.index];
         if (const S32 times = seen[one.key]++; times > 0)
@@ -237,7 +250,9 @@ void ALScriptOutlinePane::show(Doc& doc)
         list.push_back(std::move(one));
     }
     mList->setRows(std::move(list));
-    mList->setEmpty(doc.outline.empty() ? mServices->words(doc.loaded ? "NoOutline" : "NoOutlineYet")
+    // A notecard has one only as JSON.
+    const char* none = !doc.loaded ? "NoOutlineYet" : !doc.notecard ? "NoOutline" : doc.grammar == "json" ? "NoOutlineJson" : "NoOutlineNotecard";
+    mList->setEmpty(doc.outline.empty() ? mServices->words(none)
                     : rows.empty()      ? mServices->words("OutlineNoMatch")
                                         : LLStringUtil::null,
                     LLStringUtil::null);
@@ -278,7 +293,7 @@ void ALScriptOutlinePane::fold(size_t index, std::optional<bool> folded)
         return;
     }
     const std::string& key  = mKeys[index];
-    const bool         shut = doc->caret.outlineFolded.contains(key);
+    const bool         shut = doc->outlineFolded.contains(key);
     const bool         want = folded.value_or(!shut);
     if (!mParents[index] || want == shut)
     {
@@ -305,11 +320,11 @@ void ALScriptOutlinePane::fold(size_t index, std::optional<bool> folded)
     }
     if (want)
     {
-        doc->caret.outlineFolded.insert(key);
+        doc->outlineFolded.insert(key);
     }
     else
     {
-        doc->caret.outlineFolded.erase(key);
+        doc->outlineFolded.erase(key);
     }
     show(*doc);
     mList->selectByValue(LLSD(static_cast<S32>(index)));
@@ -328,13 +343,13 @@ void ALScriptOutlinePane::followCaret(Doc& doc)
     }
     mFollowed = true;
     // The innermost symbol the caret is in, as the breadcrumb found it.
-    if (doc.caret.crumbPath.empty())
+    if (doc.caret->crumbPath.empty())
     {
         mList->deselectAllItems(true);
         return;
     }
     LLScrollListItem* now = mList->getFirstSelected();
-    for (auto step = doc.caret.crumbPath.rbegin(); step != doc.caret.crumbPath.rend(); ++step)
+    for (auto step = doc.caret->crumbPath.rbegin(); step != doc.caret->crumbPath.rend(); ++step)
     {
         const S32 index = static_cast<S32>(*step);
         if (now && now->getValue().asInteger() == index)

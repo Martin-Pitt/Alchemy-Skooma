@@ -25,9 +25,11 @@
 #include "linden_common.h"
 
 #include "../allslservice.h"
+#include "../alscriptfixes.h"
 
 #include "../test/lltut.h"
 
+#include "llsdserialize.h"
 #include "lluuid.h"
 
 #include <filesystem>
@@ -429,8 +431,8 @@ namespace tut
             }
             return false;
         };
-        ensure("the channel's name before the 0:" + listed, has(6, 14, "Channel:") || has(6, 14, "channel:"));
-        ensure("the text's before the cast:" + listed, has(6, 17, "Text:") || has(6, 17, "text:"));
+        ensure("the channel's name before the 0:" + listed, has(6, 14, "channel:"));
+        ensure("the message's before the cast:" + listed, has(6, 17, "msg:"));
         ensure("nothing before n, which is the name:" + listed, !has(6, 30, "n:"));
         ensure("n: before the 2:" + listed, has(7, 29, "n:"));
         ensure("nothing when not asked", service.inlayHints(script, false).empty());
@@ -757,5 +759,101 @@ namespace tut
         // Nothing twice: an old one still one declaration.
         const ALScriptSignature said = service.signature("default { state_entry() { llAbs( } }\n", 0, 32);
         ensure("an old function as it was", said.found && said.label.find("llAbs") != std::string::npos);
+    }
+
+    template<> template<>
+    void allslservice_object::test<22>()
+    {
+        set_test_name("every template Script Studio offers for a new LSL script checks without an error");
+        ensure("builtins loaded: " + error, loaded);
+        llifstream in(std::string(AL_SCRIPT_TEMPLATES_DIR) + "/lsl.xml", std::ios::in | std::ios::binary);
+        LLSD       templates;
+        ensure("read", in.is_open() && LLSDSerialize::fromXML(templates, in) != LLSDParser::PARSE_FAILURE && templates.isArray());
+        ensure("some", templates.size() > 0);
+        for (LLSD::array_const_iterator it = templates.beginArray(); it != templates.endArray(); ++it)
+        {
+            const std::string      name     = (*it)["name"].asString();
+            const ALScriptProblems problems = service.check((*it)["body"].asString());
+            ensure(name + " parses", service.parsed());
+            ensure_equals(name + ": " + said(problems), errors(problems), size_t(0));
+        }
+    }
+
+    template<> template<>
+    void allslservice_object::test<23>()
+    {
+        set_test_name("a handler or a state begun inside a block left open is a missing brace, after the last code before it, not what the "
+                      "parser wanted of the head it misread");
+        ensure("builtins loaded: " + error, loaded);
+        auto first_error = [&](const std::string& script) {
+            for (const ALScriptProblem& problem : service.check(script))
+            {
+                if (problem.severity == ALScriptProblem::Severity::Error)
+                {
+                    return problem;
+                }
+            }
+            return ALScriptProblem();
+        };
+        const std::string open = "default\n{\n    state_entry()\n    {\n        llSay(0, \"Hello, Avatar!\");\n\n";
+        // A handler with parameters, read as a call.
+        ALScriptProblem p = first_error(open + "    touch_start(integer total_number)\n    {\n        llSay(0, \"Touched.\");\n    }\n}\n");
+        ensure_equals("the brace: " + p.message, p.message, std::string("Missing '}'."));
+        ensure("keyed", p.key == "LSLSyntaxMissing" && p.args.size() == 1 && p.args[0] == "'}'");
+        ensure("on the semicolon before it", p.line == 4 && p.column == 34 && p.endColumn == 35);
+        // One without, its brace on the next line.
+        p = first_error(open + "    touch_start()\n    {\n    }\n}\n");
+        ensure_equals("the brace, a head without parameters: " + p.message, p.message, std::string("Missing '}'."));
+        ensure("on the same semicolon", p.line == 4 && p.column == 34);
+        // A state after one not closed.
+        p = first_error("default\n{\n    state_entry()\n    {\n    }\n\nstate other\n{\n    state_entry()\n    {\n    }\n}\n");
+        ensure_equals("the state's brace: " + p.message, p.message, std::string("Missing '}'."));
+        ensure("after the handler's", p.line == 4 && p.column == 4);
+        // A handler's own head wrong where handlers go is not one.
+        p = first_error("default\n{\n    touch_start(integer)\n    {\n    }\n}\n");
+        ensure("a head wrong in its state's braces: not a brace", p.severity == ALScriptProblem::Severity::Error && p.message != "Missing '}'.");
+    }
+
+    template<> template<>
+    void allslservice_object::test<24>()
+    {
+        set_test_name("the studio's own LSL lints beside Tailslide's: a pure call in a loop's check whose arguments the loop leaves be, noted once, and answering a NOLINT by its name");
+        ensure("builtins load: " + error, loaded);
+        const auto found = [&](const std::string& text) {
+            ALScriptProblems out;
+            for (const ALScriptProblem& p : service.check(text))
+            {
+                if (p.code == "SlLoopInvariantCall")
+                {
+                    out.push_back(p);
+                }
+            }
+            return out;
+        };
+        ALScriptProblems said = found("list gL = [1, 2];\n"
+                                      "default { state_entry() {\n"
+                                      "    integer i; string s = \"abc\";\n"
+                                      "    for (i = 0; i < llGetListLength(gL); ++i) llOwnerSay((string)i);\n"
+                                      "    while (i < llStringLength(s)) ++i;\n"
+                                      "    do ++i; while (i < llGetListLength(llParseString2List(s, [\",\"], [])));\n"
+                                      "} }\n");
+        ensure_equals("three: each loop's once", said.size(), size_t(3));
+        ensure("a note keyed as Tailslide's, by the function: " + said[0].message,
+               said[0].key == "LSLSlLoopInvariantCall" && said[0].severity == ALScriptProblem::Severity::Note && said[0].line == 3 &&
+                   said[0].args == std::vector<std::string>{ "llGetListLength", "integer", "3", "4" } &&
+                   said[0].source == ALScriptProblem::Source::Lint);
+        ensure("the outer call of two: " + said[2].message, said[2].line == 5 && said[2].args[0] == "llGetListLength");
+        ensure("a NOLINT answers to the rule's name",
+               ALScriptFixes::suppressed(said[0], "    for (i = 0; i < llGetListLength(gL); ++i) // NOLINT(SlLoopInvariantCall)", "", false));
+
+        said = found("list gL = [1, 2];\n"
+                     "grow() { gL += [0]; }\n"
+                     "default { state_entry() {\n"
+                     "    integer i; list l;\n"
+                     "    for (i = 0; i < llGetListLength(l); ++i) l += [i];\n"
+                     "    for (i = 0; i < llGetListLength(gL) && i < 10; ++i) grow();\n"
+                     "    while (llGetUnixTime() < 5) ++i;\n"
+                     "} }\n");
+        ensure("not where the loop changes what it is given, itself or by a function, nor for a call that reads the world", said.empty());
     }
 }

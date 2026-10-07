@@ -33,6 +33,8 @@
 #include "aluniformbuffer.h"
 
 #include <memory>
+#include <future>
+#include "threadpool.h"
 
 class LLSpatialGroup;
 class LLViewerObject;
@@ -158,6 +160,24 @@ public:
     void invalidateAutomaticPlacement() { mNavRoomsDirty = true; }
     // Placed probes, which the rooms probes must stay clear of and share the cap with.
     void getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Probe kinds for the census export and the probe volume display; the values are the census file's.
+    enum SKProbeKind : U8
+    {
+        SK_PROBE_DEFAULT = 0,
+        SK_PROBE_PLACED_SPHERE,
+        SK_PROBE_PLACED_BOX,
+        SK_PROBE_OCTREE,
+        SK_PROBE_NAV_SPHERE,
+        SK_PROBE_NAV_BOX, // reserved: navmesh room boxes do not exist yet
+    };
+    SKProbeKind getSKProbeKind(const LLReflectionMap* probe) const;
+    // Every probe held, the default probe first.
+    const std::vector<LLPointer<LLReflectionMap>>& getSKProbes() const { return mProbes; }
+    // Neighbour links from a nav rooms sphere to an octree probe, and probes relinked for a relevance flip.
+    U32 countNavOctreeLinks() const;
+    U32 getRelevanceRelinks() const { return mRelevanceRelinks; }
     // </SK:Nexii>
 
     // reset all state on the next update
@@ -336,8 +356,13 @@ private:
     // The census's solid bodies as a tile lattice for the grid placement's
     // point tests, rebuilt only when the census publishes a new scan.
     // mSolidsCensus is the scan it was built from.
-    std::unique_ptr<sknav::SolidLattice> mSolids;
+    std::shared_ptr<sknav::SolidLattice> mSolids;
+    std::unique_ptr<LL::ThreadPool> mSolidWorkers;
+    std::future<std::shared_ptr<sknav::SolidLattice>> mSolidJob;
+    std::shared_ptr<const SKCensusSnapshot> mSolidJobCensus;
     std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
+    void updateRelevanceLinks();
+    U32 mRelevanceRelinks = 0;
     // </SK:Nexii>
 };
 

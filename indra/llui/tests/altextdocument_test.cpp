@@ -27,6 +27,7 @@
 #include "../altextdocument.h"
 
 #include "../altextchars.h"
+#include "llstring.h"
 
 #include "../test/lltut.h"
 
@@ -415,5 +416,72 @@ namespace tut
         ensure("past an underscore", doc.nextCodeWord(ALTextPos(1, 2), true) == ALTextPos(1, 7) && doc.prevCodeWord(ALTextPos(1, 15), true) == ALTextPos(1, 7));
         const ALTextDocument wide("x\xC3\xA9y + 1");
         ensure("a character past ASCII kept whole", wide.nextCodeWord(ALTextPos(0, 0)) == ALTextPos(0, 5));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<19>()
+    {
+        set_test_name("a character stepped over forward and back, at every place of a line, is the cluster ICU says, ASCII taken the quick way");
+        const std::vector<std::string> lines = {
+            "plain ascii, all of it",
+            "e\xCC\x81 an accent joined to the e before it",
+            "caf\xC3\xA9 na\xC3\xAFve",
+            "1\xEF\xB8\x8F\xE2\x83\xA3 a keycap after a digit",
+            "flags \xF0\x9F\x87\xBA\xF0\x9F\x87\xB8 and a\xE2\x80\x8D joiner",
+            "a tab\tin a line",
+            "x",
+            "",
+        };
+        std::string text;
+        for (size_t i = 0; i < lines.size(); ++i)
+        {
+            text += (i ? "\n" : "") + lines[i];
+        }
+        const ALTextDocument d(text);
+        for (S32 l = 0; l < static_cast<S32>(lines.size()); ++l)
+        {
+            // From every place a caret stands: each cluster's start, and
+            // the line's end.
+            const std::string& line  = lines[static_cast<size_t>(l)];
+            std::vector<size_t> stops = utf8str_grapheme_starts(line, line.size());
+            for (size_t c : stops)
+            {
+                ensure_equals("forward in \"" + line + "\" at " + std::to_string(c), d.nextCluster(ALTextPos(l, static_cast<S32>(c))).column,
+                              static_cast<S32>(utf8str_step_grapheme_forward(line, c)));
+            }
+            stops.push_back(line.size());
+            for (size_t c : stops)
+            {
+                if (c > 0)
+                {
+                    ensure_equals("back in \"" + line + "\" at " + std::to_string(c), d.prevCluster(ALTextPos(l, static_cast<S32>(c))).column,
+                                  static_cast<S32>(utf8str_step_grapheme_backward(line, c)));
+                }
+            }
+        }
+        ensure("off a line's end to the next", d.nextCluster(ALTextPos(0, static_cast<S32>(lines[0].size()))) == ALTextPos(1, 0));
+        ensure("back off its start to the one before", d.prevCluster(ALTextPos(1, 0)) == ALTextPos(0, static_cast<S32>(lines[0].size())));
+    }
+
+    template<> template<>
+    void altextdocument_object::test<20>()
+    {
+        set_test_name("a place moved by an edit, pushed by text put in at it or not; and the stretch a place stood in, a batch's own, not the text between");
+        ALTextDocument             doc("abcdef");
+        const ALTextDocument::Edit typed = doc.insert(ALTextPos(0, 2), "XY");
+        ensure("pushed", typed.placed(ALTextPos(0, 2)) == ALTextPos(0, 4));
+        ensure("not pushed", typed.placed(ALTextPos(0, 2), false) == ALTextPos(0, 2));
+        ensure("after it moved either way", typed.placed(ALTextPos(0, 3), false) == ALTextPos(0, 5));
+        ensure("nothing stood in what was put in", !typed.replacedAround(ALTextPos(0, 2)));
+
+        // "abXYcdef": "XY" and "ef" replaced at once.
+        const ALTextDocument::Edit batch =
+            doc.replaceMany({ { ALTextRange(ALTextPos(0, 2), ALTextPos(0, 4)), "-" }, { ALTextRange(ALTextPos(0, 6), ALTextPos(0, 8)), "" } });
+        ensure_equals("made", doc.text(), std::string("ab-cd"));
+        ensure("in the first", batch.replacedAround(ALTextPos(0, 3)) == ALTextRange(ALTextPos(0, 2), ALTextPos(0, 4)));
+        ensure("at the second's start", batch.replacedAround(ALTextPos(0, 6)) == ALTextRange(ALTextPos(0, 6), ALTextPos(0, 8)));
+        ensure("not between them", !batch.replacedAround(ALTextPos(0, 4)) && !batch.replacedAround(ALTextPos(0, 5)));
+        ensure("nor at an end", !batch.replacedAround(ALTextPos(0, 8)));
+        ensure("between them, moved by the first", batch.placed(ALTextPos(0, 5)) == ALTextPos(0, 4));
     }
 }

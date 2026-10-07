@@ -22,40 +22,60 @@ on:
         type: string
         default: "hippo"
   pull_request:
+    # Everything but documentation and the GitHub files no build reads;
+    # later patterns win.
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "!doc/**"
+      - "!LICENSE"
+      - "!.github/**"
+      - ".github/workflows/build.yaml"
+      - ".github/actions/**"
   push:
     branches: ["main", "release/*", "beta/*", "project/*"]
     tags: ["Alchemy*"]
 
+# Every job reads the repository and nothing more, unless it says otherwise.
 permissions:
   contents: read
+
+# A new push to a pull request supersedes the run in flight. Everything else
+# (branches, tags, dispatches) runs to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # The whole point of the setup job is that we want to set variables once
   # that will be consumed by multiple subsequent jobs.
   setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # which-branch looks up a tag's branch and that branch's pull request.
+      pull-requests: read
     outputs:
       viewer_branch: ${{ steps.which-branch.outputs.branch }}
       relnotes: ${{ steps.which-branch.outputs.relnotes }}
       release_run: ${{ steps.setvar.outputs.release_run }}
       build_type: ${{ steps.setvar.outputs.build_type }}
+      build_suffix: ${{ steps.setvar.outputs.build_suffix }}
       sentry_dsn: ${{ steps.setvar.outputs.sentry_dsn }}
       viewer_channel: ${{ steps.setvar.outputs.viewer_channel }}
       is_private_build: ${{ steps.setvar.outputs.is_private_build }}
+      r2_cache_mode: ${{ steps.setvar.outputs.r2_cache_mode }}
     env:
       # Build with a tag like "Alchemy#abcdef0" to generate a release page
       # (used for builds we are planning to deploy).
       # When you want to use a string variable as a workflow YAML boolean, it's
       # important to ensure it's the empty string when false. If you omit || '',
       # its value when false is "false", which is interpreted as true.
-      RELEASE_RUN: ${{ (github.event.inputs.release_run || github.ref_type == 'tag' && startsWith(github.ref_name, 'Alchemy')) && 'Y' || '' }}
+      RELEASE_RUN: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'Alchemy') && 'Y' || '' }}
       FROM_FORK: ${{ github.event.pull_request.head.repo.fork }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
+      # which-branch installs PyGithub for tag builds.
       - name: Setup python
         uses: actions/setup-python@v7
         with:
@@ -76,6 +96,14 @@ jobs:
           # The Sentry project crash reports go to; unset, the viewer is
           # built without a crash reporter.
           SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+          # Inputs and ref names reach the script through the environment,
+          # never pasted into it, so no input can become a command.
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_PROJECT: ${{ inputs.project }}
+          IS_EDU_TAG: ${{ github.ref_type == 'tag' && contains(github.ref_name, 'edu') }}
+          R2_ENABLED: ${{ vars.VCPKG_R2_ENABLED }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           echo "release_run=$RELEASE_RUN" >> "$GITHUB_OUTPUT"
 
@@ -85,14 +113,17 @@ jobs:
             echo 'is_private_build=false' >> $GITHUB_OUTPUT
           fi
 
-          if [[ "x$GITHUB_REPOSITORY" != "xAlchemyViewer/Alchemy" || "x$GITHUB_REPOSITORY" != "xAlchemyViewer/AlchemyInternal" ]]; then
+          if [[ "x$GITHUB_REPOSITORY" != "xAlchemyViewer/Alchemy" && "x$GITHUB_REPOSITORY" != "xAlchemyViewer/AlchemyInternal" ]]; then
             # Non-linden viewer repository run OSS build
             echo 'build_type=opensource' >> $GITHUB_OUTPUT
+            echo 'build_suffix=-OS' >> $GITHUB_OUTPUT
           elif [[ "$FROM_FORK" == "true" ]]; then
             # PR from fork; don't build with proprietary libs
             echo 'build_type=opensource' >> $GITHUB_OUTPUT
+            echo 'build_suffix=-OS' >> $GITHUB_OUTPUT
           else
-            echo 'build_type=proprietary' >> $GITHUB_OUTPUT
+            echo 'build_type=opensource' >> $GITHUB_OUTPUT
+            echo "build_suffix=" >> $GITHUB_OUTPUT
           fi
 
           # Crash reports go to Sentry on every platform and build type once
@@ -104,25 +135,42 @@ jobs:
             echo "sentry_dsn=" >> "$GITHUB_OUTPUT"
           fi
 
+          # The vcpkg binary cache in R2. Only trusted builds of protected
+          # refs write it; same-repository pull requests read it with the
+          # read-only keys, so code still under review cannot put packages in
+          # front of a release build. Forks get no secrets and Dependabot gets
+          # its own, so neither uses it.
+          r2_cache_mode=
+          if [[ "$R2_ENABLED" == "true" && "$GITHUB_ACTOR" != "dependabot[bot]" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              if [[ "$PR_HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+                r2_cache_mode="read"
+              fi
+            elif [[ "$REF_PROTECTED" == "true" ]]; then
+              r2_cache_mode="readwrite"
+            fi
+          fi
+          echo "r2_cache_mode=$r2_cache_mode" >> "$GITHUB_OUTPUT"
+
           # determine the viewer channel from the branch or tag name
           # trigger an EDU build by including "edu" in the tag
-          edu=${{ github.ref_type == 'tag' && contains(github.ref_name, 'edu') }}
-          echo "ref_type=${{ github.ref_type }}, ref_name=${{ github.ref_name }}, edu='$edu'"
+          edu=$IS_EDU_TAG
+          echo "ref_type=$GITHUB_REF_TYPE, ref_name=$GITHUB_REF_NAME, edu='$edu'"
           branch=$BUILD_VCS_BRANCH
-          if [[ "${{inputs.channel}}" != "" && "${{inputs.channel}}" != "Auto" ]];
+          if [[ "$INPUT_CHANNEL" != "" && "$INPUT_CHANNEL" != "Auto" ]];
           then
-              if [[ "${{inputs.channel}}" == "Project" ]];
+              if [[ "$INPUT_CHANNEL" == "Project" ]];
               then
-                  export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Project ${{inputs.project}}"
+                  export viewer_channel="$VIEWER_CHANNEL_BASE Project $INPUT_PROJECT"
               else
-                  export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} ${{inputs.channel}}"
+                  export viewer_channel="$VIEWER_CHANNEL_BASE $INPUT_CHANNEL"
               fi
           elif [[ "$edu" == "true" ]];
           then
-              export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Release edu"
+              export viewer_channel="$VIEWER_CHANNEL_BASE Release edu"
           elif  [[ "$branch" == "develop" ]];
           then
-              export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Develop"
+              export viewer_channel="$VIEWER_CHANNEL_BASE Develop"
           else
               IFS='/' read -ra ba <<< "$branch"
               prefix=${ba[0]}
@@ -131,41 +179,35 @@ jobs:
                   prj_str="${prj[*]}"
                   # uppercase first letter of each word
                   capitalized=$(echo "$prj_str" | awk '{for (i=1; i<=NF; i++) $i = toupper(substr($i,1,1)) substr($i,2); print}')
-                  export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Project $capitalized"
+                  export viewer_channel="$VIEWER_CHANNEL_BASE Project $capitalized"
               elif  [[ "$prefix" == "release" || "$prefix" == "main" ]];
               then
-                  export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Release"
+                  export viewer_channel="$VIEWER_CHANNEL_BASE Release"
               else
-                  export viewer_channel="${{ env.VIEWER_CHANNEL_BASE }} Test"
+                  export viewer_channel="$VIEWER_CHANNEL_BASE Test"
               fi
           fi
           echo "viewer_channel=$viewer_channel" >> "$GITHUB_OUTPUT"
 
   build:
     needs: setup
-    permissions:
-      packages: write
     strategy:
+      # One platform failing says nothing about the others: let them finish.
+      fail-fast: false
       matrix:
-        runner: ["windows-2025-vs2026", "macos-26", "ubuntu-26.04"]
+        runner: ["windows-2025-vs2026", "xcode-27", "ubuntu-26.04"]
         configuration: [release]
         arch: [x64, arm64]
         build_variant: [Viewer, Tests]
         exclude:
-          # The x86-64 Linux runner cannot build arm64; the arm64 rows below
-          # bring their own runner.
+          # The x86-64 Linux and Windows runners do not build arm64; the arm64
+          # rows below bring their own runner.
           - runner: ubuntu-26.04
             arch: arm64
           - runner: windows-2025-vs2026
             arch: arm64
-          - build_variant: Viewer
-            configuration: relwithdebinfo
-          - build_variant: Viewer
-            configuration: optdebug
-          - runner: macos-26
-            configuration: relwithdebinfo
-          - runner: macos-26
-            configuration: optdebug
+          - runner: xcode-27
+            arch: x64
         include:
           # Linux on arm64: NEON is a first-class target, and this is the
           # one row where GCC compiles the SIMD layer for it.
@@ -177,30 +219,25 @@ jobs:
             configuration: release
             arch: arm64
             build_variant: Tests
+          # Windows on arm64, built and tested natively.
+          - runner: windows-11-vs2026-arm
+            configuration: release
+            arch: arm64
+            build_variant: Viewer
+          - runner: windows-11-vs2026-arm
+            configuration: release
+            arch: arm64
+            build_variant: Tests
 
     runs-on: ${{ matrix.runner }}
+    # A failing test row is reported without failing the run.
+    continue-on-error: ${{ startsWith(matrix.build_variant, 'Tests') }}
     outputs:
       viewer_version: ${{ steps.build.outputs.viewer_version }}
       imagename: ${{ steps.build.outputs.imagename }}
-      # Windows Velopack outputs (passed to sign-pkg-windows)
-      velopack_pack_id:       ${{ steps.build.outputs.velopack_pack_id }}
-      velopack_pack_version:  ${{ steps.build.outputs.velopack_pack_version }}
-      velopack_pack_authors:  ${{ steps.build.outputs.velopack_pack_authors }}
-      velopack_pack_title:    ${{ steps.build.outputs.velopack_pack_title }}
-      velopack_main_exe:      ${{ steps.build.outputs.velopack_main_exe }}
-      velopack_icon:          ${{ steps.build.outputs.velopack_icon }}
-      velopack_splash:        ${{ steps.build.outputs.velopack_splash }}
-      velopack_splash_color:  ${{ steps.build.outputs.velopack_splash_color }}
-      velopack_installer_base: ${{ steps.build.outputs.velopack_installer_base }}
-      # macOS Velopack outputs (passed to sign-pkg-mac)
-      velopack_mac_pack_id:      ${{ steps.build.outputs.velopack_mac_pack_id }}
-      velopack_mac_pack_version: ${{ steps.build.outputs.velopack_mac_pack_version }}
-      velopack_mac_pack_title:   ${{ steps.build.outputs.velopack_mac_pack_title }}
-      velopack_mac_main_exe:     ${{ steps.build.outputs.velopack_mac_main_exe }}
-      velopack_mac_bundle_id:    ${{ steps.build.outputs.velopack_mac_bundle_id }}
     env:
       # Sets Xcode version used for build
-      DEVELOPER_DIR: "/Applications/Xcode_26.6.app/Contents/Developer"
+      DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer"
       # Decide if we're building tests or the viewer
       AL_BUILD_VIEWER: ${{ matrix.build_variant == 'Viewer' }}
       AL_BUILD_APPEARANCE_UTILITY: false # ${{ startsWith(matrix.runner, 'ubuntu-') && matrix.build_variant == 'Viewer' }}
@@ -215,6 +252,7 @@ jobs:
       BUILD_ARCH: ${{ matrix.arch }}
       BUILD_CONFIG: ${{ matrix.configuration }}
       BUILD_TYPE: ${{ needs.setup.outputs.build_type }}
+      CFG_SUFFIX: ${{ needs.setup.outputs.build_suffix }}
       # Crash reporting: Sentry, wherever the setup job found a DSN
       AL_USE_SENTRY: ${{ needs.setup.outputs.sentry_dsn != '' }}
       AL_SENTRY_DSN: ${{ needs.setup.outputs.sentry_dsn }}
@@ -223,7 +261,7 @@ jobs:
       AL_CHANNEL: ${{ needs.setup.outputs.viewer_channel }}
       VIEWER_GRID: "agni"
       # Link Time Optimization
-      AL_USE_LTO: ${{ matrix.configuration == 'release' }}
+      AL_USE_LTO: ${{ matrix.configuration == 'release' && startsWith(matrix.build_variant, 'Viewer') }}
       # Setting this variable directs Linden's TUT test driver code to capture
       # test-program log output at the specified level, but to display it only if
       # the individual test fails.
@@ -231,152 +269,41 @@ jobs:
       master_message_template_checkout: ${{ github.workspace }}/.master-message-template
       # vcpkg Setup
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      VCPKG_USERNAME: ${{ github.repository_owner }}
-      # VCPKG_FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
       VCPKG_BINARY_SOURCES: "clear;default,readwrite"
     steps:
-      - name: Linux Dependency Install and Disk Cleanup
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            autoconf autoconf-archive automake bison build-essential cmake curl flex gettext \
-            libasound2-dev libaudio-dev libdbus-1-dev libdbus-1-dev libdecor-0-dev libdrm-dev \
-            libegl1-mesa-dev libfribidi-dev libgbm-dev libgl1-mesa-dev libgl1-mesa-dri libgles2-mesa-dev \
-            libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev libibus-1.0-dev libjack-dev libltdl-dev \
-            libpipewire-0.3-dev libpulse-dev libsndio-dev libtext-unidecode-perl \
-            libthai-dev libtool libudev-dev libunwind-dev liburing-dev libvlc-dev libwayland-dev \
-            libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxft-dev libxi-dev libxinerama-dev \
-            libxkbcommon-dev libxrandr-dev libxss-dev libxtst-dev linux-libc-dev mono-complete \
-            nasm ninja-build pkgconf tar tex-common texinfo unzip zip
-
-          sudo locale-gen en_US.UTF-8
-          sudo locale-gen en_GB.UTF-8
-          sudo locale-gen fr_FR.UTF-8
-
-          df -h
-          sudo docker container prune -f
-          sudo docker image prune -a -f
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          df -h
-
-      - name: macOS Homebrew Dependency Install
-        if: runner.os == 'macOS'
-        run: |
-          brew install autoconf autoconf-archive automake libtool mono nasm unzip zip
-
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          # Full history: the vcpkg submodule needs it to resolve the
+          # versions the manifest pins.
+          fetch-depth: 0
+          persist-credentials: false
           submodules: recursive
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Checkout master-message-template
         uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: secondlife/master-message-template
           path: .master-message-template
 
-      - name: Setup python
-        uses: actions/setup-python@v7
+      - name: Set up the build
+        uses: ./.github/actions/setup-build
         with:
-          python-version: "3.14"
-
-      # Linux builds with the CMake floor, so the floor is a floor.
-      - name: Install python dependencies
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]
-          then pip3 install llsd cmake==4.0.0 ninja
-          else pip3 install llsd cmake ninja
-          fi
-
-      - name: Bootstrap vcpkg Windows
-        if: runner.os == 'Windows'
-        run: |
-          ./vcpkg/bootstrap-vcpkg.bat
-
-      - name: Bootstrap vcpkg non-Windows
-        if: runner.os == 'macOS' || runner.os == 'Linux'
-        run: |
-          ./vcpkg/bootstrap-vcpkg.sh
-
-      - name: Install AWS CLI on macOS
-        if: >-
-          vars.VCPKG_R2_ENABLED == 'true' && runner.os == 'macOS' &&
-          ((github.ref_protected && github.event_name != 'pull_request') ||
-           (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
-        run: brew install awscli
-
-      - name: Configure R2 binary cache for trusted builds
-        if: vars.VCPKG_R2_ENABLED == 'true' && github.ref_protected && github.event_name != 'pull_request'
-        env:
-          R2_CACHE_MODE: readwrite
-          R2_ENDPOINT_URL: ${{ vars.VCPKG_R2_ENDPOINT_URL }}
-          R2_BUCKET: ${{ vars.VCPKG_R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.VCPKG_R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.VCPKG_R2_SECRET_ACCESS_KEY }}
-        run: python scripts/vcpkg/configure_r2_cache.py
-
-      - name: Configure R2 binary cache for same-repository PRs
-        if: >-
-          vars.VCPKG_R2_ENABLED == 'true' && github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          # Temporary cache population test; restore read mode and reader secrets afterward.
-          R2_CACHE_MODE: readwrite
-          R2_ENDPOINT_URL: ${{ vars.VCPKG_R2_ENDPOINT_URL }}
-          R2_BUCKET: ${{ vars.VCPKG_R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.VCPKG_R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.VCPKG_R2_SECRET_ACCESS_KEY }}
-        run: python scripts/vcpkg/configure_r2_cache.py
-
-      # - name: Set up vcpkg nuget caching
-      #   shell: bash
-      #   run: |
-      #     if [[ "$RUNNER_OS" == "Windows" ]]
-      #     then
-      #       $(${VCPKG_ROOT}/vcpkg fetch nuget | tail -n 1) \
-      #         sources add \
-      #         -Source "${{ env.VCPKG_FEED_URL }}" \
-      #         -StorePasswordInClearText \
-      #         -Name GitHubPackages \
-      #         -UserName "${{ env.VCPKG_USERNAME }}" \
-      #         -Password "${{ secrets.GITHUB_TOKEN }}"
-      #       $(${VCPKG_ROOT}/vcpkg fetch nuget | tail -n 1) \
-      #         setapikey "${{ secrets.GITHUB_TOKEN }}" \
-      #         -Source "${{ env.VCPKG_FEED_URL }}"
-      #     else
-      #       mono $(${VCPKG_ROOT}/vcpkg fetch nuget | tail -n 1) \
-      #         sources add \
-      #         -Source "${{ env.VCPKG_FEED_URL }}" \
-      #         -StorePasswordInClearText \
-      #         -Name GitHubPackages \
-      #         -UserName "${{ env.VCPKG_USERNAME }}" \
-      #         -Password "${{ secrets.GITHUB_TOKEN }}"
-      #       mono $(${VCPKG_ROOT}/vcpkg fetch nuget | tail -n 1) \
-      #         setapikey "${{ secrets.GITHUB_TOKEN }}" \
-      #         -Source "${{ env.VCPKG_FEED_URL }}"
-      #     fi
-
-      - name: Cache Rust Dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          r2-cache-mode: ${{ needs.setup.outputs.r2_cache_mode }}
+          r2-endpoint-url: ${{ vars.VCPKG_R2_ENDPOINT_URL }}
+          r2-bucket: ${{ vars.VCPKG_R2_BUCKET }}
+          # The writer keys only where the cache is written; a reader's mode
+          # alone would not stop code that finds writer keys from using them.
+          r2-access-key-id: ${{ needs.setup.outputs.r2_cache_mode == 'readwrite' && secrets.VCPKG_R2_ACCESS_KEY_ID || secrets.VCPKG_R2_READ_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ needs.setup.outputs.r2_cache_mode == 'readwrite' && secrets.VCPKG_R2_SECRET_ACCESS_KEY || secrets.VCPKG_R2_READ_SECRET_ACCESS_KEY }}
 
       - name: Configure
         id: configure
         shell: bash
         run: |
           set -x
-
-          # Set VCPKG root
-          export VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT
 
           [ -n "$master_message_template_checkout" ] \
           && [ -r "$master_message_template_checkout/message_template.msg" ] \
@@ -391,17 +318,22 @@ jobs:
           SIGNING=()
           case "$RUNNER_OS" in
             Windows)
-              cmake_preset_name="vs2026${cmake_preset_postfix}-fullopt"
+              cmake_preset_name="vs2026${cmake_preset_postfix}-$BUILD_ARCH"
               build_directory="build-Windows-$cmake_preset_name"
-              vcpkg_triplet="x64-windows-alchemy-avx2-release"
+              if [[ "$BUILD_ARCH" == "arm64" ]]
+              then
+                vcpkg_triplet="arm64-windows-alchemy-release"
+              else
+                vcpkg_triplet="x64-windows-alchemy-avx2-release"
+              fi
               ;;
             macOS)
-              cmake_preset_name="ninja${cmake_preset_postfix}-fullopt-$BUILD_ARCH"
+              cmake_preset_name="ninja${cmake_preset_postfix}-$BUILD_ARCH"
               build_directory="build-Darwin-$cmake_preset_name"
               vcpkg_triplet="$BUILD_ARCH-osx-alchemy-release"
               ;;
             Linux)
-              cmake_preset_name="ninja${cmake_preset_postfix}-fullopt"
+              cmake_preset_name="ninja${cmake_preset_postfix}-mold"
               build_directory="build-Linux-$cmake_preset_name"
               if [[ "$BUILD_ARCH" == "arm64" ]]
               then
@@ -413,7 +345,6 @@ jobs:
           esac
 
           echo "build_directory=$build_directory" >> "$GITHUB_OUTPUT"
-          echo "cmake_preset=$cmake_preset_name" >> "$GITHUB_OUTPUT"
 
           cmake -S indra --preset $cmake_preset_name \
             -DVCPKG_TARGET_TRIPLET="$vcpkg_triplet" \
@@ -424,12 +355,13 @@ jobs:
             -DAL_BUILD_PACKAGE:BOOL=ON \
             -DAL_USE_VELOPACK:BOOL=ON \
             -DAL_USE_LTO:BOOL="$AL_USE_LTO" \
+            -DAL_USE_TRACY:BOOL=OFF \
             -DAL_ENABLE_RELEASE_DEBUG_LOGGING:BOOL=OFF \
             -DAL_ENABLE_CRASH_REPORTING:BOOL="$AL_ENABLE_CRASH_REPORTING" \
             -DAL_USE_SENTRY:BOOL="$AL_USE_SENTRY" \
             -DAL_SENTRY_DSN:STRING="$AL_SENTRY_DSN" \
             -DAL_CHANNEL:STRING="${AL_CHANNEL}" \
-            -DAL_GRID:STRING="\"$VIEWER_GRID\"" \
+            -DAL_GRID:STRING="$VIEWER_GRID" \
             $template_verifier_master_url \
             "${SIGNING[@]}"
 
@@ -438,27 +370,29 @@ jobs:
         shell: bash
         env:
           BUILD_DIRECTORY: ${{ steps.configure.outputs.build_directory }}
-          CMAKE_PRESET_NAME: ${{ steps.configure.outputs.cmake_preset }}
           CTEST_OUTPUT_ON_FAILURE: 1 # Output log on test failure
-        working-directory: "${{ github.workspace }}/indra"
         run: |
           set -x
 
-          # Set VCPKG root
-          export VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT
+          case "$BUILD_CONFIG" in
+            release) cmake_config=Release ;;
+            relwithdebinfo) cmake_config=RelWithDebInfo ;;
+            optdebug) cmake_config=OptDebug ;;
+            *) cmake_config=Debug ;;
+          esac
 
           if $BUILD_TESTS
           then
             # Now build the tests. We want to build them in a separate step before running them.
-            cmake --build --preset $CMAKE_PRESET_NAME-$BUILD_CONFIG
+            cmake --build "$BUILD_DIRECTORY" --config "$cmake_config" --parallel "$(nproc)"
 
             # Now that we've built the tests, we can run them to validate the build.
             # If the tests fail, their output will be visible in the logs due to
             # CTEST_OUTPUT_ON_FAILURE above, and the build step will be marked as failed.
-            cmake --build --preset $CMAKE_PRESET_NAME-$BUILD_CONFIG --target BUILD_AND_RUN_TESTS
+            cmake --build "$BUILD_DIRECTORY" --config "$cmake_config" --target BUILD_AND_RUN_TESTS --parallel "$(nproc)"
           elif $AL_BUILD_VIEWER
           then
-            cmake --build --preset $CMAKE_PRESET_NAME-$BUILD_CONFIG || fatal "failed building $BUILD_CONFIG viewer"
+            cmake --build "$BUILD_DIRECTORY" --config "$cmake_config" --parallel "$(nproc)"
           else
             echo "::notice::Skipping build due to both viewer and tests being disabled"
           fi
@@ -475,11 +409,7 @@ jobs:
           # platform, we must disambiguate on more than the platform name.
           # e.g. if we were still running Windows 32-bit builds, we'd need to
           # qualify the artifact with bit width.
-          if [[ "$BUILD_TYPE" != "proprietary" ]]
-          then cfg_suffix='-OS'
-          else cfg_suffix=''
-          fi
-          echo "artifact=$RUNNER_OS$cfg_suffix-$BUILD_ARCH" >> $GITHUB_OUTPUT
+          echo "artifact=$RUNNER_OS$CFG_SUFFIX-$BUILD_ARCH" >> $GITHUB_OUTPUT
 
           # Gather version metadata
           if [ -r "$BUILD_DIRECTORY/newview/viewer_version.txt" ]
@@ -489,17 +419,10 @@ jobs:
           fi
 
           # The package: the install tree on Windows, which the signing job
-          # packages with Velopack; the CPack archive elsewhere. The names
-          # the packaging steps need come from the configure.
+          # packages with Velopack from it and its package.env metadata; the
+          # CPack archive elsewhere.
           if $AL_BUILD_VIEWER
           then
-            case "$BUILD_CONFIG" in
-              release) cmake_config=Release ;;
-              relwithdebinfo) cmake_config=RelWithDebInfo ;;
-              optdebug) cmake_config=OptDebug ;;
-              *) cmake_config=Debug ;;
-            esac
-            cat "$BUILD_DIRECTORY/newview/package.env" >> "$GITHUB_OUTPUT"
             case "$RUNNER_OS" in
               Windows)
                 cmake --install "$BUILD_DIRECTORY" --config "$cmake_config" --prefix "$RUNNER_TEMP/app"
@@ -507,11 +430,23 @@ jobs:
                 ;;
               *)
                 cpack --config "$BUILD_DIRECTORY/CPackConfig.cmake" -C "$cmake_config" -B "$RUNNER_TEMP/package"
-                viewer_app="$(ls "$RUNNER_TEMP"/package/*.tar.xz "$RUNNER_TEMP"/package/*.dmg 2>/dev/null | head -n 1)"
+                viewer_app="$(ls "$RUNNER_TEMP"/package/*.tar.xz "$RUNNER_TEMP"/package/*.dmg 2>/dev/null | head -n 1 || true)"
+                if [[ -z "$viewer_app" ]]; then
+                  echo "::error::No .tar.xz or .dmg package under $RUNNER_TEMP/package"
+                  exit 1
+                fi
                 echo "viewer_app=$viewer_app" >> "$GITHUB_OUTPUT"
                 ;;
             esac
           fi
+
+      - name: Upload Windows package metadata
+        uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows' && matrix.configuration == 'release' && matrix.build_variant == 'Viewer'
+        with:
+          name: "${{ steps.build.outputs.artifact }}-metadata"
+          path: ${{ steps.configure.outputs.build_directory }}/newview/package.env
+          if-no-files-found: error
 
       - name: Upload executable
         uses: actions/upload-artifact@v7
@@ -519,7 +454,9 @@ jobs:
         with:
           name: "${{ steps.build.outputs.artifact }}-app"
           if-no-files-found: error
-          compression-level: 9
+          # The Windows install tree is uncompressed; the .tar.xz and .dmg
+          # already are.
+          compression-level: ${{ runner.os == 'Windows' && 9 || 0 }}
           path: |
             ${{ steps.build.outputs.viewer_app }}
 
@@ -551,16 +488,6 @@ jobs:
           if-no-files-found: error
           path: |
             ${{ steps.configure.outputs.build_directory }}/symbols/Release/${{ needs.setup.outputs.viewer_channel }}.sym.tar.xz
-
-      - name: Upload metadata
-        uses: actions/upload-artifact@v7
-        if: matrix.configuration == 'release' && matrix.build_variant == 'Viewer'
-        with:
-          name: "${{ steps.build.outputs.artifact }}-metadata"
-          if-no-files-found: error
-          compression-level: 9
-          path: |
-            ${{ steps.configure.outputs.build_directory }}/newview/viewer_version.txt
 
       # Sentry symbolicates a crash report with the debug files of the
       # binaries that shipped, in pairs: PE and PDB, Mach-O and dSYM, ELF and
@@ -626,14 +553,21 @@ jobs:
 
   sign-and-package-windows:
     needs: [setup, build]
-    runs-on: windows-2025
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-2025-vs2026
     steps:
+      # The app and its metadata come from the build's artifacts; the tree
+      # contributes only the Velopack tool manifest.
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-          submodules: recursive
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          sparse-checkout: /dotnet-tools.json
+          sparse-checkout-cone-mode: false
 
       - name: Setup .NET for Velopack
         uses: actions/setup-dotnet@v6
@@ -645,75 +579,71 @@ jobs:
 
       - name: Fetch Windows app
         uses: actions/download-artifact@v8
-        if: needs.setup.outputs.build_type == 'proprietary'
         with:
-          name: Windows-x64-app
+          name: Windows${{ needs.setup.outputs.build_suffix }}-${{ matrix.arch }}-app
           path: .app
 
-      - name: Fetch Windows OS app
+      - name: Fetch Windows package metadata
         uses: actions/download-artifact@v8
-        if: needs.setup.outputs.build_type != 'proprietary'
         with:
-          name: Windows-OS-x64-app
-          path: .app
+          name: Windows${{ needs.setup.outputs.build_suffix }}-${{ matrix.arch }}-metadata
+          path: .metadata
+
+      - name: Load Velopack metadata
+        shell: bash
+        run: |
+          while IFS='=' read -r key value; do
+            if [[ "$key" == velopack_* ]]; then
+              printf '%s=%s\n' "${key^^}" "$value" >> "$GITHUB_ENV"
+            fi
+          done < .metadata/package.env
 
       - name: Build and sign Velopack package
         shell: bash
-        env:
-          PACK_ID: ${{ needs.build.outputs.velopack_pack_id }}
-          PACK_VERSION: ${{ needs.build.outputs.velopack_pack_version }}
-          PACK_TITLE: ${{ needs.build.outputs.velopack_pack_title }}
-          PACK_AUTHORS: ${{ needs.build.outputs.velopack_pack_authors }}
-          MAIN_EXE: ${{ needs.build.outputs.velopack_main_exe }}
-          ICON: ${{ needs.build.outputs.velopack_icon }}
-          SPLASH_IMAGE: ${{ needs.build.outputs.velopack_splash }}
-          SPLASH_COLOR: ${{ needs.build.outputs.velopack_splash_color }}
-          INSTALLER_BASE: ${{ needs.build.outputs.velopack_installer_base }}
         run: |
           set -x
 
           vpk_args=(
             dotnet vpk pack
-            --packId "$PACK_ID"
-            --packVersion "$PACK_VERSION"
-            --packAuthors "$PACK_AUTHORS"
+            --packId "$VELOPACK_PACK_ID"
+            --packVersion "$VELOPACK_PACK_VERSION"
+            --packAuthors "$VELOPACK_PACK_AUTHORS"
             --packDir .app
-            --mainExe "$MAIN_EXE"
-            --packTitle "$PACK_TITLE"
+            --mainExe "$VELOPACK_MAIN_EXE"
+            --packTitle "$VELOPACK_PACK_TITLE"
             --shortcuts ''
-            --splashProgressColor "$SPLASH_COLOR"
+            --splashProgressColor "$VELOPACK_SPLASH_COLOR"
+            --channel "$VELOPACK_CHANNEL"
+            --runtime "$VELOPACK_RUNTIME"
           )
 
           # Add icon if provided
-          if [[ -n "$ICON" && -f ".app/$ICON" ]]; then
-            vpk_args+=(--icon ".app/$ICON")
+          if [[ -n "$VELOPACK_ICON" && -f ".app/$VELOPACK_ICON" ]]; then
+            vpk_args+=(--icon ".app/$VELOPACK_ICON")
           fi
 
           # Add splash if provided
-          if [[ -n "$SPLASH_IMAGE" && -f ".app/$SPLASH_IMAGE" ]]; then
-            vpk_args+=(--splashImage ".app/$SPLASH_IMAGE")
+          if [[ -n "$VELOPACK_SPLASH" && -f ".app/$VELOPACK_SPLASH" ]]; then
+            vpk_args+=(--splashImage ".app/$VELOPACK_SPLASH")
           fi
 
           "${vpk_args[@]}"
 
       - name: Rename Velopack outputs
         shell: bash
-        env:
-          PACK_ID: ${{ needs.build.outputs.velopack_pack_id }}
-          INSTALLER_BASE: ${{ needs.build.outputs.velopack_installer_base }}
         run: |
           # Move Setup.exe into .app for the installer upload step
-          setup="Releases/${PACK_ID}-win-Setup.exe"
+          setup="Releases/${VELOPACK_PACK_ID}-${VELOPACK_CHANNEL}-Setup.exe"
           if [[ -f "$setup" ]]; then
-            mv "$setup" ".app/${INSTALLER_BASE}_Setup.exe"
-            echo "Moved $setup to .app/${INSTALLER_BASE}_Setup.exe"
+            mv "$setup" ".app/${VELOPACK_INSTALLER_BASE}_Setup.exe"
+            echo "Moved $setup to .app/${VELOPACK_INSTALLER_BASE}_Setup.exe"
           fi
 
           # Rename Portable.zip to include version
-          portable="Releases/${PACK_ID}-win-Portable.zip"
+          portable="Releases/${VELOPACK_PACK_ID}-${VELOPACK_CHANNEL}-Portable.zip"
           if [[ -f "$portable" ]]; then
-            mv "$portable" "Releases/${INSTALLER_BASE}_Portable.zip"
-            echo "Moved $portable to Releases/${INSTALLER_BASE}_Portable.zip"
+            mv "$portable" "Releases/${VELOPACK_INSTALLER_BASE}_Portable.zip"
+            echo "Moved $portable to Releases/${VELOPACK_INSTALLER_BASE}_Portable.zip"
           fi
 
       - name: Find Velopack installer
@@ -730,14 +660,14 @@ jobs:
       - name: Post the installer
         uses: actions/upload-artifact@v7
         with:
-          name: "Windows-installer"
+          name: "Windows${{ needs.setup.outputs.build_suffix }}-${{ matrix.arch }}-installer"
           path: ${{ steps.find-installer.outputs.installer }}
           if-no-files-found: error
 
       - name: Upload Velopack releases
         uses: actions/upload-artifact@v7
         with:
-          name: "Windows-releases"
+          name: "Windows${{ needs.setup.outputs.build_suffix }}-${{ matrix.arch }}-releases"
           path: Releases/
           if-no-files-found: error
 
@@ -787,8 +717,10 @@ jobs:
   release:
     needs: [setup, build, sign-and-package-windows]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: needs.setup.outputs.release_run
     permissions:
+      # Creates the release, generates its notes and uploads its assets.
       contents: write
     steps:
       - uses: actions/download-artifact@v8
@@ -801,11 +733,11 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: "Linux-x64-app"
+          name: "Linux${{ needs.setup.outputs.build_suffix }}-x64-app"
 
       - uses: actions/download-artifact@v8
         with:
-          name: "Linux-arm64-app"
+          name: "Linux${{ needs.setup.outputs.build_suffix }}-arm64-app"
 
       # forked from softprops/action-gh-release
       - name: Create GitHub release
@@ -814,17 +746,21 @@ jobs:
         with:
           # name the release page for the branch. We want channel and version.
           name: "${{ needs.setup.outputs.viewer_channel }} ${{ needs.build.outputs.viewer_version }}"
-          body: |
+          # The tag's pull request notes after "relnotes:", if any, ahead of
+          # the generated notes.
+          body: ${{ needs.setup.outputs.relnotes }}
           prerelease: true
           generate_release_notes: true
           target_commitish: ${{ github.sha }}
           append_body: true
           fail_on_unmatched_files: true
           files: |
-            Windows-installer/*.exe
+            Windows*-installer/*.exe
             *.tar.xz
-            Windows-releases/*
+            Windows*-releases/*
 
       - name: post release URL
+        env:
+          RELEASE_URL: ${{ steps.release.outputs.url }}
         run: |
-          echo "::notice::Release ${{ steps.release.outputs.url }}"
+          echo "::notice::Release $RELEASE_URL"

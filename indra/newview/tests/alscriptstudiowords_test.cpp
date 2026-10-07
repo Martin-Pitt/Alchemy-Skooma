@@ -71,6 +71,8 @@ namespace tut
 {
     struct alscriptstudiowords_data
     {
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
         al_studio_test::StudioWindow window;
         std::vector<std::string>     extra;
         LLSD                         lsl  = lslKeywords();
@@ -78,7 +80,7 @@ namespace tut
 
         alscriptstudiowords_data()
         {
-            Words::Sources& sources   = Words::sources();
+            auto& sources = viewer.slots;
             sources.keywords          = [this](bool lua) { return lua ? slua : lsl; };
             sources.preprocessorWords = [this] { return extra; };
             sources.lslHelpUrl        = [] { return std::string("https://wiki.example/[LSL_STRING]"); };
@@ -86,7 +88,6 @@ namespace tut
         }
         ~alscriptstudiowords_data()
         {
-            Words::sources() = Words::Sources();
             Words::forget();
         }
         ALCodeEditor& editor(const std::string& text, bool lua)
@@ -148,7 +149,7 @@ namespace tut
         ensure("kept", Words::word(false, "llSay") != nullptr && !Words::word(false, "llShout"));
         Words::forget();
         ensure("built again", !Words::word(false, "llSay") && Words::word(false, "llShout") != nullptr);
-        Words::sources().keywords = [](bool) { return LLSD("not a map"); };
+        viewer.slots.keywords = [](bool) { return LLSD("not a map"); };
         Words::forget();
         ensure("definitions that are not: no words", Words::vocabulary(false).empty() && !Words::word(false, "llShout"));
     }
@@ -329,5 +330,98 @@ namespace tut
         ensure("llSay has none", !Words::linkArgument(false, "llSay", 0));
         ensure("a word not known, none", !Words::linkArgument(false, "llNothing", 0));
         ensure("SLua's by its name with its library", Words::linkArgument(true, "ll.MessageLinked", 0) && !Words::linkArgument(true, "ll.MessageLinked", 1));
+    }
+    template<> template<>
+    void alscriptstudiowords_object::test<12>()
+    {
+        set_test_name("a language's tables are made once and shared by every editor of it; new definitions are read once however many ask; new preprocessor words make new tables");
+        S32         asked   = 0;
+        std::string version = "one";
+        viewer.slots.keywords = [this, &asked](bool lua) {
+            ++asked;
+            return lua ? slua : lsl;
+        };
+        viewer.slots.definitionsVersion = [&version] { return version; };
+        Words::forget();
+        ALCodeEditor& a = editor("default {}", false);
+        ALCodeEditor& b = editor("default {}", false);
+        ALCodeEditor& s = editor("x", true);
+        Words::teach(a, false);
+        Words::teach(b, false);
+        Words::teach(s, true);
+        ensure("one set for both LSL editors", &a.highlighter().words() == &b.highlighter().words());
+        ensure("another for SLua's", &s.highlighter().words() != &a.highlighter().words());
+        const S32 first = asked;
+        Words::teach(a, false);
+        ensure_equals("taught again from what is kept", asked, first);
+
+        version                     = "two";
+        lsl["functions"]["llShout"] = LLSD().with("return", "");
+        Words::teach(a, false);
+        Words::teach(b, false);
+        ensure_equals("new definitions read once for both", asked, first + 1);
+        ensure("and shared still, with the new word", &a.highlighter().words() == &b.highlighter().words() &&
+                                                          a.highlighter().words().has("function", "llShout"));
+
+        const ALSyntaxWords* before = &a.highlighter().words();
+        extra                       = { "switch" };
+        Words::teach(a, false);
+        ensure("new preprocessor words, new tables", &a.highlighter().words() != before && a.highlighter().words().has("control", "switch"));
+    }
+
+    template<> template<>
+    void alscriptstudiowords_object::test<13>()
+    {
+        set_test_name("the reference files each word: a function by its first category, an SLua ll function by its LSL twin's, other SLua by library, a constant by family");
+        Words::Categories found;
+        Words::readCategories("constants:\n"
+                              "  PI:\n"
+                              "    categories:\n"
+                              "      - math\n"
+                              "functions:\n"
+                              "  llSay:\n"
+                              "    arguments:\n"
+                              "    - Channel:\n"
+                              "        tooltip: Channel to use.\n"
+                              "    tooltip: Says Text on Channel.\n"
+                              "      More text, six in.\n"
+                              "    categories:\n"
+                              "      - avatar_communication\n"
+                              "      - chat\n"
+                              "  llOld:\n"
+                              "    tooltip: Gone.\n"
+                              "events:\n"
+                              "  touch_start:\n"
+                              "    categories:\n"
+                              "      - touch\n",
+                              found);
+        ensure_equals("only functions, and those with categories", found.size(), size_t(1));
+        ensure_equals("by the first", found["llSay"], std::string("avatar_communication"));
+
+        viewer.slots.definitionsYaml = [] { return std::string("functions:\n  llSay:\n    categories:\n      - avatar_communication\n"); };
+        lsl["constants"]["PRIM_POSITION"] = LLSD().with("type", "integer").with("value", "6");
+        Words::forget();
+        ensure_equals("LSL, in words", Words::word(false, "llSay")->group, std::string("Avatar communication"));
+        ensure("none where none is said", Words::word(false, "llOld")->group.empty());
+        ensure("an event none", Words::word(false, "touch_start")->group.empty());
+        ensure_equals("a constant by family", Words::word(false, "PRIM_POSITION")->group, std::string("PRIM_..."));
+        ensure("one without a family none", Words::word(false, "PI")->group.empty());
+        ensure_equals("SLua's ll function as its twin", Words::word(true, "ll.Say")->group, std::string("Avatar communication"));
+        ensure_equals("another SLua function by library", Words::word(true, "math.pi")->group, std::string("math"));
+    }
+
+    template<> template<>
+    void alscriptstudiowords_object::test<14>()
+    {
+        set_test_name("the units ask the viewer attached; what it leaves unsaid is a viewer with nothing's answer");
+        ALScriptStudioViewer& asked = ALScriptStudioViewer::get();
+        ensure("the test's is the one asked", &asked == &viewer);
+        ensure("its words", asked.lslHelpUrl() == "https://wiki.example/[LSL_STRING]");
+        ensure("no definitions as YAML, no version", asked.definitionsYaml().empty() && asked.definitionsVersion().empty());
+        ensure("no preprocessor, no transform", !asked.preprocessing() && !asked.transformOn(ALPreprocessor::Transform::Switch));
+        ALPreprocessor::Include found;
+        ensure("no include", asked.lookUp(ALScriptPreprocessor::Request(), ALPreprocessor::Ask(), found) == ALPreprocessor::Found::No);
+        viewer.slots.lslHelpUrl = nullptr;
+        ensure_equals("the wiki as nothing says it", asked.lslHelpUrl(), std::string("[LSL_STRING]"));
     }
 }

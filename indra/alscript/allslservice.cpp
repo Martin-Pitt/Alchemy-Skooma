@@ -31,7 +31,9 @@
 #include "alscriptengine.h"
 
 #include "almessagemap.h"
+#include "allsllintpass.h"
 #include "allsltraits.h"
+#include "alscriptlexicon.h"
 
 #include "llfile.h"
 
@@ -495,66 +497,24 @@ namespace
     {
         Lexed out;
         out.code.assign(text.size(), 0);
-        enum class In { Code, String, LineComment, BlockComment } in = In::Code;
-        for (size_t i = 0; i < text.size(); ++i)
+        for (size_t i = 0; i < text.size();)
         {
-            const char c    = text[i];
-            const char next = i + 1 < text.size() ? text[i + 1] : '\0';
-            switch (in)
+            const ALScriptLexicon::Stretch run = ALScriptLexicon::stretchAt(text, i, false);
+            switch (run.kind)
             {
-                case In::Code:
-                    if (c == '"')
-                    {
-                        in          = In::String;
-                        out.code[i] = STRING_BYTE;
-                    }
-                    else if (c == '/' && next == '/')
-                    {
-                        in = In::LineComment;
-                        ++i;
-                    }
-                    else if (c == '/' && next == '*')
-                    {
-                        in = In::BlockComment;
-                        ++i;
-                    }
-                    else
-                    {
-                        out.code[i] = CODE_BYTE;
-                    }
+                case ALScriptLexicon::Kind::Code:
+                    out.code[i] = CODE_BYTE;
                     break;
-                case In::String:
-                    out.code[i] = STRING_BYTE;
-                    if (c == '\\')
-                    {
-                        if (i + 1 < text.size())
-                        {
-                            out.code[++i] = STRING_BYTE;
-                        }
-                    }
-                    else if (c == '"')
-                    {
-                        in = In::Code;
-                    }
+                case ALScriptLexicon::Kind::String:
+                    std::fill(out.code.begin() + i, out.code.begin() + run.end, STRING_BYTE);
+                    out.inString = !run.closed;
                     break;
-                case In::LineComment:
-                    if (c == '\n')
-                    {
-                        in          = In::Code;
-                        out.code[i] = CODE_BYTE;
-                    }
-                    break;
-                case In::BlockComment:
-                    if (c == '*' && next == '/')
-                    {
-                        in = In::Code;
-                        ++i;
-                    }
+                case ALScriptLexicon::Kind::Comment:
+                    out.inComment = !run.closed;
                     break;
             }
+            i = run.end;
         }
-        out.inString  = in == In::String;
-        out.inComment = in == In::BlockComment;
         return out;
     }
 
@@ -607,7 +567,7 @@ namespace
 
     bool identifierByte(char c)
     {
-        return isalnum(static_cast<unsigned char>(c)) || c == '_';
+        return ALScriptLexicon::isNameByte(c);
     }
 
     // The statement the caret is in, closed where the caret is: a string
@@ -788,6 +748,92 @@ namespace
         return std::string(name);
     }
 
+    // Where the line starting at `from` -- the one the parser stopped on,
+    // or the one before it where that begins with the brace a head opens --
+    // begins a handler or a state inside a block left open: the offset its
+    // line starts at. A handler's head is an event's name and its bracket;
+    // a state's, `default` or `state` and its name before a brace.
+    std::optional<size_t> unclosedBefore(std::string_view source, const Lexed& lexed, size_t from, Tailslide::LSLSymbolTable* builtins)
+    {
+        const auto first_code = [&](size_t at) {
+            while (at < source.size() && (source[at] == ' ' || source[at] == '\t' || lexed.code[at] == COMMENT_BYTE))
+            {
+                ++at;
+            }
+            return at;
+        };
+        const auto word_at = [&](size_t at) {
+            size_t end = at;
+            while (end < source.size() && identifierByte(source[end]) && lexed.code[end] == CODE_BYTE)
+            {
+                ++end;
+            }
+            return source.substr(at, end - at);
+        };
+        const auto next_code = [&](size_t at) {
+            while (at < source.size() && (isspace(static_cast<unsigned char>(source[at])) || lexed.code[at] == COMMENT_BYTE))
+            {
+                ++at;
+            }
+            return at < source.size() ? source[at] : '\0';
+        };
+        // What the line starting at `line` begins: 2 for a handler, whose
+        // head sits in its state's braces; 1 for a state, in none; 0 for
+        // anything else.
+        const auto begins = [&](size_t line) -> S32 {
+            const size_t           at   = first_code(line);
+            const std::string_view word = word_at(at);
+            if (word.empty())
+            {
+                return 0;
+            }
+            if (word == "default")
+            {
+                return next_code(at + word.size()) == '{' ? 1 : 0;
+            }
+            if (word == "state")
+            {
+                const size_t           named = first_code(at + word.size());
+                const std::string_view name  = word_at(named);
+                return !name.empty() && next_code(named + name.size()) == '{' ? 1 : 0;
+            }
+            if (builtins && next_code(at + word.size()) == '(' && builtins->lookup(std::string(word).c_str(), Tailslide::SYM_EVENT))
+            {
+                return 2;
+            }
+            return 0;
+        };
+        size_t line  = from;
+        S32    level = begins(line);
+        if (level == 0 && first_code(line) < source.size() && source[first_code(line)] == '{' && line > 0)
+        {
+            // A brace on its own line: the head it opens, on the line of
+            // code before.
+            size_t back = line - 1;
+            while (back > 0 && (lexed.code[back - 1] == COMMENT_BYTE || isspace(static_cast<unsigned char>(source[back - 1]))))
+            {
+                --back;
+            }
+            const size_t start = source.rfind('\n', back == 0 ? 0 : back - 1);
+            line               = start == std::string_view::npos || back == 0 ? 0 : start + 1;
+            level              = begins(line);
+        }
+        if (level == 0)
+        {
+            return std::nullopt;
+        }
+        // The braces open where the line starts, counting only code's.
+        S32 open = 0;
+        for (size_t i = 0; i < line; ++i)
+        {
+            if (lexed.code[i] == CODE_BYTE)
+            {
+                open += source[i] == '{' ? 1 : source[i] == '}' ? -1 : 0;
+            }
+        }
+        return open >= level ? std::optional<size_t>(line) : std::nullopt;
+    }
+
     // Bison's "syntax error, unexpected X, expecting Y or Z" said as a
     // scripter would: a single bracket or semicolon it wanted is missing,
     // and is marked on the last thing before the place it stopped --
@@ -795,8 +841,9 @@ namespace
     // anything else is unexpected, with what was wanted where it says.
     // Keyed, as the map's messages are, for the studio to translate.
     // `lexed` is the text lexed, once for all its syntax errors, made the
-    // first time one wants it.
-    void plainSyntaxError(std::string_view source, ALScriptProblem& problem, std::optional<Lexed>& lexed_once)
+    // first time one wants it; `builtins` names the events.
+    void plainSyntaxError(std::string_view source, ALScriptProblem& problem, std::optional<Lexed>& lexed_once,
+                          Tailslide::LSLSymbolTable* builtins)
     {
         const std::string& said = problem.message;
         const std::string  UNEXPECTED("syntax error, unexpected ");
@@ -838,6 +885,31 @@ namespace
         // A value ends there: a name, a number, a closing bracket, a string.
         const char   last        = before > 0 ? source[before - 1] : '\0';
         const bool   value_ended = before > 0 && (identifierByte(last) || last == ')' || last == ']' || lexed.code[before - 1] == STRING_BYTE);
+        // A handler or a state begun inside a block not closed -- a
+        // handler's `}` left off, and the next handler read as a call, or
+        // the next state as a statement: the brace is what is missing,
+        // after the last code before the line it begins on, whatever the
+        // parser wanted of the head it misread. By the braces open where
+        // that line starts: a handler's head sits in its state's, and a
+        // state's in none.
+        if (const std::optional<size_t> head = unclosedBefore(source, lexed, from, builtins))
+        {
+            size_t end = *head;
+            while (end > 0 && (lexed.code[end - 1] == COMMENT_BYTE || isspace(static_cast<unsigned char>(source[end - 1]))))
+            {
+                --end;
+            }
+            if (end > 0)
+            {
+                problem.key     = "LSLSyntaxMissing";
+                problem.args    = { "'}'" };
+                problem.message = ALScriptProblem::fill("Missing [1].", problem.args);
+                placeOf(source, end - 1, problem.line, problem.column);
+                problem.endLine   = problem.line;
+                problem.endColumn = problem.column + 1;
+                return;
+            }
+        }
         // A name straight after a bracket or a comma, where any expression
         // could have a name, is one where only a declaration's parameters
         // go: a function's or an event's, written without its type.
@@ -1472,7 +1544,7 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
         ALMessageMap::Match known;
         if (code == Tailslide::E_SYNTAX_ERROR)
         {
-            plainSyntaxError(source, problem, lexed);
+            plainSyntaxError(source, problem, lexed, parser.context.builtins);
         }
         else if (ALMessageMap::lsl(static_cast<int>(code), problem.message, known))
         {
@@ -1480,6 +1552,21 @@ ALScriptProblems ALLSLService::check(std::string_view source, bool mono)
             problem.args = std::move(known.args);
         }
         problems.push_back(std::move(problem));
+    }
+    // The studio's own lints, beside Tailslide's warnings: their fixes,
+    // made as the pass read the script, offered only where they will be
+    // read.
+    if (script)
+    {
+        const size_t before = problems.size();
+        ALLSLLintPass::check(source, script, problems);
+        for (size_t i = before; i < problems.size(); ++i)
+        {
+            if (ALSourceMap::within(mImpl->passedOver, problems[i].line, std::max(problems[i].line, problems[i].endLine)))
+            {
+                problems[i].fixes.clear();
+            }
+        }
     }
     // A name it does not know changed to the nearest it does, where one is
     // near: Tailslide suggested one itself once, and no longer does.
@@ -2094,7 +2181,7 @@ namespace
             return false;
         }
         return stringLiteral(text) ||
-               std::all_of(text.begin(), text.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.'; });
+               std::all_of(text.begin(), text.end(), [](char c) { return ALScriptLexicon::isNameByte(c) || c == '.'; });
     }
 
     // Whether an expression is the whole of what it is given to -- a

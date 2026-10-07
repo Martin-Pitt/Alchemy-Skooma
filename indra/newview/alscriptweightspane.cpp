@@ -27,6 +27,7 @@
 #include "alscriptweightspane.h"
 
 #include "alpanelist.h"
+#include "alrecoverystore.h"
 #include "llfloater.h"
 #include "llpanel.h"
 #include "llscrolllistitem.h"
@@ -78,10 +79,6 @@ namespace
         return out;
     }
 
-    std::string share(size_t bytes, size_t limit)
-    {
-        return limit ? llformat("%.1f%%", (F64)bytes * 100.0 / (F64)limit) : std::string();
-    }
 }
 
 static LLPanelInjector<ALScriptWeightsPane> t_script_studio_weights("script_studio_weights");
@@ -187,10 +184,18 @@ const ALScriptWeight* ALScriptWeightsPane::savedFor(ALScriptWeight::Target targe
     return nullptr;
 }
 
+std::string ALScriptWeightsPane::share(size_t bytes, size_t limit) const
+{
+    // As a percentage, as the viewer's language writes one.
+    return limit ? mStrings->getString("Percent", { { "[VALUE]", llformat("%f", (F64)bytes * 100.0 / (F64)limit) } }) : std::string();
+}
+
 std::string ALScriptWeightsPane::kilobytes(size_t bytes, bool estimate) const
 {
+    // The number unrounded: the words round it, as the viewer's language
+    // writes a number.
     LLStringUtil::format_map_t args;
-    args["[SIZE]"] = llformat("%.1f", (F64)bytes / 1024.0);
+    args["[SIZE]"] = llformat("%f", (F64)bytes / 1024.0);
     return mStrings->getString(estimate ? "WeightsKilobytesEstimate" : "WeightsKilobytes", args);
 }
 
@@ -226,7 +231,7 @@ void ALScriptWeightsPane::fillTargets()
         std::string tip  = mStrings->getString(!said ? "WeightsTargetFailedTip" : weight.estimate ? "WeightsTargetEstimateTip" : "WeightsTargetTip", args);
         if (said && !weight.error.empty())
         {
-            tip += " " + mStrings->getString("WeightsTargetErrorTip", args);
+            tip = mStrings->getString("JoinSentences", { { "[FIRST]", tip }, { "[SECOND]", mStrings->getString("WeightsTargetErrorTip", args) } });
         }
         if (i == 0)
         {
@@ -280,7 +285,7 @@ void ALScriptWeightsPane::fillParts()
     LLStringUtil::format_map_t args;
     args["[NAME]"]   = mShown.name;
     args["[TARGET]"] = ALScriptWeight::nameOf(weight->target);
-    args["[SIZE]"]   = llformat("%.1f", (F64)weight->total / 1024.0);
+    args["[SIZE]"]   = llformat("%f", (F64)weight->total / 1024.0);
     args["[LIMIT]"]  = std::to_string(weight->limit / 1024);
     args["[SHARE]"]  = share(weight->total, weight->limit);
     args["[ERROR]"]  = weight->error;
@@ -289,12 +294,19 @@ void ALScriptWeightsPane::fillParts()
     {
         head += " " + mStrings->getString("WeightsHeadError", args);
     }
+    // A compiler that records no lines -- LSL's for Luau -- leaves the
+    // heat beside the text with nothing to show: said, rather than left to
+    // look like a script whose lines weigh nothing.
+    if (weight->target == ALScriptWeight::Target::LSLLuau && weight->compiled && weight->total > 0 && weight->lines.empty())
+    {
+        head += " " + mStrings->getString("WeightsHeadNoLines", args);
+    }
     if (mShown.beforeOptimizer)
     {
         const bool own = !mShown.weights.empty() && weight->target == mShown.weights.front().target;
         if (own && mShown.sent)
         {
-            args["[SENT]"] = llformat("%.1f", (F64)*mShown.sent / 1024.0);
+            args["[SENT]"] = llformat("%f", (F64)*mShown.sent / 1024.0);
             head += " " + mStrings->getString("WeightsHeadSent", args);
         }
         else
@@ -302,8 +314,33 @@ void ALScriptWeightsPane::fillParts()
             head += " " + mStrings->getString("WeightsHeadBefore");
         }
     }
+    if (mShown.region && mShown.region->hasMemory())
+    {
+        args["[RESERVED]"] = llformat("%f", (F64)mShown.region->memory / 1024.0);
+        args["[URLS]"]     = std::to_string(mShown.region->urls);
+        args["[WHEN]"]     = ALRecoveryEntry::sayWhen(mShown.region->when);
+        head += " " + mStrings->getString(mShown.region->urls > 0 ? "WeightsHeadRegionUrls" : "WeightsHeadRegion", args);
+    }
+    // And the time its scripts take, where the region tells an estate
+    // manager.
+    if (mShown.region && mShown.region->hasTime())
+    {
+        args["[TIME]"] = llformat("%.3f", mShown.region->time);
+        args["[WHEN]"] = ALRecoveryEntry::sayWhen(mShown.region->timeWhen);
+        head += " " + mStrings->getString("WeightsHeadRegionTime", args);
+    }
     mHead->setText(head);
-    mHead->setToolTip(mStrings->getString("WeightsHeadTip"));
+    // The tip says how each of what the head says is counted.
+    std::string tip = mStrings->getString("WeightsHeadTip");
+    if (mShown.region && mShown.region->hasMemory())
+    {
+        tip += " " + mStrings->getString("WeightsHeadRegionTip");
+    }
+    if (mShown.region && mShown.region->hasTime())
+    {
+        tip += " " + mStrings->getString("WeightsHeadRegionTimeTip");
+    }
+    mHead->setToolTip(tip);
 
     // Each part, with how it moved since the text was last saved, where it
     // was weighed for this target then.
@@ -336,6 +373,7 @@ void ALScriptWeightsPane::fillParts()
                 one.change = S64(part.bytes) - S64(found->second);
             }
         }
+        one.name        = partName(part);
         const S32 index = static_cast<S32>(mRows.size());
         if (held && identity(part, one.nth) == *held)
         {
@@ -347,7 +385,7 @@ void ALScriptWeightsPane::fillParts()
         LLSD row;
         row["value"]                          = index;
         row["columns"][PART_NAME]["column"]   = "part";
-        row["columns"][PART_NAME]["value"]    = partName(part);
+        row["columns"][PART_NAME]["value"]    = one.name;
         row["columns"][PART_KIND]["column"]   = "kind";
         row["columns"][PART_KIND]["value"]    = kindName(part.kind);
         row["columns"][PART_BYTES]["column"]  = "bytes";
@@ -484,7 +522,7 @@ S32 ALScriptWeightsPane::compare(S32 column, const LLScrollListItem* a, const LL
     switch (column)
     {
         case PART_NAME:
-            said = LLStringUtil::compareDict(partName(x.part), partName(y.part));
+            said = LLStringUtil::compareDict(x.name, y.name);
             break;
         case PART_KIND:
             said = order(S64(x.part.kind), S64(y.part.kind));

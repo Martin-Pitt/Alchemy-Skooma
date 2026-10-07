@@ -20,7 +20,9 @@ target_sources(
     alfilewrite.cpp
     alserialworker.cpp
     alparamtype.cpp
+    alrecoverystore.cpp
     alregex.cpp
+    alsavehistory.cpp
     alwatchedfile.cpp
     apply.cpp
     commoncontrol.cpp
@@ -122,7 +124,9 @@ target_sources(
         alfilewrite.h
         alserialworker.h
         alparamtype.h
+        alrecoverystore.h
         alregex.h
+        alsavehistory.h
         alsimd.h
         alwatchedfile.h
         always_return.h
@@ -295,7 +299,9 @@ if(AL_BUILD_TESTS)
   foreach(
     test
     alfilewrite
+    alrecoverystore
     alregex
+    alsavehistory
     alserialworker
     alwatchedfile
     apply
@@ -416,6 +422,13 @@ if(AL_BUILD_TESTS)
 
   # Skip precompiled header for tests that need special handling
   set_source_files_properties(tests/llsd_test.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS TRUE)
+
+  # GCC 15 at -O3 takes the weak_ptr that LLInstanceTrackerSubclass::getWeak()
+  # copies from mSelf, scalarised, for one read before it is set -- a false
+  # positive on test 1's queue.getWeak(), and under -Werror a failed build.
+  if(COMPILER_IS_GCC)
+    set_source_files_properties(tests/workqueue_test.cpp PROPERTIES COMPILE_OPTIONS -Wno-uninitialized)
+  endif()
 
   # The viewer's own patterns under Boost.Regex and under RE2, side by side,
   # over the text each is run on.

@@ -272,8 +272,13 @@ namespace tut
             ensure("div within an ulp", ulps_between(q.v[i], quot) <= 1);
         }
 
-        ensure_lanes("neg", neg(set(1.f, -2.f, 0.f, -0.f)), -1.f, 2.f, -0.f, 0.f);
-        ensure_lanes("abs", abs(set(1.f, -2.f, -0.f, -INF)), 1.f, 2.f, 0.f, INF);
+        // A negative zero as its bits, in and out: /fp:fast lets the compiler
+        // take -0.f for 0.f, and MSVC for arm64 does.
+        const f32x4 sign = set1_bits(0x80000000u);
+        ensure_lanes_bits("neg", neg(or_(set(1.f, -2.f, 0.f, 0.f), and_(sign, mask_lane<3>()))),
+                          bits_of(-1.f), bits_of(2.f), 0x80000000u, 0u);
+        ensure_lanes_bits("abs", abs(or_(set(1.f, -2.f, 0.f, -INF), and_(sign, mask_lane<2>()))),
+                          bits_of(1.f), bits_of(2.f), 0u, bits_of(INF));
         ensure_equals("neg keeps a NaN payload", bits_of(lane<2>(neg(a()))), pa[2] ^ 0x80000000u);
         ensure_equals("abs keeps a NaN payload", bits_of(lane<2>(abs(neg(a())))), pa[2]);
 
@@ -579,8 +584,8 @@ namespace tut
         {
             return reinterpret_cast<unsigned char*>((reinterpret_cast<uintptr_t>(p) + 63) & ~uintptr_t(63));
         };
-        unsigned char* src_line = aligned64(source.data());
-        unsigned char* dst_line = aligned64(destination.data());
+        unsigned char* src_line = aligned64(source.data() + GUARD);
+        unsigned char* dst_line = aligned64(destination.data() + GUARD);
 
         std::vector<size_t> sizes;
         for (size_t size = 16; size <= 1024; size += 16)

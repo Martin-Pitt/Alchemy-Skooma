@@ -26,6 +26,7 @@
 
 #include "../alscriptinspectorpane.h"
 
+#include "../alscriptstudiocaret.h"
 #include "../alscriptstudiowords.h"
 #include "alcodeeditor.h"
 #include "alscriptstudio_fixture.h"
@@ -73,11 +74,13 @@ namespace tut
 {
     struct alscriptinspectorpane_data
     {
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
         al_studio_test::StudioWindowOf<FakeInspectorWindow> window;
 
         alscriptinspectorpane_data()
         {
-            ALScriptStudioWords::Sources& sources = ALScriptStudioWords::sources();
+            auto& sources = viewer.slots;
             sources.keywords                      = [](bool) {
                 LLSD keywords;
                 keywords["functions"]["llSay"] = LLSD().with("return", "").with("tooltip", "Says it.");
@@ -88,7 +91,6 @@ namespace tut
         }
         ~alscriptinspectorpane_data()
         {
-            ALScriptStudioWords::sources() = ALScriptStudioWords::Sources();
             ALScriptStudioWords::forget();
             gFocusMgr.setKeyboardFocus(nullptr);
         }
@@ -115,7 +117,7 @@ namespace tut
             window.floater->addChild(doc.editor);
             doc.editor->setText(text);
             doc.editor->setCaret(ALTextPos(0, 10));
-            doc.caret.inspectAt = ALTextPos(0, 8);
+            doc.caret->inspectAt = ALTextPos(0, 8);
             return doc;
         }
         std::string shown() { return pane()->view()->document().text(); }

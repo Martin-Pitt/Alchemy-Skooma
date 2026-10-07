@@ -26,6 +26,8 @@
 
 #include "../alscriptstudiocaret.h"
 
+#include "../alscriptstudiochecking.h"
+
 #include "alcodeeditor.h"
 #include "alscriptstudio_fixture.h"
 #include "llfocusmgr.h"
@@ -41,7 +43,7 @@ namespace
     std::string at(const ALTextRange& range) { return at(range.begin) + "-" + at(range.end); }
 
     // The window, faked: a record of what the name at the caret asked of it.
-    struct FakeCaretWindow : public ALScriptStudioCaret::Window
+    struct FakeCaretWindow : public ALScriptStudioCaret::Window, public al_studio_test::QuietAnalysis
     {
         void askAnalyzer(Doc& doc, ALScriptAnalysis::Kind kind, const ALTextPos& pos) override
         {
@@ -57,8 +59,6 @@ namespace
             }
             return ALScriptPlaces::Lines(std::make_shared<const std::string>("\n\n\n\n  integer count; // held"));
         }
-        void noteJump() override { said.push_back("jump"); }
-        void keyboardInText() override { ++typing; }
         void goTo(Doc& doc, const ALTextRange& range) override { said.push_back("go " + doc.id + " " + at(range)); }
         void openIncludeAt(const std::string& path, const std::string& name, S32 line, S32 column, S32 length) override
         {
@@ -66,14 +66,6 @@ namespace
                            std::to_string(length));
         }
         void showReference(const ALScriptStudioWords::Vocab& word, bool) override { said.push_back("reference " + word.text); }
-        void startLookup(Doc& doc, ALEditorCommand command, const ALScriptReferences&, bool has_definition, const std::string& home_path,
-                         const ALScriptSpan& definition, std::vector<Doc::Place> places, U32 version) override
-        {
-            said.push_back(std::string(command == ALEditorCommand::Rename ? "rename" : "find") + " in " + doc.id +
-                           (has_definition ? " declared " + home_path + "@" + std::to_string(definition.line) : std::string(" none")) +
-                           " v" + std::to_string(version));
-            found = std::move(places);
-        }
         void showPath(Doc& doc, bool changed) override { said.push_back("path " + at(doc.editor->caret()) + (changed ? " changed" : "")); }
         bool showProblemsAt(Doc&, const ALTextPos& pos) override
         {
@@ -85,8 +77,6 @@ namespace
         bool                    expanded = false, problems = false, inspector = true;
         std::string             held;
         Names                   asked, said;
-        S32                     typing = 0;
-        std::vector<Doc::Place> found;
     };
 
     ALScriptSpan span(S32 line, S32 column, S32 length)
@@ -110,6 +100,26 @@ namespace
         result.references.references    = { span(0, 8, 5), span(1, 26, 5) };
         return result;
     }
+    // The lookup a tab's caret started, as the lookup keeps it; and one of
+    // its places, by the file it is in, none for the script's own.
+    std::string started(const Doc& doc)
+    {
+        const Doc::Lookup& lookup = *doc.lookup;
+        return std::string(lookup.command == ALEditorCommand::Rename ? "rename" : "find") + " in " + doc.id +
+               (lookup.hasDefinition ? " declared " + lookup.homePath + "@" + std::to_string(lookup.definition.line) : std::string(" none")) +
+               " v" + std::to_string(lookup.version);
+    }
+    const Doc::Place* placeIn(const Doc& doc, const std::string& file, S32 line = -1)
+    {
+        for (const Doc::Place& place : doc.lookup->places)
+        {
+            if (place.file == file && (line < 0 || place.span.line == line))
+            {
+                return &place;
+            }
+        }
+        return nullptr;
+    }
     std::string joined(const Names& names)
     {
         std::string out;
@@ -126,14 +136,18 @@ namespace tut
 {
     struct alscriptstudiocaret_data
     {
-        al_studio_test::StudioWindow         window;
-        al_studio_test::FakeServices         services;
-        FakeCaretWindow                      studio;
-        std::unique_ptr<ALScriptStudioCaret> unit;
+        // The viewer the units ask, attached first and let go of last.
+        al_studio_test::StudioViewer viewer;
+        al_studio_test::StudioWindow                      window;
+        al_studio_test::FakeServices                      services;
+        FakeCaretWindow                                   studio;
+        std::unique_ptr<al_studio_test::StudioNavigation> navigation;
+        std::unique_ptr<al_studio_test::StudioLookup>     lookup;
+        std::unique_ptr<ALScriptStudioCaret>              unit;
 
         alscriptstudiocaret_data()
         {
-            ALScriptStudioWords::Sources& sources = ALScriptStudioWords::sources();
+            auto& sources = viewer.slots;
             sources.keywords                      = [](bool) {
                 LLSD keywords;
                 keywords["functions"]["llSay"] = LLSD().with("return", "");
@@ -143,7 +157,6 @@ namespace tut
         }
         ~alscriptstudiocaret_data()
         {
-            ALScriptStudioWords::sources() = ALScriptStudioWords::Sources();
             ALScriptStudioWords::forget();
             gFocusMgr.setKeyboardFocus(nullptr);
         }
@@ -153,7 +166,9 @@ namespace tut
             {
                 skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
             }
-            unit = std::make_unique<ALScriptStudioCaret>(services, studio);
+            navigation = std::make_unique<al_studio_test::StudioNavigation>(services);
+            lookup     = std::make_unique<al_studio_test::StudioLookup>(services, navigation->unit);
+            unit       = std::make_unique<ALScriptStudioCaret>(services, studio, navigation->unit, lookup->unit, studio);
             return *unit;
         }
         ALCodeEditor* editor(const std::string& name, const std::string& text)
@@ -194,18 +209,20 @@ namespace tut
         Doc&                 doc   = tab("a");
         const U32            v     = ask(doc, ALEditorCommand::GoToDefinition);
         ensure_equals("asked", joined(studio.asked), std::string("references 0:8"));
-        ensure("remembered", doc.caret.symbolCommand == ALEditorCommand::GoToDefinition && doc.caret.symbolVersion == v);
+        ensure("remembered", doc.caret->symbolCommand == ALEditorCommand::GoToDefinition && doc.caret->symbolVersion == v);
         caret.answered(doc, references(v + 1), ALTextPos(0, 8));
         caret.answered(doc, references(v), ALTextPos(0, 9));
         ensure("of another text or place: nothing", studio.said.empty());
         caret.answered(doc, references(v), ALTextPos(0, 8));
-        ensure_equals("gone", joined(studio.said), std::string("jump, go a 0:8-0:13"));
+        ensure_equals("gone", joined(studio.said), std::string("go a 0:8-0:13"));
+        ensure_equals("a jump noted, for Back", navigation->unit.places(false), size_t(1));
         caret.answered(doc, references(v), ALTextPos(0, 8));
-        ensure_equals("answered once", studio.said.size(), size_t(2));
+        ensure("answered once", studio.said.size() == 1 && navigation->unit.places(false) == 1);
 
         ask(doc, ALEditorCommand::GoToDefinition);
         caret.answered(doc, references(v, false), ALTextPos(0, 8));
-        ensure("none: said, no jump", studio.said.size() == 2 && services.statuses.back().find("NoDefinition [NAME]=count") == 0);
+        ensure("none: said, no jump", studio.said.size() == 1 && navigation->unit.places(false) == 1 &&
+                                          services.statuses.back().find("NoDefinition [NAME]=count") == 0);
         ask(doc, ALEditorCommand::GoToDefinition);
         ALScriptAnalysis::Result none;
         none.version    = v;
@@ -270,28 +287,31 @@ namespace tut
         doc.expanded.version   = v;
         ALScriptAnalysis::Result result = references(v);
         caret.answered(doc, result, ALTextPos(0, 8));
-        ensure_equals("opened in the include", joined(studio.said), std::string("jump, open disk:/inc.lsl inc.lsl 4:8+5"));
+        ensure_equals("opened in the include", joined(studio.said), std::string("open disk:/inc.lsl inc.lsl 4:8+5"));
+        ensure_equals("a jump noted", navigation->unit.places(false), size_t(1));
 
         ask(doc, ALEditorCommand::FindReferences);
         result.references.references = { span(0, 8, 5), span(2, 26, 5), span(7, 0, 5) };
         caret.answered(doc, result, ALTextPos(0, 8));
-        ensure_equals("the lookup started", studio.said.back(), "find in a declared disk:/inc.lsl@4 v" + std::to_string(v));
-        ensure_equals("the places that map", studio.found.size(), size_t(2));
-        ensure("the include's, as held", studio.found[0].file == "disk:/inc.lsl" && studio.found[0].fileName == "inc.lsl" &&
-                                             studio.found[0].text == "integer count; // held" && studio.found[0].at == 6);
-        ensure("the script's own, as typed", studio.found[1].file.empty() && studio.found[1].span.line == 1 && studio.found[1].at == 26);
+        ensure_equals("the lookup started", started(doc), "find in a declared disk:/inc.lsl@4 v" + std::to_string(v));
+        ensure_equals("the places that map", doc.lookup->places.size(), size_t(2));
+        const Doc::Place* included = placeIn(doc, "disk:/inc.lsl");
+        ensure("the include's, as held", included && included->fileName == "inc.lsl" && included->text == "integer count; // held" && included->at == 6);
+        const Doc::Place* own = placeIn(doc, std::string());
+        ensure("the script's own, as typed", own && own->span.line == 1 && own->at == 26);
         studio.held.clear();
         ask(doc, ALEditorCommand::Rename);
         caret.answered(doc, result, ALTextPos(0, 8));
-        ensure("the include not held: the expansion's line", studio.found[0].text == "integer count;" && studio.found[0].at == -1);
-        ensure_equals("where the include has it", studio.found[0].span.line, 4);
-        ensure("to rename", studio.said.back().find("rename in a") == 0);
+        included = placeIn(doc, "disk:/inc.lsl");
+        ensure("the include not held: the expansion's line", included && included->text == "integer count;" && included->at == -1);
+        ensure_equals("where the include has it", included->span.line, 4);
+        ensure("to rename", started(doc).find("rename in a") == 0);
 
         doc.expanded.version = v + 7;
         ask(doc, ALEditorCommand::FindReferences);
         caret.answered(doc, result, ALTextPos(0, 8));
-        ensure_equals("an expansion of another text: not read through", studio.said.back(), "find in a declared @0 v" + std::to_string(v));
-        ensure("its places as they are", studio.found.size() == 3 && studio.found[2].span.line == 7);
+        ensure_equals("an expansion of another text: not read through", started(doc), "find in a declared @0 v" + std::to_string(v));
+        ensure("its places as they are", doc.lookup->places.size() == 3 && placeIn(doc, std::string(), 7));
 
         doc.expanded.version = v;
         ask(doc, ALEditorCommand::GoToDefinition);
@@ -317,7 +337,7 @@ namespace tut
         ensure("not yet settled", studio.asked.empty() && studio.said.size() == 1);
         caret.pump(10.0 + ALScriptStudioCaret::SETTLE);
         ensure_equals("settled: asked", joined(studio.asked), std::string("inspect 0:8"));
-        ensure("remembered", doc.caret.inspectAt == ALTextPos(0, 8) && doc.caret.inspectVersion == doc.editor->document().version());
+        ensure("remembered", doc.caret->inspectAt == ALTextPos(0, 8) && doc.caret->inspectVersion == doc.editor->document().version());
         doc.editor->setCaret(ALTextPos(0, 12));
         caret.pump(20.0);
         caret.pump(21.0);
@@ -331,7 +351,7 @@ namespace tut
         caret.pump(40.0);
         ensure("left the lit places: put out", doc.editor->highlights().empty());
         caret.pump(41.0);
-        ensure("on no name: the problems", studio.said.back() == "problems 1:9" && doc.caret.inspectAt == ALTextPos(0, 8));
+        ensure("on no name: the problems", studio.said.back() == "problems 1:9" && doc.caret->inspectAt == ALTextPos(0, 8));
         const size_t said = studio.said.size();
         caret.pump(42.0);
         ensure_equals("told once, not every frame", studio.said.size(), said);
@@ -339,7 +359,7 @@ namespace tut
         doc.editor->setCaret(ALTextPos(1, 8));
         caret.pump(50.0);
         caret.pump(51.0);
-        ensure("some shown: the name forgotten", doc.caret.inspectAt == ALTextPos(-1, -1));
+        ensure("some shown: the name forgotten", doc.caret->inspectAt == ALTextPos(-1, -1));
     }
 
     template<> template<>
@@ -361,11 +381,13 @@ namespace tut
         caret.pump(1.0);
         caret.pump(9.0);
         ensure_equals("the expansion's caret, the path told", joined(studio.said), std::string("path 0:0"));
-        ensure("the inspector not", studio.asked.empty() && doc.caret.inspectDue == 0.0);
-        ensure("not typing", studio.typing == 0);
+        ensure("the inspector not", studio.asked.empty() && doc.caret->inspectDue == 0.0);
+        navigation->unit.noteJump(true);
+        caret.pump(9.2);
+        ensure("a walk down a list goes on while the text has no keyboard", navigation->unit.walking());
         doc.expandedEditor->setFocus(true);
         caret.pump(9.5);
-        ensure_equals("typing", studio.typing, 1);
+        ensure("and ends once it has", !navigation->unit.walking());
     }
 
     template<> template<>
@@ -405,19 +427,45 @@ namespace tut
         doc.outline                = { state, event };
         doc.editor->setCaret(ALTextPos(1, 12));
         caret.placePath(doc);
-        ensure("in both", doc.caret.crumbPath == std::vector<size_t>({ 0, 1 }) && studio.said.back() == "path 1:12 changed");
+        ensure("in both", doc.caret->crumbPath == std::vector<size_t>({ 0, 1 }) && studio.said.back() == "path 1:12 changed");
         doc.editor->setCaret(ALTextPos(1, 14));
         caret.placePath(doc);
         ensure_equals("the same symbols: shown, not changed", studio.said.back(), std::string("path 1:14"));
         doc.editor->setCaret(ALTextPos(1, 2));
         caret.placePath(doc);
-        ensure("out of the event: changed", doc.caret.crumbPath == std::vector<size_t>({ 0 }) && studio.said.back() == "path 1:2 changed");
-        ++doc.check.analysisVersion;
+        ensure("out of the event: changed", doc.caret->crumbPath == std::vector<size_t>({ 0 }) && studio.said.back() == "path 1:2 changed");
+        ++doc.check->analysisVersion;
         caret.placePath(doc);
         ensure_equals("a new outline: changed", studio.said.back(), std::string("path 1:2 changed"));
         doc.expandedEditor = editor("expanded_a", "integer count;\n");
         doc.view           = Doc::View::Expanded;
         caret.placePath(doc);
-        ensure("the expansion in front: no path", doc.caret.crumbPath.empty());
+        ensure("the expansion in front: no path", doc.caret->crumbPath.empty());
+    }
+
+    template<> template<>
+    void alscriptstudiocaret_object::test<8>()
+    {
+        set_test_name("the caret as the window asks: seen afresh and told again where it has not moved; the inspector told again, or now");
+        ALScriptStudioCaret& caret = make();
+        Doc&                 doc   = tab("a");
+        doc.editor->setCaret(ALTextPos(0, 10));
+        caret.pump(10.0);
+        caret.pump(10.0 + ALScriptStudioCaret::SETTLE);
+        ensure("told, and asked", studio.said.size() == 1 && studio.asked.size() == 1);
+        caret.pump(20.0);
+        ensure("not again where it stands", studio.said.size() == 1);
+        ALScriptStudioCaret::seeAfresh(doc);
+        caret.pump(30.0);
+        caret.pump(30.0 + ALScriptStudioCaret::SETTLE);
+        ensure("seen afresh: told again, the inspector not, of the same word", studio.said.size() == 2 && studio.asked.size() == 1);
+        ALScriptStudioCaret::seeAfresh(doc);
+        ALScriptStudioCaret::inspectAfresh(doc);
+        caret.pump(40.0);
+        caret.pump(40.0 + ALScriptStudioCaret::SETTLE);
+        ensure_equals("the inspector told again", joined(studio.asked), std::string("inspect 0:8, inspect 0:8"));
+        caret.inspect(doc, ALTextPos(1, 26));
+        ensure_equals("told now of a word", studio.asked.back(), std::string("inspect 1:26"));
+        ensure("which is what it was last told", doc.caret->inspectAt == ALTextPos(1, 26) && doc.caret->inspectDue == 0.0);
     }
 }

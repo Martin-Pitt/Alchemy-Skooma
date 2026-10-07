@@ -51,8 +51,11 @@ namespace
     typedef std::function<void(const std::vector<std::string>&)> Chosen;
 
     // The window, faked: a record of what the files asked of it.
-    struct FakeFilesWindow : public ALScriptStudioFiles::Window
+    struct FakeFilesWindow : public ALScriptStudioFiles::Window, public al_studio_test::QuietTabs, public al_studio_test::QuietAnalysis, public al_studio_test::QuietSaves
     {
+        // A tab, as each role this fakes names it.
+        typedef ALScriptStudioDoc Doc;
+
         Doc* openFileTab(const std::string& path, bool) override
         {
             opened.push_back(path);
@@ -91,7 +94,7 @@ namespace
             settled.push_back(doc.id);
             doc.editor->resetDirty();
         }
-        void      saveStopped(Doc& doc) override { stopped.push_back(doc.id); }
+        void      stopped(Doc& doc) override { stops.push_back(doc.id); }
         void      fileWritten(const std::string& path) override { written.push_back(path); }
         void      reachChanged() override { ++reachChanges; }
         void      becomeFile(Doc& doc, const std::string& path) override
@@ -103,7 +106,7 @@ namespace
         LLMenuGL* recentMenu() override { return menu; }
         void      recentChanged() override { ++recentTold; }
 
-        Names                     opened, activated, reverted, taken, checked, asked, settled, stopped, written, became;
+        Names                     opened, activated, reverted, taken, checked, asked, settled, stops, written, became;
         S32                       reachChanges = 0;
         bool                      pickedSeveral = false;
         Chosen                    toOpen, toSave;
@@ -145,7 +148,7 @@ namespace tut
             const fsyspath    made = std::filesystem::temp_directory_path() / fsyspath(name);
             folder              = made.string();
             std::filesystem::create_directories(made);
-            unit = std::make_unique<ALScriptStudioFiles>(services, studio);
+            unit = std::make_unique<ALScriptStudioFiles>(services, studio, studio, studio, studio);
             return *unit;
         }
         std::string in(const std::string& name) const { return fsyspath(fsyspath(folder) / fsyspath(name)).string(); }
@@ -238,7 +241,7 @@ namespace tut
 
         LLSD state;
         unit.writeState(state);
-        ALScriptStudioFiles again(services, studio);
+        ALScriptStudioFiles again(services, studio, studio, studio, studio);
         again.readState(state);
         ensure("read back as written", again.recentFiles() == unit.recentFiles() && again.recentScripts().size() == 2 &&
                                            again.recentScripts()[1].ref == b.ref && again.recentScripts()[1].name == "b");
@@ -300,13 +303,13 @@ namespace tut
         f.editor->setText("new");
         unit.write(f);
         ensure_equals("written", contents(f.file), std::string("new"));
-        ensure("its own write is no change to the watch", !f.external.watch->check() && !f.external.watch->check());
+        ensure("its own write is no change to the watch", !f.watch->check() && !f.watch->check());
         ensure("said, settled, told of", !said().failure && studio.settled == Names{ f.id } && studio.written == Names{ f.file });
         Doc& g = fileTab("g.lsl", "x");
         g.file = in("no/such/folder/g.lsl");
         unit.write(g);
         ensure("will not go: said and stopped, not settled",
-               said().failure && studio.stopped == Names{ g.id } && studio.settled.size() == 1);
+               said().failure && studio.stops == Names{ g.id } && studio.settled.size() == 1);
     }
 
     template<> template<>
@@ -316,7 +319,7 @@ namespace tut
         ALScriptStudioFiles& unit = make();
         Doc&                 f    = fileTab("f.lsl", "one");
         unit.watch(f);
-        ensure("watched", f.external.watch && f.external.watch->path() == f.file);
+        ensure("watched", f.watch && f.watch->path() == f.file);
         write(f.file, "two");
         unit.changedOutside(f.id, f.file);
         ensure("clean: taken, settled, said", studio.taken == Names{ "two" } && studio.settled == Names{ f.id } && !said().failure);
@@ -393,7 +396,7 @@ namespace tut
         studio.toSave({ in("g.luau") });
         ensure_equals("written there", contents(in("g.luau")), std::string("file text"));
         ensure("the tab that file now", studio.became == Names{ in("g.luau") } && f.file == in("g.luau"));
-        ensure("watched there", f.external.watch && f.external.watch->path() == in("g.luau"));
+        ensure("watched there", f.watch && f.watch->path() == in("g.luau"));
         ensure("noted, settled, checked", unit.recentFiles().front() == in("g.luau") && studio.settled.back() == f.id &&
                                                studio.checked.back() == f.id + " now");
         f.editor->setText("changed");
@@ -421,5 +424,28 @@ namespace tut
         ensure("read back", ALScriptFileIO::readWholeFile(path, text));
         ensure_equals("as an editor keeps it", text, std::string("default\n{\n}\n"));
         ensure("and where it was asked to be", std::filesystem::exists(fsyspath(path)));
+    }
+
+    template<> template<>
+    void alscriptstudiofiles_object::test<9>()
+    {
+        set_test_name("what was opened lately and cannot be had any more is let go of: a script said gone, a file no longer on disk");
+        ALScriptStudioFiles& unit = make();
+        ensure("written", ALFileWrite::temp(in("here.lsl"), "x"));
+        unit.noteFile(in("here.lsl"));
+        unit.noteFile(in("gone.lsl"));
+        Doc& a = scriptTab("a", "x");
+        Doc& b = scriptTab("b", "y");
+        unit.noteScript(a);
+        unit.noteScript(b);
+        const S32 told = studio.recentTold;
+        ensure("the file no longer there let go of", unit.pruneRecent([](const ALScriptRef&) { return false; }) &&
+                                                          unit.recentFiles() == Names{ in("here.lsl") } && unit.recentScripts().size() == 2 &&
+                                                          studio.recentTold == told + 1);
+        ensure("nothing more gone, nothing done", !unit.pruneRecent([](const ALScriptRef&) { return false; }) && studio.recentTold == told + 1);
+        const ALScriptRef lost = b.ref;
+        ensure("pruned", unit.pruneRecent([lost](const ALScriptRef& ref) { return ref == lost; }));
+        ensure("the gone script let go of", unit.recentScripts().size() == 1 && unit.recentScripts()[0].ref == a.ref);
+        ensure("the file still there kept", unit.recentFiles() == Names{ in("here.lsl") });
     }
 }

@@ -29,6 +29,9 @@
 #include "alscriptsnippets.h"
 #include "alscriptsymbol.h"
 #include "llsd.h"
+#include "llstl.h"
+
+#include <boost/unordered/unordered_flat_map.hpp>
 
 #include <functional>
 #include <string>
@@ -62,21 +65,18 @@ public:
         // it.
         std::string                        sleep;
         bool                               godMode = false;
+        // Where the offline reference files it, beside its kind: a
+        // function's first category in the definitions, in words ("Avatar
+        // communication"), an SLua ll function its LSL twin's, any other
+        // SLua function its library's; a constant by the family its name
+        // begins with ("PRIM_..."); nothing for an event.
+        std::string                        group;
     };
     typedef ALScriptSnippets::Snippet Snippet;
 
-    // Where the words come from: the grid's definitions of a language;
-    // the preprocessor's own words while its transforms are on, which the
-    // definitions do not list; and the LSL wiki's address for a page, with
-    // [LSL_STRING] for its name. The viewer sets them once; a test sets
-    // its own.
-    struct Sources
-    {
-        std::function<LLSD(bool lua)>             keywords;
-        std::function<std::vector<std::string>()> preprocessorWords;
-        std::function<std::string()>              lslHelpUrl;
-    };
-    static Sources& sources();
+    // Where the words come from -- the grid's definitions, the
+    // preprocessor's words, the LSL wiki -- is the viewer's to say
+    // (ALScriptStudioViewer).
 
     // The words of a language, sorted, built on the first ask after the
     // definitions change; and built again on the next ask.
@@ -84,14 +84,22 @@ public:
     static void                      forget();
     // A word by its name, or none.
     static const Vocab* word(bool lua, std::string_view name);
+    // Each function the YAML definitions list under `functions:`, by the
+    // first of the categories it lists, as the file has it -- no more of
+    // YAML than that shape; a function listing none is not there.
+    typedef boost::unordered_flat_map<std::string, std::string, ll::string_hash, std::equal_to<>> Categories;
+    static void readCategories(std::string_view yaml, Categories& out);
     // What the definitions say of a word beyond its declaration, a line
     // each: its documentation, its forced delay, that only a god may call
     // it, that it is deprecated. Nothing where they say none of it.
     static std::string notesOf(const Vocab& word);
 
     // The words put in an editor's tables, so that they colour: the
-    // studio's editors and the preferences' previews alike.
-    static void teach(ALCodeEditor& editor, bool lua);
+    // studio's editors and the preferences' previews alike. The tables are
+    // a language's, made once from the vocabulary and the preprocessor's
+    // words and shared by every editor of it, not copied into each.
+    static void                                 teach(ALCodeEditor& editor, bool lua);
+    static std::shared_ptr<const ALSyntaxWords> tables(bool lua);
     // What the hover card says of the word under the mouse, where the
     // vocabulary knows it: `Say` in `ll.Say` asked about as `ll.Say`, `pi`
     // in `math.pi` as `math.pi`. False where it is a word of the script's.
