@@ -1666,7 +1666,7 @@ template<> template<>
     }
 
     template<> template<>
-    void sknavrooms_object::test<34>()
+    void sknavrooms_object::test<49>()
     {
         set_test_name("the middle of a 40 m roof on posts is SHELTERED at the gap, however deep, low roof or high");
         for (F32 height : { 3.f, 6.f })
