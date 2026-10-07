@@ -94,7 +94,7 @@ private:
     void idle();
     void updateDemand(bool want);
     void maybePost();
-    void gather(skmap::SceneInput& in) const;
+    void gather(skmap::SceneInput& in);
     void land(const skmap::ScenePtr& scene, U32 generation, F32 millis);
 
     /// What a scene was built from: a new job goes out when any of it moves.
@@ -197,6 +197,8 @@ private:
     Trigger mPosted;
     bool mHasPosted = false;
     skmap::ScenePtr mScene;
+    /// Each tile's last published copy and when it was last seen, carried while the navmesh rebuilds it.
+    std::map<std::pair<LLUUID, sknav::TileKey>, std::pair<skmap::TileInput, F64>> mLastTiles;
     bool mDemanding = false;
     F64 mLastDrawn = -1.0e9;
     LLVector3d mMapCentre;

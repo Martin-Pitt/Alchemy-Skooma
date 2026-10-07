@@ -99,6 +99,7 @@ void SKMapScene::cleanupSingleton()
     }
     updateDemand(false);
     mScene.reset();
+    mLastTiles.clear();
     mBakes.clear();
     mUploads.clear();
     mWanted.clear();
@@ -259,7 +260,7 @@ void SKMapScene::maybePost()
     }
 }
 
-void SKMapScene::gather(skmap::SceneInput& in) const
+void SKMapScene::gather(skmap::SceneInput& in)
 {
     LL_PROFILE_ZONE_SCOPED;
     const SKNavMesh& navmesh = SKNavMesh::instance();
@@ -283,6 +284,43 @@ void SKMapScene::gather(skmap::SceneInput& in) const
         }
         in.mTiles.push_back(t);
     });
+    // A tile being rebuilt is unpublished for a moment; carry its last copy so the floorplan
+    // does not drop to object boxes for that moment.
+    constexpr F64 CARRY_TILE_S = 10.0;
+    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const size_t published = in.mTiles.size();
+    size_t carried = 0;
+    std::set<std::pair<LLUUID, sknav::TileKey>> seen;
+    for (const skmap::TileInput& t : in.mTiles)
+    {
+        seen.insert({ t.mMesh, t.mKey });
+        mLastTiles[{ t.mMesh, t.mKey }] = { t, now };
+    }
+    for (auto it = mLastTiles.begin(); it != mLastTiles.end();)
+    {
+        if (seen.count(it->first))
+        {
+            ++it;
+            continue;
+        }
+        if (now - it->second.second > CARRY_TILE_S)
+        {
+            it = mLastTiles.erase(it);
+            continue;
+        }
+        const skmap::TileInput& t = it->second.first;
+        if (t.mMax.mdV[VX] > in.mMin.mdV[VX] && t.mMin.mdV[VX] < in.mMax.mdV[VX] && t.mMax.mdV[VY] > in.mMin.mdV[VY]
+            && t.mMin.mdV[VY] < in.mMax.mdV[VY])
+        {
+            in.mTiles.push_back(t);
+            ++carried;
+        }
+        ++it;
+    }
+    if (carried > 0)
+    {
+        LL_INFOS("SKMap") << "scene input: " << published << " tiles published, " << carried << " carried while unpublished" << LL_ENDL;
+    }
     navmesh.linksIn(in.mMin, in.mMax, sknav::AgentClass::AVATAR,
                     [&in](const LLVector3d& from, const LLVector3d& to, F32, sknav::LinkKind kind) {
                         if (kind == sknav::LinkKind::LADDER || kind == sknav::LinkKind::ELEVATOR)
@@ -350,6 +388,10 @@ void SKMapScene::land(const skmap::ScenePtr& scene, U32 generation, F32 millis)
     }
     mShownRibbons.clear();
     mCarried.clear();
+    if (mScene && scene->mBuilt.size() < mScene->mBuilt.size())
+    {
+        LL_INFOS("SKMap") << "scene landed with " << scene->mBuilt.size() << " built cells, down from " << mScene->mBuilt.size() << LL_ENDL;
+    }
     mScene = scene;
     // Global, so a box step that keeps the edges keeps their buffer.
     U64 boundaries = sknav::SEED;
