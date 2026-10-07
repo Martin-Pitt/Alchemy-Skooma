@@ -904,6 +904,7 @@ void SKNavMesh::applyLayouts()
                 terrain = tile.mTerrainSignature;
                 if (!tile.mTerrain || tile.mLandStamp != layout.mLand || tile.mWorldStamp != layout.mWorld)
                 {
+                    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout terrain signature");
                     terrain = terrainSignature(tile.mMin, tile.mMax, layout.mPad);
                     tile.mTerrainStale = true;
                 }
@@ -911,6 +912,8 @@ void SKNavMesh::applyLayouts()
                 tile.mWorldStamp = layout.mWorld;
             }
             else { tile.mTerrain.reset(); tile.mTerrainStale = false; }
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout resign");
+            LL_PROFILE_ZONE_NUM(tile.mRecords.size());
             reSign(tile, before, layout.mSignatures[index], terrain, layout.mParams);
             tile.mTerrainSignature = terrain;
             laid.mRecords.swap(before); // Release the old records with the result on a worker.
@@ -921,6 +924,7 @@ void SKNavMesh::applyLayouts()
             if (timer.getElapsedTimeF32() > 0.002f) return;
             auto current = mesh.mDropCursor++;
             if (layout.mKeys.count(current->first)) continue;
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout drop tile");
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 if (mesh.mNav[cls]) mesh.mNav[cls]->removeTile(mesh.mNav[cls]->getTileRefAt(current->first.mY, current->first.mX, 0), nullptr, nullptr);
             auto retired = std::make_shared<Tile>(std::move(current->second));
@@ -1349,6 +1353,7 @@ void SKNavMesh::schedule()
     };
     if (mBuildCandidates)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - launch builds");
         LLTimer timer;
         S32 launched = 0;
         while (mNextCandidate < mBuildCandidates->size())
@@ -1434,18 +1439,21 @@ void SKNavMesh::update()
     applyLayouts();
 
     // Meshes nothing has claimed for a while are gone with their structure.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - retire meshes");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            std::shared_ptr<Mesh> retired(std::move(it->second));
-            retireOn(workerQueue(), std::move(retired));
-            it = mMeshes.erase(it);
-            mRevision++;
-        }
-        else
-        {
-            ++it;
+            if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
+            {
+                std::shared_ptr<Mesh> retired(std::move(it->second));
+                retireOn(workerQueue(), std::move(retired));
+                it = mMeshes.erase(it);
+                mRevision++;
+            }
+            else
+            {
+                ++it;
+            }
         }
     }
 
@@ -1469,6 +1477,7 @@ void SKNavMesh::update()
     }
     mRooms->update(*this);
 
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
     mStats.mMeshes = static_cast<U32>(mMeshes.size());
     mStats.mInFlight = mInFlight;
     mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
