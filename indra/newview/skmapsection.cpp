@@ -30,7 +30,6 @@
 #include <cfloat>
 #include <climits>
 #include <cstring>
-#include <deque>
 #include <map>
 #include <unordered_map>
 #include <utility>
@@ -429,63 +428,134 @@ namespace skmap
             return x;
         }
 
+        F64 dist2(const LLVector2& a, const LLVector2& b)
+        {
+            const F64 dx = static_cast<F64>(a.mV[VX]) - b.mV[VX], dy = static_cast<F64>(a.mV[VY]) - b.mV[VY];
+            return dx * dx + dy * dy;
+        }
+
+        /// Up to this many nodes or open paths, pairs are tested directly rather than through a grid; both find the
+        /// same pairs, since the grid only skips pairs further apart than the tolerance.
+        constexpr size_t SMALL_CHAIN = 256;
+
+        struct ChainScratch
+        {
+            std::vector<U64> mKeys;
+            std::vector<std::pair<S32, S32>> mEnds, mJoined;
+            std::vector<S32> mParent, mIncident, mFwd, mBack;
+            std::vector<U32> mFirst, mFill, mNextFree;
+            std::vector<U8> mUsed;
+        };
+
         /// Segments into closed paths (front == back) and open ones: exact ends, a 1 mm snap, then a 2 cm close nearest first.
         void chain(const std::vector<Seg>& segs, std::vector<LLVector2>& nodes, std::vector<std::vector<S32>>& closed,
                    std::vector<std::vector<S32>>& open)
         {
-            std::unordered_map<U64, S32> keys;
-            auto node = [&](const LLVector2& p) {
-                const auto it = keys.emplace(pointKey(p), static_cast<S32>(nodes.size()));
-                if (it.second)
-                {
-                    nodes.push_back(p);
-                }
-                return it.first->second;
-            };
-            std::vector<std::pair<S32, S32>> ends;
-            ends.reserve(segs.size());
-            for (const Seg& s : segs)
+            // Scratch kept per thread: a soup's slice is small and frequent, so allocations would dominate it.
+            thread_local ChainScratch scratch;
+            ChainScratch& w = scratch;
+            // Nodes by exact plan coordinates, numbered in order of first appearance.
+            std::vector<U64>& keys = w.mKeys;
+            keys.clear();
+            // Built only for large soups: an empty unordered_map still allocates.
+            std::unique_ptr<std::unordered_map<U64, S32>> index;
+            const bool few = segs.size() * 2 <= SMALL_CHAIN;
+            if (!few)
             {
-                const S32 a = node(s.mA);
-                const S32 b = node(s.mB);
+                index = std::make_unique<std::unordered_map<U64, S32>>();
+                index->reserve(segs.size() * 2);
+            }
+            auto node = [&](const LLVector2& p) {
+                const U64 key = pointKey(p);
+                if (few)
+                {
+                    for (size_t i = 0; i < keys.size(); ++i)
+                    {
+                        if (keys[i] == key)
+                        {
+                            return static_cast<S32>(i);
+                        }
+                    }
+                }
+                else
+                {
+                    const auto it = index->find(key);
+                    if (it != index->end())
+                    {
+                        return it->second;
+                    }
+                    index->emplace(key, static_cast<S32>(keys.size()));
+                }
+                keys.push_back(key);
+                nodes.push_back(p);
+                return static_cast<S32>(keys.size()) - 1;
+            };
+            std::vector<std::pair<S32, S32>>& ends = w.mEnds;
+            ends.clear();
+            for (const Seg& sg : segs)
+            {
+                const S32 a = node(sg.mA);
+                const S32 b = node(sg.mB);
                 ends.emplace_back(a, b);
             }
-            // Nodes in neighbouring 1 mm cells within the tolerance join the lowest id.
-            std::vector<S32> parent(nodes.size());
-            for (size_t i = 0; i < nodes.size(); ++i)
+            // Nodes within the snap join; each component keeps its lowest id, whatever the order of the joins.
+            const size_t n = nodes.size();
+            std::vector<S32>& parent = w.mParent;
+            parent.resize(n);
+            for (size_t i = 0; i < n; ++i)
             {
                 parent[i] = static_cast<S32>(i);
             }
-            std::map<GridKey, std::vector<S32>> grid;
-            for (size_t i = 0; i < nodes.size(); ++i)
-            {
-                const GridKey g = gridOf(nodes[i], SECTION_SNAP_M);
-                for (S64 dx = -1; dx <= 1; ++dx)
+            const F64 snap2 = static_cast<F64>(SECTION_SNAP_M) * SECTION_SNAP_M;
+            auto unite = [&](S32 i, S32 j) {
+                const S32 a = findRoot(parent, i), b = findRoot(parent, j);
+                if (a != b)
                 {
-                    for (S64 dy = -1; dy <= 1; ++dy)
+                    parent[llmax(a, b)] = llmin(a, b);
+                }
+            };
+            if (n <= SMALL_CHAIN)
+            {
+                for (size_t i = 1; i < n; ++i)
+                {
+                    for (size_t j = 0; j < i; ++j)
                     {
-                        const auto it = grid.find({ g.first + dx, g.second + dy });
-                        if (it == grid.end())
+                        if (dist2(nodes[j], nodes[i]) <= snap2)
                         {
-                            continue;
+                            unite(static_cast<S32>(i), static_cast<S32>(j));
                         }
-                        for (S32 j : it->second)
+                    }
+                }
+            }
+            else
+            {
+                std::map<GridKey, std::vector<S32>> grid;
+                for (size_t i = 0; i < n; ++i)
+                {
+                    const GridKey g = gridOf(nodes[i], SECTION_SNAP_M);
+                    for (S64 dx = -1; dx <= 1; ++dx)
+                    {
+                        for (S64 dy = -1; dy <= 1; ++dy)
                         {
-                            if (dist(nodes[j], nodes[i]) <= SECTION_SNAP_M)
+                            const auto it = grid.find({ g.first + dx, g.second + dy });
+                            if (it == grid.end())
                             {
-                                const S32 a = findRoot(parent, static_cast<S32>(i)), b = findRoot(parent, j);
-                                if (a != b)
+                                continue;
+                            }
+                            for (S32 j : it->second)
+                            {
+                                if (dist2(nodes[j], nodes[i]) <= snap2)
                                 {
-                                    parent[llmax(a, b)] = llmin(a, b);
+                                    unite(static_cast<S32>(i), j);
                                 }
                             }
                         }
                     }
+                    grid[g].push_back(static_cast<S32>(i));
                 }
-                grid[g].push_back(static_cast<S32>(i));
             }
-            std::vector<std::pair<S32, S32>> joined;
-            joined.reserve(ends.size());
+            std::vector<std::pair<S32, S32>>& joined = w.mJoined;
+            joined.clear();
             for (const auto& e : ends)
             {
                 const S32 a = findRoot(parent, e.first), b = findRoot(parent, e.second);
@@ -494,38 +564,59 @@ namespace skmap
                     joined.emplace_back(a, b);
                 }
             }
-            std::vector<std::vector<S32>> incident(nodes.size());
-            for (size_t s = 0; s < joined.size(); ++s)
+            // Each node's segments in segment order, packed.
+            std::vector<U32>& first = w.mFirst;
+            first.assign(n + 1, 0);
+            for (const auto& e : joined)
             {
-                incident[joined[s].first].push_back(static_cast<S32>(s));
-                incident[joined[s].second].push_back(static_cast<S32>(s));
+                first[e.first + 1]++;
+                first[e.second + 1]++;
             }
-            std::vector<size_t> next_free(nodes.size(), 0);
-            std::vector<bool> used(joined.size(), false);
+            for (size_t i = 0; i < n; ++i)
+            {
+                first[i + 1] += first[i];
+            }
+            std::vector<S32>& incident = w.mIncident;
+            incident.resize(first[n]);
+            std::vector<U32>& fill = w.mFill;
+            fill.assign(first.begin(), first.end() - 1);
+            for (size_t sgi = 0; sgi < joined.size(); ++sgi)
+            {
+                incident[fill[joined[sgi].first]++] = static_cast<S32>(sgi);
+                incident[fill[joined[sgi].second]++] = static_cast<S32>(sgi);
+            }
+            std::vector<U32>& next_free = w.mNextFree;
+            next_free.assign(first.begin(), first.end() - 1);
+            std::vector<U8>& used = w.mUsed;
+            used.assign(joined.size(), 0);
             auto nextAt = [&](S32 tip) -> S32 {
-                std::vector<S32>& list = incident[tip];
-                size_t& k = next_free[tip];
-                while (k < list.size() && used[list[k]])
+                U32& k = next_free[tip];
+                while (k < first[tip + 1] && used[incident[k]])
                 {
                     ++k;
                 }
-                return k < list.size() ? list[k] : -1;
+                return k < first[tip + 1] ? incident[k] : -1;
             };
-            for (size_t s = 0; s < joined.size(); ++s)
+            // A path is grown both ways: back holds its head end reversed, fwd the rest.
+            std::vector<S32>& fwd = w.mFwd;
+            std::vector<S32>& back = w.mBack;
+            for (size_t sgi = 0; sgi < joined.size(); ++sgi)
             {
-                if (used[s])
+                if (used[sgi])
                 {
                     continue;
                 }
-                used[s] = true;
-                std::deque<S32> path = { joined[s].first, joined[s].second };
+                used[sgi] = 1;
+                fwd.assign({ joined[sgi].first, joined[sgi].second });
+                back.clear();
+                auto head = [&]() { return back.empty() ? fwd.front() : back.back(); };
                 bool is_closed = false;
                 for (S32 direction : { 1, -1 })
                 {
                     while (!is_closed)
                     {
-                        const S32 tip = direction == 1 ? path.back() : path.front();
-                        if (direction == 1 && path.size() > 2 && path.back() == path.front())
+                        const S32 tip = direction == 1 ? fwd.back() : head();
+                        if (direction == 1 && fwd.size() + back.size() > 2 && fwd.back() == head())
                         {
                             is_closed = true;
                             break;
@@ -535,17 +626,17 @@ namespace skmap
                         {
                             break;
                         }
-                        used[nxt] = true;
+                        used[nxt] = 1;
                         const S32 other = joined[nxt].first == tip ? joined[nxt].second : joined[nxt].first;
                         if (direction == 1)
                         {
-                            path.push_back(other);
+                            fwd.push_back(other);
                         }
                         else
                         {
-                            path.push_front(other);
+                            back.push_back(other);
                         }
-                        if (path.front() == path.back())
+                        if (head() == fwd.back())
                         {
                             is_closed = true;
                         }
@@ -555,29 +646,21 @@ namespace skmap
                         break;
                     }
                 }
-                (is_closed ? closed : open).emplace_back(path.begin(), path.end());
+                std::vector<S32> path(back.rbegin(), back.rend());
+                path.insert(path.end(), fwd.begin(), fwd.end());
+                (is_closed ? closed : open).push_back(std::move(path));
             }
 
             // Close what is left within 2 cm, nearest first; ties by the lower polyline index, then in the order the
             // ends are tried: tail to head, head to tail, tail to tail, head to head.
+            const F64 close2 = static_cast<F64>(SECTION_CLOSE_M) * SECTION_CLOSE_M;
             while (!open.empty())
             {
-                struct End
-                {
-                    S32 mPath;
-                    bool mHead;
-                };
-                std::map<GridKey, std::vector<End>> ends_grid;
-                for (size_t i = 0; i < open.size(); ++i)
-                {
-                    ends_grid[gridOf(nodes[open[i].front()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), true });
-                    ends_grid[gridOf(nodes[open[i].back()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), false });
-                }
                 bool found = false;
                 F64 best_d = 0.0;
                 S32 best_i = 0, best_j = 0, best_how = 0;     // how: 0 self, 1 ij, 2 ji, 3 ijr, 4 rij
                 auto consider = [&](F64 d, S32 i, S32 j, S32 how) {
-                    if (d > SECTION_CLOSE_M)
+                    if (d > close2)
                     {
                         return;
                     }
@@ -590,41 +673,71 @@ namespace skmap
                         best_how = how;
                     }
                 };
-                for (size_t i = 0; i < open.size(); ++i)
-                {
-                    const S32 si = static_cast<S32>(i);
-                    for (bool head : { true, false })
+                // One end of path i against an end of path j >= i; a path's own pair is its tail against its head.
+                auto pair = [&](S32 i, bool head_i, S32 j, bool head_j) {
+                    const LLVector2& p = nodes[head_i ? open[i].front() : open[i].back()];
+                    const LLVector2& q = nodes[head_j ? open[j].front() : open[j].back()];
+                    const F64 d = dist2(p, q);
+                    if (i == j)
                     {
-                        const LLVector2& p = nodes[head ? open[i].front() : open[i].back()];
-                        const GridKey g = gridOf(p, SECTION_CLOSE_M);
-                        for (S64 dx = -1; dx <= 1; ++dx)
+                        consider(d, i, i, 0);
+                        return;
+                    }
+                    consider(d, i, j, !head_i && head_j ? 1 : head_i && !head_j ? 2 : !head_i ? 3 : 4);
+                };
+                if (open.size() <= SMALL_CHAIN)
+                {
+                    for (size_t i = 0; i < open.size(); ++i)
+                    {
+                        const S32 si = static_cast<S32>(i);
+                        pair(si, false, si, true);
+                        for (size_t j = i + 1; j < open.size(); ++j)
                         {
-                            for (S64 dy = -1; dy <= 1; ++dy)
+                            const S32 sj = static_cast<S32>(j);
+                            pair(si, false, sj, true);
+                            pair(si, true, sj, false);
+                            pair(si, false, sj, false);
+                            pair(si, true, sj, true);
+                        }
+                    }
+                }
+                else
+                {
+                    struct End
+                    {
+                        S32 mPath;
+                        bool mHead;
+                    };
+                    std::map<GridKey, std::vector<End>> ends_grid;
+                    for (size_t i = 0; i < open.size(); ++i)
+                    {
+                        ends_grid[gridOf(nodes[open[i].front()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), true });
+                        ends_grid[gridOf(nodes[open[i].back()], SECTION_CLOSE_M)].push_back({ static_cast<S32>(i), false });
+                    }
+                    for (size_t i = 0; i < open.size(); ++i)
+                    {
+                        const S32 si = static_cast<S32>(i);
+                        for (bool head : { true, false })
+                        {
+                            const GridKey g = gridOf(nodes[head ? open[i].front() : open[i].back()], SECTION_CLOSE_M);
+                            for (S64 dx = -1; dx <= 1; ++dx)
                             {
-                                const auto it = ends_grid.find({ g.first + dx, g.second + dy });
-                                if (it == ends_grid.end())
+                                for (S64 dy = -1; dy <= 1; ++dy)
                                 {
-                                    continue;
-                                }
-                                for (const End& e : it->second)
-                                {
-                                    if (e.mPath < si || (e.mPath == si && e.mHead == head))
+                                    const auto it = ends_grid.find({ g.first + dx, g.second + dy });
+                                    if (it == ends_grid.end())
                                     {
                                         continue;
                                     }
-                                    const LLVector2& q = nodes[e.mHead ? open[e.mPath].front() : open[e.mPath].back()];
-                                    const F64 d = dist(p, q);
-                                    if (e.mPath == si)
+                                    for (const End& e : it->second)
                                     {
-                                        if (!head)
+                                        // Later paths, and this path's head seen from its tail.
+                                        if (e.mPath < si || (e.mPath == si && (head || !e.mHead)))
                                         {
-                                            consider(d, si, si, 0);
+                                            continue;
                                         }
-                                        continue;
+                                        pair(si, head, e.mPath, e.mHead);
                                     }
-                                    // This path's end against a later path's end.
-                                    const S32 how = !head && e.mHead ? 1 : head && !e.mHead ? 2 : !head ? 3 : 4;
-                                    consider(d, si, e.mPath, how);
                                 }
                             }
                         }
@@ -642,7 +755,8 @@ namespace skmap
                     closed.push_back(std::move(p));
                     continue;
                 }
-                std::vector<S32> pi = open[best_i], pj = open[best_j];
+                const std::vector<S32>& pi = open[best_i];
+                const std::vector<S32>& pj = open[best_j];
                 std::vector<S32> merged;
                 switch (best_how)
                 {
