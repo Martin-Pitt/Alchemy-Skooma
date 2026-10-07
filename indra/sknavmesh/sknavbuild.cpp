@@ -659,12 +659,11 @@ namespace
 
     /// A walkable span in the column already within the agent's climb of both
     /// surfaces: they are joined through it and need no bridge.
-    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb)
+    bool columnJoins(const rcHeightfield& hf, S32 x, S32 z, S32 lo, S32 hi, S32 climb, U8 min_code)
     {
         for (const rcSpan* s = hf.spans[x + z * hf.width]; s; s = s->next)
         {
-            if (s->area != RC_NULL_AREA && rcAbs(static_cast<S32>(s->smax) - lo) <= climb &&
-                rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
+            if (s->area >= min_code && rcAbs(static_cast<S32>(s->smax) - lo) <= climb && rcAbs(static_cast<S32>(s->smax) - hi) <= climb)
             {
                 return true;
             }
@@ -689,26 +688,33 @@ namespace
         return false;
     }
 
+    /// A span to lay across a crevice, in the cells of the heightfield it was found on.
+    struct Bridge
+    {
+        S32 mX = 0;
+        S32 mZ = 0;
+        unsigned short mSMin = 0;
+        unsigned short mSMax = 0;
+        U8 mArea = RC_NULL_AREA;
+
+        bool operator==(const Bridge& o) const
+        {
+            return mX == o.mX && mZ == o.mZ && mSMin == o.mSMin && mSMax == o.mSMax && mArea == o.mArea;
+        }
+    };
+
     /// Recast joins a span to its neighbours only, so a crevice that leaves a
     /// column without a span at the surfaces' level splits them, and the
     /// erosion that follows widens it: the top of a staircase, solid in the
-    /// sim, read as a gap. Join the two sides across one such column when
-    /// their tops are within the agent's climb and nothing stands at that
-    /// level between them.
-    void bridgeCrevices(rcHeightfield& hf, S32 climb, U32* count = nullptr)
+    /// sim, read as a gap. Find where to join the two sides across one such
+    /// column, when their tops are within the agent's climb and nothing stands
+    /// at that level between them; a class walks the spans of min_code and up.
+    /// Nothing is added here: a span laid while scanning would be read as a
+    /// neighbour by a later column and by the column's other axis, which must
+    /// judge the heightfield they were given.
+    std::vector<Bridge> findBridges(const rcHeightfield& hf, S32 climb, U8 min_code)
     {
-        struct Bridge
-        {
-            S32 mX = 0;
-            S32 mZ = 0;
-            unsigned short mSMin = 0;
-            unsigned short mSMax = 0;
-            U8 mArea = RC_NULL_AREA;
-        };
         std::vector<Bridge> bridges;
-        // Collect first, then add: a span laid while scanning would be read as
-        // a neighbour by a later column and by the column's other axis, which
-        // must judge the heightfield they were given.
         for (S32 z = 1; z + 1 < hf.height; ++z)
         {
             for (S32 x = 1; x + 1 < hf.width; ++x)
@@ -719,13 +725,13 @@ namespace
                     const S32 dz = axis == 0 ? 0 : 1;
                     for (const rcSpan* a = hf.spans[(x - dx) + (z - dz) * hf.width]; a; a = a->next)
                     {
-                        if (a->area == RC_NULL_AREA)
+                        if (a->area < min_code)
                         {
                             continue;
                         }
                         for (const rcSpan* b = hf.spans[(x + dx) + (z + dz) * hf.width]; b; b = b->next)
                         {
-                            if (b->area == RC_NULL_AREA)
+                            if (b->area < min_code)
                             {
                                 continue;
                             }
@@ -735,7 +741,7 @@ namespace
                                 continue;
                             }
                             const S32 lo = std::min(atop, btop), hi = std::max(atop, btop);
-                            if (columnJoins(hf, x, z, lo, hi, climb) || creviceBlocked(hf, x, z, lo, hi))
+                            if (columnJoins(hf, x, z, lo, hi, climb, min_code) || creviceBlocked(hf, x, z, lo, hi))
                             {
                                 continue;
                             }
@@ -755,15 +761,37 @@ namespace
                 }
             }
         }
+        return bridges;
+    }
+
+    /// Lay bridges found on a heightfield whose cells sit (dx, dz) inside this one.
+    void addBridges(rcHeightfield& hf, const std::vector<Bridge>& bridges, S32 climb, S32 dx = 0, S32 dz = 0)
+    {
         rcContext ctx(false);
         for (const Bridge& bridge : bridges)
         {
-            rcAddSpan(&ctx, hf, bridge.mX, bridge.mZ, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
+            rcAddSpan(&ctx, hf, bridge.mX + dx, bridge.mZ + dz, bridge.mSMin, bridge.mSMax, bridge.mArea, climb);
         }
-        if (count)
+    }
+
+    /// How many bridges of one list the other lacks, counting repeats.
+    U32 bridgesMissing(const std::vector<Bridge>& from, const std::vector<Bridge>& in)
+    {
+        std::vector<Bridge> rest = in;
+        U32 missing = 0;
+        for (const Bridge& b : from)
         {
-            *count = static_cast<U32>(bridges.size());
+            const auto it = std::find(rest.begin(), rest.end(), b);
+            if (it == rest.end())
+            {
+                ++missing;
+            }
+            else
+            {
+                rest.erase(it);
+            }
         }
+        return missing;
     }
 
     /// Walk from a compact span along one direction until the floor drops by
@@ -1626,7 +1654,34 @@ namespace sknav
             {
                 maskTopOnly(*mem.hf);
             }
-            bridgeCrevices(*mem.hf, cfg.walkableClimb, cstats ? &cstats->mBridges : nullptr);
+            const std::vector<Bridge> bridges = findBridges(*mem.hf, cfg.walkableClimb, avatar_cls ? AREA_CODE_BASE : 1);
+            if (cstats)
+            {
+                clock.lap(ClassBuildStats::BRIDGES);
+                cstats->mBridges = static_cast<U32>(bridges.size());
+                if (!avatar_cls && class_soup == &soup)
+                {
+                    // AVATAR's list off the same raster, both over the cells AVATAR's own heightfield has.
+                    const S32 inset = cfg.borderSize - borderCells(input.mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius, cfg.cs);
+                    const auto inside = [&](const std::vector<Bridge>& list) {
+                        std::vector<Bridge> out;
+                        for (const Bridge& b : list)
+                        {
+                            if (b.mX > inset && b.mZ > inset && b.mX + 1 + inset < cfg.width && b.mZ + 1 + inset < cfg.height)
+                            {
+                                out.push_back(b);
+                            }
+                        }
+                        return out;
+                    };
+                    const std::vector<Bridge> top_in = inside(bridges);
+                    const std::vector<Bridge> avatar_in = inside(findBridges(*mem.hf, cfg.walkableClimb, AREA_CODE_BASE));
+                    stats->mTopOnlyBridges = bridgesMissing(top_in, avatar_in);
+                    stats->mAvatarOnlyBridges = bridgesMissing(avatar_in, top_in);
+                }
+                clock.restart();
+            }
+            addBridges(*mem.hf, bridges, cfg.walkableClimb);
             clock.lap(ClassBuildStats::BRIDGES);
             cullUnderground(*mem.hf, input.mTerrain);
             clock.lap(ClassBuildStats::CULL);

@@ -129,6 +129,9 @@ namespace sknav
         U32 mExcludeWindowCells = 0;    ///< tile cells within two of an excluded triangle's box
         U32 mTileCells = 0;
         U32 mSharedCodes = 0;           ///< distinct codes of the shared partition, at the widest slope
+        /// Bridges the air's list lays that AVATAR's, found on the same raster, does not, and the reverse.
+        U32 mTopOnlyBridges = 0;
+        U32 mAvatarOnlyBridges = 0;
         ClassBuildStats mClass[2];
         /// AVATAR's walkable spans on the tile proper and, per poly, which of them it covers.
         std::vector<StatSpan> mSpans;

@@ -769,6 +769,10 @@ namespace tut
                         << "\",\"air_rest\":\"" << rest << std::dec << "\",\"gaps\":" << res.mAir->mGaps.size()
                         << ",\"leaves\":" << res.mAir->mLeaves.size();
                 }
+                if (tile.mStats)
+                {
+                    out << ",\"top_only_bridges\":" << tile.mStats->mTopOnlyBridges << ",\"avatar_only_bridges\":" << tile.mStats->mAvatarOnlyBridges;
+                }
                 out << ",\"ms\":" << (tile.mStats ? tile.mStats->mTotalMs : 0.0) << "}\n";
             }
         }
