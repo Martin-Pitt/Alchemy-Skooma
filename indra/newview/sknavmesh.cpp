@@ -26,6 +26,7 @@
 
 #include "sknavmesh.h"
 
+#include "skcaptureexport.h"
 #include "sknavannotate.h"
 #include "sknavannotator.h"
 #include "sknavcensusio.h"
@@ -84,6 +85,9 @@
 namespace
 {
     using namespace sknav;
+    using skcapture::faceAlphaMode;
+    using skcapture::facePbrAlpha;
+    using skcapture::linkNumber;
 
     template<typename T>
     void retireOn(const LL::WorkQueue::ptr_t& workers, T value)
@@ -115,43 +119,6 @@ namespace
             && std::fabs(a.mdV[VZ] - b.mdV[VZ]) <= 0.05;
     }
 
-    // How the renderer will blend a face, which is what decides whether it
-    // can be seen through: a PBR material's own mode wins over a legacy
-    // material's, and with neither the face is blended only if its tint or
-    // its texture carries alpha, which only the texture can say.
-    const char* faceAlphaMode(const LLTextureEntry* te)
-    {
-        if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-        {
-            switch (gltf->mAlphaMode)
-            {
-                case LLGLTFMaterial::ALPHA_MODE_BLEND: return "pbr-blend";
-                case LLGLTFMaterial::ALPHA_MODE_MASK: return "pbr-mask";
-                default: return "pbr-opaque";
-            }
-        }
-        const LLMaterialPtr material = te->getMaterialParams();
-        if (material.notNull())
-        {
-            switch (material->getDiffuseAlphaMode())
-            {
-                case LLMaterial::DIFFUSE_ALPHA_MODE_NONE: return "none";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_BLEND: return "blend";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_MASK: return "mask";
-                case LLMaterial::DIFFUSE_ALPHA_MODE_EMISSIVE: return "emissive";
-                default: break;
-            }
-        }
-        return "default";
-    }
-
-    // The PBR base colour's alpha, which multiplies the tint on a PBR face.
-    F32 facePbrAlpha(const LLTextureEntry* te)
-    {
-        const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial();
-        return gltf ? gltf->mBaseColor.mV[VW] : 1.f;
-    }
-
     constexpr F32 EXPORT_REACH_M = 16.f; ///< the object export's surroundings: half the side of the cube about the point
 
     /// Whether a triangle's box meets the cube of half side reach about the origin.
@@ -167,29 +134,6 @@ namespace
             }
         }
         return true;
-    }
-
-    S32 linkNumber(const LLViewerObject* object)
-    {
-        // SL numbers the root 1 and its children from 2 in child order.
-        const LLViewerObject* parent = static_cast<const LLViewerObject*>(object->getParent());
-        if (!parent)
-        {
-            return 1;
-        }
-        S32 link = 2;
-        for (const LLPointer<LLViewerObject>& child : parent->getChildren())
-        {
-            if (child.get() == object)
-            {
-                break;
-            }
-            if (!child->isAvatar())
-            {
-                ++link;
-            }
-        }
-        return link;
     }
 }
 
@@ -1547,6 +1491,21 @@ void SKNavMesh::tileContentKeysIn(const LLUUID& mesh_id, const LLVector3d& min, 
     }
 }
 
+bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        for (const auto& t : m.second->mTiles)
+        {
+            if ((t.second.mInFlight || t.second.mSignature != t.second.mBuilt) && overlaps3D(t.second.mMin, t.second.mMax, min, max))
+            {
+                return true;
+            }
+        }
+    }
+    return mRooms->settlingIn(min, max);
+}
+
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
@@ -1557,7 +1516,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine();
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const

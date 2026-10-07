@@ -945,6 +945,11 @@ namespace sknav
         return dist_vec(held_origin, origin) > params.mMoveM || std::fabs(radius - held_radius) > params.mRadiusShare * held_radius;
     }
 
+    bool shouldRecapture(const LLVector3& held_origin, F32 held_radius, const LLVector3& origin, const ProbeParams& params)
+    {
+        return dist_vec(held_origin, origin) > std::max(params.mMoveM, params.mMoveShare * held_radius);
+    }
+
     std::vector<std::vector<U32>> symmetricGraph(U32 count, const std::function<bool(U32, U32)>& linked, U32 max_degree)
     {
         std::vector<std::vector<U32>> lists(count);

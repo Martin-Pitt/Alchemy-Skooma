@@ -169,6 +169,8 @@ public:
     SKNavWorldViewPtr view() const;
     SKNavWindPtr wind() const;
     U64 revision() const { return mView ? mView->revision() : 0; }
+    /// Whether a mesh meeting the global box has a pass pending or running.
+    bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
 
     /// Tint the floor of every gap near the camera by e (mode 1) or by bucket

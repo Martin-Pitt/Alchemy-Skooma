@@ -976,6 +976,8 @@ if(AL_BUILD_VIEWER)
     rlvactions.cpp
     rlvenvironment.cpp
     skphysicsshape.cpp
+    skcaptureexport.cpp
+    skclusterprobes.cpp
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
     sknavannotator.cpp
@@ -1835,6 +1837,8 @@ if(AL_BUILD_VIEWER)
     rlvactions.h
     rlvcommon.h
     skphysicsshape.h
+    skcaptureexport.h
+    skclusterprobes.h
     skfloaternavannotate.h
     skfloaternavmesh.h
     sknavannotator.h
