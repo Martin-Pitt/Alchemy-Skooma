@@ -56,6 +56,31 @@ namespace skmap
     };
     typedef std::shared_ptr<const std::vector<PairSource>> PairSources;
 
+    /// What the pairs and pieces read of a kept record, with its index in the snapshot.
+    struct KeptRecord
+    {
+        U32 mIndex = 0;
+        U64 mSignature = 0;
+        LLVector3d mOrigin, mMin, mMax;
+        LLUUID mPart, mRoot;
+        sknav::Shape mShape = sknav::Shape::TRIANGLES;
+        sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+
+        KeptRecord() = default;
+        KeptRecord(U32 index, const sknav::Record& r)
+            : mIndex(index), mSignature(r.mSignature), mOrigin(r.mOrigin), mMin(r.mMin), mMax(r.mMax), mPart(r.mPart), mRoot(r.mRoot),
+              mShape(r.mShape), mProvenance(r.mProvenance)
+        {
+        }
+        bool same(U32 index, const sknav::Record& r) const
+        {
+            return mIndex == index && mSignature == r.mSignature && mShape == r.mShape && mProvenance == r.mProvenance
+                && std::memcmp(mOrigin.mdV, r.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0
+                && std::memcmp(mMin.mdV, r.mMin.mdV, sizeof(mMin.mdV)) == 0 && std::memcmp(mMax.mdV, r.mMax.mdV, sizeof(mMax.mdV)) == 0
+                && mPart == r.mPart && mRoot == r.mRoot;
+        }
+    };
+
     /// The last scene build, for the next to take what an unchanged layer would only compute again.
     struct SectionMemo
     {
@@ -64,6 +89,8 @@ namespace skmap
         std::vector<std::pair<U64, S32>> mLayers;
         /// Per layer of mScene, its pairs in order; null for a layer that made none.
         std::vector<PairSources> mPairs;
+        /// The records the section kept, in snapshot order.
+        std::shared_ptr<const std::vector<KeptRecord>> mKept;
     };
 
     namespace
@@ -1669,6 +1696,23 @@ namespace skmap
             return true;
         }
 
+        /// A layer's pieces as the last build made them, appended to this scene's.
+        void reusePieces(Scene& s, const Scene& last, S32 last_layer, SceneLayer& layer)
+        {
+            const std::vector<U32>& ids = last.mLayers[last_layer].mPieces;
+            const size_t want = s.mPieces.size() + ids.size();
+            if (want > s.mPieces.capacity())
+            {
+                s.mPieces.reserve(llmax(want, s.mPieces.capacity() + s.mPieces.capacity() / 2));
+            }
+            layer.mPieces.reserve(ids.size());
+            for (U32 id : ids)
+            {
+                layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
+                s.mPieces.push_back(last.mPieces[id]);
+            }
+        }
+
         /// (record, plane) as one key that sorts as the pair does.
         U64 pairKey(U32 ri, S32 q)
         {
@@ -1766,6 +1810,33 @@ namespace skmap
             }
             stats.mRecords = static_cast<U32>(kept.size());
 
+            // The same records at the same indices as the last build: an unchanged layer's pairs are the ones it had.
+            const SectionMemo* last = cache ? cache->memo().get() : nullptr;
+            bool same_records = false;
+            if (next)
+            {
+                const std::vector<KeptRecord>* had = last && last->mKept ? last->mKept.get() : nullptr;
+                same_records = had && had->size() == kept.size();
+                for (size_t k = 0; same_records && k < kept.size(); ++k)
+                {
+                    same_records = (*had)[k].same(kept[k], *recs[kept[k]]);
+                }
+                if (same_records)
+                {
+                    next->mKept = last->mKept;
+                }
+                else
+                {
+                    auto facts = std::make_shared<std::vector<KeptRecord>>();
+                    facts->reserve(kept.size());
+                    for (U32 i : kept)
+                    {
+                        facts->emplace_back(i, *recs[i]);
+                    }
+                    next->mKept = std::move(facts);
+                }
+            }
+
             // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees.
             std::map<Cell, std::vector<U32>> buckets;
             std::vector<U32> large;
@@ -1830,7 +1901,6 @@ namespace skmap
             U32 poly_stamp = 0;
 
             // A layer whose polygons the last build had, to the bit, has the floor levels it had.
-            const SectionMemo* last = cache ? cache->memo().get() : nullptr;
             std::vector<S32> last_layer(s.mLayers.size(), -1);
             if (next)
             {
@@ -1887,6 +1957,21 @@ namespace skmap
                 const LevelGrid& grid = layer.mLevels;
                 if (grid.mW == 0)
                 {
+                    continue;
+                }
+                // The same floors and the same records: the same pairs, and so the same pieces.
+                if (same_records && last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
+                    && last->mPairs[last_layer[l]])
+                {
+                    SK_SECTION_STAGE(PIECES);
+                    const PairSources& had = last->mPairs[last_layer[l]];
+                    next->mPairs[l] = had;
+                    reusePieces(s, *last->mScene, last_layer[l], layer);
+                    for (const PairSource& src : *had)
+                    {
+                        planes_used.push_back(src.mPlane);
+                    }
+                    stats.mReused += static_cast<U32>(had->size());
                     continue;
                 }
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
@@ -2030,19 +2115,7 @@ namespace skmap
                     if (same)
                     {
                         next->mPairs[l] = *had;
-                        const Scene& ls = *last->mScene;
-                        const std::vector<U32>& ids = ls.mLayers[last_layer[l]].mPieces;
-                        const size_t want_reused = s.mPieces.size() + ids.size();
-                        if (want_reused > s.mPieces.capacity())
-                        {
-                            s.mPieces.reserve(llmax(want_reused, s.mPieces.capacity() + s.mPieces.capacity() / 2));
-                        }
-                        layer.mPieces.reserve(ids.size());
-                        for (U32 id : ids)
-                        {
-                            layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                            s.mPieces.push_back(ls.mPieces[id]);
-                        }
+                        reusePieces(s, *last->mScene, last_layer[l], layer);
                         for (const auto& pq : pairs)
                         {
                             planes_used.push_back(pq.second);
