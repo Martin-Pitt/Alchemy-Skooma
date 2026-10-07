@@ -38,7 +38,7 @@
 class LLColor4U;
 class LLImageRaw;
 class LLViewerTexture;
-class LLFloaterMap;
+//class LLFloaterMap; // <SK:Nexii> SKNetMap retired the classic mini-map floater
 class LLMenuGL;
 class LLViewerRegion;
 
@@ -60,7 +60,7 @@ public:
 protected:
     LLNetMap (const Params & p);
     friend class LLUICtrlFactory;
-    friend class LLFloaterMap;
+    //friend class LLFloaterMap; // <SK:Nexii> SKNetMap retired the classic mini-map floater
 
 public:
     virtual ~LLNetMap();

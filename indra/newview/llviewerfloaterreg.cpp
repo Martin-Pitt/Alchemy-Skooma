@@ -127,7 +127,7 @@
 #include "llfloaterlinkreplace.h"
 #include "llfloaterloadprefpreset.h"
 #include "llfloaterlocalassets.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llfloatermarketplace.h"
 #include "llfloatermarketplacelistings.h"
 #include "llfloatermaturitydialog.h"

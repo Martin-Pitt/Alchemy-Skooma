@@ -472,7 +472,7 @@ if(AL_BUILD_VIEWER)
     llfloaterloadprefpreset.cpp
     llfloaterlocalassets.cpp
     llfloatermarketplacelistings.cpp
-    llfloatermap.cpp
+    # llfloatermap.cpp # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermaturitydialog.cpp
     llfloatermediasettings.cpp
     llfloatermemleak.cpp
@@ -1340,7 +1340,7 @@ if(AL_BUILD_VIEWER)
     llfloaterlinkreplace.h
     llfloaterloadprefpreset.h
     llfloaterlocalassets.h
-    llfloatermap.h
+    # llfloatermap.h # <SK:Nexii> SKNetMap retired the classic mini-map floater
     llfloatermarketplace.h
     llfloatermarketplacelistings.h
     llfloatermaturitydialog.h

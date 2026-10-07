@@ -113,7 +113,7 @@
 #include "llfloatercamera.h"
 #include "llfloaterland.h"
 #include "llfloaterinspect.h"
-#include "llfloatermap.h"
+//#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
 #include "llfloaternamedesc.h"
 #include "llfloaterpreference.h"
 #include "llfloatersnapshot.h"
