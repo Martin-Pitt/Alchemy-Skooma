@@ -54,6 +54,9 @@ namespace
 {
     constexpr F64 DRAWN_RECENTLY_S = 2.0;
     constexpr F64 COARSE_CEILING_M = 1020.0;   ///< coarse locations stop telling heights here
+    constexpr F64 CAMERA_STOREY_ABOVE_M = 4.0; ///< a camera this far over the agent's floor has left its storey
+    constexpr F64 CAMERA_STOREY_BELOW_M = 1.0; ///< or this far under it
+    constexpr F64 CAMERA_EYE_M = 1.0;          ///< an avatar's position sits about this far under its eyes
     constexpr F32 PEOPLE_REACH_M = 1024.f;
 }
 
@@ -467,6 +470,32 @@ void SKMapPeople::gatherPeople()
 
     // Floors from the scene when there is one; the raw height difference otherwise.
     const skmap::ScenePtr scene = SKMapScene::instanceExists() ? SKMapScene::instance().scene() : nullptr;
+    // Floors are told from the camera: the agent's floor while the camera is on its storey, the camera's own otherwise.
+    const LLVector3d camera = gAgentCamera.getCameraPositionGlobal();
+    const bool scene_floor = scene && SKMapScene::instance().agentFloorCurrent();
+    skmap::AgentFloor reference;
+    if (scene_floor)
+    {
+        reference = SKMapScene::instance().agentFloor();
+    }
+    else
+    {
+        reference.mPos = agent;
+    }
+    const F64 eye_above = camera.mdV[VZ] - (reference.mFound ? reference.mZ : agent.mdV[VZ]);
+    if (eye_above < -CAMERA_STOREY_BELOW_M || eye_above > CAMERA_STOREY_ABOVE_M)
+    {
+        reference = skmap::AgentFloor();
+        reference.mPos = camera - LLVector3d(0.0, 0.0, CAMERA_EYE_M);
+        reference.mFloorPos = reference.mPos;
+        if (scene_floor)
+        {
+            const skmap::FloorHit hit = skmap::floorAt(*scene, camera, 2.5f, 0.5f);
+            reference.mFound = hit.mFound;
+            reference.mLayer = hit.mLayer;
+            reference.mZ = hit.mZ;
+        }
+    }
     // The probe sees loaded avatars nearest first, so the nearest are asked about first.
     if (mCombat)
     {
@@ -540,13 +569,13 @@ void SKMapPeople::gatherPeople()
         {
             p.mFloor = skmap::FloorRelation::UNKNOWN;
         }
-        else if (scene && SKMapScene::instance().agentFloorCurrent())
+        else if (scene_floor)
         {
-            p.mFloor = skmap::floorRelation(*scene, SKMapScene::instance().agentFloor(), p.mPos, true);
+            p.mFloor = skmap::floorRelation(*scene, reference, p.mPos, true);
         }
         else
         {
-            const F64 dz = p.mPos.mdV[VZ] - agent.mdV[VZ];
+            const F64 dz = p.mPos.mdV[VZ] - reference.mPos.mdV[VZ];
             p.mFloor = dz >= skmap::FLOOR_RAW_M ? skmap::FloorRelation::ABOVE
                      : dz <= -skmap::FLOOR_RAW_M ? skmap::FloorRelation::BELOW
                                                  : skmap::FloorRelation::SAME;
