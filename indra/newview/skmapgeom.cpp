@@ -1834,29 +1834,35 @@ namespace skmap
                 }
             }
 
-            // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees.
+            SK_SECTION_STAGE_STOP(filter_timer);
+
+            // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees. Made when a
+            // layer first pairs: a build that reuses every layer pairs none.
             std::map<Cell, std::vector<U32>> buckets;
             std::vector<U32> large;
-            for (U32 i : kept)
-            {
-                const sknav::Record& r = *recs[i];
-                const S32 bx0 = cellIndex(r.mMin.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(r.mMax.mdV[VX], RECORD_BUCKET_M);
-                const S32 by0 = cellIndex(r.mMin.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(r.mMax.mdV[VY], RECORD_BUCKET_M);
-                if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
+            bool bucketed = false;
+            auto bucketRecords = [&]() {
+                SK_SECTION_STAGE(FILTER);
+                bucketed = true;
+                for (U32 i : kept)
                 {
-                    large.push_back(i);
-                    continue;
-                }
-                for (S32 by = by0; by <= by1; ++by)
-                {
-                    for (S32 bx = bx0; bx <= bx1; ++bx)
+                    const sknav::Record& r = *recs[i];
+                    const S32 bx0 = cellIndex(r.mMin.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(r.mMax.mdV[VX], RECORD_BUCKET_M);
+                    const S32 by0 = cellIndex(r.mMin.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(r.mMax.mdV[VY], RECORD_BUCKET_M);
+                    if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
                     {
-                        buckets[{ bx, by }].push_back(i);
+                        large.push_back(i);
+                        continue;
+                    }
+                    for (S32 by = by0; by <= by1; ++by)
+                    {
+                        for (S32 bx = bx0; bx <= bx1; ++bx)
+                        {
+                            buckets[{ bx, by }].push_back(i);
+                        }
                     }
                 }
-            }
-
-            SK_SECTION_STAGE_STOP(filter_timer);
+            };
             // One slice per (record, plane) for the whole scene, from the cache when there is one.
             // Per record its few planes' slices, searched in place: a map over every pair costs more than the search.
             std::vector<std::vector<std::pair<S32, SlicePtr>>> slices(recs.size());
@@ -1888,13 +1894,10 @@ namespace skmap
                 return sl;
             };
 
-            // Floor lookups by layer, and a stamp per polygon so a sheet room's search visits each once.
+            // Floor lookups by layer, made when a layer first makes pieces, and a stamp per polygon so a sheet room's
+            // search visits each once.
             std::vector<LayerIndex> layer_index;
-            {
-                SK_SECTION_STAGE(LAYER_INDEX);
-                buildLayerIndexes(s, layer_index);
-            }
-            std::vector<U32> poly_seen(s.mPolys.size(), 0);
+            std::vector<U32> poly_seen;
             U32 poly_stamp = 0;
 
             // A layer whose polygons the last build had, to the bit, has the floor levels it had.
@@ -1972,6 +1975,10 @@ namespace skmap
                     }
                     stats.mReused += static_cast<U32>(had->size());
                     continue;
+                }
+                if (!bucketed)
+                {
+                    bucketRecords();
                 }
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
@@ -2137,6 +2144,12 @@ namespace skmap
                         src.mProvenance = r.mProvenance;
                     }
                     next->mPairs[l] = std::move(sources);
+                }
+                if (layer_index.empty())
+                {
+                    SK_SECTION_STAGE(LAYER_INDEX);
+                    buildLayerIndexes(s, layer_index);
+                    poly_seen.assign(s.mPolys.size(), 0);
                 }
                 const LayerIndex& index = layer_index[l];
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
