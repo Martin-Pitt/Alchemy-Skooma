@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -1184,5 +1185,491 @@ namespace skmap
             buildGroups(s);
         }
         return s;
+    }
+
+    namespace
+    {
+        /// Every subsample a segment passes through, by grid traversal, clipped to the mask first.
+        void stampSegment(F64 ax, F64 ay, F64 bx, F64 by, F64 x0, F64 y0, F64 sub, S32 w, S32 h, std::vector<U8>& mask)
+        {
+            F64 gx0 = (ax - x0) / sub, gy0 = (ay - y0) / sub, gx1 = (bx - x0) / sub, gy1 = (by - y0) / sub;
+            // Liang-Barsky against the mask grown by a subsample.
+            F64 t0 = 0.0, t1 = 1.0;
+            const F64 dx = gx1 - gx0, dy = gy1 - gy0;
+            const F64 p[4] = { -dx, dx, -dy, dy };
+            const F64 q[4] = { gx0 + 1.0, w + 1.0 - gx0, gy0 + 1.0, h + 1.0 - gy0 };
+            for (S32 k = 0; k < 4; ++k)
+            {
+                if (p[k] == 0.0)
+                {
+                    if (q[k] < 0.0)
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                const F64 r = q[k] / p[k];
+                if (p[k] < 0.0)
+                {
+                    t0 = llmax(t0, r);
+                }
+                else
+                {
+                    t1 = llmin(t1, r);
+                }
+            }
+            if (t0 > t1)
+            {
+                return;
+            }
+            const F64 sx = gx0 + dx * t0, sy = gy0 + dy * t0, ex = gx0 + dx * t1, ey = gy0 + dy * t1;
+            S64 i = static_cast<S64>(std::floor(sx)), j = static_cast<S64>(std::floor(sy));
+            const S64 iend = static_cast<S64>(std::floor(ex)), jend = static_cast<S64>(std::floor(ey));
+            const S64 step_x = ex > sx ? 1 : ex < sx ? -1 : 0, step_y = ey > sy ? 1 : ey < sy ? -1 : 0;
+            const F64 ddx = std::fabs(ex - sx), ddy = std::fabs(ey - sy);
+            const F64 delta_x = step_x ? 1.0 / ddx : DBL_MAX, delta_y = step_y ? 1.0 / ddy : DBL_MAX;
+            F64 max_x = step_x > 0 ? (i + 1 - sx) / ddx : step_x < 0 ? (sx - i) / ddx : DBL_MAX;
+            F64 max_y = step_y > 0 ? (j + 1 - sy) / ddy : step_y < 0 ? (sy - j) / ddy : DBL_MAX;
+            auto set = [&](S64 x, S64 y) {
+                if (x >= 0 && x < w && y >= 0 && y < h)
+                {
+                    mask[static_cast<size_t>(y) * w + x] = 1;
+                }
+            };
+            S64 budget = std::llabs(iend - i) + std::llabs(jend - j) + 2;
+            set(i, j);
+            while ((i != iend || j != jend) && budget-- > 0)
+            {
+                if (max_x < max_y)
+                {
+                    i += step_x;
+                    max_x += delta_x;
+                }
+                else
+                {
+                    j += step_y;
+                    max_y += delta_y;
+                }
+                set(i, j);
+            }
+            set(iend, jend);
+        }
+
+        void stampPolyline(const LLVector2* pts, U32 count, bool closed, const LLVector2& shift, F64 x0, F64 y0, F64 sub, S32 w, S32 h,
+                           std::vector<U8>& mask)
+        {
+            if (count == 0)
+            {
+                return;
+            }
+            const U32 edges = closed ? count : count - 1;
+            for (U32 k = 0; k < edges; ++k)
+            {
+                const LLVector2& a = pts[k];
+                const LLVector2& b = pts[(k + 1) % count];
+                stampSegment(static_cast<F64>(a.mV[VX]) + shift.mV[VX], static_cast<F64>(a.mV[VY]) + shift.mV[VY],
+                             static_cast<F64>(b.mV[VX]) + shift.mV[VX], static_cast<F64>(b.mV[VY]) + shift.mV[VY], x0, y0, sub, w, h, mask);
+            }
+            if (count == 1)
+            {
+                const F64 x = pts[0].mV[VX] + static_cast<F64>(shift.mV[VX]), y = pts[0].mV[VY] + static_cast<F64>(shift.mV[VY]);
+                stampSegment(x, y, x, y, x0, y0, sub, w, h, mask);
+            }
+        }
+
+        size_t binsBytes(const ZBins& b)
+        {
+            return sizeof(ZBins) + (b.mStart.capacity() + b.mTris.capacity()) * sizeof(U32);
+        }
+    }
+
+    void fillCoverage(const SliceResult& s, const std::vector<U16>& loops, const std::vector<S8>& winds, bool lines, const LLVector2& shift,
+                      F32 x0, F32 y0, F32 sub, S32 w, S32 h, std::vector<U8>& mask)
+    {
+        if (w <= 0 || h <= 0 || sub <= 0.f)
+        {
+            return;
+        }
+        if (mask.size() < static_cast<size_t>(w) * h)
+        {
+            mask.resize(static_cast<size_t>(w) * h, 0);
+        }
+        const F64 sx = shift.mV[VX], sy = shift.mV[VY];
+        // Scanline over the loops' rows: the winding sum at each subsample centre, half-open rows y0 <= y < y1.
+        F64 ymin = DBL_MAX, ymax = -DBL_MAX;
+        for (U16 id : loops)
+        {
+            const SliceLoop& l = s.mLoops[id];
+            for (U32 k = 0; k < l.mCount; ++k)
+            {
+                const F64 y = s.mPts[l.mFirst + k].mV[VY] + sy;
+                ymin = llmin(ymin, y);
+                ymax = llmax(ymax, y);
+            }
+        }
+        if (ymin <= ymax)
+        {
+            const S32 j0 = llmax(0, static_cast<S32>(std::ceil((ymin - y0) / sub - 0.5)));
+            const S32 j1 = llmin(h - 1, static_cast<S32>(std::ceil((ymax - y0) / sub - 0.5)) - 1);
+            if (j0 <= j1)
+            {
+                struct Crossing
+                {
+                    F64 mX;
+                    S32 mW;
+                    bool operator<(const Crossing& o) const { return mX < o.mX; }
+                };
+                std::vector<std::vector<Crossing>> rows(static_cast<size_t>(j1 - j0 + 1));
+                for (size_t n = 0; n < loops.size(); ++n)
+                {
+                    const SliceLoop& l = s.mLoops[loops[n]];
+                    const S32 wind = n < winds.size() ? winds[n] : 1;
+                    if (!wind)
+                    {
+                        continue;
+                    }
+                    for (U32 k = 0; k < l.mCount; ++k)
+                    {
+                        const LLVector2& pa = s.mPts[l.mFirst + k];
+                        const LLVector2& pb = s.mPts[l.mFirst + (k + 1) % l.mCount];
+                        const F64 ax = pa.mV[VX] + sx, ay = pa.mV[VY] + sy, bx = pb.mV[VX] + sx, by = pb.mV[VY] + sy;
+                        if (ay == by)
+                        {
+                            continue;
+                        }
+                        const bool up = by > ay;
+                        const F64 lo = up ? ay : by, hi = up ? by : ay;
+                        // Rows whose centre lies in [lo, hi).
+                        const S32 ja = llmax(j0, static_cast<S32>(std::ceil((lo - y0) / sub - 0.5)));
+                        const S32 jb = llmin(j1, static_cast<S32>(std::ceil((hi - y0) / sub - 0.5)) - 1);
+                        for (S32 j = ja; j <= jb; ++j)
+                        {
+                            const F64 yc = y0 + (j + 0.5) * sub;
+                            if (yc < lo || yc >= hi)
+                            {
+                                continue;
+                            }
+                            const F64 x = ax + (yc - ay) * (bx - ax) / (by - ay);
+                            rows[j - j0].push_back({ x, up ? -wind : wind });   // swept from the left: a downward edge enters a CCW loop
+                        }
+                    }
+                }
+                for (S32 j = j0; j <= j1; ++j)
+                {
+                    std::vector<Crossing>& row = rows[j - j0];
+                    if (row.size() < 2)
+                    {
+                        continue;
+                    }
+                    std::sort(row.begin(), row.end());
+                    S32 sum = 0;
+                    for (size_t k = 0; k + 1 < row.size(); ++k)
+                    {
+                        sum += row[k].mW;
+                        if (sum <= 0)
+                        {
+                            continue;
+                        }
+                        // Subsamples whose centre lies in [x_k, x_k+1).
+                        const S32 ia = llmax(0, static_cast<S32>(std::ceil((row[k].mX - x0) / sub - 0.5)));
+                        const S32 ib = llmin(w - 1, static_cast<S32>(std::ceil((row[k + 1].mX - x0) / sub - 0.5)) - 1);
+                        for (S32 i = ia; i <= ib; ++i)
+                        {
+                            mask[static_cast<size_t>(j) * w + i] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        // Conservative edges: a sheet thinner than a subsample never vanishes between samples.
+        for (U16 id : loops)
+        {
+            const SliceLoop& l = s.mLoops[id];
+            stampPolyline(&s.mPts[l.mFirst], l.mCount, true, shift, x0, y0, sub, w, h, mask);
+        }
+        if (lines)
+        {
+            for (const SliceLoop& l : s.mLines)
+            {
+                stampPolyline(&s.mPts[l.mFirst], l.mCount, false, shift, x0, y0, sub, w, h, mask);
+            }
+        }
+    }
+
+    void mergeLevels(std::vector<std::pair<S32, U32>>& samples, std::vector<S32>& out)
+    {
+        out.clear();
+        if (samples.empty())
+        {
+            return;
+        }
+        std::sort(samples.begin(), samples.end());
+        // Equal levels first add up.
+        std::vector<std::pair<S32, U32>> levels;
+        for (const auto& s : samples)
+        {
+            if (!levels.empty() && levels.back().first == s.first)
+            {
+                levels.back().second += s.second;
+            }
+            else
+            {
+                levels.push_back(s);
+            }
+        }
+        struct Run
+        {
+            S32 mLowest, mBest;
+            U32 mBestCount, mTotal;
+        };
+        std::vector<Run> runs;
+        for (const auto& l : levels)
+        {
+            if (!runs.empty() && l.first - runs.back().mLowest <= LEVEL_MERGE_CELLS)
+            {
+                Run& r = runs.back();
+                r.mTotal += l.second;
+                if (l.second > r.mBestCount)
+                {
+                    r.mBest = l.first;
+                    r.mBestCount = l.second;
+                }
+                continue;
+            }
+            runs.push_back({ l.first, l.first, l.second, l.second });
+        }
+        std::stable_sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) {
+            return a.mTotal != b.mTotal ? a.mTotal > b.mTotal : a.mBest < b.mBest;
+        });
+        for (size_t i = 0; i < runs.size() && i < static_cast<size_t>(LEVEL_MAX); ++i)
+        {
+            out.push_back(runs[i].mBest);
+        }
+        std::sort(out.begin(), out.end());
+    }
+
+    bool isIsland(const LLVector2* outer, U32 count, F32 thickness, const std::function<bool(const LLVector2&, F32&)>& floor_at)
+    {
+        if (thickness >= ISLAND_MAX_THICKNESS_M || count < 3)
+        {
+            return false;
+        }
+        // A point inside: the centroid, or the middle of the longest inside run across the box's middle.
+        F64 a2 = 0.0, cx = 0.0, cy = 0.0;
+        LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+        for (U32 i = 0; i < count; ++i)
+        {
+            const LLVector2& p = outer[i];
+            const LLVector2& q = outer[(i + 1) % count];
+            const F64 t = static_cast<F64>(p.mV[VX]) * q.mV[VY] - static_cast<F64>(q.mV[VX]) * p.mV[VY];
+            a2 += t;
+            cx += (static_cast<F64>(p.mV[VX]) + q.mV[VX]) * t;
+            cy += (static_cast<F64>(p.mV[VY]) + q.mV[VY]) * t;
+            lo.set(llmin(lo.mV[VX], p.mV[VX]), llmin(lo.mV[VY], p.mV[VY]));
+            hi.set(llmax(hi.mV[VX], p.mV[VX]), llmax(hi.mV[VY], p.mV[VY]));
+        }
+        if (std::fabs(a2) < 1e-12)
+        {
+            return false;
+        }
+        LLVector2 rep(static_cast<F32>(cx / (3.0 * a2)), static_cast<F32>(cy / (3.0 * a2)));
+        if (!loopContains(outer, count, rep))
+        {
+            const F64 y = 0.5 * (static_cast<F64>(lo.mV[VY]) + hi.mV[VY]);
+            std::vector<F64> xs;
+            for (U32 i = 0; i < count; ++i)
+            {
+                const LLVector2& p = outer[i];
+                const LLVector2& q = outer[(i + 1) % count];
+                if ((p.mV[VY] > y) != (q.mV[VY] > y))
+                {
+                    xs.push_back(p.mV[VX] + (y - p.mV[VY]) * (static_cast<F64>(q.mV[VX]) - p.mV[VX]) / (static_cast<F64>(q.mV[VY]) - p.mV[VY]));
+                }
+            }
+            std::sort(xs.begin(), xs.end());
+            F64 best = -1.0;
+            for (size_t k = 0; k + 1 < xs.size(); k += 2)
+            {
+                if (xs[k + 1] - xs[k] > best)
+                {
+                    best = xs[k + 1] - xs[k];
+                    rep.set(static_cast<F32>(0.5 * (xs[k] + xs[k + 1])), static_cast<F32>(y));
+                }
+            }
+            if (best < 0.0)
+            {
+                return false;
+            }
+        }
+        F32 top = 0.f;
+        if (!floor_at(rep, top))
+        {
+            return false;
+        }
+
+        // The ring: samples along each edge pushed out along its normal, and one out along each convex corner's
+        // bisector; at least eight in all.
+        const bool ccw = a2 > 0.0;
+        F64 perimeter = 0.0;
+        S32 convex = 0;
+        for (U32 i = 0; i < count; ++i)
+        {
+            perimeter += (outer[(i + 1) % count] - outer[i]).length();
+            const LLVector2 e0 = outer[i] - outer[(i + count - 1) % count];
+            const LLVector2 e1 = outer[(i + 1) % count] - outer[i];
+            const F32 turn = e0.mV[VX] * e1.mV[VY] - e0.mV[VY] * e1.mV[VX];
+            convex += (ccw ? turn > 0.f : turn < 0.f) ? 1 : 0;
+        }
+        F64 step = ISLAND_SAMPLE_M;
+        S32 total = convex;
+        for (U32 i = 0; i < count; ++i)
+        {
+            total += llmax(1, static_cast<S32>(std::ceil((outer[(i + 1) % count] - outer[i]).length() / step)));
+        }
+        if (total < 8)
+        {
+            step = perimeter / 8.0;
+        }
+        auto outward = [&](const LLVector2& e) {
+            LLVector2 n = ccw ? LLVector2(e.mV[VY], -e.mV[VX]) : LLVector2(-e.mV[VY], e.mV[VX]);
+            n.normVec();
+            return n;
+        };
+        S32 found = 0, lower = 0;
+        auto sample = [&](const LLVector2& p) {
+            F32 z = 0.f;
+            if (!floor_at(p, z))
+            {
+                return true;
+            }
+            if (z > top + ISLAND_HIGHER_M)
+            {
+                return false;   // a higher floor beside it: a tread, or a crate against a taller one
+            }
+            ++found;
+            lower += z <= top - ISLAND_STEP_M ? 1 : 0;
+            return true;
+        };
+        for (U32 i = 0; i < count; ++i)
+        {
+            const LLVector2& a = outer[i];
+            const LLVector2& b = outer[(i + 1) % count];
+            const LLVector2 e = b - a;
+            const F32 len = e.length();
+            if (len < 1e-6f)
+            {
+                continue;
+            }
+            const LLVector2 n = outward(e) * ISLAND_OUT_M;
+            const S32 k = llmax(1, static_cast<S32>(std::ceil(len / step)));
+            for (S32 s = 0; s < k; ++s)
+            {
+                if (!sample(a + e * ((s + 0.5f) / k) + n))
+                {
+                    return false;
+                }
+            }
+            const LLVector2 e_next = outer[(i + 2) % count] - b;
+            const F32 turn = e.mV[VX] * e_next.mV[VY] - e.mV[VY] * e_next.mV[VX];
+            if (ccw ? turn > 0.f : turn < 0.f)
+            {
+                LLVector2 bis = outward(e) + outward(e_next);
+                if (bis.normVec() > 1e-6f && !sample(b + bis * ISLAND_OUT_M))
+                {
+                    return false;
+                }
+            }
+        }
+        return found >= 3 && lower >= ISLAND_SHARE * found;
+    }
+
+    SectionCache::SectionCache(size_t budget)
+        : mBudget(budget)
+    {
+    }
+
+    void SectionCache::touch(Entry& e)
+    {
+        mLru.splice(mLru.begin(), mLru, e.mLru);
+    }
+
+    void SectionCache::insert(const Key& key, Entry e)
+    {
+        mLru.push_front(key);
+        e.mLru = mLru.begin();
+        mBytes += e.mBytes;
+        if (e.mSlice)
+        {
+            ++mSlices;
+        }
+        mEntries[key] = std::move(e);
+    }
+
+    void SectionCache::evict(const Key& keep_a, const Key& keep_b)
+    {
+        auto it = mLru.end();
+        while (mBytes > mBudget && it != mLru.begin())
+        {
+            --it;
+            if (*it == keep_a || *it == keep_b)
+            {
+                continue;
+            }
+            const auto entry = mEntries.find(*it);
+            mBytes -= entry->second.mBytes;
+            if (entry->second.mSlice)
+            {
+                --mSlices;
+            }
+            mEntries.erase(entry);
+            it = mLru.erase(it);
+        }
+    }
+
+    SlicePtr SectionCache::get(const sknav::Record& rec, S32 q, bool* hit)
+    {
+        const Key key = { rec.mSignature, static_cast<U8>(rec.mShape), q };
+        const auto found = mEntries.find(key);
+        if (found != mEntries.end())
+        {
+            touch(found->second);
+            if (hit)
+            {
+                *hit = true;
+            }
+            return found->second.mSlice;
+        }
+        if (hit)
+        {
+            *hit = false;
+        }
+        Key bins_key = key;
+        bins_key.mPlane = INT_MIN;
+        std::shared_ptr<const ZBins> bins;
+        if (rec.mShape == sknav::Shape::TRIANGLES && rec.mTriangles && rec.mTriangles->size() / 3 > SECTION_ZBIN_MIN_TRIS)
+        {
+            const auto b = mEntries.find(bins_key);
+            if (b != mEntries.end())
+            {
+                touch(b->second);
+                bins = b->second.mBins;
+            }
+            else
+            {
+                bins = std::make_shared<const ZBins>(buildZBins(*rec.mTriangles));
+                Entry e;
+                e.mBins = bins;
+                e.mBytes = binsBytes(*bins);
+                insert(bins_key, std::move(e));
+            }
+        }
+        const F32 c = sectionPlaneZ(q) - static_cast<F32>(rec.mOrigin.mdV[VZ]);
+        auto slice = std::make_shared<SliceResult>(sliceRecord(rec, c, bins.get()));
+        Entry e;
+        e.mBytes = slice->bytes();
+        e.mSlice = slice;
+        insert(key, std::move(e));
+        evict(key, bins_key);
+        return slice;
     }
 }

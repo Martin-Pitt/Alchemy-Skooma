@@ -29,7 +29,11 @@
 #include "v2math.h"
 
 #include <cmath>
+#include <functional>
+#include <list>
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace skmap
@@ -117,6 +121,64 @@ namespace skmap
     bool loopContains(const LLVector2* pts, U32 count, const LLVector2& p);
     /// Parents, winds and groups from containment alone; loops not active are left out (wind 0).
     void windByNesting(SliceResult& s, const std::vector<bool>* active = nullptr);
+
+    /// Winding fill of the given loops (their winds as given) and conservative stamping of every edge and line, into a
+    /// subsample mask of w x h starting at (x0, y0) in the slice's frame after shift, sub metres a side. Sets bytes to 1.
+    void fillCoverage(const SliceResult& s, const std::vector<U16>& loops, const std::vector<S8>& winds, bool lines,
+                      const LLVector2& shift, F32 x0, F32 y0, F32 sub, S32 w, S32 h, std::vector<U8>& mask);
+
+    /// Up to LEVEL_MAX levels for one cell from (level, samples) pairs: sort by level; a level joins the current run when
+    /// it is at most LEVEL_MERGE_CELLS above the run's lowest level; each run keeps its most sampled level (ties: the
+    /// lower) with the run's summed samples; then the LEVEL_MAX runs with the most samples (ties: the lower level)
+    /// survive, returned ascending.
+    void mergeLevels(std::vector<std::pair<S32, U32>>& samples, std::vector<S32>& out);
+
+    /// Whether a narrow piece stands on its own raised walkable top: thinner than 1.5 m, its top over the floor found
+    /// just outside it on most of its perimeter, and no floor beside it higher than that top. floor_at gives the topmost
+    /// floor at a point, false where there is none.
+    bool isIsland(const LLVector2* outer, U32 count, F32 thickness, const std::function<bool(const LLVector2&, F32&)>& floor_at);
+
+    /// Slices by (signature, shape, plane), with each large soup's z-bins. Confined to one worker thread, no lock; it
+    /// holds no record, so no soup outlives its snapshot. Least recently used out first, by bytes.
+    class SectionCache
+    {
+    public:
+        explicit SectionCache(size_t budget = SECTION_CACHE_BYTES);
+        /// The record's slice at plane q, sliced on a miss.
+        SlicePtr get(const sknav::Record& rec, S32 q, bool* hit = nullptr);
+        size_t bytes() const { return mBytes; }
+        /// Slices held.
+        size_t entries() const { return mSlices; }
+
+    private:
+        struct Key
+        {
+            U64 mSignature = 0;
+            U8 mShape = 0;
+            S32 mPlane = 0;         ///< INT_MIN: the record's z-bins
+            bool operator<(const Key& o) const
+            {
+                return mSignature != o.mSignature ? mSignature < o.mSignature : mShape != o.mShape ? mShape < o.mShape : mPlane < o.mPlane;
+            }
+            bool operator==(const Key& o) const { return mSignature == o.mSignature && mShape == o.mShape && mPlane == o.mPlane; }
+        };
+        struct Entry
+        {
+            SlicePtr mSlice;
+            std::shared_ptr<const ZBins> mBins;
+            size_t mBytes = 0;
+            std::list<Key>::iterator mLru;
+        };
+        void touch(Entry& e);
+        void insert(const Key& key, Entry e);
+        void evict(const Key& keep_a, const Key& keep_b);
+
+        size_t mBudget;
+        size_t mBytes = 0;
+        size_t mSlices = 0;
+        std::map<Key, Entry> mEntries;
+        std::list<Key> mLru;        ///< most recent first
+    };
 }
 
 #endif // SK_MAPSECTION_H

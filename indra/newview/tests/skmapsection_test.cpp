@@ -593,4 +593,221 @@ namespace tut
             ensure("binned stair is identical", identical(skmap::sliceRecord(stair, c), skmap::sliceRecord(stair, c, &stair_bins)));
         }
     }
+
+    // A 1 m square fills the subsamples whose centres it holds, and its edges stamp the row and column they run along.
+    template<> template<>
+    void skmapsection_object::test<17>()
+    {
+        const skmap::SliceResult s = skmap::sliceRecord(box(LLVector3(0.5f, 0.5f, 1.5f), LLVector3(0.5f, 0.5f, 1.5f)), LOW);
+        std::vector<U8> mask(64 * 64, 0);
+        skmap::fillCoverage(s, { 0 }, { 1 }, false, LLVector2(0.f, 0.f), 0.f, 0.f, 1.f / 32.f, 64, 64, mask);
+        S32 set = 0;
+        for (S32 y = 0; y < 64; ++y)
+        {
+            for (S32 x = 0; x < 64; ++x)
+            {
+                if (mask[y * 64 + x])
+                {
+                    ++set;
+                    ensure("within the square and its far edges", x < 33 && y < 33);
+                }
+            }
+        }
+        ensure_equals("1089 subsamples", set, 1089);
+    }
+
+    // A 2 cm sheet at 0.25 m subsamples: every row it crosses is covered, and the cover is connected.
+    template<> template<>
+    void skmapsection_object::test<18>()
+    {
+        const Record r = box(LLVector3(2.f, 2.f, 1.5f), LLVector3(1.5f, 0.01f, 1.5f), LLVector3(0.866025404f, 0.5f, 0.f),
+                             LLVector3(-0.5f, 0.866025404f, 0.f));
+        const skmap::SliceResult s = skmap::sliceRecord(r, LOW);
+        std::vector<U8> mask(16 * 16, 0);
+        skmap::fillCoverage(s, { 0 }, { 1 }, false, LLVector2(0.f, 0.f), 0.f, 0.f, 0.25f, 16, 16, mask);
+        const F32 reach = 1.5f * 0.5f + 0.01f * 0.866025404f;
+        const S32 row0 = static_cast<S32>(std::floor((2.f - reach) / 0.25f)), row1 = static_cast<S32>(std::floor((2.f + reach) / 0.25f));
+        for (S32 y = row0; y <= row1; ++y)
+        {
+            bool any = false;
+            for (S32 x = 0; x < 16; ++x)
+            {
+                any = any || mask[y * 16 + x];
+            }
+            ensure("each row it crosses", any);
+        }
+        // Flood from the first set subsample, 8-connected.
+        std::vector<U8> seen(mask.size(), 0);
+        std::vector<S32> stack;
+        S32 total = 0;
+        for (S32 i = 0; i < 256; ++i)
+        {
+            total += mask[i];
+            if (mask[i] && stack.empty() && !seen[i])
+            {
+                stack.push_back(i);
+                seen[i] = 1;
+            }
+        }
+        S32 reached = 0;
+        while (!stack.empty())
+        {
+            const S32 i = stack.back();
+            stack.pop_back();
+            ++reached;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    const S32 x = i % 16 + dx, y = i / 16 + dy;
+                    if (x >= 0 && x < 16 && y >= 0 && y < 16 && mask[y * 16 + x] && !seen[y * 16 + x])
+                    {
+                        seen[y * 16 + x] = 1;
+                        stack.push_back(y * 16 + x);
+                    }
+                }
+            }
+        }
+        ensure("connected", total > 0 && reached == total);
+    }
+
+    // The hollow ring fills only its ring.
+    template<> template<>
+    void skmapsection_object::test<19>()
+    {
+        const skmap::SliceResult s = skmap::sliceRecord(soup(hollowRing(), true), LOW);
+        std::vector<U16> loops;
+        std::vector<S8> w;
+        for (size_t i = 0; i < s.mLoops.size(); ++i)
+        {
+            loops.push_back(static_cast<U16>(i));
+            w.push_back(s.mLoops[i].mWind);
+        }
+        const S32 n = 81;
+        const F32 x0 = -2.025f, sub = 0.05f;
+        std::vector<U8> mask(n * n, 0);
+        skmap::fillCoverage(s, loops, w, true, LLVector2(0.f, 0.f), x0, x0, sub, n, n, mask);
+        auto at = [&](F32 x, F32 y) { return mask[static_cast<S32>((y - x0) / sub) * n + static_cast<S32>((x - x0) / sub)]; };
+        ensure("the hole is clear", !at(0.2f, 0.f));
+        ensure("the ring is set", at(1.3f, 0.f));
+    }
+
+    // Levels within 0.5 m merge to the most sampled; four runs at most survive, the most sampled first.
+    template<> template<>
+    void skmapsection_object::test<20>()
+    {
+        const struct
+        {
+            std::vector<std::pair<S32, U32>> in;
+            std::vector<S32> out;
+        } cases[] = {
+            { { { 0, 1 } }, { 0 } },
+            { { { 0, 1 }, { 3, 2 } }, { 3 } },
+            { { { 0, 2 }, { 3, 2 } }, { 0 } },
+            { { { 0, 1 }, { 8, 1 }, { 16, 1 }, { 24, 1 }, { 32, 1 } }, { 0, 8, 16, 24 } },
+            { { { 0, 1 }, { 8, 1 }, { 16, 1 }, { 24, 1 }, { 32, 3 } }, { 0, 8, 16, 32 } },
+        };
+        for (const auto& k : cases)
+        {
+            std::vector<std::pair<S32, U32>> in = k.in;
+            std::vector<S32> out;
+            skmap::mergeLevels(in, out);
+            ensure("merged levels", out == k.out);
+        }
+    }
+
+    // Islands: a crate and a sandbag wall pass; stair treads and a broad stage do not.
+    template<> template<>
+    void skmapsection_object::test<21>()
+    {
+        struct Rect
+        {
+            F32 x0, y0, x1, y1, z;
+        };
+        auto floors = [](const std::vector<Rect>& rects) {
+            return [rects](const LLVector2& p, F32& z) {
+                bool found = false;
+                for (const Rect& r : rects)
+                {
+                    if (p.mV[VX] >= r.x0 && p.mV[VX] <= r.x1 && p.mV[VY] >= r.y0 && p.mV[VY] <= r.y1)
+                    {
+                        z = found ? llmax(z, r.z) : r.z;
+                        found = true;
+                    }
+                }
+                return found;
+            };
+        };
+        auto outline = [](F32 x0, F32 y0, F32 x1, F32 y1) {
+            return std::vector<LLVector2>{ LLVector2(x0, y0), LLVector2(x1, y0), LLVector2(x1, y1), LLVector2(x0, y1) };
+        };
+        auto thick = [](const std::vector<LLVector2>& o) {
+            return 2.f * std::fabs(skmap::loopArea(o.data(), 4)) / ((o[1] - o[0]).length() * 2.f + (o[2] - o[1]).length() * 2.f);
+        };
+        auto island = [&](const std::vector<LLVector2>& o, const std::vector<Rect>& rects) {
+            return skmap::isIsland(o.data(), 4, thick(o), floors(rects));
+        };
+
+        const std::vector<LLVector2> crate = outline(-7.f, -3.1f, -6.f, -2.1f);
+        ensure("crate", island(crate, { { -8.f, -4.f, 8.f, 4.f, 0.f }, { -7.f, -3.1f, -6.f, -2.1f, 0.7f } }));
+
+        std::vector<Rect> stair = { { -3.f, -2.f, 0.f, 2.f, 0.f }, { 1.5f, -2.f, 4.5f, 2.f, 1.25f } };
+        for (S32 i = 0; i < 5; ++i)
+        {
+            stair.push_back({ 0.3f * i, -1.f, 0.3f * i + 0.3f, 1.f, 0.25f * (i + 1) });
+        }
+        for (S32 i = 0; i < 5; ++i)
+        {
+            ensure("no tread is an island", !island(outline(0.3f * i, -1.f, 0.3f * i + 0.3f, 1.f), stair));
+        }
+
+        ensure("sandbag wall", island(outline(-2.f, -0.3f, 2.f, 0.3f), { { -5.f, -5.f, 5.f, 5.f, 0.f }, { -2.f, -0.3f, 2.f, 0.3f, 0.625f } }));
+
+        const std::vector<LLVector2> stage = outline(-7.85f, 0.55f, -4.65f, 3.85f);
+        ensure_approximately_equals_range("stage thickness", thick(stage), 1.6246f, 1e-4f);
+        ensure("a stage is too broad", !island(stage, { { -8.f, -4.f, 8.f, 4.f, 0.f }, { -7.85f, 0.55f, -4.65f, 3.85f, 1.f } }));
+    }
+
+    // The cache: a hit returns the same slice, a new signature misses, the budget keeps the latest.
+    template<> template<>
+    void skmapsection_object::test<22>()
+    {
+        Record r = rotatedBox();
+        r.mSignature = 77;
+        skmap::SectionCache cache;
+        bool hit = true;
+        const skmap::SlicePtr a = cache.get(r, 3, &hit);
+        ensure("first is a miss", !hit);
+        const skmap::SlicePtr b = cache.get(r, 3, &hit);
+        ensure("second is a hit", hit);
+        ensure("the same slice", a == b);
+        ensure("as sliced directly", identical(*a, skmap::sliceRecord(r, skmap::sectionPlaneZ(3))));
+        Record moved = r;
+        moved.mSignature = 78;
+        cache.get(moved, 3, &hit);
+        ensure("a new signature misses", !hit);
+
+        skmap::SectionCache small(a->bytes());
+        small.get(r, 3);
+        small.get(r, 11);
+        ensure_equals("one entry kept", small.entries(), static_cast<size_t>(1));
+        small.get(r, 11, &hit);
+        ensure("the latest", hit);
+        small.get(r, 3, &hit);
+        ensure("the older one went", !hit);
+
+        // A large soup goes through its z-bins with the same result.
+        std::vector<LLVector3> tris;
+        for (S32 i = 0; i < 100; ++i)
+        {
+            const std::vector<LLVector3> t = emitted(box(LLVector3(i * 0.5f, 0.f, 0.1f * i + 0.2f), LLVector3(0.2f, 0.3f, 0.2f)));
+            tris.insert(tris.end(), t.begin(), t.end());
+        }
+        Record stair = soup(tris, true);
+        stair.mSignature = 99;
+        for (S32 q : { 3, 11, 40, 79 })
+        {
+            ensure("binned through the cache", identical(*cache.get(stair, q), skmap::sliceRecord(stair, skmap::sectionPlaneZ(q))));
+        }
+    }
 }
