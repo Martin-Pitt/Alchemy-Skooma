@@ -1033,6 +1033,7 @@ namespace sknav
                         F32 mCover, mRoof, mOpen;
                     };
                     std::vector<std::vector<Read>> covers;
+                    std::vector<U32> rows;
                     mCover.assign(mNodeFlags.size(), in.mSky ? 255 : 0);
                     mOpen.assign(mNodeFlags.size(), 0);
                     // One dense window over the mesh and what stands within reach of it.
@@ -1059,8 +1060,18 @@ namespace sknav
                         const TileAir& a = air(t);
                         const S32 side = static_cast<S32>(std::ceil(a.mWidth * a.mCell * 0.5)) + 1;
                         covers.assign(static_cast<size_t>(side) * (static_cast<S32>(std::ceil(a.mHeight * a.mCell * 0.5)) + 1), {});
-                        for (const AirLeaf& leaf : a.mLeaves)
+                        // In row order, so the leaf whose read speaks for its square does not depend on how leaves are stored.
+                        rows.resize(a.mLeaves.size());
+                        for (U32 l = 0; l < rows.size(); ++l)
                         {
+                            rows[l] = l;
+                        }
+                        std::sort(rows.begin(), rows.end(), [&a](U32 i, U32 j) {
+                            return a.mLeaves[i].mY < a.mLeaves[j].mY || (a.mLeaves[i].mY == a.mLeaves[j].mY && a.mLeaves[i].mX < a.mLeaves[j].mX);
+                        });
+                        for (const U32 l : rows)
+                        {
+                            const AirLeaf& leaf = a.mLeaves[l];
                             const F64 s = (1 << leaf.mLevel) * 0.5 * a.mCell;
                             const F64 x = in.mMeshOrigin.mdV[VX] + a.mOrigin.mV[VX] + leaf.mX * a.mCell + s;
                             const F64 y = in.mMeshOrigin.mdV[VY] + a.mOrigin.mV[VY] + leaf.mY * a.mCell + s;

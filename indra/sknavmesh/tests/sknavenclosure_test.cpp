@@ -671,3 +671,72 @@ namespace tut
         ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
     }
 }
+
+namespace tut
+{
+    template<> template<>
+    void sknavenclosure_object::test<18>()
+    {
+        set_test_name("the sky a gap reads does not depend on the order its tile's leaves are stored in");
+        Scene s;
+        for (S32 k = 0; k < 6; ++k)
+        {
+            s.box(3.f + 4.5f * k, 4.f, 4.5f + 4.5f * k, 28.f, 0.f, 2.f + 0.75f * k, false);
+        }
+        s.room(6.f, 6.f, 13.f, 12.f);
+        auto in = s.input(1);
+        TileAir platform;
+        platform.mCell = CELL;
+        platform.mUnit = UNIT;
+        platform.mTopCell = 2;
+        platform.mTopWidth = platform.mTopHeight = 32;
+        platform.mTopStart.assign(32 * 32 + 1, 0);
+        for (S32 ty = 0; ty < 32; ++ty)
+        {
+            for (S32 tx = 0; tx < 32; ++tx)
+            {
+                if ((tx + ty) % 3 == 0)
+                {
+                    platform.mTop.push_back({ static_cast<U16>(40 + 4 * (tx % 5)), static_cast<U16>(44 + 4 * (tx % 5)) });
+                }
+                platform.mTopStart[tx + ty * 32 + 1] = static_cast<U32>(platform.mTop.size());
+            }
+        }
+        auto sky = std::make_shared<SkyMap>();
+        sky->set(2, LLVector3d(0.0, 0.0, -1.0), platform);
+        in->mSky = sky;
+        const EnclosureProductPtr stored = computeEnclosure(in);
+
+        // The same air with its leaves reversed, gaps gathered in their new order.
+        const TileAir& a = *in->mTiles[0].mAir;
+        auto reversed = std::make_shared<TileAir>(a);
+        reversed->mLeaves.assign(a.mLeaves.rbegin(), a.mLeaves.rend());
+        reversed->mGaps.clear();
+        std::vector<U32> moved(a.mGaps.size());
+        for (AirLeaf& l : reversed->mLeaves)
+        {
+            for (U32 i = 0; i < l.mGapCount; ++i)
+            {
+                moved[l.mFirstGap + i] = static_cast<U32>(reversed->mGaps.size());
+                reversed->mGaps.push_back(a.mGaps[l.mFirstGap + i]);
+            }
+            l.mFirstGap = moved[l.mFirstGap];
+        }
+        auto again = std::make_shared<EnclosureInput>(*in);
+        again->mTiles[0].mAir = reversed;
+        const EnclosureProductPtr other = computeEnclosure(again);
+
+        const std::vector<GapEnclosure>& x = stored->mTiles[0].mGaps;
+        const std::vector<GapEnclosure>& y = other->mTiles[0].mGaps;
+        ensure_equals("gaps", y.size(), x.size());
+        U32 differ = 0, read = 0;
+        for (size_t g = 0; g < x.size(); ++g)
+        {
+            const GapEnclosure& b = y[moved[g]];
+            differ += x[g].mS != b.mS || x[g].mCover != b.mCover || x[g].mOpen != b.mOpen;
+            read += x[g].mCover > 0 && x[g].mCover < 255;
+        }
+        ensure("some gaps read a partial roof", read > 0);
+        ensure_equals("gaps whose sky moved", differ, 0u);
+    }
+}
