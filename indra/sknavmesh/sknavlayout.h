@@ -29,6 +29,9 @@
 #include "sknavcluster.h"
 #include "sknavtypes.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -51,6 +54,37 @@ namespace sknav
 
     /// A mesh tile's minimum corner, global, z zero.
     LLVector3d meshTileMin(const LLVector3d& origin, const TileKey& key);
+
+    /// Query a TileKey-ordered map without visiting tiles outside the rectangle.
+    /// Bounds are inclusive, like overlapsXY: a query on an edge sees both tiles.
+    /// The callback must not change the map. Empty coordinate columns are skipped.
+    template<class TileMap, class Fn>
+    void visitTilesIn(const TileMap& tiles, const LLVector3d& origin,
+                      const LLVector3d& min, const LLVector3d& max, Fn&& fn)
+    {
+        if (!(min.mdV[VX] <= max.mdV[VX] && min.mdV[VY] <= max.mdV[VY])) return;
+        constexpr S32 low = std::numeric_limits<S32>::min();
+        constexpr S32 high = std::numeric_limits<S32>::max();
+        const auto index = [](F64 value)
+        {
+            return static_cast<S32>(std::clamp(value, static_cast<F64>(low), static_cast<F64>(high)));
+        };
+        const S32 x0 = index(std::ceil((min.mdV[VX] - origin.mdV[VX]) / TILE_M) - 1.);
+        const S32 y0 = index(std::ceil((min.mdV[VY] - origin.mdV[VY]) / TILE_M) - 1.);
+        const S32 x1 = index(std::floor((max.mdV[VX] - origin.mdV[VX]) / TILE_M));
+        const S32 y1 = index(std::floor((max.mdV[VY] - origin.mdV[VY]) / TILE_M));
+        auto column = tiles.lower_bound(TileKey { x0, low });
+        while (column != tiles.end() && column->first.mX <= x1)
+        {
+            const S32 x = column->first.mX;
+            for (auto it = tiles.lower_bound(TileKey { x, y0 });
+                 it != tiles.end() && it->first.mX == x && it->first.mY <= y1; ++it)
+            {
+                fn(it->first, it->second);
+            }
+            column = tiles.upper_bound(TileKey { x, high });
+        }
+    }
 
     bool overlapsXY(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax);
 

@@ -1666,15 +1666,14 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey&, const Tile& tile)
         {
             ++tiles_seen;
-            const Tile& tile = t.second;
             if (tile.mBuilt && overlapsXY(tile.mMin, tile.mMax, min, max))
             {
                 fn(mesh, tile);
             }
-        }
+        });
     }
     LL_PROFILE_ZONE_NUM(mMeshes.size());
     LL_PROFILE_ZONE_NUM(tiles_seen);
@@ -1682,25 +1681,24 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
 
 void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const PolyTileFn& fn) const
 {
-    // Not through forEachTileIn: the tile key is the map key, and a Tile does not hold it.
+    // Keep the key for Detour lookup while querying only the requested rectangle.
     const S32 c = static_cast<S32>(cls);
     for (const auto& entry : mMeshes)
     {
         const Mesh& mesh = *entry.second;
-        for (const auto& t : mesh.mTiles)
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
         {
-            const Tile& tile = t.second;
             if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max) || !tile.mSegments[c])
             {
-                continue;
+                return;
             }
             if (!tile.mPolyCache[c])
             {
                 // Detour's x runs along Recast x, which is SL y.
-                const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(t.first.mY, t.first.mX, 0) : nullptr;
+                const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(key.mY, key.mX, 0) : nullptr;
                 if (!dt_tile || !dt_tile->header)
                 {
-                    continue;   // nothing to hand out, so the cell is not counted as built
+                    return;   // nothing to hand out, so the cell is not counted as built
                 }
                 tile.mPolyCache[c] = extractTilePolys(*dt_tile);
             }
@@ -1709,7 +1707,7 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             out.mTerrain = mesh.mTerrain;
             out.mRegion = mesh.mRegion;
             out.mOrigin = mesh.mOrigin;
-            out.mKey = t.first;
+            out.mKey = key;
             out.mContentKey = tile.mContentKey;
             out.mMin = tile.mMin;
             out.mMax = tile.mMax;
@@ -1718,7 +1716,7 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             out.mLinks = tile.mLinks[c];
             out.mFlights = tile.mFlights[c];
             fn(out);
-        }
+        });
     }
 }
 
