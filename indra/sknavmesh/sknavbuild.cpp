@@ -1701,27 +1701,50 @@ namespace sknav
             }
         }
 
-        // The area byte of each triangle, the partition taken at the pinned slope.
+        // The area byte of each triangle. The partition is AVATAR's: over the
+        // raster's soup at the pinned slope, or where AVATAR leaves records out,
+        // over the soup without them at AVATAR's own slope, as it always was.
         const bool partitioned = input.mPartition == Partition::SLOPE;
+        const bool own_partition = std::any_of(excluded.begin(), excluded.end(), [&](const Excluded& e) { return (e.mClasses & avatar_bit) != 0; });
         std::vector<U8> codes, real;
         std::vector<Flight> flights;
         {
             std::vector<U8> avatar_walk, top_walk;
             markWalkable(*main_soup, ap.mSlope, avatar_walk);
             markWalkable(*main_soup, tp.mSlope, top_walk);
+            for (S32 t = 0; t < static_cast<S32>(leaf_tri.size()); ++t)
+            {
+                avatar_walk[t] = leaf_tri[t] ? 0 : avatar_walk[t];     // AVATAR never stands on what it leaves out
+            }
             SlopePartition slopes;
+            std::vector<U8> main_codes;     // per triangle of the raster's soup
             if (partitioned)
             {
-                std::vector<U8> walkable;
-                markWalkable(*main_soup, llmax(partitionSlope(input), ap.mSlope), walkable);
-                std::vector<LLVector3> sl(main_soup->nverts());
-                for (S32 v = 0; v < main_soup->nverts(); ++v)
+                Soup avatar_soup;
+                std::vector<std::pair<S32, S32>> avatar_solids;
+                if (!leaf_tri.empty())
                 {
-                    sl[v] = fromRecast(&main_soup->mVerts[v * 3]);
+                    filterSoup(soup, solids, excluded, static_cast<U8>(avatar_bit | solid_bit), avatar_soup, avatar_solids);
                 }
-                slopes = partitionSlopes(sl, main_soup->mTris, walkable, main_soup->mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES,
-                                         main_soup->mCues);
+                const Soup& part = leaf_tri.empty() ? *main_soup : avatar_soup;
+                std::vector<U8> walkable;
+                markWalkable(part, own_partition ? ap.mSlope : llmax(partitionSlope(input), ap.mSlope), walkable);
+                std::vector<LLVector3> sl(part.nverts());
+                for (S32 v = 0; v < part.nverts(); ++v)
+                {
+                    sl[v] = fromRecast(&part.mVerts[v * 3]);
+                }
+                slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES, part.mCues);
                 shiftFlightCodes(slopes);
+                // Back onto the raster's triangles, the left-out ones coded by area alone.
+                main_codes.assign(main_soup->ntris(), 0);
+                for (S32 t = 0, j = 0; t < main_soup->ntris(); ++t)
+                {
+                    if (leaf_tri.empty() || !leaf_tri[t])
+                    {
+                        main_codes[t] = slopes.mCodes[j++];
+                    }
+                }
                 if (stats)
                 {
                     std::vector<U8> used(256, 0);
@@ -1733,7 +1756,7 @@ namespace sknav
                     stats->mSharedCodes = static_cast<U32>(std::count(used.begin(), used.end(), 1));
                 }
             }
-            codes = encodeAreas(avatar_walk, top_walk, partitioned ? &slopes.mCodes : nullptr);
+            codes = encodeAreas(avatar_walk, top_walk, partitioned ? &main_codes : nullptr);
             real = realAreas(partitioned ? &slopes.mReal : nullptr);
             flights = std::move(slopes.mFlights);
         }
