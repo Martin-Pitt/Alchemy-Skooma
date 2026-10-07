@@ -123,7 +123,8 @@ namespace skmap
             /// An arc of sweep radians about a centre from a start point, in metres, as segments of at most 10 degrees.
             void arc(const LLVector2& centre, const LLVector2& start, F32 sweep, F32 width_px, const LLColor4U& colour)
             {
-                const S32 n = llmax(2, static_cast<S32>(std::ceil(std::fabs(sweep) / (10.f * DEG_TO_RAD))));
+                // The slack keeps an exact multiple of 10 degrees from rounding up to an extra segment.
+                const S32 n = llmax(2, static_cast<S32>(std::ceil(std::fabs(sweep) / (10.f * DEG_TO_RAD) - 1e-3f)));
                 const LLVector2 r = start - centre;
                 LLVector2 prev = start;
                 for (S32 k = 1; k <= n; ++k)
