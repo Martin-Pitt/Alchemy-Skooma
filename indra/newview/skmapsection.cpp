@@ -1560,11 +1560,20 @@ namespace skmap
             {
                 continue;
             }
-            const LLVector2 n = outward(e) * ISLAND_OUT_M;
+            const LLVector2 dir = outward(e);
+            const LLVector2 n = dir * ISLAND_OUT_M;
             const S32 k = llmax(1, static_cast<S32>(std::ceil(len / step)));
             for (S32 s = 0; s < k; ++s)
             {
-                if (!sample(a + e * ((s + 0.5f) / k) + n))
+                const LLVector2 on = a + e * ((s + 0.5f) / k);
+                if (!sample(on + n))
+                {
+                    return false;
+                }
+                // A floor that runs on across the outline is a slope, not an obstacle's top.
+                F32 z_in = top, z_out = 0.f;
+                floor_at(on - dir * llmin(ISLAND_EDGE_M, 0.5f * thickness), z_in);
+                if (floor_at(on + dir * ISLAND_EDGE_M, z_out) && z_out > z_in - ISLAND_STEP_M)
                 {
                     return false;
                 }

@@ -763,6 +763,14 @@ namespace tut
 
         ensure("sandbag wall", island(outline(-2.f, -0.3f, 2.f, 0.3f), { { -5.f, -5.f, 5.f, 5.f, 0.f }, { -2.f, -0.3f, 2.f, 0.3f, 0.625f } }));
 
+        // The top strip of a 45 degree hill: its floor runs on down the slope across the strip's edge.
+        std::vector<Rect> hill;
+        for (S32 i = 0; i < 64; ++i)
+        {
+            hill.push_back({ i * 0.125f, 0.f, (i + 1) * 0.125f, 4.f, (i + 0.5f) * 0.125f });
+        }
+        ensure("a hill's top is no island", !island(outline(7.f, 0.f, 8.f, 4.f), hill));
+
         const std::vector<LLVector2> stage = outline(-7.85f, 0.55f, -4.65f, 3.85f);
         ensure_approximately_equals_range("stage thickness", thick(stage), 1.6246f, 1e-4f);
         ensure("a stage is too broad", !island(stage, { { -8.f, -4.f, 8.f, 4.f, 0.f }, { -7.85f, 0.55f, -4.65f, 3.85f, 1.f } }));

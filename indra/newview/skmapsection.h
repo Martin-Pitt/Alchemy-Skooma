@@ -59,6 +59,7 @@ namespace skmap
     constexpr F32 ISLAND_OUT_M = 0.5f;
     constexpr F32 ISLAND_SAMPLE_M = 0.25f;
     constexpr F32 ISLAND_HIGHER_M = 0.125f;         ///< no floor beside an island may stand higher than its top by this
+    constexpr F32 ISLAND_EDGE_M = 0.125f;           ///< an island's top must step down across its outline, probed this far either side
     constexpr F32 CLUTTER_AREA_M2 = 0.05f;
     constexpr F32 CLUTTER_EXTENT_M = 0.3f;
     constexpr F32 LEVEL_CELL_M = 1.f;
@@ -134,8 +135,8 @@ namespace skmap
     void mergeLevels(std::vector<std::pair<S32, U32>>& samples, std::vector<S32>& out);
 
     /// Whether a narrow piece stands on its own raised walkable top: thinner than 1.5 m, its top over the floor found
-    /// just outside it on most of its perimeter, and no floor beside it higher than that top. floor_at gives the topmost
-    /// floor at a point, false where there is none.
+    /// just outside it on most of its perimeter, no floor beside it higher than that top, and no floor running on across
+    /// its outline. floor_at gives the topmost floor at a point, false where there is none.
     bool isIsland(const LLVector2* outer, U32 count, F32 thickness, const std::function<bool(const LLVector2&, F32&)>& floor_at);
 
     /// Slices by (signature, shape, plane), with each large soup's z-bins. Confined to one worker thread, no lock; it
