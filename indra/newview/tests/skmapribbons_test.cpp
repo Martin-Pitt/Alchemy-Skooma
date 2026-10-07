@@ -28,6 +28,8 @@
 
 #include "../skmapribbons.h"
 
+#include "../skmappalette.h"
+
 #include <cmath>
 
 namespace
@@ -231,5 +233,84 @@ namespace tut
         skmap::mergeMarks(w, 0, params(0.05f), kept, &west);
         ensure_equals("the uncut pieces join again", kept.size(), static_cast<size_t>(1));
         ensure("from the cut's edge", std::fabs(kept[0].mA.mV[VX] - 4.f) < 1e-4f && std::fabs(kept[0].mB.mV[VX] - 12.f) < 1e-4f);
+    }
+
+    // Door marks survive merging at any length and never join a wall.
+    template<> template<>
+    void skmapribbons_object::test<8>()
+    {
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::DOOR_SHUT, 0.f, 0.f, 0.3f, 0.f), mark(skmap::MarkKind::WALL, 0.3f, 0.f, 5.f, 0.f),
+                                       mark(skmap::MarkKind::DOOR_LEAF, 5.f, 0.f, 5.3f, 0.f) });
+        std::vector<skmap::MarkRun> runs;
+        skmap::mergeMarks(s, 0, params(1.f), runs);
+        bool shut = false, leaf = false, wall = false;
+        for (const skmap::MarkRun& r : runs)
+        {
+            shut = shut || (r.mKind == skmap::MarkKind::DOOR_SHUT && std::fabs(r.length() - 0.3f) < 1e-4f);
+            leaf = leaf || (r.mKind == skmap::MarkKind::DOOR_LEAF && std::fabs(r.length() - 0.3f) < 1e-4f);
+            wall = wall || (r.mKind == skmap::MarkKind::WALL && std::fabs(r.length() - 4.7f) < 1e-4f);
+        }
+        ensure("the shut bar survives", shut);
+        ensure("the leaf survives", leaf);
+        ensure("the wall is its own", wall);
+    }
+
+    // A quarter swing is nine segments on its circle.
+    template<> template<>
+    void skmapribbons_object::test<9>()
+    {
+        skmap::LineMark swing = mark(skmap::MarkKind::DOOR_SWING, 0.f, 0.f, 1.f, 0.f);
+        swing.mSweep = F_PI_BY_TWO;
+        const skmap::Scene s = scene({ swing });
+        skmap::Ribbons r;
+        skmap::buildLayerRibbons(s, 0, params(0.05f), r);
+        ensure_equals("nine segments", r.mVerts.size(), static_cast<size_t>(9 * 6));
+        for (size_t i = 0; i < r.mVerts.size(); ++i)
+        {
+            const LLVector2 anchor(r.mVerts[i].mV[VX] - r.mOffsets[i].mV[VX] * r.mMpp, r.mVerts[i].mV[VY] - r.mOffsets[i].mV[VY] * r.mMpp);
+            ensure("on the circle", std::fabs(anchor.length() - 1.f) < 1e-4f);
+        }
+    }
+
+    // The doors toggle owns every door kind; the cover toggle none.
+    template<> template<>
+    void skmapribbons_object::test<10>()
+    {
+        skmap::LineMark swing = mark(skmap::MarkKind::DOOR_SWING, 0.f, 4.f, 1.f, 4.f);
+        swing.mSweep = 1.f;
+        const skmap::Scene s = scene({ mark(skmap::MarkKind::DOOR_SHUT, 0.f, 0.f, 1.f, 0.f), mark(skmap::MarkKind::DOOR_THRESHOLD, 0.f, 1.f, 1.f, 1.f),
+                                       mark(skmap::MarkKind::DOOR_LEAF, 0.f, 2.f, 1.f, 2.f), mark(skmap::MarkKind::DOOR_JAMB, 0.f, 3.f, 0.f, 3.4f), swing });
+        skmap::RibbonParams no_doors = params(0.05f);
+        no_doors.mDoors = false;
+        std::vector<skmap::MarkRun> runs;
+        skmap::mergeMarks(s, 0, no_doors, runs);
+        ensure("doors off drops them all", runs.empty());
+        skmap::RibbonParams no_cover = params(0.05f);
+        no_cover.mCover = false;
+        skmap::mergeMarks(s, 0, no_cover, runs);
+        ensure_equals("cover off keeps them", runs.size(), static_cast<size_t>(5));
+    }
+
+    // Every door kind draws in the door colour, the swing fainter.
+    template<> template<>
+    void skmapribbons_object::test<11>()
+    {
+        auto u = [](F32 v) { return static_cast<U8>(llclamp(v, 0.f, 1.f) * 255.f + 0.5f); };
+        const skmap::PaletteColour& c = skmap::palette::DOOR;
+        const LLColor4U door(u(c.mR), u(c.mG), u(c.mB), u(c.mA));
+        const LLColor4U faint(u(c.mR), u(c.mG), u(c.mB), u(skmap::palette::DOOR_SWING_ALPHA));
+        for (skmap::MarkKind kind : { skmap::MarkKind::DOOR_SHUT, skmap::MarkKind::DOOR_THRESHOLD, skmap::MarkKind::DOOR_LEAF,
+                                      skmap::MarkKind::DOOR_JAMB, skmap::MarkKind::DOOR_SWING })
+        {
+            skmap::LineMark m = mark(kind, 0.f, 0.f, 1.f, 0.f);
+            m.mSweep = kind == skmap::MarkKind::DOOR_SWING ? 1.f : 0.f;
+            skmap::Ribbons r;
+            skmap::buildLayerRibbons(scene({ m }), 0, params(0.05f), r);
+            ensure("drawn", !r.mColours.empty());
+            for (const LLColor4U& colour : r.mColours)
+            {
+                ensure("the door colour", colour == (kind == skmap::MarkKind::DOOR_SWING ? faint : door));
+            }
+        }
     }
 }

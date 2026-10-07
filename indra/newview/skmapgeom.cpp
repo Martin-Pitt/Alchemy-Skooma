@@ -349,6 +349,152 @@ namespace skmap
             return cross2(a, b, centroid) > 0.f ? 1 : -1;
         }
 
+        /// A door's marks from its leaves cut 1 m over the sill: one shut bar, or the threshold with each leaf shut or open,
+        /// an open hinged leaf with its swing. False when a leaf cuts to nothing, so the door keeps its plain marks.
+        bool doorState(Scene& s, const DoorInput& door, const std::vector<sknav::RecordPtr>& leaves, const LineMark& base)
+        {
+            if (leaves.empty())
+            {
+                return false;
+            }
+            const LLVector2 p = s.toLocal(door.mPlanePoint);
+            LLVector2 n(door.mNormal.mV[VX], door.mNormal.mV[VY]);
+            if (n.normVec() < 1e-3f)
+            {
+                n.set(1.f, 0.f);
+            }
+            const LLVector2 t(-n.mV[VY], n.mV[VX]);
+            const F32 half = door.mWidth * 0.5f;
+            const LLVector2 ja = p - t * half, jb = p + t * half;
+            struct Leaf
+            {
+                LLVector2 mA, mB;
+                bool mShut = false;
+            };
+            std::vector<Leaf> found;
+            for (const sknav::RecordPtr& rec : leaves)
+            {
+                const SliceResult sl = sliceRecord(*rec, static_cast<F32>(door.mSill + DOOR_SLICE_M - rec->mOrigin.mdV[VZ]));
+                if (sl.mPts.empty())
+                {
+                    return false;
+                }
+                const LLVector2 shift(static_cast<F32>(rec->mOrigin.mdV[VX] - s.mOrigin.mdV[VX]),
+                                      static_cast<F32>(rec->mOrigin.mdV[VY] - s.mOrigin.mdV[VY]));
+                // The leaf's line: the principal axis of its cut, its ends the extreme projections on it.
+                LLVector2 mean;
+                for (const LLVector2& q : sl.mPts)
+                {
+                    mean += q + shift;
+                }
+                mean /= static_cast<F32>(sl.mPts.size());
+                F32 xx = 0.f, xy = 0.f, yy = 0.f;
+                for (const LLVector2& q : sl.mPts)
+                {
+                    const LLVector2 d = q + shift - mean;
+                    xx += d.mV[VX] * d.mV[VX];
+                    xy += d.mV[VX] * d.mV[VY];
+                    yy += d.mV[VY] * d.mV[VY];
+                }
+                const F32 angle = 0.5f * std::atan2(2.f * xy, xx - yy);
+                const LLVector2 axis(std::cos(angle), std::sin(angle));
+                F32 lo = FLT_MAX, hi = -FLT_MAX;
+                for (const LLVector2& q : sl.mPts)
+                {
+                    const F32 u = (q + shift - mean) * axis;
+                    lo = llmin(lo, u);
+                    hi = llmax(hi, u);
+                }
+                Leaf leaf;
+                leaf.mA = mean + axis * lo;
+                leaf.mB = mean + axis * hi;
+                auto onShutLine = [&](const LLVector2& e) {
+                    return std::fabs((e - p) * n) <= DOOR_SHUT_M && std::fabs((e - p) * t) <= half + DOOR_SHUT_M;
+                };
+                leaf.mShut = onShutLine(leaf.mA) && onShutLine(leaf.mB);
+                found.push_back(leaf);
+            }
+            LineMark mark = base;
+            bool all_shut = true;
+            for (const Leaf& leaf : found)
+            {
+                all_shut = all_shut && leaf.mShut;
+            }
+            if (all_shut)
+            {
+                mark.mKind = MarkKind::DOOR_SHUT;
+                mark.mA = ja;
+                mark.mB = jb;
+                s.mMarks.push_back(mark);
+                return true;
+            }
+            mark.mKind = MarkKind::DOOR_THRESHOLD;
+            mark.mA = ja;
+            mark.mB = jb;
+            s.mMarks.push_back(mark);
+            std::vector<LLVector2> hinges = { ja, jb };
+            if (door.mDouble)
+            {
+                hinges.push_back(p);
+            }
+            for (const Leaf& leaf : found)
+            {
+                if (leaf.mShut)
+                {
+                    mark.mKind = MarkKind::DOOR_SHUT;
+                    mark.mA = leaf.mA;
+                    mark.mB = leaf.mB;
+                    s.mMarks.push_back(mark);
+                    continue;
+                }
+                // The hinge is the end at a jamb (or the middle of a double door); with none the leaf slides.
+                F32 best = DOOR_HINGE_M;
+                S32 hinge_end = -1;
+                size_t hinge_at = 0;
+                for (S32 e = 0; e < 2; ++e)
+                {
+                    const LLVector2& end = e == 0 ? leaf.mA : leaf.mB;
+                    for (size_t h = 0; h < hinges.size(); ++h)
+                    {
+                        const F32 d = (end - hinges[h]).length();
+                        if (d <= best)
+                        {
+                            best = d;
+                            hinge_end = e;
+                            hinge_at = h;
+                        }
+                    }
+                }
+                const LLVector2 hinge = hinge_end == 1 ? leaf.mB : leaf.mA;
+                const LLVector2 free_end = hinge_end == 1 ? leaf.mA : leaf.mB;
+                mark.mKind = MarkKind::DOOR_LEAF;
+                mark.mA = hinge;
+                mark.mB = free_end;
+                s.mMarks.push_back(mark);
+                if (hinge_end < 0)
+                {
+                    continue;
+                }
+                // Where the free end rests shut: the far jamb, or the middle of a double door.
+                const LLVector2 shut_end = door.mDouble ? (hinge_at == 2 ? (((free_end - ja).length() < (free_end - jb).length()) ? ja : jb) : p)
+                                                        : (hinge_at == 0 ? jb : ja);
+                LLVector2 toward = shut_end - hinge;
+                if (toward.normVec() < 1e-4f)
+                {
+                    continue;
+                }
+                const LLVector2 rest = hinge + toward * (free_end - hinge).length();
+                const LLVector2 u = rest - hinge, v = free_end - hinge;
+                mark.mKind = MarkKind::DOOR_SWING;
+                mark.mA = hinge;
+                mark.mB = rest;
+                mark.mSweep = std::atan2(u.mV[VX] * v.mV[VY] - u.mV[VY] * v.mV[VX], u * v);
+                s.mMarks.push_back(mark);
+                mark.mSweep = 0.f;
+            }
+            return true;
+        }
+
         /// The plan distance from a scene-local point to a section piece: 0 inside its fill, else to its nearest edge or line.
         F32 pieceDistance(const SectionPiece& piece, const LLVector2& p)
         {
@@ -610,9 +756,10 @@ namespace skmap
                 }
             }
 
-            // Doors: jambs and a leaf on the floor nearest the sill.
-            for (const DoorInput& door : input.mDoors)
+            // Doors: on the floor nearest the sill, by their leaves' live state, or jambs and a leaf.
+            for (size_t di = 0; di < input.mDoors.size(); ++di)
             {
+                const DoorInput& door = input.mDoors[di];
                 const LLVector2 p = s.toLocal(door.mPlanePoint);
                 const F32 sill = static_cast<F32>(door.mSill - s.mOrigin.mdV[VZ]);
                 std::vector<Cell> cells;
@@ -650,6 +797,10 @@ namespace skmap
                 LineMark mark;
                 mark.mZ = sill;
                 mark.mLayer = layer;
+                if (door.mPlaneKnown && di < s.mDoorLeaves.size() && doorState(s, door, s.mDoorLeaves[di], mark))
+                {
+                    continue;
+                }
                 if (door.mPlaneKnown)
                 {
                     LLVector2 n(door.mNormal.mV[VX], door.mNormal.mV[VY]);
@@ -935,8 +1086,9 @@ namespace skmap
                     const S64 bx = quantise(s.mOrigin.mdV[VX] + mark.mB.mV[VX], 100.0), by = quantise(s.mOrigin.mdV[VY] + mark.mB.mV[VY], 100.0);
                     U64 r = sknav::mix(sknav::SEED, static_cast<U64>(mark.mKind));
                     r = sknav::mix(sknav::mix(sknav::mix(sknav::mix(r, ax), ay), bx), by);
-                    const U64 ribbon = sknav::mix(sknav::mix(r, static_cast<U64>(quantise(mark.mHeight, 100.0))),
-                                                  static_cast<U64>(static_cast<S64>(mark.mFloorSide)));
+                    U64 ribbon = sknav::mix(sknav::mix(r, static_cast<U64>(quantise(mark.mHeight, 100.0))),
+                                            static_cast<U64>(static_cast<S64>(mark.mFloorSide)));
+                    ribbon = sknav::mix(ribbon, static_cast<U64>(quantise(mark.mSweep, 100.0)));
                     mark_records.push_back(ribbon);
                     if (mark.mKind != MarkKind::LEDGE)
                     {

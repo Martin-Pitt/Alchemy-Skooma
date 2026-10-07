@@ -54,7 +54,8 @@ namespace skmap
 
         bool doorToggle(MarkKind kind)
         {
-            return kind == MarkKind::DOOR_JAMB || kind == MarkKind::DOOR_LEAF || kind == MarkKind::LADDER || kind == MarkKind::ELEVATOR;
+            return kind == MarkKind::DOOR_JAMB || kind == MarkKind::DOOR_LEAF || kind == MarkKind::DOOR_SHUT || kind == MarkKind::DOOR_THRESHOLD
+                || kind == MarkKind::DOOR_SWING || kind == MarkKind::LADDER || kind == MarkKind::ELEVATOR;
         }
 
         /// Anchors in metres, offsets from them in screen pixels at mMpp.
@@ -116,6 +117,22 @@ namespace skmap
                 for (F32 t = 0.f; t < length; t += on + off)
                 {
                     line(a + d * t, a + d * llmin(t + on, length), width, colour);
+                }
+            }
+
+            /// An arc of sweep radians about a centre from a start point, in metres, as segments of at most 10 degrees.
+            void arc(const LLVector2& centre, const LLVector2& start, F32 sweep, F32 width_px, const LLColor4U& colour)
+            {
+                const S32 n = llmax(2, static_cast<S32>(std::ceil(std::fabs(sweep) / (10.f * DEG_TO_RAD))));
+                const LLVector2 r = start - centre;
+                LLVector2 prev = start;
+                for (S32 k = 1; k <= n; ++k)
+                {
+                    const F32 a = sweep * k / n;
+                    const F32 c = std::cos(a), s = std::sin(a);
+                    const LLVector2 next = centre + LLVector2(r.mV[VX] * c - r.mV[VY] * s, r.mV[VX] * s + r.mV[VY] * c);
+                    line(prev, next, width_px, colour);
+                    prev = next;
                 }
             }
         };
@@ -294,6 +311,7 @@ namespace skmap
             run.mB = mark.mB;
             run.mFloorSide = mark.mFloorSide;
             run.mHeight = mark.mHeight;
+            run.mSweep = mark.mSweep;
             if (mark.mKind == MarkKind::WALL)
             {
                 run.mCover = sknav::coverClass(mark.mHeight, params.mEye, params.mClimb, params.mPeek);
@@ -432,10 +450,20 @@ namespace skmap
                              colour4u(palette::OVERHANG));
                     break;
                 case MarkKind::DOOR_JAMB:
-                    w.line(run.mA, run.mB, palette::DOOR_JAMB_PX, colour4u(palette::DOOR_JAMB));
+                    w.line(run.mA, run.mB, palette::DOOR_JAMB_PX, colour4u(palette::DOOR));
                     break;
                 case MarkKind::DOOR_LEAF:
-                    w.line(run.mA, run.mB, palette::DOOR_LEAF_PX, colour4u(palette::DOOR_LEAF));
+                    w.line(run.mA, run.mB, palette::DOOR_LEAF_PX, colour4u(palette::DOOR));
+                    break;
+                case MarkKind::DOOR_SHUT:
+                    w.line(run.mA, run.mB, palette::DOOR_SHUT_PX, colour4u(palette::DOOR));
+                    break;
+                case MarkKind::DOOR_THRESHOLD:
+                    w.dashed(run.mA, run.mB, palette::DOOR_THRESHOLD_PX, palette::DOOR_DASH_PX * mpp, palette::DOOR_DASH_PX * mpp,
+                             colour4u(palette::DOOR));
+                    break;
+                case MarkKind::DOOR_SWING:
+                    w.arc(run.mA, run.mB, run.mSweep, palette::DOOR_SWING_PX, colour4u(withAlpha(palette::DOOR, palette::DOOR_SWING_ALPHA)));
                     break;
                 default:
                     glyphs(w, run);

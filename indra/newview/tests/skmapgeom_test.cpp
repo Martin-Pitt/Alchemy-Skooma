@@ -1243,4 +1243,86 @@ namespace tut
         kept = walls({ span(1.9f, 0.4f, 2.1f, 0.6f, 1) });
         ensure("clutter covers nothing", kept.size() == 1 && same(kept[0].first, 0.f) && same(kept[0].second, 4.f));
     }
+
+    /// The oracle's doorway: a 1.2 m door in the plane x = 0, floor either side, its one leaf as given.
+    skmap::ScenePtr doorway(const LLVector3& c, const LLVector3& h, bool claimed)
+    {
+        TileMaker t;
+        t.quad(-4.f, -2.f, -0.3f, 2.f, 0.f, 0.f);
+        t.quad(0.3f, -2.f, 4.f, 2.f, 0.f, 0.f);
+        Record leaf = boxRecordOf(c, h, 9);
+        leaf.mFeature = FeatureKind::DOOR;
+        std::vector<RecordPtr> recs = { std::make_shared<const Record>(leaf) };
+        skmap::SceneInput in = input({ t.make(CLUSTER, false, 0, 0) }, &recs);
+        skmap::DoorInput door;
+        door.mPlanePoint.set(0.0, 0.0, 0.0);
+        door.mNormal.set(1.f, 0.f, 0.f);
+        door.mWidth = 1.2f;
+        door.mSill = 0.0;
+        door.mMin.set(-0.03, -0.6, 0.0);
+        door.mMax.set(0.03, 0.6, 2.2);
+        if (claimed)
+        {
+            door.mLeaves = { leaf.mPart };
+        }
+        in.mDoors.push_back(door);
+        return skmap::buildScene(in);
+    }
+
+    std::vector<const skmap::LineMark*> marksOf(const skmap::Scene& s, skmap::MarkKind kind)
+    {
+        std::vector<const skmap::LineMark*> out;
+        for (const skmap::LineMark& m : s.mMarks)
+        {
+            if (m.mKind == kind)
+            {
+                out.push_back(&m);
+            }
+        }
+        return out;
+    }
+
+    bool at(const LLVector2& p, F32 x, F32 y)
+    {
+        return std::fabs(p.mV[VX] - x) <= 0.01f && std::fabs(p.mV[VY] - y) <= 0.01f;
+    }
+
+    // A shut leaf: one bar across the doorway.
+    template<> template<>
+    void skmapgeom_object::test<28>()
+    {
+        skmap::ScenePtr s = doorway(LLVector3(0.f, 0.f, 1.1f), LLVector3(0.03f, 0.6f, 1.1f), true);
+        const std::vector<const skmap::LineMark*> shut = marksOf(*s, skmap::MarkKind::DOOR_SHUT);
+        ensure_equals("one shut bar", shut.size(), static_cast<size_t>(1));
+        ensure("jamb to jamb", at(shut[0]->mA, 0.f, -0.6f) && at(shut[0]->mB, 0.f, 0.6f));
+        ensure("no leaf", marksOf(*s, skmap::MarkKind::DOOR_LEAF).empty());
+        ensure("no jambs", marksOf(*s, skmap::MarkKind::DOOR_JAMB).empty());
+    }
+
+    // An open leaf: the threshold, the leaf where it is now, and its swing from where it rests shut.
+    template<> template<>
+    void skmapgeom_object::test<29>()
+    {
+        skmap::ScenePtr s = doorway(LLVector3(0.6f, -0.57f, 1.1f), LLVector3(0.6f, 0.03f, 1.1f), true);
+        const std::vector<const skmap::LineMark*> threshold = marksOf(*s, skmap::MarkKind::DOOR_THRESHOLD);
+        ensure("a threshold", threshold.size() == 1 && at(threshold[0]->mA, 0.f, -0.6f) && at(threshold[0]->mB, 0.f, 0.6f));
+        const std::vector<const skmap::LineMark*> leaf = marksOf(*s, skmap::MarkKind::DOOR_LEAF);
+        ensure("the leaf from its hinge", leaf.size() == 1 && at(leaf[0]->mA, 0.f, -0.57f) && at(leaf[0]->mB, 1.2f, -0.57f));
+        const std::vector<const skmap::LineMark*> swing = marksOf(*s, skmap::MarkKind::DOOR_SWING);
+        ensure_equals("a swing", swing.size(), static_cast<size_t>(1));
+        ensure("about the hinge", at(swing[0]->mA, 0.f, -0.57f));
+        ensure("from the shut end", at(swing[0]->mB, 0.f, 0.63f));
+        ensure_approximately_equals_range("a quarter turn clockwise", swing[0]->mSweep, -F_PI_BY_TWO, 0.01f);
+        ensure("no shut bar", marksOf(*s, skmap::MarkKind::DOOR_SHUT).empty());
+    }
+
+    // A door with no leaf record keeps its jambs and leaf.
+    template<> template<>
+    void skmapgeom_object::test<30>()
+    {
+        skmap::ScenePtr s = doorway(LLVector3(0.f, 0.f, 1.1f), LLVector3(0.03f, 0.6f, 1.1f), false);
+        ensure_equals("two jambs", marksOf(*s, skmap::MarkKind::DOOR_JAMB).size(), static_cast<size_t>(2));
+        ensure_equals("one leaf", marksOf(*s, skmap::MarkKind::DOOR_LEAF).size(), static_cast<size_t>(1));
+        ensure("no state", marksOf(*s, skmap::MarkKind::DOOR_SHUT).empty() && marksOf(*s, skmap::MarkKind::DOOR_THRESHOLD).empty());
+    }
 }

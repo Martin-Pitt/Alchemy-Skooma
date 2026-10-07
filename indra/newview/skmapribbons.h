@@ -80,6 +80,7 @@ namespace skmap
         LLVector2 mA, mB;
         S8 mFloorSide = 0;
         F32 mHeight = 0.f;
+        F32 mSweep = 0.f;                           ///< DOOR_SWING: signed radians from mB about mA
         F32 length() const { return (mB - mA).length(); }
     };
 

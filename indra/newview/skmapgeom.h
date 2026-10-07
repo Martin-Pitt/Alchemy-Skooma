@@ -152,6 +152,9 @@ namespace skmap
         DROP_POINT,         ///< a drop with no edge of its own: A where it leaves, B towards the landing
         DOOR_JAMB,
         DOOR_LEAF,
+        DOOR_SHUT,          ///< a shut leaf, or a doorway whose leaves are all shut
+        DOOR_THRESHOLD,     ///< the shut line of a doorway with a leaf open
+        DOOR_SWING,         ///< an open leaf's sweep: mSweep radians from mB about mA
         LADDER,             ///< a glyph at A
         ELEVATOR,           ///< a glyph at A
         VOID_BOUNDARY,      ///< a region edge with nothing across it
@@ -167,6 +170,7 @@ namespace skmap
         F32 mHeight = 0.f;                      ///< the wall's height, the drop, the clearance
         S8 mFloorSide = 0;                      ///< +1 when the floor lies left of A to B, -1 right, 0 none
         S32 mLayer = -1;                        ///< -1 for boundaries
+        F32 mSweep = 0.f;                       ///< DOOR_SWING: signed radians from mB about mA
     };
 
     /// One iso-height segment; its height is mLevel * CONTOUR_STEP_M.
