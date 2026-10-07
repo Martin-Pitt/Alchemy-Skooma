@@ -708,6 +708,20 @@ namespace
             return g;
         };
         const F64 cos_turn = std::cos(TURN_DEG * DEG_TO_RAD);
+        // Each unit's run so far, area weighted: a tread or a landing between two flights joins neither across a turn.
+        std::vector<F64> run_x(ngroups, 0.0), run_y(ngroups, 0.0);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            if (has_dir[g])
+            {
+                run_x[g] = dir_x[g] * area[g];
+                run_y[g] = dir_y[g] * area[g];
+            }
+        }
+        const auto turns = [&](S32 a, S32 b) {
+            const F64 la = std::hypot(run_x[a], run_y[a]), lb = std::hypot(run_x[b], run_y[b]);
+            return la > 0 && lb > 0 && (run_x[a] * run_x[b] + run_y[a] * run_y[b]) < cos_turn * la * lb;
+        };
         std::vector<S32> nearby;
         for (S32 g = 0; g < ngroups; ++g)
         {
@@ -729,11 +743,14 @@ namespace
                         {
                             continue;
                         }
-                        if (has_dir[g] && has_dir[o] && dir_x[g] * dir_x[o] + dir_y[g] * dir_y[o] < cos_turn)
+                        if ((has_dir[g] && has_dir[o] && dir_x[g] * dir_x[o] + dir_y[g] * dir_y[o] < cos_turn) || turns(find(g), find(o)))
                         {
                             continue;
                         }
-                        root[std::max(find(g), find(o))] = std::min(find(g), find(o));
+                        const S32 keep = std::min(find(g), find(o)), gone = std::max(find(g), find(o));
+                        root[gone] = keep;
+                        run_x[keep] += run_x[gone];
+                        run_y[keep] += run_y[gone];
                     }
                 }
             }
@@ -810,7 +827,6 @@ namespace
                     zt = s >= s1 - band ? std::max(zt, v.z) : zt;
                 }
             }
-
             F64 by_cue[3] = { 0, 0, 0 };
             std::vector<U8> member_codes;
             std::vector<LLVector2> plan;

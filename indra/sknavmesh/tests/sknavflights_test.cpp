@@ -754,4 +754,28 @@ namespace tut
         ensure_equals("a staircase still makes its flight", real.mFlights.size(), 1u);
         ensure("it rises half a metre", real.mFlights[0].mZMax - real.mFlights[0].mZMin >= FLIGHT_MIN_RISE_M);
     }
+
+    template<> template<>
+    void sknavflights_object::test<21>()
+    {
+        set_test_name("two ramps at right angles from one step are two flights, the step joining neither across the turn");
+        Soup s;
+        s.box(-6, -6, -0.5f, 8, 8, 0);
+        s.box(0, 0, 0, 0.5f, 0.5f, 0.2f);
+        s.quad(LLVector3(0.5f, -1.f, 0.2f), LLVector3(4.5f, -1.f, 2.2f), LLVector3(4.5f, 0.5f, 2.2f), LLVector3(0.5f, 0.5f, 0.2f));
+        s.box(4.5f, -2.f, 0, 7.f, 1.f, 2.2f);
+        s.quad(LLVector3(-1.f, 0.5f, 0.2f), LLVector3(0.5f, 0.5f, 0.2f), LLVector3(0.5f, 4.5f, 2.2f), LLVector3(-1.f, 4.5f, 2.2f));
+        s.box(-2.f, 4.5f, 0, 1.f, 7.f, 2.2f);
+        const SlopePartition p = s.partition();
+        ensure_equals("two flights", p.mFlights.size(), 2u);
+        bool along_x = false, along_y = false;
+        for (const Flight& f : p.mFlights)
+        {
+            const LLVector3 run = f.mTop - f.mBottom;
+            along_x = along_x || (run.mV[VX] > 3.5f && std::fabs(run.mV[VY]) < 0.2f);
+            along_y = along_y || (run.mV[VY] > 3.5f && std::fabs(run.mV[VX]) < 0.2f);
+            ensure(llformat("each as wide as its ramp: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.2f);
+        }
+        ensure("one up each ramp", along_x && along_y);
+    }
 }
