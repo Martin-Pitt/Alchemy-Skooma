@@ -224,7 +224,7 @@ namespace tut
         ensure("deep is darker in straight luma", luma(at_depth.at(128, 192)) < luma(at_surface.at(128, 64)));
     }
 
-    // A ledge's halo lightens only off its floor; a wall's darkens only on it.
+    // A ledge's halo lightens only off its floor; a wall has no halo.
     template<> template<>
     void skmapraster_object::test<4>()
     {
@@ -242,7 +242,7 @@ namespace tut
         wall.wall(4.f, 0.f, 4.f, 8.f, EdgeKind::WALL, 3.f);
         s = wall.scene(CLUSTER, false);
         r = bake(*s, s->mPolys[0].mLayer, TIER0);
-        ensure("dark on the floor", brightness(r.at(125, 128)) < brightness(r.at(32, 128)));
+        ensure("floor untouched by the wall", std::equal(r.at(125, 128), r.at(125, 128) + 4, r.at(32, 128)));
         ensure_equals("nothing past the wall", static_cast<S32>(r.at(134, 128)[3]), 0);
     }
 
