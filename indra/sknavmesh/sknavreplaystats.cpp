@@ -502,6 +502,9 @@ namespace sknav
                     << ",\"soup_ms\":" << st.mSoupMs << ",\"exclude_ms\":" << st.mExcludeMs << ",\"total_ms\":" << st.mTotalMs
                     << ",\"raster_ms\":" << st.mRasterMs << ",\"poly_ms\":" << st.mPolyMs << ",\"held_bytes\":" << st.mHeldBytes
                     << ",\"held_chf_bytes\":" << st.mHeldChfBytes << ",\"held_edge_bytes\":" << st.mHeldEdgeBytes
+                    << ",\"held_span_gap_bytes\":" << st.mHeldSpanGapBytes << ",\"span_gap_spans\":" << st.mSpanGapSpans
+                    << ",\"span_gap_misses\":" << st.mSpanGapMisses << ",\"span_gap_window_misses\":" << st.mSpanGapWindowMisses
+                    << ",\"span_gap_own_misses\":" << st.mSpanGapOwnMisses
                     << ",\"excluded\":" << st.mExcludedRecords << ",\"window_cells\":" << st.mExcludeWindowCells << ",\"tile_cells\":" << st.mTileCells
                     << ",\"shared_codes\":" << st.mSharedCodes << ",\"classes\":[";
                 first = false;

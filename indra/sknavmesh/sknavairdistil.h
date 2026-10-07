@@ -33,6 +33,7 @@
 #include <vector>
 
 struct rcHeightfield;
+struct rcCompactHeightfield;
 
 namespace sknav
 {
@@ -133,9 +134,21 @@ namespace sknav
     /// read pad_cells past the tile so clearance is exact on it, slivers
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
+    /// fine, when given, gets the fine grid the air was distilled from.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
                             const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr,
-                            const SpanFlags* extra = nullptr);
+                            const SpanFlags* extra = nullptr, AirGrid* fine = nullptr);
+
+    constexpr U32 SPAN_NO_GAP = 0xffffffff;
+
+    /// Per span of a compact heightfield with border cells round the tile, the
+    /// gap of the distilled air whose [floor - 1, ceiling) holds its top. Found
+    /// in the fine grid the air was distilled from, since a merged leaf keeps
+    /// only its highest floor; SPAN_NO_GAP off the tile or with no such gap.
+    /// tops, when given, is each span's top as rasterised, where a later pass
+    /// moved it.
+    void spanGaps(const rcCompactHeightfield& chf, S32 border, const AirGrid& fine, const TileAir& air, std::vector<U32>& out,
+                  const std::vector<U16>* tops = nullptr);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

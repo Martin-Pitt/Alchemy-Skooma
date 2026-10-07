@@ -212,6 +212,9 @@ namespace sknav
         std::vector<U8> mReal;          ///< code -> area
         std::vector<Flight> mFlights;   ///< every flight the partition found, with no polys yet
         std::vector<U8> mStanding;      ///< per flight, 1 where it still stands on mChf
+        /// Per span of mChf, its gap in mAir's mGaps (spanGaps), empty with no air.
+        std::vector<U32> mSpanGap;
+        std::weak_ptr<const TileAir> mAir;
 
         size_t chfBytes() const;
         size_t bytes() const;

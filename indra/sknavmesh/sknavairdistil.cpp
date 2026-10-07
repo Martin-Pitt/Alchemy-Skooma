@@ -463,7 +463,7 @@ namespace sknav
     }
 
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut, const SpanFlags* extra)
+                            const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut, const SpanFlags* extra, AirGrid* fine)
     {
         StageClock clock(stats ? stats->mMs : nullptr);
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
@@ -505,7 +505,45 @@ namespace sknav
                 stats->mStripBytes += strip.mGaps.size() * sizeof(AirGap) + strip.mStart.size() * sizeof(U32);
             }
         }
+        if (fine)
+        {
+            *fine = std::move(grid);
+        }
         return air;
+    }
+
+    void spanGaps(const rcCompactHeightfield& chf, S32 border, const AirGrid& fine, const TileAir& air, std::vector<U32>& out,
+                  const std::vector<U16>* tops)
+    {
+        out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
+        // Recast (x, y, z) is SL (y, z, x): the grid's ix runs along chf z, iy along chf x.
+        for (S32 iy = 0; iy < fine.mHeight && border + iy < chf.width; ++iy)
+        {
+            for (S32 ix = 0; ix < fine.mWidth && border + ix < chf.height; ++ix)
+            {
+                const rcCompactCell& cell = chf.cells[(border + iy) + (border + ix) * chf.width];
+                const S32 leaf = cell.count ? findLeafByKey(air, ix, iy) : -1;
+                if (leaf < 0)
+                {
+                    continue;
+                }
+                const AirLeaf& l = air.mLeaves[leaf];
+                const AirGap* g = fine.gaps(ix, iy);
+                const U32 count = std::min<U32>(fine.count(ix, iy), l.mGapCount);
+                for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                {
+                    const S32 top = tops ? (*tops)[i] : chf.spans[i].y;
+                    for (U32 k = 0; k < count; ++k)
+                    {
+                        if (top >= g[k].mFloor - 1 && top < g[k].mCeiling)
+                        {
+                            out[i] = l.mFirstGap + k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     std::vector<U8> packTileAir(const TileAir& air)

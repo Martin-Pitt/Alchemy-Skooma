@@ -941,4 +941,53 @@ namespace tut
         polygoniseTile(in, *raster, again);
         ensure("and polygonises as before", sameTile(again, buildTile(in)));
     }
+
+    // Every floor AVATAR keeps finds the air's gap over it: a kerb the
+    // narrow-step pass lowers by the gap over its own top, a roof by the
+    // upper of its column's two gaps.
+    template<> template<>
+    void sknavflights_object::test<26>()
+    {
+        set_test_name("each AVATAR span finds the air's gap over the top it was rasterised at");
+        TileBuildInput in = stagedStair();
+        in.mRecords.push_back(boxRecord(4.05f, 4.f, 0.f, 4.2f, 10.f, 0.5f));     // a kerb inside one column, lowered to the floor
+        in.mRecords.push_back(boxRecord(22.f, 4.f, 3.f, 30.f, 12.f, 3.25f));     // a roof over open floor
+        TileBuildResult r;
+        const TileRasterPtr raster = rasteriseTile(in, r);
+        ensure("rasterised with air", raster && r.mAir);
+        ensure("bound to the air", raster->mAir.lock() == r.mAir);
+        const rcCompactHeightfield& chf = *raster->mChf;
+        ensure_equals("a gap per span", raster->mSpanGap.size(), static_cast<size_t>(chf.spanCount));
+        const S32 border = borderCells(in.mParams[0].mRadius, in.mCell);
+        const S32 climb = static_cast<S32>(std::floor(in.mParams[0].mClimb / in.mCell));
+        S32 spans = 0, roofs = 0, kerbs = 0;
+        for (S32 z = border; z < chf.height - border; ++z)
+        {
+            for (S32 x = border; x < chf.width - border; ++x)
+            {
+                const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                for (U32 i = cell.index; i < cell.index + cell.count; ++i)
+                {
+                    if (chf.areas[i] == RC_NULL_AREA)
+                    {
+                        continue;
+                    }
+                    ++spans;
+                    const U32 g = raster->mSpanGap[i];
+                    ensure(llformat("span %d,%d has a gap", x, z), g != SPAN_NO_GAP && g < r.mAir->mGaps.size());
+                    const AirGap& gap = r.mAir->mGaps[g];
+                    const S32 top = chf.spans[i].y;
+                    // A kerb's gap is over its own top, up to its height above the floor it was lowered to.
+                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), gap.mFloor + 1 >= top && gap.mFloor <= top + 2 * climb);
+                    ensure(llformat("span %d,%d under its gap's ceiling", x, z), top < gap.mCeiling);
+                    const F32 sx = chf.bmin[2] + (z + 0.5f) * chf.cs, sy = chf.bmin[0] + (x + 0.5f) * chf.cs;
+                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + gap.mFloor * chf.ch > 3.f ? 1 : 0;
+                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && gap.mFloor > top ? 1 : 0;
+                }
+            }
+        }
+        ensure("spans", spans > 1000);
+        ensure("the roof's spans find the upper gap", roofs > 50);
+        ensure("the kerb's spans find the gap over the kerb", kerbs > 0);
+    }
 }

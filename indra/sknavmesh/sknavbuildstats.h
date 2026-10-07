@@ -131,6 +131,14 @@ namespace sknav
         size_t mHeldBytes = 0;
         size_t mHeldChfBytes = 0;
         size_t mHeldEdgeBytes = 0;
+        size_t mHeldSpanGapBytes = 0;
+        /// AVATAR's walkable spans on the tile proper, those with no gap of the
+        /// air in mSpanGap, and of those, the ones under door leaves and in
+        /// columns AVATAR reads from a copy of its own.
+        U32 mSpanGapSpans = 0;
+        U32 mSpanGapMisses = 0;
+        U32 mSpanGapWindowMisses = 0;
+        U32 mSpanGapOwnMisses = 0;
         U32 mExcludedRecords = 0;
         U32 mExcludeWindowCells = 0;    ///< tile cells within two of an excluded triangle's box
         U32 mTileCells = 0;

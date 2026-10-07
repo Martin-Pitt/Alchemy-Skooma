@@ -1501,7 +1501,7 @@ namespace sknav
 
     size_t TileRaster::bytes() const
     {
-        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity();
+        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity() + mSpanGap.capacity() * sizeof(U32);
         for (const Flight& f : mFlights)
         {
             n += sizeof(Flight) + f.mFootprint.capacity() * sizeof(LLVector2) + f.mCodes.capacity() + f.mPolys.capacity() * sizeof(U16);
@@ -2113,6 +2113,16 @@ namespace sknav
         }
         clock.lap(ClassBuildStats::WALLS);
 
+        // The tops as rasterised: the air's gaps sit over them, not over the floor a kerb is lowered to.
+        std::vector<U16> tops;
+        if (input.mAir)
+        {
+            tops.resize(static_cast<size_t>(mem.chf->spanCount));
+            for (S32 i = 0; i < mem.chf->spanCount; ++i)
+            {
+                tops[i] = static_cast<U16>(mem.chf->spans[i].y);
+            }
+        }
         flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
         if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
         {
@@ -2138,6 +2148,7 @@ namespace sknav
         {
             standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
         }
+        AirGrid fine;
         if (input.mAir)
         {
             StageClock top_clock(tstats ? tstats->mMs : nullptr);
@@ -2152,7 +2163,7 @@ namespace sknav
             const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
             result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
                                       static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
-                                      tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor);
+                                      tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine);
             top_clock.lap(ClassBuildStats::AIR);
             clock.restart();
         }
@@ -2175,6 +2186,45 @@ namespace sknav
         raster->mReal = std::move(real);
         raster->mFlights = std::move(flights);
         raster->mStanding = std::move(standing);
+        if (result.mAir)
+        {
+            spanGaps(*mem.chf, cfg.borderSize, fine, *result.mAir, raster->mSpanGap, &tops);
+            raster->mAir = result.mAir;
+            if (stats)
+            {
+                // AVATAR's floors the air has no gap over: under door leaves, in columns of AVATAR's own, or neither.
+                const rcCompactHeightfield& chf = *mem.chf;
+                for (S32 z = cfg.borderSize; z < chf.height - cfg.borderSize; ++z)
+                {
+                    for (S32 x = cfg.borderSize; x < chf.width - cfg.borderSize; ++x)
+                    {
+                        const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                        const size_t c = static_cast<size_t>(x + inset) + static_cast<size_t>(z + inset) * hf.width;
+                        for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                        {
+                            if (chf.areas[i] == RC_NULL_AREA)
+                            {
+                                continue;
+                            }
+                            ++stats->mSpanGapSpans;
+                            if (raster->mSpanGap[i] != SPAN_NO_GAP)
+                            {
+                                continue;
+                            }
+                            ++stats->mSpanGapMisses;
+                            if (!in_window.empty() && in_window[c])
+                            {
+                                ++stats->mSpanGapWindowMisses;
+                            }
+                            else if (!own_column.empty() && own_column[c])
+                            {
+                                ++stats->mSpanGapOwnMisses;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         raster->mChf.reset(mem.chf);
         mem.chf = nullptr;
         if (astats)
@@ -2196,6 +2246,7 @@ namespace sknav
             stats->mTotalMs = result.mMillis;
             stats->mHeldChfBytes = raster->chfBytes();
             stats->mHeldEdgeBytes = raster->mEdges.bytes();
+            stats->mHeldSpanGapBytes = raster->mSpanGap.capacity() * sizeof(U32);
             stats->mHeldBytes = raster->bytes();
         }
         return raster;
