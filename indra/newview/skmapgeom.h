@@ -255,8 +255,20 @@ namespace skmap
         bool empty() const { return mSize == 0; }
         const SectionPiece& operator[](size_t i) const
         {
-            const size_t r = static_cast<size_t>(std::upper_bound(mStarts.begin(), mStarts.end(), i) - mStarts.begin()) - 1;
+            const size_t r = runOf(i);
             return (*mRuns[r])[i - mStarts[r]];
+        }
+        /// The count pieces numbered from first on, which must lie in one run, as a layer's do: one search for them all
+        /// rather than one per piece.
+        const SectionPiece* span(size_t first, size_t count) const
+        {
+            if (count == 0)
+            {
+                return nullptr;
+            }
+            const size_t r = runOf(first);
+            llassert(first + count <= mStarts[r] + mRuns[r]->size());
+            return mRuns[r]->data() + (first - mStarts[r]);
         }
         /// Number the run's pieces from size() on.
         void append(const Run& run)
@@ -301,6 +313,11 @@ namespace skmap
         const_iterator end() const { return const_iterator(this, mRuns.size(), 0); }
 
     private:
+        size_t runOf(size_t i) const
+        {
+            return static_cast<size_t>(std::upper_bound(mStarts.begin(), mStarts.end(), i) - mStarts.begin()) - 1;
+        }
+
         std::vector<Run> mRuns;
         std::vector<size_t> mStarts;    ///< each run's first number
         size_t mSize = 0;
@@ -388,6 +405,13 @@ namespace skmap
     };
 
     typedef std::shared_ptr<const Scene> ScenePtr;
+
+    /// A layer's section pieces in its order, null when it has none: they lie in one run, so a loop over them pays
+    /// no search per piece.
+    inline const SectionPiece* layerPieces(const Scene& s, const SceneLayer& layer)
+    {
+        return layer.mPieces.empty() ? nullptr : s.mPieces.span(layer.mPieces.front(), layer.mPieces.size());
+    }
 
     constexpr F32 HASH_REACH_M = 2.f;           ///< what a leaf's raster reads past its edge: the halo cap
 

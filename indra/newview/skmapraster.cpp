@@ -483,9 +483,10 @@ namespace skmap
             std::vector<S8> winds;
             const F32 px0 = f.mX0 - pad, py0 = f.mY0 - pad, pspan = NP * f.mTexel;
             S32 pieces = 0;
-            for (U32 id : L.mPieces)
+            const SectionPiece* const layer_pieces = layerPieces(scene, L);
+            for (size_t k = 0; k < L.mPieces.size(); ++k)
             {
-                const SectionPiece& piece = scene.mPieces[id];
+                const SectionPiece& piece = layer_pieces[k];
                 if (piece.mMax.mV[VX] < px0 || piece.mMin.mV[VX] > px0 + pspan || piece.mMax.mV[VY] < py0 || piece.mMin.mV[VY] > py0 + pspan)
                 {
                     continue;

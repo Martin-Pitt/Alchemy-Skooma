@@ -717,15 +717,16 @@ namespace skmap
             }
 
             // Orphans: with the section, a wall line stays only where no piece of its layer stands behind it.
-            std::vector<std::map<Cell, std::vector<U32>>> piece_cells;
+            std::vector<std::map<Cell, std::vector<const SectionPiece*>>> piece_cells;
             if (s.mHasSection)
             {
                 piece_cells.resize(s.mLayers.size());
                 for (size_t l = 0; l < s.mLayers.size(); ++l)
                 {
-                    for (U32 id : s.mLayers[l].mPieces)
+                    const SectionPiece* const pieces = layerPieces(s, s.mLayers[l]);
+                    for (size_t k = 0; k < s.mLayers[l].mPieces.size(); ++k)
                     {
-                        const SectionPiece& piece = s.mPieces[id];
+                        const SectionPiece& piece = pieces[k];
                         if (piece.mFlags & PIECE_BLOB)
                         {
                             continue;   // clutter covers nothing
@@ -736,7 +737,7 @@ namespace skmap
                         {
                             for (S32 x = lo.first; x <= hi.first; ++x)
                             {
-                                piece_cells[l][{ x, y }].push_back(id);
+                                piece_cells[l][{ x, y }].push_back(&piece);
                             }
                         }
                     }
@@ -748,9 +749,9 @@ namespace skmap
                 {
                     return false;
                 }
-                for (U32 id : it->second)
+                for (const SectionPiece* held : it->second)
                 {
-                    const SectionPiece& piece = s.mPieces[id];
+                    const SectionPiece& piece = *held;
                     if (p.mV[VX] < piece.mMin.mV[VX] - ORPHAN_REACH_M || p.mV[VX] > piece.mMax.mV[VX] + ORPHAN_REACH_M
                         || p.mV[VY] < piece.mMin.mV[VY] - ORPHAN_REACH_M || p.mV[VY] > piece.mMax.mV[VY] + ORPHAN_REACH_M)
                     {
@@ -1167,9 +1168,10 @@ namespace skmap
                     }
                 }
                 // Section pieces: leaves are made from them too, so a piece far from any floor still bakes.
-                for (U32 id : layer.mPieces)
+                const SectionPiece* const layer_pieces = layerPieces(s, layer);
+                for (size_t pi = 0; pi < layer.mPieces.size(); ++pi)
                 {
-                    const SectionPiece& piece = s.mPieces[id];
+                    const SectionPiece& piece = layer_pieces[pi];
                     U64 r = sknav::mix(sknav::SEED, piece.mSource);
                     r = sknav::mix(r, static_cast<U64>(static_cast<S64>(piece.mPlane)));
                     r = sknav::mix(r, static_cast<U64>(piece.mStyle));
