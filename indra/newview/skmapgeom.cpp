@@ -1466,7 +1466,7 @@ namespace skmap
                 }
                 return one;
             };
-            std::sort(sampled.begin(), sampled.end());
+            // A cell's levels are merged as a set, so neither the cells nor their samples need an order.
             for (size_t i : sampled)
             {
                 if (!gather(i))
@@ -1474,12 +1474,18 @@ namespace skmap
                     store(i);
                 }
             }
-            std::vector<size_t> frontier = sampled;
+            // The ring a cell was stored in: 1 for the sampled cells, ring + 2 for those the search reaches.
+            std::vector<U8> stored(n, 0);
+            for (size_t i : sampled)
+            {
+                stored[i] = 1;
+            }
+            std::vector<size_t> frontier = sampled, reached;
             for (S32 ring = 0; ring < SECTION_REACH_CELLS && !frontier.empty(); ++ring)
             {
-                // Each new cell takes the union of its frontier neighbours' levels, each counted once.
-                links.clear();
-                std::vector<size_t> reached;
+                // The cells next to the frontier, each once.
+                const U8 from = static_cast<U8>(ring + 1), to = static_cast<U8>(ring + 2);
+                reached.clear();
                 for (size_t f : frontier)
                 {
                     const S32 fx = static_cast<S32>(f % w), fy = static_cast<S32>(f / w);
@@ -1493,38 +1499,67 @@ namespace skmap
                                 continue;
                             }
                             const size_t i = static_cast<size_t>(y) * w + x;
-                            if (seen[i])
+                            if (!stored[i])
                             {
-                                continue;
-                            }
-                            if (head[i] < 0)
-                            {
+                                stored[i] = to;
                                 reached.push_back(i);
-                            }
-                            for (S32 k = 0; k < counts[f]; ++k)
-                            {
-                                links.push_back({ slots[f * LEVEL_MAX + k], head[i] });
-                                head[i] = static_cast<S32>(links.size()) - 1;
                             }
                         }
                     }
                 }
-                std::sort(reached.begin(), reached.end());
+                // Each takes the union of its frontier neighbours' levels, each counted once.
                 for (size_t i : reached)
                 {
-                    const bool one = gather(i);
-                    head[i] = -1;
-                    if (one)
+                    const S32 ix = static_cast<S32>(i % w), iy = static_cast<S32>(i / w);
+                    S32 found[9 * LEVEL_MAX];
+                    S32 m = 0;
+                    for (S32 dy = -1; dy <= 1; ++dy)
                     {
+                        for (S32 dx = -1; dx <= 1; ++dx)
+                        {
+                            const S32 x = ix + dx, y = iy + dy;
+                            if (x < 0 || x >= w || y < 0 || y >= h)
+                            {
+                                continue;
+                            }
+                            const size_t j = static_cast<size_t>(y) * w + x;
+                            if (stored[j] != from)
+                            {
+                                continue;
+                            }
+                            for (S32 k = 0; k < counts[j]; ++k)
+                            {
+                                found[m++] = slots[j * LEVEL_MAX + k];
+                            }
+                        }
+                    }
+                    seen[i] = 1;
+                    if (std::all_of(found, found + m, [&](S32 level) { return level == found[0]; }))
+                    {
+                        counts[i] = 1;
+                        slots[i * LEVEL_MAX] = found[0];
                         continue;
                     }
-                    std::sort(merge_in.begin(), merge_in.end());
-                    merge_in.erase(std::unique(merge_in.begin(), merge_in.end()), merge_in.end());
+                    std::sort(found, found + m);
+                    merge_in.clear();
+                    for (S32 k = 0; k < m; ++k)
+                    {
+                        if (k == 0 || found[k] != found[k - 1])
+                        {
+                            merge_in.emplace_back(found[k], 1u);
+                        }
+                    }
                     store(i);
                 }
                 frontier.swap(reached);
             }
             grid.mCell.assign(n, 0);
+            size_t listed = 0;
+            for (size_t i = 0; i < n; ++i)
+            {
+                listed += counts[i] ? counts[i] + 1u : 0u;
+            }
+            grid.mLists.reserve(listed);
             for (size_t i = 0; i < n; ++i)
             {
                 if (!counts[i])
