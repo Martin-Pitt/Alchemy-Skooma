@@ -98,7 +98,7 @@ namespace
         g.mClear = 7;
         g.mSeed = 3;
         a.mGaps = { g, g };
-        a.mLeaves.push_back({ 0, 0, 1, 2, 0 });
+        a.mLeaves.push_back({ 0, 0, 1, 2, 0, 0 });
         for (S32 side = 0; side < 4; ++side)
         {
             const S32 n = side < 2 ? a.mHeight : a.mWidth;
@@ -221,6 +221,24 @@ namespace tut
         ensure("short", !unpackTileProduct(bytes.data(), bytes.size() - 9, 42, out));
         ensure("empty", !unpackTileProduct(bytes.data(), 0, 42, out));
         ensure_equals("a refused entry leaves the output alone", out.mTriangles, -5);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<11>()
+    {
+        set_test_name("air whose leaves are out of key order is refused");
+        for (const bool sorted : { true, false })
+        {
+            TileBuildResult in = result();
+            TileAir a = *in.mAir;
+            const AirLeaf first = { 0, 2, 0, 1, 0, 0 }, second = { 1, 2, 0, 1, 0, 1 };
+            a.mLeaves.push_back(sorted ? first : second);
+            a.mLeaves.push_back(sorted ? second : first);
+            in.mAir = std::make_shared<TileAir>(a);
+            const std::vector<U8> bytes = packTileProduct(in, 42);
+            TileBuildResult out;
+            ensure_equals(sorted ? "in key order" : "out of key order", unpackTileProduct(bytes.data(), bytes.size(), 42, out), sorted);
+        }
     }
 
     template<> template<>

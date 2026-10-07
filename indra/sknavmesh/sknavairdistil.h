@@ -96,7 +96,7 @@ namespace sknav
         F32 mUnit = 0.f;
         S32 mWidth = 0;                 ///< cells along SL x
         S32 mHeight = 0;                ///< along SL y
-        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, row-major by origin
+        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, in airKey order of their origins
         std::vector<AirGap> mGaps;
         /// -x and +x run along y, -y and +y along x.
         SeamStrip mSeams[4];

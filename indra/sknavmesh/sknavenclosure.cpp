@@ -361,26 +361,7 @@ namespace sknav
 
     S32 findAirLeaf(const TileAir& air, S32 ix, S32 iy)
     {
-        if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
-        {
-            return -1;
-        }
-        for (S32 lv = 0; lv <= AIR_MAX_LEVEL; ++lv)
-        {
-            const S32 mask = ~((1 << lv) - 1);
-            const U16 x = static_cast<U16>(ix & mask), y = static_cast<U16>(iy & mask);
-            const auto it = std::lower_bound(air.mLeaves.begin(), air.mLeaves.end(), std::make_pair(y, x),
-                                             [](const AirLeaf& l, const std::pair<U16, U16>& k) {
-                                                 return l.mY < k.first || (l.mY == k.first && l.mX < k.second);
-                                             });
-            // A leaf starting here larger than this level covers the cell too,
-            // and is found again at its own level.
-            if (it != air.mLeaves.end() && it->mY == y && it->mX == x && it->mLevel <= lv)
-            {
-                return it->mLevel == lv ? static_cast<S32>(it - air.mLeaves.begin()) : -1;
-            }
-        }
-        return -1;
+        return findLeafByKey(air, ix, iy);
     }
 
     size_t TileEnclosure::bytes() const

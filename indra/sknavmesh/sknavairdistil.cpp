@@ -323,47 +323,68 @@ namespace sknav
             }
         }
 
-        for (S32 iy = 0; iy < h; ++iy)
-        {
-            for (S32 ix = 0; ix < w; ++ix)
+        // Leaves in key order: the level-4 blocks by their own key, each walked in Z order.
+        std::function<void(S32, S32, S32)> emit = [&](S32 ix, S32 iy, S32 lv) {
+            if (ix >= w || iy >= h)
             {
-                const S32 lv = lvl[ix + iy * w];
-                const S32 s = 1 << lv;
-                if (ix % s || iy % s)
-                {
-                    continue;
-                }
-                AirLeaf leaf;
-                leaf.mX = static_cast<U16>(ix);
-                leaf.mY = static_cast<U16>(iy);
-                leaf.mLevel = static_cast<U8>(lv);
-                leaf.mFirstGap = static_cast<U32>(out.mGaps.size());
-                if (lv == 0)
-                {
-                    const U32 count = std::min<U32>(grid.count(ix, iy), 0xff);
-                    const AirGap* g = grid.gaps(ix, iy);
-                    for (U32 i = 0; i < count; ++i)
-                    {
-                        out.mGaps.push_back(record(g[i]));
-                    }
-                    leaf.mGapCount = static_cast<U8>(count);
-                }
-                else
-                {
-                    const Level& l = levels[lv];
-                    const Block& b = l.mBlocks[(ix >> lv) + (iy >> lv) * l.mWidth];
-                    for (U32 i = 0; i < b.mCount; ++i)
-                    {
-                        out.mGaps.push_back(record(l.mGaps[b.mFirst + i]));
-                    }
-                    leaf.mGapCount = b.mCount;
-                }
-                if (leaf.mGapCount > 0)
-                {
-                    out.mLeaves.push_back(leaf);
-                }
+                return;
             }
-        }        out.mLeaves.shrink_to_fit();
+            if (lvl[ix + iy * w] < lv)
+            {
+                const S32 half = 1 << (lv - 1);
+                for (S32 k = 0; k < 4; ++k)
+                {
+                    emit(ix + (k & 1) * half, iy + (k >> 1) * half, lv - 1);
+                }
+                return;
+            }
+            AirLeaf leaf;
+            leaf.mX = static_cast<U16>(ix);
+            leaf.mY = static_cast<U16>(iy);
+            leaf.mLevel = static_cast<U8>(lv);
+            leaf.mFirstGap = static_cast<U32>(out.mGaps.size());
+            if (lv == 0)
+            {
+                const U32 count = std::min<U32>(grid.count(ix, iy), 0xff);
+                const AirGap* g = grid.gaps(ix, iy);
+                for (U32 i = 0; i < count; ++i)
+                {
+                    out.mGaps.push_back(record(g[i]));
+                }
+                leaf.mGapCount = static_cast<U8>(count);
+            }
+            else
+            {
+                const Level& l = levels[lv];
+                const Block& b = l.mBlocks[(ix >> lv) + (iy >> lv) * l.mWidth];
+                for (U32 i = 0; i < b.mCount; ++i)
+                {
+                    out.mGaps.push_back(record(l.mGaps[b.mFirst + i]));
+                }
+                leaf.mGapCount = b.mCount;
+            }
+            if (leaf.mGapCount > 0)
+            {
+                out.mLeaves.push_back(leaf);
+            }
+        };
+        const S32 bw = levels[AIR_MAX_LEVEL].mWidth, bh = levels[AIR_MAX_LEVEL].mHeight;
+        S32 side = 1;
+        while (side < std::max(bw, bh))
+        {
+            side *= 2;
+        }
+        for (U32 m = 0; m < static_cast<U32>(side * side); ++m)
+        {
+            U32 bx = 0, by = 0;
+            for (S32 b = 0; b < 16; ++b)
+            {
+                bx |= ((m >> (2 * b)) & 1) << b;
+                by |= ((m >> (2 * b + 1)) & 1) << b;
+            }
+            emit(static_cast<S32>(bx) << AIR_MAX_LEVEL, static_cast<S32>(by) << AIR_MAX_LEVEL, AIR_MAX_LEVEL);
+        }
+        out.mLeaves.shrink_to_fit();
         out.mGaps.shrink_to_fit();
     }
 
@@ -528,7 +549,7 @@ namespace sknav
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"flags\":{\"walkable\":1,\"open\":2,\"own_sky\":4,"
+        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"flags\":{\"walkable\":1,\"open\":2,\"own_sky\":4,"
              "\"flight\":8,\"area_shift\":4,\"area_mask\":48},\"ceiling_open\":"
           << AIR_CEILING_OPEN << ",\"sections\":[[\"leaves\",\"leaf\"," << air.mLeaves.size() << "],[\"gaps\",\"gap\"," << air.mGaps.size() << "]";
         const char* names[4] = { "seam_neg_x", "seam_pos_x", "seam_neg_y", "seam_pos_y" };

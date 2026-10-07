@@ -439,13 +439,16 @@ namespace tut
     template<> template<>
     void sknavairdistil_object::test<10>()
     {
-        set_test_name("a cell's leaf by key is the leaf covering it, on whole and ragged tiles");
+        set_test_name("leaves come in key order, and a cell's leaf by key is the leaf covering it, on whole and ragged tiles");
         for (const auto& size : { std::make_pair(64, 64), std::make_pair(50, 37) })
         {
             const AirGrid g = room(size.first, size.second);
             TileAir air;
             distilAir(g, CLIMB, air);
-            std::sort(air.mLeaves.begin(), air.mLeaves.end(), [](const AirLeaf& a, const AirLeaf& b) { return airKey(a.mX, a.mY) < airKey(b.mX, b.mY); });
+            for (size_t i = 1; i < air.mLeaves.size(); ++i)
+            {
+                ensure("leaves in strict key order", airKey(air.mLeaves[i - 1].mX, air.mLeaves[i - 1].mY) < airKey(air.mLeaves[i].mX, air.mLeaves[i].mY));
+            }
             std::vector<S32> leaf_of;
             ensure("covered once", cover(air, leaf_of));
             S32 solid = 0;

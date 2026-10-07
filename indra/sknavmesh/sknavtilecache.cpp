@@ -319,9 +319,11 @@ namespace sknav
             {
                 return false;
             }
-            for (const AirLeaf& l : air.mLeaves)
+            for (size_t i = 0; i < air.mLeaves.size(); ++i)
             {
-                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size())
+                const AirLeaf& l = air.mLeaves[i];
+                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size()
+                    || (i > 0 && airKey(l.mX, l.mY) <= airKey(air.mLeaves[i - 1].mX, air.mLeaves[i - 1].mY)))
                 {
                     return false;
                 }
