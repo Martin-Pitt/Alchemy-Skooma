@@ -3072,18 +3072,22 @@ namespace sknav
                     }
                     continue;
                 }
-                bool any = false;
+                // A run narrower than an avatar passes is no way through: no
+                // portal, and two regions that meet only along such runs are
+                // not one either.
+                bool any = false, wide = false;
                 for (const Run& r : groupRuns(g.mU))
                 {
-                    // Narrower than an avatar passes is no way through, and blocks no merge.
                     const Scored s = score(r);
-                    if (s.mPortal && (s.mKind == PortalKind::DOOR || r.mWidth >= passage))
+                    const bool passes = s.mKind == PortalKind::DOOR || r.mWidth >= passage;
+                    wide = wide || passes;
+                    if (s.mPortal && passes)
                     {
                         makePortal(r, s, s.mKind, g.mU, g.mV);
                         any = true;
                     }
                 }
-                if (!any && round_uf.unite(g.mU, g.mV))
+                if (!any && wide && round_uf.unite(g.mU, g.mV))
                 {
                     ++merged;
                 }

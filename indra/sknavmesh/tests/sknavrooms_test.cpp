@@ -1406,18 +1406,20 @@ template<> template<>
     template<> template<>
     void sknavrooms_object::test<36>()
     {
-        set_test_name("a slot narrower than an avatar passes is no portal, and blocks no merge");
+        set_test_name("a slot narrower than an avatar passes is no portal, and no way through to merge across");
         const F32 passage = 2.f * SpaceParams().mAgentRadiusM;
         const Result r = run(roomWithRecess(0.5f, 3.f).input(1));
         const Space* room = r.at(6.f, 6.f);
-        ensure("the room has a space", room != nullptr);
-        ensure("the closet behind the slot is the room's", r.at(6.f, 11.5f) == room);
+        const Space* closet = r.at(6.f, 11.5f);
+        ensure("the room and the closet have spaces", room && closet);
+        ensure("the closet behind the slot is not the room", closet != room);
+        ensure("and no portal joins them", r.between(room, closet).empty());
         for (const Portal& q : r.mRooms->mPortals)
         {
             ensure("no portal narrower than a passage", q.mWidth >= passage);
         }
         const Result wide = run(roomWithRecess(passage + 0.15f, 3.f).input(1));
-        ensure("a doorway a passage wide still parts them", wide.at(6.f, 11.5f) != wide.at(6.f, 6.f));
+        ensure("a doorway a passage wide parts them with a portal", wide.between(wide.at(6.f, 6.f), wide.at(6.f, 11.5f)).size() == 1u);
     }
 
     template<> template<>
