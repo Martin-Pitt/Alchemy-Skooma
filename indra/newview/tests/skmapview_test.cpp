@@ -148,6 +148,12 @@ namespace tut
         skmap::analysisBox(agent, agent, 800.f, 200.f, wmin, wmax);
         ensure("aspect clamped at 2", wmax.mdV[VX] - wmin.mdV[VX] <= 2.0 * (512.0 + 32.0) + 128.0);
         ensure("aspect reaches", wmax.mdV[VX] - agent.mdV[VX] >= 512.0);
+        // A camera across the grid (a teleport, a far cam) does not stretch the box to cover the agent too.
+        LLVector3d fmin, fmax, cmin, cmax;
+        skmap::analysisBox(agent + LLVector3d(21000.0, -9000.0, 0.0), centre, 200.f, 200.f, fmin, fmax);
+        skmap::analysisBox(centre, centre, 200.f, 200.f, cmin, cmax);
+        ensure("a far agent leaves the box to the centre", fmin == cmin && fmax == cmax);
+        ensure("bounded", fmax.mdV[VX] - fmin.mdV[VX] <= 2.0 * (256.0 + 32.0) + 128.0);
     }
 
     // The zoom stays inside 4..512 m and steps by 1.1.

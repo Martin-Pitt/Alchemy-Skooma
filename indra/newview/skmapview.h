@@ -46,6 +46,7 @@ namespace skmap
     constexpr F64 ANALYSIS_SNAP_M = 64.0;
     constexpr F64 ANALYSIS_MARGIN_M = 32.0;
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
+    constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
 
     /// A tier's texel in metres: 1/32 m at tier 0 to 2 m at tier 6.
     F32 tierTexel(S32 tier);

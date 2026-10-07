@@ -577,8 +577,8 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
 void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
                                const LLColor4& tint) const
 {
-    // 2 x 2 sub-quads, so the distance dim varies across a cell.
-    const LLVector3d agent = gAgent.getPositionGlobal();
+    // 2 x 2 sub-quads, so the distance dim varies across a cell. It fades from the map centre, the camera.
+    const LLVector3d agent = view.centre();
     const F32 span = view.span();
     LLVector2 px[3][3];
     LLColor4 col[3][3];
