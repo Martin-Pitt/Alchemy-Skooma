@@ -29,6 +29,7 @@
 #include "../sknavfeatures.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace
 {
@@ -55,7 +56,43 @@ namespace
         p.mAxes[1].set(0.f, 1.f, 0.f);
         p.mAxes[2].set(0.f, 0.f, 1.f);
         p.mHalf.set(static_cast<F32>(x1 - x0) * 0.5f, static_cast<F32>(y1 - y0) * 0.5f, static_cast<F32>(z1 - z0) * 0.5f);
+        p.mFaceCover = 0.f;     // free-standing: measured, nothing against either face
         return p;
+    }
+
+    // A record spanning the box in a region at the origin, as an analytic box
+    // or as its twelve triangles.
+    RecordPtr slab(U32 n, F64 x0, F64 y0, F64 z0, F64 x1, F64 y1, F64 z1, bool triangles = false)
+    {
+        auto r = std::make_shared<Record>();
+        r->mPart = id(n);
+        r->mRoot = id(n);
+        r->mMin.set(x0, y0, z0);
+        r->mMax.set(x1, y1, z1);
+        const LLVector3 lo(static_cast<F32>(x0), static_cast<F32>(y0), static_cast<F32>(z0));
+        const LLVector3 hi(static_cast<F32>(x1), static_cast<F32>(y1), static_cast<F32>(z1));
+        r->mCenter = (lo + hi) * 0.5f;
+        r->mHalf = (hi - lo) * 0.5f;
+        r->mAxes[0].set(1.f, 0.f, 0.f);
+        r->mAxes[1].set(0.f, 1.f, 0.f);
+        r->mAxes[2].set(0.f, 0.f, 1.f);
+        r->mShape = Shape::BOX;
+        if (triangles)
+        {
+            auto c = [&](S32 i) { return LLVector3(i & 1 ? hi.mV[0] : lo.mV[0], i & 2 ? hi.mV[1] : lo.mV[1], i & 4 ? hi.mV[2] : lo.mV[2]); };
+            const S32 quads[6][4] = { { 0, 2, 6, 4 }, { 1, 5, 7, 3 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 1, 3, 2 }, { 4, 6, 7, 5 } };
+            auto tris = std::make_shared<std::vector<LLVector3>>();
+            for (const auto& q : quads)
+            {
+                for (S32 k : { q[0], q[1], q[2], q[0], q[2], q[3] })
+                {
+                    tris->push_back(c(k));
+                }
+            }
+            r->mTriangles = tris;
+            r->mShape = Shape::TRIANGLES;
+        }
+        return r;
     }
 
     FeatureRoot root(U32 n, const std::string& name = std::string())
@@ -720,5 +757,64 @@ namespace tut
         ensure_approximately_equals("both leaves wide", d[0].mWidth, 2.12f, 8);
         ensure("one plane at the doorway", d[0].mPlaneKnown && d[0].mNormal.mV[VX] > 0.99f
                                                && std::fabs(d[0].mPlanePoint.mdV[VX] - 0.0625) < 1e-4);
+    }
+
+    // Script and touch with both faces open is a door; with a face unmeasured
+    // it is not, and with something flat against a face it is mounted there.
+    template<> template<>
+    void sknavfeatures_object::test<26>()
+    {
+        FeaturePart leaf = part(1, 1, 0, 0, 0, 0.125, 1.06, 3.0);
+        leaf.mScripted = leaf.mTouch = true;
+        auto isDoor = [](const FeaturePart& p, const FeatureRoot& r) {
+            return !ofKind(classifyFeatures({ p }, { r }, FeatureParams()), FeatureKind::DOOR).empty();
+        };
+        const FeatureParams params;
+
+        // A doorway: jambs either side and a header above, nothing on the faces.
+        const std::vector<RecordPtr> frame = { slab(2, -0.05, -0.15, 0, 0.175, 0, 3.2), slab(3, -0.05, 1.06, 0, 0.175, 1.21, 3.2),
+                                               slab(4, -0.05, -0.15, 3.0, 0.175, 1.21, 3.2), slab(5, -2, -2, -0.2, 2, 3, 0, true) };
+        leaf.mFaceCover = faceCover(leaf, frame, params);
+        ensure_equals("a frame and a floor cover nothing", leaf.mFaceCover, 0.f);
+        ensure("framed, a door", isDoor(leaf, root(1)));
+        leaf.mFaceCover = -1.f;
+        ensure("unmeasured, script and touch are not enough", !isDoor(leaf, root(1)));
+
+        // A painting on a wall, as triangles and as a box.
+        for (const bool triangles : { true, false })
+        {
+            leaf.mFaceCover = faceCover(leaf, { slab(6, 0.125, -2, 0, 0.425, 3, 4, triangles) }, params);
+            ensure("the wall covers the back", leaf.mFaceCover > 0.95f);
+            ensure("mounted, not a door", !isDoor(leaf, root(1)));
+        }
+
+        // Only a name or motion outweighs it: a leaf seen open into a wall.
+        FeaturePart named = leaf;
+        named.mName = "Front Door";
+        ensure("named", isDoor(named, root(1)));
+        FeatureRoot moved = root(1);
+        moved.mEverMoved = true;
+        ensure("moved", isDoor(leaf, moved));
+    }
+
+    // A mattress against a headboard's lower half and a second board flat on
+    // its face, as a bed's layered boards are: the boards are not leaves.
+    // Bypass leaves overlapping only at an edge still are.
+    template<> template<>
+    void sknavfeatures_object::test<27>()
+    {
+        const FeatureParams params;
+        FeaturePart board = part(1, 1, 0, 0, 0, 0.3, 3.0, 2.1);
+        board.mScripted = board.mTouch = true;
+        const std::vector<RecordPtr> bed = { slab(2, 0.3, 0, 0.1, 2.5, 3.0, 0.6), slab(3, -0.25, 0, 0, -0.05, 3.0, 2.1) };
+        board.mFaceCover = faceCover(board, bed, params);
+        ensure("the layered board covers a face", board.mFaceCover >= params.mFaceBlocked);
+        ensure("a headboard", ofKind(classifyFeatures({ board }, { root(1) }, params), FeatureKind::DOOR).empty());
+
+        FeaturePart a = part(1, 1, 0, 0, 0, 0.05, 1.0, 2.5);
+        FeaturePart b = part(2, 2, 0.1, 0.9, 0, 0.15, 1.9, 2.5);
+        a.mFaceCover = faceCover(a, { slab(2, 0.1, 0.9, 0, 0.15, 1.9, 2.5) }, params);
+        b.mFaceCover = faceCover(b, { slab(1, 0, 0, 0, 0.05, 1.0, 2.5) }, params);
+        ensure("an edge's overlap leaves the face open", a.mFaceCover <= params.mFaceClear && b.mFaceCover <= params.mFaceClear);
     }
 }
