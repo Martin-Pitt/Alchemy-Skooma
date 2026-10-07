@@ -119,6 +119,7 @@ namespace sknav
         F32 mElongation = 1.f;
         F32 mSMean = 0.f;
         F32 mCoverMean = 0.f;       ///< share of the sky roofed over, walls aside, floor-weighted
+        F32 mSideOpenMean = 0.f;    ///< side openness O, floor-weighted: L's per-spot counterpart
         F32 mEMean = 0.f;
         F32 mEMin = 0.f;
         F32 mEMax = 0.f;

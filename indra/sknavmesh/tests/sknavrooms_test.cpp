@@ -1629,4 +1629,137 @@ template<> template<>
         }
         ensure("the landed coarse keeps", coarse_kept);
     }
+
+    /// A 40 m square roof over 12..52 at the given height, with walls on the
+    /// given sides of north, east, south, west; a south wall keeps a 2 m door.
+    Result canopy(F32 height, bool walls[4])
+    {
+        Scene s;
+        s.box(12.f, 12.f, 52.f, 52.f, height, height + 0.25f);
+        for (F32 px : { 12.f, 51.75f })
+        {
+            for (F32 py : { 12.f, 51.75f })
+            {
+                s.wall(px, py, px + 0.25f, py + 0.25f, height);
+            }
+        }
+        if (walls[0])
+        {
+            s.wall(12.f, 51.75f, 52.f, 52.f, height);
+        }
+        if (walls[1])
+        {
+            s.wall(51.75f, 12.f, 52.f, 52.f, height);
+        }
+        if (walls[2])
+        {
+            s.wall(12.f, 12.f, 31.f, 12.25f, height);
+            s.wall(33.f, 12.f, 52.f, 12.25f, height);
+        }
+        if (walls[3])
+        {
+            s.wall(12.f, 12.f, 12.25f, 52.f, height);
+        }
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        return run(in);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<34>()
+    {
+        set_test_name("the middle of a 40 m roof on posts is SHELTERED at the gap, however deep, low roof or high");
+        for (F32 height : { 3.f, 6.f })
+        {
+            bool walls[4] = { false, false, false, false };
+            const Result r = canopy(height, walls);
+            Enclosure e;
+            ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+            ensure("deep enough to read as INDOORS by e alone", e.mE > 0.75f);
+            ensure("open at the sides but for the corner posts", e.mO > 0.7f);
+            ensure("a canopy", e.mCanopy);
+            ensure("SHELTERED", e.mBucket == EnclosureBucket::SHELTERED);
+            // The coarse answers, what a far reader and evicted detail keep, agree.
+            S32 canopies = 0;
+            bool capped = true;
+            for (const TileEnclosure& t : r.mEnc->mTiles)
+            {
+                for (const CoarseGap& g : t.mCoarse.mGaps)
+                {
+                    if (g.mFlags & ENCLOSURE_CANOPY)
+                    {
+                        ++canopies;
+                        capped = capped && g.mBucket != static_cast<U8>(EnclosureBucket::INDOORS);
+                    }
+                }
+            }
+            ensure("coarse canopies", canopies > 100);
+            ensure("capped in the coarse too", capped);
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<35>()
+    {
+        set_test_name("a walled 40 m hall with one door stays INDOORS in its middle");
+        for (F32 height : { 3.f, 6.f })
+        {
+            bool walls[4] = { true, true, true, true };
+            const Result r = canopy(height, walls);
+            Enclosure e;
+            ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+            ensure("walled on most sides", e.mO < 0.3f);
+            ensure("no canopy", !e.mCanopy && !e.mSealed);
+            ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<36>()
+    {
+        set_test_name("under a 40 m roof with one wall and three open sides is SHELTERED at the gap");
+        bool walls[4] = { true, false, false, false };
+        const Result r = canopy(6.f, walls);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+        ensure("deep enough to read as INDOORS by e alone", e.mE > 0.75f);
+        ensure("walled on the north only", e.mO > 0.5f && e.mO < 0.9f);
+        ensure("SHELTERED", e.mBucket == EnclosureBucket::SHELTERED);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<37>()
+    {
+        set_test_name("a street between towers is walled at the sides but unroofed, so still OUTDOORS");
+        Scene s;
+        s.box(0.f, 0.f, 12.f, 32.f, 0.f, 36.f, false);
+        s.box(20.f, 0.f, 32.f, 32.f, 0.f, 36.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(16.f, 16.f, 0.5f), e));
+        ensure("open only along the street", e.mO > 0.f && e.mO < 0.5f);
+        ensure("no canopy", !e.mCanopy);
+        ensure("OUTDOORS", e.mBucket == EnclosureBucket::OUTDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<38>()
+    {
+        set_test_name("a building with no door is INDOORS, and no canopy");
+        Scene s;
+        s.wall(12.f, 12.f, 52.f, 12.25f, 6.f);
+        s.wall(12.f, 51.75f, 52.f, 52.f, 6.f);
+        s.wall(12.f, 12.f, 12.25f, 52.f, 6.f);
+        s.wall(51.75f, 12.f, 52.f, 52.f, 6.f);
+        s.box(12.f, 12.f, 52.f, 52.f, 6.f, 6.25f);
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+        ensure("walled all round, no canopy", e.mO < 0.3f && !e.mCanopy);
+        ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+    }
 }
