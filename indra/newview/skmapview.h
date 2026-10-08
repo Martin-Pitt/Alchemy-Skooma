@@ -47,8 +47,8 @@ namespace skmap
     constexpr F64 ANALYSIS_MARGIN_M = 32.0;
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
     constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
-    /// The scene origin stays while the box's minimum is this close to it on each axis: scene-local metres then stay
-    /// under 1024 for a square map, the binade a 640 m box already reaches, so they lose no precision.
+    /// The scene origin stays while the box's minimum is this close to it on each axis: the box's scene-local metres
+    /// then stay under 1664, a 2:1 map's 1408 m box plus the drift, in the binade that box already reaches (1/8192 m).
     constexpr F64 ANALYSIS_ORIGIN_DRIFT_M = 256.0;
 
     /// A tier's texel in metres: 1/32 m at tier 0 to 2 m at tier 6.
