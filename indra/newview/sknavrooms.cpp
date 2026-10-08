@@ -27,6 +27,7 @@
 #include "sknavrooms.h"
 
 #include "sknavlayout.h"
+#include "sknavspaceproducts.h"
 
 #include "llagent.h"
 #include "llbase64.h"
@@ -271,6 +272,36 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
                 }
                 best = e.mFloor;
             });
+        }
+    }
+}
+
+void SKNavWorldView::sheet(const LLVector3d& min, const LLVector3d& max, F32 res, std::vector<SpaceId>& out) const
+{
+    res = llmax(res, 0.05f);
+    const S32 nx = llmax(1, static_cast<S32>(std::ceil((max.mdV[VX] - min.mdV[VX]) / res)));
+    const S32 ny = llmax(1, static_cast<S32>(std::ceil((max.mdV[VY] - min.mdV[VY]) / res)));
+    out.assign(static_cast<size_t>(nx) * ny, SpaceId());
+    std::vector<F64> best(out.size(), -std::numeric_limits<F64>::max());
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mProduct || !overlapsXY(m.mMin, m.mMax, min, max))
+        {
+            continue;
+        }
+        // The mesh's own reading, on the same cells in its frame.
+        std::vector<SheetCell> cells;
+        const LLVector3d lo = min - m.mOrigin, hi = lo + LLVector3d(nx * res, ny * res, max.mdV[VZ] - min.mdV[VZ]);
+        sheetSpaces(*m.mProduct, LLVector3(lo), LLVector3(hi), res, cells);
+        for (size_t i = 0; i < out.size() && i < cells.size(); ++i)
+        {
+            const F64 floor = cells[i].mFloor + m.mOrigin.mdV[VZ];
+            if (cells[i].mHit && floor > best[i])
+            {
+                best[i] = floor;
+                out[i].mMesh = m.mId;
+                out[i].mId = cells[i].mSpace;
+            }
         }
     }
 }

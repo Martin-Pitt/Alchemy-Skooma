@@ -99,6 +99,10 @@ public:
     /// per sample, the highest gap whose floor lies within the box's height,
     /// read on the channel. NaN where there is no answer.
     void raster(const LLVector3d& min, const LLVector3d& max, F32 res, Channel channel, std::vector<F32>& out) const;
+    /// The sheet by space on the same grid: per sample, the space of the
+    /// highest gap whose floor lies within the box's height, over every mesh;
+    /// an id of 0 where that gap is in no space or there is none.
+    void sheet(const LLVector3d& min, const LLVector3d& max, F32 res, std::vector<SpaceId>& out) const;
 
     const std::vector<Mesh>& meshes() const { return mMeshes; }
 
