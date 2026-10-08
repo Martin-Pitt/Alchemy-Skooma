@@ -546,6 +546,126 @@ namespace sknav
         }
     }
 
+    TileAirPtr upsampleAir(const TileAir& coarse, S32 factor)
+    {
+        const S32 f = std::max(1, factor);
+        S32 shift = 0;
+        while ((1 << shift) < f)
+        {
+            ++shift;
+        }
+        const auto scale = [f](U16 h) -> U16 {
+            return h == AIR_CEILING_OPEN ? h : static_cast<U16>(std::min<S32>(static_cast<S32>(h) * f, AIR_HEIGHT_MAX));
+        };
+        const auto scaled = [&scale](AirGap g) {
+            g.mFloor = scale(g.mFloor);
+            g.mCeiling = scale(g.mCeiling);
+            return g;
+        };
+        auto out = std::make_shared<TileAir>();
+        out->mOrigin = coarse.mOrigin;
+        out->mCell = coarse.mCell / f;
+        out->mUnit = coarse.mUnit / f;
+        out->mWidth = coarse.mWidth * f;
+        out->mHeight = coarse.mHeight * f;
+
+        // A coarse leaf is f times as wide in fine cells; past AIR_MAX_LEVEL it is split into leaves of that level.
+        struct Placed
+        {
+            AirLeaf mLeaf;
+            U32 mFrom;
+        };
+        std::vector<Placed> placed;
+        for (const AirLeaf& l : coarse.mLeaves)
+        {
+            const S32 level = l.mLevel + shift;
+            const S32 top = std::min(level, AIR_MAX_LEVEL);
+            const S32 n = 1 << (level - top), side = 1 << top;
+            for (S32 by = 0; by < n; ++by)
+            {
+                for (S32 bx = 0; bx < n; ++bx)
+                {
+                    Placed p;
+                    p.mLeaf.mX = static_cast<U16>(l.mX * f + bx * side);
+                    p.mLeaf.mY = static_cast<U16>(l.mY * f + by * side);
+                    p.mLeaf.mLevel = static_cast<U8>(top);
+                    p.mLeaf.mGapCount = l.mGapCount;
+                    p.mFrom = l.mFirstGap;
+                    placed.push_back(p);
+                }
+            }
+        }
+        std::sort(placed.begin(), placed.end(),
+                  [](const Placed& a, const Placed& b) { return airKey(a.mLeaf.mX, a.mLeaf.mY) < airKey(b.mLeaf.mX, b.mLeaf.mY); });
+        out->mLeaves.reserve(placed.size());
+        for (Placed& p : placed)
+        {
+            p.mLeaf.mFirstGap = static_cast<U32>(out->mGaps.size());
+            for (U32 k = 0; k < p.mLeaf.mGapCount; ++k)
+            {
+                out->mGaps.push_back(scaled(coarse.mGaps[p.mFrom + k]));
+            }
+            out->mLeaves.push_back(p.mLeaf);
+        }
+        for (S32 s = 0; s < 4; ++s)
+        {
+            const SeamStrip& in = coarse.mSeams[s];
+            SeamStrip& strip = out->mSeams[s];
+            const S32 cells = static_cast<S32>(in.mStart.size()) - 1;
+            strip.mStart.assign(1, 0);
+            for (S32 i = 0; i < cells * f; ++i)
+            {
+                const S32 c = i / f;
+                for (U32 k = in.mStart[c]; k < in.mStart[c + 1]; ++k)
+                {
+                    strip.mGaps.push_back(scaled(in.mGaps[k]));
+                }
+                strip.mStart.push_back(static_cast<U32>(strip.mGaps.size()));
+            }
+        }
+        out->mTopCell = coarse.mTopCell * f;
+        out->mTopWidth = coarse.mTopWidth;
+        out->mTopHeight = coarse.mTopHeight;
+        out->mTopStart = coarse.mTopStart;
+        out->mTop.reserve(coarse.mTop.size());
+        for (const TopInterval& t : coarse.mTop)
+        {
+            out->mTop.push_back({ scale(t.mBottom), scale(t.mTop) });
+        }
+        return out;
+    }
+
+    void leafSpanGaps(const rcCompactHeightfield& chf, S32 border, const TileAir& air, S32 z_shift, S32 slack, std::vector<U32>& out)
+    {
+        out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
+        for (S32 iy = 0; iy < air.mHeight && border + iy < chf.width; ++iy)
+        {
+            for (S32 ix = 0; ix < air.mWidth && border + ix < chf.height; ++ix)
+            {
+                const rcCompactCell& cell = chf.cells[(border + iy) + (border + ix) * chf.width];
+                const S32 leaf = cell.count ? findLeafByKey(air, ix, iy) : -1;
+                if (leaf < 0)
+                {
+                    continue;
+                }
+                const AirLeaf& l = air.mLeaves[leaf];
+                for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                {
+                    const S32 top = chf.spans[i].y + z_shift;
+                    for (U32 k = 0; k < l.mGapCount; ++k)
+                    {
+                        const AirGap& g = air.mGaps[l.mFirstGap + k];
+                        if (top >= g.mFloor - 1 - slack && top < g.mCeiling)
+                        {
+                            out[i] = l.mFirstGap + k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     std::vector<U8> packTileAir(const TileAir& air)
     {
         std::vector<U8> out;

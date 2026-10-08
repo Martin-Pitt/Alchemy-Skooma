@@ -27,6 +27,7 @@
 
 #include "sknavairdistil.h"
 #include "sknavflights.h"
+#include "sknavstamp.h"
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
@@ -140,7 +141,13 @@ namespace sknav
         S32 mAirPad = 16;
         /// Closed gaps lower than this are folded into the solid around them.
         F32 mAirMinGap = 0.5f;
+        /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
+        /// for the spaces the tile is stamped with, wherever it is.
+        bool mCoarseAir = false;
     };
+
+    /// The cell a tile without its own air reads its coarse air at.
+    constexpr F32 COARSE_AIR_M = 1.f;
 
     struct TileBuildResult
     {
@@ -163,8 +170,13 @@ namespace sknav
         /// The distilled air, null when there is none; mAirBuilt says it was asked for.
         TileAirPtr mAir;
         bool mAirBuilt = false;
+        bool mCoarseAir = false;            ///< mAir is the coarse air, not the tile's own
         /// Stair flights and the polys they produced, when the partition is SLOPE.
         std::vector<Flight> mFlights[NUM_CLASSES];
+        /// What the polygon stage made of a stamp, when it was given one.
+        TileStampGeom mStamp;
+        /// More polys than a Detour tile can number: nothing to publish.
+        bool mPolyOverflow = false;
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
@@ -226,10 +238,21 @@ namespace sknav
     /// reads; null when the tile is empty or the stage failed (result says which).
     TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats = nullptr);
 
+    /// Whether a result holds air the polygons must wait for spaces over:
+    /// the raster stage published it, and the stamp is still to come.
+    inline bool awaitsStamp(const TileBuildResult& r)
+    {
+        return r.mStatus == TileBuildResult::SUCCESS && r.mAirBuilt && r.mAir && !r.mAir->mLeaves.empty() && !r.mStamp.mStamped &&
+               r.mData[0].empty();
+    }
+
     /// The polygon stage: regions to Detour data, flights and AVATAR's edges,
     /// over a copy of the raster's compact heightfield, so a raster polygonises
-    /// any number of times to the same tile.
-    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats = nullptr);
+    /// any number of times to the same tile. Given a stamp, its codes go in
+    /// place of the slope codes before regions, so no region and no poly holds
+    /// two spaces, and the result's mStamp says which component each poly is.
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats = nullptr,
+                        const TileStampInput* stamp_input = nullptr, const TileStamp* stamp = nullptr);
 
     /// Run the pipeline: both stages. Safe on any thread; touches nothing but
     /// the input and, when given, the stats it measures itself into.

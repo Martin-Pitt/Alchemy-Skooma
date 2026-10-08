@@ -36,6 +36,7 @@
 #include "sknavpalette.h"
 #include "sknavroomprobes.h"
 #include "sknavrooms.h"
+#include "sknavspacefilter.h"
 
 #include "alobjectproperties.h"
 #include "DetourNavMesh.h"
@@ -282,16 +283,13 @@ void SKNavMesh::evictAir()
             const auto cache = diskCache();
             if (cache && tile.mContentKey && !cache->contains(tile.mContentKey))
             {
-                // Only Detour's mutable bytes must be copied here; pack the shared products on the worker.
+                // Pack the shared products on the worker.
                 struct Spill
                 {
                     TileBuildResult mProduct;
                     decltype(Tile::mFaces) mFaces;
                     decltype(Tile::mLedges) mLedges;
                     decltype(Tile::mRunoff) mRunoff;
-                    decltype(Tile::mSegments) mSegments;
-                    decltype(Tile::mLinks) mLinks;
-                    decltype(Tile::mFlights) mFlights;
                 };
                 auto spill = std::make_shared<Spill>();
                 spill->mProduct.mStatus = TileBuildResult::SUCCESS;
@@ -301,14 +299,8 @@ void SKNavMesh::evictAir()
                 spill->mFaces = tile.mFaces;
                 spill->mLedges = tile.mLedges;
                 spill->mRunoff = tile.mRunoff;
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                {
-                    spill->mProduct.mPolys[cls] = tile.mPolys[cls];
-                    spill->mProduct.mData[cls] = tile.mDetour[cls];
-                    spill->mSegments[cls] = tile.mSegments[cls];
-                    spill->mLinks[cls] = tile.mLinks[cls];
-                    spill->mFlights[cls] = tile.mFlights[cls];
-                }
+                // The raster stage's products only: the stamped polys are on disk under the stamp's own key.
+                spill->mProduct.mCoarseAir = tile.mAirBuilt == 0;
                 const U64 content_key = tile.mContentKey;
                 workers->post([spill, cache, content_key]()
                 {
@@ -316,12 +308,6 @@ void SKNavMesh::evictAir()
                     if (spill->mFaces) spill->mProduct.mFaces = *spill->mFaces;
                     if (spill->mLedges) spill->mProduct.mLedges = *spill->mLedges;
                     if (spill->mRunoff) spill->mProduct.mRunoff = *spill->mRunoff;
-                    for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-                    {
-                        if (spill->mSegments[cls]) spill->mProduct.mSegments[cls] = *spill->mSegments[cls];
-                        if (spill->mLinks[cls]) spill->mProduct.mLinks[cls] = *spill->mLinks[cls];
-                        if (spill->mFlights[cls]) spill->mProduct.mFlights[cls] = *spill->mFlights[cls];
-                    }
                     cache->store(content_key, packTileProduct(spill->mProduct, content_key));
                 });
             }
@@ -402,8 +388,8 @@ void SKNavMesh::evictRasters(size_t budget, F64 radius)
         const auto found = mesh->second->mTiles.find(c.mKey);
         if (found == mesh->second->mTiles.end()) continue;
         Tile& tile = found->second;
-        // Never the raster of a tile with a build in flight.
-        if (tile.mInFlight || tile.mRaster != c.mRaster) continue;
+        // Never the raster of a tile with a build in flight, nor one its stamp is still to read.
+        if (tile.mInFlight || tile.mStampDue || tile.mStampInFlight || tile.mRaster != c.mRaster) continue;
         dropped.push_back(std::move(tile.mRaster));
         tile.mRaster.reset();
         tile.mRasterDropped = true;
@@ -910,6 +896,7 @@ void SKNavMesh::applyLayouts()
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout drop tile");
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 if (mesh.mNav[cls]) mesh.mNav[cls]->removeTile(mesh.mNav[cls]->getTileRefAt(current->first.mY, current->first.mX, 0), nullptr, nullptr);
+            mSlotSpaces.erase(current->second.mStampSlot);
             auto retired = std::make_shared<Tile>(std::move(current->second));
             retireOn(workers, std::move(retired));
             mesh.mTiles.erase(current);
@@ -1043,25 +1030,20 @@ void SKNavMesh::tileBlip(const Mesh& mesh, const Tile& tile) const
     }
 }
 
-bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
+bool SKNavMesh::prepareInput(const Mesh& mesh, const TileKey& key, Tile& tile, std::shared_ptr<TileBuildInput>& input,
+                             std::shared_ptr<const std::vector<RecordPtr>>& records) const
 {
-    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
-    LL::WorkQueue::ptr_t workers = workerQueue();
-    if (!main_queue || !workers || workers->isClosed())
-    {
-        return false;
-    }
-
-    auto input = std::make_shared<TileBuildInput>();
+    input = std::make_shared<TileBuildInput>();
     input->mMeshOrigin = mesh.mOrigin;
     input->mTileX = key.mX;
     input->mTileY = key.mY;
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
-    // Air is built eagerly near the camera; a tile further out keeps any it has.
-    if (input->mAir && !tile.mAir && !inAirRadius(tile))
+    // Air is built eagerly near the camera; a tile further out keeps any it has, else reads coarse air for its stamp.
+    if (input->mAir && !(tile.mAir && tile.mAirBuilt) && !inAirRadius(tile))
     {
         input->mAir = false;
+        input->mCoarseAir = true;
     }
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
@@ -1077,7 +1059,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         input->mTerrain = *tile.mTerrain;
     }
 
-    const auto records = std::make_shared<const std::vector<RecordPtr>>(tile.mRecords);
+    records = std::make_shared<const std::vector<RecordPtr>>(tile.mRecords);
     for (const auto& record : tile.mRecords)
         if (record && record->mNavRole != NavRole::EXCLUSION_VOLUME) input->mRecords.push_back(record);
     // A linkset named for stairs or a ramp says which it is better than its shape can.
@@ -1093,6 +1075,23 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         },
         *input);
     input->mRecords.clear();
+    return true;
+}
+
+bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    if (!main_queue || !workers || workers->isClosed())
+    {
+        return false;
+    }
+    std::shared_ptr<TileBuildInput> input;
+    std::shared_ptr<const std::vector<RecordPtr>> records;
+    if (!prepareInput(mesh, key, tile, input, records))
+    {
+        return false;
+    }
 
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
@@ -1101,8 +1100,6 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     // A stored product Detour refused last time is built afresh, and overwritten.
     const bool skip_load = tile.mDiskRefused;
     tile.mDiskRefused = false;
-    // The raster is held only near the camera, where the polygons will be built again.
-    const bool hold = inAirRadius(tile);
     if (tile.mRasterDropped)
     {
         ++mStats.mReRasters;
@@ -1121,7 +1118,7 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     };
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, cache, skip_load, hold]()
+        [input, records, cache, skip_load]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
             finishTileInput(*records, input->mMeshOrigin, *input);
@@ -1152,18 +1149,26 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
                 }
             }
             out->mResult = std::make_shared<TileBuildResult>();
-            if (TileRasterPtr raster = rasteriseTile(*input, *out->mResult))
+            TileBuildResult& result = *out->mResult;
+            // Past the radius too: the raster makes the coarse air from its own soup, and is held for the stamp.
+            if (TileRasterPtr raster = rasteriseTile(*input, result))
             {
-                out->mRasterMs = out->mResult->mMillis;
-                polygoniseTile(*input, *raster, *out->mResult);
-                if (hold && out->mResult->mStatus == TileBuildResult::SUCCESS)
+                out->mRasterMs = result.mMillis;
+                result.mStatus = TileBuildResult::SUCCESS;
+                if (awaitsStamp(result))
                 {
+                    // Its polygons wait for the spaces over its air.
                     out->mRaster = std::move(raster);
                 }
+                else
+                {
+                    // No air, so nothing to stamp them with: they are final now.
+                    polygoniseTile(*input, *raster, result);
+                }
             }
-            if (cache && out->mResult->mStatus != TileBuildResult::FAILED)
+            if (cache && result.mStatus != TileBuildResult::FAILED)
             {
-                cache->store(content_key, packTileProduct(*out->mResult, content_key));
+                cache->store(content_key, packTileProduct(result, content_key));
             }
             return out;
         },
@@ -1254,6 +1259,30 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         mRevision++;                // the tile's walls are gone: the overlay moved
         return;
     }
+    if (awaitsStamp(*result))
+    {
+        // The raster stage alone: its air goes to the spaces, and the polygons
+        // published before stay until the stamped ones replace them.
+        tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+        tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
+        tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
+        tile.mAir = result->mAir;
+        tile.mAirBuilt = result->mCoarseAir ? 0 : signature;
+        tile.mAirCoarse.reset();
+        tile.mContentKey = content_key;
+        tile.mRaster = std::move(raster);
+        tile.mBuilt = signature;
+        tile.mMillis = result->mMillis;
+        if (tile.mStaticAt <= 0.0)
+        {
+            tile.mStaticAt = LLTimer::getTotalSeconds();
+        }
+        tile.mStampDue = true;
+        mesh.mStampScan = true;
+        tileBlip(mesh, tile);
+        mRevision++;                // new air: the spaces over it are cut again
+        return;
+    }
     bool kept = false;
     for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
     {
@@ -1295,7 +1324,15 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
     tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
     tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
-    tile.mAirBuilt = result->mAirBuilt ? signature : 0;
+    tile.mAirBuilt = result->mAirBuilt && !result->mCoarseAir ? signature : 0;
+    // Nothing to stamp this tile with: its polygons are final as built.
+    mStats.mUnstampedPublishes += result->mAir && !result->mAir->mLeaves.empty() ? 1 : 0;
+    tile.mStampInput.reset();
+    tile.mStampGeom.reset();
+    tile.mBinding.reset();
+    tile.mStampedBy.reset();
+    tile.mStaticAt = 0.0;
+    tile.mStampDue = false;
     // A tile rebuilt without its air keeps the tops it had only while its input holds.
     if (tile.mAir || tile.mBuilt != signature)
     {
@@ -1329,6 +1366,378 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     }
     tileBlip(mesh, tile);
     mRevision++;                    // a published tile is one the overlay redraws
+}
+
+struct SKNavMesh::StampOutcome
+{
+    enum Kind : U8 { DROP, REBIND, STAMPED } mKind = DROP;
+    std::shared_ptr<TileStampInput> mInput;
+    std::shared_ptr<TileBuildResult> mResult;   ///< STAMPED: the polygon stage's products
+    std::shared_ptr<TileBinding> mBinding;
+    TileRasterPtr mRaster;                      ///< rasterised again for want of a held one
+    bool mLoaded = false;
+    F32 mMillis = 0.f;
+};
+
+void SKNavMesh::stampTiles()
+{
+    static LLCachedControl<S32> per_frame(gSavedSettings, "SKNavBuildsPerFrame", 4);
+    static LLCachedControl<S32> in_flight_max(gSavedSettings, "SKNavBuildsInFlight", 0);
+    if (!workerQueue())
+    {
+        return;
+    }
+    const S32 in_flight_cap = in_flight_max > 0 ? static_cast<S32>(in_flight_max) : static_cast<S32>(mWorkers->getWidth());
+    S32 launched = 0;
+    for (auto& entry : mMeshes)
+    {
+        Mesh& mesh = *entry.second;
+        EnclosureProductPtr enc;
+        RoomsProductPtr rooms;
+        if (!mRooms->landed(mesh.mId, enc, rooms))
+        {
+            continue;
+        }
+        if (rooms != mesh.mStampRooms)
+        {
+            // New spaces: every tile under them is read against them again.
+            mesh.mStampRooms = rooms;
+            mesh.mStampEnc = enc;
+            for (auto& t : mesh.mTiles)
+            {
+                t.second.mStampDue = t.second.mStampDue || (t.second.mAir && !t.second.mAir->mLeaves.empty());
+            }
+            mesh.mStampScan = true;
+        }
+        if (!mesh.mStampScan)
+        {
+            continue;
+        }
+        bool pending = false;
+        for (auto& t : mesh.mTiles)
+        {
+            Tile& tile = t.second;
+            if (!tile.mStampDue || tile.mStampInFlight)
+            {
+                pending = pending || tile.mStampDue;
+                continue;
+            }
+            // Only against the answers for exactly this air; a newer pass will come for newer air.
+            const TileEnclosure* te = tile.mAir ? enc->tile(t.first) : nullptr;
+            if (!te || te->mAir != tile.mAir || te->mGaps.size() != tile.mAir->mGaps.size())
+            {
+                pending = true;
+                continue;
+            }
+            if (tile.mSignature != tile.mBuilt || !tile.mBuilt)
+            {
+                pending = true;     // its raster stage is about to publish new air
+                continue;
+            }
+            if (tile.mInFlight || launched >= per_frame || mInFlight >= in_flight_cap)
+            {
+                pending = true;
+                continue;
+            }
+            if (launchStamp(mesh, t.first, tile))
+            {
+                ++launched;
+            }
+            else
+            {
+                pending = true;
+            }
+        }
+        mesh.mStampScan = pending;
+    }
+}
+
+bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    if (!main_queue || !workers || workers->isClosed())
+    {
+        return false;
+    }
+    std::shared_ptr<TileBuildInput> input;
+    std::shared_ptr<const std::vector<RecordPtr>> records;
+    if (!prepareInput(mesh, key, tile, input, records))
+    {
+        if (!tile.mRaster)
+        {
+            return false;
+        }
+        // A held raster needs only what the polygon stage reads of the input.
+        input = std::make_shared<TileBuildInput>();
+        input->mMeshOrigin = mesh.mOrigin;
+        input->mTileX = key.mX;
+        input->mTileY = key.mY;
+        input->mTileSize = static_cast<F32>(TILE_M);
+        fillParams(*input);
+        records = std::make_shared<const std::vector<RecordPtr>>();
+    }
+    const LLUUID id = mesh.mId;
+    const U32 generation = mesh.mGeneration;
+    const U64 signature = tile.mSignature;
+    const TileAirPtr air = tile.mAir;
+    const EnclosureProductPtr enc = mesh.mStampEnc;
+    const RoomsProductPtr rooms = mesh.mStampRooms;
+    const TileRasterPtr raster = tile.mRaster;
+    // The published polys rebind only if they were built from this same raster.
+    const std::shared_ptr<const TileStampGeom> published = tile.mStampBuilt == signature ? tile.mStampGeom : nullptr;
+    const U64 content_key = tile.mContentKey;
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    const LLVector3 lo(tile.mMin - mesh.mOrigin), hi(tile.mMax - mesh.mOrigin);
+    const bool posted = main_queue->postTo(
+        workers,
+        [input, records, air, enc, rooms, raster, published, content_key, cache, lo, hi, key]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tile worker");
+            LLTimer timer;
+            auto out = std::make_shared<StampOutcome>();
+            const TileEnclosure* te = enc->tile(key);
+            if (!te || te->mAir != air)
+            {
+                return out;
+            }
+            out->mInput = std::make_shared<TileStampInput>();
+            stampInput(*air, *te, *rooms, lo, hi, *out->mInput);
+            const TileStampInput& in = *out->mInput;
+            out->mBinding = std::make_shared<TileBinding>();
+            // The same partition stamps the same polys: only the binding to the spaces moved.
+            if (published && published->mPattern == in.mPattern)
+            {
+                bindStamp(*published, in, te, *rooms, *out->mBinding);
+                out->mKind = StampOutcome::REBIND;
+                out->mMillis = timer.getElapsedTimeF32() * 1000.f;
+                return out;
+            }
+            const U64 stamp_key = content_key ? stampedKey(content_key, in.mPattern) : 0;
+            if (cache && stamp_key)
+            {
+                std::vector<U8> bytes;
+                auto loaded = std::make_shared<TileBuildResult>();
+                if (cache->load(stamp_key, bytes) && unpackTileProduct(bytes.data(), bytes.size(), stamp_key, *loaded) && loaded->mStamp.mStamped &&
+                    loaded->mStamp.mPattern == in.mPattern)
+                {
+                    out->mResult = loaded;
+                    out->mLoaded = true;
+                }
+            }
+            if (!out->mLoaded)
+            {
+                TileRasterPtr held = raster;
+                if (!held)
+                {
+                    finishTileInput(*records, input->mMeshOrigin, *input);
+                    auto again = std::make_shared<TileBuildResult>();
+                    held = rasteriseTile(*input, *again);
+                    out->mRaster = held;
+                    out->mResult = again;
+                }
+                if (!held || !held->mChf)
+                {
+                    return out;
+                }
+                if (!out->mResult)
+                {
+                    out->mResult = std::make_shared<TileBuildResult>();
+                }
+                TileStamp stamp;
+                stampTile(*held->mChf, borderCells(input->mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius, input->mCell), held->mSpanGap, in,
+                          held->mReal, held->mFlights, StampParams(), stamp);
+                polygoniseTile(*input, *held, *out->mResult, nullptr, &in, &stamp);
+                if (cache && stamp_key && out->mResult->mStatus == TileBuildResult::SUCCESS && !out->mResult->mPolyOverflow)
+                {
+                    cache->store(stamp_key, packTileProduct(stampedPart(*out->mResult), stamp_key));
+                }
+            }
+            bindStamp(out->mResult->mStamp, in, te, *rooms, *out->mBinding);
+            out->mKind = StampOutcome::STAMPED;
+            out->mMillis = timer.getElapsedTimeF32() * 1000.f;
+            return out;
+        },
+        [this, id, generation, key, signature, air, rooms](std::shared_ptr<StampOutcome> out)
+        {
+            publishStamped(id, generation, key, signature, air, rooms, out);
+        });
+    if (posted)
+    {
+        tile.mStampInFlight = true;
+        tile.mStampDue = false;
+        mInFlight++;
+    }
+    return posted;
+}
+
+void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const TileKey& key, U64 signature, const TileAirPtr& air,
+                               const RoomsProductPtr& rooms, const std::shared_ptr<StampOutcome>& out)
+{
+    mInFlight = std::max(0, mInFlight - 1);
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end() || it->second->mGeneration != generation)
+    {
+        return;
+    }
+    Mesh& mesh = *it->second;
+    const auto tit = mesh.mTiles.find(key);
+    if (tit == mesh.mTiles.end())
+    {
+        return;
+    }
+    Tile& tile = tit->second;
+    tile.mStampInFlight = false;
+    // One ticket: the input, the air and the spaces it was stamped with must all still stand.
+    if (tile.mSignature != signature || tile.mAir != air || mesh.mStampRooms != rooms || out->mKind == StampOutcome::DROP)
+    {
+        tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
+        mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
+        return;
+    }
+    mStats.mLastStampMs = out->mMillis;
+    if (out->mKind == StampOutcome::REBIND)
+    {
+        tile.mStampInput = out->mInput;
+        tile.mBinding = out->mBinding;
+        tile.mStampedBy = rooms;
+        applyBinding(mesh, key, tile);
+        ++mStats.mRebinds;
+        mRevision++;
+        return;
+    }
+    const std::shared_ptr<TileBuildResult>& result = out->mResult;
+    const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+    if (result->mPolyOverflow)
+    {
+        ++mStats.mPolyOverflowTiles;
+        LL_WARNS("SKNav") << "tile " << key.mX << "," << key.mY << " of mesh " << mesh_id << " has " << result->mPolys[avatar]
+                          << " polys, past a Detour tile's " << MAX_POLYS_PER_TILE << ": not published" << LL_ENDL;
+        return;
+    }
+    if (result->mStatus != TileBuildResult::SUCCESS)
+    {
+        mStats.mFailures++;
+        LL_WARNS("SKNav") << "stamped build failed: " << result->mError << LL_ENDL;
+        return;
+    }
+    if (result->mStamp.mOverflow != TileStamp::FIT)
+    {
+        ++mStats.mStampOverflow;
+        LL_INFOS("SKNav") << "tile " << key.mX << "," << key.mY << " of mesh " << mesh_id << ": stamp palette over its codes, cascade stage "
+                          << static_cast<S32>(result->mStamp.mOverflow) << ", " << result->mStamp.mPairs << " codes" << LL_ENDL;
+        // One colour for everything is a stamp in name only: the stamped tile already there is the better one.
+        if (result->mStamp.mOverflow == TileStamp::ONE_COLOUR && !tile.mDetour[avatar].empty() && tile.mStampGeom)
+        {
+            return;
+        }
+    }
+    if (!ensureNav(mesh, avatar))
+    {
+        return;
+    }
+    // The header's user id is the filter's key to this tile's polys' spaces.
+    if (!tile.mStampSlot)
+    {
+        tile.mStampSlot = ++mNextSlot;
+    }
+    std::vector<U8>& data = result->mData[avatar];
+    if (data.size() >= sizeof(dtMeshHeader))
+    {
+        reinterpret_cast<dtMeshHeader*>(data.data())->userId = tile.mStampSlot;
+    }
+    const bool swapped = swapDetourTile(*mesh.mNav[avatar], key.mY, key.mX, tile.mDetour[avatar], data);
+    if (!swapped)
+    {
+        mStats.mFailures++;
+        LL_WARNS("SKNav") << "addTile refused the stamped tile for mesh " << mesh_id << " tile " << key.mX << "," << key.mY << LL_ENDL;
+        return;
+    }
+    tile.mPolys[avatar] = result->mPolys[avatar];
+    tile.mPolyCache[avatar].reset();
+    tile.mSegments[avatar] = std::make_shared<const std::vector<WallSegment>>(std::move(result->mSegments[avatar]));
+    tile.mLinks[avatar] = std::make_shared<const std::vector<DropLink>>(std::move(result->mLinks[avatar]));
+    tile.mFlights[avatar] = result->mFlights[avatar].empty() ? nullptr : std::make_shared<const std::vector<Flight>>(std::move(result->mFlights[avatar]));
+    if (out->mRaster)
+    {
+        // Rasterised again: its faces are the tile's own; its air is the same air under another pointer, and is not swapped.
+        tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
+        tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
+        tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
+        ++mStats.mStampReRasters;
+    }
+    tile.mStampGeom = std::make_shared<const TileStampGeom>(std::move(result->mStamp));
+    tile.mStampBuilt = signature;
+    tile.mStampInput = out->mInput;
+    tile.mBinding = out->mBinding;
+    tile.mStampedBy = rooms;
+    applyBinding(mesh, key, tile);
+    ++mStats.mStamps;
+    mStats.mStampLoads += out->mLoaded ? 1 : 0;
+    if (tile.mStaticAt > 0.0)
+    {
+        mStats.mLastStampLatencyMs = static_cast<F32>((LLTimer::getTotalSeconds() - tile.mStaticAt) * 1000.0);
+        mStats.mWorstStampLatencyMs = std::max(mStats.mWorstStampLatencyMs, mStats.mLastStampLatencyMs);
+        tile.mStaticAt = 0.0;
+    }
+    // Past the radius the raster is not held once its polygons are built.
+    if (!inAirRadius(tile))
+    {
+        tile.mRaster.reset();
+    }
+    for (auto& region : mFeatureLinks)
+    {
+        for (auto& entry : region.second)
+        {
+            if (overlapsXY(entry.second.mMin, entry.second.mMax, tile.mMin, tile.mMax))
+            {
+                entry.second.mDirty = true;
+            }
+        }
+    }
+    tileBlip(mesh, tile);
+    mRevision++;
+}
+
+void SKNavMesh::applyBinding(Mesh& mesh, const TileKey& key, Tile& tile)
+{
+    const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
+    if (!tile.mBinding || !tile.mStampGeom || !mesh.mNav[avatar])
+    {
+        return;
+    }
+    const TileBinding& b = *tile.mBinding;
+    dtNavMesh& nav = *mesh.mNav[avatar];
+    if (const dtMeshTile* dt = nav.getTileAt(key.mY, key.mX, 0); dt && dt->header)
+    {
+        const dtPolyRef base = nav.getPolyRefBase(dt);
+        for (S32 p = 0; p < dt->header->polyCount && p < static_cast<S32>(b.mPolyFlags.size()); ++p)
+        {
+            const unsigned short flags = dt->polys[p].flags;
+            if (flags)
+            {
+                nav.setPolyFlags(base | static_cast<dtPolyRef>(p), static_cast<unsigned short>((flags & ~POLY_BINDING_FLAGS) | b.mPolyFlags[p]));
+            }
+        }
+    }
+    auto spaces = std::make_shared<std::vector<U32>>(tile.mStampGeom->mPolyComponent.size(), 0);
+    for (size_t p = 0; p < spaces->size(); ++p)
+    {
+        const U16 c = tile.mStampGeom->mPolyComponent[p];
+        (*spaces)[p] = c < b.mComponentSpaceId.size() ? b.mComponentSpaceId[c] : 0;
+    }
+    mSlotSpaces[tile.mStampSlot] = spaces;
+    tile.mPolyCache[avatar].reset();
+}
+
+U32 SKNavMesh::polySpace(const dtMeshTile* tile, U32 poly) const
+{
+    if (!tile || !tile->header)
+    {
+        return 0;
+    }
+    const auto it = mSlotSpaces.find(tile->header->userId);
+    return it != mSlotSpaces.end() && poly < it->second->size() ? (*it->second)[poly] : 0;
 }
 
 void SKNavMesh::schedule()
@@ -1489,6 +1898,10 @@ void SKNavMesh::update()
         syncSkyMap();
     }
     mRooms->update(*this);
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tiles");
+        stampTiles();
+    }
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
@@ -1502,6 +1915,7 @@ void SKNavMesh::update()
                 ++mScanningStats.mTiles;
                 if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
                 if (tile.mRaster) { ++mScanningStats.mRasterTiles; mScanningStats.mRasterBytes += tile.mRaster->bytes(); }
+                mScanningStats.mAwaitingStamp += tile.mStaticAt > 0.0 ? 1 : 0;
                 if (!tile.mBuilt) return;
                 ++mScanningStats.mTilesBuilt;
                 mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
@@ -1518,6 +1932,7 @@ void SKNavMesh::update()
             mStats.mAirBytes = mScanningStats.mAirBytes;
         mStats.mRasterTiles = mScanningStats.mRasterTiles;
         mStats.mRasterBytes = mScanningStats.mRasterBytes;
+            mStats.mAwaitingStamp = mScanningStats.mAwaitingStamp;
             mStats.mFaces = mScanningStats.mFaces;
             mStats.mSegments = mScanningStats.mSegments;
             mStats.mLinks = mScanningStats.mLinks;
@@ -1580,6 +1995,10 @@ bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
+    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
+                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mAwaitingStamp, mStats.mLastStampMs,
+                                        mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
+                                        mStats.mUnstampedPublishes);
     return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
@@ -1588,7 +2007,7 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
+           + stamps + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
@@ -1671,7 +2090,7 @@ SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z
         F32 centre[3], nearest[3];
         toRecast(local, centre);
         const F32 extents[3] = { 0.5f, 2.f, 0.5f };
-        dtQueryFilter filter;
+        const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
         dtPolyRef ref = 0;
         if (dtStatusSucceed(mesh.mQuery[c]->findNearestPoly(centre, extents, &filter, &ref, nearest)) && ref)
         {
@@ -1721,7 +2140,7 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
     toLocal(a, sa);
     toLocal(b, sb);
     const F32 extents[3] = { 1.f, 3.f, 1.f };
-    dtQueryFilter filter;
+    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
     dtPolyRef ra = 0, rb = 0;
     query->findNearestPoly(sa, extents, &filter, &ra, na);
     query->findNearestPoly(sb, extents, &filter, &rb, nb);
@@ -2789,7 +3208,7 @@ std::string SKNavMesh::markUnderCamera()
             F32 centre[3], nearest[3];
             toRecast(local, centre);
             const F32 extents[3] = { 2.f, 4.f, 2.f };
-            dtQueryFilter filter;
+            const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
             dtPolyRef ref = 0;
             if (!dtStatusSucceed(mesh.mQuery[cls]->findNearestPoly(centre, extents, &filter, &ref, nearest)) || !ref)
             {
@@ -2820,7 +3239,7 @@ std::string SKNavMesh::markUnderCamera()
             // and the step between them with them.
             for (U8 area = AREA_GROUND; area <= AREA_SUBMERGED; ++area)
             {
-                dtQueryFilter area_filter;
+                SpaceQueryFilter area_filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
                 area_filter.setIncludeFlags(static_cast<unsigned short>(1u << area));
                 dtPolyRef area_ref = 0;
                 F32 area_pt[3];
@@ -2867,6 +3286,8 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
         out.mLinks[cls] = tile.mLinks[cls].get();
         out.mFlights[cls] = tile.mFlights[cls].get();
     }
+    out.mStamp = tile.mStampGeom.get();
+    out.mBinding = tile.mBinding.get();
     writeExportTile(file, mesh.mOrigin, out, counts);
 }
 

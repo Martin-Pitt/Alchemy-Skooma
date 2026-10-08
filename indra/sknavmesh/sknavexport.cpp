@@ -267,7 +267,41 @@ namespace sknav
                     file << "]}";
                 }
             }
-            file << "]}";
+            file << ']';
+            // The stamp's side tables: each poly's space id (0 for none), poly edges on portals, flight polys.
+            if (cls == static_cast<S32>(AgentClass::AVATAR) && tile.mStamp && tile.mStamp->mStamped && tile.mBinding)
+            {
+                const TileStampGeom& g = *tile.mStamp;
+                const TileBinding& b = *tile.mBinding;
+                file << ",\"poly_space\":[";
+                for (size_t p = 0; p < g.mPolyComponent.size(); ++p)
+                {
+                    const U16 c = g.mPolyComponent[p];
+                    file << (p ? "," : "") << (c < b.mComponentSpaceId.size() ? b.mComponentSpaceId[c] : 0u);
+                }
+                file << "],\"portal_edges\":[";
+                for (size_t e = 0; e < g.mPortalEdges.size(); ++e)
+                {
+                    const StampPortalEdge& pe = g.mPortalEdges[e];
+                    file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ",\""
+                         << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec << "\"]";
+                }
+                file << "],\"flight_polys\":[";
+                bool first = true;
+                if (tile.mFlights[cls])
+                {
+                    for (const Flight& f : *tile.mFlights[cls])
+                    {
+                        for (const U16 p : f.mPolys)
+                        {
+                            file << (first ? "" : ",") << p;
+                            first = false;
+                        }
+                    }
+                }
+                file << ']';
+            }
+            file << '}';
         }
         file << '}';
     }

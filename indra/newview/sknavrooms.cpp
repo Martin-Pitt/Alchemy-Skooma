@@ -1298,6 +1298,18 @@ void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
     }
 }
 
+bool SKNavRooms::landed(const LLUUID& mesh, EnclosureProductPtr& enclosure, RoomsProductPtr& rooms) const
+{
+    const auto it = mMeshes.find(mesh);
+    if (it == mMeshes.end() || !it->second.mProduct || !it->second.mRooms)
+    {
+        return false;
+    }
+    enclosure = it->second.mProduct;
+    rooms = it->second.mRooms;
+    return true;
+}
+
 const TileEnclosure* SKNavRooms::enclosureTile(const LLUUID& mesh, const TileKey& key, const TileAirPtr& air, U64& generation) const
 {
     if (!mView || !air)

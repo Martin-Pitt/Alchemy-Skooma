@@ -108,12 +108,49 @@ namespace sknav
             return dx * dx + dy * dy <= static_cast<F64>(census.mAirRadius) * census.mAirRadius;
         }
 
-        /// The viewer's launch: air near the camera only.
+        /// The viewer's launch: air near the camera only, and coarse air past it.
         void applyAirMode(const CensusFile& census, const ReplayOptions& options, ReplayTile& tile, TileBuildInput& input)
         {
             if (options.mAir == AirMode::RADIUS && input.mAir && !inAirRadius(census, tile.mMin, tile.mMax))
             {
                 input.mAir = false;
+                input.mCoarseAir = options.mCoarseAir && options.mStamp;
+            }
+        }
+
+        /// A Detour tile into a mesh's navmesh, which the navmesh then owns.
+        bool addDetour(dtNavMesh*& nav, const std::vector<U8>& data)
+        {
+            if (data.empty() || (!nav && !(nav = allocMeshNav())))
+            {
+                return false;
+            }
+            unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
+            std::memcpy(copy, data.data(), data.size());
+            if (!dtStatusSucceed(nav->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
+            {
+                dtFree(copy);
+                return false;
+            }
+            return true;
+        }
+
+        /// A binding's flags onto the tile's polys, past their area bits, as the viewer's publish sets them.
+        void applyBinding(dtNavMesh& nav, const TileKey& key, const TileBinding& binding)
+        {
+            const dtMeshTile* tile = nav.getTileAt(key.mY, key.mX, 0);
+            if (!tile || !tile->header)
+            {
+                return;
+            }
+            const dtPolyRef base = nav.getPolyRefBase(tile);
+            for (S32 p = 0; p < tile->header->polyCount && p < static_cast<S32>(binding.mPolyFlags.size()); ++p)
+            {
+                const unsigned short flags = tile->polys[p].flags;
+                if (flags)
+                {
+                    nav.setPolyFlags(base | static_cast<dtPolyRef>(p), static_cast<unsigned short>((flags & ~POLY_BINDING_FLAGS) | binding.mPolyFlags[p]));
+                }
             }
         }
 
@@ -130,6 +167,11 @@ namespace sknav
 
     ReplayMesh::~ReplayMesh()
     {
+        if (mUnstampedNav)
+        {
+            dtFreeNavMesh(mUnstampedNav);
+            mUnstampedNav = nullptr;
+        }
         for (dtNavMesh*& nav : mNav)
         {
             if (nav)
@@ -139,6 +181,8 @@ namespace sknav
             }
         }
     }
+
+    void stampReplay(ReplayResult& out, const ReplayOptions& options);
 
     void replayCensus(const CensusFile& census, const ReplayOptions& options, ReplayResult& out)
     {
@@ -326,7 +370,20 @@ namespace sknav
             pool.emplace_back([&jobs, &next, &options]() {
                 for (size_t i = next++; i < jobs.size(); i = next++)
                 {
-                    if (options.mStats)
+                    if (options.mStamp)
+                    {
+                        // The raster stage only: the polygons wait for the spaces.
+                        auto result = std::make_shared<TileBuildResult>();
+                        std::shared_ptr<TileBuildStats> stats = options.mStats ? std::make_shared<TileBuildStats>() : nullptr;
+                        jobs[i]->mRaster = rasteriseTile(*jobs[i]->mInput, *result, stats.get());
+                        if (jobs[i]->mRaster)
+                        {
+                            result->mStatus = TileBuildResult::SUCCESS;
+                        }
+                        jobs[i]->mResult = result;
+                        jobs[i]->mStats = stats;
+                    }
+                    else if (options.mStats)
                     {
                         auto stats = std::make_shared<TileBuildStats>();
                         jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput, stats.get()));
@@ -363,23 +420,9 @@ namespace sknav
                     ++out.mFailed;
                     continue;
                 }
-                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                for (S32 cls = 0; cls < NUM_CLASSES && !options.mStamp; ++cls)
                 {
-                    const std::vector<U8>& data = r.mData[cls];
-                    if (data.empty())
-                    {
-                        continue;
-                    }
-                    if (!mesh.mNav[cls] && !(mesh.mNav[cls] = allocMeshNav()))
-                    {
-                        continue;
-                    }
-                    unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
-                    std::memcpy(copy, data.data(), data.size());
-                    if (!dtStatusSucceed(mesh.mNav[cls]->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
-                    {
-                        dtFree(copy);
-                    }
+                    addDetour(mesh.mNav[cls], r.mData[cls]);
                 }
                 if (r.mAirBuilt && r.mAir)
                 {
@@ -522,6 +565,10 @@ namespace sknav
         }
         out.mStages.emplace_back("enclosure", enclosure_ms);
         out.mStages.emplace_back("spaces", spaces_ms);
+        if (options.mStamp)
+        {
+            stampReplay(out, options);
+        }
         for (S32 r = 0; r < 2; ++r)
         {
             for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
@@ -555,6 +602,100 @@ namespace sknav
             m->mWind = pass.product();
         }
         out.mStages.emplace_back("wind", since(t0));
+    }
+
+    void stampReplay(ReplayResult& out, const ReplayOptions& options)
+    {
+        // Every tile's polygons from its held raster, stamped with the spaces that landed.
+        const Clock::time_point t0 = Clock::now();
+        std::vector<std::pair<ReplayMesh*, ReplayTile*>> jobs;
+        for (auto& m : out.mMeshes)
+        {
+            for (auto& t : m->mTiles)
+            {
+                if (t.second.mRaster)
+                {
+                    jobs.emplace_back(m.get(), &t.second);
+                }
+            }
+        }
+        std::atomic<size_t> next{ 0 };
+        const S32 threads = options.mThreads > 0 ? options.mThreads : std::max(1, static_cast<S32>(std::thread::hardware_concurrency()));
+        std::vector<std::thread> pool;
+        for (S32 k = 0; k < threads; ++k)
+        {
+            pool.emplace_back([&jobs, &next, &options]() {
+                for (size_t i = next++; i < jobs.size(); i = next++)
+                {
+                    const ReplayMesh& mesh = *jobs[i].first;
+                    ReplayTile& tile = *jobs[i].second;
+                    const TileBuildInput& input = *tile.mInput;
+                    const TileRaster& raster = *tile.mRaster;
+                    const Clock::time_point s0 = Clock::now();
+                    auto in = std::make_shared<TileStampInput>();
+                    const TileAirPtr air = tile.mResult->mAir;
+                    const TileEnclosure* enc = mesh.mEnclosure && air ? mesh.mEnclosure->tile(tile.mKey) : nullptr;
+                    if (enc && enc->mAir == air && mesh.mRooms)
+                    {
+                        const LLVector3d lo = tile.mMin - mesh.mOrigin, hi = tile.mMax - mesh.mOrigin;
+                        stampInput(*air, *enc, *mesh.mRooms, LLVector3(lo), LLVector3(hi), *in);
+                    }
+                    TileStamp stamp;
+                    const S32 border = borderCells(input.mParams[static_cast<S32>(AgentClass::AVATAR)].mRadius, input.mCell);
+                    stampTile(*raster.mChf, border, raster.mSpanGap, *in, raster.mReal, raster.mFlights, StampParams(), stamp);
+                    tile.mStampMs = since(s0);
+                    if (options.mStats)
+                    {
+                        auto unstamped = std::make_shared<TileBuildResult>(*tile.mResult);
+                        auto ustats = std::make_shared<TileBuildStats>(*tile.mStats);
+                        polygoniseTile(input, raster, *unstamped, ustats.get());
+                        tile.mUnstamped = unstamped;
+                        tile.mUnstampedStats = ustats;
+                    }
+                    auto result = std::make_shared<TileBuildResult>(*tile.mResult);
+                    std::shared_ptr<TileBuildStats> stats = tile.mStats ? std::make_shared<TileBuildStats>(*tile.mStats) : nullptr;
+                    polygoniseTile(input, raster, *result, stats.get(), in.get(), &stamp);
+                    if (mesh.mRooms)
+                    {
+                        auto binding = std::make_shared<TileBinding>();
+                        bindStamp(result->mStamp, *in, enc, *mesh.mRooms, *binding);
+                        tile.mBinding = binding;
+                    }
+                    tile.mStampInput = in;
+                    tile.mResult = result;
+                    tile.mStats = stats;
+                    tile.mRaster.reset();
+                }
+            });
+        }
+        for (std::thread& t : pool)
+        {
+            t.join();
+        }
+        out.mStages.emplace_back("stamp", since(t0));
+        for (auto& m : out.mMeshes)
+        {
+            ReplayMesh& mesh = *m;
+            for (auto& t : mesh.mTiles)
+            {
+                const TileBuildResult& r = *t.second.mResult;
+                if (r.mStatus == TileBuildResult::FAILED)
+                {
+                    continue;
+                }
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    if (addDetour(mesh.mNav[cls], r.mData[cls]) && t.second.mBinding)
+                    {
+                        applyBinding(*mesh.mNav[cls], t.first, *t.second.mBinding);
+                    }
+                }
+                if (t.second.mUnstamped)
+                {
+                    addDetour(mesh.mUnstampedNav, t.second.mUnstamped->mData[static_cast<S32>(AgentClass::AVATAR)]);
+                }
+            }
+        }
     }
 
     std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation)
@@ -623,6 +764,8 @@ namespace sknav
                         tile.mLinks[cls] = &r.mLinks[cls];
                         tile.mFlights[cls] = &r.mFlights[cls];
                     }
+                    tile.mStamp = &r.mStamp;
+                    tile.mBinding = t.second.mBinding.get();
                 }
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {

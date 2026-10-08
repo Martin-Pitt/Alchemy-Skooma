@@ -30,6 +30,7 @@
 #include "sknavcluster.h"
 #include "sknavskymap.h"
 #include "sknavspaces.h"
+#include "sknavstamp.h"
 #include "sknavwind.h"
 
 #include <iosfwd>
@@ -62,6 +63,11 @@ namespace sknav
         U32 mDirtyTiles = 0;
         /// Every tile build measures itself, and the rooms passes are timed per mesh.
         bool mStats = false;
+        /// Polygons wait for the spaces and are stamped with them, as the viewer
+        /// publishes them; off, each tile is polygonised as soon as it is rasterised.
+        bool mStamp = true;
+        /// A tile without air of its own reads coarse air, so it has spaces to be stamped with.
+        bool mCoarseAir = true;
     };
 
     struct ReplayTile
@@ -73,6 +79,14 @@ namespace sknav
         std::shared_ptr<const TileBuildInput> mInput;
         std::shared_ptr<const TileBuildResult> mResult;
         std::shared_ptr<const TileBuildStats> mStats;   ///< when the replay measures
+        TileRasterPtr mRaster;      ///< held from the raster stage until the stamp, when stamping
+        /// The stamp the polygons were built with, and what binds it to the spaces.
+        std::shared_ptr<const TileStampInput> mStampInput;
+        std::shared_ptr<const TileBinding> mBinding;
+        F64 mStampMs = 0.0;         ///< reading the stamp input and stamping the spans
+        /// When the replay measures a stamped build: the same raster polygonised with no stamp.
+        std::shared_ptr<const TileBuildResult> mUnstamped;
+        std::shared_ptr<const TileBuildStats> mUnstampedStats;
     };
 
     /// One run of the rooms passes over a mesh, when the replay measures.
@@ -95,6 +109,8 @@ namespace sknav
         LLVector3d mOrigin;
         std::map<TileKey, ReplayTile> mTiles;
         dtNavMesh* mNav[NUM_CLASSES] = { nullptr };
+        /// With mStats and mStamp: the same tiles polygonised with no stamp, for the measurements to compare.
+        dtNavMesh* mUnstampedNav = nullptr;
         LLVector3d mAirMin;         ///< the footprint of its tiles with air
         LLVector3d mAirMax;
         EnclosureProductPtr mEnclosure;

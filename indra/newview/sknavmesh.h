@@ -44,10 +44,12 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class dtNavMesh;
 class dtNavMeshQuery;
+struct dtMeshTile;
 class LLViewerRegion;
 class SKNavRooms;
 class SKNavWorldView;
@@ -247,6 +249,17 @@ public:
         size_t mRasterBytes = 0;
         U32 mRasterEvicted = 0;     ///< rasters dropped for the budget or past the radius
         U32 mReRasters = 0;         ///< builds of tiles whose raster had been dropped
+        U32 mStamps = 0;            ///< stamped tiles published
+        U32 mStampLoads = 0;        ///< of those, polys found on disk under the stamp's pattern
+        U32 mStampReRasters = 0;    ///< of those, rasterised again for want of a held raster
+        U32 mRebinds = 0;           ///< tiles whose spaces moved but whose pattern did not: flags only
+        U32 mStampOverflow = 0;     ///< stamps whose palette went down the cascade (sknavstamp.h)
+        U32 mPolyOverflowTiles = 0; ///< polys over a Detour tile's budget: not published
+        U32 mUnstampedPublishes = 0;    ///< tiles with air published without a stamp; should stay 0
+        U32 mAwaitingStamp = 0;     ///< tiles whose raster stage published and whose stamp has not
+        F32 mLastStampMs = 0.f;     ///< the last stamp job, stamp input to Detour data
+        F32 mLastStampLatencyMs = 0.f;  ///< from a tile's raster stage publishing to its stamped polys
+        F32 mWorstStampLatencyMs = 0.f;
     };
     const Stats& stats() const { return mStats; }
 
@@ -332,6 +345,17 @@ private:
         /// so they can be built again without rasterising (sknavbuild.h).
         sknav::TileRasterPtr mRaster;
         bool mRasterDropped = false;    ///< the raster went for the budget since the tile was built
+        /// The stamp the published polygons were built with: what it was read
+        /// from, the side tables, their binding to the spaces, and the spaces.
+        std::shared_ptr<const sknav::TileStampInput> mStampInput;
+        std::shared_ptr<const sknav::TileStampGeom> mStampGeom;
+        std::shared_ptr<const sknav::TileBinding> mBinding;
+        sknav::RoomsProductPtr mStampedBy;
+        U32 mStampSlot = 0;             ///< the Detour header's user id: the space filter's key to its polys' spaces
+        U64 mStampBuilt = 0;            ///< the signature of the raster the stamped polys were built from
+        bool mStampDue = false;         ///< spaces landed over its air since it was stamped
+        bool mStampInFlight = false;
+        F64 mStaticAt = 0.0;            ///< when its raster stage published, while the stamp is awaited
         /// Checked against mSegments by identity, so a publish needs no reset here.
         mutable std::shared_ptr<const SegmentCells> mSegmentCells[sknav::NUM_CLASSES];
     };
@@ -374,6 +398,10 @@ private:
         std::shared_ptr<Layout> mPendingLayout;
         std::map<sknav::TileKey, Tile>::iterator mDropCursor;
         bool mDropping = false;
+        /// The spaces the tiles are being stamped with, as they landed.
+        sknav::EnclosureProductPtr mStampEnc;
+        sknav::RoomsProductPtr mStampRooms;
+        bool mStampScan = false;            ///< some tile may be due a stamp
         ~Mesh();
     };
 
@@ -469,7 +497,24 @@ private:
     /// A rising blip for a tile that was just built, coloured by why.
     void tileBlip(const Mesh& mesh, const Tile& tile) const;
     void schedule();
+    /// What a tile is built from, gathered on the main thread; false while its land is not sampled.
+    bool prepareInput(const Mesh& mesh, const sknav::TileKey& key, Tile& tile, std::shared_ptr<sknav::TileBuildInput>& input,
+                      std::shared_ptr<const std::vector<sknav::RecordPtr>>& records) const;
     bool launch(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    /// Stamp the tiles whose spaces landed: the polygons wait for them, so a
+    /// tile publishes once, stamped, and a rebuilt one keeps its old polygons
+    /// until the new ones land.
+    void stampTiles();
+    bool launchStamp(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    struct StampOutcome;
+    void publishStamped(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, const sknav::TileAirPtr& air,
+                        const sknav::RoomsProductPtr& rooms, const std::shared_ptr<StampOutcome>& out);
+    /// A binding's flags onto the tile's Detour polys, and its polys' spaces where the filter finds them.
+    void applyBinding(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
+    /// The space id of a poly, through its Detour tile's user id; 0 for none.
+    U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+    std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+    U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
                  U64 content_key = 0, bool loaded = false, sknav::TileRasterPtr raster = nullptr);
     /// The tile product cache on disk, or null when SKNavDiskCacheMB is 0.

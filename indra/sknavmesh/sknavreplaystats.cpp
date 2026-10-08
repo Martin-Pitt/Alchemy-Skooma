@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <ostream>
@@ -220,9 +221,54 @@ namespace
         F32 mPortal;
     };
 
+    struct Purity
+    {
+        U32 mImpure = 0;
+        U32 mSpans = 0;
+        F64 mArea = 0.0;
+        F64 mAreaImpure = 0.0;
+        F64 mAreaUnspaced = 0.0;
+    };
+
+    /// Polys whose spans lie in more than one space, by a space per span: 0 none, U16_MAX no gap.
+    Purity purity(const TileBuildStats& st, const std::vector<U32>& space)
+    {
+        Purity out;
+        for (size_t p = 0; p < st.mPolyArea.size(); ++p)
+        {
+            std::set<U32> in;
+            bool lacks = false;
+            for (U32 k = st.mPolySpanStart[p]; k < st.mPolySpanStart[p + 1]; ++k)
+            {
+                const U32 sp = space[st.mPolySpans[k]];
+                ++out.mSpans;
+                if (sp == 0 || sp == U16_MAX)
+                {
+                    lacks = true;
+                }
+                else
+                {
+                    in.insert(sp);
+                }
+            }
+            out.mArea += st.mPolyArea[p];
+            if (in.size() > 1)
+            {
+                ++out.mImpure;
+                out.mAreaImpure += st.mPolyArea[p];
+            }
+            if (lacks)
+            {
+                out.mAreaUnspaced += st.mPolyArea[p];
+            }
+        }
+        return out;
+    }
+
     /// Spans, spaces and polys of one tile, written as the fields of its object.
+    /// poly_space_b3 gets each unstamped poly's space index, -1 for none.
     void writeSpaceFields(std::ostream& out, const CensusFile& census, const ReplayMesh& mesh, U32 mesh_index, const ReplayTile& tile,
-                          std::vector<NoGap>& nogaps)
+                          std::vector<NoGap>& nogaps, std::vector<S32>& poly_space_b3)
     {
         const TileBuildStats& st = *tile.mStats;
         const TileBuildResult& r = *tile.mResult;
@@ -377,37 +423,19 @@ namespace
             }
         }
 
-        // Purity: a poly whose spans lie in more than one space.
-        U32 impure = 0, flight_polys = 0, spans_matched = 0;
-        F64 area = 0.0, area_impure = 0.0, area_unspaced = 0.0;
+        // Purity: a poly whose spans lie in more than one space, by the spans' own gaps here and by the raster's span map.
+        const Purity pure = purity(st, space);
+        std::vector<U32> mapped(st.mSpans.size(), U16_MAX);
+        for (size_t i = 0; i < st.mSpans.size(); ++i)
+        {
+            const U32 g = st.mSpans[i].mGap;
+            mapped[i] = g == U32_MAX ? U16_MAX : enc && g < enc->mGaps.size() ? enc->mGaps[g].mSpace : 0;
+        }
+        const Purity pure_map = purity(st, mapped);
+        U32 flight_polys = 0;
         const size_t npolys = st.mPolyArea.size();
         for (size_t p = 0; p < npolys; ++p)
         {
-            std::set<U32> in;
-            bool lacks = false;
-            for (U32 k = st.mPolySpanStart[p]; k < st.mPolySpanStart[p + 1]; ++k)
-            {
-                const U32 sp = space[st.mPolySpans[k]];
-                ++spans_matched;
-                if (sp == 0 || sp == U16_MAX)
-                {
-                    lacks = true;
-                }
-                else
-                {
-                    in.insert(sp);
-                }
-            }
-            area += st.mPolyArea[p];
-            if (in.size() > 1)
-            {
-                ++impure;
-                area_impure += st.mPolyArea[p];
-            }
-            if (lacks)
-            {
-                area_unspaced += st.mPolyArea[p];
-            }
             flight_polys += p < st.mPolyFlight.size() ? st.mPolyFlight[p] : 0;
         }
 
@@ -419,11 +447,183 @@ namespace
         out << ",\"spaces\":" << adjacent.size() << ",\"spans\":" << st.mSpans.size() << ",\"spans_nogap\":" << nogap << ",\"spans_nogap_climb\":" << nogap_climb
             << ",\"spans_unspaced\":" << unspaced << ",\"pairs_raw\":" << pairs_raw.size() << ",\"pairs_raw_all\":" << pairs_raw_all.size()
             << ",\"colours\":" << colours << ",\"pairs_coloured\":" << pairs_coloured.size() << ",\"pairs_coloured_all\":" << pairs_coloured_all.size()
-            << ",\"polys\":" << npolys << ",\"polys_impure\":" << impure << ",\"poly_area\":" << area << ",\"poly_area_impure\":" << area_impure
-            << ",\"poly_area_unspaced\":" << area_unspaced << ",\"poly_spans\":" << spans_matched << ",\"flight_polys\":" << flight_polys
+            << ",\"polys\":" << npolys << ",\"polys_impure\":" << pure.mImpure << ",\"poly_area\":" << pure.mArea << ",\"poly_area_impure\":" << pure.mAreaImpure
+            << ",\"poly_area_unspaced\":" << pure.mAreaUnspaced << ",\"poly_spans\":" << pure.mSpans << ",\"map_polys_impure\":" << pure_map.mImpure
+            << ",\"map_poly_area_impure\":" << pure_map.mAreaImpure << ",\"flight_polys\":" << flight_polys
             << ",\"narrow_cells\":" << narrow << ",\"narrow_walkable_cells\":" << narrow_walkable << ",\"narrow_blocks\":" << blocks
             << ",\"narrow_walkable_blocks\":" << blocks_walkable << ",\"blocks\":"
             << (air ? ((air->mWidth + BLOCK_CELLS - 1) / BLOCK_CELLS) * ((air->mHeight + BLOCK_CELLS - 1) / BLOCK_CELLS) : 0);
+        // The same raster polygonised with no stamp: B3's polys, measured the same two ways.
+        if (tile.mUnstampedStats)
+        {
+            const TileBuildStats& us = *tile.mUnstampedStats;
+            const Purity before = purity(us, space), before_map = purity(us, mapped);
+            out << ",\"b3_polys\":" << us.mPolyArea.size() << ",\"b3_polys_impure\":" << before.mImpure << ",\"b3_poly_area\":" << before.mArea
+                << ",\"b3_poly_area_impure\":" << before.mAreaImpure << ",\"b3_map_polys_impure\":" << before_map.mImpure
+                << ",\"b3_map_poly_area_impure\":" << before_map.mAreaImpure << ",\"b3_poly_ms\":" << us.mPolyMs
+                << ",\"b3_stand_only\":" << us.mFlightStandOnly.size() << ",\"b3_polys_only\":" << us.mFlightPolysOnly.size();
+            // Each B3 poly's space: the most of its spans', by the span map.
+            std::vector<S32>& b3 = poly_space_b3;
+            b3.assign(us.mPolyArea.size(), -1);
+            for (size_t p = 0; p < us.mPolyArea.size(); ++p)
+            {
+                std::map<U32, U32> votes;
+                for (U32 k = us.mPolySpanStart[p]; k < us.mPolySpanStart[p + 1]; ++k)
+                {
+                    const U32 sp = mapped[us.mPolySpans[k]];
+                    if (sp && sp != U16_MAX)
+                    {
+                        ++votes[sp];
+                    }
+                }
+                U32 most = 0;
+                for (const auto& [sp, v] : votes)
+                {
+                    if (v > most)
+                    {
+                        most = v;
+                        b3[p] = static_cast<S32>(sp) - 1;
+                    }
+                }
+            }
+        }
+    }
+
+    struct Coverage
+    {
+        U32 mPortals = 0;
+        U32 mHalf = 0;              ///< portals at least half covered
+        U32 mAny = 0;               ///< portals with any edge on them
+        F64 mWidth = 0.0;
+        F64 mCovered = 0.0;
+    };
+
+    /// How much of each portal's width runs along poly edges between its two
+    /// spaces, read across Detour's links so seams count: space_of gives a
+    /// poly's space index, -1 for none.
+    Coverage portalCoverage(const dtNavMesh& nav, const RoomsProduct& rooms, const std::function<S32(const dtMeshTile&, S32)>& space_of)
+    {
+        std::map<std::pair<U32, U32>, std::vector<U32>> by_pair;
+        for (U32 i = 0; i < rooms.mPortals.size(); ++i)
+        {
+            const Portal& p = rooms.mPortals[i];
+            if (!p.mCrossMesh && dist_vec(p.mA, p.mB) > 0.01f)
+            {
+                by_pair[{ std::min(p.mSpaces[0], p.mSpaces[1]), std::max(p.mSpaces[0], p.mSpaces[1]) }].push_back(i);
+            }
+        }
+        std::vector<std::vector<std::pair<F32, F32>>> runs(rooms.mPortals.size());
+        for (S32 t = 0; t < nav.getMaxTiles(); ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            if (!tile || !tile->header)
+            {
+                continue;
+            }
+            for (S32 p = 0; p < tile->header->polyCount; ++p)
+            {
+                const dtPoly& poly = tile->polys[p];
+                const S32 a = poly.getType() == DT_POLYTYPE_GROUND ? space_of(*tile, p) : -1;
+                if (a < 0)
+                {
+                    continue;
+                }
+                for (S32 j = 0; j < poly.vertCount; ++j)
+                {
+                    const dtMeshTile* other = nullptr;
+                    S32 q = -1;
+                    if (poly.neis[j] & DT_EXT_LINK)
+                    {
+                        for (U32 k = poly.firstLink; k != DT_NULL_LINK; k = tile->links[k].next)
+                        {
+                            if (tile->links[k].edge == j)
+                            {
+                                const dtPoly* np = nullptr;
+                                if (dtStatusSucceed(nav.getTileAndPolyByRef(tile->links[k].ref, &other, &np)))
+                                {
+                                    q = static_cast<S32>(np - other->polys);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    else if (poly.neis[j])
+                    {
+                        other = tile;
+                        q = poly.neis[j] - 1;
+                    }
+                    const S32 b = other && q >= 0 ? space_of(*other, q) : -1;
+                    if (b < 0 || b == a)
+                    {
+                        continue;
+                    }
+                    const auto it = by_pair.find({ static_cast<U32>(std::min(a, b)), static_cast<U32>(std::max(a, b)) });
+                    if (it == by_pair.end())
+                    {
+                        continue;
+                    }
+                    const LLVector3 va = fromRecast(&tile->verts[poly.verts[j] * 3]);
+                    const LLVector3 vb = fromRecast(&tile->verts[poly.verts[(j + 1) % poly.vertCount] * 3]);
+                    const LLVector3 mid = (va + vb) * 0.5f;
+                    for (const U32 i : it->second)
+                    {
+                        const Portal& pt = rooms.mPortals[i];
+                        if (std::fabs(mid.mV[VZ] - pt.mCentre.mV[VZ]) > 1.f ||
+                            segmentDistance(LLVector3(mid.mV[VX], mid.mV[VY], 0.f), LLVector3(pt.mA.mV[VX], pt.mA.mV[VY], 0.f),
+                                            LLVector3(pt.mB.mV[VX], pt.mB.mV[VY], 0.f)) > 0.5f)
+                        {
+                            continue;
+                        }
+                        LLVector3 dir = pt.mB - pt.mA;
+                        dir.mV[VZ] = 0.f;
+                        const F32 len = dir.normVec();
+                        LLVector3 da = va - pt.mA, db = vb - pt.mA;
+                        da.mV[VZ] = db.mV[VZ] = 0.f;
+                        F32 t0 = da * dir, t1 = db * dir;
+                        if (t0 > t1)
+                        {
+                            std::swap(t0, t1);
+                        }
+                        t0 = llclamp(t0, 0.f, len);
+                        t1 = llclamp(t1, 0.f, len);
+                        if (t1 > t0)
+                        {
+                            runs[i].emplace_back(t0, t1);
+                        }
+                    }
+                }
+            }
+        }
+        Coverage out;
+        for (const auto& [pair, list] : by_pair)
+        {
+            for (const U32 i : list)
+            {
+                const Portal& pt = rooms.mPortals[i];
+                const F32 len = dist_vec(LLVector3(pt.mA.mV[VX], pt.mA.mV[VY], 0.f), LLVector3(pt.mB.mV[VX], pt.mB.mV[VY], 0.f));
+                std::vector<std::pair<F32, F32>>& r = runs[i];
+                std::sort(r.begin(), r.end());
+                F32 covered = 0.f, end = 0.f;
+                for (const auto& [a, b] : r)
+                {
+                    const F32 from = std::max(a, end);
+                    covered += std::max(0.f, b - from);
+                    end = std::max(end, b);
+                }
+                ++out.mPortals;
+                out.mWidth += len;
+                out.mCovered += std::min(covered, len);
+                out.mHalf += covered >= 0.5f * len ? 1 : 0;
+                out.mAny += covered > 0.f ? 1 : 0;
+            }
+        }
+        return out;
+    }
+
+    void writeCoverage(std::ostream& out, const char* name, const Coverage& c)
+    {
+        out << ",\"" << name << "\":{\"portals\":" << c.mPortals << ",\"half\":" << c.mHalf << ",\"any\":" << c.mAny << ",\"width\":" << c.mWidth
+            << ",\"covered\":" << c.mCovered << '}';
     }
 
     size_t coarseBytes(const CoarseAir& c)
@@ -485,6 +685,7 @@ namespace sknav
         out << "{\"version\":1,\"cell\":" << census.mParams.mCell << ",\"air_radius\":" << census.mAirRadius << ",\"camera\":[" << census.mCamera.mdV[VX]
             << ',' << census.mCamera.mdV[VY] << ',' << census.mCamera.mdV[VZ] << "],\"tiles\":[";
         std::vector<NoGap> nogaps;
+        std::map<std::pair<size_t, TileKey>, std::vector<S32>> b3_spaces;
         bool first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
         {
@@ -518,7 +719,24 @@ namespace sknav
                 out << ",\"air_bytes\":" << (air ? air->bytes() : 0) << ",\"air_leaves\":" << (air ? air->mLeaves.size() : 0)
                     << ",\"air_gaps\":" << (air ? air->mGaps.size() : 0) << ",\"enclosure_bytes\":" << (enc ? enc->bytes() : 0)
                     << ",\"coarse_bytes\":" << (enc ? coarseBytes(enc->mCoarse) : 0) << ",\"coarse_gaps\":" << (enc ? enc->mCoarse.mGaps.size() : 0);
-                writeSpaceFields(out, census, mesh, static_cast<U32>(m), tile, nogaps);
+                writeSpaceFields(out, census, mesh, static_cast<U32>(m), tile, nogaps, b3_spaces[{ m, key }]);
+                // The stamp the polys were built with.
+                const TileStampGeom& g = r.mStamp;
+                U32 bound = 0;
+                if (tile.mBinding)
+                {
+                    for (const U32 id : tile.mBinding->mComponentSpaceId)
+                    {
+                        bound += id ? 1 : 0;
+                    }
+                }
+                out << ",\"coarse_air\":" << (r.mCoarseAir ? 1 : 0) << ",\"coarse_air_ms\":" << st.mCoarseAirMs
+                    << ",\"coarse_air_bytes\":" << (r.mCoarseAir && r.mAir ? r.mAir->bytes() : 0) << ",\"stamped\":" << (g.mStamped ? 1 : 0) << ",\"stamp_ms\":" << tile.mStampMs
+                    << ",\"pattern\":\"" << std::hex << g.mPattern << std::dec << "\",\"components\":" << g.mComponents << ",\"bound\":" << bound
+                    << ",\"pairs\":" << g.mPairs << ",\"overflow\":" << static_cast<S32>(g.mOverflow) << ",\"door_spans\":" << g.mDoorSpans
+                    << ",\"flood_spans\":" << g.mFloodSpans << ",\"unspaced_spans\":" << g.mUnspacedSpans << ",\"impure_polys\":" << g.mImpurePolys
+                    << ",\"portal_edges\":" << g.mPortalEdges.size() << ",\"poly_overflow\":" << (r.mPolyOverflow ? 1 : 0)
+                    << ",\"stand_only\":" << st.mFlightStandOnly.size() << ",\"polys_only\":" << st.mFlightPolysOnly.size();
                 out << '}';
             }
         }
@@ -528,8 +746,55 @@ namespace sknav
             const ReplayMesh& mesh = *result.mMeshes[m];
             out << (m ? "," : "") << "\n{\"id\":\"" << mesh.mId << "\",\"terrain\":" << (mesh.mTerrain ? "true" : "false") << ",\"tiles\":" << mesh.mTiles.size()
                 << ",\"spaces\":" << (mesh.mRooms ? mesh.mRooms->mSpaces.size() : 0) << ",\"portals\":" << (mesh.mRooms ? mesh.mRooms->mPortals.size() : 0)
-                << ",\"rooms_bytes\":" << (mesh.mRooms ? mesh.mRooms->bytes() : 0) << ",\"enclosure_bytes\":" << (mesh.mEnclosure ? mesh.mEnclosure->bytes() : 0)
-                << ",\"runs\":[";
+                << ",\"rooms_bytes\":" << (mesh.mRooms ? mesh.mRooms->bytes() : 0) << ",\"enclosure_bytes\":" << (mesh.mEnclosure ? mesh.mEnclosure->bytes() : 0);
+            // Every space renamed: tiles whose stamp would be cut again, which must be none.
+            if (mesh.mRooms && mesh.mEnclosure)
+            {
+                RoomsProduct renamed = *mesh.mRooms;
+                for (Space& sp : renamed.mSpaces)
+                {
+                    sp.mId ^= 0x5a5a5a5au;
+                }
+                U32 checked = 0, restamps = 0;
+                for (const auto& [key, tile] : mesh.mTiles)
+                {
+                    const TileEnclosure* te = tile.mResult && tile.mResult->mAir ? mesh.mEnclosure->tile(key) : nullptr;
+                    if (!tile.mStampInput || !te || te->mAir != tile.mResult->mAir)
+                    {
+                        continue;
+                    }
+                    TileStampInput again;
+                    const LLVector3d lo = tile.mMin - mesh.mOrigin, hi = tile.mMax - mesh.mOrigin;
+                    stampInput(*tile.mResult->mAir, *te, renamed, LLVector3(lo), LLVector3(hi), again);
+                    ++checked;
+                    restamps += again.mPattern != tile.mStampInput->mPattern ? 1 : 0;
+                }
+                out << ",\"rename_checked\":" << checked << ",\"rename_restamps\":" << restamps;
+            }
+            // Portals along poly edges between their spaces, stamped and not.
+            const dtNavMesh* stamped_nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            if (mesh.mRooms && stamped_nav)
+            {
+                writeCoverage(out, "portal_cover", portalCoverage(*stamped_nav, *mesh.mRooms, [&mesh](const dtMeshTile& t, S32 p) -> S32 {
+                    const auto it = mesh.mTiles.find(TileKey{ t.header->y, t.header->x });
+                    if (it == mesh.mTiles.end() || !it->second.mStampInput)
+                    {
+                        return -1;
+                    }
+                    const TileStampGeom& g = it->second.mResult->mStamp;
+                    const U16 c = p < static_cast<S32>(g.mPolyComponent.size()) ? g.mPolyComponent[p] : STAMP_NONE;
+                    const std::vector<U32>& cs = it->second.mStampInput->mComponentSpace;
+                    return c < cs.size() ? static_cast<S32>(cs[c]) : -1;
+                }));
+            }
+            if (mesh.mRooms && mesh.mUnstampedNav)
+            {
+                writeCoverage(out, "b3_portal_cover", portalCoverage(*mesh.mUnstampedNav, *mesh.mRooms, [&](const dtMeshTile& t, S32 p) -> S32 {
+                    const auto it = b3_spaces.find({ m, TileKey{ t.header->y, t.header->x } });
+                    return it != b3_spaces.end() && p < static_cast<S32>(it->second.size()) ? it->second[p] : -1;
+                }));
+            }
+            out << ",\"runs\":[";
             for (size_t k = 0; k < mesh.mRoomsRuns.size(); ++k)
             {
                 const ReplayRoomsRun& run = mesh.mRoomsRuns[k];

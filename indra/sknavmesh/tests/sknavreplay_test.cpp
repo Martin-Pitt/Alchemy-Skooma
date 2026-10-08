@@ -33,6 +33,7 @@
 #include "../sknavlayout.h"
 #include "../sknavreplay.h"
 #include "../sknavreplaystats.h"
+#include "../sknavstamp.h"
 #include "../sknavtilecache.h"
 #include "sknavtestscene.h"
 
@@ -42,12 +43,14 @@
 #include "DetourCommon.h"
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
+#include "Recast.h"
 
 #include <chrono>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <regex>
+#include <set>
 #include <sstream>
 
 namespace
@@ -239,7 +242,9 @@ namespace tut
         set_test_name("the replay's products are what the passes make when run directly on the same input");
         const CensusFile c = scene();
         ReplayResult r;
-        replayCensus(c, ReplayOptions(), r);
+        ReplayOptions unstamped;
+        unstamped.mStamp = false;
+        replayCensus(c, unstamped, r);
         const ReplayMesh* land = meshOf(r, id(900));
         ensure("mesh", land != nullptr);
 
@@ -351,19 +356,28 @@ namespace tut
     template<> template<>
     void sknavreplay_object::test<5>()
     {
-        set_test_name("past the air radius a tile builds no air, as in the viewer, unless air is asked for everywhere");
+        set_test_name("past the air radius a tile builds no air of its own, as in the viewer, but coarse air for its stamp, unless air is asked for everywhere");
         CensusFile c = scene();
         c.mAirRadius = 50.f;                    // the skybox is some 74 m from the camera
         const LLUUID skybox = c.mRecords.back()->mRoot;
-        ReplayResult near_only, everywhere;
+        ReplayResult near_only, everywhere, bare;
         replayCensus(c, ReplayOptions(), near_only);
         ReplayOptions all;
         all.mAir = AirMode::EVERYWHERE;
         replayCensus(c, all, everywhere);
+        ReplayOptions no_coarse;
+        no_coarse.mCoarseAir = false;
+        replayCensus(c, no_coarse, bare);
         const ReplayTile& far_tile = meshOf(near_only, skybox)->mTiles.begin()->second;
-        ensure("no air past the radius", !far_tile.mResult->mAirBuilt && !far_tile.mInput->mAir);
-        ensure("the region's tiles keep theirs", meshOf(near_only, id(900))->mTiles.at(TileKey{ 0, 0 }).mResult->mAirBuilt);
-        ensure("air everywhere when asked", meshOf(everywhere, skybox)->mTiles.begin()->second.mResult->mAirBuilt);
+        ensure("no air of its own past the radius", !far_tile.mInput->mAir && far_tile.mInput->mCoarseAir);
+        ensure("coarse air in its place", far_tile.mResult->mAirBuilt && far_tile.mResult->mCoarseAir && far_tile.mResult->mAir);
+        ensure("in the tile's own cells", far_tile.mResult->mAir->mCell == c.mParams.mCell && far_tile.mResult->mAir->mWidth == 128);
+        ensure("and stamped with it", far_tile.mResult->mStamp.mStamped && far_tile.mResult->mStamp.mComponents > 0);
+        ensure("none without coarse air", !meshOf(bare, skybox)->mTiles.begin()->second.mResult->mAirBuilt);
+        ensure("the region's tiles keep theirs", meshOf(near_only, id(900))->mTiles.at(TileKey{ 0, 0 }).mResult->mAirBuilt &&
+                                                     !meshOf(near_only, id(900))->mTiles.at(TileKey{ 0, 0 }).mResult->mCoarseAir);
+        ensure("air everywhere when asked", meshOf(everywhere, skybox)->mTiles.begin()->second.mResult->mAirBuilt &&
+                                                !meshOf(everywhere, skybox)->mTiles.begin()->second.mResult->mCoarseAir);
     }
 
     template<> template<>
@@ -487,6 +501,9 @@ namespace tut
             options.mThreads = std::stoi(threads);
         }
         options.mStats = !LLStringUtil::getenv("SKNAV_REPLAY_STATS").empty();
+        // SKNAV_REPLAY_STAMP=0 polygonises each tile as it is rasterised, as before the stamp; SKNAV_REPLAY_COARSE=0 leaves far tiles airless.
+        options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
+        options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
         ReplayResult r;
         replayCensus(c, options, r);
         std::string dir = LLStringUtil::getenv("SKNAV_REPLAY_OUT");
@@ -928,5 +945,185 @@ namespace tut
             }
             doors << "{\"door\":\"" << d.mId << "\",\"state\":" << state << ",\"length\":" << length << "}\n";
         }
+    }
+
+    // SKNAV_STAMP_DUMP names a census, SKNAV_STAMP_DUMP_OUT a file: per tile, the
+    // compact heightfield's spans, the stamp input and what stampTile made of
+    // them, for the Python oracle to stamp again from the rules alone.
+    template<> template<>
+    void sknavreplay_object::test<10>()
+    {
+        set_test_name("dump each tile's stamp with what it was stamped from, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_STAMP_DUMP");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mAir = LLStringUtil::getenv("SKNAV_REPLAY_AIR") == "radius" ? AirMode::RADIUS : AirMode::EVERYWHERE;
+        options.mRounds = 1;
+        ReplayResult r;
+        replayCensus(c, options, r);
+        const std::string limit = LLStringUtil::getenv("SKNAV_STAMP_DUMP_TILES");
+        const size_t most = limit.empty() ? ~size_t(0) : static_cast<size_t>(std::stoul(limit));
+        std::ofstream out(LLStringUtil::getenv("SKNAV_STAMP_DUMP_OUT"), std::ios::binary);
+        ensure("output", out.good());
+        out.precision(9);
+        const auto b64 = [](const void* p, size_t n) { return LLBase64::encode(static_cast<const U8*>(p), n); };
+        size_t written = 0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                if (written >= most || !tile.mStampInput || !tile.mResult->mAir)
+                {
+                    continue;
+                }
+                // The raster again: the stage is deterministic, so this is the one the replay stamped.
+                TileBuildResult again;
+                const TileRasterPtr raster = rasteriseTile(*tile.mInput, again);
+                if (!raster)
+                {
+                    continue;
+                }
+                const rcCompactHeightfield& chf = *raster->mChf;
+                const S32 border = borderCells(tile.mInput->mParams[0].mRadius, tile.mInput->mCell);
+                TileStampInput in;
+                const TileEnclosure* enc = mesh->mEnclosure ? mesh->mEnclosure->tile(key) : nullptr;
+                if (enc && mesh->mRooms && enc->mGaps.size() == again.mAir->mGaps.size())
+                {
+                    const LLVector3d lo = tile.mMin - mesh->mOrigin, hi = tile.mMax - mesh->mOrigin;
+                    stampInput(*again.mAir, *enc, *mesh->mRooms, LLVector3(lo), LLVector3(hi), in);
+                }
+                TileStamp st;
+                stampTile(chf, border, raster->mSpanGap, in, raster->mReal, raster->mFlights, StampParams(), st);
+                std::vector<S32> spans;
+                spans.reserve(static_cast<size_t>(chf.spanCount) * 9);
+                for (S32 z = 0; z < chf.height; ++z)
+                {
+                    for (S32 x = 0; x < chf.width; ++x)
+                    {
+                        const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                        for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
+                        {
+                            spans.insert(spans.end(), { x, z, chf.spans[i].y, chf.areas[i] });
+                            for (S32 d = 0; d < 4; ++d)
+                            {
+                                const S32 con = rcGetCon(chf.spans[i], d);
+                                spans.push_back(con == RC_NOT_CONNECTED ? -1
+                                                                        : static_cast<S32>(chf.cells[(x + rcGetDirOffsetX(d)) + (z + rcGetDirOffsetY(d)) * chf.width].index) + con);
+                            }
+                            spans.push_back(static_cast<S32>(i < raster->mSpanGap.size() ? raster->mSpanGap[i] : SPAN_NO_GAP));
+                        }
+                    }
+                }
+                std::vector<U8> flight_codes;
+                for (const Flight& f : raster->mFlights)
+                {
+                    flight_codes.insert(flight_codes.end(), f.mCodes.begin(), f.mCodes.end());
+                }
+                out << "{\"mesh\":\"" << mesh->mId << "\",\"x\":" << key.mX << ",\"y\":" << key.mY << ",\"border\":" << border << ",\"w\":" << chf.width
+                    << ",\"h\":" << chf.height << ",\"cs\":" << chf.cs << ",\"ch\":" << chf.ch << ",\"bmin\":[" << chf.bmin[0] << ',' << chf.bmin[1] << ','
+                    << chf.bmin[2] << "],\"reach\":" << STAMP_PORTAL_REACH_M << ",\"palette_max\":63,\"spans\":\"" << b64(spans.data(), spans.size() * 4)
+                    << "\",\"gap_component\":\"" << b64(in.mGapComponent.data(), in.mGapComponent.size() * 2) << "\",\"component_space\":[";
+                for (size_t k = 0; k < in.mComponentSpace.size(); ++k)
+                {
+                    out << (k ? "," : "") << in.mComponentSpace[k];
+                }
+                out << "],\"portals\":[";
+                for (size_t k = 0; k < in.mPortals.size(); ++k)
+                {
+                    const StampPortal& p = in.mPortals[k];
+                    out << (k ? "," : "") << '[';
+                    for (const LLVector3* v : { &p.mCentre, &p.mNormal, &p.mA, &p.mB })
+                    {
+                        out << v->mV[0] << ',' << v->mV[1] << ',' << v->mV[2] << ',';
+                    }
+                    out << p.mSide[0] << ',' << p.mSide[1] << ',' << static_cast<S32>(p.mKind) << ']';
+                }
+                out << "],\"real\":[";
+                for (size_t k = 0; k < raster->mReal.size(); ++k)
+                {
+                    out << (k ? "," : "") << static_cast<S32>(raster->mReal[k]);
+                }
+                out << "],\"flight_codes\":[";
+                for (size_t k = 0; k < flight_codes.size(); ++k)
+                {
+                    out << (k ? "," : "") << static_cast<S32>(flight_codes[k]);
+                }
+                out << "],\"span_component\":\"" << b64(st.mSpanComponent.data(), st.mSpanComponent.size() * 2) << "\",\"span_code\":\""
+                    << b64(st.mSpanCode.data(), st.mSpanCode.size()) << "\",\"colours\":[";
+                for (size_t k = 0; k < st.mComponentColour.size(); ++k)
+                {
+                    out << (k ? "," : "") << static_cast<S32>(st.mComponentColour[k]);
+                }
+                out << "],\"palette\":[";
+                for (size_t k = 1; k < st.mPalette.size(); ++k)
+                {
+                    out << (k > 1 ? "," : "") << '[' << static_cast<S32>(st.mPalette[k].mSlope) << ',' << static_cast<S32>(st.mPalette[k].mColour) << ']';
+                }
+                out << "],\"overflow\":" << static_cast<S32>(st.mOverflow) << ",\"door\":" << st.mDoorSpans << ",\"flood\":" << st.mFloodSpans
+                    << ",\"pattern_replay\":\"" << std::hex << tile.mStampInput->mPattern << "\",\"pattern\":\"" << in.mPattern << std::dec << "\"}\n";
+                ++written;
+            }
+        }
+        std::cout << written << " tiles dumped" << std::endl;
+    }
+
+    template<> template<>
+    void sknavreplay_object::test<11>()
+    {
+        set_test_name("a stamped replay's polys each lie in one space, every tile stamped, the bucket flags on Detour's polys");
+        const CensusFile c = scene();
+        ReplayResult r;
+        replayCensus(c, ReplayOptions(), r);
+        const ReplayMesh* land = meshOf(r, id(900));
+        ensure("rooms", land && land->mRooms);
+        std::set<U32> spaces;
+        U32 door_edges = 0, door_polys = 0, impure = 0, unstamped = 0;
+        for (const auto& [key, tile] : land->mTiles)
+        {
+            const TileBuildResult& res = *tile.mResult;
+            if (res.mStatus != TileBuildResult::SUCCESS || !res.mPolys[0])
+            {
+                continue;
+            }
+            unstamped += res.mStamp.mStamped && tile.mBinding ? 0 : 1;
+            impure += res.mStamp.mImpurePolys;
+            for (size_t p = 0; p < res.mStamp.mPolyComponent.size(); ++p)
+            {
+                const U16 comp = res.mStamp.mPolyComponent[p];
+                if (comp != STAMP_NONE && tile.mBinding && tile.mBinding->mComponentSpaceId[comp])
+                {
+                    spaces.insert(tile.mBinding->mComponentSpaceId[comp]);
+                }
+                door_polys += tile.mBinding && (tile.mBinding->mPolyFlags[p] & POLY_DOOR) ? 1 : 0;
+            }
+            for (const StampPortalEdge& e : res.mStamp.mPortalEdges)
+            {
+                door_edges += res.mStamp.mPortals[e.mPortal].mKind == static_cast<U8>(PortalKind::DOOR) ? 1 : 0;
+            }
+        }
+        ensure_equals("every tile with polys stamped", unstamped, 0u);
+        ensure_equals("no poly over two spaces", impure, 0u);
+        ensure("polys in at least the two rooms and outdoors", spaces.size() >= 3);
+        // The scene's doorway is under 2.2 m, lower than the avatar: the door's own edges are sknavstamp's test 6.
+        (void)door_edges;
+        (void)door_polys;
+        // The flags reached Detour.
+        const dtNavMesh* nav = land->mNav[0];
+        U32 flagged = 0;
+        for (S32 t = 0; nav && t < nav->getMaxTiles(); ++t)
+        {
+            const dtMeshTile* dt = nav->getTile(t);
+            for (S32 p = 0; dt && dt->header && p < dt->header->polyCount; ++p)
+            {
+                flagged += (dt->polys[p].flags & (POLY_INDOORS | POLY_OUTDOORS | POLY_SHELTERED)) ? 1 : 0;
+            }
+        }
+        ensure("bucket flags on Detour's polys", flagged > 0);
     }
 }

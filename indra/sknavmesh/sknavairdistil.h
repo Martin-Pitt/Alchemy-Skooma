@@ -150,6 +150,16 @@ namespace sknav
     void spanGaps(const rcCompactHeightfield& chf, S32 border, const AirGrid& fine, const TileAir& air, std::vector<U32>& out,
                   const std::vector<U16>* tops = nullptr);
 
+    /// A coarse tile's air in cells and height units factor times finer, so the
+    /// passes read it beside a fine tile's: each leaf factor times as wide,
+    /// split into leaves of AIR_MAX_LEVEL past it, heights times factor.
+    TileAirPtr upsampleAir(const TileAir& coarse, S32 factor);
+
+    /// spanGaps for air with no fine grid, read off its leaves: the gap whose
+    /// [floor - 1 - slack, ceiling) holds a span's top moved by z_shift units
+    /// into the air's frame.
+    void leafSpanGaps(const rcCompactHeightfield& chf, S32 border, const TileAir& air, S32 z_shift, S32 slack, std::vector<U32>& out);
+
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.
     std::vector<U8> packTileAir(const TileAir& air);
