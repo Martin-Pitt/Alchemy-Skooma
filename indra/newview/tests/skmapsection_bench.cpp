@@ -29,7 +29,9 @@
 // every section piece, the layers' floor levels and every bake cell key, so a
 // change that is meant to be faster only can show it produced the same scene.
 // SKMAP_SECTION_EXPECT, when set, is the exact fingerprint the build must give;
-// a mismatch exits 3. Without the census variable, or from an unoptimised build,
+// a mismatch exits 3. A third build on the warm cache moves one static box: it must
+// give what a cold build of that input gives, or the bench exits 4.
+// Without the census variable, or from an unoptimised build,
 // it exits 125, which CTest reads as skipped.
 
 #include "linden_common.h"
@@ -46,6 +48,7 @@
 #include "DetourNavMesh.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -247,8 +250,10 @@ namespace
 
     const char* stageName(skmap::SectionStage stage)
     {
-        static const char* names[] = { "levels", "pairs", "slice (misses)", "  z-bins", "  analytic shapes", "  soup segments",
-                                       "  chain", "    of it pass 3", "  simplify", "  nesting", "sheet rooms", "islands" };
+        static const char* names[] = { "filter and buckets", "layer indexes", "last build's layers", "levels", "  samples", "  spread", "  pack", "pairs",
+                                       "  sort", "pieces", "  slice", "    z-bins", "    analytic shapes", "    soup segments", "    chain",
+                                       "      nodes", "      snap", "      walk", "      close", "    simplify", "    nesting",
+                                       "  sheet rooms", "  islands", "cell hashes (scene)" };
         static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(skmap::SectionStage::COUNT), "a name per stage");
         return names[static_cast<size_t>(stage)];
     }
@@ -302,12 +307,64 @@ int main(int, char**)
     std::printf("input: box %.0f x %.0f m, %zu tiles, %zu feature links, %zu doors\n", in.mMax.mdV[VX] - in.mMin.mdV[VX],
                 in.mMax.mdV[VY] - in.mMin.mdV[VY], in.mTiles.size(), in.mFeatureLinks.size(), in.mDoors.size());
 
-    // Cold: a fresh cache each run, as after a teleport. Warm: the same cache again, as a box re-snap.
-    std::vector<F64> cold_total, cold_section, warm_total, warm_section;
+    // A census restamp that moved one thing: the static box nearest the agent that reaches its storey, half a metre
+    // east, re-signed.
+    skmap::SceneInput moved = in;
+    bool moved_one = false;
+    {
+        auto records = std::make_shared<std::vector<sknav::RecordPtr>>(census.mRecords);
+        sknav::RecordPtr* nearest = nullptr;
+        F64 best = DBL_MAX;
+        for (sknav::RecordPtr& rec : *records)
+        {
+            if (!rec || rec->mShape != sknav::Shape::BOX || rec->mRole != sknav::Role::NAV || rec->mDynamic
+                || rec->mMax.mdV[VZ] < census.mAgent.mdV[VZ] || rec->mMin.mdV[VZ] > census.mAgent.mdV[VZ] + 2.0)
+            {
+                continue;
+            }
+            const LLVector3d mid = (rec->mMin + rec->mMax) * 0.5;
+            const F64 d = (mid.mdV[VX] - census.mAgent.mdV[VX]) * (mid.mdV[VX] - census.mAgent.mdV[VX])
+                        + (mid.mdV[VY] - census.mAgent.mdV[VY]) * (mid.mdV[VY] - census.mAgent.mdV[VY]);
+            if (d < best)
+            {
+                best = d;
+                nearest = &rec;
+            }
+        }
+        if (nearest)
+        {
+            sknav::Record copy = **nearest;
+            copy.mCenter.mV[VX] += 0.5f;
+            copy.mMin.mdV[VX] += 0.5;
+            copy.mMax.mdV[VX] += 0.5;
+            copy.mSignature ^= 0x5eed5eed5eed5eedull;
+            *nearest = std::make_shared<const sknav::Record>(copy);
+            moved_one = true;
+            std::printf("moved: part %s, %.1f x %.1f x %.1f m at (%.1f, %.1f, %.1f) global\n", copy.mPart.asString().c_str(),
+                        copy.mMax.mdV[VX] - copy.mMin.mdV[VX], copy.mMax.mdV[VY] - copy.mMin.mdV[VY], copy.mMax.mdV[VZ] - copy.mMin.mdV[VZ],
+                        copy.mMin.mdV[VX], copy.mMin.mdV[VY], copy.mMin.mdV[VZ]);
+        }
+        moved.mRecords = records;
+    }
+    // The agent one snap step east, so the box and the scene origin move with it.
+    skmap::SceneInput shifted;
+    {
+        LLVector3d agent = census.mAgent;
+        agent.mdV[VX] += skmap::ANALYSIS_SNAP_M;
+        skmap::analysisBox(agent, agent, 1.f, 1.f, shifted.mMin, shifted.mMax);
+        shifted.mOrigin.set(shifted.mMin.mdV[VX], shifted.mMin.mdV[VY], 0.0);
+        gatherInput(census, replay, shifted);
+    }
+
+    // Cold: a fresh cache each run, as after a teleport. Warm: the same input on the same cache, as a census restamp
+    // or navmesh tile rebuild that changed nothing in the box; every layer is the last build's. Moved: the same cache
+    // once more, with the one record moved. Shifted: the box one snap step east on that cache, as the agent crossing
+    // a 64 m line or the map panning; every layer's origin moved, so none is the last build's.
+    std::vector<F64> cold_total, cold_section, warm_total, warm_section, moved_section, shifted_section;
     skmap::ScenePtr scene;
-    Fingerprint fp_cold, fp_warm;
-    skmap::SectionStats cold_stats, warm_stats;
-    size_t cache_bytes = 0, cache_slices = 0;
+    Fingerprint fp_cold, fp_warm, fp_moved, fp_shifted;
+    skmap::SectionStats cold_stats, warm_stats, moved_stats, shifted_stats;
+    size_t cache_bytes = 0, cache_slices = 0, cold_polys = 0, cold_layers = 0;
     for (S32 r = 0; r < runs; ++r)
     {
         skmap::SectionCache cache;
@@ -319,6 +376,8 @@ int main(int, char**)
         if (r == 0)
         {
             fp_cold = fingerprint(*scene);
+            cold_polys = scene->mPolys.size();
+            cold_layers = scene->mLayers.size();
             cache_bytes = cache.bytes();
             cache_slices = cache.entries();
         }
@@ -331,14 +390,52 @@ int main(int, char**)
         {
             fp_warm = fingerprint(*scene);
         }
+        scene = skmap::buildScene(moved, &cache);
+        moved_section.push_back(scene->mSectionStats.mMs);
+        moved_stats = scene->mSectionStats;
+        if (r == 0)
+        {
+            fp_moved = fingerprint(*scene);
+        }
+        scene = skmap::buildScene(shifted, &cache);
+        shifted_section.push_back(scene->mSectionStats.mMs);
+        shifted_stats = scene->mSectionStats;
+        if (r == 0)
+        {
+            fp_shifted = fingerprint(*scene);
+        }
     }
-    std::printf("scene: %zu polys, %zu layers, %u records, %u planes, %u pieces\n", scene->mPolys.size(), scene->mLayers.size(),
-                cold_stats.mRecords, cold_stats.mPlanes, cold_stats.mPieces);
+    // What the moved and shifted inputs build from nothing: the warm builds must have built the same.
+    Fingerprint fp_moved_cold, fp_shifted_cold;
+    {
+        skmap::SectionCache fresh;
+        fp_moved_cold = fingerprint(*skmap::buildScene(moved, &fresh));
+    }
+    {
+        skmap::SectionCache fresh;
+        fp_shifted_cold = fingerprint(*skmap::buildScene(shifted, &fresh));
+    }
+    std::printf("scene: %zu polys, %zu layers, %u records, %u planes, %u pairs, %u pieces\n", cold_polys, cold_layers,
+                cold_stats.mRecords, cold_stats.mPlanes, cold_stats.mPairs, cold_stats.mPieces);
     // The minimum is what the code costs; the median shows how far other load on the machine moved it.
     std::printf("cold: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(cold_section), runs,
                 median(cold_section), least(cold_total), cold_stats.mSlices, cold_stats.mCacheHits);
-    std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits\n", least(warm_section), runs,
-                median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits);
+    std::printf("warm: section %.2f ms (min of %d, median %.2f), scene %.2f ms; %u slices, %u hits, %u pairs reused\n",
+                least(warm_section), runs, median(warm_section), least(warm_total), warm_stats.mSlices, warm_stats.mCacheHits,
+                warm_stats.mReused);
+    if (moved_one)
+    {
+        std::printf("one record moved: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u pairs reused; %s a cold build\n",
+                    least(moved_section), runs, median(moved_section), moved_stats.mSlices, moved_stats.mCacheHits, moved_stats.mReused,
+                    fp_moved.mExact == fp_moved_cold.mExact ? "the same as" : "DIFFERENT from");
+    }
+    else
+    {
+        std::printf("one record moved: NONE, no static box reaches the agent's storey\n");
+    }
+    std::printf("box shifted one snap step: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u pairs reused; %s a cold build\n",
+                least(shifted_section), runs, median(shifted_section), shifted_stats.mSlices, shifted_stats.mCacheHits, shifted_stats.mReused,
+                fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
     std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
@@ -384,9 +481,24 @@ int main(int, char**)
     // The capture is valid only while the census is: release the scene before it.
     scene.reset();
     in.mRecords.reset();
+    moved.mRecords.reset();
+    shifted.mRecords.reset();
     if (fp_cold.mExact != fp_warm.mExact)
     {
         return 2;
+    }
+    if (fp_moved.mExact != fp_moved_cold.mExact)
+    {
+        return 4;
+    }
+    // Nothing moved would make the moved build a second warm build, which proves nothing about invalidation.
+    if (!moved_one)
+    {
+        return 5;
+    }
+    if (fp_shifted.mExact != fp_shifted_cold.mExact)
+    {
+        return 6;
     }
     const char* expect = std::getenv("SKMAP_SECTION_EXPECT");
     if (expect && *expect && std::strtoull(expect, nullptr, 16) != fp_cold.mExact)

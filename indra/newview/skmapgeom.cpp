@@ -33,10 +33,74 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <deque>
 
 namespace skmap
 {
+    /// What one (record, plane) pair's pieces are made from, besides the layer's floors.
+    struct PairSource
+    {
+        U64 mSignature = 0;
+        LLVector3d mOrigin;
+        LLUUID mPart, mRoot;
+        S32 mPlane = 0;
+        sknav::Shape mShape = sknav::Shape::TRIANGLES;
+        sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+        U32 mFirst = 0, mCount = 0;     ///< the pair's pieces in its layer's run
+
+        bool same(const sknav::Record& r, S32 q) const
+        {
+            return mPlane == q && mSignature == r.mSignature && mShape == r.mShape && mProvenance == r.mProvenance
+                && std::memcmp(mOrigin.mdV, r.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0 && mPart == r.mPart && mRoot == r.mRoot;
+        }
+        bool same(const PairSource& o) const
+        {
+            return mPlane == o.mPlane && mSignature == o.mSignature && mShape == o.mShape && mProvenance == o.mProvenance
+                && std::memcmp(mOrigin.mdV, o.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0 && mPart == o.mPart && mRoot == o.mRoot;
+        }
+    };
+    typedef std::shared_ptr<const std::vector<PairSource>> PairSources;
+
+    /// What the pairs and pieces read of a kept record, with its index in the snapshot.
+    struct KeptRecord
+    {
+        U32 mIndex = 0;
+        U64 mSignature = 0;
+        LLVector3d mOrigin, mMin, mMax;
+        LLUUID mPart, mRoot;
+        sknav::Shape mShape = sknav::Shape::TRIANGLES;
+        sknav::Provenance mProvenance = sknav::Provenance::EXACT;
+
+        KeptRecord() = default;
+        KeptRecord(U32 index, const sknav::Record& r)
+            : mIndex(index), mSignature(r.mSignature), mOrigin(r.mOrigin), mMin(r.mMin), mMax(r.mMax), mPart(r.mPart), mRoot(r.mRoot),
+              mShape(r.mShape), mProvenance(r.mProvenance)
+        {
+        }
+        bool same(U32 index, const sknav::Record& r) const
+        {
+            return mIndex == index && mSignature == r.mSignature && mShape == r.mShape && mProvenance == r.mProvenance
+                && std::memcmp(mOrigin.mdV, r.mOrigin.mdV, sizeof(mOrigin.mdV)) == 0
+                && std::memcmp(mMin.mdV, r.mMin.mdV, sizeof(mMin.mdV)) == 0 && std::memcmp(mMax.mdV, r.mMax.mdV, sizeof(mMax.mdV)) == 0
+                && mPart == r.mPart && mRoot == r.mRoot;
+        }
+    };
+
+    /// The last scene build, for the next to take what an unchanged layer would only compute again.
+    struct SectionMemo
+    {
+        ScenePtr mScene;
+        /// (content hash, layer) for every layer of mScene with polygons, sorted.
+        std::vector<std::pair<U64, S32>> mLayers;
+        /// Per layer of mScene, its pairs in order; null for a layer that made none.
+        std::vector<PairSources> mPairs;
+        /// Per layer of mScene, its run of pieces; null with its pairs.
+        std::vector<SectionPieces::Run> mRuns;
+        /// The records the section kept, in snapshot order.
+        std::shared_ptr<const std::vector<KeptRecord>> mKept;
+    };
+
     namespace
     {
         typedef std::pair<S32, S32> Cell;
@@ -653,15 +717,16 @@ namespace skmap
             }
 
             // Orphans: with the section, a wall line stays only where no piece of its layer stands behind it.
-            std::vector<std::map<Cell, std::vector<U32>>> piece_cells;
+            std::vector<std::map<Cell, std::vector<const SectionPiece*>>> piece_cells;
             if (s.mHasSection)
             {
                 piece_cells.resize(s.mLayers.size());
                 for (size_t l = 0; l < s.mLayers.size(); ++l)
                 {
-                    for (U32 id : s.mLayers[l].mPieces)
+                    const SectionPiece* const pieces = layerPieces(s, s.mLayers[l]);
+                    for (size_t k = 0; k < s.mLayers[l].mPieces.size(); ++k)
                     {
-                        const SectionPiece& piece = s.mPieces[id];
+                        const SectionPiece& piece = pieces[k];
                         if (piece.mFlags & PIECE_BLOB)
                         {
                             continue;   // clutter covers nothing
@@ -672,7 +737,7 @@ namespace skmap
                         {
                             for (S32 x = lo.first; x <= hi.first; ++x)
                             {
-                                piece_cells[l][{ x, y }].push_back(id);
+                                piece_cells[l][{ x, y }].push_back(&piece);
                             }
                         }
                     }
@@ -684,9 +749,9 @@ namespace skmap
                 {
                     return false;
                 }
-                for (U32 id : it->second)
+                for (const SectionPiece* held : it->second)
                 {
-                    const SectionPiece& piece = s.mPieces[id];
+                    const SectionPiece& piece = *held;
                     if (p.mV[VX] < piece.mMin.mV[VX] - ORPHAN_REACH_M || p.mV[VX] > piece.mMax.mV[VX] + ORPHAN_REACH_M
                         || p.mV[VY] < piece.mMin.mV[VY] - ORPHAN_REACH_M || p.mV[VY] > piece.mMax.mV[VY] + ORPHAN_REACH_M)
                     {
@@ -1103,9 +1168,10 @@ namespace skmap
                     }
                 }
                 // Section pieces: leaves are made from them too, so a piece far from any floor still bakes.
-                for (U32 id : layer.mPieces)
+                const SectionPiece* const layer_pieces = layerPieces(s, layer);
+                for (size_t pi = 0; pi < layer.mPieces.size(); ++pi)
                 {
-                    const SectionPiece& piece = s.mPieces[id];
+                    const SectionPiece& piece = layer_pieces[pi];
                     U64 r = sknav::mix(sknav::SEED, piece.mSource);
                     r = sknav::mix(r, static_cast<U64>(static_cast<S64>(piece.mPlane)));
                     r = sknav::mix(r, static_cast<U64>(piece.mStyle));
@@ -1393,6 +1459,7 @@ namespace skmap
             const S32 w = grid.mW, h = grid.mH;
             const size_t n = static_cast<size_t>(w) * h;
 
+            SK_SECTION_STAGE_START(samples_timer, LEVEL_SAMPLES);
             // Samples: each polygon's height at every cell centre it holds, or at its centroid when it holds none.
             // Cells keep linked lists of samples, so a terrain-sized grid allocates nothing per cell.
             struct Link
@@ -1474,6 +1541,8 @@ namespace skmap
                     store(i);
                 }
             }
+            SK_SECTION_STAGE_STOP(samples_timer);
+            SK_SECTION_STAGE_START(spread_timer, LEVEL_SPREAD);
             // The ring a cell was stored in: 1 for the sampled cells, ring + 2 for those the search reaches.
             std::vector<U8> stored(n, 0);
             for (size_t i : sampled)
@@ -1553,6 +1622,8 @@ namespace skmap
                 }
                 frontier.swap(reached);
             }
+            SK_SECTION_STAGE_STOP(spread_timer);
+            SK_SECTION_STAGE(LEVEL_PACK);
             grid.mCell.assign(n, 0);
             size_t listed = 0;
             for (size_t i = 0; i < n; ++i)
@@ -1569,6 +1640,91 @@ namespace skmap
                 grid.mCell[i] = static_cast<U32>(grid.mLists.size()) + 1;
                 grid.mLists.push_back(counts[i]);
                 grid.mLists.insert(grid.mLists.end(), slots.begin() + i * LEVEL_MAX, slots.begin() + i * LEVEL_MAX + counts[i]);
+            }
+        }
+
+        /// One word into a lookup hash, its bits spread both ways.
+        U64 hashStep(U64 h, U64 v)
+        {
+            h = (h ^ v) * 0x9e3779b97f4a7c15ull;
+            return h ^ (h >> 29);
+        }
+
+        /// Whole 32-bit words, two at a time.
+        U64 hashWords(U64 h, const void* data, size_t bytes)
+        {
+            const U8* p = static_cast<const U8*>(data);
+            for (; bytes >= 8; bytes -= 8, p += 8)
+            {
+                U64 v;
+                std::memcpy(&v, p, sizeof(v));
+                h = hashStep(h, v);
+            }
+            if (bytes >= 4)
+            {
+                U32 v;
+                std::memcpy(&v, p, sizeof(v));
+                h = hashStep(h, v);
+            }
+            return h;
+        }
+
+        /// A pair source's lookup hash, over what PairSource::same compares.
+        U64 sourceHash(const PairSource& p)
+        {
+            U64 h = hashStep(sknav::SEED, p.mSignature);
+            h = hashStep(h, static_cast<U32>(p.mPlane) | (static_cast<U64>(p.mShape) << 32) | (static_cast<U64>(p.mProvenance) << 40));
+            h = hashWords(h, p.mOrigin.mdV, sizeof(p.mOrigin.mdV));
+            h = hashWords(h, p.mPart.mData, sizeof(p.mPart.mData));
+            return hashWords(h, p.mRoot.mData, sizeof(p.mRoot.mData));
+        }
+
+        /// What a layer's floor levels and floor lookups read: the origin and its polygons' corners and detail
+        /// triangles, in order. Everything else the section reads of a polygon is made from these.
+        U64 layerHash(const Scene& s, const SceneLayer& layer)
+        {
+            U64 h = hashWords(sknav::SEED, s.mOrigin.mdV, sizeof(s.mOrigin.mdV));
+            for (U32 id : layer.mPolys)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                h = hashStep(h, poly.mVertCount | (static_cast<U64>(poly.mTriCount) << 8));
+                h = hashWords(h, poly.mVerts, poly.mVertCount * sizeof(LLVector3));
+                h = hashWords(h, &s.mTris[static_cast<size_t>(poly.mFirstTri) * 3], poly.mTriCount * 3 * sizeof(LLVector3));
+            }
+            return h;
+        }
+
+        /// Whether two layers hash the same because they are the same, to the bit.
+        bool sameLayer(const Scene& a, const SceneLayer& la, const Scene& b, const SceneLayer& lb)
+        {
+            if (la.mPolys.size() != lb.mPolys.size() || std::memcmp(a.mOrigin.mdV, b.mOrigin.mdV, sizeof(a.mOrigin.mdV)) != 0)
+            {
+                return false;
+            }
+            for (size_t k = 0; k < la.mPolys.size(); ++k)
+            {
+                const ScenePoly& p = a.mPolys[la.mPolys[k]];
+                const ScenePoly& q = b.mPolys[lb.mPolys[k]];
+                if (p.mVertCount != q.mVertCount || p.mTriCount != q.mTriCount
+                    || std::memcmp(p.mVerts, q.mVerts, p.mVertCount * sizeof(LLVector3)) != 0
+                    || std::memcmp(&a.mTris[static_cast<size_t>(p.mFirstTri) * 3], &b.mTris[static_cast<size_t>(q.mFirstTri) * 3],
+                                   p.mTriCount * 3 * sizeof(LLVector3)) != 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// A layer's run of pieces, appended to the scene's and listed by the layer.
+        void appendRun(Scene& s, const SectionPieces::Run& run, SceneLayer& layer)
+        {
+            const size_t first = s.mPieces.size();
+            s.mPieces.append(run);
+            layer.mPieces.resize(s.mPieces.size() - first);
+            for (size_t k = 0; k < layer.mPieces.size(); ++k)
+            {
+                layer.mPieces[k] = static_cast<U32>(first + k);
             }
         }
 
@@ -1617,13 +1773,14 @@ namespace skmap
 
         /// The layers' section: records filtered, bucketed, sliced at the planes their cells' floor levels ask for, and
         /// cut into pieces; door leaves set aside for the door marks.
-        void buildSection(Scene& s, const SceneInput& input, SectionCache* cache)
+        void buildSection(Scene& s, const SceneInput& input, SectionCache* cache, SectionMemo* next)
         {
             LL_PROFILE_ZONE_SCOPED;
             const auto started = std::chrono::steady_clock::now();
             SectionStats& stats = s.mSectionStats;
             const std::vector<sknav::RecordPtr>& recs = *input.mRecords;
 
+            SK_SECTION_STAGE_START(filter_timer, FILTER);
             // 1. Door leaves first: a swinging leaf is dynamic and must still reach its door.
             s.mDoorLeaves.assign(input.mDoors.size(), {});
             std::map<LLUUID, size_t> leaf_door;
@@ -1668,28 +1825,62 @@ namespace skmap
             }
             stats.mRecords = static_cast<U32>(kept.size());
 
-            // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees.
-            std::map<Cell, std::vector<U32>> buckets;
-            std::vector<U32> large;
-            for (U32 i : kept)
+            // The same records at the same indices as the last build: an unchanged layer's pairs are the ones it had.
+            const SectionMemo* last = cache ? cache->memo().get() : nullptr;
+            bool same_records = false;
+            if (next)
             {
-                const sknav::Record& r = *recs[i];
-                const S32 bx0 = cellIndex(r.mMin.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(r.mMax.mdV[VX], RECORD_BUCKET_M);
-                const S32 by0 = cellIndex(r.mMin.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(r.mMax.mdV[VY], RECORD_BUCKET_M);
-                if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
+                const std::vector<KeptRecord>* had = last && last->mKept ? last->mKept.get() : nullptr;
+                same_records = had && had->size() == kept.size();
+                for (size_t k = 0; same_records && k < kept.size(); ++k)
                 {
-                    large.push_back(i);
-                    continue;
+                    same_records = (*had)[k].same(kept[k], *recs[kept[k]]);
                 }
-                for (S32 by = by0; by <= by1; ++by)
+                if (same_records)
                 {
-                    for (S32 bx = bx0; bx <= bx1; ++bx)
+                    next->mKept = last->mKept;
+                }
+                else
+                {
+                    auto facts = std::make_shared<std::vector<KeptRecord>>();
+                    facts->reserve(kept.size());
+                    for (U32 i : kept)
                     {
-                        buckets[{ bx, by }].push_back(i);
+                        facts->emplace_back(i, *recs[i]);
                     }
+                    next->mKept = std::move(facts);
                 }
             }
 
+            SK_SECTION_STAGE_STOP(filter_timer);
+
+            // 3. Global 8 m buckets; a record over more than 8 x 8 of them goes on a list every bucket sees. Made when a
+            // layer first pairs: a build that reuses every layer pairs none.
+            std::map<Cell, std::vector<U32>> buckets;
+            std::vector<U32> large;
+            bool bucketed = false;
+            auto bucketRecords = [&]() {
+                SK_SECTION_STAGE(FILTER);
+                bucketed = true;
+                for (U32 i : kept)
+                {
+                    const sknav::Record& r = *recs[i];
+                    const S32 bx0 = cellIndex(r.mMin.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(r.mMax.mdV[VX], RECORD_BUCKET_M);
+                    const S32 by0 = cellIndex(r.mMin.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(r.mMax.mdV[VY], RECORD_BUCKET_M);
+                    if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
+                    {
+                        large.push_back(i);
+                        continue;
+                    }
+                    for (S32 by = by0; by <= by1; ++by)
+                    {
+                        for (S32 bx = bx0; bx <= bx1; ++bx)
+                        {
+                            buckets[{ bx, by }].push_back(i);
+                        }
+                    }
+                }
+            };
             // One slice per (record, plane) for the whole scene, from the cache when there is one.
             // Per record its few planes' slices, searched in place: a map over every pair costs more than the search.
             std::vector<std::vector<std::pair<S32, SlicePtr>>> slices(recs.size());
@@ -1721,16 +1912,51 @@ namespace skmap
                 return sl;
             };
 
-            // Floor lookups by layer, and a stamp per polygon so a sheet room's search visits each once.
+            // Floor lookups by layer, made when a layer first makes pieces, and a stamp per polygon so a sheet room's
+            // search visits each once.
             std::vector<LayerIndex> layer_index;
-            buildLayerIndexes(s, layer_index);
-            std::vector<U32> poly_seen(s.mPolys.size(), 0);
+            std::vector<U32> poly_seen;
             U32 poly_stamp = 0;
+
+            // A layer whose polygons the last build had, to the bit, has the floor levels it had.
+            std::vector<S32> last_layer(s.mLayers.size(), -1);
+            if (next)
+            {
+                next->mPairs.resize(s.mLayers.size());
+                next->mRuns.resize(s.mLayers.size());
+                SK_SECTION_STAGE(MEMO);
+                for (size_t l = 0; l < s.mLayers.size(); ++l)
+                {
+                    const SceneLayer& layer = s.mLayers[l];
+                    if (layer.mPolys.empty())
+                    {
+                        continue;
+                    }
+                    const U64 h = layerHash(s, layer);
+                    next->mLayers.emplace_back(h, static_cast<S32>(l));
+                    if (!last)
+                    {
+                        continue;
+                    }
+                    const auto range = std::equal_range(last->mLayers.begin(), last->mLayers.end(), std::make_pair(h, 0),
+                                                        [](const std::pair<U64, S32>& a, const std::pair<U64, S32>& b) { return a.first < b.first; });
+                    for (auto it = range.first; it != range.second; ++it)
+                    {
+                        if (sameLayer(s, layer, *last->mScene, last->mScene->mLayers[it->second]))
+                        {
+                            last_layer[l] = it->second;
+                            break;
+                        }
+                    }
+                }
+                std::sort(next->mLayers.begin(), next->mLayers.end());
+            }
             // Per pair and per piece, reused.
             std::vector<bool> active;
             std::vector<std::pair<S32, size_t>> order;
             std::vector<LLVector2> ring;
             std::vector<U64> pair_keys, key_scratch;
+            std::vector<std::pair<U64, U32>> by_source;
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
@@ -1739,19 +1965,45 @@ namespace skmap
                 // 4. The layer's local floor levels.
                 {
                     SK_SECTION_STAGE(LEVELS);
-                    buildLevels(s, layer, layer.mLevels);
+                    if (last_layer[l] >= 0)
+                    {
+                        layer.mLevels = last->mScene->mLayers[last_layer[l]].mLevels;
+                    }
+                    else
+                    {
+                        buildLevels(s, layer, layer.mLevels);
+                    }
                 }
                 const LevelGrid& grid = layer.mLevels;
                 if (grid.mW == 0)
                 {
                     continue;
                 }
+                // The same floors and the same records: the same pairs, and so the same pieces.
+                if (same_records && last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
+                    && last->mPairs[last_layer[l]])
+                {
+                    SK_SECTION_STAGE(PIECES);
+                    const PairSources& had = last->mPairs[last_layer[l]];
+                    next->mPairs[l] = had;
+                    next->mRuns[l] = last->mRuns[last_layer[l]];
+                    appendRun(s, next->mRuns[l], layer);
+                    for (const PairSource& src : *had)
+                    {
+                        planes_used.push_back(src.mPlane);
+                    }
+                    stats.mPairs += static_cast<U32>(had->size());
+                    stats.mReused += static_cast<U32>(had->size());
+                    continue;
+                }
+                if (!bucketed)
+                {
+                    bucketRecords();
+                }
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
                 pair_keys.clear();
-#if AL_BENCH
-                auto pairs_timer = std::make_unique<SectionStageTimer>(SectionStage::PAIRS);
-#endif
+                SK_SECTION_STAGE_START(pairs_timer, PAIRS);
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
                 // A box of cells' planes: its distinct levels, few, kept unsorted until the end.
@@ -1860,30 +2112,115 @@ namespace skmap
                     }
                 }
                 // A record over several buckets is found once per bucket: sort the keys and keep each once.
-                sortKeys(pair_keys, key_scratch);
-                pair_keys.erase(std::unique(pair_keys.begin(), pair_keys.end()), pair_keys.end());
-                pairs.reserve(pair_keys.size());
-                for (U64 k : pair_keys)
                 {
-                    pairs.emplace_back(static_cast<U32>(k >> 32), static_cast<S32>(static_cast<U32>(k) ^ 0x80000000u));
+                    SK_SECTION_STAGE(PAIR_SORT);
+                    sortKeys(pair_keys, key_scratch);
+                    pair_keys.erase(std::unique(pair_keys.begin(), pair_keys.end()), pair_keys.end());
+                    pairs.reserve(pair_keys.size());
+                    for (U64 k : pair_keys)
+                    {
+                        pairs.emplace_back(static_cast<U32>(k >> 32), static_cast<S32>(static_cast<U32>(k) ^ 0x80000000u));
+                    }
                 }
-#if AL_BENCH
-                pairs_timer.reset();
-#endif
+                SK_SECTION_STAGE_STOP(pairs_timer);
+                stats.mPairs += static_cast<U32>(pairs.size());
 
                 // 6. Pieces, in (record, plane, group) order.
+                SK_SECTION_STAGE(PIECES);
+                std::vector<PairSource>* fresh = nullptr;
+                const std::vector<PairSource>* old_sources = nullptr;
+                const std::vector<SectionPiece>* old_run = nullptr;
+                // The same floors cut by the same records at the same planes, in the same order, make the same pieces:
+                // the last build's, which hold the slices the cache would hand back.
+                if (next)
+                {
+                    const PairSources* had = last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
+                                                 ? &last->mPairs[last_layer[l]]
+                                                 : nullptr;
+                    bool same = had && *had && (*had)->size() == pairs.size();
+                    for (size_t k = 0; same && k < pairs.size(); ++k)
+                    {
+                        same = (**had)[k].same(*recs[pairs[k].first], pairs[k].second);
+                    }
+                    if (same)
+                    {
+                        next->mPairs[l] = *had;
+                        next->mRuns[l] = last->mRuns[last_layer[l]];
+                        appendRun(s, next->mRuns[l], layer);
+                        for (const auto& pq : pairs)
+                        {
+                            planes_used.push_back(pq.second);
+                        }
+                        stats.mReused += static_cast<U32>(pairs.size());
+                        continue;
+                    }
+                    // Otherwise, on the same floors, each pair the last build also had makes the pieces it made then:
+                    // a pair's pieces read its record, its plane and the layer's floors, never the other pairs.
+                    if (had && *had)
+                    {
+                        old_sources = had->get();
+                        old_run = last->mRuns[last_layer[l]].get();
+                        by_source.clear();
+                        for (size_t k = 0; k < old_sources->size(); ++k)
+                        {
+                            by_source.emplace_back(sourceHash((*old_sources)[k]), static_cast<U32>(k));
+                        }
+                        std::sort(by_source.begin(), by_source.end());
+                    }
+                    auto sources = std::make_shared<std::vector<PairSource>>(pairs.size());
+                    fresh = sources.get();
+                    for (size_t k = 0; k < pairs.size(); ++k)
+                    {
+                        const sknav::Record& r = *recs[pairs[k].first];
+                        PairSource& src = (*sources)[k];
+                        src.mSignature = r.mSignature;
+                        src.mOrigin = r.mOrigin;
+                        src.mPart = r.mPart;
+                        src.mRoot = r.mRoot;
+                        src.mPlane = pairs[k].second;
+                        src.mShape = r.mShape;
+                        src.mProvenance = r.mProvenance;
+                    }
+                    next->mPairs[l] = std::move(sources);
+                }
+                if (layer_index.empty())
+                {
+                    SK_SECTION_STAGE(LAYER_INDEX);
+                    buildLayerIndexes(s, layer_index);
+                    poly_seen.assign(s.mPolys.size(), 0);
+                }
                 const LayerIndex& index = layer_index[l];
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
                     return layerFloorAt(s, index, p, z);
                 };
-                // Room for this layer's pieces, about one and a half per pair, growing geometrically.
-                const size_t want = s.mPieces.size() + pairs.size() + pairs.size() / 2;
-                if (want > s.mPieces.capacity())
+                // The layer's run, with room for about one and a half pieces per pair.
+                auto run = std::make_shared<std::vector<SectionPiece>>();
+                run->reserve(pairs.size() + pairs.size() / 2);
+                for (size_t pk = 0; pk < pairs.size(); ++pk)
                 {
-                    s.mPieces.reserve(llmax(want, s.mPieces.capacity() + s.mPieces.capacity() / 2));
-                }
-                for (const auto& pq : pairs)
-                {
+                    const auto& pq = pairs[pk];
+                    if (fresh)
+                    {
+                        (*fresh)[pk].mFirst = static_cast<U32>(run->size());
+                    }
+                    if (old_run)
+                    {
+                        const PairSource& src = (*fresh)[pk];
+                        const U64 h = sourceHash(src);
+                        const PairSource* found = nullptr;
+                        for (auto it = std::lower_bound(by_source.begin(), by_source.end(), std::make_pair(h, 0u));
+                             it != by_source.end() && it->first == h && !found; ++it)
+                        {
+                            found = (*old_sources)[it->second].same(src) ? &(*old_sources)[it->second] : nullptr;
+                        }
+                        if (found)
+                        {
+                            run->insert(run->end(), old_run->begin() + found->mFirst, old_run->begin() + found->mFirst + found->mCount);
+                            planes_used.push_back(pq.second);
+                            stats.mReused++;
+                            continue;
+                        }
+                    }
                     const sknav::Record& rec = *recs[pq.first];
                     const S32 q = pq.second;
                     const SlicePtr sl = sliceOf(pq.first, q);
@@ -2013,8 +2350,7 @@ namespace skmap
                     // Pieces are made in place, the layer listing each as it is made.
                     const SectionStyle style = rec.mProvenance == sknav::Provenance::BOX ? SectionStyle::PROVISIONAL : SectionStyle::SOLID;
                     auto newPiece = [&]() -> SectionPiece& {
-                        layer.mPieces.push_back(static_cast<U32>(s.mPieces.size()));
-                        SectionPiece& piece = s.mPieces.emplace_back();
+                        SectionPiece& piece = run->emplace_back();
                         piece.mSlice = sl;
                         piece.mShift = shift;
                         piece.mPlane = q;
@@ -2097,6 +2433,18 @@ namespace skmap
                         piece.mMin = lo + shift;
                         piece.mMax = hi + shift;
                     }
+                }
+                if (fresh)
+                {
+                    for (size_t pk = 0; pk < fresh->size(); ++pk)
+                    {
+                        (*fresh)[pk].mCount = static_cast<U32>((pk + 1 < fresh->size() ? (*fresh)[pk + 1].mFirst : run->size()) - (*fresh)[pk].mFirst);
+                    }
+                }
+                appendRun(s, run, layer);
+                if (next)
+                {
+                    next->mRuns[l] = std::move(run);
                 }
             }
             std::sort(planes_used.begin(), planes_used.end());
@@ -2833,9 +3181,11 @@ namespace skmap
             return a < b;
         });
 
+        std::shared_ptr<SectionMemo> memo;
         if (input.mRecords)
         {
-            buildSection(s, input, cache);
+            memo = cache ? std::make_shared<SectionMemo>() : nullptr;
+            buildSection(s, input, cache, memo.get());
         }
         classifyMarks(s, input);
         sampleContours(s);
@@ -2847,11 +3197,20 @@ namespace skmap
                 poly.mCoverage = static_cast<U8>(input.mCoverage(at));
             }
         }
-        hashCells(s, input);
+        {
+            SK_SECTION_STAGE(HASH);
+            hashCells(s, input);
+        }
         for (const TileInput& tile : input.mTiles)
         {
             s.mBuilt.insert({ static_cast<S32>(std::floor((tile.mMin.mdV[VX] + 1.0) / LATTICE_M)),
                               static_cast<S32>(std::floor((tile.mMin.mdV[VY] + 1.0) / LATTICE_M)) });
+        }
+        if (memo)
+        {
+            // The scene is finished and never changes again: the next build may read it.
+            memo->mScene = scene;
+            cache->memo() = std::move(memo);
         }
         return scene;
     }

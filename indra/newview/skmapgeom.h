@@ -34,7 +34,9 @@
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
+#include <algorithm>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -242,6 +244,85 @@ namespace skmap
         LLVector2 mMin, mMax;            ///< scene-local
     };
 
+    /// A scene's section pieces, numbered across its layers in the order they were made. Stored as immutable runs, one
+    /// per layer, so a later scene with an unchanged layer shares its run rather than copying every piece.
+    class SectionPieces
+    {
+    public:
+        typedef std::shared_ptr<const std::vector<SectionPiece>> Run;
+
+        size_t size() const { return mSize; }
+        bool empty() const { return mSize == 0; }
+        const SectionPiece& operator[](size_t i) const
+        {
+            const size_t r = runOf(i);
+            return (*mRuns[r])[i - mStarts[r]];
+        }
+        /// The count pieces numbered from first on, which must lie in one run, as a layer's do: one search for them all
+        /// rather than one per piece.
+        const SectionPiece* span(size_t first, size_t count) const
+        {
+            if (count == 0)
+            {
+                return nullptr;
+            }
+            const size_t r = runOf(first);
+            llassert(first + count <= mStarts[r] + mRuns[r]->size());
+            return mRuns[r]->data() + (first - mStarts[r]);
+        }
+        /// Number the run's pieces from size() on.
+        void append(const Run& run)
+        {
+            if (run && !run->empty())
+            {
+                mStarts.push_back(mSize);
+                mRuns.push_back(run);
+                mSize += run->size();
+            }
+        }
+
+        class const_iterator
+        {
+        public:
+            typedef std::forward_iterator_tag iterator_category;
+            typedef SectionPiece value_type;
+            typedef std::ptrdiff_t difference_type;
+            typedef const SectionPiece* pointer;
+            typedef const SectionPiece& reference;
+
+            const_iterator(const SectionPieces* pieces, size_t run, size_t at) : mPieces(pieces), mRun(run), mAt(at) {}
+            reference operator*() const { return (*mPieces->mRuns[mRun])[mAt]; }
+            pointer operator->() const { return &**this; }
+            const_iterator& operator++()
+            {
+                if (++mAt == mPieces->mRuns[mRun]->size())
+                {
+                    ++mRun;
+                    mAt = 0;
+                }
+                return *this;
+            }
+            bool operator==(const const_iterator& o) const { return mRun == o.mRun && mAt == o.mAt; }
+            bool operator!=(const const_iterator& o) const { return !(*this == o); }
+
+        private:
+            const SectionPieces* mPieces;
+            size_t mRun, mAt;
+        };
+        const_iterator begin() const { return const_iterator(this, 0, 0); }
+        const_iterator end() const { return const_iterator(this, mRuns.size(), 0); }
+
+    private:
+        size_t runOf(size_t i) const
+        {
+            return static_cast<size_t>(std::upper_bound(mStarts.begin(), mStarts.end(), i) - mStarts.begin()) - 1;
+        }
+
+        std::vector<Run> mRuns;
+        std::vector<size_t> mStarts;    ///< each run's first number
+        size_t mSize = 0;
+    };
+
     /// Floor levels per global 1 m cell. mCell: 0 = no levels, else 1 + offset into mLists where [count, k0, k1, ...] is stored.
     struct LevelGrid
     {
@@ -254,6 +335,8 @@ namespace skmap
     {
         F32 mMs = 0.f;
         U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mRecords = 0;
+        U32 mPairs = 0;                 ///< (record, plane) pairs over every layer, a record counted in each it meets
+        U32 mReused = 0;                ///< of mPairs, those whose pieces came whole from the last build
     };
 
     /// Whether the global 1 m cell lists floor level k.
@@ -270,7 +353,7 @@ namespace skmap
         std::set<std::pair<S32, S32>> mFootprint;   ///< global 4 m cells its polygons meet
         std::vector<U32> mMarks;                ///< into Scene::mMarks
         std::vector<U32> mContours;             ///< into Scene::mContours
-        std::vector<U32> mPieces;               ///< into Scene::mPieces; empty without a section
+        std::vector<U32> mPieces;               ///< into Scene::mPieces, consecutive; empty without a section
         LevelGrid mLevels;                      ///< empty without a section
     };
 
@@ -310,7 +393,7 @@ namespace skmap
         /// Per layer, a hash over its line marks: the ribbons are keyed by it.
         std::vector<U64> mMarkHashes;
         bool mHasSection = false;
-        std::vector<SectionPiece> mPieces;
+        SectionPieces mPieces;
         SectionStats mSectionStats;
         /// Per SceneInput::mDoors entry, its leaf records, empty when none were found.
         std::vector<std::vector<sknav::RecordPtr>> mDoorLeaves;
@@ -322,6 +405,13 @@ namespace skmap
     };
 
     typedef std::shared_ptr<const Scene> ScenePtr;
+
+    /// A layer's section pieces in its order, null when it has none: they lie in one run, so a loop over them pays
+    /// no search per piece.
+    inline const SectionPiece* layerPieces(const Scene& s, const SceneLayer& layer)
+    {
+        return layer.mPieces.empty() ? nullptr : s.mPieces.span(layer.mPieces.front(), layer.mPieces.size());
+    }
 
     constexpr F32 HASH_REACH_M = 2.f;           ///< what a leaf's raster reads past its edge: the halo cap
 
