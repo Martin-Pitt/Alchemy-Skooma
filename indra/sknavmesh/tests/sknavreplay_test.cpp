@@ -26,8 +26,10 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavairdebug.h"
 #include "../sknavairdistil.h"
 #include "../sknavbuildstats.h"
+#include "../sknavenclosure.h"
 #include "../sknavflights.h"
 #include "../sknavannotate.h"
 #include "../sknavlayout.h"
@@ -1181,5 +1183,249 @@ namespace tut
             }
         }
         ensure("bucket flags on Detour's polys", flagged > 0);
+    }
+
+    // SKNAV_AIR_OVERLAY_CENSUS names a census, SKNAV_AIR_OVERLAY_OUT a folder: one
+    // top view per air overlay mode, gathered as the viewer gathers it.
+    template<> template<>
+    void sknavreplay_object::test<12>()
+    {
+        set_test_name("render the air overlay's modes headless, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_CENSUS");
+        if (path.empty())
+        {
+            return;
+        }
+        // SKNAV_AIR_OVERLAY_AIR=radius builds air near the census camera only, as the viewer does; files then take a radius_ prefix.
+        const bool radius = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_AIR") == "radius";
+        const std::string dir = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_OUT") + (radius ? "/radius_" : "/");
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mAir = radius ? AirMode::RADIUS : AirMode::EVERYWHERE;
+        ReplayResult r;
+        replayCensus(c, options, r);
+
+        // A software stand-in for the overlay's draw: fills by height, then lines, alpha-blended.
+        struct Canvas : AirDebugSink
+        {
+            struct Quad { LLVector3 p[4]; LLColor4 c; F32 z; };
+            struct Seg { LLVector3 a, b; LLColor4 c; };
+            std::vector<Quad> mQuads;
+            std::vector<Seg> mSegs;
+            LLVector3 mOffset;
+            U32 mBudget = 1000000, mUsed = 0;
+            bool spend(U32 n) { if (mUsed + n > mBudget) return false; mUsed += n; return true; }
+            bool quad(const LLVector3& a, const LLVector3& b, const LLVector3& cc, const LLVector3& d, const LLColor4& col) override
+            {
+                if (!spend(6)) return false;
+                mQuads.push_back({ { a + mOffset, b + mOffset, cc + mOffset, d + mOffset }, col, a.mV[VZ] + mOffset.mV[VZ] });
+                return true;
+            }
+            bool line(const LLVector3& a, const LLVector3& b, const LLColor4& col) override
+            {
+                if (!spend(2)) return false;
+                mSegs.push_back({ a + mOffset, b + mOffset, col });
+                return true;
+            }
+            void write(const std::string& file, F32 half, bool oblique) const
+            {
+                const S32 W = 800, H = 800;
+                std::vector<F32> img(W * H * 3);
+                for (S32 i = 0; i < W * H; ++i) { img[i * 3] = 16 / 255.f; img[i * 3 + 1] = 16 / 255.f; img[i * 3 + 2] = 20 / 255.f; }
+                const F32 scale = W / (2.f * half);
+                auto px = [&](const LLVector3& p) {
+                    const F32 y = oblique ? p.mV[VY] * 0.5f + p.mV[VZ] : p.mV[VY];
+                    return LLVector2((p.mV[VX] + half) * scale, H - (y + half) * scale);
+                };
+                auto blend = [&](S32 x, S32 y, const LLColor4& col) {
+                    if (x < 0 || y < 0 || x >= W || y >= H) return;
+                    F32* o = &img[(y * W + x) * 3];
+                    for (S32 k = 0; k < 3; ++k) o[k] = o[k] * (1.f - col.mV[3]) + col.mV[k] * col.mV[3];
+                };
+                std::vector<const Quad*> order;
+                for (const Quad& q : mQuads) order.push_back(&q);
+                std::stable_sort(order.begin(), order.end(), [](const Quad* a, const Quad* b) { return a->z < b->z; });
+                for (const Quad* q : order)
+                {
+                    LLVector2 v[4];
+                    F32 x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                    for (S32 k = 0; k < 4; ++k)
+                    {
+                        v[k] = px(q->p[k]);
+                        x0 = llmin(x0, v[k].mV[0]); x1 = llmax(x1, v[k].mV[0]); y0 = llmin(y0, v[k].mV[1]); y1 = llmax(y1, v[k].mV[1]);
+                    }
+                    if (x1 < 0 || y1 < 0 || x0 >= W || y0 >= H) continue;
+                    for (S32 y = llmax(0, S32(std::floor(y0))); y <= llmin(H - 1, S32(std::ceil(y1))); ++y)
+                    {
+                        for (S32 x = llmax(0, S32(std::floor(x0))); x <= llmin(W - 1, S32(std::ceil(x1))); ++x)
+                        {
+                            const F32 sx = x + 0.5f, sy = y + 0.5f;
+                            bool pos = true, neg = true;
+                            for (S32 k = 0; k < 4; ++k)
+                            {
+                                const LLVector2& a = v[k];
+                                const LLVector2& b = v[(k + 1) % 4];
+                                const F32 cr = (b.mV[0] - a.mV[0]) * (sy - a.mV[1]) - (b.mV[1] - a.mV[1]) * (sx - a.mV[0]);
+                                pos = pos && cr >= 0.f;
+                                neg = neg && cr <= 0.f;
+                            }
+                            if (pos || neg) blend(x, y, q->c);
+                        }
+                    }
+                }
+                for (const Seg& s : mSegs)
+                {
+                    const LLVector2 a = px(s.a), b = px(s.b);
+                    const F32 len = llmax(std::fabs(b.mV[0] - a.mV[0]), std::fabs(b.mV[1] - a.mV[1]));
+                    const S32 steps = llmax(1, S32(std::ceil(len)));
+                    if (steps > 4 * W) continue;
+                    for (S32 i = 0; i <= steps; ++i)
+                    {
+                        const F32 t = F32(i) / steps;
+                        blend(S32(a.mV[0] + (b.mV[0] - a.mV[0]) * t), S32(a.mV[1] + (b.mV[1] - a.mV[1]) * t), s.c);
+                    }
+                }
+                std::ofstream out(file, std::ios::binary);
+                out << "P6\n" << W << " " << H << "\n255\n";
+                for (const F32 f : img) out.put(static_cast<char>(llclamp(S32(f * 255.f + 0.5f), 0, 255)));
+            }
+        };
+
+        // Centred on the census agent; the slice on its floor.
+        const LLVector3d centre = c.mAgent;
+        F64 agent_floor = centre.mdV[VZ] - 1.0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                if (!tile.mResult || !tile.mResult->mAir || tile.mMin.mdV[VX] > centre.mdV[VX] || tile.mMax.mdV[VX] < centre.mdV[VX]
+                    || tile.mMin.mdV[VY] > centre.mdV[VY] || tile.mMax.mdV[VY] < centre.mdV[VY])
+                {
+                    continue;
+                }
+                F32 floor = 0.f;
+                if (airFloorUnder(*tile.mResult->mAir, LLVector3(centre - mesh->mOrigin), floor))
+                {
+                    agent_floor = mesh->mOrigin.mdV[VZ] + floor;
+                }
+            }
+        }
+        std::ofstream log(dir + "render.txt");
+        log << "centre " << centre << " floor " << agent_floor << "\n";
+
+        struct Shot { const char* mName; AirDebugMode mMode; F32 mHalf; F32 mSlice; bool mOblique; U32 mBudget; };
+        const Shot shots[] = { { "leaves", AirDebugMode::LEAVES, 24.f, 2.5f, false, 1000000 },
+                               { "gaps", AirDebugMode::GAPS, 24.f, 2.5f, false, 1000000 },
+                               { "gaps_oblique", AirDebugMode::GAPS, 24.f, 2.5f, true, 1000000 },
+                               { "space", AirDebugMode::SPACE, 24.f, 2.5f, false, 1000000 },
+                               { "stamp", AirDebugMode::STAMP, 24.f, 2.5f, false, 1000000 },
+                               { "clearance", AirDebugMode::CLEARANCE, 24.f, 2.5f, false, 1000000 },
+                               { "faces", AirDebugMode::FACES, 12.f, 2.5f, false, 1000000 },
+                               { "sources", AirDebugMode::SPACE, 160.f, 0.f, false, 1000000 },
+                               { "budget", AirDebugMode::GAPS, 96.f, 0.f, false, 200000 } };
+        for (const Shot& shot : shots)
+        {
+            Canvas canvas;
+            canvas.mBudget = shot.mBudget;
+            struct Near { F64 d2; const ReplayMesh* m; TileKey k; const ReplayTile* t; };
+            std::vector<Near> tiles;
+            const F64 reach = shot.mHalf * 1.42;
+            for (const auto& mesh : r.mMeshes)
+            {
+                for (const auto& [key, tile] : mesh->mTiles)
+                {
+                    const F64 dx = llmax(tile.mMin.mdV[VX] - centre.mdV[VX], 0.0, centre.mdV[VX] - tile.mMax.mdV[VX]);
+                    const F64 dy = llmax(tile.mMin.mdV[VY] - centre.mdV[VY], 0.0, centre.mdV[VY] - tile.mMax.mdV[VY]);
+                    if (dx * dx + dy * dy <= reach * reach) tiles.push_back({ dx * dx + dy * dy, mesh.get(), key, &tile });
+                }
+            }
+            std::sort(tiles.begin(), tiles.end(), [](const Near& a, const Near& b) { return a.d2 < b.d2; });
+            U32 drawn = 0, cut = 0, coarse_tiles = 0;
+            for (size_t i = 0; i < tiles.size(); ++i)
+            {
+                const Near& n = tiles[i];
+                const LLVector3d rel = n.m->mOrigin - centre;
+                canvas.mOffset = LLVector3(rel);
+                const F32 lo = shot.mSlice > 0.f ? F32(agent_floor - n.m->mOrigin.mdV[VZ] - shot.mSlice) : -1e30f;
+                const F32 hi = shot.mSlice > 0.f ? F32(agent_floor - n.m->mOrigin.mdV[VZ] + shot.mSlice) : 1e30f;
+                bool ok = true;
+                if (shot.mMode == AirDebugMode::STAMP)
+                {
+                    const dtNavMesh* nav = n.m->mNav[static_cast<S32>(AgentClass::AVATAR)];
+                    const dtMeshTile* dt = nav ? nav->getTileAt(n.k.mY, n.k.mX, 0) : nullptr;
+                    if (!dt || !dt->header) continue;
+                    for (S32 p = 0; ok && p < dt->header->polyCount; ++p)
+                    {
+                        const dtPoly& poly = dt->polys[p];
+                        if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+                        const U32 id = n.m->polySpace(dt, p);
+                        LLColor4 col = spaceColour(id);
+                        col.mV[3] = id ? 0.55f : 0.25f;
+                        const LLVector3 v0 = fromRecast(&dt->verts[poly.verts[0] * 3]);
+                        if (v0.mV[VZ] < lo || v0.mV[VZ] > hi) continue;
+                        for (S32 k = 1; ok && k + 1 < poly.vertCount; ++k)
+                        {
+                            const LLVector3 v1 = fromRecast(&dt->verts[poly.verts[k] * 3]), v2 = fromRecast(&dt->verts[poly.verts[k + 1] * 3]);
+                            ok = canvas.quad(v0, v1, v2, v2, col);
+                        }
+                        for (S32 k = 0; ok && k < poly.vertCount; ++k)
+                        {
+                            const U16 nei = poly.neis[k];
+                            if (nei && !(nei & DT_EXT_LINK) && n.m->polySpace(dt, nei - 1) == id) continue;
+                            if (nei & DT_EXT_LINK) continue;
+                            LLColor4 e = spaceColour(id);
+                            e.mV[3] = 0.95f;
+                            ok = canvas.line(fromRecast(&dt->verts[poly.verts[k] * 3]), fromRecast(&dt->verts[poly.verts[(k + 1) % poly.vertCount] * 3]), e);
+                        }
+                    }
+                }
+                else
+                {
+                    if (!n.t->mResult || !n.t->mResult->mAir) continue;
+                    const TileAir& air = *n.t->mResult->mAir;
+                    const bool coarse = n.t->mResult->mCoarseAir;
+                    coarse_tiles += coarse ? 1 : 0;
+                    AirDebugInput in;
+                    in.mMode = shot.mMode;
+                    in.mCoarse = coarse;
+                    in.mClimb = air.mUnit > 0.f ? S32(0.75f / air.mUnit) : 0;
+                    in.mCentre = LLVector3(centre - n.m->mOrigin);
+                    in.mReach = F32(reach);
+                    in.mSliceLo = lo;
+                    in.mSliceHi = hi;
+                    std::vector<U32> gap_space(air.mGaps.size(), 0);
+                    const TileEnclosure* te = n.m->mEnclosure ? n.m->mEnclosure->tile(n.k) : nullptr;
+                    if (te && te->mAir == n.t->mResult->mAir && te->mGaps.size() == gap_space.size())
+                    {
+                        const std::vector<U32>& ids = n.m->mEnclosure->mSpaceIds;
+                        for (size_t g = 0; g < gap_space.size(); ++g)
+                        {
+                            const U16 sp = te->mGaps[g].mSpace;
+                            gap_space[g] = sp && sp <= ids.size() ? ids[sp - 1] : 0;
+                        }
+                    }
+                    in.mGapSpace = gap_space.data();
+                    ok = gatherAirDebug(air, in, canvas);
+                    if (ok && coarse)
+                    {
+                        const F32 z = F32(agent_floor - n.m->mOrigin.mdV[VZ]);
+                        const LLVector3 a(n.t->mMin - n.m->mOrigin), b(n.t->mMax - n.m->mOrigin);
+                        const LLVector3 q[4] = { LLVector3(a.mV[0], a.mV[1], z), LLVector3(b.mV[0], a.mV[1], z), LLVector3(b.mV[0], b.mV[1], z), LLVector3(a.mV[0], b.mV[1], z) };
+                        for (S32 k = 0; ok && k < 4; ++k) ok = canvas.line(q[k], q[(k + 1) % 4], LLColor4(0.65f, 0.45f, 1.f, 0.6f));
+                    }
+                }
+                ++drawn;
+                if (!ok)
+                {
+                    cut = U32(tiles.size() - i);
+                    break;
+                }
+            }
+            canvas.write(dir + shot.mName + ".ppm", shot.mHalf, shot.mOblique);
+            log << shot.mName << ": " << canvas.mUsed << " verts over " << drawn << " tiles (" << coarse_tiles << " coarse), " << cut
+                << " cut by the budget of " << shot.mBudget << "\n";
+        }
     }
 }
