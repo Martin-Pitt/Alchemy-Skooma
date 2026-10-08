@@ -45,8 +45,8 @@ namespace sknav
 {
     // Whoever adds a field to Record packs and unpacks it below, then updates this size.
     static_assert(sizeof(void*) != 8 || sizeof(Record) == 224, "a new Record field must go into the census export");
-    // And a TileBuildInput field goes into the params, unless a tile sets it.
-    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 264, "a new TileBuildInput field must go into the census export");
+    // And a TileBuildInput field goes into the params, unless a tile sets it (mCoarseAir is the tile's).
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 272, "a new TileBuildInput field must go into the census export");
     // And a CensusRoot field goes into writeRootTable and the reader.
     static_assert(sizeof(void*) != 8 || sizeof(CensusRoot) == sizeof(LLUUID) + 2 * sizeof(std::string) + 8, "a new CensusRoot field must go into the root table");
 

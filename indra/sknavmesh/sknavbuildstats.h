@@ -82,8 +82,8 @@ namespace sknav
     {
         enum Stage : S32
         {
-            PARTITION, RASTERISE, FILL, CUT, BRIDGES, CULL, FILTERS, COMPACT, ERODE, REGIONS, CONTOURS, POLYMESH, FLIGHTMAP, DETAIL,
-            WALLS, AIR, EDGES, DETOUR, NUM_STAGES
+            PARTITION, RASTERISE, FILL, CUT, BRIDGES, CULL, FILTERS, COMPACT, ERODE, REGIONS, CONTOURS, POLYMESH, STAMP, FLIGHTMAP,
+            DETAIL, WALLS, AIR, EDGES, DETOUR, NUM_STAGES
         };
         bool mBuilt = false;
         F64 mMs[NUM_STAGES] = {};
@@ -118,6 +118,7 @@ namespace sknav
         U16 mTop = 0;               ///< in cells from the heightfield's base
         U16 mRegion = 0;
         U8 mCode = 0;               ///< the slope partition's code, before it is unfolded
+        U32 mGap = U32_MAX;         ///< its gap in the raster's span map, U32_MAX for none
     };
 
     struct TileBuildStats
@@ -127,6 +128,7 @@ namespace sknav
         F64 mTotalMs = 0.0;
         F64 mRasterMs = 0.0;            ///< the raster stage, soup to the held raster
         F64 mPolyMs = 0.0;              ///< the polygon stage
+        F64 mCoarseAirMs = 0.0;         ///< of the raster stage, the coarse air of a tile without its own
         /// What the raster stage hands the polygon stage: all of it, its compact heightfield, its edge field.
         size_t mHeldBytes = 0;
         size_t mHeldChfBytes = 0;

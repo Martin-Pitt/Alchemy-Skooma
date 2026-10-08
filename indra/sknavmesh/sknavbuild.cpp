@@ -32,6 +32,7 @@
 #include "Recast.h"
 #include "RecastAlloc.h"
 #include "sknavflights.h"
+#include "sknavlayout.h"
 #include "sknavwalls.h"
 
 #include <algorithm>
@@ -1173,7 +1174,8 @@ namespace
 
     /// AVATAR's walkable spans on the tile proper, and the spans under each poly:
     /// those of the poly's region in the columns whose centres it covers.
-    void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, TileBuildStats& out)
+    void recordPolySpans(const rcCompactHeightfield& chf, const rcPolyMesh& pmesh, S32 border, S32 tile_cells, const std::vector<U32>& span_gap,
+                         TileBuildStats& out)
     {
         std::vector<U32> index(chf.spanCount, U32_MAX);
         for (S32 z = border; z < border + tile_cells; ++z)
@@ -1193,6 +1195,7 @@ namespace
                     span.mTop = chf.spans[i].y;
                     span.mRegion = chf.spans[i].reg;
                     span.mCode = chf.areas[i];
+                    span.mGap = i < span_gap.size() ? span_gap[i] : U32_MAX;
                     index[i] = static_cast<U32>(out.mSpans.size());
                     out.mSpans.push_back(span);
                 }
@@ -1564,8 +1567,31 @@ namespace sknav
     const char* ClassBuildStats::stageName(S32 stage)
     {
         static const char* names[NUM_STAGES] = { "partition", "rasterise", "fill", "cut", "bridges", "cull", "filters", "compact", "erode",
-                                                 "regions", "contours", "polymesh", "flightmap", "detail", "walls", "air", "edges", "detour" };
+                                                 "regions", "contours", "polymesh", "stamp", "flightmap", "detail", "walls", "air", "edges", "detour" };
         return stage >= 0 && stage < NUM_STAGES ? names[stage] : "";
+    }
+
+    TileAirPtr buildCoarseAir(const TileBuildInput& input)
+    {
+        const S32 factor = static_cast<S32>(std::lround(COARSE_AIR_M / std::max(input.mCell, 1e-3f)));
+        if (factor < 1 || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
+        {
+            return nullptr;
+        }
+        TileBuildInput c = input;
+        c.mCell = COARSE_AIR_M;
+        c.mAir = true;
+        c.mCoarseAir = false;
+        c.mAirPad = airPadCells(c.mCell);
+        c.mPartitionSlope = partitionSlope(input);
+        c.mWallFaces = false;
+        c.mRunoff = false;
+        for (bool& e : c.mEdges)
+        {
+            e = false;
+        }
+        TileBuildResult cr;
+        return rasteriseTile(c, cr) && cr.mAir ? upsampleAir(*cr.mAir, factor) : nullptr;
     }
 
     TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats)
@@ -2180,6 +2206,19 @@ namespace sknav
             clock.restart();
         }
 
+        // Past the air's radius the spaces still need air: the tile again at the coarse cell, in this tile's cells.
+        TileAirPtr coarse;
+        if (!input.mAir && input.mCoarseAir)
+        {
+            const auto coarse_started = std::chrono::steady_clock::now();
+            coarse = buildCoarseAir(input);
+            if (stats)
+            {
+                stats->mCoarseAirMs = std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - coarse_started).count();
+            }
+            clock.restart();
+        }
+
         // What the polygons are built from, kept; the heightfields go.
         auto raster = std::make_shared<TileRaster>();
         takeEdgeField(view.mHf, raster->mEdges);
@@ -2225,6 +2264,15 @@ namespace sknav
                 }
             }
         }
+        if (coarse)
+        {
+            const S32 z_shift = static_cast<S32>(std::lround((mem.chf->bmin[1] - coarse->mOrigin.mV[VZ]) / coarse->mUnit));
+            leafSpanGaps(*mem.chf, cfg.borderSize, *coarse, z_shift, static_cast<S32>(std::lround(COARSE_AIR_M / input.mCell)), raster->mSpanGap);
+            raster->mAir = coarse;
+            result.mAir = coarse;
+            result.mAirBuilt = true;
+            result.mCoarseAir = true;
+        }
         raster->mChf.reset(mem.chf);
         mem.chf = nullptr;
         if (astats)
@@ -2252,7 +2300,8 @@ namespace sknav
         return raster;
     }
 
-    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats)
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats,
+                        const TileStampInput* stamp_input, const TileStamp* stamp)
     {
         const auto started = std::chrono::steady_clock::now();
         rcContext ctx(false);
@@ -2281,6 +2330,12 @@ namespace sknav
             result.mError = "compact copy";
             finish();
             return;
+        }
+        const bool stamped = stamp_input && stamp && stamp->mSpanCode.size() == static_cast<size_t>(mem.chf->spanCount);
+        if (stamped)
+        {
+            // Each span's palette code: a region grows within one, so within one space.
+            std::memcpy(mem.chf->areas, stamp->mSpanCode.data(), stamp->mSpanCode.size());
         }
         bool regions = false;
         switch (input.mPartition)
@@ -2323,13 +2378,35 @@ namespace sknav
             return;
         }
         clock.lap(ClassBuildStats::POLYMESH);
+        // Refs number a tile's polys in 12 bits: more would alias silently.
+        if (mem.pmesh->npolys > MAX_POLYS_PER_TILE)
+        {
+            result.mPolyOverflow = true;
+            result.mPolys[avatar] = mem.pmesh->npolys;
+            result.mError = "polys over the tile's budget";
+            finish();
+            return;
+        }
+        if (stamped)
+        {
+            stampGeometry(*mem.pmesh, *mem.chf, cfg.borderSize, raster.mSpanGap, *stamp_input, *stamp, result.mStamp);
+            for (S32 i = 0; i < mem.chf->spanCount; ++i)
+            {
+                mem.chf->areas[i] = stamp->mPalette[mem.chf->areas[i]].mSlope;
+            }
+            for (S32 i = 0; i < mem.pmesh->npolys; ++i)
+            {
+                mem.pmesh->areas[i] = stamp->mPalette[mem.pmesh->areas[i]].mSlope;
+            }
+            clock.lap(ClassBuildStats::STAMP);
+        }
         if (astats)
         {
             astats->mChfSpans = static_cast<U32>(mem.chf->spanCount);
             astats->mChfBytes = static_cast<size_t>(mem.chf->width) * mem.chf->height * sizeof(rcCompactCell) +
                                 static_cast<size_t>(mem.chf->spanCount) * (sizeof(rcCompactSpan) + 1 + (mem.chf->dist ? 2 : 0));
             astats->mWalkableSpans = static_cast<U32>(mem.chf->spanCount - std::count(mem.chf->areas, mem.chf->areas + mem.chf->spanCount, RC_NULL_AREA));
-            recordPolySpans(*mem.chf, *mem.pmesh, cfg.borderSize, cfg.tileSize, *stats);
+            recordPolySpans(*mem.chf, *mem.pmesh, cfg.borderSize, cfg.tileSize, raster.mSpanGap, *stats);
             clock.restart();
         }
         {
@@ -2447,6 +2524,17 @@ namespace sknav
             const U8 area = mem.pmesh->areas[i] == RC_WALKABLE_AREA ? AREA_OBJECT : mem.pmesh->areas[i];
             mem.pmesh->areas[i] = area;
             mem.pmesh->flags[i] = area ? static_cast<unsigned short>(1u << area) : 0;
+        }
+        // Flights are part of the geometry; where a poly is and what it touches are bound at publish.
+        for (const Flight& f : result.mFlights[avatar])
+        {
+            for (const U16 p : f.mPolys)
+            {
+                if (p < mem.pmesh->npolys && mem.pmesh->flags[p])
+                {
+                    mem.pmesh->flags[p] |= POLY_FLIGHT;
+                }
+            }
         }
 
         // A drop link becomes a one-way off-mesh connection, so findPath

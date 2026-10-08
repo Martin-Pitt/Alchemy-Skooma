@@ -194,6 +194,91 @@ namespace sknav
         constexpr U32 TAG_FLIGHTS[NUM_CLASSES] = { tag('F', 'L', 'T', '0') };
         constexpr U32 TAG_LEDGES = tag('L', 'D', 'G', ' ');
         constexpr U32 TAG_RUNOFF = tag('R', 'U', 'N', ' ');
+        constexpr U32 TAG_STAMP = tag('S', 'T', 'M', 'P');
+
+        /// A stamped geometry: a 32 byte header, then per poly its component and
+        /// gap, the portal edges, the stamp's portals and its counts.
+        void writeStamp(Writer& w, const TileStampGeom& g, U64 key)
+        {
+            w.pod(TILE_PRODUCT_VERSION);
+            w.pod(g.mPattern);
+            w.pod(key);
+            w.pod(static_cast<U16>(g.mComponents));
+            w.pod(static_cast<U16>(g.mPolyComponent.size()));
+            w.pod(static_cast<U16>(g.mPortalEdges.size()));
+            w.pod(static_cast<U16>(g.mPortals.size()));
+            w.pod(U32(0));
+            for (const U16 c : g.mPolyComponent)
+            {
+                w.pod(c);
+            }
+            for (const U32 gap : g.mPolyGap)
+            {
+                w.pod(gap);
+            }
+            for (const StampPortalEdge& e : g.mPortalEdges)
+            {
+                w.pod(e.mPoly);
+                w.pod(e.mEdge);
+                w.pod(e.mSide);
+                w.pod(e.mPortal);
+            }
+            for (const StampPortal& p : g.mPortals)
+            {
+                w.vec(p.mCentre);
+                w.vec(p.mNormal);
+                w.vec(p.mA);
+                w.vec(p.mB);
+                w.pod(p.mSide[0]);
+                w.pod(p.mSide[1]);
+                w.pod(p.mKind);
+                w.pod(p.mPortal);
+            }
+            w.pod(g.mOverflow);
+            for (const U32 v : { g.mPairs, g.mDoorSpans, g.mFloodSpans, g.mUnspacedSpans, g.mImpurePolys })
+            {
+                w.pod(v);
+            }
+        }
+
+        bool readStamp(Reader& r, U64 key, TileStampGeom& g)
+        {
+            U32 version = 0, reserved = 0;
+            U64 stored = 0;
+            U16 comps = 0, polys = 0, edges = 0, portals = 0;
+            if (!(r.pod(version) && r.pod(g.mPattern) && r.pod(stored) && r.pod(comps) && r.pod(polys) && r.pod(edges) && r.pod(portals) &&
+                  r.pod(reserved)) ||
+                version != TILE_PRODUCT_VERSION || stored != key || static_cast<size_t>(polys) * 6 + static_cast<size_t>(edges) * 6 > r.left())
+            {
+                return false;
+            }
+            g.mStamped = true;
+            g.mComponents = comps;
+            g.mPolyComponent.resize(polys);
+            g.mPolyGap.resize(polys);
+            g.mPortalEdges.resize(edges);
+            g.mPortals.resize(portals);
+            bool ok = true;
+            for (U16& c : g.mPolyComponent)
+            {
+                ok = ok && r.pod(c);
+            }
+            for (U32& gap : g.mPolyGap)
+            {
+                ok = ok && r.pod(gap);
+            }
+            for (StampPortalEdge& e : g.mPortalEdges)
+            {
+                ok = ok && r.pod(e.mPoly) && r.pod(e.mEdge) && r.pod(e.mSide) && r.pod(e.mPortal) && e.mPortal < portals && e.mPoly < polys;
+            }
+            for (StampPortal& p : g.mPortals)
+            {
+                ok = ok && r.vec(p.mCentre) && r.vec(p.mNormal) && r.vec(p.mA) && r.vec(p.mB) && r.pod(p.mSide[0]) && r.pod(p.mSide[1]) && r.pod(p.mKind) &&
+                     r.pod(p.mPortal);
+            }
+            return ok && r.pod(g.mOverflow) && r.pod(g.mPairs) && r.pod(g.mDoorSpans) && r.pod(g.mFloodSpans) && r.pod(g.mUnspacedSpans) &&
+                   r.pod(g.mImpurePolys);
+        }
 
         constexpr size_t GAP_BYTES = 8;
 
@@ -479,7 +564,7 @@ namespace sknav
     }
 
     // Whoever adds a field to TileBuildInput keys it below, then updates this size.
-    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 264, "a new TileBuildInput field must go into tileContentKey");
+    static_assert(sizeof(void*) != 8 || sizeof(TileBuildInput) == 272, "a new TileBuildInput field must go into tileContentKey");
 
     U64 tileContentKey(const TileBuildInput& input)
     {
@@ -526,6 +611,7 @@ namespace sknav
         h = mix(h, input.mAir);
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
+        h = mix(h, input.mCoarseAir);
 
         // The land by its samples, never by when a patch last arrived.
         const TerrainWindow& t = input.mTerrain;
@@ -561,7 +647,7 @@ namespace sknav
         w.pod(result.mTriangles);
         w.pod(result.mMillis);
         w.pod(result.mExcludeMillis);
-        w.pod(static_cast<U8>(result.mAirBuilt));
+        w.pod(static_cast<U8>((result.mAirBuilt ? 1 : 0) | (result.mCoarseAir ? 2 : 0)));
         w.close(s);
 
         for (S32 c = 0; c < NUM_CLASSES; ++c)
@@ -648,6 +734,13 @@ namespace sknav
             w.close(s);
         }
 
+        if (result.mStamp.mStamped)
+        {
+            s = w.open(TAG_STAMP);
+            writeStamp(w, result.mStamp, key);
+            w.close(s);
+        }
+
         w.pod(checksum(w.mOut.data(), w.mOut.size()));
         return std::move(w.mOut);
     }
@@ -701,7 +794,8 @@ namespace sknav
                 {
                     return false;
                 }
-                res.mAirBuilt = air_built != 0;
+                res.mAirBuilt = (air_built & 1) != 0;
+                res.mCoarseAir = (air_built & 2) != 0;
                 meta = true;
                 continue;
             }
@@ -784,6 +878,10 @@ namespace sknav
                 ok = readAir(sec, *air);
                 res.mAir = air;
             }
+            else if (t == TAG_STAMP)
+            {
+                ok = readStamp(sec, key, res.mStamp);
+            }
             // Any other tag is a section this version does not know: skipped.
             if (!ok)
             {
@@ -796,6 +894,28 @@ namespace sknav
         }
         out = std::move(res);
         return true;
+    }
+
+    U64 stampedKey(U64 content_key, U64 pattern)
+    {
+        return finishKey(mix(mix(SEED, content_key), pattern));
+    }
+
+    TileBuildResult stampedPart(const TileBuildResult& result)
+    {
+        TileBuildResult out;
+        out.mStatus = result.mStatus;
+        out.mMillis = result.mMillis;
+        out.mStamp = result.mStamp;
+        for (S32 c = 0; c < NUM_CLASSES; ++c)
+        {
+            out.mData[c] = result.mData[c];
+            out.mPolys[c] = result.mPolys[c];
+            out.mSegments[c] = result.mSegments[c];
+            out.mLinks[c] = result.mLinks[c];
+            out.mFlights[c] = result.mFlights[c];
+        }
+        return out;
     }
 
     TileAirPtr coarseAir(const TileAir& air)

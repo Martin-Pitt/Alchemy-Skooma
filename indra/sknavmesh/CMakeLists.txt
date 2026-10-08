@@ -25,7 +25,9 @@ target_sources(
     sknavreplay.cpp
     sknavreplaystats.cpp
     sknavskymap.cpp
+    sknavspacefilter.cpp
     sknavspaces.cpp
+    sknavstamp.cpp
     sknavtilecache.cpp
     sknavwalls.cpp
     sknavwind.cpp
@@ -53,7 +55,9 @@ target_sources(
         sknavreplay.h
         sknavreplaystats.h
         sknavskymap.h
+        sknavspacefilter.h
         sknavspaces.h
+        sknavstamp.h
         sknavtilecache.h
         sknavtypes.h
         sknavwalls.h
@@ -102,6 +106,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavprobeseval PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavreplay PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavstamp PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_bench(spacesdraw PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
 endif()

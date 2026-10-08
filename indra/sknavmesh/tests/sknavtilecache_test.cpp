@@ -440,4 +440,55 @@ namespace tut
         const U64 top = finishKey(mix(SEED, 1ull << 63)) ^ finishKey(mix(SEED, 0));
         ensure("low half moves on a top-bit change", (top & 0xffffffffull) != 0);
     }
+
+    template<> template<>
+    void sknavtilecache_object::test<12>()
+    {
+        set_test_name("stamped polys survive packing under their own key, which the raster's key alone never finds");
+        TileBuildResult r;
+        r.mStatus = TileBuildResult::SUCCESS;
+        r.mData[0] = { 1, 2, 3, 4, 5 };
+        r.mPolys[0] = 3;
+        TileStampGeom& g = r.mStamp;
+        g.mStamped = true;
+        g.mPattern = 0x1234567890abcdefull;
+        g.mComponents = 2;
+        g.mPolyComponent = { 0, 1, STAMP_NONE };
+        g.mPolyGap = { 7, SPAN_NO_GAP, 9 };
+        g.mPortalEdges = { { 0, 2, 0, 0 }, { 1, 4, 1, 0 } };
+        StampPortal p;
+        p.mCentre.set(1.f, 2.f, 3.f);
+        p.mNormal.set(1.f, 0.f, 0.f);
+        p.mA.set(1.f, 1.5f, 3.f);
+        p.mB.set(1.f, 2.5f, 3.f);
+        p.mSide[0] = 0;
+        p.mSide[1] = 1;
+        p.mKind = 0;
+        p.mPortal = 5;
+        g.mPortals = { p };
+        g.mOverflow = TileStamp::CODES_MERGED;
+        g.mPairs = 12;
+        g.mDoorSpans = 4;
+        const U64 key = stampedKey(0xfeedull, g.mPattern);
+        ensure("a key of its own", key != 0xfeedull && key != stampedKey(0xfeedull, g.mPattern + 1));
+        const std::vector<U8> bytes = packTileProduct(stampedPart(r), key);
+        TileBuildResult back;
+        ensure("unpacked", unpackTileProduct(bytes.data(), bytes.size(), key, back));
+        const TileStampGeom& h = back.mStamp;
+        ensure("stamped", h.mStamped && h.mPattern == g.mPattern && h.mComponents == 2);
+        ensure("polys", h.mPolyComponent == g.mPolyComponent && h.mPolyGap == g.mPolyGap);
+        ensure("edges", h.mPortalEdges.size() == 2 && h.mPortalEdges[1].mPoly == 1 && h.mPortalEdges[1].mEdge == 4 && h.mPortalEdges[1].mSide == 1);
+        ensure("portals", h.mPortals.size() == 1 && h.mPortals[0].mB == p.mB && h.mPortals[0].mSide[1] == 1 && h.mPortals[0].mPortal == 5);
+        ensure("counts", h.mOverflow == TileStamp::CODES_MERGED && h.mPairs == 12 && h.mDoorSpans == 4);
+        ensure("the Detour bytes", back.mData[0] == r.mData[0] && back.mPolys[0] == 3);
+        TileBuildResult other;
+        ensure("not under the raster's key", !unpackTileProduct(bytes.data(), bytes.size(), 0xfeedull, other));
+        // A static product, air and no Detour, carries no stamp.
+        TileBuildResult plain;
+        plain.mStatus = TileBuildResult::SUCCESS;
+        const std::vector<U8> static_bytes = packTileProduct(plain, 0xfeedull);
+        TileBuildResult static_back;
+        ensure("static unpacked", unpackTileProduct(static_bytes.data(), static_bytes.size(), 0xfeedull, static_back));
+        ensure("no stamp, no Detour", !static_back.mStamp.mStamped && static_back.mData[0].empty());
+    }
 }
