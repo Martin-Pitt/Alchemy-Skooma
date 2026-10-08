@@ -968,12 +968,14 @@ void LLReflectionMapManager::updateCensusPlacement()
     auto workers = LL::WorkQueue::getInstance("ProbeSolids");
     if (mSolidJob.valid() && mSolidJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
     {
-        auto retired = std::move(mSolids);
+        // The scan the old index described goes with it: this is often its last holder, and
+        // freeing a scan's triangle soup took seconds of one frame when it ran here.
+        auto retired = std::make_shared<std::pair<std::shared_ptr<sknav::SolidLattice>, std::shared_ptr<const SKCensusSnapshot>>>(
+            std::move(mSolids), std::move(mSolidsCensus));
         mSolids = mSolidJob.get();
         mSolidsCensus = std::move(mSolidJobCensus);
         mNavRoomsDirty = true;
-        auto held = std::make_shared<std::shared_ptr<sknav::SolidLattice>>(std::move(retired));
-        workers->post([held]() { held->reset(); });
+        workers->post([retired]() { retired->first.reset(); retired->second.reset(); });
     }
     if (!mSolidJob.valid() && census != mSolidsCensus)
     {

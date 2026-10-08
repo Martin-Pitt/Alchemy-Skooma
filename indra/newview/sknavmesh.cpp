@@ -904,6 +904,7 @@ void SKNavMesh::applyLayouts()
                 terrain = tile.mTerrainSignature;
                 if (!tile.mTerrain || tile.mLandStamp != layout.mLand || tile.mWorldStamp != layout.mWorld)
                 {
+                    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout terrain signature");
                     terrain = terrainSignature(tile.mMin, tile.mMax, layout.mPad);
                     tile.mTerrainStale = true;
                 }
@@ -911,6 +912,8 @@ void SKNavMesh::applyLayouts()
                 tile.mWorldStamp = layout.mWorld;
             }
             else { tile.mTerrain.reset(); tile.mTerrainStale = false; }
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout resign");
+            LL_PROFILE_ZONE_NUM(tile.mRecords.size());
             reSign(tile, before, layout.mSignatures[index], terrain, layout.mParams);
             tile.mTerrainSignature = terrain;
             laid.mRecords.swap(before); // Release the old records with the result on a worker.
@@ -921,6 +924,7 @@ void SKNavMesh::applyLayouts()
             if (timer.getElapsedTimeF32() > 0.002f) return;
             auto current = mesh.mDropCursor++;
             if (layout.mKeys.count(current->first)) continue;
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - layout drop tile");
             for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 if (mesh.mNav[cls]) mesh.mNav[cls]->removeTile(mesh.mNav[cls]->getTileRefAt(current->first.mY, current->first.mX, 0), nullptr, nullptr);
             auto retired = std::make_shared<Tile>(std::move(current->second));
@@ -1349,6 +1353,7 @@ void SKNavMesh::schedule()
     };
     if (mBuildCandidates)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - launch builds");
         LLTimer timer;
         S32 launched = 0;
         while (mNextCandidate < mBuildCandidates->size())
@@ -1434,18 +1439,21 @@ void SKNavMesh::update()
     applyLayouts();
 
     // Meshes nothing has claimed for a while are gone with their structure.
-    for (auto it = mMeshes.begin(); it != mMeshes.end();)
     {
-        if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - retire meshes");
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
         {
-            std::shared_ptr<Mesh> retired(std::move(it->second));
-            retireOn(workerQueue(), std::move(retired));
-            it = mMeshes.erase(it);
-            mRevision++;
-        }
-        else
-        {
-            ++it;
+            if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
+            {
+                std::shared_ptr<Mesh> retired(std::move(it->second));
+                retireOn(workerQueue(), std::move(retired));
+                it = mMeshes.erase(it);
+                mRevision++;
+            }
+            else
+            {
+                ++it;
+            }
         }
     }
 
@@ -1469,33 +1477,36 @@ void SKNavMesh::update()
     }
     mRooms->update(*this);
 
-    mStats.mMeshes = static_cast<U32>(mMeshes.size());
-    mStats.mInFlight = mInFlight;
-    mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
-    mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
-    // Keep the last complete counts while a bounded scan runs; partial totals would look like lost tiles.
-    if (scanTiles(mStatsCursor, 0.0005f, [&](Mesh&, const TileKey&, Tile& tile)
-        {
-            ++mScanningStats.mTiles;
-            if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
-            if (!tile.mBuilt) return;
-            ++mScanningStats.mTilesBuilt;
-            mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
-            for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
-            {
-                mScanningStats.mSegments += tile.mSegments[cls] ? static_cast<U32>(tile.mSegments[cls]->size()) : 0;
-                mScanningStats.mLinks += tile.mLinks[cls] ? static_cast<U32>(tile.mLinks[cls]->size()) : 0;
-            }
-        }))
     {
-        mStats.mTiles = mScanningStats.mTiles;
-        mStats.mTilesBuilt = mScanningStats.mTilesBuilt;
-        mStats.mAirTiles = mScanningStats.mAirTiles;
-        mStats.mAirBytes = mScanningStats.mAirBytes;
-        mStats.mFaces = mScanningStats.mFaces;
-        mStats.mSegments = mScanningStats.mSegments;
-        mStats.mLinks = mScanningStats.mLinks;
-        mScanningStats = {};
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
+        mStats.mMeshes = static_cast<U32>(mMeshes.size());
+        mStats.mInFlight = mInFlight;
+        mStats.mDiskBytes = mDiskCache ? mDiskCache->bytes() : 0;
+        mStats.mDiskEntries = mDiskCache ? static_cast<U32>(mDiskCache->entries()) : 0;
+        // Keep the last complete counts while a bounded scan runs; partial totals would look like lost tiles.
+        if (scanTiles(mStatsCursor, 0.0005f, [&](Mesh&, const TileKey&, Tile& tile)
+            {
+                ++mScanningStats.mTiles;
+                if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
+                if (!tile.mBuilt) return;
+                ++mScanningStats.mTilesBuilt;
+                mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
+                for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
+                {
+                    mScanningStats.mSegments += tile.mSegments[cls] ? static_cast<U32>(tile.mSegments[cls]->size()) : 0;
+                    mScanningStats.mLinks += tile.mLinks[cls] ? static_cast<U32>(tile.mLinks[cls]->size()) : 0;
+                }
+            }))
+        {
+            mStats.mTiles = mScanningStats.mTiles;
+            mStats.mTilesBuilt = mScanningStats.mTilesBuilt;
+            mStats.mAirTiles = mScanningStats.mAirTiles;
+            mStats.mAirBytes = mScanningStats.mAirBytes;
+            mStats.mFaces = mScanningStats.mFaces;
+            mStats.mSegments = mScanningStats.mSegments;
+            mStats.mLinks = mScanningStats.mLinks;
+            mScanningStats = {};
+        }
     }
 
     static LLCachedControl<bool> log(gSavedSettings, "SKNavCensusLog", false);

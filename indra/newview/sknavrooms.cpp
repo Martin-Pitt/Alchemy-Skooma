@@ -538,12 +538,14 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     {
         return;
     }
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - update");
     static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
     if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - revision walk");
         mSeenRevision = navmesh.mRevision;
         mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
@@ -579,6 +581,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             U64 doors = SEED;
             if (sig != SEED)
             {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - doors and lifts");
                 const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
                 navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
                     doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
@@ -636,6 +639,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         MeshState& state = entry.second;
         if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post");
             if (state.mAirSignature == SEED)
             {
                 // Its air is gone: nothing to answer with.
@@ -663,6 +667,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         const bool quiet = !state.mDirty && !state.mInFlight && (now - state.mWindChanged) * 1000.0 >= wind_settle_ms;
         if (quiet && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post wind");
             postWind(state);
         }
     }
@@ -670,6 +675,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     // The view's sky map is the copy the last pass was handed, not one per publish.
     if (mViewDirty)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - rebuild view");
         rebuildView();
     }
 }
