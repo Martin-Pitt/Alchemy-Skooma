@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="928"
+ min_height="1036"
  min_width="300"
- height="948"
+ height="1056"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -196,6 +196,67 @@
    min_val="-1"
    name="overlay_wind_heading"
    tool_tip="The heading the wind is drawn for, in degrees it blows toward, counter-clockwise from east. -1 follows the region's wind at the camera"
+   top_pad="4"
+   width="276" />
+  <combo_box
+   control_name="SKNavOverlayAir"
+   follows="left|top"
+   height="20"
+   label="Air"
+   layout="topleft"
+   left="12"
+   name="overlay_air"
+   tool_tip="The air the spaces, stamp and face offsets are built from, as floors and edges"
+   top_pad="6"
+   width="292">
+    <combo_box.item label="Air: off" value="0" name="air_off" />
+    <combo_box.item label="Air: leaves by level" value="1" name="air_leaves" />
+    <combo_box.item label="Air: gaps by flags" value="2" name="air_gaps" />
+    <combo_box.item label="Air: floors by space" value="3" name="air_space" />
+    <combo_box.item label="Air: polygons by stamped space" value="4" name="air_stamp" />
+    <combo_box.item label="Air: clearance" value="5" name="air_clearance" />
+    <combo_box.item label="Air: wall face offsets" value="6" name="air_faces" />
+  </combo_box>
+  <combo_box
+   control_name="SKNavOverlayAirSource"
+   follows="left|top"
+   height="20"
+   layout="topleft"
+   left="28"
+   name="overlay_air_source"
+   tool_tip="Which tiles' air to draw. Far tiles carry coarse air: dimmer, and framed in violet"
+   top_pad="4"
+   width="276">
+    <combo_box.item label="Detail and coarse air" value="0" name="air_both" />
+    <combo_box.item label="Detail air only" value="1" name="air_detail" />
+    <combo_box.item label="Coarse air only" value="2" name="air_coarse" />
+  </combo_box>
+  <slider
+   control_name="SKNavOverlayAirSlice"
+   decimal_digits="1"
+   follows="left|top"
+   height="20"
+   increment="0.5"
+   initial_value="0"
+   label="Slice (m)"
+   label_width="80"
+   layout="topleft"
+   left="28"
+   max_val="20"
+   min_val="0"
+   name="overlay_air_slice"
+   tool_tip="Draw only the air whose floor is within this many metres of your floor, so storeys do not stack. 0 draws every floor"
+   top_pad="4"
+   width="276" />
+  <check_box
+   height="19"
+   label="Slice at the camera's floor"
+   layout="topleft"
+   follows="left|top"
+   left="28"
+   name="overlay_air_slice_camera"
+   control_name="SKNavOverlayAirSliceCamera"
+   tool_tip="Centre the slice on the floor under the camera rather than under your avatar"
    top_pad="4"
    width="276" />
   <check_box
