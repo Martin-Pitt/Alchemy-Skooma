@@ -65,11 +65,6 @@ namespace
     constexpr S32 FINER_FALLBACK_TIERS = 2; ///< how many finer tiers stand in for a cell not yet baked
     constexpr F32 LAST_SHOWN_SLOT_M = 2.f;   ///< floors this close in height share a cell's last-shown bake
 
-    F32 smoothstep(F32 e0, F32 e1, F32 x)
-    {
-        const F32 t = llclamp((x - e0) / llmax(e1 - e0, 1e-6f), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
-    }
 }
 
 SKMapScene::SKMapScene()
@@ -682,9 +677,6 @@ void SKMapScene::drawCell(const skmap::MapView& view, LLViewerTexture* texture, 
 void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min, const LLVector3d& max, F32 u0, F32 v0, F32 u1, F32 v1,
                                const LLColor4& tint) const
 {
-    // 2 x 2 sub-quads, so the distance dim varies across a cell. It fades from the map centre, the camera.
-    const LLVector3d agent = view.centre();
-    const F32 span = view.span();
     LLVector2 px[3][3];
     LLColor4 col[3][3];
     F32 u[3], v[3];
@@ -694,9 +686,7 @@ void SKMapScene::drawCellQuads(const skmap::MapView& view, const LLVector3d& min
         {
             const LLVector3d p(min.mdV[VX] + (max.mdV[VX] - min.mdV[VX]) * i * 0.5, min.mdV[VY] + (max.mdV[VY] - min.mdV[VY]) * j * 0.5, 0.0);
             px[j][i] = view.toWidget(p);
-            const F32 d = static_cast<F32>(std::hypot(p.mdV[VX] - agent.mdV[VX], p.mdV[VY] - agent.mdV[VY]));
-            const F32 dim = 1.f - skmap::palette::DIM_AMOUNT * smoothstep(skmap::palette::DIM_NEAR * span, skmap::palette::DIM_FAR * span, d);
-            col[j][i] = LLColor4(tint.mV[0], tint.mV[1], tint.mV[2], tint.mV[3] * dim);
+            col[j][i] = tint;
         }
         u[j] = u0 + (u1 - u0) * j * 0.5f;
         v[j] = v0 + (v1 - v0) * j * 0.5f;

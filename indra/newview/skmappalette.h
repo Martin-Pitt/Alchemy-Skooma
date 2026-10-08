@@ -186,9 +186,6 @@ namespace skmap
         // Overlays drawn live.
         constexpr F32 TERRAIN_ALPHA = 0.6f;
         constexpr F32 TERRAIN_GREY = 0.75f;
-        constexpr F32 DIM_NEAR = 0.3f;              ///< of the span, where the distance dim starts
-        constexpr F32 DIM_FAR = 0.75f;
-        constexpr F32 DIM_AMOUNT = 0.55f;
         constexpr PaletteColour COVER_AHEAD_FULL = COVER_FULL;
         constexpr PaletteColour COVER_AHEAD_HALF = COVER_HALF;
         constexpr F32 COVER_AHEAD_PX = 6.f;
