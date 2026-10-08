@@ -101,9 +101,9 @@ namespace
         U8* mData = nullptr;
         S32 mSize = 0;
 
-        QuadTile(F32 bmin_x, U16 dx, U16 dz, bool portal_x0, bool portal_x1, bool detail_mid = false, bool loose_x = false)
+        QuadTile(F32 bmin_x, U16 dx, U16 dz, bool portal_x0, bool portal_x1, bool detail_mid = false, bool loose_x = false, U16 z_margin = 8)
         {
-            const U16 z0 = 8, z1 = static_cast<U16>(8 + dz);     // a metre clear of the tile's z bounds
+            const U16 z0 = z_margin, z1 = static_cast<U16>(z_margin + dz);     // clear of the tile's z bounds, a metre by default
             const U16 x0 = loose_x ? 8 : 0, x1 = static_cast<U16>(x0 + dx);
             const U16 verts[] = { x0, 0, z0, x0, 0, z1, x1, 0, z1, x1, 0, z0 };
             U16 polys[12] = { 0, 1, 2, 3, RC_MESH_NULL_IDX, RC_MESH_NULL_IDX, RC_MESH_NULL_IDX, RC_MESH_NULL_IDX, RC_MESH_NULL_IDX,
@@ -134,7 +134,7 @@ namespace
             p.bmax[0] = bmin_x + (dx + 2 * x0) * CELL - x0 * CELL;
             p.bmax[1] = 1.f;
             p.bmin[2] = -1.f;
-            p.bmax[2] = (dz + 16) * CELL - 1.f;
+            p.bmax[2] = (dz + 2 * z_margin) * CELL - 1.f;
             p.cs = CELL;
             p.ch = UNIT;
             p.buildBvTree = true;
@@ -175,72 +175,6 @@ namespace
         };
     }
 
-    /// A corridor between wall columns at 2 and 3 + width across it, eroded at Recast's 3 cells and recovered at radius; the
-    /// walls' true faces lie `offset` steps into their cells. Across runs along chf z, or along chf x when transposed.
-    /// Only the walls from faces_from to faces_to along it have offsets. Returns the walkable cells across it at `at`.
-    std::vector<S32> erodedCorridor(S32 width, U32 offset, U32* recovered = nullptr, bool transposed = false, F32 radius = 0.3f, S32 along = 16,
-                                    S32 faces_from = 0, S32 faces_to = 16, S32 at = 7)
-    {
-        const S32 across = width + 6;
-        const S32 w = transposed ? across : along, h = transposed ? along : across;
-        rcContext ctx(false);
-        rcHeightfield* hf = rcAllocHeightfield();
-        const F32 bmin[3] = { 0.f, 0.f, 0.f };
-        const F32 bmax[3] = { w * CELL, 5.f, h * CELL };
-        rcCreateHeightfield(&ctx, *hf, w, h, bmin, bmax, CELL, UNIT);
-        const S32 wall0 = 2, wall1 = 3 + width;
-        for (S32 z = 0; z < h; ++z)
-        {
-            for (S32 x = 0; x < w; ++x)
-            {
-                const S32 a = transposed ? x : z;
-                const bool wall = a == wall0 || a == wall1;
-                rcAddSpan(&ctx, *hf, x, z, 0, wall ? 40 : 1, wall ? RC_NULL_AREA : RC_WALKABLE_AREA, 1);
-            }
-        }
-        rcCompactHeightfield* chf = rcAllocCompactHeightfield();
-        rcBuildCompactHeightfield(&ctx, 20, 2, *hf, *chf);
-        const std::vector<U8> before(chf->areas, chf->areas + chf->spanCount);
-        rcErodeWalkableArea(&ctx, 3, *chf);
-        // The grid's (ix, iy) is chf (z, x). Across z the near wall's face looks +ix (side 1), the far one's -ix (side 0);
-        // across x, +iy (side 3) and -iy (side 2).
-        std::vector<FaceOffset> table;
-        for (S32 k = faces_from; k < faces_to; ++k)
-        {
-            if (transposed)
-            {
-                table.push_back(FaceOffset(faceKey(k, wall0, h, 3), offset));
-                table.push_back(FaceOffset(faceKey(k, wall1, h, 2), offset));
-            }
-            else
-            {
-                table.push_back(FaceOffset(faceKey(wall0, k, h, 1), offset));
-                table.push_back(FaceOffset(faceKey(wall1, k, h, 0), offset));
-            }
-        }
-        std::sort(table.begin(), table.end(), [](const FaceOffset& a, const FaceOffset& b) { return a.mBits < b.mBits; });
-        const U32 back = recoverEroded(*chf, before, radius, 0, h, w, table);
-        if (recovered)
-        {
-            *recovered = back;
-        }
-        std::vector<S32> walkable;
-        for (S32 a = 0; a < across; ++a)
-        {
-            const S32 x = transposed ? a : at, z = transposed ? at : a;
-            const rcCompactCell& c = chf->cells[x + z * w];
-            for (U32 i = c.index; i < c.index + c.count; ++i)
-            {
-                if (chf->areas[i] != RC_NULL_AREA)
-                {
-                    walkable.push_back(a);
-                }
-            }
-        }
-        rcFreeCompactHeightfield(chf);
-        rcFreeHeightField(hf);
-        return walkable;
-    }
 }
 
 namespace tut
@@ -346,39 +280,6 @@ namespace tut
         computeFaceOffsets(g, s.mVerts.data(), s.mTris.data(), s.ntris(), CLIMB, table);
         ensure_equals("the -x face", faceOffset(table, faceKey(1, 0, 3, 0)), 4.f / 16.f);
     }
-    template<> template<>
-    void sknavfaceoffsets_object::test<6>()
-    {
-        set_test_name("a doorway that survives only with exact erosion: 0.75 m of cells, faces 0.75 of a cell into each wall");
-        U32 back = 0;
-        ensure("Recast alone leaves nothing", erodedCorridor(6, 0).empty());
-        const std::vector<S32> kept = erodedCorridor(6, 12, &back);
-        ensure_equals("two cells clear 0.3 m of both true faces", kept.size(), static_cast<size_t>(2));
-        ensure("in the middle", kept[0] == 5 && kept[1] == 6);
-        ensure("recovered along the corridor, not at its open ends", back > 0 && back < 2 * 16);
-        ensure("the same across chf x", erodedCorridor(6, 12, nullptr, true) == kept);
-        ensure("and nothing there without the offsets", erodedCorridor(6, 0, nullptr, true).empty());
-        ensure("a doorway's jambs alone, far along a long corridor", erodedCorridor(6, 12, nullptr, false, 0.3f, 48, 36, 42, 39) == kept);
-        ensure("and across chf x", erodedCorridor(6, 12, nullptr, true, 0.3f, 48, 36, 42, 39) == kept);
-    }
-
-    template<> template<>
-    void sknavfaceoffsets_object::test<7>()
-    {
-        set_test_name("no floor comes back in a gap narrower than twice the radius, whatever its faces");
-        ensure("0.375 m of cells, 0.56 m between faces", erodedCorridor(3, 12).empty());
-        ensure("0.5 m of cells, 0.59 m between faces", erodedCorridor(4, 6).empty());
-        ensure("0.5 m of cells, 0.73 m between faces, but no cell clears both", erodedCorridor(4, 15).empty());
-    }
-
-    template<> template<>
-    void sknavfaceoffsets_object::test<8>()
-    {
-        set_test_name("only the offsets give floor back: a span the cell faces already clear stays Recast's to take");
-        // At a 0.2 m radius the corridor's second cells clear the cell faces, though Recast took them at its 3 cells.
-        ensure("a step of offset, nothing back", erodedCorridor(6, 1, nullptr, false, 0.2f).empty());
-    }
-
     template<> template<>
     void sknavfaceoffsets_object::test<9>()
     {
@@ -508,5 +409,14 @@ namespace tut
         ensure("the shared end stays", std::fabs(v[2 * 3 + 2] - 1.f) < 1e-5f);
         ensure("a move was dropped for it", stats.mDropped > 0);
         dtFree(data);
+    }
+
+    template<> template<>
+    void sknavfaceoffsets_object::test<16>()
+    {
+        set_test_name("a vertex a cell inside the tile's bounds is not pushed past them");
+        QuadTile t(0.f, 8, 8, false, false, false, true, 1);     // SL x from -0.875 to 0.125, the bound at 0.25
+        alignWallEdges(t.mData, t.mSize, 0.3f, CELL, wallProbe(0.625f));
+        ensure("held at the bound", std::fabs(t.vert(1).mV[VX] - 0.25f) < 1e-5f);
     }
 }

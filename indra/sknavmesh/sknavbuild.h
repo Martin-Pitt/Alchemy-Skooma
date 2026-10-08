@@ -143,8 +143,6 @@ namespace sknav
         F32 mAirMinGap = 0.5f;
         /// Where walls' true faces sit inside their solid cells, kept with the air (sknavfaceoffsets.h).
         bool mFaceOffsets = true;
-        /// AVATAR's erosion gives back floor that clears the radius to the true faces, by the offsets.
-        bool mExactErosion = true;
         /// AVATAR's wall edges moved out to stand the radius off the true faces.
         bool mAlignWallEdges = true;
         /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough

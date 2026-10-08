@@ -74,7 +74,6 @@ namespace sknav
         bool mCoarseAir = true;
         /// The air keeps walls' face offsets; off, every face stands at its cell boundary.
         bool mFaceOffsets = true;
-        bool mExactErosion = true;
         bool mAlignWallEdges = true;
         /// With stats, every this many measured faces traced with their triangles.
         S32 mFaceTraceEvery = 0;

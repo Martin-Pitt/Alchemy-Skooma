@@ -2176,7 +2176,7 @@ namespace sknav
                     tops[i] = static_cast<U16>(mem.chf->spans[i].y);
                 }
             }
-            // The air's gaps read ahead of the erosion, so the true faces they meet can widen the floor.
+            // The air's padded gaps, read here so the offsets reach the tile's edge columns; the air reuses them.
             AirGrid padded_air;
             std::vector<FaceOffset> padded_faces;
             const S32 air_pad = std::clamp(input.mAirPad, 0, grid.borderSize);
@@ -2193,24 +2193,10 @@ namespace sknav
             }
             const S32 padded_width = padded_air.mWidth, padded_height = padded_air.mHeight;
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
-            const bool exact = input.mExactErosion && !padded_faces.empty() && cfg.walkableRadius > 0;
-            std::vector<U8> before_erosion;
-            if (exact)
-            {
-                before_erosion.assign(mem.chf->areas, mem.chf->areas + mem.chf->spanCount);
-            }
             if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
                 result.mError = "erode";
                 return nullptr;
-            }
-            if (exact)
-            {
-                const U32 back = recoverEroded(*mem.chf, before_erosion, ap.mRadius, cfg.borderSize - air_pad, padded_width, padded_height, padded_faces);
-                if (stats)
-                {
-                    stats->mFaceOffsets.mRecovered += back;
-                }
             }
             clock.lap(ClassBuildStats::ERODE);
             if (input.mPartition == Partition::SLOPE)

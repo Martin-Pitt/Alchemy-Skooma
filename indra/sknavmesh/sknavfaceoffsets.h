@@ -31,8 +31,6 @@
 #include <functional>
 #include <vector>
 
-struct rcCompactHeightfield;
-
 namespace sknav
 {
     struct AirGrid;
@@ -65,7 +63,6 @@ namespace sknav
     {
         U32 mSides = 0;         ///< solid sides facing a floor's jamb band
         U32 mEntries = 0;       ///< entries kept for the tile proper
-        U32 mRecovered = 0;     ///< spans the erosion took that the offsets give back
         F64 mTrueSum = 0.0;     ///< metres from the boundary to the true face, summed over sides with triangles
         F64 mResidualSum = 0.0; ///< metres from the quantised face to the true face
         U32 mMeasured = 0;      ///< sides with triangles
@@ -97,15 +94,6 @@ namespace sknav
 
     /// A padded grid's table in the cropped grid's columns, pad cells in from each side.
     void cropFaceOffsets(const std::vector<FaceOffset>& padded, S32 padded_width, S32 pad, S32 width, S32 height, std::vector<FaceOffset>& out);
-
-    /// After Recast's erosion, give back each span it took whose clearance to
-    /// the true faces, read through the offsets, is at least radius metres
-    /// where to the cell faces it is not, so only the offsets change the floor.
-    /// before holds the areas from before the erosion. The grid's column
-    /// (ix, iy) is the heightfield's cell (x, z) = (iy + shift, ix + shift).
-    /// Returns the spans given back.
-    U32 recoverEroded(rcCompactHeightfield& chf, const std::vector<U8>& before, F32 radius, S32 shift, S32 grid_width, S32 grid_height,
-                      const std::vector<FaceOffset>& table);
 
     /// The offset of a column's side, in cells; 0 when it has none.
     F32 faceOffset(const std::vector<FaceOffset>& table, U32 key);
