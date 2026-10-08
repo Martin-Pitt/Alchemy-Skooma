@@ -1757,94 +1757,150 @@ namespace skmap
                 const S32 gx1 = grid.mX0 + w - 1, gy1 = grid.mY0 + h - 1;
                 const S32 bx0 = floorDivInt(grid.mX0, LEVEL_BLOCK_CELLS), bx1 = floorDivInt(gx1, LEVEL_BLOCK_CELLS);
                 const S32 by0 = floorDivInt(grid.mY0, LEVEL_BLOCK_CELLS), by1 = floorDivInt(gy1, LEVEL_BLOCK_CELLS);
-                const S32 bw = bx1 - bx0 + 1;
-                // The polygons by the blocks their samples can fall in, made when a block first needs them.
-                std::vector<std::vector<U32>> by_block;
-                std::vector<U32> poly_seen;
-                U32 stamp = 0;
-                std::vector<U32> reach_polys;
-                std::vector<U8> sub_counts;
-                std::vector<S32> sub_slots;
+                const S32 bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+                auto blockCells = [&](S32 bx, S32 by, S32& cx0, S32& cy0, S32& cx1, S32& cy1) {
+                    cx0 = llmax(bx * LEVEL_BLOCK_CELLS, grid.mX0);
+                    cx1 = llmin(bx * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gx1);
+                    cy0 = llmax(by * LEVEL_BLOCK_CELLS, grid.mY0);
+                    cy1 = llmin(by * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gy1);
+                };
+                // A block no mark reaches keeps the last grid's levels, none off it.
+                std::vector<U8> dirty(static_cast<size_t>(bw) * bh, 0);
                 for (S32 by = by0; by <= by1; ++by)
                 {
                     for (S32 bx = bx0; bx <= bx1; ++bx)
                     {
-                        const S32 cx0 = llmax(bx * LEVEL_BLOCK_CELLS, grid.mX0), cx1 = llmin(bx * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gx1);
-                        const S32 cy0 = llmax(by * LEVEL_BLOCK_CELLS, grid.mY0), cy1 = llmin(by * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gy1);
-                        if (!changed->any(cx0, cy0, cx1, cy1))
+                        S32 cx0, cy0, cx1, cy1;
+                        blockCells(bx, by, cx0, cy0, cx1, cy1);
+                        if (changed->any(cx0, cy0, cx1, cy1))
                         {
-                            // Nothing within reach changed: the last grid's levels, none off it.
-                            for (S32 cy = cy0; cy <= cy1; ++cy)
-                            {
-                                const S32 ly = cy - last->mY0;
-                                if (ly < 0 || ly >= last->mH)
-                                {
-                                    continue;
-                                }
-                                for (S32 cx = cx0; cx <= cx1; ++cx)
-                                {
-                                    const S32 lx = cx - last->mX0;
-                                    const U32 c = lx >= 0 && lx < last->mW ? last->mCell[static_cast<size_t>(ly) * last->mW + lx] : 0;
-                                    if (c)
-                                    {
-                                        const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0);
-                                        counts[i] = static_cast<U8>(last->mLists[c - 1]);
-                                        std::copy(last->mLists.begin() + c, last->mLists.begin() + c + counts[i], slots.begin() + i * LEVEL_MAX);
-                                    }
-                                }
-                            }
+                            dirty[static_cast<size_t>(by - by0) * bw + (bx - bx0)] = 1;
                             continue;
                         }
-                        if (by_block.empty())
-                        {
-                            by_block.resize(static_cast<size_t>(bw) * (by1 - by0 + 1));
-                            for (U32 id : layer.mPolys)
-                            {
-                                S32 x0, y0, x1, y1;
-                                sampleCells(s, s.mPolys[id], x0, y0, x1, y1);
-                                const S32 px0 = llmax(floorDivInt(x0, LEVEL_BLOCK_CELLS), bx0), px1 = llmin(floorDivInt(x1, LEVEL_BLOCK_CELLS), bx1);
-                                const S32 py0 = llmax(floorDivInt(y0, LEVEL_BLOCK_CELLS), by0), py1 = llmin(floorDivInt(y1, LEVEL_BLOCK_CELLS), by1);
-                                for (S32 py = py0; py <= py1; ++py)
-                                {
-                                    for (S32 px = px0; px <= px1; ++px)
-                                    {
-                                        by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)].push_back(id);
-                                    }
-                                }
-                            }
-                            poly_seen.assign(s.mPolys.size(), 0);
-                        }
-                        // The block and the reach around it, from the polygons whose samples can fall there.
-                        const S32 rx0 = llmax(cx0 - SECTION_REACH_CELLS, grid.mX0), rx1 = llmin(cx1 + SECTION_REACH_CELLS, gx1);
-                        const S32 ry0 = llmax(cy0 - SECTION_REACH_CELLS, grid.mY0), ry1 = llmin(cy1 + SECTION_REACH_CELLS, gy1);
-                        ++stamp;
-                        reach_polys.clear();
-                        for (S32 py = llmax(floorDivInt(ry0, LEVEL_BLOCK_CELLS), by0); py <= llmin(floorDivInt(ry1, LEVEL_BLOCK_CELLS), by1); ++py)
-                        {
-                            for (S32 px = llmax(floorDivInt(rx0, LEVEL_BLOCK_CELLS), bx0); px <= llmin(floorDivInt(rx1, LEVEL_BLOCK_CELLS), bx1); ++px)
-                            {
-                                for (U32 id : by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)])
-                                {
-                                    if (poly_seen[id] != stamp)
-                                    {
-                                        poly_seen[id] = stamp;
-                                        reach_polys.push_back(id);
-                                    }
-                                }
-                            }
-                        }
-                        const S32 rw = rx1 - rx0 + 1;
-                        levelsIn(s, reach_polys, rx0, ry0, rw, ry1 - ry0 + 1, sub_counts, sub_slots);
                         for (S32 cy = cy0; cy <= cy1; ++cy)
                         {
+                            const S32 ly = cy - last->mY0;
+                            if (ly < 0 || ly >= last->mH)
+                            {
+                                continue;
+                            }
                             for (S32 cx = cx0; cx <= cx1; ++cx)
                             {
-                                const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0);
-                                const size_t j = static_cast<size_t>(cy - ry0) * rw + (cx - rx0);
-                                counts[i] = sub_counts[j];
-                                std::copy(sub_slots.begin() + j * LEVEL_MAX, sub_slots.begin() + j * LEVEL_MAX + LEVEL_MAX, slots.begin() + i * LEVEL_MAX);
+                                const S32 lx = cx - last->mX0;
+                                const U32 c = lx >= 0 && lx < last->mW ? last->mCell[static_cast<size_t>(ly) * last->mW + lx] : 0;
+                                if (c)
+                                {
+                                    const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0);
+                                    counts[i] = static_cast<U8>(last->mLists[c - 1]);
+                                    std::copy(last->mLists.begin() + c, last->mLists.begin() + c + counts[i], slots.begin() + i * LEVEL_MAX);
+                                }
                             }
                         }
+                    }
+                }
+                // The marked blocks as rectangles: runs along each row, a run joined to the one below it when the two
+                // span the same columns, so the reach worked out around each costs less than around every block.
+                struct BlockRect
+                {
+                    S32 mX0, mX1, mY0, mY1;
+                };
+                std::vector<BlockRect> rects, open, still_open;
+                for (S32 by = by0; by <= by1; ++by)
+                {
+                    still_open.clear();
+                    for (S32 bx = bx0; bx <= bx1;)
+                    {
+                        if (!dirty[static_cast<size_t>(by - by0) * bw + (bx - bx0)])
+                        {
+                            ++bx;
+                            continue;
+                        }
+                        S32 end = bx;
+                        while (end + 1 <= bx1 && dirty[static_cast<size_t>(by - by0) * bw + (end + 1 - bx0)])
+                        {
+                            ++end;
+                        }
+                        BlockRect run = { bx, end, by, by };
+                        for (BlockRect& o : open)
+                        {
+                            if (o.mX0 == bx && o.mX1 == end && o.mY1 == by - 1)
+                            {
+                                run.mY0 = o.mY0;
+                                o.mY1 = INT_MIN;    // taken over by the run
+                            }
+                        }
+                        still_open.push_back(run);
+                        bx = end + 1;
+                    }
+                    for (const BlockRect& o : open)
+                    {
+                        if (o.mY1 != INT_MIN)
+                        {
+                            rects.push_back(o);
+                        }
+                    }
+                    open.swap(still_open);
+                }
+                rects.insert(rects.end(), open.begin(), open.end());
+                // The polygons by the blocks their samples can fall in.
+                std::vector<std::vector<U32>> by_block;
+                std::vector<U32> poly_seen;
+                if (!rects.empty())
+                {
+                    by_block.resize(static_cast<size_t>(bw) * bh);
+                    for (U32 id : layer.mPolys)
+                    {
+                        S32 x0, y0, x1, y1;
+                        sampleCells(s, s.mPolys[id], x0, y0, x1, y1);
+                        const S32 px0 = llmax(floorDivInt(x0, LEVEL_BLOCK_CELLS), bx0), px1 = llmin(floorDivInt(x1, LEVEL_BLOCK_CELLS), bx1);
+                        const S32 py0 = llmax(floorDivInt(y0, LEVEL_BLOCK_CELLS), by0), py1 = llmin(floorDivInt(y1, LEVEL_BLOCK_CELLS), by1);
+                        for (S32 py = py0; py <= py1; ++py)
+                        {
+                            for (S32 px = px0; px <= px1; ++px)
+                            {
+                                by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)].push_back(id);
+                            }
+                        }
+                    }
+                    poly_seen.assign(s.mPolys.size(), 0);
+                }
+                U32 stamp = 0;
+                std::vector<U32> reach_polys;
+                std::vector<U8> sub_counts;
+                std::vector<S32> sub_slots;
+                for (const BlockRect& r : rects)
+                {
+                    S32 cx0, cy0, cx1, cy1, unused0, unused1;
+                    blockCells(r.mX0, r.mY0, cx0, cy0, unused0, unused1);
+                    blockCells(r.mX1, r.mY1, unused0, unused1, cx1, cy1);
+                    // The rectangle and the reach around it, from the polygons whose samples can fall there.
+                    const S32 rx0 = llmax(cx0 - SECTION_REACH_CELLS, grid.mX0), rx1 = llmin(cx1 + SECTION_REACH_CELLS, gx1);
+                    const S32 ry0 = llmax(cy0 - SECTION_REACH_CELLS, grid.mY0), ry1 = llmin(cy1 + SECTION_REACH_CELLS, gy1);
+                    ++stamp;
+                    reach_polys.clear();
+                    for (S32 py = llmax(floorDivInt(ry0, LEVEL_BLOCK_CELLS), by0); py <= llmin(floorDivInt(ry1, LEVEL_BLOCK_CELLS), by1); ++py)
+                    {
+                        for (S32 px = llmax(floorDivInt(rx0, LEVEL_BLOCK_CELLS), bx0); px <= llmin(floorDivInt(rx1, LEVEL_BLOCK_CELLS), bx1); ++px)
+                        {
+                            for (U32 id : by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)])
+                            {
+                                if (poly_seen[id] != stamp)
+                                {
+                                    poly_seen[id] = stamp;
+                                    reach_polys.push_back(id);
+                                }
+                            }
+                        }
+                    }
+                    const S32 rw = rx1 - rx0 + 1;
+                    levelsIn(s, reach_polys, rx0, ry0, rw, ry1 - ry0 + 1, sub_counts, sub_slots);
+                    for (S32 cy = cy0; cy <= cy1; ++cy)
+                    {
+                        const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx0 - grid.mX0);
+                        const size_t j = static_cast<size_t>(cy - ry0) * rw + (cx0 - rx0);
+                        const size_t cells = static_cast<size_t>(cx1 - cx0 + 1);
+                        std::copy(sub_counts.begin() + j, sub_counts.begin() + j + cells, counts.begin() + i);
+                        std::copy(sub_slots.begin() + j * LEVEL_MAX, sub_slots.begin() + (j + cells) * LEVEL_MAX, slots.begin() + i * LEVEL_MAX);
                     }
                 }
             }
