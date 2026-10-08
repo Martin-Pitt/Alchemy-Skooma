@@ -119,7 +119,7 @@ namespace sknav
         }
 
         /// A Detour tile into a mesh's navmesh, which the navmesh then owns.
-        bool addDetour(dtNavMesh*& nav, const std::vector<U8>& data)
+        bool addDetour(dtNavMesh*& nav, const std::vector<U8>& data, U32 user_id = 0)
         {
             if (data.empty() || (!nav && !(nav = allocMeshNav())))
             {
@@ -127,6 +127,10 @@ namespace sknav
             }
             unsigned char* copy = static_cast<unsigned char*>(dtAlloc(static_cast<int>(data.size()), DT_ALLOC_PERM));
             std::memcpy(copy, data.data(), data.size());
+            if (user_id && data.size() >= sizeof(dtMeshHeader))
+            {
+                reinterpret_cast<dtMeshHeader*>(copy)->userId = user_id;
+            }
             if (!dtStatusSucceed(nav->addTile(copy, static_cast<int>(data.size()), DT_TILE_FREE_DATA, 0, nullptr)))
             {
                 dtFree(copy);
@@ -163,6 +167,26 @@ namespace sknav
         {
             return feature.mRoots.empty() ? LLUUID::null : *std::min_element(feature.mRoots.begin(), feature.mRoots.end());
         }
+    }
+
+    U32 ReplayMesh::polySpace(const dtMeshTile* tile, U32 poly) const
+    {
+        if (!tile || !tile->header)
+        {
+            return 0;
+        }
+        const auto it = mSlotSpaces.find(tile->header->userId);
+        return it != mSlotSpaces.end() && poly < it->second.size() ? it->second[poly] : 0;
+    }
+
+    const Flight* ReplayMesh::polyFlight(const dtMeshTile* tile, U32 poly) const
+    {
+        if (!tile || !tile->header)
+        {
+            return nullptr;
+        }
+        const auto it = mSlotFlights.find(tile->header->userId);
+        return it != mSlotFlights.end() && poly < it->second.size() ? it->second[poly] : nullptr;
     }
 
     ReplayMesh::~ReplayMesh()
@@ -661,6 +685,11 @@ namespace sknav
                         bindStamp(result->mStamp, *in, enc, *mesh.mRooms, *binding);
                         tile.mBinding = binding;
                     }
+                    if (mesh.mEnclosure)
+                    {
+                        bindWallSpaces(*mesh.mEnclosure, result->mSegments[static_cast<S32>(AgentClass::AVATAR)]);
+                        bindWallSpaces(*mesh.mEnclosure, result->mFaces);
+                    }
                     tile.mStampInput = in;
                     tile.mResult = result;
                     tile.mStats = stats;
@@ -673,9 +702,11 @@ namespace sknav
             t.join();
         }
         out.mStages.emplace_back("stamp", since(t0));
+        F64 storeys_ms = 0.0;
         for (auto& m : out.mMeshes)
         {
             ReplayMesh& mesh = *m;
+            U32 slot = 0;
             for (auto& t : mesh.mTiles)
             {
                 const TileBuildResult& r = *t.second.mResult;
@@ -683,11 +714,33 @@ namespace sknav
                 {
                     continue;
                 }
+                ++slot;
                 for (S32 cls = 0; cls < NUM_CLASSES; ++cls)
                 {
-                    if (addDetour(mesh.mNav[cls], r.mData[cls]) && t.second.mBinding)
+                    if (addDetour(mesh.mNav[cls], r.mData[cls], slot) && t.second.mBinding)
                     {
                         applyBinding(*mesh.mNav[cls], t.first, *t.second.mBinding);
+                        // The poly's space ids under the slot, as the viewer's publish keeps them.
+                        const TileBinding& b = *t.second.mBinding;
+                        std::vector<U32>& spaces = mesh.mSlotSpaces[slot];
+                        spaces.assign(r.mStamp.mPolyComponent.size(), 0);
+                        for (size_t p = 0; p < spaces.size(); ++p)
+                        {
+                            const U16 c = r.mStamp.mPolyComponent[p];
+                            spaces[p] = c < b.mComponentSpaceId.size() ? b.mComponentSpaceId[c] : 0;
+                        }
+                        std::vector<const Flight*>& flights = mesh.mSlotFlights[slot];
+                        flights.assign(spaces.size(), nullptr);
+                        for (const Flight& f : r.mFlights[cls])
+                        {
+                            for (const U16 p : f.mPolys)
+                            {
+                                if (p < flights.size())
+                                {
+                                    flights[p] = &f;
+                                }
+                            }
+                        }
                     }
                 }
                 if (t.second.mUnstamped)
@@ -695,7 +748,15 @@ namespace sknav
                     addDetour(mesh.mUnstampedNav, t.second.mUnstamped->mData[static_cast<S32>(AgentClass::AVATAR)]);
                 }
             }
+            if (const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)]; nav && mesh.mRooms)
+            {
+                const Clock::time_point s0 = Clock::now();
+                buildStoreys(*nav, [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polySpace(tile, poly); }, *mesh.mRooms, mesh.mStoreys,
+                             [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polyFlight(tile, poly); });
+                storeys_ms += since(s0);
+            }
         }
+        out.mStages.emplace_back("storeys", storeys_ms);
     }
 
     std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation)

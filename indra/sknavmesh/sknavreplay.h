@@ -29,6 +29,7 @@
 #include "sknavcensusio.h"
 #include "sknavcluster.h"
 #include "sknavskymap.h"
+#include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavstamp.h"
 #include "sknavwind.h"
@@ -37,10 +38,12 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 class dtNavMesh;
+struct dtMeshTile;
 
 namespace sknav
 {
@@ -117,6 +120,16 @@ namespace sknav
         RoomsProductPtr mRooms;
         WindProductPtr mWind;
         std::vector<ReplayRoomsRun> mRoomsRuns;
+        /// Per stamped Detour tile, by the user id its header carries, its polys' space ids.
+        std::unordered_map<U32, std::vector<U32>> mSlotSpaces;
+        /// Per slot, its polys' flights in the tile's result; null for none.
+        std::unordered_map<U32, std::vector<const Flight*>> mSlotFlights;
+        StoreyProduct mStoreys;
+
+        /// A poly's space id, as the viewer's space filter reads it; 0 for none.
+        U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+        /// A poly's flight, or null.
+        const Flight* polyFlight(const dtMeshTile* tile, U32 poly) const;
 
         ReplayMesh() = default;
         ReplayMesh(const ReplayMesh&) = delete;
