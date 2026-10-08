@@ -1,6 +1,6 @@
 /**
  * @file sknavspaceproducts_test.cpp
- * @brief Walls with a space on each side.
+ * @brief Walls with a space on each side, and storeys and their connectors.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -106,6 +106,18 @@ namespace
         return in;
     }
 
+    /// Open ground, a 3 m deck east of x = 16, and a flight of twelve 0.25 m steps up +x onto it.
+    TileBuildInput deckAndStair()
+    {
+        TileBuildInput in = tileInput();
+        in.mRecords.push_back(box(16.f, 4.f, 0.f, 26.f, 14.f, 3.f));
+        for (S32 k = 0; k < 12; ++k)
+        {
+            in.mRecords.push_back(box(11.2f + k * 0.4f, 7.f, 0.f, 11.6f + k * 0.4f, 10.f, (k + 1) * 0.25f));
+        }
+        return in;
+    }
+
     /// A tile rasterised, its spaces cut, stamped, polygonised and bound, its Detour tile in a mesh.
     struct Built
     {
@@ -154,6 +166,46 @@ namespace
 
         U32 spaceAt(F32 x, F32 y, F32 z) const { return spaceIdAt(*mEnc, LLVector3(x, y, z + 0.5f)); }
 
+        /// The storey of the poly under a point: inside it in plan, its height the nearest.
+        S32 storeyAt(const StoreyProduct& st, F32 x, F32 y, F32 z) const
+        {
+            const dtMeshTile* tile = static_cast<const dtNavMesh*>(mNav)->getTileAt(0, 0, 0);
+            S32 best = -1;
+            F32 best_dz = 1.f;
+            for (S32 p = 0; p < tile->header->polyCount; ++p)
+            {
+                const dtPoly& poly = tile->polys[p];
+                bool pos = false, neg = false;
+                for (S32 v = 0; v < poly.vertCount; ++v)
+                {
+                    const LLVector3 a = fromRecast(&tile->verts[poly.verts[v] * 3]);
+                    const LLVector3 c = fromRecast(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3]);
+                    const F32 cross = (c.mV[VX] - a.mV[VX]) * (y - a.mV[VY]) - (c.mV[VY] - a.mV[VY]) * (x - a.mV[VX]);
+                    pos = pos || cross > 0.f;
+                    neg = neg || cross < 0.f;
+                }
+                const bool inside = !(pos && neg);
+                if (!inside)
+                {
+                    continue;
+                }
+                const F32 dz = std::fabs(fromRecast(&tile->verts[poly.verts[0] * 3]).mV[VZ] - z);
+                if (dz < best_dz)
+                {
+                    best_dz = dz;
+                    best = st.storeyOfPoly(static_cast<U64>(mNav->getPolyRefBase(tile) | static_cast<dtPolyRef>(p)));
+                }
+            }
+            return best;
+        }
+
+        PolySpaceFn polySpace() const
+        {
+            return [this](const dtMeshTile*, U32 p) -> U32 {
+                const std::vector<U16>& comp = mPolys.mStamp.mPolyComponent;
+                return p < comp.size() && comp[p] < mBinding.mComponentSpaceId.size() ? mBinding.mComponentSpaceId[comp[p]] : 0u;
+            };
+        }
     };
 }
 
@@ -221,6 +273,54 @@ namespace tut
         }
         ensure("faces on the dividing wall", seen > 0);
         ensure_equals("each facing one room with the other behind it", bad, 0u);
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<2>()
+    {
+        set_test_name("a deck reached by a flight is a storey of its own, joined to the ground's by one connector at the flight's ends");
+        Built b(deckAndStair(), {});
+        StoreyProduct st;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st);
+        std::cout << st.mStoreys.size() << " storeys, " << st.mConnectors.size() << " connectors, " << st.mFlightPolys << " of " << st.mPolys
+                  << " polys on flights" << std::endl;
+        for (const Storey& s : st.mStoreys)
+        {
+            std::cout << "  storey " << s.mId << " z " << s.mFloorZ << " area " << s.mArea << " spaces " << s.mSpaces.size() << std::endl;
+        }
+        const S32 sg = b.storeyAt(st, 5.f, 20.f, 0.f), sd = b.storeyAt(st, 21.f, 9.f, 3.f);
+        ensure("ground and deck have storeys", sg >= 0 && sd >= 0);
+        ensure("the deck is not the ground's storey", sg != sd);
+        ensure("the ground's storey is the lower", st.mStoreys[sg].mFloorZ < 0.5f && st.mStoreys[sd].mFloorZ > 2.5f);
+        ensure("flight polys found", st.mFlightPolys > 0);
+        bool joined = false;
+        for (const StoreyConnector& c : st.mConnectors)
+        {
+            if (static_cast<S32>(c.mStorey[0]) != sg || static_cast<S32>(c.mStorey[1]) != sd)
+            {
+                continue;
+            }
+            joined = true;
+            std::cout << "  connector " << c.mEnd[0] << " -> " << c.mEnd[1] << (c.mPortals ? " at portals" : " at poly edges") << std::endl;
+            ensure("its foot at the flight's foot", std::fabs(c.mEnd[0].mV[VX] - 11.2f) < 1.5f && c.mEnd[0].mV[VZ] < 0.75f);
+            ensure("its head at the deck's edge", std::fabs(c.mEnd[1].mV[VX] - 16.f) < 1.5f && c.mEnd[1].mV[VZ] > 2.25f);
+        }
+        ensure("a connector from the ground's storey to the deck's", joined);
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<3>()
+    {
+        set_test_name("rooms through a door on one floor are one storey: a door is no climb");
+        std::vector<DoorEntity> doors;
+        Built b(twoRoomsDoor(doors), doors);
+        const U32 west = b.spaceAt(6.f, 6.f, 0.25f), east = b.spaceAt(14.f, 6.f, 0.25f);
+        StoreyProduct st;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st);
+        const S32 sw = st.storeyOf(west), se = st.storeyOf(east);
+        ensure("both rooms have storeys", sw >= 0 && se >= 0);
+        ensure_equals("the same storey", sw, se);
+        ensure("no flight, no connector", st.mConnectors.empty());
     }
 
 }
