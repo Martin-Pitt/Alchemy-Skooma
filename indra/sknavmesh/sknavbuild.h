@@ -238,10 +238,6 @@ namespace sknav
     /// reads; null when the tile is empty or the stage failed (result says which).
     TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats = nullptr);
 
-    /// The tile's air at COARSE_AIR_M in its own cells and units, for a tile
-    /// with no air of its own; null when its cell does not divide that.
-    TileAirPtr buildCoarseAir(const TileBuildInput& input);
-
     /// Whether a result holds air the polygons must wait for spaces over:
     /// the raster stage published it, and the stamp is still to come.
     inline bool awaitsStamp(const TileBuildResult& r)

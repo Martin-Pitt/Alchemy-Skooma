@@ -388,8 +388,8 @@ void SKNavMesh::evictRasters(size_t budget, F64 radius)
         const auto found = mesh->second->mTiles.find(c.mKey);
         if (found == mesh->second->mTiles.end()) continue;
         Tile& tile = found->second;
-        // Never the raster of a tile with a build in flight.
-        if (tile.mInFlight || tile.mRaster != c.mRaster) continue;
+        // Never the raster of a tile with a build in flight, nor one its stamp is still to read.
+        if (tile.mInFlight || tile.mStampDue || tile.mStampInFlight || tile.mRaster != c.mRaster) continue;
         dropped.push_back(std::move(tile.mRaster));
         tile.mRaster.reset();
         tile.mRasterDropped = true;
@@ -1150,33 +1150,20 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             }
             out->mResult = std::make_shared<TileBuildResult>();
             TileBuildResult& result = *out->mResult;
-            // Past the radius the coarse air is all the spaces need; the polygons come with the stamp.
-            if (input->mCoarseAir && !input->mAir)
+            // Past the radius too: the raster makes the coarse air from its own soup, and is held for the stamp.
+            if (TileRasterPtr raster = rasteriseTile(*input, result))
             {
-                LLTimer timer;
-                result.mAir = buildCoarseAir(*input);
-                result.mAirBuilt = result.mCoarseAir = result.mAir != nullptr;
-                result.mStatus = TileBuildResult::SUCCESS;
-                result.mMillis = timer.getElapsedTimeF32() * 1000.f;
                 out->mRasterMs = result.mMillis;
-            }
-            if (!awaitsStamp(result))
-            {
-                result = TileBuildResult();
-                if (TileRasterPtr raster = rasteriseTile(*input, result))
+                result.mStatus = TileBuildResult::SUCCESS;
+                if (awaitsStamp(result))
                 {
-                    out->mRasterMs = result.mMillis;
-                    result.mStatus = TileBuildResult::SUCCESS;
-                    if (awaitsStamp(result))
-                    {
-                        // Its polygons wait for the spaces over its air.
-                        out->mRaster = std::move(raster);
-                    }
-                    else
-                    {
-                        // No air, so nothing to stamp them with: they are final now.
-                        polygoniseTile(*input, *raster, result);
-                    }
+                    // Its polygons wait for the spaces over its air.
+                    out->mRaster = std::move(raster);
+                }
+                else
+                {
+                    // No air, so nothing to stamp them with: they are final now.
+                    polygoniseTile(*input, *raster, result);
                 }
             }
             if (cache && result.mStatus != TileBuildResult::FAILED)
