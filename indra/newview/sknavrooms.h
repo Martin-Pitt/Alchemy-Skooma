@@ -196,6 +196,8 @@ public:
     const sknav::TileEnclosure* enclosureTile(const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air, U64& generation) const;
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
     void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
+    /// The products of a mesh's last landed pass, for its tiles' stamps; false when none has landed.
+    bool landed(const LLUUID& mesh, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms) const;
 
 private:
     struct Job;
