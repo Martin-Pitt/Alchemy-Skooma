@@ -324,6 +324,12 @@ namespace tut
         ensure("the flight's", c.mFlight == flights[0].mKey && !c.mPortals);
         ensure("at its ends", dist_vec(c.mEnd[0], flights[0].mBottom) < 1e-4f && dist_vec(c.mEnd[1], flights[0].mTop) < 1e-4f);
         ensure("between the ground's storey and the deck's", static_cast<S32>(c.mStorey[0]) == sg && static_cast<S32>(c.mStorey[1]) == sd);
+
+        // A deck under the least storey area stays one: the flight lands on it.
+        StoreyProduct small;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, small, flight_of, 100.f);
+        ensure_equals("a landing kept however small", small.mStoreys.size(), static_cast<size_t>(2));
+        ensure_equals("still joined", small.mConnectors.size(), static_cast<size_t>(1));
     }
 
     template<> template<>
@@ -339,6 +345,11 @@ namespace tut
         ensure("both rooms have storeys", sw >= 0 && se >= 0);
         ensure_equals("the same storey", sw, se);
         ensure("no flight, no connector", st.mConnectors.empty());
+
+        // A floor under the least storey area that no flight reaches makes none.
+        StoreyProduct small;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, small, nullptr, 1e6f);
+        ensure("no storey", small.mStoreys.empty() && small.mPolyStorey.empty() && small.storeyOf(west) < 0);
     }
 
     template<> template<>
