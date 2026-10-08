@@ -2501,7 +2501,151 @@ namespace sknav
         TileUpdate local;
         TileUpdate& u = update ? *update : local;
         u = TileUpdate();
-        return rasteriseTile(input, result, stats);
+        const SolidRaster* solid = held.mSolid.get();
+        if (!solid || solid->mInput.mHoldSolid != input.mHoldSolid)
+        {
+            u.mPath = UpdatePath::NO_SOLID;
+            return rasteriseTile(input, result, stats);
+        }
+        if (input.mZMin != solid->mInput.mZMin || input.mZMax != solid->mInput.mZMax)
+        {
+            u.mPath = UpdatePath::Z_RANGE;
+            return rasteriseTile(input, result, stats);
+        }
+        if (!sameSettings(input, solid->mInput))
+        {
+            u.mPath = UpdatePath::SETTINGS;
+            return rasteriseTile(input, result, stats);
+        }
+        const auto started = std::chrono::steady_clock::now();
+        result.mAirBuilt = input.mAir;
+        TileSoup ts;
+        if (!soupTile(input, result, stats, started, ts))
+        {
+            u.mPath = UpdatePath::EMPTY;
+            return nullptr;
+        }
+
+        // What moved: the records and cuts only one input holds.
+        std::unordered_set<const Record*> before, after;
+        for (const auto* list : { &solid->mInput.mRecords, &solid->mInput.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                before.insert(r.get());
+            }
+        }
+        for (const auto* list : { &input.mRecords, &input.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                after.insert(r.get());
+            }
+        }
+        std::vector<const Record*> moved;
+        for (const auto* list : { &solid->mInput.mRecords, &solid->mInput.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                if (r && !after.count(r.get()))
+                {
+                    moved.push_back(r.get());
+                }
+            }
+        }
+        for (const auto* list : { &input.mRecords, &input.mCuts })
+        {
+            for (const RecordPtr& r : *list)
+            {
+                if (r && !before.count(r.get()))
+                {
+                    moved.push_back(r.get());
+                }
+            }
+        }
+        u.mChanged = static_cast<U32>(moved.size());
+
+        // Every record that stayed rasterises as before only in the same order, with the same triangles and codes.
+        const std::vector<std::pair<RecordPtr, U32>> runs = mainRuns(ts);
+        size_t i = 0, j = 0, at_old = 0, at_new = 0;
+        u.mPath = UpdatePath::LOCAL;
+        while (u.mPath == UpdatePath::LOCAL)
+        {
+            while (i < solid->mRuns.size() && solid->mRuns[i].first && !after.count(solid->mRuns[i].first.get()))
+            {
+                at_old += solid->mRuns[i++].second;
+            }
+            while (j < runs.size() && runs[j].first && !before.count(runs[j].first.get()))
+            {
+                at_new += runs[j++].second;
+            }
+            if (i == solid->mRuns.size() || j == runs.size())
+            {
+                u.mPath = i == solid->mRuns.size() && j == runs.size() ? UpdatePath::LOCAL : UpdatePath::ORDER;
+                break;
+            }
+            const U32 n = runs[j].second;
+            if (solid->mRuns[i].first != runs[j].first || solid->mRuns[i].second != n)
+            {
+                u.mPath = UpdatePath::ORDER;
+            }
+            else if (!std::equal(solid->mCodes.begin() + at_old, solid->mCodes.begin() + at_old + n, ts.mCodes.begin() + at_new))
+            {
+                u.mPath = UpdatePath::CODES;
+            }
+            at_old += n;
+            at_new += n;
+            ++i;
+            ++j;
+            if (i == solid->mRuns.size() && j == runs.size())
+            {
+                break;
+            }
+        }
+        if (u.mPath != UpdatePath::LOCAL)
+        {
+            return rasteriseSoup(input, ts, result, stats, started);
+        }
+
+        // The window: every cell a moved record's triangles touch, a cell wider each way as cellsOf takes them.
+        const rcConfig grid = rasterGrid(input);
+        CellRect window{ grid.width, grid.height, 0, 0 };
+        std::vector<LLVector3> tris;
+        for (const Record* r : moved)
+        {
+            tris.clear();
+            emitRecord(*r, input.mMeshOrigin, tris);
+            if (tris.empty())
+            {
+                continue;
+            }
+            F32 lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            for (const LLVector3& p : tris)
+            {
+                F32 v[3];
+                toRecast(p, v);
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    lo[k] = std::min(lo[k], v[k]);
+                    hi[k] = std::max(hi[k], v[k]);
+                }
+            }
+            window.mX0 = std::min(window.mX0, static_cast<S32>(std::floor((lo[0] - grid.bmin[0]) / grid.cs)) - 1);
+            window.mZ0 = std::min(window.mZ0, static_cast<S32>(std::floor((lo[2] - grid.bmin[2]) / grid.cs)) - 1);
+            window.mX1 = std::max(window.mX1, static_cast<S32>(std::floor((hi[0] - grid.bmin[0]) / grid.cs)) + 2);
+            window.mZ1 = std::max(window.mZ1, static_cast<S32>(std::floor((hi[2] - grid.bmin[2]) / grid.cs)) + 2);
+        }
+        window = { std::max(window.mX0, 0), std::max(window.mZ0, 0), std::min(window.mX1, grid.width), std::min(window.mZ1, grid.height) };
+        if (window.mX0 >= window.mX1 || window.mZ0 >= window.mZ1)
+        {
+            window = CellRect();
+        }
+        u.mWindow[0] = window.mX0;
+        u.mWindow[1] = window.mZ0;
+        u.mWindow[2] = window.mX1;
+        u.mWindow[3] = window.mZ1;
+        u.mWindowCells = static_cast<U32>((window.mX1 - window.mX0) * (window.mZ1 - window.mZ0));
+        return rasteriseSoup(input, ts, result, stats, started, solid, &window);
     }
 
     bool sameRaster(const TileRaster& a, const TileRaster& b, std::string* why)
