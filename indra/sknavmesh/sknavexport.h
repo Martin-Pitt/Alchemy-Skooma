@@ -69,6 +69,9 @@ namespace sknav
         /// The raster's ledges and run-off.
         const std::vector<WallSegment>* mLedges = nullptr;
         const std::vector<DropLink>* mRunoff = nullptr;
+        /// AVATAR's stamp and what binds it to the spaces, when its polys were stamped.
+        const TileStampGeom* mStamp = nullptr;
+        const TileBinding* mBinding = nullptr;
     };
 
     /// The Recast area a Detour poly's flags stand for.
