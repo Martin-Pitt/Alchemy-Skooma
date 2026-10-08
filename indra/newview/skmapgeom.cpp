@@ -1433,6 +1433,8 @@ namespace skmap
             /// Done adding: the marks summed into a table.
             void finish()
             {
+                mFinished = true;
+                mAll = false;
                 mSum.clear();
                 if (mRects.empty())
                 {
@@ -1486,9 +1488,11 @@ namespace skmap
                     }
                 }
             }
+            /// Asked before finish(), every rectangle reads as marked, which costs only reuse.
             bool any(S32 x0, S32 y0, S32 x1, S32 y1) const
             {
-                if (mAll)
+                llassert(mFinished);
+                if (mAll || !mFinished)
                 {
                     return true;
                 }
@@ -1514,6 +1518,7 @@ namespace skmap
             std::vector<U32> mSum;      ///< (mW + 1) x (mH + 1): the marked cells below and left of each corner
             S32 mX0 = 0, mY0 = 0, mW = 0, mH = 0;
             bool mAll = false;
+            bool mFinished = false;
         };
 
         /// The global 1 m cells a polygon's floor samples can fall in: those whose centres its plan box holds, and its
