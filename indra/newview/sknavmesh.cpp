@@ -1388,6 +1388,8 @@ struct SKNavMesh::StampOutcome
     std::shared_ptr<TileBuildResult> mResult;   ///< STAMPED: the polygon stage's products
     std::shared_ptr<TileBinding> mBinding;
     TileRasterPtr mRaster;                      ///< rasterised again for want of a held one
+    std::shared_ptr<const std::vector<WallSegment>> mSegments;  ///< REBIND: the published segments bound again
+    std::shared_ptr<const std::vector<WallFace>> mFaces;        ///< the published faces bound to these spaces
     bool mLoaded = false;
     F32 mMillis = 0.f;
 };
@@ -1499,12 +1501,14 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
     const TileRasterPtr raster = tile.mRaster;
     // The published polys rebind only if they were built from this same raster.
     const std::shared_ptr<const TileStampGeom> published = tile.mStampBuilt == signature ? tile.mStampGeom : nullptr;
+    const auto published_segments = tile.mSegments[static_cast<S32>(AgentClass::AVATAR)];
+    const auto published_faces = tile.mFaces;
     const U64 content_key = tile.mContentKey;
     const std::shared_ptr<TileDiskCache> cache = diskCache();
     const LLVector3 lo(tile.mMin - mesh.mOrigin), hi(tile.mMax - mesh.mOrigin);
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, air, enc, rooms, raster, published, content_key, cache, lo, hi, key]()
+        [input, records, air, enc, rooms, raster, published, published_segments, published_faces, content_key, cache, lo, hi, key]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tile worker");
             LLTimer timer;
@@ -1522,6 +1526,19 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
             if (published && published->mPattern == in.mPattern)
             {
                 bindStamp(*published, in, te, *rooms, *out->mBinding);
+                // The walls the tile has, bound to the spaces standing now.
+                if (published_segments)
+                {
+                    auto segments = std::make_shared<std::vector<WallSegment>>(*published_segments);
+                    bindWallSpaces(*enc, *segments);
+                    out->mSegments = segments;
+                }
+                if (published_faces)
+                {
+                    auto faces = std::make_shared<std::vector<WallFace>>(*published_faces);
+                    bindWallSpaces(*enc, *faces);
+                    out->mFaces = faces;
+                }
                 out->mKind = StampOutcome::REBIND;
                 out->mMillis = timer.getElapsedTimeF32() * 1000.f;
                 return out;
@@ -1567,6 +1584,17 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
                 }
             }
             bindStamp(out->mResult->mStamp, in, te, *rooms, *out->mBinding);
+            bindWallSpaces(*enc, out->mResult->mSegments[static_cast<S32>(AgentClass::AVATAR)]);
+            if (out->mRaster)
+            {
+                bindWallSpaces(*enc, out->mResult->mFaces);
+            }
+            else if (published_faces)
+            {
+                auto faces = std::make_shared<std::vector<WallFace>>(*published_faces);
+                bindWallSpaces(*enc, *faces);
+                out->mFaces = faces;
+            }
             out->mKind = StampOutcome::STAMPED;
             out->mMillis = timer.getElapsedTimeF32() * 1000.f;
             return out;
@@ -1614,6 +1642,14 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
         tile.mStampInput = out->mInput;
         tile.mBinding = out->mBinding;
         tile.mStampedBy = rooms;
+        if (out->mSegments)
+        {
+            tile.mSegments[static_cast<S32>(AgentClass::AVATAR)] = out->mSegments;
+        }
+        if (out->mFaces)
+        {
+            tile.mFaces = out->mFaces;
+        }
         applyBinding(mesh, key, tile);
         ++mStats.mRebinds;
         mRevision++;
@@ -1679,6 +1715,10 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
         tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
         ++mStats.mStampReRasters;
     }
+    else if (out->mFaces)
+    {
+        tile.mFaces = out->mFaces;
+    }
     tile.mStampGeom = std::make_shared<const TileStampGeom>(std::move(result->mStamp));
     tile.mStampBuilt = signature;
     tile.mStampInput = out->mInput;
@@ -1740,6 +1780,28 @@ void SKNavMesh::applyBinding(Mesh& mesh, const TileKey& key, Tile& tile)
         (*spaces)[p] = c < b.mComponentSpaceId.size() ? b.mComponentSpaceId[c] : 0;
     }
     mSlotSpaces[tile.mStampSlot] = spaces;
+    tile.mPolySpace = spaces;
+    const TileStampGeom& geom = *tile.mStampGeom;
+    auto edges = std::make_shared<std::vector<PortalEdge>>();
+    const auto space_of = [&b](U16 c) { return c < b.mComponentSpaceId.size() ? b.mComponentSpaceId[c] : 0u; };
+    for (size_t i = 0; i < geom.mPortalEdges.size(); ++i)
+    {
+        const StampPortalEdge& e = geom.mPortalEdges[i];
+        if (e.mPortal >= geom.mPortals.size() || e.mSide > 1)
+        {
+            continue;
+        }
+        const StampPortal& portal = geom.mPortals[e.mPortal];
+        PortalEdge out;
+        out.mPoly = e.mPoly;
+        out.mEdge = e.mEdge;
+        out.mKind = static_cast<PortalKind>(portal.mKind);
+        out.mPortal = i < b.mPortalKeys.size() ? b.mPortalKeys[i] : 0;
+        out.mInside = space_of(portal.mSide[e.mSide]);
+        out.mAcross = space_of(portal.mSide[1 - e.mSide]);
+        edges->push_back(out);
+    }
+    tile.mPortalEdges = edges;
     tile.mPolyCache[avatar].reset();
 }
 
@@ -2119,6 +2181,129 @@ SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z
     return best;
 }
 
+namespace
+{
+    /// The poly nearest a global position on a mesh, within the extents, mesh-local.
+    dtPolyRef nearestPoly(dtNavMeshQuery& query, const LLVector3d& origin, const LLVector3d& pos, const dtQueryFilter& filter)
+    {
+        const LLVector3d l = pos - origin;
+        F32 centre[3], nearest[3];
+        toRecast(LLVector3(static_cast<F32>(l.mdV[VX]), static_cast<F32>(l.mdV[VY]), static_cast<F32>(l.mdV[VZ])), centre);
+        const F32 extents[3] = { 0.5f, 2.f, 0.5f };
+        dtPolyRef ref = 0;
+        return dtStatusSucceed(query.findNearestPoly(centre, extents, &filter, &ref, nearest)) ? ref : 0;
+    }
+}
+
+bool SKNavMesh::spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out) const
+{
+    F32 z = 0.f;
+    Mesh* mesh = meshAt(pos, AgentClass::AVATAR, z);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (!mesh || !mesh->mQuery[c])
+    {
+        return false;
+    }
+    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+    const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
+    const dtMeshTile* tile = nullptr;
+    const dtPoly* poly = nullptr;
+    if (!ref || !dtStatusSucceed(mesh->mNav[c]->getTileAndPolyByRef(ref, &tile, &poly)))
+    {
+        return false;
+    }
+    space_out = polySpace(tile, static_cast<U32>(poly - tile->polys));
+    mesh_out = mesh->mId;
+    return space_out != 0;
+}
+
+void SKNavMesh::spacePolys(const LLUUID& mesh_id, U32 space, const OutlineFn& fn) const
+{
+    const auto it = mMeshes.find(mesh_id);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (it == mMeshes.end() || !it->second->mNav[c])
+    {
+        return;
+    }
+    const Mesh& mesh = *it->second;
+    const std::vector<std::vector<LLVector3>> polys = sknav::spacePolys(*mesh.mNav[c], [this](const dtMeshTile* t, U32 p) { return polySpace(t, p); }, space);
+    std::vector<LLVector3d> outline;
+    for (const std::vector<LLVector3>& poly : polys)
+    {
+        outline.clear();
+        for (const LLVector3& v : poly)
+        {
+            outline.push_back(mesh.mOrigin + LLVector3d(v));
+        }
+        fn(outline);
+    }
+}
+
+StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
+{
+    const auto it = mMeshes.find(mesh_id);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (it == mMeshes.end() || !it->second->mNav[c])
+    {
+        return nullptr;
+    }
+    const Mesh& mesh = *it->second;
+    if (mesh.mStoreys && mesh.mStoreysAt == mRevision)
+    {
+        return mesh.mStoreys;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    // Each stamped tile's polys' flights, by the slot its Detour header carries.
+    std::unordered_map<U32, std::vector<const Flight*>> flights;
+    for (const auto& entry : mesh.mTiles)
+    {
+        const Tile& tile = entry.second;
+        if (!tile.mStampSlot || !tile.mFlights[c] || !tile.mPolySpace)
+        {
+            continue;
+        }
+        std::vector<const Flight*>& by_poly = flights[tile.mStampSlot];
+        by_poly.assign(tile.mPolySpace->size(), nullptr);
+        for (const Flight& f : *tile.mFlights[c])
+        {
+            for (const U16 p : f.mPolys)
+            {
+                if (p < by_poly.size())
+                {
+                    by_poly[p] = &f;
+                }
+            }
+        }
+    }
+    auto out = std::make_shared<StoreyProduct>();
+    static const RoomsProduct no_rooms;
+    buildStoreys(*mesh.mNav[c], [this](const dtMeshTile* t, U32 p) { return polySpace(t, p); }, mesh.mStampRooms ? *mesh.mStampRooms : no_rooms, *out,
+                 [&flights](const dtMeshTile* t, U32 p) -> const Flight* {
+                     const auto f = t && t->header ? flights.find(t->header->userId) : flights.end();
+                     return f != flights.end() && p < f->second.size() ? f->second[p] : nullptr;
+                 });
+    mesh.mStoreys = out;
+    mesh.mStoreysAt = mRevision;
+    return out;
+}
+
+bool SKNavMesh::storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const
+{
+    F32 z = 0.f;
+    Mesh* mesh = meshAt(pos, AgentClass::AVATAR, z);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (!mesh || !mesh->mQuery[c])
+    {
+        return false;
+    }
+    const StoreyProductPtr st = storeys(mesh->mId);
+    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+    const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
+    storey_out = st && ref ? st->storeyOfPoly(static_cast<U64>(ref)) : -1;
+    mesh_out = mesh->mId;
+    return storey_out >= 0;
+}
+
 bool SKNavMesh::floorUnder(const LLVector3d& pos, AgentClass cls, F32& z_out, LLUUID* mesh_out) const
 {
     Mesh* mesh = meshAt(pos, cls, z_out);
@@ -2237,6 +2422,11 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
             out.mSegments = tile.mSegments[c];
             out.mLinks = tile.mLinks[c];
             out.mFlights = tile.mFlights[c];
+            if (c == static_cast<S32>(AgentClass::AVATAR))
+            {
+                out.mPolySpace = tile.mPolySpace;
+                out.mPortalEdges = tile.mPortalEdges;
+            }
             fn(out);
         });
     }
