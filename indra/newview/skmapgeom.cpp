@@ -29,6 +29,7 @@
 #include "sknavbuild.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <chrono>
 #include <climits>
@@ -48,6 +49,9 @@ namespace skmap
         sknav::Shape mShape = sknav::Shape::TRIANGLES;
         sknav::Provenance mProvenance = sknav::Provenance::EXACT;
         U32 mFirst = 0, mCount = 0;     ///< the pair's pieces in its layer's run
+        /// Where the pieces' reads of the floors centre, scene-local: the slice's points and groups, shifted; empty
+        /// (min above max) for a slice with nothing in it. Made from the fields above, so never compared.
+        LLVector2 mReadMin = LLVector2(FLT_MAX, FLT_MAX), mReadMax = LLVector2(-FLT_MAX, -FLT_MAX);
 
         bool same(const sknav::Record& r, S32 q) const
         {
@@ -99,6 +103,8 @@ namespace skmap
         std::vector<SectionPieces::Run> mRuns;
         /// The records the section kept, in snapshot order.
         std::shared_ptr<const std::vector<KeptRecord>> mKept;
+        /// Per polygon of mScene, polyHash; 0 for a polygon on no layer.
+        std::vector<U64> mPolyHashes;
     };
 
     namespace
@@ -1434,29 +1440,124 @@ namespace skmap
             return found;
         }
 
-        /// The layer's floor levels per global 1 m cell, spread six cells off the floor by a multi-source search.
-        void buildLevels(const Scene& s, const SceneLayer& layer, LevelGrid& grid)
+        /// Marked rectangles of global cells, asked in constant time whether a rectangle holds a marked cell.
+        class CellMarks
         {
-            grid = LevelGrid();
-            if (layer.mPolys.empty())
+        public:
+            void add(S32 x0, S32 y0, S32 x1, S32 y1)
             {
-                return;
+                if (x0 <= x1 && y0 <= y1)
+                {
+                    mRects.push_back({ x0, y0, x1, y1 });
+                }
             }
+            bool empty() const { return mRects.empty(); }
+            /// Done adding: the marks summed into a table.
+            void finish()
+            {
+                mSum.clear();
+                if (mRects.empty())
+                {
+                    return;
+                }
+                S32 lx = INT_MAX, ly = INT_MAX, hx = INT_MIN, hy = INT_MIN;
+                for (const auto& r : mRects)
+                {
+                    lx = llmin(lx, r[0]);
+                    ly = llmin(ly, r[1]);
+                    hx = llmax(hx, r[2]);
+                    hy = llmax(hy, r[3]);
+                }
+                // Too wide a spread to tabulate reads as marked everywhere, which costs only reuse.
+                if (static_cast<S64>(hx) - lx + 1 > MAX_SIDE || static_cast<S64>(hy) - ly + 1 > MAX_SIDE)
+                {
+                    mAll = true;
+                    return;
+                }
+                mX0 = lx;
+                mY0 = ly;
+                mW = hx - lx + 1;
+                mH = hy - ly + 1;
+                const size_t stride = static_cast<size_t>(mW) + 1;
+                // A difference table, summed into how many rectangles cover each cell, then each covered cell counted
+                // once into the corner sums.
+                std::vector<S32> cover(stride * (static_cast<size_t>(mH) + 1), 0);
+                for (const auto& r : mRects)
+                {
+                    const size_t x0 = r[0] - mX0, y0 = r[1] - mY0, x1 = r[2] - mX0 + 1, y1 = r[3] - mY0 + 1;
+                    cover[y0 * stride + x0]++;
+                    cover[y0 * stride + x1]--;
+                    cover[y1 * stride + x0]--;
+                    cover[y1 * stride + x1]++;
+                }
+                for (S32 y = 0; y < mH; ++y)
+                {
+                    for (S32 x = 0; x < mW; ++x)
+                    {
+                        const size_t i = y * stride + x;
+                        cover[i] += (x > 0 ? cover[i - 1] : 0) + (y > 0 ? cover[i - stride] : 0) - (x > 0 && y > 0 ? cover[i - stride - 1] : 0);
+                    }
+                }
+                mSum.assign(stride * (static_cast<size_t>(mH) + 1), 0);
+                for (S32 y = 0; y < mH; ++y)
+                {
+                    for (S32 x = 0; x < mW; ++x)
+                    {
+                        mSum[(y + 1) * stride + x + 1] = (cover[y * stride + x] > 0 ? 1u : 0u) + mSum[y * stride + x + 1]
+                                                       + mSum[(y + 1) * stride + x] - mSum[y * stride + x];
+                    }
+                }
+            }
+            bool any(S32 x0, S32 y0, S32 x1, S32 y1) const
+            {
+                if (mAll)
+                {
+                    return true;
+                }
+                if (mSum.empty())
+                {
+                    return false;
+                }
+                x0 = llmax(x0, mX0) - mX0;
+                y0 = llmax(y0, mY0) - mY0;
+                x1 = llmin(x1, mX0 + mW - 1) - mX0;
+                y1 = llmin(y1, mY0 + mH - 1) - mY0;
+                if (x0 > x1 || y0 > y1)
+                {
+                    return false;
+                }
+                const size_t stride = static_cast<size_t>(mW) + 1;
+                return mSum[(y1 + 1) * stride + x1 + 1] + mSum[y0 * stride + x0] != mSum[y0 * stride + x1 + 1] + mSum[(y1 + 1) * stride + x0];
+            }
+
+        private:
+            static constexpr S64 MAX_SIDE = 4096;
+            std::vector<std::array<S32, 4>> mRects;
+            std::vector<U32> mSum;      ///< (mW + 1) x (mH + 1): the marked cells below and left of each corner
+            S32 mX0 = 0, mY0 = 0, mW = 0, mH = 0;
+            bool mAll = false;
+        };
+
+        /// The global 1 m cells a polygon's floor samples can fall in: those whose centres its plan box holds, and its
+        /// centroid's, which it falls back on.
+        void sampleCells(const Scene& s, const ScenePoly& poly, S32& x0, S32& y0, S32& x1, S32& y1)
+        {
+            const F64 ox = s.mOrigin.mdV[VX], oy = s.mOrigin.mdV[VY];
+            const S32 cx = cellIndex(ox + poly.mCentroid.mV[VX], LEVEL_CELL_M), cy = cellIndex(oy + poly.mCentroid.mV[VY], LEVEL_CELL_M);
+            x0 = llmin(cellIndex(ox + poly.mMinX, LEVEL_CELL_M), cx);
+            y0 = llmin(cellIndex(oy + poly.mMinY, LEVEL_CELL_M), cy);
+            x1 = llmax(cellIndex(ox + poly.mMaxX, LEVEL_CELL_M), cx);
+            y1 = llmax(cellIndex(oy + poly.mMaxY, LEVEL_CELL_M), cy);
+        }
+
+        /// Floor levels over a rectangle of global 1 m cells from the polygons given, spread SECTION_REACH_CELLS off the
+        /// floor by a multi-source search: per cell its count and its levels in fixed slots. Samples outside the
+        /// rectangle are left out, which changes no cell that far inside its edges: a cell's levels are made from the
+        /// samples within the reach of it alone.
+        void levelsIn(const Scene& s, const std::vector<U32>& polys, S32 gx0, S32 gy0, S32 w, S32 h, std::vector<U8>& counts,
+                      std::vector<S32>& slots)
+        {
             const F64 ox = s.mOrigin.mdV[VX], oy = s.mOrigin.mdV[VY], oz = s.mOrigin.mdV[VZ];
-            F64 lo_x = DBL_MAX, lo_y = DBL_MAX, hi_x = -DBL_MAX, hi_y = -DBL_MAX;
-            for (U32 id : layer.mPolys)
-            {
-                const ScenePoly& poly = s.mPolys[id];
-                lo_x = llmin(lo_x, ox + poly.mMinX);
-                lo_y = llmin(lo_y, oy + poly.mMinY);
-                hi_x = llmax(hi_x, ox + poly.mMaxX);
-                hi_y = llmax(hi_y, oy + poly.mMaxY);
-            }
-            grid.mX0 = cellIndex(lo_x, LEVEL_CELL_M) - SECTION_REACH_CELLS;
-            grid.mY0 = cellIndex(lo_y, LEVEL_CELL_M) - SECTION_REACH_CELLS;
-            grid.mW = cellIndex(hi_x, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mX0 + 1;
-            grid.mH = cellIndex(hi_y, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mY0 + 1;
-            const S32 w = grid.mW, h = grid.mH;
             const size_t n = static_cast<size_t>(w) * h;
 
             SK_SECTION_STAGE_START(samples_timer, LEVEL_SAMPLES);
@@ -1470,7 +1571,9 @@ namespace skmap
             std::vector<Link> links;
             std::vector<S32> head(n, -1);
             std::vector<size_t> sampled;
-            auto add = [&](size_t i, S32 k) {
+            auto inside = [&](S32 cx, S32 cy) { return cx >= gx0 && cx < gx0 + w && cy >= gy0 && cy < gy0 + h; };
+            auto add = [&](S32 cx, S32 cy, S32 k) {
+                const size_t i = static_cast<size_t>(cy - gy0) * w + (cx - gx0);
                 if (head[i] < 0)
                 {
                     sampled.push_back(i);
@@ -1478,7 +1581,7 @@ namespace skmap
                 links.push_back({ k, head[i] });
                 head[i] = static_cast<S32>(links.size()) - 1;
             };
-            for (U32 id : layer.mPolys)
+            for (U32 id : polys)
             {
                 const ScenePoly& poly = s.mPolys[id];
                 const S32 cx0 = static_cast<S32>(std::ceil(ox + poly.mMinX - 0.5)), cx1 = static_cast<S32>(std::floor(ox + poly.mMaxX - 0.5));
@@ -1488,33 +1591,42 @@ namespace skmap
                 {
                     for (S32 cx = cx0; cx <= cx1; ++cx)
                     {
+                        // A centre outside the rectangle still decides whether the centroid is the fallback.
+                        const bool in = inside(cx, cy);
+                        if (!in && any)
+                        {
+                            continue;
+                        }
                         const LLVector2 c(static_cast<F32>(cx + 0.5 - ox), static_cast<F32>(cy + 0.5 - oy));
                         if (!polyContains(s, poly, c))
                         {
                             continue;
                         }
-                        add(static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0), sectionLevel(static_cast<F32>(polyHeightAt(s, poly, c) + oz)));
                         any = true;
+                        if (in)
+                        {
+                            add(cx, cy, sectionLevel(static_cast<F32>(polyHeightAt(s, poly, c) + oz)));
+                        }
                     }
                 }
                 if (!any)
                 {
                     const S32 cx = cellIndex(ox + poly.mCentroid.mV[VX], LEVEL_CELL_M), cy = cellIndex(oy + poly.mCentroid.mV[VY], LEVEL_CELL_M);
-                    add(static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0),
-                        sectionLevel(static_cast<F32>(polyHeightAt(s, poly, poly.mCentroid) + oz)));
+                    if (inside(cx, cy))
+                    {
+                        add(cx, cy, sectionLevel(static_cast<F32>(polyHeightAt(s, poly, poly.mCentroid) + oz)));
+                    }
                 }
             }
             // Up to LEVEL_MAX levels per cell, in fixed slots.
-            std::vector<S32> slots(n * LEVEL_MAX, 0);
-            std::vector<U8> counts(n, 0);
-            std::vector<U8> seen(n, 0);
+            slots.assign(n * LEVEL_MAX, 0);
+            counts.assign(n, 0);
             std::vector<std::pair<S32, U32>> merge_in;
             std::vector<S32> merge_out;
             auto store = [&](size_t i) {
                 mergeLevels(merge_in, merge_out);
                 counts[i] = static_cast<U8>(merge_out.size());
                 std::copy(merge_out.begin(), merge_out.end(), slots.begin() + i * LEVEL_MAX);
-                seen[i] = 1;
             };
             // Gathers a cell's levels; true when they are all one level, which needs no merge.
             auto gather = [&](size_t i) {
@@ -1529,7 +1641,6 @@ namespace skmap
                 {
                     counts[i] = 1;
                     slots[i * LEVEL_MAX] = merge_in.front().first;
-                    seen[i] = 1;
                 }
                 return one;
             };
@@ -1602,7 +1713,6 @@ namespace skmap
                             }
                         }
                     }
-                    seen[i] = 1;
                     if (std::all_of(found, found + m, [&](S32 level) { return level == found[0]; }))
                     {
                         counts[i] = 1;
@@ -1623,6 +1733,143 @@ namespace skmap
                 frontier.swap(reached);
             }
             SK_SECTION_STAGE_STOP(spread_timer);
+        }
+
+        constexpr S32 LEVEL_BLOCK_CELLS = 32;   ///< a changed layer's levels are worked out again in blocks this wide
+
+        /// The layer's floor levels per global 1 m cell. Given the last build's grid for a layer that differs from this one
+        /// only near the changed marks, a cell no mark covers keeps the levels it had there, and only the blocks holding a
+        /// marked cell are worked out again, each from the samples within reach of it.
+        void buildLevels(const Scene& s, const SceneLayer& layer, LevelGrid& grid, const LevelGrid* last = nullptr,
+                         const CellMarks* changed = nullptr)
+        {
+            grid = LevelGrid();
+            if (layer.mPolys.empty())
+            {
+                return;
+            }
+            const F64 ox = s.mOrigin.mdV[VX], oy = s.mOrigin.mdV[VY];
+            F64 lo_x = DBL_MAX, lo_y = DBL_MAX, hi_x = -DBL_MAX, hi_y = -DBL_MAX;
+            for (U32 id : layer.mPolys)
+            {
+                const ScenePoly& poly = s.mPolys[id];
+                lo_x = llmin(lo_x, ox + poly.mMinX);
+                lo_y = llmin(lo_y, oy + poly.mMinY);
+                hi_x = llmax(hi_x, ox + poly.mMaxX);
+                hi_y = llmax(hi_y, oy + poly.mMaxY);
+            }
+            grid.mX0 = cellIndex(lo_x, LEVEL_CELL_M) - SECTION_REACH_CELLS;
+            grid.mY0 = cellIndex(lo_y, LEVEL_CELL_M) - SECTION_REACH_CELLS;
+            grid.mW = cellIndex(hi_x, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mX0 + 1;
+            grid.mH = cellIndex(hi_y, LEVEL_CELL_M) + SECTION_REACH_CELLS - grid.mY0 + 1;
+            const S32 w = grid.mW, h = grid.mH;
+            const size_t n = static_cast<size_t>(w) * h;
+
+            std::vector<U8> counts;
+            std::vector<S32> slots;
+            if (!last || !changed)
+            {
+                levelsIn(s, layer.mPolys, grid.mX0, grid.mY0, w, h, counts, slots);
+            }
+            else
+            {
+                counts.assign(n, 0);
+                slots.assign(n * LEVEL_MAX, 0);
+                const S32 gx1 = grid.mX0 + w - 1, gy1 = grid.mY0 + h - 1;
+                const S32 bx0 = floorDivInt(grid.mX0, LEVEL_BLOCK_CELLS), bx1 = floorDivInt(gx1, LEVEL_BLOCK_CELLS);
+                const S32 by0 = floorDivInt(grid.mY0, LEVEL_BLOCK_CELLS), by1 = floorDivInt(gy1, LEVEL_BLOCK_CELLS);
+                const S32 bw = bx1 - bx0 + 1;
+                // The polygons by the blocks their samples can fall in, made when a block first needs them.
+                std::vector<std::vector<U32>> by_block;
+                std::vector<U32> poly_seen;
+                U32 stamp = 0;
+                std::vector<U32> reach_polys;
+                std::vector<U8> sub_counts;
+                std::vector<S32> sub_slots;
+                for (S32 by = by0; by <= by1; ++by)
+                {
+                    for (S32 bx = bx0; bx <= bx1; ++bx)
+                    {
+                        const S32 cx0 = llmax(bx * LEVEL_BLOCK_CELLS, grid.mX0), cx1 = llmin(bx * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gx1);
+                        const S32 cy0 = llmax(by * LEVEL_BLOCK_CELLS, grid.mY0), cy1 = llmin(by * LEVEL_BLOCK_CELLS + LEVEL_BLOCK_CELLS - 1, gy1);
+                        if (!changed->any(cx0, cy0, cx1, cy1))
+                        {
+                            // Nothing within reach changed: the last grid's levels, none off it.
+                            for (S32 cy = cy0; cy <= cy1; ++cy)
+                            {
+                                const S32 ly = cy - last->mY0;
+                                if (ly < 0 || ly >= last->mH)
+                                {
+                                    continue;
+                                }
+                                for (S32 cx = cx0; cx <= cx1; ++cx)
+                                {
+                                    const S32 lx = cx - last->mX0;
+                                    const U32 c = lx >= 0 && lx < last->mW ? last->mCell[static_cast<size_t>(ly) * last->mW + lx] : 0;
+                                    if (c)
+                                    {
+                                        const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0);
+                                        counts[i] = static_cast<U8>(last->mLists[c - 1]);
+                                        std::copy(last->mLists.begin() + c, last->mLists.begin() + c + counts[i], slots.begin() + i * LEVEL_MAX);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        if (by_block.empty())
+                        {
+                            by_block.resize(static_cast<size_t>(bw) * (by1 - by0 + 1));
+                            for (U32 id : layer.mPolys)
+                            {
+                                S32 x0, y0, x1, y1;
+                                sampleCells(s, s.mPolys[id], x0, y0, x1, y1);
+                                const S32 px0 = llmax(floorDivInt(x0, LEVEL_BLOCK_CELLS), bx0), px1 = llmin(floorDivInt(x1, LEVEL_BLOCK_CELLS), bx1);
+                                const S32 py0 = llmax(floorDivInt(y0, LEVEL_BLOCK_CELLS), by0), py1 = llmin(floorDivInt(y1, LEVEL_BLOCK_CELLS), by1);
+                                for (S32 py = py0; py <= py1; ++py)
+                                {
+                                    for (S32 px = px0; px <= px1; ++px)
+                                    {
+                                        by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)].push_back(id);
+                                    }
+                                }
+                            }
+                            poly_seen.assign(s.mPolys.size(), 0);
+                        }
+                        // The block and the reach around it, from the polygons whose samples can fall there.
+                        const S32 rx0 = llmax(cx0 - SECTION_REACH_CELLS, grid.mX0), rx1 = llmin(cx1 + SECTION_REACH_CELLS, gx1);
+                        const S32 ry0 = llmax(cy0 - SECTION_REACH_CELLS, grid.mY0), ry1 = llmin(cy1 + SECTION_REACH_CELLS, gy1);
+                        ++stamp;
+                        reach_polys.clear();
+                        for (S32 py = llmax(floorDivInt(ry0, LEVEL_BLOCK_CELLS), by0); py <= llmin(floorDivInt(ry1, LEVEL_BLOCK_CELLS), by1); ++py)
+                        {
+                            for (S32 px = llmax(floorDivInt(rx0, LEVEL_BLOCK_CELLS), bx0); px <= llmin(floorDivInt(rx1, LEVEL_BLOCK_CELLS), bx1); ++px)
+                            {
+                                for (U32 id : by_block[static_cast<size_t>(py - by0) * bw + (px - bx0)])
+                                {
+                                    if (poly_seen[id] != stamp)
+                                    {
+                                        poly_seen[id] = stamp;
+                                        reach_polys.push_back(id);
+                                    }
+                                }
+                            }
+                        }
+                        const S32 rw = rx1 - rx0 + 1;
+                        levelsIn(s, reach_polys, rx0, ry0, rw, ry1 - ry0 + 1, sub_counts, sub_slots);
+                        for (S32 cy = cy0; cy <= cy1; ++cy)
+                        {
+                            for (S32 cx = cx0; cx <= cx1; ++cx)
+                            {
+                                const size_t i = static_cast<size_t>(cy - grid.mY0) * w + (cx - grid.mX0);
+                                const size_t j = static_cast<size_t>(cy - ry0) * rw + (cx - rx0);
+                                counts[i] = sub_counts[j];
+                                std::copy(sub_slots.begin() + j * LEVEL_MAX, sub_slots.begin() + j * LEVEL_MAX + LEVEL_MAX, slots.begin() + i * LEVEL_MAX);
+                            }
+                        }
+                    }
+                }
+            }
+
             SK_SECTION_STAGE(LEVEL_PACK);
             grid.mCell.assign(n, 0);
             size_t listed = 0;
@@ -1679,41 +1926,203 @@ namespace skmap
             return hashWords(h, p.mRoot.mData, sizeof(p.mRoot.mData));
         }
 
-        /// What a layer's floor levels and floor lookups read: the origin and its polygons' corners and detail
-        /// triangles, in order. Everything else the section reads of a polygon is made from these.
-        U64 layerHash(const Scene& s, const SceneLayer& layer)
+        /// A polygon's corners and detail triangles: everything else the section reads of a polygon is made from these.
+        U64 polyHash(const Scene& s, const ScenePoly& poly)
+        {
+            U64 h = hashStep(sknav::SEED, poly.mVertCount | (static_cast<U64>(poly.mTriCount) << 8));
+            h = hashWords(h, poly.mVerts, poly.mVertCount * sizeof(LLVector3));
+            return hashWords(h, s.mTris.data() + static_cast<size_t>(poly.mFirstTri) * 3, poly.mTriCount * 3 * sizeof(LLVector3));
+        }
+
+        /// Whether two polygons are the same to the bit, as polyHash reads them.
+        bool samePoly(const Scene& a, const ScenePoly& p, const Scene& b, const ScenePoly& q)
+        {
+            return p.mVertCount == q.mVertCount && p.mTriCount == q.mTriCount
+                && std::memcmp(p.mVerts, q.mVerts, p.mVertCount * sizeof(LLVector3)) == 0
+                && std::memcmp(a.mTris.data() + static_cast<size_t>(p.mFirstTri) * 3, b.mTris.data() + static_cast<size_t>(q.mFirstTri) * 3,
+                               p.mTriCount * 3 * sizeof(LLVector3)) == 0;
+        }
+
+        /// What a layer's floor levels and floor lookups read: the origin and its polygons, in order.
+        U64 layerHash(const Scene& s, const SceneLayer& layer, const std::vector<U64>& poly_hashes)
         {
             U64 h = hashWords(sknav::SEED, s.mOrigin.mdV, sizeof(s.mOrigin.mdV));
             for (U32 id : layer.mPolys)
             {
-                const ScenePoly& poly = s.mPolys[id];
-                h = hashStep(h, poly.mVertCount | (static_cast<U64>(poly.mTriCount) << 8));
-                h = hashWords(h, poly.mVerts, poly.mVertCount * sizeof(LLVector3));
-                h = hashWords(h, &s.mTris[static_cast<size_t>(poly.mFirstTri) * 3], poly.mTriCount * 3 * sizeof(LLVector3));
+                h = hashStep(h, poly_hashes[id]);
             }
             return h;
+        }
+
+        bool sameOrigin(const Scene& a, const Scene& b)
+        {
+            return std::memcmp(a.mOrigin.mdV, b.mOrigin.mdV, sizeof(a.mOrigin.mdV)) == 0;
         }
 
         /// Whether two layers hash the same because they are the same, to the bit.
         bool sameLayer(const Scene& a, const SceneLayer& la, const Scene& b, const SceneLayer& lb)
         {
-            if (la.mPolys.size() != lb.mPolys.size() || std::memcmp(a.mOrigin.mdV, b.mOrigin.mdV, sizeof(a.mOrigin.mdV)) != 0)
+            if (la.mPolys.size() != lb.mPolys.size() || !sameOrigin(a, b))
             {
                 return false;
             }
             for (size_t k = 0; k < la.mPolys.size(); ++k)
             {
-                const ScenePoly& p = a.mPolys[la.mPolys[k]];
-                const ScenePoly& q = b.mPolys[lb.mPolys[k]];
-                if (p.mVertCount != q.mVertCount || p.mTriCount != q.mTriCount
-                    || std::memcmp(p.mVerts, q.mVerts, p.mVertCount * sizeof(LLVector3)) != 0
-                    || std::memcmp(&a.mTris[static_cast<size_t>(p.mFirstTri) * 3], &b.mTris[static_cast<size_t>(q.mFirstTri) * 3],
-                                   p.mTriCount * 3 * sizeof(LLVector3)) != 0)
+                if (!samePoly(a, a.mPolys[la.mPolys[k]], b, b.mPolys[lb.mPolys[k]]))
                 {
                     return false;
                 }
             }
             return true;
+        }
+
+        /// How far past a pair's slice its pieces read the floors: the island ring's half metre and the island gates'
+        /// one, with room to spare.
+        constexpr F32 SECTION_READ_REACH_M = 2.f;
+        static_assert(SECTION_READ_REACH_M > LEVEL_CELL_M && SECTION_READ_REACH_M > ISLAND_OUT_M + ISLAND_EDGE_M, "the reads' reach");
+
+        /// A layer of this build that differs from the last build's nearest layer only in places: where the polygons
+        /// either has and the other lacks lie. A cell no mark covers reads the same polygons in both, and a level cell
+        /// no mark covers has the same levels, its marks having been grown by the levels' reach.
+        struct LayerChange
+        {
+            CellMarks mIndex;           ///< global 4 m index cells
+            CellMarks mLevels;          ///< global 1 m level cells
+        };
+
+        /// Mark where a polygon one of two layers lacks can change what the section reads.
+        void markChanged(const Scene& s, const ScenePoly& poly, LayerChange& change)
+        {
+            const Cell c0 = cellOfLocal(s, LLVector2(poly.mMinX, poly.mMinY)), c1 = cellOfLocal(s, LLVector2(poly.mMaxX, poly.mMaxY));
+            change.mIndex.add(c0.first, c0.second, c1.first, c1.second);
+            S32 x0, y0, x1, y1;
+            sampleCells(s, poly, x0, y0, x1, y1);
+            change.mLevels.add(x0 - SECTION_REACH_CELLS, y0 - SECTION_REACH_CELLS, x1 + SECTION_REACH_CELLS, y1 + SECTION_REACH_CELLS);
+        }
+
+        /// For each layer the last build did not have to the bit: the last build's layer with which it shares the most
+        /// polygons, matched one to one by content, and the marks of the polygons left unmatched on either side. Both
+        /// scenes share an origin, so a polygon they have alike lies at the same local coordinates in both.
+        void matchChangedLayers(const Scene& s, const std::vector<U64>& hashes, const Scene& o, const std::vector<U64>& old_hashes,
+                                const std::vector<S32>& last_layer, std::vector<S32>& near_layer, std::vector<LayerChange>& changes)
+        {
+            // The last build's layers no layer of this one took whole, their polygons by content.
+            std::vector<U8> taken(o.mLayers.size(), 0);
+            for (S32 l : last_layer)
+            {
+                if (l >= 0)
+                {
+                    taken[l] = 1;
+                }
+            }
+            std::vector<std::pair<U64, U32>> by_hash;
+            for (size_t ol = 0; ol < o.mLayers.size(); ++ol)
+            {
+                if (!taken[ol])
+                {
+                    for (U32 id : o.mLayers[ol].mPolys)
+                    {
+                        by_hash.emplace_back(old_hashes[id], id);
+                    }
+                }
+            }
+            if (by_hash.empty())
+            {
+                return;
+            }
+            std::sort(by_hash.begin(), by_hash.end());
+            auto candidates = [&](U64 h) {
+                return std::equal_range(by_hash.begin(), by_hash.end(), std::make_pair(h, 0u),
+                                        [](const std::pair<U64, U32>& a, const std::pair<U64, U32>& b) { return a.first < b.first; });
+            };
+            std::vector<U32> used(o.mPolys.size(), 0);
+            U32 stamp = 0;
+            std::map<S32, U32> votes;
+            for (size_t l = 0; l < s.mLayers.size(); ++l)
+            {
+                const SceneLayer& layer = s.mLayers[l];
+                if (last_layer[l] >= 0 || layer.mPolys.empty())
+                {
+                    continue;
+                }
+                votes.clear();
+                for (U32 id : layer.mPolys)
+                {
+                    const auto range = candidates(hashes[id]);
+                    for (auto it = range.first; it != range.second; ++it)
+                    {
+                        if (samePoly(s, s.mPolys[id], o, o.mPolys[it->second]))
+                        {
+                            votes[o.mPolys[it->second].mLayer]++;
+                            break;
+                        }
+                    }
+                }
+                S32 best = -1;
+                U32 most = 0;
+                for (const auto& vote : votes)
+                {
+                    if (vote.second > most)
+                    {
+                        best = vote.first;
+                        most = vote.second;
+                    }
+                }
+                if (best < 0)
+                {
+                    continue;
+                }
+                ++stamp;
+                LayerChange& change = changes[l];
+                for (U32 id : layer.mPolys)
+                {
+                    const auto range = candidates(hashes[id]);
+                    bool found = false;
+                    for (auto it = range.first; it != range.second && !found; ++it)
+                    {
+                        const U32 oid = it->second;
+                        if (used[oid] != stamp && o.mPolys[oid].mLayer == best && samePoly(s, s.mPolys[id], o, o.mPolys[oid]))
+                        {
+                            used[oid] = stamp;
+                            found = true;
+                        }
+                    }
+                    if (!found)
+                    {
+                        markChanged(s, s.mPolys[id], change);
+                    }
+                }
+                for (U32 oid : o.mLayers[best].mPolys)
+                {
+                    if (used[oid] != stamp)
+                    {
+                        markChanged(o, o.mPolys[oid], change);
+                    }
+                }
+                change.mIndex.finish();
+                change.mLevels.finish();
+                near_layer[l] = best;
+            }
+        }
+
+        /// Whether a pair's pieces read none of a changed layer's marked cells, so the nearest layer's pieces for it
+        /// are the ones it would make.
+        bool readsUnchanged(const Scene& s, const PairSource& src, const LayerChange& change)
+        {
+            if (src.mReadMin.mV[VX] > src.mReadMax.mV[VX])
+            {
+                return true;
+            }
+            const LLVector2 reach(SECTION_READ_REACH_M, SECTION_READ_REACH_M);
+            const LLVector2 lo = src.mReadMin - reach, hi = src.mReadMax + reach;
+            const Cell c0 = cellOfLocal(s, lo), c1 = cellOfLocal(s, hi);
+            if (change.mIndex.any(c0.first, c0.second, c1.first, c1.second))
+            {
+                return false;
+            }
+            const F64 ox = s.mOrigin.mdV[VX], oy = s.mOrigin.mdV[VY];
+            return !change.mLevels.any(cellIndex(ox + lo.mV[VX], LEVEL_CELL_M), cellIndex(oy + lo.mV[VY], LEVEL_CELL_M),
+                                       cellIndex(ox + hi.mV[VX], LEVEL_CELL_M), cellIndex(oy + hi.mV[VY], LEVEL_CELL_M));
         }
 
         /// A layer's run of pieces, appended to the scene's and listed by the layer.
@@ -1828,6 +2237,10 @@ namespace skmap
             // The same records at the same indices as the last build: an unchanged layer's pairs are the ones it had.
             const SectionMemo* last = cache ? cache->memo().get() : nullptr;
             bool same_records = false;
+            // Otherwise the records that differ from the last build's, by the 8 m buckets they meet: a layer on its last
+            // floors whose buckets none of them meets pairs as it did. One on the large list meets every layer.
+            CellMarks changed_buckets;
+            bool changed_large = true;
             if (next)
             {
                 const std::vector<KeptRecord>* had = last && last->mKept ? last->mKept.get() : nullptr;
@@ -1849,6 +2262,47 @@ namespace skmap
                         facts->emplace_back(i, *recs[i]);
                     }
                     next->mKept = std::move(facts);
+                }
+                if (had && !same_records)
+                {
+                    changed_large = false;
+                    auto mark = [&](const LLVector3d& lo, const LLVector3d& hi) {
+                        const S32 bx0 = cellIndex(lo.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(hi.mdV[VX], RECORD_BUCKET_M);
+                        const S32 by0 = cellIndex(lo.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(hi.mdV[VY], RECORD_BUCKET_M);
+                        if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
+                        {
+                            changed_large = true;
+                        }
+                        else
+                        {
+                            changed_buckets.add(bx0, by0, bx1, by1);
+                        }
+                    };
+                    // Both lists ascend by snapshot index.
+                    for (size_t a = 0, b = 0; a < had->size() || b < kept.size();)
+                    {
+                        if (b == kept.size() || (a < had->size() && (*had)[a].mIndex < kept[b]))
+                        {
+                            mark((*had)[a].mMin, (*had)[a].mMax);
+                            ++a;
+                        }
+                        else if (a == had->size() || kept[b] < (*had)[a].mIndex)
+                        {
+                            mark(recs[kept[b]]->mMin, recs[kept[b]]->mMax);
+                            ++b;
+                        }
+                        else
+                        {
+                            if (!(*had)[a].same(kept[b], *recs[kept[b]]))
+                            {
+                                mark((*had)[a].mMin, (*had)[a].mMax);
+                                mark(recs[kept[b]]->mMin, recs[kept[b]]->mMax);
+                            }
+                            ++a;
+                            ++b;
+                        }
+                    }
+                    changed_buckets.finish();
                 }
             }
 
@@ -1920,11 +2374,24 @@ namespace skmap
 
             // A layer whose polygons the last build had, to the bit, has the floor levels it had.
             std::vector<S32> last_layer(s.mLayers.size(), -1);
+            // A layer that changed only in places, as one reaching the box's edges does after a re-snap: the last build's
+            // layer it shares the most polygons with, and where the two differ.
+            std::vector<S32> near_layer(s.mLayers.size(), -1);
+            std::vector<LayerChange> changes;
             if (next)
             {
                 next->mPairs.resize(s.mLayers.size());
                 next->mRuns.resize(s.mLayers.size());
                 SK_SECTION_STAGE(MEMO);
+                next->mPolyHashes.assign(s.mPolys.size(), 0);
+                for (size_t i = 0; i < s.mPolys.size(); ++i)
+                {
+                    if (s.mPolys[i].mLayer >= 0)
+                    {
+                        next->mPolyHashes[i] = polyHash(s, s.mPolys[i]);
+                    }
+                }
+                bool any_new = false;
                 for (size_t l = 0; l < s.mLayers.size(); ++l)
                 {
                     const SceneLayer& layer = s.mLayers[l];
@@ -1933,7 +2400,7 @@ namespace skmap
                         continue;
                     }
                     stats.mLayers++;
-                    const U64 h = layerHash(s, layer);
+                    const U64 h = layerHash(s, layer, next->mPolyHashes);
                     next->mLayers.emplace_back(h, static_cast<S32>(l));
                     if (!last)
                     {
@@ -1950,8 +2417,19 @@ namespace skmap
                             break;
                         }
                     }
+                    any_new = any_new || last_layer[l] < 0;
                 }
                 std::sort(next->mLayers.begin(), next->mLayers.end());
+                if (any_new && last && sameOrigin(s, *last->mScene) && last->mPolyHashes.size() == last->mScene->mPolys.size())
+                {
+                    SK_SECTION_STAGE(MEMO_MATCH);
+                    changes.resize(s.mLayers.size());
+                    matchChangedLayers(s, next->mPolyHashes, *last->mScene, last->mPolyHashes, last_layer, near_layer, changes);
+                    for (S32 nl : near_layer)
+                    {
+                        stats.mLayersNear += nl >= 0 ? 1u : 0u;
+                    }
+                }
             }
             // Per pair and per piece, reused.
             std::vector<bool> active;
@@ -1971,6 +2449,10 @@ namespace skmap
                     {
                         layer.mLevels = last->mScene->mLayers[last_layer[l]].mLevels;
                     }
+                    else if (near_layer[l] >= 0)
+                    {
+                        buildLevels(s, layer, layer.mLevels, &last->mScene->mLayers[near_layer[l]].mLevels, &changes[l].mLevels);
+                    }
                     else
                     {
                         buildLevels(s, layer, layer.mLevels);
@@ -1981,8 +2463,11 @@ namespace skmap
                 {
                     continue;
                 }
-                // The same floors and the same records: the same pairs, and so the same pieces.
-                if (same_records && last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
+                const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
+                const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
+                // The same floors, and no changed record in the layer's buckets: the same pairs, and so the same pieces.
+                const bool same_pairs = same_records || (!changed_large && !changed_buckets.any(bx0, by0, bx1, by1));
+                if (same_pairs && last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
                     && last->mPairs[last_layer[l]])
                 {
                     SK_SECTION_STAGE(PIECES);
@@ -2002,12 +2487,11 @@ namespace skmap
                 {
                     bucketRecords();
                 }
+                stats.mLayersPaired++;
                 // 5. Per bucket, the planes its cells (and a ring around them) ask for, against each record's height.
                 std::vector<std::pair<U32, S32>> pairs;
                 pair_keys.clear();
                 SK_SECTION_STAGE_START(pairs_timer, PAIRS);
-                const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
-                const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
                 // A box of cells' planes: its distinct levels, few, kept unsorted until the end.
                 std::vector<S32> levels_in, planes;
                 auto addLevels = [&](U32 c) {
@@ -2132,14 +2616,16 @@ namespace skmap
                 std::vector<PairSource>* fresh = nullptr;
                 const std::vector<PairSource>* old_sources = nullptr;
                 const std::vector<SectionPiece>* old_run = nullptr;
+                // The last build's layer this one takes pieces from: its own, or the nearest, whose changed cells a
+                // reused pair must not read.
+                const S32 from = last_layer[l] >= 0 ? last_layer[l] : near_layer[l];
+                const LayerChange* change = last_layer[l] < 0 && near_layer[l] >= 0 ? &changes[l] : nullptr;
                 // The same floors cut by the same records at the same planes, in the same order, make the same pieces:
                 // the last build's, which hold the slices the cache would hand back.
                 if (next)
                 {
-                    const PairSources* had = last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
-                                                 ? &last->mPairs[last_layer[l]]
-                                                 : nullptr;
-                    bool same = had && *had && (*had)->size() == pairs.size();
+                    const PairSources* had = from >= 0 && static_cast<size_t>(from) < last->mPairs.size() ? &last->mPairs[from] : nullptr;
+                    bool same = !change && had && *had && (*had)->size() == pairs.size();
                     for (size_t k = 0; same && k < pairs.size(); ++k)
                     {
                         same = (**had)[k].same(*recs[pairs[k].first], pairs[k].second);
@@ -2147,7 +2633,7 @@ namespace skmap
                     if (same)
                     {
                         next->mPairs[l] = *had;
-                        next->mRuns[l] = last->mRuns[last_layer[l]];
+                        next->mRuns[l] = last->mRuns[from];
                         appendRun(s, next->mRuns[l], layer);
                         for (const auto& pq : pairs)
                         {
@@ -2156,12 +2642,13 @@ namespace skmap
                         stats.mReused += static_cast<U32>(pairs.size());
                         continue;
                     }
-                    // Otherwise, on the same floors, each pair the last build also had makes the pieces it made then:
-                    // a pair's pieces read its record, its plane and the layer's floors, never the other pairs.
+                    // Otherwise each pair the last build also had makes the pieces it made then, on the same floors or
+                    // on floors that changed only where it does not read: a pair's pieces read its record, its plane
+                    // and the layer's floors near its slice, never the other pairs.
                     if (had && *had)
                     {
                         old_sources = had->get();
-                        old_run = last->mRuns[last_layer[l]].get();
+                        old_run = last->mRuns[from].get();
                         by_source.clear();
                         for (size_t k = 0; k < old_sources->size(); ++k)
                         {
@@ -2207,6 +2694,7 @@ namespace skmap
                     }
                     if (old_run)
                     {
+                        SK_SECTION_STAGE(PIECE_REUSE);
                         const PairSource& src = (*fresh)[pk];
                         const U64 h = sourceHash(src);
                         const PairSource* found = nullptr;
@@ -2215,8 +2703,10 @@ namespace skmap
                         {
                             found = (*old_sources)[it->second].same(src) ? &(*old_sources)[it->second] : nullptr;
                         }
-                        if (found)
+                        if (found && (!change || readsUnchanged(s, *found, *change)))
                         {
+                            (*fresh)[pk].mReadMin = found->mReadMin;
+                            (*fresh)[pk].mReadMax = found->mReadMax;
                             run->insert(run->end(), old_run->begin() + found->mFirst, old_run->begin() + found->mFirst + found->mCount);
                             planes_used.push_back(pq.second);
                             stats.mReused++;
@@ -2233,6 +2723,26 @@ namespace skmap
                     const LLVector2 shift(static_cast<F32>(rec.mOrigin.mdV[VX] - s.mOrigin.mdV[VX]),
                                           static_cast<F32>(rec.mOrigin.mdV[VY] - s.mOrigin.mdV[VY]));
                     const F32 plane = static_cast<F32>(sectionPlaneZ(q) - s.mOrigin.mdV[VZ]);
+                    if (fresh)
+                    {
+                        // Every read of the floors below lies within reach of the slice's points and its groups' boxes.
+                        LLVector2 lo(FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX);
+                        for (const LLVector2& p : sl->mPts)
+                        {
+                            lo.set(llmin(lo.mV[VX], p.mV[VX]), llmin(lo.mV[VY], p.mV[VY]));
+                            hi.set(llmax(hi.mV[VX], p.mV[VX]), llmax(hi.mV[VY], p.mV[VY]));
+                        }
+                        for (const SliceGroup& g : sl->mGroups)
+                        {
+                            lo.set(llmin(lo.mV[VX], g.mMin.mV[VX]), llmin(lo.mV[VY], g.mMin.mV[VY]));
+                            hi.set(llmax(hi.mV[VX], g.mMax.mV[VX]), llmax(hi.mV[VY], g.mMax.mV[VY]));
+                        }
+                        if (lo.mV[VX] <= hi.mV[VX])
+                        {
+                            (*fresh)[pk].mReadMin = lo + shift;
+                            (*fresh)[pk].mReadMax = hi + shift;
+                        }
+                    }
 
                     // Sheet rooms: a closed sheet around walkable floor with headroom through the plane is a wall line.
                     active.assign(sl->mLoops.size(), true);

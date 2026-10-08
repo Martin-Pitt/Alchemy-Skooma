@@ -211,7 +211,8 @@ namespace skmap
     /// Benchmark builds only: wall time per stage of a section build, kept while mOn is set.
     enum class SectionStage : U8
     {
-        FILTER, LAYER_INDEX, MEMO, LEVELS, LEVEL_SAMPLES, LEVEL_SPREAD, LEVEL_PACK, PAIRS, PAIR_SORT, PIECES, SLICE, ZBINS, SHAPE, SEGMENTS,
+        FILTER, LAYER_INDEX, MEMO, MEMO_MATCH, LEVELS, LEVEL_SAMPLES, LEVEL_SPREAD, LEVEL_PACK, PAIRS, PAIR_SORT, PIECES, PIECE_REUSE, SLICE,
+        ZBINS, SHAPE, SEGMENTS,
         CHAIN, CHAIN_NODES, CHAIN_SNAP, CHAIN_WALK, CLOSE, SIMPLIFY, NEST, SHEET, ISLAND, HASH, COUNT
     };
     struct SectionProfile

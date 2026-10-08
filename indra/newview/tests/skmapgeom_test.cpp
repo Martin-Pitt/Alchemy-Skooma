@@ -1448,4 +1448,122 @@ namespace tut
         check(shifted, "the origin moved");
         check(input({ floors(0.f) }, &walls), "back where it began");
     }
+
+    // A box re-snap keeps the scene origin, so the layers inside both boxes come whole from the last build and the
+    // ground cut by the box's edges takes all but its edges from it: each build is what a build without a cache makes.
+    template<> template<>
+    void skmapgeom_object::test<36>()
+    {
+        // Land over 0..256 in 32 m tiles, sloping east, with a storey on every third tile and walls and crates on each.
+        auto groundZ = [](F32 x) { return 0.02f * x; };
+        std::vector<TileInput> tiles;
+        std::vector<RecordPtr> records;
+        U64 sig = 1;
+        for (S32 ky = 0; ky < 8; ++ky)
+        {
+            for (S32 kx = 0; kx < 8; ++kx)
+            {
+                const F32 x0 = kx * 32.f, y0 = ky * 32.f;
+                TileMaker t;
+                const S32 land = t.quad(x0, y0, x0 + 32.f, y0 + 32.f, groundZ(x0), groundZ(x0 + 32.f), AREA_GROUND);
+                for (S32 e = 0; e < 4; ++e)
+                {
+                    t.border(land, e);
+                }
+                const F32 zm = groundZ(x0 + 16.f);
+                if ((kx + 2 * ky) % 3 == 0)
+                {
+                    t.quad(x0 + 8.f, y0 + 8.f, x0 + 20.f, y0 + 18.f, zm + 4.f, zm + 4.f);
+                    records.push_back(boxRecord(LLVector3(x0 + 12.f, y0 + 12.f, zm + 4.4f), LLVector3(0.5f, 0.5f, 0.4f), sig++));
+                }
+                tiles.push_back(t.make(LAND, true, kx, ky));
+                records.push_back(boxRecord(LLVector3(x0 + 6.5f, y0 + 16.f, zm + 0.8f), LLVector3(0.1f, 6.f, 0.8f), sig++));
+                records.push_back(boxRecord(LLVector3(x0 + 25.f, y0 + 5.f, zm + 0.4f), LLVector3(0.5f, 0.5f, 0.4f), sig++));
+            }
+        }
+        // A storey at 10 m over the line x = 128 between two tiles: a crate on it just west of the line, and east of the
+        // line a floor higher than the crate's top, which keeps the crate from being an island until the box's move west
+        // leaves that tile out. The crate's pieces then read floor that changed.
+        {
+            TileMaker a;
+            const S32 south = a.quad(120.f, 104.f, 128.f, 107.5f, 10.f, 10.f);
+            const S32 north = a.quad(120.f, 108.5f, 128.f, 112.f, 10.f, 10.f);
+            const S32 west = a.quad(120.f, 107.5f, 126.8f, 108.5f, 10.f, 10.f);
+            const S32 east = a.quad(127.8f, 107.5f, 128.f, 108.5f, 10.f, 10.f);
+            const S32 top = a.quad(126.8f, 107.5f, 127.8f, 108.5f, 10.75f, 10.75f);
+            a.join(top, 0, south, 2);
+            a.join(top, 2, north, 0);
+            a.join(top, 3, west, 1);
+            a.join(top, 1, east, 3);
+            tiles.push_back(a.make(CLUSTER, false, 3, 3));
+            TileMaker b;
+            b.quad(128.f, 104.f, 136.f, 112.f, 11.f, 11.f);
+            tiles.push_back(b.make(CLUSTER, false, 4, 3));
+        }
+        const U64 crate = sig++;
+        records.push_back(boxRecord(LLVector3(127.3f, 108.f, 10.375f), LLVector3(0.5f, 0.5f, 0.375f), crate));
+        // Two long diagonal walls on the large list: one always near the box, one it reaches only when it moves west, tall
+        // enough to cut every storey.
+        const F32 d = 0.70710678f;
+        records.push_back(std::make_shared<const Record>(boxRecordOf(LLVector3(128.f, 128.f, 3.f), LLVector3(75.f, 0.2f, 3.f), sig++,
+                                                                     LLVector3(d, d, 0.f), LLVector3(-d, d, 0.f))));
+        records.push_back(std::make_shared<const Record>(boxRecordOf(LLVector3(40.f, 220.f, 10.f), LLVector3(40.f, 0.2f, 10.f), sig++,
+                                                                     LLVector3(d, -d, 0.f), LLVector3(d, d, 0.f))));
+
+        // The box 96 m square at min, with the tiles it meets, as the viewer gathers them.
+        const LLVector3d first(96.0, 96.0, 0.0);
+        auto boxAt = [&](F64 x, F64 y) {
+            skmap::SceneInput in;
+            in.mMin.set(x, y, -1.0e4);
+            in.mMax.set(x + 96.0, y + 96.0, 1.0e5);
+            in.mOrigin = skmap::analysisOrigin(in.mMin, &first);
+            for (const TileInput& t : tiles)
+            {
+                if (t.mMax.mdV[VX] > in.mMin.mdV[VX] && t.mMin.mdV[VX] < in.mMax.mdV[VX] && t.mMax.mdV[VY] > in.mMin.mdV[VY]
+                    && t.mMin.mdV[VY] < in.mMax.mdV[VY])
+                {
+                    in.mTiles.push_back(t);
+                }
+            }
+            in.mRegions.push_back({ LLVector3d(0.0, 0.0, 0.0), 256.0 });
+            in.mRecords = std::make_shared<const std::vector<RecordPtr>>(records);
+            return in;
+        };
+
+        skmap::SectionCache cache;
+        auto check = [&](const skmap::SceneInput& in, const std::string& what) {
+            skmap::ScenePtr plain = skmap::buildScene(in);
+            skmap::ScenePtr warm = skmap::buildScene(in, &cache);
+            ensure(what + ": the origin kept", warm->mOrigin == first);
+            ensure(what + ": pieces made", !plain->mPieces.empty());
+            ensure(what + ": the same pieces", samePieces(*plain, *warm));
+            ensure(what + ": the same levels", sameLevels(*plain, *warm));
+            ensure(what + ": the same keys", plain->mCellHashes == warm->mCellHashes);
+            return warm->mSectionStats;
+        };
+        auto crateIsland = [&](const skmap::SceneInput& in) {
+            const skmap::ScenePtr s = skmap::buildScene(in);
+            const std::vector<const skmap::SectionPiece*> pieces = piecesOf(*s, crate);
+            ensure("the crate cut", !pieces.empty());
+            return std::any_of(pieces.begin(), pieces.end(), [](const skmap::SectionPiece* p) { return (p->mFlags & skmap::PIECE_ISLAND) != 0; });
+        };
+        ensure("the crate is no island beside the higher floor", !crateIsland(boxAt(96.0, 96.0)));
+        ensure("but is once that floor is left out", crateIsland(boxAt(96.0 - skmap::ANALYSIS_SNAP_M, 96.0)));
+
+        check(boxAt(96.0, 96.0), "cold");
+        const skmap::SectionStats again = check(boxAt(96.0, 96.0), "the same box");
+        ensure("the same box, every pair reused", again.mReused == again.mPairs && again.mLayersPaired == 0);
+        const F64 step = skmap::ANALYSIS_SNAP_M;
+        const std::pair<F64, F64> moves[] = { { step, 0.0 }, { -step, 0.0 }, { 0.0, step }, { 0.0, -step }, { step, step } };
+        for (const auto& move : moves)
+        {
+            const std::string what = "shifted by (" + std::to_string(static_cast<S32>(move.first)) + ", "
+                                   + std::to_string(static_cast<S32>(move.second)) + ")";
+            const skmap::SectionStats st = check(boxAt(96.0 + move.first, 96.0 + move.second), what);
+            ensure(what + ": storeys inside both boxes kept", st.mLayersKept > 0);
+            ensure(what + ": the ground kept in part", st.mLayersNear > 0);
+            ensure(what + ": pairs reused, the edges' made", st.mReused > 0 && st.mReused < st.mPairs);
+            check(boxAt(96.0, 96.0), what + ", and back");
+        }
+    }
 }

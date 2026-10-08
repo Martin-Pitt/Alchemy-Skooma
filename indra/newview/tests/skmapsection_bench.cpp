@@ -88,6 +88,8 @@ namespace
     {
         U64 mExact = sknav::SEED;
         U64 mQuant = sknav::SEED;
+        /// The pieces' parts and roots, kept out of the two above so the captures' expected values still hold.
+        U64 mIds = sknav::SEED;
         void add(U64 v)
         {
             mExact = sknav::mix(mExact, v);
@@ -111,6 +113,13 @@ namespace
             fp.add(static_cast<U64>(p.mStyle));
             fp.add(p.mGroup);
             fp.add(p.mSource);
+            U64 ids[4];
+            std::memcpy(ids, p.mPart.mData, sizeof(p.mPart.mData));
+            std::memcpy(ids + 2, p.mRoot.mData, sizeof(p.mRoot.mData));
+            for (U64 v : ids)
+            {
+                fp.mIds = sknav::mix(fp.mIds, v);
+            }
             fp.addF(p.mThickness);
             fp.addF(p.mMin.mV[VX]);
             fp.addF(p.mMin.mV[VY]);
@@ -250,8 +259,8 @@ namespace
 
     const char* stageName(skmap::SectionStage stage)
     {
-        static const char* names[] = { "filter and buckets", "layer indexes", "last build's layers", "levels", "  samples", "  spread", "  pack", "pairs",
-                                       "  sort", "pieces", "  slice", "    z-bins", "    analytic shapes", "    soup segments", "    chain",
+        static const char* names[] = { "filter and buckets", "layer indexes", "last build's layers", "  changed layers", "levels", "  samples",
+                                       "  spread", "  pack", "pairs", "  sort", "pieces", "  reused", "  slice", "    z-bins", "    analytic shapes", "    soup segments", "    chain",
                                        "      nodes", "      snap", "      walk", "      close", "    simplify", "    nesting",
                                        "  sheet rooms", "  islands", "cell hashes (scene)" };
         static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(skmap::SectionStage::COUNT), "a name per stage");
@@ -428,18 +437,20 @@ int main(int, char**)
                 warm_stats.mReused);
     if (moved_one)
     {
-        std::printf("one record moved: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u pairs reused; %s a cold build\n",
+        std::printf("one record moved: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u pairs reused, %u layers paired; "
+                    "%s a cold build\n",
                     least(moved_section), runs, median(moved_section), moved_stats.mSlices, moved_stats.mCacheHits, moved_stats.mReused,
-                    fp_moved.mExact == fp_moved_cold.mExact ? "the same as" : "DIFFERENT from");
+                    moved_stats.mLayersPaired, fp_moved.mExact == fp_moved_cold.mExact ? "the same as" : "DIFFERENT from");
     }
     else
     {
         std::printf("one record moved: NONE, no static box reaches the agent's storey\n");
     }
     std::printf("box shifted one snap step: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u of %u pairs reused, "
-                "%u of %u layers' floors kept; %s a cold build\n",
+                "%u of %u layers' floors kept, %u in part, %u layers paired; %s a cold build\n",
                 least(shifted_section), runs, median(shifted_section), shifted_stats.mSlices, shifted_stats.mCacheHits, shifted_stats.mReused,
-                shifted_stats.mPairs, shifted_stats.mLayersKept, shifted_stats.mLayers, fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
+                shifted_stats.mPairs, shifted_stats.mLayersKept, shifted_stats.mLayers, shifted_stats.mLayersNear, shifted_stats.mLayersPaired,
+                fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
     std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
@@ -492,6 +503,12 @@ int main(int, char**)
     in.mRecords.reset();
     moved.mRecords.reset();
     shifted.mRecords.reset();
+    // The memo compares parts and roots: a reuse that kept a stale one shows here.
+    if (fp_cold.mIds != fp_warm.mIds || fp_moved.mIds != fp_moved_cold.mIds || fp_shifted.mIds != fp_shifted_cold.mIds)
+    {
+        std::printf("part or root ids differ from a cold build\n");
+        return 7;
+    }
     if (fp_cold.mExact != fp_warm.mExact)
     {
         return 2;

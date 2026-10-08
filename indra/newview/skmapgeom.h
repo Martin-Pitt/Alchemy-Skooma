@@ -339,6 +339,8 @@ namespace skmap
         U32 mReused = 0;                ///< of mPairs, those whose pieces came whole from the last build
         U32 mLayers = 0;                ///< layers with polygons
         U32 mLayersKept = 0;            ///< of mLayers, those whose floors the last build had, to the bit
+        U32 mLayersNear = 0;            ///< of mLayers, those that changed in places and took the rest from the last build
+        U32 mLayersPaired = 0;          ///< layers whose pairs were found again rather than taken whole
     };
 
     /// Whether the global 1 m cell lists floor level k.
