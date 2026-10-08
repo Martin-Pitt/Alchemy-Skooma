@@ -72,6 +72,8 @@ namespace sknav
         bool mStamp = true;
         /// A tile without air of its own reads coarse air, so it has spaces to be stamped with.
         bool mCoarseAir = true;
+        /// Tiles with air also build it at half the cell over their narrow openings, to be measured.
+        bool mFineAir = false;
     };
 
     struct ReplayTile

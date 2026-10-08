@@ -738,7 +738,22 @@ namespace sknav
                     << ",\"flood_spans\":" << g.mFloodSpans << ",\"unspaced_spans\":" << g.mUnspacedSpans << ",\"impure_polys\":" << g.mImpurePolys
                     << ",\"portal_edges\":" << g.mPortalEdges.size() << ",\"poly_overflow\":" << (r.mPolyOverflow ? 1 : 0)
                     << ",\"stand_only\":" << st.mFlightStandOnly.size() << ",\"polys_only\":" << st.mFlightPolysOnly.size();
-                out << '}';
+                const TileBuildStats::Fine& f = st.mFine;
+                out << ",\"fine\":{\"blocks\":" << f.mBlocks << ",\"candidates\":" << f.mCandidates << ",\"windows\":" << f.mWindows
+                    << ",\"window_cells\":" << f.mWindowCells << ",\"skipped\":" << f.mSkipped << ",\"ms\":" << f.mMs << ",\"raster_ms\":" << f.mRasterMs
+                    << ",\"leaves\":" << f.mLeaves << ",\"gaps\":" << f.mGaps << ",\"bytes\":" << f.mBytes << ",\"coarse_links\":" << f.mCoarseLinks
+                    << ",\"closed\":" << f.mClosed << ",\"closed_separating\":" << f.mClosedSeparating << ",\"fine_links\":" << f.mFineLinks
+                    << ",\"opened\":" << f.mOpened << ",\"opened_separating\":" << f.mOpenedSeparating << ",\"fine_gaps\":" << f.mFineGaps
+                    << ",\"new_gaps\":" << f.mNewGaps << ",\"new_walkable\":" << f.mNewWalkable << ",\"rects\":[";
+                if (r.mFineAir)
+                {
+                    for (size_t i = 0; i < r.mFineAir->mWindows.size(); ++i)
+                    {
+                        const FineWindow& w = r.mFineAir->mWindows[i];
+                        out << (i ? "," : "") << '[' << w.mX0 << ',' << w.mY0 << ',' << w.mX1 << ',' << w.mY1 << ']';
+                    }
+                }
+                out << "]}}";
             }
         }
         out << "\n],\"meshes\":[";

@@ -116,6 +116,7 @@ namespace sknav
                 input.mAir = false;
                 input.mCoarseAir = options.mCoarseAir && options.mStamp;
             }
+            input.mFineAir = options.mFineAir && input.mAir;
         }
 
         /// A Detour tile into a mesh's navmesh, which the navmesh then owns.

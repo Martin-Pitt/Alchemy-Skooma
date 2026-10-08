@@ -504,6 +504,8 @@ namespace tut
         // SKNAV_REPLAY_STAMP=0 polygonises each tile as it is rasterised, as before the stamp; SKNAV_REPLAY_COARSE=0 leaves far tiles airless.
         options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
+        // SKNAV_REPLAY_FINE=1 builds the fine air over the narrow openings and measures it.
+        options.mFineAir = LLStringUtil::getenv("SKNAV_REPLAY_FINE") == "1";
         ReplayResult r;
         replayCensus(c, options, r);
         std::string dir = LLStringUtil::getenv("SKNAV_REPLAY_OUT");
@@ -533,6 +535,65 @@ namespace tut
             // SKNAV_REPLAY_STATS: the measurements; SKNAV_REPLAY_EDITS names "record op" lines to rebuild with.
             std::ofstream measure(dir + "replay-measure.json", std::ios::binary);
             writeReplayStats(measure, c, r);
+            const std::string fine_tiles = LLStringUtil::getenv("SKNAV_FINE_DUMP_TILES");
+            if (!fine_tiles.empty())
+            {
+                std::ofstream fd(dir + "fine-dump.jsonl", std::ios::binary);
+                std::istringstream list(fine_tiles);
+                std::string item;
+                while (std::getline(list, item, ';'))
+                {
+                    S32 m = 0, tx = 0, ty = 0;
+                    if (sscanf(item.c_str(), "%d,%d,%d", &m, &tx, &ty) != 3 || m >= static_cast<S32>(r.mMeshes.size()))
+                    {
+                        continue;
+                    }
+                    const auto it = r.mMeshes[m]->mTiles.find(TileKey{ tx, ty });
+                    if (it == r.mMeshes[m]->mTiles.end() || !it->second.mResult || !it->second.mResult->mAir || !it->second.mResult->mFineAir)
+                    {
+                        continue;
+                    }
+                    const TileAir& air = *it->second.mResult->mAir;
+                    const FineAir& fa = *it->second.mResult->mFineAir;
+                    fd << "{\"mesh\":" << m << ",\"x\":" << tx << ",\"y\":" << ty << ",\"cell\":" << air.mCell << ",\"unit\":" << air.mUnit
+                       << ",\"origin\":[" << air.mOrigin.mV[0] << ',' << air.mOrigin.mV[1] << ',' << air.mOrigin.mV[2] << "],\"w\":" << air.mWidth
+                       << ",\"h\":" << air.mHeight << ",\"coarse\":[";
+                    bool first = true;
+                    for (S32 iy = 0; iy < air.mHeight; ++iy)
+                    {
+                        for (S32 ix = 0; ix < air.mWidth; ++ix)
+                        {
+                            const S32 leaf = findLeafByKey(air, ix, iy);
+                            if (leaf < 0)
+                            {
+                                continue;
+                            }
+                            const AirLeaf& l = air.mLeaves[leaf];
+                            fd << (first ? "" : ",") << '[' << ix << ',' << iy;
+                            for (U32 g = 0; g < l.mGapCount; ++g)
+                            {
+                                const AirGap& gap = air.mGaps[l.mFirstGap + g];
+                                fd << ',' << gap.mFloor << ',' << gap.mCeiling << ',' << static_cast<S32>(gap.mFlags);
+                            }
+                            fd << ']';
+                            first = false;
+                        }
+                    }
+                    fd << "],\"fine\":[";
+                    for (size_t i = 0; i < fa.mLeaves.size(); ++i)
+                    {
+                        const FineLeaf& l = fa.mLeaves[i];
+                        fd << (i ? "," : "") << '[' << l.mX << ',' << l.mY;
+                        for (U32 g = 0; g < l.mGapCount; ++g)
+                        {
+                            const FineGap& gap = fa.mGaps[l.mFirstGap + g];
+                            fd << ',' << gap.mFloor << ',' << gap.mCeiling << ',' << static_cast<S32>(gap.mFlags);
+                        }
+                        fd << ']';
+                    }
+                    fd << "]}\n";
+                }
+            }
             const std::string edits_path = LLStringUtil::getenv("SKNAV_REPLAY_EDITS");
             if (!edits_path.empty())
             {
