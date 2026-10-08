@@ -1,6 +1,7 @@
 /**
  * @file sknavspaceproducts.cpp
- * @brief What the navmesh makes of its spaces: walls with a space on each side, and storeys and their connectors.
+ * @brief What the navmesh makes of its spaces: walls with a space on each side, storeys and their connectors, the sheet's
+ *        cells by space, and a space's floor from its polys.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -64,6 +65,15 @@ namespace sknav
             return fromRecast(&tile->verts[poly.verts[v] * 3]);
         }
 
+        U64 rasterKey(F32 x, F32 y, F32 z)
+        {
+            // Space::mRaster's key: 0.5 m by 0.5 m by 1 m cells, biased by 2^20 per axis.
+            const S64 bias = 1ll << 20;
+            const U64 kx = static_cast<U64>(static_cast<S64>(std::floor(x / 0.5f)) + bias) & 0x1fffff;
+            const U64 ky = static_cast<U64>(static_cast<S64>(std::floor(y / 0.5f)) + bias) & 0x1fffff;
+            const U64 kz = static_cast<U64>(static_cast<S64>(std::floor(z)) + bias) & 0x1fffff;
+            return (kx << 42) | (ky << 21) | kz;
+        }
     }
 
     U32 spaceIdAt(const EnclosureProduct& enc, const LLVector3& p)
@@ -486,5 +496,109 @@ namespace sknav
                 out.mConnectors.push_back(c);
             }
         }
+    }
+
+    void sheetSpaces(const EnclosureProduct& enc, const LLVector3& min, const LLVector3& max, F32 res, std::vector<SheetCell>& out)
+    {
+        res = std::max(res, 0.05f);
+        const S32 nx = std::max(1, static_cast<S32>(std::ceil((max.mV[VX] - min.mV[VX]) / res)));
+        const S32 ny = std::max(1, static_cast<S32>(std::ceil((max.mV[VY] - min.mV[VY]) / res)));
+        out.assign(static_cast<size_t>(nx) * ny, SheetCell());
+        for (S32 iy = 0; iy < ny; ++iy)
+        {
+            for (S32 ix = 0; ix < nx; ++ix)
+            {
+                SheetCell& cell = out[static_cast<size_t>(ix) + static_cast<size_t>(iy) * nx];
+                enc.gapsAt(min.mV[VX] + (ix + 0.5f) * res, min.mV[VY] + (iy + 0.5f) * res, [&](const Enclosure& e) {
+                    if (e.mFloor < min.mV[VZ] || e.mFloor > max.mV[VZ] || (cell.mHit && e.mFloor <= cell.mFloor))
+                    {
+                        return;
+                    }
+                    cell.mHit = true;
+                    cell.mFloor = e.mFloor;
+                    cell.mSpace = e.mSpaceId;
+                });
+            }
+        }
+    }
+
+    std::vector<std::pair<U64, U32>> polyRaster(const std::vector<std::vector<LLVector3>>& polys)
+    {
+        constexpr F32 CELL = 0.125f;
+        std::map<U64, U32> counts;
+        for (const std::vector<LLVector3>& poly : polys)
+        {
+            if (poly.size() < 3)
+            {
+                continue;
+            }
+            F32 x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+            for (const LLVector3& v : poly)
+            {
+                x0 = std::min(x0, v.mV[VX]);
+                y0 = std::min(y0, v.mV[VY]);
+                x1 = std::max(x1, v.mV[VX]);
+                y1 = std::max(y1, v.mV[VY]);
+            }
+            for (S32 cy = static_cast<S32>(std::floor(y0 / CELL)); cy * CELL < y1; ++cy)
+            {
+                for (S32 cx = static_cast<S32>(std::floor(x0 / CELL)); cx * CELL < x1; ++cx)
+                {
+                    const F32 px = (cx + 0.5f) * CELL, py = (cy + 0.5f) * CELL;
+                    // The fan triangle holding the cell's centre gives its height.
+                    for (size_t k = 1; k + 1 < poly.size(); ++k)
+                    {
+                        const LLVector3 &a = poly[0], &b = poly[k], &c = poly[k + 1];
+                        const F32 d = (b.mV[VY] - c.mV[VY]) * (a.mV[VX] - c.mV[VX]) + (c.mV[VX] - b.mV[VX]) * (a.mV[VY] - c.mV[VY]);
+                        if (std::fabs(d) < 1e-9f)
+                        {
+                            continue;
+                        }
+                        const F32 u = ((b.mV[VY] - c.mV[VY]) * (px - c.mV[VX]) + (c.mV[VX] - b.mV[VX]) * (py - c.mV[VY])) / d;
+                        const F32 v = ((c.mV[VY] - a.mV[VY]) * (px - c.mV[VX]) + (a.mV[VX] - c.mV[VX]) * (py - c.mV[VY])) / d;
+                        const F32 w = 1.f - u - v;
+                        if (u >= 0.f && v >= 0.f && w >= 0.f)
+                        {
+                            const F32 z = u * a.mV[VZ] + v * b.mV[VZ] + w * c.mV[VZ];
+                            ++counts[rasterKey(px, py, z)];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return std::vector<std::pair<U64, U32>>(counts.begin(), counts.end());
+    }
+
+    std::vector<std::vector<LLVector3>> spacePolys(const dtNavMesh& nav, const PolySpaceFn& space_of, U32 space)
+    {
+        std::vector<std::vector<LLVector3>> out;
+        if (!space || !space_of)
+        {
+            return out;
+        }
+        for (S32 t = 0; t < nav.getMaxTiles(); ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            if (!tile || !tile->header)
+            {
+                continue;
+            }
+            for (S32 p = 0; p < tile->header->polyCount; ++p)
+            {
+                const dtPoly& poly = tile->polys[p];
+                if (poly.getType() != DT_POLYTYPE_GROUND || space_of(tile, static_cast<U32>(p)) != space)
+                {
+                    continue;
+                }
+                std::vector<LLVector3> outline;
+                for (S32 v = 0; v < poly.vertCount; ++v)
+                {
+                    outline.push_back(polyVert(tile, poly, v));
+                }
+                out.push_back(std::move(outline));
+            }
+        }
+        return out;
     }
 }

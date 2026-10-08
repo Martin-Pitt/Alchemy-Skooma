@@ -1,6 +1,6 @@
 /**
  * @file sknavspaceproducts_test.cpp
- * @brief Walls with a space on each side, and storeys and their connectors.
+ * @brief Walls with a space on each side, storeys and their connectors, the sheet by space, and floors from polys.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -29,6 +29,7 @@
 #include "../sknavbuild.h"
 #include "../sknavenclosure.h"
 #include "../sknavlayout.h"
+#include "../sknavprobes.h"
 #include "../sknavskymap.h"
 #include "../sknavspaceproducts.h"
 #include "../sknavspaces.h"
@@ -323,4 +324,57 @@ namespace tut
         ensure("no flight, no connector", st.mConnectors.empty());
     }
 
+    template<> template<>
+    void sknavspaceproducts_object::test<4>()
+    {
+        set_test_name("the sheet's cells take their gap's space, the highest floor in the band, and nothing in a wall");
+        std::vector<DoorEntity> doors;
+        Built b(twoRoomsDoor(doors), doors);
+        const U32 west = b.spaceAt(6.f, 6.f, 0.25f), east = b.spaceAt(14.f, 6.f, 0.25f);
+        std::vector<SheetCell> cells;
+        // A 1 m sheet over the house, floors from below the slab to under the roof.
+        sheetSpaces(*b.mEnc, LLVector3(2.f, 2.f, -0.5f), LLVector3(18.f, 10.f, 2.f), 1.f, cells);
+        ensure_equals("16 by 8 cells", cells.size(), static_cast<size_t>(16 * 8));
+        const auto at = [&cells](F32 x, F32 y) -> const SheetCell& { return cells[static_cast<size_t>(x - 2.f) + static_cast<size_t>(y - 2.f) * 16]; };
+        ensure_equals("the west room's cell", at(6.f, 6.f).mSpace, west);
+        ensure_equals("the east room's cell", at(14.f, 6.f).mSpace, east);
+        ensure("on the slab, not the roof", at(6.f, 6.f).mHit && at(6.f, 6.f).mFloor < 1.f);
+        std::vector<SheetCell> roof;
+        sheetSpaces(*b.mEnc, LLVector3(6.f, 6.f, 2.f), LLVector3(7.f, 7.f, 5.f), 1.f, roof);
+        ensure("the roof in its own band", roof.size() == 1 && roof[0].mHit && roof[0].mFloor > 3.f);
+    }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<5>()
+    {
+        set_test_name("a space's floor from its polys: a square's cells at its height, and the west room's parts inside the room");
+        const std::vector<std::vector<LLVector3>> square = { { LLVector3(0.f, 0.f, 2.4f), LLVector3(1.f, 0.f, 2.4f), LLVector3(1.f, 1.f, 2.4f),
+                                                               LLVector3(0.f, 1.f, 2.4f) } };
+        const auto r = polyRaster(square);
+        ensure_equals("four half-metre cells", r.size(), static_cast<size_t>(4));
+        U32 total = 0;
+        for (const auto& c : r)
+        {
+            total += c.second;
+            ensure_equals("at its metre", static_cast<S64>(c.first & 0x1fffff) - (1ll << 20), 2ll);
+        }
+        ensure_equals("64 fine cells", total, 64u);
+
+        std::vector<DoorEntity> doors;
+        Built b(twoRoomsDoor(doors), doors);
+        const U32 west = b.spaceAt(6.f, 6.f, 0.25f);
+        const Space* sp = b.mRooms->byId(west);
+        ensure("the west room", sp != nullptr);
+        Space from_polys = *sp;
+        from_polys.mRaster = polyRaster(spacePolys(*b.mNav, b.polySpace(), west));
+        ensure("its polys rasterised", !from_polys.mRaster.empty());
+        ProbeParams params;
+        const std::vector<ProbePart> parts = spaceProbes(from_polys, params);
+        ensure("parts from its polys", !parts.empty());
+        for (const ProbePart& p : parts)
+        {
+            ensure(llformat("part at %.2f,%.2f inside the room", p.mOrigin.mV[VX], p.mOrigin.mV[VY]),
+                   p.mOrigin.mV[VX] > 2.25f && p.mOrigin.mV[VX] < 10.f && p.mOrigin.mV[VY] > 2.25f && p.mOrigin.mV[VY] < 9.75f);
+        }
+    }
 }

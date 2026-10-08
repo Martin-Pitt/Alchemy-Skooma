@@ -1,6 +1,7 @@
 /**
  * @file sknavspaceproducts.h
- * @brief What the navmesh makes of its spaces: walls with a space on each side, and storeys and their connectors.
+ * @brief What the navmesh makes of its spaces: walls with a space on each side, storeys and their connectors, the sheet's
+ *        cells by space, and a space's floor from its polys.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -98,6 +99,25 @@ namespace sknav
     /// flight space's stair portals where it has them. Positions mesh-local.
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out);
 
+    /// One cell of the sheet with the space of its gap: the highest gap whose
+    /// floor lies in the band, sampled at the cell's centre.
+    struct SheetCell
+    {
+        F32 mFloor = 0.f;
+        U32 mSpace = 0;             ///< id, 0 for a gap in no space
+        bool mHit = false;          ///< a gap's floor lies in the band here
+    };
+
+    /// The sheet over a mesh-local plan box, res metres a cell, row-major along y.
+    void sheetSpaces(const EnclosureProduct& enc, const LLVector3& min, const LLVector3& max, F32 res, std::vector<SheetCell>& out);
+
+    /// A space's floor raster in Space::mRaster's form, from polys instead of
+    /// air: each poly's 0.125 m cells, at its height, counted into 0.5 m by
+    /// 0.5 m by 1 m cells. polys holds each poly's outline, mesh-local.
+    std::vector<std::pair<U64, U32>> polyRaster(const std::vector<std::vector<LLVector3>>& polys);
+
+    /// The outlines of a space's polys in a Detour mesh, mesh-local.
+    std::vector<std::vector<LLVector3>> spacePolys(const dtNavMesh& nav, const PolySpaceFn& space_of, U32 space);
 }
 
 #endif // SK_NAVSPACEPRODUCTS_H
