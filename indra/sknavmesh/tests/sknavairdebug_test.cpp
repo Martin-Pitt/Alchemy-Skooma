@@ -137,9 +137,9 @@ namespace tut
         ensure_equals("gaps", stats.mGaps, 4u);
         ensure_equals("one floor per gap", sink.mQuads, 4u);
         ensure_equals("no volumes: every fill is a floor", sink.mTiltedQuads, 0u);
-        // The step's corners: two on the leaf below it, three on itself, two on the leaf beside it.
-        ensure_equals("verticals", sink.mVerticals, 7u);
-        ensure_equals("floor and ceiling outlines plus the verticals", sink.mLines, 4u * 8u + 7u);
+        // The step's corners: three on itself, five on the ground leaves round it.
+        ensure_equals("verticals", sink.mVerticals, 8u);
+        ensure_equals("floor and ceiling outlines plus the verticals", sink.mLines, 4u * 8u + 8u);
     }
 
     template<> template<>
@@ -185,6 +185,39 @@ namespace tut
                 ensure("a tick high", std::fabs(rise - in.mOpenTick) < 0.05f);
             }
         }
+    }
+
+    template<> template<>
+    void sknavairdebug_object::test<9>()
+    {
+        set_test_name("a straight step stands verticals at its ends only, not at every cell along it");
+        TileAir air;
+        air.mCell = air.mUnit = 0.125f;
+        air.mWidth = 4;
+        air.mHeight = 2;
+        // Single cells in key order: the row at y 0 on the ground, the row at y 1 two metres up.
+        for (U32 key = 0; key < 8; ++key)
+        {
+            U16 x = 0, y = 0;
+            for (U16 cx = 0; cx < 4; ++cx)
+            {
+                for (U16 cy = 0; cy < 2; ++cy)
+                {
+                    if (airKey(cx, cy) == key)
+                    {
+                        x = cx;
+                        y = cy;
+                    }
+                }
+            }
+            addLeaf(air, x, y, 0, y ? 16 : 0, y ? 36 : 20);
+        }
+        AirDebugInput in;
+        in.mMode = AirDebugMode::GAPS;
+        in.mClimb = 2;
+        Counter sink;
+        gatherAirDebug(air, in, sink);
+        ensure_equals("the step's two ends on each side of it", sink.mVerticals, 4u);
     }
 
     template<> template<>

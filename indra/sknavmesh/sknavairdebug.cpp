@@ -333,15 +333,20 @@ namespace sknav
                             const LLColor4 tick = (g.mFlags & AirGap::OWN_SKY) ? LLColor4(0.3f, 0.75f, 1.f, 1.f) : LLColor4(0.5f, 0.6f, 0.75f, 1.f);
                             ok = sink.line(mid, LLVector3(mid.mV[VX], mid.mV[VY], zf + in.mOpenTick), withAlpha(tick, 0.9f * dim));
                         }
-                        // Each corner looks at the two cells beside it outside the leaf.
+                        // Each corner looks at the two cells beside it outside the leaf and the one across it; a
+                        // corner partway along a straight wall or step draws nothing, so only its ends and turns stand.
                         const S32 X = l.mX, Y = l.mY;
-                        const S32 probe[4][4] = { { X - 1, Y, X, Y - 1 },
-                                                  { X + n, Y, X + n - 1, Y - 1 },
-                                                  { X + n, Y + n - 1, X + n - 1, Y + n },
-                                                  { X - 1, Y + n - 1, X, Y + n } };
+                        const S32 probe[4][6] = { { X - 1, Y, X, Y - 1, X - 1, Y - 1 },
+                                                  { X + n, Y, X + n - 1, Y - 1, X + n, Y - 1 },
+                                                  { X + n, Y + n - 1, X + n - 1, Y + n, X + n, Y + n },
+                                                  { X - 1, Y + n - 1, X, Y + n, X - 1, Y + n } };
                         for (S32 k = 0; ok && k < 4; ++k)
                         {
-                            if (sameAirAt(air, probe[k][0], probe[k][1], g, in.mClimb) && sameAirAt(air, probe[k][2], probe[k][3], g, in.mClimb))
+                            const bool a_diff = !sameAirAt(air, probe[k][0], probe[k][1], g, in.mClimb);
+                            const bool b_diff = !sameAirAt(air, probe[k][2], probe[k][3], g, in.mClimb);
+                            const bool d_diff = !sameAirAt(air, probe[k][4], probe[k][5], g, in.mClimb);
+                            const bool straight = d_diff && a_diff != b_diff;
+                            if ((!a_diff && !b_diff && !d_diff) || straight)
                             {
                                 continue;
                             }
