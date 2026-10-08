@@ -870,7 +870,7 @@ namespace sknav
                 continue;
             }
             std::uniform_int_distribution<size_t> pick(0, polys.size() - 1);
-            dtPolyRef path[256];
+            dtPolyRef path[256], space_path[256];
             for (S32 k = 0; k < 400; ++k)
             {
                 const auto& a = polys[pick(rng)];
@@ -881,11 +881,21 @@ namespace sknav
                 const F64 ns = std::chrono::duration<F64, std::nano>(Clock::now() - t0).count();
                 const bool reached = dtStatusSucceed(status) && count > 0 && path[count - 1] == b.first;
                 const auto t1 = Clock::now();
-                const dtStatus space_status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &space_filter, path, &space_count, 256);
+                const dtStatus space_status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &space_filter, space_path, &space_count, 256);
                 const F64 space_ns = std::chrono::duration<F64, std::nano>(Clock::now() - t1).count();
-                const bool space_reached = dtStatusSucceed(space_status) && space_count > 0 && path[space_count - 1] == b.first;
+                const bool space_reached = dtStatusSucceed(space_status) && space_count > 0 && space_path[space_count - 1] == b.first;
+                // Each path's refs folded into one number, so runs can be compared pair by pair.
+                const auto digest = [](const dtPolyRef* refs, S32 n) {
+                    U64 h = 1469598103934665603ull;
+                    for (S32 i = 0; i < n; ++i)
+                    {
+                        h = (h ^ static_cast<U64>(refs[i])) * 1099511628211ull;
+                    }
+                    return h & 0xffffffffffffull;
+                };
                 out << (first ? "" : ",") << '[' << m << ',' << ns << ',' << (reached ? 1 : 0) << ',' << count << ',' << dist_vec(a.second, b.second)
-                    << ',' << space_ns << ',' << (space_reached ? 1 : 0) << ',' << space_count << ']';
+                    << ',' << space_ns << ',' << (space_reached ? 1 : 0) << ',' << space_count << ',' << digest(path, count) << ','
+                    << digest(space_path, space_count) << ']';
                 first = false;
             }
         }
