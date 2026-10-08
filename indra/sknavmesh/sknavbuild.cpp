@@ -42,6 +42,7 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <unordered_set>
 
 namespace
 {
@@ -1504,12 +1505,19 @@ namespace sknav
 
     size_t TileRaster::bytes() const
     {
-        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity() + mSpanGap.capacity() * sizeof(U32);
+        size_t n = sizeof(TileRaster) + chfBytes() + mEdges.bytes() + mReal.capacity() + mStanding.capacity() + mSpanGap.capacity() * sizeof(U32) +
+                   (mSolid ? mSolid->bytes() : 0);
         for (const Flight& f : mFlights)
         {
             n += sizeof(Flight) + f.mFootprint.capacity() * sizeof(LLVector2) + f.mCodes.capacity() + f.mPolys.capacity() * sizeof(U16);
         }
         return n;
+    }
+
+    size_t SolidRaster::bytes() const
+    {
+        return sizeof(SolidRaster) + mStart.capacity() * sizeof(U32) + mSpans.capacity() * sizeof(U32) + mRuns.capacity() * sizeof(mRuns[0]) +
+               mCodes.capacity() + (mInput.mRecords.capacity() + mInput.mCuts.capacity()) * sizeof(RecordPtr) + mInput.mTerrain.mZ.capacity() * sizeof(F32);
     }
 
     F32 partitionSlope(const TileBuildInput& input)
@@ -1588,6 +1596,8 @@ namespace sknav
             std::vector<U8> mCodes;
             std::vector<U8> mReal;
             std::vector<Flight> mFlights;
+            /// Per record in soup order, null for the land, its triangle range in mSoup.
+            std::vector<std::pair<RecordPtr, std::pair<S32, S32>>> mRuns;
 
             const Soup& main() const { return mFiltered ? mSolidSoup : mSoup; }
             const std::vector<std::pair<S32, S32>>& mainSolids() const { return mFiltered ? mSolidSolids : mSolids; }
@@ -1617,6 +1627,7 @@ namespace sknav
                 const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
                 soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
                          cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE));
+                out.mRuns.push_back({ r, { before, soup.ntris() } });
                 if (r->mExclude && soup.ntris() > before)
                 {
                     excluded.push_back({ before, soup.ntris(), r->mExclude });
@@ -1688,7 +1699,9 @@ namespace sknav
                         quad(tris, a, b, c, d); // counter-clockwise from above: +z in SL, +y in Recast
                     }
                 }
+                const S32 before = soup.ntris();
                 soup.add(tris, AREA_GROUND, t.mWater, false);
+                out.mRuns.push_back({ nullptr, { before, soup.ntris() } });
             }
             result.mTriangles = soup.ntris();
             if (stats)
@@ -1871,11 +1884,115 @@ namespace sknav
             return true;
         }
 
+        /// Each run's triangles in the raster's soup: a run the solid raster leaves out has none there.
+        std::vector<std::pair<RecordPtr, U32>> mainRuns(const TileSoup& ts)
+        {
+            std::vector<std::pair<RecordPtr, U32>> runs;
+            runs.reserve(ts.mRuns.size());
+            for (const auto& [r, range] : ts.mRuns)
+            {
+                bool dropped = false;
+                for (const Excluded& e : ts.mExcluded)
+                {
+                    dropped = dropped || (ts.mFiltered && e.mBegin == range.first && e.mEnd == range.second && (e.mClasses & EXCLUDE_SOLID));
+                }
+                runs.emplace_back(r, dropped ? 0u : static_cast<U32>(range.second - range.first));
+            }
+            return runs;
+        }
+
+        /// The solid raster as it stands, packed, with what it was rasterised from.
+        std::shared_ptr<const SolidRaster> holdSolid(const rcHeightfield& hf, const TileBuildInput& input, const TileSoup& ts)
+        {
+            auto solid = std::make_shared<SolidRaster>();
+            solid->mWidth = hf.width;
+            solid->mHeight = hf.height;
+            const size_t columns = static_cast<size_t>(hf.width) * hf.height;
+            solid->mStart.resize(columns + 1);
+            for (size_t c = 0; c < columns; ++c)
+            {
+                solid->mStart[c] = static_cast<U32>(solid->mSpans.size());
+                for (const rcSpan* s = hf.spans[c]; s; s = s->next)
+                {
+                    solid->mSpans.push_back(SolidRaster::packSpan(s->smin, s->smax, s->area));
+                }
+            }
+            solid->mStart[columns] = static_cast<U32>(solid->mSpans.size());
+            solid->mSpans.shrink_to_fit();
+            solid->mInput = input;
+            solid->mRuns = mainRuns(ts);
+            solid->mCodes = ts.mCodes;
+            return solid;
+        }
+
+        /// The held solid raster's columns into an empty hf, but for the window's, taken from window_hf.
+        void spliceSolid(const SolidRaster& solid, const rcHeightfield& window_hf, const CellRect& window, rcHeightfield& hf)
+        {
+            rcContext ctx(false);
+            for (S32 z = 0; z < hf.height; ++z)
+            {
+                for (S32 x = 0; x < hf.width; ++x)
+                {
+                    if (x >= window.mX0 && x < window.mX1 && z >= window.mZ0 && z < window.mZ1)
+                    {
+                        copyColumn(window_hf, hf, x, z);
+                        continue;
+                    }
+                    // Spans held apart stay apart: re-added lowest first, none merges.
+                    const size_t c = static_cast<size_t>(x) + static_cast<size_t>(z) * hf.width;
+                    for (U32 i = solid.mStart[c]; i < solid.mStart[c + 1]; ++i)
+                    {
+                        const U32 s = solid.mSpans[i];
+                        rcAddSpan(&ctx, hf, x, z, static_cast<unsigned short>(s & 0x1fff), static_cast<unsigned short>((s >> 13) & 0x1fff),
+                                  static_cast<U8>(s >> 26), 0);
+                    }
+                }
+            }
+        }
+
+        /// The tile's raster grid: AVATAR's, widened to the air's pad when it keeps air.
+        rcConfig rasterGrid(const TileBuildInput& input)
+        {
+            const ClassParams& ap = input.mParams[static_cast<S32>(AgentClass::AVATAR)];
+            const S32 border = borderCells(ap.mRadius, input.mCell);
+            return tileConfig(input, ap, input.mAir ? std::max(border, input.mAirPad) : border);
+        }
+
+        bool sameTerrain(const TerrainWindow& a, const TerrainWindow& b)
+        {
+            return a.mOrigin == b.mOrigin && a.mSpacing == b.mSpacing && a.mWidth == b.mWidth && a.mHeight == b.mHeight && a.mWater == b.mWater &&
+                   a.mZ == b.mZ;
+        }
+
+        bool sameParams(const ClassParams& a, const ClassParams& b)
+        {
+            return a.mHeight == b.mHeight && a.mRadius == b.mRadius && a.mClimb == b.mClimb && a.mSlope == b.mSlope;
+        }
+
+        /// Whether two inputs agree on everything but their records.
+        bool sameSettings(const TileBuildInput& a, const TileBuildInput& b)
+        {
+            bool same = a.mMeshOrigin == b.mMeshOrigin && a.mTileX == b.mTileX && a.mTileY == b.mTileY && a.mTileSize == b.mTileSize &&
+                        a.mZMin == b.mZMin && a.mZMax == b.mZMax && a.mCell == b.mCell && a.mPartition == b.mPartition &&
+                        a.mPartitionSlope == b.mPartitionSlope && a.mDetailSampleCells == b.mDetailSampleCells &&
+                        a.mDetailMaxErrorCells == b.mDetailMaxErrorCells && a.mWallMinHeight == b.mWallMinHeight && a.mRootCues == b.mRootCues &&
+                        sameTerrain(a.mTerrain, b.mTerrain) && sameParams(a.mTopParams, b.mTopParams) && a.mWallFaces == b.mWallFaces &&
+                        a.mDropSpacing == b.mDropSpacing && a.mRunoff == b.mRunoff && a.mRunoffMax == b.mRunoffMax && a.mAir == b.mAir &&
+                        a.mAirPad == b.mAirPad && a.mAirMinGap == b.mAirMinGap && a.mCoarseAir == b.mCoarseAir;
+            for (S32 c = 0; c < NUM_CLASSES; ++c)
+            {
+                same = same && sameParams(a.mParams[c], b.mParams[c]) && a.mEdges[c] == b.mEdges[c] && a.mDropMax[c] == b.mDropMax[c];
+            }
+            return same;
+        }
+
         TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts);
 
         /// The raster stage over a tile's soup at the input's cell.
+        /// splice_from and window: only the window's cells are rasterised, the rest are the held raster's.
         TileRasterPtr rasteriseSoup(const TileBuildInput& input, const TileSoup& ts, TileBuildResult& result, TileBuildStats* stats,
-                                    std::chrono::steady_clock::time_point started)
+                                    std::chrono::steady_clock::time_point started, const SolidRaster* splice_from = nullptr,
+                                    const CellRect* window = nullptr)
         {
             rcContext ctx(false);
             const S32 avatar = static_cast<S32>(AgentClass::AVATAR);
@@ -1908,11 +2025,24 @@ namespace sknav
             }
             rcHeightfield& hf = *mem.hf;
             const RasterSource source{ main_soup, &codes, main_solids, &cut_soup, &cuts };
-            if (!rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
+            if (splice_from && window)
+            {
+                // The window's columns come out of its own raster as the whole tile's would; the held ones already are.
+                HeightfieldPtr scratch(makeHeightfield(grid));
+                if (!scratch || !rasterisePasses(*scratch, source, *window, grid.walkableClimb, clock))
+                {
+                    result.mError = "rasterize";
+                    return nullptr;
+                }
+                spliceSolid(*splice_from, *scratch, *window, hf);
+                clock.lap(ClassBuildStats::RASTERISE);
+            }
+            else if (!rasterisePasses(hf, source, CellRect{ 0, 0, hf.width, hf.height }, grid.walkableClimb, clock))
             {
                 result.mError = "rasterize";
                 return nullptr;
             }
+            std::shared_ptr<const SolidRaster> solid = input.mHoldSolid ? holdSolid(hf, input, ts) : nullptr;
 
             // The window: every cell a left-out triangle touches and one more
             // round it is AVATAR's own; its raster reaches a cell further, so
@@ -2247,6 +2377,7 @@ namespace sknav
             raster->mReal = std::move(real);
             raster->mFlights = std::move(flights);
             raster->mStanding = std::move(standing);
+            raster->mSolid = std::move(solid);
             if (result.mAir)
             {
                 spanGaps(*mem.chf, cfg.borderSize, fine, *result.mAir, raster->mSpanGap, &tops);
@@ -2334,6 +2465,7 @@ namespace sknav
             c.mCell = COARSE_AIR_M;
             c.mAir = true;
             c.mCoarseAir = false;
+            c.mHoldSolid = false;
             c.mAirPad = airPadCells(c.mCell);
             c.mPartitionSlope = partitionSlope(input);
             c.mWallFaces = false;
@@ -2355,6 +2487,88 @@ namespace sknav
         result.mAirBuilt = input.mAir;
         TileSoup ts;
         return soupTile(input, result, stats, started, ts) ? rasteriseSoup(input, ts, result, stats, started) : nullptr;
+    }
+
+    const char* updatePathName(UpdatePath path)
+    {
+        static const char* names[] = { "local", "no_solid", "z_range", "settings", "order", "codes", "empty" };
+        const size_t i = static_cast<size_t>(path);
+        return i < sizeof(names) / sizeof(names[0]) ? names[i] : "";
+    }
+
+    TileRasterPtr updateTile(const TileBuildInput& input, const TileRaster& held, TileBuildResult& result, TileBuildStats* stats, TileUpdate* update)
+    {
+        TileUpdate local;
+        TileUpdate& u = update ? *update : local;
+        u = TileUpdate();
+        return rasteriseTile(input, result, stats);
+    }
+
+    bool sameRaster(const TileRaster& a, const TileRaster& b, std::string* why)
+    {
+        const auto differ = [why](const char* what) {
+            if (why)
+            {
+                *why = what;
+            }
+            return false;
+        };
+        if (!a.mChf != !b.mChf)
+        {
+            return differ("chf");
+        }
+        if (a.mChf)
+        {
+            const rcCompactHeightfield& x = *a.mChf;
+            const rcCompactHeightfield& y = *b.mChf;
+            if (x.width != y.width || x.height != y.height || x.spanCount != y.spanCount || x.borderSize != y.borderSize ||
+                x.maxDistance != y.maxDistance || x.maxRegions != y.maxRegions || std::memcmp(x.bmin, y.bmin, sizeof(x.bmin)) ||
+                std::memcmp(x.bmax, y.bmax, sizeof(x.bmax)))
+            {
+                return differ("chf header");
+            }
+            const size_t cells = static_cast<size_t>(x.width) * x.height, spans = static_cast<size_t>(x.spanCount);
+            if (std::memcmp(x.cells, y.cells, cells * sizeof(rcCompactCell)) || std::memcmp(x.spans, y.spans, spans * sizeof(rcCompactSpan)))
+            {
+                return differ("chf spans");
+            }
+            if (std::memcmp(x.areas, y.areas, spans))
+            {
+                return differ("chf areas");
+            }
+            if (!x.dist != !y.dist || (x.dist && std::memcmp(x.dist, y.dist, spans * sizeof(unsigned short))))
+            {
+                return differ("chf distances");
+            }
+        }
+        if (a.mEdges.mWidth != b.mEdges.mWidth || a.mEdges.mHeight != b.mEdges.mHeight || a.mEdges.mStart != b.mEdges.mStart ||
+            a.mEdges.mRuns != b.mEdges.mRuns)
+        {
+            return differ("edge field");
+        }
+        if (a.mReal != b.mReal)
+        {
+            return differ("codes");
+        }
+        if (a.mFlights.size() != b.mFlights.size() || a.mStanding != b.mStanding)
+        {
+            return differ("flights");
+        }
+        for (size_t f = 0; f < a.mFlights.size(); ++f)
+        {
+            const Flight& x = a.mFlights[f];
+            const Flight& y = b.mFlights[f];
+            if (x.mKey != y.mKey || x.mBottom != y.mBottom || x.mTop != y.mTop || x.mRise != y.mRise || x.mRun != y.mRun || x.mCodes != y.mCodes ||
+                x.mFootprint != y.mFootprint || x.mKind != y.mKind || x.mRule != y.mRule || x.mTreads != y.mTreads)
+            {
+                return differ("flight");
+            }
+        }
+        if (a.mSpanGap != b.mSpanGap)
+        {
+            return differ("span gaps");
+        }
+        return true;
     }
 
     void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats,

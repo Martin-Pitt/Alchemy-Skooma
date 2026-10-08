@@ -693,7 +693,10 @@ namespace sknav
                     tile.mStampInput = in;
                     tile.mResult = result;
                     tile.mStats = stats;
-                    tile.mRaster.reset();
+                    if (!options.mKeepRasters)
+                    {
+                        tile.mRaster.reset();
+                    }
                 }
             });
         }
@@ -757,6 +760,52 @@ namespace sknav
             }
         }
         out.mStages.emplace_back("storeys", storeys_ms);
+    }
+
+    ReplayRoomsAgain replayRoomsAgain(const CensusFile& census, const ReplayResult& result, size_t mesh_index, const std::map<TileKey, TileAirPtr>& air)
+    {
+        ReplayRoomsAgain out;
+        const ReplayMesh& mesh = *result.mMeshes[mesh_index];
+        auto input = std::make_shared<EnclosureInput>();
+        for (size_t k = 0; k < result.mMeshes.size(); ++k)
+        {
+            const ReplayMesh& other = *result.mMeshes[k];
+            if (k != mesh_index && other.mEnclosure && hasAir(other) && touches(mesh, other))
+            {
+                input->mNeighbours.push_back({ other.mOrigin, other.mEnclosure });
+            }
+        }
+        const U64 generation = (mesh.mEnclosure ? mesh.mEnclosure->mGeneration : 0) + 1;
+        input->mGeneration = generation;
+        input->mMeshOrigin = mesh.mOrigin;
+        input->mSky = result.mSky;
+        input->mPrevious = mesh.mEnclosure;
+        input->mParams = census.mEnclosure;
+        for (const auto& t : mesh.mTiles)
+        {
+            const TileBuildResult& r = *t.second.mResult;
+            const auto it = air.find(t.first);
+            const TileAirPtr a = it != air.end() ? it->second : (r.mAirBuilt ? r.mAir : nullptr);
+            if (r.mStatus != TileBuildResult::FAILED && a && !a->mLeaves.empty())
+            {
+                input->mTiles.push_back({ t.first, a, skyContributor(mesh.mId, t.first) });
+            }
+        }
+        Clock::time_point t0 = Clock::now();
+        EnclosurePass pass(input);
+        while (!pass.step(1u << 30))
+        {
+        }
+        out.mEnclosure = pass.takeProduct();
+        out.mEnclosureMs = since(t0);
+        t0 = Clock::now();
+        SpacesPass spaces(replayRoomsInput(census, mesh, generation), out.mEnclosure);
+        while (!spaces.step(1u << 30))
+        {
+        }
+        out.mRooms = spaces.product();
+        out.mSpacesMs = since(t0);
+        return out;
     }
 
     std::shared_ptr<RoomsInput> replayRoomsInput(const CensusFile& census, const ReplayMesh& mesh, U64 generation)
