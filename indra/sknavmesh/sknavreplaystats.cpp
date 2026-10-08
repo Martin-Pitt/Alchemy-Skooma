@@ -27,6 +27,7 @@
 #include "sknavreplaystats.h"
 
 #include "sknavlayout.h"
+#include "sknavspacefilter.h"
 
 #include "DetourNavMesh.h"
 #include "DetourNavMeshQuery.h"
@@ -822,7 +823,8 @@ namespace sknav
             out << (i ? "," : "") << '[' << g.mMesh << ',' << g.mPos.mV[VX] << ',' << g.mPos.mV[VY] << ',' << g.mPos.mV[VZ] << ',' << g.mPortal << ']';
         }
 
-        // findPath between random poly centres of each mesh, with the plain filter.
+        // findPath between random poly centres of each mesh, with the plain filter and then the space filter
+        // reading every poly's space, a space priced that no poly stands in so the paths are the same.
         out << "],\"find_path\":[";
         std::mt19937 rng(1007);
         dtNavMeshQuery* query = dtAllocNavMeshQuery();
@@ -830,6 +832,9 @@ namespace sknav
         first = true;
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
         {
+            const ReplayMesh& rmesh = *result.mMeshes[m];
+            SpaceQueryFilter space_filter([&rmesh](const dtMeshTile* tile) { return rmesh.polySpaces(tile); });
+            space_filter.setSpaceCost(0xffffffffu, 2.f);
             const dtNavMesh* nav = result.mMeshes[m]->mNav[static_cast<S32>(AgentClass::AVATAR)];
             if (!nav || !dtStatusSucceed(query->init(nav, 4096)))
             {
@@ -865,24 +870,111 @@ namespace sknav
                 continue;
             }
             std::uniform_int_distribution<size_t> pick(0, polys.size() - 1);
-            dtPolyRef path[256];
+            dtPolyRef path[256], space_path[256];
             for (S32 k = 0; k < 400; ++k)
             {
                 const auto& a = polys[pick(rng)];
                 const auto& b = polys[pick(rng)];
-                S32 count = 0;
+                S32 count = 0, space_count = 0;
                 const auto t0 = Clock::now();
                 const dtStatus status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &filter, path, &count, 256);
                 const F64 ns = std::chrono::duration<F64, std::nano>(Clock::now() - t0).count();
                 const bool reached = dtStatusSucceed(status) && count > 0 && path[count - 1] == b.first;
-                out << (first ? "" : ",") << '[' << m << ',' << ns << ',' << (reached ? 1 : 0) << ',' << count << ',' << dist_vec(a.second, b.second) << ']';
+                const auto t1 = Clock::now();
+                const dtStatus space_status = query->findPath(a.first, b.first, a.second.mV, b.second.mV, &space_filter, space_path, &space_count, 256);
+                const F64 space_ns = std::chrono::duration<F64, std::nano>(Clock::now() - t1).count();
+                const bool space_reached = dtStatusSucceed(space_status) && space_count > 0 && space_path[space_count - 1] == b.first;
+                // Each path's refs folded into one number, so runs can be compared pair by pair.
+                const auto digest = [](const dtPolyRef* refs, S32 n) {
+                    U64 h = 1469598103934665603ull;
+                    for (S32 i = 0; i < n; ++i)
+                    {
+                        h = (h ^ static_cast<U64>(refs[i])) * 1099511628211ull;
+                    }
+                    return h & 0xffffffffffffull;
+                };
+                out << (first ? "" : ",") << '[' << m << ',' << ns << ',' << (reached ? 1 : 0) << ',' << count << ',' << dist_vec(a.second, b.second)
+                    << ',' << space_ns << ',' << (space_reached ? 1 : 0) << ',' << space_count << ',' << digest(path, count) << ','
+                    << digest(space_path, space_count) << ']';
                 first = false;
             }
         }
         dtFreeNavMeshQuery(query);
 
+        // Storeys and their connectors per mesh, global.
+        out << "],\"storeys\":[";
+        for (size_t m = 0; m < result.mMeshes.size(); ++m)
+        {
+            const ReplayMesh& mesh = *result.mMeshes[m];
+            const StoreyProduct& st = mesh.mStoreys;
+            out << (m ? "," : "") << "{\"mesh\":" << m << ",\"polys\":" << st.mPolys << ",\"flight_polys\":" << st.mFlightPolys << ",\"storeys\":[";
+            for (size_t k = 0; k < st.mStoreys.size(); ++k)
+            {
+                const Storey& s = st.mStoreys[k];
+                out << (k ? "," : "") << "{\"id\":" << s.mId << ",\"z\":" << mesh.mOrigin.mdV[VZ] + s.mFloorZ << ",\"area\":" << s.mArea
+                    << ",\"spaces\":" << s.mSpaces.size() << ",\"min\":[" << mesh.mOrigin.mdV[VX] + s.mMin.mV[VX] << ',' << mesh.mOrigin.mdV[VY] + s.mMin.mV[VY]
+                    << "],\"max\":[" << mesh.mOrigin.mdV[VX] + s.mMax.mV[VX] << ',' << mesh.mOrigin.mdV[VY] + s.mMax.mV[VY] << "]}";
+            }
+            out << "],\"connectors\":[";
+            for (size_t k = 0; k < st.mConnectors.size(); ++k)
+            {
+                const StoreyConnector& c = st.mConnectors[k];
+                const LLVector3d a = mesh.mOrigin + LLVector3d(c.mEnd[0]), b = mesh.mOrigin + LLVector3d(c.mEnd[1]);
+                out << (k ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace
+                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
+                    << b.mdV[VX] << ',' << b.mdV[VY] << ',' << b.mdV[VZ] << "]}";
+            }
+            // Each tile's polys' storeys, -1 on a flight, for the pictures.
+            out << "],\"tiles\":[";
+            bool first_tile = true;
+            const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            for (const auto& [key, tile] : mesh.mTiles)
+            {
+                const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+                if (!dt || !dt->header)
+                {
+                    continue;
+                }
+                out << (first_tile ? "" : ",") << '[' << key.mX << ',' << key.mY << ",[";
+                first_tile = false;
+                const dtPolyRef base = nav->getPolyRefBase(dt);
+                for (S32 p = 0; p < dt->header->polyCount; ++p)
+                {
+                    out << (p ? "," : "") << st.storeyOfPoly(static_cast<U64>(base | static_cast<dtPolyRef>(p)));
+                }
+                out << "]]";
+            }
+            out << "]}";
+        }
+
+        // Wall segments and faces by what their sides found.
+        U32 seg_n = 0, seg_two = 0, seg_same = 0, seg_one = 0, face_n = 0, face_two = 0, face_same = 0, face_one = 0;
+        for (const auto& mesh : result.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                for (const WallSegment& w : tile.mResult->mSegments[static_cast<S32>(AgentClass::AVATAR)])
+                {
+                    ++seg_n;
+                    seg_two += w.mSpace[0] && w.mSpace[1] && w.mSpace[0] != w.mSpace[1] ? 1 : 0;
+                    seg_same += w.mSpace[0] && w.mSpace[0] == w.mSpace[1] ? 1 : 0;
+                    seg_one += (w.mSpace[0] != 0) != (w.mSpace[1] != 0) ? 1 : 0;
+                }
+                for (const WallFace& f : tile.mResult->mFaces)
+                {
+                    ++face_n;
+                    face_two += f.mSpace[0] && f.mSpace[1] && f.mSpace[0] != f.mSpace[1] ? 1 : 0;
+                    face_same += f.mSpace[0] && f.mSpace[0] == f.mSpace[1] ? 1 : 0;
+                    face_one += (f.mSpace[0] != 0) != (f.mSpace[1] != 0) ? 1 : 0;
+                }
+            }
+        }
+        out << "],\"walls\":{\"segments\":" << seg_n << ",\"segments_two_spaces\":" << seg_two << ",\"segments_same_space\":" << seg_same
+            << ",\"segments_one_side\":" << seg_one << ",\"faces\":" << face_n << ",\"faces_two_spaces\":" << face_two
+            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one << "}";
+
         // findAirLeaf over random cells of every tile with air.
-        out << "],\"air_leaf_ns\":[";
+        out << ",\"air_leaf_ns\":[";
         first = true;
         U64 sink = 0;
         for (const auto& mesh : result.mMeshes)

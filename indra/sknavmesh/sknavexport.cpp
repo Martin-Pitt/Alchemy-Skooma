@@ -100,7 +100,8 @@ namespace sknav
                 writeVec3(file, f.mMin);
                 file << ",\"max\":";
                 writeVec3(file, f.mMax);
-                file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << '}';
+                file << ",\"side\":" << static_cast<S32>(f.mSide) << ",\"area\":" << static_cast<S32>(f.mArea) << ",\"spaces\":[" << f.mSpace[0] << ','
+                     << f.mSpace[1] << "]}";
             }
             file << ']';
         }
@@ -202,7 +203,7 @@ namespace sknav
                     file << ",\"b\":";
                     writeVec3d(file, mesh_origin + LLVector3d(seg.mB));
                     file << ",\"kind\":" << static_cast<S32>(seg.mKind) << ",\"value\":" << seg.mValue << ",\"area\":" << static_cast<S32>(seg.mArea)
-                         << '}';
+                         << ",\"spaces\":[" << seg.mSpace[0] << ',' << seg.mSpace[1] << "]}";
                 }
             }
             file << "],\"links\":[";

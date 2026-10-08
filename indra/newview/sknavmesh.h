@@ -32,6 +32,8 @@
 #include "sknavoverlay.h"
 #include "sknavpolys.h"
 #include "sknavskymap.h"
+#include "sknavspacefilter.h"
+#include "sknavspaceproducts.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
 #include "skworldcensus.h"
@@ -93,6 +95,18 @@ public:
     /// mesh is torn down, air is evicted (it follows the camera), or feature links change.
     U64 revision() const { return mRevision; }
 
+    /// A poly edge on a portal: the poly and edge in the tile's polys, the
+    /// portal's key, kind and the space on each side of it.
+    struct PortalEdge
+    {
+        U16 mPoly = 0;                  ///< into PolyTile::mPolys
+        U8 mEdge = 0;                   ///< from the poly's vertex mEdge to the next
+        sknav::PortalKind mKind = sknav::PortalKind::OPENING;
+        U64 mPortal = 0;                ///< portalKey (sknavstamp.h): the same portal across tiles and passes
+        U32 mInside = 0;                ///< the poly's space id
+        U32 mAcross = 0;                ///< the space id on the portal's other side
+    };
+
     /// One published tile as the mini-map reads it.
     struct PolyTile
     {
@@ -107,6 +121,8 @@ public:
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments;
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks;
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
+        std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per poly of mPolys, its space id; 0 for none
+        std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< its polys' edges on portals
     };
     typedef std::function<void(const PolyTile&)> PolyTileFn;
     /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
@@ -123,6 +139,18 @@ public:
     /// walkable polygon's height. Cluster meshes at the position first, then
     /// the region's terrain.
     bool floorUnder(const LLVector3d& pos, sknav::AgentClass cls, F32& z_out, LLUUID* mesh_out = nullptr) const;
+
+    /// The space under a global position: the nearest walkable poly's, within
+    /// the class's reach; false over no stamped poly.
+    bool spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out) const;
+    /// Every stamped poly of a space, its outline global.
+    typedef std::function<void(const std::vector<LLVector3d>& outline)> OutlineFn;
+    void spacePolys(const LLUUID& mesh, U32 space, const OutlineFn& fn) const;
+    /// A mesh's storeys over its published polys, rebuilt after a publish; null for no mesh.
+    /// Positions in it are relative to the mesh's origin.
+    sknav::StoreyProductPtr storeys(const LLUUID& mesh) const;
+    /// The storey under a global position, by index into storeys(mesh_out); false on a flight or off the mesh.
+    bool storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const;
 
     /// A path within one mesh (the one under a). Points are global; partial
     /// when b was not reachable and the path ends at the closest point found.
@@ -335,6 +363,8 @@ private:
         U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
+        std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per AVATAR poly, its space id, as bound
+        std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< AVATAR's poly edges on portals, as bound
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights[sknav::NUM_CLASSES];
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
@@ -402,6 +432,8 @@ private:
         sknav::EnclosureProductPtr mStampEnc;
         sknav::RoomsProductPtr mStampRooms;
         bool mStampScan = false;            ///< some tile may be due a stamp
+        mutable sknav::StoreyProductPtr mStoreys;
+        mutable U64 mStoreysAt = 0;         ///< the revision they were built at
         ~Mesh();
     };
 
@@ -513,6 +545,8 @@ private:
     void applyBinding(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     /// The space id of a poly, through its Detour tile's user id; 0 for none.
     U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+    /// A Detour tile's polys' space ids, for the space filter.
+    sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
     U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,

@@ -54,6 +54,7 @@ namespace sknav
         EdgeKind mKind = EdgeKind::OPEN;
         F32 mValue = 0.f;       ///< height, drop or clearance, metres
         U8 mArea = 0;           ///< the solid's area beyond the edge, when known
+        U32 mSpace[2] = { 0, 0 };   ///< space ids left and right of A to B, bound at publish (sknavspaceproducts.h); not cached
     };
 
     /// An exposed side of solid: the surface Atmo paints and drains along.
@@ -70,6 +71,7 @@ namespace sknav
         LLVector3 mMax;
         U8 mSide = 0;
         U8 mArea = 0;
+        U32 mSpace[2] = { 0, 0 };   ///< space ids of the side it faces and behind it, bound at publish; not cached
     };
 
     /// How a link is travelled.

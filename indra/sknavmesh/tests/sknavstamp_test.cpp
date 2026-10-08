@@ -627,6 +627,23 @@ namespace tut
         SpaceQueryFilter cheap(space_of);
         cheap.setSpaceCost(2, 0.25f);
         ensure_equals("raised to one", cheap.spaceCost(2), 1.f);
+        // The per-tile form reads the same spaces through its cached table.
+        std::vector<U32> table(comp.size());
+        for (U32 p = 0; p < table.size(); ++p)
+        {
+            table[p] = space_of(nullptr, p);
+        }
+        const auto spaces_of = [&table](const dtMeshTile*) { return SpaceQueryFilter::TileSpaces{ table.data(), static_cast<U32>(table.size()) }; };
+        SpaceQueryFilter tiled_costed(spaces_of), tiled_barred(spaces_of);
+        tiled_costed.setSpaceCost(2, 10.f);
+        tiled_barred.setSpaceCost(2, 0.f);
+        F32 tiled_len = 0.f;
+        bool tiled_through = true;
+        route(tiled_costed, tiled_len, tiled_through);
+        ensure("by tile, priced at ten, the same way round", !tiled_through && tiled_len == costed_len);
+        tiled_through = true;
+        route(tiled_barred, tiled_len, tiled_through);
+        ensure("by tile, barred, round too", !tiled_through);
     }
 
     template<> template<>
