@@ -221,6 +221,24 @@ namespace tut
     }
 
     template<> template<>
+    void sknavairdebug_object::test<10>()
+    {
+        set_test_name("a ceiling that steps over a level floor stands no vertical");
+        TileAir air;
+        air.mCell = air.mUnit = 0.125f;
+        air.mWidth = 4;
+        air.mHeight = 2;
+        addLeaf(air, 0, 0, 1, 0, 20);
+        addLeaf(air, 2, 0, 1, 0, 40);
+        AirDebugInput in;
+        in.mMode = AirDebugMode::GAPS;
+        in.mClimb = 2;
+        Counter sink;
+        gatherAirDebug(air, in, sink);
+        ensure_equals("no wall, no step", sink.mVerticals, 0u);
+    }
+
+    template<> template<>
     void sknavairdebug_object::test<3>()
     {
         set_test_name("the slice keeps only floors within it");

@@ -59,7 +59,7 @@ namespace sknav
 
         bool open(const AirGap& g) { return g.mCeiling == AIR_CEILING_OPEN || (g.mFlags & AirGap::OPEN); }
 
-        /// Whether the cell holds a gap that reads as the same air as g: floor and ceiling each within climb.
+        /// Whether the cell holds a gap whose floor is g's within climb: no wall and no step between them.
         bool sameAirAt(const TileAir& air, S32 ix, S32 iy, const AirGap& g, S32 climb)
         {
             if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
@@ -74,16 +74,7 @@ namespace sknav
             const AirLeaf& l = air.mLeaves[leaf];
             for (U32 i = l.mFirstGap; i < l.mFirstGap + l.mGapCount; ++i)
             {
-                const AirGap& n = air.mGaps[i];
-                if (std::abs(static_cast<S32>(n.mFloor) - static_cast<S32>(g.mFloor)) > climb)
-                {
-                    continue;
-                }
-                if (open(n) != open(g))
-                {
-                    continue;
-                }
-                if (open(g) || std::abs(static_cast<S32>(n.mCeiling) - static_cast<S32>(g.mCeiling)) <= climb)
+                if (std::abs(static_cast<S32>(air.mGaps[i].mFloor) - static_cast<S32>(g.mFloor)) <= climb)
                 {
                     return true;
                 }
