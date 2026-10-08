@@ -31,6 +31,7 @@
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
 #include "RecastAlloc.h"
+#include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 #include "sknavlayout.h"
 #include "sknavwalls.h"
@@ -2153,6 +2154,10 @@ namespace sknav
                     view.point(hf, overlay.get(), &faces_own);
                 }
                 extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, real.data());
+                if (input.mFaceOffsets)
+                {
+                    alignWallFaces(result.mFaces, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), cfg.cs, cfg.ch);
+                }
                 view.point(hf, overlay.get(), &own_column);
             }
             if (top_pass)
@@ -2212,6 +2217,14 @@ namespace sknav
                 result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
                                           static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
                                           tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine);
+                if (result.mAir && input.mFaceOffsets)
+                {
+                    // Not shared yet: the table goes in before the air is published.
+                    auto& air = const_cast<TileAir&>(*result.mAir);
+                    computeFaceOffsets(fine, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
+                                       air.mFaceOffsets, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
+                                       stats ? &stats->mFaceTrace : nullptr);
+                }
                 top_clock.lap(ClassBuildStats::AIR);
                 clock.restart();
             }

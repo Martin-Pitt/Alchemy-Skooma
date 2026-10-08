@@ -441,6 +441,11 @@ namespace sknav
                 w.pod(t.mBottom);
                 w.pod(t.mTop);
             }
+            w.pod(static_cast<U32>(air.mFaceOffsets.size()));
+            for (const FaceOffset& f : air.mFaceOffsets)
+            {
+                w.pod(f.mBits);
+            }
         }
 
         bool readAir(Reader& r, TileAir& air)
@@ -501,9 +506,14 @@ namespace sknav
                 r.pod(t.mBottom);
                 r.pod(t.mTop);
             }
-            if (air.mTopWidth < 0 || air.mTopHeight < 0)
+            if (air.mTopWidth < 0 || air.mTopHeight < 0 || !r.count(n, 4))
             {
                 return false;
+            }
+            air.mFaceOffsets.resize(n);
+            for (FaceOffset& f : air.mFaceOffsets)
+            {
+                r.pod(f.mBits);
             }
             return air.mTopStart.empty()
                 || offsetsFit(air.mTopStart, static_cast<size_t>(air.mTopWidth) * air.mTopHeight, air.mTop.size());
@@ -612,6 +622,7 @@ namespace sknav
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
         h = mix(h, input.mCoarseAir);
+        h = mix(h, input.mFaceOffsets);
 
         // The land by its samples, never by when a patch last arrived.
         const TerrainWindow& t = input.mTerrain;

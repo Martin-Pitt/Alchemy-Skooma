@@ -141,6 +141,8 @@ namespace sknav
         S32 mAirPad = 16;
         /// Closed gaps lower than this are folded into the solid around them.
         F32 mAirMinGap = 0.5f;
+        /// Where walls' true faces sit inside their solid cells, kept with the air (sknavfaceoffsets.h).
+        bool mFaceOffsets = true;
         /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
         /// for the spaces the tile is stamped with, wherever it is.
         bool mCoarseAir = false;

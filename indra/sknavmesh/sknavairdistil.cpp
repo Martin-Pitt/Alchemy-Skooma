@@ -111,7 +111,8 @@ namespace sknav
     size_t TileAir::bytes() const
     {
         size_t n = sizeof(TileAir) + mLeaves.capacity() * sizeof(AirLeaf) + mGaps.capacity() * sizeof(AirGap) +
-                   mTopStart.capacity() * sizeof(U32) + mTop.capacity() * sizeof(TopInterval);
+                   mTopStart.capacity() * sizeof(U32) + mTop.capacity() * sizeof(TopInterval) +
+                   mFaceOffsets.capacity() * sizeof(FaceOffset);
         for (const SeamStrip& s : mSeams)
         {
             n += s.mStart.capacity() * sizeof(U32) + s.mGaps.capacity() * sizeof(AirGap);

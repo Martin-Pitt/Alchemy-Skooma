@@ -26,6 +26,7 @@
 #define SK_NAVAIRDISTIL_H
 
 #include "sknavair.h"
+#include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 
 #include <memory>
@@ -107,6 +108,8 @@ namespace sknav
         S32 mTopHeight = 0;
         std::vector<U32> mTopStart;
         std::vector<TopInterval> mTop;
+        /// Where walls' true faces sit inside their solid cells (sknavfaceoffsets.h); empty for coarse air.
+        std::vector<FaceOffset> mFaceOffsets;
 
         size_t bytes() const;
     };

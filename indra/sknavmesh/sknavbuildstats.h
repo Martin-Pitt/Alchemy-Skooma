@@ -26,6 +26,7 @@
 #define SK_NAVBUILDSTATS_H
 
 #include "stdtypes.h"
+#include "sknavfaceoffsets.h"
 
 #include <chrono>
 #include <vector>
@@ -129,6 +130,10 @@ namespace sknav
         F64 mRasterMs = 0.0;            ///< the raster stage, soup to the held raster
         F64 mPolyMs = 0.0;              ///< the polygon stage
         F64 mCoarseAirMs = 0.0;         ///< of the raster stage, the coarse air of a tile without its own
+        /// The air's face offsets, and every mFaceTraceEvery-th side traced for an oracle when set.
+        FaceOffsetStats mFaceOffsets;
+        S32 mFaceTraceEvery = 0;
+        std::vector<FaceOffsetTrace> mFaceTrace;
         /// What the raster stage hands the polygon stage: all of it, its compact heightfield, its edge field.
         size_t mHeldBytes = 0;
         size_t mHeldChfBytes = 0;

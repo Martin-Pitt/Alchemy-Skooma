@@ -56,7 +56,7 @@ namespace sknav
 
     /// Bumped whenever the product format or what a build makes of its input
     /// changes, which orphans every entry written before.
-    constexpr U32 TILE_PRODUCT_VERSION = 7;
+    constexpr U32 TILE_PRODUCT_VERSION = 8;
 
     /// A versioned little-endian form of a tile's products under its key:
     /// a header, then tagged sections a reader skips when it does not know
