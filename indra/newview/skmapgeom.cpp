@@ -49,6 +49,7 @@ namespace skmap
         sknav::Shape mShape = sknav::Shape::TRIANGLES;
         sknav::Provenance mProvenance = sknav::Provenance::EXACT;
         U32 mFirst = 0, mCount = 0;     ///< the pair's pieces in its layer's run
+        U32 mRecord = 0;                ///< the record's snapshot index, by which pairs ascend; never compared
         /// Where the pieces' reads of the floors centre, scene-local: the slice's points and groups, shifted; empty
         /// (min above max) for a slice with nothing in it. Made from the fields above, so never compared.
         LLVector2 mReadMin = LLVector2(FLT_MAX, FLT_MAX), mReadMax = LLVector2(-FLT_MAX, -FLT_MAX);
@@ -1348,73 +1349,51 @@ namespace skmap
             }
         };
 
-        /// Every layer's index, from passes over the scene's.
-        void buildLayerIndexes(const Scene& s, std::vector<LayerIndex>& out)
+        /// One layer's share of Scene::mIndex, from the cells its own polygons meet, as the scene's index found them:
+        /// built only for a layer that makes pieces of its own, as one that takes its last build's needs none.
+        void buildLayerIndex(const Scene& s, S32 l, LayerIndex& li)
         {
-            out.assign(s.mLayers.size(), LayerIndex());
-            const S32 layers = static_cast<S32>(out.size());
-            std::vector<S32> lo_x(out.size(), INT_MAX), lo_y(out.size(), INT_MAX), hi_x(out.size(), INT_MIN), hi_y(out.size(), INT_MIN);
-            for (const auto& entry : s.mIndex)
+            li = LayerIndex();
+            std::vector<std::pair<Cell, U32>> meets;
+            std::vector<Cell> cells;
+            S32 lo_x = INT_MAX, lo_y = INT_MAX, hi_x = INT_MIN, hi_y = INT_MIN;
+            for (U32 id : s.mLayers[l].mPolys)
             {
-                for (U32 id : entry.second)
+                polyCells(s, s.mPolys[id], cells);
+                for (const Cell& c : cells)
                 {
-                    const S32 l = s.mPolys[id].mLayer;
-                    if (l >= 0 && l < layers)
-                    {
-                        lo_x[l] = llmin(lo_x[l], entry.first.first);
-                        lo_y[l] = llmin(lo_y[l], entry.first.second);
-                        hi_x[l] = llmax(hi_x[l], entry.first.first);
-                        hi_y[l] = llmax(hi_y[l], entry.first.second);
-                    }
+                    meets.emplace_back(c, id);
+                    lo_x = llmin(lo_x, c.first);
+                    lo_y = llmin(lo_y, c.second);
+                    hi_x = llmax(hi_x, c.first);
+                    hi_y = llmax(hi_y, c.second);
                 }
             }
-            for (size_t l = 0; l < out.size(); ++l)
+            if (lo_x <= hi_x)
             {
-                LayerIndex& li = out[l];
-                if (lo_x[l] <= hi_x[l])
-                {
-                    li.mX0 = lo_x[l];
-                    li.mY0 = lo_y[l];
-                    li.mW = hi_x[l] - lo_x[l] + 1;
-                    li.mH = hi_y[l] - lo_y[l] + 1;
-                }
-                li.mFirst.assign(static_cast<size_t>(li.mW) * li.mH + 1, 0);
+                li.mX0 = lo_x;
+                li.mY0 = lo_y;
+                li.mW = hi_x - lo_x + 1;
+                li.mH = hi_y - lo_y + 1;
             }
-            auto cellOf = [](const LayerIndex& li, const Cell& c) {
+            li.mFirst.assign(static_cast<size_t>(li.mW) * li.mH + 1, 0);
+            auto cellOf = [&li](const Cell& c) {
                 return static_cast<size_t>(c.second - li.mY0) * li.mW + (c.first - li.mX0);
             };
-            for (const auto& entry : s.mIndex)
+            for (const auto& m : meets)
             {
-                for (U32 id : entry.second)
-                {
-                    const S32 l = s.mPolys[id].mLayer;
-                    if (l >= 0 && l < layers)
-                    {
-                        out[l].mFirst[cellOf(out[l], entry.first) + 1]++;
-                    }
-                }
+                li.mFirst[cellOf(m.first) + 1]++;
             }
-            std::vector<std::vector<U32>> fill(out.size());
-            for (size_t l = 0; l < out.size(); ++l)
+            for (size_t i = 1; i < li.mFirst.size(); ++i)
             {
-                LayerIndex& li = out[l];
-                for (size_t i = 1; i < li.mFirst.size(); ++i)
-                {
-                    li.mFirst[i] += li.mFirst[i - 1];
-                }
-                li.mPolys.resize(li.mFirst.back());
-                fill[l].assign(li.mFirst.begin(), li.mFirst.end() - 1);
+                li.mFirst[i] += li.mFirst[i - 1];
             }
-            for (const auto& entry : s.mIndex)
+            // The layer's polygons ascend, so each cell's list does, as in the scene's index.
+            li.mPolys.resize(meets.size());
+            std::vector<U32> fill(li.mFirst.begin(), li.mFirst.end() - 1);
+            for (const auto& m : meets)
             {
-                for (U32 id : entry.second)
-                {
-                    const S32 l = s.mPolys[id].mLayer;
-                    if (l >= 0 && l < layers)
-                    {
-                        out[l].mPolys[fill[l][cellOf(out[l], entry.first)]++] = id;
-                    }
-                }
+                li.mPolys[fill[cellOf(m.first)]++] = m.second;
             }
         }
 
@@ -2037,7 +2016,8 @@ namespace skmap
             };
             std::vector<U32> used(o.mPolys.size(), 0);
             U32 stamp = 0;
-            std::map<S32, U32> votes;
+            std::vector<U32> votes(o.mLayers.size(), 0);
+            std::vector<S32> voted;
             for (size_t l = 0; l < s.mLayers.size(); ++l)
             {
                 const SceneLayer& layer = s.mLayers[l];
@@ -2045,7 +2025,6 @@ namespace skmap
                 {
                     continue;
                 }
-                votes.clear();
                 for (U32 id : layer.mPolys)
                 {
                     const auto range = candidates(hashes[id]);
@@ -2053,21 +2032,28 @@ namespace skmap
                     {
                         if (samePoly(s, s.mPolys[id], o, o.mPolys[it->second]))
                         {
-                            votes[o.mPolys[it->second].mLayer]++;
+                            const S32 ol = o.mPolys[it->second].mLayer;
+                            if (!votes[ol]++)
+                            {
+                                voted.push_back(ol);
+                            }
                             break;
                         }
                     }
                 }
+                // The most shared, the lowest layer on a tie.
                 S32 best = -1;
                 U32 most = 0;
-                for (const auto& vote : votes)
+                for (S32 ol : voted)
                 {
-                    if (vote.second > most)
+                    if (votes[ol] > most || (votes[ol] == most && ol < best))
                     {
-                        best = vote.first;
-                        most = vote.second;
+                        best = ol;
+                        most = votes[ol];
                     }
+                    votes[ol] = 0;
                 }
+                voted.clear();
                 if (best < 0)
                 {
                     continue;
@@ -2238,9 +2224,11 @@ namespace skmap
             const SectionMemo* last = cache ? cache->memo().get() : nullptr;
             bool same_records = false;
             // Otherwise the records that differ from the last build's, by the 8 m buckets they meet: a layer on its last
-            // floors whose buckets none of them meets pairs as it did. One on the large list meets every layer.
+            // floors whose buckets none of them meets pairs as it did. One on the large list meets every layer whose
+            // planes reach its heights.
             CellMarks changed_buckets;
-            bool changed_large = true;
+            bool all_changed = true;
+            std::vector<std::pair<F64, F64>> changed_large;     ///< a changed large-list record's heights
             if (next)
             {
                 const std::vector<KeptRecord>* had = last && last->mKept ? last->mKept.get() : nullptr;
@@ -2265,13 +2253,13 @@ namespace skmap
                 }
                 if (had && !same_records)
                 {
-                    changed_large = false;
+                    all_changed = false;
                     auto mark = [&](const LLVector3d& lo, const LLVector3d& hi) {
                         const S32 bx0 = cellIndex(lo.mdV[VX], RECORD_BUCKET_M), bx1 = cellIndex(hi.mdV[VX], RECORD_BUCKET_M);
                         const S32 by0 = cellIndex(lo.mdV[VY], RECORD_BUCKET_M), by1 = cellIndex(hi.mdV[VY], RECORD_BUCKET_M);
                         if (static_cast<S64>(bx1 - bx0 + 1) * (by1 - by0 + 1) > RECORD_LARGE_BUCKETS)
                         {
-                            changed_large = true;
+                            changed_large.emplace_back(lo.mdV[VZ], hi.mdV[VZ]);
                         }
                         else
                         {
@@ -2368,7 +2356,8 @@ namespace skmap
 
             // Floor lookups by layer, made when a layer first makes pieces, and a stamp per polygon so a sheet room's
             // search visits each once.
-            std::vector<LayerIndex> layer_index;
+            std::vector<LayerIndex> layer_index(s.mLayers.size());
+            std::vector<U8> indexed(s.mLayers.size(), 0);
             std::vector<U32> poly_seen;
             U32 poly_stamp = 0;
 
@@ -2437,6 +2426,7 @@ namespace skmap
             std::vector<LLVector2> ring;
             std::vector<U64> pair_keys, key_scratch;
             std::vector<std::pair<U64, U32>> by_source;
+            size_t old_cursor = 0;
 
             const S32 per_bucket = static_cast<S32>(RECORD_BUCKET_M / LEVEL_CELL_M);
             for (size_t l = 0; l < s.mLayers.size(); ++l)
@@ -2465,8 +2455,28 @@ namespace skmap
                 }
                 const S32 bx0 = floorDivInt(grid.mX0, per_bucket), bx1 = floorDivInt(grid.mX0 + grid.mW - 1, per_bucket);
                 const S32 by0 = floorDivInt(grid.mY0, per_bucket), by1 = floorDivInt(grid.mY0 + grid.mH - 1, per_bucket);
-                // The same floors, and no changed record in the layer's buckets: the same pairs, and so the same pieces.
-                const bool same_pairs = same_records || (!changed_large && !changed_buckets.any(bx0, by0, bx1, by1));
+                // The same floors, and no changed record in the layer's buckets or at its planes' heights: the same
+                // pairs, and so the same pieces.
+                bool same_pairs = same_records || (!all_changed && !changed_buckets.any(bx0, by0, bx1, by1));
+                if (!same_records && same_pairs && !changed_large.empty())
+                {
+                    // A large-list record pairs with a layer at a plane with mMin z < plane z <= mMax z.
+                    S32 lo = INT_MAX, hi = INT_MIN;
+                    for (size_t i = 0; i < grid.mLists.size(); i += grid.mLists[i] + 1)
+                    {
+                        lo = llmin(lo, grid.mLists[i + 1]);
+                        hi = llmax(hi, grid.mLists[i + grid.mLists[i]]);
+                    }
+                    if (lo <= hi)
+                    {
+                        const F64 z_lo = sectionPlaneZ(lo + llmin(SECTION_LOW_Q, SECTION_HIGH_Q));
+                        const F64 z_hi = sectionPlaneZ(hi + llmax(SECTION_LOW_Q, SECTION_HIGH_Q));
+                        for (const auto& z : changed_large)
+                        {
+                            same_pairs = same_pairs && (z_hi <= z.first || z_lo > z.second);
+                        }
+                    }
+                }
                 if (same_pairs && last_layer[l] >= 0 && static_cast<size_t>(last_layer[l]) < last->mPairs.size()
                     && last->mPairs[last_layer[l]])
                 {
@@ -2650,11 +2660,7 @@ namespace skmap
                         old_sources = had->get();
                         old_run = last->mRuns[from].get();
                         by_source.clear();
-                        for (size_t k = 0; k < old_sources->size(); ++k)
-                        {
-                            by_source.emplace_back(sourceHash((*old_sources)[k]), static_cast<U32>(k));
-                        }
-                        std::sort(by_source.begin(), by_source.end());
+                        old_cursor = 0;
                     }
                     auto sources = std::make_shared<std::vector<PairSource>>(pairs.size());
                     fresh = sources.get();
@@ -2669,18 +2675,30 @@ namespace skmap
                         src.mPlane = pairs[k].second;
                         src.mShape = r.mShape;
                         src.mProvenance = r.mProvenance;
+                        src.mRecord = pairs[k].first;
                     }
                     next->mPairs[l] = std::move(sources);
                 }
-                if (layer_index.empty())
-                {
-                    SK_SECTION_STAGE(LAYER_INDEX);
-                    buildLayerIndexes(s, layer_index);
-                    poly_seen.assign(s.mPolys.size(), 0);
-                }
-                const LayerIndex& index = layer_index[l];
+                // The layer's floor lookups, made when its first pair needs pieces of its own.
+                const LayerIndex* index = nullptr;
+                auto needIndex = [&]() {
+                    if (!index)
+                    {
+                        SK_SECTION_STAGE(LAYER_INDEX);
+                        if (!indexed[l])
+                        {
+                            buildLayerIndex(s, static_cast<S32>(l), layer_index[l]);
+                            indexed[l] = 1;
+                        }
+                        if (poly_seen.empty())
+                        {
+                            poly_seen.assign(s.mPolys.size(), 0);
+                        }
+                        index = &layer_index[l];
+                    }
+                };
                 const std::function<bool(const LLVector2&, F32&)> floor_at = [&s, &index](const LLVector2& p, F32& z) {
-                    return layerFloorAt(s, index, p, z);
+                    return layerFloorAt(s, *index, p, z);
                 };
                 // The layer's run, with room for about one and a half pieces per pair.
                 auto run = std::make_shared<std::vector<SectionPiece>>();
@@ -2696,12 +2714,35 @@ namespace skmap
                     {
                         SK_SECTION_STAGE(PIECE_REUSE);
                         const PairSource& src = (*fresh)[pk];
-                        const U64 h = sourceHash(src);
                         const PairSource* found = nullptr;
-                        for (auto it = std::lower_bound(by_source.begin(), by_source.end(), std::make_pair(h, 0u));
-                             it != by_source.end() && it->first == h && !found; ++it)
+                        // Both lists ascend by (record, plane): walk the last alongside, and search it by content only
+                        // for a pair whose record the snapshot renumbered.
+                        const U64 key = pairKey(src.mRecord, src.mPlane);
+                        while (old_cursor < old_sources->size()
+                               && pairKey((*old_sources)[old_cursor].mRecord, (*old_sources)[old_cursor].mPlane) < key)
                         {
-                            found = (*old_sources)[it->second].same(src) ? &(*old_sources)[it->second] : nullptr;
+                            ++old_cursor;
+                        }
+                        if (old_cursor < old_sources->size() && (*old_sources)[old_cursor].same(src))
+                        {
+                            found = &(*old_sources)[old_cursor];
+                        }
+                        if (!found)
+                        {
+                            if (by_source.empty() && !old_sources->empty())
+                            {
+                                for (size_t k = 0; k < old_sources->size(); ++k)
+                                {
+                                    by_source.emplace_back(sourceHash((*old_sources)[k]), static_cast<U32>(k));
+                                }
+                                std::sort(by_source.begin(), by_source.end());
+                            }
+                            const U64 h = sourceHash(src);
+                            for (auto it = std::lower_bound(by_source.begin(), by_source.end(), std::make_pair(h, 0u));
+                                 it != by_source.end() && it->first == h && !found; ++it)
+                            {
+                                found = (*old_sources)[it->second].same(src) ? &(*old_sources)[it->second] : nullptr;
+                            }
                         }
                         if (found && (!change || readsUnchanged(s, *found, *change)))
                         {
@@ -2720,6 +2761,7 @@ namespace skmap
                     {
                         continue;
                     }
+                    needIndex();
                     const LLVector2 shift(static_cast<F32>(rec.mOrigin.mdV[VX] - s.mOrigin.mdV[VX]),
                                           static_cast<F32>(rec.mOrigin.mdV[VY] - s.mOrigin.mdV[VY]));
                     const F32 plane = static_cast<F32>(sectionPlaneZ(q) - s.mOrigin.mdV[VZ]);
@@ -2792,7 +2834,7 @@ namespace skmap
                             {
                                 for (S32 cx = c0.first; cx <= c1.first && !walkable; ++cx)
                                 {
-                                    const auto polys = index.at({ cx, cy });
+                                    const auto polys = index->at({ cx, cy });
                                     for (const U32* idp = polys.first; idp != polys.second; ++idp)
                                     {
                                         const U32 id = *idp;

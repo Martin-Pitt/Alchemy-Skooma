@@ -494,6 +494,12 @@ int main(int, char**)
         printProfile("warm", scene->mSectionStats.mMs);
         profile = skmap::SectionProfile();
         profile.mOn = true;
+        scene = skmap::buildScene(moved, &cache);
+        profile.mOn = false;
+        printProfile("moved", scene->mSectionStats.mMs);
+        scene = skmap::buildScene(in, &cache);
+        profile = skmap::SectionProfile();
+        profile.mOn = true;
         scene = skmap::buildScene(shifted, &cache);
         profile.mOn = false;
         printProfile("shifted", scene->mSectionStats.mMs);
