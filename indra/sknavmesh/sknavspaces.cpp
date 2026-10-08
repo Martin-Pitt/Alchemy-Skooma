@@ -628,7 +628,8 @@ namespace sknav
         /// Whether solid stands between lo and hi (mesh units) at a point.
         bool solidAt(F32 x, F32 y, S32 lo, S32 hi) const;
         /// The aperture a cut lies in: the shortest chord through it between solid jambs, framed for callers trying many cuts on few bearings.
-        bool aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed = false) const;
+        /// With true_faces the chord runs between the jambs' true faces (sknavfaceoffsets.h), not their cells'.
+        bool aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed = false, bool true_faces = false) const;
         /// A ray's cell face at t moved to the wall's true face, by the air's face offsets for a floor (mesh units).
         F32 trueFace(const LLVector2& from, const LLVector2& dir, F32 t, S32 floor) const;
         static constexpr S32 RAYS = 2 * APERTURE_ANGLES + 1;
@@ -1119,7 +1120,7 @@ namespace sknav
         }
     }
 
-    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed) const
+    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed, bool true_faces) const
     {
         // Across a doorway the shortest chord between solid on both sides runs
         // jamb to jamb; tried near the cut's own direction, then again from
@@ -1259,7 +1260,12 @@ namespace sknav
                 {
                     continue;
                 }
-                const F32 t0 = trueFace(c, u, face(c, u, s0), run.mFloor), t1 = trueFace(c, v, face(c, v, s1), run.mFloor);
+                F32 t0 = face(c, u, s0), t1 = face(c, v, s1);
+                if (true_faces)
+                {
+                    t0 = trueFace(c, u, t0, run.mFloor);
+                    t1 = trueFace(c, v, t1, run.mFloor);
+                }
                 if (t0 + t1 < limit)
                 {
                     best = t0 + t1;
@@ -3735,9 +3741,16 @@ namespace sknav
             q.mCues = s.mCues;
             if (kind == PortalKind::OPENING && s.mAperture)
             {
-                // An opening spans its aperture, jamb to jamb, not the boundary the watershed drew.
-                const LLVector2 c = (s.mJambA + s.mJambB) * 0.5f;
-                LLVector2 n(s.mJambA.mV[VY] - s.mJambB.mV[VY], s.mJambB.mV[VX] - s.mJambA.mV[VX]);
+                // An opening spans its aperture, jamb to jamb, not the boundary the watershed drew: between their true faces, where known.
+                LLVector2 ja = s.mJambA, jb = s.mJambB;
+                LLVector2 ta, tb;
+                if (aperture(r, ta, tb, false, true))
+                {
+                    ja = ta;
+                    jb = tb;
+                }
+                const LLVector2 c = (ja + jb) * 0.5f;
+                LLVector2 n(ja.mV[VY] - jb.mV[VY], jb.mV[VX] - ja.mV[VX]);
                 n.normVec();
                 if (n * r.mN < 0.f)
                 {
@@ -3745,9 +3758,9 @@ namespace sknav
                 }
                 q.mCentre.set(c.mV[VX], c.mV[VY], fz);
                 q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
-                q.mA.set(s.mJambA.mV[VX], s.mJambA.mV[VY], fz);
-                q.mB.set(s.mJambB.mV[VX], s.mJambB.mV[VY], fz);
-                q.mWidth = dist_vec(s.mJambA, s.mJambB);
+                q.mA.set(ja.mV[VX], ja.mV[VY], fz);
+                q.mB.set(jb.mV[VX], jb.mV[VY], fz);
+                q.mWidth = dist_vec(ja, jb);
             }
             mPortals.push_back(q);
             mPortalDoor.push_back(kind == PortalKind::DOOR ? s.mDoor : -1);
