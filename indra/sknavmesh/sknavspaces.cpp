@@ -629,6 +629,8 @@ namespace sknav
         bool solidAt(F32 x, F32 y, S32 lo, S32 hi) const;
         /// The aperture a cut lies in: the shortest chord through it between solid jambs, framed for callers trying many cuts on few bearings.
         bool aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed = false) const;
+        /// A ray's cell face at t moved to the wall's true face, by the air's face offsets for a floor (mesh units).
+        F32 trueFace(const LLVector2& from, const LLVector2& dir, F32 t, S32 floor) const;
         static constexpr S32 RAYS = 2 * APERTURE_ANGLES + 1;
         static constexpr S32 WINDOW = 64;       ///< cells a side of a window, a row of them to a word
         static constexpr size_t RAY_FANS = 4;
@@ -1257,7 +1259,7 @@ namespace sknav
                 {
                     continue;
                 }
-                const F32 t0 = face(c, u, s0), t1 = face(c, v, s1);
+                const F32 t0 = trueFace(c, u, face(c, u, s0), run.mFloor), t1 = trueFace(c, v, face(c, v, s1), run.mFloor);
                 if (t0 + t1 < limit)
                 {
                     best = t0 + t1;
@@ -1272,6 +1274,56 @@ namespace sknav
             c = (a + b) * 0.5f;
         }
         return true;
+    }
+
+    F32 SpacesPass::State::trueFace(const LLVector2& from, const LLVector2& dir, F32 t, S32 floor) const
+    {
+        const LLVector2 hit = from + dir * t, free = from + dir * (t - mCell / 32.f);
+        TileKey key;
+        key.mX = tileIndex(hit.mV[VX]);
+        key.mY = tileIndex(hit.mV[VY]);
+        const U32 it = tileAt(key);
+        if (it == NONE || air(it).mFaceOffsets.empty())
+        {
+            return t;
+        }
+        const TileAir& a = air(it);
+        const F32 ox = a.mOrigin.mV[VX], oy = a.mOrigin.mV[VY];
+        const S32 ix = static_cast<S32>(std::floor((hit.mV[VX] - ox) / mCell)), iy = static_cast<S32>(std::floor((hit.mV[VY] - oy) / mCell));
+        const S32 dx = ix - static_cast<S32>(std::floor((free.mV[VX] - ox) / mCell)), dy = iy - static_cast<S32>(std::floor((free.mV[VY] - oy) / mCell));
+        if (std::abs(dx) + std::abs(dy) != 1 || ix < 0 || iy < 0 || ix >= a.mWidth || iy >= a.mHeight)
+        {
+            return t;   // through a corner, or off the grid: the cell face stands
+        }
+        const S32 side = dx == 1 ? TileAir::SIDE_NEG_X : dx == -1 ? TileAir::SIDE_POS_X : dy == 1 ? TileAir::SIDE_NEG_Y : TileAir::SIDE_POS_Y;
+        const F32 off = faceOffset(a.mFaceOffsets, faceKey(ix, iy, a.mWidth, side));
+        if (off <= 0.f)
+        {
+            return t;
+        }
+        // The face plane, and the ray's way out of the solid cell, which it may not pass.
+        const S32 axis = side < 2 ? VX : VY;
+        const F32 x0 = ox + ix * mCell, y0 = oy + iy * mCell;
+        const F32 lo = axis == VX ? x0 : y0;
+        const F32 plane = (side & 1) == 0 ? lo + off * mCell : lo + (1.f - off) * mCell;
+        if (std::fabs(dir.mV[axis]) < 1e-6f)
+        {
+            return t;
+        }
+        F32 exit = 1e30f;
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const F32 base = k == VX ? x0 : y0;
+            if (dir.mV[k] > 1e-6f)
+            {
+                exit = std::min(exit, (base + mCell - from.mV[k]) / dir.mV[k]);
+            }
+            else if (dir.mV[k] < -1e-6f)
+            {
+                exit = std::min(exit, (base - from.mV[k]) / dir.mV[k]);
+            }
+        }
+        return llclamp((plane - from.mV[axis]) / dir.mV[axis], t, std::max(t, exit));
     }
 
     void SpacesPass::State::prepare()
