@@ -2705,6 +2705,14 @@ namespace sknav
             finish();
             return;
         }
+        if (input.mFaceOffsets && input.mAlignWallEdges)
+        {
+            // Wall edges out to the radius off the walls' true faces, which only floats can say.
+            if (const TileAirPtr air = raster.mAir.lock(); air && air->mCell == cfg.cs)
+            {
+                alignWallEdges(data, size, ap.mRadius, cfg.cs, airFaceProbe(*air, cfg.walkableClimb), stats ? &stats->mEdgeAlign : nullptr);
+            }
+        }
         result.mData[avatar].assign(data, data + size);
         dtFree(data);
         clock.lap(ClassBuildStats::DETOUR);

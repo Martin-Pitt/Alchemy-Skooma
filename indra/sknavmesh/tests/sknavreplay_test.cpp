@@ -508,6 +508,7 @@ namespace tut
         // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.
         options.mFaceOffsets = LLStringUtil::getenv("SKNAV_REPLAY_FACE_OFFSETS") != "0";
         options.mExactErosion = LLStringUtil::getenv("SKNAV_REPLAY_EXACT_EROSION") != "0";
+        options.mAlignWallEdges = LLStringUtil::getenv("SKNAV_REPLAY_ALIGN_EDGES") != "0";
         const std::string face_trace = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE");
         if (!face_trace.empty())
         {

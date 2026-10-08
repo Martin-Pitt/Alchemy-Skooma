@@ -28,6 +28,7 @@
 #include "stdtypes.h"
 #include "v3math.h"
 
+#include <functional>
 #include <vector>
 
 struct rcCompactHeightfield;
@@ -35,6 +36,7 @@ struct rcCompactHeightfield;
 namespace sknav
 {
     struct AirGrid;
+    struct TileAir;
 
     /// Steps a cell is divided into for a face's position.
     constexpr S32 FACE_OFFSET_STEPS = 16;
@@ -124,6 +126,32 @@ namespace sknav
     /// each end so the floor and the top do not count. Faces with no triangle
     /// behind them stay. Soup in Recast space, faces mesh-local SL.
     void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, const S32* tris, S32 ntris, F32 cell, F32 unit);
+
+    /// How far along an SL axis (0 +x, 1 -x, 2 +y, 3 -y) from a mesh-local
+    /// point at floor height the first solid's true face lies, within reach;
+    /// negative when there is none.
+    typedef std::function<F32(const LLVector3& at, S32 dir, F32 reach)> FaceProbe;
+
+    /// The probe over a tile's air and its face offsets, solid read in the jamb band over the point's floor.
+    FaceProbe airFaceProbe(const TileAir& air, S32 climb);
+
+    struct EdgeAlignStats
+    {
+        U32 mWallEdges = 0;     ///< boundary edges on the grid's axes with a wall all along them
+        U32 mOblique = 0;       ///< boundary edges off the axes, left alone
+        U32 mMovedEdges = 0;
+        U32 mMovedVerts = 0;
+        U32 mDropped = 0;       ///< vertex moves dropped to keep a polygon convex
+        F64 mErrBefore = 0.0;   ///< metres, summed over wall edges: |nearest true face - radius|
+        F64 mErrAfter = 0.0;
+    };
+
+    /// Move each vertex of a Detour tile's wall edges out so the edge stands
+    /// the radius off the wall's true face, by at most two cells and never
+    /// in; a vertex on the tile's border stays, and no move may leave a
+    /// polygon it touches not convex. Detail
+    /// vertices on a moved edge go with it and the BV tree is refitted.
+    void alignWallEdges(U8* data, S32 size, F32 radius, F32 cell, const FaceProbe& probe, EdgeAlignStats* stats = nullptr);
 }
 
 #endif // SK_NAVFACEOFFSETS_H

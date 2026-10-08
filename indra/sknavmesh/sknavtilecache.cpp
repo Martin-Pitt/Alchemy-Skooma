@@ -624,6 +624,7 @@ namespace sknav
         h = mix(h, input.mCoarseAir);
         h = mix(h, input.mFaceOffsets);
         h = mix(h, input.mExactErosion);
+        h = mix(h, input.mAlignWallEdges);
 
         // The land by its samples, never by when a patch last arrived.
         const TerrainWindow& t = input.mTerrain;

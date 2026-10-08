@@ -741,7 +741,10 @@ namespace sknav
                 const FaceOffsetStats& fo = st.mFaceOffsets;
                 out << ",\"face_ms\":" << fo.mMs << ",\"face_sides\":" << fo.mSides << ",\"face_measured\":" << fo.mMeasured
                     << ",\"face_entries\":" << fo.mEntries << ",\"face_bytes\":" << (air ? air->mFaceOffsets.capacity() * sizeof(FaceOffset) : 0)
-                    << ",\"face_recovered\":" << fo.mRecovered << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
+                    << ",\"face_recovered\":" << fo.mRecovered << ",\"edge_walls\":" << st.mEdgeAlign.mWallEdges
+                    << ",\"edge_oblique\":" << st.mEdgeAlign.mOblique << ",\"edge_moved\":" << st.mEdgeAlign.mMovedEdges
+                    << ",\"edge_moved_verts\":" << st.mEdgeAlign.mMovedVerts << ",\"edge_dropped\":" << st.mEdgeAlign.mDropped << ",\"edge_err_before\":" << st.mEdgeAlign.mErrBefore
+                    << ",\"edge_err_after\":" << st.mEdgeAlign.mErrAfter << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
                 out << '}';
             }
         }

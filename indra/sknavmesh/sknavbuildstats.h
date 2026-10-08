@@ -133,6 +133,7 @@ namespace sknav
         /// The air's face offsets, and every mFaceTraceEvery-th side traced for an oracle when set.
         FaceOffsetStats mFaceOffsets;
         S32 mFaceTraceEvery = 0;
+        EdgeAlignStats mEdgeAlign;
         std::vector<FaceOffsetTrace> mFaceTrace;
         /// What the raster stage hands the polygon stage: all of it, its compact heightfield, its edge field.
         size_t mHeldBytes = 0;

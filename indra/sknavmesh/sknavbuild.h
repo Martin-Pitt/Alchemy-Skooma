@@ -145,6 +145,8 @@ namespace sknav
         bool mFaceOffsets = true;
         /// AVATAR's erosion gives back floor that clears the radius to the true faces, by the offsets.
         bool mExactErosion = true;
+        /// AVATAR's wall edges moved out to stand the radius off the true faces.
+        bool mAlignWallEdges = true;
         /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
         /// for the spaces the tile is stamped with, wherever it is.
         bool mCoarseAir = false;

@@ -27,13 +27,17 @@
 #include "sknavfaceoffsets.h"
 
 #include "sknavair.h"
+#include "sknavairdistil.h"
 #include "sknavwalls.h"
 
+#include "DetourCommon.h"
+#include "DetourNavMesh.h"
 #include "Recast.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 
 namespace sknav
 {
@@ -591,5 +595,387 @@ namespace sknav
             }
         }
         return recovered;
+    }
+
+    FaceProbe airFaceProbe(const TileAir& air, S32 climb)
+    {
+        return [&air, climb](const LLVector3& at, S32 dir, F32 reach) -> F32 {
+            const F32 cell = air.mCell;
+            const S32 floor = static_cast<S32>(std::lround((at.mV[VZ] - air.mOrigin.mV[VZ]) / air.mUnit));
+            const S32 lo = floor + climb + 1, hi = floor + static_cast<S32>(std::lround(FACE_BAND_TOP_M / air.mUnit));
+            const S32 axis = dir < 2 ? VX : VY;
+            const F32 sgn = (dir & 1) ? -1.f : 1.f;
+            S32 ix = static_cast<S32>(std::floor((at.mV[VX] - air.mOrigin.mV[VX]) / cell));
+            S32 iy = static_cast<S32>(std::floor((at.mV[VY] - air.mOrigin.mV[VY]) / cell));
+            const S32 steps = static_cast<S32>(std::ceil(reach / cell)) + 1;
+            for (S32 k = 0; k <= steps; ++k, (axis == VX ? ix : iy) += (dir & 1) ? -1 : 1)
+            {
+                if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
+                {
+                    return -1.f;
+                }
+                const S32 leaf = findLeafByKey(air, ix, iy);
+                if (leaf < 0)
+                {
+                    continue;
+                }
+                const AirLeaf& l = air.mLeaves[leaf];
+                bool blocked = l.mGapCount > 0;
+                for (U32 g = l.mFirstGap; g < l.mFirstGap + l.mGapCount && blocked; ++g)
+                {
+                    blocked = !(air.mGaps[g].mFloor <= lo && air.mGaps[g].mCeiling >= hi);
+                }
+                if (!blocked)
+                {
+                    continue;
+                }
+                // The near side of the solid cell, moved in to its true face.
+                const F32 base = (axis == VX ? air.mOrigin.mV[VX] + ix * cell : air.mOrigin.mV[VY] + iy * cell) + ((dir & 1) ? cell : 0.f);
+                const F32 face = base + sgn * faceOffset(air.mFaceOffsets, faceKey(ix, iy, air.mWidth, dir)) * cell;
+                const F32 d = (face - at.mV[axis]) * sgn;
+                return d <= reach ? std::max(0.f, d) : -1.f;
+            }
+            return -1.f;
+        };
+    }
+
+    void alignWallEdges(U8* data, S32 size, F32 radius, F32 cell, const FaceProbe& probe, EdgeAlignStats* stats)
+    {
+        if (!data || size < static_cast<S32>(sizeof(dtMeshHeader)))
+        {
+            return;
+        }
+        dtMeshHeader* header = reinterpret_cast<dtMeshHeader*>(data);
+        if (header->magic != DT_NAVMESH_MAGIC || header->version != DT_NAVMESH_VERSION)
+        {
+            return;
+        }
+        U8* p = data + dtAlign4(sizeof(dtMeshHeader));
+        F32* verts = reinterpret_cast<F32*>(p);
+        p += dtAlign4(sizeof(F32) * 3 * header->vertCount);
+        dtPoly* polys = reinterpret_cast<dtPoly*>(p);
+        p += dtAlign4(sizeof(dtPoly) * header->polyCount);
+        p += dtAlign4(sizeof(dtLink) * header->maxLinkCount);
+        dtPolyDetail* details = reinterpret_cast<dtPolyDetail*>(p);
+        p += dtAlign4(sizeof(dtPolyDetail) * header->detailMeshCount);
+        F32* dverts = reinterpret_cast<F32*>(p);
+        p += dtAlign4(sizeof(F32) * 3 * header->detailVertCount);
+        p += dtAlign4(sizeof(U8) * 4 * header->detailTriCount);
+        dtBVNode* nodes = reinterpret_cast<dtBVNode*>(p);
+
+        // Recast space is SL (y, z, x): SL x is rc z, SL y is rc x.
+        auto sl = [&](const F32* v) { return LLVector3(v[2], v[0], v[1]); };
+        const F32 reach = radius + 2.f * cell;
+        struct Push
+        {
+            LLVector2 mN;
+            F32 mShift;
+        };
+        std::vector<std::vector<Push>> pushes(header->vertCount);
+        struct Pushed
+        {
+            U16 mA, mB;
+            S32 mDir;
+            F32 mBefore;
+        };
+        std::vector<Pushed> pushed;
+        for (S32 i = 0; i < header->polyCount; ++i)
+        {
+            const dtPoly& poly = polys[i];
+            if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || poly.vertCount < 3)
+            {
+                continue;
+            }
+            LLVector2 centre;
+            for (S32 j = 0; j < poly.vertCount; ++j)
+            {
+                const LLVector3 v = sl(&verts[poly.verts[j] * 3]);
+                centre += LLVector2(v.mV[VX], v.mV[VY]);
+            }
+            centre /= static_cast<F32>(poly.vertCount);
+            for (S32 j = 0; j < poly.vertCount; ++j)
+            {
+                if (poly.neis[j] != 0)
+                {
+                    continue;   // a neighbour, or a portal to another tile
+                }
+                const U16 ia = poly.verts[j], ib = poly.verts[(j + 1) % poly.vertCount];
+                const LLVector3 a = sl(&verts[ia * 3]), b = sl(&verts[ib * 3]);
+                LLVector2 d(b.mV[VX] - a.mV[VX], b.mV[VY] - a.mV[VY]);
+                const F32 len = d.normVec();
+                if (len < 1e-4f)
+                {
+                    continue;
+                }
+                LLVector2 n(d.mV[VY], -d.mV[VX]);
+                if ((LLVector2(a.mV[VX], a.mV[VY]) - centre) * n < 0.f)
+                {
+                    n = -n;
+                }
+                // Walls on the grid's axes only: a sloping edge has no one side to read.
+                S32 dir;
+                if (std::fabs(n.mV[VX]) > 0.999f)
+                {
+                    dir = n.mV[VX] > 0.f ? 0 : 1;
+                }
+                else if (std::fabs(n.mV[VY]) > 0.999f)
+                {
+                    dir = n.mV[VY] > 0.f ? 2 : 3;
+                }
+                else
+                {
+                    if (stats)
+                    {
+                        ++stats->mOblique;
+                    }
+                    continue;
+                }
+                // The nearest true face across the whole edge, sampled a cell apart; open anywhere, no wall.
+                F32 nearest = 1e30f;
+                const S32 samples = std::max(1, static_cast<S32>(std::ceil(len / cell)));
+                for (S32 k = 0; k < samples && nearest >= 0.f; ++k)
+                {
+                    const F32 t = (k + 0.5f) / samples;
+                    const LLVector3 at = a + (b - a) * t;
+                    const F32 f = probe(at, dir, reach);
+                    nearest = f < 0.f ? -1.f : std::min(nearest, f);
+                }
+                if (nearest < 0.f)
+                {
+                    continue;
+                }
+                const F32 shift = std::min(nearest - radius, 2.f * cell);
+                if (stats)
+                {
+                    ++stats->mWallEdges;
+                    stats->mErrBefore += std::fabs(nearest - radius);
+                }
+                if (shift <= 0.f)
+                {
+                    if (stats)
+                    {
+                        stats->mErrAfter += std::fabs(nearest - radius);
+                    }
+                    continue;
+                }
+                pushes[ia].push_back({ n, shift });
+                pushes[ib].push_back({ n, shift });
+                pushed.push_back({ ia, ib, dir, std::fabs(nearest - radius) });
+            }
+        }
+        // Each vertex moves so every wall edge it ends sits its shift further out.
+        const F32 eps = 1e-3f;
+        std::vector<LLVector2> moved(header->vertCount);
+        for (S32 v = 0; v < header->vertCount; ++v)
+        {
+            std::vector<Push>& ps = pushes[v];
+            if (ps.empty())
+            {
+                continue;
+            }
+            LLVector2 m;
+            const Push& p0 = ps[0];
+            const Push* p1 = nullptr;
+            for (size_t k = 1; k < ps.size(); ++k)
+            {
+                if (std::fabs(ps[k].mN * p0.mN) < 0.99f)
+                {
+                    p1 = &ps[k];
+                }
+            }
+            if (p1)
+            {
+                // Two walls meet: the point their moved lines share.
+                const F32 det = p0.mN.mV[VX] * p1->mN.mV[VY] - p0.mN.mV[VY] * p1->mN.mV[VX];
+                m.set((p0.mShift * p1->mN.mV[VY] - p1->mShift * p0.mN.mV[VY]) / det, (p1->mShift * p0.mN.mV[VX] - p0.mShift * p1->mN.mV[VX]) / det);
+            }
+            else
+            {
+                F32 s = ps[0].mShift;
+                for (const Push& q : ps)
+                {
+                    s = std::min(s, q.mShift);
+                }
+                m = p0.mN * s;
+            }
+            // A vertex on the tile's border stays, so the tile across it, which reads other air, agrees.
+            const F32* rc = &verts[v * 3];
+            const bool border = std::fabs(rc[0] - header->bmin[0]) < eps || std::fabs(rc[0] - header->bmax[0]) < eps ||
+                                std::fabs(rc[2] - header->bmin[2]) < eps || std::fabs(rc[2] - header->bmax[2]) < eps;
+            moved[v] = border ? LLVector2() : m;
+        }
+        // A move that would leave any polygon it touches not convex is dropped, until none would.
+        auto convex = [&](const dtPoly& poly) {
+            S32 sign = 0;
+            for (S32 j = 0; j < poly.vertCount; ++j)
+            {
+                LLVector2 q[3];
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    const U16 v = poly.verts[(j + k) % poly.vertCount];
+                    const LLVector3 at = sl(&verts[v * 3]);
+                    q[k] = LLVector2(at.mV[VX], at.mV[VY]) + moved[v];
+                }
+                const F32 cr = (q[1].mV[VX] - q[0].mV[VX]) * (q[2].mV[VY] - q[1].mV[VY]) - (q[1].mV[VY] - q[0].mV[VY]) * (q[2].mV[VX] - q[1].mV[VX]);
+                if (std::fabs(cr) > 1e-6f)
+                {
+                    const S32 s = cr > 0.f ? 1 : -1;
+                    if (sign && s != sign)
+                    {
+                        return false;
+                    }
+                    sign = s;
+                }
+            }
+            return true;
+        };
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            for (S32 i = 0; i < header->polyCount; ++i)
+            {
+                const dtPoly& poly = polys[i];
+                if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || convex(poly))
+                {
+                    continue;
+                }
+                for (S32 j = 0; j < poly.vertCount; ++j)
+                {
+                    if (!moved[poly.verts[j]].isExactlyZero())
+                    {
+                        moved[poly.verts[j]].setZero();
+                        changed = true;
+                        if (stats)
+                        {
+                            ++stats->mDropped;
+                        }
+                    }
+                }
+            }
+        }
+        // Detail vertices on a moved edge go with it.
+        for (S32 i = 0; i < header->detailMeshCount && i < header->polyCount; ++i)
+        {
+            const dtPoly& poly = polys[i];
+            const dtPolyDetail& pd = details[i];
+            for (U32 k = 0; k < pd.vertCount; ++k)
+            {
+                F32* dv = &dverts[(pd.vertBase + k) * 3];
+                for (S32 j = 0; j < poly.vertCount; ++j)
+                {
+                    const U16 ia = poly.verts[j], ib = poly.verts[(j + 1) % poly.vertCount];
+                    if (moved[ia].isExactlyZero() && moved[ib].isExactlyZero())
+                    {
+                        continue;
+                    }
+                    const F32* va = &verts[ia * 3];
+                    const F32* vb = &verts[ib * 3];
+                    const F32 ex = vb[0] - va[0], ez = vb[2] - va[2], l2 = ex * ex + ez * ez;
+                    if (l2 < 1e-8f)
+                    {
+                        continue;
+                    }
+                    const F32 t = ((dv[0] - va[0]) * ex + (dv[2] - va[2]) * ez) / l2;
+                    const F32 px = va[0] + ex * t - dv[0], pz = va[2] + ez * t - dv[2];
+                    if (t < 0.f || t > 1.f || px * px + pz * pz > eps * eps)
+                    {
+                        continue;
+                    }
+                    const LLVector2 m = moved[ia] * (1.f - t) + moved[ib] * t;
+                    dv[0] += m.mV[VY];
+                    dv[2] += m.mV[VX];
+                    break;
+                }
+            }
+        }
+        // Kept within the tile's bounds.
+        U32 count = 0;
+        for (S32 v = 0; v < header->vertCount; ++v)
+        {
+            if (!moved[v].isExactlyZero())
+            {
+                verts[v * 3 + 0] = llclamp(verts[v * 3 + 0] + moved[v].mV[VY], header->bmin[0], header->bmax[0]);
+                verts[v * 3 + 2] = llclamp(verts[v * 3 + 2] + moved[v].mV[VX], header->bmin[2], header->bmax[2]);
+                ++count;
+            }
+        }
+        if (stats)
+        {
+            stats->mMovedVerts += count;
+        }
+        // The residual after the moves, by the same probe, over the edges that were pushed.
+        if (stats)
+        {
+            for (const Pushed& e : pushed)
+            {
+                const LLVector3 a = sl(&verts[e.mA * 3]), b = sl(&verts[e.mB * 3]);
+                const F32 len = dist_vec(LLVector2(a.mV[VX], a.mV[VY]), LLVector2(b.mV[VX], b.mV[VY]));
+                F32 nearest = 1e30f;
+                const S32 samples = std::max(1, static_cast<S32>(std::ceil(len / cell)));
+                for (S32 k = 0; k < samples && nearest >= 0.f; ++k)
+                {
+                    const F32 f = probe(a + (b - a) * ((k + 0.5f) / samples), e.mDir, reach);
+                    nearest = f < 0.f ? -1.f : std::min(nearest, f);
+                }
+                stats->mErrAfter += nearest >= 0.f ? std::fabs(nearest - radius) : e.mBefore;
+                ++stats->mMovedEdges;
+            }
+        }
+        // The BV tree's boxes, refitted to the moved polygons.
+        if (header->bvNodeCount > 0)
+        {
+            const F32 q = header->bvQuantFactor;
+            std::function<S32(S32)> refit = [&](S32 k) -> S32 {
+                dtBVNode& node = nodes[k];
+                if (node.i >= 0)
+                {
+                    const dtPoly& poly = polys[node.i];
+                    F32 lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+                    auto take = [&](const F32* v) {
+                        for (S32 a = 0; a < 3; ++a)
+                        {
+                            lo[a] = std::min(lo[a], v[a]);
+                            hi[a] = std::max(hi[a], v[a]);
+                        }
+                    };
+                    for (S32 j = 0; j < poly.vertCount; ++j)
+                    {
+                        take(&verts[poly.verts[j] * 3]);
+                    }
+                    if (node.i < header->detailMeshCount)
+                    {
+                        const dtPolyDetail& pd = details[node.i];
+                        for (U32 j = 0; j < pd.vertCount; ++j)
+                        {
+                            take(&dverts[(pd.vertBase + j) * 3]);
+                        }
+                    }
+                    for (S32 a = 0; a < 3; ++a)
+                    {
+                        // Only ever grown: a box that still holds its polygon is no worse for being loose.
+                        node.bmin[a] = std::min<U16>(node.bmin[a], static_cast<U16>(llclamp(static_cast<S32>(std::floor((lo[a] - header->bmin[a]) * q)), 0, 0xffff)));
+                        node.bmax[a] = std::max<U16>(node.bmax[a], static_cast<U16>(llclamp(static_cast<S32>(std::ceil((hi[a] - header->bmin[a]) * q)), 0, 0xffff)));
+                    }
+                    return k + 1;
+                }
+                const S32 end = k - node.i;
+                S32 c = k + 1;
+                while (c < end)
+                {
+                    const S32 next = refit(c);
+                    for (S32 a = 0; a < 3; ++a)
+                    {
+                        node.bmin[a] = std::min(node.bmin[a], nodes[c].bmin[a]);
+                        node.bmax[a] = std::max(node.bmax[a], nodes[c].bmax[a]);
+                    }
+                    c = next;
+                }
+                return end;
+            };
+            for (S32 k = 0; k < header->bvNodeCount;)
+            {
+                k = refit(k);
+            }
+        }
     }
 }
