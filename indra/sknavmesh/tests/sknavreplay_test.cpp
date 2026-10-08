@@ -47,6 +47,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <regex>
@@ -504,6 +505,20 @@ namespace tut
         // SKNAV_REPLAY_STAMP=0 polygonises each tile as it is rasterised, as before the stamp; SKNAV_REPLAY_COARSE=0 leaves far tiles airless.
         options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
+        // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.
+        options.mFaceOffsets = LLStringUtil::getenv("SKNAV_REPLAY_FACE_OFFSETS") != "0";
+        const std::string face_trace = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE");
+        if (!face_trace.empty())
+        {
+            options.mFaceTraceEvery = std::stoi(face_trace);
+        }
+        const std::string face_box = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE_BOX");
+        if (!face_box.empty())
+        {
+            std::istringstream in(face_box);
+            char comma;
+            in >> options.mFaceTraceBox[0] >> comma >> options.mFaceTraceBox[1] >> comma >> options.mFaceTraceBox[2] >> comma >> options.mFaceTraceBox[3];
+        }
         ReplayResult r;
         replayCensus(c, options, r);
         std::string dir = LLStringUtil::getenv("SKNAV_REPLAY_OUT");
@@ -533,6 +548,39 @@ namespace tut
             // SKNAV_REPLAY_STATS: the measurements; SKNAV_REPLAY_EDITS names "record op" lines to rebuild with.
             std::ofstream measure(dir + "replay-measure.json", std::ios::binary);
             writeReplayStats(measure, c, r);
+            if (options.mFaceTraceEvery > 0)
+            {
+                std::ofstream trace(dir + "face-trace.json", std::ios::binary);
+                trace << std::setprecision(9) << "[";
+                bool first = true;
+                for (const auto& mesh : r.mMeshes)
+                {
+                    for (const auto& [key, tile] : mesh->mTiles)
+                    {
+                        if (!tile.mStats || !tile.mResult || !tile.mResult->mAir || tile.mResult->mCoarseAir)
+                        {
+                            continue;
+                        }
+                        const TileAir& air = *tile.mResult->mAir;
+                        for (const FaceOffsetTrace& t : tile.mStats->mFaceTrace)
+                        {
+                            trace << (first ? "" : ",") << "\n{\"tile\":["<< key.mX << "," << key.mY << "],\"origin\":[" << air.mOrigin.mV[VX] << ","
+                                  << air.mOrigin.mV[VY] << "],\"cell\":" << air.mCell << ",\"ix\":" << t.mIx << ",\"iy\":" << t.mIy
+                                  << ",\"side\":" << t.mSide << ",\"floor\":" << t.mFloor << ",\"z\":[" << t.mZLo << "," << t.mZHi
+                                  << "],\"offset\":" << static_cast<S32>(t.mOffset) << ",\"table\":"
+                                  << faceOffset(air.mFaceOffsets, faceKey(t.mIx, t.mIy, air.mWidth, t.mSide)) * FACE_OFFSET_STEPS
+                                  << ",\"tris\":[";
+                            for (size_t i = 0; i < t.mTris.size(); ++i)
+                            {
+                                trace << (i ? "," : "") << t.mTris[i].mV[VX] << "," << t.mTris[i].mV[VY] << "," << t.mTris[i].mV[VZ];
+                            }
+                            trace << "]}";
+                            first = false;
+                        }
+                    }
+                }
+                trace << "]\n";
+            }
             const std::string edits_path = LLStringUtil::getenv("SKNAV_REPLAY_EDITS");
             if (!edits_path.empty())
             {

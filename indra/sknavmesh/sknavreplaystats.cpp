@@ -738,6 +738,10 @@ namespace sknav
                     << ",\"flood_spans\":" << g.mFloodSpans << ",\"unspaced_spans\":" << g.mUnspacedSpans << ",\"impure_polys\":" << g.mImpurePolys
                     << ",\"portal_edges\":" << g.mPortalEdges.size() << ",\"poly_overflow\":" << (r.mPolyOverflow ? 1 : 0)
                     << ",\"stand_only\":" << st.mFlightStandOnly.size() << ",\"polys_only\":" << st.mFlightPolysOnly.size();
+                const FaceOffsetStats& fo = st.mFaceOffsets;
+                out << ",\"face_ms\":" << fo.mMs << ",\"face_sides\":" << fo.mSides << ",\"face_measured\":" << fo.mMeasured
+                    << ",\"face_entries\":" << fo.mEntries << ",\"face_bytes\":" << (air ? air->mFaceOffsets.capacity() * sizeof(FaceOffset) : 0)
+                    << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
                 out << '}';
             }
         }

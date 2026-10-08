@@ -72,6 +72,11 @@ namespace sknav
         bool mStamp = true;
         /// A tile without air of its own reads coarse air, so it has spaces to be stamped with.
         bool mCoarseAir = true;
+        /// The air keeps walls' face offsets; off, every face stands at its cell boundary.
+        bool mFaceOffsets = true;
+        /// With stats, every this many measured faces traced with their triangles.
+        S32 mFaceTraceEvery = 0;
+        F32 mFaceTraceBox[4] = { 0.f, 0.f, 0.f, 0.f };  ///< mesh-local x0, y0, x1, y1 the trace keeps to, when x1 > x0
     };
 
     struct ReplayTile
