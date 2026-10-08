@@ -242,7 +242,7 @@ void SKMapScene::maybePost()
     auto input = std::make_shared<skmap::SceneInput>();
     input->mMin = trigger.mMin;
     input->mMax = trigger.mMax;
-    input->mOrigin.set(trigger.mMin.mdV[VX], trigger.mMin.mdV[VY], 0.0);
+    input->mOrigin = skmap::analysisOrigin(trigger.mMin, mHasPosted ? &mPostedOrigin : nullptr);
     gather(*input);
 
     const U32 generation = ++mGeneration;
@@ -272,6 +272,7 @@ void SKMapScene::maybePost()
         mLastPost = now;
         mPosted = trigger;
         mHasPosted = true;
+        mPostedOrigin = input->mOrigin;
     }
 }
 

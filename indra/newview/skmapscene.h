@@ -203,6 +203,8 @@ private:
     F64 mLastPost = -1.0e9;
     Trigger mPosted;
     bool mHasPosted = false;
+    /// The last post's scene origin, kept across box re-snaps so the section memo can take unchanged layers.
+    LLVector3d mPostedOrigin;
     skmap::ScenePtr mScene;
     /// Each tile's last published copy and when it was last seen, carried while the navmesh rebuilds it.
     std::map<std::pair<LLUUID, sknav::TileKey>, std::pair<skmap::TileInput, F64>> mLastTiles;

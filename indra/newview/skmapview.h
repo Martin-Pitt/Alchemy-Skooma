@@ -47,6 +47,9 @@ namespace skmap
     constexpr F64 ANALYSIS_MARGIN_M = 32.0;
     constexpr F64 ANALYSIS_REACH_M = 256.0; ///< half the widest span along the short side
     constexpr F64 ANALYSIS_JOIN_M = 256.0;  ///< the agent shares the box only while this close to the map centre in plan
+    /// The scene origin stays while the box's minimum is this close to it on each axis: scene-local metres then stay
+    /// under 1024 for a square map, the binade a 640 m box already reaches, so they lose no precision.
+    constexpr F64 ANALYSIS_ORIGIN_DRIFT_M = 256.0;
 
     /// A tier's texel in metres: 1/32 m at tier 0 to 2 m at tier 6.
     F32 tierTexel(S32 tier);
@@ -85,6 +88,11 @@ namespace skmap
     /// the widget's aspect only, never on the zoom.
     void analysisBox(const LLVector3d& agent, const LLVector3d& centre, F32 long_side_px, F32 short_side_px, LLVector3d& min,
                      LLVector3d& max);
+
+    /// Where a box's scene-local metres start: the last scene's origin while the box's minimum stays within
+    /// ANALYSIS_ORIGIN_DRIFT_M of it, else the minimum, z 0. A re-snap that keeps the origin keeps every unchanged
+    /// polygon's local coordinates to the bit, so the next build can take what they made from the last one.
+    LLVector3d analysisOrigin(const LLVector3d& min, const LLVector3d* last);
 
     /// A span after wheel notches, ×1.1 each, clamped to 4..2048 m. Positive notches zoom out.
     F32 zoomByNotches(F32 span, F32 notches);

@@ -107,7 +107,7 @@ namespace skmap
     /// Everything one scene build reads. Immutable once posted to the worker.
     struct SceneInput
     {
-        LLVector3d mOrigin;                     ///< the analysis box's minimum corner, z 0: scene-local metres start here
+        LLVector3d mOrigin;                     ///< scene-local metres start here, z 0: see skmap::analysisOrigin
         LLVector3d mMin, mMax;                  ///< the analysis box, global
         std::vector<TileInput> mTiles;
         std::vector<FeatureLink> mFeatureLinks;
@@ -337,6 +337,8 @@ namespace skmap
         U32 mPlanes = 0, mSlices = 0, mCacheHits = 0, mPieces = 0, mRecords = 0;
         U32 mPairs = 0;                 ///< (record, plane) pairs over every layer, a record counted in each it meets
         U32 mReused = 0;                ///< of mPairs, those whose pieces came whole from the last build
+        U32 mLayers = 0;                ///< layers with polygons
+        U32 mLayersKept = 0;            ///< of mLayers, those whose floors the last build had, to the bit
     };
 
     /// Whether the global 1 m cell lists floor level k.

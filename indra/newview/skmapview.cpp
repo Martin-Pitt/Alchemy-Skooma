@@ -139,6 +139,16 @@ namespace skmap
         max.set(snapUp(x1, ANALYSIS_SNAP_M), snapUp(y1, ANALYSIS_SNAP_M), 1.0e5);
     }
 
+    LLVector3d analysisOrigin(const LLVector3d& min, const LLVector3d* last)
+    {
+        if (last && std::fabs(min.mdV[VX] - last->mdV[VX]) <= ANALYSIS_ORIGIN_DRIFT_M
+            && std::fabs(min.mdV[VY] - last->mdV[VY]) <= ANALYSIS_ORIGIN_DRIFT_M)
+        {
+            return LLVector3d(last->mdV[VX], last->mdV[VY], 0.0);
+        }
+        return LLVector3d(min.mdV[VX], min.mdV[VY], 0.0);
+    }
+
     F32 zoomByNotches(F32 span, F32 notches)
     {
         return llclamp(span * std::pow(ZOOM_STEP, notches), ZOOM_MIN_M, ZOOM_MAX_M);

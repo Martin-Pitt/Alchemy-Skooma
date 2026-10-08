@@ -171,4 +171,29 @@ namespace tut
         ensure("bucket round trip", std::fabs(skmap::bucketMpp(b) - 0.5f) < 0.03f);
         ensure("bucket steps", skmap::zoomBucket(0.5f * 1.1f) == b + 1);
     }
+
+    // The scene origin starts at the box's minimum and stays there while re-snaps keep the box near it.
+    template<> template<>
+    void skmapview_object::test<7>()
+    {
+        const LLVector3d min(256064.0, 255936.0, -1.0e4);
+        const LLVector3d first = skmap::analysisOrigin(min, nullptr);
+        ensure("the first is the minimum, z 0", first == LLVector3d(min.mdV[VX], min.mdV[VY], 0.0));
+        for (S32 axis = 0; axis < 2; ++axis)
+        {
+            for (F64 sign : { -1.0, 1.0 })
+            {
+                LLVector3d step = min;
+                step.mdV[axis] += sign * skmap::ANALYSIS_SNAP_M;
+                ensure("one snap step keeps it", skmap::analysisOrigin(step, &first) == first);
+                LLVector3d edge = min;
+                edge.mdV[axis] += sign * skmap::ANALYSIS_ORIGIN_DRIFT_M;
+                ensure("as far as the drift keeps it", skmap::analysisOrigin(edge, &first) == first);
+                LLVector3d past = min;
+                past.mdV[axis] += sign * (skmap::ANALYSIS_ORIGIN_DRIFT_M + skmap::ANALYSIS_SNAP_M);
+                ensure("past the drift it moves to the minimum",
+                       skmap::analysisOrigin(past, &first) == LLVector3d(past.mdV[VX], past.mdV[VY], 0.0));
+            }
+        }
+    }
 }

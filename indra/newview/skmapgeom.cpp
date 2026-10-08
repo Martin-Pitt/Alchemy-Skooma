@@ -1932,6 +1932,7 @@ namespace skmap
                     {
                         continue;
                     }
+                    stats.mLayers++;
                     const U64 h = layerHash(s, layer);
                     next->mLayers.emplace_back(h, static_cast<S32>(l));
                     if (!last)
@@ -1945,6 +1946,7 @@ namespace skmap
                         if (sameLayer(s, layer, *last->mScene, last->mScene->mLayers[it->second]))
                         {
                             last_layer[l] = it->second;
+                            stats.mLayersKept++;
                             break;
                         }
                     }

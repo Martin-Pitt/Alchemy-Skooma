@@ -352,14 +352,15 @@ int main(int, char**)
         LLVector3d agent = census.mAgent;
         agent.mdV[VX] += skmap::ANALYSIS_SNAP_M;
         skmap::analysisBox(agent, agent, 1.f, 1.f, shifted.mMin, shifted.mMax);
-        shifted.mOrigin.set(shifted.mMin.mdV[VX], shifted.mMin.mdV[VY], 0.0);
+        shifted.mOrigin = skmap::analysisOrigin(shifted.mMin, &in.mOrigin);
         gatherInput(census, replay, shifted);
     }
 
     // Cold: a fresh cache each run, as after a teleport. Warm: the same input on the same cache, as a census restamp
     // or navmesh tile rebuild that changed nothing in the box; every layer is the last build's. Moved: the same cache
     // once more, with the one record moved. Shifted: the box one snap step east on that cache, as the agent crossing
-    // a 64 m line or the map panning; every layer's origin moved, so none is the last build's.
+    // a 64 m line or the map panning; the scene origin stays, as the viewer keeps it, and records and polygons come
+    // and go along the box's edges.
     std::vector<F64> cold_total, cold_section, warm_total, warm_section, moved_section, shifted_section;
     skmap::ScenePtr scene;
     Fingerprint fp_cold, fp_warm, fp_moved, fp_shifted;
@@ -397,6 +398,8 @@ int main(int, char**)
         {
             fp_moved = fingerprint(*scene);
         }
+        // Back to the unmoved records, untimed, so the shift is measured from a warm build of the same box.
+        scene = skmap::buildScene(in, &cache);
         scene = skmap::buildScene(shifted, &cache);
         shifted_section.push_back(scene->mSectionStats.mMs);
         shifted_stats = scene->mSectionStats;
@@ -433,9 +436,10 @@ int main(int, char**)
     {
         std::printf("one record moved: NONE, no static box reaches the agent's storey\n");
     }
-    std::printf("box shifted one snap step: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u pairs reused; %s a cold build\n",
+    std::printf("box shifted one snap step: section %.2f ms (min of %d, median %.2f); %u slices, %u hits, %u of %u pairs reused, "
+                "%u of %u layers' floors kept; %s a cold build\n",
                 least(shifted_section), runs, median(shifted_section), shifted_stats.mSlices, shifted_stats.mCacheHits, shifted_stats.mReused,
-                fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
+                shifted_stats.mPairs, shifted_stats.mLayersKept, shifted_stats.mLayers, fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
     std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
@@ -477,6 +481,11 @@ int main(int, char**)
         scene = skmap::buildScene(in, &cache);
         profile.mOn = false;
         printProfile("warm", scene->mSectionStats.mMs);
+        profile = skmap::SectionProfile();
+        profile.mOn = true;
+        scene = skmap::buildScene(shifted, &cache);
+        profile.mOn = false;
+        printProfile("shifted", scene->mSectionStats.mMs);
     }
     // The capture is valid only while the census is: release the scene before it.
     scene.reset();
