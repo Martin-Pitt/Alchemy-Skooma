@@ -507,6 +507,7 @@ namespace tut
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
         // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.
         options.mFaceOffsets = LLStringUtil::getenv("SKNAV_REPLAY_FACE_OFFSETS") != "0";
+        options.mExactErosion = LLStringUtil::getenv("SKNAV_REPLAY_EXACT_EROSION") != "0";
         const std::string face_trace = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE");
         if (!face_trace.empty())
         {
@@ -564,11 +565,18 @@ namespace tut
                         const TileAir& air = *tile.mResult->mAir;
                         for (const FaceOffsetTrace& t : tile.mStats->mFaceTrace)
                         {
-                            trace << (first ? "" : ",") << "\n{\"tile\":["<< key.mX << "," << key.mY << "],\"origin\":[" << air.mOrigin.mV[VX] << ","
-                                  << air.mOrigin.mV[VY] << "],\"cell\":" << air.mCell << ",\"ix\":" << t.mIx << ",\"iy\":" << t.mIy
+                            // Traced over the padded grid: a side off the tile proper reads no table.
+                            const S32 ix = static_cast<S32>(std::lround((t.mX0 - air.mOrigin.mV[VX]) / air.mCell));
+                            const S32 iy = static_cast<S32>(std::lround((t.mY0 - air.mOrigin.mV[VY]) / air.mCell));
+                            if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
+                            {
+                                continue;
+                            }
+                            trace << (first ? "" : ",") << "\n{\"tile\":[" << key.mX << "," << key.mY << "],\"x0\":" << t.mX0 << ",\"y0\":" << t.mY0
+                                  << ",\"cell\":" << air.mCell
                                   << ",\"side\":" << t.mSide << ",\"floor\":" << t.mFloor << ",\"z\":[" << t.mZLo << "," << t.mZHi
                                   << "],\"offset\":" << static_cast<S32>(t.mOffset) << ",\"table\":"
-                                  << faceOffset(air.mFaceOffsets, faceKey(t.mIx, t.mIy, air.mWidth, t.mSide)) * FACE_OFFSET_STEPS
+                                  << faceOffset(air.mFaceOffsets, faceKey(ix, iy, air.mWidth, t.mSide)) * FACE_OFFSET_STEPS
                                   << ",\"tris\":[";
                             for (size_t i = 0; i < t.mTris.size(); ++i)
                             {

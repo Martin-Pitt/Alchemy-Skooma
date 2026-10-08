@@ -112,6 +112,7 @@ namespace sknav
         void applyAirMode(const CensusFile& census, const ReplayOptions& options, ReplayTile& tile, TileBuildInput& input)
         {
             input.mFaceOffsets = options.mFaceOffsets;
+            input.mExactErosion = options.mExactErosion;
             if (options.mAir == AirMode::RADIUS && input.mAir && !inAirRadius(census, tile.mMin, tile.mMax))
             {
                 input.mAir = false;

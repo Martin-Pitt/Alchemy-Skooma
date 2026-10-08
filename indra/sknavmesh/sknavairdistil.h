@@ -137,10 +137,11 @@ namespace sknav
     /// read pad_cells past the tile so clearance is exact on it, slivers
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
-    /// fine, when given, gets the fine grid the air was distilled from.
+    /// fine, when given, gets the fine grid the air was distilled from;
+    /// extracted, when not empty, is taken as the padded gaps already read and folded.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
                             const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr,
-                            const SpanFlags* extra = nullptr, AirGrid* fine = nullptr);
+                            const SpanFlags* extra = nullptr, AirGrid* fine = nullptr, AirGrid* extracted = nullptr);
 
     constexpr U32 SPAN_NO_GAP = 0xffffffff;
 

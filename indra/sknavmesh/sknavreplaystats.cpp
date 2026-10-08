@@ -741,7 +741,7 @@ namespace sknav
                 const FaceOffsetStats& fo = st.mFaceOffsets;
                 out << ",\"face_ms\":" << fo.mMs << ",\"face_sides\":" << fo.mSides << ",\"face_measured\":" << fo.mMeasured
                     << ",\"face_entries\":" << fo.mEntries << ",\"face_bytes\":" << (air ? air->mFaceOffsets.capacity() * sizeof(FaceOffset) : 0)
-                    << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
+                    << ",\"face_recovered\":" << fo.mRecovered << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
                 out << '}';
             }
         }

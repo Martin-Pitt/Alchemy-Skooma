@@ -2176,11 +2176,41 @@ namespace sknav
                     tops[i] = static_cast<U16>(mem.chf->spans[i].y);
                 }
             }
+            // The air's gaps read ahead of the erosion, so the true faces they meet can widen the floor.
+            AirGrid padded_air;
+            std::vector<FaceOffset> padded_faces;
+            const S32 air_pad = std::clamp(input.mAirPad, 0, grid.borderSize);
+            if (input.mAir && input.mFaceOffsets)
+            {
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                extractAir(hf, grid.borderSize - air_pad, padded_air, real.data(), &avatar_floor);
+                foldSlivers(padded_air, static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)));
+                computeFaceOffsets(padded_air, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
+                                   padded_faces, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
+                                   stats ? &stats->mFaceTrace : nullptr);
+                top_clock.lap(ClassBuildStats::AIR);
+                clock.restart();
+            }
+            const S32 padded_width = padded_air.mWidth, padded_height = padded_air.mHeight;
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
+            const bool exact = input.mExactErosion && !padded_faces.empty() && cfg.walkableRadius > 0;
+            std::vector<U8> before_erosion;
+            if (exact)
+            {
+                before_erosion.assign(mem.chf->areas, mem.chf->areas + mem.chf->spanCount);
+            }
             if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
                 result.mError = "erode";
                 return nullptr;
+            }
+            if (exact)
+            {
+                const U32 back = recoverEroded(*mem.chf, before_erosion, ap.mRadius, cfg.borderSize - air_pad, padded_width, padded_height, padded_faces);
+                if (stats)
+                {
+                    stats->mFaceOffsets.mRecovered += back;
+                }
             }
             clock.lap(ClassBuildStats::ERODE);
             if (input.mPartition == Partition::SLOPE)
@@ -2216,14 +2246,16 @@ namespace sknav
                 const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
                 result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
                                           static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
-                                          tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine);
-                if (result.mAir && input.mFaceOffsets)
+                                          tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine, &padded_air);
+                if (result.mAir && !padded_faces.empty())
                 {
                     // Not shared yet: the table goes in before the air is published.
                     auto& air = const_cast<TileAir&>(*result.mAir);
-                    computeFaceOffsets(fine, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
-                                       air.mFaceOffsets, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
-                                       stats ? &stats->mFaceTrace : nullptr);
+                    cropFaceOffsets(padded_faces, padded_width, air_pad, air.mWidth, air.mHeight, air.mFaceOffsets);
+                    if (stats)
+                    {
+                        stats->mFaceOffsets.mEntries += static_cast<U32>(air.mFaceOffsets.size());
+                    }
                 }
                 top_clock.lap(ClassBuildStats::AIR);
                 clock.restart();

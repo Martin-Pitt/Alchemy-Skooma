@@ -29,6 +29,8 @@
 #include "sknavair.h"
 #include "sknavwalls.h"
 
+#include "Recast.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -295,8 +297,8 @@ namespace sknav
             if (trace && trace_every > 0 && boxed && measured++ % trace_every == 0)
             {
                 FaceOffsetTrace tr;
-                tr.mIx = ix;
-                tr.mIy = iy;
+                tr.mX0 = lo.mV[VX];
+                tr.mY0 = lo.mV[VY];
                 tr.mSide = q.mSide;
                 tr.mFloor = q.mFloor;
                 tr.mZLo = lo.mV[VZ];
@@ -326,7 +328,6 @@ namespace sknav
         out.shrink_to_fit();
         if (stats)
         {
-            stats->mEntries += static_cast<U32>(out.size());
             stats->mMs += std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - started).count();
         }
     }
@@ -461,5 +462,134 @@ namespace sknav
                 f.mMax.mV[axis] += move;
             }
         }
+    }
+
+    void cropFaceOffsets(const std::vector<FaceOffset>& padded, S32 padded_width, S32 pad, S32 width, S32 height, std::vector<FaceOffset>& out)
+    {
+        out.clear();
+        for (const FaceOffset& f : padded)
+        {
+            const S32 col = static_cast<S32>(f.key() >> 2);
+            const S32 ix = col % padded_width - pad, iy = col / padded_width - pad;
+            if (ix >= 0 && iy >= 0 && ix < width && iy < height)
+            {
+                out.push_back(FaceOffset(faceKey(ix, iy, width, static_cast<S32>(f.key() & 3u)), f.offset()));
+            }
+        }
+        out.shrink_to_fit();
+    }
+
+    U32 recoverEroded(rcCompactHeightfield& chf, const std::vector<U8>& before, F32 radius, S32 shift, S32 grid_width, S32 grid_height,
+                      const std::vector<FaceOffset>& table)
+    {
+        if (table.empty() || before.size() != static_cast<size_t>(chf.spanCount) || radius <= 0.f)
+        {
+            return 0;
+        }
+        const S32 reach = static_cast<S32>(std::ceil(radius / chf.cs)) + 1;
+        const F32 r_cells = radius / chf.cs;
+        // Only a span within reach of a face off its boundary can be given back.
+        std::vector<U8> near_face(static_cast<size_t>(chf.width) * chf.height, 0);
+        for (const FaceOffset& f : table)
+        {
+            if (f.offset() == 0)
+            {
+                continue;
+            }
+            const S32 col = static_cast<S32>(f.key() >> 2);
+            const S32 cx = col / grid_width + shift, cz = col % grid_width + shift;
+            for (S32 z = std::max(0, cz - reach - 1); z <= std::min(chf.height - 1, cz + reach + 1); ++z)
+            {
+                for (S32 x = std::max(0, cx - reach - 1); x <= std::min(chf.width - 1, cx + reach + 1); ++x)
+                {
+                    near_face[x + z * chf.width] = 1;
+                }
+            }
+        }
+        std::vector<U32> seen(static_cast<size_t>(chf.spanCount), 0);
+        U32 stamp = 0, recovered = 0;
+        struct Visit
+        {
+            S32 mX, mZ, mSpan;
+        };
+        std::vector<Visit> stack;
+        for (S32 z = 0; z < chf.height; ++z)
+        {
+            for (S32 x = 0; x < chf.width; ++x)
+            {
+                const rcCompactCell& cell = chf.cells[x + z * chf.width];
+                for (S32 i = static_cast<S32>(cell.index), n = static_cast<S32>(cell.index + cell.count); i < n && near_face[x + z * chf.width]; ++i)
+                {
+                    if (before[i] == RC_NULL_AREA || chf.areas[i] != RC_NULL_AREA)
+                    {
+                        continue;
+                    }
+                    // The nearest boundary over the connected floor round the span, at the cell faces and at the true ones.
+                    ++stamp;
+                    seen[i] = stamp;
+                    stack.assign(1, { x, z, i });
+                    F32 at_cells = 1e30f, at_faces = 1e30f;
+                    while (!stack.empty() && at_faces >= r_cells)
+                    {
+                        const Visit v = stack.back();
+                        stack.pop_back();
+                        const rcCompactSpan& s = chf.spans[v.mSpan];
+                        for (S32 dir = 0; dir < 4; ++dir)
+                        {
+                            const S32 dx = rcGetDirOffsetX(dir), dz = rcGetDirOffsetY(dir);
+                            const S32 con = rcGetCon(s, dir);
+                            const S32 nx = v.mX + dx, nz = v.mZ + dz;
+                            S32 ni = -1;
+                            if (con != RC_NOT_CONNECTED)
+                            {
+                                ni = static_cast<S32>(chf.cells[nx + nz * chf.width].index) + con;
+                            }
+                            if (ni >= 0 && before[ni] != RC_NULL_AREA)
+                            {
+                                if (std::abs(nx - x) <= reach && std::abs(nz - z) <= reach && seen[ni] != stamp)
+                                {
+                                    seen[ni] = stamp;
+                                    stack.push_back({ nx, nz, ni });
+                                }
+                                continue;
+                            }
+                            // A boundary: its face by the offset of the solid beyond, in the grid's axes (ix along chf z).
+                            const S32 ix = v.mZ - shift, iy = v.mX - shift, nix = ix + dz, niy = iy + dx;
+                            const S32 side = dz == 1 ? 0 : dz == -1 ? 1 : dx == 1 ? 2 : 3;
+                            F32 off = 0.f;
+                            if (nix >= 0 && niy >= 0 && nix < grid_width && niy < grid_height)
+                            {
+                                off = faceOffset(table, faceKey(nix, niy, grid_width, side));
+                            }
+                            for (S32 k = 0; k < 2; ++k)
+                            {
+                                const F32 o = k ? off : 0.f;
+                                F32 ddx, ddz;
+                                if (dx != 0)
+                                {
+                                    const F32 line = v.mX + (dx > 0 ? 1.f : 0.f) + dx * o;
+                                    ddx = std::max({ 0.f, line - (x + 1), x - line });
+                                    ddz = static_cast<F32>(std::max({ 0, v.mZ - (z + 1), z - (v.mZ + 1) }));
+                                }
+                                else
+                                {
+                                    const F32 line = v.mZ + (dz > 0 ? 1.f : 0.f) + dz * o;
+                                    ddz = std::max({ 0.f, line - (z + 1), z - line });
+                                    ddx = static_cast<F32>(std::max({ 0, v.mX - (x + 1), x - (v.mX + 1) }));
+                                }
+                                F32& best = k ? at_faces : at_cells;
+                                best = std::min(best, std::sqrt(ddx * ddx + ddz * ddz));
+                            }
+                        }
+                    }
+                    if (at_faces >= r_cells && at_cells < r_cells)
+                    {
+                        chf.areas[i] = before[i];
+                        ++recovered;
+                    }
+                }
+            }
+        }
+        return recovered;
     }
 }
