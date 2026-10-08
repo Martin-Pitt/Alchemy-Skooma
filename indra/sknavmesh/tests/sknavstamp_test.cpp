@@ -43,6 +43,7 @@
 #include "Recast.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -740,5 +741,62 @@ namespace tut
         }
         std::cout << found << " of " << walk << " spans found a coarse gap" << std::endl;
         ensure("most spans find a coarse gap", walk > 0 && found * 10 >= walk * 9);
+    }
+
+    template<> template<>
+    void sknavstamp_object::test<10>()
+    {
+        set_test_name("doors on a slant split their thresholds span for span as the rule reads, the first door in order taking a span two hold");
+        // A diagonal door, an oblique one whose normal is not square to its run, and a third over the second's threshold.
+        TileStampInput in;
+        in.mGapComponent = { 0 };
+        in.mComponentSpace = { 0, 1, 2, 3, 4, 5, 6 };
+        const auto door = [&in](F32 ax, F32 ay, F32 bx, F32 by, F32 nx, F32 ny, U16 s0, U16 s1) {
+            StampPortal p;
+            p.mA.set(ax, ay, 0.f);
+            p.mB.set(bx, by, 0.f);
+            p.mCentre.set((ax + bx) * 0.5f, (ay + by) * 0.5f, 0.5f);
+            p.mNormal.set(nx, ny, 0.f);
+            p.mNormal.normVec();
+            p.mSide[0] = s0;
+            p.mSide[1] = s1;
+            p.mKind = static_cast<U8>(PortalKind::DOOR);
+            in.mPortals.push_back(p);
+        };
+        door(2.f, 2.f, 6.f, 6.f, 1.f, -1.f, 1, 2);
+        door(1.f, 6.f, 3.f, 7.5f, 0.2f, 1.f, 3, 4);
+        door(1.5f, 6.2f, 2.5f, 7.f, 1.f, 0.f, 5, 6);
+        const ChfPtr chf = floorOf(32, 32, [](S32, S32) { return AREA_CODE_BASE; });
+        const std::vector<U32> gaps = gapsOf(*chf, [](S32, S32) { return 0; });
+        TileStamp st;
+        stampTile(*chf, 0, gaps, in, identityReal(), {}, StampParams(), st);
+        U32 differ = 0, doors = 0;
+        std::set<U16> seen;
+        for (S32 z = 0; z < 32; ++z)
+        {
+            for (S32 x = 0; x < 32; ++x)
+            {
+                const F32 px = (z + 0.5f) * 0.25f, py = (x + 0.5f) * 0.25f;
+                U16 want = 0;
+                for (const StampPortal& p : in.mPortals)
+                {
+                    const F32 dx = p.mB.mV[VX] - p.mA.mV[VX], dy = p.mB.mV[VY] - p.mA.mV[VY], len = std::sqrt(dx * dx + dy * dy);
+                    const F32 along = ((px - p.mA.mV[VX]) * dx + (py - p.mA.mV[VY]) * dy) / len;
+                    const F32 across = (px - p.mCentre.mV[VX]) * p.mNormal.mV[VX] + (py - p.mCentre.mV[VY]) * p.mNormal.mV[VY];
+                    if (along >= 0.f && along <= len && std::fabs(across) <= STAMP_THRESHOLD_M)
+                    {
+                        want = p.mSide[across < 0.f ? 0 : 1];
+                        ++doors;
+                        break;
+                    }
+                }
+                const U16 got = st.mSpanComponent[spanAt(*chf, x, z)];
+                differ += got != want ? 1 : 0;
+                seen.insert(got);
+            }
+        }
+        ensure_equals("every span as the rule reads it", differ, 0u);
+        ensure_equals("every threshold span counted", st.mDoorSpans, doors);
+        ensure("both sides of the slanted doors and the first of the overlapping pair", seen.count(1) && seen.count(2) && seen.count(3) && seen.count(4));
     }
 }

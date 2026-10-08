@@ -32,9 +32,9 @@
 #include "Recast.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <climits>
 #include <cmath>
-#include <deque>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -76,12 +76,53 @@ namespace sknav
             return best;
         }
 
-        /// The door portal whose threshold holds a point: across its run, within STAMP_THRESHOLD_M of its plane, at its sill.
-        const StampPortal* thresholdOf(const TileStampInput& input, F32 px, F32 py, F32 pz)
+        /// Whether a door portal's threshold holds a point: across its run, within STAMP_THRESHOLD_M of its plane, at its sill.
+        bool thresholdHolds(const StampPortal& p, F32 px, F32 py, F32 pz)
         {
-            for (const StampPortal& p : input.mPortals)
+            if (p.mKind != static_cast<U8>(PortalKind::DOOR) || std::fabs(pz - p.mCentre.mV[VZ]) > 1.f)
             {
-                if (p.mKind != static_cast<U8>(PortalKind::DOOR) || std::fabs(pz - p.mCentre.mV[VZ]) > 1.f)
+                return false;
+            }
+            const F32 dx = p.mB.mV[VX] - p.mA.mV[VX], dy = p.mB.mV[VY] - p.mA.mV[VY];
+            const F32 len = std::sqrt(dx * dx + dy * dy);
+            if (len <= 0.f)
+            {
+                return false;
+            }
+            const F32 along = ((px - p.mA.mV[VX]) * dx + (py - p.mA.mV[VY]) * dy) / len;
+            const F32 across = (px - p.mCentre.mV[VX]) * p.mNormal.mV[VX] + (py - p.mCentre.mV[VY]) * p.mNormal.mV[VY];
+            return along >= 0.f && along <= len && std::fabs(across) <= STAMP_THRESHOLD_M;
+        }
+
+        /// A portal's reach as a box of compact heightfield cells, a cell wider all round than any point it can hold.
+        struct PortalCells
+        {
+            U32 mPortal = 0;
+            S32 mX0 = 0, mX1 = -1, mZ0 = 0, mZ1 = -1;
+
+            bool holds(S32 x, S32 z) const { return x >= mX0 && x <= mX1 && z >= mZ0 && z <= mZ1; }
+        };
+
+        /// The cells whose centres can lie in a plan box: lo and hi are mesh-local x and y.
+        PortalCells cellsOf(const rcCompactHeightfield& chf, U32 portal, F32 lo_x, F32 lo_y, F32 hi_x, F32 hi_y)
+        {
+            PortalCells c;
+            c.mPortal = portal;
+            c.mZ0 = static_cast<S32>(std::floor((lo_x - chf.bmin[2]) / chf.cs)) - 1;
+            c.mZ1 = static_cast<S32>(std::ceil((hi_x - chf.bmin[2]) / chf.cs)) + 1;
+            c.mX0 = static_cast<S32>(std::floor((lo_y - chf.bmin[0]) / chf.cs)) - 1;
+            c.mX1 = static_cast<S32>(std::ceil((hi_y - chf.bmin[0]) / chf.cs)) + 1;
+            return c;
+        }
+
+        /// Each door's threshold as cells, in the input's order; a door whose box cannot be bounded covers every cell.
+        std::vector<PortalCells> thresholdCells(const rcCompactHeightfield& chf, const TileStampInput& input)
+        {
+            std::vector<PortalCells> out;
+            for (size_t k = 0; k < input.mPortals.size(); ++k)
+            {
+                const StampPortal& p = input.mPortals[k];
+                if (p.mKind != static_cast<U8>(PortalKind::DOOR))
                 {
                     continue;
                 }
@@ -91,14 +132,99 @@ namespace sknav
                 {
                     continue;
                 }
-                const F32 along = ((px - p.mA.mV[VX]) * dx + (py - p.mA.mV[VY]) * dy) / len;
-                const F32 across = (px - p.mCentre.mV[VX]) * p.mNormal.mV[VX] + (py - p.mCentre.mV[VY]) * p.mNormal.mV[VY];
-                if (along >= 0.f && along <= len && std::fabs(across) <= STAMP_THRESHOLD_M)
+                // Corners where along is 0 or len and across is the threshold either side, solved from the two projections.
+                const F32 ux = dx / len, uy = dy / len, nx = p.mNormal.mV[VX], ny = p.mNormal.mV[VY];
+                const F32 det = ux * ny - uy * nx;
+                if (std::fabs(det) < 0.05f)
                 {
-                    return &p;
+                    out.push_back({ static_cast<U32>(k), INT_MIN, INT_MAX, INT_MIN, INT_MAX });
+                    continue;
+                }
+                const F32 a0 = p.mA.mV[VX] * ux + p.mA.mV[VY] * uy, c0 = p.mCentre.mV[VX] * nx + p.mCentre.mV[VY] * ny;
+                F32 lo_x = FLT_MAX, lo_y = FLT_MAX, hi_x = -FLT_MAX, hi_y = -FLT_MAX;
+                for (const F32 along : { 0.f, len })
+                {
+                    for (const F32 across : { -STAMP_THRESHOLD_M, STAMP_THRESHOLD_M })
+                    {
+                        const F32 r0 = a0 + along, r1 = c0 + across;
+                        const F32 x = (r0 * ny - uy * r1) / det, y = (ux * r1 - nx * r0) / det;
+                        lo_x = std::min(lo_x, x);
+                        hi_x = std::max(hi_x, x);
+                        lo_y = std::min(lo_y, y);
+                        hi_y = std::max(hi_y, y);
+                    }
+                }
+                const F32 slack = 0.01f;
+                out.push_back(cellsOf(chf, static_cast<U32>(k), lo_x - slack, lo_y - slack, hi_x + slack, hi_y + slack));
+            }
+            return out;
+        }
+
+        /// Each portal's reach, STAMP_PORTAL_REACH_M round its run, as cells, in the input's order.
+        std::vector<PortalCells> reachCells(const rcCompactHeightfield& chf, const TileStampInput& input)
+        {
+            std::vector<PortalCells> out;
+            for (size_t k = 0; k < input.mPortals.size(); ++k)
+            {
+                const StampPortal& p = input.mPortals[k];
+                const F32 r = STAMP_PORTAL_REACH_M + 0.01f;
+                out.push_back(cellsOf(chf, static_cast<U32>(k), std::min(p.mA.mV[VX], p.mB.mV[VX]) - r, std::min(p.mA.mV[VY], p.mB.mV[VY]) - r,
+                                      std::max(p.mA.mV[VX], p.mB.mV[VX]) + r, std::max(p.mA.mV[VY], p.mB.mV[VY]) + r));
+            }
+            return out;
+        }
+
+        /// The (slope, colour) pairs present, in order: what a set of them would iterate.
+        template<typename ColourOf>
+        std::vector<std::pair<U8, U8>> presentPairs(const rcCompactHeightfield& chf, const std::vector<U8>& slope_map, ColourOf colour_of)
+        {
+            std::vector<U8> seen(256 * 256, 0);
+            for (S32 i = 0; i < chf.spanCount; ++i)
+            {
+                if (chf.areas[i] != RC_NULL_AREA)
+                {
+                    seen[slope_map[chf.areas[i]] * 256 + colour_of(i)] = 1;
                 }
             }
-            return nullptr;
+            std::vector<std::pair<U8, U8>> out;
+            for (S32 k = 0; k < 256 * 256; ++k)
+            {
+                if (seen[k])
+                {
+                    out.emplace_back(static_cast<U8>(k >> 8), static_cast<U8>(k & 0xff));
+                }
+            }
+            return out;
+        }
+
+        /// The component with the most votes, the least on a tie; STAMP_NONE for none.
+        U16 majorityOf(const std::vector<std::pair<U16, U32>>& votes)
+        {
+            U16 best = STAMP_NONE;
+            U32 most = 0;
+            for (const auto& [k, v] : votes)
+            {
+                if (v > most || (v == most && k < best))
+                {
+                    best = k;
+                    most = v;
+                }
+            }
+            return best;
+        }
+
+        /// One more vote for a component: a poly or a region holds few, so a list beats a map.
+        void vote(std::vector<std::pair<U16, U32>>& votes, U16 key)
+        {
+            for (auto& [k, v] : votes)
+            {
+                if (k == key)
+                {
+                    ++v;
+                    return;
+                }
+            }
+            votes.emplace_back(key, 1u);
         }
 
         struct Spans
@@ -269,17 +395,29 @@ namespace sknav
         std::vector<U16>& comp = out.mSpanComponent;
         comp.assign(n, STAMP_NONE);
         std::vector<U8> fillable(n, 0);
+        bool any_fillable = false;
+        const std::vector<PortalCells> doors = thresholdCells(chf, input), reach = reachCells(chf, input);
         for (S32 i = 0; i < n; ++i)
         {
             if (chf.areas[i] == RC_NULL_AREA || !spans.interior(i))
             {
                 continue;
             }
-            const F32 px = chf.bmin[2] + (spans.mZ[i] + 0.5f) * chf.cs;
-            const F32 py = chf.bmin[0] + (spans.mX[i] + 0.5f) * chf.cs;
+            const S32 cx = spans.mX[i], cz = spans.mZ[i];
+            const F32 px = chf.bmin[2] + (cz + 0.5f) * chf.cs;
+            const F32 py = chf.bmin[0] + (cx + 0.5f) * chf.cs;
             const F32 pz = chf.bmin[1] + chf.spans[i].y * chf.ch;
             // A door's threshold is split at its leaf's plane, each half to the space on its side.
-            if (const StampPortal* door = thresholdOf(input, px, py, pz))
+            const StampPortal* door = nullptr;
+            for (const PortalCells& d : doors)
+            {
+                if (d.holds(cx, cz) && thresholdHolds(input.mPortals[d.mPortal], px, py, pz))
+                {
+                    door = &input.mPortals[d.mPortal];
+                    break;
+                }
+            }
+            if (door)
             {
                 const S32 side = (px - door->mCentre.mV[VX]) * door->mNormal.mV[VX] + (py - door->mCentre.mV[VY]) * door->mNormal.mV[VY] < 0.f ? 0 : 1;
                 if (door->mSide[side] != STAMP_NONE)
@@ -298,10 +436,11 @@ namespace sknav
             // A floor the air has no gap over is under a leaf: its side of the nearest portal's plane.
             S32 best = -1;
             F32 best_d = 0.f;
-            for (size_t k = 0; k < input.mPortals.size(); ++k)
+            for (const PortalCells& r : reach)
             {
+                const size_t k = r.mPortal;
                 const StampPortal& p = input.mPortals[k];
-                if (std::fabs(pz - p.mCentre.mV[VZ]) > 1.f)
+                if (!r.holds(cx, cz) || std::fabs(pz - p.mCentre.mV[VZ]) > 1.f)
                 {
                     continue;
                 }
@@ -324,21 +463,21 @@ namespace sknav
                 }
             }
             fillable[i] = 1;
+            any_fillable = true;
         }
 
         // What no portal reaches takes the component of the floor it joins.
-        std::deque<S32> queue;
-        for (S32 i = 0; i < n; ++i)
+        std::vector<S32> queue;
+        for (S32 i = 0; any_fillable && i < n; ++i)
         {
             if (comp[i] != STAMP_NONE)
             {
                 queue.push_back(i);
             }
         }
-        while (!queue.empty())
+        for (size_t head = 0; head < queue.size(); ++head)
         {
-            const S32 i = queue.front();
-            queue.pop_front();
+            const S32 i = queue[head];
             for (S32 d = 0; d < 4; ++d)
             {
                 const S32 j = spans.neighbour(i, d);
@@ -428,20 +567,10 @@ namespace sknav
             const U16 c = spans.interior(i) ? comp[i] : STAMP_NONE;
             return c == STAMP_NONE ? 0 : colours[c];
         };
-        const auto pairs = [&]() {
-            std::set<std::pair<U8, U8>> s;
-            for (S32 i = 0; i < n; ++i)
-            {
-                if (chf.areas[i] != RC_NULL_AREA)
-                {
-                    s.emplace(slope_map[chf.areas[i]], colourOf(i));
-                }
-            }
-            return s;
-        };
+        const auto pairs = [&]() { return presentPairs(chf, slope_map, colourOf); };
         const auto realOf = [&real](U8 s) { return s < real.size() ? real[s] : s; };
         const S32 cap = llclamp(params.mPaletteMax, 1, 63);
-        std::set<std::pair<U8, U8>> used = pairs();
+        std::vector<std::pair<U8, U8>> used = pairs();
         if (static_cast<S32>(used.size()) > cap)
         {
             // First the slope partition's landings: every non-flight code becomes the least of its area.
@@ -537,11 +666,11 @@ namespace sknav
             }
         }
 
-        std::map<std::pair<U8, U8>, U8> index;
+        std::vector<U8> index(256 * 256, 0);
         out.mPalette.assign(1, StampCode());
         for (const auto& p : used)
         {
-            index[p] = static_cast<U8>(out.mPalette.size());
+            index[p.first * 256 + p.second] = static_cast<U8>(out.mPalette.size());
             out.mPalette.push_back({ p.first, p.second });
         }
         out.mPairs = static_cast<U32>(used.size());
@@ -550,7 +679,7 @@ namespace sknav
         {
             if (chf.areas[i] != RC_NULL_AREA)
             {
-                out.mSpanCode[i] = index[{ slope_map[chf.areas[i]], colourOf(i) }];
+                out.mSpanCode[i] = index[slope_map[chf.areas[i]] * 256 + colourOf(i)];
             }
         }
         out.mComponentColour = one ? std::vector<U8>(ncomp, 1) : colours;
@@ -579,37 +708,38 @@ namespace sknav
         out.mPolyComponent.assign(npolys, STAMP_NONE);
         out.mPolyGap.assign(npolys, SPAN_NO_GAP);
 
-        // Each region's component, for a poly too small to cover a cell centre.
-        std::map<U16, std::map<U16, U32>> region_votes;
-        for (S32 z = border; z < chf.height - border; ++z)
-        {
-            for (S32 x = border; x < chf.width - border; ++x)
+        // Each region's component, for a poly too small to cover a cell centre: counted when the first such poly asks.
+        std::vector<std::vector<std::pair<U16, U32>>> region_votes;
+        bool voted = false;
+        const auto regionComponent = [&](U16 reg) {
+            if (!voted)
             {
-                const rcCompactCell& c = chf.cells[x + z * chf.width];
-                for (U32 i = c.index, n = c.index + c.count; i < n; ++i)
+                voted = true;
+                for (S32 z = border; z < chf.height - border; ++z)
                 {
-                    if (chf.areas[i] != RC_NULL_AREA && chf.spans[i].reg && !(chf.spans[i].reg & RC_BORDER_REG))
+                    for (S32 x = border; x < chf.width - border; ++x)
                     {
-                        ++region_votes[chf.spans[i].reg][stamp.mSpanComponent[i]];
+                        const rcCompactCell& c = chf.cells[x + z * chf.width];
+                        for (U32 i = c.index, n = c.index + c.count; i < n; ++i)
+                        {
+                            const U16 r = chf.spans[i].reg;
+                            if (chf.areas[i] != RC_NULL_AREA && r && !(r & RC_BORDER_REG))
+                            {
+                                if (r >= region_votes.size())
+                                {
+                                    region_votes.resize(r + 1u);
+                                }
+                                vote(region_votes[r], stamp.mSpanComponent[i]);
+                            }
+                        }
                     }
                 }
             }
-        }
-        const auto majority = [](const std::map<U16, U32>& votes) {
-            U16 best = STAMP_NONE;
-            U32 most = 0;
-            for (const auto& [k, v] : votes)
-            {
-                if (v > most)
-                {
-                    best = k;
-                    most = v;
-                }
-            }
-            return best;
+            return reg < region_votes.size() ? majorityOf(region_votes[reg]) : STAMP_NONE;
         };
 
         // Each poly's spans: those of its region in the columns whose centres it covers.
+        std::vector<std::pair<U32, U32>> gaps;
         for (S32 p = 0; p < npolys; ++p)
         {
             const unsigned short* poly = &pmesh.polys[p * nvp * 2];
@@ -633,21 +763,75 @@ namespace sknav
                 twice += vx[k] * vz[m] - vx[m] * vz[k];
             }
             const F32 sign = twice < 0.f ? -1.f : 1.f;
-            std::map<U16, U32> comps;
-            std::map<U32, U32> gaps;
+            const auto inside = [&](S32 x, S32 z) {
+                const F32 px = x + 0.5f, pz = z + 0.5f;
+                for (S32 k = 0; k < nv; ++k)
+                {
+                    const S32 m = k + 1 < nv ? k + 1 : 0;
+                    if (!(sign * ((vx[m] - vx[k]) * (pz - vz[k]) - (vz[m] - vz[k]) * (px - vx[k])) >= 0.f))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            std::vector<std::pair<U16, U32>> comps;
+            gaps.clear();
             for (S32 z = lo_z; z < hi_z; ++z)
             {
-                for (S32 x = lo_x; x < hi_x; ++x)
+                // A poly is convex, so the centres it covers in a row are a run: estimated from its edges, then settled by the test itself.
+                const F32 pz = z + 0.5f;
+                F32 lo = static_cast<F32>(lo_x), hi = static_cast<F32>(hi_x - 1);
+                for (S32 k = 0; k < nv; ++k)
                 {
-                    const F32 px = x + 0.5f, pz = z + 0.5f;
-                    bool inside = true;
-                    for (S32 k = 0; k < nv && inside; ++k)
+                    const S32 m = k + 1 < nv ? k + 1 : 0;
+                    const F32 a = sign * (vx[m] - vx[k]), b = sign * (vz[m] - vz[k]);
+                    if (b != 0.f)
                     {
-                        const S32 m = (k + 1) % nv;
-                        inside = sign * ((vx[m] - vx[k]) * (pz - vz[k]) - (vz[m] - vz[k]) * (px - vx[k])) >= 0.f;
+                        const F32 at = vx[k] + a * (pz - vz[k]) / b - 0.5f;
+                        if (b > 0.f)
+                        {
+                            hi = std::min(hi, std::floor(at));
+                        }
+                        else
+                        {
+                            lo = std::max(lo, std::ceil(at));
+                        }
                     }
+                }
+                S32 x0 = static_cast<S32>(std::max(lo, static_cast<F32>(lo_x))), x1 = static_cast<S32>(std::min(hi, static_cast<F32>(hi_x - 1)));
+                while (x0 <= x1 && !inside(x0, z))
+                {
+                    ++x0;
+                }
+                if (x0 > x1)
+                {
+                    // Nothing where the edges put the run: look along the whole row.
+                    for (x0 = lo_x; x0 < hi_x && !inside(x0, z); ++x0)
+                    {
+                    }
+                    x1 = x0;
+                }
+                if (x0 >= hi_x)
+                {
+                    continue;
+                }
+                while (x0 > lo_x && inside(x0 - 1, z))
+                {
+                    --x0;
+                }
+                while (x1 > x0 && !inside(x1, z))
+                {
+                    --x1;
+                }
+                while (x1 + 1 < hi_x && inside(x1 + 1, z))
+                {
+                    ++x1;
+                }
+                for (S32 x = x0; x <= x1; ++x)
+                {
                     const S32 cx = x + border, cz = z + border;
-                    if (!inside || cx < 0 || cz < 0 || cx >= chf.width || cz >= chf.height)
+                    if (cx < 0 || cz < 0 || cx >= chf.width || cz >= chf.height)
                     {
                         continue;
                     }
@@ -656,8 +840,16 @@ namespace sknav
                     {
                         if (chf.spans[i].reg == pmesh.regs[p] && chf.areas[i] != RC_NULL_AREA)
                         {
-                            ++comps[stamp.mSpanComponent[i]];
-                            ++gaps[i < span_gap.size() ? span_gap[i] : SPAN_NO_GAP];
+                            vote(comps, stamp.mSpanComponent[i]);
+                            const U32 g = i < span_gap.size() ? span_gap[i] : SPAN_NO_GAP;
+                            if (!gaps.empty() && gaps.back().first == g)
+                            {
+                                ++gaps.back().second;
+                            }
+                            else
+                            {
+                                gaps.emplace_back(g, 1u);
+                            }
                             break;
                         }
                     }
@@ -665,21 +857,27 @@ namespace sknav
             }
             if (comps.empty())
             {
-                const auto it = region_votes.find(pmesh.regs[p]);
-                out.mPolyComponent[p] = it != region_votes.end() ? majority(it->second) : STAMP_NONE;
+                out.mPolyComponent[p] = regionComponent(pmesh.regs[p]);
             }
             else
             {
-                out.mPolyComponent[p] = majority(comps);
+                out.mPolyComponent[p] = majorityOf(comps);
                 out.mImpurePolys += comps.size() > 1 ? 1 : 0;
             }
+            // The gap most of its spans stand in, the least on a tie: a poly spans many leaves, so its runs are sorted rather than tallied.
+            std::sort(gaps.begin(), gaps.end());
             U32 most = 0;
-            for (const auto& [g, v] : gaps)
+            for (size_t a = 0, b = 0; a < gaps.size() && gaps[a].first != SPAN_NO_GAP; a = b)
             {
-                if (g != SPAN_NO_GAP && v > most)
+                U32 count = 0;
+                for (b = a; b < gaps.size() && gaps[b].first == gaps[a].first; ++b)
                 {
-                    out.mPolyGap[p] = g;
-                    most = v;
+                    count += gaps[b].second;
+                }
+                if (count > most)
+                {
+                    out.mPolyGap[p] = gaps[a].first;
+                    most = count;
                 }
             }
         }
