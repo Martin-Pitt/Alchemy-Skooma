@@ -914,6 +914,26 @@ namespace sknav
                     << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
                     << b.mdV[VX] << ',' << b.mdV[VY] << ',' << b.mdV[VZ] << "]}";
             }
+            // Each tile's polys' storeys, -1 on a flight, for the pictures.
+            out << "],\"tiles\":[";
+            bool first_tile = true;
+            const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)];
+            for (const auto& [key, tile] : mesh.mTiles)
+            {
+                const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+                if (!dt || !dt->header)
+                {
+                    continue;
+                }
+                out << (first_tile ? "" : ",") << '[' << key.mX << ',' << key.mY << ",[";
+                first_tile = false;
+                const dtPolyRef base = nav->getPolyRefBase(dt);
+                for (S32 p = 0; p < dt->header->polyCount; ++p)
+                {
+                    out << (p ? "," : "") << st.storeyOfPoly(static_cast<U64>(base | static_cast<dtPolyRef>(p)));
+                }
+                out << "]]";
+            }
             out << "]}";
         }
 
