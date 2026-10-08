@@ -715,6 +715,10 @@ namespace sknav
             put<U16>(out, t.mBottom);
             put<U16>(out, t.mTop);
         }
+        for (const FaceOffset& f : air.mFaceOffsets)
+        {
+            put<U32>(out, f.mBits);
+        }
         return out;
     }
 
@@ -722,16 +726,19 @@ namespace sknav
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
+        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
              "\"flight\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64},\"ceiling_open\":"
-          << AIR_CEILING_OPEN << ",\"sections\":[[\"leaves\",\"leaf\"," << air.mLeaves.size() << "],[\"gaps\",\"gap\"," << air.mGaps.size() << "]";
+          << AIR_CEILING_OPEN
+          << ",\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":" << FACE_OFFSET_STEPS
+          << ",\"key\":\"column*4+side\",\"column\":\"ix+iy*width\",\"sides\":[\"neg_x\",\"pos_x\",\"neg_y\",\"pos_y\"]},\"sections\":[[\"leaves\",\"leaf\"," << air.mLeaves.size() << "],[\"gaps\",\"gap\"," << air.mGaps.size() << "]";
         const char* names[4] = { "seam_neg_x", "seam_pos_x", "seam_neg_y", "seam_pos_y" };
         for (S32 s = 0; s < 4; ++s)
         {
             o << ",[\"" << names[s] << "_start\",\"start\"," << air.mSeams[s].mStart.size() << "],[\"" << names[s] << "\",\"gap\","
               << air.mSeams[s].mGaps.size() << "]";
         }
-        o << ",[\"top_start\",\"start\"," << air.mTopStart.size() << "],[\"top\",\"top\"," << air.mTop.size() << "]]}";
+        o << ",[\"top_start\",\"start\"," << air.mTopStart.size() << "],[\"top\",\"top\"," << air.mTop.size() << "],[\"face_offsets\",\"face\","
+          << air.mFaceOffsets.size() << "]]}";
         return o.str();
     }
 }

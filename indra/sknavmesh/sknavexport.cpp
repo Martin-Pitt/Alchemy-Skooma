@@ -65,7 +65,7 @@ namespace sknav
     void writeExportHeader(std::ostream& file, const std::string& exported, const LLVector3d& agent, F32 height, F32 radius, F32 climb, F32 slope,
                            F32 cell)
     {
-        file << "{\"format\":\"sknavmesh-export\",\"version\":2,\"exported\":\"" << exported << '"';
+        file << "{\"format\":\"sknavmesh-export\",\"version\":3,\"exported\":\"" << exported << '"';
         file << ",\"agent\":";
         writeVec3d(file, agent);
         file << ",\"params\":{\"height\":" << height << ",\"radius\":" << radius << ",\"climb\":" << climb << ",\"slope\":" << slope

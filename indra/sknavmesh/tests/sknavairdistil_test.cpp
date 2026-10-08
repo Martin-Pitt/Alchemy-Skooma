@@ -465,4 +465,32 @@ namespace tut
             ensure("the fixture has solid cells between leaves", solid > 0);
         }
     }
+    template<> template<>
+    void sknavairdistil_object::test<11>()
+    {
+        set_test_name("face offsets pack last, after the tops, and the layout names them");
+        const AirGrid g = room();
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        airSeams(g, air);
+        air.mTopStart.assign(1, 0);
+        const std::vector<U8> before = packTileAir(air);
+        air.mFaceOffsets = { FaceOffset(faceKey(3, 5, air.mWidth, TileAir::SIDE_POS_X), 7),
+                             FaceOffset(faceKey(9, 2, air.mWidth, TileAir::SIDE_NEG_Y), 15) };
+        const std::vector<U8> blob = packTileAir(air);
+        ensure_equals("four bytes an entry", blob.size(), before.size() + 8);
+        ensure("the sections before are untouched", std::equal(before.begin(), before.end(), blob.begin()));
+        for (size_t i = 0; i < 2; ++i)
+        {
+            const U8* p = &blob[before.size() + i * 4];
+            const U32 bits = p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<U32>(p[3]) << 24);
+            ensure_equals("key", bits >> 5, air.mFaceOffsets[i].key());
+            ensure_equals("offset", bits & 31u, air.mFaceOffsets[i].offset());
+        }
+        ensure_equals("column * 4 + side", air.mFaceOffsets[0].key(), static_cast<U32>(4 * (3 + 5 * air.mWidth) + 1));
+        const std::string layout = tileAirLayout(air);
+        ensure("the record format", layout.find("\"face\":\"<I\"") != std::string::npos);
+        ensure("the bit fields", layout.find("\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":16,") != std::string::npos);
+        ensure("the last section", layout.find("[\"face_offsets\",\"face\",2]]}") != std::string::npos);
+    }
 }
