@@ -179,6 +179,12 @@ namespace sknav
         return it != mSlotSpaces.end() && poly < it->second.size() ? it->second[poly] : 0;
     }
 
+    SpaceQueryFilter::TileSpaces ReplayMesh::polySpaces(const dtMeshTile* tile) const
+    {
+        const auto it = tile && tile->header ? mSlotSpaces.find(tile->header->userId) : mSlotSpaces.end();
+        return it == mSlotSpaces.end() ? SpaceQueryFilter::TileSpaces() : SpaceQueryFilter::TileSpaces{ it->second.data(), static_cast<U32>(it->second.size()) };
+    }
+
     const Flight* ReplayMesh::polyFlight(const dtMeshTile* tile, U32 poly) const
     {
         if (!tile || !tile->header)

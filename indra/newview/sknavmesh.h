@@ -32,6 +32,7 @@
 #include "sknavoverlay.h"
 #include "sknavpolys.h"
 #include "sknavskymap.h"
+#include "sknavspacefilter.h"
 #include "sknavspaceproducts.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
@@ -544,6 +545,8 @@ private:
     void applyBinding(Mesh& mesh, const sknav::TileKey& key, Tile& tile);
     /// The space id of a poly, through its Detour tile's user id; 0 for none.
     U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+    /// A Detour tile's polys' space ids, for the space filter.
+    sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
     U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,

@@ -833,7 +833,7 @@ namespace sknav
         for (size_t m = 0; m < result.mMeshes.size(); ++m)
         {
             const ReplayMesh& rmesh = *result.mMeshes[m];
-            SpaceQueryFilter space_filter([&rmesh](const dtMeshTile* tile, U32 poly) { return rmesh.polySpace(tile, poly); });
+            SpaceQueryFilter space_filter([&rmesh](const dtMeshTile* tile) { return rmesh.polySpaces(tile); });
             space_filter.setSpaceCost(0xffffffffu, 2.f);
             const dtNavMesh* nav = result.mMeshes[m]->mNav[static_cast<S32>(AgentClass::AVATAR)];
             if (!nav || !dtStatusSucceed(query->init(nav, 4096)))

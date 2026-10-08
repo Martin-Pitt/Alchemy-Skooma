@@ -1802,6 +1802,13 @@ U32 SKNavMesh::polySpace(const dtMeshTile* tile, U32 poly) const
     return it != mSlotSpaces.end() && poly < it->second->size() ? (*it->second)[poly] : 0;
 }
 
+sknav::SpaceQueryFilter::TileSpaces SKNavMesh::polySpaces(const dtMeshTile* tile) const
+{
+    const auto it = tile && tile->header ? mSlotSpaces.find(tile->header->userId) : mSlotSpaces.end();
+    return it == mSlotSpaces.end() || !it->second ? sknav::SpaceQueryFilter::TileSpaces()
+                                                  : sknav::SpaceQueryFilter::TileSpaces{ it->second->data(), static_cast<U32>(it->second->size()) };
+}
+
 void SKNavMesh::schedule()
 {
     static LLCachedControl<S32> perFrame(gSavedSettings, "SKNavBuildsPerFrame", 4);
@@ -2152,7 +2159,7 @@ SKNavMesh::Mesh* SKNavMesh::meshAt(const LLVector3d& pos, AgentClass cls, F32& z
         F32 centre[3], nearest[3];
         toRecast(local, centre);
         const F32 extents[3] = { 0.5f, 2.f, 0.5f };
-        const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+        const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
         dtPolyRef ref = 0;
         if (dtStatusSucceed(mesh.mQuery[c]->findNearestPoly(centre, extents, &filter, &ref, nearest)) && ref)
         {
@@ -2191,7 +2198,7 @@ bool SKNavMesh::spaceAt(const LLVector3d& pos, LLUUID& mesh_out, U32& space_out)
     {
         return false;
     }
-    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+    const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
     const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
     const dtMeshTile* tile = nullptr;
     const dtPoly* poly = nullptr;
@@ -2284,7 +2291,7 @@ bool SKNavMesh::storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_ou
         return false;
     }
     const StoreyProductPtr st = storeys(mesh->mId);
-    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+    const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
     const dtPolyRef ref = nearestPoly(*mesh->mQuery[c], mesh->mOrigin, pos, filter);
     storey_out = st && ref ? st->storeyOfPoly(static_cast<U64>(ref)) : -1;
     mesh_out = mesh->mId;
@@ -2325,7 +2332,7 @@ bool SKNavMesh::findPath(const LLVector3d& a, const LLVector3d& b, AgentClass cl
     toLocal(a, sa);
     toLocal(b, sb);
     const F32 extents[3] = { 1.f, 3.f, 1.f };
-    const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+    const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
     dtPolyRef ra = 0, rb = 0;
     query->findNearestPoly(sa, extents, &filter, &ra, na);
     query->findNearestPoly(sb, extents, &filter, &rb, nb);
@@ -3398,7 +3405,7 @@ std::string SKNavMesh::markUnderCamera()
             F32 centre[3], nearest[3];
             toRecast(local, centre);
             const F32 extents[3] = { 2.f, 4.f, 2.f };
-            const SpaceQueryFilter filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+            const SpaceQueryFilter filter([this](const dtMeshTile* t) { return polySpaces(t); });
             dtPolyRef ref = 0;
             if (!dtStatusSucceed(mesh.mQuery[cls]->findNearestPoly(centre, extents, &filter, &ref, nearest)) || !ref)
             {
@@ -3429,7 +3436,7 @@ std::string SKNavMesh::markUnderCamera()
             // and the step between them with them.
             for (U8 area = AREA_GROUND; area <= AREA_SUBMERGED; ++area)
             {
-                SpaceQueryFilter area_filter([this](const dtMeshTile* t, U32 p) { return polySpace(t, p); });
+                SpaceQueryFilter area_filter([this](const dtMeshTile* t) { return polySpaces(t); });
                 area_filter.setIncludeFlags(static_cast<unsigned short>(1u << area));
                 dtPolyRef area_ref = 0;
                 F32 area_pt[3];
