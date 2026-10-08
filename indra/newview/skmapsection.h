@@ -160,7 +160,8 @@ namespace skmap
         size_t bytes() const { return mBytes; }
         /// Slices held.
         size_t entries() const { return mSlices; }
-        /// The last scene build's memo, kept on the same worker; outside the byte budget, as it is one scene's worth.
+        /// The last section build's memo, kept on the same worker until a build without a section; outside the byte
+        /// budget, as it is one scene's worth, the scene the map shows, whose pieces hold their slices either way.
         std::shared_ptr<SectionMemo>& memo() { return mMemo; }
 
     private:

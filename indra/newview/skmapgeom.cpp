@@ -3797,6 +3797,11 @@ namespace skmap
             memo = cache ? std::make_shared<SectionMemo>() : nullptr;
             buildSection(s, input, cache, memo.get());
         }
+        else if (cache)
+        {
+            // No section: the last one's scene and door leaves are let go, not kept until a section comes back.
+            cache->memo().reset();
+        }
         classifyMarks(s, input);
         sampleContours(s);
         for (ScenePoly& poly : s.mPolys)

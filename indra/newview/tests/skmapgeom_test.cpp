@@ -1447,6 +1447,12 @@ namespace tut
         ensure("no longer navmesh, the rest reused", left.mReused > 0 && left.mReused == left.mPairs);
         check(shifted, "the origin moved");
         check(input({ floors(0.f) }, &walls), "back where it began");
+        // The section switched off holds nothing of the last one; switched on again it builds as from cold.
+        ensure("a section's memo", cache.memo() != nullptr);
+        skmap::buildScene(input({ floors(0.f) }), &cache);
+        ensure("no section, no memo", cache.memo() == nullptr);
+        const skmap::SectionStats back = check(input({ floors(0.f) }, &walls), "the section back");
+        ensure("the section back, nothing reused", back.mReused == 0);
     }
 
     // A box re-snap keeps the scene origin, so the layers inside both boxes come whole from the last build and the
