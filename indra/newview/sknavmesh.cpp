@@ -1045,6 +1045,8 @@ bool SKNavMesh::prepareInput(const Mesh& mesh, const TileKey& key, Tile& tile, s
         input->mAir = false;
         input->mCoarseAir = true;
     }
+    // A tile with air of its own keeps its solid raster, so an edit rasterises only its own cells.
+    input->mHoldSolid = input->mAir;
     // Only a region mesh has ground in it, and only its own ground: a cluster
     // clear of the ground has nothing to do with the land far below it, and a
     // tile past the region's edge is standing on land another region meshes.
@@ -1115,10 +1117,14 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         F32 mLoadMs = 0.f;
         TileRasterPtr mRaster;
         F32 mRasterMs = 0.f;
+        bool mUpdated = false;      ///< built from the held raster rather than from nothing
+        UpdatePath mPath = UpdatePath::NO_SOLID;
     };
+    // Whatever raster the update starts from, it makes the tile a whole raster of this input makes.
+    const TileRasterPtr held = tile.mRaster;
     const bool posted = main_queue->postTo(
         workers,
-        [input, records, cache, skip_load]()
+        [input, records, cache, skip_load, held]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
             finishTileInput(*records, input->mMeshOrigin, *input);
@@ -1151,8 +1157,11 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             out->mResult = std::make_shared<TileBuildResult>();
             TileBuildResult& result = *out->mResult;
             // Past the radius too: the raster makes the coarse air from its own soup, and is held for the stamp.
-            if (TileRasterPtr raster = rasteriseTile(*input, result))
+            TileUpdate update;
+            out->mUpdated = held != nullptr;
+            if (TileRasterPtr raster = held ? updateTile(*input, *held, result, nullptr, &update) : rasteriseTile(*input, result))
             {
+                out->mPath = update.mPath;
                 out->mRasterMs = result.mMillis;
                 result.mStatus = TileBuildResult::SUCCESS;
                 if (awaitsStamp(result))
@@ -1188,6 +1197,15 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
             {
                 mStats.mLastRasterMs = out->mRasterMs;
                 mStats.mLastPolyMs = out->mResult->mMillis - out->mRasterMs;
+                if (out->mUpdated && out->mPath == UpdatePath::LOCAL)
+                {
+                    ++mStats.mLocalUpdates;
+                    mStats.mLastUpdateMs = out->mRasterMs;
+                }
+                else if (out->mUpdated)
+                {
+                    ++mStats.mUpdateFallbacks;
+                }
             }
             publish(id, generation, key, signature, out->mResult, out->mKey, out->mLoaded, std::move(out->mRaster));
         });
@@ -2061,12 +2079,12 @@ std::string SKNavMesh::statsLine() const
                                         mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
-    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
+    return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), local updates %u (%u whole, last %.1f ms), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
                     mStats.mMeshes, mStats.mTilesBuilt, mStats.mTiles, mStats.mQueued, mStats.mInFlight,
                     mStats.mFaces, mStats.mSegments, mStats.mLinks, mStats.mBuilds,
                     mStats.mFailures, mStats.mLastBuildMs, mStats.mWorstBuildMs, mStats.mExcludeMs,
                     mStats.mLastRasterMs, mStats.mLastPolyMs, mStats.mRasterTiles, mStats.mRasterBytes / 1048576.0, mStats.mRasterEvicted, mStats.mReRasters,
-                    mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
+                    mStats.mLocalUpdates, mStats.mUpdateFallbacks, mStats.mLastUpdateMs, mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
            + stamps + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
