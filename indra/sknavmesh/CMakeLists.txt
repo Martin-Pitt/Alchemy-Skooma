@@ -17,6 +17,7 @@ target_sources(
     sknavcluster.cpp
     sknavenclosure.cpp
     sknavexport.cpp
+    sknavfaceoffsets.cpp
     sknavfeatures.cpp
     sknavflights.cpp
     sknavlayout.cpp
@@ -48,6 +49,7 @@ target_sources(
         sknavcluster.h
         sknavenclosure.h
         sknavexport.h
+        sknavfaceoffsets.h
         sknavfeatures.h
         sknavflights.h
         sknavlayout.h
@@ -99,6 +101,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
