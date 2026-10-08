@@ -451,6 +451,43 @@ int main(int, char**)
                 least(shifted_section), runs, median(shifted_section), shifted_stats.mSlices, shifted_stats.mCacheHits, shifted_stats.mReused,
                 shifted_stats.mPairs, shifted_stats.mLayersKept, shifted_stats.mLayers, shifted_stats.mLayersNear, shifted_stats.mLayersPaired,
                 fp_shifted.mExact == fp_shifted_cold.mExact ? "the same as" : "DIFFERENT from");
+    // Re-snaps, untimed, as the one step east may leave every layer whole: one step each way from a warm build, then on
+    // to four, the farthest the origin is kept, and each against a cold build of its box.
+    U32 sweep_near = 0;
+    bool sweep_same = true;
+    {
+        const std::pair<F64, F64> dirs[] = { { 1.0, 0.0 }, { -1.0, 0.0 }, { 0.0, 1.0 }, { 0.0, -1.0 } };
+        for (const auto& dir : dirs)
+        {
+            skmap::SectionCache cache;
+            skmap::buildScene(in, &cache);
+            LLVector3d origin = in.mOrigin;
+            for (const S32 k : { 1, 4 })
+            {
+                LLVector3d agent = census.mAgent;
+                agent.mdV[VX] += dir.first * k * skmap::ANALYSIS_SNAP_M;
+                agent.mdV[VY] += dir.second * k * skmap::ANALYSIS_SNAP_M;
+                skmap::SceneInput step;
+                skmap::analysisBox(agent, agent, 1.f, 1.f, step.mMin, step.mMax);
+                step.mOrigin = skmap::analysisOrigin(step.mMin, &origin);
+                origin = step.mOrigin;
+                gatherInput(census, replay, step);
+                const skmap::ScenePtr warm = skmap::buildScene(step, &cache);
+                const skmap::SectionStats st = warm->mSectionStats;
+                const Fingerprint fp_step = fingerprint(*warm);
+                skmap::SectionCache fresh;
+                const Fingerprint fp_step_cold = fingerprint(*skmap::buildScene(step, &fresh));
+                const bool same = fp_step.mExact == fp_step_cold.mExact && fp_step.mIds == fp_step_cold.mIds;
+                sweep_same = sweep_same && same;
+                sweep_near += st.mLayersNear;
+                std::printf("re-snap (%+.0f, %+.0f) m: section %.2f ms; %u slices, %u of %u pairs reused, %u of %u layers' floors kept, "
+                            "%u in part, %u layers paired; %s a cold build\n",
+                            dir.first * k * skmap::ANALYSIS_SNAP_M, dir.second * k * skmap::ANALYSIS_SNAP_M, st.mMs, st.mSlices,
+                            st.mReused, st.mPairs, st.mLayersKept, st.mLayers, st.mLayersNear, st.mLayersPaired,
+                            same ? "the same as" : "DIFFERENT from");
+            }
+        }
+    }
     std::printf("cache after cold: %zu slices, %.2f MB\n", cache_slices, cache_bytes / (1024.0 * 1024.0));
     std::printf("fingerprint cold exact %016llx quantised %016llx\n", static_cast<unsigned long long>(fp_cold.mExact),
                 static_cast<unsigned long long>(fp_cold.mQuant));
@@ -531,6 +568,16 @@ int main(int, char**)
     if (fp_shifted.mExact != fp_shifted_cold.mExact)
     {
         return 6;
+    }
+    if (!sweep_same)
+    {
+        return 8;
+    }
+    // No re-snap that took a layer in part would leave the reuse across a re-snap untested on this capture.
+    if (sweep_near == 0)
+    {
+        std::printf("no re-snap took a layer in part\n");
+        return 9;
     }
     const char* expect = std::getenv("SKMAP_SECTION_EXPECT");
     if (expect && *expect && std::strtoull(expect, nullptr, 16) != fp_cold.mExact)
