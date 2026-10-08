@@ -39,6 +39,7 @@
 
 #include "DetourNavMesh.h"
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 
@@ -281,6 +282,8 @@ namespace tut
     {
         set_test_name("a deck reached by a flight is a storey of its own, joined to the ground's by one connector at the flight's ends");
         Built b(deckAndStair(), {});
+        const dtMeshTile* dt = static_cast<const dtNavMesh*>(b.mNav)->getTileAt(0, 0, 0);
+        ensure("drop links off the deck, whose Detour links carry no edge", dt && dt->header->offMeshConCount > 0);
         StoreyProduct st;
         buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st);
         std::cout << st.mStoreys.size() << " storeys, " << st.mConnectors.size() << " connectors, " << st.mFlightPolys << " of " << st.mPolys
@@ -307,6 +310,20 @@ namespace tut
             ensure("its head at the deck's edge", std::fabs(c.mEnd[1].mV[VX] - 16.f) < 1.5f && c.mEnd[1].mV[VZ] > 2.25f);
         }
         ensure("a connector from the ground's storey to the deck's", joined);
+
+        // Told which flight each poly is on, the connector runs between the flight's own ends.
+        const std::vector<Flight>& flights = b.mPolys.mFlights[0];
+        ensure_equals("one flight", flights.size(), static_cast<size_t>(1));
+        const PolyFlightFn flight_of = [&flights](const dtMeshTile*, U32 p) -> const Flight* {
+            return std::find(flights[0].mPolys.begin(), flights[0].mPolys.end(), static_cast<U16>(p)) != flights[0].mPolys.end() ? &flights[0] : nullptr;
+        };
+        StoreyProduct by_flight;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, by_flight, flight_of);
+        ensure_equals("one connector", by_flight.mConnectors.size(), static_cast<size_t>(1));
+        const StoreyConnector& c = by_flight.mConnectors[0];
+        ensure("the flight's", c.mFlight == flights[0].mKey && !c.mPortals);
+        ensure("at its ends", dist_vec(c.mEnd[0], flights[0].mBottom) < 1e-4f && dist_vec(c.mEnd[1], flights[0].mTop) < 1e-4f);
+        ensure("between the ground's storey and the deck's", static_cast<S32>(c.mStorey[0]) == sg && static_cast<S32>(c.mStorey[1]) == sd);
     }
 
     template<> template<>

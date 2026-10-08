@@ -176,7 +176,8 @@ namespace sknav
         return it != mPolyStorey.end() && it->first == ref ? static_cast<S32>(it->second) : -1;
     }
 
-    void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out)
+    void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
+                      const PolyFlightFn& flight_of)
     {
         out = StoreyProduct();
         std::vector<U32> base;
@@ -247,7 +248,8 @@ namespace sknav
                 const dtLink& link = tile->links[k];
                 unsigned int salt = 0, it = 0, ip = 0;
                 nav.decodePolyId(link.ref, salt, it, ip);
-                if (it >= static_cast<unsigned int>(ntiles))
+                // Links to off-mesh connections carry no edge: a drop is no floor's neighbour.
+                if (it >= static_cast<unsigned int>(ntiles) || link.edge >= poly.vertCount)
                 {
                     continue;
                 }
@@ -395,6 +397,7 @@ namespace sknav
         };
         std::map<U32, std::map<U32, Touch>> touches;     // flight root -> storey -> link edges
         std::map<U32, std::map<U32, F32>> flight_space;  // flight root -> space -> area
+        std::map<U32, std::map<const Flight*, U32>> flight_polys;  // flight root -> Flight -> polys
         for (S32 t = 0; t < ntiles; ++t)
         {
             const dtMeshTile* tile = nav.getTile(t);
@@ -413,6 +416,10 @@ namespace sknav
                 if (space[i])
                 {
                     flight_space[r][space[i]] += area[i];
+                }
+                if (const Flight* f = flight_of ? flight_of(tile, static_cast<U32>(p)) : nullptr)
+                {
+                    ++flight_polys[r][f];
                 }
                 each_link(t, p, [&](U32 j, const LLVector3& mid) {
                     if (j < n && kind[j] == 1)
@@ -442,6 +449,51 @@ namespace sknav
                         fspace = sp;
                     }
                 }
+            }
+            // A known flight: the storeys nearest its two ends, joined at its ends.
+            const Flight* fl = nullptr;
+            U32 fl_polys = 0;
+            if (const auto fp = flight_polys.find(r); fp != flight_polys.end())
+            {
+                for (const auto& [f, count] : fp->second)
+                {
+                    if (count > fl_polys || (count == fl_polys && fl && f->mKey < fl->mKey))
+                    {
+                        fl = f;
+                        fl_polys = count;
+                    }
+                }
+            }
+            if (fl)
+            {
+                const auto nearest = [&by_storey](const LLVector3& at) {
+                    U32 best = 0;
+                    F32 best_d = 1e30f;
+                    for (const auto& [s, tc] : by_storey)
+                    {
+                        const F32 d = dist_vec(tc.mSum / static_cast<F32>(tc.mCount), at);
+                        if (d < best_d)
+                        {
+                            best_d = d;
+                            best = s;
+                        }
+                    }
+                    return best;
+                };
+                const U32 lo = nearest(fl->mBottom), hi = nearest(fl->mTop);
+                if (lo != hi)
+                {
+                    StoreyConnector c;
+                    c.mSpace = fspace;
+                    c.mFlight = fl->mKey;
+                    const bool flip = out.mStoreys[lo].mFloorZ > out.mStoreys[hi].mFloorZ;
+                    c.mStorey[0] = flip ? hi : lo;
+                    c.mStorey[1] = flip ? lo : hi;
+                    c.mEnd[0] = flip ? fl->mTop : fl->mBottom;
+                    c.mEnd[1] = flip ? fl->mBottom : fl->mTop;
+                    out.mConnectors.push_back(c);
+                }
+                continue;
             }
             // The flight space's stair portals, by the storey of the space across each.
             std::map<U32, LLVector3> portal_end;

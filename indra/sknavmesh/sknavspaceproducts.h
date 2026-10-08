@@ -73,7 +73,8 @@ namespace sknav
     {
         U32 mStorey[2] = { 0, 0 };
         U32 mSpace = 0;             ///< the flight's space, 0 when its polys have none
-        LLVector3 mEnd[2];          ///< where it meets each storey: the stair portal, else where its polys meet the storey's
+        LLVector3 mEnd[2];          ///< where it meets each storey: the flight's own ends, else its stair portals, else where its polys meet
+        U64 mFlight = 0;            ///< the Flight's key when the ends are the flight's
         bool mPortals = false;      ///< both ends are stair portals
     };
 
@@ -93,11 +94,17 @@ namespace sknav
     };
     typedef std::shared_ptr<const StoreyProduct> StoreyProductPtr;
 
+    /// The Flight a tile's poly belongs to, or null.
+    typedef std::function<const Flight*(const dtMeshTile* tile, U32 poly)> PolyFlightFn;
+
     /// Storeys over a mesh's Detour polys: a flood across Detour's links that
-    /// never steps onto a flight (a FLIGHT poly, or a poly of a flight space),
-    /// then each flight's connected polys join the storeys they touch, at the
-    /// flight space's stair portals where it has them. Positions mesh-local.
-    void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out);
+    /// never steps onto a flight (a FLIGHT poly, or a poly of a flight space).
+    /// Each flight's connected polys join the storeys they touch: the Flight
+    /// most of them belong to joins the storeys nearest its two ends, at its
+    /// ends; without one, each storey to the next one up, at the flight
+    /// space's stair portals where it has them. Positions mesh-local.
+    void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
+                      const PolyFlightFn& flight_of = nullptr);
 
     /// One cell of the sheet with the space of its gap: the highest gap whose
     /// floor lies in the band, sampled at the cell's centre.
