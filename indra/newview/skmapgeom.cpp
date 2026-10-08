@@ -1430,7 +1430,6 @@ namespace skmap
                     mRects.push_back({ x0, y0, x1, y1 });
                 }
             }
-            bool empty() const { return mRects.empty(); }
             /// Done adding: the marks summed into a table.
             void finish()
             {
