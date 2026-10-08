@@ -174,7 +174,7 @@ bool SKNavMesh::overlayActive()
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces") || gSavedSettings.getBOOL("SKNavOverlayRunoff")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
         || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
-        || gSavedSettings.getBOOL("SKNavOverlayWind");
+        || gSavedSettings.getBOOL("SKNavOverlayWind") || gSavedSettings.getU32("SKNavOverlayAir") != 0;
 }
 
 bool SKNavMesh::wanted() const
@@ -2076,7 +2076,11 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + stamps + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
+           + stamps
+           + (gSavedSettings.getU32("SKNavOverlayAir") ? llformat(", air overlay %u verts over %u tiles, %u cut by the budget", mStats.mAirOverlayVerts,
+                                                                    mStats.mAirOverlayTiles, mStats.mAirOverlayCut)
+                                                          : std::string())
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
@@ -4222,6 +4226,7 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
     static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
     static LLCachedControl<bool> show_runoff(gSavedSettings, "SKNavOverlayRunoff", false);
+    static LLCachedControl<U32> show_air(gSavedSettings, "SKNavOverlayAir", 0);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -4303,6 +4308,25 @@ void SKNavMesh::refreshOverlay()
     const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
     key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
     key = mix(key, show_wind ? mRooms->revision() : 0ull);
+    // The air layer re-gathers on its own switches; off, it adds one compare to the key.
+    key = mix(key, static_cast<U64>(show_air));
+    if (show_air)
+    {
+        static LLCachedControl<U32> air_source(gSavedSettings, "SKNavOverlayAirSource", 0);
+        static LLCachedControl<F32> air_slice(gSavedSettings, "SKNavOverlayAirSlice", 0.f);
+        static LLCachedControl<bool> air_slice_camera(gSavedSettings, "SKNavOverlayAirSliceCamera", false);
+        static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
+        key = mix(key, static_cast<U64>(air_source));
+        key = mixF32(key, air_slice);
+        key = mix(key, air_slice_camera ? 1ull : 0ull);
+        key = mix(key, static_cast<U64>(air_budget));
+        key = mix(key, mRooms->revision());
+        // The agent's feet in quarter metres, so the slice follows it up a stair.
+        if (air_slice > 0.f && !air_slice_camera)
+        {
+            key = mix(key, static_cast<U64>(std::llround(gAgent.getPositionGlobal().mdV[VZ] * 4.0)));
+        }
+    }
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -4338,6 +4362,14 @@ void SKNavMesh::refreshOverlay()
                              [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) {
                                  return annotator.portalCrossed(mesh, space_a, space_b, centre);
                              });
+    }
+    if (show_air)
+    {
+        gatherAirOverlay(camera, reach, show_air, opaque);
+    }
+    else
+    {
+        mStats.mAirOverlayVerts = mStats.mAirOverlayTiles = mStats.mAirOverlayCut = 0;
     }
     if (show_wind)
     {

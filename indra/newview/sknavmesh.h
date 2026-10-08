@@ -288,6 +288,9 @@ public:
         F32 mLastStampMs = 0.f;     ///< the last stamp job, stamp input to Detour data
         F32 mLastStampLatencyMs = 0.f;  ///< from a tile's raster stage publishing to its stamped polys
         F32 mWorstStampLatencyMs = 0.f;
+        U32 mAirOverlayVerts = 0;   ///< vertices the air overlay last gathered
+        U32 mAirOverlayTiles = 0;   ///< tiles it drew from
+        U32 mAirOverlayCut = 0;     ///< tiles the vertex budget cut short or left out
     };
     const Stats& stats() const { return mStats; }
 
@@ -575,6 +578,8 @@ private:
     /// and upload it. A quiet mesh and a parked camera cost one signature
     /// compare a frame; renderDebug() then only draws what is cached.
     void refreshOverlay();
+    /// The air overlay (SKNavOverlayAir) into mOverlay: tiles nearest the camera first, under a vertex budget.
+    void gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, bool opaque);
     /// Take the census's ladders and working elevators into mFeatureLinks,
     /// and find the exits of any span a published tile has touched.
     void syncFeatureLinks(const SKCensusSnapshotPtr& snap);

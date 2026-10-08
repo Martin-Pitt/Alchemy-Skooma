@@ -980,6 +980,7 @@ if(AL_BUILD_VIEWER)
     skclusterprobes.cpp
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
+    sknavairoverlay.cpp
     sknavannotator.cpp
     sknavmarkobjects.cpp
     sknavmesh.cpp
