@@ -11,6 +11,7 @@ target_sources(
   PRIVATE
     sknavair.cpp
     sknavairdistil.cpp
+    sknavairfine.cpp
     sknavannotate.cpp
     sknavbuild.cpp
     sknavcensusio.cpp
@@ -41,6 +42,7 @@ target_sources(
       FILES
         sknavair.h
         sknavairdistil.h
+        sknavairfine.h
         sknavannotate.h
         sknavbuild.h
         sknavbuildstats.h
@@ -93,6 +95,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavairfine PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavenclosure PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavcensusio PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
