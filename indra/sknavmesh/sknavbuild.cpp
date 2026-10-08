@@ -2348,13 +2348,6 @@ namespace sknav
         }
     }
 
-    TileAirPtr buildCoarseAir(const TileBuildInput& input)
-    {
-        TileSoup ts;
-        TileBuildResult r;
-        return soupTile(input, r, nullptr, std::chrono::steady_clock::now(), ts) ? coarseAirOf(input, ts) : nullptr;
-    }
-
     TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats)
     {
         const auto started = std::chrono::steady_clock::now();
