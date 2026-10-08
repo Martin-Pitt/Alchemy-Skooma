@@ -1871,6 +1871,107 @@ namespace sknav
             return true;
         }
 
+        /// The air at half the grid's cell over the candidate blocks of the tile's air, each window rasterised on its own.
+        FineAirPtr fineAirOf(const TileBuildInput& input, const rcConfig& grid, const RasterSource& source, const ClassParams& tp,
+                             const std::vector<U8>& real, const AirGrid& tile_air, TileBuildStats* stats)
+        {
+            const auto started = std::chrono::steady_clock::now();
+            const auto since = [](std::chrono::steady_clock::time_point t) {
+                return std::chrono::duration<F64, std::milli>(std::chrono::steady_clock::now() - t).count();
+            };
+            const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
+            const std::vector<U8> blocks = fineCandidates(tile_air, grid.walkableClimb, overlap);
+            const std::vector<FineWindow> windows = fineWindows(blocks, tile_air.mWidth, tile_air.mHeight);
+            if (stats)
+            {
+                stats->mFine.mBlocks = static_cast<U32>(blocks.size());
+                stats->mFine.mCandidates = static_cast<U32>(std::count(blocks.begin(), blocks.end(), 1));
+            }
+            if (windows.empty())
+            {
+                return nullptr;
+            }
+            auto air = std::make_shared<FineAir>();
+            air->mCell = grid.cs * 0.5f;
+            air->mUnit = grid.ch * 0.5f;
+            const S32 pad = static_cast<S32>(std::ceil(FINE_PAD_M / air->mCell - 1e-4f));
+            const S32 climb = static_cast<S32>(std::floor(tp.mClimb / air->mUnit));
+            const S32 fine_overlap = static_cast<S32>(std::ceil(0.5f / air->mUnit));
+            const S32 min_gap = static_cast<S32>(std::ceil(input.mAirMinGap / air->mUnit));
+            StageClock clock(nullptr);
+            U32 skipped = 0;
+            F64 compare_ms = 0.0;
+            for (const FineWindow& w : windows)
+            {
+                // Recast x runs along SL y and z along SL x; the tile proper starts borderSize cells into the grid.
+                rcConfig cfg = grid;
+                cfg.cs = air->mCell;
+                cfg.ch = air->mUnit;
+                cfg.borderSize = pad;
+                cfg.width = 2 * (w.mY1 - w.mY0) + 2 * pad;
+                cfg.height = 2 * (w.mX1 - w.mX0) + 2 * pad;
+                cfg.bmin[0] = grid.bmin[0] + (grid.borderSize + w.mY0) * grid.cs - pad * cfg.cs;
+                cfg.bmin[2] = grid.bmin[2] + (grid.borderSize + w.mX0) * grid.cs - pad * cfg.cs;
+                cfg.bmax[0] = cfg.bmin[0] + cfg.width * cfg.cs;
+                cfg.bmax[2] = cfg.bmin[2] + cfg.height * cfg.cs;
+                if ((cfg.bmax[1] - cfg.bmin[1]) / cfg.ch > RC_SPAN_MAX_HEIGHT)
+                {
+                    ++skipped;
+                    continue;
+                }
+                const auto raster_started = std::chrono::steady_clock::now();
+                HeightfieldPtr hf(makeHeightfield(cfg));
+                if (!hf || !rasterisePasses(*hf, source, CellRect{ 1, 1, cfg.width - 1, cfg.height - 1 }, climb, clock))
+                {
+                    ++skipped;
+                    continue;
+                }
+                addBridges(*hf, findBridges(*hf, climb, 1), climb);
+                cullUnderground(*hf, input.mTerrain);
+                filterSpans(*hf, tp, cfg.ch, cfg.cs);
+                if (stats)
+                {
+                    stats->mFine.mRasterMs += since(raster_started);
+                }
+                AirGrid padded, fine;
+                extractAir(*hf, 0, padded, real.data());
+                foldSlivers(padded, min_gap);
+                computeClearance(padded, climb, fine_overlap);
+                cropAir(padded, pad, fine);
+                air->mWindows.push_back(w);
+                appendFineLeaves(fine, 2 * w.mX0, 2 * w.mY0, blocks, tile_air.mWidth, *air);
+                if (stats)
+                {
+                    const auto compare_started = std::chrono::steady_clock::now();
+                    FineCompare c;
+                    compareFineAir(tile_air, fine, w, blocks, grid.walkableClimb, overlap, climb, fine_overlap, c);
+                    TileBuildStats::Fine& f = stats->mFine;
+                    f.mWindowCells += static_cast<U32>((w.mX1 - w.mX0) * (w.mY1 - w.mY0));
+                    f.mCoarseLinks += c.mCoarseLinks;
+                    f.mClosed += c.mClosed;
+                    f.mClosedSeparating += c.mClosedSeparating;
+                    f.mFineLinks += c.mFineLinks;
+                    f.mOpened += c.mOpened;
+                    f.mOpenedSeparating += c.mOpenedSeparating;
+                    f.mFineGaps += c.mFineGaps;
+                    f.mNewGaps += c.mNewGaps;
+                    f.mNewWalkable += c.mNewWalkable;
+                    compare_ms += since(compare_started);
+                }
+            }
+            sortFineLeaves(*air);
+            if (stats)
+            {
+                stats->mFine.mWindows = static_cast<U32>(air->mWindows.size());
+                stats->mFine.mLeaves = static_cast<U32>(air->mLeaves.size());
+                stats->mFine.mGaps = static_cast<U32>(air->mGaps.size());
+                stats->mFine.mBytes = air->bytes();
+                stats->mFine.mSkipped = skipped;
+                stats->mFine.mMs = since(started) - compare_ms;
+            }
+            return air;
+        }
+
         TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts);
 
         /// The raster stage over a tile's soup at the input's cell.
@@ -2213,6 +2314,10 @@ namespace sknav
                                           static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
                                           tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine);
                 top_clock.lap(ClassBuildStats::AIR);
+                if (input.mFineAir && result.mAir)
+                {
+                    result.mFineAir = fineAirOf(input, grid, source, tp, real, fine, stats);
+                }
                 clock.restart();
             }
             // Where the air's floors end over a drop, and the run-off down them.

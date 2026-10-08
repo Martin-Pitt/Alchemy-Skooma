@@ -26,6 +26,7 @@
 #define SK_NAVBUILD_H
 
 #include "sknavairdistil.h"
+#include "sknavairfine.h"
 #include "sknavflights.h"
 #include "sknavstamp.h"
 #include "sknavtypes.h"
@@ -144,6 +145,8 @@ namespace sknav
         /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
         /// for the spaces the tile is stamped with, wherever it is.
         bool mCoarseAir = false;
+        /// With mAir, the air again at half the cell over the blocks with narrow openings (sknavairfine.h), measured only.
+        bool mFineAir = false;
     };
 
     /// The cell a tile without its own air reads its coarse air at.
@@ -171,6 +174,7 @@ namespace sknav
         TileAirPtr mAir;
         bool mAirBuilt = false;
         bool mCoarseAir = false;            ///< mAir is the coarse air, not the tile's own
+        FineAirPtr mFineAir;                ///< with mFineAir asked for, null when no block is a candidate
         /// Stair flights and the polys they produced, when the partition is SLOPE.
         std::vector<Flight> mFlights[NUM_CLASSES];
         /// What the polygon stage made of a stamp, when it was given one.

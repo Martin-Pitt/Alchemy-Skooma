@@ -151,6 +151,23 @@ namespace sknav
         U32 mOwnColumns = 0;            ///< columns AVATAR reads from a copy of its own
         U32 mWindowCells = 0;           ///< raster cells round the records AVATAR leaves out
         S32 mWindowRect[4] = { 0, 0, 0, 0 };   ///< the window raster's cells, from the tile's corner: x0, z0, x1, z1
+        /// The fine air over the candidate blocks, and how it differs from the tile's.
+        struct Fine
+        {
+            U32 mBlocks = 0;
+            U32 mCandidates = 0;
+            U32 mWindows = 0;
+            U32 mWindowCells = 0;       ///< tile cells the windows cover
+            U32 mSkipped = 0;           ///< windows too tall for the fine height range
+            F64 mMs = 0.0;
+            F64 mRasterMs = 0.0;        ///< of mMs, the raster and its filters
+            U32 mLeaves = 0;
+            U32 mGaps = 0;
+            size_t mBytes = 0;
+            U32 mCoarseLinks = 0, mClosed = 0, mClosedSeparating = 0;
+            U32 mFineLinks = 0, mOpened = 0, mOpenedSeparating = 0;
+            U32 mFineGaps = 0, mNewGaps = 0, mNewWalkable = 0;
+        } mFine;
         ClassBuildStats mClass[1];
         /// The raster's own passes: the air's filters, the air, ledges and run-off.
         ClassBuildStats mTop;
