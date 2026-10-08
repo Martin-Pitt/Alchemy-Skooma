@@ -1518,7 +1518,7 @@ namespace tut
 
         // The box 96 m square at min, with the tiles it meets, as the viewer gathers them.
         const LLVector3d first(96.0, 96.0, 0.0);
-        auto boxAt = [&](F64 x, F64 y) {
+        auto boxWith = [&](F64 x, F64 y, const std::vector<RecordPtr>& recs) {
             skmap::SceneInput in;
             in.mMin.set(x, y, -1.0e4);
             in.mMax.set(x + 96.0, y + 96.0, 1.0e5);
@@ -1532,9 +1532,10 @@ namespace tut
                 }
             }
             in.mRegions.push_back({ LLVector3d(0.0, 0.0, 0.0), 256.0 });
-            in.mRecords = std::make_shared<const std::vector<RecordPtr>>(records);
+            in.mRecords = std::make_shared<const std::vector<RecordPtr>>(recs);
             return in;
         };
+        auto boxAt = [&](F64 x, F64 y) { return boxWith(x, y, records); };
 
         skmap::SectionCache cache;
         auto check = [&](const skmap::SceneInput& in, const std::string& what) {
@@ -1569,6 +1570,55 @@ namespace tut
             ensure(what + ": storeys inside both boxes kept", st.mLayersKept > 0);
             ensure(what + ": the ground kept in part", st.mLayersNear > 0);
             ensure(what + ": pairs reused, the edges' made", st.mReused > 0 && st.mReused < st.mPairs);
+            check(boxAt(96.0, 96.0), what + ", and back");
+        }
+
+        // Two steps the same way, the second from a build that itself took the ground in part.
+        check(boxAt(96.0 + step, 96.0), "one step east");
+        const skmap::SectionStats two = check(boxAt(96.0 + 2.0 * step, 96.0), "two steps east");
+        ensure("two steps east: the ground kept in part", two.mLayersNear > 0 && two.mLayersKept > 0);
+        check(boxAt(96.0, 96.0), "two steps east, and back");
+
+        // A record inserted first renumbers every other: with a step west, pairs are found by content alone.
+        std::vector<RecordPtr> inserted = records;
+        inserted.insert(inserted.begin(), boxRecord(LLVector3(110.f, 120.f, groundZ(110.f) + 0.4f), LLVector3(0.5f, 0.5f, 0.4f), sig++));
+        const skmap::SectionStats renumbered = check(boxWith(96.0 - step, 96.0, inserted), "renumbered, shifted west");
+        ensure("renumbered, shifted west: pairs reused", renumbered.mReused > 0 && renumbered.mReused < renumbered.mPairs);
+        check(boxAt(96.0, 96.0), "renumbered, and back");
+
+        // A crate on a storey inside both boxes moved with a step north: its storey is kept but pairs again.
+        std::vector<RecordPtr> crate_moved = records;
+        bool found_crate = false;
+        for (RecordPtr& r : crate_moved)
+        {
+            if (std::fabs(r->mCenter.mV[VX] - 172.f) < 0.01f && std::fabs(r->mCenter.mV[VY] - 172.f) < 0.01f)
+            {
+                Record copy = *r;
+                copy.mCenter.mV[VX] += 0.5f;
+                copy.mMin.mdV[VX] += 0.5;
+                copy.mMax.mdV[VX] += 0.5;
+                copy.mSignature = sig++;
+                r = std::make_shared<const Record>(copy);
+                found_crate = true;
+            }
+        }
+        ensure("the storey's crate", found_crate);
+        const skmap::SectionStats crate_north = check(boxWith(96.0, 96.0 + step, crate_moved), "a crate moved, shifted north");
+        ensure("a crate moved, shifted north: storeys kept", crate_north.mLayersKept > 0 && crate_north.mLayersNear > 0);
+        check(boxAt(96.0, 96.0), "a crate moved, and back");
+
+        // A long wall on the large list below every storey's lowest plane: it cuts the ground, which pairs again, and no
+        // storey, each of which keeps its last pairs whole. With a step east as well, along with the box's edges.
+        std::vector<RecordPtr> low_wall = records;
+        const U64 low = sig++;
+        low_wall.push_back(std::make_shared<const Record>(boxRecordOf(LLVector3(144.f, 150.f, 1.75f), LLVector3(60.f, 0.2f, 3.75f), low,
+                                                                       LLVector3(d, d, 0.f), LLVector3(-d, d, 0.f))));
+        ensure("the low wall cuts the ground", !piecesOf(*skmap::buildScene(boxWith(96.0, 96.0, low_wall)), low).empty());
+        for (const F64 dx : { 0.0, step })
+        {
+            const std::string what = dx == 0.0 ? "a low large wall" : "a low large wall, shifted east";
+            const skmap::SectionStats st = check(boxWith(96.0 + dx, 96.0, low_wall), what);
+            ensure(what + ": storeys taken whole", st.mLayersPaired > 0 && st.mLayersPaired < st.mLayers);
             check(boxAt(96.0, 96.0), what + ", and back");
         }
     }
