@@ -29,6 +29,7 @@
 #include "sknavcensusio.h"
 #include "sknavcluster.h"
 #include "sknavskymap.h"
+#include "sknavspacefilter.h"
 #include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavstamp.h"
@@ -130,6 +131,8 @@ namespace sknav
 
         /// A poly's space id, as the viewer's space filter reads it; 0 for none.
         U32 polySpace(const dtMeshTile* tile, U32 poly) const;
+        /// A tile's polys' space ids, for the space filter.
+        SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
         /// A poly's flight, or null.
         const Flight* polyFlight(const dtMeshTile* tile, U32 poly) const;
 

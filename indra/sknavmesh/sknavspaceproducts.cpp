@@ -177,7 +177,7 @@ namespace sknav
     }
 
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
-                      const PolyFlightFn& flight_of)
+                      const PolyFlightFn& flight_of, F32 min_area)
     {
         out = StoreyProduct();
         std::vector<U32> base;
@@ -282,6 +282,25 @@ namespace sknav
             }
         }
 
+        // Floors a flight steps onto, which stay storeys however small: a landing is one.
+        std::unordered_set<U32> landings;
+        for (S32 t = 0; t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                if (kind[base[t] + static_cast<U32>(p)] == 2)
+                {
+                    each_link(t, p, [&](U32 j, const LLVector3&) {
+                        if (j < n && kind[j] == 1)
+                        {
+                            landings.insert(find(j));
+                        }
+                    });
+                }
+            }
+        }
+
         // Storeys: the floor components, lowest floor first.
         std::map<U32, std::vector<U32>> comps;
         for (U32 i = 0; i < n; ++i)
@@ -319,7 +338,11 @@ namespace sknav
                 }
             }
             b.mStorey.mArea = total;
-            built.push_back(std::move(b));
+            // A scrap of floor no flight reaches is no storey: its polys get none, as a flight's do.
+            if (total >= min_area || landings.count(r))
+            {
+                built.push_back(std::move(b));
+            }
         }
         std::sort(built.begin(), built.end(), [](const Built& a, const Built& b) {
             return a.mStorey.mFloorZ < b.mStorey.mFloorZ || (a.mStorey.mFloorZ == b.mStorey.mFloorZ && a.mRoot < b.mRoot);
@@ -344,11 +367,12 @@ namespace sknav
             for (S32 p = 0; p < tile->header->polyCount; ++p)
             {
                 const U32 i = base[t] + static_cast<U32>(p);
-                if (kind[i] != 1)
+                const auto sr = kind[i] == 1 ? storey_of_root.find(find(i)) : storey_of_root.end();
+                if (sr == storey_of_root.end())
                 {
                     continue;
                 }
-                const U32 s = storey_of_root[find(i)];
+                const U32 s = sr->second;
                 out.mPolyStorey.emplace_back(static_cast<U64>(nav.getPolyRefBase(tile) | static_cast<dtPolyRef>(p)), s);
                 Storey& st = out.mStoreys[s];
                 const dtPoly& poly = tile->polys[p];
@@ -422,9 +446,10 @@ namespace sknav
                     ++flight_polys[r][f];
                 }
                 each_link(t, p, [&](U32 j, const LLVector3& mid) {
-                    if (j < n && kind[j] == 1)
+                    const auto sr = j < n && kind[j] == 1 ? storey_of_root.find(find(j)) : storey_of_root.end();
+                    if (sr != storey_of_root.end())
                     {
-                        Touch& tc = touches[r][storey_of_root[find(j)]];
+                        Touch& tc = touches[r][sr->second];
                         tc.mSum += mid;
                         ++tc.mCount;
                     }

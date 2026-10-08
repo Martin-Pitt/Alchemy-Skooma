@@ -102,9 +102,10 @@ namespace sknav
     /// Each flight's connected polys join the storeys they touch: the Flight
     /// most of them belong to joins the storeys nearest its two ends, at its
     /// ends; without one, each storey to the next one up, at the flight
-    /// space's stair portals where it has them. Positions mesh-local.
+    /// space's stair portals where it has them. Floors under min_area m² that no
+    /// flight reaches make no storey. Positions mesh-local.
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
-                      const PolyFlightFn& flight_of = nullptr);
+                      const PolyFlightFn& flight_of = nullptr, F32 min_area = 10.f);
 
     /// One cell of the sheet with the space of its gap: the highest gap whose
     /// floor lies in the band, sampled at the cell's centre.

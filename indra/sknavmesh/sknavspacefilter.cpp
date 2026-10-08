@@ -34,22 +34,49 @@ namespace sknav
 {
     void SpaceQueryFilter::setSpaceCost(U32 space, F32 cost)
     {
-        mCosts[space] = cost <= 0.f ? 0.f : std::max(cost, 1.f);
+        const F32 kept = cost <= 0.f ? 0.f : std::max(cost, 1.f);
+        for (auto& c : mCosts)
+        {
+            if (c.first == space)
+            {
+                c.second = kept;
+                return;
+            }
+        }
+        mCosts.emplace_back(space, kept);
     }
 
     F32 SpaceQueryFilter::spaceCost(U32 space) const
     {
-        const auto it = mCosts.find(space);
-        return it == mCosts.end() ? 1.f : it->second;
+        for (const auto& c : mCosts)
+        {
+            if (c.first == space)
+            {
+                return c.second;
+            }
+        }
+        return 1.f;
     }
 
     U32 SpaceQueryFilter::spaceOf(const dtMeshTile* tile, const dtPoly* poly) const
     {
-        if (!mSpaceOf || !tile || !poly || mCosts.empty())
+        if (!tile || !poly || mCosts.empty())
         {
             return 0;
         }
-        return mSpaceOf(tile, static_cast<U32>(poly - tile->polys));
+        const U32 index = static_cast<U32>(poly - tile->polys);
+        if (mSpacesOf)
+        {
+            // Tiles sit in one array, so their address over their size spreads them across the cache.
+            CachedTile& cached = mTiles[(reinterpret_cast<uintptr_t>(tile) / sizeof(dtMeshTile)) % mTiles.size()];
+            if (cached.mTile != tile)
+            {
+                cached.mTile = tile;
+                cached.mSpaces = mSpacesOf(tile);
+            }
+            return index < cached.mSpaces.mCount ? cached.mSpaces.mSpaces[index] : 0;
+        }
+        return mSpaceOf ? mSpaceOf(tile, index) : 0;
     }
 
     bool SpaceQueryFilter::passFilter(const dtPolyRef ref, const dtMeshTile* tile, const dtPoly* poly) const

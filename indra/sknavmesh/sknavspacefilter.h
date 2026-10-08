@@ -29,8 +29,10 @@
 
 #include "DetourNavMeshQuery.h"
 
+#include <array>
 #include <functional>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace sknav
 {
@@ -38,15 +40,24 @@ namespace sknav
     /// cost times its space's, and a space priced at 0 is barred. Spaces with
     /// no price cost 1, so with none set it is Detour's own filter. Costs below
     /// 1 are raised to it, which keeps the search's distance estimate a lower
-    /// bound. Needs Detour built with DT_VIRTUAL_QUERYFILTER, or the overrides
+    /// bound. Keep one per query: it caches tiles' tables. Needs Detour built with DT_VIRTUAL_QUERYFILTER, or the overrides
     /// below do not compile.
     class SpaceQueryFilter : public dtQueryFilter
     {
     public:
         /// The space id of a tile's poly, by the poly's index in its tile; 0 for none.
         typedef std::function<U32(const dtMeshTile* tile, U32 poly)> SpaceOf;
+        /// A tile's polys' space ids, by poly index; null or short where it has none.
+        struct TileSpaces
+        {
+            const U32* mSpaces = nullptr;
+            U32 mCount = 0;
+        };
+        typedef std::function<TileSpaces(const dtMeshTile* tile)> SpacesOf;
 
         explicit SpaceQueryFilter(SpaceOf space_of = nullptr) : mSpaceOf(std::move(space_of)) {}
+        /// The fast form: each tile's table is fetched once and kept, so queries do not call out per poly.
+        explicit SpaceQueryFilter(SpacesOf spaces_of) : mSpacesOf(std::move(spaces_of)) {}
 
         /// The cost of crossing a space, per metre; 0 bars it.
         void setSpaceCost(U32 space, F32 cost);
@@ -60,8 +71,16 @@ namespace sknav
     private:
         U32 spaceOf(const dtMeshTile* tile, const dtPoly* poly) const;
 
+        struct CachedTile
+        {
+            const dtMeshTile* mTile = nullptr;
+            TileSpaces mSpaces;
+        };
+
         SpaceOf mSpaceOf;
-        std::unordered_map<U32, F32> mCosts;
+        SpacesOf mSpacesOf;
+        std::vector<std::pair<U32, F32>> mCosts;
+        mutable std::array<CachedTile, 64> mTiles;
     };
 }
 
