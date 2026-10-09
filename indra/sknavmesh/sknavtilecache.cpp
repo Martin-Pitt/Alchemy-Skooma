@@ -358,7 +358,8 @@ namespace sknav
                 w.pod(g.mCeiling);
                 w.pod(g.mFlags);
                 w.pod(g.mClear);
-                w.pod(g.mSeed);
+                w.pod(g.mSlopeX);
+                w.pod(g.mSlopeY);
             }
         }
 
@@ -372,7 +373,7 @@ namespace sknav
             gaps.resize(n);
             for (AirGap& g : gaps)
             {
-                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSeed)))
+                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSlopeX) && r.pod(g.mSlopeY)))
                 {
                     return false;
                 }

@@ -59,7 +59,7 @@ namespace
         return r;
     }
 
-    /// A roofed room with a doorway on open ground, so the tile has indoor and outdoor air.
+    /// A roofed room with a doorway on open ground rising to the east, so the tile has indoor and outdoor air and tilted floors.
     TileBuildInput roomTile()
     {
         TileBuildInput in;
@@ -71,6 +71,10 @@ namespace
         in.mTerrain.mSpacing = 1.f;
         in.mTerrain.mWidth = in.mTerrain.mHeight = 45;
         in.mTerrain.mZ.assign(45 * 45, 0.f);
+        for (S32 i = 0; i < 45 * 45; ++i)
+        {
+            in.mTerrain.mZ[i] = 0.1f * std::max(0, i % 45 - 28);
+        }
         in.mTerrain.mWater = -10.f;
         in.mRecords = {
             box(8.f, 8.f, 0.f, 20.f, 8.5f, 3.f),     // south wall
@@ -180,10 +184,11 @@ namespace tut
                                           return p.mX == q.mX && p.mY == q.mY && p.mLevel == q.mLevel && p.mGapCount == q.mGapCount &&
                                                  p.mParent == q.mParent && p.mFirstGap == q.mFirstGap;
                                       }));
+        ensure("the air holds tilted floors", std::any_of(x.mGaps.begin(), x.mGaps.end(), [](const AirGap& g) { return g.mSlopeX || g.mSlopeY; }));
         ensure("the same gaps", x.mGaps.size() == air->mGaps.size() &&
                                     std::equal(x.mGaps.begin(), x.mGaps.end(), air->mGaps.begin(), [](const AirGap& p, const AirGap& q) {
                                         return p.mFloor == q.mFloor && p.mCeiling == q.mCeiling && p.mFlags == q.mFlags && p.mClear == q.mClear &&
-                                               p.mSeed == q.mSeed;
+                                               p.mSlopeX == q.mSlopeX && p.mSlopeY == q.mSlopeY;
                                     }));
         ensure("the same face offsets and tops", x.mFaceOffsets.size() == air->mFaceOffsets.size() && x.mTop.size() == air->mTop.size() &&
                                                      x.mTopStart == air->mTopStart && x.mOrigin == air->mOrigin);

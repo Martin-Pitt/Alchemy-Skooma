@@ -977,12 +977,18 @@ namespace tut
                     ensure(llformat("span %d,%d has a gap", x, z), g != SPAN_NO_GAP && g < r.mAir->mGaps.size());
                     const AirGap& gap = r.mAir->mGaps[g];
                     const S32 top = chf.spans[i].y;
+                    // The gap's floor over the span's own cell: the air's x runs along chf z.
+                    AirColumn column;
+                    airColumn(*r.mAir, findLeafByKey(*r.mAir, z - border, x - border), column);
+                    const U32 k = static_cast<U32>(std::find(column.mGap, column.mGap + column.mCount, g) - column.mGap);
+                    ensure(llformat("span %d,%d's gap is over its cell", x, z), k < column.mCount);
+                    const S32 floor = column.floorAt(*r.mAir, k, z - border, x - border);
                     // A kerb's gap is over its own top, up to its height above the floor it was lowered to.
-                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), gap.mFloor + 1 >= top && gap.mFloor <= top + 2 * climb);
+                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), floor + 1 >= top && floor <= top + 2 * climb);
                     ensure(llformat("span %d,%d under its gap's ceiling", x, z), top < gap.mCeiling);
                     const F32 sx = chf.bmin[2] + (z + 0.5f) * chf.cs, sy = chf.bmin[0] + (x + 0.5f) * chf.cs;
-                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + gap.mFloor * chf.ch > 3.f ? 1 : 0;
-                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && gap.mFloor > top ? 1 : 0;
+                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + floor * chf.ch > 3.f ? 1 : 0;
+                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && floor > top ? 1 : 0;
                 }
             }
         }

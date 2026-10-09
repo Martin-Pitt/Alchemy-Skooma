@@ -38,7 +38,9 @@ namespace
 {
     using namespace sknav;
 
-    /// A gap as a block of them sees it: the range its floors and ceilings span.
+    /// A gap as a block of them sees it: the range its floors and ceilings
+    /// span, its floor plane, and its fine floors' moments about the block's
+    /// centre, x and y in half cells.
     struct GapAgg
     {
         U16 mFloorMin = 0;
@@ -47,6 +49,12 @@ namespace
         U16 mCeilMax = 0;
         U8 mFlags = 0;
         U8 mClear = 0;
+        S8 mSlopeX = 0;
+        S8 mSlopeY = 0;
+        S32 mFloor = 0;         ///< the plane's height at the block's centre
+        S64 mSumZ = 0;
+        S64 mSumXZ = 0;
+        S64 mSumYZ = 0;
     };
 
     U16 clipHeight(U16 units)
@@ -57,10 +65,12 @@ namespace
     AirGap record(const GapAgg& a)
     {
         AirGap g;
-        g.mFloor = a.mFloorMax;
+        g.mFloor = static_cast<U16>(a.mFloor);
         g.mCeiling = (a.mFlags & AirGap::OPEN) ? AIR_CEILING_OPEN : a.mCeilMin;
         g.mFlags = a.mFlags;
         g.mClear = a.mClear;
+        g.mSlopeX = a.mSlopeX;
+        g.mSlopeY = a.mSlopeY;
         return g;
     }
 
@@ -86,7 +96,8 @@ namespace
         put<U16>(out, g.mCeiling);
         put<U8>(out, g.mFlags);
         put<U8>(out, g.mClear);
-        put<U16>(out, g.mSeed);
+        put<S8>(out, g.mSlopeX);
+        put<S8>(out, g.mSlopeY);
     }
 }
 
@@ -146,11 +157,18 @@ namespace sknav
                 while (at > 0 && air.mGaps[out.mGap[at - 1]].mFloor > air.mGaps[g].mFloor)
                 {
                     out.mGap[at] = out.mGap[at - 1];
+                    out.mLeaf[at] = out.mLeaf[at - 1];
                     --at;
                 }
                 out.mGap[at] = g;
+                out.mLeaf[at] = leaf;
             }
         }
+    }
+
+    S32 AirColumn::floorAt(const TileAir& air, U32 k, S32 ix, S32 iy) const
+    {
+        return airFloorAt(air.mGaps[mGap[k]], air.mLeaves[mLeaf[k]], ix, iy);
     }
 
     void linkLeaves(TileAir& air)
@@ -235,6 +253,8 @@ namespace sknav
                 a.mCeilMin = a.mCeilMax = clipHeight(g.mCeiling);
                 a.mFlags = g.mFlags;
                 a.mClear = g.mClear;
+                a.mFloor = a.mFloorMax;
+                a.mSumZ = a.mFloorMax;
                 return a;
             }
         };
@@ -269,33 +289,47 @@ namespace sknav
             }
         }
 
-        auto join = [climb, flat](GapAgg& a, const GapAgg& o) {
-            // AVATAR's floor is carried, not compared: the air keeps the leaves it always had.
-            if ((o.mFlags & ~AirGap::AVATAR_FLOOR) != (a.mFlags & ~AirGap::AVATAR_FLOOR))
-            {
-                return false;
-            }
-            const U16 floor_min = std::min(a.mFloorMin, o.mFloorMin), floor_max = std::max(a.mFloorMax, o.mFloorMax);
-            const U16 ceil_min = std::min(a.mCeilMin, o.mCeilMin), ceil_max = std::max(a.mCeilMax, o.mCeilMax);
-            // A leaf's record is the highest floor under the lowest ceiling, so those must not cross.
-            if (floor_max - floor_min > ((a.mFlags & AirGap::TOP) ? flat : climb) || ceil_max - ceil_min > climb ||
-                (!(a.mFlags & AirGap::OPEN) && floor_max >= ceil_min))
-            {
-                return false;
-            }
-            a.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
-            a.mFloorMin = floor_min;
-            a.mFloorMax = floor_max;
-            a.mCeilMin = ceil_min;
-            a.mCeilMax = ceil_max;
-            a.mClear = std::min(a.mClear, o.mClear);
-            return true;
-        };
+        // A walkable floor's plane holds every fine floor under it to within this; other floors to within a climb.
+        const S32 plane_tol = std::min(AIR_PLANE_TOL, flat);
+        std::vector<std::pair<S32, S32>> points;    // per fine floor of a block, its height and its rise from the block's centre
         // Any level's gaps, for the passes that move between levels.
         auto belowStart = [&](S32 L, size_t b) { return L == 0 ? fine.start(b) : lv[L].mStart[b]; };
         auto belowEnd = [&](S32 L, size_t b) { return L == 0 ? fine.end(b) : lv[L].mStart[b + 1]; };
         auto stateOf = [&](S32 L, U32 i) -> U8& { return L == 0 ? state[i] : lv[L].mAggs[i].mState; };
         auto aggOf = [&](S32 L, U32 i) { return L == 0 ? fine.agg(i) : lv[L].mAggs[i].mG; };
+
+        // The fine floors under four kid gaps of level B, the first in kid block (kx, ky), each with its rise
+        // on a plane of the given slopes from the centre of their parent block, side cells wide.
+        auto finePoints = [&](S32 B, const U32* four, S32 kx, S32 ky, S32 side, S32 sx, S32 sy, std::vector<std::pair<S32, S32>>& out) {
+            struct Node
+            {
+                S32 mLevel;
+                U32 mAgg;
+                S32 mX, mY;
+            };
+            Node stack[4 * (AIR_MAX_LEVEL + 1)];
+            S32 top = 0;
+            for (S32 k = 0; k < 4; ++k)
+            {
+                stack[top++] = { B, four[k], kx + (k & 1), ky + (k >> 1) };
+            }
+            const S32 x0 = (kx >> 1) * side, y0 = (ky >> 1) * side;
+            while (top > 0)
+            {
+                const Node n = stack[--top];
+                if (n.mLevel == 0)
+                {
+                    const S32 x2 = 2 * (n.mX - x0) + 1 - side, y2 = 2 * (n.mY - y0) + 1 - side;
+                    out.emplace_back(clipHeight(grid.mGaps[n.mAgg].mFloor), static_cast<S32>(floorDiv(sx * x2 + sy * y2 + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q)));
+                    continue;
+                }
+                const Agg& a = lv[n.mLevel].mAggs[n.mAgg];
+                for (S32 k = 0; k < 4; ++k)
+                {
+                    stack[top++] = { n.mLevel - 1, lv[n.mLevel].mKids[a.mKid + k], 2 * n.mX + (k & 1), 2 * n.mY + (k >> 1) };
+                }
+            }
+        };
 
         // Each level merges a gap over a 2 x 2 block when every kid has one gap that agrees with it; the
         // kids' finest live level is known once their block is done.
@@ -327,27 +361,28 @@ namespace sknav
                     {
                         U32 cursor[3] = { below_gaps.start(kid[1]), below_gaps.start(kid[2]), below_gaps.start(kid[3]) };
                         const U32 end[3] = { below_gaps.end(kid[1]), below_gaps.end(kid[2]), below_gaps.end(kid[3]) };
+                        const S32 sk = 1 << B, side = 1 << L;
                         for (U32 i = below_gaps.start(kid[0]), n = below_gaps.end(kid[0]); i < n; ++i)
                         {
                             if (!(below_gaps.state(i) & MERGE))
                             {
                                 continue;
                             }
-                            GapAgg a = below_gaps.agg(i);
+                            const GapAgg a = below_gaps.agg(i);
                             U32 pick[3];
                             bool ok = true;
                             for (S32 k = 0; k < 3 && ok; ++k)
                             {
-                                // Every kid runs lowest first: a's match lies past the last one taken.
+                                // Every kid runs lowest first: the match is the first past the last one taken whose
+                                // floor lies within a climb of a's plane carried to its centre.
                                 ok = false;
+                                const S32 dx = ((k + 1) & 1) * sk, dy = ((k + 1) >> 1) * sk;
+                                const S32 want = a.mFloor + static_cast<S32>(floorDiv(2 * (a.mSlopeX * dx + a.mSlopeY * dy) + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q));
                                 for (U32 j = cursor[k]; j < end[k]; ++j)
                                 {
                                     const GapAgg o = below_gaps.agg(j);
-                                    if (o.mFloorMin > a.mFloorMax + climb)
-                                    {
-                                        break;
-                                    }
-                                    if ((below_gaps.state(j) & MERGE) && join(a, o))
+                                    if ((below_gaps.state(j) & MERGE) && (o.mFlags & ~AirGap::AVATAR_FLOOR) == (a.mFlags & ~AirGap::AVATAR_FLOOR) &&
+                                        std::max(a.mCeilMax, o.mCeilMax) - std::min(a.mCeilMin, o.mCeilMin) <= climb && std::abs(o.mFloor - want) <= climb)
                                     {
                                         pick[k] = j;
                                         ok = true;
@@ -359,16 +394,65 @@ namespace sknav
                             {
                                 continue;
                             }
+                            const U32 four[4] = { i, pick[0], pick[1], pick[2] };
+                            GapAgg m = a;
+                            m.mSumZ = m.mSumXZ = m.mSumYZ = 0;
+                            for (S32 k = 0; k < 4; ++k)
+                            {
+                                const GapAgg o = below_gaps.agg(four[k]);
+                                m.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
+                                m.mFloorMin = std::min(m.mFloorMin, o.mFloorMin);
+                                m.mFloorMax = std::max(m.mFloorMax, o.mFloorMax);
+                                m.mCeilMin = std::min(m.mCeilMin, o.mCeilMin);
+                                m.mCeilMax = std::max(m.mCeilMax, o.mCeilMax);
+                                m.mClear = std::min(m.mClear, o.mClear);
+                                const S64 step_x = static_cast<S64>(2 * (k & 1) - 1) * sk;
+                                const S64 step_y = static_cast<S64>(2 * (k >> 1) - 1) * sk;
+                                m.mSumZ += o.mSumZ;
+                                m.mSumXZ += o.mSumXZ + step_x * o.mSumZ;
+                                m.mSumYZ += o.mSumYZ + step_y * o.mSumZ;
+                            }
+                            // A merged gap's record is its plane under the lowest ceiling, so those must not cross.
+                            if (m.mCeilMax - m.mCeilMin > climb || (!(m.mFlags & AirGap::OPEN) && m.mFloorMax >= m.mCeilMin))
+                            {
+                                continue;
+                            }
+                            // The block is full and symmetric about its centre, so least squares is a ratio of moments.
+                            const S64 den = static_cast<S64>(side) * side * (static_cast<S64>(side) * side - 1) / 3;
+                            const auto slope = [den](S64 sum) {
+                                return static_cast<S8>(std::clamp<S64>(floorDiv(4 * AIR_SLOPE_Q * sum + den, 2 * den), -127, 127));
+                            };
+                            m.mSlopeX = slope(m.mSumXZ);
+                            m.mSlopeY = slope(m.mSumYZ);
+                            // The lowest plane at or over every fine floor, and how far over the lowest it stands.
+                            points.clear();
+                            finePoints(B, four, 2 * bx, 2 * by, side, m.mSlopeX, m.mSlopeY, points);
+                            S32 top = 0;
+                            for (const auto& p : points)
+                            {
+                                top = std::max(top, p.first - p.second);
+                            }
+                            m.mFloor = std::min<S32>(top, AIR_HEIGHT_MAX);
+                            S32 over = 0;
+                            for (const auto& p : points)
+                            {
+                                over = std::max(over, m.mFloor + p.second - p.first);
+                            }
+                            if (over > ((m.mFlags & AirGap::TOP) ? plane_tol : climb))
+                            {
+                                continue;
+                            }
                             Agg merged;
-                            merged.mG = a;
+                            merged.mG = m;
                             merged.mState = MERGE | LIVE;
                             merged.mKid = static_cast<U32>(l.mKids.size());
-                            l.mKids.push_back(i);
-                            below_gaps.state(i) &= ~LIVE;
+                            for (S32 k = 0; k < 4; ++k)
+                            {
+                                l.mKids.push_back(four[k]);
+                                below_gaps.state(four[k]) &= ~LIVE;
+                            }
                             for (S32 k = 0; k < 3; ++k)
                             {
-                                l.mKids.push_back(pick[k]);
-                                below_gaps.state(pick[k]) &= ~LIVE;
                                 cursor[k] = pick[k] + 1;
                             }
                             l.mAggs.push_back(merged);
@@ -863,10 +947,14 @@ namespace sknav
         out->mHeight = coarse.mHeight * f;
 
         // A coarse leaf is f times as wide in fine cells; past AIR_MAX_LEVEL it is split into leaves of that level.
+        // A slope per cell is the same number at f times the cells and the units; a split leaf's floor is
+        // its parent's plane at its own centre, in half cells of the parent's f times wider side.
         struct Placed
         {
             AirLeaf mLeaf;
             U32 mFrom;
+            S32 mDx = 0;
+            S32 mDy = 0;
         };
         std::vector<Placed> placed;
         for (const AirLeaf& l : coarse.mLeaves)
@@ -884,6 +972,8 @@ namespace sknav
                     p.mLeaf.mLevel = static_cast<U8>(top);
                     p.mLeaf.mGapCount = l.mGapCount;
                     p.mFrom = l.mFirstGap;
+                    p.mDx = (2 * bx + 1 - n) * side;
+                    p.mDy = (2 * by + 1 - n) * side;
                     placed.push_back(p);
                 }
             }
@@ -898,7 +988,13 @@ namespace sknav
             p.mLeaf.mFirstGap = static_cast<U32>(out->mGaps.size());
             for (U32 k = 0; k < p.mLeaf.mGapCount; ++k)
             {
-                out->mGaps.push_back(scaled(coarse.mGaps[p.mFrom + k]));
+                AirGap g = scaled(coarse.mGaps[p.mFrom + k]);
+                if (p.mDx || p.mDy)
+                {
+                    const S64 rise = static_cast<S64>(g.mSlopeX) * p.mDx + static_cast<S64>(g.mSlopeY) * p.mDy;
+                    g.mFloor = airFloorUnits(g.mFloor + static_cast<S32>(floorDiv(rise + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q)));
+                }
+                out->mGaps.push_back(g);
             }
             out->mLeaves.push_back(p.mLeaf);
         }
@@ -952,7 +1048,7 @@ namespace sknav
                     for (U32 k = 0; k < column.mCount; ++k)
                     {
                         const AirGap& g = air.mGaps[column.mGap[k]];
-                        if (top >= g.mFloor - 1 - slack && top < g.mCeiling)
+                        if (top >= column.floorAt(air, k, ix, iy) - 1 - slack && top < g.mCeiling)
                         {
                             out[i] = column.mGap[k];
                             break;
@@ -1011,7 +1107,7 @@ namespace sknav
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf_order\":\"morton\",\"leaf_nesting\":\"parent\",\"leaf\":\"<HHBBHI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
+        o << "{\"leaf_order\":\"morton\",\"leaf_nesting\":\"parent\",\"leaf\":\"<HHBBHI\",\"gap\":\"<HHBBbb\",\"slope_q\":" << AIR_SLOPE_Q << ",\"floor_at\":\"floor + floor((sx * (2 * (ix - x) + 1 - s) + sy * (2 * (iy - y) + 1 - s) + q) / (2 * q))\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
              "\"flight\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64},\"ceiling_open\":"
           << AIR_CEILING_OPEN
           << ",\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":" << FACE_OFFSET_STEPS
