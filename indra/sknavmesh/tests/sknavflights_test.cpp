@@ -172,12 +172,12 @@ namespace
         return s;
     }
 
-    Soup ramp()
+    Soup ramp(F32 run = 4.f, F32 rise = 1.5f)
     {
         Soup s;
         s.box(-4, -2, -0.5f, 0, 2, 0);
-        s.quad(LLVector3(0, -0.75f, 0), LLVector3(4, -0.75f, 1.5f), LLVector3(4, 0.75f, 1.5f), LLVector3(0, 0.75f, 0));
-        s.box(4, -2, 0, 7, 2, 1.5f);
+        s.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, rise), LLVector3(run, 0.75f, rise), LLVector3(0, 0.75f, 0));
+        s.box(run, -2, 0, run + 3, 2, rise);
         return s;
     }
 
@@ -995,5 +995,15 @@ namespace tut
         ensure("spans", spans > 1000);
         ensure("the roof's spans find the upper gap", roofs > 50);
         ensure("the kerb's spans find the gap over the kerb", kerbs > 0);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<27>()
+    {
+        set_test_name("a steep slope with no treads and no name is a stair: a boat's stairs simplified to a ramp");
+        const SlopePartition p = ramp(3.8f, 1.8f).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure("a stair by its grade", f.mKind == ConnectorKind::STAIR && f.mRule == ConnectorRule::GRADE);
     }
 }
