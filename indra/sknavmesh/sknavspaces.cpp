@@ -26,6 +26,8 @@
 
 #include "sknavspaces.h"
 
+#include "sknavstairalign.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -623,6 +625,8 @@ namespace sknav
         /// The gaps over a fine cell: count 0 when it has none.
         U32 column(U32 t, S32 ix, S32 iy, AirColumn& out) const;
         bool probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const;
+        /// Square each stair portal to the treads of the flight it enters (sknavstairalign.h).
+        void squareStairPortals(std::vector<StairEnd>& ends, const std::vector<size_t>& portals);
         /// Whether solid stands between lo and hi (mesh units) over a fine cell.
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
         /// Whether solid stands between lo and hi (mesh units) at a point.
@@ -839,6 +843,74 @@ namespace sknav
             }
         }
         return false;
+    }
+
+    void SpacesPass::State::squareStairPortals(std::vector<StairEnd>& ends, const std::vector<size_t>& portals)
+    {
+        if (ends.empty())
+        {
+            return;
+        }
+        const S32 tol = std::max(1, static_cast<S32>(std::ceil(STAIR_TREAD_DZ_M / mUnit)));
+        const FlightFloor flight_floor = [this, tol](F32 x, F32 y, F32 z, F32& out) {
+            TileKey key;
+            key.mX = tileIndex(x);
+            key.mY = tileIndex(y);
+            const U32 t = tileAt(key);
+            if (t == NONE)
+            {
+                return false;
+            }
+            const TileAir& a = air(t);
+            const S32 ix = static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell));
+            const S32 iy = static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell));
+            if (ix < 0 || iy < 0 || ix >= a.mWidth || iy >= a.mHeight)
+            {
+                return false;
+            }
+            const S32 want = static_cast<S32>(std::lround(z / mUnit));
+            S32 best = INT_MAX, found = 0;
+            AirColumn col;
+            for (U32 i = 0; i < column(t, ix, iy, col); ++i)
+            {
+                const AirGap& g = a.mGaps[col.mGap[i]];
+                const S32 f = floorOf(t, g);
+                if ((g.mFlags & AirGap::FLIGHT) && floorGap(t, g) && std::abs(f - want) <= tol && std::abs(f - want) < best)
+                {
+                    best = std::abs(f - want);
+                    found = f;
+                }
+            }
+            if (best == INT_MAX)
+            {
+                return false;
+            }
+            out = found * mUnit;
+            return true;
+        };
+        alignStairEnds(flight_floor, ends);
+        for (size_t i = 0; i < ends.size(); ++i)
+        {
+            const StairEnd& e = ends[i];
+            if (!e.mAligned)
+            {
+                continue;
+            }
+            Portal& q = mPortals[portals[i]];
+            const F32 z = q.mSill;
+            LLVector2 n(e.mA.mV[VY] - e.mB.mV[VY], e.mB.mV[VX] - e.mA.mV[VX]);
+            n.normVec();
+            if (n.mV[VX] * q.mNormal.mV[VX] + n.mV[VY] * q.mNormal.mV[VY] < 0.f)
+            {
+                n = -n;
+            }
+            const LLVector2 c = (e.mA + e.mB) * 0.5f;
+            q.mA.set(e.mA.mV[VX], e.mA.mV[VY], z);
+            q.mB.set(e.mB.mV[VX], e.mB.mV[VY], z);
+            q.mCentre.set(c.mV[VX], c.mV[VY], z);
+            q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+            q.mWidth = dist_vec(e.mA, e.mB);
+        }
     }
 
     bool SpacesPass::State::blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const
@@ -3773,6 +3845,33 @@ namespace sknav
         };
         std::vector<std::pair<U64, U32>> keyed;
         std::vector<U32> group;
+        // Each stair portal's contact, by portal, for squaring to its flight once the rounds settle.
+        std::vector<StairEnd> stair_ends;
+        std::vector<size_t> stair_portals;
+        auto stairEnd = [&](const Run& r, U32 st, U32 first) {
+            StairEnd e;
+            e.mA = r.mA;
+            e.mB = r.mB;
+            // Squared about the cut's middle, measured from the flight cell beside it nearest that.
+            F32 nearest = FLT_MAX;
+            for (U32 id : r.mIds)
+            {
+                const Edge& ed = mEdges[id];
+                const bool a_flight = mRegions.find(ed.mA) == st;
+                const F32 d = dist_vec_squared(ed.mMid, r.mC);
+                if (d < nearest)
+                {
+                    nearest = d;
+                    e.mSeed = a_flight ? ed.mCellA : ed.mCellB;
+                    e.mZ = (a_flight ? ed.mFloorA : ed.mFloorB) * mUnit;
+                }
+            }
+            e.mPivot = r.mC;
+            e.mInto = st == first ? -r.mN : r.mN;
+            e.mFlight = st;
+            stair_ends.push_back(e);
+            stair_portals.push_back(mPortals.size() - 1);
+        };
         // A pair of regions whose edges a round left alone has the same runs next round.
         struct Memo
         {
@@ -3845,6 +3944,8 @@ namespace sknav
         {
             mPortals.clear();
             mPortalDoor.clear();
+            stair_ends.clear();
+            stair_portals.clear();
             std::vector<bool> flight(total, false);
             for (U32 s = 0; s < total; ++s)
             {
@@ -3928,6 +4029,7 @@ namespace sknav
                         Scored s = score(r);
                         s.mCues &= ~CUE_DOOR;
                         makePortal(r, s, PortalKind::STAIR, g.mU, g.mV);
+                        stairEnd(r, st, g.mU);
                         made = true;
                     }
                     if (!made && best)
@@ -3936,6 +4038,7 @@ namespace sknav
                         Scored s = score(*best);
                         s.mCues = static_cast<U8>((s.mCues & ~CUE_DOOR) | CUE_WEAK);
                         makePortal(*best, s, PortalKind::STAIR, g.mU, g.mV);
+                        stairEnd(*best, st, g.mU);
                     }
                     continue;
                 }
@@ -3988,6 +4091,7 @@ namespace sknav
             }
             mRegions = round_uf;
         }
+        squareStairPortals(stair_ends, stair_portals);
         for (const auto& pq : mApart)
         {
             SeedLink l;
