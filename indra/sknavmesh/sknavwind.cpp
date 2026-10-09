@@ -298,7 +298,7 @@ namespace sknav
                     return;
                 }
                 const AirGap& g = t.mAir->mGaps[col.mGap[0]];
-                const F32 z = unitsToM(t, g.mFloor);
+                const F32 z = unitsToM(t, airFloorUnits(col.floorAt(*t.mAir, 0, ix, iy)));
                 lowest = std::min(lowest, z);
                 if (g.area() == AREA_GROUND)
                 {
@@ -354,7 +354,7 @@ namespace sknav
                 {
                     const U32 gi = col.mGap[k];
                     const AirGap& g = t.mAir->mGaps[gi];
-                    const F32 lo = unitsToM(t, g.mFloor);
+                    const F32 lo = unitsToM(t, airFloorUnits(col.floorAt(*t.mAir, k, ix, iy)));
                     const bool open = g.mCeiling == AIR_CEILING_OPEN;
                     if (z >= lo - slack && (open || z < unitsToM(t, g.mCeiling)))
                     {

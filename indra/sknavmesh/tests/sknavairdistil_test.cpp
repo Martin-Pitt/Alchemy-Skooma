@@ -145,6 +145,48 @@ namespace
         return best;
     }
 
+    /// One open walkable floor per column at the given height, 64 x 64, with solid where wall says.
+    AirGrid field(const std::function<S32(S32, S32)>& floor, const std::function<bool(S32, S32)>& wall = nullptr, S32 n = 64)
+    {
+        AirGrid g;
+        g.mCell = g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = n;
+        g.mStart.assign(static_cast<size_t>(n) * n + 1, 0);
+        for (S32 iy = 0; iy < n; ++iy)
+        {
+            for (S32 ix = 0; ix < n; ++ix)
+            {
+                if (!wall || !wall(ix, iy))
+                {
+                    AirGap gap;
+                    gap.mFloor = static_cast<U16>(floor(ix, iy));
+                    gap.mCeiling = 400;
+                    gap.mFlags = AirGap::TOP | AirGap::OPEN | AirGap::OWN_SKY;
+                    g.mGaps.push_back(gap);
+                }
+                g.mStart[ix + iy * n + 1] = static_cast<U32>(g.mGaps.size());
+            }
+        }
+        computeClearance(g, CLIMB, OVERLAP);
+        return g;
+    }
+
+    /// The level of a column's one leaf, and its floor there on the leaf's plane; -1 for no air.
+    S32 leafAt(const TileAir& air, S32 ix, S32 iy, S32* floor = nullptr)
+    {
+        AirColumn column;
+        airColumn(air, findLeafByKey(air, ix, iy), column);
+        if (!column.mCount)
+        {
+            return -1;
+        }
+        if (floor)
+        {
+            *floor = column.floorAt(air, 0, ix, iy);
+        }
+        return air.mLeaves[column.mLeaf[0]].mLevel;
+    }
+
     /// A flat slab over ground that varies under it: the lower gaps change from column to column, the slab's top does not.
     AirGrid slab(const std::function<void(S32, S32, std::vector<AirGap>&)>& under, S32 n = 64)
     {
@@ -775,5 +817,172 @@ namespace tut
             o.write(reinterpret_cast<const char*>(counts), sizeof(counts));
             o.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(air.mLeaves.size() * 12 + air.mGaps.size() * 8));
         }
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<17>()
+    {
+        set_test_name("a uniform slope merges to the cap, its floors on the plane within a unit over every fine floor");
+        // 15 % along x and 10 % along y: a 2 m leaf spans 4 units, more than a flat leaf may.
+        const AirGrid g = field([](S32 ix, S32 iy) { return static_cast<S32>(std::ceil(0.15 * (ix + 0.5) + 0.1 * (iy + 0.5))); });
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        S32 worst = 0;
+        for (S32 iy = 0; iy < 64; ++iy)
+        {
+            for (S32 ix = 0; ix < 64; ++ix)
+            {
+                S32 floor = 0;
+                ensure_equals(llformat("a 2 m leaf at (%d, %d)", ix, iy), leafAt(air, ix, iy, &floor), AIR_MAX_LEVEL);
+                const S32 fine = g.gaps(ix, iy)[0].mFloor;
+                ensure(llformat("the plane is not under the floor at (%d, %d)", ix, iy), floor >= fine);
+                worst = std::max(worst, floor - fine);
+            }
+        }
+        ensure_equals("within a unit everywhere", worst <= AIR_PLANE_TOL, true);
+        ensure_equals("one leaf per 2 m", air.mLeaves.size(), static_cast<size_t>(16));
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<18>()
+    {
+        set_test_name("a crease keeps fine leaves along its line only");
+        // Level up to x = 21, then up at 40 %: the line runs through a 2 m, a 1 m and a 0.5 m block.
+        const S32 crease = 21;
+        const AirGrid g = field([crease](S32 ix, S32) { return ix < crease ? 0 : static_cast<S32>(std::ceil(0.4 * (ix - crease + 0.5))); });
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        for (S32 iy = 0; iy < 64; ++iy)
+        {
+            for (S32 ix = 0; ix < 64; ++ix)
+            {
+                const S32 level = leafAt(air, ix, iy);
+                if (ix < 8 || ix >= 40)
+                {
+                    ensure_equals(llformat("2 m leaves away from it at (%d, %d)", ix, iy), level, AIR_MAX_LEVEL);
+                }
+                if (ix == crease - 1 || ix == crease)
+                {
+                    ensure(llformat("finer along it at (%d, %d)", ix, iy), level < AIR_MAX_LEVEL);
+                }
+                S32 floor = 0;
+                leafAt(air, ix, iy, &floor);
+                ensure(llformat("the floor holds at (%d, %d)", ix, iy), floor >= g.gaps(ix, iy)[0].mFloor && floor - g.gaps(ix, iy)[0].mFloor <= AIR_PLANE_TOL);
+            }
+        }
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<19>()
+    {
+        set_test_name("a big flat open area reaches the cap everywhere");
+        const AirGrid g = field([](S32, S32) { return 12; });
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        ensure_equals("one leaf per 2 m", air.mLeaves.size(), static_cast<size_t>(16));
+        for (const AirLeaf& l : air.mLeaves)
+        {
+            ensure_equals("at the cap", static_cast<S32>(l.mLevel), AIR_MAX_LEVEL);
+            ensure("flat", !air.mGaps[l.mFirstGap].mSlopeX && !air.mGaps[l.mFirstGap].mSlopeY && air.mGaps[l.mFirstGap].mFloor == 12);
+        }
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<20>()
+    {
+        set_test_name("leaves step down to a wall a level at a time, on a slope as on the flat");
+        for (S32 slope = 0; slope < 2; ++slope)
+        {
+            // A wall across the middle of an open floor, level or rising 10 % along y.
+            const AirGrid g = field([slope](S32, S32 iy) { return slope ? static_cast<S32>(std::ceil(0.1 * (iy + 0.5))) : 0; },
+                                    [](S32 ix, S32 iy) { return ix == 37 && iy >= 8 && iy < 56; });
+            TileAir air;
+            distilAir(g, CLIMB, air);
+            for (S32 iy = 0; iy < 64; ++iy)
+            {
+                for (S32 ix = 0; ix < 64; ++ix)
+                {
+                    const S32 level = leafAt(air, ix, iy);
+                    if (level < 0)
+                    {
+                        continue;
+                    }
+                    if ((ix == 36 || ix == 38) && iy >= 8 && iy < 56)
+                    {
+                        ensure_equals(llformat("fine against the wall at (%d, %d)", ix, iy), level, 0);
+                    }
+                    if (ix < 16)
+                    {
+                        ensure_equals(llformat("2 m leaves away from it at (%d, %d)", ix, iy), level, AIR_MAX_LEVEL);
+                    }
+                    if (ix >= 48)
+                    {
+                        ensure(llformat("1 m leaves or coarser past the step-down at (%d, %d)", ix, iy), level >= AIR_MAX_LEVEL - 1);
+                    }
+                    for (S32 d = 0; d < 2; ++d)
+                    {
+                        const S32 other = leafAt(air, ix + (d == 0), iy + (d == 1));
+                        ensure(llformat("a level at a time at (%d, %d)", ix, iy), other < 0 || std::abs(other - level) <= 1);
+                    }
+                }
+            }
+        }
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<21>()
+    {
+        set_test_name("a seam strip along a tilted 2 m leaf is its fine floors, the leaf's plane within a unit over them");
+        const AirGrid g = field([](S32 ix, S32 iy) { return static_cast<S32>(std::ceil(0.2 * (ix + 0.5) + 0.05 * (iy + 0.5))); });
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        airSeams(g, air);
+        for (S32 side = 0; side < 4; ++side)
+        {
+            const SeamStrip& strip = air.mSeams[side];
+            ensure_equals("a cell per strip entry", strip.mStart.size(), static_cast<size_t>(65));
+            for (S32 i = 0; i < 64; ++i)
+            {
+                const S32 ix = side == TileAir::SIDE_NEG_X ? 0 : side == TileAir::SIDE_POS_X ? 63 : i;
+                const S32 iy = side == TileAir::SIDE_NEG_Y ? 0 : side == TileAir::SIDE_POS_Y ? 63 : i;
+                ensure_equals("one gap per seam cell", strip.count(i), 1u);
+                const AirGap& fine = strip.mGaps[strip.mStart[i]];
+                ensure_equals("the strip is the fine floor", static_cast<S32>(fine.mFloor), static_cast<S32>(g.gaps(ix, iy)[0].mFloor));
+                ensure("and flat", !fine.mSlopeX && !fine.mSlopeY);
+                S32 floor = 0;
+                ensure_equals(llformat("a 2 m leaf at the seam (%d, %d)", ix, iy), leafAt(air, ix, iy, &floor), AIR_MAX_LEVEL);
+                ensure(llformat("its plane meets the strip at (%d, %d)", ix, iy), floor >= fine.mFloor && floor - fine.mFloor <= AIR_PLANE_TOL);
+            }
+        }
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<22>()
+    {
+        set_test_name("coarse air upsampled keeps a tilted floor at every fine cell, split leaves included");
+        // A 1 m grid rising 10 % along x and 20 % along y, each 2 x 2 m leaf eight times as wide when upsampled and split.
+        AirGrid coarse = field([](S32 ix, S32 iy) { return static_cast<S32>(std::ceil(0.1 * (ix + 0.5) + 0.2 * (iy + 0.5))); }, nullptr, 16);
+        coarse.mCell = coarse.mUnit = 1.f;
+        TileAir air;
+        distilAir(coarse, CLIMB, air);
+        airSeams(coarse, air);
+        const TileAirPtr fine = upsampleAir(air, 8);
+        bool tilted = false, split = false;
+        for (S32 iy = 0; iy < 16; ++iy)
+        {
+            for (S32 ix = 0; ix < 16; ++ix)
+            {
+                S32 at = 0;
+                const S32 level = leafAt(air, ix, iy, &at);
+                tilted = tilted || air.mGaps[air.mLeaves[findLeafByKey(air, ix, iy)].mFirstGap].mSlopeX != 0;
+                split = split || level + 3 > AIR_MAX_LEVEL;
+                // The middle of the coarse cell in fine cells: the floor there is eight times the coarse one.
+                S32 up = 0;
+                leafAt(*fine, ix * 8 + 4, iy * 8 + 4, &up);
+                ensure(llformat("the fine floor at (%d, %d) is the coarse one: %d vs %d", ix, iy, up, at * 8), std::abs(up - at * 8) <= 8);
+            }
+        }
+        ensure("the coarse leaves tilt", tilted);
+        ensure("and split when upsampled", split);
     }
 }

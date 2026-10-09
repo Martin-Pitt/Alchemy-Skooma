@@ -44,12 +44,14 @@ namespace sknav
     constexpr U16 AIR_HEIGHT_MAX = 8191;        ///< heights are 13 bits, 1023.9 m at 0.125 m
     constexpr U16 AIR_CEILING_OPEN = 0xffff;    ///< a distilled ceiling with nothing above in the tile
     constexpr F32 AIR_PASS_M = 1.f;             ///< a closed, unwalkable gap lower than this is no way through
+    constexpr S32 AIR_PLANE_TOL = 1;            ///< units a walkable floor may lie under its merged plane
 
     /// A square block of 2^mLevel cells, from (mX, mY) in cells of the tile,
     /// over which mGapCount gaps from mFirstGap agree, lowest first. Leaves
     /// nest: a finer leaf inside a coarser one holds the gaps of its columns
     /// that the coarser one does not, so a column's gaps are those of every
-    /// leaf over it.
+    /// leaf over it. A merged gap's floor is a plane through its leaf's
+    /// centre (airFloorAt).
     struct AirLeaf
     {
         U16 mX = 0;
@@ -128,11 +130,33 @@ namespace sknav
         return air.mLeaves[leaf].mParent ? leaf - air.mLeaves[leaf].mParent : -1;
     }
 
+    /// A gap's floor at a cell of the leaf holding it: its plane's height at the cell's centre.
+    inline S32 airFloorAt(const AirGap& g, const AirLeaf& leaf, S32 ix, S32 iy)
+    {
+        if (!g.mSlopeX && !g.mSlopeY)
+        {
+            return g.mFloor;
+        }
+        const S32 s = 1 << leaf.mLevel;
+        const S32 rise = g.mSlopeX * (2 * (ix - leaf.mX) + 1 - s) + g.mSlopeY * (2 * (iy - leaf.mY) + 1 - s);
+        return g.mFloor + static_cast<S32>(floorDiv(rise + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q));
+    }
+
+    /// A floor read off a plane as a stored height.
+    inline U16 airFloorUnits(S32 units)
+    {
+        return static_cast<U16>(std::clamp<S32>(units, 0, AIR_HEIGHT_MAX));
+    }
+
     /// A column's gaps gathered from every leaf over it, lowest first.
     struct AirColumn
     {
         U32 mCount = 0;
         U32 mGap[0xff];     ///< indices into TileAir::mGaps
+        S32 mLeaf[0xff];    ///< the leaf holding each
+
+        /// The gap's floor at the column's cell.
+        S32 floorAt(const TileAir& air, U32 k, S32 ix, S32 iy) const;
     };
 
     /// The gaps over a fine cell, starting from its finest leaf; none when leaf is negative.

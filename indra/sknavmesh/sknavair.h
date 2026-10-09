@@ -57,10 +57,19 @@ namespace sknav
         U16 mCeiling = 0;
         U8 mFlags = 0;
         U8 mClear = 0;          ///< lateral clearance in CLEAR_UNIT_M, capped at CLEAR_MAX
-        U16 mSeed = 0;          ///< the room seed the gap belongs to; 0 until rooms are cut
+        S8 mSlopeX = 0;         ///< a merged floor's rise per cell along x, in 1/AIR_SLOPE_Q units; 0 in a fine grid
+        S8 mSlopeY = 0;
 
         U8 area() const { return (mFlags & AREA_MASK) >> AREA_SHIFT; }
     };
+
+    constexpr S32 AIR_SLOPE_Q = 64;     ///< slope steps per height unit per cell
+
+    /// Division rounding towards negative infinity, for positive b.
+    inline S64 floorDiv(S64 a, S64 b)
+    {
+        return a >= 0 ? a / b : -((-a + b - 1) / b);
+    }
 
     constexpr F32 CLEAR_UNIT_M = 0.125f;
     constexpr U8 CLEAR_MAX = 16;        ///< 2 m: past that a gap is simply clear

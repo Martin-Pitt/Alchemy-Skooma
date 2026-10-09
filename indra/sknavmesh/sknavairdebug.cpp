@@ -59,8 +59,8 @@ namespace sknav
 
         bool open(const AirGap& g) { return g.mCeiling == AIR_CEILING_OPEN || (g.mFlags & AirGap::OPEN); }
 
-        /// Whether the cell holds a gap whose floor is g's within climb: no wall and no step between them.
-        bool sameAirAt(const TileAir& air, S32 ix, S32 iy, const AirGap& g, S32 climb)
+        /// Whether the cell holds a gap whose floor there is within climb of floor: no wall and no step between them.
+        bool sameAirAt(const TileAir& air, S32 ix, S32 iy, S32 floor, S32 climb)
         {
             if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
             {
@@ -75,7 +75,7 @@ namespace sknav
             airColumn(air, leaf, column);
             for (U32 k = 0; k < column.mCount; ++k)
             {
-                if (std::abs(static_cast<S32>(air.mGaps[column.mGap[k]].mFloor) - static_cast<S32>(g.mFloor)) <= climb)
+                if (std::abs(column.floorAt(air, k, ix, iy) - floor) <= climb)
                 {
                     return true;
                 }
@@ -86,6 +86,7 @@ namespace sknav
 
     LLColor4 airLevelColour(S32 level)
     {
+        static_assert(AIR_MAX_LEVEL == 4, "a colour per leaf level");
         static const LLColor4 LEVELS[AIR_MAX_LEVEL + 1] = { LLColor4(0.2f, 0.9f, 1.f, 1.f), LLColor4(0.3f, 1.f, 0.45f, 1.f),
                                                             LLColor4(1.f, 0.95f, 0.3f, 1.f), LLColor4(1.f, 0.6f, 0.15f, 1.f),
                                                             LLColor4(1.f, 0.3f, 0.85f, 1.f) };
@@ -155,8 +156,7 @@ namespace sknav
         bool found = false;
         for (U32 k = 0; k < column.mCount; ++k)
         {
-            const U32 i = column.mGap[k];
-            const F32 z = air.mOrigin.mV[VZ] + air.mGaps[i].mFloor * air.mUnit;
+            const F32 z = air.mOrigin.mV[VZ] + column.floorAt(air, k, ix, iy) * air.mUnit;
             if (z <= at.mV[VZ] + air.mUnit && (!found || z > floor))
             {
                 floor = z;
@@ -239,7 +239,7 @@ namespace sknav
                 for (U32 k = 0; k < gaps.mCount; ++k)
                 {
                     const AirGap& g = air.mGaps[gaps.mGap[k]];
-                    const F32 z = floorZ(g.mFloor);
+                    const F32 z = o.mV[VZ] + gaps.floorAt(air, k, nx, ny) * air.mUnit;
                     if (!(g.mFlags & AirGap::AVATAR_FLOOR) || !inSlice(z))
                     {
                         continue;
@@ -277,8 +277,10 @@ namespace sknav
                     continue;
                 }
                 const F32 z = zf + FLOOR_LIFT_M;
-                const LLVector3 c[4] = { LLVector3(x0, y0, z), LLVector3(x0 + side, y0, z), LLVector3(x0 + side, y0 + side, z),
-                                         LLVector3(x0, y0 + side, z) };
+                // A tilted floor's corners on its plane, n cells either way of the centre in half cells.
+                auto lift = [&](S32 dx, S32 dy) { return z + (g.mSlopeX * dx + g.mSlopeY * dy) * n * air.mUnit / (2.f * AIR_SLOPE_Q); };
+                const LLVector3 c[4] = { LLVector3(x0, y0, lift(-1, -1)), LLVector3(x0 + side, y0, lift(1, -1)),
+                                         LLVector3(x0 + side, y0 + side, lift(1, 1)), LLVector3(x0, y0 + side, lift(-1, 1)) };
                 auto outline = [&](const LLVector3* p, const LLColor4& colour) {
                     for (S32 k = 0; k < 4; ++k)
                     {
@@ -318,8 +320,8 @@ namespace sknav
                         const LLColor4 wall = withAlpha(LLColor4(0.85f, 0.85f, 0.9f, 1.f), 0.7f * dim);
                         if (ok && !is_open)
                         {
-                            const LLVector3 lift(0.f, 0.f, top - z);
-                            const LLVector3 ceil[4] = { c[0] + lift, c[1] + lift, c[2] + lift, c[3] + lift };
+                            const LLVector3 ceil[4] = { LLVector3(c[0].mV[VX], c[0].mV[VY], top), LLVector3(c[1].mV[VX], c[1].mV[VY], top),
+                                                        LLVector3(c[2].mV[VX], c[2].mV[VY], top), LLVector3(c[3].mV[VX], c[3].mV[VY], top) };
                             ok = outline(ceil, withAlpha(LLColor4(0.6f, 0.75f, 1.f, 1.f), 0.6f * dim));
                         }
                         else if (ok)
@@ -337,9 +339,10 @@ namespace sknav
                                                   { X - 1, Y + n - 1, X, Y + n, X - 1, Y + n } };
                         for (S32 k = 0; ok && k < 4; ++k)
                         {
-                            const bool a_diff = !sameAirAt(air, probe[k][0], probe[k][1], g, in.mClimb);
-                            const bool b_diff = !sameAirAt(air, probe[k][2], probe[k][3], g, in.mClimb);
-                            const bool d_diff = !sameAirAt(air, probe[k][4], probe[k][5], g, in.mClimb);
+                            const S32 f = airFloorAt(g, l, (k == 1 || k == 2) ? X + n - 1 : X, k >= 2 ? Y + n - 1 : Y);
+                            const bool a_diff = !sameAirAt(air, probe[k][0], probe[k][1], f, in.mClimb);
+                            const bool b_diff = !sameAirAt(air, probe[k][2], probe[k][3], f, in.mClimb);
+                            const bool d_diff = !sameAirAt(air, probe[k][4], probe[k][5], f, in.mClimb);
                             const bool straight = d_diff && a_diff != b_diff;
                             if ((!a_diff && !b_diff && !d_diff) || straight)
                             {

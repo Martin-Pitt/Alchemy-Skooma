@@ -298,10 +298,11 @@ namespace
             {
                 const AirGap& g = t->mAir->mGaps[column.mGap[k]];
                 const GapEnclosure& e = t->mGaps[column.mGap[k]];
+                const U16 floor = airFloorUnits(column.floorAt(*t->mAir, k, ix, iy));
                 Enclosure out;
-                fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
+                fillEnclosure(*t, floor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
                 spaceId(p, out);
-                fn(out, g.mFloor, g.mCeiling, *t);
+                fn(out, floor, g.mCeiling, *t);
             }
             return;
         }
@@ -521,6 +522,7 @@ namespace sknav
     void EnclosurePass::State::pair(const U32* node_a, U32 na, const AirGap* ga, S32 oa, const U32* node_b, U32 nb, const AirGap* gb, S32 ob,
                                     U8 cost, std::vector<GraphEdge>& out) const
     {
+        static_assert((2 << AIR_MAX_LEVEL) <= 0xff, "two leaves' widths fit an edge's cost");
         // Both lists run lowest first and their gaps are disjoint, so the
         // overlapping pairs fall out of one sweep.
         U32 i = 0, j = 0;
@@ -585,6 +587,7 @@ namespace sknav
         const U32 base = mBase[t];
         const S32 off = mZOffset[t];
         U32 ids_a[0xff], ids_b[0xff];
+        AirGap gaps_a[0xff], gaps_b[0xff];
         std::vector<S32> met;
         for (size_t l = 0; l < a.mLeaves.size(); ++l)
         {
@@ -619,12 +622,25 @@ namespace sknav
                             continue;
                         }
                         met.push_back(n);
+                        // Tilted floors are compared where the leaves meet: the middle of their shared run.
+                        const S32 lo = side == 0 ? std::max(leaf.mY, other.mY) : std::max(leaf.mX, other.mX);
+                        const S32 hi = side == 0 ? std::min(leaf.mY + s, other.mY + os) : std::min(leaf.mX + s, other.mX + os);
+                        const S32 mid = (lo + hi - 1) / 2;
+                        const S32 ax = side == 0 ? x - 1 : mid, ay = side == 0 ? mid : y - 1;
+                        const S32 bx = side == 0 ? x : mid, by = side == 0 ? mid : y;
+                        for (U32 j = 0; j < leaf.mGapCount; ++j)
+                        {
+                            gaps_a[j] = a.mGaps[leaf.mFirstGap + j];
+                            gaps_a[j].mFloor = airFloorUnits(airFloorAt(gaps_a[j], leaf, ax, ay));
+                        }
                         for (U32 j = 0; j < other.mGapCount; ++j)
                         {
                             ids_b[j] = base + other.mFirstGap + j;
+                            gaps_b[j] = a.mGaps[other.mFirstGap + j];
+                            gaps_b[j].mFloor = airFloorUnits(airFloorAt(gaps_b[j], other, bx, by));
                         }
                         const U8 cost = static_cast<U8>(s + os);
-                        pair(ids_a, leaf.mGapCount, &a.mGaps[leaf.mFirstGap], off, ids_b, other.mGapCount, &a.mGaps[other.mFirstGap], off, cost, mEdges);
+                        pair(ids_a, leaf.mGapCount, gaps_a, off, ids_b, other.mGapCount, gaps_b, off, cost, mEdges);
                     }
                 }
             }
@@ -774,15 +790,17 @@ namespace sknav
                 {
                     F64 mX, mY;
                     U32 mCost;
+                    S32 mIx, mIy;   ///< the leaf's cell the probe leaves from, where a tilted floor is read
                 };
                 Probe probes[5];
                 S32 count = 0;
-                probes[count++] = { cx, cy, 0 };
+                const S32 mx = leaf.mX + (s - 1) / 2, my = leaf.mY + (s - 1) / 2;
+                probes[count++] = { cx, cy, 0, -1, -1 };
                 const F64 reach = (s * 0.5 + 0.5) * cell;
-                if (open_side[0] && leaf.mX == 0) probes[count++] = { cx - reach, cy, static_cast<U32>(s + 1) };
-                if (open_side[1] && leaf.mX + s >= a.mWidth) probes[count++] = { cx + reach, cy, static_cast<U32>(s + 1) };
-                if (open_side[2] && leaf.mY == 0) probes[count++] = { cx, cy - reach, static_cast<U32>(s + 1) };
-                if (open_side[3] && leaf.mY + s >= a.mHeight) probes[count++] = { cx, cy + reach, static_cast<U32>(s + 1) };
+                if (open_side[0] && leaf.mX == 0) probes[count++] = { cx - reach, cy, static_cast<U32>(s + 1), leaf.mX, my };
+                if (open_side[1] && leaf.mX + s >= a.mWidth) probes[count++] = { cx + reach, cy, static_cast<U32>(s + 1), leaf.mX + s - 1, my };
+                if (open_side[2] && leaf.mY == 0) probes[count++] = { cx, cy - reach, static_cast<U32>(s + 1), mx, leaf.mY };
+                if (open_side[3] && leaf.mY + s >= a.mHeight) probes[count++] = { cx, cy + reach, static_cast<U32>(s + 1), mx, leaf.mY + s - 1 };
                 for (const EnclosureInput::Neighbour& nb : in.mNeighbours)
                 {
                     if (!nb.mProduct)
@@ -801,7 +819,9 @@ namespace sknav
                             for (U32 i = 0; i < leaf.mGapCount; ++i)
                             {
                                 const U32 n = mBase[t] + leaf.mFirstGap + i;
-                                const F64 floor = base_z + (mFloor[n] - mZOffset[t]) * a.mUnit;
+                                const S32 at = probes[k].mIx < 0 ? mFloor[n] - mZOffset[t]
+                                                                 : airFloorAt(a.mGaps[leaf.mFirstGap + i], leaf, probes[k].mIx, probes[k].mIy);
+                                const F64 floor = base_z + at * a.mUnit;
                                 const F64 ceil = mCeil[n] >= OPEN_TOP ? 1e30 : base_z + (mCeil[n] - mZOffset[t]) * a.mUnit;
                                 if (std::min(ceil, nb_ceil) - std::max(floor, nb_floor) < a.mUnit)
                                 {
@@ -923,10 +943,11 @@ namespace sknav
                     {
                         continue;
                     }
+                    const S32 mx = std::max<S32>(leaf.mX, cx * c.mCells) + (ox - 1) / 2, my = std::max<S32>(leaf.mY, cy * c.mCells) + (oy - 1) / 2;
                     for (U32 i = 0; i < leaf.mGapCount; ++i)
                     {
                         const U32 g = leaf.mFirstGap + i;
-                        parts.push_back({ static_cast<U32>(cx + cy * c.mWidth), a.mGaps[g].mFloor, g, static_cast<F32>(ox * oy) });
+                        parts.push_back({ static_cast<U32>(cx + cy * c.mWidth), airFloorUnits(airFloorAt(a.mGaps[g], leaf, mx, my)), g, static_cast<F32>(ox * oy) });
                     }
                 }
             }
@@ -947,7 +968,7 @@ namespace sknav
                 const AirGap& g = a.mGaps[parts[j].mGap];
                 const GapEnclosure& ge = out.mGaps[parts[j].mGap];
                 const F32 w = parts[j].mArea;
-                floor = std::min(floor, g.mFloor);
+                floor = std::min(floor, parts[j].mFloor);
                 ceiling = (ceiling == AIR_CEILING_OPEN || g.mCeiling == AIR_CEILING_OPEN) ? AIR_CEILING_OPEN : std::max(ceiling, g.mCeiling);
                 area += w;
                 s += w * ge.mS;
