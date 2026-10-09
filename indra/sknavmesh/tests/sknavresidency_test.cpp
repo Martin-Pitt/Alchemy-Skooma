@@ -178,7 +178,7 @@ namespace tut
         ensure("the same leaves", x.mLeaves.size() == air->mLeaves.size() &&
                                       std::equal(x.mLeaves.begin(), x.mLeaves.end(), air->mLeaves.begin(), [](const AirLeaf& p, const AirLeaf& q) {
                                           return p.mX == q.mX && p.mY == q.mY && p.mLevel == q.mLevel && p.mGapCount == q.mGapCount &&
-                                                 p.mFine == q.mFine && p.mFirstGap == q.mFirstGap;
+                                                 p.mParent == q.mParent && p.mFirstGap == q.mFirstGap;
                                       }));
         ensure("the same gaps", x.mGaps.size() == air->mGaps.size() &&
                                     std::equal(x.mGaps.begin(), x.mGaps.end(), air->mGaps.begin(), [](const AirGap& p, const AirGap& q) {
