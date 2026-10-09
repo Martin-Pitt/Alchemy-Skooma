@@ -1,6 +1,6 @@
 /**
  * @file sknavairdistil.cpp
- * @brief A tile's air distilled into a restricted quadtree, its seam strips and its solid tops.
+ * @brief A tile's air distilled into per-gap quadtrees, its seam strips and its solid tops.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -47,22 +47,6 @@ namespace
         U16 mCeilMax = 0;
         U8 mFlags = 0;
         U8 mClear = 0;
-    };
-
-    struct Block
-    {
-        bool mLeaf = false;     ///< the block can stand as one leaf
-        bool mMerge = false;    ///< and can be merged into its parent
-        U8 mCount = 0;
-        U32 mFirst = 0;
-    };
-
-    struct Level
-    {
-        S32 mWidth = 0;
-        S32 mHeight = 0;
-        std::vector<Block> mBlocks;
-        std::vector<GapAgg> mGaps;
     };
 
     U16 clipHeight(U16 units)
@@ -209,225 +193,463 @@ namespace sknav
         {
             return;
         }
-
         const S32 pass = static_cast<S32>(std::ceil(AIR_PASS_M / std::max(grid.mUnit, 1e-3f)));
-        // Level 0 is the grid itself; each level above merges 2 x 2 blocks
-        // of the one below when all four may merge and agree with each other.
-        Level levels[AIR_MAX_LEVEL + 1];
+        // A walkable floor merges only where it is flat within a third of a climb, so neighbouring leaves'
+        // floors stay within a climb wherever the steps under them are no more than two thirds of one.
+        const S32 flat = climb / 3;
+        constexpr U8 MERGE = 1, LIVE = 2;
+        constexpr S8 NO_LIVE = AIR_MAX_LEVEL + 1;
+
+        // Level 0 is the grid's own gaps, each with a state; levels above hold merged gaps, each over a 2 x 2 block.
+        struct Agg
         {
-            Level& l0 = levels[0];
-            l0.mWidth = w;
-            l0.mHeight = h;
-            l0.mBlocks.resize(static_cast<size_t>(w) * h);
-            l0.mGaps.reserve(grid.mGaps.size());
-            for (S32 iy = 0; iy < h; ++iy)
+            GapAgg mG;
+            U8 mState = 0;
+            U32 mKid = 0;           ///< the first of its four kids in mKids, one per kid block
+        };
+        struct Grade
+        {
+            S32 mWidth = 0;
+            S32 mHeight = 0;
+            std::vector<U32> mStart;    ///< blocks + 1 offsets into mAggs, each block's lowest first
+            std::vector<Agg> mAggs;
+            std::vector<U32> mKids;
+            std::vector<U8> mFiner;     ///< per block, whether a block under it holds a live gap
+            std::vector<S8> mMinLive;   ///< per block, the finest level of a live gap in or under it
+        };
+        Grade lv[AIR_MAX_LEVEL + 1];
+        std::vector<U8> state(grid.mGaps.size(), 0);
+        // The gaps of a level's blocks, lowest first: level 0's are the grid's, at most 255 a cell.
+        struct FineGaps
+        {
+            const AirGrid* mGrid;
+            U8* mState;
+            U32 start(size_t c) const { return mGrid->mStart[c]; }
+            U32 end(size_t c) const { return std::min(mGrid->mStart[c + 1], mGrid->mStart[c] + 0xff); }
+            U8& state(U32 i) const { return mState[i]; }
+            GapAgg agg(U32 i) const
             {
-                for (S32 ix = 0; ix < w; ++ix)
+                const AirGap& g = mGrid->mGaps[i];
+                GapAgg a;
+                a.mFloorMin = a.mFloorMax = clipHeight(g.mFloor);
+                a.mCeilMin = a.mCeilMax = clipHeight(g.mCeiling);
+                a.mFlags = g.mFlags;
+                a.mClear = g.mClear;
+                return a;
+            }
+        };
+        struct MergedGaps
+        {
+            Grade* mGrade;
+            U32 start(size_t b) const { return mGrade->mStart[b]; }
+            U32 end(size_t b) const { return mGrade->mStart[b + 1]; }
+            U8& state(U32 i) const { return mGrade->mAggs[i].mState; }
+            const GapAgg& agg(U32 i) const { return mGrade->mAggs[i].mG; }
+        };
+        const FineGaps fine{ &grid, state.data() };
+        lv[0].mWidth = w;
+        lv[0].mHeight = h;
+        for (S32 iy = 0; iy < h; ++iy)
+        {
+            for (S32 ix = 0; ix < w; ++ix)
+            {
+                const size_t c = ix + iy * w;
+                const U32 count = grid.mStart[c + 1] - grid.mStart[c];
+                if (count > 0xff)
                 {
-                    Block& b = l0.mBlocks[ix + iy * w];
-                    const U32 count = grid.count(ix, iy);
-                    if (count > 0xff)
-                    {
-                        LL_WARNS_ONCE("SKNav") << "an air column has " << count << " gaps; keeping the lowest 255" << LL_ENDL;
-                    }
-                    b.mLeaf = true;
-                    b.mMerge = count <= 0xff;
-                    b.mCount = static_cast<U8>(std::min<U32>(count, 0xff));
-                    b.mFirst = static_cast<U32>(l0.mGaps.size());
-                    const AirGap* g = grid.gaps(ix, iy);
-                    for (U32 i = 0; i < b.mCount; ++i)
-                    {
-                        // Only air something can use makes a wall matter.
-                        const bool passable = (g[i].mFlags & (AirGap::TOP | AirGap::OPEN)) || g[i].mCeiling - g[i].mFloor >= pass;
-                        GapAgg a;
-                        a.mFloorMin = a.mFloorMax = clipHeight(g[i].mFloor);
-                        a.mCeilMin = a.mCeilMax = clipHeight(g[i].mCeiling);
-                        a.mFlags = g[i].mFlags;
-                        a.mClear = g[i].mClear;
-                        b.mMerge = b.mMerge && (g[i].mClear > 0 || !passable);  // a usable gap touching a wall stays fine
-                        l0.mGaps.push_back(a);
-                    }
+                    LL_WARNS_ONCE("SKNav") << "an air column has " << count << " gaps; keeping the lowest 255" << LL_ENDL;
+                }
+                for (U32 i = fine.start(c); i < fine.end(c); ++i)
+                {
+                    // Only air something can use makes a wall matter: a usable gap touching a wall stays fine.
+                    const AirGap& g = grid.mGaps[i];
+                    const bool passable = (g.mFlags & (AirGap::TOP | AirGap::OPEN)) || g.mCeiling - g.mFloor >= pass;
+                    state[i] = LIVE | (count <= 0xff && (g.mClear > 0 || !passable) ? MERGE : 0);
                 }
             }
         }
-        for (S32 lv = 1; lv <= AIR_MAX_LEVEL; ++lv)
-        {
-            const Level& below = levels[lv - 1];
-            Level& l = levels[lv];
+
+        auto join = [climb, flat](GapAgg& a, const GapAgg& o) {
+            // AVATAR's floor is carried, not compared: the air keeps the leaves it always had.
+            if ((o.mFlags & ~AirGap::AVATAR_FLOOR) != (a.mFlags & ~AirGap::AVATAR_FLOOR))
+            {
+                return false;
+            }
+            const U16 floor_min = std::min(a.mFloorMin, o.mFloorMin), floor_max = std::max(a.mFloorMax, o.mFloorMax);
+            const U16 ceil_min = std::min(a.mCeilMin, o.mCeilMin), ceil_max = std::max(a.mCeilMax, o.mCeilMax);
+            // A leaf's record is the highest floor under the lowest ceiling, so those must not cross.
+            if (floor_max - floor_min > ((a.mFlags & AirGap::TOP) ? flat : climb) || ceil_max - ceil_min > climb ||
+                (!(a.mFlags & AirGap::OPEN) && floor_max >= ceil_min))
+            {
+                return false;
+            }
+            a.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
+            a.mFloorMin = floor_min;
+            a.mFloorMax = floor_max;
+            a.mCeilMin = ceil_min;
+            a.mCeilMax = ceil_max;
+            a.mClear = std::min(a.mClear, o.mClear);
+            return true;
+        };
+        // Any level's gaps, for the passes that move between levels.
+        auto belowStart = [&](S32 L, size_t b) { return L == 0 ? fine.start(b) : lv[L].mStart[b]; };
+        auto belowEnd = [&](S32 L, size_t b) { return L == 0 ? fine.end(b) : lv[L].mStart[b + 1]; };
+        auto stateOf = [&](S32 L, U32 i) -> U8& { return L == 0 ? state[i] : lv[L].mAggs[i].mState; };
+        auto aggOf = [&](S32 L, U32 i) { return L == 0 ? fine.agg(i) : lv[L].mAggs[i].mG; };
+
+        // Each level merges a gap over a 2 x 2 block when every kid has one gap that agrees with it; the
+        // kids' finest live level is known once their block is done.
+        auto mergeLevel = [&](S32 L, const auto& below_gaps) {
+            const S32 B = L - 1;
+            Grade& below = lv[B];
+            Grade& l = lv[L];
             l.mWidth = (below.mWidth + 1) / 2;
             l.mHeight = (below.mHeight + 1) / 2;
-            l.mBlocks.resize(static_cast<size_t>(l.mWidth) * l.mHeight);
+            l.mStart.assign(static_cast<size_t>(l.mWidth) * l.mHeight + 1, 0);
+            below.mMinLive.assign(static_cast<size_t>(below.mWidth) * below.mHeight, NO_LIVE);
             for (S32 by = 0; by < l.mHeight; ++by)
             {
                 for (S32 bx = 0; bx < l.mWidth; ++bx)
                 {
-                    Block& b = l.mBlocks[bx + by * l.mWidth];
-                    const Block* kids[4] = { nullptr, nullptr, nullptr, nullptr };
-                    bool ok = 2 * bx + 1 < below.mWidth && 2 * by + 1 < below.mHeight;
-                    for (S32 k = 0; ok && k < 4; ++k)
+                    const size_t b = bx + by * l.mWidth;
+                    l.mStart[b + 1] = static_cast<U32>(l.mAggs.size());
+                    size_t kid[4];
+                    S32 kids = 0;
+                    for (S32 k = 0; k < 4; ++k)
                     {
-                        kids[k] = &below.mBlocks[(2 * bx + (k & 1)) + (2 * by + (k >> 1)) * below.mWidth];
-                        ok = kids[k]->mMerge && kids[k]->mCount == kids[0]->mCount;
-                    }
-                    if (!ok)
-                    {
-                        continue;
-                    }
-                    const U32 first = static_cast<U32>(l.mGaps.size());
-                    for (U32 i = 0; ok && i < kids[0]->mCount; ++i)
-                    {
-                        GapAgg a = below.mGaps[kids[0]->mFirst + i];
-                        for (S32 k = 1; k < 4; ++k)
+                        const S32 kx = 2 * bx + (k & 1), ky = 2 * by + (k >> 1);
+                        if (kx < below.mWidth && ky < below.mHeight)
                         {
-                            const GapAgg& o = below.mGaps[kids[k]->mFirst + i];
-                            // AVATAR's floor is carried, not compared: the air keeps the leaves it always had.
-                            ok = ok && (o.mFlags & ~AirGap::AVATAR_FLOOR) == (a.mFlags & ~AirGap::AVATAR_FLOOR);
-                            a.mFlags |= o.mFlags & AirGap::AVATAR_FLOOR;
-                            a.mFloorMin = std::min(a.mFloorMin, o.mFloorMin);
-                            a.mFloorMax = std::max(a.mFloorMax, o.mFloorMax);
-                            a.mCeilMin = std::min(a.mCeilMin, o.mCeilMin);
-                            a.mCeilMax = std::max(a.mCeilMax, o.mCeilMax);
-                            a.mClear = std::min(a.mClear, o.mClear);
+                            kid[kids++] = kx + ky * below.mWidth;
                         }
-                        // A leaf's record is the highest floor under the lowest ceiling, so those must not cross.
-                        ok = ok && a.mFloorMax - a.mFloorMin <= climb && a.mCeilMax - a.mCeilMin <= climb &&
-                             ((a.mFlags & AirGap::OPEN) || a.mFloorMax < a.mCeilMin);
-                        l.mGaps.push_back(a);
                     }
-                    if (!ok)
+                    if (kids == 4)
                     {
-                        l.mGaps.resize(first);
-                        continue;
-                    }
-                    b.mLeaf = b.mMerge = true;
-                    b.mCount = kids[0]->mCount;
-                    b.mFirst = first;
-                }
-            }
-        }
-
-        // Each cell's leaf level: the largest block over it that may stand
-        // as a leaf, found top down.
-        std::vector<S8> lvl(static_cast<size_t>(w) * h, 0);
-        auto fill = [&](S32 lv, S32 bx, S32 by) {
-            const S32 s = 1 << lv;
-            for (S32 y = by * s; y < std::min(h, (by + 1) * s); ++y)
-            {
-                for (S32 x = bx * s; x < std::min(w, (bx + 1) * s); ++x)
-                {
-                    lvl[x + y * w] = static_cast<S8>(lv);
-                }
-            }
-        };
-        std::function<void(S32, S32, S32)> assign = [&](S32 lv, S32 bx, S32 by) {
-            const Level& l = levels[lv];
-            if (bx >= l.mWidth || by >= l.mHeight)
-            {
-                return;
-            }
-            if (lv == 0 || l.mBlocks[bx + by * l.mWidth].mLeaf)
-            {
-                fill(lv, bx, by);
-                return;
-            }
-            for (S32 k = 0; k < 4; ++k)
-            {
-                assign(lv - 1, 2 * bx + (k & 1), 2 * by + (k >> 1));
-            }
-        };
-        for (S32 by = 0; by < levels[AIR_MAX_LEVEL].mHeight; ++by)
-        {
-            for (S32 bx = 0; bx < levels[AIR_MAX_LEVEL].mWidth; ++bx)
-            {
-                assign(AIR_MAX_LEVEL, bx, by);
-            }
-        }
-
-        // Restrict: a leaf beside one more than a level finer splits, until
-        // none does. A block's quarters may always stand as leaves.
-        for (bool changed = true; changed;)
-        {
-            changed = false;
-            for (S32 iy = 0; iy < h; ++iy)
-            {
-                for (S32 ix = 0; ix < w; ++ix)
-                {
-                    const S32 lv = lvl[ix + iy * w];
-                    const S32 s = 1 << lv;
-                    if (lv < 2 || ix % s || iy % s)
-                    {
-                        continue;
-                    }
-                    bool split = false;
-                    for (S32 t = 0; t < s && !split; ++t)
-                    {
-                        const S32 around[4][2] = { { ix - 1, iy + t }, { ix + s, iy + t }, { ix + t, iy - 1 }, { ix + t, iy + s } };
-                        for (const auto& n : around)
+                        U32 cursor[3] = { below_gaps.start(kid[1]), below_gaps.start(kid[2]), below_gaps.start(kid[3]) };
+                        const U32 end[3] = { below_gaps.end(kid[1]), below_gaps.end(kid[2]), below_gaps.end(kid[3]) };
+                        for (U32 i = below_gaps.start(kid[0]), n = below_gaps.end(kid[0]); i < n; ++i)
                         {
-                            if (n[0] >= 0 && n[1] >= 0 && n[0] < w && n[1] < h && lvl[n[0] + n[1] * w] < lv - 1)
+                            if (!(below_gaps.state(i) & MERGE))
                             {
-                                split = true;
+                                continue;
+                            }
+                            GapAgg a = below_gaps.agg(i);
+                            U32 pick[3];
+                            bool ok = true;
+                            for (S32 k = 0; k < 3 && ok; ++k)
+                            {
+                                // Every kid runs lowest first: a's match lies past the last one taken.
+                                ok = false;
+                                for (U32 j = cursor[k]; j < end[k]; ++j)
+                                {
+                                    const GapAgg o = below_gaps.agg(j);
+                                    if (o.mFloorMin > a.mFloorMax + climb)
+                                    {
+                                        break;
+                                    }
+                                    if ((below_gaps.state(j) & MERGE) && join(a, o))
+                                    {
+                                        pick[k] = j;
+                                        ok = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!ok)
+                            {
+                                continue;
+                            }
+                            Agg merged;
+                            merged.mG = a;
+                            merged.mState = MERGE | LIVE;
+                            merged.mKid = static_cast<U32>(l.mKids.size());
+                            l.mKids.push_back(i);
+                            below_gaps.state(i) &= ~LIVE;
+                            for (S32 k = 0; k < 3; ++k)
+                            {
+                                l.mKids.push_back(pick[k]);
+                                below_gaps.state(pick[k]) &= ~LIVE;
+                                cursor[k] = pick[k] + 1;
+                            }
+                            l.mAggs.push_back(merged);
+                        }
+                        l.mStart[b + 1] = static_cast<U32>(l.mAggs.size());
+                    }
+                    for (S32 k = 0; k < kids; ++k)
+                    {
+                        S8& m = below.mMinLive[kid[k]];
+                        for (U32 i = below_gaps.start(kid[k]), n = below_gaps.end(kid[k]); i < n && m > B; ++i)
+                        {
+                            m = (below_gaps.state(i) & LIVE) ? static_cast<S8>(B) : m;
+                        }
+                        if (B > 0)
+                        {
+                            const Grade& g = lv[B - 1];
+                            const S32 kx = static_cast<S32>(kid[k] % below.mWidth), ky = static_cast<S32>(kid[k] / below.mWidth);
+                            for (S32 t = 0; t < 4; ++t)
+                            {
+                                const S32 gx = 2 * kx + (t & 1), gy = 2 * ky + (t >> 1);
+                                if (gx < g.mWidth && gy < g.mHeight)
+                                {
+                                    m = std::min(m, g.mMinLive[gx + gy * g.mWidth]);
+                                }
                             }
                         }
                     }
-                    if (split)
+                }
+            }
+        };
+        lv[1].mAggs.reserve(grid.mGaps.size() / 4);
+        mergeLevel(1, fine);
+        for (S32 L = 2; L <= AIR_MAX_LEVEL; ++L)
+        {
+            lv[L].mAggs.reserve(lv[L - 1].mAggs.size() / 3);
+            mergeLevel(L, MergedGaps{ &lv[L - 1] });
+        }
+        {
+            Grade& top = lv[AIR_MAX_LEVEL];
+            const Grade& g = lv[AIR_MAX_LEVEL - 1];
+            top.mMinLive.assign(static_cast<size_t>(top.mWidth) * top.mHeight, NO_LIVE);
+            for (S32 by = 0; by < top.mHeight; ++by)
+            {
+                for (S32 bx = 0; bx < top.mWidth; ++bx)
+                {
+                    const size_t b = bx + by * top.mWidth;
+                    S8& m = top.mMinLive[b];
+                    m = top.mStart[b + 1] > top.mStart[b] ? static_cast<S8>(AIR_MAX_LEVEL) : m;
+                    for (S32 t = 0; t < 4; ++t)
                     {
-                        fill(lv - 1, ix >> (lv - 1), iy >> (lv - 1));
-                        fill(lv - 1, (ix >> (lv - 1)) + 1, iy >> (lv - 1));
-                        fill(lv - 1, ix >> (lv - 1), (iy >> (lv - 1)) + 1);
-                        fill(lv - 1, (ix >> (lv - 1)) + 1, (iy >> (lv - 1)) + 1);
-                        changed = true;
+                        const S32 gx = 2 * bx + (t & 1), gy = 2 * by + (t >> 1);
+                        if (gx < g.mWidth && gy < g.mHeight)
+                        {
+                            m = std::min(m, g.mMinLive[gx + gy * g.mWidth]);
+                        }
                     }
                 }
             }
         }
 
-        // Leaves in key order: the level-4 blocks by their own key, each walked in Z order.
-        std::function<void(S32, S32, S32)> emit = [&](S32 ix, S32 iy, S32 lv) {
-            if (ix >= w || iy >= h)
+        // Restrict, gap by gap: a live gap beside an overlapping live one more than a level finer splits into its kids.
+        auto overlaps = [](const GapAgg& a, const GapAgg& b) {
+            const S32 ca = (a.mFlags & AirGap::OPEN) ? 0xffff : a.mCeilMin, cb = (b.mFlags & AirGap::OPEN) ? 0xffff : b.mCeilMin;
+            return std::min(ca, cb) - std::max<S32>(a.mFloorMax, b.mFloorMax) >= 1;
+        };
+        // Whether a live gap of level hi or finer overlapping a lies beside a block's side, looking down the
+        // neighbour's kids along the shared edge only where something that fine lives.
+        auto finerBeside = [&](S32 L, S32 nx, S32 ny, S32 side, S32 hi, const GapAgg& a) {
+            struct Node
             {
-                return;
-            }
-            if (lvl[ix + iy * w] < lv)
+                S32 mLevel, mX, mY;
+            };
+            Node stack[2 * (AIR_MAX_LEVEL + 1)];
+            S32 top = 0;
+            stack[top++] = { L, nx, ny };
+            // Side 0 looks back from +x, 1 from -x, 2 from +y, 3 from -y.
+            const S32 fx = side == 0 ? 1 : 0, fy = side == 2 ? 1 : 0;
+            while (top > 0)
             {
-                const S32 half = 1 << (lv - 1);
-                for (S32 k = 0; k < 4; ++k)
+                const Node n = stack[--top];
+                const Grade& m = lv[n.mLevel];
+                if (n.mX >= m.mWidth || n.mY >= m.mHeight)
                 {
-                    emit(ix + (k & 1) * half, iy + (k >> 1) * half, lv - 1);
+                    continue;
                 }
-                return;
-            }
-            AirLeaf leaf;
-            leaf.mX = static_cast<U16>(ix);
-            leaf.mY = static_cast<U16>(iy);
-            leaf.mLevel = static_cast<U8>(lv);
-            leaf.mFirstGap = static_cast<U32>(out.mGaps.size());
-            if (lv == 0)
-            {
-                const U32 count = std::min<U32>(grid.count(ix, iy), 0xff);
-                const AirGap* g = grid.gaps(ix, iy);
-                for (U32 i = 0; i < count; ++i)
+                const size_t mb = n.mX + n.mY * m.mWidth;
+                if (m.mMinLive[mb] > hi)
                 {
-                    out.mGaps.push_back(record(g[i]));
+                    continue;
                 }
-                leaf.mGapCount = static_cast<U8>(count);
-            }
-            else
-            {
-                const Level& l = levels[lv];
-                const Block& b = l.mBlocks[(ix >> lv) + (iy >> lv) * l.mWidth];
-                for (U32 i = 0; i < b.mCount; ++i)
+                if (n.mLevel <= hi)
                 {
-                    out.mGaps.push_back(record(l.mGaps[b.mFirst + i]));
+                    for (U32 j = belowStart(n.mLevel, mb), e = belowEnd(n.mLevel, mb); j < e; ++j)
+                    {
+                        if ((stateOf(n.mLevel, j) & LIVE) && overlaps(a, aggOf(n.mLevel, j)))
+                        {
+                            return true;
+                        }
+                    }
                 }
-                leaf.mGapCount = b.mCount;
+                if (n.mLevel > 0)
+                {
+                    for (S32 t = 0; t < 2; ++t)
+                    {
+                        stack[top++] = { n.mLevel - 1, 2 * n.mX + (side < 2 ? fx : t), 2 * n.mY + (side < 2 ? t : fy) };
+                    }
+                }
             }
-            if (leaf.mGapCount > 0)
+            return false;
+        };
+        auto neighbour = [&](S32 L, S32 bx, S32 by, S32 side, S32& nx, S32& ny) {
+            nx = bx + (side == 0 ? -1 : side == 1 ? 1 : 0);
+            ny = by + (side == 2 ? -1 : side == 3 ? 1 : 0);
+            return nx >= 0 && ny >= 0 && nx < lv[L].mWidth && ny < lv[L].mHeight;
+        };
+        struct Ref
+        {
+            S32 mLevel;
+            U32 mAgg;
+            S32 mX;     ///< its block
+            S32 mY;
+        };
+        std::vector<Ref> work;
+        for (S32 L = 2; L <= AIR_MAX_LEVEL; ++L)
+        {
+            const Grade& l = lv[L];
+            for (S32 by = 0; by < l.mHeight; ++by)
             {
-                out.mLeaves.push_back(leaf);
+                for (S32 bx = 0; bx < l.mWidth; ++bx)
+                {
+                    const size_t b = bx + by * l.mWidth;
+                    // Only a block beside finer live air can need to split.
+                    bool near_fine = false;
+                    for (S32 side = 0, nx, ny; side < 4 && !near_fine; ++side)
+                    {
+                        near_fine = neighbour(L, bx, by, side, nx, ny) && l.mMinLive[nx + ny * l.mWidth] <= L - 2;
+                    }
+                    for (U32 i = l.mStart[b]; near_fine && i < l.mStart[b + 1]; ++i)
+                    {
+                        if (l.mAggs[i].mState & LIVE)
+                        {
+                            work.push_back({ L, i, bx, by });
+                        }
+                    }
+                }
+            }
+        }
+        while (!work.empty())
+        {
+            const Ref r = work.back();
+            work.pop_back();
+            Grade& l = lv[r.mLevel];
+            Agg& a = l.mAggs[r.mAgg];
+            if (!(a.mState & LIVE))
+            {
+                continue;
+            }
+            bool split = false;
+            for (S32 side = 0, nx, ny; side < 4 && !split; ++side)
+            {
+                split = neighbour(r.mLevel, r.mX, r.mY, side, nx, ny) && finerBeside(r.mLevel, nx, ny, side, r.mLevel - 2, a.mG);
+            }
+            if (!split)
+            {
+                continue;
+            }
+            a.mState &= ~LIVE;
+            const S32 B = r.mLevel - 1;
+            for (S32 M = r.mLevel, x = r.mX, y = r.mY; M <= AIR_MAX_LEVEL; ++M, x >>= 1, y >>= 1)
+            {
+                S8& m = lv[M].mMinLive[x + y * lv[M].mWidth];
+                m = std::min(m, static_cast<S8>(B));
+            }
+            for (S32 k = 0; k < 4; ++k)
+            {
+                const U32 j = l.mKids[a.mKid + k];
+                const S32 kx = 2 * r.mX + (k & 1), ky = 2 * r.mY + (k >> 1);
+                stateOf(B, j) |= LIVE;
+                S8& m = lv[B].mMinLive[kx + ky * lv[B].mWidth];
+                m = std::min(m, static_cast<S8>(B));
+                if (B >= 2)
+                {
+                    work.push_back({ B, j, kx, ky });
+                }
+            }
+            // Coarser live air beside the kids may now be too coarse; a block over this one too is not beside it.
+            for (S32 side = 0, nx, ny; side < 4; ++side)
+            {
+                if (!neighbour(r.mLevel, r.mX, r.mY, side, nx, ny))
+                {
+                    continue;
+                }
+                for (S32 M = r.mLevel + 1, d = 1; M <= AIR_MAX_LEVEL; ++M, ++d)
+                {
+                    const S32 mx = nx >> d, my = ny >> d;
+                    if (mx == (r.mX >> d) && my == (r.mY >> d))
+                    {
+                        break;
+                    }
+                    const Grade& m = lv[M];
+                    const size_t mb = mx + my * m.mWidth;
+                    for (U32 j = m.mStart[mb]; j < m.mStart[mb + 1]; ++j)
+                    {
+                        if (m.mAggs[j].mState & LIVE)
+                        {
+                            work.push_back({ M, j, mx, my });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Which blocks have live air under them, bottom up, so the walk skips the rest.
+        for (S32 L = 1; L <= AIR_MAX_LEVEL; ++L)
+        {
+            Grade& l = lv[L];
+            l.mFiner.assign(static_cast<size_t>(l.mWidth) * l.mHeight, 0);
+            for (S32 by = 0; by < l.mHeight; ++by)
+            {
+                for (S32 bx = 0; bx < l.mWidth; ++bx)
+                {
+                    const size_t b = bx + by * l.mWidth;
+                    l.mFiner[b] = l.mMinLive[b] < L;
+                }
+            }
+        }
+
+        // A leaf per block holding its live gaps, preorder: key order, coarsest first at a shared origin.
+        struct Visit
+        {
+            S32 mLevel;
+            S32 mX;
+            S32 mY;
+            S32 mParent;    ///< the nearest coarser leaf over the block, or -1
+        };
+        std::vector<Visit> stack;
+        out.mGaps.reserve(grid.mGaps.size() / 2);
+        out.mLeaves.reserve(grid.mGaps.size() / 3);
+        auto emit = [&](S32 root_x, S32 root_y) {
+            stack.push_back({ AIR_MAX_LEVEL, root_x, root_y, -1 });
+            while (!stack.empty())
+            {
+                const Visit v = stack.back();
+                stack.pop_back();
+                const Grade& l = lv[v.mLevel];
+                if (v.mX >= l.mWidth || v.mY >= l.mHeight)
+                {
+                    continue;
+                }
+                const size_t b = v.mX + v.mY * l.mWidth;
+                AirLeaf leaf;
+                leaf.mX = static_cast<U16>(v.mX << v.mLevel);
+                leaf.mY = static_cast<U16>(v.mY << v.mLevel);
+                leaf.mLevel = static_cast<U8>(v.mLevel);
+                leaf.mFirstGap = static_cast<U32>(out.mGaps.size());
+                for (U32 i = belowStart(v.mLevel, b), n = belowEnd(v.mLevel, b); i < n; ++i)
+                {
+                    if (stateOf(v.mLevel, i) & LIVE)
+                    {
+                        out.mGaps.push_back(v.mLevel == 0 ? record(grid.mGaps[i]) : record(l.mAggs[i].mG));
+                    }
+                }
+                leaf.mGapCount = static_cast<U8>(out.mGaps.size() - leaf.mFirstGap);
+                S32 parent = v.mParent;
+                if (leaf.mGapCount > 0)
+                {
+                    const S32 at = static_cast<S32>(out.mLeaves.size());
+                    leaf.mParent = static_cast<U16>(parent < 0 ? 0 : at - parent);
+                    out.mLeaves.push_back(leaf);
+                    parent = at;
+                }
+                if (v.mLevel > 0 && l.mFiner[b])
+                {
+                    for (S32 k = 3; k >= 0; --k)
+                    {
+                        stack.push_back({ v.mLevel - 1, 2 * v.mX + (k & 1), 2 * v.mY + (k >> 1), parent });
+                    }
+                }
             }
         };
-        const S32 bw = levels[AIR_MAX_LEVEL].mWidth, bh = levels[AIR_MAX_LEVEL].mHeight;
+        const S32 bw = lv[AIR_MAX_LEVEL].mWidth, bh = lv[AIR_MAX_LEVEL].mHeight;
         S32 side = 1;
         while (side < std::max(bw, bh))
         {
@@ -441,7 +663,7 @@ namespace sknav
                 bx |= ((m >> (2 * b)) & 1) << b;
                 by |= ((m >> (2 * b + 1)) & 1) << b;
             }
-            emit(static_cast<S32>(bx) << AIR_MAX_LEVEL, static_cast<S32>(by) << AIR_MAX_LEVEL, AIR_MAX_LEVEL);
+            emit(static_cast<S32>(bx), static_cast<S32>(by));
         }
         out.mLeaves.shrink_to_fit();
         out.mGaps.shrink_to_fit();

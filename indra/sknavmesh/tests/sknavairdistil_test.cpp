@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 
 namespace
 {
@@ -86,27 +87,131 @@ namespace
         return g;
     }
 
-    /// Per cell, the leaf covering it, or -1; false if any cell is covered twice.
-    bool cover(const TileAir& air, std::vector<S32>& out)
+    /// Per cell, its finest leaf, or -1: leaves come coarsest first, so finer ones overwrite.
+    void cover(const TileAir& air, std::vector<S32>& out)
     {
         out.assign(static_cast<size_t>(air.mWidth) * air.mHeight, -1);
         for (size_t i = 0; i < air.mLeaves.size(); ++i)
         {
             const AirLeaf& l = air.mLeaves[i];
             const S32 s = 1 << l.mLevel;
-            for (S32 y = l.mY; y < l.mY + s; ++y)
+            for (S32 y = l.mY; y < std::min(air.mHeight, l.mY + s); ++y)
             {
-                for (S32 x = l.mX; x < l.mX + s; ++x)
+                for (S32 x = l.mX; x < std::min(air.mWidth, l.mX + s); ++x)
                 {
-                    if (x >= air.mWidth || y >= air.mHeight || out[x + y * air.mWidth] >= 0)
-                    {
-                        return false;
-                    }
                     out[x + y * air.mWidth] = static_cast<S32>(i);
                 }
             }
         }
-        return true;
+    }
+
+    bool covers(const AirLeaf& l, S32 x, S32 y)
+    {
+        return x >= l.mX && y >= l.mY && x < l.mX + (1 << l.mLevel) && y < l.mY + (1 << l.mLevel);
+    }
+
+    /// The leaf holding each gap.
+    std::vector<S32> leafOfGap(const TileAir& air)
+    {
+        std::vector<S32> out(air.mGaps.size(), -1);
+        for (size_t i = 0; i < air.mLeaves.size(); ++i)
+        {
+            for (U32 k = 0; k < air.mLeaves[i].mGapCount; ++k)
+            {
+                out[air.mLeaves[i].mFirstGap + k] = static_cast<S32>(i);
+            }
+        }
+        return out;
+    }
+
+    /// The level of the leaf holding the column's gap whose floor is nearest floor, or -1.
+    S32 levelAt(const TileAir& air, S32 ix, S32 iy, S32 floor)
+    {
+        AirColumn column;
+        airColumn(air, findLeafByKey(air, ix, iy), column);
+        const std::vector<S32> owner = leafOfGap(air);
+        S32 best = -1, dist = 1 << 30;
+        for (U32 k = 0; k < column.mCount; ++k)
+        {
+            const S32 d = std::abs(static_cast<S32>(air.mGaps[column.mGap[k]].mFloor) - floor);
+            if (d < dist)
+            {
+                dist = d;
+                best = air.mLeaves[owner[column.mGap[k]]].mLevel;
+            }
+        }
+        return best;
+    }
+
+    /// A flat slab over ground that varies under it: the lower gaps change from column to column, the slab's top does not.
+    AirGrid slab(const std::function<void(S32, S32, std::vector<AirGap>&)>& under, S32 n = 64)
+    {
+        AirGrid g;
+        g.mCell = g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = n;
+        g.mStart.assign(static_cast<size_t>(n) * n + 1, 0);
+        std::vector<AirGap> column;
+        for (S32 iy = 0; iy < n; ++iy)
+        {
+            for (S32 ix = 0; ix < n; ++ix)
+            {
+                column.clear();
+                under(ix, iy, column);
+                AirGap top;
+                top.mFloor = 80;    // the slab, from 9.5 to 10 m
+                top.mCeiling = 400;
+                top.mFlags = AirGap::TOP | AirGap::OPEN | AirGap::OWN_SKY;
+                if (column.empty() || column.back().mCeiling <= 76)
+                {
+                    column.push_back(top);
+                }
+                g.mGaps.insert(g.mGaps.end(), column.begin(), column.end());
+                g.mStart[ix + iy * n + 1] = static_cast<U32>(g.mGaps.size());
+            }
+        }
+        computeClearance(g, CLIMB, OVERLAP);
+        return g;
+    }
+
+    /// Ground falling away a cell at a time in x, 1.5 m in all: the gap under the slab changes in every column.
+    void dippingFloor(S32 ix, S32, std::vector<AirGap>& c)
+    {
+        AirGap under;
+        under.mFloor = static_cast<U16>(12 + (ix % 32) * 3 / 8);
+        under.mCeiling = 76;
+        under.mFlags = AirGap::TOP;
+        c.push_back(under);
+    }
+
+    /// A 1.5 m deep channel across y = 24..40 with a pipe along it splitting the air under the slab in two.
+    void channel(S32, S32 iy, std::vector<AirGap>& c)
+    {
+        const bool in_channel = iy >= 24 && iy < 40, pipe = iy >= 30 && iy < 34;
+        AirGap under;
+        under.mFloor = in_channel ? 0 : 12;
+        under.mFlags = AirGap::TOP;
+        under.mCeiling = 76;
+        if (pipe)
+        {
+            AirGap low = under;
+            low.mCeiling = 20;
+            c.push_back(low);
+            under.mFloor = 28;
+            under.mFlags = 0;
+        }
+        c.push_back(under);
+    }
+
+    /// A sealed pocket under the slab at a few cells, the slab solid down to the ground elsewhere.
+    void pocket(S32 ix, S32 iy, std::vector<AirGap>& c)
+    {
+        if (ix >= 2 && ix < 4 && iy >= 2 && iy < 4)
+        {
+            AirGap under;
+            under.mFloor = 40;
+            under.mCeiling = 44;
+            c.push_back(under);
+        }
     }
 }
 
@@ -122,34 +227,30 @@ namespace tut
     template<> template<>
     void sknavairdistil_object::test<1>()
     {
-        set_test_name("a merged leaf covers exactly the cells it replaced, gaps within climb");
+        set_test_name("every column's gaps are its leaves' gaps, each within climb of the fine one");
         const AirGrid g = room();
         TileAir air;
         distilAir(g, CLIMB, air);
-        std::vector<S32> leaf_of;
-        ensure("no cell covered twice", cover(air, leaf_of));
+        const std::vector<S32> owner = leafOfGap(air);
         size_t coarse = 0;
         for (S32 iy = 0; iy < g.mHeight; ++iy)
         {
             for (S32 ix = 0; ix < g.mWidth; ++ix)
             {
-                const S32 li = leaf_of[ix + iy * g.mWidth];
                 const std::string at = llformat(" at (%d, %d)", ix, iy);
-                if (g.count(ix, iy) == 0)
-                {
-                    ensure("a solid column has no leaf" + at, li < 0);
-                    continue;
-                }
-                ensure("every column with air is covered" + at, li >= 0);
-                const AirLeaf& l = air.mLeaves[li];
-                coarse += l.mLevel > 0;
-                ensure_equals("gap count" + at, static_cast<U32>(l.mGapCount), g.count(ix, iy));
-                for (U32 k = 0; k < l.mGapCount; ++k)
+                AirColumn column;
+                airColumn(air, findLeafByKey(air, ix, iy), column);
+                ensure_equals("gap count" + at, column.mCount, g.count(ix, iy));
+                for (U32 k = 0; k < column.mCount; ++k)
                 {
                     const AirGap& fine = g.gaps(ix, iy)[k];
-                    const AirGap& rec = air.mGaps[l.mFirstGap + k];
+                    const AirGap& rec = air.mGaps[column.mGap[k]];
+                    const AirLeaf& l = air.mLeaves[owner[column.mGap[k]]];
+                    coarse += l.mLevel > 0;
+                    ensure("the leaf covers the column" + at, covers(l, ix, iy));
                     ensure_equals("flags" + at, rec.mFlags, fine.mFlags);
                     ensure("floor within climb" + at, std::abs(rec.mFloor - fine.mFloor) <= CLIMB);
+                    ensure("a walkable floor within a third of one" + at, !(fine.mFlags & AirGap::TOP) || rec.mFloor - fine.mFloor <= CLIMB / 3);
                     ensure("air inside the column's" + at, rec.mFloor >= fine.mFloor && rec.mClear <= fine.mClear);
                     if (fine.mFlags & AirGap::OPEN)
                     {
@@ -159,46 +260,53 @@ namespace tut
                     {
                         ensure("ceiling within climb" + at, rec.mCeiling <= fine.mCeiling && fine.mCeiling - rec.mCeiling <= CLIMB);
                     }
-                }
-                if (l.mLevel > 0)
-                {
-                    for (U32 k = 0; k < l.mGapCount; ++k)
-                    {
-                        const AirGap& fine = g.gaps(ix, iy)[k];
-                        const bool usable = (fine.mFlags & (AirGap::TOP | AirGap::OPEN)) || fine.mCeiling - fine.mFloor >= 8;
-                        ensure("no merged usable cell touches a wall" + at, fine.mClear > 0 || !usable);
-                    }
+                    const bool usable = (fine.mFlags & (AirGap::TOP | AirGap::OPEN)) || fine.mCeiling - fine.mFloor >= 8;
+                    ensure("no merged usable gap touches a wall" + at, l.mLevel == 0 || fine.mClear > 0 || !usable);
                 }
             }
         }
         ensure("open floor merges", coarse > g.mGaps.size() / 2);
         ensure("far fewer leaves than columns", air.mLeaves.size() * 4 < static_cast<size_t>(g.mWidth * g.mHeight));
-        ensure("open floor away from the wall is a 1 m leaf", air.mLeaves[leaf_of[4 + 40 * g.mWidth]].mLevel >= 3);
-        ensure_equals("beside the wall stays fine", static_cast<S32>(air.mLeaves[leaf_of[19 + 10 * g.mWidth]].mLevel), 0);
+        ensure("open floor away from the wall is a 1 m leaf", levelAt(air, 4, 40, 0) >= 3);
+        ensure_equals("beside the wall stays fine", levelAt(air, 19, 10, 0), 0);
     }
 
     template<> template<>
     void sknavairdistil_object::test<2>()
     {
-        set_test_name("touching leaves differ by at most one level");
-        const AirGrid g = room();
+        set_test_name("a leaf's gap and an overlapping gap beside it differ by at most one level");
+        AirGrid g = room();
         TileAir air;
         distilAir(g, CLIMB, air);
-        std::vector<S32> leaf_of;
-        ensure("covered once", cover(air, leaf_of));
+        const std::vector<S32> owner = leafOfGap(air);
         S32 worst = 0;
-        for (S32 iy = 0; iy < g.mHeight; ++iy)
+        for (size_t li = 0; li < air.mLeaves.size(); ++li)
         {
-            for (S32 ix = 0; ix < g.mWidth; ++ix)
+            const AirLeaf& l = air.mLeaves[li];
+            const S32 s = 1 << l.mLevel;
+            for (S32 k = 0; k < 4 * s; ++k)
             {
-                const S32 a = leaf_of[ix + iy * g.mWidth];
-                const S32 right = ix + 1 < g.mWidth ? leaf_of[ix + 1 + iy * g.mWidth] : -1;
-                const S32 up = iy + 1 < g.mHeight ? leaf_of[ix + (iy + 1) * g.mWidth] : -1;
-                for (S32 b : { right, up })
+                const S32 side = k / s, t = k % s;
+                const S32 x = side == 0 ? l.mX - 1 : side == 1 ? l.mX + s : l.mX + t;
+                const S32 y = side == 2 ? l.mY - 1 : side == 3 ? l.mY + s : l.mY + t;
+                if (x < 0 || y < 0 || x >= air.mWidth || y >= air.mHeight)
                 {
-                    if (a >= 0 && b >= 0)
+                    continue;
+                }
+                AirColumn column;
+                airColumn(air, findLeafByKey(air, x, y), column);
+                for (U32 i = 0; i < l.mGapCount; ++i)
+                {
+                    const AirGap& a = air.mGaps[l.mFirstGap + i];
+                    for (U32 j = 0; j < column.mCount; ++j)
                     {
-                        worst = std::max(worst, std::abs(air.mLeaves[a].mLevel - air.mLeaves[b].mLevel));
+                        const AirGap& b = air.mGaps[column.mGap[j]];
+                        const AirLeaf& o = air.mLeaves[owner[column.mGap[j]]];
+                        const S32 ca = (a.mFlags & AirGap::OPEN) ? 0xffff : a.mCeiling, cb = (b.mFlags & AirGap::OPEN) ? 0xffff : b.mCeiling;
+                        if (!covers(o, l.mX, l.mY) && std::min(ca, cb) - std::max(a.mFloor, b.mFloor) >= 1)
+                        {
+                            worst = std::max(worst, l.mLevel - o.mLevel);
+                        }
                     }
                 }
             }
@@ -214,8 +322,7 @@ namespace tut
         TileAir before;
         distilAir(g, CLIMB, before);
         std::vector<S32> leaf_of;
-        cover(before, leaf_of);
-        ensure("a 1 m leaf before", before.mLeaves[leaf_of[4 + 40 * g.mWidth]].mLevel >= 3);
+        ensure("a 1 m leaf before", levelAt(before, 4, 40, 0) >= 3);
         // Clear the own-sky bit over a patch straddling that leaf's corner.
         for (S32 iy = 36; iy < 44; ++iy)
         {
@@ -228,7 +335,7 @@ namespace tut
         TileAir air;
         distilAir(g, CLIMB, air);
         cover(air, leaf_of);
-        ensure("no leaf straddles the change", air.mLeaves[leaf_of[4 + 40 * g.mWidth]].mLevel <= 2);
+        ensure("no leaf straddles the change", levelAt(air, 4, 40, 0) <= 2);
         ensure("inside it the flags hold", (air.mGaps[air.mLeaves[leaf_of[1 + 40 * g.mWidth]].mFirstGap].mFlags & AirGap::OWN_SKY) == 0);
     }
 
@@ -403,7 +510,9 @@ namespace tut
         TileAir air;
         distilAir(g, CLIMB, air);
         airSeams(g, air);
-        ensure_equals("leaf capped", static_cast<U32>(air.mLeaves[0].mGapCount), 255u);
+        AirColumn column;
+        airColumn(air, findLeafByKey(air, 0, 0), column);
+        ensure_equals("leaf capped", column.mCount, 255u);
         ensure_equals("seam capped", air.mSeams[TileAir::SIDE_NEG_X].count(0), 255u);
         ensure_equals("seam along y capped", air.mSeams[TileAir::SIDE_NEG_Y].count(0), 255u);
     }
@@ -440,19 +549,31 @@ namespace tut
     template<> template<>
     void sknavairdistil_object::test<10>()
     {
-        set_test_name("leaves come in key order, and a cell's leaf by key is the leaf covering it, on whole and ragged tiles");
-        for (const auto& size : { std::make_pair(64, 64), std::make_pair(50, 37) })
+        set_test_name("leaves come in key order, coarsest first, linked to their parents, and a cell's leaf by key is its finest");
+        S32 nested = 0, solid = 0;
+        for (const AirGrid& g : { room(64, 64), room(50, 37), slab(dippingFloor), slab(channel), slab(pocket) })
         {
-            const AirGrid g = room(size.first, size.second);
             TileAir air;
             distilAir(g, CLIMB, air);
-            for (size_t i = 1; i < air.mLeaves.size(); ++i)
+            for (size_t i = 0; i < air.mLeaves.size(); ++i)
             {
-                ensure("leaves in strict key order", airKey(air.mLeaves[i - 1].mX, air.mLeaves[i - 1].mY) < airKey(air.mLeaves[i].mX, air.mLeaves[i].mY));
+                const AirLeaf& l = air.mLeaves[i];
+                if (i > 0)
+                {
+                    const AirLeaf& p = air.mLeaves[i - 1];
+                    const U32 kp = airKey(p.mX, p.mY), kl = airKey(l.mX, l.mY);
+                    ensure("leaves in key order, coarsest first", kp < kl || (kp == kl && p.mLevel > l.mLevel));
+                }
+                // The parent is the last leaf before it that covers it.
+                S32 want = -1;
+                for (S32 j = static_cast<S32>(i) - 1; j >= 0 && want < 0; --j)
+                {
+                    want = air.mLeaves[j].mLevel > l.mLevel && covers(air.mLeaves[j], l.mX, l.mY) ? j : -1;
+                }
+                ensure_equals(llformat("parent of leaf %d", static_cast<S32>(i)), parentLeaf(air, static_cast<S32>(i)), want);
             }
             std::vector<S32> leaf_of;
-            ensure("covered once", cover(air, leaf_of));
-            S32 solid = 0;
+            cover(air, leaf_of);
             for (S32 iy = -1; iy <= g.mHeight; ++iy)
             {
                 for (S32 ix = -1; ix <= g.mWidth; ++ix)
@@ -460,12 +581,15 @@ namespace tut
                     const bool inside = ix >= 0 && iy >= 0 && ix < g.mWidth && iy < g.mHeight;
                     const S32 want = inside ? leaf_of[ix + iy * g.mWidth] : -1;
                     solid += inside && want < 0;
+                    nested += want >= 0 && parentLeaf(air, want) >= 0;
                     ensure_equals(llformat("leaf at (%d, %d)", ix, iy), findLeafByKey(air, ix, iy), want);
                 }
             }
-            ensure("the fixture has solid cells between leaves", solid > 0);
         }
+        ensure("the fixtures have solid cells between leaves", solid > 0);
+        ensure("and leaves inside leaves", nested > 0);
     }
+
     template<> template<>
     void sknavairdistil_object::test<11>()
     {
@@ -493,5 +617,108 @@ namespace tut
         ensure("the record format", layout.find("\"face\":\"<I\"") != std::string::npos);
         ensure("the bit fields", layout.find("\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":16,") != std::string::npos);
         ensure("the last section", layout.find("[\"face_offsets\",\"face\",2]]}") != std::string::npos);
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<12>()
+    {
+        set_test_name("a flat slab over a dipping floor keeps its own gap coarse, the floor under it fine");
+        const AirGrid g = slab(dippingFloor);
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        for (S32 iy = 4; iy < 60; iy += 9)
+        {
+            for (S32 ix = 4; ix < 60; ix += 9)
+            {
+                ensure_equals(llformat("the slab's top is 2 m leaves at (%d, %d)", ix, iy), levelAt(air, ix, iy, 80), AIR_MAX_LEVEL);
+            }
+        }
+        ensure("the floor under it is finer", levelAt(air, 20, 20, 12 + 20 * 3 / 8) < AIR_MAX_LEVEL);
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<13>()
+    {
+        set_test_name("a slab over a channel keeps its top coarse where the gaps under it change in number");
+        const AirGrid g = slab(channel);
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        ensure_equals("over the bank", levelAt(air, 8, 8, 80), AIR_MAX_LEVEL);
+        ensure_equals("over the channel's edge", levelAt(air, 8, 24, 80), AIR_MAX_LEVEL);
+        ensure_equals("over the pipe", levelAt(air, 40, 31, 80), AIR_MAX_LEVEL);
+        ensure("under it the bank's edge is fine", levelAt(air, 8, 23, 12) < AIR_MAX_LEVEL);
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<14>()
+    {
+        set_test_name("a wall through the slab still splits its top, and its leaves step down to it");
+        AirGrid g = slab([](S32, S32, std::vector<AirGap>& c) {
+            AirGap under;
+            under.mFloor = 12;
+            under.mCeiling = 76;
+            under.mFlags = AirGap::TOP;
+            c.push_back(under);
+        });
+        // A solid column from the ground past the slab's top at x = 30..31: no air in it at all.
+        AirGrid walled = g;
+        walled.mGaps.clear();
+        for (S32 iy = 0; iy < g.mHeight; ++iy)
+        {
+            for (S32 ix = 0; ix < g.mWidth; ++ix)
+            {
+                if (ix != 30 && ix != 31)
+                {
+                    walled.mGaps.insert(walled.mGaps.end(), g.gaps(ix, iy), g.gaps(ix, iy) + g.count(ix, iy));
+                }
+                walled.mStart[ix + iy * g.mWidth + 1] = static_cast<U32>(walled.mGaps.size());
+            }
+        }
+        computeClearance(walled, CLIMB, OVERLAP);
+        TileAir air;
+        distilAir(walled, CLIMB, air);
+        ensure_equals("beside the wall the top is fine", levelAt(air, 29, 40, 80), 0);
+        ensure_equals("and the floor under the slab", levelAt(air, 32, 40, 12), 0);
+        ensure("a step away it is coarser", levelAt(air, 27, 40, 80) >= 1);
+        ensure_equals("far from it 2 m leaves", levelAt(air, 56, 40, 80), AIR_MAX_LEVEL);
+    }
+
+    template<> template<>
+    void sknavairdistil_object::test<15>()
+    {
+        set_test_name("a walkable floor in steps merges only where a leaf's floors are within a third of a climb");
+        // Treads of 0.25 m rising 3 units each, open overhead: each tread is within a climb of the next, two are not within a third of one.
+        AirGrid g;
+        g.mCell = g.mUnit = 0.125f;
+        g.mWidth = g.mHeight = 64;
+        g.mStart.assign(64 * 64 + 1, 0);
+        for (S32 iy = 0; iy < 64; ++iy)
+        {
+            for (S32 ix = 0; ix < 64; ++ix)
+            {
+                AirGap gap;
+                gap.mFloor = static_cast<U16>(8 + 3 * (ix / 2));
+                gap.mCeiling = 400;
+                gap.mFlags = AirGap::TOP | AirGap::OPEN | AirGap::OWN_SKY;
+                g.mGaps.push_back(gap);
+                g.mStart[ix + iy * 64 + 1] = static_cast<U32>(g.mGaps.size());
+            }
+        }
+        computeClearance(g, CLIMB, OVERLAP);
+        TileAir air;
+        distilAir(g, CLIMB, air);
+        S32 worst = 0;
+        for (S32 iy = 0; iy < 64; ++iy)
+        {
+            for (S32 ix = 0; ix < 64; ++ix)
+            {
+                AirColumn column;
+                airColumn(air, findLeafByKey(air, ix, iy), column);
+                ensure_equals("one gap", column.mCount, 1u);
+                worst = std::max(worst, air.mGaps[column.mGap[0]].mFloor - g.gaps(ix, iy)[0].mFloor);
+            }
+        }
+        ensure("no leaf spans two treads", worst <= CLIMB / 3);
+        ensure("a tread's own cells merge", levelAt(air, 10, 10, 8 + 15) >= 1);
     }
 }

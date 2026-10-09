@@ -1,6 +1,6 @@
 /**
  * @file sknavairdistil.h
- * @brief A tile's air distilled into a restricted quadtree, its seam strips and its solid tops.
+ * @brief A tile's air distilled into per-gap quadtrees, its seam strips and its solid tops.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -141,11 +141,14 @@ namespace sknav
     /// Sort leaves into key order, coarsest first at a shared origin, and link each to its parent.
     void linkLeaves(TileAir& air);
 
-    /// Merge the fine grid into leaves of up to AIR_MAX_LEVEL. A block
-    /// merges when every column has the same gaps with equal flags, floors
-    /// and ceilings each within climb, and no usable gap (walkable, open or AIR_PASS_M tall) touching a wall; leaves
-    /// that touch differ by at most one level. A merged gap keeps the highest
-    /// floor, the lowest ceiling and the least clearance of those it replaced.
+    /// Merge the fine grid's gaps into leaves of up to AIR_MAX_LEVEL, gap by
+    /// gap: a gap merges over a block when every column has one gap matching
+    /// it, with equal flags, floors and ceilings each within climb (walkable
+    /// floors within a third of one), and none is a usable gap (walkable, open
+    /// or AIR_PASS_M tall) touching a wall. The other gaps of those columns stay
+    /// in finer leaves, and a gap beside an overlapping one is at most one
+    /// level coarser. A merged gap keeps the highest floor, the lowest ceiling
+    /// and the least clearance of those it replaced.
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out);
 
     /// The seam strips of a tile's fine grid.
