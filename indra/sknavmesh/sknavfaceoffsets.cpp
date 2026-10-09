@@ -510,7 +510,7 @@ namespace sknav
                 for (U32 k = 0; k < column.mCount && blocked; ++k)
                 {
                     const AirGap& g = air.mGaps[column.mGap[k]];
-                    blocked = !(g.mFloor <= lo && g.mCeiling >= hi);
+                    blocked = !(column.floorAt(air, k, ix, iy) <= lo && g.mCeiling >= hi);
                 }
                 if (!blocked)
                 {

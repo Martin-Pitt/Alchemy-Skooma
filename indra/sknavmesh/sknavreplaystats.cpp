@@ -90,7 +90,7 @@ namespace
         for (U32 k = 0; k < column.mCount; ++k)
         {
             const AirGap& g = air.mGaps[column.mGap[k]];
-            if (top >= static_cast<S32>(g.mFloor) - 1 - slack && top < static_cast<S32>(g.mCeiling))
+            if (top >= column.floorAt(air, k, ix, iy) - 1 - slack && top < static_cast<S32>(g.mCeiling))
             {
                 return column.mGap[k];
             }
