@@ -33,6 +33,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 
 namespace
@@ -720,5 +722,58 @@ namespace tut
         }
         ensure("no leaf spans two treads", worst <= CLIMB / 2);
         ensure("a tread's own cells merge", levelAt(air, 10, 10, 8 + 20) >= 1);
+    }
+
+    // SKNAV_DISTIL_GRIDS names a folder of fine grids ("SKG1", width, height, counts as U16, gaps as
+    // floor, ceiling, flags, clear) and SKNAV_DISTIL_OUT a folder: each grid's distilled leaves and gaps
+    // go to a .leaves file of the same name, for an oracle to diff.
+    template<> template<>
+    void sknavairdistil_object::test<16>()
+    {
+        set_test_name("distil fine grids from files, when a folder is named");
+        const std::string in = LLStringUtil::getenv("SKNAV_DISTIL_GRIDS"), out = LLStringUtil::getenv("SKNAV_DISTIL_OUT");
+        if (in.empty() || out.empty())
+        {
+            return;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(in))
+        {
+            if (entry.path().extension() != ".gaps")
+            {
+                continue;
+            }
+            std::ifstream f(entry.path(), std::ios::binary);
+            std::vector<char> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            ensure("a grid file", b.size() >= 12 && std::equal(b.begin(), b.begin() + 4, "SKG1"));
+            AirGrid g;
+            g.mCell = g.mUnit = 0.125f;
+            memcpy(&g.mWidth, &b[4], 4);
+            memcpy(&g.mHeight, &b[8], 4);
+            const size_t cells = static_cast<size_t>(g.mWidth) * g.mHeight;
+            g.mStart.assign(cells + 1, 0);
+            size_t at = 12 + 2 * cells;
+            for (size_t c = 0; c < cells; ++c)
+            {
+                U16 n;
+                memcpy(&n, &b[12 + 2 * c], 2);
+                g.mStart[c + 1] = g.mStart[c] + n;
+                for (U16 k = 0; k < n; ++k, at += 6)
+                {
+                    AirGap gap;
+                    memcpy(&gap.mFloor, &b[at], 2);
+                    memcpy(&gap.mCeiling, &b[at + 2], 2);
+                    gap.mFlags = static_cast<U8>(b[at + 4]);
+                    gap.mClear = static_cast<U8>(b[at + 5]);
+                    g.mGaps.push_back(gap);
+                }
+            }
+            TileAir air;
+            distilAir(g, CLIMB, air);
+            const std::vector<U8> blob = packTileAir(air);
+            std::ofstream o(out + "/" + entry.path().stem().string() + ".leaves", std::ios::binary);
+            const U32 counts[2] = { static_cast<U32>(air.mLeaves.size()), static_cast<U32>(air.mGaps.size()) };
+            o.write(reinterpret_cast<const char*>(counts), sizeof(counts));
+            o.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(air.mLeaves.size() * 12 + air.mGaps.size() * 8));
+        }
     }
 }

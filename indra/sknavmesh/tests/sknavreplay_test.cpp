@@ -1294,7 +1294,13 @@ namespace tut
         };
 
         // Centred on the census agent; the slice on its floor.
-        const LLVector3d centre = c.mAgent;
+        // SKNAV_AIR_OVERLAY_CENTRE="x y z" looks somewhere other than the agent.
+        LLVector3d centre = c.mAgent;
+        const std::string at = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_CENTRE");
+        if (!at.empty())
+        {
+            std::istringstream(at) >> centre.mdV[VX] >> centre.mdV[VY] >> centre.mdV[VZ];
+        }
         F64 agent_floor = centre.mdV[VZ] - 1.0;
         for (const auto& mesh : r.mMeshes)
         {
