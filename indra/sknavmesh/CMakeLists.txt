@@ -31,6 +31,7 @@ target_sources(
     sknavspacefilter.cpp
     sknavspaceproducts.cpp
     sknavspaces.cpp
+    sknavstairalign.cpp
     sknavstamp.cpp
     sknavtilecache.cpp
     sknavwalls.cpp
@@ -65,6 +66,7 @@ target_sources(
         sknavspacefilter.h
         sknavspaceproducts.h
         sknavspaces.h
+        sknavstairalign.h
         sknavstamp.h
         sknavtilecache.h
         sknavtypes.h
@@ -118,6 +120,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavresidency PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavspaceproducts PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavstairalign PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavstamp PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_bench(spacesdraw PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
