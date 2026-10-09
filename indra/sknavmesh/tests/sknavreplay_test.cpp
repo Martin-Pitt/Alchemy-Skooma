@@ -35,6 +35,7 @@
 #include "../sknavlayout.h"
 #include "../sknavreplay.h"
 #include "../sknavreplaystats.h"
+#include "../sknavresidency.h"
 #include "../sknavstamp.h"
 #include "../sknavtilecache.h"
 #include "sknavtestscene.h"
@@ -47,7 +48,9 @@
 #include "DetourNavMeshQuery.h"
 #include "Recast.h"
 
+#include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -55,6 +58,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace
 {
@@ -1427,5 +1431,279 @@ namespace tut
             log << shot.mName << ": " << canvas.mUsed << " verts over " << drawn << " tiles (" << coarse_tiles << " coarse), " << cut
                 << " cut by the budget of " << shot.mBudget << "\n";
         }
+    }
+
+    // SKNAV_REPLAY_RESIDENCY names a census, SKNAV_REPLAY_RESIDENCY_OUT a JSON
+    // file: what a settled spill keeps and frees, what it writes, what a reload
+    // costs, that the air comes back the same, and what whole-cluster air adds.
+    template<> template<>
+    void sknavreplay_object::test<13>()
+    {
+        set_test_name("spill every settled mesh's detail and reload it: the bytes, the costs and the same spaces, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_RESIDENCY");
+        if (path.empty())
+        {
+            return;
+        }
+        typedef std::chrono::steady_clock Clock;
+        const auto ms = [](Clock::time_point t0) { return std::chrono::duration<F64, std::milli>(Clock::now() - t0).count(); };
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        ReplayResult r;
+        replayCensus(c, options, r);
+
+        // Spilled through a real disk cache, as the viewer does.
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "sknav-residency";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        TileDiskCache cache(dir.string(), 8ull << 30);
+        cache.index();
+
+        struct Spilled
+        {
+            ReplayMesh* mMesh;
+            TileKey mKey;
+            U64 mKey64;
+            TileAirPtr mAir;
+            TileRasterPtr mRaster;
+        };
+        std::vector<Spilled> spilled;
+        size_t detail_air = 0, rasters = 0, coarse_kept = 0, coarse_tiles_air = 0, products = 0, products_after = 0;
+        size_t disk = 0;
+        U32 detail_tiles = 0, coarse_tiles = 0, repack_differ = 0, reraster_differ = 0;
+        F64 pack_ms = 0.0, store_ms = 0.0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            AirSwap away;
+            for (auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult& res = *tile.mResult;
+                if (!res.mAir)
+                {
+                    continue;
+                }
+                if (!res.mAirBuilt || res.mCoarseAir || res.mAir->mLeaves.empty())
+                {
+                    coarse_tiles_air += res.mAir->bytes();
+                    ++coarse_tiles;
+                    continue;
+                }
+                // The raster the viewer holds within the radius: built again, the replay having let it go after the stamp.
+                TileBuildResult again;
+                const TileRasterPtr raster = rasteriseTile(*tile.mInput, again);
+                reraster_differ += again.mAir && packSpill(again.mAir.get(), nullptr, 0) == packSpill(res.mAir.get(), nullptr, 0) ? 0 : 1;
+                const U64 key64 = spillKey(tileContentKey(*tile.mInput));
+                Clock::time_point t0 = Clock::now();
+                // The raster reads the air it was built with, so that is the air that goes with it.
+                const std::vector<U8> bytes = packSpill(again.mAir.get(), raster.get(), key64);
+                pack_ms += ms(t0);
+                t0 = Clock::now();
+                ensure("stored", cache.store(key64, bytes));
+                store_ms += ms(t0);
+                disk += bytes.size();
+                detail_air += res.mAir->bytes();
+                rasters += raster ? raster->bytes() : 0;
+                coarse_kept += coarseAir(*res.mAir)->bytes();
+                ++detail_tiles;
+                spilled.push_back({ mesh.get(), key, key64, again.mAir, raster });
+                away[key] = nullptr;
+            }
+            if (mesh->mEnclosure)
+            {
+                products += mesh->mEnclosure->bytes() + mesh->mRooms->bytes();
+                products_after += withTileAir(*mesh->mEnclosure, away)->bytes() + withTileAir(*mesh->mRooms, away)->bytes();
+            }
+        }
+
+        // Reload one tile at a time, then the largest mesh across every core as an edit would.
+        F64 load_ms = 0.0, worst_ms = 0.0;
+        std::map<std::pair<ReplayMesh*, TileKey>, std::pair<TileAirPtr, TileRasterPtr>> back;
+        for (const Spilled& s : spilled)
+        {
+            const Clock::time_point t0 = Clock::now();
+            std::vector<U8> bytes;
+            TileAirPtr air;
+            TileRasterPtr raster;
+            ensure("reloaded", cache.load(s.mKey64, bytes) && unpackSpill(bytes.data(), bytes.size(), s.mKey64, air, raster));
+            const F64 t = ms(t0);
+            load_ms += t;
+            worst_ms = std::max(worst_ms, t);
+            repack_differ += packSpill(air.get(), raster.get(), s.mKey64) == packSpill(s.mAir.get(), s.mRaster.get(), s.mKey64) ? 0 : 1;
+            back[{ s.mMesh, s.mKey }] = { air, raster };
+        }
+        std::map<ReplayMesh*, U32> per_mesh;
+        for (const Spilled& s : spilled)
+        {
+            ++per_mesh[s.mMesh];
+        }
+        ReplayMesh* largest = nullptr;
+        for (const auto& [m, n] : per_mesh)
+        {
+            largest = !largest || n > per_mesh[largest] ? m : largest;
+        }
+        F64 mesh_wall_ms = 0.0;
+        const S32 threads = std::max(1, static_cast<S32>(std::thread::hardware_concurrency()) - 2);
+        if (largest)
+        {
+            std::vector<const Spilled*> jobs;
+            for (const Spilled& s : spilled)
+            {
+                if (s.mMesh == largest) jobs.push_back(&s);
+            }
+            std::atomic<size_t> next{ 0 };
+            const Clock::time_point t0 = Clock::now();
+            std::vector<std::thread> pool;
+            for (S32 k = 0; k < threads; ++k)
+            {
+                pool.emplace_back([&]() {
+                    for (size_t i = next++; i < jobs.size(); i = next++)
+                    {
+                        std::vector<U8> bytes;
+                        TileAirPtr air;
+                        TileRasterPtr raster;
+                        cache.load(jobs[i]->mKey64, bytes);
+                        unpackSpill(bytes.data(), bytes.size(), jobs[i]->mKey64, air, raster);
+                    }
+                });
+            }
+            for (std::thread& t : pool) t.join();
+            mesh_wall_ms = ms(t0);
+        }
+
+        // The largest mesh's enclosure, spaces and stamps over the reloaded air against the air it had.
+        bool same_enclosure = true, same_spaces = true;
+        U32 stamp_tiles = 0, stamp_differ = 0;
+        if (largest)
+        {
+            // The landed products the next pass reads, pointed at the reloaded air as the viewer points them.
+            AirSwap swap;
+            for (const auto& [k, v] : back)
+            {
+                if (k.first == largest) swap[k.second] = v.first;
+            }
+            const auto run = [&](bool reloaded) {
+                auto input = std::make_shared<EnclosureInput>();
+                input->mPrevious = reloaded ? withTileAir(*largest->mEnclosure, swap) : largest->mEnclosure;
+                input->mGeneration = 1;
+                input->mMeshOrigin = largest->mOrigin;
+                input->mSky = r.mSky;
+                input->mParams = c.mEnclosure;
+                for (const auto& [key, tile] : largest->mTiles)
+                {
+                    const TileBuildResult& res = *tile.mResult;
+                    if (res.mStatus == TileBuildResult::FAILED || !res.mAirBuilt || !res.mAir || res.mAir->mLeaves.empty()) continue;
+                    const auto it = back.find({ largest, key });
+                    input->mTiles.push_back({ key, reloaded && it != back.end() ? it->second.first : res.mAir, skyContributor(largest->mId, key) });
+                }
+                EnclosurePass pass(input);
+                while (!pass.step(1u << 30)) {}
+                std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
+                std::shared_ptr<RoomsInput> rooms_input = replayRoomsInput(c, *largest, 1);
+                if (reloaded)
+                {
+                    rooms_input->mPrevious = withTileAir(*largest->mRooms, swap);
+                }
+                SpacesPass spaces(rooms_input, product);
+                while (!spaces.step(1u << 30)) {}
+                return std::make_pair(std::shared_ptr<const EnclosureProduct>(product), spaces.product());
+            };
+            const auto a = run(false);
+            const auto b = run(true);
+            same_enclosure = a.first->mSummary == b.first->mSummary && a.first->mGapCount == b.first->mGapCount && a.first->mSpaceIds == b.first->mSpaceIds;
+            for (size_t t = 0; same_enclosure && t < a.first->mTiles.size(); ++t)
+            {
+                const auto& x = a.first->mTiles[t].mGaps;
+                const auto& y = b.first->mTiles[t].mGaps;
+                same_enclosure = x.size() == y.size() && std::equal(x.begin(), x.end(), y.begin(), [](const GapEnclosure& p, const GapEnclosure& q) {
+                                     return p.mSpace == q.mSpace && p.mS == q.mS && p.mE == q.mE && p.mD == q.mD && p.mBucket == q.mBucket && p.mOpen == q.mOpen;
+                                 });
+            }
+            same_spaces = a.second->mSpaces.size() == b.second->mSpaces.size() && a.second->mPortals.size() == b.second->mPortals.size();
+            for (size_t s = 0; same_spaces && s < a.second->mSpaces.size(); ++s)
+            {
+                same_spaces = a.second->mSpaces[s].mId == b.second->mSpaces[s].mId;
+            }
+            for (const Spilled& s : spilled)
+            {
+                if (s.mMesh != largest || !s.mRaster) continue;
+                const ReplayTile& tile = largest->mTiles.at(s.mKey);
+                const auto& [air, raster] = back[{ largest, s.mKey }];
+                const LLVector3 lo(tile.mMin - largest->mOrigin), hi(tile.mMax - largest->mOrigin);
+                const auto stamped = [&](const std::pair<std::shared_ptr<const EnclosureProduct>, RoomsProductPtr>& p, const TileAirPtr& a_air, const TileRaster& ras) {
+                    TileStampInput in;
+                    stampInput(*a_air, *p.first->tile(s.mKey), *p.second, lo, hi, in);
+                    TileStamp st;
+                    stampTile(*ras.mChf, borderCells(tile.mInput->mParams[0].mRadius, tile.mInput->mCell), ras.mSpanGap, in, ras.mReal, ras.mFlights, StampParams(), st);
+                    TileBuildResult polys = *tile.mResult;
+                    polygoniseTile(*tile.mInput, ras, polys, nullptr, &in, &st);
+                    return polys.mData[0];
+                };
+                if (!a.first->tile(s.mKey)) continue;
+                ++stamp_tiles;
+                stamp_differ += stamped(a, s.mAir, *s.mRaster) == stamped(b, air, *raster) ? 0 : 1;
+            }
+        }
+
+        // Whole-cluster air: the tiles under the agent's clusters past the radius, built with detail rather than coarse.
+        std::vector<ClusterPtr> home;
+        r.mClusters.at(c.mAgent, home);
+        U32 cluster_tiles = 0;
+        F64 cluster_detail_ms = 0.0, cluster_coarse_ms = 0.0;
+        size_t cluster_air = 0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult& res = *tile.mResult;
+                if (res.mAirBuilt && !res.mCoarseAir) continue;     // detail already
+                bool under = false;
+                for (const ClusterPtr& h : home) under = under || overlapsXY(h->mMin, h->mMax, tile.mMin, tile.mMax);
+                if (!under) continue;
+                ++cluster_tiles;
+                TileBuildInput detail = *tile.mInput;
+                detail.mAir = true;
+                detail.mCoarseAir = false;
+                TileBuildResult d, k;
+                Clock::time_point t0 = Clock::now();
+                rasteriseTile(detail, d);
+                cluster_detail_ms += ms(t0);
+                t0 = Clock::now();
+                rasteriseTile(*tile.mInput, k);
+                cluster_coarse_ms += ms(t0);
+                cluster_air += d.mAir ? d.mAir->bytes() : 0;
+            }
+        }
+
+        std::string census_name = path;
+        std::replace(census_name.begin(), census_name.end(), '\\', '/');
+        const F64 MB = 1048576.0;
+        const size_t before = detail_air + rasters + coarse_tiles_air;
+        const size_t after = coarse_kept + coarse_tiles_air;
+        std::ostringstream json;
+        json << std::fixed << std::setprecision(3) << "{\"census\":\"" << census_name << "\",\"meshes\":" << r.mMeshes.size()
+             << ",\"detail_tiles\":" << detail_tiles << ",\"coarse_tiles\":" << coarse_tiles << ",\"detail_air_mb\":" << detail_air / MB
+             << ",\"held_raster_mb\":" << rasters / MB << ",\"coarse_tiles_air_mb\":" << coarse_tiles_air / MB << ",\"coarse_kept_mb\":" << coarse_kept / MB
+             << ",\"resident_before_mb\":" << before / MB << ",\"resident_after_mb\":" << after / MB << ",\"products_mb\":" << products / MB
+             << ",\"products_after_mb\":" << products_after / MB << ",\"disk_written_mb\":" << disk / MB << ",\"pack_ms_per_tile\":" << pack_ms / std::max(1u, detail_tiles)
+             << ",\"store_ms_per_tile\":" << store_ms / std::max(1u, detail_tiles) << ",\"reload_ms_per_tile\":" << load_ms / std::max<size_t>(1, spilled.size())
+             << ",\"reload_worst_ms\":" << worst_ms << ",\"largest_mesh_tiles\":" << (largest ? per_mesh[largest] : 0) << ",\"largest_mesh_reload_wall_ms\":" << mesh_wall_ms
+             << ",\"threads\":" << threads << ",\"repack_differ\":" << repack_differ << ",\"reraster_differ\":" << reraster_differ
+             << ",\"same_enclosure\":" << (same_enclosure ? "true" : "false") << ",\"same_spaces\":" << (same_spaces ? "true" : "false")
+             << ",\"stamp_tiles\":" << stamp_tiles << ",\"stamp_differ\":" << stamp_differ << ",\"home_clusters\":" << home.size()
+             << ",\"cluster_extra_tiles\":" << cluster_tiles << ",\"cluster_detail_ms\":" << cluster_detail_ms << ",\"cluster_coarse_ms\":" << cluster_coarse_ms
+             << ",\"cluster_extra_air_mb\":" << cluster_air / MB << "}";
+        std::cout << json.str() << std::endl;
+        const std::string out = LLStringUtil::getenv("SKNAV_REPLAY_RESIDENCY_OUT");
+        if (!out.empty())
+        {
+            std::ofstream(out) << json.str() << "\n";
+        }
+        std::filesystem::remove_all(dir, ec);
+        ensure_equals("spills that repack differently", repack_differ, 0u);
+        ensure("the same enclosure over reloaded air", same_enclosure);
+        ensure("the same spaces over reloaded air", same_spaces);
+        ensure_equals("stamps that differ over reloaded air", stamp_differ, 0u);
     }
 }
