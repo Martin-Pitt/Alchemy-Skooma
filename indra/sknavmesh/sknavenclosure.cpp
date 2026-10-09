@@ -292,11 +292,12 @@ namespace
             {
                 return;
             }
-            const AirLeaf& l = t->mAir->mLeaves[leaf];
-            for (U32 i = 0; i < l.mGapCount; ++i)
+            AirColumn column;
+            airColumn(*t->mAir, leaf, column);
+            for (U32 k = 0; k < column.mCount; ++k)
             {
-                const AirGap& g = t->mAir->mGaps[l.mFirstGap + i];
-                const GapEnclosure& e = t->mGaps[l.mFirstGap + i];
+                const AirGap& g = t->mAir->mGaps[column.mGap[k]];
+                const GapEnclosure& e = t->mGaps[column.mGap[k]];
                 Enclosure out;
                 fillEnclosure(*t, g.mFloor, g.mCeiling, e.mS, e.mE, e.mD, e.mOpen, e.mBucket, e.mSpace, e.mFlags, out);
                 spaceId(p, out);
@@ -454,7 +455,7 @@ namespace sknav
         void prepare();
         void graphTile(size_t t);
         void seamTile(size_t t);
-        void pair(U32 a0, U32 na, const AirGap* ga, S32 oa, U32 b0, U32 nb, const AirGap* gb, S32 ob, U8 cost, std::vector<GraphEdge>& out) const;
+        void pair(const U32* a, U32 na, const AirGap* ga, S32 oa, const U32* b, U32 nb, const AirGap* gb, S32 ob, U8 cost, std::vector<GraphEdge>& out) const;
         void finishGraph();
         void neighbourSeeds(std::vector<std::pair<U32, U32>>& sky, std::vector<std::pair<U32, U32>>& walk) const;
         void answerTile(size_t t);
@@ -517,10 +518,10 @@ namespace sknav
         mProduct->mTiles.resize(in.mTiles.size());
     }
 
-    void EnclosurePass::State::pair(U32 a0, U32 na, const AirGap* ga, S32 oa, U32 b0, U32 nb, const AirGap* gb, S32 ob, U8 cost,
-                                    std::vector<GraphEdge>& out) const
+    void EnclosurePass::State::pair(const U32* node_a, U32 na, const AirGap* ga, S32 oa, const U32* node_b, U32 nb, const AirGap* gb, S32 ob,
+                                    U8 cost, std::vector<GraphEdge>& out) const
     {
-        // Both columns run lowest first and their gaps are disjoint, so the
+        // Both lists run lowest first and their gaps are disjoint, so the
         // overlapping pairs fall out of one sweep.
         U32 i = 0, j = 0;
         while (i < na && j < nb)
@@ -530,7 +531,7 @@ namespace sknav
             const S32 overlap = std::min(ca, cb) - std::max(fa, fb);
             if (overlap >= 1)
             {
-                const U32 a = a0 + i, b = b0 + j;
+                const U32 a = node_a[i], b = node_b[j];
                 const bool within = std::abs(fa - fb) <= mClimb;
                 U8 flags = EDGE_SKY;
                 if (overlap >= mCarryOverlap)
@@ -541,7 +542,11 @@ namespace sknav
                 {
                     flags |= EDGE_WALK;
                 }
-                out.push_back({ a, b, cost, flags });
+                // No cost given: half the two leaves' widths each, from the leaves that hold the gaps.
+                const U8 c = cost ? cost
+                                  : static_cast<U8>((1 << air(mNodeTile[a]).mLeaves[mNodeLeaf[a]].mLevel) +
+                                                    (1 << air(mNodeTile[b]).mLeaves[mNodeLeaf[b]].mLevel));
+                out.push_back({ a, b, c, flags });
             }
             if (ca < cb)
             {
@@ -563,6 +568,7 @@ namespace sknav
     {
         const TileAir& a = air(t);
         const S32 w = a.mWidth, h = a.mHeight;
+        // Leaves are stored coarsest first over a cell, so each cell ends up with its finest.
         mLeafMap.assign(static_cast<size_t>(w) * h, -1);
         for (size_t l = 0; l < a.mLeaves.size(); ++l)
         {
@@ -578,14 +584,20 @@ namespace sknav
         }
         const U32 base = mBase[t];
         const S32 off = mZOffset[t];
+        U32 ids_a[0xff], ids_b[0xff];
+        std::vector<S32> met;
         for (size_t l = 0; l < a.mLeaves.size(); ++l)
         {
             const AirLeaf& leaf = a.mLeaves[l];
             const S32 s = 1 << leaf.mLevel;
-            // The +x and +y sides only: every touching pair is met once.
+            for (U32 i = 0; i < leaf.mGapCount; ++i)
+            {
+                ids_a[i] = base + leaf.mFirstGap + i;
+            }
+            // The +x and +y sides only: every touching pair is met once. A leaf over both cells is air they share, not a neighbour.
             for (S32 side = 0; side < 2; ++side)
             {
-                S32 last = -1;
+                met.clear();
                 for (S32 k = 0; k < s; ++k)
                 {
                     const S32 x = side == 0 ? leaf.mX + s : leaf.mX + k;
@@ -594,16 +606,26 @@ namespace sknav
                     {
                         break;
                     }
-                    const S32 n = mLeafMap[x + y * w];
-                    if (n < 0 || n == last)
+                    for (S32 n = mLeafMap[x + y * w]; n >= 0; n = parentLeaf(a, n))
                     {
-                        continue;
+                        const AirLeaf& other = a.mLeaves[n];
+                        const S32 os = 1 << other.mLevel;
+                        if (leaf.mX >= other.mX && leaf.mY >= other.mY && leaf.mX < other.mX + os && leaf.mY < other.mY + os)
+                        {
+                            break;
+                        }
+                        if (std::find(met.begin(), met.end(), n) != met.end())
+                        {
+                            continue;
+                        }
+                        met.push_back(n);
+                        for (U32 j = 0; j < other.mGapCount; ++j)
+                        {
+                            ids_b[j] = base + other.mFirstGap + j;
+                        }
+                        const U8 cost = static_cast<U8>(s + os);
+                        pair(ids_a, leaf.mGapCount, &a.mGaps[leaf.mFirstGap], off, ids_b, other.mGapCount, &a.mGaps[other.mFirstGap], off, cost, mEdges);
                     }
-                    last = n;
-                    const AirLeaf& other = a.mLeaves[n];
-                    const U8 cost = static_cast<U8>(s + (1 << other.mLevel));
-                    pair(base + leaf.mFirstGap, leaf.mGapCount, &a.mGaps[leaf.mFirstGap], off, base + other.mFirstGap, other.mGapCount,
-                         &a.mGaps[other.mFirstGap], off, cost, mEdges);
                 }
             }
         }
@@ -612,11 +634,13 @@ namespace sknav
     void EnclosurePass::State::seamTile(size_t t)
     {
         // Across the +x and +y seams, gap by gap along the neighbours' level-0
-        // strips: the strip's k-th gap is the covering leaf's k-th. The key
-        // only finds the leaf; a cell whose counts disagree is skipped.
+        // strips: the strip's k-th gap is the column's k-th. The key only
+        // finds the leaves; a cell whose counts disagree is skipped.
         const EnclosureInput& in = *mInput;
         const TileAir& a = air(t);
         std::vector<GraphEdge> edges;
+        AirColumn ca, cb;
+        U32 ids_a[0xff], ids_b[0xff];
         for (S32 side = 0; side < 2; ++side)
         {
             TileKey nk = in.mTiles[t].mKey;
@@ -643,15 +667,25 @@ namespace sknav
                 }
                 const S32 la = side == 0 ? findLeafByKey(a, a.mWidth - 1, i) : findLeafByKey(a, i, a.mHeight - 1);
                 const S32 lb = side == 0 ? findLeafByKey(b, 0, j) : findLeafByKey(b, j, 0);
-                if (la < 0 || lb < 0 || a.mLeaves[la].mGapCount != sa.count(i) || b.mLeaves[lb].mGapCount != sb.count(j))
+                if (la < 0 || lb < 0)
                 {
                     continue;
                 }
-                const AirLeaf& leaf_a = a.mLeaves[la];
-                const AirLeaf& leaf_b = b.mLeaves[lb];
-                const U8 cost = static_cast<U8>((1 << leaf_a.mLevel) + (1 << leaf_b.mLevel));
-                pair(mBase[t] + leaf_a.mFirstGap, sa.count(i), &sa.mGaps[sa.mStart[i]], mZOffset[t], mBase[u] + leaf_b.mFirstGap, sb.count(j),
-                     &sb.mGaps[sb.mStart[j]], mZOffset[u], cost, edges);
+                airColumn(a, la, ca);
+                airColumn(b, lb, cb);
+                if (ca.mCount != sa.count(i) || cb.mCount != sb.count(j))
+                {
+                    continue;
+                }
+                for (U32 k = 0; k < ca.mCount; ++k)
+                {
+                    ids_a[k] = mBase[t] + ca.mGap[k];
+                }
+                for (U32 k = 0; k < cb.mCount; ++k)
+                {
+                    ids_b[k] = mBase[u] + cb.mGap[k];
+                }
+                pair(ids_a, sa.count(i), &sa.mGaps[sa.mStart[i]], mZOffset[t], ids_b, sb.count(j), &sb.mGaps[sb.mStart[j]], mZOffset[u], 0, edges);
             }
             // Cells along a side share leaves: one edge per pair, with every
             // cell's link kinds.
@@ -1049,7 +1083,8 @@ namespace sknav
                             rows[l] = l;
                         }
                         std::sort(rows.begin(), rows.end(), [&a](U32 i, U32 j) {
-                            return a.mLeaves[i].mY < a.mLeaves[j].mY || (a.mLeaves[i].mY == a.mLeaves[j].mY && a.mLeaves[i].mX < a.mLeaves[j].mX);
+                            const AirLeaf &li = a.mLeaves[i], &lj = a.mLeaves[j];
+                            return li.mY < lj.mY || (li.mY == lj.mY && (li.mX < lj.mX || (li.mX == lj.mX && li.mLevel > lj.mLevel)));
                         });
                         for (const U32 l : rows)
                         {
@@ -1186,19 +1221,41 @@ namespace sknav
                 {
                     return false;
                 }
-                // Else the walkable gap straight below it, through no more than a climb of solid.
+                // Else the walkable gap straight below it, through no more than a climb of solid, in any column under it.
                 for (size_t t = 0; t < tiles; ++t)
                 {
-                    for (const AirLeaf& leaf : air(t).mLeaves)
+                    const TileAir& a = air(t);
+                    AirColumn column;
+                    for (const AirLeaf& leaf : a.mLeaves)
                     {
-                        for (U32 i = 1; i < leaf.mGapCount; ++i)
+                        for (U32 i = 0; i < leaf.mGapCount; ++i)
                         {
-                            const U32 n = mBase[t] + leaf.mFirstGap + i, below = n - 1;
-                            if (!(mNodeFlags[n] & NODE_WALK) && mDwalk[n] == INF && (mNodeFlags[below] & NODE_WALK) && mDwalk[below] != INF &&
-                                mFloor[n] - mCeil[below] <= mClimb)
+                            const U32 g = leaf.mFirstGap + i, n = mBase[t] + g;
+                            if ((mNodeFlags[n] & NODE_WALK) || mDwalk[n] != INF)
                             {
-                                mDwalk[n] = mDwalk[below];
-                                mCarrySeed[n] = mCarrySeed[below];
+                                continue;
+                            }
+                            const S32 s = 1 << leaf.mLevel;
+                            for (S32 y = leaf.mY; y < std::min(a.mHeight, leaf.mY + s); ++y)
+                            {
+                                for (S32 x = leaf.mX; x < std::min(a.mWidth, leaf.mX + s); ++x)
+                                {
+                                    airColumn(a, findLeafByKey(a, x, y), column);
+                                    for (U32 k = 1; k < column.mCount; ++k)
+                                    {
+                                        if (column.mGap[k] != g)
+                                        {
+                                            continue;
+                                        }
+                                        const U32 below = mBase[t] + column.mGap[k - 1];
+                                        if ((mNodeFlags[below] & NODE_WALK) && mDwalk[below] < mDwalk[n] && mFloor[n] - mCeil[below] <= mClimb)
+                                        {
+                                            mDwalk[n] = mDwalk[below];
+                                            mCarrySeed[n] = mCarrySeed[below];
+                                        }
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }

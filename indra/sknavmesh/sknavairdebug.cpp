@@ -71,10 +71,11 @@ namespace sknav
             {
                 return false;
             }
-            const AirLeaf& l = air.mLeaves[leaf];
-            for (U32 i = l.mFirstGap; i < l.mFirstGap + l.mGapCount; ++i)
+            AirColumn column;
+            airColumn(air, leaf, column);
+            for (U32 k = 0; k < column.mCount; ++k)
             {
-                if (std::abs(static_cast<S32>(air.mGaps[i].mFloor) - static_cast<S32>(g.mFloor)) <= climb)
+                if (std::abs(static_cast<S32>(air.mGaps[column.mGap[k]].mFloor) - static_cast<S32>(g.mFloor)) <= climb)
                 {
                     return true;
                 }
@@ -149,10 +150,12 @@ namespace sknav
         {
             return false;
         }
-        const AirLeaf& l = air.mLeaves[leaf];
+        AirColumn column;
+        airColumn(air, leaf, column);
         bool found = false;
-        for (U32 i = l.mFirstGap; i < l.mFirstGap + l.mGapCount; ++i)
+        for (U32 k = 0; k < column.mCount; ++k)
         {
+            const U32 i = column.mGap[k];
             const F32 z = air.mOrigin.mV[VZ] + air.mGaps[i].mFloor * air.mUnit;
             if (z <= at.mV[VZ] + air.mUnit && (!found || z > floor))
             {
@@ -231,10 +234,11 @@ namespace sknav
                             t1.set(x0 + cell, y0 + cell - off, 0.f);
                         break;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
-                for (U32 i = l.mFirstGap; i < l.mFirstGap + l.mGapCount; ++i)
+                AirColumn gaps;
+                airColumn(air, leaf, gaps);
+                for (U32 k = 0; k < gaps.mCount; ++k)
                 {
-                    const AirGap& g = air.mGaps[i];
+                    const AirGap& g = air.mGaps[gaps.mGap[k]];
                     const F32 z = floorZ(g.mFloor);
                     if (!(g.mFlags & AirGap::AVATAR_FLOOR) || !inSlice(z))
                     {

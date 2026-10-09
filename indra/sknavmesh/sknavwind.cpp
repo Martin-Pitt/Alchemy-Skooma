@@ -275,10 +275,12 @@ namespace sknav
                 }
             }
         }
-        auto leaf = [&](const TileEnclosure& t, S32 ix, S32 iy) -> const AirLeaf* {
-            const S32 li = leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth];
-            return li >= 0 ? &t.mAir->mLeaves[li] : nullptr;
+        // Leaves fill finest last, so the map holds each cell's finest leaf; the column gathers the rest.
+        auto column = [&](const TileEnclosure& t, S32 ix, S32 iy, AirColumn& out) {
+            airColumn(*t.mAir, leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth], out);
+            return out.mCount > 0;
         };
+        AirColumn col;
 
         // The ground: the lowest terrain floor, else carried from the nearest one.
         f->mZ.assign(n, none);
@@ -291,12 +293,11 @@ namespace sknav
             std::vector<F32> ground(n, none);
             F32 lowest = none;
             forCells([&](const TileEnclosure& t, S32 ix, S32 iy, size_t r) {
-                const AirLeaf* l = leaf(t, ix, iy);
-                if (!l || !l->mGapCount)
+                if (!column(t, ix, iy, col))
                 {
                     return;
                 }
-                const AirGap& g = t.mAir->mGaps[l->mFirstGap];
+                const AirGap& g = t.mAir->mGaps[col.mGap[0]];
                 const F32 z = unitsToM(t, g.mFloor);
                 lowest = std::min(lowest, z);
                 if (g.area() == AREA_GROUND)
@@ -345,14 +346,13 @@ namespace sknav
         forCells([&](const TileEnclosure& t, S32 ix, S32 iy, size_t r) {
             ++covered[r];
             const F32 z = f->mZ[r];
-            const AirLeaf* l = leaf(t, ix, iy);
             F32 above = none;
-            if (l)
+            if (column(t, ix, iy, col))
             {
                 const F32 slack = t.mUnit;      // floors may read a unit high
-                for (U32 k = 0; k < l->mGapCount; ++k)
+                for (U32 k = 0; k < col.mCount; ++k)
                 {
-                    const U32 gi = l->mFirstGap + k;
+                    const U32 gi = col.mGap[k];
                     const AirGap& g = t.mAir->mGaps[gi];
                     const F32 lo = unitsToM(t, g.mFloor);
                     const bool open = g.mCeiling == AIR_CEILING_OPEN;

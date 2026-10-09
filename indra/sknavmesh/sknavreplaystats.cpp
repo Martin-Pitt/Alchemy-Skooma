@@ -85,13 +85,14 @@ namespace
         {
             return NO_GAP;
         }
-        const AirLeaf& l = air.mLeaves[leaf];
-        for (U32 k = 0; k < l.mGapCount; ++k)
+        AirColumn column;
+        airColumn(air, leaf, column);
+        for (U32 k = 0; k < column.mCount; ++k)
         {
-            const AirGap& g = air.mGaps[l.mFirstGap + k];
+            const AirGap& g = air.mGaps[column.mGap[k]];
             if (top >= static_cast<S32>(g.mFloor) - 1 - slack && top < static_cast<S32>(g.mCeiling))
             {
-                return l.mFirstGap + k;
+                return column.mGap[k];
             }
         }
         return NO_GAP;
@@ -121,10 +122,11 @@ namespace
             const AirGap* next = nullptr;
             if (leaf >= 0)
             {
-                const AirLeaf& l = air.mLeaves[leaf];
-                for (U32 g = 0; g < l.mGapCount && !next; ++g)
+                AirColumn column;
+                airColumn(air, leaf, column);
+                for (U32 g = 0; g < column.mCount && !next; ++g)
                 {
-                    next = airAdjacent(*gap, air.mGaps[l.mFirstGap + g], climb, overlap) ? &air.mGaps[l.mFirstGap + g] : nullptr;
+                    next = airAdjacent(*gap, air.mGaps[column.mGap[g]], climb, overlap) ? &air.mGaps[column.mGap[g]] : nullptr;
                 }
             }
             if (!next)
@@ -151,11 +153,12 @@ namespace
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
+                AirColumn column;
+                airColumn(air, leaf, column);
                 U8 found = 0;
-                for (U32 g = 0; g < l.mGapCount; ++g)
+                for (U32 g = 0; g < column.mCount; ++g)
                 {
-                    const AirGap& gap = air.mGaps[l.mFirstGap + g];
+                    const AirGap& gap = air.mGaps[column.mGap[g]];
                     if (static_cast<S32>(gap.mCeiling) - static_cast<S32>(gap.mFloor) < overlap)
                     {
                         continue;

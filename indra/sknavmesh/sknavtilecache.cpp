@@ -423,6 +423,7 @@ namespace sknav
                 w.pod(l.mY);
                 w.pod(l.mLevel);
                 w.pod(l.mGapCount);
+                w.pod(l.mParent);
                 w.pod(l.mFirstGap);
             }
             writeGaps(w, air.mGaps);
@@ -452,7 +453,7 @@ namespace sknav
         {
             U32 n;
             if (!(r.vec(air.mOrigin) && r.pod(air.mCell) && r.pod(air.mUnit) && r.pod(air.mWidth) && r.pod(air.mHeight)
-                  && r.count(n, 10)))
+                  && r.count(n, 12)))
             {
                 return false;
             }
@@ -467,6 +468,7 @@ namespace sknav
                 r.pod(l.mY);
                 r.pod(l.mLevel);
                 r.pod(l.mGapCount);
+                r.pod(l.mParent);
                 r.pod(l.mFirstGap);
             }
             if (!readGaps(r, air.mGaps))
@@ -475,9 +477,15 @@ namespace sknav
             }
             for (size_t i = 0; i < air.mLeaves.size(); ++i)
             {
+                // Keys rise, coarsest first at a shared origin, and a parent lies back over its leaf.
                 const AirLeaf& l = air.mLeaves[i];
-                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size()
-                    || (i > 0 && airKey(l.mX, l.mY) <= airKey(air.mLeaves[i - 1].mX, air.mLeaves[i - 1].mY)))
+                const AirLeaf* prev = i > 0 ? &air.mLeaves[i - 1] : nullptr;
+                const AirLeaf* parent = l.mParent && l.mParent <= i ? &air.mLeaves[i - l.mParent] : nullptr;
+                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size() || l.mLevel > AIR_MAX_LEVEL
+                    || (prev && (airKey(l.mX, l.mY) < airKey(prev->mX, prev->mY)
+                                 || (airKey(l.mX, l.mY) == airKey(prev->mX, prev->mY) && l.mLevel > prev->mLevel)))
+                    || (l.mParent && (!parent || parent->mLevel < l.mLevel || l.mX < parent->mX || l.mY < parent->mY
+                                      || l.mX >= parent->mX + (1 << parent->mLevel) || l.mY >= parent->mY + (1 << parent->mLevel))))
                 {
                     return false;
                 }

@@ -341,10 +341,11 @@ namespace tut
         {
             seams += s.mStart.size() * 4 + s.mGaps.size() * 8;
         }
-        ensure_equals("size", blob.size(), air.mLeaves.size() * 10 + air.mGaps.size() * 8 + seams + 4);
+        ensure_equals("size", blob.size(), air.mLeaves.size() * 12 + air.mGaps.size() * 8 + seams + 4);
         const AirLeaf& l = air.mLeaves[1];
-        ensure_equals("second leaf's x", static_cast<S32>(blob[10] | (blob[11] << 8)), static_cast<S32>(l.mX));
-        ensure_equals("second leaf's first gap", static_cast<U32>(blob[16] | (blob[17] << 8) | (blob[18] << 16) | (blob[19] << 24)), l.mFirstGap);
+        ensure_equals("second leaf's x", static_cast<S32>(blob[12] | (blob[13] << 8)), static_cast<S32>(l.mX));
+        ensure_equals("second leaf's parent", static_cast<S32>(blob[18] | (blob[19] << 8)), static_cast<S32>(l.mParent));
+        ensure_equals("second leaf's first gap", static_cast<U32>(blob[20] | (blob[21] << 8) | (blob[22] << 16) | (blob[23] << 24)), l.mFirstGap);
         ensure("layout names the sections", tileAirLayout(air).find("\"seam_pos_y\"") != std::string::npos);
     }
 

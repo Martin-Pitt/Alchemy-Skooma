@@ -504,11 +504,13 @@ namespace sknav
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
-                bool blocked = l.mGapCount > 0;
-                for (U32 g = l.mFirstGap; g < l.mFirstGap + l.mGapCount && blocked; ++g)
+                AirColumn column;
+                airColumn(air, leaf, column);
+                bool blocked = column.mCount > 0;
+                for (U32 k = 0; k < column.mCount && blocked; ++k)
                 {
-                    blocked = !(air.mGaps[g].mFloor <= lo && air.mGaps[g].mCeiling >= hi);
+                    const AirGap& g = air.mGaps[column.mGap[k]];
+                    blocked = !(g.mFloor <= lo && g.mCeiling >= hi);
                 }
                 if (!blocked)
                 {

@@ -133,10 +133,66 @@ namespace sknav
         {
             return -1;
         }
-        // Solid blocks have no leaf, so the predecessor may end before the cell.
-        const AirLeaf& l = *(it - 1);
-        const S32 s = 1 << l.mLevel;
-        return ix < l.mX + s && iy < l.mY + s ? static_cast<S32>(it - 1 - air.mLeaves.begin()) : -1;
+        // The predecessor lies inside the finest leaf over the cell, if any, so that leaf is it or one of its parents.
+        S32 leaf = static_cast<S32>(it - 1 - air.mLeaves.begin());
+        while (leaf >= 0)
+        {
+            const AirLeaf& l = air.mLeaves[leaf];
+            const S32 s = 1 << l.mLevel;
+            if (ix < l.mX + s && iy < l.mY + s)
+            {
+                return leaf;
+            }
+            leaf = parentLeaf(air, leaf);
+        }
+        return -1;
+    }
+
+    void airColumn(const TileAir& air, S32 leaf, AirColumn& out)
+    {
+        out.mCount = 0;
+        for (; leaf >= 0; leaf = parentLeaf(air, leaf))
+        {
+            const AirLeaf& l = air.mLeaves[leaf];
+            for (U32 i = 0; i < l.mGapCount && out.mCount < 0xff; ++i)
+            {
+                // Insert by floor: a column's gaps are disjoint, and few.
+                const U32 g = l.mFirstGap + i;
+                U32 at = out.mCount++;
+                while (at > 0 && air.mGaps[out.mGap[at - 1]].mFloor > air.mGaps[g].mFloor)
+                {
+                    out.mGap[at] = out.mGap[at - 1];
+                    --at;
+                }
+                out.mGap[at] = g;
+            }
+        }
+    }
+
+    void linkLeaves(TileAir& air)
+    {
+        // Keys alone tie a coarse leaf with the first finer one at its origin; gaps move with their leaves untouched.
+        std::stable_sort(air.mLeaves.begin(), air.mLeaves.end(), [](const AirLeaf& a, const AirLeaf& b) {
+            const U32 ka = airKey(a.mX, a.mY), kb = airKey(b.mX, b.mY);
+            return ka < kb || (ka == kb && a.mLevel > b.mLevel);
+        });
+        std::vector<S32> open;
+        for (S32 i = 0; i < static_cast<S32>(air.mLeaves.size()); ++i)
+        {
+            AirLeaf& l = air.mLeaves[i];
+            while (!open.empty())
+            {
+                const AirLeaf& o = air.mLeaves[open.back()];
+                const S32 s = 1 << o.mLevel;
+                if (l.mX >= o.mX && l.mY >= o.mY && l.mX < o.mX + s && l.mY < o.mY + s)
+                {
+                    break;
+                }
+                open.pop_back();
+            }
+            l.mParent = static_cast<U16>(open.empty() ? 0 : i - open.back());
+            open.push_back(i);
+        }
     }
 
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out)
@@ -529,6 +585,7 @@ namespace sknav
                   const std::vector<U16>* tops)
     {
         out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
+        AirColumn column;
         // Recast (x, y, z) is SL (y, z, x): the grid's ix runs along chf z, iy along chf x.
         for (S32 iy = 0; iy < fine.mHeight && border + iy < chf.width; ++iy)
         {
@@ -540,9 +597,10 @@ namespace sknav
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
+                // The column's distilled gaps run lowest first, one for each fine gap.
+                airColumn(air, leaf, column);
                 const AirGap* g = fine.gaps(ix, iy);
-                const U32 count = std::min<U32>(fine.count(ix, iy), l.mGapCount);
+                const U32 count = std::min<U32>(fine.count(ix, iy), column.mCount);
                 for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
                 {
                     const S32 top = tops ? (*tops)[i] : chf.spans[i].y;
@@ -550,7 +608,7 @@ namespace sknav
                     {
                         if (top >= g[k].mFloor - 1 && top < g[k].mCeiling)
                         {
-                            out[i] = l.mFirstGap + k;
+                            out[i] = column.mGap[k];
                             break;
                         }
                     }
@@ -608,8 +666,10 @@ namespace sknav
                 }
             }
         }
-        std::sort(placed.begin(), placed.end(),
-                  [](const Placed& a, const Placed& b) { return airKey(a.mLeaf.mX, a.mLeaf.mY) < airKey(b.mLeaf.mX, b.mLeaf.mY); });
+        std::sort(placed.begin(), placed.end(), [](const Placed& a, const Placed& b) {
+            const U32 ka = airKey(a.mLeaf.mX, a.mLeaf.mY), kb = airKey(b.mLeaf.mX, b.mLeaf.mY);
+            return ka < kb || (ka == kb && a.mLeaf.mLevel > b.mLeaf.mLevel);
+        });
         out->mLeaves.reserve(placed.size());
         for (Placed& p : placed)
         {
@@ -620,6 +680,7 @@ namespace sknav
             }
             out->mLeaves.push_back(p.mLeaf);
         }
+        linkLeaves(*out);
         for (S32 s = 0; s < 4; ++s)
         {
             const SeamStrip& in = coarse.mSeams[s];
@@ -651,6 +712,7 @@ namespace sknav
     void leafSpanGaps(const rcCompactHeightfield& chf, S32 border, const TileAir& air, S32 z_shift, S32 slack, std::vector<U32>& out)
     {
         out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
+        AirColumn column;
         for (S32 iy = 0; iy < air.mHeight && border + iy < chf.width; ++iy)
         {
             for (S32 ix = 0; ix < air.mWidth && border + ix < chf.height; ++ix)
@@ -661,16 +723,16 @@ namespace sknav
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
+                airColumn(air, leaf, column);
                 for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
                 {
                     const S32 top = chf.spans[i].y + z_shift;
-                    for (U32 k = 0; k < l.mGapCount; ++k)
+                    for (U32 k = 0; k < column.mCount; ++k)
                     {
-                        const AirGap& g = air.mGaps[l.mFirstGap + k];
+                        const AirGap& g = air.mGaps[column.mGap[k]];
                         if (top >= g.mFloor - 1 - slack && top < g.mCeiling)
                         {
-                            out[i] = l.mFirstGap + k;
+                            out[i] = column.mGap[k];
                             break;
                         }
                     }
@@ -682,13 +744,14 @@ namespace sknav
     std::vector<U8> packTileAir(const TileAir& air)
     {
         std::vector<U8> out;
-        out.reserve(air.mLeaves.size() * 10 + air.mGaps.size() * 8 + air.mTop.size() * 4);
+        out.reserve(air.mLeaves.size() * 12 + air.mGaps.size() * 8 + air.mTop.size() * 4);
         for (const AirLeaf& l : air.mLeaves)
         {
             put<U16>(out, l.mX);
             put<U16>(out, l.mY);
             put<U8>(out, l.mLevel);
             put<U8>(out, l.mGapCount);
+            put<U16>(out, l.mParent);
             put<U32>(out, l.mFirstGap);
         }
         for (const AirGap& g : air.mGaps)
@@ -726,7 +789,7 @@ namespace sknav
     {
         // Struct formats as Python's struct module reads them.
         std::ostringstream o;
-        o << "{\"leaf_order\":\"morton\",\"leaf\":\"<HHBBI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
+        o << "{\"leaf_order\":\"morton\",\"leaf_nesting\":\"parent\",\"leaf\":\"<HHBBHI\",\"gap\":\"<HHBBH\",\"start\":\"<I\",\"top\":\"<HH\",\"face\":\"<I\",\"flags\":{\"top\":1,\"open\":2,\"own_sky\":4,"
              "\"flight\":8,\"area_shift\":4,\"area_mask\":48,\"avatar_floor\":64},\"ceiling_open\":"
           << AIR_CEILING_OPEN
           << ",\"face_bits\":{\"key_shift\":5,\"offset_mask\":31,\"steps\":" << FACE_OFFSET_STEPS

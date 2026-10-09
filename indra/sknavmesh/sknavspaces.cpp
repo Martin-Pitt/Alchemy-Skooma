@@ -621,7 +621,7 @@ namespace sknav
         /// or -1 past the mesh's tiles and -2 in a tile without detail.
         S32 resolve(U32 t, S32 ix, S32 iy, U32& tile_out, S32& x_out, S32& y_out) const;
         /// The gaps over a fine cell: count 0 when it has none.
-        const AirGap* column(U32 t, S32 ix, S32 iy, U32& count) const;
+        U32 column(U32 t, S32 ix, S32 iy, AirColumn& out) const;
         bool probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const;
         /// Whether solid stands between lo and hi (mesh units) over a fine cell.
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
@@ -800,18 +800,11 @@ namespace sknav
         return 0;
     }
 
-    const AirGap* SpacesPass::State::column(U32 t, S32 ix, S32 iy, U32& count) const
+    U32 SpacesPass::State::column(U32 t, S32 ix, S32 iy, AirColumn& out) const
     {
         const TileInfo& ti = mTiles[t];
-        const S32 leaf = ti.mLeafMap[ix + iy * ti.mAir->mWidth];
-        if (leaf < 0)
-        {
-            count = 0;
-            return nullptr;
-        }
-        const AirLeaf& l = ti.mAir->mLeaves[leaf];
-        count = l.mGapCount;
-        return &ti.mAir->mGaps[l.mFirstGap];
+        airColumn(*ti.mAir, ti.mLeafMap[ix + iy * ti.mAir->mWidth], out);
+        return out.mCount;
     }
 
     bool SpacesPass::State::probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const
@@ -831,20 +824,15 @@ namespace sknav
         {
             return false;
         }
-        const S32 leaf = mTiles[t].mLeafMap[ix + iy * a.mWidth];
-        if (leaf < 0)
+        AirColumn col;
+        for (U32 i = 0; i < column(t, ix, iy, col); ++i)
         {
-            return false;
-        }
-        const AirLeaf& l = a.mLeaves[leaf];
-        for (U32 i = 0; i < l.mGapCount; ++i)
-        {
-            const AirGap& g = a.mGaps[l.mFirstGap + i];
+            const AirGap& g = a.mGaps[col.mGap[i]];
             const S32 f = floorOf(t, g);
             if (f >= floor - tol && f <= floor + tol && floorGap(t, g))
             {
                 out.mTile = t;
-                out.mGap = l.mFirstGap + i;
+                out.mGap = col.mGap[i];
                 out.mFloor = f;
                 out.mCeil = ceilOf(t, g);
                 return true;
@@ -861,15 +849,17 @@ namespace sknav
         {
             return false;
         }
-        U32 count;
-        const AirGap* g = column(tile, x, y, count);
+        AirColumn col;
+        const U32 count = column(tile, x, y, col);
         if (!count)
         {
             return false;   // nothing stands there at all
         }
+        const TileAir& a = air(tile);
         for (U32 i = 0; i < count; ++i)
         {
-            if (floorOf(tile, g[i]) <= lo && ceilOf(tile, g[i]) >= hi)
+            const AirGap& g = a.mGaps[col.mGap[i]];
+            if (floorOf(tile, g) <= lo && ceilOf(tile, g) >= hi)
             {
                 return false;
             }
@@ -2113,6 +2103,7 @@ namespace sknav
                 continue;
             }
             const TileAir& a = *ti.mAir;
+            AirColumn col;
             ti.mColStart.assign(static_cast<size_t>(a.mWidth) * a.mHeight + 1, 0);
             for (S32 iy = 0; iy < a.mHeight; ++iy)
             {
@@ -2120,18 +2111,13 @@ namespace sknav
                 {
                     const S32 c = ix + iy * a.mWidth;
                     ti.mColStart[c] = static_cast<U32>(mCells.size());
-                    const S32 leaf = ti.mLeafMap[c];
-                    if (leaf < 0)
+                    airColumn(a, ti.mLeafMap[c], col);
+                    for (U32 i = 0; i < col.mCount; ++i)
                     {
-                        continue;
-                    }
-                    const AirLeaf& l = a.mLeaves[leaf];
-                    for (U32 i = 0; i < l.mGapCount; ++i)
-                    {
-                        const AirGap& g = a.mGaps[l.mFirstGap + i];
+                        const AirGap& g = a.mGaps[col.mGap[i]];
                         if (floorGap(t, g))
                         {
-                            mCells.push_back({ t, static_cast<U16>(ix), static_cast<U16>(iy), l.mFirstGap + i, floorOf(t, g), ceilOf(t, g),
+                            mCells.push_back({ t, static_cast<U16>(ix), static_cast<U16>(iy), col.mGap[i], floorOf(t, g), ceilOf(t, g),
                                                (g.mFlags & AirGap::FLIGHT) != 0 });
                         }
                     }
@@ -2354,7 +2340,7 @@ namespace sknav
                     {
                         U32 u = NONE;
                         S32 x, y;
-                        const AirGap* g = nullptr;
+                        AirColumn col;
                         U32 count = 0;
                         for (U32 k = c0; k < c1; ++k)
                         {
@@ -2377,14 +2363,15 @@ namespace sknav
                                 }
                                 else
                                 {
-                                    g = column(u, x, y, count);
+                                    count = column(u, x, y, col);
                                 }
                             }
                             const S32 floor = mCells[k].mFloor;
                             for (U32 i = 0; i < count; ++i)
                             {
-                                const S32 f = floorOf(u, g[i]);
-                                if (f <= floor - 1 && ceilOf(u, g[i]) >= floor + 14)
+                                const AirGap& gi = air(u).mGaps[col.mGap[i]];
+                                const S32 f = floorOf(u, gi);
+                                if (f <= floor - 1 && ceilOf(u, gi) >= floor + 14)
                                 {
                                     comp_drops[id] += f < floor - mClimb ? 1.0 : 0.0;
                                     break;
@@ -2934,6 +2921,7 @@ namespace sknav
     {
         // Every level-0 step between floor gaps of two seeds, within and across tiles.
         mEdges.clear();
+        AirColumn colb;
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
             const TileInfo& ti = mTiles[t];
@@ -2967,25 +2955,43 @@ namespace sknav
                             continue;
                         }
                         const TileInfo& ui = mTiles[u];
-                        const S32 lb = ui.mLeafMap[bx + by * ui.mAir->mWidth];
-                        if (lb < 0)
+                        // b's column, less the air a leaf over both cells holds: that is one gap, not a step.
+                        colb.mCount = 0;
+                        for (S32 lb = ui.mLeafMap[bx + by * ui.mAir->mWidth]; lb >= 0; lb = parentLeaf(*ui.mAir, lb))
+                        {
+                            const AirLeaf& o = ui.mAir->mLeaves[lb];
+                            if (u == t && ax >= o.mX && ay >= o.mY && ax < o.mX + (1 << o.mLevel) && ay < o.mY + (1 << o.mLevel))
+                            {
+                                break;
+                            }
+                            for (U32 j = 0; j < o.mGapCount; ++j)
+                            {
+                                U32 at = colb.mCount++;
+                                while (at > 0 && ui.mAir->mGaps[colb.mGap[at - 1]].mFloor > ui.mAir->mGaps[o.mFirstGap + j].mFloor)
+                                {
+                                    colb.mGap[at] = colb.mGap[at - 1];
+                                    --at;
+                                }
+                                colb.mGap[at] = o.mFirstGap + j;
+                            }
+                        }
+                        const U32 nb = colb.mCount;
+                        if (!nb)
                         {
                             continue;
                         }
-                        const AirLeaf& leaf_b = ui.mAir->mLeaves[lb];
-                        const U32 nb = leaf_b.mGapCount, first_b = leaf_b.mFirstGap;
                         // Within one seed on both sides, as most steps are, there is no edge.
-                        if (nb == 1 && leaf.mGapCount == 1 && u == t && ui.mRooms.mSeeds[first_b] == ti.mRooms.mSeeds[leaf.mFirstGap])
+                        if (nb == 1 && leaf.mGapCount == 1 && u == t && ui.mRooms.mSeeds[colb.mGap[0]] == ti.mRooms.mSeeds[leaf.mFirstGap])
                         {
                             continue;
                         }
-                        const AirGap* gb = &ui.mAir->mGaps[first_b];
+                        auto gb = [&](U32 j) -> const AirGap& { return ui.mAir->mGaps[colb.mGap[j]]; };
                         const LLVector2 ca(cellX(ti, ax), cellY(ti, ay)), cb(cellX(ui, bx), cellY(ui, by));
                         // Where both columns' gaps rise with their floors, as air's do, only b's within a climb of a's are tried.
                         bool rising = true;
                         for (U32 j = 1; j < nb && rising; ++j)
                         {
-                            rising = gb[j].mFloor > gb[j - 1].mFloor;
+                            rising = gb(j).mFloor > gb(j - 1).mFloor;
                         }
                         for (U32 i = 1; i < leaf.mGapCount && rising; ++i)
                         {
@@ -3002,17 +3008,17 @@ namespace sknav
                             }
                             const AirGap& gap_a = a.mGaps[ga];
                             const S32 fa = floorOf(t, gap_a), ca_top = ceilOf(t, gap_a);
-                            while (rising && j0 < nb && floorOf(u, gb[j0]) < fa - mClimb)
+                            while (rising && j0 < nb && floorOf(u, gb(j0)) < fa - mClimb)
                             {
                                 ++j0;
                             }
                             for (U32 j = rising ? j0 : 0; j < nb; ++j)
                             {
-                                if (rising && floorOf(u, gb[j]) > fa + mClimb)
+                                if (rising && floorOf(u, gb(j)) > fa + mClimb)
                                 {
                                     break;
                                 }
-                                const U16 sb = ui.mRooms.mSeeds[first_b + j];
+                                const U16 sb = ui.mRooms.mSeeds[colb.mGap[j]];
                                 if (!sb)
                                 {
                                     continue;
@@ -3022,7 +3028,7 @@ namespace sknav
                                 {
                                     continue;
                                 }
-                                const S32 fb = floorOf(u, gb[j]), cb_top = ceilOf(u, gb[j]);
+                                const S32 fb = floorOf(u, gb(j)), cb_top = ceilOf(u, gb(j));
                                 if (std::abs(fa - fb) > mClimb || std::min(ca_top, cb_top) - std::max(fa, fb) < mWalkOverlap)
                                 {
                                     continue;
@@ -3038,8 +3044,8 @@ namespace sknav
                                 e.mTileA = t;
                                 e.mGapA = ga;
                                 e.mTileB = u;
-                                e.mGapB = first_b + j;
-                                e.mFlight = ((gap_a.mFlags | gb[j].mFlags) & AirGap::FLIGHT) != 0;
+                                e.mGapB = colb.mGap[j];
+                                e.mFlight = ((gap_a.mFlags | gb(j).mFlags) & AirGap::FLIGHT) != 0;
                                 mEdges.push_back(e);
                             }
                         }
@@ -4641,19 +4647,22 @@ namespace sknav
                     {
                         continue;
                     }
-                    const S32 lb = mTiles[u].mLeafMap[bx + by * air(u).mWidth];
-                    if (lb < 0)
+                    for (S32 lb = mTiles[u].mLeafMap[bx + by * air(u).mWidth]; lb >= 0; lb = parentLeaf(air(u), lb))
                     {
-                        continue;
-                    }
-                    const AirLeaf& ol = air(u).mLeaves[lb];
-                    for (U32 j = 0; j < ol.mGapCount; ++j)
-                    {
-                        const AirGap& o = air(u).mGaps[ol.mFirstGap + j];
-                        const S32 fo = floorOf(u, o);
-                        if (floorGap(u, o) && std::abs(fo - f) <= mClimb && std::min(c, ceilOf(u, o)) - std::max(f, fo) >= mWalkOverlap)
+                        // A leaf over this gap's own cells holds air beside it in the same columns, not a step away.
+                        const AirLeaf& ol = air(u).mLeaves[lb];
+                        if (u == t && leaf.mX >= ol.mX && leaf.mY >= ol.mY && leaf.mX < ol.mX + (1 << ol.mLevel) && leaf.mY < ol.mY + (1 << ol.mLevel))
                         {
-                            fn(u, ol.mFirstGap + j);
+                            break;
+                        }
+                        for (U32 j = 0; j < ol.mGapCount; ++j)
+                        {
+                            const AirGap& o = air(u).mGaps[ol.mFirstGap + j];
+                            const S32 fo = floorOf(u, o);
+                            if (floorGap(u, o) && std::abs(fo - f) <= mClimb && std::min(c, ceilOf(u, o)) - std::max(f, fo) >= mWalkOverlap)
+                            {
+                                fn(u, ol.mFirstGap + j);
+                            }
                         }
                     }
                 }
@@ -4719,17 +4728,22 @@ namespace sknav
         {
             const TileAir& a = air(t);
             std::vector<U32>& gs = mGapSpace[t];
-            for (const AirLeaf& leaf : a.mLeaves)
+            AirColumn col;
+            for (S32 iy = 0; iy < a.mHeight; ++iy)
             {
-                U32 below = 0;
-                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                for (S32 ix = 0; ix < a.mWidth; ++ix)
                 {
-                    U32& s = gs[leaf.mFirstGap + i];
-                    if (!s && below && floorOf(t, a.mGaps[leaf.mFirstGap + i]) - ceilOf(t, a.mGaps[leaf.mFirstGap + i - 1]) <= slab)
+                    column(t, ix, iy, col);
+                    U32 below = 0;
+                    for (U32 i = 0; i < col.mCount; ++i)
                     {
-                        s = below;
+                        U32& s = gs[col.mGap[i]];
+                        if (!s && below && floorOf(t, a.mGaps[col.mGap[i]]) - ceilOf(t, a.mGaps[col.mGap[i - 1]]) <= slab)
+                        {
+                            s = below;
+                        }
+                        below = s;
                     }
-                    below = s;
                 }
             }
         }

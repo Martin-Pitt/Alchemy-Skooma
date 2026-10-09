@@ -45,15 +45,18 @@ namespace sknav
     constexpr U16 AIR_CEILING_OPEN = 0xffff;    ///< a distilled ceiling with nothing above in the tile
     constexpr F32 AIR_PASS_M = 1.f;             ///< a closed, unwalkable gap lower than this is no way through
 
-    /// A square block of 2^mLevel cells whose gaps agree, from (mX, mY) in
-    /// cells of the tile. Its gaps are mGapCount records from mFirstGap.
+    /// A square block of 2^mLevel cells, from (mX, mY) in cells of the tile,
+    /// over which mGapCount gaps from mFirstGap agree, lowest first. Leaves
+    /// nest: a finer leaf inside a coarser one holds the gaps of its columns
+    /// that the coarser one does not, so a column's gaps are those of every
+    /// leaf over it.
     struct AirLeaf
     {
         U16 mX = 0;
         U16 mY = 0;
         U8 mLevel = 0;
         U8 mGapCount = 0;
-        U16 mFine = 0;          ///< unused yet; fills what was padding
+        U16 mParent = 0;        ///< how many leaves back the nearest coarser leaf over this one is; 0 for none
         U32 mFirstGap = 0;
     };
 
@@ -98,7 +101,7 @@ namespace sknav
         F32 mUnit = 0.f;
         S32 mWidth = 0;                 ///< cells along SL x
         S32 mHeight = 0;                ///< along SL y
-        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, in airKey order of their origins
+        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, in airKey order of their origins, coarsest first at a shared origin
         std::vector<AirGap> mGaps;
         /// -x and +x run along y, -y and +y along x.
         SeamStrip mSeams[4];
@@ -115,9 +118,28 @@ namespace sknav
     };
     typedef std::shared_ptr<const TileAir> TileAirPtr;
 
-    /// The leaf covering a fine cell, or -1, by the last leaf whose key is at
-    /// most the cell's; leaves must be in key order.
+    /// The finest leaf covering a fine cell, or -1, from the last leaf whose
+    /// key is at most the cell's; the coarser ones over it follow parentLeaf.
     S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy);
+
+    /// The nearest coarser leaf over a leaf, or -1.
+    inline S32 parentLeaf(const TileAir& air, S32 leaf)
+    {
+        return air.mLeaves[leaf].mParent ? leaf - air.mLeaves[leaf].mParent : -1;
+    }
+
+    /// A column's gaps gathered from every leaf over it, lowest first.
+    struct AirColumn
+    {
+        U32 mCount = 0;
+        U32 mGap[0xff];     ///< indices into TileAir::mGaps
+    };
+
+    /// The gaps over a fine cell, starting from its finest leaf; none when leaf is negative.
+    void airColumn(const TileAir& air, S32 leaf, AirColumn& out);
+
+    /// Sort leaves into key order, coarsest first at a shared origin, and link each to its parent.
+    void linkLeaves(TileAir& air);
 
     /// Merge the fine grid into leaves of up to AIR_MAX_LEVEL. A block
     /// merges when every column has the same gaps with equal flags, floors
