@@ -523,18 +523,38 @@ namespace
     void trianglesNear(const Partitioner& P, F64 px, F64 py, std::vector<S32>& out)
     {
         out.clear();
-        const S32 cx0 = static_cast<S32>(std::floor((px - NEAR_XY - P.mGx0) / P.mGcell));
-        const S32 cx1 = static_cast<S32>(std::floor((px + NEAR_XY - P.mGx0) / P.mGcell));
-        const S32 cy0 = static_cast<S32>(std::floor((py - NEAR_XY - P.mGy0) / P.mGcell));
-        const S32 cy1 = static_cast<S32>(std::floor((py + NEAR_XY - P.mGy0) / P.mGcell));
+        if (!std::isfinite(px) || !std::isfinite(py))
+        {
+            return;
+        }
+        // Clamp before the cast: a point far off the grid would otherwise wrap and cover all of it.
+        const auto cell = [](F64 v, S32 n) { return static_cast<S32>(std::clamp(std::floor(v), -1.0, static_cast<F64>(n))); };
+        const S32 cx0 = cell((px - NEAR_XY - P.mGx0) / P.mGcell, P.mGw);
+        const S32 cx1 = cell((px + NEAR_XY - P.mGx0) / P.mGcell, P.mGw);
+        const S32 cy0 = cell((py - NEAR_XY - P.mGy0) / P.mGcell, P.mGh);
+        const S32 cy1 = cell((py + NEAR_XY - P.mGy0) / P.mGcell, P.mGh);
+        // A triangle spans several cells; a per-triangle stamp dedups in linear time and keeps grid order.
+        thread_local std::vector<U32> seen;
+        thread_local U32 stamp = 0;
+        if (seen.size() < P.mArea.size())
+        {
+            seen.assign(P.mArea.size(), 0);
+            stamp = 0;
+        }
+        if (++stamp == 0)
+        {
+            std::fill(seen.begin(), seen.end(), 0);
+            stamp = 1;
+        }
         for (S32 cy = std::max(cy0, 0); cy <= std::min(cy1, P.mGh - 1); ++cy)
         {
             for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
             {
                 for (const S32 t : P.mGrid[static_cast<size_t>(cy) * P.mGw + cx])
                 {
-                    if (std::find(out.begin(), out.end(), t) == out.end())
+                    if (seen[t] != stamp)
                     {
+                        seen[t] = stamp;
                         out.push_back(t);
                     }
                 }
@@ -924,6 +944,7 @@ namespace
                     const F64 x = (s + sign * PAST_M) * ux + l * px, y = (s + sign * PAST_M) * uy + l * py;
                     const F64 x2 = (s + sign * (PAST_M + BEYOND_M)) * ux + l * px, y2 = (s + sign * (PAST_M + BEYOND_M)) * uy + l * py;
                     trianglesNear(P, x, y, nearby);
+                    trianglesNear(P, x2, y2, beyond);
                     // each sample counts the one floor nearest the end's height
                     S32 pick = -1;
                     F64 pick_z = 0;
@@ -940,7 +961,6 @@ namespace
                         {
                             continue;
                         }
-                        trianglesNear(P, x2, y2, beyond);
                         const bool carries = std::any_of(beyond.begin(), beyond.end(), [&](S32 j) {
                             F64 zj = 0;
                             return grp[j] >= 0 && !cand[grp[j]] && nearZ(P, j, x2, y2, zj) && std::fabs(zj - zi) <= LEVEL_DZ;

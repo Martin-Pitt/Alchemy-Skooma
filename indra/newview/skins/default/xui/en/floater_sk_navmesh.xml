@@ -5,9 +5,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- min_height="1036"
+ min_height="787"
  min_width="300"
- height="1056"
+ height="787"
  layout="topleft"
  name="floater_sk_navmesh"
  save_rect="true"
@@ -67,441 +67,472 @@
    width="292">
   </text>
 
-  <text
-   name="overlay_label"
-   height="13"
-   type="string"
-   text_color="LabelTextColor"
-   follows="left|top"
-   layout="topleft"
-   left="12"
-   top_pad="10"
-   width="292">
-    Overlay
-  </text>
-  <check_box
-   height="19"
-   label="Draw the navmesh"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="overlay_on"
-   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh. The layers below draw whether or not the surface is drawn"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Build faces, ledges and run-off"
-   layout="topleft"
-   follows="left|top"
-   left="28"
-   name="build_raster"
-   control_name="SKNavBuildRaster"
-   tool_tip="Every tile keeps its solid raster's wall faces, the ledges its floors end in and the run-off down them: the surfaces snow, rain and puddles settle on and drain along"
-   top_pad="4"
-   width="276" />
-  <check_box
-   height="19"
-   label="Walls, cover and ledges"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_walls"
-   control_name="SKNavOverlayWalls"
-   tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands. Draws without the navmesh surface"
-   top_pad="6"
-   width="292" />
-  <check_box
-   height="19"
-   label="Ledges and run-off"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_runoff"
-   control_name="SKNavOverlayRunoff"
-   tool_tip="Where the floors weather settles on end over a drop, and where it runs off them. Needs them built"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Wall faces"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_faces"
-   control_name="SKNavOverlayFaces"
-   tool_tip="The vertical surfaces at their full height, which is what Atmo reads. The cover segments above stop at four metres because that is all a cover class can mean. Draws without the navmesh surface"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Tile seams"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_links"
-   control_name="SKNavOverlayLinks"
-   tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile. Part of the surface, so it needs Draw the navmesh"
-   top_pad="4"
-   width="292" />
-  <combo_box
-   control_name="SKNavOverlayEnclosure"
-   follows="left|top"
-   height="20"
-   label="Enclosure"
-   layout="topleft"
-   left="12"
-   name="overlay_enclosure"
-   tool_tip="Tint the floors by how enclosed their air is, from the rooms pass: blue outdoors, amber sheltered, red indoors, grey where nothing answered. By e shades between them"
-   top_pad="6"
-   width="292">
-    <combo_box.item label="Enclosure: off" value="0" name="enclosure_off" />
-    <combo_box.item label="Enclosure: by indoorness (e)" value="1" name="enclosure_e" />
-    <combo_box.item label="Enclosure: by bucket" value="2" name="enclosure_bucket" />
-  </combo_box>
-  <check_box
-   height="19"
-   label="Spaces and portals"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_spaces"
-   control_name="SKNavOverlaySpaces"
-   tool_tip="Fill each space the rooms pass cut in a colour of its own, and draw its portals: doors red, stairs lime, openings cyan, dashed where nothing is over them"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Wind"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_wind"
-   control_name="SKNavOverlayWind"
-   tool_tip="An arrow every 2 m over the lowest wind band near the camera, coloured by speed factor: blue calm, cyan the free stream, yellow twice it"
-   top_pad="4"
-   width="292" />
-  <slider
-   control_name="SKNavOverlayWindHeading"
-   decimal_digits="0"
-   follows="left|top"
-   height="20"
-   increment="1"
-   initial_value="-1"
-   label="Heading"
-   label_width="80"
-   layout="topleft"
-   left="28"
-   max_val="359"
-   min_val="-1"
-   name="overlay_wind_heading"
-   tool_tip="The heading the wind is drawn for, in degrees it blows toward, counter-clockwise from east. -1 follows the region's wind at the camera"
-   top_pad="4"
-   width="276" />
-  <combo_box
-   control_name="SKNavOverlayAir"
-   follows="left|top"
-   height="20"
-   label="Air"
-   layout="topleft"
-   left="12"
-   name="overlay_air"
-   tool_tip="The air the spaces, stamp and face offsets are built from, as floors and edges"
-   top_pad="6"
-   width="292">
-    <combo_box.item label="Air: off" value="0" name="air_off" />
-    <combo_box.item label="Air: leaves by level" value="1" name="air_leaves" />
-    <combo_box.item label="Air: gaps by flags" value="2" name="air_gaps" />
-    <combo_box.item label="Air: floors by space" value="3" name="air_space" />
-    <combo_box.item label="Air: polygons by stamped space" value="4" name="air_stamp" />
-    <combo_box.item label="Air: clearance" value="5" name="air_clearance" />
-    <combo_box.item label="Air: wall face offsets" value="6" name="air_faces" />
-  </combo_box>
-  <combo_box
-   control_name="SKNavOverlayAirSource"
-   follows="left|top"
-   height="20"
-   layout="topleft"
-   left="28"
-   name="overlay_air_source"
-   tool_tip="Which tiles' air to draw. Far tiles carry coarse air: dimmer, and framed in violet"
-   top_pad="4"
-   width="276">
-    <combo_box.item label="Detail and coarse air" value="0" name="air_both" />
-    <combo_box.item label="Detail air only" value="1" name="air_detail" />
-    <combo_box.item label="Coarse air only" value="2" name="air_coarse" />
-  </combo_box>
-  <slider
-   control_name="SKNavOverlayAirSlice"
-   decimal_digits="1"
-   follows="left|top"
-   height="20"
-   increment="0.5"
-   initial_value="0"
-   label="Slice (m)"
-   label_width="80"
-   layout="topleft"
-   left="28"
-   max_val="20"
-   min_val="0"
-   name="overlay_air_slice"
-   tool_tip="Draw only the air whose floor is within this many metres of your floor, so storeys do not stack. 0 draws every floor"
-   top_pad="4"
-   width="276" />
-  <check_box
-   height="19"
-   label="Slice at the camera's floor"
-   layout="topleft"
-   follows="left|top"
-   left="28"
-   name="overlay_air_slice_camera"
-   control_name="SKNavOverlayAirSliceCamera"
-   tool_tip="Centre the slice on the floor under the camera rather than under your avatar"
-   top_pad="4"
-   width="276" />
-  <check_box
-   height="19"
-   label="X-ray vision"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_xray"
-   control_name="SKNavOverlayXRay"
-   tool_tip="Also draw what is hidden behind geometry, darker and fainter"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Draw the world underneath"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_world"
-   control_name="SKNavOverlayWorld"
-   tool_tip="Off wipes the frame, leaving the navmesh on its own"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Tile update blips"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_updates"
-   control_name="SKNavOverlayUpdates"
-   tool_tip="A rising blip each time a tile is built or rebuilt, coloured by why, with a line back to the record that moved"
-   top_pad="4"
-   width="292" />
-  <slider
-   control_name="SKNavOverlayEdgeWidth"
-   decimal_digits="0"
-   follows="left|top"
-   height="20"
-   increment="1"
-   initial_value="3"
-   label="Edge width"
-   label_width="80"
-   layout="topleft"
-   left="28"
-   max_val="8"
-   min_val="1"
-   name="overlay_edge_width"
-   tool_tip="How wide the edges of the walkable surface are drawn. Some drivers refuse anything above one pixel"
-   top_pad="6"
-   width="276" />
-  <slider
-   control_name="SKNavOverlayRange"
-   decimal_digits="0"
-   follows="left|top"
-   height="20"
-   increment="8"
-   initial_value="96"
-   label="Range (m)"
-   label_width="80"
-   layout="topleft"
-   left="28"
-   max_val="512"
-   min_val="16"
-   name="overlay_range"
-   tool_tip="How far from your camera the overlay is drawn; its last fifth fades away"
-   top_pad="6"
-   width="276" />
-  <text
-   name="census_label"
-   height="13"
-   type="string"
-   text_color="LabelTextColor"
-   follows="left|top"
-   layout="topleft"
-   left="12"
-   top_pad="10"
-   width="292">
-    Census and physics
-  </text>
-  <check_box
-   height="19"
-   label="Census shapes"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_census"
-   control_name="SKNavOverlayCensus"
-   tool_tip="The physics shapes the mesh is built from, and the structure each belongs to. Draws without the navmesh surface"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Doors, ladders, shafts and vehicles"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="show_features"
-   control_name="SKNavOverlayFeatures"
-   tool_tip="What the census has recognised: door leaves, ladder spans with the floors they can be left at, elevator shafts and vehicles"
-   top_pad="4"
-   width="292" />
-  <check_box
-   height="19"
-   label="Physics shapes"
-   layout="topleft"
-   follows="left|top"
-   left="12"
-   name="physics_shapes"
-   tool_tip="The same switch as Develop &gt; Render Metadata &gt; Physics Shapes: what the sim collides with"
-   top_pad="4"
-   width="292" />
-
-  <button
-   follows="left|top"
-   layout="topleft"
-   left="12"
-   top_pad="10"
-   height="23"
-   width="292"
-   name="mark_button"
-   label="Mark what the camera is pointing at"
-   tool_tip="Cast from the middle of the screen, mark the hit, and write down everything the census and the navmesh know there. The report goes to the log under SKNavDump" />
-  <text
-   name="mark_status"
-   height="26"
-   word_wrap="true"
-   use_ellipses="false"
-   type="string"
-   follows="left|top|right"
-   layout="topleft"
-   left="12"
-   top_pad="4"
-   width="292">
-  </text>
-   <button
-    follows="left|top"
-    layout="topleft"
-    left="12"
-    top_pad="8"
-    height="23"
-    width="292"
-    name="export_button"
-    label="Export the navmesh"
-    tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
-   <text
-    name="export_status"
-    height="26"
-    word_wrap="true"
-    use_ellipses="false"
-    type="string"
-    follows="left|top|right"
-    layout="topleft"
-    left="12"
-    top_pad="4"
-    width="292">
-   </text>
-   <combo_box
-    follows="left|top"
-    layout="topleft"
-    left="12"
-    top_pad="8"
-    height="23"
-    width="200"
-    name="capture_kind"
-    tool_tip="What to capture: the selected linkset or the one the camera points at with its crew, or the selected or pointed-at avatar's attachments (yourself if none)">
-    <combo_box.item label="Vehicle and crew" value="0" name="capture_vehicle" />
-    <combo_box.item label="Worn attachments" value="1" name="capture_attachments" />
-    <combo_box.item label="Avatar" value="2" name="capture_avatar" />
-   </combo_box>
-   <button
-    follows="left|top"
-    layout="topleft"
-    left_pad="4"
-    top_delta="0"
-    height="23"
-    width="88"
-    name="capture_button"
-    label="Export"
-    tool_tip="Write triangles and each face's transparency to sknav-capture-&lt;kind&gt;-&lt;id&gt;.json in the logs folder: a vehicle in its root's frame, worn attachments each in their own root's frame, an avatar in its body frame" />
-   <text
-    name="capture_status"
-    height="26"
-    word_wrap="true"
-    use_ellipses="false"
-    type="string"
-    follows="left|top|right"
-    layout="topleft"
-    left="12"
-    top_pad="4"
-    width="292">
-   </text>
-   <button
-    follows="left|top"
-    layout="topleft"
-    left="12"
-    top_pad="8"
-    height="23"
-    width="292"
-    name="export_census_button"
-    label="Export the census"
-    tool_tip="Write what every tile is built from - the census's records, clusters, doors and features, each region's land and the build parameters - to sknav-census-&lt;time&gt;.json in the logs folder, so the build can be replayed offline" />
-   <text
-    name="export_census_status"
-    height="26"
-    word_wrap="true"
-    use_ellipses="false"
-    type="string"
-    follows="left|top|right"
-    layout="topleft"
-    left="12"
-    top_pad="4"
-    width="292">
-   </text>
-   <button
-    follows="left|top"
-    layout="topleft"
-    left="12"
-    top_pad="8"
-    height="23"
-    width="292"
-    name="export_vehicle_button"
-    label="Export an object and its surroundings"
-    tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-object-&lt;id&gt;.json in the logs folder: triangles in the object's own frame and each face's transparency, plus the navmesh's collision input and the visible faces within 16 m of the point, in world axes. Pointed at an avatar sitting on nothing, it writes what they wear and the ground around where they stand" />
-   <text
-    name="export_vehicle_status"
-    height="26"
-    word_wrap="true"
-    use_ellipses="false"
-    type="string"
-    follows="left|top|right"
-    layout="topleft"
-    left="12"
-    top_pad="4"
-    width="292">
-   </text>
-   <button
-    follows="left|top"
-    layout="topleft"
-    left="12"
-    top_pad="8"
-    height="23"
-    width="292"
-    name="annotate_button"
-    label="Annotate the navmesh..."
-    tool_tip="Mark in the world where the navmesh is wrong. Both exports above carry the marks" />
+    <tab_container
+     follows="all"
+     height="595"
+     layout="topleft"
+     left="4"
+     name="nav_console_tabs"
+     right="-4"
+     tab_max_width="80"
+     tab_min_width="40"
+     tab_position="top"
+     top="186">
+        <panel
+         follows="all"
+         height="571"
+         label="Overlays"
+         layout="topleft"
+         left="0"
+         name="nav_tab_overlays"
+         top="0"
+         width="312">
+            <text
+             name="overlay_label"
+             height="13"
+             type="string"
+             text_color="LabelTextColor"
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top="6"
+             width="292">
+             Overlay
+            </text>
+            <check_box
+             height="19"
+             label="Draw the navmesh"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="overlay_on"
+             tool_tip="The same switch as Develop &gt; Render Metadata &gt; Navmesh. The layers below draw whether or not the surface is drawn"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Build faces, ledges and run-off"
+             layout="topleft"
+             follows="left|top"
+             left="24"
+             name="build_raster"
+             control_name="SKNavBuildRaster"
+             tool_tip="Every tile keeps its solid raster's wall faces, the ledges its floors end in and the run-off down them: the surfaces snow, rain and puddles settle on and drain along"
+             top_pad="4"
+             width="276" />
+            <check_box
+             height="19"
+             label="Walls, cover and ledges"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_walls"
+             control_name="SKNavOverlayWalls"
+             tool_tip="Floor edges by what lies beyond them, with the cover they give and where a drop lands. Draws without the navmesh surface"
+             top_pad="6"
+             width="292" />
+            <check_box
+             height="19"
+             label="Ledges and run-off"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_runoff"
+             control_name="SKNavOverlayRunoff"
+             tool_tip="Where the floors weather settles on end over a drop, and where it runs off them. Needs them built"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Wall faces"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_faces"
+             control_name="SKNavOverlayFaces"
+             tool_tip="The vertical surfaces at their full height, which is what Atmo reads. The cover segments above stop at four metres because that is all a cover class can mean. Draws without the navmesh surface"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Tile seams"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_links"
+             control_name="SKNavOverlayLinks"
+             tool_tip="Colour the edges where tiles meet by whether Detour joined them to the next tile. Part of the surface, so it needs Draw the navmesh"
+             top_pad="4"
+             width="292" />
+            <combo_box
+             control_name="SKNavOverlayEnclosure"
+             follows="left|top"
+             height="20"
+             label="Enclosure"
+             layout="topleft"
+             left="8"
+             name="overlay_enclosure"
+             tool_tip="Tint the floors by how enclosed their air is, from the rooms pass: blue outdoors, amber sheltered, red indoors, grey where nothing answered. By e shades between them"
+             top_pad="6"
+             width="292">
+                <combo_box.item label="Enclosure: off" value="0" name="enclosure_off" />
+                <combo_box.item label="Enclosure: by indoorness (e)" value="1" name="enclosure_e" />
+                <combo_box.item label="Enclosure: by bucket" value="2" name="enclosure_bucket" />
+            </combo_box>
+            <check_box
+             height="19"
+             label="Spaces and portals"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_spaces"
+             control_name="SKNavOverlaySpaces"
+             tool_tip="Fill each space the rooms pass cut in a colour of its own, and draw its portals: doors red, stairs lime, openings cyan, dashed where nothing is over them"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Wind"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_wind"
+             control_name="SKNavOverlayWind"
+             tool_tip="An arrow every 2 m over the lowest wind band near the camera, coloured by speed factor: blue calm, cyan the free stream, yellow twice it"
+             top_pad="4"
+             width="292" />
+            <slider
+             control_name="SKNavOverlayWindHeading"
+             decimal_digits="0"
+             follows="left|top"
+             height="20"
+             increment="1"
+             initial_value="-1"
+             label="Heading"
+             label_width="80"
+             layout="topleft"
+             left="24"
+             max_val="359"
+             min_val="-1"
+             name="overlay_wind_heading"
+             tool_tip="The heading the wind is drawn for, in degrees it blows toward, counter-clockwise from east. -1 follows the region's wind at the camera"
+             top_pad="4"
+             width="276" />
+            <combo_box
+             control_name="SKNavOverlayAir"
+             follows="left|top"
+             height="20"
+             label="Air"
+             layout="topleft"
+             left="8"
+             name="overlay_air"
+             tool_tip="The air the spaces, stamp and face offsets are built from, as floors and edges"
+             top_pad="6"
+             width="292">
+                <combo_box.item label="Air: off" value="0" name="air_off" />
+                <combo_box.item label="Air: leaves by level" value="1" name="air_leaves" />
+                <combo_box.item label="Air: gaps by flags" value="2" name="air_gaps" />
+                <combo_box.item label="Air: floors by space" value="3" name="air_space" />
+                <combo_box.item label="Air: polygons by stamped space" value="4" name="air_stamp" />
+                <combo_box.item label="Air: clearance" value="5" name="air_clearance" />
+                <combo_box.item label="Air: wall face offsets" value="6" name="air_faces" />
+            </combo_box>
+            <combo_box
+             control_name="SKNavOverlayAirSource"
+             follows="left|top"
+             height="20"
+             layout="topleft"
+             left="24"
+             name="overlay_air_source"
+             tool_tip="Which tiles' air to draw. Far tiles carry coarse air: dimmer, and framed in violet"
+             top_pad="4"
+             width="276">
+                <combo_box.item label="Detail and coarse air" value="0" name="air_both" />
+                <combo_box.item label="Detail air only" value="1" name="air_detail" />
+                <combo_box.item label="Coarse air only" value="2" name="air_coarse" />
+            </combo_box>
+            <slider
+             control_name="SKNavOverlayAirSlice"
+             decimal_digits="1"
+             follows="left|top"
+             height="20"
+             increment="0.5"
+             initial_value="0"
+             label="Slice (m)"
+             label_width="80"
+             layout="topleft"
+             left="24"
+             max_val="20"
+             min_val="0"
+             name="overlay_air_slice"
+             tool_tip="Draw only the air whose floor is within this many metres of your floor, so storeys do not stack. 0 draws every floor"
+             top_pad="4"
+             width="276" />
+            <check_box
+             height="19"
+             label="Slice at the camera's floor"
+             layout="topleft"
+             follows="left|top"
+             left="24"
+             name="overlay_air_slice_camera"
+             control_name="SKNavOverlayAirSliceCamera"
+             tool_tip="Centre the slice on the floor under the camera rather than under your avatar"
+             top_pad="4"
+             width="276" />
+            <check_box
+             height="19"
+             label="X-ray vision"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_xray"
+             control_name="SKNavOverlayXRay"
+             tool_tip="Also draw what is hidden behind geometry, darker and fainter"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Draw the world underneath"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_world"
+             control_name="SKNavOverlayWorld"
+             tool_tip="Off wipes the frame, leaving the navmesh on its own"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Tile update blips"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_updates"
+             control_name="SKNavOverlayUpdates"
+             tool_tip="A rising blip each time a tile is built or rebuilt, coloured by why, with a line back to the record that moved"
+             top_pad="4"
+             width="292" />
+            <slider
+             control_name="SKNavOverlayEdgeWidth"
+             decimal_digits="0"
+             follows="left|top"
+             height="20"
+             increment="1"
+             initial_value="3"
+             label="Edge width"
+             label_width="80"
+             layout="topleft"
+             left="24"
+             max_val="8"
+             min_val="1"
+             name="overlay_edge_width"
+             tool_tip="How wide the edges of the walkable surface are drawn. Some drivers refuse anything above one pixel"
+             top_pad="6"
+             width="276" />
+            <slider
+             control_name="SKNavOverlayRange"
+             decimal_digits="0"
+             follows="left|top"
+             height="20"
+             increment="8"
+             initial_value="96"
+             label="Range (m)"
+             label_width="80"
+             layout="topleft"
+             left="24"
+             max_val="512"
+             min_val="16"
+             name="overlay_range"
+             tool_tip="How far from your camera the overlay is drawn; its last fifth fades away"
+             top_pad="6"
+             width="276" />
+            <text
+             name="census_label"
+             height="13"
+             type="string"
+             text_color="LabelTextColor"
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="10"
+             width="292">
+             Census and physics
+            </text>
+            <check_box
+             height="19"
+             label="Census shapes"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_census"
+             control_name="SKNavOverlayCensus"
+             tool_tip="The physics shapes the mesh is built from, and the structure each belongs to. Draws without the navmesh surface"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Doors, ladders, shafts and vehicles"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="show_features"
+             control_name="SKNavOverlayFeatures"
+             tool_tip="What the census has recognised: door leaves, ladder spans with the floors they can be left at, elevator shafts and vehicles"
+             top_pad="4"
+             width="292" />
+            <check_box
+             height="19"
+             label="Physics shapes"
+             layout="topleft"
+             follows="left|top"
+             left="8"
+             name="physics_shapes"
+             tool_tip="The same switch as Develop &gt; Render Metadata &gt; Physics Shapes: what the sim collides with"
+             top_pad="4"
+             width="292" />
+        </panel>
+        <panel
+         follows="all"
+         height="571"
+         label="Export"
+         layout="topleft"
+         left="0"
+         name="nav_tab_export"
+         top="0"
+         width="312">
+            <button
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top="6"
+             height="23"
+             width="292"
+             name="mark_button"
+             label="Mark what the camera is pointing at"
+             tool_tip="Cast from the middle of the screen, mark the hit, and write down everything the census and the navmesh know there. The report goes to the log under SKNavDump" />
+            <text
+             name="mark_status"
+             height="26"
+             word_wrap="true"
+             use_ellipses="false"
+             type="string"
+             follows="left|top|right"
+             layout="topleft"
+             left="8"
+             top_pad="4"
+             width="292">
+            </text>
+            <button
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="8"
+             height="23"
+             width="292"
+             name="export_button"
+             label="Export the navmesh"
+             tool_tip="Write every built mesh, tile, polygon, segment, link and face to sknavmesh-export.json in the logs folder, for reading offline" />
+            <text
+             name="export_status"
+             height="26"
+             word_wrap="true"
+             use_ellipses="false"
+             type="string"
+             follows="left|top|right"
+             layout="topleft"
+             left="8"
+             top_pad="4"
+             width="292">
+            </text>
+            <combo_box
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="8"
+             height="23"
+             width="200"
+             name="capture_kind"
+             tool_tip="What to capture: the selected linkset or the one the camera points at with its crew, or the selected or pointed-at avatar's attachments (yourself if none)">
+                <combo_box.item label="Vehicle and crew" value="0" name="capture_vehicle" />
+                <combo_box.item label="Worn attachments" value="1" name="capture_attachments" />
+                <combo_box.item label="Avatar" value="2" name="capture_avatar" />
+            </combo_box>
+            <button
+             follows="left|top"
+             layout="topleft"
+             left_pad="4"
+             top_delta="0"
+             height="23"
+             width="88"
+             name="capture_button"
+             label="Export"
+             tool_tip="Write triangles and each face's transparency to sknav-capture-&lt;kind&gt;-&lt;id&gt;.json in the logs folder: a vehicle in its root's frame, worn attachments each in their own root's frame, an avatar in its body frame" />
+            <text
+             name="capture_status"
+             height="26"
+             word_wrap="true"
+             use_ellipses="false"
+             type="string"
+             follows="left|top|right"
+             layout="topleft"
+             left="8"
+             top_pad="4"
+             width="292">
+            </text>
+            <button
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="8"
+             height="23"
+             width="292"
+             name="export_census_button"
+             label="Export the census"
+             tool_tip="Write what every tile is built from - the census's records, clusters, doors and features, each region's land and the build parameters - to sknav-census-&lt;time&gt;.json in the logs folder, so the build can be replayed offline" />
+            <text
+             name="export_census_status"
+             height="26"
+             word_wrap="true"
+             use_ellipses="false"
+             type="string"
+             follows="left|top|right"
+             layout="topleft"
+             left="8"
+             top_pad="4"
+             width="292">
+            </text>
+            <button
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="8"
+             height="23"
+             width="292"
+             name="export_vehicle_button"
+             label="Export an object and its surroundings"
+             tool_tip="Write the selected linkset, or the one the camera is pointing at, with everyone sitting on it and what they wear, to sknav-object-&lt;id&gt;.json in the logs folder: triangles in the object's own frame and each face's transparency, plus the navmesh's collision input and the visible faces within 16 m of the point, in world axes. Pointed at an avatar sitting on nothing, it writes what they wear and the ground around where they stand" />
+            <text
+             name="export_vehicle_status"
+             height="26"
+             word_wrap="true"
+             use_ellipses="false"
+             type="string"
+             follows="left|top|right"
+             layout="topleft"
+             left="8"
+             top_pad="4"
+             width="292">
+            </text>
+            <button
+             follows="left|top"
+             layout="topleft"
+             left="8"
+             top_pad="8"
+             height="23"
+             width="292"
+             name="annotate_button"
+             label="Annotate the navmesh..."
+             tool_tip="Mark in the world where the navmesh is wrong. Both exports above carry the marks" />
+        </panel>
+    </tab_container>
 </floater>

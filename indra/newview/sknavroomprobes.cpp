@@ -660,6 +660,12 @@ void SKNavRoomProbes::update(const SKNavWorldViewPtr& view, SKNavMesh& navmesh)
     mLastMs = std::chrono::duration<F32, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
+bool SKNavRoomProbes::pendingFor(const LLUUID& mesh) const
+{
+    const auto it = mPlacing.lower_bound(std::make_pair(mesh, 0u));
+    return it != mPlacing.end() && it->first == mesh;
+}
+
 std::string SKNavRoomProbes::statsLine() const
 {
     const LLReflectionMapManager& manager = gPipeline.mReflectionMapManager;
