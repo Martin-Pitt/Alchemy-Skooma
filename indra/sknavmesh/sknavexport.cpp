@@ -349,7 +349,7 @@ namespace sknav
                  << ",\"ceiling\":[" << s.mCeilingMin + oz << ',' << s.mCeilingMean + oz << ',' << s.mCeilingMax + oz << "],\"floor\":["
                  << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"cover\":" << s.mCoverMean << ",\"O\":" << s.mSideOpenMean << ",\"e\":["
                  << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
-                 << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false")
+                 << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false") << ",\"under_flight\":" << (s.mUnderFlight ? "true" : "false")
                  << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";
             for (size_t k = 0; k < s.mPortals.size(); ++k)
             {

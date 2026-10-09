@@ -56,6 +56,8 @@ namespace
     constexpr F32 LIFT_STACK_M = 0.5f;      ///< a census shaft thinner than this is a stack of doors, not the shaft beside it
     constexpr F32 OPEN_MIN_S = 0.25f;       ///< unroofed air seeing this much sky is never indoors
     constexpr F32 OPEN_MAX_COVER = 0.05f;
+    constexpr F32 UNDER_FLIGHT_SHARE = 0.3f;    ///< a space this much under an outdoor flight's air is sheltered by it
+    constexpr F32 UNDER_FLIGHT_REACH_M = 2.f;   ///< and opens onto ground this far off across low headroom
     constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
@@ -633,6 +635,8 @@ namespace sknav
         bool probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const;
         /// Square each stair portal to the treads of the flight it enters (sknavstairalign.h).
         void squareStairPortals(std::vector<StairEnd>& ends, const std::vector<size_t>& portals);
+        /// Ground under an outdoor flight with no portal opens onto the ground it reaches under the flight's low end.
+        void joinUnderFlights(std::vector<Space>& out);
         /// Whether solid stands between lo and hi (mesh units) over a fine cell.
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
         /// Whether solid stands between lo and hi (mesh units) at a point.
@@ -4202,6 +4206,196 @@ namespace sknav
         std::unordered_map<U64, Scored>().swap(mScored);
     }
 
+    void SpacesPass::State::joinUnderFlights(std::vector<Space>& out)
+    {
+        // A space's own avatar floor, not air it took over above a thin solid.
+        auto ownFloor = [&](const Space& sp, U32 t, const AirGap& g) {
+            const F32 z = floorOf(t, g) * mUnit;
+            return floorGap(t, g) && z >= sp.mFloorMin - mClimb * mUnit && z <= sp.mFloorMax + mClimb * mUnit;
+        };
+        std::vector<U32> degree(out.size(), 0);
+        for (const Portal& q : mPortals)
+        {
+            ++degree[q.mSpaces[0]];
+            ++degree[q.mSpaces[1]];
+        }
+        // Each space's floor, and how much of it lies under an open flight's air.
+        std::vector<F64> total(out.size(), 0.0), under(out.size(), 0.0);
+        AirColumn col;
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                if (!leaf.mGapCount)
+                {
+                    continue;
+                }
+                const F64 area = std::pow((1 << leaf.mLevel) * mCell, 2.0);
+                column(t, leaf.mX, leaf.mY, col);
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const U32 g = leaf.mFirstGap + i;
+                    const U32 s = mGapSpace[t][g];
+                    if (!s || !ownFloor(out[s - 1], t, a.mGaps[g]))
+                    {
+                        continue;
+                    }
+                    total[s - 1] += area;
+                    const S32 f = floorOf(t, a.mGaps[g]);
+                    for (U32 k = 0; k < col.mCount; ++k)
+                    {
+                        const AirGap& o = a.mGaps[col.mGap[k]];
+                        if ((o.mFlags & AirGap::FLIGHT) && floorOf(t, o) > f + mWalkHead / 2 && ceilOf(t, o) >= OPEN_TOP)
+                        {
+                            under[s - 1] += area;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        std::vector<bool> lone(out.size(), false);
+        for (U32 s = 0; s < out.size(); ++s)
+        {
+            Space& sp = out[s];
+            lone[s] = !degree[s] && !sp.mLift && !sp.mFlight && total[s] > 0.0 && under[s] >= UNDER_FLIGHT_SHARE * total[s];
+            sp.mUnderFlight = lone[s];
+        }
+        // From each lone space's floors, walk out across floor too low to stand on until ground of another space, or solid.
+        struct Contact
+        {
+            LLVector2 mFrom, mTo;
+            F32 mZ;
+        };
+        std::map<std::pair<U32, U32>, std::vector<Contact>> contacts;
+        const S32 reach = static_cast<S32>(std::lround(UNDER_FLIGHT_REACH_M / mCell));
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                const S32 sz = 1 << leaf.mLevel;
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const U32 g = leaf.mFirstGap + i;
+                    const U32 s = mGapSpace[t][g];
+                    if (!s || !lone[s - 1] || !ownFloor(out[s - 1], t, a.mGaps[g]))
+                    {
+                        continue;
+                    }
+                    for (S32 d = 0; d < 4; ++d)
+                    {
+                        for (S32 e = 0; e < sz; ++e)
+                        {
+                            S32 x = DX[d] > 0 ? leaf.mX + sz - 1 : DX[d] < 0 ? leaf.mX : leaf.mX + e;
+                            S32 y = DY[d] > 0 ? leaf.mY + sz - 1 : DY[d] < 0 ? leaf.mY : leaf.mY + e;
+                            const LLVector2 from(a.mOrigin.mV[VX] + (x + 0.5f) * mCell, a.mOrigin.mV[VY] + (y + 0.5f) * mCell);
+                            const S32 f = airFloorAt(a.mGaps[g], leaf, x, y) + mTiles[t].mZOff;
+                            for (S32 k = 1; k <= reach; ++k)
+                            {
+                                x += DX[d];
+                                y += DY[d];
+                                U32 u;
+                                S32 bx, by;
+                                if (resolve(t, x, y, u, bx, by) != 0)
+                                {
+                                    break;
+                                }
+                                S32 hit = -1, hf = 0;
+                                const U32 n = column(u, bx, by, col);
+                                for (U32 j = 0; j < n; ++j)
+                                {
+                                    const S32 fo = floorAt(u, col, j, bx, by);
+                                    if (std::abs(fo - f) <= mClimb && ceilOf(u, air(u).mGaps[col.mGap[j]]) > f + mClimb)
+                                    {
+                                        hit = static_cast<S32>(j);
+                                        hf = fo;
+                                        break;
+                                    }
+                                }
+                                if (hit < 0)
+                                {
+                                    break;
+                                }
+                                const U32 og = col.mGap[hit];
+                                const U32 o = mGapSpace[u][og];
+                                if (!o || !floorGap(u, air(u).mGaps[og]))
+                                {
+                                    continue;
+                                }
+                                if (o != s)
+                                {
+                                    if (!out[o - 1].mFlight && !out[o - 1].mLift)
+                                    {
+                                        const TileAir& b = air(u);
+                                        const LLVector2 to(b.mOrigin.mV[VX] + (bx + 0.5f) * mCell, b.mOrigin.mV[VY] + (by + 0.5f) * mCell);
+                                        contacts[{ s - 1, o - 1 }].push_back({ from, to, 0.5f * (f + hf) * mUnit });
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Each lone space opens onto the ground it meets along the most cells.
+        std::vector<std::pair<U32, const std::vector<Contact>*>> best(out.size(), { 0, nullptr });
+        for (const auto& [key, list] : contacts)
+        {
+            auto& b = best[key.first];
+            if (!b.second || list.size() > b.second->size())
+            {
+                b = { key.second, &list };
+            }
+        }
+        for (U32 s = 0; s < out.size(); ++s)
+        {
+            const std::vector<Contact>* list = best[s].second;
+            if (!list)
+            {
+                continue;
+            }
+            LLVector2 n(0.f, 0.f), mid(0.f, 0.f);
+            F32 z = 0.f;
+            for (const Contact& c : *list)
+            {
+                n += c.mTo - c.mFrom;
+                mid += (c.mFrom + c.mTo) * 0.5f;
+                z += c.mZ;
+            }
+            mid /= static_cast<F32>(list->size());
+            z /= static_cast<F32>(list->size());
+            n.normVec();
+            const LLVector2 along(-n.mV[VY], n.mV[VX]);
+            F32 lo = 1e30f, hi = -1e30f;
+            for (const Contact& c : *list)
+            {
+                const F32 v = (((c.mFrom + c.mTo) * 0.5f) - mid) * along;
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+            // Narrower than an avatar passes is no way out.
+            if (hi - lo + mCell < 2.f * params().mAgentRadiusM)
+            {
+                continue;
+            }
+            Portal q;
+            q.mKind = PortalKind::OPENING;
+            q.mSpaces[0] = s;
+            q.mSpaces[1] = best[s].first;
+            const LLVector2 pa = mid + along * (lo - 0.5f * mCell), pb = mid + along * (hi + 0.5f * mCell);
+            q.mA.set(pa.mV[VX], pa.mV[VY], z);
+            q.mB.set(pb.mV[VX], pb.mV[VY], z);
+            q.mCentre.set(mid.mV[VX], mid.mV[VY], z);
+            q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+            q.mWidth = hi - lo + mCell;
+            q.mSill = z;
+            mPortals.push_back(q);
+        }
+    }
+
     void SpacesPass::State::spaces()
     {
         const SpaceParams& p = params();
@@ -4963,6 +5157,7 @@ namespace sknav
                 }
             }
         }
+        joinUnderFlights(out);
         for (U32 i = 0; i < mPortals.size(); ++i)
         {
             for (U32 s : mPortals[i].mSpaces)
@@ -5135,6 +5330,10 @@ namespace sknav
             if (sp.mLift)
             {
                 sp.mBucket = EnclosureBucket::INDOORS;
+            }
+            if (sp.mBucket == EnclosureBucket::INDOORS && sp.mUnderFlight)
+            {
+                sp.mBucket = EnclosureBucket::SHELTERED;
             }
             // Unroofed air under open sky is never indoors, lift or not.
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mCoverMean <= OPEN_MAX_COVER && sp.mSMean > OPEN_MIN_S)

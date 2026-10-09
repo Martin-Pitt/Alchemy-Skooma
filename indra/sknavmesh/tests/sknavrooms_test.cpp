@@ -157,8 +157,8 @@ namespace
         std::string o;
         for (const Space& sp : r.mRooms->mSpaces)
         {
-            o += llformat(" [%u b%d a%.1f z%.1f S%.2f ceil%.1f lift%d p%zu c(%.1f,%.1f)]", r.index(&sp), (int)sp.mBucket, sp.mFloorArea, sp.mFloorMin, sp.mSMean,
-                          sp.mCeilingMax, (int)sp.mLift, sp.mPortals.size(), sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
+            o += llformat(" [%u b%d a%.1f z%.1f S%.2f ceil%.1f lift%d uf%d p%zu c(%.1f,%.1f)]", r.index(&sp), (int)sp.mBucket, sp.mFloorArea, sp.mFloorMin, sp.mSMean,
+                          sp.mCeilingMax, (int)sp.mLift, (int)sp.mUnderFlight, sp.mPortals.size(), sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
         }
         return o;
     }
@@ -1902,6 +1902,32 @@ template<> template<>
             lifts += sp.mLift ? 1 : 0;
         }
         ensure_equals("only the shaft", lifts, 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<53>()
+    {
+        set_test_name("ground under an open flight is sheltered and opens onto the street under its stringer");
+        // A flight up +x from 4 m to 16 m onto a landing block, treads as thin slabs with air below;
+        // walled on the north, and on the south a stringer hangs to 0.9 m over the street.
+        Scene s;
+        for (S32 k = 1; k <= 24; ++k)
+        {
+            const F32 x = 4.f + (k - 1) * 0.5f, z = 0.25f * k;
+            s.box(x, 10.25f, x + 0.5f, 12.f, z - 0.25f, z, true, true);
+        }
+        s.box(16.f, 10.f, 20.f, 12.25f, 0.f, 6.f);
+        s.wall(4.f, 12.f, 16.f, 12.25f, 6.f);
+        s.box(4.f, 10.f, 16.f, 10.25f, 0.9f, 6.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        const Space* under = r.at(14.f, 11.1f, 0.5f);
+        const Space* street = r.at(13.f, 5.f, 0.5f);
+        ensure(llformat("found %d %d", under ? 1 : 0, street ? 1 : 0), under && street && under != street);
+        ensure("under its flight" + info(r), under->mUnderFlight);
+        ensure("sheltered, not indoors", under->mBucket != EnclosureBucket::INDOORS);
+        ensure("opens onto the street", !r.between(under, street).empty());
     }
 
     template<> template<>
