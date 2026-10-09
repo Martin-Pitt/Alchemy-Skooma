@@ -247,9 +247,11 @@ namespace tut
         std::set<LLUUID> spaces_pending = { a }, stamp_pending, probes_pending = { b };
         gate.add("spaces", [&](const LLUUID& m) { return spaces_pending.count(m) > 0; });
         gate.add("stamp", [&](const LLUUID& m) { return stamp_pending.count(m) > 0; });
-        gate.add("room probes", [&](const LLUUID& m) { return probes_pending.count(m) > 0; });
+        gate.add("room probes", [&](const LLUUID& m) { return probes_pending.count(m) > 0; }, false);
         ensure("a waits on its spaces", !gate.settled(a) && std::string(gate.pending(a)) == "spaces");
         ensure("b waits on its probes", !gate.settled(b) && std::string(gate.pending(b)) == "room probes");
+        ensure("which read no air: b's detail stays on disk", !gate.needsDetail(b));
+        ensure("a's spaces bring its detail back", gate.needsDetail(a));
         spaces_pending.clear();
         stamp_pending.insert(a);
         ensure("then on its stamp", std::string(gate.pending(a)) == "stamp");

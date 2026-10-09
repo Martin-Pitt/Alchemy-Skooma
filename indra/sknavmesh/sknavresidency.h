@@ -37,22 +37,31 @@
 
 namespace sknav
 {
-    /// The products that read a mesh's detail air when it settles. The air may
-    /// leave memory only once none of them is pending for the mesh; a new
-    /// product joins by adding itself here.
+    /// The products a mesh settles into. Its detail air may leave memory only
+    /// once none of them is pending for it; a new product joins by adding itself here.
     class SettleGate
     {
     public:
         typedef std::function<bool(const LLUUID& mesh)> PendingFn;
 
-        void add(const std::string& name, PendingFn pending);
+        /// reads_air: whether the product, once pending again, needs the detail back
+        /// (spaces do; probe placement reads the spaces and only waits its turn).
+        void add(const std::string& name, PendingFn pending, bool reads_air = true);
         /// The first product still pending for the mesh, or null when none is.
         const char* pending(const LLUUID& mesh) const;
         bool settled(const LLUUID& mesh) const { return pending(mesh) == nullptr; }
+        /// Whether a product that reads the air is pending: a spilled mesh's detail comes back for it.
+        bool needsDetail(const LLUUID& mesh) const;
         size_t size() const { return mProducts.size(); }
 
     private:
-        std::vector<std::pair<std::string, PendingFn>> mProducts;
+        struct Product
+        {
+            std::string mName;
+            PendingFn mPending;
+            bool mReadsAir = true;
+        };
+        std::vector<Product> mProducts;
     };
 
     /// Per tile key, the air a product should point at instead; null lets the detail go.

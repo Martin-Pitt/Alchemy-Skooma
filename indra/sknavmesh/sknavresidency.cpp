@@ -28,21 +28,33 @@
 
 namespace sknav
 {
-    void SettleGate::add(const std::string& name, PendingFn pending)
+    void SettleGate::add(const std::string& name, PendingFn pending, bool reads_air)
     {
-        mProducts.emplace_back(name, std::move(pending));
+        mProducts.push_back({ name, std::move(pending), reads_air });
     }
 
     const char* SettleGate::pending(const LLUUID& mesh) const
     {
-        for (const auto& product : mProducts)
+        for (const Product& product : mProducts)
         {
-            if (product.second && product.second(mesh))
+            if (product.mPending && product.mPending(mesh))
             {
-                return product.first.c_str();
+                return product.mName.c_str();
             }
         }
         return nullptr;
+    }
+
+    bool SettleGate::needsDetail(const LLUUID& mesh) const
+    {
+        for (const Product& product : mProducts)
+        {
+            if (product.mReadsAir && product.mPending && product.mPending(mesh))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     EnclosureProductPtr withTileAir(const EnclosureProduct& product, const AirSwap& swap)
