@@ -194,9 +194,9 @@ namespace sknav
             return;
         }
         const S32 pass = static_cast<S32>(std::ceil(AIR_PASS_M / std::max(grid.mUnit, 1e-3f)));
-        // A walkable floor merges only where it is flat within a third of a climb, so neighbouring leaves'
-        // floors stay within a climb wherever the steps under them are no more than two thirds of one.
-        const S32 flat = climb / 3;
+        // A walkable floor merges only where it is flat within half a climb, so neighbouring leaves'
+        // floors stay within a climb wherever the steps under them are no more than half of one.
+        const S32 flat = climb / 2;
         constexpr U8 MERGE = 1, LIVE = 2;
         constexpr S8 NO_LIVE = AIR_MAX_LEVEL + 1;
 

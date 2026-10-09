@@ -144,7 +144,7 @@ namespace sknav
     /// Merge the fine grid's gaps into leaves of up to AIR_MAX_LEVEL, gap by
     /// gap: a gap merges over a block when every column has one gap matching
     /// it, with equal flags, floors and ceilings each within climb (walkable
-    /// floors within a third of one), and none is a usable gap (walkable, open
+    /// floors within half of one), and none is a usable gap (walkable, open
     /// or AIR_PASS_M tall) touching a wall. The other gaps of those columns stay
     /// in finer leaves, and a gap beside an overlapping one is at most one
     /// level coarser. A merged gap keeps the highest floor, the lowest ceiling

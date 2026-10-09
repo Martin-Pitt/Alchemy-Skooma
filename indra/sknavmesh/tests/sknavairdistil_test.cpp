@@ -250,7 +250,7 @@ namespace tut
                     ensure("the leaf covers the column" + at, covers(l, ix, iy));
                     ensure_equals("flags" + at, rec.mFlags, fine.mFlags);
                     ensure("floor within climb" + at, std::abs(rec.mFloor - fine.mFloor) <= CLIMB);
-                    ensure("a walkable floor within a third of one" + at, !(fine.mFlags & AirGap::TOP) || rec.mFloor - fine.mFloor <= CLIMB / 3);
+                    ensure("a walkable floor within half of one" + at, !(fine.mFlags & AirGap::TOP) || rec.mFloor - fine.mFloor <= CLIMB / 2);
                     ensure("air inside the column's" + at, rec.mFloor >= fine.mFloor && rec.mClear <= fine.mClear);
                     if (fine.mFlags & AirGap::OPEN)
                     {
@@ -686,8 +686,8 @@ namespace tut
     template<> template<>
     void sknavairdistil_object::test<15>()
     {
-        set_test_name("a walkable floor in steps merges only where a leaf's floors are within a third of a climb");
-        // Treads of 0.25 m rising 3 units each, open overhead: each tread is within a climb of the next, two are not within a third of one.
+        set_test_name("a walkable floor in steps merges only where a leaf's floors are within half a climb");
+        // Treads of 0.25 m rising 4 units each, open overhead: each tread is within a climb of the next, two are not within half of one.
         AirGrid g;
         g.mCell = g.mUnit = 0.125f;
         g.mWidth = g.mHeight = 64;
@@ -697,7 +697,7 @@ namespace tut
             for (S32 ix = 0; ix < 64; ++ix)
             {
                 AirGap gap;
-                gap.mFloor = static_cast<U16>(8 + 3 * (ix / 2));
+                gap.mFloor = static_cast<U16>(8 + 4 * (ix / 2));
                 gap.mCeiling = 400;
                 gap.mFlags = AirGap::TOP | AirGap::OPEN | AirGap::OWN_SKY;
                 g.mGaps.push_back(gap);
@@ -718,7 +718,7 @@ namespace tut
                 worst = std::max(worst, air.mGaps[column.mGap[0]].mFloor - g.gaps(ix, iy)[0].mFloor);
             }
         }
-        ensure("no leaf spans two treads", worst <= CLIMB / 3);
-        ensure("a tread's own cells merge", levelAt(air, 10, 10, 8 + 15) >= 1);
+        ensure("no leaf spans two treads", worst <= CLIMB / 2);
+        ensure("a tread's own cells merge", levelAt(air, 10, 10, 8 + 20) >= 1);
     }
 }
