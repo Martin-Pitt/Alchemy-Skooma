@@ -2501,6 +2501,7 @@ namespace sknav
             // each flight's polys by their code, then unfold the codes:
             // everything past here reads real areas
             std::vector<LLVector3> centroids(mem.pmesh->npolys);
+            std::vector<std::vector<LLVector3>> outlines(mem.pmesh->npolys);
             for (S32 i = 0; i < mem.pmesh->npolys; ++i)
             {
                 const unsigned short* poly = &mem.pmesh->polys[i * mem.pmesh->nvp * 2];
@@ -2511,6 +2512,7 @@ namespace sknav
                     const F32 rc[3] = { mem.pmesh->bmin[0] + v[0] * mem.pmesh->cs, mem.pmesh->bmin[1] + v[1] * mem.pmesh->ch,
                                         mem.pmesh->bmin[2] + v[2] * mem.pmesh->cs };
                     centroids[i] += fromRecast(rc);
+                    outlines[i].push_back(fromRecast(rc));
                 }
                 centroids[i] /= static_cast<F32>(llmax(nv, 1));
             }
@@ -2523,6 +2525,14 @@ namespace sknav
                 }
             }
             mapFlightPolys(flights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), ap.mClimb);
+            {
+                const rcPolyMesh& pm = *mem.pmesh;
+                // Contours already moved the mesh's corner onto the tile proper.
+                const F32 r0[3] = { pm.bmin[0], pm.bmin[1], pm.bmin[2] }, r1[3] = { pm.bmin[0] + cfg.tileSize * pm.cs, pm.bmin[1], pm.bmin[2] + cfg.tileSize * pm.cs };
+                const LLVector3 c0 = fromRecast(r0), c1 = fromRecast(r1);
+                fitFlightEdges(flights, outlines, ap.mRadius, LLVector2(llmin(c0.mV[VX], c1.mV[VX]), llmin(c0.mV[VY], c1.mV[VY])),
+                               LLVector2(llmax(c0.mV[VX], c1.mV[VX]), llmax(c0.mV[VY], c1.mV[VY])));
+            }
             if (stats)
             {
                 // The air's flights against the polys': region removal can take a standing flight's polys.

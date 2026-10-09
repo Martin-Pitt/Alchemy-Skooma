@@ -1006,4 +1006,30 @@ namespace tut
         const Flight& f = p.mFlights[0];
         ensure("a stair by its grade", f.mKind == ConnectorKind::STAIR && f.mRule == ConnectorRule::GRADE);
     }
+
+    template<> template<>
+    void sknavflights_object::test<28>()
+    {
+        set_test_name("a flight's ends span its walkable treads, not its rails; a side the tile cuts off keeps its span");
+        // A flight up +x over 4 m whose structure is 6 m wide, rails and all; its polys walk 2 m of it.
+        Flight f;
+        f.mBottom = LLVector3(10.f, 10.f, 0.f);
+        f.mTop = LLVector3(14.f, 10.f, 2.f);
+        f.mBottomA = LLVector3(10.f, 7.f, 0.f);
+        f.mBottomB = LLVector3(10.f, 13.f, 0.f);
+        f.mTopA = LLVector3(14.f, 7.f, 2.f);
+        f.mTopB = LLVector3(14.f, 13.f, 2.f);
+        f.mPolys = { 0 };
+        const std::vector<std::vector<LLVector3>> polys = { { LLVector3(10.f, 9.f, 0.f), LLVector3(14.f, 9.f, 2.f), LLVector3(14.f, 11.f, 2.f), LLVector3(10.f, 11.f, 0.f) } };
+        std::vector<Flight> flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 32.f));
+        const Flight& g = flights[0];
+        ensure("bottom across the treads", std::fabs(g.mBottomA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mBottomB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("top across the treads", std::fabs(g.mTopA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mTopB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("ends stay put along the run", g.mBottomA.mV[VX] == 10.f && g.mTopB.mV[VX] == 14.f && g.mTopA.mV[VZ] == 2.f);
+        // The tile ends at y = 11: the treads may go on past it.
+        flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 11.f));
+        ensure("cut side kept, other side fitted", std::fabs(flights[0].mBottomB.mV[VY] - 13.f) < 1e-3f && std::fabs(flights[0].mBottomA.mV[VY] - 8.7f) < 1e-3f);
+    }
 }

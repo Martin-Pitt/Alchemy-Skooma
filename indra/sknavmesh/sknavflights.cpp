@@ -1405,6 +1405,69 @@ namespace sknav
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
     }
 
+    void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
+                        const LLVector2& hi)
+    {
+        const auto on_edge = [&](const LLVector3& v) {
+            return v.mV[VX] - lo.mV[VX] < 0.05f || hi.mV[VX] - v.mV[VX] < 0.05f || v.mV[VY] - lo.mV[VY] < 0.05f || hi.mV[VY] - v.mV[VY] < 0.05f;
+        };
+        for (Flight& f : flights)
+        {
+            LLVector2 u(f.mTop.mV[VX] - f.mBottom.mV[VX], f.mTop.mV[VY] - f.mBottom.mV[VY]);
+            const F32 run = u.normVec();
+            if (run < 1e-3f || f.mPolys.empty())
+            {
+                continue;
+            }
+            const LLVector2 p(-u.mV[VY], u.mV[VX]), base(f.mBottom.mV[VX], f.mBottom.mV[VY]);
+            F32 k0 = 1e30f, k1 = -1e30f, s0 = 1e30f, s1 = -1e30f;
+            bool cut0 = false, cut1 = false;
+            for (const U16 i : f.mPolys)
+            {
+                for (const LLVector3& v : polys[i])
+                {
+                    const LLVector2 d(v.mV[VX] - base.mV[VX], v.mV[VY] - base.mV[VY]);
+                    if (d * p < k0)
+                    {
+                        k0 = d * p;
+                        cut0 = on_edge(v);
+                    }
+                    if (d * p > k1)
+                    {
+                        k1 = d * p;
+                        cut1 = on_edge(v);
+                    }
+                    s0 = llmin(s0, d * u);
+                    s1 = llmax(s1, d * u);
+                }
+            }
+            if (k1 < k0 || llmin(s1, run) - llmax(s0, 0.f) < 0.5f * run)
+            {
+                continue;
+            }
+            const auto lateral = [&](const LLVector3& v) { return (LLVector2(v.mV[VX], v.mV[VY]) - base) * p; };
+            // A side the tile cuts off may carry on in the next tile.
+            const F32 a0 = llmin(lateral(f.mBottomA), lateral(f.mBottomB)), b0 = llmax(lateral(f.mBottomA), lateral(f.mBottomB));
+            const F32 a = cut0 ? a0 : llmax(a0, k0 - radius);
+            const F32 b = cut1 ? b0 : llmin(b0, k1 + radius);
+            if (b - a < 2.f * radius)
+            {
+                continue;
+            }
+            // Ends keep their place along the run and their height; only their span across it narrows.
+            const auto place = [&](const LLVector3& end, F32 l) {
+                const LLVector2 at = base + u * ((LLVector2(end.mV[VX], end.mV[VY]) - base) * u) + p * l;
+                return LLVector3(at.mV[VX], at.mV[VY], end.mV[VZ]);
+            };
+            const bool flip = lateral(f.mBottomA) > lateral(f.mBottomB);
+            f.mBottomA = place(f.mBottomA, flip ? b : a);
+            f.mBottomB = place(f.mBottomB, flip ? a : b);
+            const bool flip_top = lateral(f.mTopA) > lateral(f.mTopB);
+            f.mTopA = place(f.mTopA, flip_top ? b : a);
+            f.mTopB = place(f.mTopB, flip_top ? a : b);
+        }
+    }
+
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb)
     {
         for (S32 z = border; z < chf.height - border; ++z)

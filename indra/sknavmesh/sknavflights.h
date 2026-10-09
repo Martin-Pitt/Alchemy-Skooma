@@ -107,6 +107,13 @@ namespace sknav
     /// that got none are dropped.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
 
+    /// Narrow each flight's ends to the walkable treads: the lateral extent of
+    /// its polys, grown back by the erosion radius. Polys are outlines in the
+    /// poly mesh's order; a flight whose polys cover less than half its run is
+    /// left as it is, and so is a side whose polys stop at the tile's edge, lo to hi.
+    void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
+                        const LLVector2& hi);
+
     /// Whether a flight still stands on the compact heightfield before its
     /// regions are built: a span of the tile proper carrying one of its codes
     /// inside its footprint, within climb of its heights. The air marks the
