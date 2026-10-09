@@ -140,6 +140,11 @@ void SKNavMesh::gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, 
             const Tile& tile = t.second;
             if (!tile.mAir)
             {
+                // A settled tile's detail is on disk: it is drawn once it is back.
+                if (tile.mAirSpilled)
+                {
+                    requestDetail(mesh.mId);
+                }
                 continue;
             }
             // Air built for the tile is its detail; air with no build signature is the coarse air a far tile reads.

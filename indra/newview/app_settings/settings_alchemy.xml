@@ -5290,6 +5290,30 @@
             <key>Value</key>
             <real>128.0</real>
         </map>
+        <!-- <SK:Nexii> Navmesh air residency: settled air on disk -->
+        <key>SKNavAirSpill</key>
+        <map>
+            <key>Comment</key>
+            <string>Once a navmesh mesh's spaces have landed and its tiles are stamped, its detail air and held rasters go to the disk cache and leave memory, coming back when an edit, a rooms pass or the air overlay needs them. Spaces, portals, stamped tiles, walls and coarse air stay. Needs SKNavDiskCacheMB.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKNavAirDetailHoldSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds a navmesh mesh keeps its detail air in memory after the last thing that needed it, before it goes back to disk.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>20.0</real>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKNavDiskCacheMB</key>
         <map>
             <key>Comment</key>

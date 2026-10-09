@@ -31,6 +31,7 @@
 #include "sknavlayout.h"
 #include "sknavoverlay.h"
 #include "sknavpolys.h"
+#include "sknavresidency.h"
 #include "sknavskymap.h"
 #include "sknavspacefilter.h"
 #include "sknavspaceproducts.h"
@@ -80,6 +81,10 @@ public:
     /// Whether anything meeting the global box is still on its way: a tile
     /// queued or building, or a rooms pass not yet landed over it.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether every tile of a mesh holds its detail air, none of it waiting on disk.
+    bool detailResident(const LLUUID& mesh) const;
+    /// Bring a mesh's detail air back from disk, and keep it for SKNavAirDetailHoldSeconds after the last ask.
+    void requestDetail(const LLUUID& mesh) const;
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
@@ -262,6 +267,15 @@ public:
         U32 mAirTiles = 0;
         size_t mAirBytes = 0;
         U32 mAirEvicted = 0;    ///< tiles whose detail went to disk for the budget
+        U32 mSpilledMeshes = 0;     ///< settled meshes whose detail air waits on disk
+        U32 mSpilledTiles = 0;
+        U32 mSpills = 0;            ///< tiles spilled, ever
+        U64 mSpillBytes = 0;        ///< bytes those spills wrote
+        size_t mSpillFreed = 0;     ///< air and raster bytes the last spill let go
+        U32 mReloads = 0;           ///< tiles brought back, ever
+        U32 mReloadMisses = 0;      ///< of those, ones the disk had lost and that were built again
+        F32 mLastReloadMs = 0.f;    ///< the last reload, per tile on the worker
+        F32 mLastReloadWallMs = 0.f;    ///< the last reload, from asking to the detail landing
         U64 mDiskBytes = 0;
         U32 mDiskEntries = 0;
         U32 mDiskLoads = 0;     ///< builds answered from disk
@@ -364,6 +378,8 @@ private:
         bool mDiskRefused = false;      ///< Detour refused the product loaded from disk: build the next one
         F64 mNearness = 0.0;            ///< camera nearness over time, for the air budget
         U64 mAirBuilt = 0;              ///< the signature the air was built from; 0 = never asked
+        U64 mAirId = 0;                 ///< names mAir across a spill and its reload, which change the pointer but not the air
+        bool mAirSpilled = false;       ///< its detail air and raster wait on disk under spillKey(mContentKey)
         std::shared_ptr<const std::vector<sknav::WallSegment>> mSegments[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<sknav::DropLink>> mLinks[sknav::NUM_CLASSES];
         std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per AVATAR poly, its space id, as bound
@@ -437,6 +453,12 @@ private:
         bool mStampScan = false;            ///< some tile may be due a stamp
         mutable sknav::StoreyProductPtr mStoreys;
         mutable U64 mStoreysAt = 0;         ///< the revision they were built at
+        /// Where its detail air is: every tile's in memory, on its way to disk, there, or on its way back.
+        enum class Residency : U8 { RESIDENT, SPILLING, SPILLED, RELOADING };
+        Residency mResidency = Residency::RESIDENT;
+        F64 mDetailWanted = 0.0;            ///< when something last needed its detail
+        F64 mResidencyChecked = 0.0;
+        F64 mReloadAsked = 0.0;
         ~Mesh();
     };
 
@@ -559,6 +581,19 @@ private:
     /// Keep the tiles' detailed air under SKNavAirBudgetMB, least recently
     /// near first, spilling to disk what is not there already.
     void evictAir();
+    /// Settled meshes spill their detail air and rasters to disk, and spilled ones
+    /// a product or a reader needs bring it back, both on the workers.
+    void updateResidency();
+    void spillMesh(Mesh& mesh);
+    void reloadMesh(Mesh& mesh);
+    struct SpillJob;
+    void finishSpill(const std::shared_ptr<SpillJob>& job);
+    void finishReload(const std::shared_ptr<SpillJob>& job);
+    /// Point a mesh's landed products and its stamp at other air, keeping their contents.
+    bool swapProductsAir(Mesh& mesh, const sknav::AirSwap& swap);
+    sknav::SettleGate mSettleGate;
+    mutable std::set<LLUUID> mDetailRequests;
+    U64 mNextAirId = 0;
     void fillTerrain(const LLVector3d& mesh_origin, const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad, sknav::TerrainWindow& out) const;
     U64 terrainSignature(const LLVector3d& tile_min, const LLVector3d& tile_max, F32 pad) const;
     /// What the region's land looks like now, over all its patches. A tile's
