@@ -5290,7 +5290,7 @@
             <key>Value</key>
             <real>128.0</real>
         </map>
-        <!-- <SK:Nexii> Navmesh air residency: settled air on disk -->
+        <!-- <SK:Nexii> Navmesh air residency: settled air on disk, whole-cluster detail -->
         <key>SKNavAirSpill</key>
         <map>
             <key>Comment</key>
@@ -5312,6 +5312,17 @@
             <string>F32</string>
             <key>Value</key>
             <real>20.0</real>
+        </map>
+        <key>SKNavAirWholeCluster</key>
+        <map>
+            <key>Comment</key>
+            <string>Every navmesh tile under the cluster the agent stands in builds detail air, however far from the camera, so the building it is in has complete spaces.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
         <!-- </SK:Nexii> -->
         <key>SKNavDiskCacheMB</key>

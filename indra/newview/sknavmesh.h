@@ -529,8 +529,11 @@ private:
     /// the rooms replace. Demands the navmesh runs for them, air and census
     /// with it.
     static bool probesDemanded();
-    /// Whether a tile is near enough the camera to build its air eagerly.
-    static bool inAirRadius(const Tile& tile);
+    /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
+    bool inAirRadius(const Tile& tile) const;
+    /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
+    std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
+    void findHomeBoxes(const SKCensusSnapshotPtr& snap);
     /// Bring the sky map in line with the published tiles' air.
     void syncSkyMap();
     /// The pool the tile builds run on, created on first use. A pool of its

@@ -218,13 +218,40 @@ bool SKNavMesh::probesDemanded()
     return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
-bool SKNavMesh::inAirRadius(const Tile& tile)
+bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
     const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-    return dx * dx + dy * dy <= static_cast<F64>(radius) * radius;
+    if (dx * dx + dy * dy <= static_cast<F64>(radius) * radius)
+    {
+        return true;
+    }
+    for (const auto& box : mHomeBoxes)
+    {
+        if (overlapsXY(box.first, box.second, tile.mMin, tile.mMax))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavMesh::findHomeBoxes(const SKCensusSnapshotPtr& snap)
+{
+    static LLCachedControl<bool> whole(gSavedSettings, "SKNavAirWholeCluster", true);
+    mHomeBoxes.clear();
+    if (!whole || !snap)
+    {
+        return;
+    }
+    std::vector<ClusterPtr> around;
+    snap->mClusters.at(gAgent.getPositionGlobal(), around);
+    for (const ClusterPtr& c : around)
+    {
+        mHomeBoxes.emplace_back(c->mMin, c->mMax);
+    }
 }
 
 LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
@@ -2288,6 +2315,7 @@ void SKNavMesh::update()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile");
         reconcile(snap);
     }
+    findHomeBoxes(snap);
 
     applyLayouts();
 
