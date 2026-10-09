@@ -52,7 +52,6 @@ namespace
     constexpr F32 OPEN_HEIGHT_M = 20.f;     ///< what an open ceiling counts for in a volume
     constexpr F32 LIFT_TALL_M = 5.f;        ///< a shaft behind a door has this much headroom
     constexpr F32 LIFT_REACH_M = 3.f;
-    constexpr F32 LIFT_MAX_S = 0.1f;        ///< a roofed shaft sees this little sky
     constexpr F32 LIFT_SHAFT_M = 10.f;      ///< air this tall runs up through storeys, and may see a little more
     constexpr F32 LIFT_STACK_M = 0.5f;      ///< a census shaft thinner than this is a stack of doors, not the shaft beside it
     constexpr F32 OPEN_MIN_S = 0.25f;       ///< unroofed air seeing this much sky is never indoors
@@ -4531,6 +4530,7 @@ namespace sknav
 
         // Lifts: a census shaft, or a tall shaft behind a door, is a space of its own.
         std::vector<std::vector<std::pair<U32, U32>>> lifts;
+        std::vector<std::pair<LLVector3d, LLVector3d>> shafts;
         const F64 leaf_min = 1.0;
         for (const auto& box : mInput->mLifts)
         {
@@ -4541,8 +4541,11 @@ namespace sknav
             {
                 for (S32 k : { VX, VY })
                 {
-                    lo.mdV[k] -= 1.5;
-                    hi.mdV[k] += 1.5;
+                    if (hi.mdV[k] - lo.mdV[k] < LIFT_STACK_M)
+                    {
+                        lo.mdV[k] -= LIFT_REACH_M;
+                        hi.mdV[k] += LIFT_REACH_M;
+                    }
                 }
             }
             std::vector<std::pair<U32, U32>> gaps;
@@ -4575,6 +4578,7 @@ namespace sknav
             if (got >= leaf_min)
             {
                 lifts.push_back(std::move(gaps));
+                shafts.emplace_back(lo, hi);
             }
         }
         for (const DoorSpan& d : mDoors)
@@ -4636,9 +4640,31 @@ namespace sknav
                         }
                     }
                 }
-                // Small, blind to the sky or running up through storeys, and nothing more of it just beyond: a shaft, not a hall or a doorstep.
-                const F32 sky_max = tallest >= LIFT_SHAFT_M ? OPEN_MIN_S : LIFT_MAX_S;
-                if (got >= 1.0 && around <= 16.0 && sky < sky_max * got)
+                // Small, running up through storeys, mostly blind to the sky, and nothing more of it just beyond: a shaft, not a hall or a doorstep.
+                if (got < 1.0 || around > 16.0 || tallest < LIFT_SHAFT_M || sky >= OPEN_MIN_S * got)
+                {
+                    continue;
+                }
+                // A door in a census shaft's stack of doors opens onto that shaft.
+                size_t into = shafts.size();
+                F64 nearest = 1.0;
+                for (size_t k = 0; k < shafts.size(); ++k)
+                {
+                    const LLVector3d& lo = shafts[k].first;
+                    const LLVector3d& hi = shafts[k].second;
+                    const F64 dx = std::max({ lo.mdV[VX] - d.mC.mV[VX], d.mC.mV[VX] - hi.mdV[VX], 0.0 });
+                    const F64 dy = std::max({ lo.mdV[VY] - d.mC.mV[VY], d.mC.mV[VY] - hi.mdV[VY], 0.0 });
+                    if (std::hypot(dx, dy) <= nearest)
+                    {
+                        nearest = std::hypot(dx, dy);
+                        into = k;
+                    }
+                }
+                if (into < shafts.size())
+                {
+                    lifts[into].insert(lifts[into].end(), gaps.begin(), gaps.end());
+                }
+                else
                 {
                     lifts.push_back(std::move(gaps));
                 }
@@ -4646,6 +4672,8 @@ namespace sknav
         }
         for (auto& gaps : lifts)
         {
+            std::sort(gaps.begin(), gaps.end());
+            gaps.erase(std::unique(gaps.begin(), gaps.end()), gaps.end());
             // A shaft two doors found is one lift.
             gaps.erase(std::remove_if(gaps.begin(), gaps.end(), [&](const std::pair<U32, U32>& tg) {
                            const U32 s = mGapSpace[tg.first][tg.second];
@@ -5102,6 +5130,11 @@ namespace sknav
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mL < p.mIndoorL)
             {
                 sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // A shaft is indoors whatever its depth reads.
+            if (sp.mLift)
+            {
+                sp.mBucket = EnclosureBucket::INDOORS;
             }
             // Unroofed air under open sky is never indoors, lift or not.
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mCoverMean <= OPEN_MAX_COVER && sp.mSMean > OPEN_MIN_S)

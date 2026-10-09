@@ -152,6 +152,17 @@ namespace
         return r;
     }
 
+    std::string info(const Result& r)
+    {
+        std::string o;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            o += llformat(" [%u b%d a%.1f z%.1f S%.2f ceil%.1f lift%d p%zu c(%.1f,%.1f)]", r.index(&sp), (int)sp.mBucket, sp.mFloorArea, sp.mFloorMin, sp.mSMean,
+                          sp.mCeilingMax, (int)sp.mLift, sp.mPortals.size(), sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
+        }
+        return o;
+    }
+
     std::string dump(const Result& r)
     {
         return dumpRooms(*r.mEnc, *r.mRooms);
@@ -262,7 +273,16 @@ namespace
         s.wall(8.f, 12.f, 20.f, 12.25f, 8.f);
         s.wall(21.f, 12.f, 28.f, 12.25f, 8.f);
         s.box(20.f, 12.f, 21.f, 12.25f, 2.2f, 8.f, false);
-        s.wall(8.f, 27.75f, 28.f, 28.f, 8.f);
+        if (shaft)
+        {
+            s.wall(8.f, 27.75f, 14.75f, 28.f, 8.f);
+            s.wall(15.75f, 27.75f, 28.f, 28.f, 8.f);
+            s.box(14.75f, 27.75f, 15.75f, 28.f, 2.2f, 8.f, false);
+        }
+        else
+        {
+            s.wall(8.f, 27.75f, 28.f, 28.f, 8.f);
+        }
         s.wall(8.f, 12.f, 8.25f, 28.f, 8.f);
         s.wall(27.75f, 12.f, 28.f, 28.f, 8.f);
         s.box(8.f, 12.f, 28.f, 28.f, 8.f, 8.25f);
@@ -271,13 +291,12 @@ namespace
         s.box(19.f, 10.f, 22.f, 12.f, 7.f, 7.25f);
         if (shaft)
         {
-            // A 2 m shaft off the back of the hall, 20 m tall and roofed, behind a door.
-            s.wall(14.f, 23.f, 14.25f, 27.75f, 20.f);
-            s.wall(16.25f, 23.f, 16.5f, 27.75f, 20.f);
-            s.wall(14.f, 23.f, 14.75f, 23.25f, 20.f);
-            s.wall(15.75f, 23.f, 16.5f, 23.25f, 20.f);
-            s.box(14.75f, 23.f, 15.75f, 23.25f, 2.2f, 20.f, false);
-            s.box(14.f, 23.f, 16.5f, 28.f, 20.f, 20.25f);
+            // A 2 m shaft in a core behind the hall's back wall, 12 m tall and roofed, behind a door.
+            s.box(8.f, 28.f, 14.25f, 31.f, 0.f, 12.f, false);
+            s.box(16.25f, 28.f, 22.f, 31.f, 0.f, 12.f, false);
+            s.box(14.25f, 30.25f, 16.25f, 31.f, 0.f, 12.f, false);
+            s.box(8.f, 27.75f, 22.f, 28.f, 8.f, 12.f, false);
+            s.box(8.f, 28.f, 22.f, 31.f, 12.f, 12.25f);
         }
         return s;
     }
@@ -1870,12 +1889,12 @@ template<> template<>
         s.addSky(*in);
         auto rooms = std::make_shared<RoomsInput>();
         rooms->mDoors.push_back(door(20.5f, 12.125f, 0.f, 1.f, 1.f));
-        rooms->mDoors.push_back(door(15.25f, 23.125f, 0.f, 1.f, 1.f));
+        rooms->mDoors.push_back(door(15.25f, 27.875f, 0.f, 1.f, 1.f));
         const Result r = run(in, rooms);
-        const Space* lift = r.at(15.25f, 25.5f);
+        const Space* lift = r.at(15.25f, 29.25f);
         const Space* hall = r.at(18.f, 20.f);
         ensure("found", lift && hall);
-        ensure("a lift of its own", lift != hall && lift->mLift);
+        ensure("a lift of its own" + info(r), lift != hall && lift->mLift);
         ensure("INDOORS", lift->mBucket == EnclosureBucket::INDOORS);
         U32 lifts = 0;
         for (const Space& sp : r.mRooms->mSpaces)
@@ -1883,5 +1902,65 @@ template<> template<>
             lifts += sp.mLift ? 1 : 0;
         }
         ensure_equals("only the shaft", lifts, 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<54>()
+    {
+        set_test_name("two shafts behind stacks of doors are two lifts; a stack of doors on a storeyed hall is none");
+        // Bad Space's pair: two 2.5 m shafts side by side, 30 m tall, each behind a census stack of doors
+        // in the wall of a storeyed hall; a third stack faces a hall with a floor every 4 m.
+        Scene s;
+        s.wall(11.75f, 9.75f, 14.75f, 10.f, 30.f);
+        s.wall(11.75f, 15.25f, 14.75f, 15.5f, 30.f);
+        s.wall(11.75f, 9.75f, 12.f, 15.5f, 30.f);
+        s.wall(12.f, 12.5f, 14.5f, 12.75f, 30.f);
+        for (F32 y0 : { 10.f, 12.75f })
+        {
+            s.box(14.5f, y0, 14.75f, y0 + 0.5f, 0.f, 30.f, false);
+            s.box(14.5f, y0 + 1.75f, 14.75f, y0 + 2.5f, 0.f, 30.f, false);
+            s.box(14.5f, y0 + 0.5f, 14.75f, y0 + 1.75f, 2.2f, 30.f, false);
+        }
+        s.box(11.75f, 9.75f, 14.75f, 15.5f, 30.f, 30.25f);
+        s.wall(14.75f, 4.f, 26.f, 4.25f, 30.f);
+        s.wall(14.75f, 21.75f, 26.f, 22.f, 30.f);
+        s.wall(25.75f, 4.f, 26.f, 22.f, 30.f);
+        s.wall(14.5f, 4.f, 14.75f, 9.75f, 30.f);
+        s.wall(14.5f, 15.5f, 14.75f, 22.f, 30.f);
+        for (F32 z = 4.f; z < 30.f; z += 4.f)
+        {
+            s.box(14.75f, 4.f, 26.f, 22.f, z - 0.25f, z);
+        }
+        s.box(14.75f, 4.f, 26.f, 22.f, 30.f, 30.25f);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        for (F32 y0 : { 10.f, 12.75f })
+        {
+            rooms->mLifts.emplace_back(LLVector3d(14.5f, y0 + 0.5f, 0.f), LLVector3d(14.6f, y0 + 1.75f, 30.f));
+            for (F32 z = 0.f; z < 28.f; z += 4.f)
+            {
+                rooms->mDoors.push_back(door(14.625f, y0 + 1.125f, 1.f, 0.f, 1.25f, z));
+            }
+        }
+        rooms->mLifts.emplace_back(LLVector3d(25.75f, 12.f, 0.f), LLVector3d(25.85f, 13.25f, 30.f));
+        const Result r = run(in, rooms);
+        const Space* a = r.at(13.25f, 11.25f);
+        const Space* b = r.at(13.25f, 14.f);
+        ensure("found", a && b);
+        ensure("each a lift" + info(r), a->mLift && b->mLift);
+        ensure("two shafts, two lifts" + info(r), a != b);
+        U32 lifts = 0;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            lifts += sp.mLift ? 1 : 0;
+        }
+        ensure_equals("only the shafts", lifts, 2u);
+        // The census alone, with no doors to probe from, finds the same two.
+        rooms->mDoors.clear();
+        const Result c = run(in, rooms);
+        const Space* ca = c.at(13.25f, 11.25f);
+        const Space* cb = c.at(13.25f, 14.f);
+        ensure("census lifts" + info(c), ca && cb && ca != cb && ca->mLift && cb->mLift);
     }
 }
