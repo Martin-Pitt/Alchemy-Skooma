@@ -52,6 +52,11 @@ namespace
     constexpr F32 OPEN_HEIGHT_M = 20.f;     ///< what an open ceiling counts for in a volume
     constexpr F32 LIFT_TALL_M = 5.f;        ///< a shaft behind a door has this much headroom
     constexpr F32 LIFT_REACH_M = 3.f;
+    constexpr F32 LIFT_MAX_S = 0.1f;        ///< a roofed shaft sees this little sky
+    constexpr F32 LIFT_SHAFT_M = 10.f;      ///< air this tall runs up through storeys, and may see a little more
+    constexpr F32 LIFT_STACK_M = 0.5f;      ///< a census shaft thinner than this is a stack of doors, not the shaft beside it
+    constexpr F32 OPEN_MIN_S = 0.25f;       ///< unroofed air seeing this much sky is never indoors
+    constexpr F32 OPEN_MAX_COVER = 0.05f;
     constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
@@ -4529,7 +4534,17 @@ namespace sknav
         const F64 leaf_min = 1.0;
         for (const auto& box : mInput->mLifts)
         {
-            const LLVector3d lo = box.first - mInput->mMeshOrigin, hi = box.second - mInput->mMeshOrigin;
+            LLVector3d lo = box.first - mInput->mMeshOrigin, hi = box.second - mInput->mMeshOrigin;
+            // A stack of doors stands in the shaft's wall: look either side of it for tall air only.
+            const bool stack = std::min(hi.mdV[VX] - lo.mdV[VX], hi.mdV[VY] - lo.mdV[VY]) < LIFT_STACK_M;
+            if (stack)
+            {
+                for (S32 k : { VX, VY })
+                {
+                    lo.mdV[k] -= 1.5;
+                    hi.mdV[k] += 1.5;
+                }
+            }
             std::vector<std::pair<U32, U32>> gaps;
             F64 got = 0.0;
             for (U32 t = 0; t < mTiles.size(); ++t)
@@ -4547,7 +4562,9 @@ namespace sknav
                     {
                         const U32 g = leaf.mFirstGap + i;
                         const F32 z = floorOf(t, a.mGaps[g]) * mUnit;
-                        if (mGapSpace[t][g] && z >= lo.mdV[VZ] - 1.0 && z <= hi.mdV[VZ] + 1.0)
+                        const S32 c_top = ceilOf(t, a.mGaps[g]);
+                        const bool tall = c_top < OPEN_TOP && (c_top - floorOf(t, a.mGaps[g])) * mUnit >= LIFT_SHAFT_M;
+                        if (mGapSpace[t][g] && z >= lo.mdV[VZ] - 1.0 && z <= hi.mdV[VZ] + 1.0 && (!stack || tall))
                         {
                             gaps.emplace_back(t, g);
                             got += 4.0 * half * half;
@@ -4578,7 +4595,8 @@ namespace sknav
                 }
                 const U32 home = mGapSpace[pr.mTile][pr.mGap];
                 std::vector<std::pair<U32, U32>> gaps;
-                F64 got = 0.0, around = 0.0;
+                F64 got = 0.0, around = 0.0, sky = 0.0;
+                F32 tallest = 0.f;
                 const F32 reach = LIFT_REACH_M + 2.f;
                 for (U32 t = 0; t < mTiles.size(); ++t)
                 {
@@ -4608,15 +4626,19 @@ namespace sknav
                                 around += 4.0 * half * half;
                                 if (dc <= LIFT_REACH_M)
                                 {
+                                    const GapEnclosure& ge = mEnc->mTiles[mTiles[t].mEnc].mGaps[g];
                                     gaps.emplace_back(t, g);
                                     got += 4.0 * half * half;
+                                    sky += 4.0 * half * half * ge.mS / 255.0;
+                                    tallest = std::max(tallest, (c_top - f) * mUnit);
                                 }
                             }
                         }
                     }
                 }
-                // Small, and nothing more of it just beyond: a shaft, not a hall.
-                if (got >= 1.0 && around <= 16.0)
+                // Small, blind to the sky or running up through storeys, and nothing more of it just beyond: a shaft, not a hall or a doorstep.
+                const F32 sky_max = tallest >= LIFT_SHAFT_M ? OPEN_MIN_S : LIFT_MAX_S;
+                if (got >= 1.0 && around <= 16.0 && sky < sky_max * got)
                 {
                     lifts.push_back(std::move(gaps));
                 }
@@ -4640,8 +4662,8 @@ namespace sknav
             sp.mLift = true;
             sp.mBucket = EnclosureBucket::INDOORS;
             sp.mL = 1.f;
-            F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0;
-            F32 lo = 1e30f, hi = -1e30f;
+            F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
+            F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
             std::set<U32> old;
             for (const auto& tg : gaps)
@@ -4674,6 +4696,7 @@ namespace sknav
                 sx += area * x;
                 sy += area * y;
                 s += area * ge.mS / 255.0;
+                cv += area * ge.mCover / 255.0;
                 if (ge.mD != ENCLOSURE_D_UNKNOWN)
                 {
                     e += area * ge.mE / 255.0;
@@ -4681,6 +4704,13 @@ namespace sknav
                 }
                 const S32 c_top = ceilOf(tg.first, gap);
                 vol += area * (c_top >= OPEN_TOP ? OPEN_HEIGHT_M : (c_top - floorOf(tg.first, gap)) * mUnit);
+                if (c_top < OPEN_TOP)
+                {
+                    ceil_sum += area * c_top * mUnit;
+                    ceil_area += area;
+                    ceil_lo = std::min(ceil_lo, c_top * mUnit);
+                    ceil_hi = std::max(ceil_hi, c_top * mUnit);
+                }
                 lo = std::min(lo, z);
                 hi = std::max(hi, z);
                 raster[rasterKey(x, y, z)] += static_cast<U32>(std::lround(area / cell_area));
@@ -4691,6 +4721,13 @@ namespace sknav
             sp.mFloorMax = hi;
             sp.mCentre.set(static_cast<F32>(sx / std::max(w, 1e-9)), static_cast<F32>(sy / std::max(w, 1e-9)), lo);
             sp.mSMean = static_cast<F32>(s / std::max(w, 1e-9));
+            sp.mCoverMean = static_cast<F32>(cv / std::max(w, 1e-9));
+            if (ceil_area > 0.0)
+            {
+                sp.mCeilingMin = ceil_lo;
+                sp.mCeilingMax = ceil_hi;
+                sp.mCeilingMean = static_cast<F32>(ceil_sum / ceil_area);
+            }
             sp.mEMean = known > 0.0 ? static_cast<F32>(e / known) : 0.f;
             sp.mUnknown = static_cast<F32>(1.0 - known / std::max(w, 1e-9));
             sp.mAnchor.set(std::floor(sp.mCentre.mV[VX]), std::floor(sp.mCentre.mV[VY]), std::floor(lo));
@@ -5055,10 +5092,6 @@ namespace sknav
         // Buckets, held against the space's last one; few walls cap one at SHELTERED.
         for (Space& sp : out)
         {
-            if (sp.mLift)
-            {
-                continue;
-            }
             if (sp.mUnknown >= 1.f)
             {
                 sp.mBucket = EnclosureBucket::UNKNOWN;
@@ -5067,6 +5100,11 @@ namespace sknav
             const Space* was = prev ? prev->byId(sp.mId) : nullptr;
             sp.mBucket = enclosureBucket(sp.mEMean, was ? was->mBucket : EnclosureBucket::UNKNOWN, p.mHysteresis);
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mL < p.mIndoorL)
+            {
+                sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // Unroofed air under open sky is never indoors, lift or not.
+            if (sp.mBucket == EnclosureBucket::INDOORS && sp.mCoverMean <= OPEN_MAX_COVER && sp.mSMean > OPEN_MIN_S)
             {
                 sp.mBucket = EnclosureBucket::SHELTERED;
             }

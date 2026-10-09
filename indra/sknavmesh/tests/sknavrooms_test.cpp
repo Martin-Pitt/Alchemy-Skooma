@@ -255,6 +255,33 @@ namespace
         return s;
     }
 
+    /// A walled, roofed building whose street door is set into a facade recess under a high overhang.
+    Scene recessed(bool shaft)
+    {
+        Scene s;
+        s.wall(8.f, 12.f, 20.f, 12.25f, 8.f);
+        s.wall(21.f, 12.f, 28.f, 12.25f, 8.f);
+        s.box(20.f, 12.f, 21.f, 12.25f, 2.2f, 8.f, false);
+        s.wall(8.f, 27.75f, 28.f, 28.f, 8.f);
+        s.wall(8.f, 12.f, 8.25f, 28.f, 8.f);
+        s.wall(27.75f, 12.f, 28.f, 28.f, 8.f);
+        s.box(8.f, 12.f, 28.f, 28.f, 8.f, 8.25f);
+        s.wall(19.f, 10.f, 19.25f, 12.f, 8.f);
+        s.wall(21.75f, 10.f, 22.f, 12.f, 8.f);
+        s.box(19.f, 10.f, 22.f, 12.f, 7.f, 7.25f);
+        if (shaft)
+        {
+            // A 2 m shaft off the back of the hall, 20 m tall and roofed, behind a door.
+            s.wall(14.f, 23.f, 14.25f, 27.75f, 20.f);
+            s.wall(16.25f, 23.f, 16.5f, 27.75f, 20.f);
+            s.wall(14.f, 23.f, 14.75f, 23.25f, 20.f);
+            s.wall(15.75f, 23.f, 16.5f, 23.25f, 20.f);
+            s.box(14.75f, 23.f, 15.75f, 23.25f, 2.2f, 20.f, false);
+            s.box(14.f, 23.f, 16.5f, 28.f, 20.f, 20.25f);
+        }
+        return s;
+    }
+
     DoorEntity door(F32 x, F32 y, F32 nx, F32 ny, F32 width, F32 sill = 0.f, F32 height = 2.2f)
     {
         DoorEntity d;
@@ -276,7 +303,7 @@ namespace tut
     struct sknavrooms_data
     {
     };
-    typedef test_group<sknavrooms_data> sknavrooms_group;
+    typedef test_group<sknavrooms_data, 80> sknavrooms_group;  // more than TUT's default 50
     typedef sknavrooms_group::object sknavrooms_object;
     tut::sknavrooms_group sknavrooms_tests("sknavrooms");
 
@@ -1803,5 +1830,58 @@ template<> template<>
         ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
         ensure("walled all round, no canopy", e.mO < 0.3f && !e.mCanopy);
         ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<51>()
+    {
+        set_test_name("a doorstep in a facade recess under a high overhang is no lift, and the door opens onto the street");
+        Scene s = recessed(false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mDoors.push_back(door(20.5f, 12.125f, 0.f, 1.f, 1.f));
+        const Result r = run(in, rooms);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure("no lift", !sp.mLift);
+        }
+        const Space* hall = r.at(18.f, 20.f);
+        const Space* street = r.at(20.5f, 4.f);
+        ensure("found", hall && street && hall != street);
+        ensure("hall roofed", hall->mBucket != EnclosureBucket::OUTDOORS);
+        ensure("street not INDOORS", street->mBucket != EnclosureBucket::INDOORS);
+        const Space* step = r.at(20.5f, 11.f);
+        ensure("doorstep not INDOORS", step && step->mBucket != EnclosureBucket::INDOORS);
+        bool door_out = false;
+        for (const Portal* q : r.between(hall, step))
+        {
+            door_out = door_out || q->mKind == PortalKind::DOOR;
+        }
+        ensure("the door joins the hall to the doorstep", door_out);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<52>()
+    {
+        set_test_name("a tall roofed shaft behind a door is a lift");
+        Scene s = recessed(true);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mDoors.push_back(door(20.5f, 12.125f, 0.f, 1.f, 1.f));
+        rooms->mDoors.push_back(door(15.25f, 23.125f, 0.f, 1.f, 1.f));
+        const Result r = run(in, rooms);
+        const Space* lift = r.at(15.25f, 25.5f);
+        const Space* hall = r.at(18.f, 20.f);
+        ensure("found", lift && hall);
+        ensure("a lift of its own", lift != hall && lift->mLift);
+        ensure("INDOORS", lift->mBucket == EnclosureBucket::INDOORS);
+        U32 lifts = 0;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            lifts += sp.mLift ? 1 : 0;
+        }
+        ensure_equals("only the shaft", lifts, 1u);
     }
 }
