@@ -51,12 +51,15 @@ namespace
     {
         std::vector<LLVector3> mV;
         std::vector<S32> mT;
+        std::vector<S32> mS;    ///< per triangle, the record it came from
+        S32 mSource = -1;
 
         void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c)
         {
             const S32 n = static_cast<S32>(mV.size());
             mV.insert(mV.end(), { a, b, c });
             mT.insert(mT.end(), { n, n + 1, n + 2 });
+            mS.push_back(mSource);
         }
         void quad(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLVector3& d)
         {
@@ -106,6 +109,7 @@ namespace
                 for (S32 i = 0; i < nx; ++i)
                 {
                     mT.insert(mT.end(), { idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j), idx(i + 1, j + 1), idx(i, j + 1) });
+                    mS.insert(mS.end(), { mSource, mSource });
                 }
             }
         }
@@ -122,7 +126,7 @@ namespace
                 nn.normVec();
                 areas[t] = nn.mV[VZ] >= up ? OBJECT : 0;
             }
-            return partitionSlopes(mV, mT, areas, two, OBJECT, climb, WALK_SLOPE_DEG);
+            return partitionSlopes(mV, mT, areas, two, OBJECT, climb, WALK_SLOPE_DEG, 63, {}, mSource >= 0 || !mS.empty() ? mS : std::vector<S32>());
         }
     };
 
@@ -1204,5 +1208,63 @@ namespace tut
         flights = { f };
         mapFlightPolys(flights, {}, {}, 0.75f);
         ensure_equals("a wide one goes", flights.size(), 0u);
+    }
+
+    /// A slope between decks, its own record or one facet of a big lumpy one.
+    Soup facet(F32 deg, F32 rise, F32 half_width, bool own)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.mSource = 1;
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.mSource = 2;
+        s.box(run, -4, 0, run + 4, 4, rise);
+        s.mSource = 0;
+        s.quad(LLVector3(0, -half_width, 0), LLVector3(run, -half_width, rise), LLVector3(run, half_width, rise), LLVector3(0, half_width, 0));
+        if (!own)
+        {
+            // the rest of the rock: many walkable facets well away, spread wide in plan
+            s.grid(-12.f, 8.f, 12.f, 20.f, 1.f, [](F32 x, F32 y) { return 0.3f * std::sin(x) * std::cos(y); });
+        }
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<39>()
+    {
+        set_test_name("a narrow steep wedge is a stair only as its own record: one facet of a rock is not");
+        const SlopePartition own = facet(56.f, 1.8f, 0.44f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a stair", own.mFlights[0].mKind == ConnectorKind::STAIR);
+        ensure_equals("a rock's facet", facet(56.f, 1.8f, 0.44f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<40>()
+    {
+        set_test_name("a small steep facet of a rock is no climb; as its own record, or large, it is");
+        const SlopePartition own = facet(60.f, 2.5f, 1.f, true).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("own record", own.mFlights.size(), 1u);
+        ensure("a climb", own.mFlights[0].mKind == ConnectorKind::CLIMB);
+        ensure_equals("a rock's facet", facet(60.f, 2.5f, 1.f, false).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition big = facet(60.f, 3.f, 2.f, false).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("a large flat face of a rock", big.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<41>()
+    {
+        set_test_name("a polygon-less climb is dropped: only stairs are kept bare");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 2.f;
+        f.mRun = 1.f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mKind = ConnectorKind::CLIMB;
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("dropped", flights.size(), 0u);
     }
 }

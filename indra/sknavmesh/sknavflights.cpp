@@ -495,6 +495,11 @@ namespace
     constexpr F64 FLAT_FACE_DEG = 10.0;     ///< a steep unstepped flight's faces lie this close to its plane
     constexpr F64 FLAT_FACE_SHARE = 0.9;    ///< over this share of its area, so a few stray facets do not fail it
     constexpr F64 STAIR_LIKE_WIDTH_M = 1.5; ///< a wedge this narrow, decked at both ends and a storey high, is a stair however steep
+    constexpr F64 STAIR_LIKE_SHARE = 0.7;   ///< and its face is this much of its record's walkable area
+    constexpr F64 RECORD_SPREAD_MAX = 3.0;  ///< in a record no bigger in plan than this many faces
+    constexpr F64 CLIMB_FACE_M2 = 7.0;      ///< a climb's face is this big
+    constexpr F64 CLIMB_SHARE = 0.3;        ///< or this much of its own record
+    constexpr F64 CLIMB_SHARED_FACE_M2 = 4.0;   ///< and this big
     constexpr F64 STAIR_LIKE_RISE_MIN_M = 1.2;
     constexpr F64 STAIR_LIKE_RISE_MAX_M = 2.5;
     constexpr F64 MAX_GOING_M = 0.6;        ///< and deeper than this, seating
@@ -688,9 +693,33 @@ namespace
     /// clipped to its floors' heights; the floors just past each end only say
     /// that it connects two of them.
     void buildConnectors(Partitioner& P, const std::vector<S32>& grp, const std::vector<U8>& kind, S32 ngroups, const std::vector<U8>& codes,
-                         const std::vector<U8>& cues, const std::vector<std::pair<S32, S32>>& level_links, F64 max_grade_deg,
-                         std::vector<Flight>& flights)
+                         const std::vector<U8>& cues, const std::vector<S32>& sources, const std::vector<std::pair<S32, S32>>& level_links,
+                         F64 max_grade_deg, std::vector<Flight>& flights)
     {
+        // Per source record: its walkable area facing up, and its extent in plan.
+        S32 nsources = 0;
+        for (const S32 s : sources)
+        {
+            nsources = std::max(nsources, s + 1);
+        }
+        std::vector<F64> source_walk(nsources, 0.0), sx0(nsources, 1e30), sy0(nsources, 1e30), sx1(nsources, -1e30), sy1(nsources, -1e30);
+        for (S32 t = 0; t < static_cast<S32>(sources.size()) && t < P.ntris(); ++t)
+        {
+            const S32 s = sources[t];
+            if (s < 0 || !P.mValid[t])
+            {
+                continue;
+            }
+            source_walk[s] += P.mWalk[t] ? P.mArea[t] : 0.0;
+            for (S32 c = 0; c < 3; ++c)
+            {
+                const V3& v = P.mV[P.mT[t * 3 + c]];
+                sx0[s] = std::min(sx0[s], v.x);
+                sy0[s] = std::min(sy0[s], v.y);
+                sx1[s] = std::max(sx1[s], v.x);
+                sy1[s] = std::max(sy1[s], v.y);
+            }
+        }
         const S32 n = P.ntris();
         std::vector<std::vector<S32>> tris_of(ngroups);
         std::vector<F64> area(ngroups, 0.0);
@@ -1093,7 +1122,45 @@ namespace
             const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? deck_area[deck_of(f)] : 1e30; };
             const bool decked = floor_area(fb) >= FLOOR_MIN_M2 && floor_area(ft) >= FLOOR_MIN_M2;
             // narrow, a storey high, from deck to deck: a ship's stair simplified to a wedge
-            const bool stair_like = decked && width <= STAIR_LIKE_WIDTH_M && rise >= STAIR_LIKE_RISE_MIN_M && rise <= STAIR_LIKE_RISE_MAX_M;
+            // The record most of the face comes from: how much of its walkable area the face is, and how much bigger it is in plan.
+            F64 face_share = 1.0, record_spread = 1.0, face_area = 0.0;
+            {
+                const std::vector<S32>& face = sloped.empty() ? all : sloped;
+                std::map<S32, F64> by_source;
+                F64 fx0 = 1e30, fy0 = 1e30, fx1 = -1e30, fy1 = -1e30;
+                for (const S32 t : face)
+                {
+                    face_area += P.mArea[t];
+                    if (t < static_cast<S32>(sources.size()) && sources[t] >= 0)
+                    {
+                        by_source[sources[t]] += P.mArea[t];
+                    }
+                    for (S32 c = 0; c < 3; ++c)
+                    {
+                        const V3& v = P.mV[P.mT[t * 3 + c]];
+                        fx0 = std::min(fx0, v.x);
+                        fy0 = std::min(fy0, v.y);
+                        fx1 = std::max(fx1, v.x);
+                        fy1 = std::max(fy1, v.y);
+                    }
+                }
+                S32 rec = -1;
+                for (const auto& [s, a] : by_source)
+                {
+                    rec = rec < 0 || a > by_source[rec] ? s : rec;
+                }
+                if (rec >= 0)
+                {
+                    face_share = by_source[rec] / std::max(source_walk[rec], 1e-9);
+                    record_spread = std::max(0.0, sx1[rec] - sx0[rec]) * std::max(0.0, sy1[rec] - sy0[rec]) /
+                                    std::max(std::max(0.01, fx1 - fx0) * std::max(0.01, fy1 - fy0), 1e-6);
+                }
+            }
+            const bool own_record = face_share >= STAIR_LIKE_SHARE && record_spread <= RECORD_SPREAD_MAX;
+            const bool stair_like = decked && own_record && width <= STAIR_LIKE_WIDTH_M && rise >= STAIR_LIKE_RISE_MIN_M && rise <= STAIR_LIKE_RISE_MAX_M;
+            // a climb is a large flat face, or the face its own record is mostly made of: not one facet of a rock
+            const bool climbable = face_area >= CLIMB_FACE_M2 ||
+                                   (face_share >= CLIMB_SHARE && record_spread <= RECORD_SPREAD_MAX && face_area >= CLIMB_SHARED_FACE_M2);
             Flight fl;
             if (stepped)
             {
@@ -1116,6 +1183,10 @@ namespace
                 fl.mRule = ConnectorRule::GRADE;
             }
             const bool cued = fl.mRule != ConnectorRule::GRADE || cue != CUE_NONE;
+            if (fl.mKind == ConnectorKind::CLIMB && !climbable)
+            {
+                continue;
+            }
             if (cue == CUE_NONE && !decked)
             {
                 continue;
@@ -1165,7 +1236,7 @@ namespace sknav
 {
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
                                    const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes,
-                                   const std::vector<U8>& cues)
+                                   const std::vector<U8>& cues, const std::vector<S32>& sources)
     {
         SlopePartition out;
         Partitioner P;
@@ -1459,7 +1530,7 @@ namespace sknav
         }
 
         // 4. connectors: slope and tread groups that step off onto a floor at each end
-        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, level_links, walk_slope_deg, out.mFlights);
+        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, sources, level_links, walk_slope_deg, out.mFlights);
         return out;
     }
 
@@ -1491,10 +1562,10 @@ namespace sknav
         }
         for (Flight& f : flights)
         {
-            // only a narrow steep flight between decks is worth keeping bare
+            // only a narrow steep stair between decks is worth keeping bare
             const F32 width = (f.mBottomB - f.mBottomA).length();
             const bool steep = f.mRise > std::tan(STAIR_GRADE_DEG * DEG_TO_RAD) * f.mRun;
-            f.mEroded = f.mEroded && f.mPolys.empty() && f.mDecked && steep && width <= STAIR_LIKE_WIDTH_M;
+            f.mEroded = f.mEroded && f.mPolys.empty() && f.mKind == ConnectorKind::STAIR && f.mDecked && steep && width <= STAIR_LIKE_WIDTH_M;
         }
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty() && !f.mEroded; }), flights.end());
     }

@@ -123,8 +123,9 @@ namespace
         std::vector<U8> mAreas;       // per triangle, the Area of its source
         std::vector<U8> mTwoSided;    // per triangle, walkable from either side
         std::vector<U8> mCues;        // per triangle, its object's NameCue
+        std::vector<S32> mSources;    // per triangle, the record it came from
 
-        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE)
+        void add(const std::vector<LLVector3>& tris, U8 area, F32 water, bool two_sided, U8 cue = CUE_NONE, S32 source = -1)
         {
             const size_t base = mVerts.size() / 3;
             for (size_t i = 0; i + 2 < tris.size(); i += 3)
@@ -150,6 +151,7 @@ namespace
                 mAreas.push_back(under && area == AREA_GROUND ? AREA_SUBMERGED : area);
                 mTwoSided.push_back(two_sided);
                 mCues.push_back(cue);
+                mSources.push_back(source);
             }
         }
         S32 nverts() const { return static_cast<S32>(mVerts.size() / 3); }
@@ -197,6 +199,7 @@ namespace
             out.mAreas.push_back(soup.mAreas[t]);
             out.mTwoSided.push_back(soup.mTwoSided[t]);
             out.mCues.push_back(soup.mCues[t]);
+            out.mSources.push_back(soup.mSources[t]);
         }
         for (const auto& range : solids)
         {
@@ -1617,7 +1620,8 @@ namespace sknav
                 const S32 before = soup.ntris();
                 const auto cue = std::lower_bound(input.mRootCues.begin(), input.mRootCues.end(), std::make_pair(r->mRoot, U8(0)));
                 soup.add(tris, AREA_OBJECT, input.mTerrain.mWater, hull,
-                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE));
+                         cue != input.mRootCues.end() && cue->first == r->mRoot ? cue->second : static_cast<U8>(CUE_NONE),
+                         static_cast<S32>(&r - input.mRecords.data()));
                 if (r->mExclude && soup.ntris() > before)
                 {
                     excluded.push_back({ before, soup.ntris(), r->mExclude });
@@ -1833,7 +1837,7 @@ namespace sknav
                     {
                         sl[v] = fromRecast(&part.mVerts[v * 3]);
                     }
-                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, ap.mSlope, PARTITION_MAX_CODES, part.mCues);
+                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, ap.mSlope, PARTITION_MAX_CODES, part.mCues, part.mSources);
                     shiftFlightCodes(slopes);
                     // Back onto the raster's triangles, the left-out ones coded by area alone.
                     main_codes.assign(main_soup->ntris(), 0);

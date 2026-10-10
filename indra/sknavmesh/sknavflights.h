@@ -97,11 +97,12 @@ namespace sknav
     /// regions, the rest keep one code per area. A two-sided triangle is
     /// walkable whichever way it faces. Codes run from 1 to below max_codes;
     /// every area keeps one of its own however many colours want one.
-    /// cues holds a NameCue per triangle from its object's name, or is empty.
+    /// cues holds a NameCue per triangle from its object's name, or is empty;
+    /// sources the record each triangle came from, or is empty.
     /// A flight steeper than walk_slope_deg is a wall unless its treads step by no more than climb.
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
                                    const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes = 63,
-                                   const std::vector<U8>& cues = {});
+                                   const std::vector<U8>& cues = {}, const std::vector<S32>& sources = {});
 
     /// The NameCue an object's name and description give: stair words, else ramp.
     U8 nameCue(const std::string& name, const std::string& description);
