@@ -152,7 +152,7 @@ namespace tut
     template<> template<>
     void alscriptkeymap_object::test<4>()
     {
-        set_test_name("every item of the studio's menu bar can take keys: the editors' command, or one of the table's; named by where it is");
+        set_test_name("every item of the studio's menu bar can take keys: the editors' command, or one of the table's; named by where it is, and the only one so named");
         LLXMLNodePtr root;
         ensure("the studio's file", LLXMLNode::parseFile(std::string(LLUI_TEST_APP_DIR) + "/skins/default/xui/en/floater_script_studio.xml", root));
         const std::vector<ALScriptKeymap::MenuItem> items = ALScriptKeymap::menuItemsIn(root);
@@ -160,7 +160,7 @@ namespace tut
         std::set<std::string> ids;
         for (const ALScriptKeymap::MenuItem& item : items)
         {
-            ids.insert(item.id);
+            ensure("the only item so named: " + item.id, ids.insert(item.id).second);
             ensure("can take keys: " + item.id, alEditorCommandFromName(item.id).has_value() || ALScriptKeymap::isMenuCommand(item.id));
             ensure("named by its menus: " + item.id, item.path.find(" > ") != std::string::npos);
         }
@@ -341,5 +341,39 @@ namespace tut
         ensure("all restored, the preset kept", ALScriptKeymap::preset() == other_preset && !ALScriptKeymap::anyRebound());
         ALScriptKeymap::setPreset("nothing of the kind");
         ensure("one not offered: the standard", ALScriptKeymap::preset() == ALScriptKeyPresets::STANDARD);
+    }
+
+    template<> template<>
+    void alscriptkeymap_object::test<10>()
+    {
+        set_test_name("what the comparison's bar does has keys too, the first letter of each word; peeking at a change on Alt-F3, beside Alt-F5's step");
+        const std::pair<const char*, ALKeyChord> keys[] = {
+            { "compare_settle_theirs", ALKeyChord{ 'T', MASK_ALT } }, { "compare_settle_mine", ALKeyChord{ 'M', MASK_ALT } },
+            { "compare_settle_both", ALKeyChord{ 'B', MASK_ALT } },   { "compare_fold", ALKeyChord{ 'F', MASK_ALT } },
+            { "compare_swap", ALKeyChord{ 'S', MASK_ALT } },          { "compare_older", ALKeyChord{ ',', MASK_ALT } },
+            { "compare_newer", ALKeyChord{ '.', MASK_ALT } },         { "peek_change", ALKeyChord{ KEY_F3, MASK_ALT } },
+        };
+        for (const auto& [id, chord] : keys)
+        {
+            ensure(std::string("a menu command: ") + id, ALScriptKeymap::isMenuCommand(id));
+            ensure(std::string("its key: ") + id + " " + chord.describe(), ALScriptKeymap::menuKey(id) == chord);
+            ensure(std::string("no editor's: ") + id, ALScriptKeymap::current().lookup(chord.key, chord.mask) == C::None);
+        }
+        ensure("the step beside it", ALScriptKeymap::menuKey("next_difference") == (ALKeyChord{ KEY_F5, MASK_ALT }));
+    }
+
+    template<> template<>
+    void alscriptkeymap_object::test<11>()
+    {
+        set_test_name("keys kept for a menu's command the table no longer has, renamed or gone, take nothing from the commands that have them");
+        // Go > Next Change was next_change until it was told from Next Edit
+        // Location, the editor's command of that name.
+        ensure("no menu command now", !ALScriptKeymap::isMenuCommand("next_change"));
+        ALScriptKeymap::rebindMenu("next_change", { ALKeyChord{ KEY_F5, MASK_ALT }, ALKeyChord{ KEY_F8, MASK_NONE } });
+        ensure("the step's key its own still", ALScriptKeymap::menuKey("next_difference") == (ALKeyChord{ KEY_F5, MASK_ALT }));
+        ensure("and a problem's", has(ALScriptKeymap::menuKeys("next_problem"), ALKeyChord{ KEY_F8, MASK_NONE }));
+        ensure("the editor's command of that name untouched", ALScriptKeymap::keysOf(ALScriptKeymap::current(), C::NextChange).empty() ==
+                                                                  ALScriptKeymap::keysOf(ALKeymap::standard(), C::NextChange).empty());
+        ALScriptKeymap::restoreAll();
     }
 }
