@@ -1330,7 +1330,7 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
     }
 }
 
-void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
+void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh, const sknav::StoreyProduct* storeys) const
 {
     if (!mView)
     {
@@ -1340,7 +1340,7 @@ void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
     {
         if (m.mId == mesh && m.mRooms)
         {
-            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get());
+            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get(), storeys);
             return;
         }
     }

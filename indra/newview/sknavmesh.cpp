@@ -4041,7 +4041,7 @@ std::string SKNavMesh::exportAll() const
             writeTile(file, mesh, t.first, t.second, counts);
         }
         file << ']';
-        mRooms->writeSpaces(file, mesh.mId);
+        mRooms->writeSpaces(file, mesh.mId, storeys(mesh.mId).get());
         file << '}';
     }
     file << ']';

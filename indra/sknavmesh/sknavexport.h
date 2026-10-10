@@ -28,6 +28,7 @@
 #include "sknavbuild.h"
 #include "sknavenclosure.h"
 #include "sknavfeatures.h"
+#include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavwind.h"
 
@@ -85,7 +86,8 @@ namespace sknav
     /// A tile's per-gap answers as a JSON member, leading comma included.
     void writeExportEnclosure(std::ostream& file, U64 generation, const TileEnclosure& tile);
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind);
+    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind,
+                           const StoreyProduct* storeys = nullptr);
     /// One door as a JSON object; names are escaped.
     void writeExportDoor(std::ostream& file, const DoorEntity& door);
     /// One feature as a JSON object, with its span's exits and links per class when it has one.
