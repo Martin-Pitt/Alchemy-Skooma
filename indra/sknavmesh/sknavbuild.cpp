@@ -2317,6 +2317,8 @@ namespace sknav
             for (size_t f = 0; f < flights.size(); ++f)
             {
                 standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
+                // A flight erosion took whole still joins its floors, kept by the tile it sits in.
+                flights[f].mEroded = !standing[f] && flightHome(*mem.chf, cfg.borderSize, flights[f]);
             }
             AirGrid fine;
             if (input.mAir)
@@ -2325,7 +2327,7 @@ namespace sknav
                 std::vector<Flight> marked;
                 for (size_t f = 0; f < flights.size(); ++f)
                 {
-                    if (standing[f])
+                    if (standing[f] || flights[f].mEroded)
                     {
                         marked.push_back(flights[f]);
                     }

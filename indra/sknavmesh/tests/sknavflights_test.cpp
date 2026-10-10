@@ -1106,6 +1106,31 @@ namespace tut
     }
 
     template<> template<>
+    void sknavflights_object::test<33>()
+    {
+        set_test_name("a narrow stair erosion leaves no polygon on keeps its record, marked eroded, linking its floors");
+        TileBuildInput in = stairTile();
+        in.mParams[0].mSlope = WALK_SLOPE_DEG;
+        // six steps 0.88 m wide between two walls: the 0.3 m radius erodes them all away
+        for (S32 k = 1; k <= 6; ++k)
+        {
+            in.mRecords.push_back(boxRecord(10.f + (k - 1) * 0.3f, 15.56f, 0.f, 10.f + k * 0.3f, 16.44f, k * 0.25f));
+        }
+        in.mRecords.push_back(boxRecord(10.f, 14.f, 0.f, 11.8f, 15.56f, 3.5f));
+        in.mRecords.push_back(boxRecord(10.f, 16.44f, 0.f, 11.8f, 18.f, 3.5f));
+        in.mRecords.push_back(boxRecord(11.8f, 12.f, 0.f, 16.f, 20.f, 1.5f));
+        const TileBuildResult r = buildTile(in);
+        ensure("built: " + r.mError, r.mStatus == TileBuildResult::SUCCESS);
+        const S32 w = static_cast<S32>(AgentClass::AVATAR);
+        ensure_equals("one flight", r.mFlights[w].size(), 1u);
+        const Flight& f = r.mFlights[w][0];
+        ensure("no polys", f.mPolys.empty());
+        ensure("eroded", f.mEroded);
+        ensure(llformat("from the ground to the landing: %.2f to %.2f", f.mBottom.mV[VZ], f.mTop.mV[VZ]),
+               std::fabs(f.mBottom.mV[VZ]) < 0.2f && std::fabs(f.mTop.mV[VZ] - 1.5f) < 0.2f);
+    }
+
+    template<> template<>
     void sknavflights_object::test<34>()
     {
         set_test_name("stepped stairs are judged by riser against the climb, whatever their grade");

@@ -68,6 +68,7 @@ namespace sknav
         ConnectorKind mKind = ConnectorKind::STAIR;
         ConnectorRule mRule = ConnectorRule::GRADE;
         U8 mTreads = 0;                     ///< tread groups among its groups
+        bool mEroded = false;               ///< erosion left it no poly in its home tile; it still links its floors
         std::vector<U8> mCodes;             ///< the area codes its groups rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced
     };
@@ -105,7 +106,7 @@ namespace sknav
 
     /// Give each flight the polys that its codes produced over its footprint.
     /// centroids and codes are per poly, in the poly mesh's order; flights
-    /// that got none are dropped.
+    /// that got none are dropped unless eroded.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
 
     /// Narrow each flight's ends to the walkable treads: the lateral extent of
@@ -120,6 +121,9 @@ namespace sknav
     /// inside its footprint, within climb of its heights. The air marks the
     /// flights that do, before any polys exist.
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb);
+
+    /// Whether the middle of a flight's footprint lies on the tile proper, so the tile is the one that keeps it.
+    bool flightHome(const rcCompactHeightfield& chf, S32 border, const Flight& flight);
 
     /// Mark FLIGHT on the walkable gaps a flight stands for: inside
     /// its footprint, with the floor on its plane. The grid and the flights

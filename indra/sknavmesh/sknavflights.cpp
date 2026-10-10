@@ -1447,7 +1447,11 @@ namespace sknav
                 }
             }
         }
-        flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
+        for (Flight& f : flights)
+        {
+            f.mEroded = f.mEroded && f.mPolys.empty();
+        }
+        flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty() && !f.mEroded; }), flights.end());
     }
 
     void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
@@ -1537,6 +1541,23 @@ namespace sknav
             }
         }
         return false;
+    }
+
+    bool flightHome(const rcCompactHeightfield& chf, S32 border, const Flight& flight)
+    {
+        if (flight.mFootprint.empty())
+        {
+            return false;
+        }
+        LLVector2 mid;
+        for (const LLVector2& p : flight.mFootprint)
+        {
+            mid += p / static_cast<F32>(flight.mFootprint.size());
+        }
+        // Recast x is SL y, Recast z SL x.
+        const F32 x0 = chf.bmin[2] + border * chf.cs, x1 = chf.bmin[2] + (chf.height - border) * chf.cs;
+        const F32 y0 = chf.bmin[0] + border * chf.cs, y1 = chf.bmin[0] + (chf.width - border) * chf.cs;
+        return mid.mV[VX] >= x0 && mid.mV[VX] < x1 && mid.mV[VY] >= y0 && mid.mV[VY] < y1;
     }
 
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights)
