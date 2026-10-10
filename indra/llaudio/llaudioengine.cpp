@@ -1625,7 +1625,7 @@ void LLAudioEngine::logSoundPlay(const LLUUID& id, LLVector3d position, S32 type
     item->mOwnerID = ownerid;
     item->mSourceID = sourceid;
     item->mPlaying = true;
-    item->mTimeStarted = LLTimer::getElapsedSeconds();
+    item->mTimeStarted = LLTimer::getUptimeSeconds();
     item->mTimeStopped = F64_MAX;
     item->mIsTrigger = is_trigger;
     item->mIsLooped = is_looped;
@@ -1643,7 +1643,7 @@ void LLAudioEngine::logSoundStop(const LLUUID& id)
     {
         LLSoundHistoryItem& hist_item = *iter->second;
         hist_item.mPlaying = false;
-        hist_item.mTimeStopped = LLTimer::getElapsedSeconds();
+        hist_item.mTimeStopped = LLTimer::getUptimeSeconds();
         pruneSoundLog();
     }
 }
