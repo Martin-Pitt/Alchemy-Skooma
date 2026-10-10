@@ -65,16 +65,16 @@ namespace
 
 const ALGradeHistory::Step& ALGradeHistory::stepAt(size_t index) const
 {
-    const std::vector<Step>& back = mSteps.undone();
+    const auto& back = mSteps.undone();
     if (index < back.size())
     {
         return back[index];
     }
-    const std::vector<Step>& forward = mSteps.redone();
+    const auto& forward = mSteps.redone();
     return forward[forward.size() - 1 - (index - back.size())];
 }
 
-void ALGradeHistory::record(const std::string& name, const LLSD& before, const LLSD& after, F32 now)
+void ALGradeHistory::record(const std::string& name, const LLSD& before, const LLSD& after, F64 now)
 {
     // Not a change, so not a reason to touch anything -- least of all the
     // redo tail, which a write of the value already there would otherwise
