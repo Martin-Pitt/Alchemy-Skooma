@@ -241,7 +241,16 @@ namespace sknav
                     static const char* const KINDS[] = { "stair", "ramp", "climb" };
                     static const char* const RULES[] = { "name", "treads", "grade" };
                     file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"kind\":\"" << KINDS[static_cast<S32>(f.mKind)]
-                         << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":" << static_cast<S32>(f.mTreads) << ",\"eroded\":" << (f.mEroded ? "true" : "false")
+                         << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":";
+                    if (f.mTreadCount >= 0)
+                    {
+                        file << f.mTreadCount;
+                    }
+                    else
+                    {
+                        file << "null";
+                    }
+                    file << ",\"tread_groups\":" << static_cast<S32>(f.mTreads) << ",\"eroded\":" << (f.mEroded ? "true" : "false")
                          << ",\"rise\":" << f.mRise << ",\"run\":" << f.mRun << ",\"plane\":[" << f.mPlane[0] << ',' << f.mPlane[1] << ','
                          << mesh_origin.mdV[VZ] + f.mPlane[2] - f.mPlane[0] * mesh_origin.mdV[VX] - f.mPlane[1] * mesh_origin.mdV[VY]
                          << "],\"bottom\":";
@@ -267,7 +276,28 @@ namespace sknav
                     {
                         file << (i ? "," : "") << f.mPolys[i];
                     }
-                    file << "]}";
+                    file << ']';
+                    // The ground polys each end meets, as [tile x, tile y, poly], with their storeys and why an end has none.
+                    if (const FlightEnds* fe = tile.mStoreys && nav ? tile.mStoreys->flightEnds(f.mKey) : nullptr)
+                    {
+                        file << ",\"end_polys\":[";
+                        for (S32 e = 0; e < 2; ++e)
+                        {
+                            file << (e ? ",[" : "[");
+                            for (size_t i = 0; i < fe->mPolys[e].size(); ++i)
+                            {
+                                unsigned int salt = 0, it = 0, ip = 0;
+                                nav->decodePolyId(static_cast<dtPolyRef>(fe->mPolys[e][i]), salt, it, ip);
+                                const dtMeshTile* et = nav->getTile(static_cast<int>(it));
+                                const S32 kx = et && et->header ? et->header->y : 0, ky = et && et->header ? et->header->x : 0;
+                                file << (i ? "," : "") << '[' << kx << ',' << ky << ',' << ip << ']';
+                            }
+                            file << ']';
+                        }
+                        file << "],\"end_storeys\":[" << fe->mStorey[0] << ',' << fe->mStorey[1] << "],\"end_gaps\":[\"" << endGapName(fe->mGap[0]) << "\",\""
+                             << endGapName(fe->mGap[1]) << "\"]";
+                    }
+                    file << '}';
                 }
             }
             file << ']';
@@ -286,8 +316,11 @@ namespace sknav
                 for (size_t e = 0; e < g.mPortalEdges.size(); ++e)
                 {
                     const StampPortalEdge& pe = g.mPortalEdges[e];
-                    file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ",\""
-                         << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec << "\"]";
+                    // The portal's index into the mesh's portals (-1 for none), then its key.
+                    const U32 pi = e < b.mPortalIndex.size() ? b.mPortalIndex[e] : NO_PORTAL;
+                    file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ','
+                         << (pi == NO_PORTAL ? -1 : static_cast<S64>(pi)) << ",\"" << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec
+                         << "\"]";
                 }
                 file << "],\"flight_polys\":[";
                 bool first = true;
@@ -328,7 +361,8 @@ namespace sknav
                             writeVec3d(file, mesh_origin + LLVector3d(w.mLine[k]));
                         }
                         file << "],\"class\":\"" << wallClassName(w.mClass) << "\",\"low\":" << (w.mLow ? "true" : "false") << ",\"high\":"
-                             << (w.mHigh ? "true" : "false") << ",\"top\":[" << w.mTopMin << ',' << w.mTopMax << "],\"face\":" << w.mFace
+                             << (w.mHigh ? "true" : "false") << ",\"top\":[" << w.mTopMin << ',' << w.mTopMax << "],\"face\":" << w.mFace << ",\"far\":" << w.mFar << ",\"depth\":" << w.mDepth
+                             << ",\"thick\":" << (w.mThick ? "true" : "false")
                              << ",\"floor\":" << mesh_origin.mdV[VZ] + w.mFloorZ << ",\"polys\":[";
                         for (size_t k = 0; k < w.mPolys.size(); ++k)
                         {
