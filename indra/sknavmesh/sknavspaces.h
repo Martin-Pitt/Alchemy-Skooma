@@ -129,6 +129,11 @@ namespace sknav
         bool mFlight = false;       ///< a stair flight's own space
         bool mUnderFlight = false;  ///< ground under an outdoor flight, sheltered by it
         bool mFrozen = false;       ///< kept from an earlier pass for tiles whose detail was evicted
+        bool mRoof = false;         ///< a building's roof: walkable, under open sky, over its roofed floors
+        F32 mOverRoofed = 0.f;      ///< share of the floor open to the sky over an indoor or sheltered floor
+        U32 mBuilding = 0;          ///< its building's least member id, 0 in none: indoor spaces, roofs and what they cover
+        std::vector<U32> mCovers;   ///< a roof's: indices of the roofed spaces it lies most over or over a quarter of, ascending
+        std::vector<F32> mCoverM2;  ///< m² of each of those it lies over
         std::vector<U32> mPortals;  ///< indices into the product's portals
         /// Floor area per 0.5 m x 0.5 m x 1 m cell, sorted by key: what ids are tracked by.
         std::vector<std::pair<U64, U32>> mRaster;

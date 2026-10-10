@@ -388,7 +388,13 @@ namespace sknav
                  << s.mFloorMin + oz << ',' << s.mFloorMax + oz << "],\"elongation\":" << s.mElongation << ",\"S\":" << s.mSMean << ",\"cover\":" << s.mCoverMean << ",\"O\":" << s.mSideOpenMean << ",\"e\":["
                  << s.mEMin << ',' << s.mEMean << ',' << s.mEMax << "],\"L\":" << s.mL << ",\"unknown\":" << s.mUnknown
                  << ",\"lift\":" << (s.mLift ? "true" : "false") << ",\"flight\":" << (s.mFlight ? "true" : "false") << ",\"under_flight\":" << (s.mUnderFlight ? "true" : "false")
-                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"portals\":[";
+                 << ",\"frozen\":" << (s.mFrozen ? "true" : "false") << ",\"roof\":" << (s.mRoof ? "true" : "false") << ",\"over_roofed\":" << s.mOverRoofed
+                 << ",\"building\":" << s.mBuilding << ",\"covers\":[";
+            for (size_t k = 0; s.mRoof && k < s.mCovers.size(); ++k)
+            {
+                file << (k ? "," : "") << (s.mCovers[k] < rooms.mSpaces.size() ? rooms.mSpaces[s.mCovers[k]].mId : 0u);
+            }
+            file << "],\"portals\":[";
             for (size_t k = 0; k < s.mPortals.size(); ++k)
             {
                 file << (k ? "," : "") << s.mPortals[k];
