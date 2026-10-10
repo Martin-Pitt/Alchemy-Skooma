@@ -28,6 +28,7 @@
 
 #include "llspatialpartition.h"
 
+#include "alfarplane.h"
 #include "llappviewer.h"
 #include "lltexturecache.h"
 #include "lltexturefetch.h"
@@ -129,12 +130,11 @@ LLSpatialGroup::~LLSpatialGroup()
 
     sNodeCount--;
 
-    // The reflection probe holds a raw back-pointer to this group, but outlives
-    // it (the manager keeps the probe alive past the group's death). Clear it,
-    // or the probe's placement pass will read freed memory.
-    if (mReflectionProbe)
+    // unhook from the reflection probe, which the manager keeps until its next update
+    // notices nothing else holds it -- and autoAdjustOrigin dereferences mGroup until then
+    if (mReflectionProbe.notNull())
     {
-        mReflectionProbe->mGroup = nullptr;
+        mReflectionProbe->orphan();
     }
 
     clearDrawMap();
@@ -735,7 +735,7 @@ F32 LLSpatialGroup::getUpdateUrgency() const
     }
     else
     {
-        F32 time = gFrameTimeSeconds-mLastUpdateTime+4.f;
+        F32 time = (F32)(gFrameTimeSeconds-mLastUpdateTime)+4.f;
         return time + (mObjectBounds[1].dot3(mObjectBounds[1]).getF32()+1.f)/mDistance;
     }
 }
@@ -1113,6 +1113,38 @@ public:
     }
 };
 
+// LLOctreeCullNoFarClip held to a sphere, for terrain once the projection no longer bounds it
+// (ALFarPlane::terrainReach).
+class ALOctreeCullReach : public LLOctreeCullNoFarClip
+{
+public:
+    ALOctreeCullReach(LLCamera* camera, F32 reach)
+        : LLOctreeCullNoFarClip(camera), mReach(reach) { }
+
+    S32 frustumCheck(const LLViewerOctreeGroup* group) override
+    {
+        S32 res = AABBInFrustumNoFarClipGroupBounds(group);
+        if (res != 0)
+        {
+            res = llmin(res, AABBSphereIntersect(group->getExtents()[0], group->getExtents()[1], mCamera->getOrigin(), mReach));
+        }
+        return res;
+    }
+
+    S32 frustumCheckObjects(const LLViewerOctreeGroup* group) override
+    {
+        S32 res = AABBInFrustumNoFarClipObjectBounds(group);
+        if (res != 0)
+        {
+            res = llmin(res, AABBSphereIntersect(group->getObjectExtents()[0], group->getObjectExtents()[1], mCamera->getOrigin(), mReach));
+        }
+        return res;
+    }
+
+private:
+    F32 mReach;
+};
+
 class LLOctreeCullShadow : public LLOctreeCull
 {
 public:
@@ -1448,6 +1480,15 @@ S32 LLSpatialPartition::cull(LLCamera &camera, bool do_occlusion)
     if (LLPipeline::sShadowRender)
     {
         LLOctreeCullShadow culler(&camera);
+        culler.traverse(mOctree);
+    }
+    // Terrain in the main view, when an infinite projection no longer bounds it. Water is a flat plane drawn out
+    // to its stretch, so it is not held to the reach.
+    else if (const F32 reach = ALFarPlane::terrainReach(LLViewerCamera::getInstance()->getProjectionFar());
+             mInfiniteFarClip && reach > 0.f && !gCubeSnapshot && &camera == LLViewerCamera::getInstance() &&
+             mPartitionType != LLViewerRegion::PARTITION_WATER && mPartitionType != LLViewerRegion::PARTITION_VOIDWATER)
+    {
+        ALOctreeCullReach culler(&camera, reach);
         culler.traverse(mOctree);
     }
     else if (mInfiniteFarClip || (!LLPipeline::sUseFarClip && !gCubeSnapshot))
@@ -1982,7 +2023,7 @@ void renderBoundingBox(LLDrawable* drawable, bool set_color = true)
     LLViewerObject* vobj = drawable->getVObj();
     if (vobj && vobj->onActiveList())
     {
-        gGL.setLineWidth(llmax(4.f*sinf(gFrameTimeSeconds*2.f)+1.f, 1.f));
+        gGL.setLineWidth(llmax(4.f*sinf((F32)fmod(gFrameTimeSeconds.value()*2.0, (F64)F_TWO_PI))+1.f, 1.f));
         //gGL.setLineWidth(4.f*(sinf(gFrameTimeSeconds*2.f)*0.25f+0.75f));
         stop_glerror();
         drawBoxOutline(pos,size);
