@@ -912,4 +912,62 @@ namespace tut
         ensure_equals("the floor's poly is in the room's space", geom.mPolyComponent[0], 0);
         ensure_equals("and stands in the floor's gap, not the roof's", geom.mPolyGap[0], 0u);
     }
+
+    template<> template<>
+    void sknavstamp_object::test<13>()
+    {
+        set_test_name("a poly in no space that shares an edge with a spaced poly takes its neighbour's space");
+        const ChfPtr chf = floorOf(16, 8, [](S32, S32) { return AREA_CODE_BASE; });
+        std::vector<U32> gaps(chf->spanCount, 0u);
+        TileStamp st;
+        st.mSpanComponent.assign(chf->spanCount, STAMP_NONE);
+        st.mComponentColour = { 1 };
+        for (S32 z = 0; z < 8; ++z)
+        {
+            for (S32 x = 0; x < 16; ++x)
+            {
+                const S32 i = spanAt(*chf, x, z);
+                chf->spans[i].reg = 1;
+                st.mSpanComponent[i] = x < 8 ? 0 : STAMP_NONE;
+            }
+        }
+        TileStampInput in;
+        in.mGapComponent = { 0 };
+        in.mComponentSpace = { 3 };
+        // Two quads, west over the spaced half, east over the unspaced half, sharing the edge at x = 8.
+        rcPolyMesh* pm = rcAllocPolyMesh();
+        pm->nvp = 6;
+        pm->nverts = 6;
+        pm->npolys = 2;
+        pm->maxpolys = 2;
+        pm->cs = 0.25f;
+        pm->ch = 0.25f;
+        rcVcopy(pm->bmin, chf->bmin);
+        rcVcopy(pm->bmax, chf->bmax);
+        const unsigned short verts[18] = { 0, 4, 0, 0, 4, 8, 8, 4, 8, 8, 4, 0, 16, 4, 8, 16, 4, 0 };
+        pm->verts = static_cast<unsigned short*>(rcAlloc(sizeof(verts), RC_ALLOC_PERM));
+        std::copy(verts, verts + 18, pm->verts);
+        pm->polys = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 24, RC_ALLOC_PERM));
+        std::fill(pm->polys, pm->polys + 24, RC_MESH_NULL_IDX);
+        const unsigned short a[4] = { 0, 1, 2, 3 }, b[4] = { 3, 2, 4, 5 };
+        for (S32 k = 0; k < 4; ++k)
+        {
+            pm->polys[k] = a[k];
+            pm->polys[12 + k] = b[k];
+        }
+        pm->polys[6 + 2] = 1;   // west's edge 2-3 is east's
+        pm->polys[12 + 6 + 0] = 0;
+        pm->regs = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 2, RC_ALLOC_PERM));
+        pm->regs[0] = pm->regs[1] = 1;
+        pm->flags = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 2, RC_ALLOC_PERM));
+        pm->flags[0] = pm->flags[1] = 1;
+        pm->areas = static_cast<unsigned char*>(rcAlloc(2, RC_ALLOC_PERM));
+        pm->areas[0] = pm->areas[1] = AREA_CODE_BASE;
+        TileStampGeom geom;
+        stampGeometry(*pm, *chf, 0, gaps, in, st, geom);
+        rcFreePolyMesh(pm);
+        ensure_equals("the west poly is spaced", geom.mPolyComponent[0], 0);
+        ensure_equals("the east poly took its neighbour's space", geom.mPolyComponent[1], 0);
+        ensure_equals("one joined", geom.mJoinedPolys, 1u);
+    }
 }

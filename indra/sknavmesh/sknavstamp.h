@@ -153,6 +153,7 @@ namespace sknav
         U32 mFloodSpans = 0;
         U32 mUnspacedSpans = 0;
         U32 mImpurePolys = 0;               ///< polys whose spans hold more than one component; 0 unless the cascade fused
+        U32 mJoinedPolys = 0;               ///< polys in no component that took a walkably joined neighbour's
 
         size_t bytes() const;
     };

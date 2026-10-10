@@ -899,6 +899,31 @@ namespace sknav
             }
         }
 
+        // A poly in no component walkably joined to one takes its neighbour's, ring by ring.
+        std::vector<S32> ring;
+        for (S32 p = 0; p < npolys; ++p)
+        {
+            if (out.mPolyComponent[p] != STAMP_NONE)
+            {
+                ring.push_back(p);
+            }
+        }
+        for (size_t head = 0; head < ring.size(); ++head)
+        {
+            const S32 p = ring[head];
+            const unsigned short* poly = &pmesh.polys[p * nvp * 2];
+            for (S32 e = 0; e < nvp && poly[e] != RC_MESH_NULL_IDX; ++e)
+            {
+                const unsigned short nei = poly[nvp + e];
+                if (nei != RC_MESH_NULL_IDX && !(nei & 0x8000) && out.mPolyComponent[nei] == STAMP_NONE)
+                {
+                    out.mPolyComponent[nei] = out.mPolyComponent[p];
+                    ++out.mJoinedPolys;
+                    ring.push_back(nei);
+                }
+            }
+        }
+
         // Poly edges along a portal between the poly's component and the one across it.
         const auto at = [&pmesh](unsigned short vi) {
             const unsigned short* v = &pmesh.verts[vi * 3];
