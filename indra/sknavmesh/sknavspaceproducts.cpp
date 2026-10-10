@@ -176,12 +176,18 @@ namespace sknav
         return it != mPolyStorey.end() && it->first == ref ? static_cast<S32>(it->second) : -1;
     }
 
+    const FlightEnds* StoreyProduct::flightEnds(U64 key) const
+    {
+        const auto it = std::lower_bound(mFlightEnds.begin(), mFlightEnds.end(), key, [](const FlightEnds& f, U64 k) { return f.mFlight < k; });
+        return it != mFlightEnds.end() && it->mFlight == key ? &*it : nullptr;
+    }
+
     constexpr F32 CLIMB_END_STEP_M = 0.4f;     ///< a climb's floor is looked for this far past each end
     constexpr F32 CLIMB_END_REACH_M = 1.5f;    ///< within this in plan
     constexpr F32 CLIMB_END_DZ_M = 1.f;        ///< and this in height
 
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
-                      const PolyFlightFn& flight_of, F32 min_area)
+                      const PolyFlightFn& flight_of, F32 min_area, const std::vector<const Flight*>& flights)
     {
         out = StoreyProduct();
         std::vector<U32> base;
@@ -305,6 +311,25 @@ namespace sknav
             }
         }
 
+        // So do the floors a Flight's ends meet, linked or not.
+        flightEnds(nav, flights, flight_of, out.mFlightEnds);
+        for (const FlightEnds& fe : out.mFlightEnds)
+        {
+            for (const std::vector<U64>& refs : fe.mPolys)
+            {
+                for (const U64 ref : refs)
+                {
+                    unsigned int salt = 0, it = 0, ip = 0;
+                    nav.decodePolyId(static_cast<dtPolyRef>(ref), salt, it, ip);
+                    const U32 i = it < static_cast<unsigned int>(ntiles) ? base[it] + ip : n;
+                    if (i < n && kind[i] == 1)
+                    {
+                        landings.insert(find(i));
+                    }
+                }
+            }
+        }
+
         // Storeys: the floor components, lowest floor first.
         std::map<U32, std::vector<U32>> comps;
         for (U32 i = 0; i < n; ++i)
@@ -417,7 +442,7 @@ namespace sknav
             st.mId = st.mSpaces.empty() ? 0 : st.mSpaces.front();
         }
 
-        // Connectors: each flight's polys, the storeys they touch, and where.
+        // Flight polys: the storeys each connected run of them touches, and where.
         struct Touch
         {
             LLVector3 mSum;
@@ -460,6 +485,122 @@ namespace sknav
                 });
             }
         }
+        // The run of flight polys most of each Flight's own polys lie in.
+        std::unordered_map<U64, U32> root_of_flight;
+        std::unordered_map<U64, U32> root_polys;
+        for (const auto& [r, by_flight] : flight_polys)
+        {
+            for (const auto& [f, count] : by_flight)
+            {
+                U32& most = root_polys[f->mKey];
+                if (count > most && touches.count(r))
+                {
+                    most = count;
+                    root_of_flight[f->mKey] = r;
+                }
+            }
+        }
+
+        // Each Flight's connector between the storeys its ends meet.
+        std::unordered_map<U64, const Flight*> flight_by_key;
+        std::unordered_map<U64, std::map<U32, F32>> flight_space_area;
+        for (S32 t = 0; flight_of && t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                if (const Flight* f = flight_of(tile, static_cast<U32>(p)))
+                {
+                    flight_by_key.emplace(f->mKey, f);
+                    const U32 i = base[t] + static_cast<U32>(p);
+                    if (space[i])
+                    {
+                        flight_space_area[f->mKey][space[i]] += area[i];
+                    }
+                }
+            }
+        }
+        for (const Flight* f : flights)
+        {
+            if (f)
+            {
+                flight_by_key.emplace(f->mKey, f);
+            }
+        }
+        for (FlightEnds& fe : out.mFlightEnds)
+        {
+            for (S32 e = 0; e < 2; ++e)
+            {
+                std::map<S32, U32> votes;
+                for (const U64 ref : fe.mPolys[e])
+                {
+                    const S32 s = out.storeyOfPoly(ref);
+                    if (s >= 0)
+                    {
+                        ++votes[s];
+                    }
+                }
+                U32 most = 0;
+                for (const auto& [s, count] : votes)
+                {
+                    if (count > most)
+                    {
+                        most = count;
+                        fe.mStorey[e] = s;
+                    }
+                }
+            }
+            const auto fk = flight_by_key.find(fe.mFlight);
+            if (fk == flight_by_key.end())
+            {
+                continue;
+            }
+            const Flight& fl = *fk->second;
+            // An end meeting no storey's poly (a landing in a flight space, or nothing) takes the storey its run of flight polys touches nearest that end, not the other end's.
+            S32 st[2] = { fe.mStorey[0], fe.mStorey[1] };
+            const auto rf = root_of_flight.find(fl.mKey);
+            for (S32 e = 0; e < 2; ++e)
+            {
+                const auto tr = rf != root_of_flight.end() && st[e] < 0 ? touches.find(rf->second) : touches.end();
+                F32 best_d = 1e30f;
+                for (const auto& [s, tc] : tr != touches.end() ? tr->second : std::map<U32, Touch>())
+                {
+                    const F32 d = dist_vec(tc.mSum / static_cast<F32>(tc.mCount), e == 0 ? fl.mBottom : fl.mTop);
+                    if (d < best_d && static_cast<S32>(s) != st[1 - e])
+                    {
+                        best_d = d;
+                        st[e] = static_cast<S32>(s);
+                    }
+                }
+            }
+            const bool guessed = st[0] != fe.mStorey[0] || st[1] != fe.mStorey[1];
+            if (st[0] < 0 || st[1] < 0 || (guessed && st[0] == st[1]))
+            {
+                continue;
+            }
+            StoreyConnector c;
+            c.mFlight = fl.mKey;
+            c.mKind = fl.mKind;
+            F32 most = 0.f;
+            if (const auto fs = flight_space_area.find(fl.mKey); fs != flight_space_area.end())
+            {
+                for (const auto& [sp, a] : fs->second)
+                {
+                    if (a > most)
+                    {
+                        most = a;
+                        c.mSpace = sp;
+                    }
+                }
+            }
+            const bool flip = out.mStoreys[st[0]].mFloorZ > out.mStoreys[st[1]].mFloorZ;
+            c.mStorey[0] = static_cast<U32>(flip ? st[1] : st[0]);
+            c.mStorey[1] = static_cast<U32>(flip ? st[0] : st[1]);
+            c.mEnd[0] = flip ? fl.mTop : fl.mBottom;
+            c.mEnd[1] = flip ? fl.mBottom : fl.mTop;
+            out.mConnectors.push_back(c);
+        }
+
         for (const auto& [r, by_storey] : touches)
         {
             if (by_storey.size() < 2)
@@ -495,35 +636,7 @@ namespace sknav
             }
             if (fl)
             {
-                const auto nearest = [&by_storey](const LLVector3& at) {
-                    U32 best = 0;
-                    F32 best_d = 1e30f;
-                    for (const auto& [s, tc] : by_storey)
-                    {
-                        const F32 d = dist_vec(tc.mSum / static_cast<F32>(tc.mCount), at);
-                        if (d < best_d)
-                        {
-                            best_d = d;
-                            best = s;
-                        }
-                    }
-                    return best;
-                };
-                const U32 lo = nearest(fl->mBottom), hi = nearest(fl->mTop);
-                if (lo != hi)
-                {
-                    StoreyConnector c;
-                    c.mSpace = fspace;
-                    c.mFlight = fl->mKey;
-                    c.mKind = fl->mKind;
-                    const bool flip = out.mStoreys[lo].mFloorZ > out.mStoreys[hi].mFloorZ;
-                    c.mStorey[0] = flip ? hi : lo;
-                    c.mStorey[1] = flip ? lo : hi;
-                    c.mEnd[0] = flip ? fl->mTop : fl->mBottom;
-                    c.mEnd[1] = flip ? fl->mBottom : fl->mTop;
-                    out.mConnectors.push_back(c);
-                }
-                continue;
+                continue;   // joined at its own ends above
             }
             // The flight space's stair portals, by the storey of the space across each.
             std::map<U32, LLVector3> portal_end;

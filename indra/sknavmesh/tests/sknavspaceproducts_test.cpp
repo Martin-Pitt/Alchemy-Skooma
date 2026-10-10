@@ -516,4 +516,71 @@ namespace tut
         ensure("the climb's, at its ends", l.mFlight == climb->mKey && dist_vec(l.mFoot, climb->mBottom) < 1e-4f && dist_vec(l.mTop, climb->mTop) < 1e-4f);
         ensure("found by either space", apart.climbLinksOf(ground).size() == 1 && apart.climbLinksOf(deck_id).size() == 1 && apart.climbLinksOf(7u).empty());
     }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<7>()
+    {
+        set_test_name("a flight's ends meet the ground's polys at its foot and the deck's at its head, none of its own");
+        Built b(deckAndStair(), {});
+        const std::vector<Flight>& flights = b.mPolys.mFlights[0];
+        ensure_equals("one flight", flights.size(), static_cast<size_t>(1));
+        const Flight& f = flights[0];
+        const PolyFlightFn flight_of = [&f](const dtMeshTile*, U32 p) -> const Flight* {
+            return std::find(f.mPolys.begin(), f.mPolys.end(), static_cast<U16>(p)) != f.mPolys.end() ? &f : nullptr;
+        };
+        StoreyProduct st;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, st, flight_of, 10.f, { &f });
+        const FlightEnds* fe = st.flightEnds(f.mKey);
+        ensure("its ends", fe != nullptr);
+        const dtNavMesh& nav = *b.mNav;
+        for (S32 e = 0; e < 2; ++e)
+        {
+            ensure(llformat("end %d meets polys", e), !fe->mPolys[e].empty() && fe->mGap[e] == EndGap::NONE);
+            for (const U64 ref : fe->mPolys[e])
+            {
+                const dtMeshTile* t = nullptr;
+                const dtPoly* p = nullptr;
+                ensure("a poly", dtStatusSucceed(nav.getTileAndPolyByRef(static_cast<dtPolyRef>(ref), &t, &p)));
+                const U32 ip = static_cast<U32>(p - t->polys);
+                ensure("not the flight's own", !flight_of(t, ip));
+                F32 lo = 1e30f, hi = -1e30f;
+                for (S32 v = 0; v < p->vertCount; ++v)
+                {
+                    lo = std::min(lo, fromRecast(&t->verts[p->verts[v] * 3]).mV[VZ]);
+                    hi = std::max(hi, fromRecast(&t->verts[p->verts[v] * 3]).mV[VZ]);
+                }
+                const F32 z = e == 0 ? f.mBottom.mV[VZ] : f.mTop.mV[VZ];
+                ensure(llformat("end %d at its height: %.2f..%.2f for %.2f", e, lo, hi, z), lo <= z + FLIGHT_END_DZ_M && hi >= z - FLIGHT_END_DZ_M);
+            }
+        }
+        const S32 sg = b.storeyAt(st, 5.f, 20.f, 0.f), sd = b.storeyAt(st, 21.f, 9.f, 3.f);
+        ensure("their storeys", fe->mStorey[0] == sg && fe->mStorey[1] == sd);
+
+        // An end edge drawn up the run, short of its floor, still meets it across the links of the flight's own polys.
+        Flight shy = f;
+        LLVector3 up = f.mTop - f.mBottom;
+        up.mV[VZ] = 0.f;
+        up.normVec();
+        shy.mBottomA += up * 0.6f;
+        shy.mBottomB += up * 0.6f;
+        std::vector<FlightEnds> shy_ends;
+        flightEnds(nav, { &shy }, [&f, &shy](const dtMeshTile* t, U32 p) -> const Flight* {
+            return std::find(f.mPolys.begin(), f.mPolys.end(), static_cast<U16>(p)) != f.mPolys.end() ? &shy : nullptr;
+        }, shy_ends);
+        ensure("linked at its foot", shy_ends.size() == 1 && !shy_ends[0].mPolys[0].empty());
+
+        // Without polys of its own its ends still meet the floors; with no floor there either, an end says it was eroded.
+        Flight bare = f;
+        bare.mKey ^= 1;
+        bare.mPolys.clear();
+        std::vector<FlightEnds> ends;
+        flightEnds(nav, { &bare }, nullptr, ends);
+        ensure("bare, still meeting the floors", ends.size() == 1 && !ends[0].mPolys[0].empty() && !ends[0].mPolys[1].empty());
+        for (LLVector3* v : { &bare.mBottom, &bare.mTop, &bare.mBottomA, &bare.mBottomB, &bare.mTopA, &bare.mTopB })
+        {
+            v->mV[VZ] += 20.f;
+        }
+        flightEnds(nav, { &bare }, nullptr, ends);
+        ensure("in the air, eroded", ends.size() == 1 && ends[0].mGap[0] == EndGap::ERODED && ends[0].mGap[1] == EndGap::ERODED);
+    }
 }

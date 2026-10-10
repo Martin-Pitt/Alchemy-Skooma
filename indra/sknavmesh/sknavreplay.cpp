@@ -767,8 +767,19 @@ namespace sknav
             if (const dtNavMesh* nav = mesh.mNav[static_cast<S32>(AgentClass::AVATAR)]; nav && mesh.mRooms)
             {
                 const Clock::time_point s0 = Clock::now();
+                std::vector<const Flight*> all;
+                for (const auto& t : mesh.mTiles)
+                {
+                    if (t.second.mResult->mStatus != TileBuildResult::FAILED)
+                    {
+                        for (const Flight& f : t.second.mResult->mFlights[static_cast<S32>(AgentClass::AVATAR)])
+                        {
+                            all.push_back(&f);
+                        }
+                    }
+                }
                 buildStoreys(*nav, [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polySpace(tile, poly); }, *mesh.mRooms, mesh.mStoreys,
-                             [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polyFlight(tile, poly); });
+                             [&mesh](const dtMeshTile* tile, U32 poly) { return mesh.polyFlight(tile, poly); }, 10.f, all);
                 storeys_ms += since(s0);
             }
         }

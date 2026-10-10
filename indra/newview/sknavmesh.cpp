@@ -2672,13 +2672,25 @@ StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
             }
         }
     }
+    std::vector<const Flight*> all;
+    for (const auto& entry : mesh.mTiles)
+    {
+        if (entry.second.mFlights[c])
+        {
+            for (const Flight& f : *entry.second.mFlights[c])
+            {
+                all.push_back(&f);
+            }
+        }
+    }
     auto out = std::make_shared<StoreyProduct>();
     static const RoomsProduct no_rooms;
     buildStoreys(*mesh.mNav[c], [this](const dtMeshTile* t, U32 p) { return polySpace(t, p); }, mesh.mStampRooms ? *mesh.mStampRooms : no_rooms, *out,
                  [&flights](const dtMeshTile* t, U32 p) -> const Flight* {
                      const auto f = t && t->header ? flights.find(t->header->userId) : flights.end();
                      return f != flights.end() && p < f->second.size() ? f->second[p] : nullptr;
-                 });
+                 },
+                 10.f, all);
     mesh.mStoreys = out;
     mesh.mStoreysAt = mRevision;
     return out;

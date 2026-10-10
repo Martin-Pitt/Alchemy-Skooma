@@ -21,6 +21,7 @@ target_sources(
     sknavexport.cpp
     sknavfaceoffsets.cpp
     sknavfeatures.cpp
+    sknavflightends.cpp
     sknavflights.cpp
     sknavlayout.cpp
     sknavprobecache.cpp
@@ -58,6 +59,7 @@ target_sources(
         sknavexport.h
         sknavfaceoffsets.h
         sknavfeatures.h
+        sknavflightends.h
         sknavflights.h
         sknavlayout.h
         sknavprobecache.h
