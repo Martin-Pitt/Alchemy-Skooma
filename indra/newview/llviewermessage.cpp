@@ -2520,7 +2520,7 @@ void process_chat_from_simulator(LLMessageSystem *msg, void **user_data)
     msg->getU8Fast(_PREHASH_ChatData, _PREHASH_Audible, audible_temp);
     chat.mAudible = (EChatAudible)audible_temp;
 
-    chat.mTime = LLFrameTimer::getElapsedSeconds();
+    chat.mTime = LLFrameTimer::getUptimeSeconds();
 
     // IDEVO Correct for new-style "Resident" names
     if (chat.mSourceType == CHAT_SOURCE_AGENT)
@@ -3399,11 +3399,6 @@ void process_agent_movement_complete(LLMessageSystem* msg, void**)
             LLViewerCamera::getInstance()->lookAt(agent_pos, look_at_point, up_direction);
         }
     }
-
-#ifdef LL_DISCORD
-    if (gSavedSettings.getBOOL("EnableDiscord"))
-        LLAppViewer::updateDiscordActivity();
-#endif
 
     if ( LLTracker::isTracking(NULL) )
     {

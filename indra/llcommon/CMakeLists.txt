@@ -77,7 +77,6 @@ target_sources(
     llmortician.cpp
     llmutex.cpp
     llpointer.cpp
-    llptrto.cpp
     llpredicate.cpp
     llprocess.cpp
     llprocessor.cpp
@@ -122,8 +121,10 @@ target_sources(
     FILE_SET HEADERS
       FILES
         alfilewrite.h
+        allinebreaks.h
         alserialworker.h
         alparamtype.h
+        alrandmap.h
         alrecoverystore.h
         alregex.h
         alsavehistory.h
@@ -332,6 +333,7 @@ if(AL_BUILD_TESTS)
     llpounceable
     llprocessor
     llprocinfo
+    llptrto
     llrand
     llsd
     llsdjson
@@ -340,6 +342,7 @@ if(AL_BUILD_TESTS)
     llstreamtools
     llstring
     llstring_utf
+    lltimer
     lltrace
     lltreeiterators
     llunits
@@ -359,11 +362,6 @@ if(AL_BUILD_TESTS)
   foreach(test llleap llprocess llsdserialize)
     al_add_test(${test} PROJECT llcommon LIBRARIES llcommon PYTHON)
   endforeach()
-
-  ## llexception_test.cpp isn't a regression test, and doesn't need to be run
-  ## every build. It's to help a developer make implementation choices about
-  ## throwing and catching exceptions.
-  ##al_add_test(llexception PROJECT llcommon LIBRARIES llcommon)
 
   # The SIMD ops layer, at the tree's tier and, where the tiers differ, at
   # each of them; a variant the host cannot run skips.
@@ -388,7 +386,12 @@ if(AL_BUILD_TESTS)
       INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
   )
   if(COMPILER_IS_MSVC)
-    target_compile_options(alsimd_asm_probe PRIVATE /FAs)
+    # Visual Studio points /Fa at the object's directory itself; Ninja leaves
+    # it to cl, which writes the listing to the build tree's root.
+    target_compile_options(
+      alsimd_asm_probe
+      PRIVATE /FAs "/Fa$<PATH:GET_PARENT_PATH,$<TARGET_OBJECTS:alsimd_asm_probe>>/"
+    )
     set(alsimd_asm_syntax masm)
   elseif(COMPILER_IS_CLANG_CL)
     target_compile_options(alsimd_asm_probe PRIVATE /clang:-save-temps=obj)
@@ -427,7 +430,10 @@ if(AL_BUILD_TESTS)
   # copies from mSelf, scalarised, for one read before it is set -- a false
   # positive on test 1's queue.getWeak(), and under -Werror a failed build.
   if(COMPILER_IS_GCC)
-    set_source_files_properties(tests/workqueue_test.cpp PROPERTIES COMPILE_OPTIONS -Wno-uninitialized)
+    set_source_files_properties(
+      tests/workqueue_test.cpp
+      PROPERTIES COMPILE_OPTIONS -Wno-uninitialized
+    )
   endif()
 
   # The viewer's own patterns under Boost.Regex and under RE2, side by side,

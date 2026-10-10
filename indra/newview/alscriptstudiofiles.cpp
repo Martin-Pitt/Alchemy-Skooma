@@ -58,11 +58,12 @@ ALScriptStudioFiles::ALScriptStudioFiles(ALScriptStudioServices& services, ALScr
 // static
 std::string ALScriptStudioFiles::textSyntaxOf(const std::string& path)
 {
-    // A file that is no script: coloured where it is XML or JSON, which
-    // the studio has grammars for -- its snippets are XML -- else text.
+    // A file that is no script: coloured by the grammar whose file names
+    // its extension -- XML, JSON, a notecard of settings -- else as text.
     std::string extension = gDirUtilp->getExtension(path);
     LLStringUtil::toLower(extension);
-    return extension == "xml" || extension == "xui" ? "xml" : extension == "json" ? "json" : "text";
+    const std::shared_ptr<const ALSyntaxGrammar> grammar = ALTextView::syntaxLibrary().forExtension(extension);
+    return grammar ? grammar->name() : std::string("text");
 }
 
 // static
@@ -175,10 +176,11 @@ void ALScriptStudioFiles::write(Doc& doc)
         doc.watch->seen();
     }
     mServices.report(mServices.words("SavedToFile", args), false, &doc);
-    mWindow.fileSettled(doc);
     // The scripter's snippets, offered as saved from here on; the vimrc
-    // read again at once.
-    mWindow.fileWritten(doc.file);
+    // read again at once; what it masters sent. Before it is settled,
+    // which may close it.
+    mWindow.fileWritten(doc);
+    mWindow.fileSettled(doc);
 }
 
 // --- the File menu -----------------------------------------------------------------------
@@ -328,6 +330,7 @@ void ALScriptStudioFiles::chosenToSaveAs(const std::string& id, const std::vecto
     watch(*doc);
     noteFile(path);
     mServices.report(mServices.words("SavedToFile", args), false, doc);
+    mWindow.fileWritten(*doc);
     mWindow.fileSettled(*doc);
     mAnalysis.scheduleAnalysis(*doc, true);
 }
