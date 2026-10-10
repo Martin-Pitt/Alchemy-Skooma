@@ -937,7 +937,7 @@ U64 SKNavMesh::terrainSignature(const LLVector3d& tile_min, const LLVector3d& ti
                 const LLSurfacePatch* patch = land.getPatch(x, y);
                 if (patch)
                 {
-                    h = mix(h, patch->getLastUpdateTime());
+                    h = mix(h, static_cast<U64>(patch->getUpdateCount()));
                     h = mixF32(h, patch->getMinZ());
                     h = mixF32(h, patch->getMaxZ());
                 }
@@ -963,7 +963,7 @@ U64 SKNavMesh::landStamp(LLViewerRegion& region) const
             const LLSurfacePatch* patch = land.getPatch(x, y);
             if (patch)
             {
-                h = mix(h, patch->getLastUpdateTime());
+                h = mix(h, static_cast<U64>(patch->getUpdateCount()));
                 h = mixF32(h, patch->getMinZ());
                 h = mixF32(h, patch->getMaxZ());
             }
@@ -2307,7 +2307,7 @@ void SKNavMesh::update()
     }
     // On a new census, and once a second besides: the land patches change
     // without the census noticing, and a region mesh is built from both.
-    static F32 last = -1.f;
+    static F64 last = -1.0;
     if (snap->mStamp != mCensusStamp || gFrameTimeSeconds - last > 1.f)
     {
         mCensusStamp = snap->mStamp;

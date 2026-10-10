@@ -129,7 +129,7 @@ public:
     {
         bool mEverMoved = false;
         F32 mTravel = 0.f;              ///< metres gone, turning not included
-        F32 mLastSeen = 0.f;
+        F64 mLastSeen = 0.f;
         bool mEverCrewed = false;
         bool mVehicle = false;          ///< crewed while physical or travelling: a vehicle for the session
         bool mWorkingElevator = false;  ///< it was the car of a working shaft
@@ -146,15 +146,15 @@ private:
         U64 mSignature = 0;
         sknav::RecordPtr mRecord;
         sknav::RecordPtr mPhysics;  ///< a surround's physics shape, beside its rendered one
-        F32 mLastSeen = 0.f;
+        F64 mLastSeen = 0.f;
     };
 
     struct Rest
     {
         LLVector3d mPosition;
         LLQuaternion mRotation;     ///< baseline together with mPosition
-        F32 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
-        F32 mLastSeen = 0.f;
+        F64 mMovedAt = -1.f;        ///< last time the root was seen somewhere else
+        F64 mLastSeen = 0.f;
         bool mKnown = false;
     };
 
@@ -239,11 +239,11 @@ private:
     sknav::LeafHistories mLeaves;
     std::map<std::string, F32> mDemands;
     U64 mStamp = 0;
-    F32 mRolesRequestedAt = -1.f;
+    F64 mRolesRequestedAt = -1.f;
     U64 mRolesRegion = 0;
     bool mRolesWanted = false;
     U32 mRolesRequestId = 0;
-    F32 mLastLog = 0.f;
+    F64 mLastLog = 0.f;
 };
 
 #endif // SK_WORLDCENSUS_H

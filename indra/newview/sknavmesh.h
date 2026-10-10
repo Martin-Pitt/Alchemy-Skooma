@@ -434,7 +434,7 @@ private:
         dtNavMesh* mNav[sknav::NUM_CLASSES] = { nullptr };
         dtNavMeshQuery* mQuery[sknav::NUM_CLASSES] = { nullptr };
         std::map<sknav::TileKey, Tile> mTiles;
-        F32 mLastSeen = 0.f;
+        F64 mLastSeen = 0.f;
         // What the region pass's layout and tile re-sign were last laid
         // against. While all of these stand, the pass would rebuild exactly
         // what already stands, so it is skipped whole.
@@ -512,7 +512,7 @@ private:
     std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
     bool mScheduleScanReady = false;
     size_t mNextCandidate = 0;
-    F32 mCandidateTime = 0.f;
+    F64 mCandidateTime = 0.f;
     Stats mScanningStats;
 
     typedef sknav::ExportCounts ExportCounts;
@@ -640,7 +640,7 @@ private:
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;
     Stats mStats;
-    F32 mLastLog = 0.f;
+    F64 mLastLog = 0.f;
     bool mDemanding = false;
     sknav::SkyMap mSkyMap;
     std::map<U64, sknav::TileAirPtr> mSkyTiles;     ///< what each contributor last gave the sky map
