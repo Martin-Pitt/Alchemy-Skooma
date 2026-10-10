@@ -189,7 +189,7 @@ void SKMapAllyResolver::onProperties(const LLUUID& object)
     const ALObjectPropertiesCache::ServerProps* props = ALObjectPropertiesCache::instance().get(object);
     if (it != mRecords.end() && props)
     {
-        skmap::probeReply(it->second, object, props->mGroupId, LLFrameTimer::getElapsedSeconds());
+        skmap::probeReply(it->second, object, props->mGroupId, LLFrameTimer::getUptimeSeconds().value());
     }
 }
 
