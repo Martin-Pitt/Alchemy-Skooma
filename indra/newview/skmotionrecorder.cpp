@@ -58,7 +58,7 @@ namespace
     struct FrameRec
     {
         U32 frame;
-        F64 frame_secs;      // LLFrameTimer::getElapsedSeconds()
+        F64 frame_secs;      // LLFrameTimer::getUptimeSeconds().value()
         U64 total_us;        // totalTime()
         F64 msg_secs;        // LLMessageSystem::getMessageTimeSeconds(), the circuit clock
         F32 frame_interval;  // gFrameIntervalSeconds
@@ -381,7 +381,7 @@ namespace
         out << ",\"viewer\":" << jsonString(LLVersionInfo::instance().getChannelAndVersion());
         out << ",\"start_utc\":" << jsonString(start_utc);
         out << ",\"start_total_us\":" << (U64)totalTime();
-        out << ",\"start_frame_secs\":" << (F64)LLFrameTimer::getElapsedSeconds();
+        out << ",\"start_frame_secs\":" << (F64)LLFrameTimer::getUptimeSeconds().value();
         out << ",\"start_msg_secs\":" << LLMessageSystem::getMessageTimeSeconds().value();
         out << ",\"agent_id\":" << jsonString(gAgent.getID().asString());
 
@@ -512,7 +512,7 @@ void SKMotionRecorder::start()
     sPrevRebuilds = 0;
     sPhaseOut = 1.f;
     sEdgeClipped = false;
-    sStartSecs = LLFrameTimer::getElapsedSeconds();
+    sStartSecs = LLFrameTimer::getUptimeSeconds().value();
     sRecording = true;
 
     LL_INFOS("MotionRecorder") << "Recording object motion to " << sPath << LL_ENDL;
@@ -552,7 +552,7 @@ void SKMotionRecorder::toggle()
 
 void SKMotionRecorder::onFrameBegin()
 {
-    if (sDuration > 0.f && LLFrameTimer::getElapsedSeconds() - sStartSecs >= sDuration)
+    if (sDuration > 0.f && LLFrameTimer::getUptimeSeconds().value() - sStartSecs >= sDuration)
     {
         stop();
         return;
@@ -739,7 +739,7 @@ void SKMotionRecorder::onFrameEnd()
 
     FrameRec frame = {};
     frame.frame = sFrame;
-    frame.frame_secs = LLFrameTimer::getElapsedSeconds();
+    frame.frame_secs = LLFrameTimer::getUptimeSeconds().value();
     frame.total_us = totalTime();
     frame.msg_secs = LLMessageSystem::getMessageTimeSeconds().value();
     frame.frame_interval = gFrameIntervalSeconds.value();

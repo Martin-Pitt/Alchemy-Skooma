@@ -7284,7 +7284,7 @@ void LLViewerObject::skRecoverClampedVelocity(const LLVector3& new_pos)
     constexpr F32 VEL_CLAMP = 127.99f;
     constexpr F32 ACC_CLAMP = 63.99f;
 
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     const bool in_world = mRegionp && !getParent();
     const bool have_prev = in_world && mSKLastRawSecs > 0.0 && mSKLastRawRegion == mRegionp && now - mSKLastRawSecs <= 1.0;
     if (!have_prev)
