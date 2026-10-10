@@ -31,6 +31,7 @@
 #include "DetourNavMeshBuilder.h"
 #include "Recast.h"
 #include "RecastAlloc.h"
+#include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 #include "sknavlayout.h"
 #include "sknavwalls.h"
@@ -2254,6 +2255,10 @@ namespace sknav
                     view.point(hf, overlay.get(), &faces_own);
                 }
                 extractWallFaces(view.mHf, cfg.borderSize, input.mWallMinHeight, result.mFaces, real.data());
+                if (input.mFaceOffsets)
+                {
+                    alignWallFaces(result.mFaces, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), cfg.cs, cfg.ch);
+                }
                 view.point(hf, overlay.get(), &own_column);
             }
             if (top_pass)
@@ -2272,6 +2277,22 @@ namespace sknav
                     tops[i] = static_cast<U16>(mem.chf->spans[i].y);
                 }
             }
+            // The air's padded gaps, read here so the offsets reach the tile's edge columns; the air reuses them.
+            AirGrid padded_air;
+            std::vector<FaceOffset> padded_faces;
+            const S32 air_pad = std::clamp(input.mAirPad, 0, grid.borderSize);
+            if (input.mAir && input.mFaceOffsets)
+            {
+                StageClock top_clock(tstats ? tstats->mMs : nullptr);
+                extractAir(hf, grid.borderSize - air_pad, padded_air, real.data(), &avatar_floor);
+                foldSlivers(padded_air, static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)));
+                computeFaceOffsets(padded_air, main_soup->mVerts.data(), main_soup->mTris.data(), main_soup->ntris(), grid.walkableClimb,
+                                   padded_faces, stats ? &stats->mFaceOffsets : nullptr, stats ? stats->mFaceTraceEvery : 0,
+                                   stats ? &stats->mFaceTrace : nullptr);
+                top_clock.lap(ClassBuildStats::AIR);
+                clock.restart();
+            }
+            const S32 padded_width = padded_air.mWidth, padded_height = padded_air.mHeight;
             flattenNarrowSteps(*mem.chf, 2 * cfg.walkableRadius, cfg.walkableClimb);
             if (cfg.walkableRadius > 0 && !rcErodeWalkableArea(&ctx, cfg.walkableRadius, *mem.chf))
             {
@@ -2312,7 +2333,17 @@ namespace sknav
                 const S32 overlap = static_cast<S32>(std::ceil(0.5f / grid.ch));
                 result.mAir = buildTileAir(hf, grid.borderSize, input.mAirPad, grid.walkableClimb, overlap,
                                           static_cast<S32>(std::ceil(input.mAirMinGap / grid.ch)), &marked,
-                                          tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine);
+                                          tstats ? &tstats->mAir : nullptr, real.data(), &avatar_floor, &fine, &padded_air);
+                if (result.mAir && !padded_faces.empty())
+                {
+                    // Not shared yet: the table goes in before the air is published.
+                    auto& air = const_cast<TileAir&>(*result.mAir);
+                    cropFaceOffsets(padded_faces, padded_width, air_pad, air.mWidth, air.mHeight, air.mFaceOffsets);
+                    if (stats)
+                    {
+                        stats->mFaceOffsets.mEntries += static_cast<U32>(air.mFaceOffsets.size());
+                    }
+                }
                 top_clock.lap(ClassBuildStats::AIR);
                 if (input.mFineAir && result.mAir)
                 {
@@ -2575,6 +2606,7 @@ namespace sknav
             // each flight's polys by their code, then unfold the codes:
             // everything past here reads real areas
             std::vector<LLVector3> centroids(mem.pmesh->npolys);
+            std::vector<std::vector<LLVector3>> outlines(mem.pmesh->npolys);
             for (S32 i = 0; i < mem.pmesh->npolys; ++i)
             {
                 const unsigned short* poly = &mem.pmesh->polys[i * mem.pmesh->nvp * 2];
@@ -2585,6 +2617,7 @@ namespace sknav
                     const F32 rc[3] = { mem.pmesh->bmin[0] + v[0] * mem.pmesh->cs, mem.pmesh->bmin[1] + v[1] * mem.pmesh->ch,
                                         mem.pmesh->bmin[2] + v[2] * mem.pmesh->cs };
                     centroids[i] += fromRecast(rc);
+                    outlines[i].push_back(fromRecast(rc));
                 }
                 centroids[i] /= static_cast<F32>(llmax(nv, 1));
             }
@@ -2597,6 +2630,14 @@ namespace sknav
                 }
             }
             mapFlightPolys(flights, centroids, std::vector<U8>(mem.pmesh->areas, mem.pmesh->areas + mem.pmesh->npolys), ap.mClimb);
+            {
+                const rcPolyMesh& pm = *mem.pmesh;
+                // Contours already moved the mesh's corner onto the tile proper.
+                const F32 r0[3] = { pm.bmin[0], pm.bmin[1], pm.bmin[2] }, r1[3] = { pm.bmin[0] + cfg.tileSize * pm.cs, pm.bmin[1], pm.bmin[2] + cfg.tileSize * pm.cs };
+                const LLVector3 c0 = fromRecast(r0), c1 = fromRecast(r1);
+                fitFlightEdges(flights, outlines, ap.mRadius, LLVector2(llmin(c0.mV[VX], c1.mV[VX]), llmin(c0.mV[VY], c1.mV[VY])),
+                               LLVector2(llmax(c0.mV[VX], c1.mV[VX]), llmax(c0.mV[VY], c1.mV[VY])));
+            }
             if (stats)
             {
                 // The air's flights against the polys': region removal can take a standing flight's polys.
@@ -2764,6 +2805,14 @@ namespace sknav
             result.mError = "navmesh data";
             finish();
             return;
+        }
+        if (input.mFaceOffsets && input.mAlignWallEdges)
+        {
+            // Wall edges out to the radius off the walls' true faces, which only floats can say.
+            if (const TileAirPtr air = raster.mAir.lock(); air && air->mCell == cfg.cs)
+            {
+                alignWallEdges(data, size, ap.mRadius, cfg.cs, airFaceProbe(*air, cfg.walkableClimb), stats ? &stats->mEdgeAlign : nullptr);
+            }
         }
         result.mData[avatar].assign(data, data + size);
         dtFree(data);

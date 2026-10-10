@@ -466,6 +466,15 @@ bool ALFloaterLightBox::postBuild()
     return ALStudioFloater::postBuild();
 }
 
+void ALFloaterLightBox::onOpen(const LLSD& key)
+{
+    if (ALSettingRow* row = findChild<ALSettingRow>("perf_farclip"))
+    {
+        cap_draw_distance_control(row->getSlider(), row);
+    }
+    ALStudioFloater::onOpen(key);
+}
+
 // Shared by the colour LUT and lens dirt pickers. Both enumerate a bundled
 // directory and a user directory of the same name, list the bundled entries
 // first and the user ones behind a separator, and select whatever the setting
@@ -1017,7 +1026,7 @@ void ALFloaterLightBox::endColorSession(bool escaped)
     if (mRecordedKeys.count(key) && !llsd_equals(picked, mColorOriginal))
     {
         ScopedHistoryGroup group(mHistory);
-        mHistory.record(key, mColorOriginal, picked, (F32)LLTimer::getElapsedSeconds().value());
+        mHistory.record(key, mColorOriginal, picked, LLTimer::getUptimeSeconds().value());
     }
 }
 
@@ -1693,7 +1702,7 @@ void ALFloaterLightBox::onGradeSettingChanged(const std::string& name, const LLS
     // A monotonic clock is all the history wants: it compares two of these to
     // decide whether one drag is still in progress, and never reads the value
     // on its own.
-    mHistory.record(name, before, after, (F32)LLTimer::getElapsedSeconds().value());
+    mHistory.record(name, before, after, LLTimer::getUptimeSeconds().value());
 }
 
 bool ALFloaterLightBox::applyHistory(bool redo_direction)

@@ -40,7 +40,7 @@ namespace sknav
     constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< the crease angle: neighbours further apart are different slopes
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
     constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a connector climbs at least this
-    constexpr F32 STAIR_GRADE_DEG = 30.f;   ///< without a name or treads, steeper is a stair
+    constexpr F32 STAIR_GRADE_DEG = 22.f;   ///< without a name or treads, steeper is a stair: walkways stay under it, stairs simplified to a slope do not
 
     enum SlopeGroupKind : U8 { SLOPE_GROUP, LANDING_GROUP, TREAD_GROUP };
 
@@ -106,6 +106,13 @@ namespace sknav
     /// centroids and codes are per poly, in the poly mesh's order; flights
     /// that got none are dropped.
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb);
+
+    /// Narrow each flight's ends to the walkable treads: the lateral extent of
+    /// its polys, grown back by the erosion radius. Polys are outlines in the
+    /// poly mesh's order; a flight whose polys cover less than half its run is
+    /// left as it is, and so is a side whose polys stop at the tile's edge, lo to hi.
+    void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
+                        const LLVector2& hi);
 
     /// Whether a flight still stands on the compact heightfield before its
     /// regions are built: a span of the tile proper carrying one of its codes

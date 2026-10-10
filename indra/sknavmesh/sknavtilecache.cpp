@@ -28,6 +28,8 @@
 #include "sknavfingerprint.h"
 
 #include "DetourNavMesh.h"
+#include "Recast.h"
+#include "RecastAlloc.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +40,7 @@
 #include <functional>
 #include <numeric>
 #include <thread>
+#include <type_traits>
 
 namespace sknav
 {
@@ -195,6 +198,8 @@ namespace sknav
         constexpr U32 TAG_LEDGES = tag('L', 'D', 'G', ' ');
         constexpr U32 TAG_RUNOFF = tag('R', 'U', 'N', ' ');
         constexpr U32 TAG_STAMP = tag('S', 'T', 'M', 'P');
+        constexpr U32 TAG_RASTER = tag('R', 'A', 'S', 'T');
+        constexpr U32 SPILL_MAGIC = 0x534e4b53;     // 'SKNS'
 
         /// A stamped geometry: a 32 byte header, then per poly its component and
         /// gap, the portal edges, the stamp's portals and its counts.
@@ -353,7 +358,8 @@ namespace sknav
                 w.pod(g.mCeiling);
                 w.pod(g.mFlags);
                 w.pod(g.mClear);
-                w.pod(g.mSeed);
+                w.pod(g.mSlopeX);
+                w.pod(g.mSlopeY);
             }
         }
 
@@ -367,7 +373,7 @@ namespace sknav
             gaps.resize(n);
             for (AirGap& g : gaps)
             {
-                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSeed)))
+                if (!(r.pod(g.mFloor) && r.pod(g.mCeiling) && r.pod(g.mFlags) && r.pod(g.mClear) && r.pod(g.mSlopeX) && r.pod(g.mSlopeY)))
                 {
                     return false;
                 }
@@ -423,6 +429,7 @@ namespace sknav
                 w.pod(l.mY);
                 w.pod(l.mLevel);
                 w.pod(l.mGapCount);
+                w.pod(l.mParent);
                 w.pod(l.mFirstGap);
             }
             writeGaps(w, air.mGaps);
@@ -441,13 +448,18 @@ namespace sknav
                 w.pod(t.mBottom);
                 w.pod(t.mTop);
             }
+            w.pod(static_cast<U32>(air.mFaceOffsets.size()));
+            for (const FaceOffset& f : air.mFaceOffsets)
+            {
+                w.pod(f.mBits);
+            }
         }
 
         bool readAir(Reader& r, TileAir& air)
         {
             U32 n;
             if (!(r.vec(air.mOrigin) && r.pod(air.mCell) && r.pod(air.mUnit) && r.pod(air.mWidth) && r.pod(air.mHeight)
-                  && r.count(n, 10)))
+                  && r.count(n, 12)))
             {
                 return false;
             }
@@ -462,6 +474,7 @@ namespace sknav
                 r.pod(l.mY);
                 r.pod(l.mLevel);
                 r.pod(l.mGapCount);
+                r.pod(l.mParent);
                 r.pod(l.mFirstGap);
             }
             if (!readGaps(r, air.mGaps))
@@ -470,9 +483,15 @@ namespace sknav
             }
             for (size_t i = 0; i < air.mLeaves.size(); ++i)
             {
+                // Keys rise, coarsest first at a shared origin, and a parent lies back over its leaf.
                 const AirLeaf& l = air.mLeaves[i];
-                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size()
-                    || (i > 0 && airKey(l.mX, l.mY) <= airKey(air.mLeaves[i - 1].mX, air.mLeaves[i - 1].mY)))
+                const AirLeaf* prev = i > 0 ? &air.mLeaves[i - 1] : nullptr;
+                const AirLeaf* parent = l.mParent && l.mParent <= i ? &air.mLeaves[i - l.mParent] : nullptr;
+                if (static_cast<U64>(l.mFirstGap) + l.mGapCount > air.mGaps.size() || l.mLevel > AIR_MAX_LEVEL
+                    || (prev && (airKey(l.mX, l.mY) < airKey(prev->mX, prev->mY)
+                                 || (airKey(l.mX, l.mY) == airKey(prev->mX, prev->mY) && l.mLevel > prev->mLevel)))
+                    || (l.mParent && (!parent || parent->mLevel < l.mLevel || l.mX < parent->mX || l.mY < parent->mY
+                                      || l.mX >= parent->mX + (1 << parent->mLevel) || l.mY >= parent->mY + (1 << parent->mLevel))))
                 {
                     return false;
                 }
@@ -501,12 +520,251 @@ namespace sknav
                 r.pod(t.mBottom);
                 r.pod(t.mTop);
             }
-            if (air.mTopWidth < 0 || air.mTopHeight < 0)
+            if (air.mTopWidth < 0 || air.mTopHeight < 0 || !r.count(n, 4))
             {
                 return false;
             }
+            air.mFaceOffsets.resize(n);
+            for (FaceOffset& f : air.mFaceOffsets)
+            {
+                r.pod(f.mBits);
+            }
             return air.mTopStart.empty()
                 || offsetsFit(air.mTopStart, static_cast<size_t>(air.mTopWidth) * air.mTopHeight, air.mTop.size());
+        }
+
+        void writeFlight(Writer& w, const Flight& f)
+        {
+            w.pod(f.mKey);
+            w.pod(f.mRise);
+            w.pod(f.mRun);
+            w.pod(f.mPlane[0]);
+            w.pod(f.mPlane[1]);
+            w.pod(f.mPlane[2]);
+            w.pod(f.mZMin);
+            w.pod(f.mZMax);
+            for (const LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
+            {
+                w.vec(*v);
+            }
+            w.pod(static_cast<U8>(f.mKind));
+            w.pod(static_cast<U8>(f.mRule));
+            w.pod(f.mTreads);
+            w.pod(static_cast<U32>(f.mCodes.size()));
+            for (const U8 code : f.mCodes)
+            {
+                w.pod(code);
+            }
+            w.pod(static_cast<U32>(f.mFootprint.size()));
+            for (const LLVector2& p : f.mFootprint)
+            {
+                w.pod(p.mV[0]);
+                w.pod(p.mV[1]);
+            }
+            w.pod(static_cast<U32>(f.mPolys.size()));
+            for (const U16 p : f.mPolys)
+            {
+                w.pod(p);
+            }
+        }
+
+        bool readFlight(Reader& sec, Flight& f)
+        {
+            U32 m = 0;
+            U8 kind = 0, rule = 0;
+            bool ok = sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
+                      sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
+            for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
+            {
+                ok = ok && sec.vec(*v);
+            }
+            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && kind <= static_cast<U8>(ConnectorKind::RAMP) &&
+                 rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
+            f.mKind = static_cast<ConnectorKind>(kind);
+            f.mRule = static_cast<ConnectorRule>(rule);
+            f.mCodes.resize(ok ? m : 0);
+            for (U8& code : f.mCodes)
+            {
+                ok = ok && sec.pod(code);
+            }
+            ok = ok && sec.count(m, 8);
+            f.mFootprint.resize(ok ? m : 0);
+            for (LLVector2& p : f.mFootprint)
+            {
+                ok = ok && sec.pod(p.mV[0]) && sec.pod(p.mV[1]);
+            }
+            ok = ok && sec.count(m, 2);
+            f.mPolys.resize(ok ? m : 0);
+            for (U16& p : f.mPolys)
+            {
+                ok = ok && sec.pod(p);
+            }
+            return ok;
+        }
+
+        template <typename T> void writeArray(Writer& w, const T* data, size_t n)
+        {
+            static_assert(std::is_trivially_copyable_v<T>);
+            if (n)
+            {
+                const U8* p = reinterpret_cast<const U8*>(data);
+                w.mOut.insert(w.mOut.end(), p, p + n * sizeof(T));
+            }
+        }
+
+        template <typename T> bool readArray(Reader& r, T* data, size_t n)
+        {
+            static_assert(std::is_trivially_copyable_v<T>);
+            if (static_cast<U64>(n) * sizeof(T) > r.left())
+            {
+                return false;
+            }
+            if (n)
+            {
+                std::memcpy(data, r.mData + r.mPos, n * sizeof(T));
+                r.mPos += n * sizeof(T);
+            }
+            return true;
+        }
+
+        template <typename T> void writeVector(Writer& w, const std::vector<T>& v)
+        {
+            w.pod(static_cast<U32>(v.size()));
+            writeArray(w, v.data(), v.size());
+        }
+
+        template <typename T> bool readVector(Reader& r, std::vector<T>& v)
+        {
+            U32 n;
+            if (!r.count(n, sizeof(T)))
+            {
+                return false;
+            }
+            v.resize(n);
+            return readArray(r, v.data(), n);
+        }
+
+        /// The compact heightfield bit for bit, then the edge field, codes, flights and span gaps.
+        void writeRaster(Writer& w, const TileRaster& raster)
+        {
+            const rcCompactHeightfield* chf = raster.mChf.get();
+            w.pod(static_cast<U8>(chf ? 1 : 0));
+            if (chf)
+            {
+                w.pod(chf->width);
+                w.pod(chf->height);
+                w.pod(chf->spanCount);
+                w.pod(chf->walkableHeight);
+                w.pod(chf->walkableClimb);
+                w.pod(chf->borderSize);
+                w.pod(chf->maxDistance);
+                w.pod(chf->maxRegions);
+                writeArray(w, chf->bmin, 3);
+                writeArray(w, chf->bmax, 3);
+                w.pod(chf->cs);
+                w.pod(chf->ch);
+                writeArray(w, chf->cells, static_cast<size_t>(chf->width) * chf->height);
+                writeArray(w, chf->spans, static_cast<size_t>(chf->spanCount));
+                w.pod(static_cast<U8>(chf->dist ? 1 : 0));
+                if (chf->dist)
+                {
+                    writeArray(w, chf->dist, static_cast<size_t>(chf->spanCount));
+                }
+                writeArray(w, chf->areas, static_cast<size_t>(chf->spanCount));
+            }
+            const EdgeField& e = raster.mEdges;
+            w.pod(e.mWidth);
+            w.pod(e.mHeight);
+            writeArray(w, e.mBmin, 3);
+            w.pod(e.mCs);
+            w.pod(e.mCh);
+            writeVector(w, e.mStart);
+            writeVector(w, e.mRuns);
+            writeVector(w, raster.mReal);
+            w.pod(static_cast<U32>(raster.mFlights.size()));
+            for (const Flight& f : raster.mFlights)
+            {
+                writeFlight(w, f);
+            }
+            writeVector(w, raster.mStanding);
+            writeVector(w, raster.mSpanGap);
+        }
+
+        bool readRaster(Reader& r, TileRaster& raster)
+        {
+            U8 has = 0;
+            if (!r.pod(has))
+            {
+                return false;
+            }
+            if (has)
+            {
+                rcCompactHeightfield* chf = rcAllocCompactHeightfield();
+                if (!chf)
+                {
+                    return false;
+                }
+                raster.mChf.reset(chf);
+                if (!(r.pod(chf->width) && r.pod(chf->height) && r.pod(chf->spanCount) && r.pod(chf->walkableHeight) && r.pod(chf->walkableClimb)
+                      && r.pod(chf->borderSize) && r.pod(chf->maxDistance) && r.pod(chf->maxRegions) && readArray(r, chf->bmin, 3)
+                      && readArray(r, chf->bmax, 3) && r.pod(chf->cs) && r.pod(chf->ch)))
+                {
+                    return false;
+                }
+                if (chf->width < 0 || chf->height < 0 || chf->spanCount < 0)
+                {
+                    return false;
+                }
+                const U64 cells = static_cast<U64>(chf->width) * chf->height;
+                const U64 spans = static_cast<U64>(chf->spanCount);
+                if (cells * sizeof(rcCompactCell) + spans * sizeof(rcCompactSpan) > r.left())
+                {
+                    return false;
+                }
+                chf->cells = static_cast<rcCompactCell*>(rcAlloc(sizeof(rcCompactCell) * std::max<U64>(cells, 1), RC_ALLOC_PERM));
+                chf->spans = static_cast<rcCompactSpan*>(rcAlloc(sizeof(rcCompactSpan) * std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                chf->areas = static_cast<unsigned char*>(rcAlloc(std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                U8 has_dist = 0;
+                if (!chf->cells || !chf->spans || !chf->areas || !readArray(r, chf->cells, cells) || !readArray(r, chf->spans, spans) || !r.pod(has_dist))
+                {
+                    return false;
+                }
+                if (has_dist)
+                {
+                    chf->dist = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * std::max<U64>(spans, 1), RC_ALLOC_PERM));
+                    if (!chf->dist || !readArray(r, chf->dist, spans))
+                    {
+                        return false;
+                    }
+                }
+                if (!readArray(r, chf->areas, spans))
+                {
+                    return false;
+                }
+                for (U64 c = 0; c < cells; ++c)
+                {
+                    if (static_cast<U64>(chf->cells[c].index) + chf->cells[c].count > spans)
+                    {
+                        return false;
+                    }
+                }
+            }
+            EdgeField& e = raster.mEdges;
+            U32 n = 0;
+            if (!(r.pod(e.mWidth) && r.pod(e.mHeight) && readArray(r, e.mBmin, 3) && r.pod(e.mCs) && r.pod(e.mCh) && readVector(r, e.mStart)
+                  && readVector(r, e.mRuns) && readVector(r, raster.mReal) && r.count(n, 123)))
+            {
+                return false;
+            }
+            raster.mFlights.resize(n);
+            for (Flight& f : raster.mFlights)
+            {
+                if (!readFlight(r, f))
+                {
+                    return false;
+                }
+            }
+            return readVector(r, raster.mStanding) && readVector(r, raster.mSpanGap) && r.left() == 0;
         }
     }
 
@@ -612,6 +870,8 @@ namespace sknav
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
         h = mix(h, input.mCoarseAir);
+        h = mix(h, input.mFaceOffsets);
+        h = mix(h, input.mAlignWallEdges);
 
         // The land by its samples, never by when a patch last arrived.
         const TerrainWindow& t = input.mTerrain;
@@ -685,37 +945,7 @@ namespace sknav
             w.pod(static_cast<U32>(result.mFlights[c].size()));
             for (const Flight& f : result.mFlights[c])
             {
-                w.pod(f.mKey);
-                w.pod(f.mRise);
-                w.pod(f.mRun);
-                w.pod(f.mPlane[0]);
-                w.pod(f.mPlane[1]);
-                w.pod(f.mPlane[2]);
-                w.pod(f.mZMin);
-                w.pod(f.mZMax);
-                for (const LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
-                {
-                    w.vec(*v);
-                }
-                w.pod(static_cast<U8>(f.mKind));
-                w.pod(static_cast<U8>(f.mRule));
-                w.pod(f.mTreads);
-                w.pod(static_cast<U32>(f.mCodes.size()));
-                for (const U8 code : f.mCodes)
-                {
-                    w.pod(code);
-                }
-                w.pod(static_cast<U32>(f.mFootprint.size()));
-                for (const LLVector2& p : f.mFootprint)
-                {
-                    w.pod(p.mV[0]);
-                    w.pod(p.mV[1]);
-                }
-                w.pod(static_cast<U32>(f.mPolys.size()));
-                for (const U16 p : f.mPolys)
-                {
-                    w.pod(p);
-                }
+                writeFlight(w, f);
             }
             w.close(s);
         }
@@ -816,35 +1046,7 @@ namespace sknav
                     res.mFlights[c].resize(ok ? n : 0);
                     for (Flight& f : res.mFlights[c])
                     {
-                        U32 m = 0;
-                        U8 kind = 0, rule = 0;
-                        ok = ok && sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
-                             sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
-                        for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
-                        {
-                            ok = ok && sec.vec(*v);
-                        }
-                        ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && kind <= static_cast<U8>(ConnectorKind::RAMP) &&
-                             rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
-                        f.mKind = static_cast<ConnectorKind>(kind);
-                        f.mRule = static_cast<ConnectorRule>(rule);
-                        f.mCodes.resize(ok ? m : 0);
-                        for (U8& code : f.mCodes)
-                        {
-                            ok = ok && sec.pod(code);
-                        }
-                        ok = ok && sec.count(m, 8);
-                        f.mFootprint.resize(ok ? m : 0);
-                        for (LLVector2& p : f.mFootprint)
-                        {
-                            ok = ok && sec.pod(p.mV[0]) && sec.pod(p.mV[1]);
-                        }
-                        ok = ok && sec.count(m, 2);
-                        f.mPolys.resize(ok ? m : 0);
-                        for (U16& p : f.mPolys)
-                        {
-                            ok = ok && sec.pod(p);
-                        }
+                        ok = ok && readFlight(sec, f);
                     }
                 }
                 else if (t == TAG_LINKS[c])
@@ -893,6 +1095,90 @@ namespace sknav
             return false;
         }
         out = std::move(res);
+        return true;
+    }
+
+    U64 spillKey(U64 content_key)
+    {
+        return finishKey(mix(mix(SEED, content_key), SPILL_MAGIC));
+    }
+
+    std::vector<U8> packSpill(const TileAir* air, const TileRaster* raster, U64 key)
+    {
+        Writer w;
+        w.pod(SPILL_MAGIC);
+        w.pod(TILE_PRODUCT_VERSION);
+        w.pod(key);
+        if (air)
+        {
+            const size_t s = w.open(TAG_AIR);
+            writeAir(w, *air);
+            w.close(s);
+        }
+        if (raster)
+        {
+            const size_t s = w.open(TAG_RASTER);
+            writeRaster(w, *raster);
+            w.close(s);
+        }
+        w.pod(checksum(w.mOut.data(), w.mOut.size()));
+        return std::move(w.mOut);
+    }
+
+    bool unpackSpill(const U8* data, size_t size, U64 key, TileAirPtr& air_out, TileRasterPtr& raster_out)
+    {
+        if (!data || size < 16 + sizeof(U64))
+        {
+            return false;
+        }
+        const size_t body = size - sizeof(U64);
+        U64 sum;
+        std::memcpy(&sum, data + body, sizeof(sum));
+        if (sum != checksum(data, body))
+        {
+            return false;
+        }
+        Reader r(data, body);
+        U32 magic, version;
+        U64 stored;
+        if (!(r.pod(magic) && r.pod(version) && r.pod(stored)) || magic != SPILL_MAGIC || version != TILE_PRODUCT_VERSION || stored != key)
+        {
+            return false;
+        }
+        std::shared_ptr<TileAir> air;
+        std::shared_ptr<TileRaster> raster;
+        while (r.left() > 0)
+        {
+            U32 t, len;
+            if (!r.pod(t) || !r.pod(len) || len > r.left())
+            {
+                return false;
+            }
+            Reader sec(r.mData + r.mPos, len);
+            r.mPos += len;
+            if (t == TAG_AIR)
+            {
+                air = std::make_shared<TileAir>();
+                if (!readAir(sec, *air))
+                {
+                    return false;
+                }
+            }
+            else if (t == TAG_RASTER)
+            {
+                raster = std::make_shared<TileRaster>();
+                if (!readRaster(sec, *raster))
+                {
+                    return false;
+                }
+            }
+        }
+        if (raster)
+        {
+            raster->mAir = air;
+        }
+        air_out = air;
+        raster_out = raster;
         return true;
     }
 

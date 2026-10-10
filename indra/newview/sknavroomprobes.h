@@ -61,6 +61,8 @@ public:
     /// Let every full probe go and release its claim on residual coverage.
     void clear();
     std::string statsLine() const;
+    /// Whether a worker is placing a space of this mesh.
+    bool pendingFor(const LLUUID& mesh) const;
 
 private:
     struct Held

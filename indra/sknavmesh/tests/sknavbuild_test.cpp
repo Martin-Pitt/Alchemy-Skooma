@@ -1123,6 +1123,7 @@ namespace tut
             TileBuildInput in = tile(0, 0);
             in.mTerrain = flat(0.f, 45, -6.f, -6.f);
             in.mAir = air;
+            in.mFaceOffsets = false;    // read off the air, they would part the two builds by design
             // A deck reaching 3 m past the tile: beyond AVATAR's border, inside the air's pad.
             in.mRecords.push_back(box(-3.f, -3.f, 1.5f, 35.f, 35.f, 2.f));
             in.mRecords.push_back(box(12.f, 12.f, 2.f, 14.f, 14.f, 4.f));
@@ -1189,6 +1190,7 @@ namespace tut
                 in.mTerrain = flat(0.f);
                 in.mAir = true;
                 in.mWallFaces = true;
+                in.mFaceOffsets = false;    // read off the air, which keeps the leaf
                 auto door = std::make_shared<Record>(*box(15.9f, 12.f, 1.f, 16.1f, 14.f, 3.5f));
                 door->mExclude = EXCLUDE_AVATAR;
                 if (leaf && c.mLeafFirst)
