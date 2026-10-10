@@ -89,6 +89,18 @@ namespace sknav
         LLVector3 mTop;
     };
 
+    /// A portal cut after stamping where two spaces' walkable polys share an edge and no portal joins them.
+    struct SeamPortal
+    {
+        enum Kind : U8 { DOOR = 0, STAIR = 1, ADJACENT = 3 };
+        U32 mSpace[2] = { 0, 0 };   ///< ids, the lesser first
+        Kind mKind = ADJACENT;      ///< STAIR beside a flight, DOOR on a door's polys, else ADJACENT
+        LLVector3 mA;               ///< the shared run's two farthest ends and its middle, mesh-local
+        LLVector3 mB;
+        LLVector3 mCentre;
+        F32 mLength = 0.f;          ///< metres of shared edge
+    };
+
     struct StoreyProduct
     {
         std::vector<Storey> mStoreys;               ///< lowest floor first
@@ -97,6 +109,7 @@ namespace sknav
         std::vector<std::pair<U32, U32>> mSpaceStorey;  ///< space id -> storey index, by id
         std::vector<std::pair<U64, U32>> mPolyStorey;   ///< Detour poly ref -> storey index, by ref; flights have none
         std::vector<FlightEnds> mFlightEnds;            ///< each flight's end polys and storeys, by key
+        std::vector<SeamPortal> mSeamPortals;           ///< space pairs whose polys meet with no portal, by pair
         U32 mFlightPolys = 0;
         U32 mPolys = 0;
 

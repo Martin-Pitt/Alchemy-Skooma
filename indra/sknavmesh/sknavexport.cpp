@@ -34,6 +34,7 @@
 #include "DetourNavMesh.h"
 
 #include <ostream>
+#include <unordered_map>
 
 namespace sknav
 {
@@ -448,6 +449,32 @@ namespace sknav
                  << ",\"head\":" << (p.lintel() ? p.mHead + oz : 0.0) << ",\"lintel\":" << (p.lintel() ? "true" : "false")
                  << ",\"walled\":" << (p.walled() ? "true" : "false") << ",\"cues\":" << static_cast<S32>(p.mCues) << ",\"door\":\"" << p.mDoor
                  << "\"}";
+        }
+        // Seam portals after the cut ones, marked seam, with the same fields where they have them.
+        if (storeys && !storeys->mSeamPortals.empty())
+        {
+            std::unordered_map<U32, size_t> index_of;
+            for (size_t i = 0; i < rooms.mSpaces.size(); ++i)
+            {
+                index_of[rooms.mSpaces[i].mId] = i;
+            }
+            static const char* const SEAM_KINDS[] = { "door", "stair", "opening", "adjacent" };
+            bool first = rooms.mPortals.empty();
+            for (const SeamPortal& sp : storeys->mSeamPortals)
+            {
+                const auto a = index_of.find(sp.mSpace[0]), b = index_of.find(sp.mSpace[1]);
+                if (a == index_of.end() || b == index_of.end())
+                {
+                    continue;
+                }
+                file << (first ? "" : ",") << "{\"kind\":\"" << SEAM_KINDS[static_cast<S32>(sp.mKind)] << "\",\"spaces\":[" << a->second << ',' << b->second
+                     << "],\"a\":";
+                vec(origin + LLVector3d(sp.mA));
+                file << ",\"b\":";
+                vec(origin + LLVector3d(sp.mB));
+                file << ",\"width\":" << dist_vec(sp.mA, sp.mB) << ",\"length\":" << sp.mLength << ",\"seam\":true}";
+                first = false;
+            }
         }
         file << ']';
         if (storeys)

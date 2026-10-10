@@ -604,4 +604,27 @@ namespace tut
         flightEnds(nav, { &bare }, nullptr, ends);
         ensure("in the air, eroded", ends.size() == 1 && ends[0].mGap[0] == EndGap::ERODED && ends[0].mGap[1] == EndGap::ERODED);
     }
+
+    template<> template<>
+    void sknavspaceproducts_object::test<8>()
+    {
+        set_test_name("two spaces whose polys share an edge with no portal between them get a seam portal there, none where a portal stands");
+        std::vector<DoorEntity> doors;
+        Built b(twoRoomsDoor(doors), doors);
+        const U32 west = b.spaceAt(6.f, 6.f, 0.25f), east = b.spaceAt(14.f, 6.f, 0.25f);
+        ensure("two rooms", west && east && west != east);
+        StoreyProduct with;
+        buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, with);
+        ensure("the door joins them already: no seam", with.mSeamPortals.empty());
+        // The same polys with the door's portal gone.
+        RoomsProduct bare(*b.mRooms);
+        bare.mPortals.clear();
+        StoreyProduct seam;
+        buildStoreys(*b.mNav, b.polySpace(), bare, seam);
+        ensure_equals("one seam portal", seam.mSeamPortals.size(), size_t(1));
+        const SeamPortal& sp = seam.mSeamPortals.front();
+        ensure("between the rooms", sp.mSpace[0] == std::min(west, east) && sp.mSpace[1] == std::max(west, east));
+        ensure("in the doorway", std::fabs(sp.mCentre.mV[VX] - 10.f) < 0.75f && sp.mLength > 0.3f);
+        ensure("no flight, so no stair", sp.mKind != SeamPortal::STAIR);
+    }
 }

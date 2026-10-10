@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -852,6 +853,79 @@ namespace sknav
             }
         }
         std::sort(out.mSpaceStorey.begin(), out.mSpaceStorey.end());
+
+        // Seam portals: two spaces whose polys share an edge with no portal between them.
+        std::set<std::pair<U32, U32>> joined;
+        for (const Portal& q : rooms.mPortals)
+        {
+            if (q.mSpaces[0] < rooms.mSpaces.size() && q.mSpaces[1] < rooms.mSpaces.size())
+            {
+                const U32 a = rooms.mSpaces[q.mSpaces[0]].mId, b = rooms.mSpaces[q.mSpaces[1]].mId;
+                joined.emplace(std::min(a, b), std::max(a, b));
+            }
+        }
+        std::map<std::pair<U32, U32>, SeamPortal> seams;
+        std::map<std::pair<U32, U32>, std::vector<LLVector3>> seam_ends;
+        for (S32 t = 0; t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                const U32 i = base[t] + static_cast<U32>(p);
+                const dtPoly& poly = tile->polys[p];
+                if (!space[i] || !kind[i])
+                {
+                    continue;
+                }
+                for (U32 k = poly.firstLink; k != DT_NULL_LINK; k = tile->links[k].next)
+                {
+                    const dtLink& link = tile->links[k];
+                    unsigned int salt = 0, it = 0, ip = 0;
+                    nav.decodePolyId(link.ref, salt, it, ip);
+                    if (it >= static_cast<unsigned int>(ntiles) || link.edge >= poly.vertCount)
+                    {
+                        continue;
+                    }
+                    const U32 j = base[it] + ip;
+                    if (j >= n || !kind[j] || !space[j] || space[i] >= space[j] || joined.count({ space[i], space[j] }))
+                    {
+                        continue;
+                    }
+                    const LLVector3 a = polyVert(tile, poly, link.edge), b = polyVert(tile, poly, (link.edge + 1) % poly.vertCount);
+                    const dtMeshTile* other = nav.getTile(static_cast<S32>(it));
+                    const bool door = (poly.flags & POLY_DOOR) || (other && ip < static_cast<unsigned int>(other->header->polyCount) && (other->polys[ip].flags & POLY_DOOR));
+                    SeamPortal& sp = seams[{ space[i], space[j] }];
+                    sp.mSpace[0] = space[i];
+                    sp.mSpace[1] = space[j];
+                    const SeamPortal::Kind kd = kind[i] == 2 || kind[j] == 2 ? SeamPortal::STAIR : door ? SeamPortal::DOOR : SeamPortal::ADJACENT;
+                    // A stair outranks a door, a door an adjacency.
+                    const auto rank = [](SeamPortal::Kind x) { return x == SeamPortal::STAIR ? 2 : x == SeamPortal::DOOR ? 1 : 0; };
+                    sp.mKind = rank(kd) > rank(sp.mKind) ? kd : sp.mKind;
+                    const F32 len = dist_vec(a, b);
+                    sp.mCentre += (a + b) * (0.5f * len);
+                    sp.mLength += len;
+                    seam_ends[{ space[i], space[j] }].push_back(a);
+                    seam_ends[{ space[i], space[j] }].push_back(b);
+                }
+            }
+        }
+        for (auto& [pair, sp] : seams)
+        {
+            sp.mCentre = sp.mLength > 0.f ? sp.mCentre * (1.f / sp.mLength) : sp.mCentre;
+            const std::vector<LLVector3>& ends = seam_ends[pair];
+            // The run's ends: the point farthest from its middle, then the point farthest from that.
+            sp.mA = ends.front();
+            for (const LLVector3& e : ends)
+            {
+                sp.mA = dist_vec_squared(e, sp.mCentre) > dist_vec_squared(sp.mA, sp.mCentre) ? e : sp.mA;
+            }
+            sp.mB = sp.mA;
+            for (const LLVector3& e : ends)
+            {
+                sp.mB = dist_vec_squared(e, sp.mA) > dist_vec_squared(sp.mB, sp.mA) ? e : sp.mB;
+            }
+            out.mSeamPortals.push_back(sp);
+        }
     }
 
     std::vector<U32> StoreyProduct::climbLinksOf(U32 space) const
