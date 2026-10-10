@@ -92,7 +92,7 @@ void SKMapPeople::cleanupSingleton()
 
 void SKMapPeople::noteDrawn(const skmap::MapView& view)
 {
-    mLastDrawn = LLFrameTimer::getElapsedSeconds();
+    mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
     view.visibleBox(mViewMin, mViewMax);
     const LLVector3d pad = (mViewMax - mViewMin) * 0.05;
     mViewMin -= pad;
@@ -101,7 +101,7 @@ void SKMapPeople::noteDrawn(const skmap::MapView& view)
 
 bool SKMapPeople::active() const
 {
-    return LLFrameTimer::getElapsedSeconds() - mLastDrawn < DRAWN_RECENTLY_S;
+    return LLFrameTimer::getUptimeSeconds().value() - mLastDrawn < DRAWN_RECENTLY_S;
 }
 
 // static
@@ -131,15 +131,15 @@ void SKMapPeople::idle()
         {
             mCombat = false;
         }
-        mResolver.update(false, false, mCandidates, LLFrameTimer::getElapsedSeconds());
+        mResolver.update(false, false, mCandidates, LLFrameTimer::getUptimeSeconds().value());
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
     updateCombat();
     updateCandidates();
-    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getElapsedSeconds());
+    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getUptimeSeconds().value());
     gatherPeople();
-    mResolver.dispatch(LLFrameTimer::getElapsedSeconds());
+    mResolver.dispatch(LLFrameTimer::getUptimeSeconds().value());
     updateFiringLines();
     updateProjectiles();
     updateCoverAhead();
@@ -248,7 +248,7 @@ void SKMapPeople::updateCoverAhead()
         mCoverAhead = sknav::Cover::NONE;
         return;
     }
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (now - mCoverAt < 0.1)
     {
         return;
@@ -269,7 +269,7 @@ void SKMapPeople::updateCoverAhead()
 
 void SKMapPeople::addPing(const LLVector3d& pos)
 {
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     mPings.erase(std::remove_if(mPings.begin(), mPings.end(), [now](const Ping& p) { return now - p.mTime > skmap::palette::PING_SECONDS; }),
                  mPings.end());
     mPings.push_back({ pos, now });
@@ -290,7 +290,7 @@ void SKMapPeople::updateFiringLines()
     constexpr F64 RAY_BUDGET_S = 0.001; ///< what an idle may spend on rays, averaged
     constexpr F64 RAY_BURST_S = 0.004;  ///< how much unspent budget may accumulate
     constexpr F64 RAY_DEBT_S = 0.5;     ///< how far one dear ray may push the next out
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     // A world ray through a hub full of mesh can cost a hundred milliseconds, so the rays are
     // paid for by measured cost: a dear one is followed by as many idles as it takes to earn
     // the next, and a cheap scene never notices.
@@ -368,7 +368,7 @@ void SKMapPeople::updateProjectiles()
         mLastObjectPos.clear();
         return;
     }
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (now - mProjectilesAt < 0.1)
     {
         return;
@@ -509,7 +509,7 @@ void SKMapPeople::gatherPeople()
             }
         }
         std::sort(loaded.begin(), loaded.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-        const F64 now = LLFrameTimer::getElapsedSeconds();
+        const F64 now = LLFrameTimer::getUptimeSeconds().value();
         for (const auto& entry : loaded)
         {
             const LLVector3d p = entry.second->getPositionGlobal();
@@ -521,7 +521,7 @@ void SKMapPeople::gatherPeople()
 
     static LLCachedControl<F32> code_hold(gSavedSettings, "SKMapMarkerCodeHold", skmap::CODE_HOLD_S);
     mCodes.setHold(code_hold);
-    const F64 code_now = LLFrameTimer::getElapsedSeconds();
+    const F64 code_now = LLFrameTimer::getUptimeSeconds().value();
     mCodes.release(code_now);
 
     const LLColor4 general(skmap::palette::DOT_GENERAL.mR, skmap::palette::DOT_GENERAL.mG, skmap::palette::DOT_GENERAL.mB, 1.f);

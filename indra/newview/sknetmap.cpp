@@ -240,7 +240,7 @@ void SKNetMap::updateView()
 
     if (mEaseStart >= 0.0)
     {
-        const F64 t = (LLFrameTimer::getElapsedSeconds() - mEaseStart) / RECENTRE_S;
+        const F64 t = (LLFrameTimer::getUptimeSeconds().value() - mEaseStart) / RECENTRE_S;
         if (t >= 1.0 || mPanning)
         {
             mPan = mPanning ? mPan : LLVector2::zero;
@@ -265,7 +265,7 @@ void SKNetMap::recentre()
     if (isPanned())
     {
         mEaseFrom = mPan;
-        mEaseStart = LLFrameTimer::getElapsedSeconds();
+        mEaseStart = LLFrameTimer::getUptimeSeconds().value();
     }
 }
 
@@ -569,7 +569,7 @@ void SKNetMap::drawEvents()
     static LLCachedControl<F32> icon_s(gSavedSettings, "SKMapDeathIconSeconds", 2.f);
     const SKMapPeople& people = SKMapPeople::instance();
     std::vector<skmap::EventRing::Draw> draws;
-    people.events().visible(LLFrameTimer::getElapsedSeconds(), line_s, icon_s, people.combat(), draws);
+    people.events().visible(LLFrameTimer::getUptimeSeconds().value(), line_s, icon_s, people.combat(), draws);
     if (draws.empty())
     {
         return;
@@ -664,7 +664,7 @@ void SKNetMap::drawProjectiles()
 
 void SKNetMap::drawPings()
 {
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     gGL.begin(LLRender::TRIANGLES);
     for (const SKMapPeople::Ping& ping : SKMapPeople::instance().pings())
     {
