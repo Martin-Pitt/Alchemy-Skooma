@@ -821,6 +821,33 @@ namespace tut
     template<> template<>
     void sknavstamp_object::test<11>()
     {
+        set_test_name("each portal edge carries its portal's index into the mesh's portals, the portal its key names");
+        std::vector<DoorEntity> doors;
+        const Stamped s(twoRoomsDoor(doors), doors);
+        // A portal on another mesh, first in the list, is in no tile's stamp, so the tile's portals and the mesh's are numbered apart.
+        auto rooms = std::make_shared<RoomsProduct>(*s.mRooms);
+        Portal other = rooms->mPortals.front();
+        other.mCrossMesh = true;
+        rooms->mPortals.insert(rooms->mPortals.begin(), other);
+        TileStampInput input;
+        stampInput(*s.mResult.mAir, *s.mEnc->tile(TileKey{ 0, 0 }), *rooms, LLVector3(0.f, 0.f, -1.f), LLVector3(32.f, 32.f, 8.f), input);
+        TileBinding b;
+        bindStamp(s.mPolys.mStamp, input, s.mEnc->tile(TileKey{ 0, 0 }), *rooms, b);
+        ensure("portal edges", !b.mPortalKeys.empty());
+        ensure_equals("an index per edge", b.mPortalIndex.size(), b.mPortalKeys.size());
+        for (size_t e = 0; e < b.mPortalIndex.size(); ++e)
+        {
+            const U32 i = b.mPortalIndex[e];
+            ensure("an index past the other mesh's", i > 0 && i < rooms->mPortals.size());
+            const Portal& p = rooms->mPortals[i];
+            ensure("the keyed portal", portalKey(rooms->mSpaces[p.mSpaces[0]].mId, rooms->mSpaces[p.mSpaces[1]].mId, static_cast<U8>(p.mKind), p.mCentre) ==
+                                           b.mPortalKeys[e]);
+        }
+    }
+
+    template<> template<>
+    void sknavstamp_object::test<12>()
+    {
         set_test_name("an indoor floor under a roof keeps its space when Recast retriangulates its poly across regions");
         // Two storeys of 8 by 8 cells: a room's floor (top 4) in space 0, a roof (top 24) in none, outside every region.
         rcContext ctx(false);

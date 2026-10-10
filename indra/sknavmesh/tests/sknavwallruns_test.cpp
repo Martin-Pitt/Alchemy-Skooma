@@ -366,4 +366,37 @@ namespace tut
         ensure("the air under the roof is the room's", under == room);
         ensure("the air over it is not", roof != room);
     }
+
+    template<> template<>
+    void sknavwallruns_object::test<6>()
+    {
+        set_test_name("a 0.3 m wall has its far face 0.3 m behind its near one; a deep block is thick");
+        TileBuildInput in = tileInput();
+        in.mRecords.push_back(box(4.f, 12.1f, 0.f, 24.f, 12.4f, 3.f));
+        in.mRecords.push_back(box(4.f, 20.f, 0.f, 24.f, 26.f, 3.f));
+        Built b(in);
+        U32 thin = 0, deep = 0;
+        for (const WallRun& r : b.mRuns)
+        {
+            const LLVector3 mid = (r.mLine.front() + r.mLine.back()) * 0.5f;
+            if (std::fabs(r.mFloorZ) > 0.3f || r.mClass != WallClass::SOLID || mid.mV[VX] < 6.f || mid.mV[VX] > 22.f)
+            {
+                continue;
+            }
+            if (std::fabs(mid.mV[VY] - 11.75f) < 0.3f)
+            {
+                ++thin;
+                std::cout << "thin: face " << r.mFace << " far " << r.mFar << " depth " << r.mDepth << std::endl;
+                ensure("a far face", r.mFar > r.mFace && !r.mThick);
+                ensure("0.3 m behind the near one", std::fabs(r.mFar - r.mFace - 0.3f) < 0.07f && std::fabs(r.mDepth - 0.3f) < 0.07f);
+            }
+            else if (std::fabs(mid.mV[VY] - 19.65f) < 0.3f)
+            {
+                ++deep;
+                std::cout << "deep: face " << r.mFace << " far " << r.mFar << " thick " << r.mThick << std::endl;
+                ensure("thick, with no far face", r.mThick && r.mFar < 0.f);
+            }
+        }
+        ensure("runs along both", thin > 0 && deep > 0);
+    }
 }

@@ -507,6 +507,87 @@ namespace
     constexpr F64 BURIED_DZ = 0.1;          ///< a floor this far above a flight's slope covers it
     constexpr F64 EXPOSED_STEP_M = 0.1;     ///< where a sunk flight comes out of its floor, found to this
 
+    constexpr F64 TREAD_CLEAR_M = 0.05;     ///< a tread lies this far clear of both floors
+    constexpr F64 TREAD_BELOW_M = 0.6;      ///< and at most this far under the flight's plane, as steps under a ramp do
+    constexpr F64 TREAD_ABOVE_M = 0.35;     ///< or over it, as a step's back half does
+    constexpr F64 TREAD_SPLIT_M = 0.04;     ///< level faces further apart in height are two treads
+    constexpr F64 TREAD_MIN_M2 = 0.05;      ///< a tread has at least this much level face
+    constexpr F64 TREAD_RISER_SPREAD = 2.5; ///< no riser between treads is taller than this many times the median
+
+    /// Treads between two floors: the distinct heights of the level faces over a flight's footprint, near its plane, when they step evenly.
+    S32 countTreads(const Partitioner& P, const std::vector<LLVector2>& hull, const F32 plane[3], F64 zb, F64 zt, F64 climb)
+    {
+        if (hull.size() < 3)
+        {
+            return 0;
+        }
+        F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+        for (const LLVector2& v : hull)
+        {
+            x0 = std::min<F64>(x0, v.mV[0]);
+            y0 = std::min<F64>(y0, v.mV[1]);
+            x1 = std::max<F64>(x1, v.mV[0]);
+            y1 = std::max<F64>(y1, v.mV[1]);
+        }
+        const F64 lo = std::min(zb, zt) + TREAD_CLEAR_M, hi = std::max(zb, zt) - TREAD_CLEAR_M;
+        std::vector<std::pair<F64, F64>> level;
+        for (S32 t = 0; t < P.ntris(); ++t)
+        {
+            const V3& c = P.mC[t];
+            if (!P.mValid[t] || !P.mLevel[t] || c.z <= lo || c.z >= hi || c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1)
+            {
+                continue;
+            }
+            const F64 dz = c.z - (plane[0] * c.x + plane[1] * c.y + plane[2]);
+            if (dz < -TREAD_BELOW_M || dz > TREAD_ABOVE_M)
+            {
+                continue;
+            }
+            bool inside = true;
+            for (size_t i = 0; i < hull.size() && inside; ++i)
+            {
+                const LLVector2 &a = hull[i], &b = hull[(i + 1) % hull.size()];
+                inside = (b.mV[0] - a.mV[0]) * (c.y - a.mV[1]) - (b.mV[1] - a.mV[1]) * (c.x - a.mV[0]) >= -1e-6;
+            }
+            if (inside)
+            {
+                level.emplace_back(c.z, P.mArea[t]);
+            }
+        }
+        std::sort(level.begin(), level.end());
+        std::vector<F64> heights = { lo - TREAD_CLEAR_M };
+        F64 area = 0, sum = 0, last = -1e30;
+        for (size_t i = 0; i <= level.size(); ++i)
+        {
+            if (i == level.size() || level[i].first - last > TREAD_SPLIT_M)
+            {
+                if (area >= TREAD_MIN_M2)
+                {
+                    heights.push_back(sum / area);
+                }
+                area = sum = 0;
+            }
+            if (i < level.size())
+            {
+                area += level[i].second;
+                sum += level[i].first * level[i].second;
+                last = level[i].first;
+            }
+        }
+        heights.push_back(hi + TREAD_CLEAR_M);
+        // Steps climb the whole rise in risers a foot can take, none much taller than the rest; stray level faces on a wedge do not.
+        std::vector<F64> risers;
+        for (size_t i = 1; i < heights.size(); ++i)
+        {
+            risers.push_back(heights[i] - heights[i - 1]);
+        }
+        std::vector<F64> sorted = risers;
+        std::sort(sorted.begin(), sorted.end());
+        const F64 median = sorted[sorted.size() / 2], tallest = sorted.back();
+        const S32 treads = static_cast<S32>(heights.size()) - 2;
+        return treads > 0 && median <= climb && tallest <= TREAD_RISER_SPREAD * median ? treads : 0;
+    }
+
     /// Height of walkable triangle t at a point in plan: over it, or within NEAR_XY of an edge.
     bool nearZ(const Partitioner& P, S32 t, F64 px, F64 py, F64& z)
     {
@@ -1219,6 +1300,8 @@ namespace
             fl.mZMax = static_cast<F32>(ftz);
             fl.mFootprint = hull(plan);
             fl.mTreads = treads;
+            const S32 counted = countTreads(P, fl.mFootprint, fl.mPlane, fbz, ftz, P.mClimb);
+            fl.mTreadCount = static_cast<S16>(counted > 0 ? std::min(counted, 999) : treads > 0 ? treads : -1);
             fl.mDecked = decked;
             fl.mCodes = member_codes;
             U64 key = 1469598103934665603ull;

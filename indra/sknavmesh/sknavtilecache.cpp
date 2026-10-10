@@ -550,6 +550,7 @@ namespace sknav
             w.pod(static_cast<U8>(f.mKind));
             w.pod(static_cast<U8>(f.mRule));
             w.pod(f.mTreads);
+            w.pod(f.mTreadCount);
             w.pod(static_cast<U8>(f.mEroded));
             w.pod(static_cast<U8>(f.mDecked));
             w.pod(static_cast<U32>(f.mCodes.size()));
@@ -580,7 +581,7 @@ namespace sknav
             {
                 ok = ok && sec.vec(*v);
             }
-            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && sec.pod(eroded) && sec.pod(decked) && kind <= static_cast<U8>(ConnectorKind::CLIMB) &&
+            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && sec.pod(f.mTreadCount) && sec.pod(eroded) && sec.pod(decked) && kind <= static_cast<U8>(ConnectorKind::CLIMB) &&
                  rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
             f.mKind = static_cast<ConnectorKind>(kind);
             f.mRule = static_cast<ConnectorRule>(rule);

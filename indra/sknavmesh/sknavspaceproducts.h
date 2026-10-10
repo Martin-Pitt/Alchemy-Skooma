@@ -26,6 +26,7 @@
 #ifndef SK_NAVSPACEPRODUCTS_H
 #define SK_NAVSPACEPRODUCTS_H
 
+#include "sknavflightends.h"
 #include "sknavspaces.h"
 #include "sknavwalls.h"
 
@@ -95,6 +96,7 @@ namespace sknav
         std::vector<ClimbLink> mClimbLinks;         ///< climbs between two different spaces
         std::vector<std::pair<U32, U32>> mSpaceStorey;  ///< space id -> storey index, by id
         std::vector<std::pair<U64, U32>> mPolyStorey;   ///< Detour poly ref -> storey index, by ref; flights have none
+        std::vector<FlightEnds> mFlightEnds;            ///< each flight's end polys and storeys, by key
         U32 mFlightPolys = 0;
         U32 mPolys = 0;
 
@@ -102,23 +104,23 @@ namespace sknav
         S32 storeyOf(U32 space) const;
         /// The storey index of a Detour poly, or -1 for a flight or a poly it does not know.
         S32 storeyOfPoly(U64 ref) const;
+        /// A flight's ends by its key, or null.
+        const FlightEnds* flightEnds(U64 key) const;
         /// The climb links that touch a space, by index into mClimbLinks.
         std::vector<U32> climbLinksOf(U32 space) const;
     };
     typedef std::shared_ptr<const StoreyProduct> StoreyProductPtr;
 
-    /// The Flight a tile's poly belongs to, or null.
-    typedef std::function<const Flight*(const dtMeshTile* tile, U32 poly)> PolyFlightFn;
-
     /// Storeys over a mesh's Detour polys: a flood across Detour's links that
     /// never steps onto a flight (a FLIGHT poly, or a poly of a flight space).
-    /// Each flight's connected polys join the storeys they touch: the Flight
-    /// most of them belong to joins the storeys nearest its two ends, at its
-    /// ends; without one, each storey to the next one up, at the flight
+    /// Each Flight joins the storeys of the floor polys its two ends meet (see
+    /// flightEnds), at its ends, the same storey included. Flight polys no
+    /// Flight owns join each storey they touch to the next one up, at the flight
     /// space's stair portals where it has them. Floors under min_area m² that no
-    /// flight reaches make no storey. Positions mesh-local.
+    /// flight reaches make no storey. flights lists the mesh's Flights, those
+    /// without polys included. Positions mesh-local.
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
-                      const PolyFlightFn& flight_of = nullptr, F32 min_area = 10.f);
+                      const PolyFlightFn& flight_of = nullptr, F32 min_area = 10.f, const std::vector<const Flight*>& flights = {});
 
     /// One cell of the sheet with the space of its gap: the highest gap whose
     /// floor lies in the band, sampled at the cell's centre.

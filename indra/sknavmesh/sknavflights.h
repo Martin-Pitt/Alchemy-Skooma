@@ -69,6 +69,7 @@ namespace sknav
         ConnectorKind mKind = ConnectorKind::STAIR;
         ConnectorRule mRule = ConnectorRule::GRADE;
         U8 mTreads = 0;                     ///< tread groups among its groups
+        S16 mTreadCount = -1;               ///< treads between its floors, from the level faces over its footprint, else its tread groups; -1 for a smooth wedge
         bool mDecked = false;               ///< lands on a deck of floor area at both ends
         bool mEroded = false;               ///< no poly in its home tile, eroded or merged away; it still links its floors
         std::vector<U8> mCodes;             ///< the area codes its groups rasterise as

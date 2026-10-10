@@ -1267,4 +1267,50 @@ namespace tut
         mapFlightPolys(flights, {}, {}, 0.75f);
         ensure_equals("dropped", flights.size(), 0u);
     }
+
+    template<> template<>
+    void sknavflights_object::test<42>()
+    {
+        set_test_name("a 9-step stair counts 9 treads, and so do its steps under a ramp laid over them");
+        const SlopePartition p = straight(9).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("treads", static_cast<S32>(p.mFlights[0].mTreadCount), 9);
+        Soup covered = straight(9);
+        const F32 top = 10 * 0.25f, run = 9 * 0.3f;
+        covered.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, top), LLVector3(run, 0.75f, top), LLVector3(0, 0.75f, 0));
+        const SlopePartition c = covered.partition();
+        ensure("a flight under the ramp", !c.mFlights.empty());
+        for (const Flight& f : c.mFlights)
+        {
+            ensure_equals("the steps under it", static_cast<S32>(f.mTreadCount), 9);
+        }
+        // With the steps unwalkable under it the ramp alone is the flight, with no tread groups: the faces still count them.
+        const size_t n = covered.mT.size() / 3, steps0 = 12, steps1 = 12 + 9 * 12;
+        std::vector<U8> areas(n, 0), two(n, 0);
+        for (size_t t = 0; t < n; ++t)
+        {
+            LLVector3 nn = (covered.mV[covered.mT[t * 3 + 1]] - covered.mV[covered.mT[t * 3]]) % (covered.mV[covered.mT[t * 3 + 2]] - covered.mV[covered.mT[t * 3]]);
+            nn.normVec();
+            areas[t] = (t < steps0 || t >= steps1) && nn.mV[VZ] >= std::cos(WALK_SLOPE_DEG * DEG_TO_RAD) ? OBJECT : 0;
+        }
+        const SlopePartition r = partitionSlopes(covered.mV, covered.mT, areas, two, OBJECT, 0.75f, WALK_SLOPE_DEG);
+        ensure_equals("the ramp", r.mFlights.size(), 1u);
+        ensure_equals("no tread groups", static_cast<S32>(r.mFlights[0].mTreads), 0);
+        ensure_equals("nine treads under it", static_cast<S32>(r.mFlights[0].mTreadCount), 9);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<43>()
+    {
+        set_test_name("a smooth wedge has no treads to count: unknown, not none");
+        const SlopePartition p = ramp().partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure_equals("smooth", static_cast<S32>(p.mFlights[0].mTreadCount), -1);
+        // A stray level face under the wedge is no stair: one riser of a metre is no step.
+        Soup stray = ramp();
+        stray.box(1.8f, -0.25f, 0.f, 2.3f, 0.25f, 0.45f);
+        const SlopePartition q = stray.partition();
+        ensure_equals("still one flight", q.mFlights.size(), 1u);
+        ensure_equals("still smooth", static_cast<S32>(q.mFlights[0].mTreadCount), -1);
+    }
 }
