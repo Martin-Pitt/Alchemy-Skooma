@@ -20,8 +20,8 @@ else()
   set(AL_TEST_ENVIRONMENT "")
 endif()
 
-# al_add_test(<name> PROJECT <project> [UNIT] [PYTHON] [GL] [ISA_TIER <tier>]
-#             [PCH <target>] [SOURCES <file>...] [LIBRARIES <target>...] [INCLUDES <dir>...]
+# al_add_test(<name> PROJECT <project> [UNIT] [DIR <folder>] [PYTHON] [GL] [ISA_TIER <tier>]
+#             [SOURCES <file>...] [LIBRARIES <target>...] [INCLUDES <dir>...]
 #             [DEFINES <define>...] [COMMAND <arg>...] [ENVIRONMENT <VAR=value>...])
 #
 # Builds tests/<name>_test.cpp into an executable and registers it as a test
@@ -30,22 +30,18 @@ endif()
 # A UNIT test compiles the project's own <name>.cpp into the executable and
 # sees the project's include directories instead of linking the project, so
 # the test decides what that one file links against; <name>.h is listed with
-# it. Any other test links whatever LIBRARIES names. Both link the TUT runner,
+# it. DIR is the folder of the project the two are in, where they are not at
+# its top. Any other test links whatever LIBRARIES names. Both link the TUT runner,
 # and a unit test also links llcommon and llmath, the libraries every source
 # file in the tree reaches for.
 #
 # COMMAND runs the test through another program; "{}" stands for the test
 # executable and is appended when absent. ENVIRONMENT sets variables for the
 # run, VAR=value each. A PYTHON test spawns a Python peer: PYTHON is set to
-# the interpreter for its run, and without one the test is registered
-# disabled. A GL test stands up a GL context on a hidden window: it is
+# the interpreter for its run, and without one that has the llsd module the
+# test is registered disabled. A GL test stands up a GL context on a hidden window: it is
 # labelled gl, and where AL_ENABLE_GL_TESTS is off it is built and
 # registered disabled.
-#
-# PCH names a target whose precompiled header the test's sources are
-# compiled against. Clang alone: a test's LL_TEST definitions differ from the
-# header's, which MSVC warns of -- an error here -- and GCC takes as a reason
-# not to use the header at all.
 #
 # ISA_TIER builds the test for that x86-64 tier (baseline, v2, v3 or v4)
 # rather than the tree's, against the tree's libraries: its own sources are
@@ -64,7 +60,7 @@ function(al_add_test name)
     PARSE_ARGV 1
     arg
     "UNIT;PYTHON;GL"
-    "PROJECT;ISA_TIER;PCH"
+    "PROJECT;ISA_TIER;DIR"
     "SOURCES;LIBRARIES;INCLUDES;DEFINES;COMMAND;ENVIRONMENT"
   )
   if(NOT arg_PROJECT)
@@ -87,7 +83,13 @@ function(al_add_test name)
   if(arg_UNIT)
     set(target PROJECT_${arg_PROJECT}_TEST_${name}${suffix})
     set(test_name ${target})
-    set(sources ${name}.cpp tests/${name}_test.cpp ${arg_SOURCES} ${name}.h)
+    # The unit's own file, in the folder of the project it is in where DIR
+    # says, beside its test.
+    set(dir "")
+    if(arg_DIR)
+      set(dir "${arg_DIR}/")
+    endif()
+    set(sources ${dir}${name}.cpp tests/${name}_test.cpp ${arg_SOURCES} ${dir}${name}.h)
     set(libraries lltut_runner_lib llcommon ll::tut)
     if(NOT arg_PROJECT STREQUAL "llmath")
       list(APPEND libraries llmath)
@@ -119,7 +121,8 @@ function(al_add_test name)
       ${arg_INCLUDES}
       ${INDRA_SOURCE_DIR}/test
       ${INDRA_SOURCE_DIR}/llmath
-      ${INDRA_SOURCE_DIR}/llui
+      # llui's own folders, which its top-level headers name theirs from.
+      $<TARGET_PROPERTY:llui,INTERFACE_INCLUDE_DIRECTORIES>
   )
   target_compile_definitions(${target} PRIVATE "LL_TEST=${name}" "LL_TEST_${name}" ${arg_DEFINES})
   set_target_properties(${target} PROPERTIES FOLDER "Tests/${arg_PROJECT}")
@@ -145,24 +148,22 @@ function(al_add_test name)
     list(REMOVE_AT command ${executable_position})
     list(INSERT command ${executable_position} "$<TARGET_FILE:${target}>")
   endif()
-  if(arg_UNIT)
-    list(
-      APPEND command
-      "--touch=${CMAKE_CURRENT_BINARY_DIR}/${target}_ok.txt"
-      "--sourcedir=${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-  endif()
-
   set(environment ${arg_ENVIRONMENT})
   set(labels)
   set(disabled FALSE)
+  # Five minutes: the slowest test without a Python peer runs in under 15
+  # seconds. One with a peer gets fifteen; the slowest of those runs in under
+  # 40. CTest's own default, 25 minutes, holds a hung test longer than the
+  # rest of a CI run takes.
+  set(timeout 300)
   if(arg_ISA_TIER)
     al_isa_level(${arg_ISA_TIER} ${CMAKE_SYSTEM_NAME} ${ARCH} level)
     list(APPEND command "--isa-level=${level}")
     list(APPEND labels isa)
   endif()
   if(arg_PYTHON)
-    if(Python3_Interpreter_FOUND)
+    set(timeout 900)
+    if(AL_PYTHON_PEERS)
       list(APPEND environment "PYTHON=${Python3_EXECUTABLE}")
     else()
       set(disabled TRUE)
@@ -183,6 +184,7 @@ function(al_add_test name)
       LABELS "${labels}"
       DISABLED ${disabled}
       SKIP_RETURN_CODE 125
+      TIMEOUT ${timeout}
   )
 
   add_dependencies(BUILD_TESTS ${target})
@@ -210,7 +212,7 @@ function(al_add_bench name)
   add_executable(${target} tests/${name}_bench.cpp ${arg_SOURCES})
   target_link_libraries(${target} PRIVATE al::flags ${arg_LIBRARIES})
   target_include_directories(${target} PRIVATE ${arg_INCLUDES} ${INDRA_SOURCE_DIR}/llmath)
-  target_compile_definitions(${target} PRIVATE "AL_BENCH=1" ${arg_DEFINES})
+  target_compile_definitions(${target} PRIVATE ${arg_DEFINES})
   set_target_properties(${target} PROPERTIES FOLDER "Benchmarks/${arg_PROJECT}")
   if(WINDOWS)
     set_target_properties(${target} PROPERTIES AL_SKIP_RELEASE_DEBUG_INFO ON)
