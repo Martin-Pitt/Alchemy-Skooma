@@ -492,6 +492,10 @@ namespace
     constexpr F64 LEVEL_DZ = 0.3;
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
+    constexpr F64 FLAT_FACE_DEG = 8.0;      ///< a steep unstepped flight's faces all lie this close to its plane
+    constexpr F64 STAIR_LIKE_WIDTH_M = 1.5; ///< a wedge this narrow, decked at both ends and a storey high, is a stair however steep
+    constexpr F64 STAIR_LIKE_RISE_MIN_M = 1.2;
+    constexpr F64 STAIR_LIKE_RISE_MAX_M = 2.5;
     constexpr F64 MAX_GOING_M = 0.6;        ///< and deeper than this, seating
     constexpr F64 MIN_RUN_M = 0.5;
     constexpr F64 BURIED_DZ = 0.1;          ///< a floor this far above a flight's slope covers it
@@ -582,6 +586,25 @@ namespace
         ux = -gx / l;
         uy = -gy / l;
         return true;
+    }
+
+    /// Whether every triangle faces within FLAT_FACE_DEG of the area-weighted mean.
+    bool flatFace(const Partitioner& P, const std::vector<S32>& tris)
+    {
+        V3 m;
+        for (const S32 t : tris)
+        {
+            m = { m.x + P.mN[t].x * P.mArea[t], m.y + P.mN[t].y * P.mArea[t], m.z + P.mN[t].z * P.mArea[t] };
+        }
+        const F64 l = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
+        if (l <= 0)
+        {
+            return false;
+        }
+        const F64 cos_flat = std::cos(FLAT_FACE_DEG * DEG_TO_RAD);
+        return std::all_of(tris.begin(), tris.end(), [&](S32 t) {
+            return P.mArea[t] < 1e-4 || (P.mN[t].x * m.x + P.mN[t].y * m.y + P.mN[t].z * m.z) / l >= cos_flat;
+        });
     }
 
     /// For a chain of level treads: the plan direction height rises along, fitted over the treads' centroids.
@@ -1061,26 +1084,39 @@ namespace
             }
             const F64 run = st - sb;
             const F64 grade = std::atan2(rise, std::max(run, 1e-6)) * RAD_TO_DEG;
+            // A floor outside the partitioned area is ground, never a prop top; inside, it is the whole deck.
+            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? deck_area[deck_of(f)] : 1e30; };
+            const bool decked = floor_area(fb) >= FLOOR_MIN_M2 && floor_area(ft) >= FLOOR_MIN_M2;
+            // narrow, a storey high, from deck to deck: a ship's stair simplified to a wedge
+            const bool stair_like = decked && width <= STAIR_LIKE_WIDTH_M && rise >= STAIR_LIKE_RISE_MIN_M && rise <= STAIR_LIKE_RISE_MAX_M;
             Flight fl;
-            if (cue != CUE_NONE)
+            if (stepped)
+            {
+                fl.mKind = ConnectorKind::STAIR;
+                fl.mRule = cue != CUE_NONE ? ConnectorRule::NAME : ConnectorRule::TREADS;
+            }
+            else if (grade > CLIMB_GRADE_DEG)
+            {
+                fl.mKind = stair_like ? ConnectorKind::STAIR : ConnectorKind::CLIMB;
+                fl.mRule = ConnectorRule::GRADE;
+            }
+            else if (cue != CUE_NONE)
             {
                 fl.mKind = cue == CUE_STAIR ? ConnectorKind::STAIR : ConnectorKind::RAMP;
                 fl.mRule = ConnectorRule::NAME;
-            }
-            else if (stepped)
-            {
-                fl.mKind = ConnectorKind::STAIR;
-                fl.mRule = ConnectorRule::TREADS;
             }
             else
             {
                 fl.mKind = grade > STAIR_GRADE_DEG ? ConnectorKind::STAIR : ConnectorKind::RAMP;
                 fl.mRule = ConnectorRule::GRADE;
             }
-            const bool cued = fl.mRule != ConnectorRule::GRADE;
-            // A floor outside the partitioned area is ground, never a prop top; inside, it is the whole deck.
-            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? deck_area[deck_of(f)] : 1e30; };
-            if (cue == CUE_NONE && (floor_area(fb) < FLOOR_MIN_M2 || floor_area(ft) < FLOOR_MIN_M2))
+            const bool cued = fl.mRule != ConnectorRule::GRADE || cue != CUE_NONE;
+            if (cue == CUE_NONE && !decked)
+            {
+                continue;
+            }
+            // An unstepped flight steeper than a ramp is one flat face: a curved column is not.
+            if (!stepped && grade > STAIR_GRADE_DEG && !flatFace(P, sloped.empty() ? all : sloped))
             {
                 continue;
             }
@@ -1107,6 +1143,7 @@ namespace
             fl.mZMax = static_cast<F32>(ftz);
             fl.mFootprint = hull(plan);
             fl.mTreads = treads;
+            fl.mDecked = decked;
             fl.mCodes = member_codes;
             U64 key = 1469598103934665603ull;
             for (const F32 v : { fl.mBottom.mV[VX], fl.mBottom.mV[VY], fl.mBottom.mV[VZ], fl.mTop.mV[VX], fl.mTop.mV[VY], fl.mTop.mV[VZ] })
@@ -1564,7 +1601,8 @@ namespace sknav
     {
         for (const Flight& f : flights)
         {
-            if (f.mFootprint.size() < 3)
+            // a climb links levels through the mesh alone, with no stair portal
+            if (f.mFootprint.size() < 3 || f.mKind == ConnectorKind::CLIMB)
             {
                 continue;
             }

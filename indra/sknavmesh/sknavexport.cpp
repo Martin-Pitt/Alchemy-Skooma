@@ -236,7 +236,7 @@ namespace sknav
                         file << ',';
                     }
                     first = false;
-                    static const char* const KINDS[] = { "stair", "ramp" };
+                    static const char* const KINDS[] = { "stair", "ramp", "climb" };
                     static const char* const RULES[] = { "name", "treads", "grade" };
                     file << "{\"key\":\"" << std::hex << f.mKey << std::dec << "\",\"kind\":\"" << KINDS[static_cast<S32>(f.mKind)]
                          << "\",\"rule\":\"" << RULES[static_cast<S32>(f.mRule)] << "\",\"treads\":" << static_cast<S32>(f.mTreads) << ",\"eroded\":" << (f.mEroded ? "true" : "false")

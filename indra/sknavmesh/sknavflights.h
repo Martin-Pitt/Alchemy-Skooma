@@ -40,11 +40,12 @@ namespace sknav
     constexpr F32 SLOPE_TURN_DEG = 30.f;    ///< the crease angle: neighbours further apart are different slopes
     constexpr F32 SLOPE_REACH_M = 0.75f;    ///< a level group shallower than this between two risers is a tread
     constexpr F32 FLIGHT_MIN_RISE_M = 0.5f; ///< a connector climbs at least this
+    constexpr F32 CLIMB_GRADE_DEG = 52.f;   ///< an unstepped flight steeper than this is a climb, not a stair, unless it is stair-like
     constexpr F32 STAIR_GRADE_DEG = 22.f;   ///< without a name or treads, steeper is a stair: walkways stay under it, stairs simplified to a slope do not
 
     enum SlopeGroupKind : U8 { SLOPE_GROUP, LANDING_GROUP, TREAD_GROUP };
 
-    enum class ConnectorKind : U8 { STAIR, RAMP };
+    enum class ConnectorKind : U8 { STAIR, RAMP, CLIMB };
     enum class ConnectorRule : U8 { NAME, TREADS, GRADE };     ///< what told stair from ramp
     enum NameCue : U8 { CUE_NONE = 0, CUE_STAIR = 1, CUE_RAMP = 2 };
 
@@ -68,6 +69,7 @@ namespace sknav
         ConnectorKind mKind = ConnectorKind::STAIR;
         ConnectorRule mRule = ConnectorRule::GRADE;
         U8 mTreads = 0;                     ///< tread groups among its groups
+        bool mDecked = false;               ///< lands on a deck of floor area at both ends
         bool mEroded = false;               ///< no poly in its home tile, eroded or merged away; it still links its floors
         std::vector<U8> mCodes;             ///< the area codes its groups rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced

@@ -551,6 +551,7 @@ namespace sknav
             w.pod(static_cast<U8>(f.mRule));
             w.pod(f.mTreads);
             w.pod(static_cast<U8>(f.mEroded));
+            w.pod(static_cast<U8>(f.mDecked));
             w.pod(static_cast<U32>(f.mCodes.size()));
             for (const U8 code : f.mCodes)
             {
@@ -572,18 +573,19 @@ namespace sknav
         bool readFlight(Reader& sec, Flight& f)
         {
             U32 m = 0;
-            U8 kind = 0, rule = 0, eroded = 0;
+            U8 kind = 0, rule = 0, eroded = 0, decked = 0;
             bool ok = sec.pod(f.mKey) && sec.pod(f.mRise) && sec.pod(f.mRun) && sec.pod(f.mPlane[0]) && sec.pod(f.mPlane[1]) &&
                       sec.pod(f.mPlane[2]) && sec.pod(f.mZMin) && sec.pod(f.mZMax);
             for (LLVector3* v : { &f.mBottom, &f.mTop, &f.mBottomA, &f.mBottomB, &f.mTopA, &f.mTopB })
             {
                 ok = ok && sec.vec(*v);
             }
-            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && sec.pod(eroded) && kind <= static_cast<U8>(ConnectorKind::RAMP) &&
+            ok = ok && sec.pod(kind) && sec.pod(rule) && sec.pod(f.mTreads) && sec.pod(eroded) && sec.pod(decked) && kind <= static_cast<U8>(ConnectorKind::CLIMB) &&
                  rule <= static_cast<U8>(ConnectorRule::GRADE) && sec.count(m, 1);
             f.mKind = static_cast<ConnectorKind>(kind);
             f.mRule = static_cast<ConnectorRule>(rule);
             f.mEroded = eroded != 0;
+            f.mDecked = decked != 0;
             f.mCodes.resize(ok ? m : 0);
             for (U8& code : f.mCodes)
             {

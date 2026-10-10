@@ -1141,4 +1141,42 @@ namespace tut
         ensure("a stair by its treads", p.mFlights[0].mRule == ConnectorRule::TREADS);
         ensure_equals("risers past the climb are platforms", straight(6, 0.8f, 0.3f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
     }
+
+    /// A slope up +x from a floor to a deck, half_width either side, with a lateral bow of z += bow * y * y.
+    Soup wedge(F32 deg, F32 rise, F32 half_width, F32 bow = 0.f)
+    {
+        Soup s;
+        const F32 run = rise / std::tan(deg * DEG_TO_RAD);
+        s.box(-4, -4, -0.5f, 0, 4, 0);
+        s.grid(0.f, -half_width, run, half_width, std::min(run, half_width) / 8.f, [&](F32 x, F32 y) { return x / run * rise + bow * y * y; });
+        s.box(run, -4, 0, run + 4, 4, rise);
+        return s;
+    }
+
+    template<> template<>
+    void sknavflights_object::test<35>()
+    {
+        set_test_name("a curved column face at 60 degrees is no flight; flat, it is a climb");
+        ensure_equals("curved", wedge(60.f, 3.f, 1.f, 0.23f).partition(0.75f, TOP_SLOPE_DEG).mFlights.size(), 0u);
+        const SlopePartition flat = wedge(60.f, 3.f, 1.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flat", flat.mFlights.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<36>()
+    {
+        set_test_name("a flat 60 degree cliff between decks is a climb, not a stair");
+        const SlopePartition p = wedge(60.f, 3.f, 2.f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a climb", p.mFlights[0].mKind == ConnectorKind::CLIMB);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<37>()
+    {
+        set_test_name("a 0.88 m wedge just past 52 degrees between decks is a stair: a ship's stair");
+        const SlopePartition p = wedge(52.5f, 1.8f, 0.44f).partition(0.75f, TOP_SLOPE_DEG);
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        ensure("a stair", p.mFlights[0].mKind == ConnectorKind::STAIR);
+    }
 }
