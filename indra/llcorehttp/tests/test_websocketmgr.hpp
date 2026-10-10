@@ -40,7 +40,9 @@
 #include <functional>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -365,6 +367,23 @@ namespace
                     thread << std::this_thread::get_id();
                     result["thread"] = thread.str();
                     return result;
+                });
+            // What a handler says it was asked wrong is the client's to
+            // hear; what broke in it is not.
+            connection->registerMethod("test.throw",
+                [](const std::string&, const LLSD&, const LLSD&) -> LLSD
+                {
+                    throw std::runtime_error("C:\\Users\\someone\\secret");
+                });
+            connection->registerAsyncMethod("test.throw.async",
+                [](const std::string&, const LLSD&, const LLSD&) -> LLSD
+                {
+                    throw std::runtime_error("C:\\Users\\someone\\secret");
+                });
+            connection->registerMethod("test.refuse",
+                [](const std::string&, const LLSD&, const LLSD&) -> LLSD
+                {
+                    throw LLJSONRPCConnection::InvalidParams("no such script");
                 });
         }
     };
@@ -1009,6 +1028,116 @@ namespace tut
         ensure_equals("and answered as not JSON", parse_error["error"]["code"].asInteger(), LLSD::Integer(-32700));
         ensure("the connection open after it", open_after);
         ensure("and closed by the one past it", closed);
+    }
+
+    template<> template<>
+    void WebsocketMgrTestObjectType::test<16>()
+    {
+        set_test_name("a handler that throws is answered as an internal error saying nothing of what it threw; one that refuses says why");
+
+        const U16 port = unusedPort();
+        if (!port)
+        {
+            skip("no port free to listen on");
+        }
+        LL::WorkQueue     mainloop("mainloop");
+        const std::string name    = "throw_test";
+        LLWebsocketMgr&   manager = LLWebsocketMgr::instance();
+        ensure("added", manager.addServer(std::make_shared<TestRPCServer>(name, port, true)));
+        ensure("started", manager.startServer(name));
+
+        TestClient client;
+        const bool opened = client.open(port) == 101;
+        auto       pump   = [&]() { mainloop.runPending(); };
+        auto       ask    = [&](const std::string& method, LLSD& answer)
+        {
+            return opened && client.send(R"({"jsonrpc":"2.0","id":"x","method":")" + method + R"("})") &&
+                   LlsdFromJsonString(client.receive(pump).text, answer);
+        };
+        LLSD       sync_answer, async_answer, refusal;
+        const bool read_sync    = ask("test.throw", sync_answer);
+        const bool read_async   = ask("test.throw.async", async_answer);
+        const bool read_refusal = ask("test.refuse", refusal);
+        client.close();
+        manager.removeServer(name);
+        mainloop.close();
+
+        ensure("opened", opened);
+        for (const auto& [what, read, answer] : { std::tuple{ "run where it came in", read_sync, sync_answer },
+                                                  std::tuple{ "run on the main thread", read_async, async_answer } })
+        {
+            ensure(std::string(what) + ": answered", read);
+            ensure_equals(std::string(what) + ": as an internal error", answer["error"]["code"].asInteger(), LLSD::Integer(-32603));
+            ensure_equals(std::string(what) + ": and nothing more", answer["error"]["message"].asString(), std::string("Internal error"));
+        }
+        ensure("the refusal answered", read_refusal);
+        ensure_equals("as invalid params", refusal["error"]["code"].asInteger(), LLSD::Integer(-32602));
+        ensure_contains("saying why", refusal["error"]["message"].asString(), "no such script");
+    }
+
+    template<> template<>
+    void WebsocketMgrTestObjectType::test<17>()
+    {
+        set_test_name("sends taken while the server thread is busy count against the most a connection may hold");
+
+        // Holds the server thread as the connection opens, so that nothing
+        // sent meanwhile is queued, let alone written, until it is let go.
+        class HeldServer : public LLWebsocketMgr::WSServer
+        {
+        public:
+            using LLWebsocketMgr::WSServer::WSServer;
+
+            void onConnectionOpened(const LLWebsocketMgr::WSConnection::ptr_t& connection) override
+            {
+                mConnection = connection;
+                mOpened     = true;
+                // Let go at the latest here, where the test failed before
+                // it could.
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                while (!mRelease && std::chrono::steady_clock::now() < deadline)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+            void onConnectionClosed(const LLWebsocketMgr::WSConnection::ptr_t&) override { ++mClosed; }
+
+            LLWebsocketMgr::WSConnection::ptr_t mConnection; ///< Set before mOpened
+            std::atomic<bool>                   mOpened{ false };
+            std::atomic<bool>                   mRelease{ false };
+            std::atomic<int>                    mClosed{ 0 };
+        };
+
+        const U16 port = unusedPort();
+        if (!port)
+        {
+            skip("no port free to listen on");
+        }
+        const std::string name    = "held_test";
+        LLWebsocketMgr&   manager = LLWebsocketMgr::instance();
+        auto              server  = std::make_shared<HeldServer>(name, port, true);
+        ensure("added", manager.addServer(server));
+        ensure("started", manager.startServer(name));
+
+        TestClient client;
+        const bool opened = client.open(port) == 101 && waitFor([&]() { return server->mOpened.load(); });
+
+        // Nothing goes out while the thread is held: 31 whole megabytes,
+        // and what each message costs, fit in the 32 MB; a 32nd does not.
+        const std::string megabyte(1024 * 1024, 'x');
+        int               sent = 0;
+        while (opened && sent < 128 && server->mConnection->sendMessage(megabyte))
+        {
+            ++sent;
+        }
+        const bool refused = opened && !server->mConnection->sendMessage(megabyte);
+        server->mRelease   = true;
+        const bool dropped = waitFor([&]() { return server->mClosed == 1; });
+        manager.removeServer(name);
+
+        ensure("opened", opened);
+        ensure_equals("taken up to the most it may hold", sent, 31);
+        ensure("and refused after", refused);
+        ensure("dropped", dropped);
     }
 }
 

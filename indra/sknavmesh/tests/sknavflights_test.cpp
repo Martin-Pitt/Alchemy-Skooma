@@ -172,12 +172,12 @@ namespace
         return s;
     }
 
-    Soup ramp()
+    Soup ramp(F32 run = 4.f, F32 rise = 1.5f)
     {
         Soup s;
         s.box(-4, -2, -0.5f, 0, 2, 0);
-        s.quad(LLVector3(0, -0.75f, 0), LLVector3(4, -0.75f, 1.5f), LLVector3(4, 0.75f, 1.5f), LLVector3(0, 0.75f, 0));
-        s.box(4, -2, 0, 7, 2, 1.5f);
+        s.quad(LLVector3(0, -0.75f, 0), LLVector3(run, -0.75f, rise), LLVector3(run, 0.75f, rise), LLVector3(0, 0.75f, 0));
+        s.box(run, -2, 0, run + 3, 2, rise);
         return s;
     }
 
@@ -977,17 +977,59 @@ namespace tut
                     ensure(llformat("span %d,%d has a gap", x, z), g != SPAN_NO_GAP && g < r.mAir->mGaps.size());
                     const AirGap& gap = r.mAir->mGaps[g];
                     const S32 top = chf.spans[i].y;
+                    // The gap's floor over the span's own cell: the air's x runs along chf z.
+                    AirColumn column;
+                    airColumn(*r.mAir, findLeafByKey(*r.mAir, z - border, x - border), column);
+                    const U32 k = static_cast<U32>(std::find(column.mGap, column.mGap + column.mCount, g) - column.mGap);
+                    ensure(llformat("span %d,%d's gap is over its cell", x, z), k < column.mCount);
+                    const S32 floor = column.floorAt(*r.mAir, k, z - border, x - border);
                     // A kerb's gap is over its own top, up to its height above the floor it was lowered to.
-                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), gap.mFloor + 1 >= top && gap.mFloor <= top + 2 * climb);
+                    ensure(llformat("span %d,%d stands under its gap's floor", x, z), floor + 1 >= top && floor <= top + 2 * climb);
                     ensure(llformat("span %d,%d under its gap's ceiling", x, z), top < gap.mCeiling);
                     const F32 sx = chf.bmin[2] + (z + 0.5f) * chf.cs, sy = chf.bmin[0] + (x + 0.5f) * chf.cs;
-                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + gap.mFloor * chf.ch > 3.f ? 1 : 0;
-                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && gap.mFloor > top ? 1 : 0;
+                    roofs += sx > 23.f && sx < 29.f && sy > 5.f && sy < 11.f && chf.bmin[1] + floor * chf.ch > 3.f ? 1 : 0;
+                    kerbs += sx > 4.f && sx < 4.25f && sy > 5.f && sy < 9.f && floor > top ? 1 : 0;
                 }
             }
         }
         ensure("spans", spans > 1000);
         ensure("the roof's spans find the upper gap", roofs > 50);
         ensure("the kerb's spans find the gap over the kerb", kerbs > 0);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<27>()
+    {
+        set_test_name("a steep slope with no treads and no name is a stair: a boat's stairs simplified to a ramp");
+        const SlopePartition p = ramp(3.8f, 1.8f).partition();
+        ensure_equals("flights", p.mFlights.size(), 1u);
+        const Flight& f = p.mFlights[0];
+        ensure("a stair by its grade", f.mKind == ConnectorKind::STAIR && f.mRule == ConnectorRule::GRADE);
+    }
+
+    template<> template<>
+    void sknavflights_object::test<28>()
+    {
+        set_test_name("a flight's ends span its walkable treads, not its rails; a side the tile cuts off keeps its span");
+        // A flight up +x over 4 m whose structure is 6 m wide, rails and all; its polys walk 2 m of it.
+        Flight f;
+        f.mBottom = LLVector3(10.f, 10.f, 0.f);
+        f.mTop = LLVector3(14.f, 10.f, 2.f);
+        f.mBottomA = LLVector3(10.f, 7.f, 0.f);
+        f.mBottomB = LLVector3(10.f, 13.f, 0.f);
+        f.mTopA = LLVector3(14.f, 7.f, 2.f);
+        f.mTopB = LLVector3(14.f, 13.f, 2.f);
+        f.mPolys = { 0 };
+        const std::vector<std::vector<LLVector3>> polys = { { LLVector3(10.f, 9.f, 0.f), LLVector3(14.f, 9.f, 2.f), LLVector3(14.f, 11.f, 2.f), LLVector3(10.f, 11.f, 0.f) } };
+        std::vector<Flight> flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 32.f));
+        const Flight& g = flights[0];
+        ensure("bottom across the treads", std::fabs(g.mBottomA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mBottomB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("top across the treads", std::fabs(g.mTopA.mV[VY] - 8.7f) < 1e-3f && std::fabs(g.mTopB.mV[VY] - 11.3f) < 1e-3f);
+        ensure("ends stay put along the run", g.mBottomA.mV[VX] == 10.f && g.mTopB.mV[VX] == 14.f && g.mTopA.mV[VZ] == 2.f);
+        // The tile ends at y = 11: the treads may go on past it.
+        flights = { f };
+        fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 11.f));
+        ensure("cut side kept, other side fitted", std::fabs(flights[0].mBottomB.mV[VY] - 13.f) < 1e-3f && std::fabs(flights[0].mBottomA.mV[VY] - 8.7f) < 1e-3f);
     }
 }

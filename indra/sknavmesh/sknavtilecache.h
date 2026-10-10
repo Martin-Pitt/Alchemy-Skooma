@@ -56,7 +56,7 @@ namespace sknav
 
     /// Bumped whenever the product format or what a build makes of its input
     /// changes, which orphans every entry written before.
-    constexpr U32 TILE_PRODUCT_VERSION = 7;
+    constexpr U32 TILE_PRODUCT_VERSION = 12;
 
     /// A versioned little-endian form of a tile's products under its key:
     /// a header, then tagged sections a reader skips when it does not know
@@ -65,6 +65,14 @@ namespace sknav
     /// False, leaving out untouched, when the bytes are short, damaged, of
     /// another version or written for another key.
     bool unpackTileProduct(const U8* data, size_t size, U64 key, TileBuildResult& out);
+
+    /// Where a settled tile's detail air and held raster wait on disk, under its raster's key.
+    U64 spillKey(U64 content_key);
+    /// The air and raster bit for bit; either may be null.
+    std::vector<U8> packSpill(const TileAir* air, const TileRaster* raster, U64 key);
+    /// False, leaving the outputs untouched, on bytes that are short, damaged, of
+    /// another version or key. A raster read back points at the air read with it.
+    bool unpackSpill(const U8* data, size_t size, U64 key, TileAirPtr& air, TileRasterPtr& raster);
 
     /// Where a tile's stamped polys are cached: under its raster's key and the
     /// stamp's pattern, so the same partition finds them whatever the spaces are called.

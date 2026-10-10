@@ -171,6 +171,13 @@
              function="Floater.Toggle"
              parameter="preferences" />
         </menu_item_call>
+        <menu_item_call
+         label="Lightbox..."
+         name="Lightbox Settings">
+            <menu_item_call.on_click
+             function="Floater.Toggle"
+             parameter="lightbox" />
+        </menu_item_call>
          <menu_item_call
          label="Toolbar buttons..."
          name="Toolbars">
@@ -866,6 +873,16 @@
              function="Floater.Show"
              parameter="360capture" />
         </menu_item_call>
+        <menu_item_check
+         label="Lightbox"
+         name="Lightbox">
+            <menu_item_check.on_check
+             function="Floater.Visible"
+             parameter="lightbox" />
+            <menu_item_check.on_click
+             function="Floater.Toggle"
+             parameter="lightbox" />
+        </menu_item_check>
         <menu_item_check
          label="Scopes"
          name="Scopes">
@@ -2189,8 +2206,8 @@ function="World.EnvPreset"
                  function="ReportAbuse" />
             </menu_item_call>
         <menu_item_call
-             label="Report Bug"
-             name="Report Bug">
+             label="Send Feedback..."
+             name="Send Feedback">
                 <menu_item_call.on_click
                  function="Advanced.ReportBug"/>
             </menu_item_call>
@@ -3524,6 +3541,14 @@ function="World.EnvPreset"
                 parameter="mem_leaking" />
                </menu_item_call>
         </menu>
+        <menu_item_call
+         label="Send Test Feedback..."
+         name="Send Test Feedback">
+            <menu_item_call.on_click
+             function="Advanced.SendTestFeedback" />
+            <menu_item_call.on_enable
+             function="Feedback.CanSend" />
+        </menu_item_call>
       <menu
          create_jump_keys="true"
          label="Video"
@@ -3918,6 +3943,53 @@ function="World.EnvPreset"
          label="Rendering"
          name="Rendering"
          tear_off="true">
+            <menu
+             create_jump_keys="true"
+             label="Far Plane"
+             name="Far Plane"
+             tear_off="true">
+                <menu_item_check
+                 label="Projection Overlay"
+                 name="Projection Overlay">
+                    <menu_item_check.on_check
+                     function="CheckControl"
+                     parameter="AlchemyRenderFarPlaneOverlay" />
+                    <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="AlchemyRenderFarPlaneOverlay" />
+                </menu_item_check>
+                <menu_item_separator />
+                <menu_item_check
+                 label="Projection: Automatic"
+                 name="Projection Automatic">
+                    <menu_item_check.on_check
+                     function="Advanced.CheckFarPlaneForce"
+                     parameter="0" />
+                    <menu_item_check.on_click
+                     function="Advanced.SetFarPlaneForce"
+                     parameter="0" />
+                </menu_item_check>
+                <menu_item_check
+                 label="Projection: Finite (2x draw distance)"
+                 name="Projection Finite">
+                    <menu_item_check.on_check
+                     function="Advanced.CheckFarPlaneForce"
+                     parameter="1" />
+                    <menu_item_check.on_click
+                     function="Advanced.SetFarPlaneForce"
+                     parameter="1" />
+                </menu_item_check>
+                <menu_item_check
+                 label="Projection: Infinite (reverse-Z)"
+                 name="Projection Infinite">
+                    <menu_item_check.on_check
+                     function="Advanced.CheckFarPlaneForce"
+                     parameter="2" />
+                    <menu_item_check.on_click
+                     function="Advanced.SetFarPlaneForce"
+                     parameter="2" />
+                </menu_item_check>
+            </menu>
             <menu_item_check
              label="Axes"
              name="Axes">
