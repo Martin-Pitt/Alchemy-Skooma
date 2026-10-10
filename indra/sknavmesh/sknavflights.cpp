@@ -1486,7 +1486,10 @@ namespace sknav
         }
         for (Flight& f : flights)
         {
-            f.mEroded = f.mEroded && f.mPolys.empty();
+            // only a narrow steep flight between decks is worth keeping bare
+            const F32 width = (f.mBottomB - f.mBottomA).length();
+            const bool steep = f.mRise > std::tan(STAIR_GRADE_DEG * DEG_TO_RAD) * f.mRun;
+            f.mEroded = f.mEroded && f.mPolys.empty() && f.mDecked && steep && width <= STAIR_LIKE_WIDTH_M;
         }
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty() && !f.mEroded; }), flights.end());
     }

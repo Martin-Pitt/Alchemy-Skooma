@@ -1179,4 +1179,30 @@ namespace tut
         ensure_equals("flights", p.mFlights.size(), 1u);
         ensure("a stair", p.mFlights[0].mKind == ConnectorKind::STAIR);
     }
+
+    template<> template<>
+    void sknavflights_object::test<38>()
+    {
+        set_test_name("a polygon-less flight is kept only narrow, steep and decked at both ends");
+        Flight f;
+        f.mBottomA = LLVector3(0.f, -0.44f, 0.f);
+        f.mBottomB = LLVector3(0.f, 0.44f, 0.f);
+        f.mRise = 1.8f;
+        f.mRun = 1.4f;
+        f.mEroded = true;
+        f.mDecked = true;
+        f.mCodes = { 5 };
+        std::vector<Flight> flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a ship's stair stays", flights.size(), 1u);
+        f.mDecked = false;
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a stray strip with no decks goes", flights.size(), 0u);
+        f.mDecked = true;
+        f.mBottomB = LLVector3(0.f, 3.f, 0.f);
+        flights = { f };
+        mapFlightPolys(flights, {}, {}, 0.75f);
+        ensure_equals("a wide one goes", flights.size(), 0u);
+    }
 }
