@@ -176,6 +176,10 @@ namespace sknav
         return it != mPolyStorey.end() && it->first == ref ? static_cast<S32>(it->second) : -1;
     }
 
+    constexpr F32 CLIMB_END_STEP_M = 0.4f;     ///< a climb's floor is looked for this far past each end
+    constexpr F32 CLIMB_END_REACH_M = 1.5f;    ///< within this in plan
+    constexpr F32 CLIMB_END_DZ_M = 1.f;        ///< and this in height
+
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
                       const PolyFlightFn& flight_of, F32 min_area)
     {
@@ -511,6 +515,7 @@ namespace sknav
                     StoreyConnector c;
                     c.mSpace = fspace;
                     c.mFlight = fl->mKey;
+                    c.mKind = fl->mKind;
                     const bool flip = out.mStoreys[lo].mFloorZ > out.mStoreys[hi].mFloorZ;
                     c.mStorey[0] = flip ? hi : lo;
                     c.mStorey[1] = flip ? lo : hi;
@@ -573,6 +578,117 @@ namespace sknav
                 out.mConnectors.push_back(c);
             }
         }
+
+        // Climbs: the floor polys just past each of a climb's own ends give the storeys and spaces it joins.
+        std::map<U64, const Flight*> climbs;
+        for (S32 t = 0; flight_of && t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                const Flight* f = flight_of(tile, static_cast<U32>(p));
+                if (f && f->mKind == ConnectorKind::CLIMB)
+                {
+                    climbs[f->mKey] = f;
+                }
+            }
+        }
+        // Flight polys are never floors, so the climb's own are passed over.
+        const auto floorPast = [&](const LLVector3& at) {
+            U32 best = n;
+            F32 best_score = CLIMB_END_REACH_M + CLIMB_END_DZ_M;
+            for (S32 t = 0; t < ntiles; ++t)
+            {
+                const dtMeshTile* tile = nav.getTile(t);
+                for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+                {
+                    const U32 i = base[t] + static_cast<U32>(p);
+                    if (kind[i] != 1)
+                    {
+                        continue;
+                    }
+                    const dtPoly& poly = tile->polys[p];
+                    F32 d = 1e30f, wz = 0.f, w = 0.f;
+                    bool inside = true;
+                    for (S32 v = 0; v < poly.vertCount; ++v)
+                    {
+                        const LLVector3 a = polyVert(tile, poly, v), b = polyVert(tile, poly, (v + 1) % poly.vertCount);
+                        const LLVector2 e(b.mV[VX] - a.mV[VX], b.mV[VY] - a.mV[VY]), to(at.mV[VX] - a.mV[VX], at.mV[VY] - a.mV[VY]);
+                        inside = inside && e.mV[VX] * to.mV[VY] - e.mV[VY] * to.mV[VX] >= 0.f;
+                        const F32 len2 = e.lengthSquared();
+                        const F32 u = len2 > 0.f ? llclamp((to * e) / len2, 0.f, 1.f) : 0.f;
+                        d = std::min(d, (to - e * u).length());
+                        const F32 k = 1.f / (LLVector2(at.mV[VX] - a.mV[VX], at.mV[VY] - a.mV[VY]).length() + 1e-3f);
+                        wz += a.mV[VZ] * k;
+                        w += k;
+                    }
+                    d = inside ? 0.f : d;
+                    const F32 dz = std::fabs(wz / w - at.mV[VZ]);
+                    if (d <= CLIMB_END_REACH_M && dz <= CLIMB_END_DZ_M && d + dz < best_score)
+                    {
+                        best_score = d + dz;
+                        best = i;
+                    }
+                }
+            }
+            return best;
+        };
+        for (const auto& [key, fp] : climbs)
+        {
+            const Flight& f = *fp;
+            LLVector2 run(f.mTop.mV[VX] - f.mBottom.mV[VX], f.mTop.mV[VY] - f.mBottom.mV[VY]);
+            run.normVec();
+            const LLVector3 step(run.mV[VX] * CLIMB_END_STEP_M, run.mV[VY] * CLIMB_END_STEP_M, 0.f);
+            const U32 foot = floorPast(f.mBottom - step), top = floorPast(f.mTop + step);
+            if (foot >= n || top >= n)
+            {
+                continue;
+            }
+            const auto sf = storey_of_root.find(find(foot)), st = storey_of_root.find(find(top));
+            if (sf != storey_of_root.end() && st != storey_of_root.end() && sf->second != st->second)
+            {
+                const U32 lo = std::min(sf->second, st->second), hi = std::max(sf->second, st->second);
+                const bool known = std::any_of(out.mConnectors.begin(), out.mConnectors.end(), [&](const StoreyConnector& c) {
+                    return c.mFlight == key && c.mStorey[0] == lo && c.mStorey[1] == hi;
+                });
+                if (!known)
+                {
+                    StoreyConnector c;
+                    c.mSpace = space[foot] == space[top] ? space[foot] : 0;
+                    c.mFlight = key;
+                    c.mKind = ConnectorKind::CLIMB;
+                    const bool flip = sf->second != lo;
+                    c.mStorey[0] = lo;
+                    c.mStorey[1] = hi;
+                    c.mEnd[0] = flip ? f.mTop : f.mBottom;
+                    c.mEnd[1] = flip ? f.mBottom : f.mTop;
+                    out.mConnectors.push_back(c);
+                }
+            }
+            if (space[foot] && space[top] && space[foot] != space[top])
+            {
+                ClimbLink l;
+                l.mSpace[0] = space[foot];
+                l.mSpace[1] = space[top];
+                l.mFlight = key;
+                l.mFoot = f.mBottom;
+                l.mTop = f.mTop;
+                out.mClimbLinks.push_back(l);
+            }
+        }
+    }
+
+    std::vector<U32> StoreyProduct::climbLinksOf(U32 space) const
+    {
+        std::vector<U32> out;
+        for (size_t i = 0; i < mClimbLinks.size(); ++i)
+        {
+            if (mClimbLinks[i].mSpace[0] == space || mClimbLinks[i].mSpace[1] == space)
+            {
+                out.push_back(static_cast<U32>(i));
+            }
+        }
+        return out;
     }
 
     void sheetSpaces(const EnclosureProduct& enc, const LLVector3& min, const LLVector3& max, F32 res, std::vector<SheetCell>& out)

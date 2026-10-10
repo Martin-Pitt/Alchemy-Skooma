@@ -76,12 +76,23 @@ namespace sknav
         LLVector3 mEnd[2];          ///< where it meets each storey: the flight's own ends, else its stair portals, else where its polys meet
         U64 mFlight = 0;            ///< the Flight's key when the ends are the flight's
         bool mPortals = false;      ///< both ends are stair portals
+        ConnectorKind mKind = ConnectorKind::STAIR;     ///< the Flight's kind when known
+    };
+
+    /// Two spaces a climb joins, foot first: a link in the space graph with no geometry of its own.
+    struct ClimbLink
+    {
+        U32 mSpace[2] = { 0, 0 };   ///< ids, the space at the climb's foot and at its top
+        U64 mFlight = 0;            ///< the climb's Flight key
+        LLVector3 mFoot;            ///< the climb's own ends, mesh-local
+        LLVector3 mTop;
     };
 
     struct StoreyProduct
     {
         std::vector<Storey> mStoreys;               ///< lowest floor first
         std::vector<StoreyConnector> mConnectors;
+        std::vector<ClimbLink> mClimbLinks;         ///< climbs between two different spaces
         std::vector<std::pair<U32, U32>> mSpaceStorey;  ///< space id -> storey index, by id
         std::vector<std::pair<U64, U32>> mPolyStorey;   ///< Detour poly ref -> storey index, by ref; flights have none
         U32 mFlightPolys = 0;
@@ -91,6 +102,8 @@ namespace sknav
         S32 storeyOf(U32 space) const;
         /// The storey index of a Detour poly, or -1 for a flight or a poly it does not know.
         S32 storeyOfPoly(U64 ref) const;
+        /// The climb links that touch a space, by index into mClimbLinks.
+        std::vector<U32> climbLinksOf(U32 space) const;
     };
     typedef std::shared_ptr<const StoreyProduct> StoreyProductPtr;
 
