@@ -2684,6 +2684,55 @@ StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
     return out;
 }
 
+std::vector<ClimbLink> SKNavMesh::climbLinks(const LLUUID& mesh, U32 space) const
+{
+    std::vector<ClimbLink> out;
+    if (const StoreyProductPtr st = storeys(mesh))
+    {
+        for (const U32 i : st->climbLinksOf(space))
+        {
+            out.push_back(st->mClimbLinks[i]);
+        }
+    }
+    return out;
+}
+
+void SKNavMesh::gatherClimbLinks(const LLVector3d& camera, F64 reach, bool opaque)
+{
+    // Each climb link as an arrow from the climb's foot to its top, lifted over the face it climbs.
+    LLColor4 color = skNavSwatchColor(SKNavSwatch::SPACE_CLIMB);
+    if (opaque)
+    {
+        color.mV[VALPHA] = 1.f;
+    }
+    const F64 reach2 = reach * reach;
+    for (const auto& entry : mMeshes)
+    {
+        const StoreyProductPtr st = storeys(entry.first);
+        for (const ClimbLink& l : st ? st->mClimbLinks : std::vector<ClimbLink>())
+        {
+            const LLVector3d foot = entry.second->mOrigin + LLVector3d(l.mFoot) + LLVector3d(0.0, 0.0, 0.3);
+            const LLVector3d top = entry.second->mOrigin + LLVector3d(l.mTop) + LLVector3d(0.0, 0.0, 0.3);
+            if (dist_vec_squared2D((foot + top) * 0.5, camera) > reach2)
+            {
+                continue;
+            }
+            const LLVector3 a = gAgent.getPosAgentFromGlobal(foot), b = gAgent.getPosAgentFromGlobal(top);
+            mOverlay.edge(a, b, color);
+            LLVector3 dir = b - a;
+            const F32 len = dir.normVec();
+            LLVector3 side(-dir.mV[VY], dir.mV[VX], 0.f);
+            if (len < 0.1f || side.normVec() < 1e-3f)
+            {
+                continue;
+            }
+            const F32 head = llmin(0.5f, len * 0.3f);
+            mOverlay.edge(b, b - dir * head + side * head * 0.5f, color);
+            mOverlay.edge(b, b - dir * head - side * head * 0.5f, color);
+        }
+    }
+}
+
 bool SKNavMesh::storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const
 {
     F32 z = 0.f;
@@ -4041,7 +4090,7 @@ std::string SKNavMesh::exportAll() const
             writeTile(file, mesh, t.first, t.second, counts);
         }
         file << ']';
-        mRooms->writeSpaces(file, mesh.mId);
+        mRooms->writeSpaces(file, mesh.mId, storeys(mesh.mId).get());
         file << '}';
     }
     file << ']';
@@ -4761,6 +4810,7 @@ void SKNavMesh::refreshOverlay()
                              [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) {
                                  return annotator.portalCrossed(mesh, space_a, space_b, centre);
                              });
+        gatherClimbLinks(camera, reach, opaque);
     }
     if (show_air)
     {

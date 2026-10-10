@@ -91,7 +91,8 @@ namespace sknav
     /// A tile's per-gap answers as a JSON member, leading comma included.
     void writeExportEnclosure(std::ostream& file, U64 generation, const TileEnclosure& tile);
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind);
+    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind,
+                           const StoreyProduct* storeys = nullptr);
     /// A mesh's storeys and their connectors as JSON members, leading comma included, global.
     void writeExportStoreys(std::ostream& file, const LLVector3d& origin, const StoreyProduct& storeys);
     /// One door as a JSON object; names are escaped.

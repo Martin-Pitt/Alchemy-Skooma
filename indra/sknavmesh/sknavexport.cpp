@@ -367,7 +367,7 @@ namespace sknav
              << LLBase64::encode(blob.data(), blob.size()) << "\"}";
     }
 
-    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind)
+    void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind, const StoreyProduct* storeys)
     {
         static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
         auto vec = [&file](const LLVector3d& v) { file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']'; };
@@ -410,6 +410,21 @@ namespace sknav
                  << "\"}";
         }
         file << ']';
+        if (storeys)
+        {
+            // Climb links: two space ids and the climb's key, its ends only to place a draw.
+            file << ",\"climb_links\":[";
+            for (size_t i = 0; i < storeys->mClimbLinks.size(); ++i)
+            {
+                const ClimbLink& l = storeys->mClimbLinks[i];
+                file << (i ? "," : "") << "{\"spaces\":[" << l.mSpace[0] << ',' << l.mSpace[1] << "],\"flight\":\"" << std::hex << l.mFlight << std::dec << "\",\"foot\":";
+                vec(origin + LLVector3d(l.mFoot));
+                file << ",\"top\":";
+                vec(origin + LLVector3d(l.mTop));
+                file << '}';
+            }
+            file << ']';
+        }
         if (wind && !wind->mSlabs.empty())
         {
             // Per band its heights, per slab its cells: factor, deflection x and y, flags, a byte each.
@@ -462,6 +477,7 @@ namespace sknav
             }
             file << "]}";
         }
+        static const char* const KINDS[] = { "stair", "ramp", "climb" };
         file << "],\"storey_connectors\":[";
         for (size_t i = 0; i < storeys.mConnectors.size(); ++i)
         {
@@ -470,7 +486,8 @@ namespace sknav
             writeVec3d(file, origin + LLVector3d(c.mEnd[0]));
             file << ',';
             writeVec3d(file, origin + LLVector3d(c.mEnd[1]));
-            file << "],\"flight\":\"" << std::hex << c.mFlight << std::dec << "\",\"portals\":" << (c.mPortals ? "true" : "false") << '}';
+            file << "],\"flight\":\"" << std::hex << c.mFlight << std::dec << "\",\"portals\":" << (c.mPortals ? "true" : "false") << ",\"kind\":\""
+                 << KINDS[static_cast<S32>(c.mKind)] << "\"}";
         }
         file << ']';
     }

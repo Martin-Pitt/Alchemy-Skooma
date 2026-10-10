@@ -946,7 +946,7 @@ namespace sknav
                 const StoreyConnector& c = st.mConnectors[k];
                 const LLVector3d a = mesh.mOrigin + LLVector3d(c.mEnd[0]), b = mesh.mOrigin + LLVector3d(c.mEnd[1]);
                 out << (k ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace
-                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
+                    << ",\"portals\":" << (c.mPortals ? 1 : 0) << ",\"flight\":" << (c.mFlight ? 1 : 0) << ",\"kind\":" << static_cast<S32>(c.mKind) << ",\"a\":[" << a.mdV[VX] << ',' << a.mdV[VY] << ',' << a.mdV[VZ] << "],\"b\":["
                     << b.mdV[VX] << ',' << b.mdV[VY] << ',' << b.mdV[VZ] << "]}";
             }
             // Each tile's polys' storeys, -1 on a flight, for the pictures.

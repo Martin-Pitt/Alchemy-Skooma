@@ -911,7 +911,7 @@ namespace sknav
             file << ']';
             if (mesh.mRooms)
             {
-                writeExportSpaces(file, mesh.mOrigin, *mesh.mRooms, mesh.mWind.get());
+                writeExportSpaces(file, mesh.mOrigin, *mesh.mRooms, mesh.mWind.get(), &mesh.mStoreys);
                 writeExportStoreys(file, mesh.mOrigin, mesh.mStoreys);
             }
             file << '}';

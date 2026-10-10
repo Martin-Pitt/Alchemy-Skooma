@@ -156,6 +156,8 @@ public:
     sknav::StoreyProductPtr storeys(const LLUUID& mesh) const;
     /// The storey under a global position, by index into storeys(mesh_out); false on a flight or off the mesh.
     bool storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const;
+    /// The climb links touching a space: the spaces a climb joins it to, with no geometry of their own.
+    std::vector<sknav::ClimbLink> climbLinks(const LLUUID& mesh, U32 space) const;
 
     /// A path within one mesh (the one under a). Points are global; partial
     /// when b was not reachable and the path ends at the closest point found.
@@ -618,6 +620,7 @@ private:
     void refreshOverlay();
     /// The air overlay (SKNavOverlayAir) into mOverlay: tiles nearest the camera first, under a vertex budget.
     void gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, bool opaque);
+    void gatherClimbLinks(const LLVector3d& camera, F64 reach, bool opaque);
     /// Take the census's ladders and working elevators into mFeatureLinks,
     /// and find the exits of any span a published tile has touched.
     void syncFeatureLinks(const SKCensusSnapshotPtr& snap);
