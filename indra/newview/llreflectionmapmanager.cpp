@@ -217,7 +217,7 @@ struct CompareProbeDistance
 
 static F32 update_score(LLReflectionMap* p)
 {
-    return gFrameTimeSeconds - p->mLastUpdateTime  - p->mDistance*0.1f;
+    return (F32)(gFrameTimeSeconds - p->mLastUpdateTime) - p->mDistance*0.1f;
 }
 
 // return true if a is higher priority for an update than b
@@ -401,12 +401,6 @@ void LLReflectionMapManager::update()
     LLReflectionMap* oldestProbe = nullptr;
     LLReflectionMap* oldestOccluded = nullptr;
 
-    if (mUpdatingProbe != nullptr)
-    {
-        did_update = true;
-        doProbeUpdate();
-    }
-
     // Occlusion state only means anything for as long as the queries that produce it keep
     // running, and they stop whenever LLPipeline::sUseOcclusion drops out of its "query"
     // level -- the UseOcclusion setting, a feature-table veto, or simply turning on wireframe.
@@ -474,6 +468,24 @@ void LLReflectionMapManager::update()
 
             probe->mInsideManualProbe = eclipsed;
         }
+    }
+
+    // A probe that stopped being relevant partway through its twelve passes is dropped rather than
+    // finished, by the same rule the scheduling loop below uses to skip one. Every remaining pass
+    // renders the whole scene for a probe that is about to lose its cube slot in the release pass,
+    // or, when whatever registered it is gone, to be deleted outright. It comes after the eclipse
+    // pass above so that it judges on this frame's mInsideManualProbe, as the scheduling loop does:
+    // judged on last frame's, a probe whose eclipser had just gone would be abandoned here, found
+    // relevant again a few lines later, and start its twelve passes over.
+    if (mUpdatingProbe != nullptr && mUpdatingProbe != mDefaultProbe && !mUpdatingProbe->isRelevant())
+    {
+        abandonProbeUpdate();
+    }
+
+    if (mUpdatingProbe != nullptr)
+    {
+        did_update = true;
+        doProbeUpdate();
     }
 
     // Update distance to camera for all probes.
@@ -911,8 +923,7 @@ void LLReflectionMapManager::deleteProbe(U32 i)
     }
     if (mUpdatingProbe == probe)
     {
-        mUpdatingProbe = nullptr;
-        mUpdatingFace = 0;
+        abandonProbeUpdate();
     }
 
     // remove from any Neighbors lists
@@ -925,6 +936,18 @@ void LLReflectionMapManager::deleteProbe(U32 i)
 
     // Probes are distance sorted, order matters.
     mProbes.erase(mProbes.begin() + i);
+}
+
+void LLReflectionMapManager::abandonProbeUpdate()
+{
+    mUpdatingProbe = nullptr;
+    mUpdatingFace = 0;
+
+    // The irradiance half runs first and the radiance half is what marks a probe complete. Left
+    // set, this would start the next probe on its radiance half: it would skip the irradiance
+    // projection altogether and be marked complete on whatever SH coefficients its slot's
+    // previous owner left behind.
+    mRadiancePass = false;
 }
 
 
@@ -1576,7 +1599,7 @@ void LLReflectionMapManager::updateUniforms()
             LLViewerObject* vobj = probe->mViewerObject;
             if (vobj)
             {
-                F32 time = (F32)gFrameTimeSeconds - probe->mLastUpdateTime;
+                F32 time = (F32)(gFrameTimeSeconds - probe->mLastUpdateTime);
                 vobj->setDebugText(llformat("%d/%d/%d/%.1f - %.1f/%.1f", probe->mCubeIndex, probe->mProbeIndex, (U32) probe->mNeighbors.size(), probe->mMinDepth, probe->mMaxDepth, time), time > 1.f ? LLColor4::white : LLColor4::green);
             }
         }
@@ -1847,10 +1870,9 @@ void LLReflectionMapManager::cleanup()
     mCreateList.clear();
 
     mReflectionMaps.clear();
-    mUpdatingFace = 0;
+    abandonProbeUpdate();
 
     mDefaultProbe = nullptr;
-    mUpdatingProbe = nullptr;
 
     mUBO.release();
 
