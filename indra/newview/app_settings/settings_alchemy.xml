@@ -46,6 +46,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>ALMesaRDNA35SettingsRestored</key>
+        <map>
+            <key>Comment</key>
+            <string>Set once SkipBenchmark and UseOcclusion have been checked on a Radeon RDNA 3.5 APU under Mesa, and restored if they still held what earlier viewers' AMD driver workaround set there by mistake.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
         <key>ALMeshNotifyBudgetMs</key>
         <map>
             <key>Comment</key>
@@ -288,10 +299,21 @@
             <key>Value</key>
             <string></string>
         </map>
+        <key>ALScriptSLuaAliases</key>
+        <map>
+            <key>Comment</key>
+            <string>SLua aliases Script Studio names, one to a line as name=folder: require("@name/x") reads x from the folder on disk, where no .luaurc names the alias. Naming a folder lets a require read it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string></string>
+        </map>
         <key>ALScriptPreprocDiskIncludes</key>
         <map>
             <key>Comment</key>
-            <string>The preprocessor resolves #include from a folder on disk as well as from inventory and the object.</string>
+            <string>The preprocessor reads files on disk: #include from the include folders, and a SLua require from the folders its .luaurc or the SLua aliases name. Off, nothing on disk.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -302,7 +324,7 @@
         <key>ALScriptPreprocWorldIncludes</key>
         <map>
             <key>Comment</key>
-            <string>The preprocessor resolves #include and require from the object holding the script and from the agent's inventory. Off, only folders on disk are looked in.</string>
+            <string>The preprocessor resolves #include and require from the object holding the script and from the agent's inventory: for SLua, a require relative to a script in the world, and a .luaurc notecard or item. Off, only folders on disk are looked in, and a script in the world reaches them through a SLua alias.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -324,7 +346,7 @@
         <key>ALScriptPreprocIncludeOrder</key>
         <map>
             <key>Comment</key>
-            <string>Where the preprocessor looks for an include, in order: any of inventory, object and disk.</string>
+            <string>Where the preprocessor looks for an LSL #include, or a SLua --#include, in order: any of inventory, object and disk. A SLua require does not search.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -336,6 +358,83 @@
         <map>
             <key>Comment</key>
             <string>The preprocessor rewrites list[i] reads and writes as llList2Type and lazy_list_set calls (LSL).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>ALScriptPreprocLineComments</key>
+        <map>
+            <key>Comment</key>
+            <string>The preprocessor writes an @line comment wherever its text moves to another file or skips lines, saying the line and the file -- one on disk by its path from the script's folder, never from the root -- as Linden Lab's VS Code plugin does.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>ALScriptMastersAskOver</key>
+        <map>
+            <key>Comment</key>
+            <string>A save of a file on disk that scripts in the world include sends those scripts again. Where more than this many would change, or they are in more than one object, Script Studio asks first.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>8</integer>
+        </map>
+        <key>ALScriptMastersEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Files on disk linked as the masters of scripts in the world, and the files they include, are watched while you are logged in, and a save made outside Script Studio sends the scripts. A save in Script Studio sends them either way.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptMastersQuiet</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds that files linked to scripts in the world must go unchanged, after a save made outside Script Studio, before the scripts are sent: a checkout of many files sends each script once.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>ALScriptMastersSkipUnchanged</key>
+        <map>
+            <key>Comment</key>
+            <string>A send Script Studio makes of its own from a file on disk -- an include's users, Send from Files -- is skipped where what would go up is what the script already holds. A save of the file itself always goes up.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>ALScriptUploadHeader</key>
+        <map>
+            <key>Comment</key>
+            <string>A script saved preprocessed carries a header at the top of its compiled half, after the target line: what the save hashes to (XXH128 of the target, the source and the expansion) and when. A script saved as written carries none.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>ALScriptUploadHeaderCreator</key>
+        <map>
+            <key>Comment</key>
+            <string>The upload header (ALScriptUploadHeader) also names who saved the script.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -541,6 +640,17 @@
             <key>Value</key>
             <real>5.0</real>
         </map>
+        <key>ALScriptFragmentCompletion</key>
+        <map>
+            <key>Comment</key>
+            <string>As an SLua script is typed, answer a completion or signature help over the statement being typed, checked alone against the script's last check, rather than checking the whole script again first. Off, every keystroke that changed the script checks all of it before answering.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>ALScriptStudioAutoComplete</key>
         <map>
             <key>Comment</key>
@@ -621,7 +731,7 @@
         <key>ALScriptConvertHandlerFields</key>
         <map>
             <key>Comment</key>
-            <string>Convert to SLua assigns handlers to LLEvents' fields (LLEvents.touch_start = function ...), one for each event, rather than putting them on with LLEvents:on.</string>
+            <string>Convert to SLua assigns handlers to LLEvents' fields (function LLEvents.touch_start(...)) rather than putting them on with LLEvents:on. SLua puts an assigned handler on as LLEvents:on does, beside any others.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -632,7 +742,7 @@
         <key>ALScriptConvertTypes</key>
         <map>
             <key>Comment</key>
-            <string>Convert to SLua writes Luau types on locals, parameters and what functions return, from LSL's types.</string>
+            <string>Convert to SLua writes Luau types on locals, parameters and what functions return, from LSL's types; and the SLua handlers the editor completes have their parameters typed as the definitions type them.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>
@@ -651,6 +761,17 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
+        <key>ALScriptConvertKeepComments</key>
+        <map>
+            <key>Comment</key>
+            <string>Convert to SLua carries the script's own comments over, each over what it stood over, or after it where it was after it on its line: // as --, and /* */ as --[[ ]].</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>ALScriptStudioAutoClose</key>
         <map>
             <key>Comment</key>
@@ -661,6 +782,17 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
+        </map>
+        <key>ALScriptStudioDiffAlgorithm</key>
+        <map>
+            <key>Comment</key>
+            <string>How Script Studio's comparisons, and a notecard's, choose the lines that stay: histogram, patience, minimal or structural.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>String</string>
+            <key>Value</key>
+            <string>histogram</string>
         </map>
         <key>ALScriptStudioCaretStyle</key>
         <map>
@@ -1003,6 +1135,17 @@
             <key>Value</key>
             <string></string>
         </map>
+        <key>FMODResampleMethod</key>
+        <map>
+            <key>Comment</key>
+            <string>The resampler FMOD Studio uses for a sound whose sample rate is not the output's: 0 Linear, 1 Cubic, 2 Spline, the slowest and the best. Takes effect when audio next starts.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>2</integer>
+        </map>
         <key>AudioFAudioInnerRadius</key>
         <map>
             <key>Comment</key>
@@ -1134,6 +1277,50 @@
             <string>S32</string>
             <key>Value</key>
             <integer>0</integer>
+        </map>
+        <key>AlchemyFeedbackHideInterface</key>
+        <map>
+            <key>Comment</key>
+            <string>Whether a feedback report's screenshot is of the world alone, without windows, chat or HUDs</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>AlchemyFeedbackIncludeAvatar</key>
+        <map>
+            <key>Comment</key>
+            <string>Whether a feedback report names the avatar who sent it</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>AlchemyFeedbackRememberEmail</key>
+        <map>
+            <key>Comment</key>
+            <string>Whether the email address given in a feedback report is kept for the next one</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>AlchemyFeedbackScreenshotDelay</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds Send Feedback waits, once its window is open, before taking the screenshot</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.3</real>
         </map>
         <key>AlchemyDisableClickToSit</key>
         <map>
@@ -1909,6 +2096,28 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
+        </map>
+        <key>AlchemyRenderFarPlaneForce</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug A/B for the main view's projection: 0 automatic (infinite on reverse-Z, finite 1024 m on forward-Z), 1 force a finite plane at twice the draw distance and never under 1024 m, 2 force infinite on reverse-Z (forward-Z ignores it). Probe captures are never forced.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>AlchemyRenderFarPlaneOverlay</key>
+        <map>
+            <key>Comment</key>
+            <string>Debug: draw column pairs from 500 m to 100 km around the camera with the main projection, nearer orange and farther cyan, depth tested against each other only and laid over the frame, to see where the projection clips and whether depth order holds. Ignores the scene, object culling and reach.</string>
+            <key>Persist</key>
+            <integer>0</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
         </map>
         <key>AlchemyRenderMemoryDrawDistanceLimit</key>
         <map>
@@ -3878,6 +4087,17 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <key>RenderPreferDiscreteGPU</key>
+        <map>
+            <key>Comment</key>
+            <string>Linux: on a hybrid-graphics machine, whose integrated GPU drives the display, render on the discrete GPU, unless DRI_PRIME or NVIDIA's offload variables already choose one. Read at startup. Windows always asks for the discrete GPU.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
         <key>RenderTonemapACESWhite</key>
         <map>
             <key>Comment</key>
@@ -4542,7 +4762,7 @@
             <key>Type</key>
             <string>S32</string>
             <key>Value</key>
-            <integer>600</integer>
+            <integer>0</integer>
         </map>
         <key>FindLandSort</key>
         <map>

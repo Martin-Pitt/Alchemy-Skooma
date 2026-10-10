@@ -95,7 +95,7 @@ namespace
             doc.editor->resetDirty();
         }
         void      stopped(Doc& doc) override { stops.push_back(doc.id); }
-        void      fileWritten(const std::string& path) override { written.push_back(path); }
+        void      fileWritten(Doc& doc) override { written.push_back(doc.file); }
         void      reachChanged() override { ++reachChanges; }
         void      becomeFile(Doc& doc, const std::string& path) override
         {
@@ -202,16 +202,13 @@ namespace tut
     template<> template<>
     void alscriptstudiofiles_object::test<1>()
     {
-        set_test_name("what a file's name says it holds, and the grammar a file that is no script is coloured by");
+        set_test_name("what a file's name says it holds");
         typedef ALScriptStudioFiles F;
         ensure("LSL", F::languageOf("/a/b.lsl", false).script && !F::languageOf("/a/b.lsl", true).lua);
         ensure("SLua by .luau and .lua, whatever the case", F::languageOf("/a/b.LUAU", false).lua && F::languageOf("/a/b.lua", false).lua);
         ensure("text", !F::languageOf("/a/b.txt", false).script && F::languageOf("/a/b.txt", false).said);
         ensure("no extension: what it was asked for as", F::languageOf("/a/b", true).script && F::languageOf("/a/b", true).lua &&
                                                              !F::languageOf("/a/b", true).said);
-        ensure("XML, XUI and JSON coloured, the rest text",
-               F::textSyntaxOf("/a/s.XML") == "xml" && F::textSyntaxOf("/a/s.xui") == "xml" && F::textSyntaxOf("/a/s.json") == "json" &&
-                   F::textSyntaxOf("/a/s.txt") == "text");
     }
 
     template<> template<>
@@ -323,6 +320,9 @@ namespace tut
         write(f.file, "two");
         unit.changedOutside(f.id, f.file);
         ensure("clean: taken, settled, said", studio.taken == Names{ "two" } && studio.settled == Names{ f.id } && !said().failure);
+        // Read in, not written: what it masters is the masters' watch's to
+        // send, not the tab's.
+        ensure("not taken for a write of the studio's", studio.written.empty());
         unit.changedOutside(f.id, f.file);
         ensure("the same again: nothing", studio.taken.size() == 1);
 
@@ -399,6 +399,7 @@ namespace tut
         ensure("watched there", f.watch && f.watch->path() == in("g.luau"));
         ensure("noted, settled, checked", unit.recentFiles().front() == in("g.luau") && studio.settled.back() == f.id &&
                                                studio.checked.back() == f.id + " now");
+        ensure("told of as written", studio.written == Names{ in("g.luau") });
         f.editor->setText("changed");
         unit.chosenToSaveAs(f.id, { f.file });
         ensure("its own file again: a save", contents(f.file) == "changed" && studio.became.size() == 1);
@@ -447,5 +448,25 @@ namespace tut
         ensure("pruned", unit.pruneRecent([lost](const ALScriptRef& ref) { return ref == lost; }));
         ensure("the gone script let go of", unit.recentScripts().size() == 1 && unit.recentScripts()[0].ref == a.ref);
         ensure("the file still there kept", unit.recentFiles() == Names{ in("here.lsl") });
+    }
+
+    template<> template<>
+    void alscriptstudiofiles_object::test<10>()
+    {
+        set_test_name("a file that is no script is coloured by the grammar whose file names its extension, whatever its case, and as text where none does");
+        // The grammars are the source tree's, which the UI is pointed at.
+        if (!ll_test::HeadlessUI::get().ok())
+        {
+            skip("no UI: LLUI_TEST_APP_DIR does not point at the source tree");
+        }
+        typedef ALScriptStudioFiles F;
+        ensure_equals("XML", F::textSyntaxOf("/a/s.XML"), std::string("xml"));
+        ensure_equals("a skin's file", F::textSyntaxOf("/a/s.xui"), std::string("xml"));
+        ensure_equals("JSON", F::textSyntaxOf("/a/s.json"), std::string("json"));
+        ensure_equals("a notecard of settings", F::textSyntaxOf("/a/door.ini"), std::string("config"));
+        ensure_equals("and another way of naming one", F::textSyntaxOf("/a/door.CFG"), std::string("config"));
+        ensure_equals("text", F::textSyntaxOf("/a/s.txt"), std::string("text"));
+        ensure_equals("a name no grammar knows", F::textSyntaxOf("/a/s.dat"), std::string("text"));
+        ensure_equals("and none", F::textSyntaxOf("/a/s"), std::string("text"));
     }
 }

@@ -24,7 +24,7 @@
 
 #include "linden_common.h"
 
-#include "../altextlayout.h"
+#include "altextlayout.h"
 
 #include "alfontshaping.h"
 #include "llfontfreetype.h"
@@ -92,17 +92,23 @@ namespace tut
             {
                 return row.begin;
             }
-            S32 cluster = row.begin;
-            F32 left    = 0.f;
+            // A row the line wraps after ends at the next row's start, which
+            // is not a place on it: on or past its last cluster is that one.
+            // An inlay is a cell of its own beside the character that shares
+            // its column.
+            const bool wraps_after = row.glyphEnd < line.glyphs.size();
+            S32        cluster     = row.begin;
+            F32        left        = 0.f;
             for (size_t k = row.glyphBegin; k <= row.glyphEnd; ++k)
             {
                 const bool at_end     = (k == row.glyphEnd);
-                const bool starts_one = at_end || k == row.glyphBegin || line.glyphs[k].cluster != line.glyphs[k - 1].cluster;
+                const bool starts_one = at_end || k == row.glyphBegin || line.glyphs[k].cluster != line.glyphs[k - 1].cluster ||
+                                        (line.glyphs[k].inlay >= 0) != (line.glyphs[k - 1].inlay >= 0);
                 if (!starts_one)
                 {
                     continue;
                 }
-                const S32 next_cluster = at_end ? row.end : line.glyphs[k].cluster;
+                const S32 next_cluster = at_end ? (wraps_after ? cluster : row.end) : line.glyphs[k].cluster;
                 const F32 right        = at_end ? row.width : line.glyphs[k].pen - row.xStart;
                 if (k != row.glyphBegin && x < right)
                 {
@@ -111,7 +117,7 @@ namespace tut
                 cluster = next_cluster;
                 left    = right;
             }
-            return row.end;
+            return wraps_after ? cluster : row.end;
         }
         static S32 walkedRow(const ALTextLayout::Line& line, S32 column)
         {
@@ -255,7 +261,7 @@ namespace tut
         ensure_equals("four lines", layout.lineCount(), 4);
         ensure_equals("the new line lays out", layout.line(1).glyphs.size(), size_t(3));
         ensure_equals("tops follow", layout.lineTop(3), 3 * layout.rowHeight());
-        doc.removeFirstLines(3);
+        doc.remove(ALTextRange(doc.start(), ALTextPos(3, 0)));
         ensure_equals("one left", layout.lineCount(), 1);
         ensure_equals("which is the last", layout.line(0).glyphs.size(), size_t(5));
     }
@@ -267,7 +273,7 @@ namespace tut
         ready("a\nbbbb\nc\nd");
         const S32 row = layout.rowHeight();
         ensure("the widest line is the second", close_to(layout.contentWidth(), layout.line(1).width));
-        layout.setHidden(1, 2, true);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 1, 2, true);
         ensure("hidden", layout.hidden(1) && layout.hidden(2) && !layout.hidden(3));
         ensure("any", layout.anyHidden());
         ensure_equals("no height", layout.lineHeight(1), 0);
@@ -284,7 +290,7 @@ namespace tut
         doc.insert(ALTextPos(0, 0), "\n");
         ensure("slid down by the line the edit made", !layout.hidden(1) && layout.hidden(2) && layout.hidden(3) && !layout.hidden(4));
         ensure_equals("three rows now", layout.totalHeight(), 3 * row);
-        layout.setHidden(0, 4, false);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 0, 4, false);
         ensure("none hidden", !layout.anyHidden());
         ensure_equals("five rows", layout.totalHeight(), 5 * row);
     }
@@ -482,9 +488,9 @@ namespace tut
         ensure_equals("nothing laid out again", again, laid);
 
         const U32 before = layout.hiddenRevision();
-        layout.setHidden(1, 1, false);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 1, 1, false);
         ensure_equals("shown already: nothing moved", layout.hiddenRevision(), before);
-        layout.setHidden(1, 1, true);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 1, 1, true);
         ensure("hidden: moved", layout.hiddenRevision() != before);
         const U32 hidden = layout.hiddenRevision();
         doc.insert(ALTextPos(0, 0), "x\n");
@@ -499,7 +505,7 @@ namespace tut
         U32 was = layout.hiddenRevision();
         doc.replace(ALTextRange(ALTextPos(0, 4), ALTextPos(0, 4)), "\nnew");
         ensure("none hidden, a line made: no change", layout.hiddenRevision() == was);
-        layout.setHidden(3, 4, true);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 3, 4, true);
         ensure("hidden", layout.hiddenRevision() != was && layout.hidden(3) && layout.hidden(4));
         was = layout.hiddenRevision();
         doc.replace(ALTextRange(ALTextPos(1, 0), ALTextPos(1, 0)), "N");
@@ -686,9 +692,9 @@ namespace tut
         check("lines made");
         doc.remove(ALTextRange(ALTextPos(1, 0), ALTextPos(4, 0)));
         check("lines taken away");
-        layout.setHidden(6, 9, true);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 6, 9, true);
         check("hidden");
-        layout.setHidden(7, 7, false);
+        layout.setHidden(ALTextLayout::HiddenBy::Folds, 7, 7, false);
         check("one shown");
         layout.setWrapWidth(120);
         check("narrower");
@@ -750,5 +756,473 @@ namespace tut
         ensure_equals("nothing kept: nothing held", layout.trim(0, -1), 11);
         ensure_equals("none held", layout.linesHeld(), 0);
         ensure_equals("nothing more to let go of", layout.trim(0, -1), 0);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<19>()
+    {
+        set_test_name("hidden by whom: a line hidden while the folds or the host hide it, each showing only its own; edits slide both");
+        ready("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        typedef ALTextLayout::HiddenBy By;
+        const S32 row_h = layout.totalHeight() / 10;
+        layout.setHidden(By::Host, 2, 5, true);
+        layout.setHidden(By::Folds, 4, 7, true);
+        ensure("either hides it", layout.hidden(2) && layout.hidden(5) && layout.hidden(7) && !layout.hidden(8));
+        ensure("whose", layout.hiddenBy(4, By::Host) && layout.hiddenBy(4, By::Folds) && !layout.hiddenBy(2, By::Folds) && !layout.hiddenBy(7, By::Host));
+        ensure_equals("six lines take no height", layout.totalHeight(), 4 * row_h);
+        U32 was = layout.hiddenRevision();
+        layout.setHidden(By::Folds, 4, 7, false);
+        ensure("the folds shown: the host's still hidden", layout.hidden(4) && layout.hidden(5) && !layout.hidden(6) && !layout.hidden(7));
+        ensure("which moved what is hidden", layout.hiddenRevision() != was);
+        ensure_equals("four lines take none", layout.totalHeight(), 6 * row_h);
+        layout.setHidden(By::Folds, 3, 3, true);
+        was = layout.hiddenRevision();
+        layout.setHidden(By::Folds, 3, 3, true);
+        ensure("hiding a line hidden again moves nothing", layout.hiddenRevision() == was);
+        layout.setHidden(By::Host, 2, 5, false);
+        ensure("the host's shown: the fold's still hidden", !layout.hidden(2) && layout.hidden(3) && !layout.hidden(4));
+        doc.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 0)), "new\n");
+        ensure("slid by a line made above", !layout.hidden(3) && layout.hiddenBy(4, By::Folds));
+        layout.setHidden(By::Any, 0, 10, false);
+        ensure("all shown", !layout.anyHidden());
+    }
+    template<> template<>
+    void altextlayout_object::test<20>()
+    {
+        set_test_name("gaps: rows of nothing above a line in its height, its top its text's; hidden with it; one changed moves the tops below; below the text");
+        ready("0\n1\n2\n3\n4\n5");
+        const S32        row_h = layout.rowHeight();
+        std::vector<S32> gaps(7, 0);
+        gaps[3]       = 2;
+        gaps[6]       = 1;
+        S32 asked     = 0;
+        layout.setGapProvider([&](S32 line) {
+            ++asked;
+            return gaps[static_cast<size_t>(line)];
+        });
+        ensure_equals("in the height, and below the text", layout.totalHeight(), 9 * row_h);
+        ensure("the line's top its text's", layout.lineTop(3) == 5 * row_h && layout.gapTop(3) == 3 * row_h && layout.lineTop(4) == 6 * row_h);
+        ensure("past the last: the bottom of everything", layout.lineTop(6) == 9 * row_h && layout.gapTop(6) == 8 * row_h);
+        ensure("a y in the gap over the line below it", layout.lineAtY(3 * row_h) == 3 && layout.lineAtY(5 * row_h - 1) == 3 && layout.gapAtY(4 * row_h) == 3);
+        ensure("its text not in it", layout.gapAtY(5 * row_h) == -1 && layout.gapAtY(2 * row_h) == -1);
+        ensure("past the text, in the rows below it", layout.gapAtY(8 * row_h) == 6 && layout.gapAtY(9 * row_h) == -1 && layout.lineAtY(8 * row_h) == 5);
+
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 2, 3, true);
+        ensure("hidden, its gap with it", layout.gapRows(3) == 0 && layout.totalHeight() == 5 * row_h && layout.lineTop(4) == 2 * row_h);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 2, 3, false);
+        ensure("shown, its gap again", layout.gapRows(3) == 2 && layout.totalHeight() == 9 * row_h);
+
+        // One line's gap changed: its own height set, nothing summed again.
+        const U32 was = layout.heightsRevision();
+        gaps[1]       = 1;
+        asked         = 0;
+        layout.gapChanged(1);
+        ensure("the tops below moved", layout.lineTop(2) == 3 * row_h && layout.totalHeight() == 10 * row_h && layout.heightsRevision() != was);
+        ensure("asked of that line alone", asked <= 3);
+        gaps[6] = 0;
+        layout.gapChanged(6);
+        ensure_equals("the rows below the text let go", layout.totalHeight(), 9 * row_h);
+
+        // Made again where many changed.
+        gaps.assign(7, 0);
+        layout.gapsChanged();
+        ensure_equals("none", layout.totalHeight(), 6 * row_h);
+        layout.setGapProvider(nullptr);
+        ensure("none asked of nobody", layout.gapRows(3) == 0 && layout.gapAtY(0) == -1);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<21>()
+    {
+        set_test_name("the first line in sight after one, over a run of ten thousand hidden lines, gaps or none; the line count where none is");
+        std::string many = "first";
+        for (S32 n = 0; n < 10000; ++n)
+        {
+            many += "\nhidden";
+        }
+        many += "\nlast";
+        ready(many.c_str());
+        ensure("none hidden: the next", layout.visibleAfter(0) == 1 && layout.visibleAfter(-5) == 0);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 1, 10000, true);
+        ensure("over the run", layout.visibleAfter(0) == 10001);
+        ensure("from inside the run", layout.visibleAfter(1) == 10001 && layout.visibleAfter(9999) == 10001);
+        ensure("past the last: the count", layout.visibleAfter(10001) == 10002);
+        std::vector<S32> gaps(10003, 0);
+        gaps[10001] = 2;
+        layout.setGapProvider([&gaps](S32 line) { return gaps[static_cast<size_t>(line)]; });
+        ensure("a gap over the line after the run: still that line", layout.visibleAfter(0) == 10001);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 9000, 10001, true);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 1, 8999, false);
+        ensure("a run to the end: none after it", layout.visibleAfter(8999) == 10002 && layout.visibleAfter(5) == 6);
+        layout.setGapProvider(nullptr);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<22>()
+    {
+        set_test_name("on or past the end of a row the line wraps after is a column on that row, so an x kept from row to row stops on a short row");
+        // Rows of 'aaaaaaaaaaaa ', 'bb ' -- the word after it does not fit
+        // beside it -- and 'cccccccccccccc'.
+        ready("aaaaaaaaaaaa bb cccccccccccccc");
+        layout.setWrapWidth(static_cast<S32>(layout.xOf(0, 14)) + 2);
+        const ALTextLayout::Line& line = layout.line(0);
+        ensure_equals("three rows", line.rows.size(), size_t(3));
+        ensure("the short one in the middle", line.rows[1].begin == 13 && line.rows[1].end == 16);
+        for (bool round : { false, true })
+        {
+            const std::string how = round ? ", rounded" : "";
+            ensure_equals("past the short row: before the space it hangs" + how, layout.columnAt(0, 1, line.rows[1].width + 20.f, round), 15);
+            ensure_equals("on the space it hangs" + how, layout.columnAt(0, 1, line.rows[1].width - 0.5f, round), 15);
+            ensure_equals("past the first row" + how, layout.columnAt(0, 0, line.rows[0].width + 20.f, round), 12);
+            ensure_equals("past the last row: the line's end" + how, layout.columnAt(0, 2, line.rows[2].width + 20.f, round), 30);
+        }
+        // Up from the line's end and down again, at the x the caret kept:
+        // each row in turn, none skipped and none stuck at.
+        const F32 kept = layout.xOf(0, 30);
+        const S32 up   = layout.columnAt(0, 1, kept, true);
+        S32       on   = -1;
+        layout.xOf(0, up, &on);
+        ensure_equals("up onto the short row, and drawn there", on, 1);
+        const S32 again = layout.columnAt(0, on - 1, kept, true);
+        ensure_equals("up again onto the first", layout.rowOf(0, again), 0);
+        const S32 down = layout.columnAt(0, layout.rowOf(0, again) + 1, kept, true);
+        ensure_equals("down onto the short row, not past it", layout.rowOf(0, down), 1);
+        ensure_equals("down again to the line's end", layout.columnAt(0, layout.rowOf(0, down) + 1, kept, true), 30);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<23>()
+    {
+        set_test_name("a line let go of and then changed counts for the widest by the text it has, not by what it measured before");
+        std::string text;
+        for (S32 i = 0; i < 20; ++i)
+        {
+            text += i == 12 ? "a line far longer than every other line of the text\n" : "line\n";
+        }
+        ready(text.c_str());
+        for (S32 l = 0; l < layout.lineCount(); ++l)
+        {
+            layout.line(l);
+        }
+        const F32 long_width = layout.line(12).width;
+        const F32 space      = layout.columnWidth();
+        ensure("the long line the widest", close_to(layout.contentWidth(), long_width));
+        // Let go of, far from what is in sight, then changed there: a
+        // short line made long, as Replace All makes one.
+        layout.trim(0, 3);
+        doc.replace(ALTextRange(ALTextPos(8, 0), ALTextPos(8, 4)), std::string(400, 'x'));
+        ensure("the line made long counts as long: " + std::to_string(layout.contentWidth()), layout.contentWidth() >= 399.f * space);
+        // And the long lines made short.
+        doc.replace(ALTextRange(ALTextPos(12, 0), ALTextPos(12, doc.lineLength(12))), "x");
+        doc.replace(ALTextRange(ALTextPos(8, 0), ALTextPos(8, 400)), "y");
+        ensure("the long lines made short count as short: " + std::to_string(layout.contentWidth()), layout.contentWidth() < long_width * 0.5f);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<24>()
+    {
+        set_test_name("the widest line is kept up through edits as a count of every line finds it: a line typed wider, the widest cut short, lines made and taken away");
+        ready("aa\nbbbbbb\ncc\nd");
+        const auto check = [&](const std::string& what) {
+            F32 widest = 0.f;
+            for (S32 l = 0; l < layout.lineCount(); ++l)
+            {
+                widest = llmax(widest, layout.line(l).width);
+            }
+            ensure_equals(what, layout.contentWidth(), widest);
+        };
+        check("laid out");
+        doc.insert(ALTextPos(2, 2), "cccccccccc");
+        check("a line typed wider than the widest");
+        doc.remove(ALTextRange(ALTextPos(2, 2), ALTextPos(2, 12)));
+        check("the widest cut short");
+        doc.insert(ALTextPos(0, 0), "dddddddddddddddd\n\n");
+        check("lines made, one of them the widest");
+        doc.remove(ALTextRange(ALTextPos(0, 0), ALTextPos(2, 0)));
+        check("lines taken away with the widest");
+        doc.insert(ALTextPos(3, 1), "\neeeeeeeeeeeeeeeeeeee");
+        check("a line made below, wider than the rest");
+        layout.invalidateLine(4);
+        check("that line laid out again");
+    }
+
+    template<> template<>
+    void altextlayout_object::test<25>()
+    {
+        set_test_name("the line at a y past a run hidden to the end is the last in sight, and the last in sight before a line is found over a run, gaps or none");
+        std::string many = "first\nsecond";
+        for (S32 n = 0; n < 5000; ++n)
+        {
+            many += "\nhidden";
+        }
+        ready(many.c_str());
+        const S32 row  = layout.rowHeight();
+        const S32 last = layout.lineCount() - 1;
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 2, last, true);
+        ensure_equals("past everything in sight: the last line in sight", layout.lineAtY(10 * row), 1);
+        ensure_equals("on it, itself", layout.lineAtY(row), 1);
+        ensure_equals("before the run, from past it", layout.visibleBefore(last + 1), 1);
+        ensure_equals("from inside it", layout.visibleBefore(2500), 1);
+        ensure_equals("before a line in sight, the one above it", layout.visibleBefore(1), 0);
+        ensure_equals("none before the first", layout.visibleBefore(0), -1);
+        std::vector<S32> gaps(static_cast<size_t>(last + 2), 0);
+        gaps[1] = 2;
+        layout.setGapProvider([&gaps](S32 line) { return gaps[static_cast<size_t>(line)]; });
+        ensure_equals("a gap over the last in sight: still it", layout.visibleBefore(last + 1), 1);
+        ensure_equals("and past everything, it", layout.lineAtY(20 * row), 1);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 1, 1, true);
+        ensure_equals("the run from the second line: the first", layout.visibleBefore(last + 1), 0);
+        ensure_equals("past everything, the first", layout.lineAtY(20 * row), 0);
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 0, 0, true);
+        ensure_equals("everything hidden: none", layout.visibleBefore(last + 1), -1);
+        layout.setGapProvider(nullptr);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<26>()
+    {
+        set_test_name("an inlay is a cell of its own: a click on the half of the character beside it nearer it is before the character, and a click on it is its column");
+        ready("f(a, b)");
+        layout.setInlayProvider([](S32 line, std::vector<ALTextLayout::Inlay>& out) {
+            out.push_back(ALTextLayout::Inlay{ 2, 40.f, true, 0 });
+            out.push_back(ALTextLayout::Inlay{ 5, 40.f, false, 1 });
+        });
+        // An argument's name before 'a', which the caret at a's column
+        // stands after.
+        const F32 a_left  = layout.xOf(0, 2);
+        const F32 a_right = layout.xOf(0, 3);
+        ensure("the name before a", a_left >= 40.f && a_right > a_left);
+        ensure_equals("a's near half: before a", layout.columnAt(0, 0, a_left + (a_right - a_left) * 0.25f, true), 2);
+        ensure_equals("a's far half: after it", layout.columnAt(0, 0, a_left + (a_right - a_left) * 0.75f, true), 3);
+        ensure_equals("the name's near half: a's column", layout.columnAt(0, 0, a_left - 30.f, true), 2);
+        ensure_equals("its far half too", layout.columnAt(0, 0, a_left - 5.f, true), 2);
+        // A word after the text before 'b', which the caret at b's column
+        // stands before.
+        const ALTextLayout::Line& line   = layout.line(0);
+        F32                       b_left = -1.f;
+        for (const ALTextLayout::Glyph& glyph : line.glyphs)
+        {
+            if (glyph.cluster == 5 && glyph.inlay < 0)
+            {
+                b_left = glyph.pen - line.rows[0].xStart;
+                break;
+            }
+        }
+        const F32 b_right = layout.xOf(0, 6);
+        ensure("the word before b", b_left >= layout.xOf(0, 5) + 39.f && b_right > b_left);
+        ensure_equals("b's near half: before b", layout.columnAt(0, 0, b_left + (b_right - b_left) * 0.25f, true), 5);
+        ensure_equals("the word's far half: b's column", layout.columnAt(0, 0, b_left - 5.f, true), 5);
+        searchedAsWalked(0);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<27>()
+    {
+        set_test_name("how many lines each owner hides is kept through hiding, showing and edits, as the lines themselves say");
+        ready("0\n1\n2\n3\n4\n5\n6\n7\n8\n9");
+        typedef ALTextLayout::HiddenBy By;
+        // Each owner's lines, and anybody's, counted one by one.
+        const auto counted = [this](By by) {
+            S32 n = 0;
+            for (S32 l = 0; l < layout.lineCount(); ++l)
+            {
+                n += (by == By::Any ? layout.hidden(l) : layout.hiddenBy(l, by)) ? 1 : 0;
+            }
+            return n;
+        };
+        const auto as_counted = [&](const std::string& what) {
+            ensure_equals(what + ": the folds'", layout.hiddenCount(By::Folds), counted(By::Folds));
+            ensure_equals(what + ": the host's", layout.hiddenCount(By::Host), counted(By::Host));
+            ensure_equals(what + ": either's", layout.hiddenCount(By::Any), counted(By::Any));
+        };
+        ensure("none hidden", layout.hiddenCount(By::Folds) == 0 && layout.hiddenCount(By::Host) == 0 && layout.hiddenCount(By::Any) == 0);
+        layout.setHidden(By::Host, 2, 5, true);
+        layout.setHidden(By::Folds, 4, 7, true);
+        ensure("four each, six in all", layout.hiddenCount(By::Folds) == 4 && layout.hiddenCount(By::Host) == 4 && layout.hiddenCount(By::Any) == 6);
+        layout.setHidden(By::Folds, 4, 7, true);
+        ensure_equals("hidden again, the same four", layout.hiddenCount(By::Folds), 4);
+        const U32 asked = layout.hiddenByAsked();
+        as_counted("hidden");
+        ensure_equals("each line asked who hides it, once for each owner", layout.hiddenByAsked(), asked + 20);
+
+        // Lines 3 and 4 made one: 3 the host's, 4 both's, and the line made
+        // in sight.
+        doc.replace(ALTextRange(ALTextPos(3, 0), ALTextPos(4, 1)), "x");
+        ensure("the folds' other three left, a line up", layout.hiddenCount(By::Folds) == 3 && layout.hiddenBy(4, By::Folds) && layout.hiddenBy(6, By::Folds));
+        ensure_equals("the host's other two", layout.hiddenCount(By::Host), 2);
+        as_counted("an edit over hidden lines");
+        doc.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 0)), "new\n");
+        as_counted("a line made above");
+        layout.setHidden(By::Any, 5, 5, false);
+        ensure("one both hid shown", layout.hiddenCount(By::Folds) == 2 && layout.hiddenCount(By::Host) == 1);
+        as_counted("one both hid shown");
+        layout.setHidden(By::Any, 0, 20, false);
+        ensure("none hidden again", layout.hiddenCount(By::Folds) == 0 && layout.hiddenCount(By::Host) == 0 && layout.hiddenCount(By::Any) == 0);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<28>()
+    {
+        set_test_name("lines made or taken go into and out of the heights summed, the lines made counted with their gaps once asked: the tops a layout made afresh finds, and no line else asked");
+        std::string text;
+        for (S32 i = 0; i < 3000; ++i)
+        {
+            text += (i % 7 == 0 ? "g" : "line ") + std::to_string(i) + "\n";
+        }
+        ready(text.c_str());
+        // A gap of a row over each line that starts with g, as a host that
+        // keeps its gaps with the lines' text; and two rows below the text
+        // while it has an odd number of lines.
+        S32        asked = 0;
+        const auto gaps  = [this, &asked](S32 line) {
+            ++asked;
+            if (line >= doc.lineCount())
+            {
+                return doc.lineCount() % 2 ? 2 : 0;
+            }
+            return doc.line(line).compare(0, 1, "g") == 0 ? 1 : 0;
+        };
+        layout.setGapProvider(gaps);
+        const S32 row = layout.rowHeight();
+        const auto same = [&](const std::string& what) {
+            ALTextLayout fresh;
+            fresh.attach(&doc);
+            fresh.setFont(LLFontGL::getFontMonospace());
+            fresh.setGapProvider(gaps);
+            ensure_equals(what + ": the whole height", layout.totalHeight(), fresh.totalHeight());
+            for (S32 l = 0; l <= doc.lineCount(); l += 97)
+            {
+                ensure_equals(what + ": the top of " + std::to_string(l), layout.lineTop(l), fresh.lineTop(l));
+            }
+            ensure_equals(what + ": the last's top", layout.lineTop(doc.lineCount() - 1), fresh.lineTop(doc.lineCount() - 1));
+        };
+        same("as made");
+
+        doc.insert(ALTextPos(10, 0), "g new\n");
+        asked = 0;
+        ensure_equals("a line made, with a gap over it", layout.lineTop(10) - layout.lineTop(9), 2 * row);
+        ensure("only the line made asked, and the rows below the text, a handful of times", asked < 10);
+        same("a line made");
+        doc.replace(ALTextRange(ALTextPos(20, 0), ALTextPos(25, 0)), std::string());
+        same("five lines taken");
+        doc.replace(ALTextRange(ALTextPos(30, 2), ALTextPos(31, 3)), "g\ng\ng");
+        same("two lines made three");
+        doc.replace(ALTextRange(ALTextPos(2000, 0), ALTextPos(2000, 0)), "a\nb\ng\n");
+        doc.replace(ALTextRange(ALTextPos(5, 0), ALTextPos(6, 0)), std::string());
+        same("two edits before any is asked");
+        std::vector<std::pair<ALTextRange, std::string>> batch;
+        batch.emplace_back(ALTextRange(ALTextPos(100, 0), ALTextPos(100, 0)), "g\n");
+        batch.emplace_back(ALTextRange(ALTextPos(400, 0), ALTextPos(403, 0)), std::string());
+        batch.emplace_back(ALTextRange(ALTextPos(900, 1), ALTextPos(900, 1)), "\n\n");
+        doc.replaceMany(std::move(batch));
+        same("a batch's runs");
+        std::string pasted;
+        for (S32 i = 0; i < 2000; ++i)
+        {
+            pasted += i % 3 ? "p\n" : "g\n";
+        }
+        doc.insert(ALTextPos(1500, 0), pasted);
+        same("a paste of thousands, summed again");
+        for (S32 i = 0; i < 1500; ++i)
+        {
+            doc.insert(ALTextPos(i, 0), "\n");
+        }
+        same("many lines made with no height asked between");
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 50, 60, true);
+        doc.replace(ALTextRange(ALTextPos(55, 0), ALTextPos(58, 0)), "g\n");
+        ensure("the hidden lines it replaced gone, the line made in sight", !layout.hidden(55) && layout.hidden(54) && layout.hidden(57));
+        layout.setHidden(ALTextLayout::HiddenBy::Host, 0, doc.lineCount(), false);
+        same("hidden lines replaced, then shown");
+        layout.setGapProvider(nullptr);
+    }
+
+    template<> template<>
+    void altextlayout_object::test<29>()
+    {
+        set_test_name("the widest is kept through lines typed wider, the widest cut short, lines made and taken and a batch's runs, as a count of every line finds it, without every line's width counted again");
+        std::string text;
+        for (S32 i = 0; i < 3000; ++i)
+        {
+            text += std::string(static_cast<size_t>((i * 37) % 61), 'a') + "\n";
+        }
+        ready(text.c_str());
+        // No line laid out: each counts its bytes at a column's width.
+        const auto widest_line = [this] {
+            S32 at = 0;
+            for (S32 l = 1; l < doc.lineCount(); ++l)
+            {
+                at = doc.lineLength(l) > doc.lineLength(at) ? l : at;
+            }
+            return at;
+        };
+        const auto widest = [&] { return static_cast<F32>(doc.lineLength(widest_line())) * layout.columnWidth(); };
+        ensure_equals("as made", layout.contentWidth(), widest());
+        const U32 passes = layout.widthPasses();
+        U32        seed  = 777;
+        const auto next  = [&seed](U32 below) {
+            seed = seed * 1103515245u + 12345u;
+            return below == 0 ? 0 : (seed >> 8) % below;
+        };
+        for (S32 step = 0; step < 1500; ++step)
+        {
+            const U32 kind = next(10);
+            const S32 line = next(3) == 0 ? widest_line() : static_cast<S32>(next(static_cast<U32>(doc.lineCount())));
+            const S32 length = doc.lineLength(line);
+            if (kind < 3)
+            {
+                doc.insert(ALTextPos(line, length), std::string(next(30) + 1, 'x'));
+            }
+            else if (kind < 5)
+            {
+                const S32 cut = llmin(length, static_cast<S32>(next(40)) + 1);
+                doc.remove(ALTextRange(ALTextPos(line, length - cut), ALTextPos(line, length)));
+            }
+            else if (kind < 7)
+            {
+                doc.insert(ALTextPos(line, static_cast<S32>(next(static_cast<U32>(length + 1)))), "\n" + std::string(next(90), 'b') + (next(2) ? "\n" : ""));
+            }
+            else if (kind < 9)
+            {
+                const S32 last  = llmin(doc.lineCount() - 1, line + static_cast<S32>(next(4)));
+                const S32 from  = static_cast<S32>(next(static_cast<U32>(length + 1)));
+                const S32 to    = static_cast<S32>(next(static_cast<U32>(doc.lineLength(last) + 1)));
+                doc.remove(ALTextRange(ALTextPos(line, from), ALTextPos(last, last == line ? llmax(from, to) : to)));
+            }
+            else if (line + 200 < doc.lineCount())
+            {
+                std::vector<std::pair<ALTextRange, std::string>> batch;
+                batch.emplace_back(ALTextRange(ALTextPos(line, 0), ALTextPos(line, 0)), std::string(next(120), 'c') + "\n\n");
+                batch.emplace_back(ALTextRange(ALTextPos(line + 100, 0), ALTextPos(line + 102, 0)), std::string());
+                batch.emplace_back(ALTextRange(ALTextPos(line + 200, 0), ALTextPos(line + 200, 0)), "d\n" + std::string(next(120), 'd'));
+                doc.replaceMany(std::move(batch));
+            }
+            ensure_equals("step " + std::to_string(step), layout.contentWidth(), widest());
+        }
+        ensure_equals("no edit had every line's width counted again", layout.widthPasses(), passes);
+
+        std::string pasted;
+        for (S32 i = 0; i < 2000; ++i)
+        {
+            pasted += std::string(static_cast<size_t>(i % 150), 'p') + "\n";
+        }
+        doc.insert(ALTextPos(10, 0), pasted);
+        ensure_equals("a paste of thousands", layout.contentWidth(), widest());
+        ensure_equals("a paste of thousands has every line's width counted again, once", layout.widthPasses(), passes + 1);
+
+        // Laid out, a line counts its width as laid.
+        F32 laid = 0.f;
+        for (S32 l = 0; l < doc.lineCount(); ++l)
+        {
+            laid = llmax(laid, layout.line(l).width);
+        }
+        ensure_equals("every line laid out", layout.contentWidth(), laid);
+        const S32 at = widest_line();
+        doc.remove(ALTextRange(ALTextPos(at, 0), ALTextPos(at, doc.lineLength(at))));
+        laid = 0.f;
+        for (S32 l = 0; l < doc.lineCount(); ++l)
+        {
+            laid = llmax(laid, l == at ? 0.f : layout.line(l).width);
+        }
+        ensure_equals("the widest laid out emptied, before it is laid out again", layout.contentWidth(), laid);
     }
 }
