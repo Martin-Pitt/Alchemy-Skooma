@@ -58,7 +58,6 @@ namespace
     constexpr F32 OPEN_MAX_COVER = 0.05f;
     constexpr F32 UNDER_FLIGHT_SHARE = 0.3f;    ///< a space this much under an outdoor flight's air is sheltered by it
     constexpr F32 UNDER_FLIGHT_REACH_M = 2.f;   ///< and opens onto ground this far off across low headroom
-    constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
@@ -4989,9 +4988,8 @@ namespace sknav
         }
 
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
-        // space around it, or else the one below across a thin solid; a floor
-        // on a solid thicker than that is a level of its own.
-        const S32 slab = static_cast<S32>(std::lround(CARRY_SLAB_M / mUnit));
+        // space it steps onto; never the one below across a solid, which no
+        // one walks to from there.
         std::vector<std::vector<U32>> leaf_of(mTiles.size());
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
@@ -5100,30 +5098,6 @@ namespace sknav
                 ring.swap(next);
             }
         };
-        spread();
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
-            const TileAir& a = air(t);
-            std::vector<U32>& gs = mGapSpace[t];
-            AirColumn col;
-            for (S32 iy = 0; iy < a.mHeight; ++iy)
-            {
-                for (S32 ix = 0; ix < a.mWidth; ++ix)
-                {
-                    column(t, ix, iy, col);
-                    U32 below = 0;
-                    for (U32 i = 0; i < col.mCount; ++i)
-                    {
-                        U32& s = gs[col.mGap[i]];
-                        if (!s && below && floorAt(t, col, i, ix, iy) - ceilOf(t, a.mGaps[col.mGap[i - 1]]) <= slab)
-                        {
-                            s = below;
-                        }
-                        below = s;
-                    }
-                }
-            }
-        }
         spread();
 
         // Bounds over every gap a space holds, now that all have joined.

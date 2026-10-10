@@ -973,7 +973,7 @@ namespace tut
     template<> template<>
     void sknavrooms_object::test<26>()
     {
-        set_test_name("a roof joins the room under it across a thin slab, not across a thick one, and every space's bounds hold its gaps");
+        set_test_name("a roof never joins the room under it, thin slab or thick, and every space's bounds hold its gaps");
         Scene s = twoRooms();
         // A solid block beside the rooms, its top flush with their roof, and a
         // tower over a small room whose roof lies 4 m of solid above its ceiling.
@@ -988,8 +988,8 @@ namespace tut
         const Space* west = r.at(6.f, 6.f);
         const Space* tower = r.at(27.f, 5.f);
         ensure("rooms found", west && tower);
-        ensure("the thin roof is the room's", r.at(6.f, 6.f, 3.5f) == west);
-        ensure("the roof over the block joins the roof beside it", r.at(20.f, 6.f, 3.5f) == r.at(16.f, 6.f, 3.5f) && r.at(20.f, 6.f, 3.5f));
+        ensure("the thin roof is not the room's", r.at(6.f, 6.f, 3.5f) != west);
+        ensure("a roof no one walks onto holds no space, over the block or the rooms", !r.at(20.f, 6.f, 3.5f) && !r.at(16.f, 6.f, 3.5f));
         ensure("the tower's top is not the room 4 m below", r.at(27.f, 5.f, 7.5f) != tower);
         ensure_equals("no gap outside its space's bounds", r.outOfBounds(), 0u);
     }
