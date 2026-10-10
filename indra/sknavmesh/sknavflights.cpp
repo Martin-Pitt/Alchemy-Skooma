@@ -480,6 +480,7 @@ namespace
     constexpr F64 PLANAR = 0.92;            ///< a slope group whose normals agree less than this is furniture
     constexpr F64 TURN_DEG = 30.0;          ///< joined slopes whose runs differ more are two flights
     constexpr F64 JOIN_DZ = 0.5;
+    constexpr F64 JOIN_SLOPE_DEG = 20.0;    ///< slope groups steeper or gentler than each other by more are two flights
     constexpr F64 MIN_WIDTH_M = 0.9;        ///< narrower is a rail or a wall top
     constexpr F64 MIN_AREA_M2 = 1.5;        ///< without a name, smaller is a prop
     constexpr F64 MAX_AREA_UNCUED_M2 = 100.0;   ///< and bigger is a roof or a hillside
@@ -680,7 +681,7 @@ namespace
             }
         }
         std::vector<U8> cand(ngroups, 0), has_dir(ngroups, 0);
-        std::vector<F64> dir_x(ngroups, 0.0), dir_y(ngroups, 0.0);
+        std::vector<F64> dir_x(ngroups, 0.0), dir_y(ngroups, 0.0), slope_deg(ngroups, 0.0), own_rise(ngroups, 0.0);
         bool any = false;
         for (S32 g = 0; g < ngroups; ++g)
         {
@@ -692,19 +693,27 @@ namespace
             const F64 mz = mean[g].z / a;
             const F64 deg = std::acos(std::min(1.0, mz)) * RAD_TO_DEG;
             const F64 planar = std::sqrt(mean[g].x * mean[g].x + mean[g].y * mean[g].y + mean[g].z * mean[g].z) / a;
-            const bool slope = kind[g] == SLOPE_GROUP && deg >= MIN_SLOPE_DEG && planar >= PLANAR && !(deg < FLOORISH_DEG && area[g] > FLOORISH_M2);
-            F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30;
+            F64 x0 = 1e30, y0 = 1e30, x1 = -1e30, y1 = -1e30, z0 = 1e30, z1 = -1e30;
+            bool named = false;
             for (const S32 t : tris_of[g])
             {
+                named = named || (t < static_cast<S32>(cues.size()) && (cues[t] == CUE_STAIR || cues[t] == CUE_RAMP));
                 for (S32 c = 0; c < 3; ++c)
                 {
                     const V3& v = P.mV[P.mT[t * 3 + c]];
                     x0 = std::min(x0, v.x);
                     y0 = std::min(y0, v.y);
+                    z0 = std::min(z0, v.z);
                     x1 = std::max(x1, v.x);
                     y1 = std::max(y1, v.y);
+                    z1 = std::max(z1, v.z);
                 }
             }
+            slope_deg[g] = deg;
+            own_rise[g] = z1 - z0;
+            // a slope that climbs less than a step, unnamed, is a hull skirt or a prop's bevel
+            const bool slope = kind[g] == SLOPE_GROUP && deg >= MIN_SLOPE_DEG && planar >= PLANAR && !(deg < FLOORISH_DEG && area[g] > FLOORISH_M2) &&
+                               (own_rise[g] >= P.mClimb || named);
             // a tread is shallow: a deeper level group is a landing
             const bool tread = kind[g] == TREAD_GROUP && area[g] <= TREAD_MAX_M2 && std::min(x1 - x0, y1 - y0) <= MAX_GOING_M;
             cand[g] = slope || tread;
@@ -764,6 +773,12 @@ namespace
                         const S32 o = grp[u];
                         F64 z = 0;
                         if (o < 0 || o == g || !cand[o] || find(o) == find(g) || !nearZ(P, u, v.x, v.y, z) || std::fabs(z - v.z) > JOIN_DZ)
+                        {
+                            continue;
+                        }
+                        // a low or much gentler slope beside a steep one is not part of its flight
+                        if (kind[g] == SLOPE_GROUP && kind[o] == SLOPE_GROUP &&
+                            (std::fabs(slope_deg[g] - slope_deg[o]) > JOIN_SLOPE_DEG || std::min(own_rise[g], own_rise[o]) < FLIGHT_MIN_RISE_M))
                         {
                             continue;
                         }
