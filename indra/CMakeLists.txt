@@ -21,15 +21,9 @@ set(AL_CHANNEL "Alchemy Test" CACHE STRING "Viewer Channel Name")
 set(AL_GRID agni CACHE STRING "Target Grid")
 
 # The Velopack update client in the viewer, and the velopack target that
-# packs the installer and the update feed; see cmake/ViewerPackage.cmake.
-# Windows and macOS ship through it; Linux does not.
-cmake_dependent_option(
-  AL_USE_VELOPACK
-  "Build the Velopack update client and the velopack packaging target"
-  OFF
-  "WIN32 OR APPLE"
-  OFF
-)
+# packs the installer, or on Linux the AppImage, and the update feed; see
+# cmake/ViewerPackage.cmake.
+option(AL_USE_VELOPACK "Build the Velopack update client and the velopack packaging target" OFF)
 
 # Build executable options
 option(AL_BUILD_VIEWER "Build the viewer project" ON)
@@ -60,7 +54,14 @@ option(AL_BUILD_DULLAHAN_EXAMPLE "Build the Dullahan OpenGL example application"
 # Plugin Build Options
 option(AL_BUILD_EXAMPLE_PLUGIN "Build support for SLPlugin example plugin" ON)
 option(AL_BUILD_CEF_PLUGIN "Build support for SLPlugin CEF web plugin." ON)
-option(AL_BUILD_VLC_PLUGIN "Build support for SLPlugin VLC media plugin." ON)
+# GStreamer plays media on Linux. VLC there is built only when asked for, and
+# used only with MediaPluginForceVLC.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  set(al_vlc_plugin_default OFF)
+else()
+  set(al_vlc_plugin_default ON)
+endif()
+option(AL_BUILD_VLC_PLUGIN "Build support for SLPlugin VLC media plugin." ${al_vlc_plugin_default})
 cmake_dependent_option(
   AL_BUILD_GSTREAMER_PLUGIN
   "Build support for SLPlugin Gstreamer media plugin."
@@ -83,8 +84,7 @@ option(AL_USE_LTO "Enable Link Time Optimization" OFF)
 option(AL_USE_OPENXR "Enable building with OpenXR support (Experimental)" OFF)
 option(AL_USE_PRECOMPILED_HEADERS "Enable use of precompiled header directives where supported." ON)
 
-# Audio Engines
-option(AL_USE_FMODSTUDIO "Enable support for the FMOD Studio audio engine" OFF)
+# Audio Engines; FMOD Studio is with the proprietary libraries below.
 option(AL_USE_FAUDIO "Enable support for the FAudio audio engine" ON)
 option(AL_USE_OPENAL "Enable support for the OpenAL audio engine" OFF)
 
@@ -121,17 +121,42 @@ option(AL_ENABLE_PROPRIETARY "Build with support for non-free libraries" OFF)
 cmake_dependent_option(
   AL_USE_KDU
   "Enable support for the Kakadu JPEG2000 decoding library"
-  ON
+  OFF
   "AL_ENABLE_PROPRIETARY"
   OFF
 )
 
-# The Discord Social SDK is downloaded per application from Discord and
-# points to by AL_DISCORD_SDK_DIR; see cmake/Discord.cmake.
+# The Discord Social SDK comes from AlchemyViewer's private vcpkg registry;
+# see cmake/Discord.cmake. It is built for Windows and macOS, x64 and arm64,
+# and Linux x64, and the option is held off anywhere else. This runs before
+# project(), so on Linux the host stands for the target, as it does for the
+# triplet: nothing cross-compiles the viewer there. CMAKE_HOST_SYSTEM_PROCESSOR
+# is not set until project() runs, so the host is asked directly, as
+# cmake/BootstrapVcpkg.cmake does for the triplet.
+set(al_discord_supported ON)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  cmake_host_system_information(RESULT al_host_arch QUERY OS_PLATFORM)
+  if(NOT al_host_arch MATCHES "^(x86_64|AMD64|amd64)$")
+    set(al_discord_supported OFF)
+  endif()
+  unset(al_host_arch)
+endif()
 cmake_dependent_option(
   AL_USE_DISCORD
-  "Enable Discord presence and friends through the Discord Social SDK"
+  "Enable Discord rich presence through the Discord Social SDK"
+  ON
+  "AL_ENABLE_PROPRIETARY;al_discord_supported"
   OFF
+)
+
+# FMOD Studio comes from the same registry, and is built for every platform
+# the viewer is; see cmake/FMODSTUDIO.cmake. It takes precedence over the
+# other audio engines when the viewer starts, so a proprietary build plays
+# through it.
+cmake_dependent_option(
+  AL_USE_FMODSTUDIO
+  "Enable support for the FMOD Studio audio engine"
+  ON
   "AL_ENABLE_PROPRIETARY"
   OFF
 )
@@ -200,9 +225,20 @@ cmake_dependent_option(
 # WebRTC voice. Off in sanitized builds, which cannot link libwebrtc.
 option(AL_USE_WEBRTC "Build with WebRTC voice" ON)
 
-# Signing
-option(AL_ENABLE_SIGNING "Enable signing the viewer" OFF)
-set(AL_SIGNING_IDENTITY "" CACHE STRING "Specifies the signing identity to use, if necessary.")
+# macOS signing. The install step always signs the bundle: with this
+# identity, or ad-hoc when it is empty.
+set(
+  AL_SIGNING_IDENTITY
+  ""
+  CACHE STRING
+  "The macOS Developer ID to sign the bundle with; empty signs ad-hoc"
+)
+set(
+  AL_NOTARY_PROFILE
+  ""
+  CACHE STRING
+  "The notarytool keychain profile the macOS velopack target notarizes with; empty skips notarization"
+)
 
 # Warn about any option name from before the AL_ scheme.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RetiredOptions.cmake)
@@ -257,6 +293,14 @@ endif()
 
 if(AL_USE_KDU)
   list(APPEND VCPKG_MANIFEST_FEATURES "kdu")
+endif()
+
+if(AL_USE_DISCORD)
+  list(APPEND VCPKG_MANIFEST_FEATURES "discord")
+endif()
+
+if(AL_USE_FMODSTUDIO)
+  list(APPEND VCPKG_MANIFEST_FEATURES "fmodstudio")
 endif()
 
 # Setup Tracy feature flags
@@ -365,7 +409,16 @@ if(AL_BUILD_TESTS)
   # Set parallel level to decrease test runtime. Benchmarks are registered
   # as tests under their own label and left out of the default run, since
   # their numbers are their output and a shared parallel run would ruin them.
-  set(CMAKE_CTEST_ARGUMENTS -j${NUM_CORES} --output-on-failure -LE benchmark)
+  # Each run also writes its results as JUnit, which CI keeps.
+  set(
+    CMAKE_CTEST_ARGUMENTS
+    -j${NUM_CORES}
+    --output-on-failure
+    -LE
+    benchmark
+    --output-junit
+    "${CMAKE_BINARY_DIR}/Testing/test-results.xml"
+  )
 
   # Set up our test targets
   set(CTEST_TEST_TARGET_ALIAS BUILD_AND_RUN_TESTS)
@@ -411,6 +464,7 @@ set(
   SDL3
   Sentry
   Tracy
+  Velopack
   WebRTC
 )
 
@@ -432,6 +486,10 @@ add_subdirectory(template_verifier)
 add_subdirectory(dullahan)
 add_subdirectory(llprecompiled)
 add_subdirectory(alscript)
+if(AL_BUILD_TESTS)
+  # LL's LSL compiler, restored as a reference for the script tests.
+  add_subdirectory(lscript)
+endif()
 add_subdirectory(llaudio)
 add_subdirectory(llappearance)
 add_subdirectory(llcharacter)

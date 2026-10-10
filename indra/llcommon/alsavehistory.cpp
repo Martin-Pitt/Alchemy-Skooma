@@ -259,6 +259,12 @@ std::vector<ALSavedText> ALSaveHistory::list(const std::string& key) const
     return listLocked(key);
 }
 
+size_t ALSaveHistory::count(const std::string& key) const
+{
+    std::lock_guard lock(mLock);
+    return key.empty() ? 0 : savesIn(folderOf(key)).size();
+}
+
 bool ALSaveHistory::load(ALSavedText& saved) const
 {
     std::lock_guard lock(mLock);
@@ -270,6 +276,32 @@ bool ALSaveHistory::load(ALSavedText& saved) const
     saved.text  = std::move(read.text);
     saved.whole = true;
     return true;
+}
+
+bool ALSaveHistory::holds(const std::string& key, const LLUUID& asset, const std::string& text, size_t newest) const
+{
+    std::lock_guard lock(mLock);
+    if (key.empty() || newest == 0)
+    {
+        return false;
+    }
+    std::vector<ALSavedText> kept = listLocked(key);
+    if (kept.size() > newest)
+    {
+        kept.resize(newest);
+    }
+    if (asset.notNull() && std::any_of(kept.begin(), kept.end(), [&asset](const ALSavedText& one) { return one.asset == asset; }))
+    {
+        return true;
+    }
+    for (ALSavedText& one : kept)
+    {
+        if (one.bytes == text.size() && readSaved(one.path, one, true) && one.text == text)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ALSaveHistory::rekey(const std::string& from, const std::string& to)

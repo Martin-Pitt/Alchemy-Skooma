@@ -124,6 +124,10 @@ public:
     // from the entry point, before anything can throw.
     static void installTerminateHandler();
 
+    // The log the previous run wrote, or empty when there is none. Known
+    // once the viewer is constructed, which moves the logs into place.
+    static std::string previousLogFile();
+
     bool quitRequested() { return mQuitRequested; }
     bool logoutRequestSent() { return mLogoutRequestSent; }
     bool isSecondInstance() { return mSecondInstance; }
@@ -229,6 +233,9 @@ public:
 
     F32 getMainloopTimeoutSec() const;
     std::string getMainloopWatchdogState() const;
+    // The same in its two parts, "Expired at " or "Paused at " and the
+    // state, which a crash handler can copy out without allocating.
+    std::pair<std::string_view, std::string_view> getMainloopWatchdogStateParts() const;
 
     // Handle the 'login completed' event.
     // *NOTE:Mani Fix this for login abstraction!!
@@ -272,6 +279,11 @@ public:
     // Writes an error code into the error_marker file for use on next startup.
     void createErrorMarker(eLastExecEvent error_code) const;
     bool errorMarkerExists() const;
+    // The error marker a crash handler leaves, unless one is there already.
+    // Async-signal-safe: it opens, writes and closes a file whose path and
+    // contents prepareCrashMarker() composed while the viewer ran.
+    void prepareCrashMarker();
+    void createCrashMarker(eLastExecEvent error_code) const;
 
     void createCloseRequestMarker() const;
     void removeCloseRequestMarker() const;
@@ -285,13 +297,6 @@ public:
     // Good chance of viewer crashing either way, but better than alternatives.
     // Note: mQuitRequested can be aborted by user.
     void outOfMemorySoftQuit();
-
-#ifdef LL_DISCORD
-    static void initDiscordSocial();
-    static void updateDiscordActivity();
-    static void updateDiscordPartyCurrentSize(int32_t size);
-    static void updateDiscordPartyMaxSize(int32_t size);
-#endif
 
 protected:
     virtual bool initWindow(); // Initialize the viewer's window.
@@ -337,6 +342,7 @@ private:
     void cleanupSavedSettings(); // Sets some config data to current or default values during cleanup.
     void removeCacheFiles(const std::string& filemask); // Deletes cached files the match the given wildcard.
 
+    void startDebugInfo(); // Write this run's id and log to "static_debug_info.log", ahead of the rest
     void writeSystemInfo(); // Write system info to "debug_info.log"
 
     void processMarkerFiles();
@@ -361,11 +367,22 @@ private:
 
     bool mSecondInstance; // Is this a second instance of the app?
 
+    // Where the previous run's log was moved as this run started.
+    std::string mPreviousLogFile;
+
     std::string mMarkerFileName;
     LLFile mMarkerFile; // A file created to indicate the app is running.
 
     std::string mLogoutMarkerFileName;
     LLFile mLogoutMarkerFile; // A file created to indicate the app is running.
+
+    // Where createCrashMarker() writes, and the version line it starts with.
+#if LL_WINDOWS
+    std::wstring mCrashMarkerPath;
+#else
+    std::string mCrashMarkerPath;
+#endif
+    std::string mCrashMarkerVersion;
 
     bool mReportedCrash;
 
@@ -422,17 +439,20 @@ extern LLUUID gLastAgentSessionId; // will be set if agent logged in
 
 extern const char* gPlatform;
 
+// Frames drawn: display() counts them. LLFrameTimer::getFrameCount() counts frames of
+// idle(), which go on while nothing is drawn; a wait for a rendered frame uses this one.
 extern U32 gFrameCount;
 extern U32 gForegroundFrameCount;
 
 extern LLPumpIO* gServicePump;
 
-extern U64MicrosecondsImplicit  gStartTime;
-extern U64MicrosecondsImplicit   gFrameTime;                    // The timestamp of the most-recently-processed frame
-extern F32SecondsImplicit       gFrameTimeSeconds;          // Loses msec precision after ~4.5 hours...
-extern F32SecondsImplicit       gFrameIntervalSeconds;      // Elapsed time between current and previous gFrameTimeSeconds
-extern F32      gFPSClamped;                // Frames per second, smoothed, weighted toward last frame
-extern F32      gFrameDTClamped;
+// The frame's time, sampled once at the top of LLAppViewer::idle() from the
+// same reading as LLFrameTimer, and updated every frame, teleports included.
+extern U64MicrosecondsImplicit   gFrameTime;                    // Microseconds since the epoch, as totalTime()
+extern F64SecondsImplicit       gFrameTimeSeconds;          // Seconds since startup, as LLFrameTimer::getUptimeSeconds()
+extern F32SecondsImplicit       gFrameIntervalSeconds;      // This frame's length, as LLFrameTimer::getFrameDeltaTimeF32()
+extern F32      gFPSClamped;                // Frames per second, smoothed, weighted toward last frame: a rate to show or test, not a dt
+extern F32      gFrameDTClamped;            // gFrameIntervalSeconds clamped to 0.1 ms..1 s: the dt for anything that integrates a rate
 
 extern LLTimer gRenderStartTime;
 extern LLFrameTimer gForegroundTime;
