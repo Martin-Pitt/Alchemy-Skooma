@@ -2832,6 +2832,69 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
     LL_PROFILE_ZONE_NUM(tiles_seen);
 }
 
+std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& mesh, const TileKey& key, const Tile& tile) const
+{
+    if (tile.mWallRuns && tile.mWallRunsAt == mRevision)
+    {
+        return tile.mWallRuns;
+    }
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    const dtNavMesh* nav = mesh.mNav[c];
+    const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
+    if (!dt || !dt->header || !tile.mPolySpace || !tile.mAir || !mesh.mStampEnc)
+    {
+        return nullptr;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+    // The tile's air and its neighbours', each with the gaps' spaces the stamp was bound to.
+    const EnclosureProductPtr enc = mesh.mStampEnc;
+    std::vector<WallAir> around;
+    for (S32 dy = -1; dy <= 1; ++dy)
+    {
+        for (S32 dx = -1; dx <= 1; ++dx)
+        {
+            const auto it = mesh.mTiles.find(TileKey{ key.mX + dx, key.mY + dy });
+            if (it != mesh.mTiles.end() && it->second.mAir)
+            {
+                around.push_back({ it->second.mAir, enc->tile(it->first) });
+            }
+        }
+    }
+    const WallAirReader reader(std::move(around), [enc](U16 s) { return s <= enc->mSpaceIds.size() ? enc->mSpaceIds[s - 1] : 0u; });
+    TileBuildInput params;
+    fillParams(params);
+    WallRunParams wp;
+    wp.mRadius = params.mParams[c].mRadius;
+    wp.mClimb = params.mParams[c].mClimb;
+    wp.mHeight = params.mParams[c].mHeight;
+    auto runs = std::make_shared<std::vector<WallRun>>();
+    buildWallRuns(*dt, *tile.mPolySpace, reader, wp, *runs);
+    tile.mWallRuns = runs;
+    tile.mWallRunsAt = mRevision;
+    return runs;
+}
+
+void SKNavMesh::wallRunsIn(const LLVector3d& min, const LLVector3d& max, const WallRunFn& fn) const
+{
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile) {
+            if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max))
+            {
+                return;
+            }
+            if (const auto runs = tileWallRuns(mesh, key, tile))
+            {
+                for (const WallRun& r : *runs)
+                {
+                    fn(mesh.mOrigin, mesh.mId, key, r);
+                }
+            }
+        });
+    }
+}
+
 void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const PolyTileFn& fn) const
 {
     // Keep the key for Detour lookup while querying only the requested rectangle.
@@ -3937,6 +4000,10 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
     }
     out.mStamp = tile.mStampGeom.get();
     out.mBinding = tile.mBinding.get();
+    const auto runs = tileWallRuns(mesh, key, tile);
+    out.mWallRuns = runs.get();
+    const StoreyProductPtr st = storeys(mesh.mId);
+    out.mStoreys = st.get();
     writeExportTile(file, mesh.mOrigin, out, counts);
 }
 
@@ -4090,7 +4157,12 @@ std::string SKNavMesh::exportAll() const
             writeTile(file, mesh, t.first, t.second, counts);
         }
         file << ']';
-        mRooms->writeSpaces(file, mesh.mId, storeys(mesh.mId).get());
+        const StoreyProductPtr st = storeys(mesh.mId);
+        mRooms->writeSpaces(file, mesh.mId, st.get());
+        if (st)
+        {
+            writeExportStoreys(file, mesh.mOrigin, *st);
+        }
         file << '}';
     }
     file << ']';

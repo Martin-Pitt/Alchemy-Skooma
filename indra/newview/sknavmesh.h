@@ -37,6 +37,7 @@
 #include "sknavspaceproducts.h"
 #include "sknavtilecache.h"
 #include "sknavtypes.h"
+#include "sknavwallruns.h"
 #include "skworldcensus.h"
 #include "threadpool.h"
 
@@ -156,6 +157,11 @@ public:
     sknav::StoreyProductPtr storeys(const LLUUID& mesh) const;
     /// The storey under a global position, by index into storeys(mesh_out); false on a flight or off the mesh.
     bool storeyAt(const LLVector3d& pos, LLUUID& mesh_out, S32& storey_out) const;
+    /// AVATAR's wall runs (sknavwallruns.h) of every tile meeting the box, mesh-local, with
+    /// the mesh origin they are relative to, the tile's key and its polys' storeys' mesh.
+    /// Built on the first read after a publish, from the same polys, spaces and air.
+    typedef std::function<void(const LLVector3d& origin, const LLUUID& mesh, const sknav::TileKey& key, const sknav::WallRun& run)> WallRunFn;
+    void wallRunsIn(const LLVector3d& min, const LLVector3d& max, const WallRunFn& fn) const;
     /// The climb links touching a space: the spaces a climb joins it to, with no geometry of their own.
     std::vector<sknav::ClimbLink> climbLinks(const LLUUID& mesh, U32 space) const;
 
@@ -390,6 +396,9 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
+        /// AVATAR's wall runs, built on first read for the revision in mWallRunsAt.
+        mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
+        mutable U64 mWallRunsAt = 0;
         /// The Detour tile's bytes, which Detour reads but does not own.
         std::vector<U8> mDetour[sknav::NUM_CLASSES];
         /// What the published polygons were built from, held near the camera
@@ -627,6 +636,8 @@ private:
     void findExits(FeatureSpan& span) const;
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
+    /// A tile's wall runs as of this revision, null without a Detour tile, stamp or air.
+    std::shared_ptr<const std::vector<sknav::WallRun>> tileWallRuns(const Mesh& mesh, const sknav::TileKey& key, const Tile& tile) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
     /// Span links by region handle, then feature. A tile rebuild would wipe
