@@ -193,7 +193,7 @@ void LLViewerObjectList::skWatchGhostCandidate(LLViewerObject* objectp)
     objectp->mSKGhostWatched = true;
     mSKGhostCandidates.push_back({ objectp,
                                    objectp->getPositionRegion(),
-                                   (F64Seconds)LLFrameTimer::getElapsedSeconds(),
+                                   (F64Seconds)LLFrameTimer::getUptimeSeconds().value(),
                                    (F64Seconds)0.0,
                                    0.f,
                                    1.f,
