@@ -99,6 +99,7 @@ namespace al_studio_test
                                                                const std::vector<std::string>&, std::function<void()>)>
                                                                                               modules;
             std::function<void(const ALScriptPreprocessor::Request&, std::function<void()>)> fetchNearby;
+            std::function<bool(const std::string&, const std::string&)>                      nameStudioAlias;
         };
         Slots slots;
 
@@ -153,6 +154,10 @@ namespace al_studio_test
             {
                 slots.fetchNearby(request, std::move(fetched));
             }
+        }
+        bool nameStudioAlias(const std::string& name, const std::string& folder) override
+        {
+            return slots.nameStudioAlias ? slots.nameStudioAlias(name, folder) : ALScriptStudioViewer::nameStudioAlias(name, folder);
         }
     };
 
@@ -390,7 +395,7 @@ namespace al_studio_test
         void pickFileToSave(const std::string& name, std::function<void(const std::vector<std::string>&)>) override { picked.push_back(name); }
         void askReload(const ALScriptStudioDoc&, std::function<void(bool)>) override {}
         void fileSettled(ALScriptStudioDoc& doc) override { settled.push_back(doc.id); }
-        void fileWritten(const std::string&) override {}
+        void fileWritten(ALScriptStudioDoc&) override {}
         void reachChanged() override {}
         void becomeFile(ALScriptStudioDoc&, const std::string&) override {}
         LLMenuGL* recentMenu() override { return nullptr; }

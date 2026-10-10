@@ -34,8 +34,10 @@
 #include "alscriptpreprocessor.h"
 #include "alscriptregionusage.h"
 #include "alscripttempfiles.h"
+#include "aluploadheader.h"
 #include "lldbstrings.h"
 #include "llagent.h"
+#include "llagentui.h"
 #include "llavatarnamecache.h"
 #include "llcorehttputil.h"
 #include "llappviewer.h"
@@ -59,6 +61,7 @@
 #include "lltrans.h"
 #include "llversioninfo.h"
 #include "llviewerassettype.h"
+#include "llviewercontrol.h"
 #include "llviewerassetupload.h"
 #include "llviewerinventory.h"
 #include "llviewerobject.h"
@@ -200,6 +203,11 @@ private:
                 {
                     continue;
                 }
+                if (item->getType() != LLAssetType::AT_LSL_TEXT && item->getType() != LLAssetType::AT_NOTECARD)
+                {
+                    contents.others.push_back({ item->getName(), item->getType() });
+                    continue;
+                }
                 ALScriptContents::Item one;
                 one.id          = item->getUUID();
                 one.name        = item->getName();
@@ -211,13 +219,9 @@ private:
                     one.script = true;
                     one.lua    = item->getRuntime() == "luau" || item->getInventorySubType() == SST_LUA;
                 }
-                else if (item->getType() == LLAssetType::AT_NOTECARD)
-                {
-                    one.script = false;
-                }
                 else
                 {
-                    continue;
+                    one.script = false;
                 }
                 contents.items.push_back(std::move(one));
             }
@@ -225,6 +229,10 @@ private:
             // the order the simulator sends them in.
             std::stable_sort(contents.items.begin(), contents.items.end(),
                              [](const ALScriptContents::Item& a, const ALScriptContents::Item& b) {
+                                 return LLStringUtil::compareDict(a.name, b.name) < 0;
+                             });
+            std::stable_sort(contents.others.begin(), contents.others.end(),
+                             [](const ALScriptContents::Other& a, const ALScriptContents::Other& b) {
                                  return LLStringUtil::compareDict(a.name, b.name) < 0;
                              });
         }
@@ -648,6 +656,7 @@ std::vector<ALScriptDiagnostic> ALScriptWorkspace::parseDiagnostics(const LLSD& 
         diagnostic.line      = place.line;
         diagnostic.column    = place.column;
         diagnostic.hasColumn = place.hasColumn;
+        diagnostic.hasLine   = place.hasLine;
         diagnostic.level     = place.level;
         diagnostic.message   = place.message;
         out.push_back(std::move(diagnostic));
@@ -844,13 +853,16 @@ bool ALScriptWorkspace::save(const ALScriptRef& ref, const std::string& text, co
     }
     const bool lua = options.compileTarget == "luau";
     auto answered  = [this, ref, lua, callback, text, sender = options.sender, running = options.running.value_or(true),
-                     experience = options.experience](const LLSD& response, const LLUUID& new_asset_id) {
+                     experience = options.experience, map = options.sourceMap, code_line = options.codeLine](const LLSD& response,
+                                                                                                           const LLUUID& new_asset_id) {
         ALScriptCompileResult result;
         result.ref        = ref;
         result.sender     = sender;
         result.success    = response["compiled"].asBoolean();
         result.running    = running;
         result.newAssetId = new_asset_id;
+        result.sourceMap  = map;
+        result.codeLine   = code_line;
         if (!ref.inInventory())
         {
             result.experience = experience;
@@ -1043,7 +1055,7 @@ bool ALScriptWorkspace::uploadNotecard(const ALScriptRef& ref, const std::string
 }
 
 void ALScriptWorkspace::prepare(const ALScriptRef& ref, const std::string& name, const LLUUID& asset_id, const std::string& text, bool lua,
-                                const std::string& target, prepared_callback_t callback, bool anyway)
+                                const std::string& target, prepared_callback_t callback, bool anyway, const From& from)
 {
     if (ALPreprocessor::wanted(text, lua, ALScriptEnvelope::looksWrapped(text), ALScriptPreprocessor::enabled()) == ALPreprocessor::Wanted::No)
     {
@@ -1055,12 +1067,24 @@ void ALScriptWorkspace::prepare(const ALScriptRef& ref, const std::string& name,
     std::optional<ALScriptEnvelope> envelope = ALScriptEnvelope::parse(text);
     ALScriptPreprocessor::Request   request;
     request.ref           = ref;
+    request.path          = from.path;
     request.name          = name;
     request.assetId       = asset_id;
     request.source        = std::make_shared<const std::string>(envelope ? envelope->source : text);
     request.lua           = lua;
     request.compileTarget = target;
-    ALScriptPreprocessor::instance().run(request, [request, envelope, lua, target, callback, anyway](const ALPreprocessor::Result& expanded) {
+    // The upload header, where asked, read here on the main thread: who it
+    // names; and @file, where the text is a master's.
+    static LLCachedControl<bool> header_on(gSavedSettings, "ALScriptUploadHeader", false);
+    static LLCachedControl<bool> creator_on(gSavedSettings, "ALScriptUploadHeaderCreator", false);
+    const bool  header = header_on;
+    std::string creator;
+    if (header && creator_on)
+    {
+        LLAgentUI::buildFullname(creator);
+    }
+    ALScriptPreprocessor::instance().run(request, [request, envelope, lua, target, callback, anyway, header, creator,
+                                                   file = from.file](const ALPreprocessor::Result& expanded) {
         ALScriptPrepared prepared;
         if (expanded.hasErrors() || !expanded.pending.empty())
         {
@@ -1074,6 +1098,8 @@ void ALScriptWorkspace::prepare(const ALScriptRef& ref, const std::string& name,
                 diagnostic.line      = problem.line;
                 diagnostic.column    = problem.column;
                 diagnostic.hasColumn = true;
+                // An include's line is no line of the script.
+                diagnostic.hasLine   = problem.file.empty();
                 diagnostic.level     = "ERROR";
                 diagnostic.message   = problem.file.empty() ? problem.message : problem.file + ": " + problem.message;
                 prepared.errors.push_back(std::move(diagnostic));
@@ -1084,6 +1110,7 @@ void ALScriptWorkspace::prepare(const ALScriptRef& ref, const std::string& name,
             for (const std::string& name : expanded.pending)
             {
                 ALScriptDiagnostic diagnostic;
+                diagnostic.hasLine = false;
                 diagnostic.level   = "ERROR";
                 diagnostic.message = anyway ? alScriptKeyedWords("PreprocIncludeSentWithout", { name },
                                                                  ALScriptProblem::fill("include file '[1]' could not be fetched, and the script went up without it", { name }))
@@ -1107,6 +1134,18 @@ void ALScriptWorkspace::prepare(const ALScriptRef& ref, const std::string& name,
             wrapped.compileTarget    = target;
             wrapped.programVersion   = LLVersionInfo::instance().getChannelAndVersion();
             wrapped.lastCompiled     = LLDate::now().asString();
+            // A header of its own or none: one copied from the envelope it
+            // came in would say an old hash and date of new code.
+            wrapped.header.clear();
+            if (header)
+            {
+                ALUploadHeader said;
+                said.hash      = ALUploadHeader::hashOf(target, wrapped.source, wrapped.expanded);
+                said.date      = ALUploadHeader::dateOf(LLDate::now());
+                said.creator   = creator;
+                said.file      = file;
+                wrapped.header = said.write(lua);
+            }
             prepared.text            = wrapped.wrap();
             prepared.map             = std::make_shared<const ALSourceMap>(expanded.map);
             if (const std::optional<ALScriptEnvelope> sent = ALScriptEnvelope::parse(prepared.text))
@@ -1188,24 +1227,16 @@ void ALScriptWorkspace::recompile(const ALScriptRef& ref, const std::string& req
                 deliver(result, callback);
                 return;
             }
+            // What the compiler says is of the expansion: the result says
+            // how to read it back.
             ALScriptSaveOptions options;
             options.compileTarget = target;
             options.running       = running;
             options.sender        = sender;
-            // What the compiler says is of the expansion: the caller told
-            // how to read it back.
-            const auto told = [callback, map = prepared.map, line = prepared.codeLine](const ALScriptCompileResult& result) {
-                if (!callback)
-                {
-                    return;
-                }
-                ALScriptCompileResult read = result;
-                read.sourceMap     = map;
-                read.codeLine      = line;
-                callback(read);
-            };
+            options.sourceMap     = prepared.map;
+            options.codeLine      = prepared.codeLine;
             std::string error;
-            if (!save(ref, prepared.text, options, told, error))
+            if (!save(ref, prepared.text, options, callback, error))
             {
                 fail(error);
             }
@@ -1987,7 +2018,7 @@ std::vector<ALScriptRuntimeEvent> ALScriptWorkspace::runtimeErrorsOf(const LLUUI
     const auto                since = mRuntimeSince.find(item);
     for (const ALScriptRuntimeEvent& event : mRecent)
     {
-        if (event.isError && event.prim == prim && event.item == item && (since == mRuntimeSince.end() || event.time > since->second))
+        if (event.isError && event.prim == prim && event.item == item && (since == mRuntimeSince.end() || event.heardAt > since->second))
         {
             errors.push_back(event);
         }
@@ -1999,7 +2030,7 @@ void ALScriptWorkspace::forgetRuntime(const LLUUID& item)
 {
     if (item.notNull())
     {
-        mRuntimeSince[item] = LLDate::now().secondsSinceEpoch();
+        mRuntimeSince[item] = LLFrameTimer::getTotalSeconds();
     }
 }
 
@@ -2358,6 +2389,7 @@ void ALScriptWorkspace::deliverRuntime(const Burst& burst)
 
     ALScriptRuntimeEvent event;
     event.time       = LLDate::now().secondsSinceEpoch();
+    event.heardAt    = LLFrameTimer::getTotalSeconds();
     event.prim       = burst.fromId;
     event.root       = root ? root->getID() : burst.fromId;
     event.objectName = burst.fromName;
