@@ -29,6 +29,7 @@
 #include "object_flags.h"
 
 // viewer includes
+#include "alfarplane.h"
 #include "aoengine.h"
 #include "llagent.h"
 #include "llagentcamera.h"
@@ -50,6 +51,7 @@
 #include "llvoavatarself.h"
 #include "llvolume.h"
 #include "llvolumemessage.h"
+#include "llrender.h"
 
 #include <iterator>
 
@@ -163,7 +165,7 @@ bool ALChatCommand::parseCommand(std::string data)
             F32 dist;
             if (input >> dist)
             {
-                dist = llclamp(dist, 16.f, 512.f);
+                dist = ALFarPlane::clampDrawDistance(llclamp(dist, 16.f, MAX_FAR_CLIP), LLRender::sReverseZ);
                 gSavedSettings.setF32("RenderFarClip", dist);
                 gAgentCamera.mDrawDistance = dist;
                 return true;
@@ -298,7 +300,7 @@ bool ALChatCommand::parseCommand(std::string data)
         else if (cmd == DICE_ROLL_TRIGGER)
         {
             S32 dice_sides;
-            if (!(input >> dice_sides))
+            if (!(input >> dice_sides) || dice_sides < 1)
                 dice_sides = 6;
             LLSD args;
             args["RESULT"] = (ll_rand(dice_sides) + 1);

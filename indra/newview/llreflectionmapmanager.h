@@ -198,6 +198,9 @@ private:
     // delete the probe with the given index in mProbes
     void deleteProbe(U32 i);
 
+    // stop generating mUpdatingProbe partway through, so the next probe starts from its first pass
+    void abandonProbeUpdate();
+
     // get a free cube index
     // returns -1 if allocation failed
     S32 allocateCubeIndex();
@@ -317,7 +320,7 @@ private:
 
     // if true, only update the default probe
     bool mPaused = false;
-    F32 mResumeTime = 0.f;
+    F64 mResumeTime = 0.0;
 
     ReflectionProbeData mProbeData;
 };
