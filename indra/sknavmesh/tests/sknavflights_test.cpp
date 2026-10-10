@@ -1032,4 +1032,42 @@ namespace tut
         fitFlightEdges(flights, polys, 0.3f, LLVector2(0.f, 0.f), LLVector2(32.f, 11.f));
         ensure("cut side kept, other side fitted", std::fabs(flights[0].mBottomB.mV[VY] - 13.f) < 1e-3f && std::fabs(flights[0].mBottomA.mV[VY] - 8.7f) < 1e-3f);
     }
+    template<> template<>
+    void sknavflights_object::test<29>()
+    {
+        set_test_name("two stair wedges with a low hull skirt between them are two narrow flights, not one across the skirt");
+        // The galleon: 49 degree wedges up to a quarterdeck, and a 12 degree skirt 6 m wide rising 0.43 m between them.
+        Soup s;
+        s.box(-6, -4, -0.5f, 0, 4, 0);
+        s.box(1.45f, -4, 0, 6, 4, 1.68f);
+        for (const F32 y : { -3.f, 2.f })
+        {
+            s.quad(LLVector3(0, y, 0), LLVector3(1.45f, y, 1.68f), LLVector3(1.45f, y + 0.88f, 1.68f), LLVector3(0, y + 0.88f, 0));
+        }
+        s.quad(LLVector3(-0.5f, -3.f, 0.01f), LLVector3(1.44f, -3.f, 0.44f), LLVector3(1.44f, 3.f, 0.44f), LLVector3(-0.5f, 3.f, 0.01f));
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        for (const Flight& f : p.mFlights)
+        {
+            ensure(llformat("as wide as a wedge: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 0.88f) < 0.1f);
+            ensure(llformat("up the wedge: rise %.2f run %.2f", f.mRise, f.mRun), std::fabs(f.mRise - 1.68f) < 0.1f && std::fabs(f.mRun - 1.45f) < 0.2f);
+        }
+    }
+
+    template<> template<>
+    void sknavflights_object::test<30>()
+    {
+        set_test_name("a gentle ramp climbing a metre stays a ramp, beside a steep stair it does not join");
+        Soup s = ramp(7.f, 1.f);
+        s.quad(LLVector3(0, 0.75f, 0), LLVector3(1.2f, 0.75f, 1.f), LLVector3(1.2f, 1.95f, 1.f), LLVector3(0, 1.95f, 0));
+        s.box(1.2f, 0.75f, 0, 7.f, 2.f, 1.f);
+        const SlopePartition p = s.partition();
+        ensure_equals("flights", p.mFlights.size(), 2u);
+        bool ramp_found = false;
+        for (const Flight& f : p.mFlights)
+        {
+            ramp_found = ramp_found || (f.mKind == ConnectorKind::RAMP && std::fabs(f.mRun - 7.f) < 0.3f && std::fabs((f.mBottomB - f.mBottomA).length() - 1.5f) < 0.15f);
+        }
+        ensure("the ramp, at its own width and run", ramp_found);
+    }
 }
