@@ -1172,6 +1172,14 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
         roots.push_back(std::move(r));
     }
 
+    // Only a door-shaped part with something to say for it is worth the rays.
+    for (FeaturePart& p : mScan.mFeatureParts)
+    {
+        if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
+        {
+            p.mFaceCover = faceCover(p, snap.mRecords, params);
+        }
+    }
     snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
     snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
     // A leaf is watched from the scan it is first a door, and stays watched

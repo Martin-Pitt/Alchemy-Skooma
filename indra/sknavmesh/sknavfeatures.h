@@ -51,6 +51,7 @@ namespace sknav
         bool mScripted = false;     ///< the leaf's own flag
         bool mTouch = false;
         F32 mSeeThrough = 0.f;      ///< share of its faces that can be seen through
+        F32 mFaceCover = -1.f;      ///< share of its more covered face something lies against; < 0 when not measured
     };
 
     /// What is known about one linkset. An empty name or description is not
@@ -86,6 +87,9 @@ namespace sknav
         F32 mDoorWidthMin = 0.5f;   ///< a door leaf is this wide or wider
         F32 mDoorWidthMax = 6.f;    ///< and no wider than a gate
         F32 mDoorConfidence = 0.5f; ///< evidence a leaf needs to be a door
+        F32 mFaceReach = 0.3f;      ///< how far off a leaf's face something counts as lying against it
+        F32 mFaceBlocked = 0.5f;    ///< face cover from which a panel is mounted on something, not a leaf
+        F32 mFaceClear = 0.2f;      ///< face cover up to which both faces are open, as a leaf's are
         F32 mVehicleTravel = 1.f;   ///< how far a crewed linkset must go to be a vehicle
         F32 mLadderFootprint = 1.f; ///< a lone ladder piece is no wider than this on either plan axis
     };
@@ -112,6 +116,16 @@ namespace sknav
     /// doors and the shafts their stacks make; a part belongs to one feature.
     std::vector<Feature> classifyFeatures(const std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
                                           const FeatureParams& params);
+
+    /// A door-sized thin upright panel: the shape a leaf must have.
+    bool doorShaped(const FeaturePart& part, const FeatureParams& params);
+
+    /// The share of the leaf's more covered face that other records' geometry
+    /// lies against, within the reach, by a grid of short rays off each face
+    /// that leaves out the edges and the sill. A wall behind a painting or a
+    /// mattress against a headboard covers a face; a doorway's frame does not.
+    /// Negative for a part that is not door-shaped.
+    F32 faceCover(const FeaturePart& leaf, const std::vector<RecordPtr>& records, const FeatureParams& params);
 
     /// One doorway as the rooms and the map see it: plain values, no viewer
     /// types. Positions are global.
