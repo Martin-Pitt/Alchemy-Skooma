@@ -1804,7 +1804,7 @@ LLVector3d LLAgentCamera::smoothSKFollow(const LLVector3d& raw)
     }
 
     const bool moving = !rootp->getVelocity().isExactlyZero() || rootp->mDrawable->isActive();
-    const F64 now = LLFrameTimer::getElapsedSeconds();
+    const F64 now = LLFrameTimer::getUptimeSeconds().value();
     if (!mSKFollowValid || mSKFollowObjectId != mFocusObject->getID() || (raw - mSKFollowPos).magVec() > SNAP_DISTANCE)
     {
         if (!moving)
