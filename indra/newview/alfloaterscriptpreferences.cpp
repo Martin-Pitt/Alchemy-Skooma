@@ -36,6 +36,7 @@
 #include "alscriptstudiovimrc.h"
 #include "alscriptstudiowords.h"
 #include "alfontfield.h"
+#include "alpanelscriptaliases.h"
 #include "alpanelscriptkeymap.h"
 #include "llbutton.h"
 #include "llcallbacklist.h"
@@ -80,17 +81,20 @@ namespace
         "ALScriptStudioPreflight",   "ALScriptPreprocEnabled",     "ALScriptPreprocSwitch",
         "ALScriptPreprocLazyLists",  "ALScriptPreprocCompress",    "ALScriptPreprocOptimizer",
         "ALScriptPreprocOptimizerShrinkNames", "ALScriptPreprocOptimizerAddStrings",
-        "ALScriptPreprocOptimizerInlining",     "ALScriptPreprocExtensions",
+        "ALScriptPreprocOptimizerInlining",     "ALScriptPreprocExtensions", "ALScriptPreprocLineComments",
+        "ALScriptUploadHeader",      "ALScriptUploadHeaderCreator",
         "ALScriptPreprocDiskIncludes", "ALScriptPreprocDiskIncludeFolder", "ALScriptPreprocIncludeOrder", "ALScriptPreprocWorldIncludes",
+        "ALScriptSLuaAliases",
         "ALScriptStudioTabWidth",    "ALScriptStudioInsertSpaces", "ALScriptStudioDetectIndentation", "ALScriptStudioReindentOnPaste",
         "ALScriptLintLevels",        "ALScriptLuauMode",           "ALScriptLuauSolver",
-        "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptStudioAutoClose",
+        "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptFragmentCompletion",
+        "ALScriptStudioAutoClose",
         "ALScriptStudioCaretStyle",  "ALScriptStudioCaretBlink",   "ALScriptStudioHoverCards",  "ALScriptStudioHoverDelay",
         "ALScriptStudioVimClipboard",
         "ALScriptFormatBlankLines",  "ALScriptFormatSpacing",      "ALScriptFormatOnSave",      "ALScriptTrimOnSave",        "ALScriptFixOnSave",
         "ALScriptTemplateLSL",       "ALScriptTemplateSLua",       "ALScriptPreprocDefines",    "ExternalEditor",
         "ALScriptConvertLLTimers",   "ALScriptConvertDetectedTable", "ALScriptConvertSLuaCalls", "ALScriptConvertIdioms",
-        "ALScriptConvertHandlerFields", "ALScriptConvertTypes",    "ALScriptConvertComments",
+        "ALScriptConvertHandlerFields", "ALScriptConvertTypes",    "ALScriptConvertComments",   "ALScriptConvertKeepComments",
     };
 
     // What each preset of Convert to SLua sets: SLua's own ways, or as
@@ -213,7 +217,8 @@ bool ALFloaterScriptPreferences::postBuild()
     // they change -- by the settings' own signals, so a Cancel reaches
     // them as a click does.
     for (const char* setting : { "ALScriptStudioTabWidth", "ALScriptStudioInsertSpaces", "ALScriptStudioDetectIndentation", "ALScriptStudioReindentOnPaste",
-                                 "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptStudioAutoClose",
+                                 "ALScriptStudioAutoComplete", "ALScriptStudioCompleteAfter", "ALScriptStudioAcceptOnEnter", "ALScriptFragmentCompletion",
+        "ALScriptStudioAutoClose",
                                  "ALScriptStudioCaretStyle", "ALScriptStudioCaretBlink", "ALScriptStudioHoverCards", "ALScriptStudioHoverDelay" })
     {
         if (LLControlVariable* control = gSavedSettings.getControl(setting))
@@ -254,7 +259,7 @@ bool ALFloaterScriptPreferences::postBuild()
     {
         mEnableWatches.emplace_back(control->getSignal()->connect([this](LLControlVariable*, const LLSD&, const LLSD&) { refreshIncludeOrder(); }));
     }
-    for (const char* setting : { "ALScriptPreprocOptimizer", "ALScriptPreprocDiskIncludes", "ALScriptStudioAutoComplete", "ALScriptStudioHoverCards",
+    for (const char* setting : { "ALScriptPreprocOptimizer", "ALScriptUploadHeader", "ALScriptPreprocDiskIncludes", "ALScriptStudioAutoComplete", "ALScriptStudioHoverCards",
                                  "ALScriptPreprocDiskIncludeFolder", "ALScriptTemplateLSL", "ALScriptTemplateSLua", "ALScriptPreprocDefines" })
     {
         if (LLControlVariable* control = gSavedSettings.getControl(setting))
@@ -380,6 +385,7 @@ void ALFloaterScriptPreferences::refreshEnabled()
     {
         getChildView(name)->setEnabled(optimize);
     }
+    getChildView("preproc_upload_creator")->setEnabled(gSavedSettings.getBOOL("ALScriptUploadHeader"));
     const bool disk = gSavedSettings.getBOOL("ALScriptPreprocDiskIncludes");
     for (const char* name : { "include_folders", "add_folder" })
     {
@@ -430,6 +436,12 @@ void ALFloaterScriptPreferences::onOpen(const LLSD& key)
     if (ALPanelScriptKeymap* keys = findChild<ALPanelScriptKeymap>("keys_tab"))
     {
         keys->refresh();
+    }
+    // An inventory folder renamed, or a folder on disk gone, since the
+    // aliases were last shown, which no setting says.
+    if (ALPanelScriptAliases* aliases = findChild<ALPanelScriptAliases>("aliases_panel"))
+    {
+        aliases->refresh();
     }
 }
 
@@ -531,6 +543,25 @@ void ALFloaterScriptPreferences::revert()
         }
     }
     ALScriptStudio::refreshAll();
+}
+
+// static
+void ALFloaterScriptPreferences::keepChanged(std::initializer_list<const char*> settings)
+{
+    // Not open, nothing remembered to go back to.
+    ALFloaterScriptPreferences* prefs = LLFloaterReg::findTypedInstance<ALFloaterScriptPreferences>("script_studio_prefs");
+    if (!prefs || !prefs->mShowing)
+    {
+        return;
+    }
+    for (const char* setting : settings)
+    {
+        const LLControlVariable* control = gSavedSettings.getControl(setting);
+        if (control && prefs->mWasSettings.has(setting))
+        {
+            prefs->mWasSettings[setting] = control->getValue();
+        }
+    }
 }
 
 bool ALFloaterScriptPreferences::changed() const

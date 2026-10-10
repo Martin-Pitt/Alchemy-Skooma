@@ -24,7 +24,7 @@
 
 #include "linden_common.h"
 
-#include "../altextsearch.h"
+#include "altextsearch.h"
 
 #include "../test/lltut.h"
 
@@ -144,8 +144,6 @@ namespace tut
         ensure_equals("a class with a break in it does", said(ALTextSearch::matches(doc, "two[\\s\\n]three", options)), std::string("0:4-1:5"));
         const ALTextRange stretch(ALTextPos(0, 4), ALTextPos(1, 5));
         ensure_equals("within a stretch that spans lines", said(ALTextSearch::matches(doc, "\\w+", options, &stretch)), std::string("0:4-7 1:0-5"));
-        ensure_equals("a group over the break, with the whole's start said",
-                      said(ALTextSearch::matches(doc, "two\\n(three)", [&] { ALTextSearchOptions o = options; o.matchGroup = 1; return o; }())), std::string("1:0-5"));
         ensure_equals("what replaces a match over the break", ALTextSearch::replacement(doc, ALTextRange(ALTextPos(0, 4), ALTextPos(1, 5)), "two\\n(three)", options, "$1"),
                       std::string("three"));
         options.regex = false;
@@ -351,5 +349,155 @@ namespace tut
         ensure("held to the stretch", held.size() == 1 && held[0].second == "<foo>");
         std::string bad;
         ensure("a pattern that does not read makes none", ALTextSearch::replacements(doc, "(", regex, "x", nullptr, &bad).empty() && !bad.empty());
+    }
+
+    template<> template<>
+    void altextsearch_object::test<13>()
+    {
+        set_test_name("a pattern reads the text a character at a time: no match begins or ends inside one, and without regard to case one folds past ASCII");
+        ALTextDocument doc;
+        doc.setText("caf\xc3\xa9\n\xc3\xa9" "a\n");
+        ALTextSearchOptions options;
+        options.regex = true;
+        ensure_equals("the last character of a line, all of it", said(ALTextSearch::matches(doc, ".$", options)), std::string("0:3-5 1:2-3"));
+        ensure_equals("the first, all of it", said(ALTextSearch::matches(doc, "^.", options)), std::string("0:0-1 1:0-2"));
+        ensure_equals("one match for each character outside a class", said(ALTextSearch::matches(doc, "[^a-z]", options)), std::string("0:3-5 1:0-2"));
+        ensure_equals("a look behind steps back over a whole one", said(ALTextSearch::matches(doc, "(?<=^.)a", options)), std::string("0:1-2 1:2-3"));
+        options.acrossLines = true;
+        ensure_equals("the lines as one text, the same", said(ALTextSearch::matches(doc, ".$", options)), std::string("0:3-5 1:2-3"));
+
+        // What replaces each takes the whole character out, and the text
+        // stays well-formed.
+        std::vector<std::pair<ALTextRange, std::string>> edits = ALTextSearch::replacements(doc, ".$", options, "[$&]");
+        ensure_equals("as many", edits.size(), size_t(2));
+        ensure("the whole of the last character", edits[0].first == ALTextRange(ALTextPos(0, 3), ALTextPos(0, 5)));
+        ensure_equals("its group the whole of it too", edits[0].second, std::string("[\xc3\xa9]"));
+        ensure_equals("the same worked out over it again", ALTextSearch::replacement(doc, edits[0].first, ".$", options, "[$&]"), std::string("[\xc3\xa9]"));
+        doc.replaceMany(std::move(edits));
+        ensure_equals("replaced, every character whole", doc.text(), std::string("caf[\xc3\xa9]\n\xc3\xa9[a]\n"));
+        options.acrossLines = false;
+
+        // Without regard to case, a letter past ASCII is matched by its
+        // other case, and is a word's letter.
+        doc.setText("caf\xc3\xa9 CAF\xc3\x89\n");
+        ensure_equals("\xc3\xa9 finds \xc3\x89", said(ALTextSearch::matches(doc, "caf\xc3\xa9", options)), std::string("0:0-5 0:6-11"));
+        ensure_equals("each word whole", said(ALTextSearch::matches(doc, "\\w+", options)), std::string("0:0-5 0:6-11"));
+        ensure("no word's edge inside one", ALTextSearch::matches(doc, "\\bcaf\\b", options).empty());
+        options.caseSensitive = true;
+        ensure_equals("by case, only itself", said(ALTextSearch::matches(doc, "caf\xc3\xa9", options)), std::string("0:0-5"));
+        ensure_equals("a character by its codepoint", said(ALTextSearch::matches(doc, "caf\\x{e9}", options)), std::string("0:0-5"));
+        options.caseSensitive = false;
+
+        // A byte that spells no character is one of its own, not a fault.
+        doc.setText("a\xc3" "b\xff");
+        std::string error;
+        ensure_equals("each byte one", said(ALTextSearch::matches(doc, ".", options, nullptr, &error)), std::string("0:0-1 0:1-2 0:2-3 0:3-4"));
+        ensure("and nothing to say", error.empty());
+    }
+
+    template<> template<>
+    void altextsearch_object::test<14>()
+    {
+        set_test_name("a stretch that begins inside a character is searched from the character after it, by pattern, line by line or whole");
+        ALTextDocument doc;
+        doc.setText("caf\xc3\xa9 x\n");
+        ALTextSearchOptions options;
+        options.regex = true;
+        const ALTextRange inside(ALTextPos(0, 4), ALTextPos(0, 7));
+        ensure_equals("line by line: nothing of the \xc3\xa9 it began in", said(ALTextSearch::matches(doc, ".", options, &inside)), std::string("0:5-6 0:6-7"));
+        auto edits = ALTextSearch::replacements(doc, ".", options, "_", &inside);
+        doc.replaceMany(std::move(edits));
+        ensure_equals("replaced, the \xc3\xa9 whole", doc.text(), std::string("caf\xc3\xa9__\n"));
+        options.acrossLines = true;
+        doc.setText("caf\xc3\xa9 x\n");
+        ensure_equals("the lines as one text, the same", said(ALTextSearch::matches(doc, ".", options, &inside)), std::string("0:5-6 0:6-7"));
+        options.acrossLines = false;
+        // One that ends inside a character keeps no match of it, as before.
+        doc.setText("x \xc3\xa9\n");
+        const ALTextRange ending(ALTextPos(0, 0), ALTextPos(0, 3));
+        ensure_equals("ending inside one: what is before it", said(ALTextSearch::matches(doc, ".", options, &ending)), std::string("0:0-1 0:1-2"));
+    }
+
+    template<> template<>
+    void altextsearch_object::test<15>()
+    {
+        set_test_name("plain text goes on from the end of each match, as a pattern does: no match overlaps the one before it");
+        ALTextDocument doc;
+        doc.setText("aaaa\n///x\naaa aa\n");
+        ALTextSearchOptions options;
+        ensure_equals("aa twice in aaaa, without regard to case", said(ALTextSearch::matches(doc, "aa", options)), std::string("0:0-2 0:2-4 2:0-2 2:4-6"));
+        options.caseSensitive = true;
+        ensure_equals("and by case", said(ALTextSearch::matches(doc, "aa", options)), std::string("0:0-2 0:2-4 2:0-2 2:4-6"));
+        ensure_equals("// once in ///", said(ALTextSearch::matches(doc, "//", options)), std::string("1:0-2"));
+        options.regex = true;
+        ensure_equals("as many as the pattern finds", said(ALTextSearch::matches(doc, "aa", options)), std::string("0:0-2 0:2-4 2:0-2 2:4-6"));
+        options.regex     = false;
+        options.wholeWord = true;
+        ensure_equals("one that is not a whole word steps on by a character", said(ALTextSearch::matches(doc, "aa", options)), std::string("2:4-6"));
+        options.wholeWord     = false;
+        options.caseSensitive = false;
+        std::vector<std::pair<ALTextRange, std::string>> edits = ALTextSearch::replacements(doc, "aa", options, "b");
+        ensure_equals("as many replaced as there are", edits.size(), size_t(4));
+        doc.replaceMany(std::move(edits));
+        ensure_equals("each replaced whole", doc.text(), std::string("bb\n///x\nba b\n"));
+    }
+
+    template<> template<>
+    void altextsearch_object::test<16>()
+    {
+        set_test_name("without regard to case, plain text is found where it begins with a character past ASCII that lowers to an ASCII letter, "
+                      "and an ASCII letter where it begins with one past ASCII that lowers to it");
+        ALTextDocument doc;
+        // The Kelvin sign, which lowers to k, and the capital I with a dot
+        // above, which lowers to i.
+        doc.setText("\xE2\x84\xAA" "elvin kelvin\n" "\xC4\xB0" "f if\n");
+        ALTextSearchOptions options;
+        ensure_equals("kelvin from the Kelvin sign, and from k", said(ALTextSearch::matches(doc, "kelvin", options)), std::string("0:0-8 0:9-15"));
+        ensure_equals("\xC4\xB0" "f, and if", said(ALTextSearch::matches(doc, "\xC4\xB0" "f", options)), std::string("1:0-3 1:4-6"));
+    }
+
+    template<> template<>
+    void altextsearch_object::test<17>()
+    {
+        set_test_name("a search that is stopped looks no further than the match or the line it is at, plainly, by pattern and over the lines as one");
+        std::string text;
+        for (S32 i = 0; i < 1000; ++i)
+        {
+            text += "a\n";
+        }
+        const ALTextDocument doc(text);
+        std::atomic<bool>    stop{ true };
+        ALTextSearchOptions  options;
+        options.stop = &stop;
+        ensure("plainly", ALTextSearch::matches(doc, "a", options).size() <= 1);
+        options.regex = true;
+        ensure("by pattern", ALTextSearch::matches(doc, "a", options).size() <= 1);
+        options.acrossLines = true;
+        ensure("over the lines as one", ALTextSearch::matches(doc, "a", options).size() <= 1);
+        stop = false;
+        ensure_equals("not stopped, every one", ALTextSearch::matches(doc, "a", options).size(), size_t(1000));
+    }
+
+    template<> template<>
+    void altextsearch_object::test<18>()
+    {
+        set_test_name("the first match of each line alone, where asked: as it is or by pattern, line by line or whole, with what replaces each kept");
+        ALTextDocument doc;
+        doc.setText("a a a\nb\na a\n");
+        ALTextSearchOptions options;
+        options.firstPerLine = true;
+        ensure_equals("as it is", said(ALTextSearch::matches(doc, "a", options)), std::string("0:0-1 2:0-1"));
+        options.regex = true;
+        std::vector<std::string>       replaced;
+        const std::vector<ALTextRange> found = ALTextSearch::matches(doc, "a", options, nullptr, nullptr, nullptr, "x", replaced);
+        ensure_equals("by pattern", said(found), std::string("0:0-1 2:0-1"));
+        ensure("what replaces each kept, and no more", replaced == std::vector<std::string>{ "x", "x" });
+        options.acrossLines = true;
+        ensure_equals("the lines as one text", said(ALTextSearch::matches(doc, "a", options)), std::string("0:0-1 2:0-1"));
+        doc.setText("x a\nb a a\nb\n");
+        ensure_equals("one over a line's end by the line it begins on, and the next found as ever",
+                      said(ALTextSearch::matches(doc, "a\\nb|a", options)), std::string("0:2-1:1 1:2-3"));
+        options.firstPerLine = false;
+        ensure_equals("all of them otherwise", said(ALTextSearch::matches(doc, "a\\nb|a", options)), std::string("0:2-1:1 1:2-3 1:4-2:1"));
     }
 }

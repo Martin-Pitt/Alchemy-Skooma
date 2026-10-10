@@ -19,7 +19,8 @@ Every platform needs a C++ toolchain plus:
 
 - **CMake** 4.0+
 - **Git**
-- **Rust** and **.NET SDK** — only for Velopack installers (`-DAL_USE_VELOPACK=ON`)
+- **Rust** — only for the Velopack update client (`-DAL_USE_VELOPACK=ON`), whose C API the build compiles from `indra/rust`
+- **.NET SDK** — only for Velopack installers; on Linux the AppImage also needs `mksquashfs` (`squashfs-tools`)
 - **Python** 3 — only for the tests that spawn a Python peer (see [Running tests](#running-tests))
 
 Install commands are platform-specific; see below.
@@ -33,7 +34,7 @@ Install the following:
 - [Visual Studio 2026](https://visualstudio.microsoft.com/vs/community/) — select the **Desktop development with C++** workload
 - [CMake](https://cmake.org/download/) 4.0+
 - [Git for Windows](https://git-scm.com/install/windows)
-- [Rust](https://rust-lang.org/tools/install/) — run `rustup-init.exe` and accept defaults (packaging only)
+- [Rust](https://rust-lang.org/tools/install/) — run `rustup-init.exe` and accept defaults (Velopack only)
 - [.NET SDK](https://dotnet.microsoft.com/en-us/download) (packaging only)
 
 Sanity-check in a fresh terminal:
@@ -54,23 +55,24 @@ brew install git cmake zip unzip curl pkgconf automake autoconf autoconf-archive
     gettext libtool rustup dotnet
 ```
 
-Initialize the Rust toolchain (packaging only):
+Put Homebrew's rustup on the path and install a stable toolchain (Velopack only). The formula is keg-only and no longer provides `rustup-init`; add the `export` to your shell profile too:
 
 ```
-rustup-init -y
+export PATH="$(brew --prefix rustup)/bin:$PATH"
+rustup default stable
 ```
 
 ### Linux
 
-Install system packages for your distro:
+Install system packages for your distro. Media plays through GStreamer; the VLC media plugin is left out on Linux unless configured with `-DAL_BUILD_VLC_PLUGIN=ON`, which also needs LibVLC's development package (`libvlc` on Arch, `libvlc-dev` on Debian and Ubuntu, `vlc-devel` on Fedora and openSUSE).
 
 <details>
 <summary>Arch</summary>
 
 ```
 sudo pacman -Syu automake autoconf autoconf-archive base-devel cmake fontconfig git glib2-devel \
-    gstreamer gst-plugins-base-libs ninja libglvnd libtool libvlc libx11 pkgconf python \
-    wayland dotnet-sdk rustup zip nasm
+    gstreamer gst-plugins-base-libs ninja libglvnd libtool libx11 pkgconf python \
+    wayland dotnet-sdk zip nasm
 ```
 
 </details>
@@ -85,10 +87,10 @@ sudo apt install \
     libegl1-mesa-dev libfribidi-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
     libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev libibus-1.0-dev libjack-dev \
     libpipewire-0.3-dev libpulse-dev libsndio-dev libtext-unidecode-perl \
-    libthai-dev libtool libudev-dev libunwind-dev liburing-dev libvlc-dev libwayland-dev \
+    libthai-dev libtool libudev-dev libunwind-dev liburing-dev libwayland-dev \
     libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxft-dev libxi-dev libxinerama-dev \
     libxkbcommon-dev libxrandr-dev libxss-dev libxtst-dev linux-libc-dev ninja-build \
-    pkgconf tar tex-common texinfo unzip zip dotnet-sdk-10.0 rustup nasm
+    pkgconf tar tex-common texinfo unzip zip dotnet-sdk-10.0 nasm
 ```
 
 </details>
@@ -103,10 +105,10 @@ sudo apt install \
     libegl1-mesa-dev libfribidi-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
     libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev libibus-1.0-dev libjack-dev \
     libpipewire-0.3-dev libpulse-dev libsndio-dev libtext-unidecode-perl \
-    libthai-dev libtool libudev-dev libunwind-dev liburing-dev libvlc-dev libwayland-dev \
+    libthai-dev libtool libudev-dev libunwind-dev liburing-dev libwayland-dev \
     libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxft-dev libxi-dev libxinerama-dev \
     libxkbcommon-dev libxrandr-dev libxss-dev libxtst-dev linux-libc-dev ninja-build \
-    pkgconf tar tex-common texinfo unzip zip dotnet-sdk-10.0 rustup nasm
+    pkgconf tar tex-common texinfo unzip zip dotnet-sdk-10.0 nasm
 ```
 
 </details>
@@ -120,7 +122,7 @@ sudo apt install \
 sudo dnf group install "Development Tools"
 sudo dnf install cmake fontconfig-devel git glib2-devel gstreamer1-devel \
     gstreamer1-plugins-base-devel libX11-devel libglvnd-devel \
-    ninja-build python3 vlc-devel wayland-devel dotnet-sdk-10.0 rustup
+    ninja-build python3 wayland-devel dotnet-sdk-10.0
 ```
 
 You may need to enable EPEL first: `sudo dnf install epel-release`
@@ -130,8 +132,8 @@ You may need to enable EPEL first: `sudo dnf install epel-release`
 ```
 sudo dnf install @development-tools @c-development cmake fontconfig-devel git glib-devel \
     gstreamer1-devel gstreamer1-plugins-base-devel libX11-devel \
-    libglvnd-devel ninja-build python3 vlc-devel \
-    wayland-devel dotnet-sdk-10.0 rustup perl-IPC-Cmd perl-FindBin perl-Time-Piece \
+    libglvnd-devel ninja-build python3 \
+    wayland-devel dotnet-sdk-10.0 perl-IPC-Cmd perl-FindBin perl-Time-Piece \
     autoconf-archive perl-open libXcursor-devel wayland-protocols-devel dbus-devel \
     ibus-devel mesa-libGLU-devel libxkbcommon-devel mesa-libEGL-devel mesa-libGL-devel \
     libXtst-devel libXrandr-devel pipewire-devel pulseaudio-libs-devel alsa-lib-devel \
@@ -149,16 +151,10 @@ To build with Clang instead of GCC, also install: `sudo dnf install clang lld`
 sudo zypper in -t pattern devel_basis devel_C_C++
 sudo zypper install cmake fontconfig-devel git glib2-devel gstreamer-devel \
     gstreamer-plugins-base-devel libglvnd-devel libX11-devel ninja Mesa-libGL-devel \
-    python3 vlc-devel wayland-devel
+    python3 wayland-devel
 ```
 
 </details>
-
-Initialize a stable Rust toolchain (packaging only):
-
-```
-rustup default stable
-```
 
 ## Clone and bootstrap
 
@@ -300,7 +296,7 @@ Ninja and Xcode presets are multi-config; Visual Studio presets always are. Ever
 Override any option at configure time with `-D<NAME>=<VALUE>`. For example:
 
 ```
-cmake -S indra --preset ninja-os -DAL_BUILD_TESTS=ON -DAL_USE_FMODSTUDIO=ON
+cmake -S indra --preset ninja-os -DAL_BUILD_TESTS=ON -DAL_USE_OPENAL=ON
 ```
 
 Options are defined in [`indra/CMakeLists.txt`](../indra/CMakeLists.txt). The most commonly used:
@@ -315,7 +311,7 @@ Options are defined in [`indra/CMakeLists.txt`](../indra/CMakeLists.txt). The mo
 | `AL_ENABLE_GL_TESTS`     | ON      | Run the tests that render on a hidden window; off, they are built and registered disabled (needs `AL_BUILD_TESTS`) |
 | `AL_BUILD_DOCS`          | OFF     | Add the `doc` target (API documentation with Doxygen)                 |
 | `AL_VCPKG_INSTALL`       | ON      | Let configure run `vcpkg install` when the manifest, the registry configuration, the triplets or the feature list changed; off leaves the ports to you |
-| `AL_BUILD_PACKAGE`       | ON      | Add the `package` target: the CPack archive of the installed tree (zip, tar.xz, dmg) |
+| `AL_BUILD_PACKAGE`       | ON      | Add the `package` target: the CPack archive of the installed tree (zip, tar.xz, dmg), and on Linux the .deb and .rpm |
 | `AL_USE_VELOPACK`        | OFF     | Add the `velopack` target, and the Velopack update client to the viewer |
 | `AL_SOURCEID`            | `$sourceid` | Referring agency recorded in `settings_install.xml`                |
 
@@ -325,15 +321,33 @@ Options are defined in [`indra/CMakeLists.txt`](../indra/CMakeLists.txt). The mo
 |:--------------------|:--------|:---------------------------------------------------------------------|
 | `AL_USE_FAUDIO`     | ON      | FAudio audio engine                                                  |
 | `AL_USE_OPENAL`     | OFF     | OpenAL audio engine                                                  |
-| `AL_USE_FMODSTUDIO` | OFF     | FMOD Studio audio engine (proprietary; `AL_FMODSTUDIO_SDK_DIR` names the SDK, or the Windows installer's registry entry does) |
+| `AL_USE_FMODSTUDIO` | ON      | FMOD Studio audio engine, which takes precedence over the others (needs `AL_ENABLE_PROPRIETARY`, so off in `-os` builds, and access to the private registry) |
 
 ### Proprietary SDKs
 
 | Option           | Default | Description                                                                 |
 |:-----------------|:--------|:----------------------------------------------------------------------------|
 | `AL_ENABLE_PROPRIETARY` | OFF | Allow the non-free libraries below                                     |
-| `AL_USE_KDU`     | ON      | Kakadu JPEG2000 codec (needs `AL_ENABLE_PROPRIETARY`)                       |
-| `AL_USE_DISCORD` | OFF     | Discord presence through the Social SDK (needs `AL_ENABLE_PROPRIETARY`; `AL_DISCORD_SDK_DIR` names the SDK unpacked from the developer portal) |
+| `AL_USE_KDU`     | OFF     | Kakadu JPEG2000 codec (needs `AL_ENABLE_PROPRIETARY`)                       |
+| `AL_USE_DISCORD` | ON      | Discord rich presence through the Social SDK (needs `AL_ENABLE_PROPRIETARY` and access to the private registry; held off on Linux arm64, which the SDK is not built for) |
+
+Some proprietary ports come from AlchemyViewer's private vcpkg registry,
+`https://github.com/AlchemyViewer/private-registry`, which
+`indra/vcpkg-configuration.json` lists beside the public one. vcpkg fetches it
+with plain git, and only when an option above asks for one of its ports, so an
+open-source build never touches it. To use it, `git ls-remote` on that URL
+must succeed without a prompt, through Git Credential Manager or
+`gh auth setup-git`. With SSH keys only, send the organisation's HTTPS URLs
+over SSH, from inside the viewer checkout so the rewrite stays with it:
+
+```
+git config --local url."git@github.com:AlchemyViewer/".insteadOf "https://github.com/AlchemyViewer/"
+```
+
+With `--global` instead, it applies to every AlchemyViewer clone on the
+machine.
+
+The registry's README covers CI and adding ports.
 
 ### Profiling
 
@@ -360,8 +374,8 @@ Options are defined in [`indra/CMakeLists.txt`](../indra/CMakeLists.txt). The mo
 | Option                   | Default     | Description                                |
 |:-------------------------|:------------|:-------------------------------------------|
 | `AL_BUILD_CEF_PLUGIN`       | ON          | Chromium Embedded Framework (in-world web) |
-| `AL_BUILD_VLC_PLUGIN`       | ON          | VLC media plugin                           |
-| `AL_BUILD_GSTREAMER_PLUGIN` | ON on Linux | GStreamer media plugin (Linux only)        |
+| `AL_BUILD_VLC_PLUGIN`       | OFF on Linux | VLC media plugin; on Linux GStreamer plays media, and VLC only with `MediaPluginForceVLC` |
+| `AL_BUILD_GSTREAMER_PLUGIN` | ON on Linux | GStreamer media plugin (Linux only): video, audio and the parcel stream |
 | `AL_BUILD_EXAMPLE_PLUGIN`   | ON          | Reference/example plugin                   |
 
 ### Platform-specific
@@ -370,6 +384,8 @@ Options are defined in [`indra/CMakeLists.txt`](../indra/CMakeLists.txt). The mo
 |:-----------------|:------------|:-------------------------------------------------------|
 | `AL_USE_OPENXR`     | OFF         | OpenXR VR support (experimental)                       |
 | `AL_USE_SDL_WINDOW` | ON on Linux | SDL-based window management (Linux only; GL through EGL on Wayland and X11 alike) |
+| `AL_SIGNING_IDENTITY` | empty     | macOS Developer ID the bundle is signed with; empty signs ad-hoc |
+| `AL_NOTARY_PROFILE`   | empty     | macOS notarytool keychain profile the `velopack` target notarizes with; empty skips notarization |
 
 ### Crash reporting
 
@@ -404,7 +420,9 @@ Enable tests at configure time:
 cmake -S indra --preset <preset> -DAL_BUILD_TESTS=ON
 ```
 
-Four tests drive a Python peer (`llleap`, `llprocess`, `llsdserialize`, `llcorehttp`); they need a Python 3 interpreter with the `llsd` package (`pip install -r requirements.txt`, in a venv if you like) and are registered disabled when configure finds none. Nothing else in the build runs Python.
+Four tests drive a Python peer (`llleap`, `llprocess`, `llsdserialize`, `llcorehttp`); they need a Python 3 interpreter with the `llsd` package (`pip install -r requirements.txt`, in a venv if you like) and are registered disabled when configure finds none.
+
+LL's LSL compiler (`indra/lscript`), restored as a reference for the script tests, is built only with tests on. Its lexer, grammar, newer event nodes and library table are written at build time by lsl-definitions' own generator, which needs Python with `PyYAML` and `llsd` (both in `requirements.txt`), and then put through `bison` and `flex`. Where any of them is missing, configure leaves the library out and the configuration report says what it needs. Nothing else in the build runs Python.
 
 The `llrender` suites render on a hidden SDL window with the platform's own GL -- WGL on Windows, EGL on Linux, and where Linux has no display SDL's offscreen driver over Mesa (set `LIBGL_ALWAYS_SOFTWARE=1` for llvmpipe on a machine with no GPU). A host with no GL 4.1 to give, such as a CI runner without a graphics driver, configures with `-DAL_ENABLE_GL_TESTS=OFF`: those suites still build, and CTest reports them as not run rather than failed. They carry the label `gl`, so `ctest -LE gl` skips them for one run.
 
@@ -459,11 +477,30 @@ cpack --config build-<OS>-<preset>/CPackSourceConfig.cmake
 
 (or the `package_source` target under Ninja). Uncommitted changes are not in it, and cpack says so.
 
-The Windows installer and the update packages come from [Velopack](https://velopack.io): configure with `-DAL_USE_VELOPACK=ON`, run `dotnet tool restore` once so the `vpk` tool is available, and build the `velopack` target. It installs into `newview/velopack/<Config>/app` and writes the installer and the update feed to `newview/velopack/<Config>/Releases`. Each Windows architecture has its own Velopack channel, named for its runtime, since an installed viewer updates from its channel's feed: `win-x64` and `win-arm64`. The channel also names the feed, `releases.win-x64.json` or `releases.win-arm64.json`, and the files vpk writes.
+The Windows installer, the Linux AppImage and the update packages for every platform come from [Velopack](https://velopack.io): configure with `-DAL_USE_VELOPACK=ON`, run `dotnet tool restore` once so the `vpk` tool is available, and build the `velopack` target. It installs into `newview/velopack/<Config>/app` (on Linux, into the `usr/bin` of `newview/velopack/<Config>/<App>.AppDir`) and writes the update feed, and on Windows the installer and on Linux the AppImage, to `newview/velopack/<Config>/Releases`. Each platform and architecture has its own Velopack channel, named for its runtime, since an installed viewer updates from its channel's feed: `win-x64`, `win-arm64`, `osx-arm64`, `osx-x64`, `linux-x64` and `linux-arm64`. The channel also names the feed, `releases.<channel>.json`, and the files vpk writes. On macOS vpk adds its updater to the bundle and seals it again, with `AL_SIGNING_IDENTITY` or ad-hoc, and notarizes it when `AL_NOTARY_PROFILE` names a profile stored with `xcrun notarytool store-credentials`.
+
+On Linux the AppImage holds the installed tree as it is, at the AppDir's `usr/bin`, where the update client looks for the updater and manifest vpk adds; `cmake/ViewerAppDir.cmake` lays out the rest around it, the `AppRun` that runs the launcher and the tree's desktop entry and icons. Run from the AppImage, the launcher points the desktop entry at the AppImage file rather than at its mount, and the update client replaces that file in place. A tree from the archive or a system package has no Velopack installation, finds no update manager, and is updated by its package manager. The hosted build's `package-linux` job makes the AppImage and feed from the build's archive.
 
 The third-party attribution is generated, not kept by hand: `cmake/Attribution.cmake` reads every installed port's `vcpkg.spdx.json` and `copyright` and writes `app_settings/packages-info.txt` (what the About floater's Licences tab shows) and `licenses.txt` (every licence text). What vcpkg cannot know — the pieces under `indra/externals/`, the SDKs from outside vcpkg, and a holder or licence a port's files do not state — is in `cmake/attribution.json`, as is the list of installed ports that ship nothing and are skipped: build tools, empty ports that stand for a system library, and what is built only for those. A newly added port whose `vcpkg.json` declares no `license` stops the build with its name; fix the port, add an override to the table, or, if the viewer ships none of it, skip it with the reason (and the platform, when the port is empty only on some).
 
-On macOS the install step signs the bundle inside out — ad-hoc, or with `-DAL_ENABLE_SIGNING=ON -DAL_SIGNING_IDENTITY=<Developer ID>` — so the CEF helpers keep their sandbox entitlements. On Linux the binaries carry an `$ORIGIN`-relative RPATH and find the data one directory above the executable, so the tree runs from wherever it is unpacked.
+On macOS the install step signs the bundle inside out — ad-hoc, or with `-DAL_SIGNING_IDENTITY=<Developer ID>` — so the CEF helpers keep their sandbox entitlements, and the package step seals it again after stripping the executable. The disk image is APFS: HFS+ decomposes file names, which breaks the seal over the font stand-ins with Japanese names. On Linux the binaries carry an `$ORIGIN`-relative RPATH and find the data one directory above the executable, so the tree runs from wherever it is unpacked.
+
+On Linux CPack also writes a `.deb` where `dpkg-shlibdeps` is installed and an `.rpm` where `rpmbuild` is (`-G DEB` or `-G RPM` asks for one alone). Each channel is a package of its own — `alchemy-viewer` for the release channel, `alchemy-beta`, `alchemy-test` and so on otherwise — so channels install side by side. A package holds the tree as it is, under `/opt/<package>`, with the launcher linked as `/usr/bin/<package>` and the desktop entry, AppStream data and icons in `/usr/share`, taken from the tree's `share/`. Both are named for the channel's application ID (`org.alchemyviewer.viewer`, `org.alchemyviewer.viewer.beta`, …), which is also the Wayland app ID and X11 class of the viewer's window. CEF's sandbox helper is installed setuid root, which sandboxes the web browser's renderers. Dependencies come from what the binaries link, less the libraries the tree carries; what the viewer loads at run time is listed in `cmake/ViewerPackageLinux.cmake`. `AL_PACKAGE_CONTACT` names the maintainer.
+
+A tree from the archive runs where it is unpacked: its launcher, `alchemy`, adds it to the application menu, or points the channel's entry at it when the entry is another tree's, unless the system already has an entry for the channel or `AL_NO_DESKTOP_INTEGRATION` is set. It makes the tree the handler of `secondlife://` and `x-grid-location-info://` links only where no other viewer has them: when nothing handles them, the channel already does, or the entry that did is gone. It asks again on each run, so the links of a viewer removed since come to it. `install.sh` copies it to `/opt/<package>` as root or `~/.local/share/<package>` otherwise, and `install.sh --uninstall` takes it away. `etc/desktop_integration.sh install|uninstall` adds or removes the desktop entry alone.
+
+The hosted build (`.github/workflows/build.yaml`) writes the Linux archive, `.deb` and `.rpm` in the build job, and packages Windows and macOS in jobs of their own, after the build, from the build's install tree or stripped bundle and its `newview/package.env`. Pull requests are packaged unsigned; other builds are signed when the repository has the secrets, and without them are packaged unsigned with a notice:
+
+| Secret | What |
+|:--|:--|
+| `AZURE_KEY_VAULT_URI`, `AZURE_KEY_VAULT_CERTIFICATE` | The Azure Key Vault and the name of the Windows code-signing certificate in it |
+| `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` | The Entra application AzureSignTool signs as |
+| `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PASSWORD` | The Developer ID Application certificate and key, as a base64 `.p12`, and its password |
+| `MACOS_NOTARY_KEY`, `MACOS_NOTARY_KEY_ID`, `MACOS_NOTARY_ISSUER_ID` | An App Store Connect API key (the `.p8`'s text) and its key ID, to notarize with, and the issuer ID of a team key; an individual key has none |
+
+`scripts/signing/macos_signing_secrets.py` makes the macOS secrets from the exported `.p12` and the API key's `.p8`, checking each as the build will use it, and stores them with `gh secret set` (`--repo`) or writes them to files (`--output`); its header says where each comes from.
+
+vpk signs every Windows binary, its `Setup.exe` and `Update.exe` through AzureSignTool. On macOS the job signs the bundle inside out with `ViewerCodeSign.cmake`, vpk adds its updater, seals, notarizes and staples the bundle, and the job builds the disk image from that bundle with [dmgbuild](https://dmgbuild.readthedocs.io) (`indra/newview/installers/darwin/dmg_settings.py`), then signs, notarizes and staples the image.
 
 ## Troubleshooting
 
@@ -504,15 +541,15 @@ Velopack needs the `vpk` .NET tool. Install it once per clone:
 dotnet tool restore
 ```
 
-### Rust / `cargo` missing during packaging
+### `rustc` not found when configuring
 
-Velopack invokes `cargo`. Install a stable Rust toolchain:
+With `AL_USE_VELOPACK=ON` the build compiles Velopack's C API, `indra/rust/velopack_libc`, with cargo through [Corrosion](https://github.com/corrosion-rs/corrosion), which looks for `rustc` on the path and in `~/.cargo/bin`. Install a stable toolchain:
 
 ```
 rustup default stable
 ```
 
-Only needed with `AL_USE_VELOPACK=ON`.
+On macOS, Homebrew's rustup keeps `rustc` and `cargo` in `$(brew --prefix rustup)/bin`, which must be on the path. A target the toolchain lacks, such as `x86_64-apple-darwin` for an x86_64 build on Apple silicon, is added with rustup while configuring; `-DRust_RUSTUP_INSTALL_MISSING_TARGET=OFF` stops that.
 
 ### Warnings fail the build
 
