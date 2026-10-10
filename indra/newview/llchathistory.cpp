@@ -201,7 +201,7 @@ public:
             if (mTime > 0) // have frame time
             {
                 time_t current_time = time_corrected();
-                time_t message_time = (time_t)(current_time - LLFrameTimer::getElapsedSeconds() + mTime);
+                time_t message_time = (time_t)(current_time - LLFrameTimer::getUptimeSeconds() + mTime);
 
                 // Report abuse shouldn't use AM/PM, use 24-hour time
                 time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
@@ -503,7 +503,7 @@ public:
             if (mTime > 0) // have frame time
             {
                 time_t current_time = time_corrected();
-                time_t message_time = (time_t)(current_time - LLFrameTimer::getElapsedSeconds() + mTime);
+                time_t message_time = (time_t)(current_time - LLFrameTimer::getUptimeSeconds() + mTime);
 
                 // Report abuse shouldn't use AM/PM, use 24-hour time
                 time_string = "[" + LLTrans::getString("TimeMonth") + "]/["
@@ -1625,12 +1625,12 @@ void LLChatHistory::appendMessage(const LLChat& chat, const LLSD &args, const LL
         p.left_pad = mLeftWidgetPad;
         p.right_pad = mRightWidgetPad;
 
-        LLDate new_message_time = LLDate::now();
+        const F64 new_message_time = LLFrameTimer::getTotalSeconds();
         if (!teleport_separator
             && mLastFromName == chat.mFromName
             && mLastFromID == chat.mFromID
-            && mLastMessageTime.notNull()
-            && (new_message_time.secondsSinceEpoch() - mLastMessageTime.secondsSinceEpoch()) < 60.0
+            && mLastMessageTime > 0.0
+            && (new_message_time - mLastMessageTime) < 60.0
             && mIsLastMessageFromLog == message_from_log)  //distinguish between current and previous chat session's histories
         {
             view = getSeparator();

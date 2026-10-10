@@ -24,7 +24,7 @@
 
 #include "linden_common.h"
 
-#include "../alfoldmodel.h"
+#include "alfoldmodel.h"
 
 #include "../test/lltut.h"
 
@@ -167,7 +167,7 @@ namespace tut
                     }
                 }
             },
-            [](S32) { return 1u; });
+            nullptr);
         folds.setLineComment("//");
         std::string out;
         for (const ALFoldModel::Region& region : folds.regions(doc, 4))
@@ -198,12 +198,344 @@ namespace tut
                     out.push_back({ 0, ALFoldModel::Event::Close });
                 }
             },
-            [](S32) { return 1u; });
+            nullptr);
         out.clear();
         for (const ALFoldModel::Region& region : words.regions(lua, 4))
         {
             out += (out.empty() ? "" : " ") + std::to_string(region.start) + "-" + std::to_string(region.end);
         }
         ensure_equals("each arm a block of its own, the last through the end", out, std::string("0-1 2-3 4-6"));
+    }
+
+    template<> template<>
+    void alfoldmodel_object::test<5>()
+    {
+        set_test_name("whole lines taken from a folded block's first line take its fold, and leave the block after them as it was; lines put in above it at its start take it down with them");
+        const char* const text = "foo()\n{\n    x();\n}\nbar()\n{\n    y();\n}";
+        ALTextDocument    doc(text);
+        ensure_equals("two blocks", blocks(doc), std::string("0-3 4-7"));
+        model.fold(doc, 4, 0);
+        ALTextDocument::Edit edit = doc.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(4, 0)), "");
+        model.edited(edit);
+        ensure_equals("the block after them now first", doc.line(0), std::string("bar()"));
+        ensure("the fold gone with its line, the block now there not folded for it", model.folded().empty());
+
+        // Both folded: the one after moves up, and is one fold still.
+        ALTextDocument both(text);
+        ALFoldModel    two;
+        two.fold(both, 4, 0);
+        two.fold(both, 4, 4);
+        edit = both.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(4, 0)), "");
+        two.edited(edit);
+        ensure("the one after moved up, once", two.folded() == std::vector<S32>{ 0 });
+        ensure_equals("hiding its lines once", lines(two.hidden(both, 4)), std::string("1-3"));
+
+        // Return at its first line's start: the line goes down, and the fold
+        // with it.
+        ALTextDocument above(text);
+        ALFoldModel    down;
+        down.fold(above, 4, 0);
+        edit = above.replace(ALTextRange(ALTextPos(0, 0), ALTextPos(0, 0)), "\n");
+        down.edited(edit);
+        ensure("moved down with its line", down.folded() == std::vector<S32>{ 1 });
+        ensure_equals("hiding what it did", lines(down.hidden(above, 4)), std::string("2-4"));
+        edit = above.replace(ALTextRange(ALTextPos(1, 0), ALTextPos(1, 0)), "q");
+        down.edited(edit);
+        ensure("typing at its start keeps it", down.folded() == std::vector<S32>{ 1 });
+    }
+
+    template<> template<>
+    void alfoldmodel_object::test<6>()
+    {
+        set_test_name("by syntax, open at a line: a bracket alone on its line under a header that opens a block of its own starts its own, once each, as the blocks have it");
+        const ALTextDocument doc("llSetLinkPrimitiveParamsFast(LINK_THIS,\n[\n    PRIM_COLOR, ALL_SIDES\n]);\n");
+        ALFoldModel          folds;
+        folds.setSyntax(
+            [&doc](S32 line, std::vector<ALFoldModel::Block>& out) {
+                const std::string& text = doc.line(line);
+                for (S32 i = 0; i < static_cast<S32>(text.size()); ++i)
+                {
+                    const char c = text[static_cast<size_t>(i)];
+                    if (c == '(' || c == '[')
+                    {
+                        out.push_back({ i, ALFoldModel::Event::Open });
+                    }
+                    else if (c == ')' || c == ']')
+                    {
+                        out.push_back({ i, ALFoldModel::Event::Close });
+                    }
+                }
+            },
+            nullptr);
+        std::string out;
+        for (const ALFoldModel::Region& region : folds.regions(doc, 4))
+        {
+            out += (out.empty() ? "" : " ") + std::to_string(region.start) + "-" + std::to_string(region.end);
+        }
+        ensure_equals("the call's block from its line, the list's from its own", out, std::string("0-3 1-3"));
+        ensure("both open inside them, each once", folds.openAt(doc, 4, 2, 8) == std::vector<S32>({ 0, 1 }));
+        ensure("the innermost alone the list's", folds.openAt(doc, 4, 2, 1) == std::vector<S32>({ 1 }));
+    }
+
+    template<> template<>
+    void alfoldmodel_object::test<7>()
+    {
+        set_test_name("by syntax, a line's blocks are read once and again only where it is said to have been lexed anew, the text lexed through first");
+        const ALTextDocument doc("a {\n  b {\n  }\n}\nc {\n}\n");
+        ALFoldModel          folds;
+        // The lines whose braces lex as something other than code, as in a
+        // comment; and how often blocks were asked for, and through which
+        // line the text was lexed.
+        std::vector<bool> quiet(static_cast<size_t>(doc.lineCount()), false);
+        S32               asked   = 0;
+        S32               lexed   = -1;
+        folds.setSyntax(
+            [&](S32 line, std::vector<ALFoldModel::Block>& out) {
+                ++asked;
+                const std::string& text = doc.line(line);
+                for (S32 i = 0; !quiet[static_cast<size_t>(line)] && i < static_cast<S32>(text.size()); ++i)
+                {
+                    if (text[static_cast<size_t>(i)] == '{' || text[static_cast<size_t>(i)] == '}')
+                    {
+                        out.push_back({ i, text[static_cast<size_t>(i)] == '{' ? ALFoldModel::Event::Open : ALFoldModel::Event::Close });
+                    }
+                }
+            },
+            [&](S32 line) { lexed = line; });
+        const auto found = [&]() {
+            std::string out;
+            for (const ALFoldModel::Region& region : folds.regions(doc, 4))
+            {
+                out += (out.empty() ? "" : " ") + std::to_string(region.start) + "-" + std::to_string(region.end);
+            }
+            return out;
+        };
+        ensure_equals("the blocks", found(), std::string("0-3 1-2 4-5"));
+        ensure_equals("each line with anything on it asked once", asked, 6);
+        ensure_equals("the text lexed through its last line first", lexed, doc.lineCount() - 1);
+        folds.invalidate();
+        quiet[1] = quiet[2] = true;
+        ensure_equals("found again, none asked again", found(), std::string("0-3 1-2 4-5"));
+        ensure_equals("asked no more", asked, 6);
+        folds.relexed(1, 2);
+        ensure_equals("those said lexed anew read again", found(), std::string("0-3 4-5"));
+        ensure_equals("and they alone", asked, 8);
+        ensure("the sticky headers lex through the line before theirs", folds.openAt(doc, 4, 5, 3) == std::vector<S32>({ 4 }) && lexed == 4);
+    }
+
+    template<> template<>
+    void alfoldmodel_object::test<8>()
+    {
+        set_test_name("by syntax, through edits of every kind, in a short text and in a long one whose blocks are left open, the blocks found from the walk kept are those a walk of the whole text finds, and an edit walks only near it and puts the blocks together from what it walked");
+        // The same edits on every run from a seed, four runs.
+        S32 nearby  = 0;
+        S32 spliced = 0;
+        // Functions with braces their own lines' and their headers', an else,
+        // regions, and block comments, which a lexer here reads as a
+        // highlighter does: a line's braces count where they are code. Or
+        // many more of them, every third brace alone on its line left out,
+        // so that what is open grows down the text.
+        const auto functions = [](S32 count, bool unclosed) {
+            std::string text;
+            for (S32 f = 0; f < count; ++f)
+            {
+                text += f % 3 == 0 ? "f()\n{\n    if (a) {\n        b();\n    } else {\n        c();\n    }\n}\n"
+                      : f % 3 == 1 ? "// #region r\ng() {\n    d();\n}\n// #endregion\n\n"
+                                   : "/* h() {\n */\nh()\n{\n    e();\n}\n";
+            }
+            if (!unclosed)
+            {
+                return text;
+            }
+            std::string out;
+            S32         alone = 0;
+            size_t      at    = 0;
+            while (at < text.size())
+            {
+                const size_t end  = text.find('\n', at);
+                std::string  line = text.substr(at, end - at);
+                if (line == "}" && ++alone % 3 == 0)
+                {
+                    line.clear();
+                }
+                out += line + "\n";
+                at = end + 1;
+            }
+            return out;
+        };
+        // `sweeping`: now and then hundreds of lines taken at once, over
+        // places the walk keeps.
+        const auto run = [&](U32 first_seed, const std::string& text, bool sweeping) {
+            ALTextDocument doc(text);
+            // Whether each line starts inside a comment, as the lexer has it.
+            const auto starts = [&doc]() {
+                std::vector<bool> out(static_cast<size_t>(doc.lineCount()), false);
+                bool              inside = false;
+                for (S32 l = 0; l < doc.lineCount(); ++l)
+                {
+                    out[static_cast<size_t>(l)] = inside;
+                    const std::string& line     = doc.line(l);
+                    for (size_t i = 0; i + 1 < line.size(); ++i)
+                    {
+                        if (!inside && line[i] == '/' && line[i + 1] == '*')
+                        {
+                            inside = true;
+                            ++i;
+                        }
+                        else if (inside && line[i] == '*' && line[i + 1] == '/')
+                        {
+                            inside = false;
+                            ++i;
+                        }
+                    }
+                }
+                return out;
+            };
+            std::vector<bool> lexed = starts();
+            const auto        blocks = [&doc, &lexed](S32 line, std::vector<ALFoldModel::Block>& out) {
+                const std::string& t      = doc.line(line);
+                bool               inside = lexed[static_cast<size_t>(line)];
+                for (S32 i = 0; i < static_cast<S32>(t.size()); ++i)
+                {
+                    const char c = t[static_cast<size_t>(i)];
+                    const char n = i + 1 < static_cast<S32>(t.size()) ? t[static_cast<size_t>(i + 1)] : '\0';
+                    if (!inside && c == '/' && n == '*')
+                    {
+                        inside = true;
+                        ++i;
+                    }
+                    else if (inside && c == '*' && n == '/')
+                    {
+                        inside = false;
+                        ++i;
+                    }
+                    else if (!inside && (c == '{' || c == '}'))
+                    {
+                        out.push_back({ i, c == '{' ? ALFoldModel::Event::Open : ALFoldModel::Event::Close });
+                    }
+                }
+            };
+            const auto said = [](const std::vector<ALFoldModel::Region>& regions) {
+                std::string out;
+                for (const ALFoldModel::Region& region : regions)
+                {
+                    out += (out.empty() ? "" : " ") + std::to_string(region.start) + "-" + std::to_string(region.end);
+                }
+                return out;
+            };
+            ALFoldModel kept;
+            kept.setSyntax(blocks, nullptr);
+            kept.setLineComment("//");
+            ensure_equals("all of it walked first", (kept.regions(doc, 4), kept.lastWalked()), doc.lineCount());
+            // The same edits on every run, each number drawn in a statement of
+            // its own so that no compiler's order of arguments changes them.
+            U32        seed = first_seed;
+            const auto pick = [&seed](S32 n) {
+                seed = seed * 1664525u + 1013904223u;
+                return n > 0 ? static_cast<S32>((seed >> 8) % static_cast<U32>(n)) : 0;
+            };
+            const auto somewhere = [&]() {
+                const S32 line   = pick(doc.lineCount());
+                const S32 column = pick(doc.lineLength(line) + 1);
+                return ALTextPos(line, column);
+            };
+            const char* const PIECES[] = { "", "x", "\n", "\n\n", "{", "}", "{\n", "}\n", "} else {", "/*", "*/", "// #region\n", "// #endregion\n",
+                                           "k()\n{\n    m();\n}\n" };
+            const S32         PIECE_COUNT = static_cast<S32>(sizeof(PIECES) / sizeof(PIECES[0]));
+            for (S32 step = 0; step < 600; ++step)
+            {
+                const std::string at  = "step " + std::to_string(step);
+                const S32         how = pick(10);
+                ALTextDocument::Edit edit;
+                if (how < 7)
+                {
+                    // One run: a piece put in, over a stretch of up to a few
+                    // lines or none.
+                    const ALTextPos from  = somewhere();
+                    S32             lines = pick(4);
+                    if (sweeping)
+                    {
+                        const S32 big = pick(12);
+                        lines         = big == 0 ? pick(400) : lines;
+                    }
+                    const S32       piece = pick(PIECE_COUNT);
+                    const S32       to    = llmin(from.line + lines, doc.lineCount() - 1);
+                    const S32       col   = pick(doc.lineLength(to) + 1);
+                    const ALTextRange range = ALTextRange(from, ALTextPos(to, col)).normalised();
+                    edit                    = doc.replace(how < 3 ? ALTextRange(from, from) : range, PIECES[piece]);
+                }
+                else
+                {
+                    // Several runs at once, as a Replace All makes them.
+                    std::vector<std::pair<ALTextRange, std::string>> runs;
+                    S32 line = pick(8);
+                    while (line < doc.lineCount() && runs.size() < 6)
+                    {
+                        const S32 piece = pick(PIECE_COUNT);
+                        runs.emplace_back(ALTextRange(ALTextPos(line, 0), ALTextPos(line, llmin(doc.lineLength(line), pick(3)))), PIECES[piece]);
+                        const S32 gap = pick(40);
+                        line += 2 + gap;
+                    }
+                    if (runs.empty())
+                    {
+                        continue;
+                    }
+                    edit = doc.replaceMany(std::move(runs));
+                }
+                // As the highlighter does: the lines after the edit lexed, and
+                // those whose start the edit changed said to be lexed anew.
+                const std::vector<bool> was = lexed;
+                lexed                       = starts();
+                kept.edited(edit, doc.lineCount());
+                const std::vector<ALTextDocument::Edit::LineSpan>& spans = edit.lineSpans();
+                S32 relexed_first = -1;
+                S32 relexed_last  = -1;
+                for (S32 l = 0; l < doc.lineCount(); ++l)
+                {
+                    // The line it was, where it was not one the edit made.
+                    S32  old    = l;
+                    bool inside = false;
+                    S32  before = 0;
+                    for (const ALTextDocument::Edit::LineSpan& span : spans)
+                    {
+                        const S32 made_first = span.first + before;
+                        const S32 made_last  = made_first + llmax(span.made, 1) - 1;
+                        if (l < made_first)
+                        {
+                            break;
+                        }
+                        if (l <= made_last)
+                        {
+                            inside = true;
+                            break;
+                        }
+                        old    = l - span.shiftAfter;
+                        before = span.shiftAfter;
+                    }
+                    if (!inside && old >= 0 && old < static_cast<S32>(was.size()) && was[static_cast<size_t>(old)] != lexed[static_cast<size_t>(l)])
+                    {
+                        relexed_first = relexed_first < 0 ? l : relexed_first;
+                        relexed_last  = l;
+                    }
+                }
+                if (relexed_first >= 0)
+                {
+                    kept.relexed(relexed_first, relexed_last);
+                }
+                ALFoldModel whole;
+                whole.setSyntax(blocks, nullptr);
+                whole.setLineComment("//");
+                const std::string found = said(kept.regions(doc, 4));
+                ensure_equals(at + ": the blocks", found, said(whole.regions(doc, 4)));
+                nearby += kept.lastWalked() < doc.lineCount() / 4 ? 1 : 0;
+            spliced += kept.lastSpliced() ? 1 : 0;
+            }
+        };
+        run(20261009u, functions(60, false), false);
+        run(7u, functions(60, false), false);
+        run(4242u, functions(60, false), false);
+        run(99u, functions(400, true), true);
+        ensure("most edits walked only near them: " + std::to_string(nearby), nearby > 1200);
+        ensure("and most put the blocks together from the walk's changes: " + std::to_string(spliced), spliced > 300);
     }
 }

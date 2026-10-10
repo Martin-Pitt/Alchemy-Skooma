@@ -26,8 +26,11 @@
 
 #include "alscriptstudioplaces.h"
 
+#include "allinebreaks.h"
 #include "alscriptenvelope.h"
 #include "alscriptlexicon.h"
+
+#include <algorithm>
 
 namespace ALScriptPlaces
 {
@@ -36,56 +39,19 @@ namespace ALScriptPlaces
         return ALTextRange(ALTextPos(span.line, span.column), ALTextPos(span.endLine, span.endColumn));
     }
 
-    // A line of a text, as it is, for a row of a pane.
-    std::string lineOf(const std::string& text, S32 line)
+    Lines::Lines(std::shared_ptr<const std::string> held) : mHeld(std::move(held))
     {
-        size_t begin = 0;
-        for (S32 l = 0; l < line && begin != std::string::npos; ++l)
+        if (mHeld)
         {
-            begin = text.find('\n', begin);
-            if (begin != std::string::npos)
-            {
-                ++begin;
-            }
+            mLines = ALLineBreaks::views(*mHeld);
         }
-        if (begin == std::string::npos)
-        {
-            return std::string();
-        }
-        size_t end = text.find('\n', begin);
-        if (end != std::string::npos && end > begin && text[end - 1] == '\r')
-        {
-            --end;
-        }
-        return text.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
     }
 
-    Lines::Lines(std::shared_ptr<const std::string> held) : mHeld(std::move(held)), mText(mHeld.get())
-    {
-        index();
-    }
-
-    Lines::Lines(const std::string& text) : mText(&text)
-    {
-        index();
-    }
-
-    void Lines::index()
-    {
-        if (!mText)
-        {
-            return;
-        }
-        mStarts.push_back(0);
-        for (size_t at = mText->find('\n'); at != std::string::npos; at = mText->find('\n', at + 1))
-        {
-            mStarts.push_back(at + 1);
-        }
-    }
+    Lines::Lines(const std::string& text) : mLines(ALLineBreaks::views(text)) {}
 
     bool Lines::has(S32 line) const
     {
-        return line >= 0 && (mOpen ? line < mOpen->lineCount() : static_cast<size_t>(line) < mStarts.size());
+        return line >= 0 && (mOpen ? line < mOpen->lineCount() : static_cast<size_t>(line) < mLines.size());
     }
 
     std::string Lines::line(S32 line) const
@@ -98,13 +64,7 @@ namespace ALScriptPlaces
         {
             return mOpen->line(line);
         }
-        const size_t begin = mStarts[static_cast<size_t>(line)];
-        size_t       end   = static_cast<size_t>(line) + 1 < mStarts.size() ? mStarts[static_cast<size_t>(line) + 1] - 1 : mText->size();
-        if (end > begin && (*mText)[end - 1] == '\r')
-        {
-            --end;
-        }
-        return mText->substr(begin, end - begin);
+        return std::string(mLines[static_cast<size_t>(line)]);
     }
 
     bool holds(const ALScriptSpan& span, const ALTextPos& pos)
@@ -143,15 +103,6 @@ namespace ALScriptPlaces
         }
     }
 
-    std::string lineOf(const ALTextDocument& text, S32 line)
-    {
-        if (line < 0 || line >= text.lineCount())
-        {
-            return std::string();
-        }
-        return text.line(line);
-    }
-
     // A name as both languages spell one.
     bool isIdentifier(const std::string& text)
     {
@@ -179,6 +130,26 @@ namespace ALScriptPlaces
             span.endColumn = begin.column;
         }
         return begin.file;
+    }
+
+    bool mapModuleSpan(const std::vector<std::pair<std::string, ALSourceMap>>& maps, const std::string& key, ALScriptSpan& span,
+                       std::string& path, std::string& name)
+    {
+        const auto own = std::find_if(maps.begin(), maps.end(), [&key](const auto& module) { return module.first == key; });
+        if (own == maps.end())
+        {
+            return false;
+        }
+        ALScriptSpan mapped = span;
+        const S32    file   = mapSpan(own->second, mapped);
+        if (file < 0)
+        {
+            return false;
+        }
+        span = mapped;
+        path = own->second.files()[file].path;
+        name = own->second.files()[file].name;
+        return true;
     }
 
     void placeText(ALScriptStudioDoc::Place& place, const std::string& line)
@@ -262,6 +233,21 @@ namespace ALScriptPlaces
         }
         declared.line   = result.hover.definitionLine;
         declared.column = result.hover.definitionColumn;
+        if (!result.hover.definitionFile.empty())
+        {
+            // In a module the script requires, read apart: through the
+            // module's own map, to the file it came of.
+            ALScriptSpan span;
+            span.line = span.endLine = declared.line;
+            span.column = span.endColumn = declared.column;
+            if (!preprocessed || !mapModuleSpan(doc.expanded.moduleMaps, result.hover.definitionFile, span, declared.path, declared.name))
+            {
+                return Declared();
+            }
+            declared.line   = span.line;
+            declared.column = span.column;
+            return declared;
+        }
         if (preprocessed)
         {
             const ALSourceMap::Loc loc = doc.expanded.map.toSource(declared.line, declared.column);
