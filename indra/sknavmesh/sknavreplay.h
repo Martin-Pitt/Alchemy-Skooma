@@ -33,6 +33,7 @@
 #include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavstamp.h"
+#include "sknavwallruns.h"
 #include "sknavwind.h"
 
 #include <iosfwd>
@@ -99,6 +100,7 @@ namespace sknav
         /// When the replay measures a stamped build: the same raster polygonised with no stamp.
         std::shared_ptr<const TileBuildResult> mUnstamped;
         std::shared_ptr<const TileBuildStats> mUnstampedStats;
+        std::shared_ptr<const std::vector<WallRun>> mWallRuns;  ///< over the stamped polys, once the spaces are bound
     };
 
     /// One run of the rooms passes over a mesh, when the replay measures.
@@ -167,6 +169,7 @@ namespace sknav
         U32 mRefused = 0;
         /// Wall-clock milliseconds per stage, in order.
         std::vector<std::pair<std::string, F64>> mStages;
+        WallRunStats mWallRuns;
     };
 
     /// clusters -> meshes and tiles -> terrain -> buildTile -> enclosure -> spaces -> wind.

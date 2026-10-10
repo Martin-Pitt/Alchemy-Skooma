@@ -996,7 +996,14 @@ namespace sknav
         }
         out << "],\"walls\":{\"segments\":" << seg_n << ",\"segments_two_spaces\":" << seg_two << ",\"segments_same_space\":" << seg_same
             << ",\"segments_one_side\":" << seg_one << ",\"faces\":" << face_n << ",\"faces_two_spaces\":" << face_two
-            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one << "}";
+            << ",\"faces_same_space\":" << face_same << ",\"faces_one_side\":" << face_one;
+        const WallRunStats& wr = result.mWallRuns;
+        out << ",\"runs\":{\"edges\":" << wr.mEdges << ",\"mixed_edges\":" << wr.mMixedEdges;
+        for (S32 c = 0; c < 3; ++c)
+        {
+            out << ",\"" << wallClassName(static_cast<WallClass>(c)) << "\":[" << wr.mRuns[c] << ',' << wr.mMetres[c] << ']';
+        }
+        out << "}}";
 
         // findAirLeaf over random cells of every tile with air.
         out << ",\"air_leaf_ns\":[";

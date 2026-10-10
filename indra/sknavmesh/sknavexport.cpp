@@ -73,6 +73,8 @@ namespace sknav
         file << ",\"classes\":[\"avatar\"]";
         file << ",\"edgeKinds\":[\"open\",\"wall\",\"ledge\",\"overhang\"]";
         file << ",\"linkKinds\":[\"drop\",\"ladder\",\"elevator\"]";
+        file << ",\"wallClasses\":[\"none\",\"hatched\",\"solid\"],\"covers\":[\"none\",\"half\",\"full\"],\"wallPlanes\":[" << WALL_LOW_PLANE_M << ','
+             << WALL_HIGH_PLANE_M << ']';
         file << ",\"areas\":[\"none\",\"ground\",\"object\",\"submerged\",\"drop\",\"5\",\"6\",\"7\"]";
         file << ",\"meshes\":[";
     }
@@ -301,6 +303,42 @@ namespace sknav
                     }
                 }
                 file << ']';
+                if (tile.mStoreys && dt && dt->header)
+                {
+                    // Each poly's storey by index into the mesh's storeys, -1 on a flight or none.
+                    const dtPolyRef base = nav->getPolyRefBase(dt);
+                    file << ",\"poly_storey\":[";
+                    for (size_t p = 0; p < g.mPolyComponent.size(); ++p)
+                    {
+                        file << (p ? "," : "") << tile.mStoreys->storeyOfPoly(static_cast<U64>(base | static_cast<dtPolyRef>(p)));
+                    }
+                    file << ']';
+                }
+                if (tile.mWallRuns)
+                {
+                    static const char* const COVERS[] = { "none", "half", "full" };
+                    file << ",\"walls\":[";
+                    for (size_t i = 0; i < tile.mWallRuns->size(); ++i)
+                    {
+                        const WallRun& w = (*tile.mWallRuns)[i];
+                        file << (i ? "," : "") << "{\"line\":[";
+                        for (size_t k = 0; k < w.mLine.size(); ++k)
+                        {
+                            file << (k ? "," : "");
+                            writeVec3d(file, mesh_origin + LLVector3d(w.mLine[k]));
+                        }
+                        file << "],\"class\":\"" << wallClassName(w.mClass) << "\",\"low\":" << (w.mLow ? "true" : "false") << ",\"high\":"
+                             << (w.mHigh ? "true" : "false") << ",\"top\":[" << w.mTopMin << ',' << w.mTopMax << "],\"face\":" << w.mFace
+                             << ",\"floor\":" << mesh_origin.mdV[VZ] + w.mFloorZ << ",\"polys\":[";
+                        for (size_t k = 0; k < w.mPolys.size(); ++k)
+                        {
+                            file << (k ? "," : "") << w.mPolys[k];
+                        }
+                        file << "],\"space\":" << w.mSpace << ",\"across\":" << w.mAcross << ",\"cover\":\"" << COVERS[static_cast<S32>(w.mCover)] << "\"}";
+                        ++counts.mWallRuns;
+                    }
+                    file << ']';
+                }
             }
             file << '}';
         }
@@ -404,6 +442,37 @@ namespace sknav
             }
             file << "]}";
         }
+    }
+
+    void writeExportStoreys(std::ostream& file, const LLVector3d& origin, const StoreyProduct& storeys)
+    {
+        file << ",\"storeys\":[";
+        for (size_t i = 0; i < storeys.mStoreys.size(); ++i)
+        {
+            const Storey& s = storeys.mStoreys[i];
+            file << (i ? "," : "") << "{\"index\":" << i << ",\"id\":" << s.mId << ",\"floor\":" << origin.mdV[VZ] + s.mFloorZ << ",\"area\":" << s.mArea
+                 << ",\"min\":";
+            writeVec3d(file, origin + LLVector3d(s.mMin));
+            file << ",\"max\":";
+            writeVec3d(file, origin + LLVector3d(s.mMax));
+            file << ",\"spaces\":[";
+            for (size_t k = 0; k < s.mSpaces.size(); ++k)
+            {
+                file << (k ? "," : "") << s.mSpaces[k];
+            }
+            file << "]}";
+        }
+        file << "],\"storey_connectors\":[";
+        for (size_t i = 0; i < storeys.mConnectors.size(); ++i)
+        {
+            const StoreyConnector& c = storeys.mConnectors[i];
+            file << (i ? "," : "") << "{\"storeys\":[" << c.mStorey[0] << ',' << c.mStorey[1] << "],\"space\":" << c.mSpace << ",\"ends\":[";
+            writeVec3d(file, origin + LLVector3d(c.mEnd[0]));
+            file << ',';
+            writeVec3d(file, origin + LLVector3d(c.mEnd[1]));
+            file << "],\"flight\":\"" << std::hex << c.mFlight << std::dec << "\",\"portals\":" << (c.mPortals ? "true" : "false") << '}';
+        }
+        file << ']';
     }
 
     void writeExportDoor(std::ostream& file, const DoorEntity& d)
