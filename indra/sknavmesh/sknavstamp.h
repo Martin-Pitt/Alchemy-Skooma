@@ -167,12 +167,15 @@ namespace sknav
 
     /// A geometry bound to the spaces standing now: each poly's space id and
     /// the flags past its area bits, and each portal edge's portal key.
+    constexpr U32 NO_PORTAL = 0xffffffffu;
+
     struct TileBinding
     {
         U64 mHash = 0;
         std::vector<U32> mComponentSpaceId;     ///< 0 for a component whose space is gone
         std::vector<U16> mPolyFlags;            ///< POLY_BINDING_FLAGS bits per poly
         std::vector<U64> mPortalKeys;           ///< per portal edge
+        std::vector<U32> mPortalIndex;          ///< per portal edge, its portal's index in the rooms product, or NO_PORTAL
     };
 
     /// Bind a geometry to the input it was stamped with, read again against

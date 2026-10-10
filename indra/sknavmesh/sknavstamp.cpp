@@ -1000,6 +1000,10 @@ namespace sknav
             const Space* a = spaceOf(sp.mSide[0]);
             const Space* b = spaceOf(sp.mSide[1]);
             out.mPortalKeys.push_back(portalKey(a ? a->mId : 0, b ? b->mId : 0, sp.mKind, sp.mCentre));
+            // The geometry may be cached from another binding, so the index is the input's, the same portal by position and kind.
+            const bool same = e.mPortal < input.mPortals.size() && input.mPortals[e.mPortal].mPortal < rooms.mPortals.size() &&
+                              input.mPortals[e.mPortal].mKind == sp.mKind && dist_vec(input.mPortals[e.mPortal].mCentre, sp.mCentre) < 0.01f;
+            out.mPortalIndex.push_back(same ? input.mPortals[e.mPortal].mPortal : NO_PORTAL);
             if (sp.mKind == static_cast<U8>(PortalKind::DOOR) && e.mPoly < npolys)
             {
                 out.mPolyFlags[e.mPoly] |= POLY_DOOR;
@@ -1017,6 +1021,10 @@ namespace sknav
         for (const U64 k : out.mPortalKeys)
         {
             h = mix(h, k);
+        }
+        for (const U32 i : out.mPortalIndex)
+        {
+            h = mix(h, i);
         }
         out.mHash = h;
     }
