@@ -367,10 +367,31 @@ namespace tut
         ensure_equals("the same storey", sw, se);
         ensure("no flight, no connector", st.mConnectors.empty());
 
-        // A floor under the least storey area that no flight reaches makes none.
+        // A floor under the least storey area that a space holds is still a storey, and every spaced poly has one.
         StoreyProduct small;
         buildStoreys(*b.mNav, b.polySpace(), *b.mRooms, small, nullptr, 1e6f);
-        ensure("no storey", small.mStoreys.empty() && small.mPolyStorey.empty() && small.storeyOf(west) < 0);
+        ensure("the rooms keep their storey", small.storeyOf(west) >= 0 && small.storeyOf(east) >= 0);
+        const dtNavMesh& nav = *b.mNav;
+        U32 spaced = 0, homeless = 0;
+        for (S32 t = 0; t < nav.getMaxTiles(); ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                if (b.polySpace()(tile, static_cast<U32>(p)))
+                {
+                    ++spaced;
+                    homeless += small.storeyOfPoly(static_cast<U64>(nav.getPolyRefBase(tile) | static_cast<dtPolyRef>(p))) < 0 ? 1 : 0;
+                }
+            }
+        }
+        ensure("spaced polys", spaced > 0);
+        ensure_equals("every spaced poly has a storey", homeless, 0u);
+
+        // A scrap in no space that no flight reaches makes none.
+        StoreyProduct none;
+        buildStoreys(*b.mNav, [](const dtMeshTile*, U32) { return 0u; }, *b.mRooms, none, nullptr, 1e6f);
+        ensure("no storey", none.mStoreys.empty() && none.mPolyStorey.empty());
     }
 
     template<> template<>

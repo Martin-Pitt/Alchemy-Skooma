@@ -42,6 +42,11 @@ namespace sknav
 {
     namespace
     {
+        constexpr U32 NO_STOREY = 0xffffffffu;
+    }
+
+    namespace
+    {
         constexpr F32 STEP_M = 0.0625f;     ///< half a fine air cell: no column is stepped over
         constexpr F32 SAME_FLOOR_M = 0.3f;  ///< a gap whose floor is this close to the segment's is its own floor still
 
@@ -367,8 +372,9 @@ namespace sknav
                 }
             }
             b.mStorey.mArea = total;
-            // A scrap of floor no flight reaches is no storey: its polys get none, as a flight's do.
-            if (total >= min_area || landings.count(r))
+            // A scrap of floor no flight reaches and no space holds is no storey: its polys get none, as a flight's do.
+            const bool spaced = std::any_of(polys.begin(), polys.end(), [&](U32 i) { return space[i] != 0; });
+            if (total >= min_area || landings.count(r) || spaced)
             {
                 built.push_back(std::move(b));
             }
@@ -789,6 +795,63 @@ namespace sknav
                 out.mClimbLinks.push_back(l);
             }
         }
+
+        // A space with polys in no storey, a flight's own: the lower storey of its connector, else the storey its polys meet most.
+        std::unordered_set<U32> placed;
+        for (const auto& ss : out.mSpaceStorey)
+        {
+            placed.insert(ss.first);
+        }
+        std::map<U32, std::map<U32, U32>> meets;
+        for (S32 t = 0; t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                const U32 i = base[t] + static_cast<U32>(p);
+                if (!space[i] || placed.count(space[i]))
+                {
+                    continue;
+                }
+                std::map<U32, U32>& m = meets[space[i]];
+                m.emplace(NO_STOREY, 0);
+                each_link(t, p, [&](U32 j, const LLVector3&) {
+                    const auto sr = j < n && kind[j] == 1 ? storey_of_root.find(find(j)) : storey_of_root.end();
+                    if (sr != storey_of_root.end())
+                    {
+                        ++m[sr->second];
+                    }
+                });
+            }
+        }
+        for (const auto& [sp, by] : meets)
+        {
+            U32 best = NO_STOREY, most = 0;
+            for (const StoreyConnector& c : out.mConnectors)
+            {
+                if (c.mSpace == sp)
+                {
+                    best = c.mStorey[0];
+                    break;
+                }
+            }
+            for (const auto& [st, count] : by)
+            {
+                if (best == NO_STOREY && st != NO_STOREY && count > most)
+                {
+                    most = count;
+                    best = st;
+                }
+            }
+            if (best != NO_STOREY && best < out.mStoreys.size())
+            {
+                out.mSpaceStorey.emplace_back(sp, best);
+                std::vector<U32>& list = out.mStoreys[best].mSpaces;
+                list.insert(std::upper_bound(list.begin(), list.end(), sp), sp);
+                out.mStoreys[best].mId = list.front();
+            }
+        }
+        std::sort(out.mSpaceStorey.begin(), out.mSpaceStorey.end());
     }
 
     std::vector<U32> StoreyProduct::climbLinksOf(U32 space) const
