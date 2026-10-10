@@ -24,9 +24,9 @@
 
 #include "linden_common.h"
 
-#include "../altextdocument.h"
+#include "altextdocument.h"
 
-#include "../altextchars.h"
+#include "altextchars.h"
 #include "llstring.h"
 
 #include "../test/lltut.h"
@@ -242,16 +242,12 @@ namespace tut
     template<> template<>
     void altextdocument_object::test<12>()
     {
-        set_test_name("a log: text arrives at the end and the oldest lines go");
+        set_test_name("a log: text arrives at the end");
         ALTextDocument doc;
         doc.append("one\ntwo");
         doc.append("\nthree");
         ensure_equals("three lines", doc.lineCount(), 3);
-        ALTextDocument::Edit gone = doc.removeFirstLines(2);
-        ensure_equals("one left", doc.text(), std::string("three"));
-        ensure_equals("what went", gone.removed, std::string("one\ntwo\n"));
-        ensure("everything can go", doc.removeFirstLines(5).removed == "three" && doc.empty());
-        ensure("nothing to go", doc.removeFirstLines(0).nothing());
+        ensure_equals("in the order it came", doc.text(), std::string("one\ntwo\nthree"));
     }
 
     template<> template<>
@@ -421,7 +417,7 @@ namespace tut
     template<> template<>
     void altextdocument_object::test<19>()
     {
-        set_test_name("a character stepped over forward and back, at every place of a line, is the cluster ICU says, ASCII taken the quick way");
+        set_test_name("a character stepped over forward and back, at every place of a line, is the cluster ICU says, and a byte of a line clamped is the boundary it says, ASCII taken the quick way");
         const std::vector<std::string> lines = {
             "plain ascii, all of it",
             "e\xCC\x81 an accent joined to the e before it",
@@ -458,6 +454,11 @@ namespace tut
                                   static_cast<S32>(utf8str_step_grapheme_backward(line, c)));
                 }
             }
+            for (size_t c = 0; c <= line.size(); ++c)
+            {
+                ensure_equals("clamped in \"" + line + "\" at " + std::to_string(c), d.clamp(ALTextPos(l, static_cast<S32>(c))).column,
+                              static_cast<S32>(utf8str_grapheme_align_backward(line, c)));
+            }
         }
         ensure("off a line's end to the next", d.nextCluster(ALTextPos(0, static_cast<S32>(lines[0].size()))) == ALTextPos(1, 0));
         ensure("back off its start to the one before", d.prevCluster(ALTextPos(1, 0)) == ALTextPos(0, static_cast<S32>(lines[0].size())));
@@ -483,5 +484,111 @@ namespace tut
         ensure("not between them", !batch.replacedAround(ALTextPos(0, 4)) && !batch.replacedAround(ALTextPos(0, 5)));
         ensure("nor at an end", !batch.replacedAround(ALTextPos(0, 8)));
         ensure("between them, moved by the first", batch.placed(ALTextPos(0, 5)) == ALTextPos(0, 4));
+    }
+    template<> template<>
+    void altextdocument_object::test<21>()
+    {
+        set_test_name("a text's lines, whatever its endings, as a character at a time reads them: CRLF and a lone CR as LF, at the ends too, and a CR far on");
+        // Each character read in turn: what the lines are.
+        const auto reference = [](const std::string& text) {
+            std::vector<std::string> out(1);
+            for (size_t i = 0; i < text.size(); ++i)
+            {
+                if (text[i] == '\r' || text[i] == '\n')
+                {
+                    if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n')
+                    {
+                        ++i;
+                    }
+                    out.emplace_back();
+                }
+                else
+                {
+                    out.back().push_back(text[i]);
+                }
+            }
+            return out;
+        };
+        std::vector<std::string> texts = { "", "\r", "\n", "\r\n", "\n\r", "\r\r\n", "a\r", "a\r\n", "\ra", "a\rb\r\nc\nd\r\re",
+                                           std::string(500, 'x') + "\n" + std::string(30, 'y') + "\r" };
+        std::string many;
+        for (S32 n = 0; n < 2000; ++n)
+        {
+            many += "line " + std::to_string(n) + "\n";
+        }
+        texts.push_back(many + "a lone CR far on\rand after it");
+        // And texts of the three endings and letters, at random but the same
+        // each run.
+        U32 seed = 12345;
+        for (S32 t = 0; t < 300; ++t)
+        {
+            std::string text;
+            const S32   length = static_cast<S32>((seed = seed * 1103515245u + 12345u) >> 16) % 40;
+            for (S32 c = 0; c < length; ++c)
+            {
+                seed = seed * 1103515245u + 12345u;
+                text.push_back("ab\r\n"[(seed >> 16) % 4]);
+            }
+            texts.push_back(text);
+        }
+        for (const std::string& text : texts)
+        {
+            const ALTextDocument           doc(text);
+            const std::vector<std::string> want = reference(text);
+            std::vector<std::string>       got;
+            for (S32 l = 0; l < doc.lineCount(); ++l)
+            {
+                got.push_back(doc.line(l));
+            }
+            ensure("the lines of a text of " + std::to_string(text.size()) + " bytes", got == want);
+            ALTextDocument replaced("something else\nfirst");
+            replaced.setText(text);
+            ensure_equals("the same put in over another", replaced.text(), doc.text());
+        }
+    }
+
+    template<> template<>
+    void altextdocument_object::test<22>()
+    {
+        set_test_name("the bytes of the text, and of a stretch of it, as every kind of edit leaves them");
+        ALTextDocument doc("one\r\ntwo\rthree");
+        const auto agrees = [&doc](const std::string& what) {
+            ensure_equals(what + ": the whole", doc.byteCount(), doc.text().size());
+            const S32         last     = doc.lineCount() - 1;
+            const ALTextRange ranges[] = { ALTextRange(doc.start(), doc.end()), ALTextRange(ALTextPos(0, 1), ALTextPos(0, 2)),
+                                           ALTextRange(ALTextPos(0, 2), ALTextPos(last, 1)), ALTextRange(doc.end(), ALTextPos(0, 1)),
+                                           ALTextRange(ALTextPos(-3, 9), ALTextPos(99, 99)) };
+            for (const ALTextRange& range : ranges)
+            {
+                ensure_equals(what + ": a stretch", doc.byteCount(range), doc.text(range).size());
+            }
+        };
+        agrees("as read");
+        doc.insert(ALTextPos(1, 1), "X\r\nY");
+        agrees("a break put in");
+        doc.replace(ALTextRange(ALTextPos(0, 1), ALTextPos(2, 1)), "z");
+        agrees("lines taken out");
+        doc.replaceMany({ { ALTextRange(ALTextPos(0, 0), ALTextPos(0, 1)), "ab\ncd" }, { ALTextRange(doc.end(), doc.end()), "\r\n\n" } });
+        agrees("a batch");
+        doc.remove(ALTextRange(doc.start(), doc.end()));
+        agrees("everything gone");
+        doc.setText("again\nand again");
+        agrees("a text put in whole");
+    }
+
+    template<> template<>
+    void altextdocument_object::test<23>()
+    {
+        set_test_name("words as code reads them never stop inside a character: a keycap's mark goes with what joins it, and so does a blank a mark is put on");
+        // x, a blank, # with U+FE0F and U+20E3 on it, a blank, y.
+        const ALTextDocument keycap("x #\xEF\xB8\x8F\xE2\x83\xA3 y");
+        ensure("from the mark, past the keycap and the blank after it", keycap.nextCodeWord(ALTextPos(0, 2)) == ALTextPos(0, 10));
+        ensure("back over it whole", keycap.prevCodeWord(ALTextPos(0, 10)) == ALTextPos(0, 2));
+        ensure("up to it as before", keycap.nextCodeWord(ALTextPos(0, 0)) == ALTextPos(0, 2));
+        // a, a blank with a combining acute on it, z.
+        const ALTextDocument accent("a \xCC\x81z");
+        ensure("forward past the blank and its mark", accent.nextCodeWord(ALTextPos(0, 0)) == ALTextPos(0, 4));
+        ensure("and from the blank itself", accent.nextCodeWord(ALTextPos(0, 1)) == ALTextPos(0, 4));
+        ensure("back to the blank the mark is on", accent.prevCodeWord(ALTextPos(0, 4)) == ALTextPos(0, 1));
     }
 }
