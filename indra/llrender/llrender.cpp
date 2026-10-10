@@ -38,6 +38,9 @@
 #include "llshadermgr.h"
 #include "hbxxh.h"
 #include "alprojection.h"
+#include "llcamera.h"
+
+#include <algorithm>
 
 #if GL_ARB_debug_output
 #ifndef APIENTRY
@@ -364,6 +367,39 @@ bool LLRender::init(bool needs_vertex_buffer)
     // Fresh context: nothing is bound at UB_LIGHTS/UB_MATRICES yet, whatever a previous one had.
     mLightsUBOBound   = false;
     mMatricesUBOBound = false;
+
+    // Nor on any texture unit, and unit 0 is the active one. gGL is thread_local and outlives
+    // a context -- the GL tests make one per test -- and a fresh context hands out the same
+    // first texture names as the last one did, so a slot still caching its namesake would
+    // take the new texture for bound already and skip the bind; an active-unit index left at
+    // 3 would skip the glActiveTexture a slot-3 bind needs, and bind on unit 0 instead.
+    for (ALTextureSlot& slot : mTextureSlots)
+    {
+        slot.mCurrTexture = 0;
+        slot.mCurrTexType = ALTextureSlot::TT_NONE;
+        slot.mCurrSampler = 0;
+    }
+    mCurrTextureUnitIndex = 0;
+
+    // Nor is the last context's blending or colour mask: GL starts every context writing all
+    // four channels and blending ONE, ZERO. The mask cache takes that default. The blend
+    // factors go to unknown, so the BT_ALPHA below is issued rather than skipped for
+    // matching what the previous context was left with.
+    for (bool& write : mCurrColorMask)
+    {
+        write = true;
+    }
+    mCurrBlendColorSFactor = BF_UNDEF;
+    mCurrBlendAlphaSFactor = BF_UNDEF;
+    mCurrBlendColorDFactor = BF_UNDEF;
+    mCurrBlendAlphaDFactor = BF_UNDEF;
+
+    // The same for the rest of what the setters cache, at GL's initial values: a line
+    // width of 1, no polygon offset, three vertices a patch.
+    mLineWidth           = 1.f;
+    mPolygonOffsetFactor = 0.f;
+    mPolygonOffsetUnits  = 0.f;
+    mPatchVertices       = 3;
 
     // Build this context's sampler objects before anything can ask for one.
     mSamplerCache.warmup();
@@ -1052,6 +1088,18 @@ ALTextureSlot* LLRender::getTextureSlot(U32 index)
     }
 }
 
+void LLRender::forgetTextures(S32 count, const U32* names)
+{
+    const U32* end = names + count;
+    for (ALTextureSlot& slot : mTextureSlots)
+    {
+        if (slot.mCurrTexture != 0 && std::find(names, end, slot.mCurrTexture) != end)
+        {
+            slot.mCurrTexture = 0;
+        }
+    }
+}
+
 LLLightState* LLRender::getLight(U32 index)
 {
     if (index < mLightState.size())
@@ -1692,8 +1740,25 @@ LLMatrix4a al_reverse_z_transform(const LLMatrix4a& p)
 
 LLMatrix4a al_perspective(F32 fovy_rad, F32 aspect, F32 z_near, F32 z_far)
 {
+    // An infinite far plane is exact only when reversed: forward 24-bit depth keeps the finite plane.
+    if (std::isinf(z_far))
+    {
+        if (!LLRender::sReverseZ)
+        {
+            return LLMatrix4a::perspective(fovy_rad, aspect, z_near, FINITE_PROJECTION_FAR);
+        }
+        // Stored depth d = near / distance: the depth row is (0, 0, 0, near) against a w row of (0, 0, -1, 0).
+        LLMatrix4a p = LLMatrix4a::perspective(fovy_rad, aspect, z_near, z_near * 2.f);
+        p.setColumn<2>(LLVector4a(0.f, 0.f, 0.f, z_near));
+        return p;
+    }
     const LLMatrix4a p = LLMatrix4a::perspective(fovy_rad, aspect, z_near, z_far);
     return LLRender::sReverseZ ? al_reverse_z_transform(p) : p;
+}
+
+bool al_projection_is_infinite(const LLMatrix4a& proj)
+{
+    return LLRender::sReverseZ && proj.getColumn<2>()[2] == 0.f && proj.getColumn<3>()[2] != 0.f;
 }
 
 LLMatrix4a al_ortho(F32 left, F32 right, F32 bottom, F32 top, F32 z_near, F32 z_far)

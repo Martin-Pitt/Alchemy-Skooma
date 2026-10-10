@@ -51,7 +51,6 @@ set(
   AL_ENABLE_TRACY_LOCAL_ONLY
   AL_ENABLE_TRACY_GPU
   AL_BUILD_TRACY_GUI
-  AL_ENABLE_SIGNING
   AL_USE_VELOPACK
   AL_ENABLE_RELEASE_DEBUG_LOGGING
   AL_BUILD_PACKAGE
@@ -315,7 +314,14 @@ function(al_configuration_report)
     _al_report_row("Package" "none (AL_BUILD_PACKAGE off)")
   else()
     if(LINUX)
+      # The system packages where their tools were found (ViewerPackage.cmake).
       set(package_kind "tar.xz")
+      if(AL_DPKG_SHLIBDEPS)
+        string(APPEND package_kind ", deb")
+      endif()
+      if(AL_RPMBUILD)
+        string(APPEND package_kind ", rpm")
+      endif()
     elseif(DARWIN)
       set(package_kind "dmg")
     else()
@@ -326,10 +332,16 @@ function(al_configuration_report)
     endif()
     _al_report_row("Package" "${package_kind}")
   endif()
-  if(AL_ENABLE_SIGNING)
-    _al_report_row("Signing" "identity '${AL_SIGNING_IDENTITY}'")
-  else()
-    _al_report_row("Signing" "off")
+  if(DARWIN)
+    if(AL_SIGNING_IDENTITY)
+      set(signing "identity '${AL_SIGNING_IDENTITY}'")
+    else()
+      set(signing "ad-hoc")
+    endif()
+    if(AL_USE_VELOPACK AND AL_NOTARY_PROFILE)
+      string(APPEND signing ", Velopack notarized with profile '${AL_NOTARY_PROFILE}'")
+    endif()
+    _al_report_row("Signing" "${signing}")
   endif()
 
   if(AL_BUILD_TESTS)
@@ -345,10 +357,20 @@ function(al_configuration_report)
 
   if(NOT AL_BUILD_TESTS)
     _al_report_row("Python" "not used (tests off)")
-  elseif(Python3_Interpreter_FOUND)
+  elseif(AL_PYTHON_PEERS)
     _al_report_row("Python" "${Python3_VERSION} (${Python3_EXECUTABLE})")
+  elseif(Python3_Interpreter_FOUND)
+    _al_report_row(
+      "Python"
+      "${Python3_VERSION} without the llsd module; the tests that spawn a Python peer are disabled"
+    )
   else()
     _al_report_row("Python" "not found; the tests that spawn a Python peer are disabled")
+  endif()
+
+  if(AL_BUILD_TESTS)
+    get_property(lscript_status GLOBAL PROPERTY AL_LSCRIPT_STATUS)
+    _al_report_row("LL's compiler" "${lscript_status}")
   endif()
 
   if(LL_GENERATOR_IS_MULTI_CONFIG)
