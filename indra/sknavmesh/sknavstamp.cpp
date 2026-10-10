@@ -43,6 +43,8 @@ namespace sknav
 {
     namespace
     {
+        constexpr S32 MULTI_REGION_REACH = 4;   ///< heightfield units a multi-region poly's span may lie off its height
+
         U64 quantPos(U64 h, const LLVector3& v)
         {
             for (S32 k = 0; k < 3; ++k)
@@ -745,7 +747,7 @@ namespace sknav
             const unsigned short* poly = &pmesh.polys[p * nvp * 2];
             S32 nv = 0;
             F32 vx[16], vz[16];
-            S32 lo_x = INT_MAX, hi_x = INT_MIN, lo_z = INT_MAX, hi_z = INT_MIN;
+            S32 lo_x = INT_MAX, hi_x = INT_MIN, lo_z = INT_MAX, hi_z = INT_MIN, lo_y = INT_MAX, hi_y = INT_MIN;
             for (; nv < nvp && poly[nv] != RC_MESH_NULL_IDX; ++nv)
             {
                 const unsigned short* v = &pmesh.verts[poly[nv] * 3];
@@ -755,7 +757,10 @@ namespace sknav
                 hi_x = std::max<S32>(hi_x, v[0]);
                 lo_z = std::min<S32>(lo_z, v[2]);
                 hi_z = std::max<S32>(hi_z, v[2]);
+                lo_y = std::min<S32>(lo_y, v[1]);
+                hi_y = std::max<S32>(hi_y, v[1]);
             }
+            const bool multi = pmesh.regs[p] == RC_MULTIPLE_REGS;
             F32 twice = 0.f;
             for (S32 k = 0; k < nv; ++k)
             {
@@ -836,9 +841,21 @@ namespace sknav
                         continue;
                     }
                     const rcCompactCell& c = chf.cells[cx + cz * chf.width];
+                    // A poly Recast retriangulated across regions has none: its span is the walkable one nearest its height.
+                    S32 nearest = -1, nearest_d = MULTI_REGION_REACH + 1;
+                    for (U32 i = c.index, n = c.index + c.count; multi && i < n; ++i)
+                    {
+                        const S32 y = chf.spans[i].y;
+                        const S32 d = y < lo_y ? lo_y - y : (y > hi_y ? y - hi_y : 0);
+                        if (chf.areas[i] != RC_NULL_AREA && d < nearest_d)
+                        {
+                            nearest = static_cast<S32>(i);
+                            nearest_d = d;
+                        }
+                    }
                     for (U32 i = c.index, n = c.index + c.count; i < n; ++i)
                     {
-                        if (chf.spans[i].reg == pmesh.regs[p] && chf.areas[i] != RC_NULL_AREA)
+                        if (multi ? static_cast<S32>(i) == nearest : chf.spans[i].reg == pmesh.regs[p] && chf.areas[i] != RC_NULL_AREA)
                         {
                             vote(comps, stamp.mSpanComponent[i]);
                             const U32 g = i < span_gap.size() ? span_gap[i] : SPAN_NO_GAP;
@@ -857,7 +874,7 @@ namespace sknav
             }
             if (comps.empty())
             {
-                out.mPolyComponent[p] = regionComponent(pmesh.regs[p]);
+                out.mPolyComponent[p] = multi ? STAMP_NONE : regionComponent(pmesh.regs[p]);
             }
             else
             {
