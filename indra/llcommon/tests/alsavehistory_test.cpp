@@ -207,4 +207,54 @@ namespace tut
         ensure("the half-written swept", !LLFile::isfile(dir + "2.llsd" + std::string(ALFileWrite::BESIDE)));
         ensure_equals("the save still there", texts(history, "item:a"), std::string("one"));
     }
+
+    template<> template<>
+    void alsavehistory_object::test<7>()
+    {
+        set_test_name("a key's saves counted by their files' names, each key its own; what is no save of the name not counted");
+        ALSaveHistory history(folder);
+        const F64     now = LLDate::now().secondsSinceEpoch();
+        ensure_equals("none for a key never saved", history.count("item:a"), 0U);
+        ensure_equals("none for no key", history.count(""), 0U);
+        history.keep(saved("item:a", "one", now - 60.0));
+        history.keep(saved("item:a", "two", now - 50.0));
+        history.keep(saved("item:b", "other", now - 40.0));
+        ensure_equals("as many as listed", history.count("item:a"), history.list("item:a").size());
+        ensure_equals("two", history.count("item:a"), 2U);
+        ensure_equals("the other key's", history.count("item:b"), 1U);
+        const std::string kept = history.list("item:a").front().path;
+        const std::string dir  = kept.substr(0, kept.find_last_of('/') + 1);
+        {
+            llofstream half(dir + "3.llsd" + std::string(ALFileWrite::BESIDE));
+            half << "{'key':'item:a'";
+        }
+        ensure_equals("what a write cut short is none", history.count("item:a"), 2U);
+    }
+
+    template<> template<>
+    void alsavehistory_object::test<8>()
+    {
+        set_test_name("a text kept already, by the asset its save made or by the text, among a key's newest; not past them, nor another key's");
+        ALSaveHistory history(folder);
+        const F64     now = LLDate::now().secondsSinceEpoch();
+        history.keep(saved("item:a", "one", now - 60.0));
+        history.keep(saved("item:a", "two", now - 50.0));
+        history.keep(saved("item:a", "three", now - 40.0));
+        history.keep(saved("item:b", "other", now - 30.0));
+        const LLUUID elsewhere = LLUUID::generateNewID("elsewhere");
+        ensure("by the asset its save made, whatever the text", history.holds("item:a", LLUUID::generateNewID("two"), "not it", 10));
+        // The same text sent again made another asset, and was not kept
+        // again: found by the text.
+        ensure("by the text, under an asset no save made", history.holds("item:a", elsewhere, "one", 10));
+        ensure("a text of the same length that is not one", !history.holds("item:a", elsewhere, "owe", 10));
+        ensure("nor one never kept", !history.holds("item:a", elsewhere, "four", 10));
+        ensure("nor without an asset", !history.holds("item:a", LLUUID::null, "four", 10));
+        // Among the newest two only: "one" is the third.
+        ensure("the newest", history.holds("item:a", elsewhere, "three", 2));
+        ensure("past the newest, by the text", !history.holds("item:a", elsewhere, "one", 2));
+        ensure("past the newest, by the asset", !history.holds("item:a", LLUUID::generateNewID("one"), "x", 2));
+        ensure("another key's is not this one's", !history.holds("item:a", LLUUID::generateNewID("other"), "other", 10));
+        ensure("nothing for a key never saved", !history.holds("item:c", LLUUID::generateNewID("one"), "one", 10));
+        ensure("nor for no key", !history.holds("", LLUUID::generateNewID("one"), "one", 10));
+    }
 }

@@ -26,7 +26,7 @@
 - **llaudio** - Audio engine abstraction (OpenAL or FMOD Studio, Vorbis decoding)
 
 **UI layer:**
-- **llui** - UI widget framework: panels, floaters, buttons, text editors, lists, toolbars, notifications. Layout defined in XUI (XML) files. Includes spell-check via Hunspell
+- **llui** - UI widget framework: panels, floaters, buttons, text editors, lists, toolbars, notifications. Layout defined in XUI (XML) files. Includes spell-check via Hunspell. Linden Lab's widgets sit at its top as upstream has them; Alchemy's own are in folders, each on the include path: `base/` (view types, skin words, surfaces, matching), `text/` (`ALTextView` and its document, undo, editing, layout, search, ruler, find bar), `code/` (`ALCodeEditor`, completion, fixes, folds, the grammar and highlighter, the keymap), `diff/` (`ALTextDiff`, `ALDiffView`), `vim/`, `xui/` (XUI Studio's model), `fields/` (the property grid and its field editors), `studio/` (a studio window's panes, folds, docks, quick open) and `widgets/`
 
 **Application layer:**
 - **lllogin** - Login subsystem
@@ -34,6 +34,9 @@
 - **llwebrtc** - WebRTC voice integration (conditional)
 - **llphysicsextensionsos** - Physics extensions stub (VHACD convex decomposition)
 - **media_plugins** - Out-of-process media plugin implementations (CEF, VLC, GStreamer)
+- **alscript** - Script Studio's language services, free of UI (depends on llcommon, llmath, Tailslide and SLua's Luau). One folder a part, each on the include path: `core/` (problems, symbols, the lexicon, messages, weights, the formatter), `lint/` (the studio's lints and fixes), `lsl/` (the LSL analyzer over Tailslide, the SLua converter), `lsl/optimizer/` (the LSL optimizer, a pass a file, sharing `allsloptimizerpass.h`), `luau/` (the SLua analyzer), `masters/` (files on disk as the masters of scripts in the world: the links and their index, a master found from a script's `@file` hint or its name under the blessed folders, and what a send does) and `preprocessor/` (the preprocessor and its includes)
+- **lscript** - LL's LSL compiler and LSO VM, restored as a test-only reference for the optimizer and the weigher; built with tests, never linked into the viewer
+- **rust** - The Rust the viewer builds: one Cargo workspace and lock file, imported by Corrosion, a vcpkg port. It holds velopack_libc, Velopack's C API over the `velopack` crate from crates.io, its sources and headers vendored from the release with one buffer fix marked Alchemy (`cmake/Velopack.cmake`): a DLL on Windows, a static library on macOS and Linux, the release build for every configuration
 - **newview** - The main viewer application. Contains all viewer-specific logic: the rendering pipeline, scene graph, UI floaters/panels, settings, object/avatar systems, and the application entry point. Links against all libraries above plus third-party: Tracy, OpenXR, Discord SDK, NVAPI, TinyEXR, Velopack
 
 ### Application Lifecycle
@@ -93,6 +96,13 @@ The deferred rendering pipeline is orchestrated by `LLPipeline` (`indra/newview/
 
 Depth of field runs **before** bloom and before the tonemapper, on linear HDR. Gathering over display-space values gathers over already-compressed highlights, and bloom-after-defocus is the optical order, so a defocused highlight blooms as a soft disc rather than a sharp core on a blurred background.
 
+**Distances** (`ALFarPlane`, `alfarplane.h`) are kept apart, each with its own reader:
+- The **draw distance** (`RenderFarClip`, `LLViewerCamera::getFar()`) is a content budget: cull sphere, interest list, object cache, fog, shadow splits. Its ceiling is `MAX_FAR_CLIP` (2048 m) under reverse-Z and `FORWARD_Z_MAX_FAR_CLIP` (512 m) under forward 24-bit depth.
+- The **projection's far plane** (`LLViewerCamera::getProjectionFar()`) only says how depth is stored. Under reverse-Z the main view's projection is infinite (`al_perspective` with `z_far` = infinity, stored depth = near / distance); forward-Z, probe captures and previews keep `FINITE_PROJECTION_FAR` (1024 m). Depth reconstruction floors w so the cleared depth unprojects to `MAX_RECONSTRUCT_DISTANCE`, never infinity.
+- The **sky** draws last, on the far plane, writing no depth: it is wherever the depth buffer still holds the cleared value, under either projection. Every pass that tells sky from geometry (`isFarDepth`, the lens flare's `skyOf`, void water's fog) tests for exactly that value, and the haze pass leaves it to the depth test: its full-screen triangle lies on the far plane too (`hazeV.glsl`), so the sky is rejected before it is shaded.
+- **Terrain and water**, whose partitions ignore the draw distance, reach as far as the projection lets them: under the infinite one terrain is culled to `TERRAIN_REACH` (8 km) and edge water stretches `EDGE_WATER_STRETCH` (256 km) past the regions, to the horizon.
+- **Haze** is worked in the sky dome's frame wherever geometry is hazed: WindLight's `calcAtmosphericVars` takes eye space and turns it by `eyeToSky`, which the Environment block carries for the camera of each environment update (`ALFarPlane::eyeToSkyFrame`), so its altitude is the world's and its sun glow does not turn with the camera. The water surface alone, in the haze pass (`hazeF.glsl`), converges as it thickens on the dome's own colour behind it (`mSkyBehind`), so far water meets the sky without a seam; it lies below the horizon, where the dome is the horizon's colour, while terrain rising above it would take the dome's fast change there and the glow of a sun behind it.
+
 **GBuffer layout** (MRT attachments on `deferredScreen`):
 - frag_data[0]: Base color (GL_RGBA)
 - frag_data[1]: Specular/ORM — PBR occlusion/roughness/metallic (GL_RGBA)
@@ -104,7 +114,7 @@ Depth of field runs **before** bloom and before the tonemapper, on linear HDR. G
 - `mAuxillaryRT` — Reflection probe faces, at probe resolution × `ALProbeSuperSample`, and scaled by `RenderResolutionDivisor`/`RenderResolutionMultiplier` like the main pack. The GLTF material preview renders its sphere and post chain here
 - `mHeroProbeRT` — High-res hero probe rendering
 - `mPreviewMap` and `mBakeMap` sit outside the packs and are sized to their users, not the screen: `mPreviewMap` is `MAX_PREVIEW_WIDTH` square, the target every UI preview (`LLViewerDynamicTexture` below `ORDER_LAST`) draws into and copies out of; `mBakeMap` is the appearance bake scratch target
-- Additional targets: `mSceneMap` (SSR input), `mLuminanceMap`/`mExposureMap` (auto-exposure), `postPingMap`/`postPongMap` (post-process ping-pong), `mFXAAMap`, `mSMAABlendBuffer`, `bloomMip[BLOOM_MAX_MIPS]` (HDR bloom pyramid, up to 7 levels, live count in `bloomMipCount`), `mWaterDis` (refraction; also lends its quadrants to the cross-screen filter's two scratch buffers and accumulator, and its whole to depth of field's sharp copy, while it is idle after the water pass — `crossFilterReady`/`crossFilterWidth`/`crossFilterHeight` tell `colorCorrect` where the accumulator is), `mSpotShadow[2]`, `mPbrBrdfLut`
+- Additional targets: `mSceneMap` (SSR input), `mLuminanceMap`/`mExposureMap` (auto-exposure), `postPingMap`/`postPongMap` (post-process ping-pong), `mFXAAMap`, `mSMAABlendBuffer`, `bloomMip[BLOOM_MAX_MIPS]` (HDR bloom pyramid, up to 7 levels, live count in `bloomMipCount`), `mWaterDis` (refraction; also lends its quadrants to the cross-screen filter's two scratch buffers and accumulator, and its whole to depth of field's sharp copy, while it is idle after the water pass — `crossFilterReady`/`crossFilterWidth`/`crossFilterHeight` tell `colorCorrect` where the accumulator is), `mSpotShadow[2]`, `mPbrBrdfLut`, `mSkyBehind` (the sky dome redrawn at half resolution with no depth, so it covers what the world hides; the haze pass converges far water on it; drawn for the main view only, and only while water is in it and the camera above it)
 - `mGlow[3]` is the **legacy non-HDR glow chain**, not the bloom pyramid, and lives outside the pack. So does `mLensDirtMap`, the generated lens dirt plate — an `LLRenderTarget` allocated the first frame the effect is enabled and released when it is switched off.
 
 **Post-processing chain:**

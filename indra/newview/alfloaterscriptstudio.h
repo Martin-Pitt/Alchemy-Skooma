@@ -26,6 +26,7 @@
 
 #include "alcodeeditor.h"
 #include "alscriptexplorerpane.h"
+#include "alscriptlinkpane.h"
 #include "alnotecardembedded.h"
 #include "alscriptoutputpane.h"
 #include "alscriptproblemspane.h"
@@ -34,7 +35,14 @@
 #include "alscriptstudiocommands.h"
 #include "alscriptstudiodoc.h"
 #include "alscriptstudioservices.h"
+#include "alscriptstudiocomparepairs.h"
+#include "alscriptstudiocomparewith.h"
+#include "alscriptstudioexpandedcompare.h"
 #include "alscriptstudiohistory.h"
+#include "alscriptstudiodiskmasters.h"
+#include "alscriptstudiomasters.h"
+#include "alscriptstudiomerging.h"
+#include "alscriptstudioselections.h"
 #include "alscriptstudiorecovery.h"
 #include "alscriptstudiosaving.h"
 #include "alscriptstudiotabs.h"
@@ -130,7 +138,11 @@ class ALFloaterScriptStudio final : public ALStudioFloater, public ALScriptStudi
                                     public ALScriptReferencesPane::Window, public ALScriptOutlinePane::Window,
                                     public ALScriptCrumbsBar::Window, public ALScriptInspectorPane::Window,
                                     public ALScriptStudioCaret::Window, public ALScriptStudioChecking::Window,
-                                    public ALScriptObjectCheck::Window, public ALScriptRecompile::Window, public ALScriptStudioHistory::Window
+                                    public ALScriptObjectCheck::Window, public ALScriptRecompile::Window, public ALScriptStudioHistory::Window,
+                                    public ALScriptStudioCompareWith::Window, public ALScriptStudioMerging::Window,
+                                    public ALScriptStudioSelections::Window, public ALScriptStudioExpandedCompare::Window,
+                                    public ALScriptStudioComparePairs::Window, public ALScriptStudioMasters::Window,
+                                    public ALScriptLinkPane::Window
 {
     friend class LLFloaterReg;
 
@@ -196,6 +208,9 @@ public:
 
     // A word of the language, as the region defines it (ALScriptStudioWords).
     typedef ALScriptStudioWords::Vocab Vocab;
+    // How long a tab's changes stop before a comparison following it is
+    // made again, in seconds.
+    static constexpr F64 COMPARE_SETTLE = 0.3;
     // The least and the most a zoom takes the text to, in points
     // (ALScriptStudio::editorFont).
     static constexpr F32 MIN_TEXT_POINTS = 6.f;
@@ -343,6 +358,11 @@ private:
     // A notecard's editor takes the notecards' own wrap and line numbers,
     // counted from 0 where that is asked for.
     void                      applyEditorOptions(ALCodeEditor& editor, bool notecard = false);
+    // The keys every editor shares, vim's among them where it is on.
+    void                      applyEditorKeys(ALCodeEditor& editor);
+    // A comparison's sides in the editors' face and keys, but for what
+    // would part the sides: wrapping, folding.
+    void                      applyCompareOptions(ALDiffView& view);
     // The expanded text put in the document's other editor, which is shown
     // once there is one where the tab asked for it.
     void                      showExpanded(Doc& doc, const std::string& text) override;
@@ -439,9 +459,33 @@ private:
     // a notecard, its items with it -- and the tab closed once it is.
     void saveCopyToInventory(Doc& doc) override;
     // An LSL tab written again as SLua (ALLSLToSLua) in a new SLua script
-    // of the inventory's, its text put in unsaved and set beside the LSL;
-    // the LSL script left as it is.
+    // beside it -- in the prim the LSL is in, or the inventory's scripts
+    // folder for one in the inventory -- its text put in unsaved and set
+    // beside the LSL; the LSL script left as it is.
     void convertToSLua(Doc& doc);
+    // A script written as SLua into a prim, waited for until the prim lists
+    // it: by the id the region gave, or by its name where it gave none, as
+    // one of that name that was not there before.
+    struct ConvertedWaiting
+    {
+        LLUUID              prim;
+        LLUUID              item;
+        std::string         name;
+        std::vector<LLUUID> before;
+        std::string         text;
+        Doc::PendingCompare compare;
+    };
+    std::vector<ConvertedWaiting>      mConvertedWaiting;
+    boost::signals2::scoped_connection mConvertedContents;
+    // The prims whose contents a string's item names were asked of before
+    // they were known: their scripts' editors asked again once they are.
+    std::set<LLUUID>                   mItemsAwaited;
+    boost::signals2::scoped_connection mItemsContents;
+    void convertedMade(const ALScriptCreated& made, ConvertedWaiting waiting);
+    void convertedListed(const ALScriptContents& contents);
+    // The new SLua script opened with its text unsaved, and set beside the
+    // LSL once it has loaded.
+    void openConverted(const ALScriptRef& ref, const std::string& name, const std::string& text, const Doc::PendingCompare& compare);
 
     // --- problems and checks -----------------------------------------------------------
 
@@ -494,6 +538,9 @@ private:
     // Completion's link numbers: where the call being typed wants one, the
     // prims of the script's object by name, each putting in its number.
     void completeLinks(const Doc& doc, const ALTextPos& at, std::string_view prefix, std::vector<ALCodeEditor::Completion>& out);
+    // Completion in a string: where the call wants an item of the object's
+    // by its name, the names of what the script's prim holds of that kind.
+    void completeItems(const Doc& doc, const ALTextPos& at, std::vector<ALCodeEditor::Completion>& out);
     // What scripts say, from the workspace: listed in the Output tab, and
     // a run-time error in a script that is open marked on its line.
     void runtimeEvent(const ALScriptRuntimeEvent& event);
@@ -636,6 +683,10 @@ private:
     void addBuildCommands();
     void addHelpCommands();
     void addEditorCommand(const std::string& name, ALEditorCommand command, bool changes);
+    // One of the text's own that no item of the menus gives: reached by its
+    // keys alone.
+    void addUnlistedEditorCommand(const std::string& name, ALEditorCommand command, bool changes);
+    void editorCommand(const std::string& name, ALEditorCommand command, bool changes, bool listed);
     void onCompileTarget();
     // A notecard's grammar picked from the strip.
     void onNotecardGrammar();
@@ -733,6 +784,15 @@ private:
     void                                  askWeights(Doc& doc) override { askAnalyzer(doc, ALScriptAnalysis::Kind::Weigh, ALTextPos()); }
     bool optimizing() const override;
     std::string programVersion() const override;
+    ALScriptStudioDoc::Header uploadHeader() const override;
+    // ALScriptStudioMasters::Window
+    void pickMasterFile(std::function<void(const std::string& path)> chosen) override;
+    void openMasterFile(const std::string& path, bool lua) override;
+    void closeTab(Doc& doc) override;
+    void askLinkUnsaved(const Doc& doc, const std::string& path, std::function<void(ALScriptStudioMasters::Unsaved answer)> answered) override;
+    void editMasterFile(const std::string& path, bool lua) override;
+    bool heldByBridge(const ALScriptRef& ref) override;
+    void loadWorldText(const ALScriptRef& ref, std::function<void(const ALScriptLoaded& loaded)> loaded) override;
     bool        weightNotes() const override { return mWeightNotes; }
     bool        weightHeat() const override { return mWeightHeat; }
     ALScriptWeightsPane* weightsPane() override { return mWeightsPane; }
@@ -762,7 +822,7 @@ private:
     void                          pickFilesToOpen(bool several, std::function<void(const std::vector<std::string>& files)> chosen) override;
     void pickFileToSave(const std::string& name, std::function<void(const std::vector<std::string>& files)> chosen) override;
     void askReload(const Doc& doc, std::function<void(bool reload)> answered) override;
-    void fileWritten(const std::string& path) override;
+    void fileWritten(Doc& doc) override;
     // A file of a tab changed on disk, or went: what is in reach looked at.
     void reachChanged() override { mOrphansDirty = true; }
     void becomeFile(Doc& doc, const std::string& path) override;
@@ -774,6 +834,7 @@ private:
     // popover over the window, with a row saying what return will do as
     // it is typed.
     void candidates(const Doc& doc, std::function<void(ALScriptLookup::Candidates)> told) override;
+    std::vector<std::string> diskCandidates(const Doc& doc) override;
     void loadSource(const ALScriptRef& ref, std::function<void(const LLUUID& asset, const std::optional<std::string>& source)> loaded) override;
     void expand(ALScriptPreprocessor::Request request, std::function<void(const ALPreprocessor::Result&)> expanded) override;
     void showFound(Doc& doc, const ALScriptLookup::Found& found) override;
@@ -809,6 +870,29 @@ private:
     void                         takeOffer(Doc& doc, const std::string& action) override { outputAction(doc, action); }
     void compare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
                  const std::string& right_title) override;
+    // A comparison shown in the tab's editor's place, lined up at the
+    // ranges where there are any; what is typed in it goes to the source,
+    // at the line the caret is on.
+    void showCompare(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title, const std::string& right_title,
+                     const ALTextDiff::ranges_t& ranges);
+    // A comparison whose right is the tab's text titled again, unsaved or
+    // not as the tab now is.
+    void retitleCompare(const Doc& doc) const override;
+    // Another text beside the tab's own, which the comparison follows as
+    // the tab changes: under the other's title and the tab's, "now" where
+    // none is given; lined up at the ranges where there are any -- the LSL
+    // a conversion was made from against the SLua it wrote, whose changes
+    // are no one's to take back.
+    void compareWithTab(Doc& doc, const std::string& theirs, const std::string& their_title, const std::string& own_title = std::string(),
+                        const ALTextDiff::ranges_t& ranges = {}) override;
+    // A comparison that follows its tab made again from the tab's text,
+    // where the tab has changed since.
+    void refreshCompare(Doc& doc);
+    // Every comparison inline or side by side, as the last was asked for.
+    void setCompareInline(bool inline_view);
+    // How every comparison chooses the lines that stay, kept in the
+    // settings for those to come.
+    void setCompareAlgorithm(ALTextDiff::Algorithm algorithm);
     void endCompare(Doc& doc) override;
     // A tab made to hold a kept text with nothing loaded under it: unsaved,
     // with whatever its script or file was.
@@ -884,7 +968,12 @@ private:
     // The Weights tab: whether it is looked at; and a part chosen there,
     // gone to.
     bool weightsShown() const override;
-    void onWeightChosen(bool to_editor);
+    // A part or a string chosen in the Memory tab's list: shown there, or
+    // gone to.
+    void onWeightChosen(ALPaneList* list, bool to_editor);
+    // A start several strings share kept once in the script the Memory tab
+    // shows (ALLuauSharedStart): one step to undo, said in the status.
+    void keepStartOnce(const std::string& start, const std::vector<std::string>& strings);
     // The outline (ALScriptOutlinePane): shown, which the bar at the
     // bottom is told of; a symbol chosen, gone to; its sort kept.
     void        outlineShown(Doc& doc) override { mCaret.placePath(doc); }
@@ -913,12 +1002,43 @@ private:
     void showExplorer() override;
     void explorerPinsChanged() override { saveState(); }
     void checkScripts(const LLUUID& root) override { checkObject(root); }
+    // The Link tab shown, listing the scripts of the prims with a file
+    // proposed for each; and hidden again once it is done with
+    // (ALScriptLinkPane::Window), Output shown where it said what it linked.
+    void linkScripts(std::vector<ALScriptLinkScripts::Prim> prims) override;
+    void linkPaneDone(bool linked) override;
     void itemRenamed(const ALScriptRef& ref, const std::string& name) override;
     void itemDeleted(const ALScriptRef& ref) override;
     bool unsavedAnywhere(const ALScriptRef& ref) const override;
     void compareItems(const ALScriptRef& first, const std::string& name, const std::string& first_title, const ALScriptRef& second,
                       const std::string& second_title) override;
     void showHistory(const ALScriptRef& ref, const std::string& name) override;
+    // An item's text, once loaded, set beside a tab's under the two titles.
+    void compareWithLoaded(Doc& doc, const std::string& own_title, const ALScriptRef& other, const std::string& other_title);
+    // What Compare With asks of the window (ALScriptStudioCompareWith::Window).
+    void compareWithItem(Doc& doc, const ALScriptStudioCompareWith::Item& item, const std::string& title) override;
+    void offerHistory(Doc& doc) override { mHistory.show(doc); }
+    std::optional<std::string>                    clipboardText() const override;
+    std::vector<std::string>                      recentFiles() const override { return mFiles.recentFiles(); }
+    std::vector<ALScriptStudioCompareWith::Item> itemsLike(const Doc& doc) const override;
+    // What a merge asks of the window (ALScriptStudioMerging::Window).
+    void loadWorld(Doc& doc, std::function<void(Doc& doc, const std::string& text, const LLUUID& asset)> loaded) override;
+    // What comparing selections asks of the window (ALScriptStudioSelections::Window).
+    LLView* typeInSource(Doc& doc, const ALTextPos& at) override;
+    // What comparing the source with its expansion asks of the window
+    // (ALScriptStudioExpandedCompare::Window).
+    void compareRanged(Doc& doc, const std::string& left, const std::string& right, const std::string& left_title,
+                       const std::string& right_title, const ALTextDiff::ranges_t& ranges) override
+    {
+        showCompare(doc, left, right, left_title, right_title, ranges);
+    }
+    void preprocess(Doc& doc) override { mSaving.preprocess(doc); }
+    // What lining a comparison up by its functions asks of the window
+    // (ALScriptStudioComparePairs::Window).
+    void askShape(ALScriptAnalysis::Request request, ALScriptAnalysis::callback_t answered) override
+    {
+        ALScriptAnalysis::instance().ask(std::move(request), std::move(answered));
+    }
     // What the Search tab asks of the window (ALScriptSearchPane::Window).
     void listObjects(const LLUUID& only, std::function<void(std::vector<ALScriptSearchPane::Window::Object>)> told) override;
     std::string                                     objectName(const LLUUID& root) const override;
@@ -956,10 +1076,12 @@ private:
         S32         errors = 0;
         S32         warnings = 0;
         const char* image  = nullptr;
+        // How many scripts in the world a file's tab is the master of.
+        S32         masters = 0;
         friend bool operator==(const TabFacts& a, const TabFacts& b)
         {
             return a.id == b.id && a.name == b.name && a.dirty == b.dirty && a.preview == b.preview && a.readOnly == b.readOnly && a.errors == b.errors &&
-                   a.warnings == b.warnings && a.image == b.image;
+                   a.warnings == b.warnings && a.image == b.image && a.masters == b.masters;
         }
         friend bool operator!=(const TabFacts& a, const TabFacts& b) { return !(a == b); }
     };
@@ -1222,7 +1344,10 @@ private:
     // The Weights tab, and its list of parts.
     ALScriptWeightsPane*               mWeightsPane = nullptr;
     ALPaneList*                        mWeightsParts      = nullptr;
+    ALPaneList*                        mWeightsStrings    = nullptr;
     ALScriptExplorerPane*              mExplorerPane  = nullptr;
+    // The Link tab, hidden but while there is something to link.
+    ALScriptLinkPane*                  mLinkPane      = nullptr;
     // What each of the menus' items does, whether it can, and whether it
     // is on, by the item's name.
     ALScriptStudioCommands             mCommands;
@@ -1230,6 +1355,16 @@ private:
     ALScriptStudioRecovery             mRecovery{ *this, *this, *this };
     // What its items were saved as before, to compare and put back.
     ALScriptStudioHistory              mHistory{ *this, *this };
+    // Whatever a tab may be set beside, picked from one list.
+    ALScriptStudioCompareWith          mCompareWith{ *this, *this };
+    // A save that came up against another, settled conflict by conflict.
+    ALScriptStudioMerging              mMerging{ *this, *this };
+    // A selection held, to compare with another.
+    ALScriptStudioSelections           mSelections{ *this, *this };
+    // The source beside what a save sends of it.
+    ALScriptStudioExpandedCompare      mExpandedCompare{ *this, *this };
+    // A comparison lined up by its texts' functions.
+    ALScriptStudioComparePairs         mComparePairs{ *this, *this };
     // What the region said an object reserves, heard.
     boost::signals2::scoped_connection mRegionUsageConnection;
     // Saving and compiling the tabs.
@@ -1252,6 +1387,8 @@ private:
     ALScriptObjectCheck                mObjectCheck{ *this, *this, *this };
     // Recompiles from the Explorer.
     ALScriptRecompile                  mRecompile{ *this, *this };
+    // Its scripts whose master is a file on disk.
+    ALScriptStudioMasters              mMasters{ *this, *this, *this, ALScriptStudioDiskMasters::get() };
     std::string                        mCheckingWhere;
     S32                                mCheckedErrors   = 0;
     S32                                mCheckedWarnings = 0;
@@ -1290,11 +1427,15 @@ private:
     boost::signals2::scoped_connection mCompiledConnection;
     boost::signals2::scoped_connection mSavedConnection;
     boost::signals2::scoped_connection mDefinitionsConnection;
-    // The vimrc changed: read again into this window's vim.
+    // The vimrc changed: read again into the studio's vim, which every
+    // window shares, and this window's editors set again from it.
     boost::signals2::scoped_connection mVimrcConnection;
     // The settings the window follows as they change: the lints and the
     // Luau mode, the preprocessor's, vim's clipboard.
     std::vector<boost::signals2::scoped_connection> mSettingConnections;
     boost::signals2::scoped_connection mRuntimeConnection;
     boost::signals2::scoped_connection mRunningConnection;
+    // A file's links made or let go of: its tab says how many scripts it
+    // is the master of.
+    boost::signals2::scoped_connection mLinkBadgesConnection;
 };

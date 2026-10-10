@@ -48,6 +48,7 @@
 #include "llenvironment.h"
 #include "llsettingssky.h"
 #include "llsettingswater.h"
+#include "alfarplane.h"
 
 bool LLDrawPoolWater::sSkipScreenCopy = false;
 bool LLDrawPoolWater::sNeedsReflectionUpdate = true;
@@ -96,7 +97,8 @@ void LLDrawPoolWater::prerender()
 
 S32 LLDrawPoolWater::getNumPostDeferredPasses()
 {
-    if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    if (ALFarPlane::waterVisibleFrom(camera->getOrigin().mV[2], LLEnvironment::instance().getWaterHeight(), camera->getProjectionFar()))
     {
         return 1;
     }
@@ -128,7 +130,9 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWPOOL;
     LLGLDisable blend(GL_BLEND);
 
-    gGL.setColorMask(true, true);
+    // Leave the alpha alone, as WindLight's deferred water did: it is the glow channel, and the
+    // water's zero there wiped the glow of whatever lies beneath the surface.
+    gGL.setColorMask(true, false);
 
     LLColor3 light_diffuse(0, 0, 0);
 
@@ -172,8 +176,22 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         has_normal_mips ? ALSamplers::AnisoWrap : ALSamplers::PointWrap;
 
     LLColor4      specular(sun_up ? psky->getSunlightColor() : psky->getMoonlightColor());
-    F32           phase_time = (F32) LLFrameTimer::getElapsedSeconds() * 0.5f;
     LLGLSLShader *shader     = nullptr;
+
+    // Each wave layer's scroll, the wave direction times the time times the layer's rate, taken
+    // in F64 and kept to its fraction: the normal maps wrap, so the fraction is all that shows,
+    // and the product taken in the shader's float stepped once the session was a day or two old.
+    const F64 phase_time = LLFrameTimer::getUptimeSeconds() * 0.5;
+    const auto wave_scroll = [phase_time](F32 direction, F64 rate)
+    {
+        const F64 scroll = direction * phase_time * rate;
+        return (F32)(scroll - floor(scroll));
+    };
+    const LLVector2 wave1_dir = pwater->getWave1Dir();
+    const LLVector2 wave2_dir = pwater->getWave2Dir();
+    const LLVector2 big_wave_scroll(wave_scroll(wave1_dir.mV[VX], 0.055), wave_scroll(wave1_dir.mV[VY], 0.055));
+    const LLVector4 little_wave_scroll(wave_scroll(wave2_dir.mV[VX], 0.13), wave_scroll(wave2_dir.mV[VY], 0.13),
+                                       wave_scroll(wave1_dir.mV[VX], 0.1), wave_scroll(wave1_dir.mV[VY], 0.1));
 
     // One pass, one of two shaders.  Void water and region water share state.
     // There isn't a good reason anymore to really have void water run in a separate pass.
@@ -229,13 +247,12 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     F32 water_height = environment.getWaterHeight();
     F32 camera_height = LLViewerCamera::getInstance()->getOrigin().mV[2];
     shader->uniform1f(LLShaderMgr::WATER_WATERHEIGHT, camera_height - water_height);
-    shader->uniform1f(LLShaderMgr::WATER_TIME, phase_time);
     shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
 
     shader->uniform3fv(LLShaderMgr::WATER_SPECULAR, 1, light_diffuse.mV);
 
-    shader->uniform2fv(LLShaderMgr::WATER_WAVE_DIR1, 1, pwater->getWave1Dir().mV);
-    shader->uniform2fv(LLShaderMgr::WATER_WAVE_DIR2, 1, pwater->getWave2Dir().mV);
+    shader->uniform2fv(LLShaderMgr::WATER_BIG_WAVE_SCROLL, 1, big_wave_scroll.mV);
+    shader->uniform4fv(LLShaderMgr::WATER_LITTLE_WAVE_SCROLL, 1, little_wave_scroll.mV);
 
     shader->uniform3fv(LLShaderMgr::WATER_LIGHT_DIR, 1, light_dir.mV);
 
@@ -266,6 +283,19 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     shader->uniform3fv(LLViewerShaderMgr::LIGHTNORM, 1, rotated_light_direction.mV);
 
     shader->uniform3fv(LLShaderMgr::WL_CAMPOSLOCAL, 1, LLViewerCamera::getInstance()->getOrigin().mV);
+
+    // The wave clamp, and the edge water's outer rectangle relative to the camera for its fade. The whole rim,
+    // not the patches in view: a culled side would pull the rectangle in over interior water.
+    {
+        LLVector3 rim_min, rim_max;
+        const bool have_rim = LLWorld::getInstance()->getEdgeWaterBounds(rim_min, rim_max);
+        const LLVector3& eye = LLViewerCamera::getInstance()->getOrigin();
+        const LLVector2 rim_lo(rim_min.mV[VX] - eye.mV[VX], rim_min.mV[VY] - eye.mV[VY]);
+        const LLVector2 rim_hi(rim_max.mV[VX] - eye.mV[VX], rim_max.mV[VY] - eye.mV[VY]);
+        const ALFarPlane::WaterFar water_far = ALFarPlane::waterFar(LLViewerCamera::getInstance()->getProjectionFar(), have_rim, rim_lo, rim_hi);
+        shader->uniform2f(LLShaderMgr::WATER_FAR, water_far.mWaveClamp, water_far.mEdgeFade);
+        shader->uniform4f(LLShaderMgr::WATER_RIM, rim_lo.mV[VX], rim_lo.mV[VY], rim_hi.mV[VX], rim_hi.mV[VY]);
+    }
 
     if (LLViewerCamera::getInstance()->cameraUnderWater())
     {
