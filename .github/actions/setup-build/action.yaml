@@ -1,10 +1,15 @@
 name: Set up the build
 description: >-
-  Installs the host packages, Python tools and vcpkg that configuring the
-  viewer needs, and adds the R2 vcpkg binary cache when asked to. Expects the
-  repository checked out with its submodules and VCPKG_ROOT set.
+  Installs the host packages, Python tools, Rust crates and vcpkg that
+  configuring the viewer needs, and adds the R2 vcpkg binary cache when asked
+  to. Expects the repository checked out with its submodules and VCPKG_ROOT
+  set.
 
 inputs:
+  msvc-environment:
+    description: "true to give the job MSVC's environment on Windows, for a Ninja build"
+    required: false
+    default: "false"
   r2-cache-mode:
     description: "read or readwrite to use the R2 vcpkg binary cache; empty to go without it"
     required: false
@@ -25,6 +30,10 @@ inputs:
     description: "R2 secret access key"
     required: false
     default: ""
+  private-registry-token:
+    description: "A token that reads AlchemyViewer's private vcpkg registry and the vendor repositories its ports fetch; empty for an open-source build"
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -40,10 +49,10 @@ runs:
           libegl1-mesa-dev libfribidi-dev libgbm-dev libgl1-mesa-dev libgl1-mesa-dri libgles2-mesa-dev \
           libgstreamer-plugins-base1.0-dev libgstreamer1.0-dev libibus-1.0-dev libjack-dev libltdl-dev \
           libpipewire-0.3-dev libpulse-dev libsndio-dev libtext-unidecode-perl \
-          libthai-dev libtool libudev-dev libunwind-dev liburing-dev libvlc-dev libwayland-dev \
+          libthai-dev libtool libudev-dev libunwind-dev liburing-dev libwayland-dev \
           libx11-dev libxcursor-dev libxext-dev libxfixes-dev libxft-dev libxi-dev libxinerama-dev \
           libxkbcommon-dev libxrandr-dev libxss-dev libxtst-dev linux-libc-dev mold \
-          nasm ninja-build pkgconf tar tex-common texinfo unzip zip
+          nasm ninja-build pkgconf rpm tar tex-common texinfo unzip zip
 
         sudo locale-gen en_US.UTF-8
         sudo locale-gen en_GB.UTF-8
@@ -62,19 +71,65 @@ runs:
       shell: bash
       run: brew install autoconf autoconf-archive automake libtool nasm unzip zip
 
+    # The image carries the Xcodes besides the one the build uses and an
+    # Android SDK, none of which the build reads. They go in the background,
+    # while the ports build, rather than holding the job up.
+    - name: macOS disk cleanup
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        df -h /
+        keep="$(cd "${DEVELOPER_DIR:-$(xcode-select -p)}/../.." && pwd -P)"
+        if [[ "$keep" != /Applications/*.app ]]; then
+          echo "::warning::The build's Xcode is not an application under /Applications ($keep); leaving the image as it is"
+          exit 0
+        fi
+        doomed=()
+        shopt -s nullglob
+        for xcode in /Applications/Xcode_*.app; do
+          if [[ "$(cd "$xcode" && pwd -P)" != "$keep" ]]; then
+            doomed+=("$xcode")
+          fi
+        done
+        if [[ -n "${ANDROID_HOME:-}" && -d "$ANDROID_HOME" ]]; then
+          doomed+=("$ANDROID_HOME")
+        fi
+        echo "Keeping $keep; removing ${doomed[*]}"
+        if (( ${#doomed[@]} )); then
+          nohup sudo rm -rf "${doomed[@]}" > /dev/null 2>&1 &
+        fi
+
     - name: Setup python
       uses: actions/setup-python@v7
       with:
         python-version: "3.14"
 
-    # Linux builds with the CMake floor, so the floor is a floor.
-    - name: Install python dependencies
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "Linux" ]]
-        then pip3 install llsd cmake==4.0.0 ninja
-        else pip3 install llsd cmake ninja
-        fi
+    # What a Developer Command Prompt has, for the runner's architecture,
+    # but Visual Studio's CMake, Ninja and vcpkg.
+    - name: MSVC environment
+      if: runner.os == 'Windows' && inputs.msvc-environment == 'true'
+      shell: pwsh
+      run: python scripts/ci/msvc_environment.py
+
+    # After the MSVC environment, so nothing it puts on the path comes ahead
+    # of these. Linux builds with the CMake floor, so the floor is a floor;
+    # the Visual Studio 2026 generator needs a newer one. Both are pinned:
+    # vcpkg builds the ports with this CMake and hashes its version into
+    # every package ABI, so a CMake release on PyPI would otherwise miss the
+    # whole binary cache until a protected build filled it again. llsd is
+    # for the tests that spawn a Python peer, PyYAML for lsl-definitions'
+    # generator, which LL's LSL compiler needs for its tests, and sentry-cli
+    # uploads the debug files.
+    - name: Python tools
+      uses: ./.github/actions/python-tools
+      with:
+        requirements: |
+          cmake==4.0.0; sys_platform == "linux"
+          cmake==4.4.4; sys_platform != "linux"
+          ninja==1.13.2
+          llsd==1.2.4
+          PyYAML==6.0.3
+          sentry-cli==3.8.0
 
     - name: Bootstrap vcpkg Windows
       if: runner.os == 'Windows'
@@ -86,16 +141,54 @@ runs:
       shell: bash
       run: ./vcpkg/bootstrap-vcpkg.sh
 
-    # Ports built with cargo (Velopack) fetch their crates here. Keyed on the
-    # manifest and the registry baseline, which decide the crate versions.
-    - name: Cache Rust dependencies
-      uses: actions/cache@v6
+    # Corrosion builds velopack_libc, which every platform ships, from the
+    # crates indra/rust/Cargo.lock names. They come from the cache:
+    # only what cargo downloads, the index and the .crate archives, as it
+    # unpacks the sources itself and the unpacked tree would be most of what
+    # a restore costs on Windows. On a miss they are fetched and saved at
+    # once, not when the job ends: the rows that build no viewer never run
+    # cargo, and would save an empty registry under the key.
+    - name: Restore the Rust crates
+      id: crates
+      uses: actions/cache/restore@v6
       with:
         path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: ${{ runner.os }}-cargo-${{ hashFiles('indra/vcpkg.json', 'indra/vcpkg-configuration.json') }}
-        restore-keys: ${{ runner.os }}-cargo-
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+        key: cargo-${{ runner.os }}-${{ hashFiles('indra/rust/Cargo.lock') }}
+
+    - name: Fetch the Rust crates
+      if: steps.crates.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo fetch --locked --manifest-path indra/rust/Cargo.toml
+
+    - name: Save the Rust crates
+      if: steps.crates.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+        key: ${{ steps.crates.outputs.cache-primary-key }}
+
+    # vcpkg fetches the private registry, and vcpkg_from_git its ports'
+    # vendor files, with plain git and no authentication of its own. Git's
+    # global config reaches every git vcpkg runs, the cleaned environment of
+    # a Windows port build included, where an environment variable would
+    # not. The token sits in the config only as long as the runner does.
+    - name: Authenticate to the private vcpkg registry
+      if: inputs.private-registry-token != ''
+      shell: bash
+      env:
+        PRIVATE_REGISTRY_TOKEN: ${{ inputs.private-registry-token }}
+      run: |
+        git config --global \
+          "url.https://x-access-token:${PRIVATE_REGISTRY_TOKEN}@github.com/AlchemyViewer/.insteadOf" \
+          "https://github.com/AlchemyViewer/"
+        if ! GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/AlchemyViewer/private-registry HEAD > /dev/null; then
+          echo "::error::The private registry token cannot read AlchemyViewer/private-registry"
+          exit 1
+        fi
 
     - name: Install AWS CLI on macOS
       if: inputs.r2-cache-mode != '' && runner.os == 'macOS'
