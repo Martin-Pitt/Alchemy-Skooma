@@ -60,6 +60,7 @@ const F32 MAX_INTERPOLATE_DISTANCE_SQUARED = 10.f * 10.f;
 const F32 OBJECT_DAMPING_TIME_CONSTANT = 0.06f;
 
 extern bool gShiftFrame;
+extern bool gCubeSnapshot; // <SK:Nexii> render/vertical-reach
 
 
 ////////////////////////
@@ -1583,10 +1584,19 @@ void LLSpatialBridge::setVisible(LLCamera& camera_in, std::vector<LLDrawable*>* 
     size.setSub(exts[1], exts[0]);
     size.mul(0.5f);
 
+    // <SK:Nexii> render/vertical-reach: a scenery bridge (not an avatar, animesh or HUD) is held to the main view's vertical reach.
+    F32 z_scale = 1.f;
+    if (mPartitionType == LLViewerRegion::PARTITION_BRIDGE && !gCubeSnapshot &&
+        &camera_in == LLViewerCamera::getInstance() && LLViewerCamera::getInstance()->getVerticalReach() > 0.f)
+    {
+        z_scale = llmax(camera_in.mFrustumCornerDist / LLViewerCamera::getInstance()->getVerticalReach(), 1.f);
+    }
+    // </SK:Nexii>
+
     if ((LLPipeline::sShadowRender && camera_in.AABBInFrustum(center, size)) ||
         LLPipeline::sImpostorRender ||
         (camera_in.AABBInFrustumNoFarClip(center, size) &&
-        AABBSphereIntersect(exts[0], exts[1], camera_in.getOrigin(), camera_in.mFrustumCornerDist)))
+        AABBEllipsoidIntersect(exts[0], exts[1], camera_in.getOrigin(), camera_in.mFrustumCornerDist, z_scale))) // <SK:Nexii> render/vertical-reach: was AABBSphereIntersect
     {
         if (!LLPipeline::sImpostorRender &&
             !LLPipeline::sShadowRender &&
