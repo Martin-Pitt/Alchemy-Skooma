@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes indra/alscript/allsltraits.inc and allsluuids.inc from lsl_definitions.yaml.
+"""Writes indra/alscript/lsl/allsltraits.inc and allsluuids.inc from lsl_definitions.yaml.
 
 The optimizer folds a call to a library function only when the definitions
 say the function has no side effects, and refuses to drop a call whose
@@ -15,12 +15,14 @@ where LSL answers 1 or 0 (a result with bool-semantics), or gives booleans
 in the list it answers (bool-semantics on a list); whether `ll` lacks it,
 leaving it to `llcompat` alone, or SLua has it nowhere -- read from what
 secondlife.d.luau, beside the YAML, declares in each; and what SLua would
-have used in its stead (slua-deprecated's `use`), and whether that takes
-other arguments. The performance lints
-read how long each makes the script sleep, under LSO and under Mono,
-where the two differ (sleep, mono-sleep). And the constants LSL
+have used in its stead (slua-deprecated's `use`, or else deprecated's). The
+performance lints read how long each makes the script sleep, under LSO and
+under Mono, where the two differ (sleep, mono-sleep). And the constants LSL
 types a string that SLua types a uuid, NULL_KEY among them, for
-allsluuids.inc. Run it whenever the definitions change:
+allsluuids.inc; and, for allslitemargs.inc, each argument that names an
+item among the object's contents and of what kind (inventory-kind, which
+the port's patch adds), for the names Script Studio offers in a string.
+Run it whenever the definitions change:
 
     python3 scripts/content_tools/generate_lsl_traits.py \
         build-<OS>-<preset>/vcpkg_installed/<triplet>/share/lsl-definitions/lsl_definitions/lsl_definitions.yaml
@@ -58,6 +60,22 @@ DETERMINISTIC = {
     "llSHA256String",
     "llVerifyRSA",
     "llsRGB2Linear",
+}
+
+
+# The kinds of item an argument may name (inventory-kind), as
+# ALLSLTraits::Item calls them: `any` for an item of whatever kind.
+ITEM_KINDS = {
+    "any": "Any",
+    "sound": "Sound",
+    "texture": "Texture",
+    "animation": "Animation",
+    "notecard": "Notecard",
+    "object": "Object",
+    "material": "Material",
+    "settings": "Settings",
+    "landmark": "Landmark",
+    "script": "Script",
 }
 
 
@@ -119,7 +137,7 @@ def main(argv):
         print(__doc__)
         return 2
     source = Path(argv[1])
-    out = Path(__file__).resolve().parents[2] / "indra" / "alscript" / "allsltraits.inc"
+    out = Path(__file__).resolve().parents[2] / "indra" / "alscript" / "lsl" / "allsltraits.inc"
     uuids_out = out.with_name("allsluuids.inc")
     # What SLua declares in ll and in llcompat, by their bare names; and
     # what it marks deprecated in ll.
@@ -129,9 +147,6 @@ def main(argv):
     # for, as bits by their places; and each one's parameters' types.
     text_args = {}
     params = {}
-    # What secondlife.d.luau's deprecation says to use, which is what Luau's
-    # lint says and its fix puts in.
-    luau_use = {}
     table = None
     for line in (source.parent / "secondlife.d.luau").read_text(encoding="utf-8").split("\n"):
         m = re.match(r"^declare (ll|llcompat): \{\s*$", line)
@@ -149,9 +164,6 @@ def main(argv):
             if table == "ll":
                 bits = 0
                 params[m.group(1)] = ll_params(line)
-                said = re.search(r"use='([^']+)'", line)
-                if said:
-                    luau_use[m.group(1)] = said.group(1)
                 for i, t in enumerate(params[m.group(1)]):
                     if re.search(r"\bstring\b", t) and re.search(r"\buuid\b", t) and "{" not in t:
                         bits |= 1 << i
@@ -160,6 +172,9 @@ def main(argv):
         print("no ll or llcompat in " + str(source.parent / "secondlife.d.luau"))
         return 1
     functions = {}
+    # Each argument that names an item of the object's, by its function,
+    # its place and the kind of item.
+    item_args = []
     uuids = []
     # Each event's parameters LSL types a key that SLua passes as a string.
     event_text = []
@@ -216,6 +231,7 @@ def main(argv):
                 "return": None,
                 "use": None,
                 "reason": None,
+                "lsl-use": None,
                 "sleep": 0.0,
                 "mono-sleep": None,
             }
@@ -236,6 +252,13 @@ def main(argv):
             functions[name]["index-result"] = True
         if re.match(r"^        index-semantics: true\s*$", line) and argument >= 0:
             functions[name]["index-args"] |= 1 << argument
+        m = re.match(r"^        inventory-kind: (\S+)\s*$", line)
+        if m and argument >= 0:
+            kind = m.group(1).strip("'\"")
+            if kind not in ITEM_KINDS:
+                print("an inventory-kind not known: %s of %s" % (kind, name))
+                return 1
+            item_args.append((name, argument, ITEM_KINDS[kind]))
         if re.match(r"^    bool-semantics: true\s*$", line):
             functions[name]["bool"] = True
         m = re.match(r"^    return: (\S+)\s*$", line)
@@ -244,15 +267,22 @@ def main(argv):
         m = re.match(r"^    (sleep|mono-sleep): ([0-9.]+)\s*$", line)
         if m:
             functions[name][m.group(1)] = float(m.group(2))
-        if re.match(r"^    slua-deprecated:", line):
-            in_deprecated = True
+        # SLua's word on a function it deprecates (slua-deprecated); and the
+        # definitions' word that it is deprecated at all (deprecated), whose
+        # `use` names ll's too: what SLua would use where its own word names
+        # nothing, llMakeFire's ll.ParticleSystem among them. A reason there
+        # would be LSL's, and is not kept.
+        m = re.match(r"^    (slua-deprecated|deprecated):\s*$", line)
+        if m:
+            in_deprecated = m.group(1)
             folded = None
             continue
         if in_deprecated:
             m = re.match(r"^      (use|reason): (.*?)\s*$", line)
             if m:
-                functions[name][m.group(1)] = m.group(2).strip("'\"")
-                folded = m.group(1)
+                folded = m.group(1) if in_deprecated == "slua-deprecated" else ("lsl-use" if m.group(1) == "use" else None)
+                if folded:
+                    functions[name][folded] = m.group(2).strip("'\"")
             elif line.startswith("        ") and folded:
                 # A value folded onto the lines after its key.
                 functions[name][folded] = (functions[name][folded] + " " + line.strip()).strip("'\"")
@@ -262,6 +292,12 @@ def main(argv):
                 folded = None
     if not functions:
         print("no functions found in " + str(source))
+        return 1
+    # The key is the port's own patch's, not Linden Lab's: definitions
+    # without it are the port's patch dropped, and would leave Script
+    # Studio offering no item's name anywhere.
+    if not item_args:
+        print("no inventory-kind in " + str(source) + ": is the lsl-definitions port's inventory-kind.patch applied?")
         return 1
     for fn in DETERMINISTIC:
         if fn not in functions:
@@ -292,13 +328,8 @@ def main(argv):
             slua.append("SluaRemoved" if bare in declared["llcompat"] else "SluaAbsent")
         elif bare in deprecated:
             slua.append("SluaDeprecated")
-        # What SLua's deprecation says to use, where it is ll's, taking
-        # other arguments: its name alone put in place is no call that works.
-        used = luau_use.get(bare, "")
-        used = used[3:] if used.startswith("ll.") else None
-        if used and bare in params and used in params and params[used] != params[bare]:
-            slua.append("SluaUseDiffers")
-        use = '"%s"' % t["use"].replace('\\', '\\\\').replace('"', '\\"') if t["use"] else "nullptr"
+        used = t["use"] or t["lsl-use"]
+        use = '"%s"' % used.replace('\\', '\\\\').replace('"', '\\"') if used else "nullptr"
         reason = '"%s"' % t["reason"].replace('\\', '\\\\').replace('"', '\\"') if t["reason"] else "nullptr"
         lines.append(
             '{ "%s", %s, %s, %s, %s, 0x%x, 0x%x, %s, %s, %sf, %sf },'
@@ -337,6 +368,18 @@ def main(argv):
         encoding="utf-8",
     )
     print("%d event parameters SLua passes as text -> %s" % (len(event_text), events_out))
+    items_out = out.with_name("allslitemargs.inc")
+    items_out.write_text(
+        "// Generated by scripts/content_tools/generate_lsl_traits.py from\n"
+        "// lsl_definitions.yaml; do not edit. Each argument that names an item\n"
+        "// among the object's contents: its function, its place from nought,\n"
+        "// and the kind of item (ALLSLTraits::Item).\n"
+        "// clang-format off\n"
+        + "".join('{ "%s", %d, Item::%s },\n' % a for a in sorted(item_args))
+        + "// clang-format on\n",
+        encoding="utf-8",
+    )
+    print("%d arguments naming an item -> %s" % (len(item_args), items_out))
     return 0
 
 

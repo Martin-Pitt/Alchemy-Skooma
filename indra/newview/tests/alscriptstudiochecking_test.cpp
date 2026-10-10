@@ -110,6 +110,8 @@ namespace
             case Kind::Inspect:    return "inspect";
             case Kind::Actions:    return "actions";
             case Kind::Weigh:      return "weigh";
+            case Kind::Shape:      return "shape";
+            case Kind::Warm:       return "warm";
         }
         return "?";
     }
@@ -1385,5 +1387,123 @@ namespace tut
         ensure_equals("put right", doc.editor->document().line(1), std::string("if #t ~= 0 then print(1) end"));
         ensure("Apply again: nothing waiting, and said", !checking.applyPreviewed(doc) && services.statuses.back() == "FixAllNotPreviewed" &&
                                                             services.statusFailures.back());
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<25>()
+    {
+        set_test_name("a fix that moves a require onto a SLua alias of the studio's own names the folder once its edit is sure to take, and is refused with nothing changed where the name is another folder's");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a");
+        std::vector<std::string> named;
+        bool                     free = true;
+        viewer.slots.nameStudioAlias = [&named, &free](const std::string& name, const std::string& folder) {
+            named.push_back(name + "=" + folder);
+            return free;
+        };
+        ALScriptFix moved = fix("Name /inc as the SLua alias @inc, and require it as '@inc/util'", 0, 8, 13, "total", false);
+        moved.key         = "ScriptFixRequireAlias";
+        moved.args        = { "@inc/util", "inc", "/inc" };
+        ensure("made", checking.applyFix(doc, moved, version(doc)));
+        ensure("the folder named", named == std::vector<std::string>{ "inc=/inc" });
+        ensure_equals("and the text", doc.editor->document().line(0), std::string("integer total;"));
+        ALScriptFix taken = fix("Name /lib as the SLua alias @inc, and require it as '@inc/util'", 0, 8, 13, "other", false);
+        taken.key         = "ScriptFixRequireAlias";
+        taken.args        = { "@inc/util", "inc", "/lib" };
+        // An edit that would not take names nothing: in a text that may not
+        // change, or that it would take past its limit.
+        named.clear();
+        doc.editor->setReadOnly(true);
+        ensure("not made", !checking.applyFix(doc, taken, version(doc)));
+        ensure("and nothing named", named.empty());
+        doc.editor->setReadOnly(false);
+        ALScriptFix longer   = taken;
+        longer.edits[0].text = "a_name_longer_than_the_text_has_room_for";
+        doc.editor->setMaxBytes(doc.editor->document().byteCount());
+        ensure("past the limit: not made", !checking.applyFix(doc, longer, version(doc)));
+        ensure("nor named", named.empty());
+        doc.editor->setMaxBytes(0);
+        free             = false;
+        const U32 was_at = version(doc);
+        ensure("the name another folder's: refused", !checking.applyFix(doc, taken, version(doc)));
+        ensure("asked", named == std::vector<std::string>{ "inc=/lib" });
+        ensure("said", services.statuses.back().find("AliasTaken [NAME]=inc") == 0 && services.statusFailures.back());
+        ensure("nothing changed", version(doc) == was_at && doc.editor->document().line(0) == "integer total;");
+        ensure("nothing to redo", !doc.editor->undoJournal().canRedo());
+        ALScriptFix plain = fix("Require it as './util'", 0, 8, 13, "sum", false);
+        plain.key         = "ScriptFixRequireAs";
+        plain.args        = { "./util" };
+        named.clear();
+        ensure("a plain one names nothing", checking.applyFix(doc, plain, version(doc)) && named.empty());
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<26>()
+    {
+        set_test_name("an include's file asked of again after an edit that changes how every line after it starts: what it was, while the text "
+                      "is lexed to its end a slice at a time, then what it is; a check sent of the text as it stands");
+        ALScriptStudioChecking& checking = make();
+        std::string             text;
+        for (S32 i = 0; i < 3000; ++i)
+        {
+            text += "integer helper" + std::to_string(i) + " = 1;\n";
+        }
+        Doc& doc = tab("disk:/lib.lsl", text);
+        doc.file = "/lib.lsl";
+        doc.editor->setSyntax("lsl");
+        ensure("a fragment", checking.lslFragment(doc));
+        ALSyntaxHighlighter& highlighter = doc.editor->highlighter();
+        const S32            last        = doc.editor->document().lineCount() - 1;
+
+        // A string opened at the top runs on to the end: every line after
+        // it starts in it.
+        doc.editor->document().insert(ALTextPos(0, 0), "\"");
+        ensure("asked again at once: a fragment", checking.lslFragment(doc));
+        highlighter.tokens(last);
+        ensure("the text not lexed to its end for it: " + std::to_string(highlighter.lastLexed()) + " of " + std::to_string(last + 1) + " left",
+               highlighter.lastLexed() > last / 2);
+        ensure("nor kept for the text as it stands", doc.check->fragment->first != version(doc));
+        ensure("lexed to its end: what it is, kept", checking.lslFragment(doc) && doc.check->fragment->first == version(doc));
+
+        // A state at the end of a text set whole: still lexed when the check
+        // is asked, which sends it as it stands, with no state put after it.
+        doc.editor->setText(text + "default\n{\n    state_entry() { }\n}\n");
+        checking.lslFragment(doc);
+        checking.ask(doc, Kind::Check, ALTextPos(), ALTextPos());
+        ensure_equals("asked once", studio.asks.size(), size_t(1));
+        ensure("of the script as it stands", *studio.asks[0].request.text == doc.editor->text());
+        ensure("and a script now", !checking.lslFragment(doc));
+    }
+
+    template<> template<>
+    void alscriptstudiochecking_object::test<27>()
+    {
+        set_test_name("a fix that moves a require onto a SLua alias of the studio's own is held to the text's limit as its edit is, without a composition standing in the text");
+        ALScriptStudioChecking& checking = make();
+        Doc&                    doc      = tab("a");
+        std::vector<std::string> named;
+        viewer.slots.nameStudioAlias = [&named](const std::string& name, const std::string& folder) {
+            named.push_back(name + "=" + folder);
+            return true;
+        };
+        // Three bytes composed at the end of the text, which the edit is
+        // not made to; room for two more without them.
+        ALCodeEditor& editor = *doc.editor;
+        editor.setCaret(editor.document().end());
+        editor.preeditor().updatePreedit("xyz", LLPreeditor::segment_lengths_t{ 3 }, LLPreeditor::standouts_t{ false }, 3);
+        ensure("composing", editor.hasPreedit());
+        editor.setMaxBytes(SCRIPT.size() + 2);
+
+        ALScriptFix longer = fix("Name /inc as the SLua alias @inc, and require it as '@inc/util'", 0, 8, 13, "counter_", false);
+        longer.key         = "ScriptFixRequireAlias";
+        longer.args        = { "@inc/util", "inc", "/inc" };
+        ensure("three more: past the limit, not made", !checking.applyFix(doc, longer, version(doc)));
+        ensure("nor named", named.empty());
+        ALScriptFix moved   = longer;
+        moved.edits[0].text = "counter";
+        ensure("two more: made", checking.applyFix(doc, moved, version(doc)));
+        ensure("the folder named", named == std::vector<std::string>{ "inc=/inc" });
+        ensure_equals("and the text, the composition gone", editor.text(), "integer counter" + SCRIPT.substr(13));
+        editor.setMaxBytes(0);
     }
 }

@@ -139,6 +139,7 @@
     <floater.string name="FixChecking">Checking [NAME] for fixes...</floater.string>
     <floater.string name="FilterFixable">Fixable</floater.string>
     <floater.string name="FilterFixableCount">Fixable ([COUNT])</floater.string>
+    <floater.string name="AliasTaken">The SLua alias @[NAME] now names another folder. Check the script again to be offered another fix.</floater.string>
     <floater.string name="FixStale">The script changed since it was checked. Fixes will be offered again after the next check.</floater.string>
     <floater.string name="ProblemFixTip">Fix: [TITLE]</floater.string>
     <floater.string name="ScriptsA">1 script</floater.string>
@@ -459,6 +460,8 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="NoticeTakeCompiled">Use Preprocessed Code</floater.string>
     <floater.string name="NoticeCompare">Compare</floater.string>
     <floater.string name="NoticeCompareTip">Show both texts side by side, with changes marked; Escape closes the comparison</floater.string>
+    <floater.string name="NoticeMerge">Merge</floater.string>
+    <floater.string name="NoticeMergeTip">Put in what only the other version changed, then settle each conflict in the comparison; undo takes the merge back</floater.string>
     <floater.string name="CompareNow">This tab now</floater.string>
     <floater.string name="CompareUnsaved">[TITLE] (unsaved)</floater.string>
     <floater.string name="FixAllAfter">After [FIXES]</floater.string>
@@ -507,6 +510,31 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="ExplorerComparePlaceholder">Type a name to find a script or notecard</floater.string>
     <floater.string name="ExplorerNothingToCompare">Nothing listed in the Explorer is like [NAME] to compare it with. Pin or select the other object first.</floater.string>
     <floater.string name="CompareSaved">As last saved</floater.string>
+    <floater.string name="CompareWithTitle">Compare [NAME] with</floater.string>
+    <floater.string name="PeekNoChange">The caret's line has not changed since the script was saved.</floater.string>
+    <floater.string name="NoChangeAfter">No change since the save after this line.</floater.string>
+    <floater.string name="NoChangeBefore">No change since the save before this line.</floater.string>
+    <floater.string name="ComparePreprocessed">Preprocessed, as a save sends it</floater.string>
+    <floater.string name="SelectionLine">[NAME], line [FIRST]</floater.string>
+    <floater.string name="SelectionLines">[NAME], lines [FIRST]–[LAST]</floater.string>
+    <floater.string name="SelectionHeld">Holding [TITLE] to compare. Select something else, here or in another tab, then choose View > Compare with Held Selection.</floater.string>
+    <floater.string name="CompareWithPlaceholder">Type to find a tab, a file, or a script in an object</floater.string>
+    <floater.string name="CompareWithSavedDetail">this tab's text when it was last saved</floater.string>
+    <floater.string name="CompareWithSavedThereDetail">what was saved over it from elsewhere</floater.string>
+    <floater.string name="CompareWithTab">open tab</floater.string>
+    <floater.string name="CompareWithTabUnsaved">open tab, unsaved</floater.string>
+    <floater.string name="CompareClipboard">Clipboard</floater.string>
+    <floater.string name="CompareWithLinesA">1 line</floater.string>
+    <floater.string name="CompareWithLinesB">[COUNT] lines</floater.string>
+    <floater.string name="CompareWithClipboardEmpty">The clipboard holds no text to compare with.</floater.string>
+    <floater.string name="CompareTabClosed">[NAME] is no longer open to compare with.</floater.string>
+    <floater.string name="CompareSavedThereGone">There is no longer a version saved elsewhere to compare with.</floater.string>
+    <floater.string name="CompareTabSnapshot">[NAME], as it was</floater.string>
+    <floater.string name="CompareWithFile">File on Disk...</floater.string>
+    <floater.string name="CompareWithFileDetail">choose a file to compare with</floater.string>
+    <floater.string name="CompareWithHistory">Local History...</floater.string>
+    <floater.string name="CompareWithSavesA">1 save kept</floater.string>
+    <floater.string name="CompareWithSavesB">[COUNT] saves kept</floater.string>
     <floater.string name="CompareNothingSaved">There is no saved text to compare with: you undid past the last save, then made a change.</floater.string>
     <floater.string name="CompareKept">Unsaved changes, [WHEN]</floater.string>
     <floater.string name="CompareCompiled">Preprocessed code, as saved</floater.string>
@@ -576,6 +604,8 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="ActionKeepSavedTip">Keep your changes; saving [NAME] replaces the version saved elsewhere</floater.string>
     <floater.string name="ActionCompareSaved">Compare</floater.string>
     <floater.string name="ActionCompareSavedTip">Compare the version saved elsewhere with this tab</floater.string>
+    <floater.string name="ActionMergeSaved">Merge</floater.string>
+    <floater.string name="ActionMergeSavedTip">Put what only the version saved elsewhere changed into [NAME], then settle each conflict in the comparison</floater.string>
     <floater.string name="SavedElsewhereConflict">[NAME] was saved by [WHO] while this tab had unsaved changes.</floater.string>
     <floater.string name="SavedElsewhereKept">Kept your changes to [NAME]; saving replaces the version saved elsewhere.</floater.string>
     <floater.string name="SavedByBridge">VS Code</floater.string>
@@ -607,6 +637,143 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="RecompileUnsaved">[NAME] has unsaved changes; the recompile uses the version saved on the server, without them.</floater.string>
     <floater.string name="SavedByEditor">another editor</floater.string>
     <floater.string name="SavedByQueue">a recompile</floater.string>
+    <floater.string name="SavedByFile">its file on disk</floater.string>
+    <floater.string name="SavedByStudio">Script Studio</floater.string>
+    <floater.string name="MasterNotSLuaFile">[FILE] is not an SLua file, and [NAME] is SLua.</floater.string>
+    <floater.string name="MasterNotLSLFile">[FILE] is not an LSL file, and [NAME] is LSL.</floater.string>
+    <floater.string name="MasterNotNotecardFile">[FILE] is not a notecard's file: a notecard is linked to a .txt, .notecard or .json file.</floater.string>
+    <floater.string name="MasterNotecardCarries">[NAME] carries items, which a file on disk cannot hold, so it cannot be linked to one.</floater.string>
+    <floater.string name="MasterLinked">[NAME] is linked to [FILE]: from now on it is changed through the file, and saving the file sends it.</floater.string>
+    <floater.string name="MasterLinkedBridge">VS Code holds [NAME] too: whichever saves it last is what it holds.</floater.string>
+    <floater.string name="MasterLinkDiffers">[FILE] is not what [NAME] holds now: the next save of the file sends it, and keeps what [NAME] had in History.</floater.string>
+    <floater.string name="MasterUnlinked">[NAME] is no longer linked to [FILE].</floater.string>
+    <floater.string name="MasterSaveFileFirst">Save [NAME] before sending it: what goes up is the file on disk.</floater.string>
+    <floater.string name="MasterSendingA">Sending [NAME] to its script.</floater.string>
+    <floater.string name="MasterSendingB">Sending [NAME] to its [COUNT] scripts.</floater.string>
+    <floater.string name="MasterOpened">[NAME] is linked to [FILE]: its file opened in its place.</floater.string>
+    <floater.string name="MasterHinted">[NAME] names [FILE] as its file.</floater.string>
+    <floater.string name="MasterHintUnsaved">Save or revert [NAME] before linking it to [FILE], the file it names: what was typed here is in neither the script nor the file.</floater.string>
+    <floater.string name="MasterSent">Saved [NAME] from [FILE].</floater.string>
+    <floater.string name="MasterNotCompiled">[NAME] went up from [FILE], and did not compile.</floater.string>
+    <floater.string name="MasterKeptTheirs">What it held in-world, which was not the file, is in History.</floater.string>
+    <floater.string name="MasterSendFailed">[FILE] was not sent to [NAME]: [WHY].</floater.string>
+    <floater.string name="MasterSkipped">[NAME] already holds [FILE].</floater.string>
+    <floater.string name="MasterHeld">[NAME] was changed in-world since [FILE] was last sent to it, so it was not sent.</floater.string>
+    <floater.string name="MasterDiffering">[NAME] was changed in-world by [WHO]: it no longer holds [FILE].</floater.string>
+    <floater.string name="MasterSuspended">[NAME]'s link to [FILE] is held: [WHY].</floater.string>
+    <floater.string name="MasterOrphaned">[NAME] is gone from where it was; its link to [FILE] is kept a while, should it come back.</floater.string>
+    <floater.string name="MasterPending">[FILE] was not sent to [NAME]: [WHY]. It waits to be sent by hand.</floater.string>
+    <floater.string name="MasterRelinked">[NAME] is linked to [FILE] again.</floater.string>
+    <floater.string name="MasterNotWritten">[FILE] could not be written, so [NAME] is not linked to it; what was typed is still here.</floater.string>
+    <floater.string name="MasterGaveWay">[NAME] is linked to [FILE] now: its tab gave way to the file's, where it is changed from here on.</floater.string>
+    <floater.string name="MasterLinkedUnsaved">[NAME] is linked to [FILE] now, and what was typed here is not in the file: copy it into the file to keep it, or Unlink to save it from here.</floater.string>
+    <floater.string name="MasterLinkedClean">[NAME] is linked to [FILE] now, and nothing unsaved is left here: switch to the file to change it there, or Unlink to save it from here.</floater.string>
+    <floater.string name="MasterEditedOutside">[NAME] is linked to [FILE]: the file is opened in the external editor in its place.</floater.string>
+    <floater.string name="MasterNotRead">[FILE] could not be read to compare with [NAME].</floater.string>
+    <floater.string name="LinkHeadListing">Asking what [OBJECTS] holds...</floater.string>
+    <floater.string name="LinkHeadReading">Reading the scripts of [OBJECTS]: [DONE] of [COUNT]...</floater.string>
+    <floater.string name="LinkHeadMatchingA">Looking on disk for the file of 1 script...</floater.string>
+    <floater.string name="LinkHeadMatchingB">Looking on disk for the files of [COUNT] scripts...</floater.string>
+    <floater.string name="LinkHeadNone">No script of [OBJECTS] is left to link</floater.string>
+    <floater.string name="LinkHeadFoundA">1 script of [OBJECTS]</floater.string>
+    <floater.string name="LinkHeadFoundB">[COUNT] scripts of [OBJECTS]</floater.string>
+    <floater.string name="LinkHeadAlreadyA">1 linked already</floater.string>
+    <floater.string name="LinkHeadAlreadyB">[COUNT] linked already</floater.string>
+    <floater.string name="LinkHeadUnreadA">1 you cannot read</floater.string>
+    <floater.string name="LinkHeadUnreadB">[COUNT] you cannot read</floater.string>
+    <floater.string name="LinkHeadUnlistedA">1 prim did not say what it holds</floater.string>
+    <floater.string name="LinkHeadUnlistedB">[COUNT] prims did not say what they hold</floater.string>
+    <floater.string name="LinkHeadChecking">checking which differ in-world</floater.string>
+    <floater.string name="LinkFileNone">None found: choose a file</floater.string>
+    <floater.string name="LinkFileChooseA">Choose the file...</floater.string>
+    <floater.string name="LinkFileChooseB">Choose one of [COUNT] files...</floater.string>
+    <floater.string name="LinkHowHint">its @file</floater.string>
+    <floater.string name="LinkHowNamed">named by the script</floater.string>
+    <floater.string name="LinkHowRecord">an earlier link</floater.string>
+    <floater.string name="LinkHowOwnRecord">its own link</floater.string>
+    <floater.string name="LinkHowName">its name</floater.string>
+    <floater.string name="LinkHowPicked">picked</floater.string>
+    <floater.string name="LinkWorldAsking">checking...</floater.string>
+    <floater.string name="LinkWorldSame">same</floater.string>
+    <floater.string name="LinkWorldDiffers">differs</floater.string>
+    <floater.string name="LinkWorldUnknown">can't tell</floater.string>
+    <floater.string name="LinkTipHint">It names [HINT] as its file.</floater.string>
+    <floater.string name="LinkTipHintWhy">It names [HINT] as its file, which is not used: [WHY].</floater.string>
+    <floater.string name="LinkTipNamed">The script names this file, which is not called [NAME]: be sure it is the file you mean before you link it.</floater.string>
+    <floater.string name="LinkTipRecord">A script called [NAME] was linked to this file before it was taken; this may be it, rezzed again.</floater.string>
+    <floater.string name="LinkTipOwnRecord">[NAME] was linked to this file, and its link was held as gone though the script is still here: linking it puts the link back.</floater.string>
+    <floater.string name="LinkTipChoicesA">1 file could be its: choose it.</floater.string>
+    <floater.string name="LinkTipChoicesB">[COUNT] files could be its: choose one.</floater.string>
+    <floater.string name="LinkTipRecordsA">1 earlier link could be its: choose it.</floater.string>
+    <floater.string name="LinkTipRecordsB">[COUNT] earlier links of scripts called [NAME] had different files: choose one.</floater.string>
+    <floater.string name="LinkTipUnknown">Whether it is what the script holds in-world can't be told: its text in-world could not be read.</floater.string>
+    <floater.string name="LinkTipUnknownWhy">Whether it is what the script holds in-world can't be told: [WHY].</floater.string>
+    <floater.string name="LinkTipNotOwned">Not your object, so it is not ticked: tick it to link it.</floater.string>
+    <floater.string name="LinkTipMissed">[FILE] does not expand cleanly -- an include not found, say -- so it is not sent from here; saving the file sends it all the same.</floater.string>
+    <floater.string name="LinkChooseTitle">The file for [NAME]</floater.string>
+    <floater.string name="LinkChoosePlaceholder">Type to find a file</floater.string>
+    <floater.string name="LinkChoosePick">Another file...</floater.string>
+    <floater.string name="LinkChoosePickDetail">Pick any file on disk</floater.string>
+    <floater.string name="LinkedOne">[NAME] to [FILE]</floater.string>
+    <floater.string name="LinkedScriptsA">Linked [LIST].</floater.string>
+    <floater.string name="LinkedScriptsB">Linked [COUNT] scripts to their files: [LIST].</floater.string>
+    <floater.string name="LinkedSendingA">Sending the 1 that differs.</floater.string>
+    <floater.string name="LinkedSendingB">Sending the [COUNT] that differ.</floater.string>
+    <floater.string name="LinkedUnexpandedA">1 that differs was not sent, as its file does not expand cleanly: saving the file sends it.</floater.string>
+    <floater.string name="LinkedUnexpandedB">[COUNT] that differ were not sent, as their files do not expand cleanly: saving each file sends it.</floater.string>
+    <floater.string name="ExplorerSendingFromFilesA">Sending 1 script from its file.</floater.string>
+    <floater.string name="ExplorerSendingFromFilesB">Sending [COUNT] scripts from their files.</floater.string>
+    <floater.string name="ExplorerSendUnsavedA">1 was not sent: its file has unsaved changes in a tab.</floater.string>
+    <floater.string name="ExplorerSendUnsavedB">[COUNT] were not sent: their files have unsaved changes in tabs.</floater.string>
+    <floater.string name="LinkBadgeLinked">linked</floater.string>
+    <floater.string name="LinkBadgeLinkedTip">Linked to [FILE]: saving the file sends it.</floater.string>
+    <floater.string name="LinkBadgeUnsent">file not sent</floater.string>
+    <floater.string name="LinkBadgeUnsentTip">Linked to [FILE], which has not been sent to it yet: Send from Files sends it.</floater.string>
+    <floater.string name="LinkBadgeNewer">file changed</floater.string>
+    <floater.string name="LinkBadgeNewerTip">Linked to [FILE], which has changed since it was last sent: Send from Files sends it.</floater.string>
+    <floater.string name="LinkBadgePending">send waiting</floater.string>
+    <floater.string name="LinkBadgePendingTip">Linked to [FILE]; the last send did not go, and waits for Send from Files.</floater.string>
+    <floater.string name="LinkBadgeDiffering">changed in-world</floater.string>
+    <floater.string name="LinkBadgeDifferingTip">Linked to [FILE], and changed in-world since it was last sent: a Send from Files is held; saving the file sends it, keeping what it had in History.</floater.string>
+    <floater.string name="LinkBadgeSuspended">file missing</floater.string>
+    <floater.string name="LinkBadgeSuspendedTip">Linked to [FILE], which is not there: nothing is sent until it is found again.</floater.string>
+    <floater.string name="TabMastersDetailA">linked</floater.string>
+    <floater.string name="TabMastersDetailB">linked to [COUNT]</floater.string>
+    <floater.string name="TabMastersTipA">The master of 1 script in-world: saving it sends it.</floater.string>
+    <floater.string name="TabMastersTipB">The master of [COUNT] scripts in-world: saving it sends them.</floater.string>
+    <floater.string name="CompareMasterFile">File</floater.string>
+    <floater.string name="CompareMasterWorld">[NAME] in-world</floater.string>
+    <floater.string name="CompareMasterOnDisk">[FILE] on disk</floater.string>
+    <floater.string name="NoticeMasterLink">Link</floater.string>
+    <floater.string name="NoticeMasterLinkTip">Link this script to the file it names: from then on it is changed through the file</floater.string>
+    <floater.string name="NoticeMasterSend">Send File</floater.string>
+    <floater.string name="NoticeMasterSendTip">Send the file on disk to the script now, keeping what the script holds in History</floater.string>
+    <floater.string name="NoticeMasterUnlink">Unlink</floater.string>
+    <floater.string name="NoticeMasterUnlinkTip">Let the script go from this file; neither is changed</floater.string>
+    <floater.string name="NoticeMasterGiveWay">Switch to File</floater.string>
+    <floater.string name="NoticeMasterGiveWayTip">Close this tab and open the file's in its place, where the script is changed from now on</floater.string>
+    <floater.string name="NoticeMasterCompareFile">Compare with File</floater.string>
+    <floater.string name="NoticeMasterCompareFileTip">Show the file on disk beside what was typed here, with changes marked</floater.string>
+    <floater.string name="NoticeMasterOpenFile">Open File</floater.string>
+    <floater.string name="NoticeMasterOpenFileTip">Open the file in a tab of its own, keeping this one, to copy what was typed here into it</floater.string>
+    <floater.string name="NoticeMasterFind">Find File...</floater.string>
+    <floater.string name="NoticeMasterFindTip">Pick where the file is now, keeping the link</floater.string>
+    <floater.string name="ActionMasterLink">Link</floater.string>
+    <floater.string name="ActionMasterLinkTip">Link [NAME] to the file it names</floater.string>
+    <floater.string name="ActionMasterSend">Send file</floater.string>
+    <floater.string name="ActionMasterSendTip">Send the file on disk to the script now</floater.string>
+    <floater.string name="ActionMasterCompare">Compare</floater.string>
+    <floater.string name="ActionMasterCompareTip">Compare [NAME] with what the script holds in-world</floater.string>
+    <floater.string name="ActionMasterGiveWay">Switch to file</floater.string>
+    <floater.string name="ActionMasterGiveWayTip">Close [NAME]'s tab and open its file's in its place</floater.string>
+    <floater.string name="ActionMasterCompareFile">Compare with file</floater.string>
+    <floater.string name="ActionMasterCompareFileTip">Compare what was typed in [NAME] with its file on disk</floater.string>
+    <floater.string name="ActionMasterOpenFile">Open file</floater.string>
+    <floater.string name="ActionMasterOpenFileTip">Open the file [NAME] is linked to, keeping its tab</floater.string>
+    <floater.string name="ActionMasterUnlink">Unlink</floater.string>
+    <floater.string name="ActionMasterUnlinkTip">Let the script go from [NAME]</floater.string>
+    <floater.string name="ActionMasterFind">Find file</floater.string>
+    <floater.string name="ActionMasterFindTip">Pick where the file is now, keeping the link</floater.string>
     <floater.string name="CompareSavedThere">Saved elsewhere</floater.string>
     <floater.string name="SaveAskingWorld">Checking whether [NAME] was saved elsewhere...</floater.string>
     <floater.string name="SaveWorldMoved">[NAME] was saved elsewhere (by a co-owner or in another viewer) after you opened it here. Saving would replace that version.</floater.string>
@@ -614,6 +781,19 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="ActionReloadWorldTip">Reload the saved [NAME]; your unsaved changes are kept in File &gt; Recover Unsaved Changes</floater.string>
     <floater.string name="ActionCompareWorld">Compare</floater.string>
     <floater.string name="ActionCompareWorldTip">Compare the saved [NAME] with the text in this tab</floater.string>
+    <floater.string name="ActionMergeWorld">Merge</floater.string>
+    <floater.string name="ActionMergeWorldTip">Put what only the saved [NAME] changed into this tab, then settle each conflict in the comparison</floater.string>
+    <floater.string name="MergeConflictsA">Merged into [NAME] what only the other version changed. 1 conflict is left to settle in the comparison; save to keep the merge.</floater.string>
+    <floater.string name="MergeConflictsB">Merged into [NAME] what only the other version changed. [COUNT] conflicts are left to settle in the comparison; save to keep the merge.</floater.string>
+    <floater.string name="MergeTakenBack">The merge into [NAME] was undone; the other version stands again.</floater.string>
+    <floater.string name="CompareLoading">Loading [NAME] to compare...</floater.string>
+    <floater.string name="NoticeShowCompare">Show Comparison</floater.string>
+    <floater.string name="NoticeShowCompareTip">Show the merge's comparison, where each conflict is marked and settled</floater.string>
+    <floater.string name="ActionShowCompare">Show Comparison</floater.string>
+    <floater.string name="ActionShowCompareTip">Show the comparison of [NAME], where each conflict is marked and settled</floater.string>
+    <floater.string name="MergeClean">Merged into [NAME] what only the other version changed; nothing conflicts. Save to keep the merge.</floater.string>
+    <floater.string name="MergeNoBase">What [NAME] was before both changes is no longer known here, so the two are compared as they are: take back each change you want.</floater.string>
+    <floater.string name="MergeReadOnly">[NAME] cannot be changed here, so the two are compared as they are.</floater.string>
     <floater.string name="CompareWorld">Currently saved</floater.string>
     <floater.string name="ActionExport">Export to a file</floater.string>
     <floater.string name="ActionExportTip">Save a copy of [NAME] to a file on this computer</floater.string>
@@ -713,6 +893,17 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
     <floater.string name="WeightsKindFrame">Overhead</floater.string>
     <floater.string name="WeightsStateTip">The state's handler table. Each handler is listed separately.</floater.string>
     <floater.string name="WeightsFrameTip">Fixed overhead for any script on this target.</floater.string>
+    <floater.string name="WeightsStringName">name</floater.string>
+    <floater.string name="WeightsStringTip">[BYTES] bytes in the string table, its length included. Used by [USES] instructions, [LOADS] of them as a value.</floater.string>
+    <floater.string name="WeightsStringNameTip">A function's name, which the line information keeps: [BYTES] bytes in the string table, its length included.</floater.string>
+    <floater.string name="WeightsSharedStart">Shared start: [START] in [COUNT] strings</floater.string>
+    <floater.string name="WeightsSharedStartTip">[COUNT] strings start with these [LENGTH] bytes. Kept once and joined back on as each is loaded, the bytecode would be about [SAVED] bytes smaller. Luau joins constant strings as it compiles, a local that is never assigned again included, so the start must be kept apart: local start; start = [START]. Each join also builds the string while the script runs.</floater.string>
+    <floater.string name="WeightsSaves">-[BYTES]</floater.string>
+    <floater.string name="WeightsSharedStartStrings">They are [STRINGS].</floater.string>
+    <floater.string name="WeightsSharedStartMore">[STRINGS] and [COUNT] more</floater.string>
+    <floater.string name="WeightsStringShares">It shares its start, [START], with [COUNT] other strings, which could be kept once.</floater.string>
+    <floater.string name="KeptStartOnce">Kept the start once in [COUNT] places, as [NAME].</floater.string>
+    <floater.string name="KeepStartFailed">Could not keep the start once: [ERROR]</floater.string>
     <floater.string name="WeightNote">[BYTES] bytes</floater.string>
     <floater.string name="WeightNoteEstimate">~[BYTES] bytes</floater.string>
     <floater.string name="WeightNoteNamed">[NAME] [NOTE]</floater.string>
@@ -830,6 +1021,18 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
             <menu_item_call label="Edit in External Editor" layout="topleft" name="external_editor">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="external_editor" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="external_editor" />
+            </menu_item_call>
+            <menu_item_call label="Link to File on Disk..." layout="topleft" name="link_file">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="link_file" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="link_file" />
+            </menu_item_call>
+            <menu_item_call label="Send File to Its Scripts" layout="topleft" name="send_file">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="send_file" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="send_file" />
+            </menu_item_call>
+            <menu_item_call label="Unlink File from Its Scripts" layout="topleft" name="unlink_file">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="unlink_file" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="unlink_file" />
             </menu_item_call>
             <menu_item_separator layout="topleft" />
             <menu_item_call label="Move to New Window" layout="topleft" name="pop_out">
@@ -1149,6 +1352,14 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_problem" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_problem" />
             </menu_item_call>
+            <menu_item_call label="Next Change" layout="topleft" name="next_difference">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_difference" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_difference" />
+            </menu_item_call>
+            <menu_item_call label="Previous Change" layout="topleft" name="previous_difference">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="previous_difference" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="previous_difference" />
+            </menu_item_call>
             <menu_item_call label="Next Left From LSL" layout="topleft" name="next_migration">
                 <menu_item_call.on_click function="ScriptStudio.Menu" parameter="next_migration" />
                 <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="next_migration" />
@@ -1266,11 +1477,131 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_saved" />
                 <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_saved" />
             </menu_item_check>
+            <menu_item_check label="Peek at Change" layout="topleft" name="peek_change">
+                <menu_item_check.on_check function="ScriptStudio.Check" parameter="peek_change" />
+                <menu_item_check.on_click function="ScriptStudio.Menu" parameter="peek_change" />
+                <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="peek_change" />
+            </menu_item_check>
+            <menu_item_call label="Compare With..." layout="topleft" name="compare_with">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_with" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_with" />
+            </menu_item_call>
+            <menu_item_call label="Compare with Preprocessed" layout="topleft" name="compare_preprocessed">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_preprocessed" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_preprocessed" />
+            </menu_item_call>
+            <menu_item_call label="Select for Compare" layout="topleft" name="compare_hold_selection">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_hold_selection" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_hold_selection" />
+            </menu_item_call>
+            <menu_item_call label="Compare with Held Selection" layout="topleft" name="compare_selections">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_selections" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_selections" />
+            </menu_item_call>
+            <menu_item_check label="Show Comparison" layout="topleft" name="compare_shown">
+                <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_shown" />
+                <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_shown" />
+                <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_shown" />
+            </menu_item_check>
+            <menu_item_call label="Take Change Back" layout="topleft" name="compare_take_back">
+                <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_take_back" />
+                <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_take_back" />
+            </menu_item_call>
             <menu_item_check label="Compare Inline" layout="topleft" name="compare_inline">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_inline" />
                 <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_inline" />
                 <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_inline" />
             </menu_item_check>
+            <menu
+             label="Comparison"
+             layout="topleft"
+             mouse_opaque="false"
+             name="comparison_view_menu"
+             tear_off="false"
+             width="260">
+                <menu_item_call label="Settle with Theirs" layout="topleft" name="compare_settle_theirs">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_settle_theirs" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_settle_theirs" />
+                </menu_item_call>
+                <menu_item_call label="Settle with Mine" layout="topleft" name="compare_settle_mine">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_settle_mine" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_settle_mine" />
+                </menu_item_call>
+                <menu_item_call label="Settle with Both" layout="topleft" name="compare_settle_both">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_settle_both" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_settle_both" />
+                </menu_item_call>
+                <menu_item_separator layout="topleft" />
+                <menu_item_check label="Fold Unchanged Lines" layout="topleft" name="compare_fold">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_fold" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_fold" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_fold" />
+                </menu_item_check>
+                <menu_item_check label="Swap Sides" layout="topleft" name="compare_swap">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_swap" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_swap" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_swap" />
+                </menu_item_check>
+                <menu_item_call label="Older Save" layout="topleft" name="compare_older">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_older" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_older" />
+                </menu_item_call>
+                <menu_item_call label="Newer Save" layout="topleft" name="compare_newer">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_newer" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_newer" />
+                </menu_item_call>
+                <menu_item_separator layout="topleft" />
+                <menu_item_check label="Histogram" layout="topleft" name="compare_histogram">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_histogram" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_histogram" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_histogram" />
+                </menu_item_check>
+                <menu_item_check label="Patience" layout="topleft" name="compare_patience">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_patience" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_patience" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_patience" />
+                </menu_item_check>
+                <menu_item_check label="Fewest Changes" layout="topleft" name="compare_minimal">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_minimal" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_minimal" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_minimal" />
+                </menu_item_check>
+                <menu_item_check label="By Structure" layout="topleft" name="compare_structural">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_structural" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_structural" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_structural" />
+                </menu_item_check>
+                <menu_item_separator layout="topleft" />
+                <menu_item_call label="Copy This Change" layout="topleft" name="compare_copy_change">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_copy_change" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_copy_change" />
+                </menu_item_call>
+                <menu_item_call label="Copy as Unified Diff" layout="topleft" name="compare_copy_diff">
+                    <menu_item_call.on_click function="ScriptStudio.Menu" parameter="compare_copy_diff" />
+                    <menu_item_call.on_enable function="ScriptStudio.Enable" parameter="compare_copy_diff" />
+                </menu_item_call>
+                <menu_item_separator layout="topleft" />
+                <menu_item_check label="Ignore Whitespace" layout="topleft" name="compare_ignore_whitespace">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_ignore_whitespace" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_ignore_whitespace" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_ignore_whitespace" />
+                </menu_item_check>
+                <menu_item_check label="Ignore Whitespace at Line Ends" layout="topleft" name="compare_ignore_trailing">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_ignore_trailing" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_ignore_trailing" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_ignore_trailing" />
+                </menu_item_check>
+                <menu_item_check label="Ignore Blank Lines" layout="topleft" name="compare_ignore_blank_lines">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_ignore_blank_lines" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_ignore_blank_lines" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_ignore_blank_lines" />
+                </menu_item_check>
+                <menu_item_check label="Ignore Comments" layout="topleft" name="compare_ignore_comments">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="compare_ignore_comments" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="compare_ignore_comments" />
+                    <menu_item_check.on_enable function="ScriptStudio.Enable" parameter="compare_ignore_comments" />
+                </menu_item_check>
+            </menu>
             <menu_item_separator layout="topleft" />
             <menu_item_check label="Word Wrap" layout="topleft" name="word_wrap">
                 <menu_item_check.on_check function="ScriptStudio.Check" parameter="word_wrap" />
@@ -1504,6 +1835,10 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                 <menu_item_call label="Add Include Folder..." layout="topleft" name="preproc_folder">
                     <menu_item_call.on_click function="ScriptStudio.Menu" parameter="preproc_folder" />
                 </menu_item_call>
+                <menu_item_check label="Mark Where Lines Came From" layout="topleft" name="preproc_line_comments">
+                    <menu_item_check.on_check function="ScriptStudio.Check" parameter="preproc_line_comments" />
+                    <menu_item_check.on_click function="ScriptStudio.Menu" parameter="preproc_line_comments" />
+                </menu_item_check>
                 <menu_item_separator layout="topleft" />
                 <menu
                  label="Firestorm"
@@ -1944,6 +2279,15 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                          height="22"
                          layout="topleft"
                          name="notice_third"
+                         right="-30"
+                         top="3"
+                         visible="false"
+                         width="86" />
+                        <button
+                         follows="right|top"
+                         height="22"
+                         layout="topleft"
+                         name="notice_fourth"
                          right="-30"
                          top="3"
                          visible="false"
@@ -2505,8 +2849,54 @@ A notecard dropped on the vimrc box in Script Studio Preferences (Editor tab) is
                                         <pane_list.columns label="Line" name="line" width="84" />
                                     </pane_list>
                                 </layout_panel>
+                                <layout_panel
+                                 auto_resize="true"
+                                 height="144"
+                                 layout="topleft"
+                                 min_dim="140"
+                                 name="weights_strings_panel"
+                                 user_resize="true"
+                                 width="300">
+                                    <pane_list
+                                     draw_heading="true"
+                                     heading_height="18"
+                                     follows="all"
+                                     height="120"
+                                     layout="topleft"
+                                     left="0"
+                                     name="weights_strings"
+                                     tool_tip="Each string the compiled script keeps once, its bytes and how many instructions use it. Rows in italics are starts several strings share, which could be kept once. Double-click to go there."
+                                     top="0"
+                                     width="300">
+                                        <pane_list.columns dynamic_width="true" label="String" name="string" />
+                                        <pane_list.columns halign="right" label="Bytes" name="bytes" width="50" />
+                                        <pane_list.columns halign="right" label="Uses" name="uses" width="40" />
+                                        <pane_list.columns halign="right" label="Since save" name="change" width="64" />
+                                        <pane_list.columns label="Line" name="line" width="60" />
+                                    </pane_list>
+                                    <button
+                                     enabled="false"
+                                     follows="left|bottom"
+                                     height="20"
+                                     label="Keep start once"
+                                     layout="topleft"
+                                     left="2"
+                                     name="weights_keep_start"
+                                     tool_tip="Write the chosen shared start once in the script, in a local of its own, and join it back onto each of its strings. SLua only; one step to undo."
+                                     top_pad="2"
+                                     width="130" />
+                                </layout_panel>
                             </layout_stack>
                         </panel>
+                        <panel
+                         class="script_studio_link"
+                         filename="panel_script_studio_link.xml"
+                         follows="all"
+                         height="168"
+                         label="Link to Files"
+                         layout="topleft"
+                         name="link_tab"
+                         width="574" />
                     </tab_container>
                 </layout_panel>
             </layout_stack>
