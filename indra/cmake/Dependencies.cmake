@@ -91,7 +91,7 @@ al_import(ll::recast       PACKAGE recastnavigation CONFIG TARGETS RecastNavigat
 al_import(ll::re2          PACKAGE re2             CONFIG TARGETS re2::re2)
 al_import(ll::simdjson     PACKAGE simdjson        CONFIG TARGETS simdjson::simdjson)
 al_import(ll::simdutf      PACKAGE simdutf                TARGETS simdutf::simdutf)
-al_import(ll::slua         PACKAGE unofficial-slua CONFIG TARGETS unofficial::slua::Luau.Analysis unofficial::slua::Luau.Compiler)
+al_import(ll::slua         PACKAGE unofficial-slua CONFIG TARGETS unofficial::slua::Luau.Analysis unofficial::slua::Luau.Compiler unofficial::slua::Luau.Require unofficial::slua::Luau.VM)
 al_import(ll::tailslide    PACKAGE unofficial-tailslide CONFIG TARGETS unofficial::tailslide::libtailslide)
 al_import(ll::tinyexr      PACKAGE tinyexr         CONFIG TARGETS unofficial::tinyexr::tinyexr)
 al_import(ll::vorbis       PACKAGE Vorbis          CONFIG TARGETS Vorbis::vorbisfile Vorbis::vorbisenc Vorbis::vorbis)
@@ -111,7 +111,6 @@ al_import(ll::fontconfig   PACKAGE Fontconfig                 TARGETS Fontconfig
 al_import(ll::faudio       PACKAGE FAudio              CONFIG TARGETS FAudio::FAudio DEFINES LL_FAUDIO=1     WHEN AL_USE_FAUDIO)
 al_import(ll::openal       PACKAGE OpenAL              CONFIG TARGETS OpenAL::OpenAL DEFINES LL_OPENAL=1     WHEN AL_USE_OPENAL)
 al_import(ll::openxr       PACKAGE OpenXR              CONFIG TARGETS OpenXR::headers OpenXR::openxr_loader WHEN AL_USE_OPENXR)
-al_import(ll::velopack     PACKAGE unofficial-velopack CONFIG TARGETS unofficial::velopack::velopack DEFINES LL_VELOPACK=1 WHEN AL_USE_VELOPACK)
 al_import(ll::nsspellchecker LINK "-framework AppKit" "-framework Foundation"                       WHEN AL_USE_NSSPELLCHECKER)
 al_import(ll::winspellcheck  LINK ole32                                                            WHEN AL_USE_WINSPELLCHECK)
 # gersemi: on
