@@ -492,7 +492,8 @@ namespace
     constexpr F64 LEVEL_DZ = 0.3;
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
-    constexpr F64 FLAT_FACE_DEG = 8.0;      ///< a steep unstepped flight's faces all lie this close to its plane
+    constexpr F64 FLAT_FACE_DEG = 10.0;     ///< a steep unstepped flight's faces lie this close to its plane
+    constexpr F64 FLAT_FACE_SHARE = 0.9;    ///< over this share of its area, so a few stray facets do not fail it
     constexpr F64 STAIR_LIKE_WIDTH_M = 1.5; ///< a wedge this narrow, decked at both ends and a storey high, is a stair however steep
     constexpr F64 STAIR_LIKE_RISE_MIN_M = 1.2;
     constexpr F64 STAIR_LIKE_RISE_MAX_M = 2.5;
@@ -588,7 +589,7 @@ namespace
         return true;
     }
 
-    /// Whether every triangle faces within FLAT_FACE_DEG of the area-weighted mean.
+    /// Whether FLAT_FACE_SHARE of the area faces within FLAT_FACE_DEG of the area-weighted mean.
     bool flatFace(const Partitioner& P, const std::vector<S32>& tris)
     {
         V3 m;
@@ -602,9 +603,13 @@ namespace
             return false;
         }
         const F64 cos_flat = std::cos(FLAT_FACE_DEG * DEG_TO_RAD);
-        return std::all_of(tris.begin(), tris.end(), [&](S32 t) {
-            return P.mArea[t] < 1e-4 || (P.mN[t].x * m.x + P.mN[t].y * m.y + P.mN[t].z * m.z) / l >= cos_flat;
-        });
+        F64 flat = 0, all = 0;
+        for (const S32 t : tris)
+        {
+            all += P.mArea[t];
+            flat += (P.mN[t].x * m.x + P.mN[t].y * m.y + P.mN[t].z * m.z) / l >= cos_flat ? P.mArea[t] : 0.0;
+        }
+        return flat >= FLAT_FACE_SHARE * all;
     }
 
     /// For a chain of level treads: the plan direction height rises along, fitted over the treads' centroids.
