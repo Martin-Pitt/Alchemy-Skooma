@@ -481,7 +481,7 @@ namespace
     constexpr F64 TURN_DEG = 30.0;          ///< joined slopes whose runs differ more are two flights
     constexpr F64 JOIN_DZ = 0.5;
     constexpr F64 JOIN_SLOPE_DEG = 20.0;    ///< slope groups steeper or gentler than each other by more are two flights
-    constexpr F64 MIN_WIDTH_M = 0.9;        ///< narrower is a rail or a wall top
+    constexpr F64 MIN_WIDTH_M = 0.8;        ///< narrower is a rail or a wall top; a ship's stair is 0.88 m
     constexpr F64 MIN_AREA_M2 = 1.5;        ///< without a name, smaller is a prop
     constexpr F64 MAX_AREA_UNCUED_M2 = 100.0;   ///< and bigger is a roof or a hillside
     constexpr F64 MAX_RUN_M = 12.0;

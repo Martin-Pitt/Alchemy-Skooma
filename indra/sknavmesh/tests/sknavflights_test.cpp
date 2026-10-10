@@ -1042,14 +1042,14 @@ namespace tut
         s.box(1.45f, -4, 0, 6, 4, 1.68f);
         for (const F32 y : { -3.f, 2.f })
         {
-            s.quad(LLVector3(0, y, 0), LLVector3(1.45f, y, 1.68f), LLVector3(1.45f, y + 1.f, 1.68f), LLVector3(0, y + 1.f, 0));
+            s.quad(LLVector3(0, y, 0), LLVector3(1.45f, y, 1.68f), LLVector3(1.45f, y + 0.88f, 1.68f), LLVector3(0, y + 0.88f, 0));
         }
         s.quad(LLVector3(-0.5f, -3.f, 0.01f), LLVector3(1.44f, -3.f, 0.44f), LLVector3(1.44f, 3.f, 0.44f), LLVector3(-0.5f, 3.f, 0.01f));
         const SlopePartition p = s.partition();
         ensure_equals("flights", p.mFlights.size(), 2u);
         for (const Flight& f : p.mFlights)
         {
-            ensure(llformat("as wide as a wedge: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 1.f) < 0.15f);
+            ensure(llformat("as wide as a wedge: %.2f", (f.mBottomB - f.mBottomA).length()), std::fabs((f.mBottomB - f.mBottomA).length() - 0.88f) < 0.1f);
             ensure(llformat("up the wedge: rise %.2f run %.2f", f.mRise, f.mRun), std::fabs(f.mRise - 1.68f) < 0.1f && std::fabs(f.mRun - 1.45f) < 0.2f);
         }
     }
