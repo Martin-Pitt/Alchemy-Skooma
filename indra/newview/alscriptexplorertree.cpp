@@ -33,6 +33,7 @@
 #include "llfolderviewitem.h"
 #include "llfolderviewmodel.h"
 #include "lltextbox.h"
+#include "lltooltip.h"
 #include "lluicolortable.h"
 #include "lluictrlfactory.h"
 
@@ -64,6 +65,7 @@ public:
         mName   = row.name;
         mLabel  = look.label;
         mSuffix = look.suffix;
+        mTip    = look.tip;
         mKnown  = row.known;
         if (look.icon != mIconName)
         {
@@ -83,6 +85,7 @@ public:
     bool               folder() const { return mFolder; }
     bool               known() const { return mKnown; }
     const std::string& suffix() const { return mSuffix; }
+    const std::string& tip() const { return mTip; }
     S32                mOrder = 0;
     // How the rows last said it was, open or folded: the folder is opened
     // or folded again only where that changed, leaving what a person did
@@ -161,6 +164,7 @@ private:
     std::string           mName;
     std::string           mLabel;
     std::string           mSuffix;
+    std::string           mTip;
     std::string           mIconName;
     LLPointer<LLUIImage>  mIcon;
     std::string           mOverlayName;
@@ -327,6 +331,22 @@ bool ALScriptExplorerTree::handleRightMouseDown(S32 x, S32 y, MASK mask)
     return true;
 }
 
+bool ALScriptExplorerTree::handleToolTip(S32 x, S32 y, MASK mask)
+{
+    // Asked before the rows are: each row's own widget would say its name.
+    const LLFolderViewItem* hit  = mFolderView ? itemAt(x, y) : nullptr;
+    const Node*             node = hit ? static_cast<const Node*>(hit->getViewModelItem()) : nullptr;
+    if (!node || node->tip().empty())
+    {
+        return LLPanel::handleToolTip(x, y, mask);
+    }
+    LLRect sticky;
+    hit->localRectToScreen(LLRect(0, hit->getRect().getHeight(), hit->getRect().getWidth(), hit->getRect().getHeight() - hit->getItemHeight()),
+                           &sticky);
+    LLToolTipMgr::instance().show(LLToolTip::Params().message(node->tip()).sticky_rect(sticky).delay_time(getTooltipTimeout()));
+    return true;
+}
+
 void ALScriptExplorerTree::showMenuAtChoice()
 {
     S32 x = 8;
@@ -346,7 +366,7 @@ LLFolderViewItem* ALScriptExplorerTree::itemAt(S32 x, S32 y) const
     localPointToOtherView(x, y, &lx, &ly, mFolderView);
     for (LLView* view = mFolderView->childFromPoint(lx, ly, true); view && view != mFolderView; view = view->getParent())
     {
-        if (LLFolderViewItem* item = dynamic_cast<LLFolderViewItem*>(view))
+        if (LLFolderViewItem* item = view->as<LLFolderViewItem>())
         {
             // A folder's own row, not the room its open children take.
             S32 ix = 0, iy = 0;
