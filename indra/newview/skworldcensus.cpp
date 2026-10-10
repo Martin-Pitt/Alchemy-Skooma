@@ -1196,7 +1196,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     {
         if (leaves.count(p.mPart) || mLeaves.count(p.mPart))
         {
-            observeLeaf(mLeaves[p.mPart], p, gFrameTimeSeconds);
+            observeLeaf(mLeaves[p.mPart], p, static_cast<F32>(gFrameTimeSeconds.value()));
         }
     }
     snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);
