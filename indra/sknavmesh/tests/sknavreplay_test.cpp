@@ -615,6 +615,7 @@ namespace tut
                     }
                     fd << "]}\n";
                 }
+            }
             if (options.mFaceTraceEvery > 0)
             {
                 std::ofstream trace(dir + "face-trace.json", std::ios::binary);
