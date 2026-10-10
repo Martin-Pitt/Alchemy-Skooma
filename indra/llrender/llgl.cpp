@@ -62,6 +62,10 @@
 #include "lldxhardware.h"
 #endif
 
+#if LL_LINUX
+#include <sys/utsname.h>
+#endif
+
 #ifdef _DEBUG
 //#define GL_STATE_VERIFY
 #endif
@@ -1551,6 +1555,169 @@ void LLGLManager::initEGL()
 #endif
 }
 
+#if LL_LINUX
+namespace
+{
+    // radeonsi and r600 put the kernel's DRM interface version and release in GL_RENDERER:
+    // "(radeonsi, navi31, ACO, DRM 3.64, 7.2.4-200.fc44.x86_64)", in older Mesa
+    // "(POLARIS10, DRM 3.42.0, 5.15.0-58-generic, LLVM 13.0.1)", and r600
+    // "(DRM 2.50.0 / 6.1.0-13-amd64, LLVM 15.0.6)". Both move with the kernel, not the driver.
+    std::string strip_kernel_from_renderer(std::string renderer)
+    {
+        // With what joins it on, so that a release like "6.1.0" is not found in "LLVM 16.1.0".
+        struct utsname uts;
+        const std::string release = uname(&uts) == 0 ? uts.release : "";
+        for (const std::string separator : { ", ", " / " })
+        {
+            if (size_t pos = renderer.find(separator + release); !release.empty() && pos != std::string::npos)
+            {
+                renderer.erase(pos, separator.size() + release.size());
+                break;
+            }
+        }
+
+        if (size_t pos = renderer.find("DRM "); pos != std::string::npos
+            && pos + 4 < renderer.size() && isdigit((unsigned char)renderer[pos + 4]))
+        {
+            size_t end = pos + 4;
+            while (end < renderer.size() && (isdigit((unsigned char)renderer[end]) || renderer[end] == '.'))
+            {
+                ++end;
+            }
+            if (pos >= 2 && renderer.compare(pos - 2, 2, ", ") == 0)
+            {
+                pos -= 2;   // "navi31, DRM 3.64"
+            }
+            else if (renderer.compare(end, 2, ", ") == 0)
+            {
+                end += 2;   // "(DRM 2.50.0, LLVM"
+            }
+            renderer.erase(pos, end - pos);
+        }
+        return renderer;
+    }
+
+    // Whole names only: EGL_EXT_device_drm is a prefix of EGL_EXT_device_drm_render_node.
+    bool has_egl_extension(const char* extensions, const std::string& name)
+    {
+        return (" " + ll_safe_string(extensions) + " ").find(" " + name + " ") != std::string::npos;
+    }
+
+    // The DRM node of the EGL device behind the current display, e.g. /dev/dri/renderD128,
+    // through EGL_EXT_device_query. Empty when the EGL cannot say, and for a software device,
+    // which has none.
+    std::string egl_device_drm_node()
+    {
+        EGLDisplay display = (EGLDisplay)SDL_EGL_GetCurrentDisplay();
+        PFNEGLQUERYSTRINGPROC query_string = (PFNEGLQUERYSTRINGPROC)SDL_EGL_GetProcAddress("eglQueryString");
+        if (!display || !query_string)
+        {
+            return {};
+        }
+
+        // Client extensions, so asked of no display.
+        const char* client_extensions = query_string(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+        if (!has_egl_extension(client_extensions, "EGL_EXT_device_query")
+            && !has_egl_extension(client_extensions, "EGL_EXT_device_base"))
+        {
+            return {};
+        }
+
+        PFNEGLQUERYDISPLAYATTRIBEXTPROC query_display_attrib =
+            (PFNEGLQUERYDISPLAYATTRIBEXTPROC)SDL_EGL_GetProcAddress("eglQueryDisplayAttribEXT");
+        PFNEGLQUERYDEVICESTRINGEXTPROC query_device_string =
+            (PFNEGLQUERYDEVICESTRINGEXTPROC)SDL_EGL_GetProcAddress("eglQueryDeviceStringEXT");
+        EGLAttrib device = 0;
+        if (!query_display_attrib || !query_device_string
+            || !query_display_attrib(display, EGL_DEVICE_EXT, &device) || !device)
+        {
+            return {};
+        }
+
+        const char* device_extensions = query_device_string((EGLDeviceEXT)device, EGL_EXTENSIONS);
+        const char* node = nullptr;
+        if (has_egl_extension(device_extensions, "EGL_EXT_device_drm_render_node"))
+        {
+            node = query_device_string((EGLDeviceEXT)device, EGL_DRM_RENDER_NODE_FILE_EXT);
+        }
+        if (!node && has_egl_extension(device_extensions, "EGL_EXT_device_drm"))
+        {
+            node = query_device_string((EGLDeviceEXT)device, EGL_DRM_DEVICE_FILE_EXT);
+        }
+        return ll_safe_string(node);
+    }
+
+    // The sysfs directory of the device GL draws with: the one EGL names, else the first
+    // render node of GL's vendor. Empty when neither finds one.
+    std::string drm_device_sysfs_dir(const std::string& vendor_short)
+    {
+        const std::string node = egl_device_drm_node();
+        if (!node.empty())
+        {
+            // /dev/dri/renderD128 -> /sys/class/drm/renderD128/device
+            return "/sys/class/drm/" + node.substr(node.rfind('/') + 1) + "/device";
+        }
+
+        const char* vendor_id = vendor_short == "AMD"    ? "0x1002"
+                              : vendor_short == "INTEL"  ? "0x8086"
+                              : vendor_short == "NVIDIA" ? "0x10de"
+                              : nullptr;
+        // Render nodes are numbered from 128.
+        for (S32 minor = 128; vendor_id && minor < 192; ++minor)
+        {
+            const std::string dir = "/sys/class/drm/renderD" + std::to_string(minor) + "/device";
+            llifstream file(dir + "/vendor");
+            std::string id;
+            if (file >> id && id == vendor_id)
+            {
+                return dir;
+            }
+        }
+        return {};
+    }
+
+    // A size sysfs gives in bytes, in MB. 0 when the attribute is missing.
+    U32 read_sysfs_mb(const std::string& path)
+    {
+        llifstream file(path);
+        U64 bytes = 0;
+        file >> bytes;
+        return (U32)(bytes >> 20);
+    }
+
+    // VRAM for a GPU GL has no real figure for. amdgpu publishes its memory in sysfs. Memory
+    // a GPU shares with the system -- Intel's, a software renderer's -- is a quarter of RAM,
+    // which is what LLDXHardware allows Intel on Windows.
+    U32 fallback_vram_mb(const std::string& vendor_short, bool shares_system_memory, std::string& source)
+    {
+        const U32 ram_share_mb = U32Megabytes(gSysMemory.getPhysicalMemoryKB()).value() / 4;
+
+        const std::string device_dir = drm_device_sysfs_dir(vendor_short);
+        const U32 vram_mb = device_dir.empty() ? 0 : read_sysfs_mb(device_dir + "/mem_info_vram_total");
+        if (vram_mb >= 1024)
+        {
+            // A card's own memory, or a carve-out big enough to stand for it.
+            source = "amdgpu VRAM";
+            return vram_mb;
+        }
+        if (vram_mb > 0)
+        {
+            // An APU: its VRAM is the BIOS carve-out, and the rest it draws from system memory
+            // through the GTT. The carve-out is not counted in system memory, so it comes on
+            // top of the quarter, which the GTT's size bounds.
+            source = "amdgpu carve-out and GTT";
+            return vram_mb + llmin(read_sysfs_mb(device_dir + "/mem_info_gtt_total"), ram_share_mb);
+        }
+        if (shares_system_memory)
+        {
+            source = "system memory";
+            return ram_share_mb;
+        }
+        return 0;
+    }
+}
+#endif
+
 
 // return false if unable (or unwilling due to old drivers) to init GL
 bool LLGLManager::initGL()
@@ -1645,6 +1812,14 @@ bool LLGLManager::initGL()
 
     mGLVersion = mDriverVersionMajor + mDriverVersionMinor * .1f;
 
+    {
+        std::string renderer = ll_safe_string((const char *)glGetString(GL_RENDERER));
+#if LL_LINUX
+        renderer = strip_kernel_from_renderer(renderer);
+#endif
+        mGLIdentity = ll_safe_string((const char *)glGetString(GL_VENDOR)) + " " + renderer + " " + mGLVersionString;
+    }
+
     // Every Mesa driver stamps "Mesa" into the GL_VERSION string
     // (e.g. "4.6 (Core Profile) Mesa 26.1.4"), regardless of the underlying
     // hardware backend. Detect it here so driver-specific workarounds can key
@@ -1654,6 +1829,25 @@ bool LLGLManager::initGL()
         LLStringUtil::toUpper(ver_upper);
         mIsMesa = ver_upper.find("MESA") != std::string::npos;
     }
+    mIsD3D12 = mIsMesa && mGLRenderer.rfind("D3D12", 0) == 0;
+
+#if LL_LINUX
+    // When the hardware driver does not load -- NVIDIA's without its EGL platform library,
+    // a missing Mesa driver, a VM or container without the GPU -- Mesa draws on the CPU
+    // instead, offering GL 4.6 and every extension the viewer asks for, so nothing else
+    // would tell. GL_RENDERER names what actually draws, and keeps the name when zink runs
+    // over lavapipe or virgl over a host's llvmpipe.
+    mIsSoftwareRenderer = false;
+    for (const char* software : { "LLVMPIPE", "SOFTPIPE", "SWRAST", "SOFTWARE RASTERIZER",
+                                  "MICROSOFT BASIC RENDER DRIVER" })
+    {
+        mIsSoftwareRenderer = mIsSoftwareRenderer || mGLRenderer.find(software) != std::string::npos;
+    }
+    if (mIsSoftwareRenderer)
+    {
+        LL_WARNS("RenderInit") << "GL renderer " << mGLRenderer << " draws on the CPU" << LL_ENDL;
+    }
+#endif
 
     if (mGLVersion >= 2.f)
     {
@@ -1772,6 +1966,22 @@ bool LLGLManager::initGL()
 
             mVRAM = meminfo[0] / 1024;
             LL_INFOS("RenderInit") << "VRAM Detected (ATIMemInfo):" << mVRAM << LL_ENDL;
+        }
+    }
+#endif
+
+#if LL_LINUX
+    // Neither extension counts memory a GPU shares with the system: Intel's and a software
+    // renderer's report none, an APU's only its BIOS carve-out, often 512 MB -- so an AMD
+    // figure under 1 GB is checked too. Windows asks DXGI instead.
+    if (mVRAM < 256 || (mIsAMD && mVRAM < 1024))
+    {
+        std::string source;
+        const U32 fallback_mb = fallback_vram_mb(mGLVendorShort, mIsIntel || mIsSoftwareRenderer, source);
+        if (fallback_mb > mVRAM)
+        {
+            mVRAM = fallback_mb;
+            LL_INFOS("RenderInit") << "VRAM Detected (" << source << "):" << mVRAM << LL_ENDL;
         }
     }
 #endif
@@ -1983,7 +2193,9 @@ void LLGLManager::initExtensions()
     // OpenGL 4.x capabilities
     mHasCubeMapArray = mGLVersion >= 3.99f;
     mHasTransformFeedback = mGLVersion >= 3.99f;
-    mHasDebugOutput = mGLVersion >= 4.29f;
+    // Core in 4.3; also GL_KHR_debug, which names the same entry points without a suffix.
+    // Downgraded below if glDebugMessageCallback doesn't resolve.
+    mHasDebugOutput = mGLVersion >= 4.29f || mGLExtensions.contains("GL_KHR_debug");
     mHasAnisotropic = mGLVersion >= 4.59f;
     if(!mHasAnisotropic)
     {
@@ -2076,6 +2288,28 @@ void LLGLManager::initExtensions()
                                << ", no GL_ARB_texture_storage); using mutable textures." << LL_ENDL;
     }
 
+    // Immutable buffer storage. Resolved here for the same reason as glTexStorage above: the
+    // GL_VERSION_4_4 ladder early-outs on a lower context, so a 4.1 driver exposing
+    // GL_ARB_buffer_storage -- GLOn12 -- would otherwise leave glBufferStorage null, and every
+    // persistently mapped uniform ring falls back to orphaning without it.
+    if (mGLVersion >= 4.39f || mGLExtensions.contains("GL_ARB_buffer_storage"))
+    {
+        glBufferStorage = (PFNGLBUFFERSTORAGEPROC)LL_GET_PROC_ADDRESS("glBufferStorage");
+
+        if (!glBufferStorage)
+        {
+            LL_WARNS("RenderInit") << "Buffer storage advertised (GL " << mGLVersion
+                                   << ") but glBufferStorage did not resolve; uniform rings will orphan."
+                                   << LL_ENDL;
+        }
+        else
+        {
+            LL_INFOS("RenderInit") << "Buffer storage available (GL " << mGLVersion
+                                   << (mGLVersion >= 4.39f ? ", core)" : ", GL_ARB_buffer_storage)")
+                                   << LL_ENDL;
+        }
+    }
+
     // Direct state access. Resolved here for the same reason as glTexStorage above: the
     // GL_VERSION_4_5 ladder early-outs on a lower context, so a 4.1/4.4 driver exposing
     // GL_ARB_direct_state_access would otherwise leave these null. Only the entry points
@@ -2085,7 +2319,23 @@ void LLGLManager::initExtensions()
         glBindTextureUnit = (PFNGLBINDTEXTUREUNITPROC)LL_GET_PROC_ADDRESS("glBindTextureUnit");
         glCreateSamplers  = (PFNGLCREATESAMPLERSPROC)LL_GET_PROC_ADDRESS("glCreateSamplers");
 
-        if (!glBindTextureUnit || !glCreateSamplers)
+        // The named-buffer calls ALUniformBuffer makes. glNamedBufferStorage exists only
+        // alongside buffer storage, so without it the pointer stays null and that class keeps
+        // to the bind-target path.
+        glCreateBuffers               = (PFNGLCREATEBUFFERSPROC)LL_GET_PROC_ADDRESS("glCreateBuffers");
+        glNamedBufferData             = (PFNGLNAMEDBUFFERDATAPROC)LL_GET_PROC_ADDRESS("glNamedBufferData");
+        glNamedBufferSubData          = (PFNGLNAMEDBUFFERSUBDATAPROC)LL_GET_PROC_ADDRESS("glNamedBufferSubData");
+        glMapNamedBufferRange         = (PFNGLMAPNAMEDBUFFERRANGEPROC)LL_GET_PROC_ADDRESS("glMapNamedBufferRange");
+        glUnmapNamedBuffer            = (PFNGLUNMAPNAMEDBUFFERPROC)LL_GET_PROC_ADDRESS("glUnmapNamedBuffer");
+        glFlushMappedNamedBufferRange = (PFNGLFLUSHMAPPEDNAMEDBUFFERRANGEPROC)LL_GET_PROC_ADDRESS("glFlushMappedNamedBufferRange");
+        if (glBufferStorage)
+        {
+            glNamedBufferStorage = (PFNGLNAMEDBUFFERSTORAGEPROC)LL_GET_PROC_ADDRESS("glNamedBufferStorage");
+        }
+
+        if (!glBindTextureUnit || !glCreateSamplers || !glCreateBuffers || !glNamedBufferData ||
+            !glNamedBufferSubData || !glMapNamedBufferRange || !glUnmapNamedBuffer ||
+            !glFlushMappedNamedBufferRange)
         {
             mHasDirectStateAccess = false;
             LL_WARNS("RenderInit") << "Direct state access advertised (GL " << mGLVersion
@@ -2130,6 +2380,44 @@ void LLGLManager::initExtensions()
     {
         LL_INFOS("RenderInit") << "Clip control unavailable (GL " << mGLVersion
                                << ", no GL_ARB_clip_control); reverse-Z depth disabled." << LL_ENDL;
+    }
+
+    // Debug output and object labels. Resolved here for the same reason as glTexStorage
+    // above: the GL_VERSION_4_3 ladder early-outs on a lower context, so a 4.1 driver
+    // exposing GL_KHR_debug -- GLOn12 -- would otherwise leave these null.
+    if (mHasDebugOutput)
+    {
+        glDebugMessageControl  = (PFNGLDEBUGMESSAGECONTROLPROC)LL_GET_PROC_ADDRESS("glDebugMessageControl");
+        glDebugMessageInsert   = (PFNGLDEBUGMESSAGEINSERTPROC)LL_GET_PROC_ADDRESS("glDebugMessageInsert");
+        glDebugMessageCallback = (PFNGLDEBUGMESSAGECALLBACKPROC)LL_GET_PROC_ADDRESS("glDebugMessageCallback");
+        glGetDebugMessageLog   = (PFNGLGETDEBUGMESSAGELOGPROC)LL_GET_PROC_ADDRESS("glGetDebugMessageLog");
+        glPushDebugGroup       = (PFNGLPUSHDEBUGGROUPPROC)LL_GET_PROC_ADDRESS("glPushDebugGroup");
+        glPopDebugGroup        = (PFNGLPOPDEBUGGROUPPROC)LL_GET_PROC_ADDRESS("glPopDebugGroup");
+        glObjectLabel          = (PFNGLOBJECTLABELPROC)LL_GET_PROC_ADDRESS("glObjectLabel");
+        glGetObjectLabel       = (PFNGLGETOBJECTLABELPROC)LL_GET_PROC_ADDRESS("glGetObjectLabel");
+        glObjectPtrLabel       = (PFNGLOBJECTPTRLABELPROC)LL_GET_PROC_ADDRESS("glObjectPtrLabel");
+        glGetObjectPtrLabel    = (PFNGLGETOBJECTPTRLABELPROC)LL_GET_PROC_ADDRESS("glGetObjectPtrLabel");
+
+        if (!glDebugMessageCallback)
+        {
+            mHasDebugOutput = false;
+            LL_WARNS("RenderInit") << "Debug output advertised (GL " << mGLVersion
+                                   << ") but glDebugMessageCallback did not resolve; GL debug output is off."
+                                   << LL_ENDL;
+        }
+    }
+
+    // Reset status. Core in 4.5, and GL_KHR_robustness names it without a suffix on a lower
+    // context, so it is resolved here for the GL_VERSION_4_5 ladder's early-out as above.
+    // GL_ARB_robustness alone names it glGetGraphicsResetStatusARB, which the window layer
+    // looks up itself.
+    if (mGLVersion >= 4.49f || mGLExtensions.contains("GL_KHR_robustness"))
+    {
+        glGetGraphicsResetStatus = (PFNGLGETGRAPHICSRESETSTATUSPROC)LL_GET_PROC_ADDRESS("glGetGraphicsResetStatus");
+        glReadnPixels            = (PFNGLREADNPIXELSPROC)LL_GET_PROC_ADDRESS("glReadnPixels");
+        glGetnUniformfv          = (PFNGLGETNUNIFORMFVPROC)LL_GET_PROC_ADDRESS("glGetnUniformfv");
+        glGetnUniformiv          = (PFNGLGETNUNIFORMIVPROC)LL_GET_PROC_ADDRESS("glGetnUniformiv");
+        glGetnUniformuiv         = (PFNGLGETNUNIFORMUIVPROC)LL_GET_PROC_ADDRESS("glGetnUniformuiv");
     }
 
     // GL_EXT_memory_object
@@ -3484,49 +3772,6 @@ void LLGLDepthTest::checkState()
     }
 }
 
-LLGLSquashToFarClip::LLGLSquashToFarClip()
-{
-    setProjectionMatrix(gGL.getProjectionMatrix(), 0);
-}
-
-LLGLSquashToFarClip::LLGLSquashToFarClip(const LLMatrix4a& P, U32 layer)
-{
-    setProjectionMatrix(P, layer);
-}
-
-void LLGLSquashToFarClip::setProjectionMatrix(LLMatrix4a projection, U32 layer)
-{
-    // Replacing row 2 with row 3 * depth forces ndc z = depth for every vertex regardless
-    // of projection, so only the far-plane constant mirrors under reverse-Z (far = 0).
-    // Under ZERO_TO_ONE ndc==window, so mirror the forward WINDOW depth (0.999995 - 5e-5*layer,
-    // i.e. ndc*0.5+0.5), not the raw ndc distance -- matching the sundisc/moon pins.
-    F32 depth = LLRender::sReverseZ ? (0.000005f + 0.00005f * layer)
-                                    : (0.99999f - 0.0001f * layer);
-
-    // the depth column is the w column scaled: clip z = depth * clip w
-    LLVector4a squashed = projection.getColumn<3>();
-    squashed.mul(depth);
-    projection.setColumn<2>(squashed);
-
-    LLRender::eMatrixMode last_matrix_mode = gGL.getMatrixMode();
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.loadMatrix(projection);
-
-    gGL.matrixMode(last_matrix_mode);
-}
-
-LLGLSquashToFarClip::~LLGLSquashToFarClip()
-{
-    LLRender::eMatrixMode last_matrix_mode = gGL.getMatrixMode();
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.popMatrix();
-
-    gGL.matrixMode(last_matrix_mode);
-}
-
 
 
 LLGLSyncFence::LLGLSyncFence()
@@ -3573,30 +3818,6 @@ void LLGLSyncFence::wait()
         { //track the number of times we've waited here
         }
     }
-}
-
-LLGLSPipelineSkyBox::LLGLSPipelineSkyBox()
-: mCullFace(GL_CULL_FACE)
-, mSquashClip()
-{
-}
-
-LLGLSPipelineSkyBox::~LLGLSPipelineSkyBox()
-{
-}
-
-LLGLSPipelineDepthTestSkyBox::LLGLSPipelineDepthTestSkyBox(bool depth_test, bool depth_write)
-: LLGLSPipelineSkyBox()
-, mDepth(depth_test ? GL_TRUE : GL_FALSE, depth_write ? GL_TRUE : GL_FALSE, GL_LEQUAL)
-{
-
-}
-
-LLGLSPipelineBlendSkyBox::LLGLSPipelineBlendSkyBox(bool depth_test, bool depth_write)
-: LLGLSPipelineDepthTestSkyBox(depth_test, depth_write)
-, mBlend(GL_BLEND)
-{
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
 }
 
 #if LL_WINDOWS

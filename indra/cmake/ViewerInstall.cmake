@@ -9,7 +9,8 @@
 #   Windows  <prefix>/AlchemyX.exe, data trees beside it, llplugin/ for the
 #            media plugins and the CEF and VLC payloads.
 #   Linux    <prefix>/bin/alchemy-bin, bin/llplugin/, lib/ for the shared
-#            libraries, data trees at the root, the wrapper and etc/ scripts.
+#            libraries, data trees at the root, the launcher and etc/
+#            scripts, and share/ with the desktop entry and its icons.
 #   macOS    <prefix>/<Channel>.app with data in Contents/Resources, shared
 #            libraries in Contents/Frameworks, and the media plugins as
 #            bundles in Contents/Resources carrying their own Frameworks.
@@ -50,6 +51,33 @@ endif()
 string(REPLACE "." "_" al_package_version "${VIEWER_SHORT_VERSION}.${VIEWER_VERSION_REVISION}")
 set(AL_PACKAGE_NAME "Alchemy${al_package_suffix}_${al_package_version}_${ARCH}")
 
+# The Linux desktop's names, one set to a channel so channels install side by
+# side. The application ID names the desktop entry, its icon and its AppStream
+# data, and is the Wayland app ID and X11 class the viewer's window carries,
+# which is how the shell matches the window to the entry. The package name is
+# what the viewer installs as and under. The release channel's are
+# org.alchemyviewer.viewer and alchemy-viewer, another channel's
+# org.alchemyviewer.viewer.<words> and alchemy-<words>, its variant's words.
+string(TOLOWER "${al_package_suffix}" al_linux_words)
+string(REGEX REPLACE "[^a-z0-9]+" "_" al_linux_words "${al_linux_words}")
+string(REGEX REPLACE "^_+|_+$" "" al_linux_words "${al_linux_words}")
+set(AL_APP_ID "org.alchemyviewer.viewer")
+if(AL_CHANNEL_TYPE STREQUAL "release")
+  set(AL_LINUX_PACKAGE "alchemy-viewer")
+else()
+  set(AL_LINUX_PACKAGE "alchemy")
+endif()
+if(al_linux_words)
+  # An element of the ID must not begin with a digit.
+  if(al_linux_words MATCHES "^[0-9]")
+    string(APPEND AL_APP_ID "._${al_linux_words}")
+  else()
+    string(APPEND AL_APP_ID ".${al_linux_words}")
+  endif()
+  string(REPLACE "_" "-" al_linux_words "${al_linux_words}")
+  string(APPEND AL_LINUX_PACKAGE "-${al_linux_words}")
+endif()
+
 # ---------------------------------------------------------------------------
 # Layout, relative to the prefix.
 
@@ -60,6 +88,9 @@ if(DARWIN)
   set(AL_INSTALL_LIBDIR "${AL_INSTALL_BUNDLE}/Contents/Frameworks")
   set(AL_INSTALL_PLUGINDIR "${AL_INSTALL_DATADIR}")
   set(al_ca_bundle_dir "${AL_INSTALL_DATADIR}")
+  # What ViewerCodeSign.cmake signs with, here and in the package steps.
+  set(AL_SIGN_PLUGIN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/slplugin.entitlements")
+  set(AL_SIGN_HELPER_ENTITLEMENTS "${INDRA_SOURCE_DIR}/dullahan/src/dullahan.entitlements")
 elseif(LINUX)
   set(AL_INSTALL_DATADIR ".")
   set(AL_INSTALL_BINDIR "bin")
@@ -177,41 +208,31 @@ if(AL_USE_OPENAL AND NOT WINDOWS)
   )
 endif()
 
-# The SDKs from outside vcpkg ship the library the viewer loads at run time;
-# FMOD's logging build serves the Debug configuration.
-if(AL_USE_FMODSTUDIO AND FMOD_LIBRARY_RELEASE)
-  al_install_shared_library(
-    "${FMOD_LIBRARY_RELEASE}"
-    CONFIGURATIONS
-    OptDebug
-    RelWithDebInfo
-    Release
-  )
-  al_install_shared_library("${FMOD_LIBRARY_DEBUG}" CONFIGURATIONS Debug)
+# The prebuilt SDKs from the private registry, shared libraries on every
+# platform. Each configuration takes its own: FMOD's logging build is the
+# Debug one. On Windows the viewer's runtime DLLs above already carry these,
+# to the same folder; installing them twice is harmless.
+set(al_sdk_targets)
+if(AL_USE_FMODSTUDIO)
+  list(APPEND al_sdk_targets unofficial::fmodstudio::fmod)
 endif()
 if(AL_USE_DISCORD)
-  if(WINDOWS)
-    install(
-      FILES "${DISCORD_SDK_RUNTIME_DIR}/discord_partner_sdk.dll"
-      DESTINATION "${AL_INSTALL_LIBDIR}"
-      COMPONENT viewer
-    )
-  elseif(DARWIN)
-    install(
-      FILES "${DISCORD_SDK_RUNTIME_DIR}/libdiscord_partner_sdk.dylib"
-      DESTINATION "${AL_INSTALL_LIBDIR}"
-      COMPONENT viewer
-    )
-  else()
-    file(GLOB al_discord_libraries "${DISCORD_SDK_RUNTIME_DIR}/libdiscord_partner_sdk.so*")
-    install(FILES ${al_discord_libraries} DESTINATION "${AL_INSTALL_LIBDIR}" COMPONENT viewer)
-  endif()
+  list(APPEND al_sdk_targets unofficial::discord-social-sdk::discord-social-sdk)
 endif()
+foreach(target IN LISTS al_sdk_targets)
+  install(
+    IMPORTED_RUNTIME_ARTIFACTS ${target}
+    RUNTIME DESTINATION "${AL_INSTALL_LIBDIR}" COMPONENT viewer
+    LIBRARY DESTINATION "${AL_INSTALL_LIBDIR}" COMPONENT viewer
+  )
+endforeach()
+unset(al_sdk_targets)
 
 # The crash reporter. Its out-of-process handler sits beside the executable,
 # and on Windows the WER module beside the handler, which is where the client
 # looks for it; sentry.dll itself comes with the runtime DLLs above. On macOS
-# the SDK is a framework the viewer loads from Contents/Frameworks.
+# the SDK is a framework the viewer loads from Contents/Frameworks. On Linux
+# the library is static, linked into the viewer, and only the handler ships.
 if(AL_USE_SENTRY)
   if(WINDOWS)
     install(
@@ -417,13 +438,16 @@ if(TARGET media_plugin_libvlc)
     set(vlc_frameworks_dir "${AL_INSTALL_PLUGINDIR}/media_plugin_libvlc.app/Contents/Frameworks")
     file(GLOB vlc_libraries "${al_vcpkg_dir}/lib/libvlc*.dylib*")
     install(FILES ${vlc_libraries} DESTINATION "${vlc_frameworks_dir}" COMPONENT plugins)
+    # Not plugins.dat: VLC trusts its cache only while every plugin keeps the
+    # size and time it was cached with, and signing changes both. A data file
+    # under Frameworks would also need a signature of its own, which lives in
+    # extended attributes that archives and update packages drop.
     install(
       DIRECTORY "${VLC_PLUGINS_DIR}/"
       DESTINATION "${vlc_frameworks_dir}/plugins"
       COMPONENT plugins
       FILES_MATCHING
       PATTERN "*.dylib"
-      PATTERN "plugins.dat"
     )
   endif()
 endif()
@@ -625,43 +649,97 @@ if(DARWIN)
     )
   endforeach()
 
-  # Ad-hoc, or with AL_SIGNING_IDENTITY, inside out; the hosted build signs
-  # in its own step.
-  if(NOT DEFINED ENV{GITHUB_ACTIONS})
-    install(
-      CODE
-        "set(AL_SIGN_BUNDLE \"\${CMAKE_INSTALL_PREFIX}/${AL_INSTALL_BUNDLE}\")
+  # Ad-hoc, or with AL_SIGNING_IDENTITY, inside out. The hosted build signs
+  # ad-hoc here and again with its Developer ID in the packaging job.
+  install(
+    CODE
+      "set(AL_SIGN_BUNDLE \"\${CMAKE_INSTALL_PREFIX}/${AL_INSTALL_BUNDLE}\")
 set(AL_SIGN_IDENTITY \"${AL_SIGNING_IDENTITY}\")
-set(AL_SIGN_PLUGIN_ENTITLEMENTS \"${al_newview_dir}/slplugin.entitlements\")
-set(AL_SIGN_HELPER_ENTITLEMENTS \"${INDRA_SOURCE_DIR}/dullahan/src/dullahan.entitlements\")"
-      COMPONENT viewer
-    )
-    install(SCRIPT "${CMAKE_CURRENT_LIST_DIR}/ViewerCodeSign.cmake" COMPONENT viewer)
-  endif()
+set(AL_SIGN_PLUGIN_ENTITLEMENTS \"${AL_SIGN_PLUGIN_ENTITLEMENTS}\")
+set(AL_SIGN_HELPER_ENTITLEMENTS \"${AL_SIGN_HELPER_ENTITLEMENTS}\")"
+    COMPONENT viewer
+  )
+  install(SCRIPT "${CMAKE_CURRENT_LIST_DIR}/ViewerCodeSign.cmake" COMPONENT viewer)
 endif()
 
 if(LINUX)
+  # The launcher, and the scripts a tree from the archive is installed and
+  # added to the desktop with. install.sh knows the channel's package name.
   install(
     PROGRAMS "${al_newview_dir}/linux_tools/wrapper.sh"
     RENAME alchemy
     DESTINATION .
     COMPONENT viewer
   )
-  install(PROGRAMS "${al_newview_dir}/linux_tools/install.sh" DESTINATION . COMPONENT viewer)
+  set(al_linux_dir "${CMAKE_CURRENT_BINARY_DIR}/linux")
+  configure_file(
+    "${al_newview_dir}/linux_tools/install.sh.in"
+    "${al_linux_dir}/install.sh"
+    @ONLY
+    FILE_PERMISSIONS
+      OWNER_READ
+      OWNER_WRITE
+      OWNER_EXECUTE
+      GROUP_READ
+      GROUP_EXECUTE
+      WORLD_READ
+      WORLD_EXECUTE
+  )
+  install(PROGRAMS "${al_linux_dir}/install.sh" DESTINATION . COMPONENT viewer)
   install(
     PROGRAMS
-      "${al_newview_dir}/linux_tools/handle_secondlifeprotocol.sh"
-      "${al_newview_dir}/linux_tools/register_secondlifeprotocol.sh"
-      "${al_newview_dir}/linux_tools/refresh_desktop_app_entry.sh"
+      "${al_newview_dir}/linux_tools/desktop_integration.sh"
       "${al_newview_dir}/linux_tools/chrome_sandboxing_permissions_setup.sh"
     DESTINATION etc
     COMPONENT viewer
   )
   install(DIRECTORY "${al_newview_dir}/res-sdl" DESTINATION . COMPONENT viewer)
+
+  # The desktop entry, its AppStream data and its icons, laid out under share/
+  # as they go under /usr/share. The entry runs the launcher by the package
+  # name; desktop_integration.sh points a copy of it at the tree instead.
+  string(TIMESTAMP al_release_date "%Y-%m-%d" UTC)
+  configure_file(
+    "${al_newview_dir}/linux_tools/viewer.desktop.in"
+    "${al_linux_dir}/${AL_APP_ID}.desktop"
+    @ONLY
+  )
+  configure_file(
+    "${al_newview_dir}/linux_tools/viewer.metainfo.xml.in"
+    "${al_linux_dir}/${AL_APP_ID}.metainfo.xml"
+    @ONLY
+  )
   install(
-    FILES "${BRANDING_SOURCE_DIR}/viewer/icons/${ICON_PATH}/alchemy_256.png"
-    RENAME alchemy_icon.png
-    DESTINATION .
+    FILES "${al_linux_dir}/${AL_APP_ID}.desktop"
+    DESTINATION share/applications
     COMPONENT viewer
+  )
+  install(
+    FILES "${al_linux_dir}/${AL_APP_ID}.metainfo.xml"
+    DESTINATION share/metainfo
+    COMPONENT viewer
+  )
+  foreach(
+    size
+    16
+    32
+    64
+    128
+    256
+    512
+  )
+    install(
+      FILES "${BRANDING_SOURCE_DIR}/viewer/icons/${ICON_PATH}/alchemy_${size}.png"
+      RENAME "${AL_APP_ID}.png"
+      DESTINATION "share/icons/hicolor/${size}x${size}/apps"
+      COMPONENT viewer
+    )
+  endforeach()
+
+  # The window takes the application ID, so the shell finds its entry.
+  set_property(
+    SOURCE "${al_newview_dir}/llappviewersdl.cpp"
+    APPEND
+    PROPERTY COMPILE_DEFINITIONS "AL_VIEWER_APP_ID=\"${AL_APP_ID}\""
   )
 endif()

@@ -29,9 +29,12 @@
 #include "llpreviewnotecard.h"
 
 #include "aldiffview.h"
+#include "alscriptstudio.h"
 #include "alnotecardembedded.h"
+#include "alfilewrite.h"
 #include "alrecovery.h"
 #include "alsaid.h"
+#include "alscriptdiskmasters.h"
 #include "alscriptstudiohistory.h"
 #include "alscriptworkspace.h"
 #include "alsurface.h"
@@ -400,6 +403,7 @@ void LLPreviewNotecard::loaded(const ALScriptLoaded& answer)
     mText->setMaxBytes(LLNotecard::MAX_SIZE);
     showModifiable(mModifiable);
     hideNotice();
+    showLinked();
     if (mCompare && mCompare->getVisible())
     {
         toggleCompare();
@@ -464,6 +468,10 @@ bool LLPreviewNotecard::saveIfNeeded()
     {
         return false;
     }
+    if (const std::optional<ALMasterLink> link = masterLink())
+    {
+        return saveThroughFile(*link);
+    }
     // The text with each item it still stands, numbered afresh; the
     // editor's own left as they are.
     std::string                  text;
@@ -498,6 +506,67 @@ bool LLPreviewNotecard::saveIfNeeded()
     }
     mSaving = true;
     setStatus(getString("Saving"));
+    return true;
+}
+
+std::optional<ALMasterLink> LLPreviewNotecard::masterLink() const
+{
+    // One whose file is gone is saved here as any notecard is, until the
+    // file is found again or the link let go of.
+    std::optional<ALMasterLink> link = ALScriptDiskMasters::instance().linkOf(ref());
+    if (!link || !link->notecard || link->state == ALMasterLink::State::Suspended)
+    {
+        return std::nullopt;
+    }
+    return link;
+}
+
+void LLPreviewNotecard::showLinked()
+{
+    const std::optional<ALMasterLink> link = masterLink();
+    if (!link)
+    {
+        return;
+    }
+    LLStringUtil::format_map_t args;
+    args["[FILE]"] = link->master;
+    showNotice(getString("LinkedToFile", args), { { getString("Unlink"), [this]() {
+                                                       ALScriptDiskMasters::instance().unlink(ref());
+                                                       hideNotice();
+                                                       setStatus(getString("Unlinked"));
+                                                   } } });
+}
+
+bool LLPreviewNotecard::saveThroughFile(const ALMasterLink& link)
+{
+    std::string                 text;
+    ALNotecardEmbedded::items_t items;
+    mItems->forSave(text, items);
+    LLStringUtil::format_map_t args;
+    args["[FILE]"] = gDirUtilp->getBaseFileName(link.master);
+    if (!items.empty())
+    {
+        setStatus(getString("LinkedCarries", args), true);
+        mCloseAfterSave = false;
+        return false;
+    }
+    if (!ALFileWrite::whole(link.master, text))
+    {
+        args["[REASON]"] = getString("FileNotWritten", args);
+        setStatus(getString("SaveFailed", args), true);
+        mCloseAfterSave = false;
+        return false;
+    }
+    // Saved, in the file that is what the notecard is; and sent from it,
+    // as a save of the file is sent, by whoever writes it.
+    mText->markSavedAt(mText->savePoint());
+    mKeeper.forget();
+    ALScriptDiskMasters::instance().wrote(link.master);
+    setStatus(getString("SavedToFile", args));
+    if (mCloseAfterSave)
+    {
+        closeFloater();
+    }
     return true;
 }
 
@@ -578,6 +647,7 @@ void LLPreviewNotecard::heard(const ALScriptSaved& saved)
             args["[NAME]"] = mNoteName;
             args["[WHO]"]  = getString(saved.sender.origin == ALScriptOrigin::Bridge   ? "SavedByBridge"
                                        : saved.sender.origin == ALScriptOrigin::Studio ? "SavedByStudio"
+                                       : saved.sender.origin == ALScriptOrigin::Disk   ? "SavedByFile"
                                                                                                   : "SavedByOther");
             showNotice(getString("SavedElsewhere", args), { { getString("TakeTheirs"), [this]() { takeTheirs(); } },
                                                             { getString("KeepMine"), [this]() { keepMine(); } },
@@ -630,12 +700,37 @@ void LLPreviewNotecard::toggleCompare()
         mCompare->setVisible(false);
         mCompare->setFont(mText->getFont());
         mCompare->setOnEscape([this]() { toggleCompare(); });
+        // A notecard is prose: a change of case alone may be let go of.
+        mCompare->setOffersIgnoreCase(true);
+        // Its right is the text, which is changed only there: what is
+        // typed goes on in it, where the caret was, the comparison left.
+        mCompare->setOnEdit([this](S32 line, S32 column) -> LLView* {
+            if (!mModifiable || mText->isReadOnly())
+            {
+                return nullptr;
+            }
+            toggleCompare();
+            mText->goTo(mText->document().clamp(ALTextPos(line, column)));
+            return mText;
+        });
         host->addChild(mCompare);
     }
     const bool comparing = !mCompare->getVisible() && (mSavedThere || mHistoryShown);
     if (comparing)
     {
         mCompare->setRect(mText->getRect());
+        // Its lines chosen as the studio's comparisons choose them, as the
+        // setting is now.
+        mCompare->setAlgorithm(ALScriptStudio::compareAlgorithm());
+        // A change taken back is an edit of the text, one step to undo,
+        // where the text may be changed and is still what was compared.
+        mCompare->setOnTakeBack(nullptr);
+        if (mModifiable)
+        {
+            mCompare->setOnTakeBack([this](const ALTextRange& range, const std::string& text) {
+                return mModifiable && !mText->isReadOnly() && mText->wholeText() == mCompare->rightText() && mText->replaceAll({ { range, text } });
+            });
+        }
         if (mHistoryShown)
         {
             LLStringUtil::format_map_t args;
@@ -719,10 +814,9 @@ void LLPreviewNotecard::showHistory()
 
 void LLPreviewNotecard::compareSave(ALSavedText saved)
 {
-    std::shared_ptr<ALSaveHistory> history = ALRecovery::history();
-    LLStringUtil::format_map_t     args;
+    LLStringUtil::format_map_t args;
     args["[WHEN]"] = ALRecoveryEntry::sayWhen(saved.when);
-    if (!mLoaded || mSavedThere || (!saved.whole && (!history || !history->load(saved))))
+    if (!mLoaded || mSavedThere || !ALScriptStudioHistory::read(saved))
     {
         setStatus(getString("HistoryUnreadable", args), true);
         return;
@@ -735,6 +829,41 @@ void LLPreviewNotecard::compareSave(ALSavedText saved)
     }
     mHistoryShown = std::move(saved);
     toggleCompare();
+    showHistoryNotice();
+    // The notecard's other saves to step through, each put on the left in
+    // its place, as the studio's comparison of a save has them.
+    if (mCompare && mCompare->getVisible())
+    {
+        ALScriptStudioHistory::offerVersions(
+            *mCompare, ALRecoveryStore::keyOf(mObjectUUID, mItemUUID, std::string()), mHistoryShown->path,
+            [this](ALSavedText stepped) {
+                if (!mHistoryShown || !mCompare || !mCompare->getVisible())
+                {
+                    return;
+                }
+                LLStringUtil::format_map_t when;
+                when["[WHEN]"] = ALRecoveryEntry::sayWhen(stepped.when);
+                mCompare->setLeftText(stepped.text);
+                mCompare->setTitles(getString("HistorySavedAt", when), getString("CompareMine"));
+                mHistoryShown = std::move(stepped);
+                showHistoryNotice();
+            },
+            [this](const ALSavedText& unread) {
+                LLStringUtil::format_map_t when;
+                when["[WHEN]"] = ALRecoveryEntry::sayWhen(unread.when);
+                setStatus(getString("HistoryUnreadable", when), true);
+            });
+    }
+}
+
+void LLPreviewNotecard::showHistoryNotice()
+{
+    if (!mHistoryShown)
+    {
+        return;
+    }
+    LLStringUtil::format_map_t args;
+    args["[WHEN]"] = ALRecoveryEntry::sayWhen(mHistoryShown->when);
     std::vector<NoticeButton> buttons;
     if (mModifiable)
     {
@@ -1031,6 +1160,22 @@ void LLPreviewNotecard::syncExternal()
 
 void LLPreviewNotecard::openInExternalEditor()
 {
+    // A notecard whose master is a file on disk is edited there: its saves
+    // are sent as any save of the file is, and heard here as they land.
+    std::string filename;
+    if (const std::optional<ALMasterLink> link = masterLink())
+    {
+        filename = link->master;
+    }
+    else
+    {
+        filename = writeEditorCopy();
+    }
+    runExternalEditor(filename);
+}
+
+std::string LLPreviewNotecard::writeEditorCopy()
+{
     delete mLiveFile; // deletes file
     mLiveFile = nullptr;
 
@@ -1051,7 +1196,11 @@ void LLPreviewNotecard::openInExternalEditor()
     mLiveFile = new LLLiveLSLFile(filename, boost::bind(&LLPreviewNotecard::onExternalChange, this, _1));
     mLiveFile->ignoreNextUpdate();
     mLiveFile->addToEventTimer();
+    return filename;
+}
 
+void LLPreviewNotecard::runExternalEditor(const std::string& filename)
+{
     // Open it in external editor.
     {
         LLExternalEditor             ed;
