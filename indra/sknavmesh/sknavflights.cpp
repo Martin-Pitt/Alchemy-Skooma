@@ -492,8 +492,6 @@ namespace
     constexpr F64 LEVEL_DZ = 0.3;
     constexpr F64 FLOOR_MIN_M2 = 4.0;       ///< without a name, a smaller floor at an end is a prop top
     constexpr F64 MIN_RISE_UNCUED_M = 1.0;  ///< without a name or treads, a smaller climb is a step
-    constexpr F64 MAX_GRADE_DEG = 52.0;     ///< steeper is a wall, a ladder or furniture
-    constexpr F64 MAX_RISER_M = 0.4;        ///< treads further apart than this are platforms
     constexpr F64 MAX_GOING_M = 0.6;        ///< and deeper than this, seating
     constexpr F64 MIN_RUN_M = 0.5;
     constexpr F64 BURIED_DZ = 0.1;          ///< a floor this far above a flight's slope covers it
@@ -662,7 +660,8 @@ namespace
     /// clipped to its floors' heights; the floors just past each end only say
     /// that it connects two of them.
     void buildConnectors(Partitioner& P, const std::vector<S32>& grp, const std::vector<U8>& kind, S32 ngroups, const std::vector<U8>& codes,
-                         const std::vector<U8>& cues, std::vector<Flight>& flights)
+                         const std::vector<U8>& cues, const std::vector<std::pair<S32, S32>>& level_links, F64 max_grade_deg,
+                         std::vector<Flight>& flights)
     {
         const S32 n = P.ntris();
         std::vector<std::vector<S32>> tris_of(ngroups);
@@ -801,6 +800,33 @@ namespace
             {
                 units[find(g)].push_back(g);
             }
+        }
+
+        // The deck each floor group belongs to: floor groups joined where one steps level onto the next.
+        std::vector<S32> deck(ngroups);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            deck[g] = g;
+        }
+        const auto deck_of = [&](S32 g) {
+            while (deck[g] != g)
+            {
+                g = deck[g] = deck[deck[g]];
+            }
+            return g;
+        };
+        for (const auto& [a, b] : level_links)
+        {
+            if (a >= 0 && b >= 0 && !cand[a] && !cand[b] && deck_of(a) != deck_of(b))
+            {
+                const S32 ra = deck_of(a), rb = deck_of(b);
+                deck[std::max(ra, rb)] = std::min(ra, rb);
+            }
+        }
+        std::vector<F64> deck_area(ngroups, 0.0);
+        for (S32 g = 0; g < ngroups; ++g)
+        {
+            deck_area[deck_of(g)] += area[g];
         }
 
         std::vector<S32> beyond;
@@ -1022,7 +1048,7 @@ namespace
             std::sort(gaps.begin(), gaps.end());
             const F64 riser = gaps.empty() ? 1e9 : gaps[gaps.size() / 2];
             const F64 going = (s1 - s0) / std::max<F64>(treads, 1);
-            const bool stepped = treads >= 2 && riser <= MAX_RISER_M && going <= MAX_GOING_M;
+            const bool stepped = treads >= 2 && riser <= P.mClimb && going <= MAX_GOING_M;
 
             const F64 rise = ftz - fbz;
             // clip each end to where the run reaches its floor's height
@@ -1052,13 +1078,13 @@ namespace
                 fl.mRule = ConnectorRule::GRADE;
             }
             const bool cued = fl.mRule != ConnectorRule::GRADE;
-            // A floor outside the partitioned area is ground, never a prop top.
-            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? area[f] : 1e30; };
+            // A floor outside the partitioned area is ground, never a prop top; inside, it is the whole deck.
+            const auto floor_area = [&](S32 f) { return P.mPart[tris_of[f][0]] ? deck_area[deck_of(f)] : 1e30; };
             if (cue == CUE_NONE && (floor_area(fb) < FLOOR_MIN_M2 || floor_area(ft) < FLOOR_MIN_M2))
             {
                 continue;
             }
-            if (rise < FLIGHT_MIN_RISE_M || (rise < MIN_RISE_UNCUED_M && !cued) || run < MIN_RUN_M || grade > MAX_GRADE_DEG ||
+            if (rise < FLIGHT_MIN_RISE_M || (rise < MIN_RISE_UNCUED_M && !cued) || run < MIN_RUN_M || (grade > max_grade_deg && !stepped) ||
                 width < MIN_WIDTH_M || s1 - s0 > MAX_RUN_M || (!cued && (unit_area < MIN_AREA_M2 || unit_area > MAX_AREA_UNCUED_M2)) ||
                 (sloped.empty() && treads >= 2 && !stepped && cue == CUE_NONE))
             {
@@ -1096,7 +1122,7 @@ namespace
 namespace sknav
 {
     SlopePartition partitionSlopes(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
-                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, S32 max_codes,
+                                   const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes,
                                    const std::vector<U8>& cues)
     {
         SlopePartition out;
@@ -1162,7 +1188,7 @@ namespace sknav
 
         // risers: the probe again, across the boundaries of the final groups
         std::vector<std::vector<Riser>> risers(ngroups);
-        std::vector<std::pair<S32, S32>> touching;
+        std::vector<std::pair<S32, S32>> touching, level_links;
         P.boundaries(g_of, edges);
         for (const Boundary& e : edges)
         {
@@ -1173,6 +1199,10 @@ namespace sknav
                 continue;
             }
             touching.emplace_back(grp[e.mTri], grp[u]);
+            if (std::fabs(dz) <= LEVEL_DZ)
+            {
+                level_links.emplace_back(grp[e.mTri], grp[u]);
+            }
             if (std::fabs(dz) >= SEAM_DZ)
             {
                 // Seen from both sides: a stair of overlapping prims has each
@@ -1387,7 +1417,7 @@ namespace sknav
         }
 
         // 4. connectors: slope and tread groups that step off onto a floor at each end
-        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, out.mFlights);
+        buildConnectors(P, grp, kind, ngroups, out.mCodes, cues, level_links, walk_slope_deg, out.mFlights);
         return out;
     }
 

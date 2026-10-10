@@ -752,7 +752,7 @@ namespace tut
                     const auto it = std::lower_bound(in.mRootCues.begin(), in.mRootCues.end(), std::make_pair(roots[i], U8(0)));
                     cues[i] = it != in.mRootCues.end() && it->first == roots[i] ? it->second : static_cast<U8>(CUE_NONE);
                 }
-                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, 63, cues);
+                const SlopePartition p = partitionSlopes(verts, idx, areas, two, AREA_OBJECT, in.mParams[0].mClimb, in.mParams[0].mSlope, 63, cues);
                 out << "tile " << key.mX << ' ' << key.mY << ' ' << in.mMeshOrigin.mdV[VX] << ' ' << in.mMeshOrigin.mdV[VY] << ' '
                     << in.mMeshOrigin.mdV[VZ] << ' ' << in.mTileX * in.mTileSize << ' ' << in.mTileY * in.mTileSize << ' ' << in.mTileSize << '\n';
                 for (size_t i = 0; i < areas.size(); ++i)

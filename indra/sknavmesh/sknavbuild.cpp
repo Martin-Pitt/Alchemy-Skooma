@@ -1833,7 +1833,7 @@ namespace sknav
                     {
                         sl[v] = fromRecast(&part.mVerts[v * 3]);
                     }
-                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, PARTITION_MAX_CODES, part.mCues);
+                    slopes = partitionSlopes(sl, part.mTris, walkable, part.mTwoSided, AREA_OBJECT, ap.mClimb, ap.mSlope, PARTITION_MAX_CODES, part.mCues);
                     shiftFlightCodes(slopes);
                     // Back onto the raster's triangles, the left-out ones coded by area alone.
                     main_codes.assign(main_soup->ntris(), 0);
