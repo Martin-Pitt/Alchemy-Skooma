@@ -28,6 +28,7 @@
 
 #include "alpanelist.h"
 
+#include "allinebreaks.h"
 #include "alwatchedfile.h"
 #include "alxmldocument.h"
 #include "alxmllayermerge.h"
@@ -2100,16 +2101,8 @@ LLSD ALFloaterXUIStudio::row(const LLSD& id, std::initializer_list<std::pair<con
     S32 i = 0;
     for (const auto& [column, value] : cells)
     {
-        std::string oneLine = value;
-        for (char& c : oneLine)
-        {
-            if (c == '\n' || c == '\r' || c == '\t')
-            {
-                c = ' ';
-            }
-        }
         r["columns"][i]["column"] = column;
-        r["columns"][i]["value"] = oneLine;
+        r["columns"][i]["value"] = ALLineBreaks::oneLine(value);
         ++i;
     }
     return r;
@@ -3133,7 +3126,7 @@ bool ALFloaterXUIStudio::onChannelChanged(const std::string& channel, const LLSD
         mChannels->addElement(row(id, {
             { "channel", channel },
             { "name", note->getName() },
-            { "time", LLDate(LLTimer::getTotalSeconds()).toHTTPDateString("%H:%M:%S") },
+            { "time", LLDate::now().toHTTPDateString("%H:%M:%S") },
             { "message", message } }));
         // A session's worth of notifications through ten channels is not a
         // list anybody reads to the bottom of, and the pointers held for
@@ -4089,6 +4082,7 @@ void ALFloaterXUIStudio::documentRead(const std::string& status)
     fillHistory();
     setStatus(status);
     mRereadPending = true;
+    mRereadAt.reset();
     mRereadAt.setTimerExpirySec(REREAD_SECONDS);
 }
 

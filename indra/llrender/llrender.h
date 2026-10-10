@@ -383,6 +383,12 @@ public:
 
     ALTextureSlot* getTextureSlot(U32 index);
 
+    // Drop these texture names, about to be deleted in this context, from every slot's
+    // bind cache. Deleting a bound texture returns that binding to 0, and GL may hand the
+    // name out again; a slot still caching it would take the new texture for bound already
+    // and skip the bind.
+    void forgetTextures(S32 count, const U32* names);
+
     U32 getCurrentTexUnitIndex(void) const { return mCurrTextureUnitIndex; }
 
     // Resolve a sampler object belonging to THIS context. See ALSamplerCache -- the cache
@@ -553,6 +559,9 @@ LLMatrix4a al_reverse_z_transform(const LLMatrix4a& forward_proj);
 // Perspective / ortho that emit reversed-ZO when sReverseZ, else the plain forward
 // matrix: LLMatrix4a::perspective / ortho with the convention applied.
 LLMatrix4a al_perspective(F32 fovy_rad, F32 aspect, F32 z_near, F32 z_far);
+// z_far may be +infinity, which under reverse-Z gives the infinite projection (stored depth = near /
+// distance, nothing clipped far). True for such a matrix, pick or zoom applied or not.
+bool al_projection_is_infinite(const LLMatrix4a& proj);
 LLMatrix4a al_ortho(F32 left, F32 right, F32 bottom, F32 top, F32 z_near, F32 z_far);
 // project / unproject honoring the active convention: the zero-to-one forms under
 // reverse-Z, since the projection already outputs [0,1] window z. The results carry
