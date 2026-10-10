@@ -210,7 +210,8 @@ static std::string rewrite_release_feed(const std::string& json_str)
 static std::string download_url_raw(const std::string& url)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
-    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("VelopackSource", httpPolicy);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>(
+        "VelopackSource", httpPolicy, LLCoreHttpUtil::HttpCoroutineAdapter::Destination::Outside);
     auto httpRequest = std::make_shared<LLCore::HttpRequest>();
     auto httpOpts = std::make_shared<LLCore::HttpOptions>();
     httpOpts->setFollowRedirects(true);
@@ -231,7 +232,8 @@ static std::string download_url_raw(const std::string& url)
 static bool download_url_to_file(const std::string& url, const std::string& local_path)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
-    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("VelopackDownload", httpPolicy);
+    auto httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>(
+        "VelopackDownload", httpPolicy, LLCoreHttpUtil::HttpCoroutineAdapter::Destination::Outside);
     auto httpRequest = std::make_shared<LLCore::HttpRequest>();
     auto httpOpts = std::make_shared<LLCore::HttpOptions>();
     httpOpts->setFollowRedirects(true);
@@ -756,7 +758,7 @@ void clear_nsis_links(const std::string& nsis_folder_path)
     }
 
     // 3. Taskbar links, which are user-specific and located at:
-    // %AppData%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\
+    // %AppData%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar
     // Note that it can be a link to velopack already or to a different NSIS viewer.
     // Name might also be different based on method of creation.
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, path)))
@@ -1095,7 +1097,17 @@ static void on_log_message(void* user_data, const char* level, const char* messa
     LL_INFOS("Velopack") << "[" << level << "] " << message << LL_ENDL;
 }
 
-#endif // LL_WINDOWS / LL_DARWIN
+#elif LL_LINUX
+
+// Linux has no install hooks: the AppImage is the installation, and its
+// launcher adds it to the desktop (linux_tools/desktop_integration.sh).
+
+static void on_log_message(void* user_data, const char* level, const char* message)
+{
+    LL_INFOS("Velopack") << "[" << level << "] " << message << LL_ENDL;
+}
+
+#endif // LL_WINDOWS / LL_DARWIN / LL_LINUX
 
 //
 // Common progress callback
@@ -1248,6 +1260,10 @@ static void ensure_update_manager(bool allow_downgrade)
 
     // Windows: Velopack auto-detection works because the viewer is installed
     // by Velopack's Setup.exe which creates the proper install structure.
+    // Linux: it works from the AppImage, whose usr/bin holds the updater and
+    // the manifest and whose path is $APPIMAGE. A tree from the archive or a
+    // system package is not Velopack's, and finds no update manager: the
+    // package manager updates it.
     if (!vpkc_new_update_manager_with_source(sUpdateSource, &options, nullptr, &sUpdateManager))
     {
         char err[512];
@@ -1278,6 +1294,32 @@ bool velopack_initialize()
 
     vpkc_app_run(nullptr);
     return true;
+}
+
+// Whether this viewer can update itself: the Windows installation, the
+// bundle on macOS -- vpk's, or an older one through the explicit locator
+// ensure_update_manager falls back to -- and the AppImage on Linux. A tree
+// from the archive or a system package is not Velopack's, and its package
+// manager updates it. Asked of a manager made for the purpose and freed: its
+// source is never read, and the one the update check makes is left to it.
+bool velopack_is_installed()
+{
+#if LL_DARWIN
+    return true;
+#else
+    static const bool installed = []()
+    {
+        vpkc_update_options_t options = {};
+        vpkc_update_manager_t* manager = nullptr;
+        if (!vpkc_new_update_manager(".", &options, nullptr, &manager))
+        {
+            return false;
+        }
+        vpkc_free_update_manager(manager);
+        return true;
+    }();
+    return installed;
+#endif
 }
 
 // Downloads the update that was found during the check phase.
@@ -1510,7 +1552,8 @@ std::string velopack_get_current_version()
     size_t len = vpkc_get_current_version(sUpdateManager, version, sizeof(version));
     if (len > 0)
     {
-        return std::string(version, len);
+        // The length returned is the whole version's, which may not have fit.
+        return std::string(version, std::min(len, sizeof(version) - 1));
     }
     return "";
 }
