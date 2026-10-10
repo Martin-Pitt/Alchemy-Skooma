@@ -68,7 +68,7 @@ namespace sknav
         ConnectorKind mKind = ConnectorKind::STAIR;
         ConnectorRule mRule = ConnectorRule::GRADE;
         U8 mTreads = 0;                     ///< tread groups among its groups
-        bool mEroded = false;               ///< erosion left it no poly in its home tile; it still links its floors
+        bool mEroded = false;               ///< no poly in its home tile, eroded or merged away; it still links its floors
         std::vector<U8> mCodes;             ///< the area codes its groups rasterise as
         std::vector<U16> mPolys;            ///< the tile's polys the flight produced
     };

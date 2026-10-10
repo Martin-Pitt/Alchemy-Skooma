@@ -2317,8 +2317,8 @@ namespace sknav
             for (size_t f = 0; f < flights.size(); ++f)
             {
                 standing[f] = flightSurvives(*mem.chf, cfg.borderSize, flights[f], ap.mClimb);
-                // A flight erosion took whole still joins its floors, kept by the tile it sits in.
-                flights[f].mEroded = !standing[f] && flightHome(*mem.chf, cfg.borderSize, flights[f]);
+                // The tile a flight sits in keeps it even if no poly comes of it, so it still joins its floors.
+                flights[f].mEroded = flightHome(*mem.chf, cfg.borderSize, flights[f]);
             }
             AirGrid fine;
             if (input.mAir)
