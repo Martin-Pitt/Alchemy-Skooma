@@ -404,6 +404,21 @@ void LLReflectionMapManager::update()
     LLReflectionMap* oldestProbe = nullptr;
     LLReflectionMap* oldestOccluded = nullptr;
 
+    // <SK:Nexii> render/probe-shot
+    if (mProbeShotPending)
+    {
+        mProbeShotPending = false;
+        const std::string dir = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "probe_shots");
+        LLFile::mkdir(dir);
+        const std::string stem = gDirUtilp->add(dir, LLDate::now().toHTTPDateString("%Y%m%d_%H%M%S"));
+        takeProbeShot(stem + "_local", false);
+        takeProbeShot(stem + "_default", true);
+        LLSD args;
+        args["MESSAGE"] = "Probe shots saved to " + stem + "_*";
+        LLNotificationsUtil::add("SystemMessageTip", args);
+    }
+    // </SK:Nexii>
+
     // Occlusion state only means anything for as long as the queries that produce it keep
     // running, and they stop whenever LLPipeline::sUseOcclusion drops out of its "query"
     // level -- the UseOcclusion setting, a feature-table veto, or simply turning on wireframe.
