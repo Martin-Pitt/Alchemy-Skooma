@@ -41,6 +41,7 @@ namespace sknav
     constexpr F32 WALL_LOW_PLANE_M = 0.4375f;
     constexpr F32 WALL_HIGH_PLANE_M = 1.4375f;
     constexpr F32 WALL_RUN_STRIDE_M = 0.125f;   ///< samples along a boundary edge at most this far apart
+    constexpr F32 WALL_THICK_M = 2.f;           ///< a solid still solid this far past its near face is thick, not a wall with a far side
 
     /// What a run shows: solid at the high plane, else at the low plane, else nothing.
     enum class WallClass : U8 { NONE, HATCHED, SOLID };
@@ -57,6 +58,9 @@ namespace sknav
         F32 mTopMin = 0.f;          ///< least and greatest top of the solid over the floor along the run, metres; 0 for none
         F32 mTopMax = 0.f;
         F32 mFace = -1.f;           ///< mean distance from the line to the solid's true face, metres; < 0 when no face was met
+        F32 mFar = -1.f;            ///< mean distance from the line to the solid's far face, where air comes back at its plane; < 0 when none was met
+        F32 mDepth = -1.f;          ///< mean distance from the near face to the far one; < 0 when no sample had both
+        bool mThick = false;        ///< most samples found the solid still solid WALL_THICK_M past where it was met
         F32 mFloorZ = 0.f;          ///< mean floor height the run is measured from, mesh-local
         std::vector<U16> mPolys;    ///< the tile's floor polys it bounds, by index, ascending
         U32 mSpace = 0;             ///< the floor's space id, 0 for none

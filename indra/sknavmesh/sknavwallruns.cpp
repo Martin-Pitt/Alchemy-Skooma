@@ -91,7 +91,9 @@ namespace sknav
             WallClass mClass = WallClass::NONE;
             F32 mTop = 0.f;
             F32 mFace = -1.f;
+            F32 mFar = -1.f;
             F32 mFloor = 0.f;
+            bool mThick = false;
             U32 mAcross = 0;
         };
 
@@ -284,6 +286,30 @@ namespace sknav
                             const F32 t_face = (face - at.mV[along_x ? VX : VY]) / nc;
                             s.mFace = std::clamp(t_face, 0.f, d + step);
                         }
+                        // On through the solid to the first column with air back at the plane it was solid at.
+                        const F32 plane = floor + (high ? WALL_HIGH_PLANE_M : WALL_LOW_PLANE_M);
+                        F32 last = d;
+                        bool ended = false;
+                        for (F32 d2 = d + step; d2 <= d + WALL_THICK_M + 1e-4f; d2 += step)
+                        {
+                            const LLVector3 q2 = at + n * d2;
+                            if (!air.column(q2.mV[VX], q2.mV[VY], gaps))
+                            {
+                                ended = true;   // off the tiles: unknown
+                                break;
+                            }
+                            if (airAt(gaps, plane))
+                            {
+                                const LLVector3 ql = at + n * last;
+                                const F32 back = air.faceAt(ql.mV[VX], ql.mV[VY], dir ^ 1);
+                                const F32 t_far = std::isnan(back) ? (last + d2) * 0.5f : (back - at.mV[along_x ? VX : VY]) / nc;
+                                s.mFar = std::clamp(t_far, std::max(s.mFace, 0.f), d2);
+                                ended = true;
+                                break;
+                            }
+                            last = d2;
+                        }
+                        s.mThick = !ended;
                         break;
                     }
                     // Beyond: past the solid, or past the floor's own edge, the first gap at the reading heights.
@@ -338,8 +364,8 @@ namespace sknav
         std::vector<size_t> chain;
         auto emit = [&](const std::vector<size_t>& ch) {
             WallRun run;
-            F64 face_sum = 0.0, floor_sum = 0.0;
-            U32 face_n = 0, n = 0;
+            F64 face_sum = 0.0, floor_sum = 0.0, far_sum = 0.0, depth_sum = 0.0;
+            U32 face_n = 0, n = 0, far_n = 0, depth_n = 0, thick_n = 0;
             std::map<U32, U32> across_n;
             auto close = [&]() {
                 if (run.mLine.size() >= 2)
@@ -355,6 +381,9 @@ namespace sknav
                         }
                     }
                     run.mFace = face_n ? static_cast<F32>(face_sum / face_n) : -1.f;
+                    run.mFar = far_n ? static_cast<F32>(far_sum / far_n) : -1.f;
+                    run.mDepth = depth_n ? static_cast<F32>(depth_sum / depth_n) : -1.f;
+                    run.mThick = thick_n > far_n;
                     run.mFloorZ = n ? static_cast<F32>(floor_sum / n) : 0.f;
                     std::sort(run.mPolys.begin(), run.mPolys.end());
                     run.mPolys.erase(std::unique(run.mPolys.begin(), run.mPolys.end()), run.mPolys.end());
@@ -371,8 +400,8 @@ namespace sknav
                     }
                 }
                 run = WallRun();
-                face_sum = floor_sum = 0.0;
-                face_n = n = 0;
+                face_sum = floor_sum = far_sum = depth_sum = 0.0;
+                face_n = n = far_n = depth_n = thick_n = 0;
                 across_n.clear();
             };
             const size_t first_run = out.size();
@@ -422,6 +451,17 @@ namespace sknav
                         face_sum += s.mFace;
                         ++face_n;
                     }
+                    if (s.mFar >= 0.f)
+                    {
+                        far_sum += s.mFar;
+                        ++far_n;
+                        if (s.mFace >= 0.f)
+                        {
+                            depth_sum += s.mFar - s.mFace;
+                            ++depth_n;
+                        }
+                    }
+                    thick_n += s.mThick ? 1 : 0;
                     floor_sum += s.mFloor;
                     ++across_n[s.mAcross];
                     ++n;
@@ -447,7 +487,11 @@ namespace sknav
                     tail.mLine.insert(tail.mLine.end(), head.mLine.begin() + 1, head.mLine.end());
                     tail.mTopMin = std::min(tail.mTopMin, head.mTopMin);
                     tail.mTopMax = std::max(tail.mTopMax, head.mTopMax);
-                    tail.mFace = head.mFace < 0.f ? tail.mFace : tail.mFace < 0.f ? head.mFace : (tail.mFace * nt + head.mFace * nh) / (nt + nh);
+                    const auto blend = [nh, nt](F32 t, F32 h) { return h < 0.f ? t : t < 0.f ? h : (t * nt + h * nh) / (nt + nh); };
+                    tail.mFace = blend(tail.mFace, head.mFace);
+                    tail.mFar = blend(tail.mFar, head.mFar);
+                    tail.mDepth = blend(tail.mDepth, head.mDepth);
+                    tail.mThick = nh > nt ? head.mThick : tail.mThick;
                     tail.mFloorZ = (tail.mFloorZ * nt + head.mFloorZ * nh) / (nt + nh);
                     tail.mPolys.insert(tail.mPolys.end(), head.mPolys.begin(), head.mPolys.end());
                     std::sort(tail.mPolys.begin(), tail.mPolys.end());
