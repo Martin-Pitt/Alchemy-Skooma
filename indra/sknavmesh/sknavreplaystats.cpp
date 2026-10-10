@@ -85,13 +85,14 @@ namespace
         {
             return NO_GAP;
         }
-        const AirLeaf& l = air.mLeaves[leaf];
-        for (U32 k = 0; k < l.mGapCount; ++k)
+        AirColumn column;
+        airColumn(air, leaf, column);
+        for (U32 k = 0; k < column.mCount; ++k)
         {
-            const AirGap& g = air.mGaps[l.mFirstGap + k];
-            if (top >= static_cast<S32>(g.mFloor) - 1 - slack && top < static_cast<S32>(g.mCeiling))
+            const AirGap& g = air.mGaps[column.mGap[k]];
+            if (top >= column.floorAt(air, k, ix, iy) - 1 - slack && top < static_cast<S32>(g.mCeiling))
             {
-                return l.mFirstGap + k;
+                return column.mGap[k];
             }
         }
         return NO_GAP;
@@ -121,10 +122,11 @@ namespace
             const AirGap* next = nullptr;
             if (leaf >= 0)
             {
-                const AirLeaf& l = air.mLeaves[leaf];
-                for (U32 g = 0; g < l.mGapCount && !next; ++g)
+                AirColumn column;
+                airColumn(air, leaf, column);
+                for (U32 g = 0; g < column.mCount && !next; ++g)
                 {
-                    next = airAdjacent(*gap, air.mGaps[l.mFirstGap + g], climb, overlap) ? &air.mGaps[l.mFirstGap + g] : nullptr;
+                    next = airAdjacent(*gap, air.mGaps[column.mGap[g]], climb, overlap) ? &air.mGaps[column.mGap[g]] : nullptr;
                 }
             }
             if (!next)
@@ -151,11 +153,12 @@ namespace
                 {
                     continue;
                 }
-                const AirLeaf& l = air.mLeaves[leaf];
+                AirColumn column;
+                airColumn(air, leaf, column);
                 U8 found = 0;
-                for (U32 g = 0; g < l.mGapCount; ++g)
+                for (U32 g = 0; g < column.mCount; ++g)
                 {
-                    const AirGap& gap = air.mGaps[l.mFirstGap + g];
+                    const AirGap& gap = air.mGaps[column.mGap[g]];
                     if (static_cast<S32>(gap.mCeiling) - static_cast<S32>(gap.mFloor) < overlap)
                     {
                         continue;
@@ -738,6 +741,13 @@ namespace sknav
                     << ",\"flood_spans\":" << g.mFloodSpans << ",\"unspaced_spans\":" << g.mUnspacedSpans << ",\"impure_polys\":" << g.mImpurePolys
                     << ",\"portal_edges\":" << g.mPortalEdges.size() << ",\"poly_overflow\":" << (r.mPolyOverflow ? 1 : 0)
                     << ",\"stand_only\":" << st.mFlightStandOnly.size() << ",\"polys_only\":" << st.mFlightPolysOnly.size();
+                const FaceOffsetStats& fo = st.mFaceOffsets;
+                out << ",\"face_ms\":" << fo.mMs << ",\"face_sides\":" << fo.mSides << ",\"face_measured\":" << fo.mMeasured
+                    << ",\"face_entries\":" << fo.mEntries << ",\"face_bytes\":" << (air ? air->mFaceOffsets.capacity() * sizeof(FaceOffset) : 0)
+                    << ",\"edge_walls\":" << st.mEdgeAlign.mWallEdges
+                    << ",\"edge_oblique\":" << st.mEdgeAlign.mOblique << ",\"edge_moved\":" << st.mEdgeAlign.mMovedEdges
+                    << ",\"edge_moved_verts\":" << st.mEdgeAlign.mMovedVerts << ",\"edge_dropped\":" << st.mEdgeAlign.mDropped << ",\"edge_err_before\":" << st.mEdgeAlign.mErrBefore
+                    << ",\"edge_err_after\":" << st.mEdgeAlign.mErrAfter << ",\"face_true_sum\":" << fo.mTrueSum << ",\"face_residual_sum\":" << fo.mResidualSum;
                 out << '}';
             }
         }

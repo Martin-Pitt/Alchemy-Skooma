@@ -523,18 +523,38 @@ namespace
     void trianglesNear(const Partitioner& P, F64 px, F64 py, std::vector<S32>& out)
     {
         out.clear();
-        const S32 cx0 = static_cast<S32>(std::floor((px - NEAR_XY - P.mGx0) / P.mGcell));
-        const S32 cx1 = static_cast<S32>(std::floor((px + NEAR_XY - P.mGx0) / P.mGcell));
-        const S32 cy0 = static_cast<S32>(std::floor((py - NEAR_XY - P.mGy0) / P.mGcell));
-        const S32 cy1 = static_cast<S32>(std::floor((py + NEAR_XY - P.mGy0) / P.mGcell));
+        if (!std::isfinite(px) || !std::isfinite(py))
+        {
+            return;
+        }
+        // Clamp before the cast: a point far off the grid would otherwise wrap and cover all of it.
+        const auto cell = [](F64 v, S32 n) { return static_cast<S32>(std::clamp(std::floor(v), -1.0, static_cast<F64>(n))); };
+        const S32 cx0 = cell((px - NEAR_XY - P.mGx0) / P.mGcell, P.mGw);
+        const S32 cx1 = cell((px + NEAR_XY - P.mGx0) / P.mGcell, P.mGw);
+        const S32 cy0 = cell((py - NEAR_XY - P.mGy0) / P.mGcell, P.mGh);
+        const S32 cy1 = cell((py + NEAR_XY - P.mGy0) / P.mGcell, P.mGh);
+        // A triangle spans several cells; a per-triangle stamp dedups in linear time and keeps grid order.
+        thread_local std::vector<U32> seen;
+        thread_local U32 stamp = 0;
+        if (seen.size() < P.mArea.size())
+        {
+            seen.assign(P.mArea.size(), 0);
+            stamp = 0;
+        }
+        if (++stamp == 0)
+        {
+            std::fill(seen.begin(), seen.end(), 0);
+            stamp = 1;
+        }
         for (S32 cy = std::max(cy0, 0); cy <= std::min(cy1, P.mGh - 1); ++cy)
         {
             for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
             {
                 for (const S32 t : P.mGrid[static_cast<size_t>(cy) * P.mGw + cx])
                 {
-                    if (std::find(out.begin(), out.end(), t) == out.end())
+                    if (seen[t] != stamp)
                     {
+                        seen[t] = stamp;
                         out.push_back(t);
                     }
                 }
@@ -924,6 +944,7 @@ namespace
                     const F64 x = (s + sign * PAST_M) * ux + l * px, y = (s + sign * PAST_M) * uy + l * py;
                     const F64 x2 = (s + sign * (PAST_M + BEYOND_M)) * ux + l * px, y2 = (s + sign * (PAST_M + BEYOND_M)) * uy + l * py;
                     trianglesNear(P, x, y, nearby);
+                    trianglesNear(P, x2, y2, beyond);
                     // each sample counts the one floor nearest the end's height
                     S32 pick = -1;
                     F64 pick_z = 0;
@@ -940,7 +961,6 @@ namespace
                         {
                             continue;
                         }
-                        trianglesNear(P, x2, y2, beyond);
                         const bool carries = std::any_of(beyond.begin(), beyond.end(), [&](S32 j) {
                             F64 zj = 0;
                             return grp[j] >= 0 && !cand[grp[j]] && nearZ(P, j, x2, y2, zj) && std::fabs(zj - zi) <= LEVEL_DZ;
@@ -1383,6 +1403,69 @@ namespace sknav
             }
         }
         flights.erase(std::remove_if(flights.begin(), flights.end(), [](const Flight& f) { return f.mPolys.empty(); }), flights.end());
+    }
+
+    void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
+                        const LLVector2& hi)
+    {
+        const auto on_edge = [&](const LLVector3& v) {
+            return v.mV[VX] - lo.mV[VX] < 0.05f || hi.mV[VX] - v.mV[VX] < 0.05f || v.mV[VY] - lo.mV[VY] < 0.05f || hi.mV[VY] - v.mV[VY] < 0.05f;
+        };
+        for (Flight& f : flights)
+        {
+            LLVector2 u(f.mTop.mV[VX] - f.mBottom.mV[VX], f.mTop.mV[VY] - f.mBottom.mV[VY]);
+            const F32 run = u.normVec();
+            if (run < 1e-3f || f.mPolys.empty())
+            {
+                continue;
+            }
+            const LLVector2 p(-u.mV[VY], u.mV[VX]), base(f.mBottom.mV[VX], f.mBottom.mV[VY]);
+            F32 k0 = 1e30f, k1 = -1e30f, s0 = 1e30f, s1 = -1e30f;
+            bool cut0 = false, cut1 = false;
+            for (const U16 i : f.mPolys)
+            {
+                for (const LLVector3& v : polys[i])
+                {
+                    const LLVector2 d(v.mV[VX] - base.mV[VX], v.mV[VY] - base.mV[VY]);
+                    if (d * p < k0)
+                    {
+                        k0 = d * p;
+                        cut0 = on_edge(v);
+                    }
+                    if (d * p > k1)
+                    {
+                        k1 = d * p;
+                        cut1 = on_edge(v);
+                    }
+                    s0 = llmin(s0, d * u);
+                    s1 = llmax(s1, d * u);
+                }
+            }
+            if (k1 < k0 || llmin(s1, run) - llmax(s0, 0.f) < 0.5f * run)
+            {
+                continue;
+            }
+            const auto lateral = [&](const LLVector3& v) { return (LLVector2(v.mV[VX], v.mV[VY]) - base) * p; };
+            // A side the tile cuts off may carry on in the next tile.
+            const F32 a0 = llmin(lateral(f.mBottomA), lateral(f.mBottomB)), b0 = llmax(lateral(f.mBottomA), lateral(f.mBottomB));
+            const F32 a = cut0 ? a0 : llmax(a0, k0 - radius);
+            const F32 b = cut1 ? b0 : llmin(b0, k1 + radius);
+            if (b - a < 2.f * radius)
+            {
+                continue;
+            }
+            // Ends keep their place along the run and their height; only their span across it narrows.
+            const auto place = [&](const LLVector3& end, F32 l) {
+                const LLVector2 at = base + u * ((LLVector2(end.mV[VX], end.mV[VY]) - base) * u) + p * l;
+                return LLVector3(at.mV[VX], at.mV[VY], end.mV[VZ]);
+            };
+            const bool flip = lateral(f.mBottomA) > lateral(f.mBottomB);
+            f.mBottomA = place(f.mBottomA, flip ? b : a);
+            f.mBottomB = place(f.mBottomB, flip ? a : b);
+            const bool flip_top = lateral(f.mTopA) > lateral(f.mTopB);
+            f.mTopA = place(f.mTopA, flip_top ? b : a);
+            f.mTopB = place(f.mTopB, flip_top ? a : b);
+        }
     }
 
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb)

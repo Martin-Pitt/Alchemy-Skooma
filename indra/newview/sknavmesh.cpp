@@ -151,6 +151,21 @@ SKNavMesh::SKNavMesh()
     : mRooms(std::make_unique<SKNavRooms>()),
       mRoomProbes(std::make_unique<SKNavRoomProbes>())
 {
+    // Every product that reads a mesh's detail air as it settles; a new one joins here.
+    mSettleGate.add("spaces", [this](const LLUUID& mesh) { return mRooms->passPending(mesh); });
+    mSettleGate.add("wind", [this](const LLUUID& mesh) { return mRooms->windPending(mesh); });
+    mSettleGate.add("stamp", [this](const LLUUID& mesh)
+    {
+        const auto it = mMeshes.find(mesh);
+        if (it == mMeshes.end()) return false;
+        for (const auto& entry : it->second->mTiles)
+        {
+            const Tile& tile = entry.second;
+            if (tile.mInFlight || tile.mStampDue || tile.mStampInFlight || tile.mSignature != tile.mBuilt) return true;
+        }
+        return false;
+    });
+    mSettleGate.add("room probes", [this](const LLUUID& mesh) { return mRoomProbes->pendingFor(mesh); }, false);
 }
 
 SKNavMesh::~SKNavMesh()
@@ -174,7 +189,7 @@ bool SKNavMesh::overlayActive()
     return gSavedSettings.getBOOL("SKNavOverlayWalls") || gSavedSettings.getBOOL("SKNavOverlayFaces") || gSavedSettings.getBOOL("SKNavOverlayRunoff")
         || gSavedSettings.getBOOL("SKNavOverlayCensus") || gSavedSettings.getBOOL("SKNavOverlayFeatures")
         || gSavedSettings.getU32("SKNavOverlayEnclosure") != 0 || gSavedSettings.getBOOL("SKNavOverlaySpaces")
-        || gSavedSettings.getBOOL("SKNavOverlayWind");
+        || gSavedSettings.getBOOL("SKNavOverlayWind") || gSavedSettings.getU32("SKNavOverlayAir") != 0;
 }
 
 bool SKNavMesh::wanted() const
@@ -203,13 +218,40 @@ bool SKNavMesh::probesDemanded()
     return room_probes && probe_level >= 3 && LLPipeline::sReflectionProbesEnabled;
 }
 
-bool SKNavMesh::inAirRadius(const Tile& tile)
+bool SKNavMesh::inAirRadius(const Tile& tile) const
 {
     static LLCachedControl<F32> radius(gSavedSettings, "SKNavAirRadius", 128.f);
     const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
     const F64 dx = llmax(tile.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - tile.mMax.mdV[VX]);
     const F64 dy = llmax(tile.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - tile.mMax.mdV[VY]);
-    return dx * dx + dy * dy <= static_cast<F64>(radius) * radius;
+    if (dx * dx + dy * dy <= static_cast<F64>(radius) * radius)
+    {
+        return true;
+    }
+    for (const auto& box : mHomeBoxes)
+    {
+        if (overlapsXY(box.first, box.second, tile.mMin, tile.mMax))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SKNavMesh::findHomeBoxes(const SKCensusSnapshotPtr& snap)
+{
+    static LLCachedControl<bool> whole(gSavedSettings, "SKNavAirWholeCluster", true);
+    mHomeBoxes.clear();
+    if (!whole || !snap)
+    {
+        return;
+    }
+    std::vector<ClusterPtr> around;
+    snap->mClusters.at(gAgent.getPositionGlobal(), around);
+    for (const ClusterPtr& c : around)
+    {
+        mHomeBoxes.emplace_back(c->mMin, c->mMax);
+    }
 }
 
 LL::WorkQueue::ptr_t SKNavMesh::workerQueue()
@@ -402,6 +444,345 @@ void SKNavMesh::evictRasters(size_t budget, F64 radius)
         auto retired = std::make_shared<std::vector<TileRasterPtr>>(std::move(dropped));
         retireOn(workerQueue(), std::move(retired));
     }
+}
+
+struct SKNavMesh::SpillJob
+{
+    struct Entry
+    {
+        TileKey mKey;
+        U64 mContentKey = 0;
+        TileAirPtr mAir;            ///< spilling: what leaves; reloading: what came back
+        TileRasterPtr mRaster;
+        TileAirPtr mCoarse;         ///< the solid tops it keeps for the sky map
+        size_t mBytes = 0;          ///< written, or read
+        F32 mMillis = 0.f;
+        bool mOk = false;
+    };
+    LLUUID mMesh;
+    U32 mGeneration = 0;
+    std::vector<Entry> mEntries;
+    size_t mPending = 0;            ///< reloads still on the workers
+    F64 mAsked = 0.0;
+};
+
+bool SKNavMesh::detailResident(const LLUUID& mesh) const
+{
+    const auto it = mMeshes.find(mesh);
+    return it == mMeshes.end() || it->second->mResidency == Mesh::Residency::RESIDENT || it->second->mResidency == Mesh::Residency::SPILLING;
+}
+
+void SKNavMesh::requestDetail(const LLUUID& mesh) const
+{
+    mDetailRequests.insert(mesh);
+}
+
+void SKNavMesh::updateResidency()
+{
+    static LLCachedControl<bool> spill(gSavedSettings, "SKNavAirSpill", true);
+    static LLCachedControl<F32> hold(gSavedSettings, "SKNavAirDetailHoldSeconds", 20.f);
+    static LLCachedControl<U32> show_air(gSavedSettings, "SKNavOverlayAir", 0);
+    static LLCachedControl<F32> overlay_range(gSavedSettings, "SKNavOverlayRange", 96.f);
+    const F64 now = LLTimer::getTotalSeconds();
+    // The air overlay draws detail: what it reaches stays in memory while it is on.
+    if (show_air && overlayActive())
+    {
+        const LLVector3d camera = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+        const F64 reach2 = static_cast<F64>(overlay_range) * overlay_range;
+        for (const auto& entry : mMeshes)
+        {
+            for (const auto& t : entry.second->mTiles)
+            {
+                const F64 dx = llmax(t.second.mMin.mdV[VX] - camera.mdV[VX], 0.0, camera.mdV[VX] - t.second.mMax.mdV[VX]);
+                const F64 dy = llmax(t.second.mMin.mdV[VY] - camera.mdV[VY], 0.0, camera.mdV[VY] - t.second.mMax.mdV[VY]);
+                if (dx * dx + dy * dy <= reach2)
+                {
+                    mDetailRequests.insert(entry.first);
+                    break;
+                }
+            }
+        }
+    }
+    for (const LLUUID& id : mDetailRequests)
+    {
+        if (const auto it = mMeshes.find(id); it != mMeshes.end())
+        {
+            it->second->mDetailWanted = now;
+        }
+    }
+    mDetailRequests.clear();
+    U32 spilled = 0;
+    for (auto& entry : mMeshes)
+    {
+        Mesh& mesh = *entry.second;
+        const bool wanted = now - mesh.mDetailWanted < hold;
+        if (mesh.mResidency == Mesh::Residency::SPILLED)
+        {
+            ++spilled;
+            // An edit, a pass, a neighbour or the overlay wants the detail: it comes back first.
+            if (!spill || wanted || mSettleGate.needsDetail(mesh.mId))
+            {
+                reloadMesh(mesh);
+            }
+        }
+        else if (mesh.mResidency == Mesh::Residency::RESIDENT && spill && !wanted && now - mesh.mResidencyChecked >= 1.0)
+        {
+            mesh.mResidencyChecked = now;
+            if (mSettleGate.settled(mesh.mId))
+            {
+                spillMesh(mesh);
+            }
+        }
+    }
+    mStats.mSpilledMeshes = spilled;
+}
+
+void SKNavMesh::spillMesh(Mesh& mesh)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    if (!main_queue || !workers || workers->isClosed() || !cache)
+    {
+        return;
+    }
+    auto job = std::make_shared<SpillJob>();
+    job->mMesh = mesh.mId;
+    job->mGeneration = mesh.mGeneration;
+    for (const auto& entry : mesh.mTiles)
+    {
+        const Tile& tile = entry.second;
+        // Detail air only: coarse air stays, and so does a tile with no key to find it by.
+        if (tile.mAir && tile.mAirBuilt && !tile.mAir->mLeaves.empty() && tile.mContentKey && !tile.mAirSpilled)
+        {
+            SpillJob::Entry e;
+            e.mKey = entry.first;
+            e.mContentKey = tile.mContentKey;
+            e.mAir = tile.mAir;
+            e.mRaster = tile.mRaster;
+            job->mEntries.push_back(std::move(e));
+        }
+    }
+    if (job->mEntries.empty())
+    {
+        return;
+    }
+    const bool posted = main_queue->postTo(
+        workers,
+        [job, cache]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill mesh worker");
+            for (SpillJob::Entry& e : job->mEntries)
+            {
+                const U64 key = spillKey(e.mContentKey);
+                const std::vector<U8> bytes = packSpill(e.mAir.get(), e.mRaster.get(), key);
+                e.mBytes = bytes.size();
+                e.mOk = cache->store(key, bytes);
+                e.mCoarse = coarseAir(*e.mAir);
+            }
+            return job;
+        },
+        [this](std::shared_ptr<SpillJob> done) { finishSpill(done); });
+    if (posted)
+    {
+        mesh.mResidency = Mesh::Residency::SPILLING;
+    }
+}
+
+bool SKNavMesh::swapProductsAir(Mesh& mesh, const AirSwap& swap)
+{
+    const RoomsProductPtr old_rooms = mesh.mStampRooms;
+    EnclosureProductPtr enc;
+    RoomsProductPtr rooms;
+    if (!mRooms->swapAir(mesh.mId, swap, enc, rooms))
+    {
+        return false;
+    }
+    // The stamp follows, so the same spaces under a new pointer stamp nothing again.
+    mesh.mStampEnc = enc;
+    mesh.mStampRooms = rooms;
+    for (auto& entry : mesh.mTiles)
+    {
+        if (entry.second.mStampedBy && entry.second.mStampedBy == old_rooms)
+        {
+            entry.second.mStampedBy = rooms;
+        }
+    }
+    return true;
+}
+
+void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
+{
+    static LLCachedControl<F32> hold(gSavedSettings, "SKNavAirDetailHoldSeconds", 20.f);
+    const auto it = mMeshes.find(job->mMesh);
+    if (it == mMeshes.end() || it->second->mGeneration != job->mGeneration || it->second->mResidency != Mesh::Residency::SPILLING)
+    {
+        return;
+    }
+    Mesh& mesh = *it->second;
+    mesh.mResidency = Mesh::Residency::RESIDENT;
+    // Something moved or asked for the detail while it was written: it stays.
+    if (LLTimer::getTotalSeconds() - mesh.mDetailWanted < hold || !mSettleGate.settled(mesh.mId))
+    {
+        return;
+    }
+    AirSwap swap;
+    for (const SpillJob::Entry& e : job->mEntries)
+    {
+        const auto t = mesh.mTiles.find(e.mKey);
+        if (!e.mOk || t == mesh.mTiles.end())
+        {
+            continue;
+        }
+        const Tile& tile = t->second;
+        if (tile.mAir != e.mAir || tile.mContentKey != e.mContentKey || tile.mInFlight || (tile.mRaster && tile.mRaster != e.mRaster))
+        {
+            continue;
+        }
+        swap[e.mKey] = nullptr;
+    }
+    if (swap.empty() || !swapProductsAir(mesh, swap))
+    {
+        return;
+    }
+    auto retired = std::make_shared<std::vector<std::pair<TileAirPtr, TileRasterPtr>>>();
+    size_t freed = 0;
+    for (SpillJob::Entry& e : job->mEntries)
+    {
+        if (!swap.count(e.mKey))
+        {
+            continue;
+        }
+        Tile& tile = mesh.mTiles[e.mKey];
+        freed += tile.mAir->bytes() + (tile.mRaster ? tile.mRaster->bytes() : 0);
+        tile.mAirCoarse = e.mCoarse;
+        tile.mAir.reset();
+        tile.mRaster.reset();
+        tile.mAirSpilled = true;
+        ++mStats.mSpills;
+        mStats.mSpillBytes += e.mBytes;
+        retired->emplace_back(std::move(e.mAir), std::move(e.mRaster));
+    }
+    mStats.mSpillFreed = freed;
+    retireOn(workerQueue(), std::move(retired));
+    mesh.mResidency = Mesh::Residency::SPILLED;
+    ++mRevision;
+}
+
+void SKNavMesh::reloadMesh(Mesh& mesh)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    auto job = std::make_shared<SpillJob>();
+    job->mMesh = mesh.mId;
+    job->mGeneration = mesh.mGeneration;
+    job->mAsked = LLTimer::getTotalSeconds();
+    for (const auto& entry : mesh.mTiles)
+    {
+        if (entry.second.mAirSpilled)
+        {
+            SpillJob::Entry e;
+            e.mKey = entry.first;
+            e.mContentKey = entry.second.mContentKey;
+            job->mEntries.push_back(std::move(e));
+        }
+    }
+    if (job->mEntries.empty() || !cache || !main_queue || !workers || workers->isClosed())
+    {
+        // Nothing to read it from: what is still away is built again.
+        finishReload(job);
+        return;
+    }
+    mesh.mResidency = Mesh::Residency::RELOADING;
+    job->mPending = job->mEntries.size();
+    // One job a tile, so a mesh comes back across every worker at once.
+    for (size_t i = 0; i < job->mEntries.size(); ++i)
+    {
+        const bool posted = main_queue->postTo(
+            workers,
+            [job, cache, i]()
+            {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
+                LLTimer timer;
+                SpillJob::Entry& e = job->mEntries[i];
+                const U64 key = spillKey(e.mContentKey);
+                std::vector<U8> bytes;
+                e.mOk = cache->load(key, bytes) && unpackSpill(bytes.data(), bytes.size(), key, e.mAir, e.mRaster) && e.mAir;
+                e.mBytes = bytes.size();
+                e.mMillis = timer.getElapsedTimeF32() * 1000.f;
+                return job;
+            },
+            [this](std::shared_ptr<SpillJob> done)
+            {
+                if (--done->mPending == 0)
+                {
+                    finishReload(done);
+                }
+            });
+        if (!posted && --job->mPending == 0)
+        {
+            finishReload(job);
+        }
+    }
+}
+
+void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
+{
+    const auto it = mMeshes.find(job->mMesh);
+    if (it == mMeshes.end() || it->second->mGeneration != job->mGeneration)
+    {
+        return;
+    }
+    Mesh& mesh = *it->second;
+    AirSwap swap;
+    for (const SpillJob::Entry& e : job->mEntries)
+    {
+        const auto t = mesh.mTiles.find(e.mKey);
+        if (e.mOk && t != mesh.mTiles.end() && t->second.mAirSpilled && t->second.mContentKey == e.mContentKey)
+        {
+            swap[e.mKey] = e.mAir;
+        }
+    }
+    // Nothing reads a spilled mesh's products, so this only fails if a pass slipped in: try again next frame.
+    if (!swap.empty() && !swapProductsAir(mesh, swap))
+    {
+        mesh.mResidency = Mesh::Residency::SPILLED;
+        return;
+    }
+    F32 millis = 0.f;
+    for (SpillJob::Entry& e : job->mEntries)
+    {
+        const auto t = mesh.mTiles.find(e.mKey);
+        if (t == mesh.mTiles.end() || !t->second.mAirSpilled)
+        {
+            continue;
+        }
+        Tile& tile = t->second;
+        tile.mAirSpilled = false;
+        ++mStats.mReloads;
+        if (swap.count(e.mKey))
+        {
+            tile.mAir = std::move(e.mAir);
+            tile.mRaster = std::move(e.mRaster);
+            tile.mAirCoarse.reset();
+            millis += e.mMillis;
+        }
+        else
+        {
+            // Lost from disk: built again with its detail, which gives it new air the spaces read anew.
+            ++mStats.mReloadMisses;
+            tile.mBuilt = 0;
+        }
+    }
+    if (!job->mEntries.empty())
+    {
+        mStats.mLastReloadMs = millis / job->mEntries.size();
+        mStats.mLastReloadWallMs = static_cast<F32>((LLTimer::getTotalSeconds() - job->mAsked) * 1000.0);
+    }
+    mesh.mResidency = Mesh::Residency::RESIDENT;
+    mesh.mDetailWanted = LLTimer::getTotalSeconds();
+    ++mRevision;
 }
 
 void SKNavMesh::cleanupSingleton()
@@ -1040,7 +1421,9 @@ bool SKNavMesh::prepareInput(const Mesh& mesh, const TileKey& key, Tile& tile, s
     input->mTileSize = static_cast<F32>(TILE_M);
     fillParams(*input);
     // Air is built eagerly near the camera; a tile further out keeps any it has, else reads coarse air for its stamp.
-    if (input->mAir && !(tile.mAir && tile.mAirBuilt) && !inAirRadius(tile))
+    // A settled tile whose detail waits on disk, or the disk lost, builds its detail again too.
+    const bool detail = (tile.mAir && tile.mAirBuilt) || tile.mAirSpilled || (tile.mAirBuilt && tile.mAirBuilt == tile.mSignature);
+    if (input->mAir && !detail && !inAirRadius(tile))
     {
         input->mAir = false;
         input->mCoarseAir = true;
@@ -1241,6 +1624,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mLedges.reset();
         tile.mRunoff.reset();
         tile.mAir.reset();
+        tile.mAirId = 0;
+        tile.mAirSpilled = false;
         tile.mAirCoarse.reset();
         tile.mRaster.reset();
         tile.mContentKey = 0;
@@ -1267,6 +1652,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
         tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
         tile.mAir = result->mAir;
+        tile.mAirId = ++mNextAirId;
+        tile.mAirSpilled = false;
         tile.mAirBuilt = result->mCoarseAir ? 0 : signature;
         tile.mAirCoarse.reset();
         tile.mContentKey = content_key;
@@ -1324,6 +1711,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
     tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
     tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
+    tile.mAirId = tile.mAir ? ++mNextAirId : 0;
+    tile.mAirSpilled = false;
     tile.mAirBuilt = result->mAirBuilt && !result->mCoarseAir ? signature : 0;
     // Nothing to stamp this tile with: its polygons are final as built.
     mStats.mUnstampedPublishes += result->mAir && !result->mAir->mLeaves.empty() ? 1 : 0;
@@ -1926,6 +2315,7 @@ void SKNavMesh::update()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reconcile");
         reconcile(snap);
     }
+    findHomeBoxes(snap);
 
     applyLayouts();
 
@@ -1971,6 +2361,10 @@ void SKNavMesh::update()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tiles");
         stampTiles();
     }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - air residency");
+        updateResidency();
+    }
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stats scan");
@@ -1985,6 +2379,7 @@ void SKNavMesh::update()
                 if (tile.mAir) { ++mScanningStats.mAirTiles; mScanningStats.mAirBytes += tile.mAir->bytes(); }
                 if (tile.mRaster) { ++mScanningStats.mRasterTiles; mScanningStats.mRasterBytes += tile.mRaster->bytes(); }
                 mScanningStats.mAwaitingStamp += tile.mStaticAt > 0.0 ? 1 : 0;
+                mScanningStats.mSpilledTiles += tile.mAirSpilled ? 1 : 0;
                 if (!tile.mBuilt) return;
                 ++mScanningStats.mTilesBuilt;
                 mScanningStats.mFaces += tile.mFaces ? static_cast<U32>(tile.mFaces->size()) : 0;
@@ -2002,6 +2397,7 @@ void SKNavMesh::update()
         mStats.mRasterTiles = mScanningStats.mRasterTiles;
         mStats.mRasterBytes = mScanningStats.mRasterBytes;
             mStats.mAwaitingStamp = mScanningStats.mAwaitingStamp;
+            mStats.mSpilledTiles = mScanningStats.mSpilledTiles;
             mStats.mFaces = mScanningStats.mFaces;
             mStats.mSegments = mScanningStats.mSegments;
             mStats.mLinks = mScanningStats.mLinks;
@@ -2076,7 +2472,14 @@ std::string SKNavMesh::statsLine() const
                     mStats.mAirTiles, mStats.mAirBytes / 1048576.0, mStats.mAirEvicted, static_cast<U32>(mSkyMap.cells()), mSkyMap.bytes() / 1048576.0,
                     mStats.mDiskBytes / 1048576.0, mStats.mDiskEntries, mStats.mDiskLoads, mStats.mDiskRebuilds, mStats.mDiskCorrupt,
                     looked ? 100.0 * mStats.mDiskLoads / looked : 0.0, mStats.mDiskLoadMs)
-           + stamps + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
+           + stamps
+           + llformat(", spilled %u tiles in %u meshes (%u spills, %.1f MB written, %.1f MB freed last), %u reloads (%u lost), reload %.2f ms a tile, %.0f ms asked to landed",
+                      mStats.mSpilledTiles, mStats.mSpilledMeshes, mStats.mSpills, mStats.mSpillBytes / 1048576.0, mStats.mSpillFreed / 1048576.0,
+                      mStats.mReloads, mStats.mReloadMisses, mStats.mLastReloadMs, mStats.mLastReloadWallMs)
+           + (gSavedSettings.getU32("SKNavOverlayAir") ? llformat(", air overlay %u verts over %u tiles, %u cut by the budget", mStats.mAirOverlayVerts,
+                                                                    mStats.mAirOverlayTiles, mStats.mAirOverlayCut)
+                                                          : std::string())
+           + "; " + mRooms->statsLine() + "; " + mRoomProbes->statsLine() + "; " + gPipeline.mReflectionMapManager.clusterProbesStatsLine();
 }
 
 std::shared_ptr<const SKNavWorldView> SKNavMesh::view() const
@@ -4222,6 +4625,7 @@ void SKNavMesh::refreshOverlay()
     static LLCachedControl<bool> show_wind(gSavedSettings, "SKNavOverlayWind", false);
     static LLCachedControl<F32> wind_heading(gSavedSettings, "SKNavOverlayWindHeading", -1.f);
     static LLCachedControl<bool> show_runoff(gSavedSettings, "SKNavOverlayRunoff", false);
+    static LLCachedControl<U32> show_air(gSavedSettings, "SKNavOverlayAir", 0);
 
     // The surface itself hangs off the pipeline's debug mask, the same switch
     // as Develop > Render Metadata > Navmesh. The layers below are switches of
@@ -4303,6 +4707,25 @@ void SKNavMesh::refreshOverlay()
     const S32 wind_bucket = static_cast<S32>(std::lround(heading / (360.f / sknav::WIND_HEADINGS)));
     key = mix(key, show_wind ? static_cast<U64>(wind_bucket + 1000) : 0ull);
     key = mix(key, show_wind ? mRooms->revision() : 0ull);
+    // The air layer re-gathers on its own switches; off, it adds one compare to the key.
+    key = mix(key, static_cast<U64>(show_air));
+    if (show_air)
+    {
+        static LLCachedControl<U32> air_source(gSavedSettings, "SKNavOverlayAirSource", 0);
+        static LLCachedControl<F32> air_slice(gSavedSettings, "SKNavOverlayAirSlice", 0.f);
+        static LLCachedControl<bool> air_slice_camera(gSavedSettings, "SKNavOverlayAirSliceCamera", false);
+        static LLCachedControl<U32> air_budget(gSavedSettings, "SKNavOverlayAirBudget", 1000000);
+        key = mix(key, static_cast<U64>(air_source));
+        key = mixF32(key, air_slice);
+        key = mix(key, air_slice_camera ? 1ull : 0ull);
+        key = mix(key, static_cast<U64>(air_budget));
+        key = mix(key, mRooms->revision());
+        // The agent's feet in quarter metres, so the slice follows it up a stair.
+        if (air_slice > 0.f && !air_slice_camera)
+        {
+            key = mix(key, static_cast<U64>(std::llround(gAgent.getPositionGlobal().mdV[VZ] * 4.0)));
+        }
+    }
     if (mHasMark)
     {
         key = mixF64(key, mMark.mdV[VX]);
@@ -4338,6 +4761,14 @@ void SKNavMesh::refreshOverlay()
                              [&annotator](const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre) {
                                  return annotator.portalCrossed(mesh, space_a, space_b, centre);
                              });
+    }
+    if (show_air)
+    {
+        gatherAirOverlay(camera, reach, show_air, opaque);
+    }
+    else
+    {
+        mStats.mAirOverlayVerts = mStats.mAirOverlayTiles = mStats.mAirOverlayCut = 0;
     }
     if (show_wind)
     {

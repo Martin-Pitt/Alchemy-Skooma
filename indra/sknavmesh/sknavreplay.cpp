@@ -111,6 +111,8 @@ namespace sknav
         /// The viewer's launch: air near the camera only, and coarse air past it.
         void applyAirMode(const CensusFile& census, const ReplayOptions& options, ReplayTile& tile, TileBuildInput& input)
         {
+            input.mFaceOffsets = options.mFaceOffsets;
+            input.mAlignWallEdges = options.mAlignWallEdges;
             if (options.mAir == AirMode::RADIUS && input.mAir && !inAirRadius(census, tile.mMin, tile.mMax))
             {
                 input.mAir = false;
@@ -405,6 +407,11 @@ namespace sknav
                         // The raster stage only: the polygons wait for the spaces.
                         auto result = std::make_shared<TileBuildResult>();
                         std::shared_ptr<TileBuildStats> stats = options.mStats ? std::make_shared<TileBuildStats>() : nullptr;
+                        if (stats)
+                        {
+                            stats->mFaceTraceEvery = options.mFaceTraceEvery;
+                            std::copy(options.mFaceTraceBox, options.mFaceTraceBox + 4, stats->mFaceOffsets.mTraceBox);
+                        }
                         jobs[i]->mRaster = rasteriseTile(*jobs[i]->mInput, *result, stats.get());
                         if (jobs[i]->mRaster)
                         {
@@ -416,6 +423,8 @@ namespace sknav
                     else if (options.mStats)
                     {
                         auto stats = std::make_shared<TileBuildStats>();
+                        stats->mFaceTraceEvery = options.mFaceTraceEvery;
+                        std::copy(options.mFaceTraceBox, options.mFaceTraceBox + 4, stats->mFaceOffsets.mTraceBox);
                         jobs[i]->mResult = std::make_shared<const TileBuildResult>(buildTile(*jobs[i]->mInput, stats.get()));
                         jobs[i]->mStats = stats;
                     }

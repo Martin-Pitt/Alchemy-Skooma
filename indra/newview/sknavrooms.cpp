@@ -604,13 +604,13 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             LLVector3d lo(1e300, 1e300, 0.0), hi(-1e300, -1e300, 0.0);
             for (const auto& t : mesh.mTiles)
             {
-                if (!t.second.mAir)
+                // Air on disk for a settled mesh is still its air: the same id comes back with it.
+                if (!t.second.mAir && !t.second.mAirSpilled)
                 {
                     evicted += t.second.mAirCoarse ? 1 : 0;
                     continue;
                 }
-                sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)),
-                          reinterpret_cast<uintptr_t>(t.second.mAir.get()));
+                sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)), t.second.mAirId);
                 lo.mdV[VX] = llmin(lo.mdV[VX], t.second.mMin.mdV[VX]);
                 lo.mdV[VY] = llmin(lo.mdV[VY], t.second.mMin.mdV[VY]);
                 hi.mdV[VX] = llmax(hi.mdV[VX], t.second.mMax.mdV[VX]);
@@ -701,7 +701,24 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 }
                 continue;
             }
-            post(state, navmesh);
+            // A pass reads its own detail and its neighbours': any on disk comes back first.
+            bool away = !navmesh.detailResident(state.mId);
+            if (away)
+            {
+                navmesh.requestDetail(state.mId);
+            }
+            for (const auto& other : mMeshes)
+            {
+                if (other.first != state.mId && other.second.mProduct && touches(state, other.second) && !navmesh.detailResident(other.first))
+                {
+                    navmesh.requestDetail(other.first);
+                    away = true;
+                }
+            }
+            if (!away)
+            {
+                post(state, navmesh);
+            }
         }
     }
 
@@ -1338,6 +1355,34 @@ bool SKNavRooms::landed(const LLUUID& mesh, EnclosureProductPtr& enclosure, Room
     }
     enclosure = it->second.mProduct;
     rooms = it->second.mRooms;
+    return true;
+}
+
+bool SKNavRooms::passPending(const LLUUID& mesh) const
+{
+    const auto it = mMeshes.find(mesh);
+    return it != mMeshes.end() && (it->second.mDirty || it->second.mInFlight || (!it->second.mProduct && it->second.mAirSignature != SEED));
+}
+
+bool SKNavRooms::windPending(const LLUUID& mesh) const
+{
+    const auto it = mMeshes.find(mesh);
+    return it != mMeshes.end() && it->second.mProduct && (it->second.mWindDirty || it->second.mWindInFlight);
+}
+
+bool SKNavRooms::swapAir(const LLUUID& mesh, const AirSwap& swap, EnclosureProductPtr& enclosure, RoomsProductPtr& rooms)
+{
+    const auto it = mMeshes.find(mesh);
+    if (it == mMeshes.end() || !it->second.mProduct || !it->second.mRooms || it->second.mInFlight || it->second.mWindInFlight)
+    {
+        return false;
+    }
+    MeshState& state = it->second;
+    state.mProduct = withTileAir(*state.mProduct, swap);
+    state.mRooms = withTileAir(*state.mRooms, swap);
+    enclosure = state.mProduct;
+    rooms = state.mRooms;
+    mViewDirty = true;
     return true;
 }
 

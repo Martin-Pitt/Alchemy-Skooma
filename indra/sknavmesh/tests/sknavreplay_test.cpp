@@ -26,13 +26,16 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavairdebug.h"
 #include "../sknavairdistil.h"
 #include "../sknavbuildstats.h"
+#include "../sknavenclosure.h"
 #include "../sknavflights.h"
 #include "../sknavannotate.h"
 #include "../sknavlayout.h"
 #include "../sknavreplay.h"
 #include "../sknavreplaystats.h"
+#include "../sknavresidency.h"
 #include "../sknavstamp.h"
 #include "../sknavtilecache.h"
 #include "sknavtestscene.h"
@@ -45,13 +48,17 @@
 #include "DetourNavMeshQuery.h"
 #include "Recast.h"
 
+#include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace
 {
@@ -504,6 +511,21 @@ namespace tut
         // SKNAV_REPLAY_STAMP=0 polygonises each tile as it is rasterised, as before the stamp; SKNAV_REPLAY_COARSE=0 leaves far tiles airless.
         options.mStamp = LLStringUtil::getenv("SKNAV_REPLAY_STAMP") != "0";
         options.mCoarseAir = LLStringUtil::getenv("SKNAV_REPLAY_COARSE") != "0";
+        // SKNAV_REPLAY_FACE_OFFSETS=0 leaves faces at their cell boundaries; SKNAV_REPLAY_FACE_TRACE=n traces every n-th face for the oracle.
+        options.mFaceOffsets = LLStringUtil::getenv("SKNAV_REPLAY_FACE_OFFSETS") != "0";
+        options.mAlignWallEdges = LLStringUtil::getenv("SKNAV_REPLAY_ALIGN_EDGES") != "0";
+        const std::string face_trace = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE");
+        if (!face_trace.empty())
+        {
+            options.mFaceTraceEvery = std::stoi(face_trace);
+        }
+        const std::string face_box = LLStringUtil::getenv("SKNAV_REPLAY_FACE_TRACE_BOX");
+        if (!face_box.empty())
+        {
+            std::istringstream in(face_box);
+            char comma;
+            in >> options.mFaceTraceBox[0] >> comma >> options.mFaceTraceBox[1] >> comma >> options.mFaceTraceBox[2] >> comma >> options.mFaceTraceBox[3];
+        }
         ReplayResult r;
         replayCensus(c, options, r);
         std::string dir = LLStringUtil::getenv("SKNAV_REPLAY_OUT");
@@ -533,6 +555,46 @@ namespace tut
             // SKNAV_REPLAY_STATS: the measurements; SKNAV_REPLAY_EDITS names "record op" lines to rebuild with.
             std::ofstream measure(dir + "replay-measure.json", std::ios::binary);
             writeReplayStats(measure, c, r);
+            if (options.mFaceTraceEvery > 0)
+            {
+                std::ofstream trace(dir + "face-trace.json", std::ios::binary);
+                trace << std::setprecision(9) << "[";
+                bool first = true;
+                for (const auto& mesh : r.mMeshes)
+                {
+                    for (const auto& [key, tile] : mesh->mTiles)
+                    {
+                        if (!tile.mStats || !tile.mResult || !tile.mResult->mAir || tile.mResult->mCoarseAir)
+                        {
+                            continue;
+                        }
+                        const TileAir& air = *tile.mResult->mAir;
+                        for (const FaceOffsetTrace& t : tile.mStats->mFaceTrace)
+                        {
+                            // Traced over the padded grid: a side off the tile proper reads no table.
+                            const S32 ix = static_cast<S32>(std::lround((t.mX0 - air.mOrigin.mV[VX]) / air.mCell));
+                            const S32 iy = static_cast<S32>(std::lround((t.mY0 - air.mOrigin.mV[VY]) / air.mCell));
+                            if (ix < 0 || iy < 0 || ix >= air.mWidth || iy >= air.mHeight)
+                            {
+                                continue;
+                            }
+                            trace << (first ? "" : ",") << "\n{\"tile\":[" << key.mX << "," << key.mY << "],\"x0\":" << t.mX0 << ",\"y0\":" << t.mY0
+                                  << ",\"cell\":" << air.mCell
+                                  << ",\"side\":" << t.mSide << ",\"floor\":" << t.mFloor << ",\"z\":[" << t.mZLo << "," << t.mZHi
+                                  << "],\"offset\":" << static_cast<S32>(t.mOffset) << ",\"table\":"
+                                  << faceOffset(air.mFaceOffsets, faceKey(ix, iy, air.mWidth, t.mSide)) * FACE_OFFSET_STEPS
+                                  << ",\"tris\":[";
+                            for (size_t i = 0; i < t.mTris.size(); ++i)
+                            {
+                                trace << (i ? "," : "") << t.mTris[i].mV[VX] << "," << t.mTris[i].mV[VY] << "," << t.mTris[i].mV[VZ];
+                            }
+                            trace << "]}";
+                            first = false;
+                        }
+                    }
+                }
+                trace << "]\n";
+            }
             const std::string edits_path = LLStringUtil::getenv("SKNAV_REPLAY_EDITS");
             if (!edits_path.empty())
             {
@@ -1125,5 +1187,529 @@ namespace tut
             }
         }
         ensure("bucket flags on Detour's polys", flagged > 0);
+    }
+
+    // SKNAV_AIR_OVERLAY_CENSUS names a census, SKNAV_AIR_OVERLAY_OUT a folder: one
+    // top view per air overlay mode, gathered as the viewer gathers it.
+    template<> template<>
+    void sknavreplay_object::test<12>()
+    {
+        set_test_name("render the air overlay's modes headless, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_CENSUS");
+        if (path.empty())
+        {
+            return;
+        }
+        // SKNAV_AIR_OVERLAY_AIR=radius builds air near the census camera only, as the viewer does; files then take a radius_ prefix.
+        const bool radius = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_AIR") == "radius";
+        const std::string dir = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_OUT") + (radius ? "/radius_" : "/");
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        options.mAir = radius ? AirMode::RADIUS : AirMode::EVERYWHERE;
+        ReplayResult r;
+        replayCensus(c, options, r);
+
+        // A software stand-in for the overlay's draw: fills by height, then lines, alpha-blended.
+        struct Canvas : AirDebugSink
+        {
+            struct Quad { LLVector3 p[4]; LLColor4 c; F32 z; };
+            struct Seg { LLVector3 a, b; LLColor4 c; };
+            std::vector<Quad> mQuads;
+            std::vector<Seg> mSegs;
+            LLVector3 mOffset;
+            U32 mBudget = 1000000, mUsed = 0;
+            bool spend(U32 n) { if (mUsed + n > mBudget) return false; mUsed += n; return true; }
+            bool quad(const LLVector3& a, const LLVector3& b, const LLVector3& cc, const LLVector3& d, const LLColor4& col) override
+            {
+                if (!spend(6)) return false;
+                mQuads.push_back({ { a + mOffset, b + mOffset, cc + mOffset, d + mOffset }, col, a.mV[VZ] + mOffset.mV[VZ] });
+                return true;
+            }
+            bool line(const LLVector3& a, const LLVector3& b, const LLColor4& col) override
+            {
+                if (!spend(2)) return false;
+                mSegs.push_back({ a + mOffset, b + mOffset, col });
+                return true;
+            }
+            void write(const std::string& file, F32 half, bool oblique) const
+            {
+                const S32 W = 800, H = 800;
+                std::vector<F32> img(W * H * 3);
+                for (S32 i = 0; i < W * H; ++i) { img[i * 3] = 16 / 255.f; img[i * 3 + 1] = 16 / 255.f; img[i * 3 + 2] = 20 / 255.f; }
+                const F32 scale = W / (2.f * half);
+                auto px = [&](const LLVector3& p) {
+                    const F32 y = oblique ? p.mV[VY] * 0.5f + p.mV[VZ] : p.mV[VY];
+                    return LLVector2((p.mV[VX] + half) * scale, H - (y + half) * scale);
+                };
+                auto blend = [&](S32 x, S32 y, const LLColor4& col) {
+                    if (x < 0 || y < 0 || x >= W || y >= H) return;
+                    F32* o = &img[(y * W + x) * 3];
+                    for (S32 k = 0; k < 3; ++k) o[k] = o[k] * (1.f - col.mV[3]) + col.mV[k] * col.mV[3];
+                };
+                std::vector<const Quad*> order;
+                for (const Quad& q : mQuads) order.push_back(&q);
+                std::stable_sort(order.begin(), order.end(), [](const Quad* a, const Quad* b) { return a->z < b->z; });
+                for (const Quad* q : order)
+                {
+                    LLVector2 v[4];
+                    F32 x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+                    for (S32 k = 0; k < 4; ++k)
+                    {
+                        v[k] = px(q->p[k]);
+                        x0 = llmin(x0, v[k].mV[0]); x1 = llmax(x1, v[k].mV[0]); y0 = llmin(y0, v[k].mV[1]); y1 = llmax(y1, v[k].mV[1]);
+                    }
+                    if (x1 < 0 || y1 < 0 || x0 >= W || y0 >= H) continue;
+                    for (S32 y = llmax(0, S32(std::floor(y0))); y <= llmin(H - 1, S32(std::ceil(y1))); ++y)
+                    {
+                        for (S32 x = llmax(0, S32(std::floor(x0))); x <= llmin(W - 1, S32(std::ceil(x1))); ++x)
+                        {
+                            const F32 sx = x + 0.5f, sy = y + 0.5f;
+                            bool pos = true, neg = true;
+                            for (S32 k = 0; k < 4; ++k)
+                            {
+                                const LLVector2& a = v[k];
+                                const LLVector2& b = v[(k + 1) % 4];
+                                const F32 cr = (b.mV[0] - a.mV[0]) * (sy - a.mV[1]) - (b.mV[1] - a.mV[1]) * (sx - a.mV[0]);
+                                pos = pos && cr >= 0.f;
+                                neg = neg && cr <= 0.f;
+                            }
+                            if (pos || neg) blend(x, y, q->c);
+                        }
+                    }
+                }
+                for (const Seg& s : mSegs)
+                {
+                    const LLVector2 a = px(s.a), b = px(s.b);
+                    const F32 len = llmax(std::fabs(b.mV[0] - a.mV[0]), std::fabs(b.mV[1] - a.mV[1]));
+                    const S32 steps = llmax(1, S32(std::ceil(len)));
+                    if (steps > 4 * W) continue;
+                    for (S32 i = 0; i <= steps; ++i)
+                    {
+                        const F32 t = F32(i) / steps;
+                        blend(S32(a.mV[0] + (b.mV[0] - a.mV[0]) * t), S32(a.mV[1] + (b.mV[1] - a.mV[1]) * t), s.c);
+                    }
+                }
+                std::ofstream out(file, std::ios::binary);
+                out << "P6\n" << W << " " << H << "\n255\n";
+                for (const F32 f : img) out.put(static_cast<char>(llclamp(S32(f * 255.f + 0.5f), 0, 255)));
+            }
+        };
+
+        // Centred on the census agent; the slice on its floor.
+        // SKNAV_AIR_OVERLAY_CENTRE="x y z" looks somewhere other than the agent.
+        LLVector3d centre = c.mAgent;
+        const std::string at = LLStringUtil::getenv("SKNAV_AIR_OVERLAY_CENTRE");
+        if (!at.empty())
+        {
+            std::istringstream(at) >> centre.mdV[VX] >> centre.mdV[VY] >> centre.mdV[VZ];
+        }
+        F64 agent_floor = centre.mdV[VZ] - 1.0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                if (!tile.mResult || !tile.mResult->mAir || tile.mMin.mdV[VX] > centre.mdV[VX] || tile.mMax.mdV[VX] < centre.mdV[VX]
+                    || tile.mMin.mdV[VY] > centre.mdV[VY] || tile.mMax.mdV[VY] < centre.mdV[VY])
+                {
+                    continue;
+                }
+                F32 floor = 0.f;
+                if (airFloorUnder(*tile.mResult->mAir, LLVector3(centre - mesh->mOrigin), floor))
+                {
+                    agent_floor = mesh->mOrigin.mdV[VZ] + floor;
+                }
+            }
+        }
+        std::ofstream log(dir + "render.txt");
+        log << "centre " << centre << " floor " << agent_floor << "\n";
+
+        struct Shot { const char* mName; AirDebugMode mMode; F32 mHalf; F32 mSlice; bool mOblique; U32 mBudget; };
+        const Shot shots[] = { { "leaves", AirDebugMode::LEAVES, 24.f, 2.5f, false, 1000000 },
+                               { "gaps", AirDebugMode::GAPS, 24.f, 2.5f, false, 1000000 },
+                               { "gaps_oblique", AirDebugMode::GAPS, 24.f, 2.5f, true, 1000000 },
+                               { "space", AirDebugMode::SPACE, 24.f, 2.5f, false, 1000000 },
+                               { "stamp", AirDebugMode::STAMP, 24.f, 2.5f, false, 1000000 },
+                               { "clearance", AirDebugMode::CLEARANCE, 24.f, 2.5f, false, 1000000 },
+                               { "faces", AirDebugMode::FACES, 12.f, 2.5f, false, 1000000 },
+                               { "sources", AirDebugMode::SPACE, 160.f, 0.f, false, 1000000 },
+                               { "budget", AirDebugMode::GAPS, 96.f, 0.f, false, 200000 } };
+        for (const Shot& shot : shots)
+        {
+            Canvas canvas;
+            canvas.mBudget = shot.mBudget;
+            struct Near { F64 d2; const ReplayMesh* m; TileKey k; const ReplayTile* t; };
+            std::vector<Near> tiles;
+            const F64 reach = shot.mHalf * 1.42;
+            for (const auto& mesh : r.mMeshes)
+            {
+                for (const auto& [key, tile] : mesh->mTiles)
+                {
+                    const F64 dx = llmax(tile.mMin.mdV[VX] - centre.mdV[VX], 0.0, centre.mdV[VX] - tile.mMax.mdV[VX]);
+                    const F64 dy = llmax(tile.mMin.mdV[VY] - centre.mdV[VY], 0.0, centre.mdV[VY] - tile.mMax.mdV[VY]);
+                    if (dx * dx + dy * dy <= reach * reach) tiles.push_back({ dx * dx + dy * dy, mesh.get(), key, &tile });
+                }
+            }
+            std::sort(tiles.begin(), tiles.end(), [](const Near& a, const Near& b) { return a.d2 < b.d2; });
+            U32 drawn = 0, cut = 0, coarse_tiles = 0;
+            for (size_t i = 0; i < tiles.size(); ++i)
+            {
+                const Near& n = tiles[i];
+                const LLVector3d rel = n.m->mOrigin - centre;
+                canvas.mOffset = LLVector3(rel);
+                const F32 lo = shot.mSlice > 0.f ? F32(agent_floor - n.m->mOrigin.mdV[VZ] - shot.mSlice) : -1e30f;
+                const F32 hi = shot.mSlice > 0.f ? F32(agent_floor - n.m->mOrigin.mdV[VZ] + shot.mSlice) : 1e30f;
+                bool ok = true;
+                if (shot.mMode == AirDebugMode::STAMP)
+                {
+                    const dtNavMesh* nav = n.m->mNav[static_cast<S32>(AgentClass::AVATAR)];
+                    const dtMeshTile* dt = nav ? nav->getTileAt(n.k.mY, n.k.mX, 0) : nullptr;
+                    if (!dt || !dt->header) continue;
+                    for (S32 p = 0; ok && p < dt->header->polyCount; ++p)
+                    {
+                        const dtPoly& poly = dt->polys[p];
+                        if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+                        const U32 id = n.m->polySpace(dt, p);
+                        LLColor4 col = spaceColour(id);
+                        col.mV[3] = id ? 0.55f : 0.25f;
+                        const LLVector3 v0 = fromRecast(&dt->verts[poly.verts[0] * 3]);
+                        if (v0.mV[VZ] < lo || v0.mV[VZ] > hi) continue;
+                        for (S32 k = 1; ok && k + 1 < poly.vertCount; ++k)
+                        {
+                            const LLVector3 v1 = fromRecast(&dt->verts[poly.verts[k] * 3]), v2 = fromRecast(&dt->verts[poly.verts[k + 1] * 3]);
+                            ok = canvas.quad(v0, v1, v2, v2, col);
+                        }
+                        for (S32 k = 0; ok && k < poly.vertCount; ++k)
+                        {
+                            const U16 nei = poly.neis[k];
+                            if (nei && !(nei & DT_EXT_LINK) && n.m->polySpace(dt, nei - 1) == id) continue;
+                            if (nei & DT_EXT_LINK) continue;
+                            LLColor4 e = spaceColour(id);
+                            e.mV[3] = 0.95f;
+                            ok = canvas.line(fromRecast(&dt->verts[poly.verts[k] * 3]), fromRecast(&dt->verts[poly.verts[(k + 1) % poly.vertCount] * 3]), e);
+                        }
+                    }
+                }
+                else
+                {
+                    if (!n.t->mResult || !n.t->mResult->mAir) continue;
+                    const TileAir& air = *n.t->mResult->mAir;
+                    const bool coarse = n.t->mResult->mCoarseAir;
+                    coarse_tiles += coarse ? 1 : 0;
+                    AirDebugInput in;
+                    in.mMode = shot.mMode;
+                    in.mCoarse = coarse;
+                    in.mClimb = air.mUnit > 0.f ? S32(0.75f / air.mUnit) : 0;
+                    in.mCentre = LLVector3(centre - n.m->mOrigin);
+                    in.mReach = F32(reach);
+                    in.mSliceLo = lo;
+                    in.mSliceHi = hi;
+                    std::vector<U32> gap_space(air.mGaps.size(), 0);
+                    const TileEnclosure* te = n.m->mEnclosure ? n.m->mEnclosure->tile(n.k) : nullptr;
+                    if (te && te->mAir == n.t->mResult->mAir && te->mGaps.size() == gap_space.size())
+                    {
+                        const std::vector<U32>& ids = n.m->mEnclosure->mSpaceIds;
+                        for (size_t g = 0; g < gap_space.size(); ++g)
+                        {
+                            const U16 sp = te->mGaps[g].mSpace;
+                            gap_space[g] = sp && sp <= ids.size() ? ids[sp - 1] : 0;
+                        }
+                    }
+                    in.mGapSpace = gap_space.data();
+                    ok = gatherAirDebug(air, in, canvas);
+                    if (ok && coarse)
+                    {
+                        const F32 z = F32(agent_floor - n.m->mOrigin.mdV[VZ]);
+                        const LLVector3 a(n.t->mMin - n.m->mOrigin), b(n.t->mMax - n.m->mOrigin);
+                        const LLVector3 q[4] = { LLVector3(a.mV[0], a.mV[1], z), LLVector3(b.mV[0], a.mV[1], z), LLVector3(b.mV[0], b.mV[1], z), LLVector3(a.mV[0], b.mV[1], z) };
+                        for (S32 k = 0; ok && k < 4; ++k) ok = canvas.line(q[k], q[(k + 1) % 4], LLColor4(0.65f, 0.45f, 1.f, 0.6f));
+                    }
+                }
+                ++drawn;
+                if (!ok)
+                {
+                    cut = U32(tiles.size() - i);
+                    break;
+                }
+            }
+            canvas.write(dir + shot.mName + ".ppm", shot.mHalf, shot.mOblique);
+            log << shot.mName << ": " << canvas.mUsed << " verts over " << drawn << " tiles (" << coarse_tiles << " coarse), " << cut
+                << " cut by the budget of " << shot.mBudget << "\n";
+        }
+    }
+
+    // SKNAV_REPLAY_RESIDENCY names a census, SKNAV_REPLAY_RESIDENCY_OUT a JSON
+    // file: what a settled spill keeps and frees, what it writes, what a reload
+    // costs, that the air comes back the same, and what whole-cluster air adds.
+    template<> template<>
+    void sknavreplay_object::test<13>()
+    {
+        set_test_name("spill every settled mesh's detail and reload it: the bytes, the costs and the same spaces, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_RESIDENCY");
+        if (path.empty())
+        {
+            return;
+        }
+        typedef std::chrono::steady_clock Clock;
+        const auto ms = [](Clock::time_point t0) { return std::chrono::duration<F64, std::milli>(Clock::now() - t0).count(); };
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayOptions options;
+        ReplayResult r;
+        replayCensus(c, options, r);
+
+        // Spilled through a real disk cache, as the viewer does.
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / "sknav-residency";
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        TileDiskCache cache(dir.string(), 8ull << 30);
+        cache.index();
+
+        struct Spilled
+        {
+            ReplayMesh* mMesh;
+            TileKey mKey;
+            U64 mKey64;
+            TileAirPtr mAir;
+            TileRasterPtr mRaster;
+        };
+        std::vector<Spilled> spilled;
+        size_t detail_air = 0, rasters = 0, coarse_kept = 0, coarse_tiles_air = 0, products = 0, products_after = 0;
+        size_t disk = 0;
+        U32 detail_tiles = 0, coarse_tiles = 0, repack_differ = 0, reraster_differ = 0;
+        F64 pack_ms = 0.0, store_ms = 0.0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            AirSwap away;
+            for (auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult& res = *tile.mResult;
+                if (!res.mAir)
+                {
+                    continue;
+                }
+                if (!res.mAirBuilt || res.mCoarseAir || res.mAir->mLeaves.empty())
+                {
+                    coarse_tiles_air += res.mAir->bytes();
+                    ++coarse_tiles;
+                    continue;
+                }
+                // The raster the viewer holds within the radius: built again, the replay having let it go after the stamp.
+                TileBuildResult again;
+                const TileRasterPtr raster = rasteriseTile(*tile.mInput, again);
+                reraster_differ += again.mAir && packSpill(again.mAir.get(), nullptr, 0) == packSpill(res.mAir.get(), nullptr, 0) ? 0 : 1;
+                const U64 key64 = spillKey(tileContentKey(*tile.mInput));
+                Clock::time_point t0 = Clock::now();
+                // The raster reads the air it was built with, so that is the air that goes with it.
+                const std::vector<U8> bytes = packSpill(again.mAir.get(), raster.get(), key64);
+                pack_ms += ms(t0);
+                t0 = Clock::now();
+                ensure("stored", cache.store(key64, bytes));
+                store_ms += ms(t0);
+                disk += bytes.size();
+                detail_air += res.mAir->bytes();
+                rasters += raster ? raster->bytes() : 0;
+                coarse_kept += coarseAir(*res.mAir)->bytes();
+                ++detail_tiles;
+                spilled.push_back({ mesh.get(), key, key64, again.mAir, raster });
+                away[key] = nullptr;
+            }
+            if (mesh->mEnclosure)
+            {
+                products += mesh->mEnclosure->bytes() + mesh->mRooms->bytes();
+                products_after += withTileAir(*mesh->mEnclosure, away)->bytes() + withTileAir(*mesh->mRooms, away)->bytes();
+            }
+        }
+
+        // Reload one tile at a time, then the largest mesh across every core as an edit would.
+        F64 load_ms = 0.0, worst_ms = 0.0;
+        std::map<std::pair<ReplayMesh*, TileKey>, std::pair<TileAirPtr, TileRasterPtr>> back;
+        for (const Spilled& s : spilled)
+        {
+            const Clock::time_point t0 = Clock::now();
+            std::vector<U8> bytes;
+            TileAirPtr air;
+            TileRasterPtr raster;
+            ensure("reloaded", cache.load(s.mKey64, bytes) && unpackSpill(bytes.data(), bytes.size(), s.mKey64, air, raster));
+            const F64 t = ms(t0);
+            load_ms += t;
+            worst_ms = std::max(worst_ms, t);
+            repack_differ += packSpill(air.get(), raster.get(), s.mKey64) == packSpill(s.mAir.get(), s.mRaster.get(), s.mKey64) ? 0 : 1;
+            back[{ s.mMesh, s.mKey }] = { air, raster };
+        }
+        std::map<ReplayMesh*, U32> per_mesh;
+        for (const Spilled& s : spilled)
+        {
+            ++per_mesh[s.mMesh];
+        }
+        ReplayMesh* largest = nullptr;
+        for (const auto& [m, n] : per_mesh)
+        {
+            largest = !largest || n > per_mesh[largest] ? m : largest;
+        }
+        F64 mesh_wall_ms = 0.0;
+        const S32 threads = std::max(1, static_cast<S32>(std::thread::hardware_concurrency()) - 2);
+        if (largest)
+        {
+            std::vector<const Spilled*> jobs;
+            for (const Spilled& s : spilled)
+            {
+                if (s.mMesh == largest) jobs.push_back(&s);
+            }
+            std::atomic<size_t> next{ 0 };
+            const Clock::time_point t0 = Clock::now();
+            std::vector<std::thread> pool;
+            for (S32 k = 0; k < threads; ++k)
+            {
+                pool.emplace_back([&]() {
+                    for (size_t i = next++; i < jobs.size(); i = next++)
+                    {
+                        std::vector<U8> bytes;
+                        TileAirPtr air;
+                        TileRasterPtr raster;
+                        cache.load(jobs[i]->mKey64, bytes);
+                        unpackSpill(bytes.data(), bytes.size(), jobs[i]->mKey64, air, raster);
+                    }
+                });
+            }
+            for (std::thread& t : pool) t.join();
+            mesh_wall_ms = ms(t0);
+        }
+
+        // The largest mesh's enclosure, spaces and stamps over the reloaded air against the air it had.
+        bool same_enclosure = true, same_spaces = true;
+        U32 stamp_tiles = 0, stamp_differ = 0;
+        if (largest)
+        {
+            // The landed products the next pass reads, pointed at the reloaded air as the viewer points them.
+            AirSwap swap;
+            for (const auto& [k, v] : back)
+            {
+                if (k.first == largest) swap[k.second] = v.first;
+            }
+            const auto run = [&](bool reloaded) {
+                auto input = std::make_shared<EnclosureInput>();
+                input->mPrevious = reloaded ? withTileAir(*largest->mEnclosure, swap) : largest->mEnclosure;
+                input->mGeneration = 1;
+                input->mMeshOrigin = largest->mOrigin;
+                input->mSky = r.mSky;
+                input->mParams = c.mEnclosure;
+                for (const auto& [key, tile] : largest->mTiles)
+                {
+                    const TileBuildResult& res = *tile.mResult;
+                    if (res.mStatus == TileBuildResult::FAILED || !res.mAirBuilt || !res.mAir || res.mAir->mLeaves.empty()) continue;
+                    const auto it = back.find({ largest, key });
+                    input->mTiles.push_back({ key, reloaded && it != back.end() ? it->second.first : res.mAir, skyContributor(largest->mId, key) });
+                }
+                EnclosurePass pass(input);
+                while (!pass.step(1u << 30)) {}
+                std::shared_ptr<EnclosureProduct> product = pass.takeProduct();
+                std::shared_ptr<RoomsInput> rooms_input = replayRoomsInput(c, *largest, 1);
+                if (reloaded)
+                {
+                    rooms_input->mPrevious = withTileAir(*largest->mRooms, swap);
+                }
+                SpacesPass spaces(rooms_input, product);
+                while (!spaces.step(1u << 30)) {}
+                return std::make_pair(std::shared_ptr<const EnclosureProduct>(product), spaces.product());
+            };
+            const auto a = run(false);
+            const auto b = run(true);
+            same_enclosure = a.first->mSummary == b.first->mSummary && a.first->mGapCount == b.first->mGapCount && a.first->mSpaceIds == b.first->mSpaceIds;
+            for (size_t t = 0; same_enclosure && t < a.first->mTiles.size(); ++t)
+            {
+                const auto& x = a.first->mTiles[t].mGaps;
+                const auto& y = b.first->mTiles[t].mGaps;
+                same_enclosure = x.size() == y.size() && std::equal(x.begin(), x.end(), y.begin(), [](const GapEnclosure& p, const GapEnclosure& q) {
+                                     return p.mSpace == q.mSpace && p.mS == q.mS && p.mE == q.mE && p.mD == q.mD && p.mBucket == q.mBucket && p.mOpen == q.mOpen;
+                                 });
+            }
+            same_spaces = a.second->mSpaces.size() == b.second->mSpaces.size() && a.second->mPortals.size() == b.second->mPortals.size();
+            for (size_t s = 0; same_spaces && s < a.second->mSpaces.size(); ++s)
+            {
+                same_spaces = a.second->mSpaces[s].mId == b.second->mSpaces[s].mId;
+            }
+            for (const Spilled& s : spilled)
+            {
+                if (s.mMesh != largest || !s.mRaster) continue;
+                const ReplayTile& tile = largest->mTiles.at(s.mKey);
+                const auto& [air, raster] = back[{ largest, s.mKey }];
+                const LLVector3 lo(tile.mMin - largest->mOrigin), hi(tile.mMax - largest->mOrigin);
+                const auto stamped = [&](const std::pair<std::shared_ptr<const EnclosureProduct>, RoomsProductPtr>& p, const TileAirPtr& a_air, const TileRaster& ras) {
+                    TileStampInput in;
+                    stampInput(*a_air, *p.first->tile(s.mKey), *p.second, lo, hi, in);
+                    TileStamp st;
+                    stampTile(*ras.mChf, borderCells(tile.mInput->mParams[0].mRadius, tile.mInput->mCell), ras.mSpanGap, in, ras.mReal, ras.mFlights, StampParams(), st);
+                    TileBuildResult polys = *tile.mResult;
+                    polygoniseTile(*tile.mInput, ras, polys, nullptr, &in, &st);
+                    return polys.mData[0];
+                };
+                if (!a.first->tile(s.mKey)) continue;
+                ++stamp_tiles;
+                stamp_differ += stamped(a, s.mAir, *s.mRaster) == stamped(b, air, *raster) ? 0 : 1;
+            }
+        }
+
+        // Whole-cluster air: the tiles under the agent's clusters past the radius, built with detail rather than coarse.
+        std::vector<ClusterPtr> home;
+        r.mClusters.at(c.mAgent, home);
+        U32 cluster_tiles = 0;
+        F64 cluster_detail_ms = 0.0, cluster_coarse_ms = 0.0;
+        size_t cluster_air = 0;
+        for (const auto& mesh : r.mMeshes)
+        {
+            for (const auto& [key, tile] : mesh->mTiles)
+            {
+                const TileBuildResult& res = *tile.mResult;
+                if (res.mAirBuilt && !res.mCoarseAir) continue;     // detail already
+                bool under = false;
+                for (const ClusterPtr& h : home) under = under || overlapsXY(h->mMin, h->mMax, tile.mMin, tile.mMax);
+                if (!under) continue;
+                ++cluster_tiles;
+                TileBuildInput detail = *tile.mInput;
+                detail.mAir = true;
+                detail.mCoarseAir = false;
+                TileBuildResult d, k;
+                Clock::time_point t0 = Clock::now();
+                rasteriseTile(detail, d);
+                cluster_detail_ms += ms(t0);
+                t0 = Clock::now();
+                rasteriseTile(*tile.mInput, k);
+                cluster_coarse_ms += ms(t0);
+                cluster_air += d.mAir ? d.mAir->bytes() : 0;
+            }
+        }
+
+        std::string census_name = path;
+        std::replace(census_name.begin(), census_name.end(), '\\', '/');
+        const F64 MB = 1048576.0;
+        const size_t before = detail_air + rasters + coarse_tiles_air;
+        const size_t after = coarse_kept + coarse_tiles_air;
+        std::ostringstream json;
+        json << std::fixed << std::setprecision(3) << "{\"census\":\"" << census_name << "\",\"meshes\":" << r.mMeshes.size()
+             << ",\"detail_tiles\":" << detail_tiles << ",\"coarse_tiles\":" << coarse_tiles << ",\"detail_air_mb\":" << detail_air / MB
+             << ",\"held_raster_mb\":" << rasters / MB << ",\"coarse_tiles_air_mb\":" << coarse_tiles_air / MB << ",\"coarse_kept_mb\":" << coarse_kept / MB
+             << ",\"resident_before_mb\":" << before / MB << ",\"resident_after_mb\":" << after / MB << ",\"products_mb\":" << products / MB
+             << ",\"products_after_mb\":" << products_after / MB << ",\"disk_written_mb\":" << disk / MB << ",\"pack_ms_per_tile\":" << pack_ms / std::max(1u, detail_tiles)
+             << ",\"store_ms_per_tile\":" << store_ms / std::max(1u, detail_tiles) << ",\"reload_ms_per_tile\":" << load_ms / std::max<size_t>(1, spilled.size())
+             << ",\"reload_worst_ms\":" << worst_ms << ",\"largest_mesh_tiles\":" << (largest ? per_mesh[largest] : 0) << ",\"largest_mesh_reload_wall_ms\":" << mesh_wall_ms
+             << ",\"threads\":" << threads << ",\"repack_differ\":" << repack_differ << ",\"reraster_differ\":" << reraster_differ
+             << ",\"same_enclosure\":" << (same_enclosure ? "true" : "false") << ",\"same_spaces\":" << (same_spaces ? "true" : "false")
+             << ",\"stamp_tiles\":" << stamp_tiles << ",\"stamp_differ\":" << stamp_differ << ",\"home_clusters\":" << home.size()
+             << ",\"cluster_extra_tiles\":" << cluster_tiles << ",\"cluster_detail_ms\":" << cluster_detail_ms << ",\"cluster_coarse_ms\":" << cluster_coarse_ms
+             << ",\"cluster_extra_air_mb\":" << cluster_air / MB << "}";
+        std::cout << json.str() << std::endl;
+        const std::string out = LLStringUtil::getenv("SKNAV_REPLAY_RESIDENCY_OUT");
+        if (!out.empty())
+        {
+            std::ofstream(out) << json.str() << "\n";
+        }
+        std::filesystem::remove_all(dir, ec);
+        ensure_equals("spills that repack differently", repack_differ, 0u);
+        ensure("the same enclosure over reloaded air", same_enclosure);
+        ensure("the same spaces over reloaded air", same_spaces);
+        ensure_equals("stamps that differ over reloaded air", stamp_differ, 0u);
     }
 }

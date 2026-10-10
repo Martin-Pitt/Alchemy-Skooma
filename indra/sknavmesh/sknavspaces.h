@@ -127,6 +127,7 @@ namespace sknav
         F32 mUnknown = 0.f;         ///< share of the floor with no enclosure answer
         bool mLift = false;
         bool mFlight = false;       ///< a stair flight's own space
+        bool mUnderFlight = false;  ///< ground under an outdoor flight, sheltered by it
         bool mFrozen = false;       ///< kept from an earlier pass for tiles whose detail was evicted
         std::vector<U32> mPortals;  ///< indices into the product's portals
         /// Floor area per 0.5 m x 0.5 m x 1 m cell, sorted by key: what ids are tracked by.

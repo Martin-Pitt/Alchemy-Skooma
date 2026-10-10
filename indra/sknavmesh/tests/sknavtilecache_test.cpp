@@ -96,7 +96,8 @@ namespace
         g.mCeiling = AIR_CEILING_OPEN;
         g.mFlags = AirGap::TOP | AirGap::OPEN;
         g.mClear = 7;
-        g.mSeed = 3;
+        g.mSlopeX = -5;
+        g.mSlopeY = 9;
         a.mGaps = { g, g };
         a.mLeaves.push_back({ 0, 0, 1, 2, 0, 0 });
         for (S32 side = 0; side < 4; ++side)
@@ -148,7 +149,7 @@ namespace
     bool sameGaps(const std::vector<AirGap>& a, const std::vector<AirGap>& b)
     {
         return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const AirGap& x, const AirGap& y) {
-                   return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mFlags == y.mFlags && x.mClear == y.mClear && x.mSeed == y.mSeed;
+                   return x.mFloor == y.mFloor && x.mCeiling == y.mCeiling && x.mFlags == y.mFlags && x.mClear == y.mClear && x.mSlopeX == y.mSlopeX && x.mSlopeY == y.mSlopeY;
                });
     }
 

@@ -10,6 +10,7 @@ target_sources(
   sknavmesh
   PRIVATE
     sknavair.cpp
+    sknavairdebug.cpp
     sknavairdistil.cpp
     sknavannotate.cpp
     sknavbuild.cpp
@@ -17,6 +18,7 @@ target_sources(
     sknavcluster.cpp
     sknavenclosure.cpp
     sknavexport.cpp
+    sknavfaceoffsets.cpp
     sknavfeatures.cpp
     sknavflights.cpp
     sknavlayout.cpp
@@ -24,10 +26,12 @@ target_sources(
     sknavprobes.cpp
     sknavreplay.cpp
     sknavreplaystats.cpp
+    sknavresidency.cpp
     sknavskymap.cpp
     sknavspacefilter.cpp
     sknavspaceproducts.cpp
     sknavspaces.cpp
+    sknavstairalign.cpp
     sknavstamp.cpp
     sknavtilecache.cpp
     sknavwalls.cpp
@@ -40,6 +44,7 @@ target_sources(
     FILE_SET HEADERS
       FILES
         sknavair.h
+        sknavairdebug.h
         sknavairdistil.h
         sknavannotate.h
         sknavbuild.h
@@ -48,6 +53,7 @@ target_sources(
         sknavcluster.h
         sknavenclosure.h
         sknavexport.h
+        sknavfaceoffsets.h
         sknavfeatures.h
         sknavflights.h
         sknavlayout.h
@@ -55,10 +61,12 @@ target_sources(
         sknavprobes.h
         sknavreplay.h
         sknavreplaystats.h
+        sknavresidency.h
         sknavskymap.h
         sknavspacefilter.h
         sknavspaceproducts.h
         sknavspaces.h
+        sknavstairalign.h
         sknavstamp.h
         sknavtilecache.h
         sknavtypes.h
@@ -92,6 +100,7 @@ target_precompile_headers(sknavmesh REUSE_FROM llprecompiled)
 if(AL_BUILD_TESTS)
   al_add_test(sknavasync PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavair PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavairdebug PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavairdistil PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavannotate PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavenclosure PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -99,6 +108,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavflights PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavtilecache PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
@@ -107,8 +117,10 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavprobeinvariants PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavprobeseval PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavreplay PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavresidency PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavrooms PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavspaceproducts PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavstairalign PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavstamp PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwind PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_bench(spacesdraw PROJECT sknavmesh LIBRARIES sknavmesh llcommon)

@@ -102,6 +102,10 @@ void SKFloaterNavMesh::draw()
         }
         getChild<LLUICtrl>("mesh_status")->setValue(mesh_line);
         getChild<LLUICtrl>("overlay_wind_heading")->setEnabled(gSavedSettings.getBOOL("SKNavOverlayWind"));
+        const bool air = gSavedSettings.getU32("SKNavOverlayAir") != 0;
+        getChild<LLUICtrl>("overlay_air_source")->setEnabled(air);
+        getChild<LLUICtrl>("overlay_air_slice")->setEnabled(air);
+        getChild<LLUICtrl>("overlay_air_slice_camera")->setEnabled(air);
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
     }
     LLFloater::draw();

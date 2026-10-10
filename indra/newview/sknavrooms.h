@@ -27,6 +27,7 @@
 
 #include "lluuid.h"
 #include "sknavenclosure.h"
+#include "sknavresidency.h"
 #include "sknavspaces.h"
 #include "sknavwind.h"
 #include "threadpool.h"
@@ -202,6 +203,13 @@ public:
     void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
     /// The products of a mesh's last landed pass, for its tiles' stamps; false when none has landed.
     bool landed(const LLUUID& mesh, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms) const;
+    /// Whether a mesh's spaces, or its wind slabs, are still to land over its air.
+    bool passPending(const LLUUID& mesh) const;
+    bool windPending(const LLUUID& mesh) const;
+    /// Replace a mesh's landed products with copies pointing at other air, as its
+    /// detail leaves for disk or comes back; false, changing nothing, while a pass
+    /// over it is running.
+    bool swapAir(const LLUUID& mesh, const sknav::AirSwap& swap, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms);
 
 private:
     struct Job;
