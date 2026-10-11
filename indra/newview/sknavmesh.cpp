@@ -2948,7 +2948,53 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
                 out.mPolySpace = tile.mPolySpace;
                 out.mPortalEdges = tile.mPortalEdges;
             }
+            if (const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(key.mY, key.mX, 0) : nullptr)
+            {
+                out.mPolyRefBase = mesh.mNav[c]->getPolyRefBase(dt_tile);
+            }
             fn(out);
+        });
+    }
+}
+
+void SKNavMesh::borderLinksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const BorderLinkFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        if (!mesh.mNav[c])
+        {
+            continue;
+        }
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
+        {
+            if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max))
+            {
+                return;
+            }
+            const dtMeshTile* dt_tile = mesh.mNav[c]->getTileAt(key.mY, key.mX, 0);
+            if (!dt_tile || !dt_tile->header)
+            {
+                return;
+            }
+            for (S32 i = 0; i < dt_tile->header->polyCount; ++i)
+            {
+                const dtPoly& poly = dt_tile->polys[i];
+                if (poly.getType() != DT_POLYTYPE_GROUND)
+                {
+                    continue;
+                }
+                for (U32 l = poly.firstLink; l != DT_NULL_LINK; l = dt_tile->links[l].next)
+                {
+                    const dtLink& link = dt_tile->links[l];
+                    if (link.side == 0xff)
+                    {
+                        continue;   // an internal link: TilePolys already holds it
+                    }
+                    fn(mesh.mId, key, static_cast<U16>(i), link.edge, link.ref, link.bmin / 255.f, link.bmax / 255.f);
+                }
+            }
         });
     }
 }

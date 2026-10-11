@@ -129,10 +129,15 @@ public:
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
         std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per poly of mPolys, its space id; 0 for none
         std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< its polys' edges on portals
+        U64 mPolyRefBase = 0;           ///< Detour ref of poly 0; poly i is mPolyRefBase | i
     };
     typedef std::function<void(const PolyTile&)> PolyTileFn;
     /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
     void polysIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const PolyTileFn& fn) const;
+    /// A poly edge's neighbour across its tile's border, from Detour's external links as they stand now: the edge,
+    /// the neighbour's ref and the stretch of the edge they share, as fractions from the edge's first vertex.
+    typedef std::function<void(const LLUUID& mesh, const sknav::TileKey& key, U16 poly, U8 edge, U64 neighbour, F32 t0, F32 t1)> BorderLinkFn;
+    void borderLinksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const BorderLinkFn& fn) const;
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the

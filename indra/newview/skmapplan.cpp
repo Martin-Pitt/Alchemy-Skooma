@@ -1,0 +1,1483 @@
+/**
+ * @file skmapplan.cpp
+ * @brief The mini-map's plan: which navmesh spaces are drawn and at what storey rank, and the geometry that draws them.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "skmapplan.h"
+
+#include "llsurface.h"
+#include "llviewerregion.h"
+#include "llworld.h"
+#include "sknavmesh.h"
+#include "sknavpolys.h"
+#include "sknavrooms.h"
+
+#include <cmath>
+#include <map>
+#include <unordered_set>
+
+using namespace skmap::plan;
+
+namespace
+{
+    // Selection and style constants are proto2's (V:/Scratch/minimap-gpu/proto2 README, owner rulings 10, 15, 18, 22).
+    constexpr F32 CONTOUR_STEP_M = 0.5f;        // skmapgeom.h CONTOUR_STEP_M, the scene's contour interval
+    constexpr F32 DIM_ALPHA = 0.45f;            // the proto's "dimmed outside"
+    constexpr F32 ROOF_SHADOW_M = 2.f;          // inner roof shadow falloff width
+    constexpr F32 ROOF_SHADOW_ALPHA = 0.1f;
+    constexpr S32 ROOF_SHADOW_DISC = 16;        // segments of the shadow's end discs
+    constexpr F32 RANK_CLOSED_ROOF = -0.5f;     // closed buildings' roofs, under the ground plan
+    constexpr F32 RANK_STOREY_STEP = 1.f / 1000.f;
+
+    struct Rgba
+    {
+        F32 r, g, b, a;
+    };
+    constexpr Rgba rgb(F32 r, F32 g, F32 b, F32 a = 1.f) { return { r / 255.f, g / 255.f, b / 255.f, a }; }
+    const Rgba COL_WALL_LINE = rgb(229, 228, 225, 1.f);
+    const Rgba COL_HATCH_LINE = rgb(208, 208, 205, -0.9f);      // a negative alpha draws the half-cover hatch
+    const Rgba COL_LEDGE = rgb(158, 166, 176, 0.6f);
+    const Rgba COL_CONTOUR = rgb(140, 148, 158, 0.30f);
+    const Rgba COL_DOOR = rgb(160, 112, 255, 1.f);
+    const Rgba COL_OPENING = rgb(61, 220, 132, 1.f);
+    const Rgba COL_STAIR = rgb(255, 160, 64, 1.f);
+    const Rgba COL_CASING = rgb(32, 36, 40, 0.75f);
+    const Rgba COL_CASING_LINE = rgb(158, 166, 176, 0.9f);
+    const Rgba COL_RUNG = rgb(158, 166, 176, 0.7f);
+    const Rgba COL_REGION = rgb(158, 166, 176, 0.6f);
+    const Rgba COL_GAP = rgb(255, 0, 255, 1.f);
+    const Rgba COL_ARROW_EDGE = rgb(25, 25, 25, 0.8f);
+    const Rgba COL_ROOF_LINE = rgb(0, 0, 0, 0.4f);
+
+    // Pixel widths (rulings 15, 18, 22).
+    constexpr F32 PX_SOLID = 2.f, PX_HATCHED = 3.f, PX_LEDGE = 1.f, PX_CONTOUR = 1.f, PX_ROOF = 1.f, PX_DOOR = 3.f;
+    constexpr F32 PX_CASING = 3.f, PX_CASING_LINE = 1.f, PX_RUNG = 0.8f, PX_RUNG_PITCH = 6.f, PX_CAP = 2.5f;
+    constexpr F32 PX_CENTRE = 3.f, PX_ARROW_LONG = 13.f, PX_ARROW_WIDE = 11.f, PX_ARROW_EDGE = 0.8f, PX_REGION = 1.f;
+
+    // Floor kinds the shader reads.
+    constexpr F32 KIND_FLOOR = 0.f, KIND_OTHER = 2.f, KIND_GAP = 4.f;
+
+    U64 pairKey(U32 a, U32 b) { return a < b ? (static_cast<U64>(a) << 32) | b : (static_cast<U64>(b) << 32) | a; }
+
+    void addUnique(std::vector<U32>& v, U32 x)
+    {
+        if (std::find(v.begin(), v.end(), x) == v.end())
+        {
+            v.push_back(x);
+        }
+    }
+
+    U64 mix(U64 h, U64 v)
+    {
+        h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        return h;
+    }
+    U64 bitsOf(F32 f)
+    {
+        U32 u;
+        memcpy(&u, &f, sizeof(u));
+        return u;
+    }
+}
+
+bool Options::operator==(const Options& o) const
+{
+    return mOverlap == o.mOverlap && mOutside == o.mOutside && mGaps == o.mGaps && mLedges == o.mLedges && mOther == o.mOther
+        && mContours == o.mContours && mRoofOutline == o.mRoofOutline && mDoors == o.mDoors && mShade == o.mShade && mTerrain == o.mTerrain;
+}
+
+void Selection::set(U32 s, F32 r)
+{
+    if (mRankOf[s] >= 0)
+    {
+        mRank[mRankOf[s]].second = r;
+        return;
+    }
+    mRankOf[s] = static_cast<S32>(mRank.size());
+    mRank.emplace_back(s, r);
+}
+
+size_t Geometry::triangles() const
+{
+    size_t n = mShadowClip.size() + mShadowBand.size() + mTop.size();
+    for (const Rank& r : mRanks)
+    {
+        n += r.mFloors.size() + r.mWalls.size() + r.mWallLines.size() + r.mLines.size();
+    }
+    return n / 3;
+}
+
+// ---------- topology ----------
+
+namespace
+{
+    std::vector<U32> flood(const Data& d, U32 start)
+    {
+        std::vector<U32> out{ start };
+        std::vector<U8> seen(d.mSpaces.size(), 0);
+        seen[start] = 1;
+        std::vector<U32> q{ start };
+        while (!q.empty())
+        {
+            const U32 c = q.back();
+            q.pop_back();
+            for (U32 n : d.mAdj[c])
+            {
+                if (!seen[n])
+                {
+                    seen[n] = 1;
+                    out.push_back(n);
+                    q.push_back(n);
+                }
+            }
+        }
+        return out;
+    }
+}
+
+void Data::finish()
+{
+    const size_t ns = mSpaces.size(), np = mPolys.size();
+    mSpacePolys.assign(ns, {});
+    for (U32 i = 0; i < np; ++i)
+    {
+        if (mPolys[i].mSpace >= 0)
+        {
+            mSpacePolys[mPolys[i].mSpace].push_back(i);
+        }
+    }
+    mFlightOf.assign(np, -1);
+    for (U32 f = 0; f < mFlights.size(); ++f)
+    {
+        for (U32 p : mFlights[f].mPolys)
+        {
+            mFlightOf[p] = static_cast<S32>(f);
+        }
+    }
+    mRoofsOf.clear();
+    for (U32 s = 0; s < ns; ++s)
+    {
+        if (mSpaces[s].mRoof && mSpaces[s].mBuilding)
+        {
+            auto it = std::find_if(mRoofsOf.begin(), mRoofsOf.end(), [&](const auto& e) { return e.first == mSpaces[s].mBuilding; });
+            if (it == mRoofsOf.end())
+            {
+                mRoofsOf.emplace_back(mSpaces[s].mBuilding, std::vector<U32>());
+                it = mRoofsOf.end() - 1;
+            }
+            it->second.push_back(s);
+        }
+    }
+    mWallsOfPoly.assign(np, {});
+    for (U32 w = 0; w < mWalls.size(); ++w)
+    {
+        for (U32 p : mWalls[w].mPolys)
+        {
+            mWallsOfPoly[p].push_back(w);
+        }
+    }
+
+    // Space pairs whose polys share an edge with no portal between them, and space-less polys beside a space.
+    std::unordered_set<U64> portal_pair, touched;
+    for (const Portal& p : mPortals)
+    {
+        if (p.mSpaces[0] >= 0 && p.mSpaces[1] >= 0)
+        {
+            portal_pair.insert(pairKey(p.mSpaces[0], p.mSpaces[1]));
+        }
+    }
+    mTouchOf.assign(ns, {});
+    mNoSpaceNbr.assign(ns, {});
+    for (U32 i = 0; i < np; ++i)
+    {
+        const Poly& p = mPolys[i];
+        for (U32 e = 0; e < p.mCount; ++e)
+        {
+            auto visit = [&](U32 n)
+            {
+                const S32 a = p.mSpace, b = mPolys[n].mSpace;
+                if (a >= 0 && b < 0)
+                {
+                    addUnique(mNoSpaceNbr[a], n);
+                }
+                if (a < 0 || b < 0 || a == b || portal_pair.count(pairKey(a, b)) || !touched.insert(pairKey(a, b)).second)
+                {
+                    return;
+                }
+                mTouchOf[a].push_back(b);
+                mTouchOf[b].push_back(a);
+            };
+            const S32 n = mNbr[p.mFirst + e];
+            if (n >= 0)
+            {
+                visit(n);
+            }
+            else if (n == NBR_BORDER)
+            {
+                const auto it = mBorder.find((static_cast<U64>(i) << 3) | e);
+                if (it != mBorder.end())
+                {
+                    for (const BorderLink& l : it->second)
+                    {
+                        visit(l.mPoly);
+                    }
+                }
+            }
+        }
+    }
+
+    // Flood adjacency: portals, and climb links as level separators (ruling 21 for outdoor stairs).
+    mAdj.assign(ns, {});
+    mStairAdj.assign(ns, {});
+    for (const Portal& p : mPortals)
+    {
+        const S32 a = p.mSpaces[0], b = p.mSpaces[1];
+        if (a < 0 || b < 0)
+        {
+            continue;
+        }
+        auto& m = p.mKind == PortalKind::STAIR && !(outdoorish(a) && outdoorish(b)) ? mStairAdj : mAdj;
+        addUnique(m[a], b);
+        addUnique(m[b], a);
+    }
+    for (const auto& c : mClimbs)
+    {
+        addUnique(mStairAdj[c.first], c.second);
+        addUnique(mStairAdj[c.second], c.first);
+    }
+
+    // Ground level: per region mesh, the connected set holding its largest outdoor space with polys.
+    mGround.assign(ns, 0);
+    mGroundOrder.clear();
+    std::vector<S32> roots(mSpaceIndex.size(), -1);
+    for (U32 s = 0; s < ns; ++s)
+    {
+        const Space& sp = mSpaces[s];
+        if (sp.mBucket == Bucket::OUTDOORS && !mSpacePolys[s].empty() && (roots[sp.mMesh] < 0 || sp.mArea > mSpaces[roots[sp.mMesh]].mArea))
+        {
+            roots[sp.mMesh] = static_cast<S32>(s);
+        }
+    }
+    mStreetRoom.assign(ns, 0);
+    std::unordered_map<U64, std::map<S32, U32>> links;   // building -> storey -> street links
+    for (S32 root : roots)
+    {
+        if (root < 0)
+        {
+            continue;
+        }
+        for (U32 s : flood(*this, root))
+        {
+            mGround[s] = 1;
+            mGroundOrder.push_back(s);
+        }
+        // Street rooms: indoor spaces one door or opening off the ground's outdoor set.
+        std::vector<U8> out(ns, 0);
+        std::vector<U32> q{ static_cast<U32>(root) }, outdoor{ static_cast<U32>(root) };
+        out[root] = 1;
+        while (!q.empty())
+        {
+            const U32 c = q.back();
+            q.pop_back();
+            for (U32 n : mAdj[c])
+            {
+                if (!indoor(n) && !out[n])
+                {
+                    out[n] = 1;
+                    outdoor.push_back(n);
+                    q.push_back(n);
+                }
+            }
+        }
+        for (U32 s : outdoor)
+        {
+            for (U32 n : mAdj[s])
+            {
+                if (!indoor(n))
+                {
+                    continue;
+                }
+                mStreetRoom[n] = 1;
+                if (mSpaces[n].mStorey >= 0)
+                {
+                    ++links[mSpaces[n].mBuilding][mSpaces[n].mStorey];
+                }
+            }
+        }
+    }
+    // Ground storey per building (ruling 12): the most street links, the lower index on a tie.
+    mGroundStorey.clear();
+    for (const auto& b : links)
+    {
+        S32 best = -1;
+        U32 most = 0;
+        for (const auto& st : b.second)
+        {
+            if (best < 0 || st.second > most)
+            {
+                best = st.first;
+                most = st.second;
+            }
+        }
+        mGroundStorey[b.first] = best;
+    }
+    // Closed buildings: no indoor space has a door or opening to a space that is not indoors.
+    std::unordered_set<U64> open;
+    for (const Portal& p : mPortals)
+    {
+        const S32 a = p.mSpaces[0], b = p.mSpaces[1];
+        if ((p.mKind == PortalKind::DOOR || p.mKind == PortalKind::OPENING) && a >= 0 && b >= 0 && indoor(a) != indoor(b))
+        {
+            open.insert(mSpaces[indoor(a) ? a : b].mBuilding);
+        }
+    }
+    mNoEntry.clear();
+    for (const auto& r : mRoofsOf)
+    {
+        if (open.count(r.first))
+        {
+            continue;
+        }
+        for (U32 s = 0; s < ns; ++s)
+        {
+            if (mSpaces[s].mBuilding == r.first && indoor(s))
+            {
+                mNoEntry.push_back(r.first);
+                break;
+            }
+        }
+    }
+}
+
+// ---------- selection ----------
+
+namespace
+{
+    bool isFlightSpace(const Data& d, U32 s)
+    {
+        const Space& sp = d.mSpaces[s];
+        if (sp.mFlight)
+        {
+            return true;
+        }
+        if (!sp.mPortals.empty()
+            && std::all_of(sp.mPortals.begin(), sp.mPortals.end(), [&](U32 p) { return d.mPortals[p].mKind == PortalKind::STAIR; }))
+        {
+            return true;
+        }
+        return std::any_of(d.mSpacePolys[s].begin(), d.mSpacePolys[s].end(), [&](U32 p) { return d.mFlightOf[p] >= 0; });
+    }
+
+    S32 groundStoreyOf(const Data& d, U64 b)
+    {
+        const auto it = d.mGroundStorey.find(b);
+        return it == d.mGroundStorey.end() ? -2 : it->second;
+    }
+
+    /// Overlap modes: a, the ground storey plus each other street room on top; b, the ground storey only; c, no
+    /// interiors. Inside a building, its own storey only; on a roof not joined to the ground, the roof's flood.
+    std::vector<std::pair<U32, F32>> storeyFilter(const Data& d, const std::vector<U32>& plan, S32 vs, Overlap mode)
+    {
+        std::vector<std::pair<U32, F32>> out;
+        const S32 v_st = vs >= 0 && d.indoor(vs) ? d.mSpaces[vs].mStorey : -1;
+        if (vs >= 0 && d.mSpaces[vs].mRoof && std::none_of(plan.begin(), plan.end(), [&](U32 s) { return d.mGround[s] != 0; }))
+        {
+            for (U32 s : plan)
+            {
+                out.emplace_back(s, 1.f);
+            }
+            return out;
+        }
+        for (U32 s : plan)
+        {
+            if (!d.indoor(s))
+            {
+                out.emplace_back(s, 0.f);
+                continue;
+            }
+            const S32 st = d.mSpaces[s].mStorey;
+            const U64 b = d.mSpaces[s].mBuilding;
+            if (vs >= 0 && d.indoor(vs) && b == d.mSpaces[vs].mBuilding)
+            {
+                if (static_cast<S32>(s) == vs || (v_st >= 0 && st == v_st))
+                {
+                    out.emplace_back(s, 1.f);
+                }
+                continue;
+            }
+            if (mode == Overlap::ROOFS)
+            {
+                continue;
+            }
+            if (st >= 0 && st == groundStoreyOf(d, b))
+            {
+                out.emplace_back(s, 0.f);
+            }
+            else if (mode == Overlap::STOREY && d.mStreetRoom[s])
+            {
+                out.emplace_back(s, 1.f);
+            }
+        }
+        return out;
+    }
+
+    void maxInto(std::vector<std::pair<U32, F32>>& v, U32 k, F32 r)
+    {
+        for (auto& e : v)
+        {
+            if (e.first == k)
+            {
+                e.second = llmax(e.second, r);
+                return;
+            }
+        }
+        v.emplace_back(k, r);
+    }
+}
+
+Selection skmap::plan::select(const Data& d, S32 vs, const Options& opts)
+{
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.Select");
+    Selection sel;
+    const U32 ns = static_cast<U32>(d.mSpaces.size());
+    sel.mRankOf.assign(ns, -1);
+    sel.mDim.assign(ns, 0);
+    std::vector<U8> ground_why(ns, 0);
+    std::vector<U32> no_storey, roof_gaps;
+    const Overlap mode = opts.mOverlap;
+    U32 viewer_mesh = U32_MAX;
+    if (vs >= 0)
+    {
+        viewer_mesh = d.mSpaces[vs].mMesh;
+        const std::vector<U32> plan = flood(d, vs);
+        for (U32 s : plan)
+        {
+            if (d.indoor(s) && d.mSpaces[s].mStorey < 0 && static_cast<S32>(s) != vs)
+            {
+                no_storey.push_back(s);
+            }
+        }
+        sel.mOnGround = std::any_of(plan.begin(), plan.end(), [&](U32 s) { return d.mGround[s] != 0; });
+        sel.mInside = d.indoor(vs);
+        for (const auto& e : storeyFilter(d, plan, vs, mode))
+        {
+            sel.set(e.first, sel.mOnGround ? e.second : 1.f);
+        }
+    }
+    // Off the ground level (or off every space), the ground outside under the plan (ruling 9); other region meshes'
+    // ground always, as each region is its own build.
+    if (opts.mOutside != Outside::NONE || sel.mOnGround)
+    {
+        for (const auto& e : storeyFilter(d, d.mGroundOrder, -1, mode))
+        {
+            const bool own = d.mSpaces[e.first].mMesh == viewer_mesh;
+            if ((own && sel.mOnGround) || sel.has(e.first) || (!own && !sel.mOnGround && opts.mOutside == Outside::NONE))
+            {
+                continue;
+            }
+            sel.set(e.first, 0.f);
+            ground_why[e.first] = own || !sel.mOnGround;
+        }
+    }
+    // Mode c: every other building's roofs, higher covering lower by its storeys' floor order. Modes a/b: a building with
+    // no entrance shows its roofs under the ground plan.
+    const U64 vb = vs >= 0 ? d.mSpaces[vs].mBuilding : 0;
+    for (const auto& br : d.mRoofsOf)
+    {
+        const U64 b = br.first;
+        const bool closed = mode != Overlap::ROOFS && std::find(d.mNoEntry.begin(), d.mNoEntry.end(), b) != d.mNoEntry.end();
+        if ((vs >= 0 && b == vb) || (mode != Overlap::ROOFS && !closed))
+        {
+            continue;
+        }
+        std::vector<S32> sts;
+        for (U32 r : br.second)
+        {
+            const S32 st = d.mSpaces[r].mStorey;
+            if (st >= 0 && std::find(sts.begin(), sts.end(), st) == sts.end())
+            {
+                sts.push_back(st);
+            }
+        }
+        std::stable_sort(sts.begin(), sts.end(), [&](S32 a, S32 c) { return d.mStoreyFloor[a] < d.mStoreyFloor[c]; });
+        for (U32 r : br.second)
+        {
+            if (sel.has(r))
+            {
+                continue;
+            }
+            const S32 st = d.mSpaces[r].mStorey;
+            if (st < 0)
+            {
+                if (!d.mSpacePolys[r].empty())
+                {
+                    roof_gaps.push_back(r);
+                }
+                continue;
+            }
+            const F32 order = static_cast<F32>(std::find(sts.begin(), sts.end(), st) - sts.begin() + 1);
+            sel.set(r, (closed ? RANK_CLOSED_ROOF : 1.f) + order * RANK_STOREY_STEP);
+        }
+    }
+    if (mode == Overlap::ROOFS)
+    {
+        for (U32 s = 0; s < ns; ++s)
+        {
+            if (d.mSpaces[s].mRoof && !d.mSpaces[s].mBuilding && !sel.has(s) && !d.mSpacePolys[s].empty())
+            {
+                roof_gaps.push_back(s);
+            }
+        }
+    }
+    // Flights: a STAIR neighbour of a drawn space that is a flight space, at that space's rank (ruling 15).
+    const std::vector<std::pair<U32, F32>> drawn = sel.mRank;
+    for (const auto& e : drawn)
+    {
+        for (U32 n : d.mStairAdj[e.first])
+        {
+            if (!sel.has(n) && isFlightSpace(d, n))
+            {
+                sel.set(n, e.second);
+            }
+        }
+    }
+    if (!sel.mOnGround && opts.mOutside == Outside::DIM)
+    {
+        for (U32 s = 0; s < ns; ++s)
+        {
+            sel.mDim[s] = ground_why[s] && sel.has(s);
+        }
+    }
+    // Flight records with a poly in a drawn space, at the highest such rank.
+    for (U32 f = 0; f < d.mFlights.size(); ++f)
+    {
+        F32 r = -1.f;
+        for (U32 p : d.mFlights[f].mPolys)
+        {
+            const S32 s = d.mPolys[p].mSpace;
+            if (sel.has(s))
+            {
+                r = llmax(r, sel.rank(s));
+            }
+        }
+        if (r >= 0.f)
+        {
+            sel.mFlights.emplace_back(f, r);
+        }
+    }
+    // Other level (ruling 15): STAIR neighbours of drawn spaces that are not drawn.
+    if (opts.mOther)
+    {
+        for (const auto& e : sel.mRank)
+        {
+            for (U32 n : d.mStairAdj[e.first])
+            {
+                if (!sel.has(n))
+                {
+                    addUnique(sel.mOther, n);
+                }
+            }
+        }
+    }
+    // Gaps: portal-less neighbours, space-less polys beside drawn floors, storey-less plan rooms, undecided roofs.
+    for (const auto& e : sel.mRank)
+    {
+        for (U32 n : d.mTouchOf[e.first])
+        {
+            if (!sel.has(n))
+            {
+                maxInto(sel.mGapSpaces, n, e.second);
+            }
+        }
+        for (U32 p : d.mNoSpaceNbr[e.first])
+        {
+            maxInto(sel.mGapPolys, p, e.second);
+        }
+    }
+    for (U32 s : no_storey)
+    {
+        if (!sel.has(s))
+        {
+            maxInto(sel.mGapSpaces, s, 0.f);
+        }
+    }
+    for (U32 s : roof_gaps)
+    {
+        maxInto(sel.mGapSpaces, s, 1.f);
+    }
+    // Roof outlines: outside a building, the outline of its roof spaces' polys, over everything; not in mode c.
+    if (opts.mRoofOutline && mode != Overlap::ROOFS)
+    {
+        std::vector<U8> in(d.mPolys.size(), 0);
+        for (const auto& br : d.mRoofsOf)
+        {
+            if (vs >= 0 && br.first == vb)
+            {
+                continue;
+            }
+            std::vector<U32> polys;
+            for (U32 r : br.second)
+            {
+                for (U32 p : d.mSpacePolys[r])
+                {
+                    in[p] = 1;
+                    polys.push_back(p);
+                }
+            }
+            const auto member = [&](U32 p) { return in[p] != 0; };
+            for (U32 p : polys)
+            {
+                for (U32 e = 0; e < d.mPolys[p].mCount; ++e)
+                {
+                    d.edgeOutline(p, e, member, [&](const LLVector3& a, const LLVector3& b) { sel.mRoofLines.emplace_back(a, b); });
+                }
+            }
+            for (U32 p : polys)
+            {
+                in[p] = 0;
+            }
+            sel.mRoofPolys.insert(sel.mRoofPolys.end(), polys.begin(), polys.end());
+        }
+    }
+
+    U64 h = 0;
+    for (const auto& e : sel.mRank)
+    {
+        h = mix(mix(h, e.first), bitsOf(e.second));
+    }
+    for (U32 s = 0; s < ns; ++s)
+    {
+        h = sel.mDim[s] ? mix(h, s) : h;
+    }
+    for (const auto& e : sel.mFlights)
+    {
+        h = mix(mix(h, e.first), bitsOf(e.second));
+    }
+    for (U32 s : sel.mOther)
+    {
+        h = mix(h, s);
+    }
+    h = mix(mix(mix(h, sel.mGapSpaces.size()), sel.mGapPolys.size()), sel.mRoofLines.size());
+    sel.mHash = h;
+    return sel;
+}
+
+// ---------- geometry ----------
+
+namespace
+{
+    struct Builder
+    {
+        F32 mMpp = 1.f;
+        std::map<F32, Geometry::Rank> mRanks;
+        Geometry::Rank& rank(F32 r)
+        {
+            Geometry::Rank& g = mRanks[r];
+            g.mRank = r;
+            return g;
+        }
+    };
+
+    void vtx(std::vector<Vertex>& out, F32 x, F32 y, F32 z, const Rgba& c, F32 k0 = 0.f, F32 k1 = 0.f, F32 k2 = 0.f, F32 k3 = 0.f)
+    {
+        out.push_back({ { x, y, z }, { c.r, c.g, c.b, c.a }, { k0, k1, k2, k3 } });
+    }
+
+    /// A segment as a quad wpx texels wide about its line.
+    void pushLine(std::vector<Vertex>& out, F32 mpp, const LLVector2& a, const LLVector2& b, F32 wpx, const Rgba& c, F32 z = 0.f)
+    {
+        const LLVector2 d = b - a;
+        const F32 len = d.length();
+        const LLVector2 n = len > 0.f ? LLVector2(-d.mV[VY], d.mV[VX]) / len : LLVector2(0.f, 1.f);
+        const LLVector2 h = n * (wpx * mpp * 0.5f);
+        const LLVector2 a0 = a - h, a1 = a + h, b0 = b - h, b1 = b + h;
+        vtx(out, a0.mV[0], a0.mV[1], z, c);
+        vtx(out, b0.mV[0], b0.mV[1], z, c);
+        vtx(out, b1.mV[0], b1.mV[1], z, c);
+        vtx(out, a0.mV[0], a0.mV[1], z, c);
+        vtx(out, b1.mV[0], b1.mV[1], z, c);
+        vtx(out, a1.mV[0], a1.mV[1], z, c);
+    }
+    LLVector2 xy(const LLVector3& v) { return LLVector2(v.mV[VX], v.mV[VY]); }
+
+    /// A run's line moved `face` metres to its right (floor on the left), mitred at inner points; where the run turns
+    /// back on itself the point takes the next segment's normal.
+    std::vector<LLVector3> offsetLine(const std::vector<LLVector3>& line, F32 face)
+    {
+        const size_t n = line.size();
+        std::vector<LLVector2> nr;
+        for (size_t k = 0; k + 1 < n; ++k)
+        {
+            const F32 dx = line[k + 1].mV[VX] - line[k].mV[VX], dy = line[k + 1].mV[VY] - line[k].mV[VY];
+            F32 l = std::sqrt(dx * dx + dy * dy);
+            l = l > 0.f ? l : 1.f;
+            nr.emplace_back(dy / l, -dx / l);
+        }
+        if (nr.empty())
+        {
+            return line;
+        }
+        std::vector<LLVector3> out;
+        for (size_t k = 0; k < n; ++k)
+        {
+            const LLVector2& a = nr[k > 0 ? k - 1 : 0];
+            const LLVector2& b = nr[llmin(nr.size() - 1, k)];
+            LLVector2 m = a + b;
+            const F32 c = a * b;
+            if (c <= 0.f)
+            {
+                m = b;
+            }
+            else
+            {
+                const F32 l = m.length();
+                const F32 s = 1.f / std::sqrt((1.f + c) / 2.f);
+                m = m / l * s;
+            }
+            out.emplace_back(line[k].mV[VX] + m.mV[VX] * face, line[k].mV[VY] + m.mV[VY] * face, line[k].mV[VZ]);
+        }
+        return out;
+    }
+
+    void floorPoly(const Data& d, std::vector<Vertex>& out, U32 p, F32 kind, F32 alpha)
+    {
+        const Poly& poly = d.mPolys[p];
+        const F32 outdoor = d.indoor(poly.mSpace) ? 0.f : 1.f;
+        const Rgba c{ 0.f, 0.f, 0.f, alpha };
+        for (U32 j = 1; j + 1 < poly.mCount; ++j)
+        {
+            for (U32 k : { 0u, j, j + 1 })
+            {
+                const LLVector3& v = d.vert(p, k);
+                vtx(out, v.mV[VX], v.mV[VY], v.mV[VZ], c, kind, outdoor, poly.mWater);
+            }
+        }
+    }
+
+    enum class EndState { OPEN, HIDDEN, UNKNOWN };
+
+    /// Flight marks at the composite's scale (rulings 16-18, 20, 22).
+    void flightMarks(const Data& d, const Flight& f, F32 mpp, bool gaps, const std::vector<F32>& drawn_poly, std::vector<Vertex>& lines,
+                     std::vector<Vertex>& tris, std::vector<Vertex>& edges)
+    {
+        const LLVector2 bm = (xy(f.mBottom[0]) + xy(f.mBottom[1])) * 0.5f, tm = (xy(f.mTop[0]) + xy(f.mTop[1])) * 0.5f;
+        const F32 len = (tm - bm).length();
+        if (len < 1e-3f || f.mOutline.empty())
+        {
+            return;
+        }
+        const LLVector2 up = (tm - bm) / len, ac(-up.mV[VY], up.mV[VX]);
+        // Tread extent across the flight: the walkable outline projected on the across axis (ruling 20).
+        F32 a0 = F32_MAX, a1 = -F32_MAX;
+        for (const auto& s : f.mOutline)
+        {
+            for (const LLVector2& p : { s.first, s.second })
+            {
+                const F32 t = (p - bm) * ac;
+                a0 = llmin(a0, t);
+                a1 = llmax(a1, t);
+            }
+        }
+        const auto at = [&](F32 u, F32 a) { return bm + up * u + ac * a; };
+        for (const auto& s : f.mOutline)
+        {
+            pushLine(lines, mpp, s.first, s.second, PX_CASING, COL_CASING);
+        }
+        for (const auto& s : f.mOutline)
+        {
+            pushLine(lines, mpp, s.first, s.second, PX_CASING_LINE, COL_CASING_LINE);
+        }
+        if (f.mStair && f.mTreads > 0)
+        {
+            // One rung per tread riser, thinned to the ruling-18 minimum pitch.
+            const S32 n = llmin(f.mTreads + 1, llmax(1, static_cast<S32>(std::floor(len / (PX_RUNG_PITCH * mpp)))));
+            for (S32 i = 1; i < n; ++i)
+            {
+                pushLine(lines, mpp, at(len * i / n, a0), at(len * i / n, a1), PX_RUNG, COL_RUNG);
+            }
+        }
+        for (S32 top = 0; top < 2; ++top)
+        {
+            const std::vector<U32>& ep = f.mEnds[top];
+            const EndState st = ep.empty() ? EndState::UNKNOWN
+                                           : std::any_of(ep.begin(), ep.end(), [&](U32 p) { return drawn_poly[p] > -F32_MAX; })
+                                                 ? EndState::OPEN
+                                                 : EndState::HIDDEN;
+            if (st == EndState::OPEN || (st == EndState::UNKNOWN && !gaps))
+            {
+                continue;
+            }
+            const LLVector3* e = top ? f.mTop : f.mBottom;
+            const F32 u = ((xy(e[0]) + xy(e[1])) * 0.5f - bm) * up;
+            pushLine(lines, mpp, at(u, a0), at(u, a1), PX_CAP, st == EndState::HIDDEN ? COL_STAIR : COL_GAP);
+        }
+        F32 al = PX_ARROW_LONG * mpp, aw = PX_ARROW_WIDE * mpp;
+        const F32 k = llmin(1.f, 0.8f * len / al, 0.9f * (a1 - a0) / aw);
+        al *= k;
+        aw *= k;
+        const F32 tip_off = llmin(0.05f * len, 2.f * mpp);
+        const LLVector2 tip = at(len - tip_off, (a0 + a1) / 2.f), base = at(len - tip_off - al, (a0 + a1) / 2.f);
+        pushLine(lines, mpp, at(0.05f * len, (a0 + a1) / 2.f), base, PX_CENTRE, COL_STAIR);
+        const LLVector2 l = base + ac * (aw / 2.f), r = base - ac * (aw / 2.f);
+        vtx(tris, tip.mV[0], tip.mV[1], 0.f, COL_STAIR);
+        vtx(tris, l.mV[0], l.mV[1], 0.f, COL_STAIR);
+        vtx(tris, r.mV[0], r.mV[1], 0.f, COL_STAIR);
+        pushLine(edges, mpp, tip, l, PX_ARROW_EDGE, COL_ARROW_EDGE);
+        pushLine(edges, mpp, l, r, PX_ARROW_EDGE, COL_ARROW_EDGE);
+        pushLine(edges, mpp, r, tip, PX_ARROW_EDGE, COL_ARROW_EDGE);
+    }
+}
+
+void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Options& opts, F32 mpp, Geometry& out)
+{
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.Geometry");
+    Builder B;
+    B.mMpp = mpp;
+    const F32 NONE = -F32_MAX;
+    std::vector<F32> drawn_poly(d.mPolys.size(), NONE);
+    std::vector<U32> drawn_order;
+    const auto mark = [&](U32 p, F32 r)
+    {
+        drawn_poly[p] = r;
+        drawn_order.push_back(p);
+    };
+    for (const auto& e : sel.mRank)
+    {
+        const F32 alpha = sel.mDim[e.first] ? DIM_ALPHA : 1.f;
+        for (U32 p : d.mSpacePolys[e.first])
+        {
+            floorPoly(d, B.rank(e.second).mFloors, p, KIND_FLOOR, alpha);
+            mark(p, e.second);
+        }
+    }
+    for (const auto& e : sel.mFlights)
+    {
+        for (U32 p : d.mFlights[e.first].mPolys)
+        {
+            if (drawn_poly[p] == NONE)
+            {
+                floorPoly(d, B.rank(e.second).mFloors, p, KIND_FLOOR, 1.f);
+                mark(p, e.second);
+            }
+        }
+    }
+    // Other level: muted, at the lowest rank, under everything drawn.
+    for (U32 s : sel.mOther)
+    {
+        for (U32 p : d.mSpacePolys[s])
+        {
+            if (drawn_poly[p] == NONE)
+            {
+                floorPoly(d, B.rank(-1.f).mFloors, p, KIND_OTHER, 1.f);
+            }
+        }
+    }
+    if (opts.mGaps)
+    {
+        for (const auto& e : sel.mGapSpaces)
+        {
+            for (U32 p : d.mSpacePolys[e.first])
+            {
+                if (drawn_poly[p] == NONE)
+                {
+                    floorPoly(d, B.rank(e.second).mFloors, p, KIND_GAP, 1.f);
+                }
+            }
+        }
+        for (const auto& e : sel.mGapPolys)
+        {
+            if (drawn_poly[e.first] == NONE)
+            {
+                floorPoly(d, B.rank(e.second).mFloors, e.first, KIND_GAP, 1.f);
+            }
+        }
+    }
+    // Walls: the wall runs of the drawn polys, at the highest rank among them, depth-tested at the run's own floor.
+    std::vector<std::pair<U32, F32>> walls;
+    std::vector<S32> wall_at(d.mWalls.size(), -1);
+    for (U32 p : drawn_order)
+    {
+        for (U32 w : d.mWallsOfPoly[p])
+        {
+            if (wall_at[w] < 0)
+            {
+                wall_at[w] = static_cast<S32>(walls.size());
+                walls.emplace_back(w, drawn_poly[p]);
+            }
+            else
+            {
+                walls[wall_at[w]].second = llmax(walls[wall_at[w]].second, drawn_poly[p]);
+            }
+        }
+    }
+    out.mWallRuns = 0;
+    for (const auto& e : walls)
+    {
+        const Wall& w = d.mWalls[e.first];
+        if (w.mClass == WallClass::NONE && !opts.mLedges)
+        {
+            continue;
+        }
+        Geometry::Rank& g = B.rank(e.second);
+        ++out.mWallRuns;
+        // A run that met no face (face < 0) keeps its line where it is.
+        const std::vector<LLVector3> line = w.mClass == WallClass::NONE || w.mFace < 0.f ? w.mLine : offsetLine(w.mLine, w.mFace);
+        // Floor out to the face: the navmesh edge stops the erosion width short of the wall; the run's face closes it.
+        if (w.mClass != WallClass::NONE && w.mFace > 0.f && !w.mPolys.empty())
+        {
+            const Poly& p0 = d.mPolys[w.mPolys[0]];
+            const F32 outdoor = d.indoor(p0.mSpace) ? 0.f : 1.f;
+            const Rgba c{ 0.f, 0.f, 0.f, 1.f };
+            for (size_t k = 0; k + 1 < w.mLine.size(); ++k)
+            {
+                const LLVector3 &e0 = w.mLine[k], &e1 = w.mLine[k + 1], &l0 = line[k], &l1 = line[k + 1];
+                const F32 z0 = e0.mV[VZ], z1 = e1.mV[VZ];
+                vtx(g.mFloors, e0.mV[0], e0.mV[1], z0, c, KIND_FLOOR, outdoor, p0.mWater);
+                vtx(g.mFloors, e1.mV[0], e1.mV[1], z1, c, KIND_FLOOR, outdoor, p0.mWater);
+                vtx(g.mFloors, l1.mV[0], l1.mV[1], z1, c, KIND_FLOOR, outdoor, p0.mWater);
+                vtx(g.mFloors, e0.mV[0], e0.mV[1], z0, c, KIND_FLOOR, outdoor, p0.mWater);
+                vtx(g.mFloors, l1.mV[0], l1.mV[1], z1, c, KIND_FLOOR, outdoor, p0.mWater);
+                vtx(g.mFloors, l0.mV[0], l0.mV[1], z0, c, KIND_FLOOR, outdoor, p0.mWater);
+            }
+        }
+        // Poché between the face and the far face (R8), one surface per pixel in the composite.
+        if (w.mClass != WallClass::NONE && w.mFar > w.mFace)
+        {
+            const std::vector<LLVector3> far = offsetLine(w.mLine, w.mFar);
+            const F32 half = w.mClass == WallClass::SOLID ? 0.f : 1.f;
+            const Rgba c{ 0.f, 0.f, 0.f, 1.f };
+            for (size_t k = 0; k + 1 < line.size(); ++k)
+            {
+                for (const LLVector3* q : { &line[k], &line[k + 1], &far[k + 1], &line[k], &far[k + 1], &far[k] })
+                {
+                    vtx(g.mWalls, q->mV[VX], q->mV[VY], w.mFloor, c, half, 1.f);
+                }
+            }
+        }
+        const F32 px = w.mClass == WallClass::SOLID ? PX_SOLID : w.mClass == WallClass::HATCHED ? PX_HATCHED : PX_LEDGE;
+        const Rgba& c = w.mClass == WallClass::SOLID ? COL_WALL_LINE : w.mClass == WallClass::HATCHED ? COL_HATCH_LINE : COL_LEDGE;
+        for (size_t k = 0; k + 1 < line.size(); ++k)
+        {
+            pushLine(g.mWallLines, mpp, xy(line[k]), xy(line[k + 1]), px, c, w.mFloor);
+        }
+    }
+    // Contours on drawn floors (build.py leaves stairs out).
+    if (opts.mContours)
+    {
+        for (const Contour& c : d.mContours)
+        {
+            if (drawn_poly[c.mPoly] != NONE)
+            {
+                pushLine(B.rank(drawn_poly[c.mPoly]).mLines, mpp, c.mA, c.mB, PX_CONTOUR, COL_CONTOUR);
+            }
+        }
+    }
+    // Roof outlines: on a rank above every storey drawn, so they lie over everything.
+    if (!sel.mRoofLines.empty())
+    {
+        F32 top = 1.f;
+        for (const auto& r : B.mRanks)
+        {
+            top = llmax(top, r.first);
+        }
+        std::vector<Vertex>& l = B.rank(top + 1.f).mLines;
+        for (const auto& s : sel.mRoofLines)
+        {
+            pushLine(l, mpp, xy(s.first), xy(s.second), PX_ROOF, COL_ROOF_LINE);
+        }
+    }
+    // Doors and openings on the higher rank of their drawn sides; seam 'adjacent' portals are plain shared floor.
+    if (opts.mDoors)
+    {
+        for (const Portal& p : d.mPortals)
+        {
+            if (p.mKind == PortalKind::STAIR || p.mKind == PortalKind::ADJACENT)
+            {
+                continue;
+            }
+            const bool ha = sel.has(p.mSpaces[0]), hb = sel.has(p.mSpaces[1]);
+            if (!ha && !hb)
+            {
+                continue;
+            }
+            const F32 r = llmax(ha ? sel.rank(p.mSpaces[0]) : -1.f, hb ? sel.rank(p.mSpaces[1]) : -1.f);
+            pushLine(B.rank(r).mLines, mpp, xy(p.mA), xy(p.mB), PX_DOOR, p.mKind == PortalKind::DOOR ? COL_DOOR : COL_OPENING);
+        }
+    }
+    // Flight marks after each rank's lines: casing, rungs, caps, centreline; then arrowheads, then their edges.
+    {
+        std::map<F32, std::vector<Vertex>> tris, edges;
+        for (const auto& e : sel.mFlights)
+        {
+            flightMarks(d, d.mFlights[e.first], mpp, opts.mGaps, drawn_poly, B.rank(e.second).mLines, tris[e.second], edges[e.second]);
+        }
+        for (auto& t : tris)
+        {
+            std::vector<Vertex>& l = B.rank(t.first).mLines;
+            l.insert(l.end(), t.second.begin(), t.second.end());
+            l.insert(l.end(), edges[t.first].begin(), edges[t.first].end());
+        }
+    }
+    // Roof inner shadow: around every outline segment a two-sided band and a disc at its start, fading to nothing over
+    // ROOF_SHADOW_M; the composite max-blends them and clips them to the roofs.
+    out.mShadowClip.clear();
+    out.mShadowBand.clear();
+    const Rgba clip_c{ 0.f, 0.f, 0.f, 1.f };
+    for (U32 p : sel.mRoofPolys)
+    {
+        const Poly& poly = d.mPolys[p];
+        for (U32 j = 1; j + 1 < poly.mCount; ++j)
+        {
+            for (U32 k : { 0u, j, j + 1 })
+            {
+                vtx(out.mShadowClip, d.vert(p, k).mV[VX], d.vert(p, k).mV[VY], 0.f, clip_c);
+            }
+        }
+    }
+    const Rgba edge_c{ ROOF_SHADOW_ALPHA, 0.f, 0.f, 1.f }, zero_c{ 0.f, 0.f, 0.f, 1.f };
+    const auto tri = [&](const LLVector2& p, const LLVector2& q, const LLVector2& r, const Rgba& cp, const Rgba& cq, const Rgba& cr)
+    {
+        vtx(out.mShadowBand, p.mV[0], p.mV[1], 0.f, cp);
+        vtx(out.mShadowBand, q.mV[0], q.mV[1], 0.f, cq);
+        vtx(out.mShadowBand, r.mV[0], r.mV[1], 0.f, cr);
+    };
+    for (const auto& s : sel.mRoofLines)
+    {
+        const LLVector2 a = xy(s.first), b = xy(s.second);
+        F32 len = (b - a).length();
+        len = len > 0.f ? len : 1.f;
+        const LLVector2 n = LLVector2(-(b.mV[VY] - a.mV[VY]), b.mV[VX] - a.mV[VX]) / len * ROOF_SHADOW_M;
+        for (F32 sgn : { 1.f, -1.f })
+        {
+            const LLVector2 ai = a + n * sgn, bi = b + n * sgn;
+            tri(a, b, bi, edge_c, edge_c, zero_c);
+            tri(a, bi, ai, edge_c, zero_c, zero_c);
+        }
+        for (S32 k = 0; k < ROOF_SHADOW_DISC; ++k)
+        {
+            const F32 t0 = F_TWO_PI * k / ROOF_SHADOW_DISC, t1 = F_TWO_PI * (k + 1) / ROOF_SHADOW_DISC;
+            tri(a, a + LLVector2(std::cos(t0), std::sin(t0)) * ROOF_SHADOW_M, a + LLVector2(std::cos(t1), std::sin(t1)) * ROOF_SHADOW_M, edge_c,
+                zero_c, zero_c);
+        }
+    }
+    // Region edges over everything.
+    out.mTop.clear();
+    for (const Region& r : d.mRegions)
+    {
+        const LLVector2 a = r.mMin, b = r.mMin + LLVector2(static_cast<F32>(r.mSide), 0.f),
+                        c = r.mMin + LLVector2(static_cast<F32>(r.mSide), static_cast<F32>(r.mSide)),
+                        e = r.mMin + LLVector2(0.f, static_cast<F32>(r.mSide));
+        pushLine(out.mTop, mpp, a, b, PX_REGION, COL_REGION);
+        pushLine(out.mTop, mpp, b, c, PX_REGION, COL_REGION);
+        pushLine(out.mTop, mpp, c, e, PX_REGION, COL_REGION);
+        pushLine(out.mTop, mpp, e, a, PX_REGION, COL_REGION);
+    }
+    out.mRanks.clear();
+    for (auto& r : B.mRanks)
+    {
+        out.mRanks.push_back(std::move(r.second));
+    }
+}
+
+// ---------- gather ----------
+
+namespace
+{
+    bool overlaps(const LLVector3d& amin, const LLVector3d& amax, const LLVector3d& bmin, const LLVector3d& bmax)
+    {
+        return amin.mdV[VX] <= bmax.mdV[VX] && amax.mdV[VX] >= bmin.mdV[VX] && amin.mdV[VY] <= bmax.mdV[VY] && amax.mdV[VY] >= bmin.mdV[VY];
+    }
+
+    Bucket bucketOf(sknav::EnclosureBucket b)
+    {
+        switch (b)
+        {
+            case sknav::EnclosureBucket::OUTDOORS: return Bucket::OUTDOORS;
+            case sknav::EnclosureBucket::SHELTERED: return Bucket::SHELTERED;
+            case sknav::EnclosureBucket::INDOORS: return Bucket::INDOORS;
+            default: return Bucket::UNKNOWN;
+        }
+    }
+
+    /// The region meshes meeting the box, by the view's meshes: those whose tiles are the region's own.
+    template <typename Fn> void forRegionMeshes(const LLVector3d& min, const LLVector3d& max, const Fn& fn)
+    {
+        const SKNavWorldViewPtr view = SKNavMesh::instance().view();
+        if (!view)
+        {
+            return;
+        }
+        for (const SKNavWorldView::Mesh& m : view->meshes())
+        {
+            if (!m.mRooms || !overlaps(m.mMin, m.mMax, min, max))
+            {
+                continue;
+            }
+            bool terrain = false;
+            SKNavMesh::instance().polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
+            {
+                terrain = terrain || (t.mMesh == m.mId && t.mTerrain);
+            });
+            if (terrain)
+            {
+                fn(m);
+            }
+        }
+    }
+}
+
+U64 skmap::plan::gatherKey(const LLVector3d& min, const LLVector3d& max)
+{
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.GatherKey");
+    SKNavMesh& nav = SKNavMesh::instance();
+    U64 h = 0;
+    std::vector<U64> keys;
+    forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
+    {
+        U64 id[2];
+        memcpy(id, m.mId.mData, sizeof(id));
+        h = mix(mix(h, id[0]), id[1]);
+        h = mix(h, m.mRooms->mGeneration);
+        h = mix(h, reinterpret_cast<uintptr_t>(nav.storeys(m.mId).get()));
+        h = mix(h, nav.detailResident(m.mId) ? 1 : 0);
+        keys.clear();
+        nav.tileContentKeysIn(m.mId, m.mMin, m.mMax, keys);
+        for (U64 k : keys)
+        {
+            h = mix(h, k);
+        }
+    });
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        const LLVector3d o = region->getOriginGlobal();
+        const F64 w = region->getWidth();
+        if (overlaps(o, o + LLVector3d(w, w, 0.0), min, max))
+        {
+            h = mix(mix(h, region->getHandle()), bitsOf(region->getWaterHeight()));
+        }
+    }
+    return h;
+}
+
+DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, const LLVector3d& max)
+{
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.Gather");
+    SKNavMesh& nav = SKNavMesh::instance();
+    auto d = std::make_shared<Data>();
+    d->mOrigin = origin;
+    const auto local = [&](const LLVector3d& g) { return LLVector3(g - origin); };
+
+    forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
+    {
+        const U32 mi = static_cast<U32>(d->mSpaceIndex.size());
+        d->mSpaceIndex.emplace_back(m.mId, std::unordered_map<U32, U32>());
+        auto& ids = d->mSpaceIndex.back().second;
+        nav.requestDetail(m.mId);   // wall runs read the tiles' air (ruling 13)
+        const sknav::RoomsProduct& rooms = *m.mRooms;
+        const sknav::StoreyProductPtr storeys = nav.storeys(m.mId);
+        const U32 space_base = static_cast<U32>(d->mSpaces.size()), storey_base = static_cast<U32>(d->mStoreyFloor.size());
+        const U32 portal_base = static_cast<U32>(d->mPortals.size());
+        const LLVector3 mo = local(m.mOrigin);
+        if (storeys)
+        {
+            for (const sknav::Storey& st : storeys->mStoreys)
+            {
+                d->mStoreyFloor.push_back(st.mFloorZ + mo.mV[VZ]);
+            }
+        }
+        for (const sknav::Space& s : rooms.mSpaces)
+        {
+            ids[s.mId] = static_cast<U32>(d->mSpaces.size());
+            Space sp;
+            sp.mBucket = bucketOf(s.mBucket);
+            sp.mRoof = s.mRoof;
+            sp.mFlight = s.mFlight;
+            sp.mBuilding = s.mBuilding ? (static_cast<U64>(mi + 1) << 32) | s.mBuilding : 0;
+            const S32 st = storeys ? storeys->storeyOf(s.mId) : -1;
+            sp.mStorey = st >= 0 ? static_cast<S32>(storey_base) + st : -1;
+            sp.mArea = s.mFloorArea;
+            sp.mMesh = mi;
+            for (U32 p : s.mPortals)
+            {
+                sp.mPortals.push_back(portal_base + p);
+            }
+            d->mSpaces.push_back(std::move(sp));
+        }
+        for (const sknav::Portal& p : rooms.mPortals)
+        {
+            Portal out;
+            out.mKind = p.mKind == sknav::PortalKind::DOOR ? PortalKind::DOOR : p.mKind == sknav::PortalKind::STAIR ? PortalKind::STAIR : PortalKind::OPENING;
+            // A cross-mesh portal's far space is not in this product.
+            for (S32 k = 0; k < 2; ++k)
+            {
+                out.mSpaces[k] = !p.mCrossMesh && p.mSpaces[k] < rooms.mSpaces.size() ? static_cast<S32>(space_base + p.mSpaces[k]) : -1;
+            }
+            out.mA = mo + p.mA;
+            out.mB = mo + p.mB;
+            d->mPortals.push_back(out);
+        }
+        const auto index_of = [&](U32 id) { const auto it = ids.find(id); return it == ids.end() ? -1 : static_cast<S32>(it->second); };
+        if (storeys)
+        {
+            for (const sknav::SeamPortal& p : storeys->mSeamPortals)
+            {
+                Portal out;
+                out.mKind = p.mKind == sknav::SeamPortal::DOOR ? PortalKind::DOOR : p.mKind == sknav::SeamPortal::STAIR ? PortalKind::STAIR : PortalKind::ADJACENT;
+                out.mSpaces[0] = index_of(p.mSpace[0]);
+                out.mSpaces[1] = index_of(p.mSpace[1]);
+                out.mA = mo + p.mA;
+                out.mB = mo + p.mB;
+                d->mPortals.push_back(out);
+            }
+            for (const sknav::ClimbLink& c : storeys->mClimbLinks)
+            {
+                const S32 a = index_of(c.mSpace[0]), b = index_of(c.mSpace[1]);
+                if (a >= 0 && b >= 0)
+                {
+                    d->mClimbs.emplace_back(a, b);
+                }
+            }
+        }
+
+        // Polys, tile by tile; the Detour refs name them for the flight ends and the border links.
+        std::unordered_map<U64, U32> by_ref;
+        std::map<std::pair<S32, S32>, U32> tile_base;
+        std::map<U64, U32> flight_of_key;
+        nav.polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
+        {
+            if (t.mMesh != m.mId || !t.mPolys)
+            {
+                return;
+            }
+            const U32 base = static_cast<U32>(d->mPolys.size());
+            tile_base[{ t.mKey.mX, t.mKey.mY }] = base;
+            const LLVector3 to = local(t.mOrigin);
+            LLViewerRegion* region = LLWorld::getInstance()->getRegionFromHandle(t.mRegion);
+            const F32 water = region ? region->getWaterHeight() : 0.f;
+            const sknav::TilePolys& tp = *t.mPolys;
+            for (U32 i = 0; i < tp.mPolys.size(); ++i)
+            {
+                const sknav::TilePolys::Poly& p = tp.mPolys[i];
+                Poly out;
+                out.mFirst = static_cast<U32>(d->mVerts.size());
+                out.mCount = p.mVertCount;
+                const U32 sid = t.mPolySpace && i < t.mPolySpace->size() ? (*t.mPolySpace)[i] : 0;
+                out.mSpace = sid ? index_of(sid) : -1;
+                out.mWater = water;
+                for (U32 k = 0; k < p.mVertCount; ++k)
+                {
+                    d->mVerts.push_back(to + tp.mVerts[p.mVerts[k]]);
+                    const S16 n = p.mNeighbour[k];
+                    d->mNbr.push_back(n >= 0 ? static_cast<S32>(base + n) : n == sknav::TilePolys::EDGE_BORDER ? NBR_BORDER : NBR_NONE);
+                }
+                d->mPolys.push_back(out);
+                if (t.mPolyRefBase)
+                {
+                    by_ref[t.mPolyRefBase | i] = base + i;
+                }
+            }
+            if (t.mFlights)
+            {
+                for (const sknav::Flight& f : *t.mFlights)
+                {
+                    auto it = flight_of_key.find(f.mKey);
+                    if (it == flight_of_key.end())
+                    {
+                        it = flight_of_key.emplace(f.mKey, static_cast<U32>(d->mFlights.size())).first;
+                        Flight out;
+                        out.mStair = f.mKind == sknav::ConnectorKind::STAIR;
+                        out.mTreads = f.mTreadCount;
+                        out.mBottom[0] = to + f.mBottomA;
+                        out.mBottom[1] = to + f.mBottomB;
+                        out.mTop[0] = to + f.mTopA;
+                        out.mTop[1] = to + f.mTopB;
+                        d->mFlights.push_back(std::move(out));
+                    }
+                    for (U16 p : f.mPolys)
+                    {
+                        if (p < tp.mPolys.size())
+                        {
+                            d->mFlights[it->second].mPolys.push_back(base + p);
+                        }
+                    }
+                }
+            }
+        });
+        // Cross-tile neighbours from Detour's own external links (R13).
+        nav.borderLinksIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR,
+                          [&](const LLUUID& mesh, const sknav::TileKey& key, U16 poly, U8 edge, U64 nbr, F32 t0, F32 t1)
+        {
+            const auto tb = tile_base.find({ key.mX, key.mY });
+            const auto nb = by_ref.find(nbr);
+            if (mesh != m.mId || tb == tile_base.end() || nb == by_ref.end())
+            {
+                return;
+            }
+            d->mBorder[(static_cast<U64>(tb->second + poly) << 3) | edge].push_back({ nb->second, t0, t1 });
+        });
+        if (storeys)
+        {
+            for (const auto& kf : flight_of_key)
+            {
+                if (const sknav::FlightEnds* ends = storeys->flightEnds(kf.first))
+                {
+                    for (S32 k = 0; k < 2; ++k)
+                    {
+                        for (U64 ref : ends->mPolys[k])
+                        {
+                            const auto it = by_ref.find(ref);
+                            if (it != by_ref.end())
+                            {
+                                d->mFlights[kf.second].mEnds[k].push_back(it->second);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        nav.wallRunsIn(m.mMin, m.mMax, [&](const LLVector3d& o, const LLUUID& mesh, const sknav::TileKey& key, const sknav::WallRun& r)
+        {
+            const auto tb = tile_base.find({ key.mX, key.mY });
+            if (mesh != m.mId || tb == tile_base.end())
+            {
+                return;
+            }
+            const LLVector3 ol = local(o);
+            Wall w;
+            for (const LLVector3& v : r.mLine)
+            {
+                w.mLine.push_back(ol + v);
+            }
+            w.mClass = r.mClass == sknav::WallClass::SOLID ? WallClass::SOLID : r.mClass == sknav::WallClass::HATCHED ? WallClass::HATCHED : WallClass::NONE;
+            w.mFace = r.mFace;
+            w.mFar = r.mFar;
+            w.mFloor = r.mFloorZ + ol.mV[VZ];
+            for (U16 p : r.mPolys)
+            {
+                w.mPolys.push_back(tb->second + p);
+            }
+            d->mWalls.push_back(std::move(w));
+        });
+    });
+
+    // Flight outlines: their polys' edge stretches no other of their polys shares (ruling 20).
+    std::vector<S32> flight_of(d->mPolys.size(), -1);
+    for (U32 f = 0; f < d->mFlights.size(); ++f)
+    {
+        for (U32 p : d->mFlights[f].mPolys)
+        {
+            flight_of[p] = static_cast<S32>(f);
+        }
+    }
+    for (U32 f = 0; f < d->mFlights.size(); ++f)
+    {
+        Flight& fl = d->mFlights[f];
+        const auto member = [&](U32 p) { return flight_of[p] == static_cast<S32>(f); };
+        for (U32 p : fl.mPolys)
+        {
+            for (U32 e = 0; e < d->mPolys[p].mCount; ++e)
+            {
+                d->edgeOutline(p, e, member, [&](const LLVector3& a, const LLVector3& b) { fl.mOutline.emplace_back(xy(a), xy(b)); });
+            }
+        }
+    }
+    // Contours: per fan triangle at CONTOUR_STEP_M, not on stair polys (ruling 15; ramps keep them).
+    for (U32 p = 0; p < d->mPolys.size(); ++p)
+    {
+        if (flight_of[p] >= 0 && d->mFlights[flight_of[p]].mStair)
+        {
+            continue;
+        }
+        const Poly& poly = d->mPolys[p];
+        for (U32 j = 1; j + 1 < poly.mCount; ++j)
+        {
+            const LLVector3 t[3] = { d->vert(p, 0), d->vert(p, j), d->vert(p, j + 1) };
+            const F32 lo = llmin(t[0].mV[VZ], t[1].mV[VZ], t[2].mV[VZ]), hi = llmax(t[0].mV[VZ], t[1].mV[VZ], t[2].mV[VZ]);
+            for (S32 k = static_cast<S32>(std::ceil(lo / CONTOUR_STEP_M)); k <= static_cast<S32>(std::floor(hi / CONTOUR_STEP_M)); ++k)
+            {
+                const F32 z = k * CONTOUR_STEP_M;
+                LLVector2 pts[3];
+                S32 n = 0;
+                for (S32 e = 0; e < 3; ++e)
+                {
+                    const LLVector3 &a = t[e], &b = t[(e + 1) % 3];
+                    if ((a.mV[VZ] - z) * (b.mV[VZ] - z) < 0.f)
+                    {
+                        const F32 s = (z - a.mV[VZ]) / (b.mV[VZ] - a.mV[VZ]);
+                        pts[n++] = LLVector2(a.mV[VX] + (b.mV[VX] - a.mV[VX]) * s, a.mV[VY] + (b.mV[VY] - a.mV[VY]) * s);
+                    }
+                }
+                if (n == 2)
+                {
+                    d->mContours.push_back({ p, pts[0], pts[1] });
+                }
+            }
+        }
+    }
+    // The regions' land: one height per metre, the surface's own grid.
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        const LLVector3d o = region->getOriginGlobal();
+        const S32 side = static_cast<S32>(region->getWidth());
+        if (!overlaps(o, o + LLVector3d(side, side, 0.0), min, max))
+        {
+            continue;
+        }
+        Region r;
+        r.mMin = xy(local(o));
+        r.mSide = side;
+        r.mWater = region->getWaterHeight();
+        r.mHeights.resize((side + 1) * (side + 1));
+        const LLSurface& land = region->getLand();
+        for (S32 y = 0; y <= side; ++y)
+        {
+            for (S32 x = 0; x <= side; ++x)
+            {
+                r.mHeights[y * (side + 1) + x] = land.resolveHeightRegion(static_cast<F32>(llmin(x, side - 1)), static_cast<F32>(llmin(y, side - 1)));
+            }
+        }
+        d->mRegions.push_back(std::move(r));
+    }
+    d->finish();
+    return d;
+}
+
+S32 skmap::plan::viewerSpace(const Data& d, const LLVector3d& pos)
+{
+    LLUUID mesh;
+    U32 id = 0;
+    if (!SKNavMesh::instance().spaceAt(pos, mesh, id) || !id)
+    {
+        return -1;
+    }
+    for (const auto& m : d.mSpaceIndex)
+    {
+        if (m.first == mesh)
+        {
+            const auto it = m.second.find(id);
+            return it == m.second.end() ? -1 : static_cast<S32>(it->second);
+        }
+    }
+    return -1;
+}
