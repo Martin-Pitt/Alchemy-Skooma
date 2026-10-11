@@ -1328,8 +1328,6 @@ void LLPipeline::releaseGLBuffers()
 {
     assertInitialized();
 
-    SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
-
     if (mNoiseMap)
     {
         LLImageGL::deleteTextures(1, &mNoiseMap);
@@ -1410,6 +1408,7 @@ void LLPipeline::releaseGLBuffers()
 
     gBumpImageList.destroyGL();
     LLVOAvatar::resetImpostors();
+    SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
 }
 
 void LLPipeline::releaseLUTBuffers()

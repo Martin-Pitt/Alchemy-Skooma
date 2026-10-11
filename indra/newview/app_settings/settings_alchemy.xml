@@ -2,6 +2,116 @@
 <llsd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="llsd.xsd">
     <map>
+        <key>SKOutlineCaptureAlphaCutoff</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: the least alpha a translucent surface needs to count as covering in a vehicle glyph.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.02</real>
+        </map>
+        <key>SKOutlineCaptureBudgetMs</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: CPU milliseconds a frame may spend rendering vehicle glyphs (one render always runs when one is due).</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.2</real>
+        </map>
+        <key>SKOutlineCaptureCells</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: cells across the longer side of a vehicle glyph.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>160</integer>
+        </map>
+        <key>SKOutlineCaptureDebug</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: show the Outline Capture Runtime debug view in Develop &gt; Render Tests and time its renders on the GPU.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOutlineCaptureEnabled</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: render vehicle glyphs when something asks for them.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKOutlineCaptureIdleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: seconds a glyph nobody asks for is kept before its atlas slot is freed.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>30.0</real>
+        </map>
+        <key>SKOutlineCaptureMaxCellMetres</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: the largest cell of a vehicle glyph in metres; longer vehicles get more cells, up to what an atlas slot holds.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.25</real>
+        </map>
+        <key>SKOutlineCaptureMaxPerFrame</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: the most vehicle glyphs rendered in one frame.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>S32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKOutlineCaptureMovingSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: how often a moving vehicle's glyph is rendered again, in seconds, to follow parts that move with it.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.5</real>
+        </map>
+        <key>SKOutlineCaptureSettleSeconds</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline capture: seconds without change, with every part at its top LOD, before a glyph counts as settled.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>3.0</real>
+        </map>
         <key>ALCefAcceleratedPaint</key>
         <map>
             <key>Comment</key>
@@ -4904,116 +5014,6 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
-        </map>
-        <key>SKOutlineCaptureAlphaCutoff</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: the least alpha a translucent surface needs to count as covering in a vehicle glyph.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.02</real>
-        </map>
-        <key>SKOutlineCaptureBudgetMs</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: CPU milliseconds a frame may spend rendering vehicle glyphs (one render always runs when one is due).</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.2</real>
-        </map>
-        <key>SKOutlineCaptureCells</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: cells across the longer side of a vehicle glyph.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>160</integer>
-        </map>
-        <key>SKOutlineCaptureDebug</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: show the Outline Capture Runtime debug view in Develop &gt; Render Tests and time its renders on the GPU.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
-        <key>SKOutlineCaptureEnabled</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: render vehicle glyphs when something asks for them.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
-        <key>SKOutlineCaptureIdleSeconds</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: seconds a glyph nobody asks for is kept before its atlas slot is freed.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>30.0</real>
-        </map>
-        <key>SKOutlineCaptureMaxCellMetres</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: the largest cell of a vehicle glyph in metres; longer vehicles get more cells, up to what an atlas slot holds.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.25</real>
-        </map>
-        <key>SKOutlineCaptureMaxPerFrame</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: the most vehicle glyphs rendered in one frame.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>S32</string>
-            <key>Value</key>
-            <integer>4</integer>
-        </map>
-        <key>SKOutlineCaptureMovingSeconds</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: how often a moving vehicle's glyph is rendered again, in seconds, to follow parts that move with it.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>0.5</real>
-        </map>
-        <key>SKOutlineCaptureSettleSeconds</key>
-        <map>
-            <key>Comment</key>
-            <string>Outline capture: seconds without change, with every part at its top LOD, before a glyph counts as settled.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>3.0</real>
         </map>
     </map>
 </llsd>
