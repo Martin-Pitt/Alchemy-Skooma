@@ -32,12 +32,25 @@ in float target_pos_x;
 in vec4 vertex_color;
 in vec2 vary_texcoord0;
 uniform float minimum_alpha;
+uniform float sk_coverage_cutoff; // <SK:Nexii> outline capture: above 0, any rendered surface this opaque covers
 
 void main()
 {
     float alpha = texture(diffuseMap,vary_texcoord0.xy).a;
 
     alpha *= vertex_color.a;
+
+    // <SK:Nexii> outline capture: coverage keeps translucent surfaces whole, with no stripes.
+    if (sk_coverage_cutoff > 0.0)
+    {
+        if (alpha < sk_coverage_cutoff)
+        {
+            discard;
+        }
+        frag_color = vec4(1,1,1,1);
+        return;
+    }
+    // </SK:Nexii>
 
     if (alpha < 0.05) // treat as totally transparent
     {

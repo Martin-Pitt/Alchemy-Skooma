@@ -259,6 +259,7 @@ const U32 LLPipeline::MAX_PREVIEW_WIDTH = 512;
 const F32 BACKLIGHT_DAY_MAGNITUDE_OBJECT = 0.1f;
 const F32 BACKLIGHT_NIGHT_MAGNITUDE_OBJECT = 0.08f;
 const F32 ALPHA_BLEND_CUTOFF = 0.598f;
+static F32 sk_coverage_cutoff = 0.02f; // <SK:Nexii> outline capture: any rendered translucent surface covers
 const F32 DEFERRED_LIGHT_FALLOFF = 0.5f;
 const U32 DEFERRED_VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_TEXCOORD1;
 
@@ -318,6 +319,7 @@ bool    LLPipeline::sBakeSunlight = false;
 bool    LLPipeline::sNoAlpha = false;
 bool    LLPipeline::sUseFarClip = true;
 bool    LLPipeline::sShadowRender = false;
+bool    LLPipeline::sSKCoverageRender = false; // <SK:Nexii> outline capture
 bool    LLPipeline::sRenderGlow = false;
 bool    LLPipeline::sImpostorRender = false;
 bool    LLPipeline::sUnderWaterRender = false;
@@ -7474,7 +7476,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
                 gDeferredShadowGLTFAlphaBlendProgram.bind(rigged);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (float)target_width);
-                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
                 LLRenderPass::pushRiggedGLTFBatch(*pparams, lastAvatarGLTF, lastMeshIdGLTF, skipLastSkinGLTF, lastMatGLTF, lastTexGLTF);
             }
             else
@@ -7482,7 +7484,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
                 gDeferredShadowAlphaMaskProgram.bind(rigged);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (float)target_width);
-                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
                 lastMatGLTF = nullptr; // pushBatch clobbers texture units
                 lastTexGLTF = nullptr;
                 if (mSimplePool->uploadMatrixPalette(pparams->mAvatar, pparams->mSkinInfo, lastAvatar, lastMeshId, skipLastSkin))
@@ -7498,7 +7500,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
                 gDeferredShadowGLTFAlphaBlendProgram.bind(rigged);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (float)target_width);
-                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
                 LLRenderPass::pushGLTFBatch(*pparams, lastMatGLTF, lastTexGLTF);
             }
             else
@@ -7506,7 +7508,7 @@ void LLPipeline::renderAlphaObjects(bool rigged)
                 gDeferredShadowAlphaMaskProgram.bind(rigged);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
                 LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (float)target_width);
-                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+                LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(sSKCoverageRender ? sk_coverage_cutoff : ALPHA_BLEND_CUTOFF); // <SK:Nexii> outline capture
                 lastMatGLTF = nullptr; // pushBatch clobbers texture units
                 lastTexGLTF = nullptr;
                 mSimplePool->pushBatch(*pparams, true, true);
@@ -12015,7 +12017,7 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
         LLRenderPass::PASS_NORMSPEC_EMISSIVE
     };
 
-    LLGLEnable cull(GL_CULL_FACE);
+    LLGLEnable cull(sSKCoverageRender ? 0 : GL_CULL_FACE); // <SK:Nexii> outline capture: coverage is double-sided
 
     //enable depth clamping if available
     LLGLEnable clamp_depth(depth_clamp ? GL_DEPTH_CLAMP : 0);
@@ -12234,6 +12236,101 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
     sUseOcclusion = saved_occlusion;
     LLPipeline::sShadowRender = false;
 }
+
+// <SK:Nexii> outline capture: renderShadow's depth-only passes over one bridge, culled and sorted with the capture camera.
+namespace
+{
+    // The coverage cutoff on the shadow alpha programs: 0 keeps their stripes and floor, above 0 replaces both.
+    void skSetCoverageCutoff(F32 cutoff)
+    {
+        for (LLGLSLShader* base : { &gDeferredShadowAlphaMaskProgram, &gDeferredShadowFullbrightAlphaMaskProgram,
+                                    &gDeferredShadowGLTFAlphaBlendProgram })
+        {
+            base->forEachVariant(
+                [cutoff](LLGLSLShader& shader)
+                {
+                    if (!shader.mProgramObject)
+                    {
+                        return;
+                    }
+                    const GLint loc = glGetUniformLocation(shader.mProgramObject, "sk_coverage_cutoff");
+                    if (loc >= 0)
+                    {
+                        shader.bind();
+                        glUniform1f(loc, cutoff);
+                    }
+                });
+        }
+        LLGLSLShader::unbind();
+    }
+}
+
+U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera,
+                                        F32 alpha_cutoff)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOutlineCoverage");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        bool coverage = sSKCoverageRender;
+        ~Restore()
+        {
+            skSetCoverageCutoff(0.f);
+            sSKCoverageRender = coverage;
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    // Avatars stay in the mask so stateSort resets their pools; otherwise this frame's bodies would draw.
+    pushRenderTypeMask();
+    clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_TERRAIN, RENDER_TYPE_GRASS, RENDER_TYPE_TREE,
+                        RENDER_TYPE_VOIDWATER, RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES,
+                        RENDER_TYPE_CLOUDS, RENDER_TYPE_HUD_PARTICLES, END_RENDER_TYPES);
+
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    sSKCoverageRender = true;
+    sk_coverage_cutoff = llclamp(alpha_cutoff, 0.001f, 1.f);
+    skSetCoverageCutoff(sk_coverage_cutoff);
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    result.clear();
+    grabReferences(result);
+    // Impostor-style acceptance for the bridge itself: no frustum or impostor-flag rejection of the subject.
+    sImpostorRender = true;
+    markVisible(bridge, camera);
+    sImpostorRender = false;
+
+    renderShadow(view, proj, camera, result, true, false);
+
+    U32 draw_infos = 0;
+    for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
+    {
+        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        {
+            ++draw_infos;
+        }
+    }
+
+    popRenderTypeMask();
+    return draw_infos;
+}
+// </SK:Nexii>
 
 bool LLPipeline::getVisiblePointCloud(LLCamera& camera, LLVector3& min, LLVector3& max, std::vector<LLVector3>& fp, LLVector3 light_dir)
 {

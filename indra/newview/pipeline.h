@@ -139,6 +139,9 @@ public:
     //  for_profile - if true, a profile is being performed, do not update actual impostor
     //  specific_attachment - specific attachment to profile, or nullptr to profile entire avatar
     void generateImpostor(LLVOAvatar* avatar, bool preview_avatar = false, bool for_profile = false, LLViewerObject* specific_attachment = nullptr);
+    // <SK:Nexii> outline capture: depth-only coverage of one spatial bridge into the bound target; returns the draws made.
+    U32 skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera, F32 alpha_cutoff);
+    // </SK:Nexii>
 
     void bindScreenToTexture();
     void renderFinalize();
@@ -773,6 +776,7 @@ public:
     static bool             sNoAlpha;
     static bool             sUseFarClip;
     static bool             sShadowRender;
+    static bool             sSKCoverageRender; // <SK:Nexii> outline capture: renderShadow draws double-sided, translucency counts
     static bool             sDynamicLOD;
     static bool             sPickAvatar;
     static bool             sImpostorRender;
