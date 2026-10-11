@@ -168,6 +168,8 @@ public:
 
     // <SK:Nexii> Navmesh rooms probes: an automatic sphere held by a room part, and an octree probe a room part replaces.
     bool mNavRooms = false;
+    // Census cluster fill: blends over the default probe and under every other probe (SKClusterProbes).
+    bool mClusterFill = false;
     bool mSuppressedByNavRooms = false;
     bool mBlockedByCensus = false;
     // Set once the census pass has anchored this probe's placement (mGridOrigin/mGridRadius);

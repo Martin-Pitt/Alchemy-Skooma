@@ -152,6 +152,17 @@ namespace
         return r;
     }
 
+    std::string info(const Result& r)
+    {
+        std::string o;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            o += llformat(" [%u b%d a%.1f z%.1f S%.2f ceil%.1f lift%d uf%d p%zu c(%.1f,%.1f)]", r.index(&sp), (int)sp.mBucket, sp.mFloorArea, sp.mFloorMin, sp.mSMean,
+                          sp.mCeilingMax, (int)sp.mLift, (int)sp.mUnderFlight, sp.mPortals.size(), sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
+        }
+        return o;
+    }
+
     std::string dump(const Result& r)
     {
         return dumpRooms(*r.mEnc, *r.mRooms);
@@ -255,6 +266,41 @@ namespace
         return s;
     }
 
+    /// A walled, roofed building whose street door is set into a facade recess under a high overhang.
+    Scene recessed(bool shaft)
+    {
+        Scene s;
+        s.wall(8.f, 12.f, 20.f, 12.25f, 8.f);
+        s.wall(21.f, 12.f, 28.f, 12.25f, 8.f);
+        s.box(20.f, 12.f, 21.f, 12.25f, 2.2f, 8.f, false);
+        if (shaft)
+        {
+            s.wall(8.f, 27.75f, 14.75f, 28.f, 8.f);
+            s.wall(15.75f, 27.75f, 28.f, 28.f, 8.f);
+            s.box(14.75f, 27.75f, 15.75f, 28.f, 2.2f, 8.f, false);
+        }
+        else
+        {
+            s.wall(8.f, 27.75f, 28.f, 28.f, 8.f);
+        }
+        s.wall(8.f, 12.f, 8.25f, 28.f, 8.f);
+        s.wall(27.75f, 12.f, 28.f, 28.f, 8.f);
+        s.box(8.f, 12.f, 28.f, 28.f, 8.f, 8.25f);
+        s.wall(19.f, 10.f, 19.25f, 12.f, 8.f);
+        s.wall(21.75f, 10.f, 22.f, 12.f, 8.f);
+        s.box(19.f, 10.f, 22.f, 12.f, 7.f, 7.25f);
+        if (shaft)
+        {
+            // A 2 m shaft in a core behind the hall's back wall, 12 m tall and roofed, behind a door.
+            s.box(8.f, 28.f, 14.25f, 31.f, 0.f, 12.f, false);
+            s.box(16.25f, 28.f, 22.f, 31.f, 0.f, 12.f, false);
+            s.box(14.25f, 30.25f, 16.25f, 31.f, 0.f, 12.f, false);
+            s.box(8.f, 27.75f, 22.f, 28.f, 8.f, 12.f, false);
+            s.box(8.f, 28.f, 22.f, 31.f, 12.f, 12.25f);
+        }
+        return s;
+    }
+
     DoorEntity door(F32 x, F32 y, F32 nx, F32 ny, F32 width, F32 sill = 0.f, F32 height = 2.2f)
     {
         DoorEntity d;
@@ -276,7 +322,7 @@ namespace tut
     struct sknavrooms_data
     {
     };
-    typedef test_group<sknavrooms_data> sknavrooms_group;
+    typedef test_group<sknavrooms_data, 80> sknavrooms_group;  // more than TUT's default 50
     typedef sknavrooms_group::object sknavrooms_object;
     tut::sknavrooms_group sknavrooms_tests("sknavrooms");
 
@@ -927,7 +973,7 @@ namespace tut
     template<> template<>
     void sknavrooms_object::test<26>()
     {
-        set_test_name("a roof joins the room under it across a thin slab, not across a thick one, and every space's bounds hold its gaps");
+        set_test_name("a roof never joins the room under it, thin slab or thick, and every space's bounds hold its gaps");
         Scene s = twoRooms();
         // A solid block beside the rooms, its top flush with their roof, and a
         // tower over a small room whose roof lies 4 m of solid above its ceiling.
@@ -942,8 +988,9 @@ namespace tut
         const Space* west = r.at(6.f, 6.f);
         const Space* tower = r.at(27.f, 5.f);
         ensure("rooms found", west && tower);
-        ensure("the thin roof is the room's", r.at(6.f, 6.f, 3.5f) == west);
-        ensure("the roof over the block joins the roof beside it", r.at(20.f, 6.f, 3.5f) == r.at(16.f, 6.f, 3.5f) && r.at(20.f, 6.f, 3.5f));
+        ensure("the thin roof is not the room's", r.at(6.f, 6.f, 3.5f) != west);
+        const Space* roof = r.at(16.f, 6.f, 3.5f);
+        ensure("a roof no one walks onto is a roof of its own, over the block and the rooms", roof && roof->mRoof && r.at(20.f, 6.f, 3.5f) == roof);
         ensure("the tower's top is not the room 4 m below", r.at(27.f, 5.f, 7.5f) != tower);
         ensure_equals("no gap outside its space's bounds", r.outOfBounds(), 0u);
     }
@@ -1120,6 +1167,313 @@ namespace tut
             out << (i ? "," : "") << space;
         }
         out << "]}\n";
+    }
+
+    /// A roofed 8 x 8 m room with a recess off its north wall, through a
+    /// slot under a lintel: the recess's inside is 2.5 m wide and depth deep.
+    Scene roomWithRecess(F32 slot, F32 depth)
+    {
+        Scene s;
+        s.wall(2.f, 2.f, 10.f, 2.25f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(9.75f, 2.f, 10.f, 10.f);
+        const F32 x0 = 6.f - slot * 0.5f, x1 = 6.f + slot * 0.5f;
+        s.wall(2.f, 9.75f, x0, 10.f);
+        s.wall(x1, 9.75f, 10.f, 10.f);
+        s.box(x0, 9.75f, x1, 10.f, 2.2f, 3.f, false);
+        s.wall(4.5f, 10.f, 4.75f, 10.f + depth + 0.25f);
+        s.wall(7.25f, 10.f, 7.5f, 10.f + depth + 0.25f);
+        s.wall(4.5f, 10.f + depth, 7.5f, 10.f + depth + 0.25f);
+        s.box(2.f, 2.f, 10.f, 10.f + depth + 0.25f, 3.f, 3.25f);
+        return s;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<39>()
+    {
+        set_test_name("a recess smaller than an avatar's floor joins its room, though the doorway into it has a lintel");
+        const Result r = run(roomWithRecess(1.f, 0.625f).input(1));
+        const Space* room = r.at(6.f, 6.f);
+        ensure("the room has a space", room != nullptr);
+        ensure("the recess is the room's", r.at(6.f, 10.3f) == room);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure("no space under an avatar's floor", sp.mFloorArea >= SpaceParams().mAvatarAreaM2);
+        }
+        // A closet as wide but deeper is a space of its own behind its doorway.
+        const Result deep = run(roomWithRecess(1.f, 3.f).input(1));
+        const Space* closet = deep.at(6.f, 11.5f);
+        ensure("the closet is its own space", closet && closet != deep.at(6.f, 6.f));
+        ensure_equals("behind one opening", deep.between(closet, deep.at(6.f, 6.f)).size(), 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<40>()
+    {
+        set_test_name("a slot narrower than an avatar passes is no portal, and no way through to merge across");
+        const F32 passage = 2.f * SpaceParams().mAgentRadiusM;
+        const Result r = run(roomWithRecess(0.5f, 3.f).input(1));
+        const Space* room = r.at(6.f, 6.f);
+        const Space* closet = r.at(6.f, 11.5f);
+        ensure("the room and the closet have spaces", room && closet);
+        ensure("the closet behind the slot is not the room", closet != room);
+        ensure("and no portal joins them", r.between(room, closet).empty());
+        for (const Portal& q : r.mRooms->mPortals)
+        {
+            ensure("no portal narrower than a passage", q.mWidth >= passage);
+        }
+        const Result wide = run(roomWithRecess(passage + 0.15f, 3.f).input(1));
+        ensure("a doorway a passage wide parts them with a portal", wide.between(wide.at(6.f, 6.f), wide.at(6.f, 11.5f)).size() == 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<41>()
+    {
+        set_test_name("an opening spans its aperture jamb to jamb, under its lintel, not the boundary the watershed drew");
+        // A 3 m doorway beside a wall stub that bends the watershed's boundary.
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 9.75f, 18.f, 10.f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(17.75f, 2.f, 18.f, 10.f);
+        s.wall(10.f, 2.f, 10.25f, 3.f);
+        s.wall(10.f, 6.f, 10.25f, 10.f);
+        s.wall(7.f, 2.75f, 10.f, 3.f);
+        s.box(10.f, 3.f, 10.25f, 6.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 10.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        const Space* a = r.at(6.f, 6.f);
+        const Space* b = r.at(14.f, 6.f);
+        ensure("two rooms", a && b && a != b);
+        const std::vector<const Portal*> p = r.between(a, b);
+        ensure_equals("one opening", p.size(), 1u);
+        const Portal& q = *p[0];
+        ensure("an opening", q.mKind == PortalKind::OPENING);
+        ensure("its width is the clear width", std::fabs(q.mWidth - 3.f) < 0.02f);
+        ensure("its ends on the jambs", std::fabs(std::min(q.mA.mV[VY], q.mB.mV[VY]) - 3.f) < 0.02f && std::fabs(std::max(q.mA.mV[VY], q.mB.mV[VY]) - 6.f) < 0.02f);
+        ensure("its centre midway between them", std::fabs(q.mCentre.mV[VY] - 4.5f) < 0.02f);
+        ensure("in the wall", q.mCentre.mV[VX] > 9.9f && q.mCentre.mV[VX] < 10.35f);
+        ensure("square to it", std::fabs(q.mNormal.mV[VX]) > 0.99f);
+        ensure("its head the lintel", std::fabs(q.mHead - 2.2f) < 0.15f);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<42>()
+    {
+        set_test_name("a causeway between two pavilions, under a beam, is an opening walled on neither side: floor that ends is no jamb");
+        // Roofed both sides, so the outdoor rule leaves the cut alone; nothing below the causeway.
+        Scene s;
+        s.mGround[2] = s.mGround[0];
+        s.box(2.f, 2.f, 12.f, 14.f, 1.75f, 2.f);
+        s.box(12.f, 7.f, 14.f, 9.f, 1.75f, 2.f);
+        s.box(14.f, 2.f, 24.f, 14.f, 1.75f, 2.f);
+        s.box(2.f, 2.f, 12.f, 14.f, 4.5f, 4.75f, false);
+        s.box(14.f, 2.f, 24.f, 14.f, 4.5f, 4.75f, false);
+        s.box(12.75f, 7.f, 13.25f, 9.f, 3.9f, 4.2f, false);
+        const Result r = run(s.input(1));
+        const Space* west = r.at(5.f, 8.f, 2.5f);
+        const Space* east = r.at(20.f, 8.f, 2.5f);
+        ensure("two pavilions", west && east && west != east);
+        const std::vector<const Portal*> p = r.between(west, east);
+        ensure_equals("one cut on the causeway", p.size(), 1u);
+        ensure("an opening, for its lintel", p[0]->mKind == PortalKind::OPENING && p[0]->lintel());
+        ensure("walled on neither side", !p[0]->walled());
+    }
+
+    /// Two roofed rooms either side of a partition with a 2 m doorway under
+    /// a lintel, both opening without one onto a corridor along their north
+    /// side: the rooms meet through the doorway and around through the corridor.
+    Scene loopedRooms(F32 lintel_z = 2.2f)
+    {
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 14.f, 18.f, 14.25f);
+        s.wall(2.f, 2.f, 2.25f, 14.25f);
+        s.wall(17.75f, 2.f, 18.f, 14.25f);
+        s.wall(2.f, 10.f, 4.f, 10.25f);
+        s.wall(6.f, 10.f, 14.f, 10.25f);
+        s.wall(16.f, 10.f, 18.f, 10.25f);
+        s.wall(10.f, 2.25f, 10.25f, 5.f);
+        s.wall(10.f, 7.f, 10.25f, 10.f);
+        s.box(10.f, 5.f, 10.25f, 7.f, lintel_z, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 14.25f, 3.f, 3.25f);
+        return s;
+    }
+
+    /// The spaces pass again over the same air, reading the last pass.
+    Result rerun(const Scene& s, const Result& first)
+    {
+        std::shared_ptr<EnclosureInput> in = s.input(1);
+        for (EnclosureInput::Tile& t : in->mTiles)
+        {
+            if (const RoomsTile* was = first.mRooms->tile(t.mKey))
+            {
+                t.mAir = was->mAir;
+            }
+        }
+        EnclosurePass pass(in);
+        while (!pass.step(1u << 30))
+        {
+        }
+        Result r;
+        r.mEnc = pass.takeProduct();
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mPrevious = first.mRooms;
+        r.mRooms = computeSpaces(rooms, r.mEnc);
+        return r;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<43>()
+    {
+        set_test_name("a doorway under a lintel parts its rooms though they meet again around it, and stays cut on the next pass");
+        const Scene s = loopedRooms();
+        const Result r = run(s.input(1));
+        const Space* west = r.at(6.f, 6.f);
+        const Space* east = r.at(14.f, 6.f);
+        ensure("two rooms", west && east && west != east);
+        ensure_equals("one aperture cut", r.mRooms->mApart.size(), 1u);
+        bool doorway = false;
+        for (const Portal* q : r.between(west, east))
+        {
+            doorway = doorway || (q->mKind == PortalKind::OPENING && q->lintel() && std::fabs(q->mCentre.mV[VY] - 6.f) < 0.1f &&
+                                  q->mCentre.mV[VX] > 9.9f && q->mCentre.mV[VX] < 10.35f && std::fabs(q->mWidth - 2.f) < 0.05f);
+        }
+        ensure("an opening on the doorway, jamb to jamb", doorway);
+        // A pass that cuts no tile again keeps the cut.
+        const Result again = rerun(s, r);
+        ensure_equals("nothing cut again", again.mRooms->mDirtyTiles, 0u);
+        ensure("still two rooms", again.at(6.f, 6.f) && again.at(6.f, 6.f) != again.at(14.f, 6.f));
+        ensure_equals("the cut kept", again.mRooms->mApart.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<44>()
+    {
+        set_test_name("a beam across a corridor is no doorway: its walls run on along both sides");
+        Scene s;
+        s.wall(2.f, 2.f, 20.f, 2.25f);
+        s.wall(2.f, 4.f, 20.f, 4.25f);
+        s.wall(2.f, 2.f, 2.25f, 4.25f);
+        s.wall(19.75f, 2.f, 20.f, 4.25f);
+        s.box(10.f, 2.25f, 10.25f, 4.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 20.f, 4.25f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+        ensure("one corridor", r.at(5.f, 3.f) && r.at(5.f, 3.f) == r.at(15.f, 3.f));
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<45>()
+    {
+        set_test_name("a beam from a wall's end to a post is no doorway: a jamb's wall runs on past it");
+        Scene s;
+        s.wall(2.f, 2.f, 18.f, 2.25f);
+        s.wall(2.f, 9.75f, 18.f, 10.f);
+        s.wall(2.f, 2.f, 2.25f, 10.f);
+        s.wall(17.75f, 2.f, 18.f, 10.f);
+        s.wall(10.f, 2.25f, 10.25f, 5.f);
+        s.wall(9.9f, 7.f, 10.35f, 7.4f);
+        s.box(10.f, 5.f, 10.25f, 7.f, 2.2f, 3.f, false);
+        s.box(2.f, 2.f, 18.f, 10.f, 3.f, 3.25f);
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+        // The same gap between two walls is one.
+        s.wall(10.f, 7.4f, 10.25f, 9.75f);
+        const Result walled = run(s.input(1));
+        ensure_equals("a doorway's cut", walled.mRooms->mApart.size(), 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<46>()
+    {
+        set_test_name("an arch between open yards, or a lintel higher than a door's, cuts nothing");
+        // The looped rooms unroofed: open sky either side of the doorway.
+        Scene yards = loopedRooms();
+        yards.mSolids.pop_back();
+        const Result open = run(yards.input(1));
+        ensure("no cut under open sky", open.mRooms->mApart.empty());
+        // Roofed, with the lintel 3.75 m up under a 4.5 m ceiling.
+        Scene hall = loopedRooms(3.75f);
+        hall.mSolids.pop_back();
+        for (Solid& w : hall.mSolids)
+        {
+            w.mZ1 = std::max(w.mZ1, 4.5f);
+        }
+        hall.box(2.f, 2.f, 18.f, 14.25f, 4.5f, 4.75f);
+        const Result high = run(hall.input(1));
+        ensure("no cut under a lintel that high", high.mRooms->mApart.empty());
+        ensure("the door-high one is cut", run(loopedRooms().input(1)).mRooms->mApart.size() == 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<47>()
+    {
+        set_test_name("a ceiling sloping across a doorway is no lintel to cut at");
+        Scene s = loopedRooms();
+        s.mSolids.erase(std::find_if(s.mSolids.begin(), s.mSolids.end(), [](const Solid& w) { return w.mZ0 == 2.2f; }));
+        for (S32 k = 0; k < 4; ++k)
+        {
+            s.box(10.f, 5.f + 0.5f * k, 10.25f, 5.5f + 0.5f * k, 2.f + 0.2f * k, 3.f, false);
+        }
+        const Result r = run(s.input(1));
+        ensure("no aperture cut", r.mRooms->mApart.empty());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<48>()
+    {
+        set_test_name("no stair portal is wider than a staircase, though a deck-wide flight meets its floors along 14 m");
+        Scene s;
+        s.box(20.f, 0.f, 28.f, 16.f, 3.f, 3.25f);
+        s.flight(12.f, 20.f, 1.f, 15.f, 3.25f);
+        const Result r = run(s.input(1));
+        for (const Portal& q : r.mRooms->mPortals)
+        {
+            ensure("no stair portal wider than a staircase", q.mKind != PortalKind::STAIR || q.mWidth <= STAIR_MAX_WIDTH_M);
+        }
+    }
+
+    /// The looped rooms four times over four tiles, once across the corner
+    /// they share, each moved off the cell grid so the doorways' jambs and
+    /// middles fall inside cells.
+    Scene town()
+    {
+        Scene s;
+        for (const LLVector2& at : { LLVector2(22.03f, 24.07f), LLVector2(1.11f, 44.29f), LLVector2(40.53f, 1.71f), LLVector2(0.37f, 0.93f) })
+        {
+            for (Solid b : loopedRooms().mSolids)
+            {
+                b.mX0 += at.mV[VX];
+                b.mX1 += at.mV[VX];
+                b.mY0 += at.mV[VY];
+                b.mY1 += at.mV[VY];
+                s.mSolids.push_back(b);
+            }
+        }
+        return s;
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<50>()
+    {
+        set_test_name("doorways cut from below find, reading their cells in bulk, what they find reading every sample");
+        for (const Scene& s : { loopedRooms(), town() })
+        {
+            const S32 tiles = s.mSolids.size() > 11 ? 2 : 1;
+            auto framed = std::make_shared<RoomsInput>(), sampled = std::make_shared<RoomsInput>();
+            sampled->mFrameApertures = false;
+            const Result a = run(s.input(tiles, tiles), framed);
+            const Result b = run(s.input(tiles, tiles), sampled);
+            ensure("some doorway cut from below", !b.mRooms->mApart.empty());
+            ensure_equals("as many cuts", a.mRooms->mApart.size(), b.mRooms->mApart.size());
+            for (size_t i = 0; i < a.mRooms->mApart.size(); ++i)
+            {
+                const SeedLink &p = a.mRooms->mApart[i], &q = b.mRooms->mApart[i];
+                ensure("the same cut", p.mA == q.mA && p.mB == q.mB && p.mSeedA == q.mSeedA && p.mSeedB == q.mSeedB);
+            }
+            ensure("the same spaces and portals, to the bit", dump(a) == dump(b));
+        }
     }
 
     template<> template<>
@@ -1363,5 +1717,301 @@ template<> template<>
             }
         }
         ensure("the landed coarse keeps", coarse_kept);
+    }
+
+    /// A 40 m square roof over 12..52 at the given height, with walls on the
+    /// given sides of north, east, south, west; a south wall keeps a 2 m door.
+    Result canopy(F32 height, bool walls[4])
+    {
+        Scene s;
+        s.box(12.f, 12.f, 52.f, 52.f, height, height + 0.25f);
+        for (F32 px : { 12.f, 51.75f })
+        {
+            for (F32 py : { 12.f, 51.75f })
+            {
+                s.wall(px, py, px + 0.25f, py + 0.25f, height);
+            }
+        }
+        if (walls[0])
+        {
+            s.wall(12.f, 51.75f, 52.f, 52.f, height);
+        }
+        if (walls[1])
+        {
+            s.wall(51.75f, 12.f, 52.f, 52.f, height);
+        }
+        if (walls[2])
+        {
+            s.wall(12.f, 12.f, 31.f, 12.25f, height);
+            s.wall(33.f, 12.f, 52.f, 12.25f, height);
+        }
+        if (walls[3])
+        {
+            s.wall(12.f, 12.f, 12.25f, 52.f, height);
+        }
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        return run(in);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<49>()
+    {
+        set_test_name("the middle of a 40 m roof on posts is SHELTERED at the gap, however deep, low roof or high");
+        for (F32 height : { 3.f, 6.f })
+        {
+            bool walls[4] = { false, false, false, false };
+            const Result r = canopy(height, walls);
+            Enclosure e;
+            ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+            ensure("deep enough to read as INDOORS by e alone", e.mE > 0.75f);
+            ensure("open at the sides but for the corner posts", e.mO > 0.7f);
+            ensure("a canopy", e.mCanopy);
+            ensure("SHELTERED", e.mBucket == EnclosureBucket::SHELTERED);
+            // The coarse answers, what a far reader and evicted detail keep, agree.
+            S32 canopies = 0;
+            bool capped = true;
+            for (const TileEnclosure& t : r.mEnc->mTiles)
+            {
+                for (const CoarseGap& g : t.mCoarse.mGaps)
+                {
+                    if (g.mFlags & ENCLOSURE_CANOPY)
+                    {
+                        ++canopies;
+                        capped = capped && g.mBucket != static_cast<U8>(EnclosureBucket::INDOORS);
+                    }
+                }
+            }
+            ensure("coarse canopies", canopies > 100);
+            ensure("capped in the coarse too", capped);
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<35>()
+    {
+        set_test_name("a walled 40 m hall with one door stays INDOORS in its middle");
+        for (F32 height : { 3.f, 6.f })
+        {
+            bool walls[4] = { true, true, true, true };
+            const Result r = canopy(height, walls);
+            Enclosure e;
+            ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+            ensure("walled on most sides", e.mO < 0.3f);
+            ensure("no canopy", !e.mCanopy && !e.mSealed);
+            ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<36>()
+    {
+        set_test_name("under a 40 m roof with one wall and three open sides is SHELTERED at the gap");
+        bool walls[4] = { true, false, false, false };
+        const Result r = canopy(6.f, walls);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+        ensure("deep enough to read as INDOORS by e alone", e.mE > 0.75f);
+        ensure("walled on the north only", e.mO > 0.5f && e.mO < 0.9f);
+        ensure("SHELTERED", e.mBucket == EnclosureBucket::SHELTERED);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<37>()
+    {
+        set_test_name("a street between towers is walled at the sides but unroofed, so still OUTDOORS");
+        Scene s;
+        s.box(0.f, 0.f, 12.f, 32.f, 0.f, 36.f, false);
+        s.box(20.f, 0.f, 32.f, 32.f, 0.f, 36.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(16.f, 16.f, 0.5f), e));
+        ensure("open only along the street", e.mO > 0.f && e.mO < 0.5f);
+        ensure("no canopy", !e.mCanopy);
+        ensure("OUTDOORS", e.mBucket == EnclosureBucket::OUTDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<38>()
+    {
+        set_test_name("a building with no door is INDOORS, and no canopy");
+        Scene s;
+        s.wall(12.f, 12.f, 52.f, 12.25f, 6.f);
+        s.wall(12.f, 51.75f, 52.f, 52.f, 6.f);
+        s.wall(12.f, 12.f, 12.25f, 52.f, 6.f);
+        s.wall(51.75f, 12.f, 52.f, 52.f, 6.f);
+        s.box(12.f, 12.f, 52.f, 52.f, 6.f, 6.25f);
+        auto in = s.input(2, 2);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure e;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(32.f, 32.f, 0.5f), e));
+        ensure("walled all round, no canopy", e.mO < 0.3f && !e.mCanopy);
+        ensure("INDOORS", e.mBucket == EnclosureBucket::INDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<51>()
+    {
+        set_test_name("a doorstep in a facade recess under a high overhang is no lift, and the door opens onto the street");
+        Scene s = recessed(false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mDoors.push_back(door(20.5f, 12.125f, 0.f, 1.f, 1.f));
+        const Result r = run(in, rooms);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure("no lift", !sp.mLift);
+        }
+        const Space* hall = r.at(18.f, 20.f);
+        const Space* street = r.at(20.5f, 4.f);
+        ensure("found", hall && street && hall != street);
+        ensure("hall roofed", hall->mBucket != EnclosureBucket::OUTDOORS);
+        ensure("street not INDOORS", street->mBucket != EnclosureBucket::INDOORS);
+        const Space* step = r.at(20.5f, 11.f);
+        ensure("doorstep not INDOORS", step && step->mBucket != EnclosureBucket::INDOORS);
+        bool door_out = false;
+        for (const Portal* q : r.between(hall, step))
+        {
+            door_out = door_out || q->mKind == PortalKind::DOOR;
+        }
+        ensure("the door joins the hall to the doorstep", door_out);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<52>()
+    {
+        set_test_name("a tall roofed shaft behind a door is a lift");
+        Scene s = recessed(true);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mDoors.push_back(door(20.5f, 12.125f, 0.f, 1.f, 1.f));
+        rooms->mDoors.push_back(door(15.25f, 27.875f, 0.f, 1.f, 1.f));
+        const Result r = run(in, rooms);
+        const Space* lift = r.at(15.25f, 29.25f);
+        const Space* hall = r.at(18.f, 20.f);
+        ensure("found", lift && hall);
+        ensure("a lift of its own" + info(r), lift != hall && lift->mLift);
+        ensure("INDOORS", lift->mBucket == EnclosureBucket::INDOORS);
+        U32 lifts = 0;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            lifts += sp.mLift ? 1 : 0;
+        }
+        ensure_equals("only the shaft", lifts, 1u);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<53>()
+    {
+        set_test_name("ground under an open flight is sheltered and opens onto the street under its stringer");
+        // A flight up +x from 4 m to 16 m onto a landing block, treads as thin slabs with air below;
+        // walled on the north, and on the south a stringer hangs to 0.9 m over the street.
+        Scene s;
+        for (S32 k = 1; k <= 24; ++k)
+        {
+            const F32 x = 4.f + (k - 1) * 0.5f, z = 0.25f * k;
+            s.box(x, 10.25f, x + 0.5f, 12.f, z - 0.25f, z, true, true);
+        }
+        s.box(16.f, 10.f, 20.f, 12.25f, 0.f, 6.f);
+        s.wall(4.f, 12.f, 16.f, 12.25f, 6.f);
+        s.box(4.f, 10.f, 16.f, 10.25f, 0.9f, 6.f, false);
+        auto in = s.input(1);
+        s.addSky(*in);
+        const Result r = run(in);
+        const Space* under = r.at(14.f, 11.1f, 0.5f);
+        const Space* street = r.at(13.f, 5.f, 0.5f);
+        ensure(llformat("found %d %d", under ? 1 : 0, street ? 1 : 0), under && street && under != street);
+        ensure("under its flight" + info(r), under->mUnderFlight);
+        ensure("sheltered, not indoors", under->mBucket != EnclosureBucket::INDOORS);
+        ensure("opens onto the street", !r.between(under, street).empty());
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<54>()
+    {
+        set_test_name("two shafts behind stacks of doors are two lifts; a stack of doors on a storeyed hall is none");
+        // Bad Space's pair: two 2.5 m shafts side by side, 30 m tall, each behind a census stack of doors
+        // in the wall of a storeyed hall; a third stack faces a hall with a floor every 4 m.
+        Scene s;
+        s.wall(11.75f, 9.75f, 14.75f, 10.f, 30.f);
+        s.wall(11.75f, 15.25f, 14.75f, 15.5f, 30.f);
+        s.wall(11.75f, 9.75f, 12.f, 15.5f, 30.f);
+        s.wall(12.f, 12.5f, 14.5f, 12.75f, 30.f);
+        for (F32 y0 : { 10.f, 12.75f })
+        {
+            s.box(14.5f, y0, 14.75f, y0 + 0.5f, 0.f, 30.f, false);
+            s.box(14.5f, y0 + 1.75f, 14.75f, y0 + 2.5f, 0.f, 30.f, false);
+            s.box(14.5f, y0 + 0.5f, 14.75f, y0 + 1.75f, 2.2f, 30.f, false);
+        }
+        s.box(11.75f, 9.75f, 14.75f, 15.5f, 30.f, 30.25f);
+        s.wall(14.75f, 4.f, 26.f, 4.25f, 30.f);
+        s.wall(14.75f, 21.75f, 26.f, 22.f, 30.f);
+        s.wall(25.75f, 4.f, 26.f, 22.f, 30.f);
+        s.wall(14.5f, 4.f, 14.75f, 9.75f, 30.f);
+        s.wall(14.5f, 15.5f, 14.75f, 22.f, 30.f);
+        for (F32 z = 4.f; z < 30.f; z += 4.f)
+        {
+            s.box(14.75f, 4.f, 26.f, 22.f, z - 0.25f, z);
+        }
+        s.box(14.75f, 4.f, 26.f, 22.f, 30.f, 30.25f);
+        auto in = s.input(1);
+        s.addSky(*in);
+        auto rooms = std::make_shared<RoomsInput>();
+        for (F32 y0 : { 10.f, 12.75f })
+        {
+            rooms->mLifts.emplace_back(LLVector3d(14.5f, y0 + 0.5f, 0.f), LLVector3d(14.6f, y0 + 1.75f, 30.f));
+            for (F32 z = 0.f; z < 28.f; z += 4.f)
+            {
+                rooms->mDoors.push_back(door(14.625f, y0 + 1.125f, 1.f, 0.f, 1.25f, z));
+            }
+        }
+        rooms->mLifts.emplace_back(LLVector3d(25.75f, 12.f, 0.f), LLVector3d(25.85f, 13.25f, 30.f));
+        const Result r = run(in, rooms);
+        const Space* a = r.at(13.25f, 11.25f);
+        const Space* b = r.at(13.25f, 14.f);
+        ensure("found", a && b);
+        ensure("each a lift" + info(r), a->mLift && b->mLift);
+        ensure("two shafts, two lifts" + info(r), a != b);
+        U32 lifts = 0;
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            lifts += sp.mLift ? 1 : 0;
+        }
+        ensure_equals("only the shafts", lifts, 2u);
+        // The census alone, with no doors to probe from, finds the same two.
+        rooms->mDoors.clear();
+        const Result c = run(in, rooms);
+        const Space* ca = c.at(13.25f, 11.25f);
+        const Space* cb = c.at(13.25f, 14.f);
+        ensure("census lifts" + info(c), ca && cb && ca != cb && ca->mLift && cb->mLift);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<55>()
+    {
+        set_test_name("a rooftop and the roof of its stair hut are both roofs, linked to the building under them");
+        Scene s = twoRooms();
+        // A hut on the rooftop with a door onto it, its own roof 2.75 m up.
+        s.box(12.f, 4.f, 16.f, 4.25f, 3.25f, 6.f, false);
+        s.box(12.f, 7.75f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(15.75f, 4.f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 4.f, 12.25f, 5.5f, 3.25f, 6.f, false);
+        s.box(12.f, 6.5f, 12.25f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 5.5f, 12.25f, 6.5f, 5.45f, 6.f, false);
+        s.box(12.f, 4.f, 16.f, 8.f, 6.f, 6.25f);
+        const Result r = run(s.input(1));
+        const Space* west = r.at(6.f, 6.f);
+        const Space* top = r.at(6.f, 6.f, 3.75f);
+        const Space* hut = r.at(14.f, 6.f, 6.75f);
+        ensure("the room, the rooftop and the hut's roof" + info(r), west && top && hut && top != west && hut != top);
+        ensure("the rooftop is a roof, outdoors", top->mRoof && top->mBucket == EnclosureBucket::OUTDOORS);
+        ensure("the hut's roof is a roof, outdoors", hut->mRoof && hut->mBucket == EnclosureBucket::OUTDOORS);
+        ensure("the rooftop covers the rooms", std::find(top->mCovers.begin(), top->mCovers.end(), r.index(west)) != top->mCovers.end());
+        ensure("both in the building under them", west->mBuilding && top->mBuilding == west->mBuilding && hut->mBuilding == west->mBuilding);
     }
 }

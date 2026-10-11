@@ -26,7 +26,9 @@
 #define SK_NAVBUILD_H
 
 #include "sknavairdistil.h"
+#include "sknavairfine.h"
 #include "sknavflights.h"
+#include "sknavstamp.h"
 #include "sknavtypes.h"
 #include "sknavwalls.h"
 
@@ -34,15 +36,25 @@
 #include <string>
 #include <vector>
 
+struct rcCompactHeightfield;
+
 namespace sknav
 {
-    /// The agent classes a tile is built for. Order is the index everywhere.
-    enum class AgentClass : U8 { AVATAR = 0, WEATHER = 1 };
-    constexpr S32 NUM_CLASSES = 2;
+    /// The agent classes a tile builds a mesh for. Order is the index everywhere.
+    enum class AgentClass : U8 { AVATAR = 0 };
+    constexpr S32 NUM_CLASSES = 1;
 
     /// Recast area ids: what a walkable polygon stands on. Detour poly flags
     /// are 1 << area, so a query filter can pick them.
     enum Area : U8 { AREA_NONE = 0, AREA_GROUND = 1, AREA_OBJECT = 2, AREA_SUBMERGED = 3 };
+
+    /// The solid raster's area byte. 1-3 are surfaces only the air's slope
+    /// walks, each its own Area; from AREA_CODE_BASE up are AVATAR's, the slope
+    /// partition's codes moved past them. A stamp palette spans 1-63.
+    constexpr U8 AREA_TOP_ONLY = 3;
+    constexpr U8 AREA_CODE_BASE = AREA_TOP_ONLY + 1;
+    constexpr U8 AREA_CODE_MAX = 63;
+    constexpr S32 PARTITION_MAX_CODES = AREA_CODE_MAX - AREA_TOP_ONLY;
 
     struct ClassParams
     {
@@ -51,6 +63,15 @@ namespace sknav
         F32 mClimb = 0.75f;     ///< metres of step that still connects
         F32 mSlope = 45.f;      ///< degrees, steeper is a wall
     };
+
+    /// What the air stands on: nearly everything, since weather runs down
+    /// whatever it lands on, under half a metre of headroom. The raster's
+    /// TOP surfaces; a truly vertical face has no top and is a wall face.
+    constexpr F32 TOP_HEIGHT_M = 0.5f;
+    constexpr F32 TOP_SLOPE_DEG = 89.f;
+
+    /// Metres of padding the air reads past a tile, so its clearance there is exact.
+    constexpr F32 AIR_PAD_M = 2.f;
 
     /// A terrain height window: samples at mSpacing from mOrigin (mesh-local
     /// x, y), mWidth by mHeight, row-major. Empty when the tile has no terrain.
@@ -86,6 +107,10 @@ namespace sknav
         F32 mZMax = 0.f;
         F32 mCell = CELL_M;
         Partition mPartition = Partition::SLOPE;
+        /// The walkable limit the slope partition is taken at, degrees; 0 takes
+        /// the air's slope on a tile that keeps air and AVATAR's elsewhere, so
+        /// the partition depends on where the tile is, not on which classes run.
+        F32 mPartitionSlope = 0.f;
         F32 mDetailSampleCells = 6.f;       ///< 0 leaves the polygons untouched
         F32 mDetailMaxErrorCells = 2.f;
         F32 mWallMinHeight = 0.5f;          ///< shorter faces are a slope's terracing, not a wall
@@ -96,44 +121,70 @@ namespace sknav
         /// navmesh rather than built, so they never become a surface.
         std::vector<RecordPtr> mCuts;
         TerrainWindow mTerrain;
-        bool mClasses[NUM_CLASSES] = { true, false };
         ClassParams mParams[NUM_CLASSES];
-        /// Walls (sknavwalls.h). Faces are class-independent and cost a pass
-        /// over the raw heightfield; edges and drops are per class.
+        /// What the raster's TOP surfaces are; its climb is AVATAR's, its radius unused.
+        ClassParams mTopParams = { TOP_HEIGHT_M, 0.f, 0.75f, TOP_SLOPE_DEG };
+        /// Walls (sknavwalls.h). Faces, ledges and run-off come off the solid
+        /// raster; AVATAR's edges and drops off its mesh.
         bool mWallFaces = false;
-        bool mEdges[NUM_CLASSES] = { false, false };
-        F32 mDropMax[NUM_CLASSES] = { 10.f, 24.f };
+        bool mEdges[NUM_CLASSES] = { false };
+        F32 mDropMax[NUM_CLASSES] = { 10.f };
         F32 mDropSpacing = 2.f;
-        /// The air grid (sknavair.h), off the WEATHER heightfield, which keeps
-        /// the door leaves that split rooms. Nothing when WEATHER is not built.
+        /// Where the raster's TOP floors end over a drop, and where weather
+        /// runs off them, down to mRunoffMax metres.
+        bool mRunoff = false;
+        F32 mRunoffMax = 24.f;
+        /// The air grid (sknavair.h), off the solid raster, which keeps the
+        /// door leaves that split rooms.
         bool mAir = false;
-        /// Cells WEATHER reads past the tile when it keeps the air, so the
-        /// clearance on the tile is exact; AVATAR's heightfield never grows.
+        /// Cells the raster reads past the tile when it keeps the air, so the
+        /// clearance on the tile is exact; AVATAR reads its own border of it.
         S32 mAirPad = 16;
         /// Closed gaps lower than this are folded into the solid around them.
         F32 mAirMinGap = 0.5f;
+        /// Where walls' true faces sit inside their solid cells, kept with the air (sknavfaceoffsets.h).
+        bool mFaceOffsets = true;
+        /// AVATAR's wall edges moved out to stand the radius off the true faces.
+        bool mAlignWallEdges = true;
+        /// Without mAir, the air at COARSE_AIR_M in this tile's cells: enough
+        /// for the spaces the tile is stamped with, wherever it is.
+        bool mCoarseAir = false;
+        /// With mAir, the air again at half the cell over the blocks with narrow openings (sknavairfine.h), measured only.
+        bool mFineAir = false;
     };
+
+    /// The cell a tile without its own air reads its coarse air at.
+    constexpr F32 COARSE_AIR_M = 1.f;
 
     struct TileBuildResult
     {
         enum Status { SUCCESS, EMPTY, FAILED } mStatus = FAILED;
         std::string mError;
-        /// Detour tile data per class; empty for a class not built or with no polys.
+        /// Detour tile data per class; empty for a class with no polys.
         std::vector<U8> mData[NUM_CLASSES];
-        S32 mPolys[NUM_CLASSES] = { 0, 0 };
+        S32 mPolys[NUM_CLASSES] = { 0 };
         S32 mTriangles = 0;                 ///< rasterised
         F32 mMillis = 0.f;
         F32 mExcludeMillis = 0.f;           ///< of mMillis, building the soups a class leaves records out of
         /// Exposed vertical surfaces of the tile's solids, mesh-local SL metres.
         std::vector<WallFace> mFaces;
+        /// The raster's TOP floor edges over a drop, and the run-off down them.
+        std::vector<WallSegment> mLedges;
+        std::vector<DropLink> mRunoff;
         /// Floor edges with what lies beyond them, and where a floor can be left.
         std::vector<WallSegment> mSegments[NUM_CLASSES];
         std::vector<DropLink> mLinks[NUM_CLASSES];
         /// The distilled air, null when there is none; mAirBuilt says it was asked for.
         TileAirPtr mAir;
         bool mAirBuilt = false;
+        bool mCoarseAir = false;            ///< mAir is the coarse air, not the tile's own
+        FineAirPtr mFineAir;                ///< with mFineAir asked for, null when no block is a candidate
         /// Stair flights and the polys they produced, when the partition is SLOPE.
         std::vector<Flight> mFlights[NUM_CLASSES];
+        /// What the polygon stage made of a stamp, when it was given one.
+        TileStampGeom mStamp;
+        /// More polys than a Detour tile can number: nothing to publish.
+        bool mPolyOverflow = false;
     };
 
     /// SL is z-up, Recast is y-up: (x, y, z) -> (y, z, x), a cyclic permutation,
@@ -157,8 +208,63 @@ namespace sknav
     /// narrow-step walk of twice the radius that must still fit inside it.
     S32 borderCells(F32 radius, F32 cell);
 
-    /// Run the pipeline. Safe on any thread; touches nothing but the input.
-    TileBuildResult buildTile(const TileBuildInput& input);
+    /// The slope the tile's partition is taken at.
+    F32 partitionSlope(const TileBuildInput& input);
+
+    /// The air's pad in cells: AIR_PAD_M, whole cells.
+    S32 airPadCells(F32 cell);
+
+    struct TileBuildStats;
+
+    struct FreeCompact
+    {
+        void operator()(rcCompactHeightfield* chf) const;
+    };
+
+    /// What a tile's polygons are built from, once its raster is done: AVATAR's
+    /// compact heightfield after erosion, its areas still the partition's codes,
+    /// and what classifyEdges reads of AVATAR's view of the solid raster. Held
+    /// so the polygons can be built again without rasterising; immutable.
+    struct TileRaster
+    {
+        std::unique_ptr<rcCompactHeightfield, FreeCompact> mChf;
+        EdgeField mEdges;
+        std::vector<U8> mReal;          ///< code -> area
+        std::vector<Flight> mFlights;   ///< every flight the partition found, with no polys yet
+        std::vector<U8> mStanding;      ///< per flight, 1 where it still stands on mChf
+        /// Per span of mChf, its gap in mAir's mGaps (spanGaps), empty with no air.
+        std::vector<U32> mSpanGap;
+        std::weak_ptr<const TileAir> mAir;
+
+        size_t chfBytes() const;
+        size_t bytes() const;
+    };
+    typedef std::shared_ptr<const TileRaster> TileRasterPtr;
+
+    /// The raster stage: everything up to AVATAR's regions. Fills the result's
+    /// faces, ledges, run-off and air, and hands back what the polygon stage
+    /// reads; null when the tile is empty or the stage failed (result says which).
+    TileRasterPtr rasteriseTile(const TileBuildInput& input, TileBuildResult& result, TileBuildStats* stats = nullptr);
+
+    /// Whether a result holds air the polygons must wait for spaces over:
+    /// the raster stage published it, and the stamp is still to come.
+    inline bool awaitsStamp(const TileBuildResult& r)
+    {
+        return r.mStatus == TileBuildResult::SUCCESS && r.mAirBuilt && r.mAir && !r.mAir->mLeaves.empty() && !r.mStamp.mStamped &&
+               r.mData[0].empty();
+    }
+
+    /// The polygon stage: regions to Detour data, flights and AVATAR's edges,
+    /// over a copy of the raster's compact heightfield, so a raster polygonises
+    /// any number of times to the same tile. Given a stamp, its codes go in
+    /// place of the slope codes before regions, so no region and no poly holds
+    /// two spaces, and the result's mStamp says which component each poly is.
+    void polygoniseTile(const TileBuildInput& input, const TileRaster& raster, TileBuildResult& result, TileBuildStats* stats = nullptr,
+                        const TileStampInput* stamp_input = nullptr, const TileStamp* stamp = nullptr);
+
+    /// Run the pipeline: both stages. Safe on any thread; touches nothing but
+    /// the input and, when given, the stats it measures itself into.
+    TileBuildResult buildTile(const TileBuildInput& input, TileBuildStats* stats = nullptr);
 
     /// Tessellate an analytic record into triangles (mesh-local, given the
     /// mesh origin), or copy its soup. Exposed for tests.

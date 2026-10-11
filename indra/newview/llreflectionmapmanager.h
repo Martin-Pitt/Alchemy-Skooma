@@ -33,11 +33,14 @@
 #include "aluniformbuffer.h"
 
 #include <memory>
+#include <future>
+#include "threadpool.h"
 
 class LLSpatialGroup;
 class LLViewerObject;
 
 struct SKCensusSnapshot;
+class SKClusterProbes; // <SK:Nexii> Cluster probes
 namespace sknav
 {
     class SolidLattice;
@@ -155,7 +158,15 @@ public:
     // <SK:Nexii> Navmesh rooms probes: full spheres placed before residual grid irradiance probes.
     LLReflectionMap* registerNavRoomsProbe(const LLVector3& origin, F32 radius);
     void invalidateNavRoomsProbe(LLReflectionMap* probe);
+    // A new influence radius for a rooms probe; its capture stands, as it depends only on the origin.
+    void resizeNavRoomsProbe(LLReflectionMap* probe, F32 radius);
+    // What a rooms probe sees may have changed: its capture stands, and is retaken in place when the
+    // refresh rotation reaches it, as if it were a minute old, ahead of fresh ones but behind any capture.
+    void staleNavRoomsProbe(LLReflectionMap* probe);
     void invalidateAutomaticPlacement() { mNavRoomsDirty = true; }
+    // Census cluster fill probes: automatic spheres that blend over the default probe and under every other probe.
+    LLReflectionMap* registerClusterProbe(const LLVector3& origin, F32 radius);
+    std::string clusterProbesStatsLine() const;
     // Placed probes, which the rooms probes must stay clear of and share the cap with.
     void getNavRoomsContext(std::vector<LLReflectionMap*>& placed) const;
     // </SK:Nexii>
@@ -169,6 +180,7 @@ public:
         SK_PROBE_OCTREE,
         SK_PROBE_NAV_SPHERE,
         SK_PROBE_NAV_BOX, // reserved: navmesh room boxes do not exist yet
+        SK_PROBE_CLUSTER, // a fill over one cell of a census cluster, between the default probe and the rest
     };
     SKProbeKind getSKProbeKind(const LLReflectionMap* probe) const;
     // Every probe held, the default probe first.
@@ -357,10 +369,18 @@ private:
     // The census's solid bodies as a tile lattice for the grid placement's
     // point tests, rebuilt only when the census publishes a new scan.
     // mSolidsCensus is the scan it was built from.
-    std::unique_ptr<sknav::SolidLattice> mSolids;
+    std::shared_ptr<sknav::SolidLattice> mSolids;
+    std::unique_ptr<LL::ThreadPool> mSolidWorkers;
+    std::future<std::shared_ptr<sknav::SolidLattice>> mSolidJob;
+    std::shared_ptr<const SKCensusSnapshot> mSolidJobCensus;
     std::shared_ptr<const SKCensusSnapshot> mSolidsCensus;
     void updateRelevanceLinks();
     U32 mRelevanceRelinks = 0;
+    // </SK:Nexii>
+
+    // <SK:Nexii> Cluster probes: a fill tier over each census cluster, between the default probe and the rest.
+    void updateClusterProbes();
+    std::unique_ptr<SKClusterProbes> mClusterProbes;
     // </SK:Nexii>
 };
 

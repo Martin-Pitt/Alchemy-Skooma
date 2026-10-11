@@ -27,6 +27,8 @@
 
 #include "lluuid.h"
 #include "sknavenclosure.h"
+#include "sknavresidency.h"
+#include "sknavspaceproducts.h"
 #include "sknavspaces.h"
 #include "sknavwind.h"
 #include "threadpool.h"
@@ -99,6 +101,10 @@ public:
     /// per sample, the highest gap whose floor lies within the box's height,
     /// read on the channel. NaN where there is no answer.
     void raster(const LLVector3d& min, const LLVector3d& max, F32 res, Channel channel, std::vector<F32>& out) const;
+    /// The sheet by space on the same grid: per sample, the space of the
+    /// highest gap whose floor lies within the box's height, over every mesh;
+    /// an id of 0 where that gap is in no space or there is none.
+    void sheet(const LLVector3d& min, const LLVector3d& max, F32 res, std::vector<SpaceId>& out) const;
 
     const std::vector<Mesh>& meshes() const { return mMeshes; }
 
@@ -169,6 +175,8 @@ public:
     SKNavWorldViewPtr view() const;
     SKNavWindPtr wind() const;
     U64 revision() const { return mView ? mView->revision() : 0; }
+    /// Whether a mesh meeting the global box has a pass pending or running.
+    bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
     std::string statsLine() const;
 
     /// Tint the floor of every gap near the camera by e (mode 1) or by bucket
@@ -180,7 +188,7 @@ public:
     /// openings cyan, dashed without a lintel. Agent coordinates. Portals
     /// the filter says are crossed out draw greyed, under the strike the
     /// annotator draws over them.
-    typedef std::function<bool(const LLUUID& mesh, U32 space_a, U32 space_b)> PortalCrossedFn;
+    typedef std::function<bool(const LLUUID& mesh, U32 space_a, U32 space_b, const LLVector3d& centre)> PortalCrossedFn;
     void gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, F64 reach, bool opaque,
                       const PortalCrossedFn& crossed = {}) const;
 
@@ -193,7 +201,16 @@ public:
     /// this air, with the generation of the pass that gave them; else null.
     const sknav::TileEnclosure* enclosureTile(const LLUUID& mesh, const sknav::TileKey& key, const sknav::TileAirPtr& air, U64& generation) const;
     /// A mesh's spaces, portals and wind slabs as JSON members, leading comma included, global.
-    void writeSpaces(std::ostream& file, const LLUUID& mesh) const;
+    void writeSpaces(std::ostream& file, const LLUUID& mesh, const sknav::StoreyProduct* storeys = nullptr) const;
+    /// The products of a mesh's last landed pass, for its tiles' stamps; false when none has landed.
+    bool landed(const LLUUID& mesh, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms) const;
+    /// Whether a mesh's spaces, or its wind slabs, are still to land over its air.
+    bool passPending(const LLUUID& mesh) const;
+    bool windPending(const LLUUID& mesh) const;
+    /// Replace a mesh's landed products with copies pointing at other air, as its
+    /// detail leaves for disk or comes back; false, changing nothing, while a pass
+    /// over it is running.
+    bool swapAir(const LLUUID& mesh, const sknav::AirSwap& swap, sknav::EnclosureProductPtr& enclosure, sknav::RoomsProductPtr& rooms);
 
 private:
     struct Job;

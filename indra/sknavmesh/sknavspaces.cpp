@@ -26,7 +26,10 @@
 
 #include "sknavspaces.h"
 
+#include "sknavstairalign.h"
+
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -49,7 +52,16 @@ namespace
     constexpr F32 OPEN_HEIGHT_M = 20.f;     ///< what an open ceiling counts for in a volume
     constexpr F32 LIFT_TALL_M = 5.f;        ///< a shaft behind a door has this much headroom
     constexpr F32 LIFT_REACH_M = 3.f;
-    constexpr F32 CARRY_SLAB_M = 2.f;       ///< air over a solid this thin joins the space below it
+    constexpr F32 LIFT_SHAFT_M = 10.f;      ///< air this tall runs up through storeys, and may see a little more
+    constexpr F32 LIFT_STACK_M = 0.5f;      ///< a census shaft thinner than this is a stack of doors, not the shaft beside it
+    constexpr F32 OPEN_MIN_S = 0.25f;       ///< unroofed air seeing this much sky is never indoors
+    constexpr F32 OPEN_MAX_COVER = 0.05f;
+    constexpr F64 ROOF_MIN_M2 = 2.0;        ///< a smaller patch of floor no space steps onto stays in none
+    constexpr F64 ROOF_OPEN_SHARE = 0.5;    ///< a roof's floor this much under open sky
+    constexpr F64 ROOF_COVER_SHARE = 0.5;   ///< and this much over roofed floors
+    constexpr F32 ROOF_COVERS_SHARE = 0.25f;    ///< a roof covers a space it lies over this much of
+    constexpr F32 UNDER_FLIGHT_SHARE = 0.3f;    ///< a space this much under an outdoor flight's air is sheltered by it
+    constexpr F32 UNDER_FLIGHT_REACH_M = 2.f;   ///< and opens onto ground this far off across low headroom
     constexpr F32 RASTER_XY_M = 0.5f;
     constexpr F32 RASTER_Z_M = 1.f;
     constexpr U32 STAIR_RUN_EDGES = 3;
@@ -57,6 +69,12 @@ namespace
     constexpr F32 WALL_END_RUN_M = 0.5f;    ///< a wall runs this far behind its end, or it is a post
     constexpr S32 STAIR_END_UNITS = 2;      ///< a floor this close to a tread it meets is at an end of the flight
     constexpr F32 SCORE_REACH_M = 2.5f;     ///< a cut's probes land no further than this from it
+    constexpr F32 JAMB_TOP_M = 1.5f;        ///< a jamb stands solid from a step above the floor to this
+    constexpr S32 APERTURE_ANGLES = 18;     ///< chords tried within 45 degrees either side of a cut
+    constexpr F32 APERTURE_MAX_M = 3.f;     ///< a doorway cut from its lintel is no wider than this
+    constexpr F32 APERTURE_HEAD_M = 3.5f;   ///< and its lintel no higher than this over its sill
+    constexpr F32 JAMB_WALL_M = 0.75f;      ///< a jamb's wall is thinner than twice this across the cut
+    constexpr F32 JAMB_RUN_M = 1.f;         ///< and runs on this far along it past the jamb, or the jamb is a post
     constexpr F32 MEMO_BLOCK_SHARE = 0.5f;  ///< a pass cutting more of its mesh's tiles than this reads no memo
 
     enum Stage : S32
@@ -147,6 +165,7 @@ namespace
         F64 mWeight = 0.0;      ///< m² of leaf gaps
         F64 mS = 0.0;
         F64 mCover = 0.0;
+        F64 mSideOpen = 0.0;
         F64 mE = 0.0;
         F64 mKnown = 0.0;
         F32 mEMin = 1.f;
@@ -197,6 +216,9 @@ namespace
         U8 mCues = 0;
         F32 mHead = 0.f;
         S32 mDoor = -1;
+        bool mAperture = false;     ///< solid jambs either side: the cut spans mJambA to mJambB
+        LLVector2 mJambA;
+        LLVector2 mJambB;
     };
 
     struct Probe
@@ -489,10 +511,10 @@ namespace sknav
 
     size_t RoomsProduct::bytes() const
     {
-        size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal);
+        size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal) + mApart.capacity() * sizeof(SeedLink);
         for (const Space& s : mSpaces)
         {
-            n += sizeof(Space) + s.mPortals.capacity() * sizeof(U32) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
+            n += sizeof(Space) + (s.mPortals.capacity() + s.mCovers.capacity() + s.mCoverM2.capacity()) * sizeof(U32) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
         }
         for (const RoomsTile& t : mTiles)
         {
@@ -600,20 +622,103 @@ namespace sknav
         F32 cellX(const TileInfo& t, S32 ix) const { return t.mAir->mOrigin.mV[VX] + (ix + 0.5f) * mCell; }
         F32 cellY(const TileInfo& t, S32 iy) const { return t.mAir->mOrigin.mV[VY] + (iy + 0.5f) * mCell; }
         S32 floorOf(U32 t, const AirGap& g) const { return g.mFloor + mTiles[t].mZOff; }
+        /// A column's k-th floor at its cell, on its plane.
+        S32 floorAt(U32 t, const AirColumn& col, U32 k, S32 ix, S32 iy) const { return col.floorAt(*mTiles[t].mAir, k, ix, iy) + mTiles[t].mZOff; }
         S32 ceilOf(U32 t, const AirGap& g) const
         {
             return (g.mFlags & AirGap::OPEN) || g.mCeiling == AIR_CEILING_OPEN ? OPEN_TOP : g.mCeiling + mTiles[t].mZOff;
         }
-        bool floorGap(U32 t, const AirGap& g) const { return (g.mFlags & AirGap::WALKABLE) && ceilOf(t, g) - floorOf(t, g) >= mWalkHead; }
+        bool floorGap(U32 t, const AirGap& g) const { return (g.mFlags & AirGap::TOP) && ceilOf(t, g) - floorOf(t, g) >= mWalkHead; }
 
         /// The tile and fine cell a (possibly out of range) cell of tile t is,
         /// or -1 past the mesh's tiles and -2 in a tile without detail.
         S32 resolve(U32 t, S32 ix, S32 iy, U32& tile_out, S32& x_out, S32& y_out) const;
         /// The gaps over a fine cell: count 0 when it has none.
-        const AirGap* column(U32 t, S32 ix, S32 iy, U32& count) const;
+        U32 column(U32 t, S32 ix, S32 iy, AirColumn& out) const;
         bool probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const;
+        /// Square each stair portal to the treads of the flight it enters (sknavstairalign.h).
+        void squareStairPortals(std::vector<StairEnd>& ends, const std::vector<size_t>& portals);
+        /// Ground under an outdoor flight with no portal opens onto the ground it reaches under the flight's low end.
+        void joinUnderFlights(std::vector<Space>& out);
         /// Whether solid stands between lo and hi (mesh units) over a fine cell.
         bool blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const;
+        /// Whether solid stands between lo and hi (mesh units) at a point.
+        bool solidAt(F32 x, F32 y, S32 lo, S32 hi) const;
+        /// The aperture a cut lies in: the shortest chord through it between solid jambs, framed for callers trying many cuts on few bearings.
+        /// With true_faces the chord runs between the jambs' true faces (sknavfaceoffsets.h), not their cells'.
+        bool aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed = false, bool true_faces = false) const;
+        /// A ray's cell face at t moved to the wall's true face, by the air's face offsets for a floor (mesh units).
+        F32 trueFace(const LLVector2& from, const LLVector2& dir, F32 t, S32 floor) const;
+        static constexpr S32 RAYS = 2 * APERTURE_ANGLES + 1;
+        static constexpr S32 WINDOW = 64;       ///< cells a side of a window, a row of them to a word
+        static constexpr size_t RAY_FANS = 4;
+        static constexpr S32 BAND = 4;          ///< samples a march reads the cells of at once
+        /// How many cells round its centre's a ray's samples can be read from.
+        S32 frameReach() const { return static_cast<S32>(std::ceil(SCORE_REACH_M / mCell)) + 2; }
+        /// The rays aperture tries about a bearing, and as rows of bits the cells round the centre's each side's and each band's samples can be read from.
+        struct RayFan
+        {
+            F32 mBase = 0.f;
+            std::array<LLVector2, RAYS> mDirs;
+            S32 mBandCount = 0;
+            std::vector<U64> mMasks;                    ///< per mask and row
+            std::vector<std::pair<S32, S32>> mSpans;    ///< per mask, its first and last row
+            S32 sideMask(S32 side) const { return side; }
+            S32 bandMask(S32 side, S32 i, S32 band) const { return 2 + (side * RAYS + i) * mBandCount + band; }
+            /// The band's samples and all nearer.
+            S32 reachMask(S32 side, S32 i, S32 band) const { return 2 + (2 * RAYS + side * RAYS + i) * mBandCount + band; }
+        };
+        mutable std::vector<RayFan> mFans;      ///< for the last few bearings
+        mutable size_t mFanNext = 0;
+        const RayFan& rayFan(F32 base) const;
+        /// Where solid stands between lo and hi over a window of a tile's cells, a row of bits a word.
+        struct Window
+        {
+            U32 mTile = NONE;
+            const TileAir* mAir = nullptr;
+            S32 mX0 = 0, mY0 = 0;
+            U64 mRows[WINDOW];
+        };
+        mutable Window mWindows[4];
+        mutable S32 mWindowCount = 0, mWindowsLo = INT_MIN, mWindowsHi = INT_MIN;
+        /// Where a centre's frame of reach cells either side lies in the windows of the tiles its samples can read.
+        struct Frame
+        {
+            struct Place
+            {
+                S32 mWindow, mX, mY;
+            };
+            Place mPlaces[4];
+            S32 mCount = 0;
+            bool mOneTile = false;      ///< every sample reads the one tile
+        };
+        void frameAt(const LLVector2& c, S32 lo, S32 hi, Frame& frame) const;
+        /// Where solid stands between lo and hi over a tile's cells, filled eight by eight cells as first read.
+        struct SolidMap
+        {
+            S32 mWords = 0, mBlocksW = 0;
+            std::vector<U64> mBits;
+            std::vector<U8> mFilled;    ///< per block of eight by eight cells
+            /// Cells x0 to x1 of row iy, from bit 0.
+            U64 row(S32 iy, S32 x0, S32 x1) const;
+        };
+        struct SolidKey
+        {
+            U32 mTile;
+            S32 mLo, mHi;
+            bool operator==(const SolidKey& o) const { return mTile == o.mTile && mLo == o.mLo && mHi == o.mHi; }
+        };
+        struct SolidKeyHash
+        {
+            size_t operator()(const SolidKey& k) const
+            {
+                const U64 h = (static_cast<U64>(k.mTile) * 0x9E3779B97F4A7C15ull) ^ ((static_cast<U64>(static_cast<U32>(k.mLo)) << 32 | static_cast<U32>(k.mHi)) * 0xC2B2AE3D27D4EB4Full);
+                return static_cast<size_t>(h ^ (h >> 29));
+            }
+        };
+        mutable std::unordered_map<SolidKey, SolidMap, SolidKeyHash> mSolidMaps;
+        /// The tile's solid map, its cells x0 to x1 by y0 to y1 filled.
+        const SolidMap& solidMap(U32 t, S32 x0, S32 x1, S32 y0, S32 y1, S32 lo, S32 hi) const;
 
         void prepare();
         void runBatch(size_t b);
@@ -624,9 +729,27 @@ namespace sknav
         void cutSeeds(size_t b);
         void wallEnds();
         U32 mWallEndCuts = 0;
+        void apertureCuts();
+        bool jambEnds(const Run& r) const;
+        /// The first floor off a cut on one side whose ceiling clears its lintel.
+        bool pastLintel(const Run& r, F32 sgn, Probe& out) const;
+        /// How far along its normal a cut sits from the middle of the wall its jambs end.
+        F32 wallMiddle(const Run& r) const;
+        U32 mApertureCuts = 0;
+        std::vector<Run> mForced;       ///< aperture cuts, whose sides no merge joins
+        /// The floor cell of a work tile at a point, within a climb of floor, or NONE.
+        U32 cellAt(const LLVector2& q, S32 floor) const;
+        /// Sever the links crossing a cut, noting each for undo when asked.
+        void sever(const Run& r, std::vector<std::pair<U32, U32>>* undo);
         void number();
         void unite(U32 a, U32 b);
         void edges();
+        void absorbFragments();
+        void collectApart();
+        bool keptApart(UnionFind& uf, U32 u, U32 v) const;
+        /// Drop the cuts that keep two regions apart.
+        void releaseApart(UnionFind& uf, U32 u, U32 v);
+        std::vector<std::pair<U32, U32>> mApart;   ///< seeds either side of an aperture cut
         void merge();
         bool demoteFlatFlights(F32 min_rise);
         std::vector<Run> runs(const std::vector<U32>& edge_ids, U32 ru) const;
@@ -694,18 +817,11 @@ namespace sknav
         return 0;
     }
 
-    const AirGap* SpacesPass::State::column(U32 t, S32 ix, S32 iy, U32& count) const
+    U32 SpacesPass::State::column(U32 t, S32 ix, S32 iy, AirColumn& out) const
     {
         const TileInfo& ti = mTiles[t];
-        const S32 leaf = ti.mLeafMap[ix + iy * ti.mAir->mWidth];
-        if (leaf < 0)
-        {
-            count = 0;
-            return nullptr;
-        }
-        const AirLeaf& l = ti.mAir->mLeaves[leaf];
-        count = l.mGapCount;
-        return &ti.mAir->mGaps[l.mFirstGap];
+        airColumn(*ti.mAir, ti.mLeafMap[ix + iy * ti.mAir->mWidth], out);
+        return out.mCount;
     }
 
     bool SpacesPass::State::probe(F32 x, F32 y, S32 floor, S32 tol, Probe& out) const
@@ -725,26 +841,89 @@ namespace sknav
         {
             return false;
         }
-        const S32 leaf = mTiles[t].mLeafMap[ix + iy * a.mWidth];
-        if (leaf < 0)
+        AirColumn col;
+        for (U32 i = 0; i < column(t, ix, iy, col); ++i)
         {
-            return false;
-        }
-        const AirLeaf& l = a.mLeaves[leaf];
-        for (U32 i = 0; i < l.mGapCount; ++i)
-        {
-            const AirGap& g = a.mGaps[l.mFirstGap + i];
-            const S32 f = floorOf(t, g);
+            const AirGap& g = a.mGaps[col.mGap[i]];
+            const S32 f = floorAt(t, col, i, ix, iy);
             if (f >= floor - tol && f <= floor + tol && floorGap(t, g))
             {
                 out.mTile = t;
-                out.mGap = l.mFirstGap + i;
+                out.mGap = col.mGap[i];
                 out.mFloor = f;
                 out.mCeil = ceilOf(t, g);
                 return true;
             }
         }
         return false;
+    }
+
+    void SpacesPass::State::squareStairPortals(std::vector<StairEnd>& ends, const std::vector<size_t>& portals)
+    {
+        if (ends.empty())
+        {
+            return;
+        }
+        const S32 tol = std::max(1, static_cast<S32>(std::ceil(STAIR_TREAD_DZ_M / mUnit)));
+        const FlightFloor flight_floor = [this, tol](F32 x, F32 y, F32 z, F32& out) {
+            TileKey key;
+            key.mX = tileIndex(x);
+            key.mY = tileIndex(y);
+            const U32 t = tileAt(key);
+            if (t == NONE)
+            {
+                return false;
+            }
+            const TileAir& a = air(t);
+            const S32 ix = static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell));
+            const S32 iy = static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell));
+            if (ix < 0 || iy < 0 || ix >= a.mWidth || iy >= a.mHeight)
+            {
+                return false;
+            }
+            const S32 want = static_cast<S32>(std::lround(z / mUnit));
+            S32 best = INT_MAX, found = 0;
+            AirColumn col;
+            for (U32 i = 0; i < column(t, ix, iy, col); ++i)
+            {
+                const AirGap& g = a.mGaps[col.mGap[i]];
+                const S32 f = floorOf(t, g);
+                if ((g.mFlags & AirGap::FLIGHT) && floorGap(t, g) && std::abs(f - want) <= tol && std::abs(f - want) < best)
+                {
+                    best = std::abs(f - want);
+                    found = f;
+                }
+            }
+            if (best == INT_MAX)
+            {
+                return false;
+            }
+            out = found * mUnit;
+            return true;
+        };
+        alignStairEnds(flight_floor, ends);
+        for (size_t i = 0; i < ends.size(); ++i)
+        {
+            const StairEnd& e = ends[i];
+            if (!e.mAligned)
+            {
+                continue;
+            }
+            Portal& q = mPortals[portals[i]];
+            const F32 z = q.mSill;
+            LLVector2 n(e.mA.mV[VY] - e.mB.mV[VY], e.mB.mV[VX] - e.mA.mV[VX]);
+            n.normVec();
+            if (n.mV[VX] * q.mNormal.mV[VX] + n.mV[VY] * q.mNormal.mV[VY] < 0.f)
+            {
+                n = -n;
+            }
+            const LLVector2 c = (e.mA + e.mB) * 0.5f;
+            q.mA.set(e.mA.mV[VX], e.mA.mV[VY], z);
+            q.mB.set(e.mB.mV[VX], e.mB.mV[VY], z);
+            q.mCentre.set(c.mV[VX], c.mV[VY], z);
+            q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+            q.mWidth = dist_vec(e.mA, e.mB);
+        }
     }
 
     bool SpacesPass::State::blocked(U32 t, S32 ix, S32 iy, S32 lo, S32 hi) const
@@ -755,20 +934,477 @@ namespace sknav
         {
             return false;
         }
-        U32 count;
-        const AirGap* g = column(tile, x, y, count);
+        AirColumn col;
+        const U32 count = column(tile, x, y, col);
         if (!count)
         {
             return false;   // nothing stands there at all
         }
+        const TileAir& a = air(tile);
         for (U32 i = 0; i < count; ++i)
         {
-            if (floorOf(tile, g[i]) <= lo && ceilOf(tile, g[i]) >= hi)
+            const AirGap& g = a.mGaps[col.mGap[i]];
+            if (floorAt(tile, col, i, x, y) <= lo && ceilOf(tile, g) >= hi)
             {
                 return false;
             }
         }
         return true;
+    }
+
+    bool SpacesPass::State::solidAt(F32 x, F32 y, S32 lo, S32 hi) const
+    {
+        TileKey key;
+        key.mX = tileIndex(x);
+        key.mY = tileIndex(y);
+        const U32 t = tileAt(key);
+        if (t == NONE)
+        {
+            return false;
+        }
+        const TileAir& a = air(t);
+        return blocked(t, static_cast<S32>(std::floor((x - a.mOrigin.mV[VX]) / mCell)), static_cast<S32>(std::floor((y - a.mOrigin.mV[VY]) / mCell)), lo, hi);
+    }
+
+    const SpacesPass::State::SolidMap& SpacesPass::State::solidMap(U32 t, S32 x0, S32 x1, S32 y0, S32 y1, S32 lo, S32 hi) const
+    {
+        SolidMap& m = mSolidMaps[SolidKey{ t, lo, hi }];
+        const TileAir& a = air(t);
+        if (m.mFilled.empty())
+        {
+            m.mWords = (a.mWidth + 63) >> 6;
+            m.mBlocksW = (a.mWidth + 7) >> 3;
+            m.mBits.assign(static_cast<size_t>(m.mWords) * a.mHeight, 0);
+            m.mFilled.assign(static_cast<size_t>(m.mBlocksW) * ((a.mHeight + 7) >> 3), 0);
+        }
+        for (S32 by = y0 >> 3; by <= y1 >> 3; ++by)
+        {
+            for (S32 bx = x0 >> 3; bx <= x1 >> 3; ++bx)
+            {
+                U8& filled = m.mFilled[static_cast<size_t>(bx + by * m.mBlocksW)];
+                if (filled)
+                {
+                    continue;
+                }
+                filled = 1;
+                for (S32 iy = by * 8; iy < std::min(by * 8 + 8, a.mHeight); ++iy)
+                {
+                    for (S32 ix = bx * 8; ix < std::min(bx * 8 + 8, a.mWidth); ++ix)
+                    {
+                        if (blocked(t, ix, iy, lo, hi))
+                        {
+                            m.mBits[static_cast<size_t>(iy * m.mWords + (ix >> 6))] |= 1ull << (ix & 63);
+                        }
+                    }
+                }
+            }
+        }
+        return m;
+    }
+
+    U64 SpacesPass::State::SolidMap::row(S32 iy, S32 x0, S32 x1) const
+    {
+        const U64* r = &mBits[static_cast<size_t>(iy * mWords)];
+        const S32 word = x0 >> 6, off = x0 & 63;
+        U64 v = r[word] >> off;
+        if (off && word + 1 < mWords)
+        {
+            v |= r[word + 1] << (64 - off);
+        }
+        const S32 n = x1 - x0 + 1;
+        return n >= 64 ? v : v & ((1ull << n) - 1);
+    }
+
+    const SpacesPass::State::RayFan& SpacesPass::State::rayFan(F32 base) const
+    {
+        for (const RayFan& f : mFans)
+        {
+            if (f.mBase == base)
+            {
+                return f;
+            }
+        }
+        RayFan* slot = nullptr;
+        if (mFans.size() < RAY_FANS)
+        {
+            mFans.reserve(RAY_FANS);
+            slot = &mFans.emplace_back();
+        }
+        else
+        {
+            slot = &mFans[mFanNext];
+            mFanNext = (mFanNext + 1) % RAY_FANS;
+        }
+        RayFan& f = *slot;
+        f.mBase = base;
+        for (S32 i = 0; i < RAYS; ++i)
+        {
+            const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
+            const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
+            f.mDirs[i].set(std::cos(th), std::sin(th));
+        }
+        // A sample is read from the cell its offset from the centre falls in or the next, wherever in its cell the centre lies.
+        const S32 reach = frameReach();
+        S32 samples = 0;
+        for (F32 t = mCell * 0.5f; t <= SCORE_REACH_M; t += mCell * 0.5f)
+        {
+            ++samples;
+        }
+        f.mBandCount = (samples + BAND - 1) / BAND;
+        const S32 masks = 2 + 4 * RAYS * f.mBandCount;
+        f.mMasks.assign(static_cast<size_t>(masks) * WINDOW, 0);
+        f.mSpans.assign(masks, std::make_pair(WINDOW, -1));
+        for (S32 side = 0; side < 2 && 2 * reach < WINDOW; ++side)
+        {
+            for (S32 i = 0; i < RAYS; ++i)
+            {
+                const LLVector2 dir = side ? -f.mDirs[i] : f.mDirs[i];
+                S32 j = 0;
+                for (F32 t = mCell * 0.5f; t <= SCORE_REACH_M; t += mCell * 0.5f, ++j)
+                {
+                    const F32 x = dir.mV[VX] * t / mCell, y = dir.mV[VY] * t / mCell;
+                    for (S32 dy = static_cast<S32>(std::floor(y - 0.01f)); dy <= static_cast<S32>(std::floor(y + 1.01f)); ++dy)
+                    {
+                        for (S32 dx = static_cast<S32>(std::floor(x - 0.01f)); dx <= static_cast<S32>(std::floor(x + 1.01f)); ++dx)
+                        {
+                            auto set = [&](S32 mask) {
+                                f.mMasks[static_cast<size_t>(mask * WINDOW + dy + reach)] |= 1ull << (dx + reach);
+                                f.mSpans[mask].first = std::min(f.mSpans[mask].first, dy + reach);
+                                f.mSpans[mask].second = std::max(f.mSpans[mask].second, dy + reach);
+                            };
+                            set(f.sideMask(side));
+                            set(f.bandMask(side, i, j / BAND));
+                            for (S32 band = j / BAND; band < f.mBandCount; ++band)
+                            {
+                                set(f.reachMask(side, i, band));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return f;
+    }
+
+    void SpacesPass::State::frameAt(const LLVector2& c, S32 lo, S32 hi, Frame& frame) const
+    {
+        // Windows are kept while frames fall inside them, and built anew round a frame that leaves them.
+        const S32 reach = frameReach();
+        const F32 r = (reach + 1) * mCell;
+        const F32 x0 = c.mV[VX] - r, x1 = c.mV[VX] + r, y0 = c.mV[VY] - r, y1 = c.mV[VY] + r;
+        frame.mCount = 0;
+        bool fits = mWindowsLo == lo && mWindowsHi == hi;
+        for (S32 ky = tileIndex(y0); ky <= tileIndex(y1); ++ky)
+        {
+            for (S32 kx = tileIndex(x0); kx <= tileIndex(x1); ++kx)
+            {
+                TileKey key;
+                key.mX = kx;
+                key.mY = ky;
+                const U32 it = tileAt(key);
+                if (it == NONE)
+                {
+                    continue;
+                }
+                const TileAir& ta = air(it);
+                const S32 ic = static_cast<S32>(std::floor((c.mV[VX] - ta.mOrigin.mV[VX]) / mCell));
+                const S32 jc = static_cast<S32>(std::floor((c.mV[VY] - ta.mOrigin.mV[VY]) / mCell));
+                S32 w = 0;
+                while (w < mWindowCount && mWindows[w].mTile != it)
+                {
+                    ++w;
+                }
+                fits = fits && w < mWindowCount && ic - reach >= mWindows[w].mX0 && ic + reach < mWindows[w].mX0 + WINDOW &&
+                       jc - reach >= mWindows[w].mY0 && jc + reach < mWindows[w].mY0 + WINDOW;
+                Frame::Place& place = frame.mPlaces[frame.mCount++];
+                place.mWindow = w;
+                place.mX = ic - reach;
+                place.mY = jc - reach;
+            }
+        }
+        frame.mOneTile = frame.mCount == 1 && tileIndex(x0) == tileIndex(x1) && tileIndex(y0) == tileIndex(y1);
+        if (fits)
+        {
+            for (S32 k = 0; k < frame.mCount; ++k)
+            {
+                Frame::Place& place = frame.mPlaces[k];
+                place.mX -= mWindows[place.mWindow].mX0;
+                place.mY -= mWindows[place.mWindow].mY0;
+            }
+            return;
+        }
+        mWindowsLo = lo;
+        mWindowsHi = hi;
+        mWindowCount = 0;
+        S32 k = 0;
+        for (S32 ky = tileIndex(y0); ky <= tileIndex(y1); ++ky)
+        {
+            for (S32 kx = tileIndex(x0); kx <= tileIndex(x1); ++kx)
+            {
+                TileKey key;
+                key.mX = kx;
+                key.mY = ky;
+                const U32 it = tileAt(key);
+                if (it == NONE)
+                {
+                    continue;
+                }
+                Frame::Place& place = frame.mPlaces[k++];
+                place.mWindow = mWindowCount++;
+                Window& win = mWindows[place.mWindow];
+                const TileAir& ta = air(it);
+                win.mTile = it;
+                win.mAir = &ta;
+                win.mX0 = place.mX - (WINDOW - (2 * reach + 1)) / 2;
+                win.mY0 = place.mY - (WINDOW - (2 * reach + 1)) / 2;
+                place.mX -= win.mX0;
+                place.mY -= win.mY0;
+                std::fill(win.mRows, win.mRows + WINDOW, 0ull);
+                const S32 gx0 = std::max(win.mX0, 0), gx1 = std::min(win.mX0 + WINDOW - 1, ta.mWidth - 1);
+                const S32 gy0 = std::max(win.mY0, 0), gy1 = std::min(win.mY0 + WINDOW - 1, ta.mHeight - 1);
+                if (gx0 <= gx1 && gy0 <= gy1)
+                {
+                    const SolidMap& m = solidMap(it, gx0, gx1, gy0, gy1, lo, hi);
+                    for (S32 iy = gy0; iy <= gy1; ++iy)
+                    {
+                        win.mRows[iy - win.mY0] = m.row(iy, gx0, gx1) << (gx0 - win.mX0);
+                    }
+                }
+                // Off the grid, the cells a point of the tile's footprint can still be read from, through its neighbours.
+                const S32 fx0 = std::max(win.mX0, static_cast<S32>(std::floor((static_cast<F32>(kx * TILE_M) - ta.mOrigin.mV[VX]) / mCell)) - 1);
+                const S32 fx1 = std::min(win.mX0 + WINDOW - 1, static_cast<S32>(std::floor((static_cast<F32>((kx + 1) * TILE_M) - ta.mOrigin.mV[VX]) / mCell)) + 1);
+                const S32 fy0 = std::max(win.mY0, static_cast<S32>(std::floor((static_cast<F32>(ky * TILE_M) - ta.mOrigin.mV[VY]) / mCell)) - 1);
+                const S32 fy1 = std::min(win.mY0 + WINDOW - 1, static_cast<S32>(std::floor((static_cast<F32>((ky + 1) * TILE_M) - ta.mOrigin.mV[VY]) / mCell)) + 1);
+                for (S32 iy = fy0; iy <= fy1; ++iy)
+                {
+                    const bool row_off = iy < 0 || iy >= ta.mHeight;
+                    for (S32 ix = fx0; ix <= fx1; ++ix)
+                    {
+                        if (!row_off && ix >= 0 && ix < ta.mWidth)
+                        {
+                            ix = ta.mWidth - 1;     // the grid's own cells are in already
+                            continue;
+                        }
+                        if (blocked(it, ix, iy, lo, hi))
+                        {
+                            win.mRows[iy - win.mY0] |= 1ull << (ix - win.mX0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bool SpacesPass::State::aperture(const Run& run, LLVector2& a, LLVector2& b, bool framed, bool true_faces) const
+    {
+        // Across a doorway the shortest chord between solid on both sides runs
+        // jamb to jamb; tried near the cut's own direction, then again from
+        // the chord's middle. A floor's edge is no jamb: nothing stands there.
+        const S32 lo = run.mFloor + mClimb + 1, hi = run.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        const F32 step = mCell * 0.5f;
+        // Framed, a call reads its samples' cells in bulk, unless they are too fine for a window's rows.
+        const F32 base = std::atan2(run.mD.mV[VY], run.mD.mV[VX]);
+        framed = framed && 2 * frameReach() < WINDOW;
+        LLVector2 own[RAYS];
+        const RayFan* fan = framed ? &rayFan(base) : nullptr;
+        const LLVector2* dirs = framed ? fan->mDirs.data() : own;
+        for (S32 i = 0; i < RAYS && !framed; ++i)
+        {
+            const S32 k = (i & 1) ? (i + 1) / 2 : -(i / 2);
+            const F32 th = base + k * (F_PI * 0.25f / APERTURE_ANGLES);
+            own[i].set(std::cos(th), std::sin(th));
+        }
+        Frame frame;
+        // solidAt, read from the windows.
+        auto solid = [&](const LLVector2& from, const LLVector2& dir, F32 t) {
+            const LLVector2 q = from + dir * t;
+            if (!framed)
+            {
+                return solidAt(q.mV[VX], q.mV[VY], lo, hi);
+            }
+            const Frame::Place* place = frame.mPlaces;
+            if (!frame.mOneTile)
+            {
+                TileKey key;
+                key.mX = tileIndex(q.mV[VX]);
+                key.mY = tileIndex(q.mV[VY]);
+                const U32 it = tileAt(key);
+                while (place != frame.mPlaces + frame.mCount && mWindows[place->mWindow].mTile != it)
+                {
+                    ++place;
+                }
+                if (place == frame.mPlaces + frame.mCount)
+                {
+                    return false;
+                }
+            }
+            const Window& w = mWindows[place->mWindow];
+            const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - w.mAir->mOrigin.mV[VX]) / mCell));
+            const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - w.mAir->mOrigin.mV[VY]) / mCell));
+            return ((w.mRows[iy - w.mY0] >> (ix - w.mX0)) & 1) != 0;
+        };
+        // Whether any cell the samples a mask holds can be read from is solid.
+        auto reads = [&](S32 mask) {
+            if (!framed)
+            {
+                return true;
+            }
+            const U64* m = &fan->mMasks[static_cast<size_t>(mask * WINDOW)];
+            const auto& span = fan->mSpans[mask];
+            U64 hit = 0;
+            for (S32 k = 0; k < frame.mCount; ++k)
+            {
+                const Frame::Place& place = frame.mPlaces[k];
+                const U64* rows = mWindows[place.mWindow].mRows + place.mY;
+                for (S32 r = span.first; r <= span.second; ++r)
+                {
+                    hit |= (m[r] << place.mX) & rows[r];
+                }
+            }
+            return hit != 0;
+        };
+        // The first solid sample along a ray, 0 when there is none short of limit.
+        auto march = [&](const LLVector2& from, S32 side, S32 i, F32 limit) {
+            const LLVector2 dir = side ? -dirs[i] : dirs[i];
+            S32 j = 0, band = -1;
+            bool any = false;
+            for (F32 t = step; t <= SCORE_REACH_M && t - step < limit; t += step, ++j)
+            {
+                if (j / BAND != band)
+                {
+                    band = j / BAND;
+                    any = !framed || reads(fan->bandMask(side, i, band));
+                }
+                if (any && solid(from, dir, t))
+                {
+                    return t;
+                }
+            }
+            return 0.f;
+        };
+        // That sample's face, found to a sixty-fourth of a cell.
+        auto face = [&](const LLVector2& from, const LLVector2& dir, F32 t) {
+            F32 free = t - step, hit = t;
+            while (hit - free > mCell / 64.f)
+            {
+                const F32 mid = (free + hit) * 0.5f;
+                (solid(from, dir, mid) ? hit : free) = mid;
+            }
+            return hit;
+        };
+        LLVector2 c = run.mC;
+        for (S32 pass = 0; pass < 2; ++pass)
+        {
+            if (solidAt(c.mV[VX], c.mV[VY], lo, hi))
+            {
+                return false;
+            }
+            if (framed)
+            {
+                frameAt(c, lo, hi, frame);
+            }
+            // With nothing solid within reach one way, no ray finds a jamb.
+            if (framed && (!reads(fan->sideMask(0)) || !reads(fan->sideMask(1))))
+            {
+                return false;
+            }
+            // Nearer the cut's own direction wins a tie.
+            F32 best = 1e30f;
+            for (S32 i = 0; i < RAYS; ++i)
+            {
+                const F32 limit = best - mCell * 0.25f;
+                if (framed)
+                {
+                    // The bands a march short of limit can reach, and a band more.
+                    const S32 last = limit < SCORE_REACH_M + step ? std::min(fan->mBandCount - 1, static_cast<S32>(limit / step) / BAND + 1) : fan->mBandCount - 1;
+                    if (!reads(fan->reachMask(0, i, last)) || !reads(fan->reachMask(1, i, last)))
+                    {
+                        continue;
+                    }
+                }
+                const LLVector2& u = dirs[i];
+                const LLVector2 v = -u;
+                // Each face lies within a step short of its sample, so faces too far apart for a shorter chord go unsought.
+                const F32 s0 = march(c, 0, i, limit);
+                if (s0 == 0.f)
+                {
+                    continue;
+                }
+                const F32 s1 = march(c, 1, i, limit - (s0 - step) + mCell / 32.f);
+                if (s1 == 0.f || (s0 - step) + (s1 - step) >= limit + mCell / 64.f)
+                {
+                    continue;
+                }
+                F32 t0 = face(c, u, s0), t1 = face(c, v, s1);
+                if (true_faces)
+                {
+                    t0 = trueFace(c, u, t0, run.mFloor);
+                    t1 = trueFace(c, v, t1, run.mFloor);
+                }
+                if (t0 + t1 < limit)
+                {
+                    best = t0 + t1;
+                    a = c - u * t1;
+                    b = c + u * t0;
+                }
+            }
+            if (best > 1e29f)
+            {
+                return false;
+            }
+            c = (a + b) * 0.5f;
+        }
+        return true;
+    }
+
+    F32 SpacesPass::State::trueFace(const LLVector2& from, const LLVector2& dir, F32 t, S32 floor) const
+    {
+        const LLVector2 hit = from + dir * t, free = from + dir * (t - mCell / 32.f);
+        TileKey key;
+        key.mX = tileIndex(hit.mV[VX]);
+        key.mY = tileIndex(hit.mV[VY]);
+        const U32 it = tileAt(key);
+        if (it == NONE || air(it).mFaceOffsets.empty())
+        {
+            return t;
+        }
+        const TileAir& a = air(it);
+        const F32 ox = a.mOrigin.mV[VX], oy = a.mOrigin.mV[VY];
+        const S32 ix = static_cast<S32>(std::floor((hit.mV[VX] - ox) / mCell)), iy = static_cast<S32>(std::floor((hit.mV[VY] - oy) / mCell));
+        const S32 dx = ix - static_cast<S32>(std::floor((free.mV[VX] - ox) / mCell)), dy = iy - static_cast<S32>(std::floor((free.mV[VY] - oy) / mCell));
+        if (std::abs(dx) + std::abs(dy) != 1 || ix < 0 || iy < 0 || ix >= a.mWidth || iy >= a.mHeight)
+        {
+            return t;   // through a corner, or off the grid: the cell face stands
+        }
+        const S32 side = dx == 1 ? TileAir::SIDE_NEG_X : dx == -1 ? TileAir::SIDE_POS_X : dy == 1 ? TileAir::SIDE_NEG_Y : TileAir::SIDE_POS_Y;
+        const F32 off = faceOffset(a.mFaceOffsets, faceKey(ix, iy, a.mWidth, side));
+        if (off <= 0.f)
+        {
+            return t;
+        }
+        // The face plane, and the ray's way out of the solid cell, which it may not pass.
+        const S32 axis = side < 2 ? VX : VY;
+        const F32 x0 = ox + ix * mCell, y0 = oy + iy * mCell;
+        const F32 lo = axis == VX ? x0 : y0;
+        const F32 plane = (side & 1) == 0 ? lo + off * mCell : lo + (1.f - off) * mCell;
+        if (std::fabs(dir.mV[axis]) < 1e-6f)
+        {
+            return t;
+        }
+        F32 exit = 1e30f;
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const F32 base = k == VX ? x0 : y0;
+            if (dir.mV[k] > 1e-6f)
+            {
+                exit = std::min(exit, (base + mCell - from.mV[k]) / dir.mV[k]);
+            }
+            else if (dir.mV[k] < -1e-6f)
+            {
+                exit = std::min(exit, (base - from.mV[k]) / dir.mV[k]);
+            }
+        }
+        return llclamp((plane - from.mV[axis]) / dir.mV[axis], t, std::max(t, exit));
     }
 
     void SpacesPass::State::prepare()
@@ -1125,61 +1761,345 @@ namespace sknav
             }
             used[pq.second.first] = used[pq.second.second] = true;
             ++mWallEndCuts;
-            // Sever the links crossing the segment, from the cells along it.
-            std::vector<U32> near_cells;
-            for (F32 t = 0.f; t <= r.mWidth; t += mCell * 0.5f)
+            sever(r, nullptr);
+        }
+    }
+
+    U32 SpacesPass::State::cellAt(const LLVector2& q, S32 floor) const
+    {
+        TileKey k;
+        k.mX = tileIndex(q.mV[VX]);
+        k.mY = tileIndex(q.mV[VY]);
+        const U32 it = tileAt(k);
+        if (it == NONE || !mTiles[it].mWork)
+        {
+            return NONE;
+        }
+        const TileInfo& ti = mTiles[it];
+        const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
+        const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
+        if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
+        {
+            return NONE;
+        }
+        const S32 col = ix + iy * ti.mAir->mWidth;
+        for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+        {
+            if (std::abs(mCells[c].mFloor - floor) <= mClimb)
             {
-                for (F32 side : { -1.f, 0.f, 1.f })
-                {
-                    const LLVector2 q = r.mA + r.mD * t + r.mN * (side * mCell);
-                    TileKey k;
-                    k.mX = tileIndex(q.mV[VX]);
-                    k.mY = tileIndex(q.mV[VY]);
-                    const U32 it = tileAt(k);
-                    if (it == NONE || !mTiles[it].mWork)
-                    {
-                        continue;
-                    }
-                    const TileInfo& ti = mTiles[it];
-                    const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
-                    const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
-                    if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
-                    {
-                        continue;
-                    }
-                    const S32 col = ix + iy * ti.mAir->mWidth;
-                    for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
-                    {
-                        if (std::abs(mCells[c].mFloor - r.mFloor) <= mClimb)
-                        {
-                            near_cells.push_back(c);
-                        }
-                    }
-                }
+                return c;
             }
-            for (U32 c : near_cells)
+        }
+        return NONE;
+    }
+
+    void SpacesPass::State::sever(const Run& r, std::vector<std::pair<U32, U32>>* undo)
+    {
+        // Sever the links crossing the segment, from the cells along it.
+        std::vector<U32> near_cells;
+        for (F32 t = 0.f; t <= r.mWidth; t += mCell * 0.5f)
+        {
+            for (F32 side : { -1.f, 0.f, 1.f })
             {
-                const Cell& cell = mCells[c];
-                const TileInfo& ti = mTiles[cell.mTile];
-                const LLVector2 pc(cellX(ti, cell.mX), cellY(ti, cell.mY));
-                for (S32 d = 0; d < 4; ++d)
+                const LLVector2 q = r.mA + r.mD * t + r.mN * (side * mCell);
+                TileKey k;
+                k.mX = tileIndex(q.mV[VX]);
+                k.mY = tileIndex(q.mV[VY]);
+                const U32 it = tileAt(k);
+                if (it == NONE || !mTiles[it].mWork)
                 {
-                    const U32 o = mLink[c * 4 + d];
-                    if (o == NONE)
+                    continue;
+                }
+                const TileInfo& ti = mTiles[it];
+                const S32 ix = static_cast<S32>(std::floor((q.mV[VX] - ti.mAir->mOrigin.mV[VX]) / mCell));
+                const S32 iy = static_cast<S32>(std::floor((q.mV[VY] - ti.mAir->mOrigin.mV[VY]) / mCell));
+                if (ix < 0 || iy < 0 || ix >= ti.mAir->mWidth || iy >= ti.mAir->mHeight)
+                {
+                    continue;
+                }
+                const S32 col = ix + iy * ti.mAir->mWidth;
+                for (U32 c = ti.mColStart[col]; c < ti.mColStart[col + 1]; ++c)
+                {
+                    if (std::abs(mCells[c].mFloor - r.mFloor) <= mClimb)
                     {
-                        continue;
-                    }
-                    const LLVector2 po(pc.mV[VX] + DX[d] * mCell, pc.mV[VY] + DY[d] * mCell);
-                    const F32 sc = (pc - r.mA) * r.mN, so = (po - r.mA) * r.mN;
-                    const F32 along = ((pc + po) * 0.5f - r.mA) * r.mD;
-                    if ((sc < 0.f) != (so < 0.f) && along >= 0.f && along <= r.mWidth)
-                    {
-                        mLink[c * 4 + d] = NONE;
-                        mLink[o * 4 + (d ^ 1)] = NONE;
+                        near_cells.push_back(c);
                     }
                 }
             }
         }
+        for (U32 c : near_cells)
+        {
+            const Cell& cell = mCells[c];
+            const TileInfo& ti = mTiles[cell.mTile];
+            const LLVector2 pc(cellX(ti, cell.mX), cellY(ti, cell.mY));
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const U32 o = mLink[c * 4 + d];
+                if (o == NONE)
+                {
+                    continue;
+                }
+                const LLVector2 po(pc.mV[VX] + DX[d] * mCell, pc.mV[VY] + DY[d] * mCell);
+                const F32 sc = (pc - r.mA) * r.mN, so = (po - r.mA) * r.mN;
+                const F32 along = ((pc + po) * 0.5f - r.mA) * r.mD;
+                if ((sc < 0.f) != (so < 0.f) && along >= 0.f && along <= r.mWidth)
+                {
+                    if (undo)
+                    {
+                        undo->emplace_back(c * 4 + d, o);
+                        undo->emplace_back(o * 4 + (d ^ 1), c);
+                    }
+                    mLink[c * 4 + d] = NONE;
+                    mLink[o * 4 + (d ^ 1)] = NONE;
+                }
+            }
+        }
+    }
+
+    void SpacesPass::State::apertureCuts()
+    {
+        // A doorway whose rooms the watershed sees as one basin makes no
+        // saddle to cut at: find it from below, where the ceiling drops to a
+        // lintel, take the aperture between its jambs, and sever the floor
+        // there when a lintel spans it, floor runs through it, its jambs are
+        // the ends of a wall across it rather than the sides of a corridor
+        // along it, and each side then holds an avatar's floor.
+        const SpaceParams& p = params();
+        const S32 drop = static_cast<S32>(std::lround(p.mLintelDropM / mUnit));
+        const F32 grid = 0.5f;
+        std::unordered_set<U64> tried;
+        std::vector<LLVector2> cuts;
+        std::vector<std::pair<U32, U32>> undo;
+        std::vector<U32> stack;
+        std::unordered_set<U32> seen;
+        const F32 passage = 2.f * p.mAgentRadiusM;
+        const U32 min_cells = static_cast<U32>(std::ceil(p.mAvatarAreaM2 / (mCell * mCell)));
+        // Floor reached from a point without crossing a severed link, up to what an avatar needs.
+        auto holds = [&](const LLVector2& at, S32 floor) {
+            const U32 start = cellAt(at, floor);
+            if (start == NONE || !mAvatar[start])
+            {
+                return false;
+            }
+            seen.clear();
+            seen.insert(start);
+            stack.assign(1, start);
+            while (!stack.empty() && seen.size() < min_cells)
+            {
+                const U32 k = stack.back();
+                stack.pop_back();
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    const U32 o = mLink[k * 4 + d];
+                    if (o != NONE && mAvatar[o] && seen.insert(o).second)
+                    {
+                        stack.push_back(o);
+                    }
+                }
+            }
+            return seen.size() >= min_cells;
+        };
+        const size_t n = mCells.size();
+        for (U32 c = 0; c < n; ++c)
+        {
+            const Cell& cell = mCells[c];
+            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP)
+            {
+                continue;
+            }
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const U32 o = mLink[c * 4 + d];
+                if (o == NONE || mCells[o].mCeil < cell.mCeil + drop)
+                {
+                    continue;
+                }
+                const TileInfo& ti = mTiles[cell.mTile];
+                const LLVector2 at(cellX(ti, cell.mX), cellY(ti, cell.mY));
+                const U64 key = (static_cast<U64>(static_cast<U32>(static_cast<S32>(std::floor(at.mV[VX] / grid)))) << 40) ^
+                                (static_cast<U64>(static_cast<U32>(static_cast<S32>(std::floor(at.mV[VY] / grid)))) << 20) ^
+                                (static_cast<U64>(static_cast<U32>(cell.mFloor / (mClimb + 1))) << 1) ^ static_cast<U64>(d >> 1);
+                if (!tried.insert(key).second)
+                {
+                    continue;
+                }
+                // The edge of the lintel need not lie between its jambs: try
+                // the chord from each step back under it, and keep the
+                // shortest a doorway's jambs end.
+                Run probe_run;
+                probe_run.mD.set(static_cast<F32>(-DY[d]), static_cast<F32>(DX[d]));
+                probe_run.mFloor = cell.mFloor;
+                const LLVector2 back(static_cast<F32>(-DX[d]), static_cast<F32>(-DY[d]));
+                Run r;
+                r.mWidth = 1e30f;
+                Probe under;
+                for (F32 t = 0.f; t <= JAMB_WALL_M + 1e-3f; t += mCell)
+                {
+                    probe_run.mC = at + back * t;
+                    if (!probe(probe_run.mC.mV[VX], probe_run.mC.mV[VY], cell.mFloor, mClimb, under) || under.mCeil >= cell.mCeil + drop)
+                    {
+                        break;
+                    }
+                    Run q;
+                    if (!aperture(probe_run, q.mA, q.mB, mInput->mFrameApertures))
+                    {
+                        continue;
+                    }
+                    q.mD = q.mB - q.mA;
+                    q.mWidth = q.mD.normVec();
+                    q.mN.set(-q.mD.mV[VY], q.mD.mV[VX]);
+                    q.mC = (q.mA + q.mB) * 0.5f;
+                    q.mFloor = cell.mFloor;
+                    if (q.mWidth >= passage && q.mWidth <= APERTURE_MAX_M && q.mWidth < r.mWidth && jambEnds(q))
+                    {
+                        r = q;
+                    }
+                }
+                bool near_cut = r.mWidth > APERTURE_MAX_M;
+                for (const LLVector2& q : cuts)
+                {
+                    near_cut = near_cut || dist_vec(q, r.mC) < APERTURE_MAX_M * 0.5f;
+                }
+                if (near_cut)
+                {
+                    continue;
+                }
+                r.mKey = mix(mix(mix(SEED, 0x41505254ll), static_cast<U64>(std::lround(r.mC.mV[VX] * 8.f))), static_cast<U64>(std::lround(r.mC.mV[VY] * 8.f)));
+                // Floor all the way across, under a lintel as level as a door's: a sloping ceiling is no lintel.
+                bool open = true;
+                Probe pr;
+                S32 ceil_lo = INT_MAX, ceil_hi = INT_MIN;
+                for (F32 t = mCell; t < r.mWidth - mCell * 0.5f && open; t += mCell)
+                {
+                    const LLVector2 q = r.mA + r.mD * t;
+                    open = probe(q.mV[VX], q.mV[VY], r.mFloor, mClimb, pr);
+                    ceil_lo = std::min(ceil_lo, pr.mCeil);
+                    ceil_hi = std::max(ceil_hi, pr.mCeil);
+                }
+                if (!open || ceil_hi - ceil_lo > drop)
+                {
+                    continue;
+                }
+                const Scored s = score(r);
+                if (!(s.mCues & CUE_LINTEL) || !(s.mCues & CUE_JAMBS) || s.mDoor >= 0 || s.mHead - r.mFloor * mUnit > APERTURE_HEAD_M)
+                {
+                    continue;
+                }
+                // A doorway leads in under a roof: an arch between two stretches of open sky parts nothing.
+                Probe in_a, in_b;
+                if (!pastLintel(r, 1.f, in_a) || !pastLintel(r, -1.f, in_b) || (in_a.mCeil >= OPEN_TOP && in_b.mCeil >= OPEN_TOP))
+                {
+                    continue;
+                }
+                // Cut down the middle of the wall, not along a face of it, so the run cut there stands under the lintel.
+                const LLVector2 shift = r.mN * wallMiddle(r);
+                Probe mid;
+                if (probe(r.mC.mV[VX] + shift.mV[VX], r.mC.mV[VY] + shift.mV[VY], r.mFloor, mClimb, mid) && mid.mCeil + drop <= std::min(in_a.mCeil, in_b.mCeil))
+                {
+                    r.mA += shift;
+                    r.mB += shift;
+                    r.mC += shift;
+                }
+                undo.clear();
+                sever(r, &undo);
+                const F32 side = 0.5f;
+                if (undo.empty() || !holds(r.mC + r.mN * side, r.mFloor) || !holds(r.mC - r.mN * side, r.mFloor))
+                {
+                    for (const auto& u : undo)
+                    {
+                        mLink[u.first] = u.second;
+                    }
+                    continue;
+                }
+                cuts.push_back(r.mC);
+                mForced.push_back(r);
+                ++mApertureCuts;
+            }
+        }
+    }
+
+    bool SpacesPass::State::pastLintel(const Run& r, F32 sgn, Probe& out) const
+    {
+        // The first floor off the cut, on one side, whose ceiling clears the lintel.
+        Probe at;
+        if (!probe(r.mC.mV[VX], r.mC.mV[VY], r.mFloor, mClimb, at))
+        {
+            return false;
+        }
+        const S32 drop = static_cast<S32>(std::lround(params().mLintelDropM / mUnit));
+        for (F32 t = mCell; t <= SCORE_REACH_M * 0.5f; t += mCell)
+        {
+            const LLVector2 q = r.mC + r.mN * (sgn * t);
+            if (probe(q.mV[VX], q.mV[VY], r.mFloor, mClimb, out) && out.mCeil >= at.mCeil + drop)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    F32 SpacesPass::State::wallMiddle(const Run& r) const
+    {
+        // Just inside each jamb, the wall's faces either side of the cut.
+        const S32 lo = r.mFloor + mClimb + 1, hi = r.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        F32 sum = 0.f;
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const LLVector2 j = k == 0 ? r.mA - r.mD * (mCell * 1.5f) : r.mB + r.mD * (mCell * 1.5f);
+            F32 face[2] = { 0.f, 0.f };
+            for (S32 side = 0; side < 2; ++side)
+            {
+                const F32 sgn = side == 0 ? 1.f : -1.f;
+                for (F32 t = mCell * 0.25f; t <= JAMB_WALL_M; t += mCell * 0.25f)
+                {
+                    face[side] = t;
+                    const LLVector2 q = j + r.mN * (sgn * t);
+                    if (!solidAt(q.mV[VX], q.mV[VY], lo, hi))
+                    {
+                        break;
+                    }
+                }
+            }
+            sum += 0.5f * (face[0] - face[1]);
+        }
+        return 0.5f * sum;
+    }
+
+    bool SpacesPass::State::jambEnds(const Run& r) const
+    {
+        // A jamb ends a wall that runs across the cut: just inside it, solid,
+        // and a step off the wall to one side at least, air at a door's
+        // height. A corridor's walls run on along both sides of a beam.
+        const S32 lo = r.mFloor + mClimb + 1, hi = r.mFloor + static_cast<S32>(std::lround(JAMB_TOP_M / mUnit));
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const LLVector2 out = k == 0 ? -r.mD : r.mD;
+            bool ends = false;
+            for (const F32 depth : { 1.f, 1.5f })
+            {
+                const LLVector2 j = (k == 0 ? r.mA : r.mB) + out * (mCell * depth);
+                if (!solidAt(j.mV[VX], j.mV[VY], lo, hi))
+                {
+                    continue;
+                }
+                for (F32 sgn : { 1.f, -1.f })
+                {
+                    const LLVector2 q = j + r.mN * (sgn * JAMB_WALL_M);
+                    ends = ends || !solidAt(q.mV[VX], q.mV[VY], lo, hi);
+                }
+            }
+            // And the wall runs on past the jamb along the cut, or it is a post.
+            for (F32 t = mCell * 1.5f; ends && t <= JAMB_RUN_M + 1e-3f; t += mCell)
+            {
+                const LLVector2 j = (k == 0 ? r.mA : r.mB) + out * t;
+                ends = solidAt(j.mV[VX], j.mV[VY], lo, hi);
+            }
+            if (!ends)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool SpacesPass::State::recut()
@@ -1239,6 +2159,7 @@ namespace sknav
             ti.mSeedLabels.clear();
         }
         mShadow[0].clear();
+        mForced.clear();
         mLabelBase = 0;
         mBatch = 0;
         return true;
@@ -1267,6 +2188,7 @@ namespace sknav
                 continue;
             }
             const TileAir& a = *ti.mAir;
+            AirColumn col;
             ti.mColStart.assign(static_cast<size_t>(a.mWidth) * a.mHeight + 1, 0);
             for (S32 iy = 0; iy < a.mHeight; ++iy)
             {
@@ -1274,18 +2196,13 @@ namespace sknav
                 {
                     const S32 c = ix + iy * a.mWidth;
                     ti.mColStart[c] = static_cast<U32>(mCells.size());
-                    const S32 leaf = ti.mLeafMap[c];
-                    if (leaf < 0)
+                    airColumn(a, ti.mLeafMap[c], col);
+                    for (U32 i = 0; i < col.mCount; ++i)
                     {
-                        continue;
-                    }
-                    const AirLeaf& l = a.mLeaves[leaf];
-                    for (U32 i = 0; i < l.mGapCount; ++i)
-                    {
-                        const AirGap& g = a.mGaps[l.mFirstGap + i];
+                        const AirGap& g = a.mGaps[col.mGap[i]];
                         if (floorGap(t, g))
                         {
-                            mCells.push_back({ t, static_cast<U16>(ix), static_cast<U16>(iy), l.mFirstGap + i, floorOf(t, g), ceilOf(t, g),
+                            mCells.push_back({ t, static_cast<U16>(ix), static_cast<U16>(iy), col.mGap[i], floorAt(t, col, i, ix, iy), ceilOf(t, g),
                                                (g.mFlags & AirGap::FLIGHT) != 0 });
                         }
                     }
@@ -1508,7 +2425,7 @@ namespace sknav
                     {
                         U32 u = NONE;
                         S32 x, y;
-                        const AirGap* g = nullptr;
+                        AirColumn col;
                         U32 count = 0;
                         for (U32 k = c0; k < c1; ++k)
                         {
@@ -1531,14 +2448,15 @@ namespace sknav
                                 }
                                 else
                                 {
-                                    g = column(u, x, y, count);
+                                    count = column(u, x, y, col);
                                 }
                             }
                             const S32 floor = mCells[k].mFloor;
                             for (U32 i = 0; i < count; ++i)
                             {
-                                const S32 f = floorOf(u, g[i]);
-                                if (f <= floor - 1 && ceilOf(u, g[i]) >= floor + 14)
+                                const AirGap& gi = air(u).mGaps[col.mGap[i]];
+                                const S32 f = floorAt(u, col, i, x, y);
+                                if (f <= floor - 1 && ceilOf(u, gi) >= floor + 14)
                                 {
                                     comp_drops[id] += f < floor - mClimb ? 1.0 : 0.0;
                                     break;
@@ -1558,6 +2476,7 @@ namespace sknav
         }
 
         wallEnds();
+        apertureCuts();
         // The watershed over the clearance, off flights: descend its levels,
         // grow the regions there are into what each level exposes, then seed
         // new ones from what is left.
@@ -2010,6 +2929,7 @@ namespace sknav
                     si.mWeight += area;
                     si.mS += area * ge.mS / 255.0;
                     si.mCover += area * ge.mCover / 255.0;
+                    si.mSideOpen += area * ge.mOpen / 255.0;
                     if (ge.mD != ENCLOSURE_D_UNKNOWN)
                     {
                         const F32 e = ge.mE / 255.f;
@@ -2086,6 +3006,8 @@ namespace sknav
     {
         // Every level-0 step between floor gaps of two seeds, within and across tiles.
         mEdges.clear();
+        AirColumn colb;
+        S32 floor_a[0xff], floor_b[0xff];
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
             const TileInfo& ti = mTiles[t];
@@ -2119,29 +3041,57 @@ namespace sknav
                             continue;
                         }
                         const TileInfo& ui = mTiles[u];
-                        const S32 lb = ui.mLeafMap[bx + by * ui.mAir->mWidth];
-                        if (lb < 0)
+                        // b's column, less the air a leaf over both cells holds: that is one gap, not a step.
+                        colb.mCount = 0;
+                        for (S32 lb = ui.mLeafMap[bx + by * ui.mAir->mWidth]; lb >= 0; lb = parentLeaf(*ui.mAir, lb))
+                        {
+                            const AirLeaf& o = ui.mAir->mLeaves[lb];
+                            if (u == t && ax >= o.mX && ay >= o.mY && ax < o.mX + (1 << o.mLevel) && ay < o.mY + (1 << o.mLevel))
+                            {
+                                break;
+                            }
+                            for (U32 j = 0; j < o.mGapCount; ++j)
+                            {
+                                U32 at = colb.mCount++;
+                                while (at > 0 && ui.mAir->mGaps[colb.mGap[at - 1]].mFloor > ui.mAir->mGaps[o.mFirstGap + j].mFloor)
+                                {
+                                    colb.mGap[at] = colb.mGap[at - 1];
+                                    colb.mLeaf[at] = colb.mLeaf[at - 1];
+                                    --at;
+                                }
+                                colb.mGap[at] = o.mFirstGap + j;
+                                colb.mLeaf[at] = lb;
+                            }
+                        }
+                        const U32 nb = colb.mCount;
+                        if (!nb)
                         {
                             continue;
                         }
-                        const AirLeaf& leaf_b = ui.mAir->mLeaves[lb];
-                        const U32 nb = leaf_b.mGapCount, first_b = leaf_b.mFirstGap;
                         // Within one seed on both sides, as most steps are, there is no edge.
-                        if (nb == 1 && leaf.mGapCount == 1 && u == t && ui.mRooms.mSeeds[first_b] == ti.mRooms.mSeeds[leaf.mFirstGap])
+                        if (nb == 1 && leaf.mGapCount == 1 && u == t && ui.mRooms.mSeeds[colb.mGap[0]] == ti.mRooms.mSeeds[leaf.mFirstGap])
                         {
                             continue;
                         }
-                        const AirGap* gb = &ui.mAir->mGaps[first_b];
+                        auto gb = [&](U32 j) -> const AirGap& { return ui.mAir->mGaps[colb.mGap[j]]; };
                         const LLVector2 ca(cellX(ti, ax), cellY(ti, ay)), cb(cellX(ui, bx), cellY(ui, by));
+                        for (U32 j = 0; j < nb; ++j)
+                        {
+                            floor_b[j] = floorAt(u, colb, j, bx, by);
+                        }
+                        for (U32 i = 0; i < leaf.mGapCount; ++i)
+                        {
+                            floor_a[i] = airFloorAt(a.mGaps[leaf.mFirstGap + i], leaf, ax, ay) + ti.mZOff;
+                        }
                         // Where both columns' gaps rise with their floors, as air's do, only b's within a climb of a's are tried.
                         bool rising = true;
                         for (U32 j = 1; j < nb && rising; ++j)
                         {
-                            rising = gb[j].mFloor > gb[j - 1].mFloor;
+                            rising = floor_b[j] > floor_b[j - 1];
                         }
                         for (U32 i = 1; i < leaf.mGapCount && rising; ++i)
                         {
-                            rising = a.mGaps[leaf.mFirstGap + i].mFloor > a.mGaps[leaf.mFirstGap + i - 1].mFloor;
+                            rising = floor_a[i] > floor_a[i - 1];
                         }
                         U32 j0 = 0;
                         for (U32 i = 0; i < leaf.mGapCount; ++i)
@@ -2153,18 +3103,18 @@ namespace sknav
                                 continue;
                             }
                             const AirGap& gap_a = a.mGaps[ga];
-                            const S32 fa = floorOf(t, gap_a), ca_top = ceilOf(t, gap_a);
-                            while (rising && j0 < nb && floorOf(u, gb[j0]) < fa - mClimb)
+                            const S32 fa = floor_a[i], ca_top = ceilOf(t, gap_a);
+                            while (rising && j0 < nb && floor_b[j0] < fa - mClimb)
                             {
                                 ++j0;
                             }
                             for (U32 j = rising ? j0 : 0; j < nb; ++j)
                             {
-                                if (rising && floorOf(u, gb[j]) > fa + mClimb)
+                                if (rising && floor_b[j] > fa + mClimb)
                                 {
                                     break;
                                 }
-                                const U16 sb = ui.mRooms.mSeeds[first_b + j];
+                                const U16 sb = ui.mRooms.mSeeds[colb.mGap[j]];
                                 if (!sb)
                                 {
                                     continue;
@@ -2174,7 +3124,7 @@ namespace sknav
                                 {
                                     continue;
                                 }
-                                const S32 fb = floorOf(u, gb[j]), cb_top = ceilOf(u, gb[j]);
+                                const S32 fb = floor_b[j], cb_top = ceilOf(u, gb(j));
                                 if (std::abs(fa - fb) > mClimb || std::min(ca_top, cb_top) - std::max(fa, fb) < mWalkOverlap)
                                 {
                                     continue;
@@ -2190,8 +3140,8 @@ namespace sknav
                                 e.mTileA = t;
                                 e.mGapA = ga;
                                 e.mTileB = u;
-                                e.mGapB = first_b + j;
-                                e.mFlight = ((gap_a.mFlags | gb[j].mFlags) & AirGap::FLIGHT) != 0;
+                                e.mGapB = colb.mGap[j];
+                                e.mFlight = ((gap_a.mFlags | gb(j).mFlags) & AirGap::FLIGHT) != 0;
                                 mEdges.push_back(e);
                             }
                         }
@@ -2456,17 +3406,9 @@ namespace sknav
         {
             lintel = lintel && (std::isnan(s) || s >= head + drop);
         }
-        bool jambs = true;
-        for (S32 k = 0; k < 2 && jambs; ++k)
-        {
-            const LLVector2 end = k == 0 ? run.mA : run.mB;
-            const F32 sgn = k == 0 ? -1.f : 1.f;
-            for (F32 t : { 0.3f, 0.8f })
-            {
-                const LLVector2 at = end + run.mD * (sgn * t);
-                jambs = jambs && !probe(at.mV[VX], at.mV[VY], run.mFloor, mClimb, pr);
-            }
-        }
+        // Walled both sides means solid jambs, not just floor that ends.
+        LLVector2 jamb_a, jamb_b;
+        const bool jambs = aperture(run, jamb_a, jamb_b) && dist_vec(jamb_a, jamb_b) >= 2.f * p.mAgentRadiusM;
         F32 es[2];
         for (S32 k = 0; k < 2; ++k)
         {
@@ -2531,6 +3473,9 @@ namespace sknav
         out.mCues = (lintel ? CUE_LINTEL : 0) | (jambs ? CUE_JAMBS : 0) | (estep ? CUE_E_STEP : 0) | (door >= 0 ? CUE_DOOR : 0);
         out.mHead = lintel ? head : 0.f;
         out.mDoor = door;
+        out.mAperture = jambs;
+        out.mJambA = jamb_a;
+        out.mJambB = jamb_b;
         if (door >= 0)
         {
             out.mPortal = true;
@@ -2659,6 +3604,182 @@ namespace sknav
         return changed;
     }
 
+    void SpacesPass::State::collectApart()
+    {
+        // An aperture cut keeps its sides apart: whatever else they meet
+        // through, the regions either side never merge into one.
+        mApart.clear();
+        for (const Run& r : mForced)
+        {
+            U32 sides[2];
+            S32 found = 0;
+            // Each side's seed is the first past the lintel, out of the cut's own strip.
+            for (const F32 sgn : { 1.f, -1.f })
+            {
+                Probe pr;
+                if (pastLintel(r, sgn, pr) && mTiles[pr.mTile].mRooms.mSeeds[pr.mGap])
+                {
+                    sides[found++] = mTiles[pr.mTile].mSeedBase + mTiles[pr.mTile].mRooms.mSeeds[pr.mGap] - 1;
+                }
+            }
+            if (found == 2 && mRegions.find(sides[0]) != mRegions.find(sides[1]))
+            {
+                mApart.emplace_back(sides[0], sides[1]);
+            }
+        }
+        // A pass that cuts no tile again keeps the cuts an earlier one made there.
+        if (mInput->mPrevious)
+        {
+            for (const SeedLink& l : mInput->mPrevious->mApart)
+            {
+                const U32 a = tileAt(l.mA), b = tileAt(l.mB);
+                if (a == NONE || b == NONE || mTiles[a].mDirty || mTiles[b].mDirty || l.mSeedA > mTiles[a].mRooms.mStats.size() ||
+                    l.mSeedB > mTiles[b].mRooms.mStats.size())
+                {
+                    continue;
+                }
+                const U32 sa = mTiles[a].mSeedBase + l.mSeedA - 1, sb = mTiles[b].mSeedBase + l.mSeedB - 1;
+                if (mRegions.find(sa) != mRegions.find(sb))
+                {
+                    mApart.emplace_back(sa, sb);
+                }
+            }
+        }
+    }
+
+    bool SpacesPass::State::keptApart(UnionFind& uf, U32 u, U32 v) const
+    {
+        u = uf.find(u);
+        v = uf.find(v);
+        for (const auto& pq : mApart)
+        {
+            const U32 a = uf.find(pq.first), b = uf.find(pq.second);
+            if ((a == u && b == v) || (a == v && b == u))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void SpacesPass::State::releaseApart(UnionFind& uf, U32 u, U32 v)
+    {
+        u = uf.find(u);
+        v = uf.find(v);
+        mApart.erase(std::remove_if(mApart.begin(), mApart.end(),
+                                    [&](const std::pair<U32, U32>& pq) {
+                                        const U32 a = uf.find(pq.first), b = uf.find(pq.second);
+                                        return (a == u && b == v) || (a == v && b == u);
+                                    }),
+                     mApart.end());
+    }
+
+    void SpacesPass::State::absorbFragments()
+    {
+        // A region smaller than an avatar's floor is a fragment of a cut, not
+        // a space: smallest first, it joins the neighbour it shares the most
+        // boundary with before any cut is scored, flight or floor, and the
+        // joined region flies when most of its floor does.
+        const U32 total = static_cast<U32>(mSeeds.size());
+        const F64 cell_area = static_cast<F64>(mCell) * mCell;
+        const F64 min_area = params().mAvatarAreaM2;
+        std::unordered_map<U32, F64> area, flying;
+        std::unordered_map<U32, std::vector<U32>> members;
+        for (U32 s = 0; s < total; ++s)
+        {
+            const U32 r = mRegions.find(s);
+            const F64 a = mTiles[mSeeds[s].mTile].mRooms.mStats[mSeeds[s].mLocal].mCells * cell_area;
+            area[r] += a;
+            flying[r] += mSeeds[s].mFlight ? a : 0.0;
+            members[r].push_back(s);
+        }
+        std::unordered_map<U32, std::map<U32, U32>> nb;
+        for (const Edge& e : mEdges)
+        {
+            const U32 a = mRegions.find(e.mA), b = mRegions.find(e.mB);
+            if (a != b)
+            {
+                ++nb[a][b];
+                ++nb[b][a];
+            }
+        }
+        typedef std::pair<F64, U32> Item;
+        std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+        for (const auto& [r, a] : area)
+        {
+            if (a < min_area)
+            {
+                heap.emplace(a, r);
+            }
+        }
+        while (!heap.empty())
+        {
+            const Item top = heap.top();
+            heap.pop();
+            const U32 r = top.second;
+            if (mRegions.find(r) != r || top.first != area[r] || top.first >= min_area)
+            {
+                continue;
+            }
+            auto& mine = nb[r];
+            U32 best = NONE, best_w = 0, held = NONE, held_w = 0;
+            for (const auto& [o, w] : mine)
+            {
+                if (keptApart(mRegions, r, o))
+                {
+                    if (w > held_w)
+                    {
+                        held = o;
+                        held_w = w;
+                    }
+                }
+                else if (w > best_w)
+                {
+                    best = o;
+                    best_w = w;
+                }
+            }
+            if (best == NONE && held != NONE)
+            {
+                // A side too small to be a space of its own: the cut it was held by goes.
+                releaseApart(mRegions, r, held);
+                best = held;
+            }
+            if (best == NONE)
+            {
+                continue;
+            }
+            mRegions.unite(r, best);
+            const U32 root = mRegions.find(r), gone = root == r ? best : r;
+            for (const auto& [o, w] : nb[gone])
+            {
+                if (o == root)
+                {
+                    continue;
+                }
+                nb[root][o] += w;
+                nb[o][root] += w;
+                nb[o].erase(gone);
+            }
+            nb[root].erase(gone);
+            nb.erase(gone);
+            area[root] += area[gone];
+            flying[root] += flying[gone];
+            std::vector<U32>& kept = members[root];
+            kept.insert(kept.end(), members[gone].begin(), members[gone].end());
+            members.erase(gone);
+            const bool flight = flying[root] * 2.0 > area[root];
+            for (U32 s : kept)
+            {
+                mSeeds[s].mFlight = flight;
+            }
+            if (area[root] < min_area)
+            {
+                heap.emplace(area[root], root);
+            }
+        }
+    }
+
     void SpacesPass::State::merge()
     {
         edges();
@@ -2701,6 +3822,10 @@ namespace sknav
             }
         }
         std::vector<std::unordered_map<U64, S32>>().swap(mShadow);
+        collectApart();
+        absorbFragments();
+        auto kept_apart = [this](UnionFind& uf, U32 u, U32 v) { return keptApart(uf, u, v); };
+        const F32 passage = 2.f * params().mAgentRadiusM;
         const U32 total = static_cast<U32>(mSeeds.size());
         auto makePortal = [this](const Run& r, const Scored& s, PortalKind kind, U32 u, U32 v) {
             Portal q;
@@ -2716,11 +3841,61 @@ namespace sknav
             q.mSill = fz;
             q.mHead = s.mHead;
             q.mCues = s.mCues;
+            if (kind == PortalKind::OPENING && s.mAperture)
+            {
+                // An opening spans its aperture, jamb to jamb, not the boundary the watershed drew: between their true faces, where known.
+                LLVector2 ja = s.mJambA, jb = s.mJambB;
+                LLVector2 ta, tb;
+                if (aperture(r, ta, tb, false, true))
+                {
+                    ja = ta;
+                    jb = tb;
+                }
+                const LLVector2 c = (ja + jb) * 0.5f;
+                LLVector2 n(ja.mV[VY] - jb.mV[VY], jb.mV[VX] - ja.mV[VX]);
+                n.normVec();
+                if (n * r.mN < 0.f)
+                {
+                    n = -n;
+                }
+                q.mCentre.set(c.mV[VX], c.mV[VY], fz);
+                q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+                q.mA.set(ja.mV[VX], ja.mV[VY], fz);
+                q.mB.set(jb.mV[VX], jb.mV[VY], fz);
+                q.mWidth = dist_vec(ja, jb);
+            }
             mPortals.push_back(q);
             mPortalDoor.push_back(kind == PortalKind::DOOR ? s.mDoor : -1);
         };
         std::vector<std::pair<U64, U32>> keyed;
         std::vector<U32> group;
+        // Each stair portal's contact, by portal, for squaring to its flight once the rounds settle.
+        std::vector<StairEnd> stair_ends;
+        std::vector<size_t> stair_portals;
+        auto stairEnd = [&](const Run& r, U32 st, U32 first) {
+            StairEnd e;
+            e.mA = r.mA;
+            e.mB = r.mB;
+            // Squared about the cut's middle, measured from the flight cell beside it nearest that.
+            F32 nearest = FLT_MAX;
+            for (U32 id : r.mIds)
+            {
+                const Edge& ed = mEdges[id];
+                const bool a_flight = mRegions.find(ed.mA) == st;
+                const F32 d = dist_vec_squared(ed.mMid, r.mC);
+                if (d < nearest)
+                {
+                    nearest = d;
+                    e.mSeed = a_flight ? ed.mCellA : ed.mCellB;
+                    e.mZ = (a_flight ? ed.mFloorA : ed.mFloorB) * mUnit;
+                }
+            }
+            e.mPivot = r.mC;
+            e.mInto = st == first ? -r.mN : r.mN;
+            e.mFlight = st;
+            stair_ends.push_back(e);
+            stair_portals.push_back(mPortals.size() - 1);
+        };
         // A pair of regions whose edges a round left alone has the same runs next round.
         struct Memo
         {
@@ -2793,6 +3968,8 @@ namespace sknav
         {
             mPortals.clear();
             mPortalDoor.clear();
+            stair_ends.clear();
+            stair_portals.clear();
             std::vector<bool> flight(total, false);
             for (U32 s = 0; s < total; ++s)
             {
@@ -2860,17 +4037,23 @@ namespace sknav
                         }
                         std::nth_element(floor_side.begin(), floor_side.begin() + floor_side.size() / 2, floor_side.end());
                         const S32 ff = floor_side[floor_side.size() / 2];
-                        if (!best || r.mEdges > best->mEdges)
+                        // A staircase is never wider than this: a wider contact runs along a deck or round a corner.
+                        if (r.mWidth > STAIR_MAX_WIDTH_M)
+                        {
+                            continue;
+                        }
+                        if (r.mWidth >= passage && (!best || r.mEdges > best->mEdges))
                         {
                             best = &r;
                         }
-                        if (r.mEdges < STAIR_RUN_EDGES || (ff > fs_lo + 1 && ff < fs_hi - 1) || (fs_lo == fs_hi && std::abs(ff - fs_lo) > STAIR_END_UNITS))
+                        if (r.mEdges < STAIR_RUN_EDGES || r.mWidth < passage || (ff > fs_lo + 1 && ff < fs_hi - 1) || (fs_lo == fs_hi && std::abs(ff - fs_lo) > STAIR_END_UNITS))
                         {
                             continue;
                         }
                         Scored s = score(r);
                         s.mCues &= ~CUE_DOOR;
                         makePortal(r, s, PortalKind::STAIR, g.mU, g.mV);
+                        stairEnd(r, st, g.mU);
                         made = true;
                     }
                     if (!made && best)
@@ -2879,20 +4062,38 @@ namespace sknav
                         Scored s = score(*best);
                         s.mCues = static_cast<U8>((s.mCues & ~CUE_DOOR) | CUE_WEAK);
                         makePortal(*best, s, PortalKind::STAIR, g.mU, g.mV);
+                        stairEnd(*best, st, g.mU);
                     }
                     continue;
                 }
-                bool any = false;
+                // A run narrower than an avatar passes is no way through: no
+                // portal, and two regions that meet only along such runs are
+                // not one either.
+                bool any = false, wide = false;
                 for (const Run& r : groupRuns(g.mU))
                 {
                     const Scored s = score(r);
-                    if (s.mPortal)
+                    const bool passes = s.mKind == PortalKind::DOOR || r.mWidth >= passage;
+                    wide = wide || passes;
+                    if (s.mPortal && passes)
                     {
                         makePortal(r, s, s.mKind, g.mU, g.mV);
                         any = true;
                     }
                 }
-                if (!any && round_uf.unite(g.mU, g.mV))
+                const bool held = !any && wide && kept_apart(round_uf, g.mU, g.mV);
+                if (held)
+                {
+                    // Held apart by a cut elsewhere: where else they meet is an opening.
+                    for (const Run& r : groupRuns(g.mU))
+                    {
+                        if (r.mWidth >= passage)
+                        {
+                            makePortal(r, score(r), PortalKind::OPENING, g.mU, g.mV);
+                        }
+                    }
+                }
+                if (!held && !any && wide && round_uf.unite(g.mU, g.mV))
                 {
                     ++merged;
                 }
@@ -2913,6 +4114,16 @@ namespace sknav
                 round = 0;
             }
             mRegions = round_uf;
+        }
+        squareStairPortals(stair_ends, stair_portals);
+        for (const auto& pq : mApart)
+        {
+            SeedLink l;
+            l.mA = mTiles[mSeeds[pq.first].mTile].mKey;
+            l.mSeedA = static_cast<U16>(mSeeds[pq.first].mLocal + 1);
+            l.mB = mTiles[mSeeds[pq.second].mTile].mKey;
+            l.mSeedB = static_cast<U16>(mSeeds[pq.second].mLocal + 1);
+            mProduct->mApart.push_back(l);
         }
         // A flight that touches no floor is no stair: drops, low headroom or
         // steps past climb part it from every floor, so no contact can link it.
@@ -2996,6 +4207,196 @@ namespace sknav
         mPortals.swap(kept);
         mPortalDoor.swap(kept_door);
         std::unordered_map<U64, Scored>().swap(mScored);
+    }
+
+    void SpacesPass::State::joinUnderFlights(std::vector<Space>& out)
+    {
+        // A space's own avatar floor, not air it took over above a thin solid.
+        auto ownFloor = [&](const Space& sp, U32 t, const AirGap& g) {
+            const F32 z = floorOf(t, g) * mUnit;
+            return floorGap(t, g) && z >= sp.mFloorMin - mClimb * mUnit && z <= sp.mFloorMax + mClimb * mUnit;
+        };
+        std::vector<U32> degree(out.size(), 0);
+        for (const Portal& q : mPortals)
+        {
+            ++degree[q.mSpaces[0]];
+            ++degree[q.mSpaces[1]];
+        }
+        // Each space's floor, and how much of it lies under an open flight's air.
+        std::vector<F64> total(out.size(), 0.0), under(out.size(), 0.0);
+        AirColumn col;
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                if (!leaf.mGapCount)
+                {
+                    continue;
+                }
+                const F64 area = std::pow((1 << leaf.mLevel) * mCell, 2.0);
+                column(t, leaf.mX, leaf.mY, col);
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const U32 g = leaf.mFirstGap + i;
+                    const U32 s = mGapSpace[t][g];
+                    if (!s || !ownFloor(out[s - 1], t, a.mGaps[g]))
+                    {
+                        continue;
+                    }
+                    total[s - 1] += area;
+                    const S32 f = floorOf(t, a.mGaps[g]);
+                    for (U32 k = 0; k < col.mCount; ++k)
+                    {
+                        const AirGap& o = a.mGaps[col.mGap[k]];
+                        if ((o.mFlags & AirGap::FLIGHT) && floorOf(t, o) > f + mWalkHead / 2 && ceilOf(t, o) >= OPEN_TOP)
+                        {
+                            under[s - 1] += area;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        std::vector<bool> lone(out.size(), false);
+        for (U32 s = 0; s < out.size(); ++s)
+        {
+            Space& sp = out[s];
+            lone[s] = !degree[s] && !sp.mLift && !sp.mFlight && total[s] > 0.0 && under[s] >= UNDER_FLIGHT_SHARE * total[s];
+            sp.mUnderFlight = lone[s];
+        }
+        // From each lone space's floors, walk out across floor too low to stand on until ground of another space, or solid.
+        struct Contact
+        {
+            LLVector2 mFrom, mTo;
+            F32 mZ;
+        };
+        std::map<std::pair<U32, U32>, std::vector<Contact>> contacts;
+        const S32 reach = static_cast<S32>(std::lround(UNDER_FLIGHT_REACH_M / mCell));
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                const S32 sz = 1 << leaf.mLevel;
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const U32 g = leaf.mFirstGap + i;
+                    const U32 s = mGapSpace[t][g];
+                    if (!s || !lone[s - 1] || !ownFloor(out[s - 1], t, a.mGaps[g]))
+                    {
+                        continue;
+                    }
+                    for (S32 d = 0; d < 4; ++d)
+                    {
+                        for (S32 e = 0; e < sz; ++e)
+                        {
+                            S32 x = DX[d] > 0 ? leaf.mX + sz - 1 : DX[d] < 0 ? leaf.mX : leaf.mX + e;
+                            S32 y = DY[d] > 0 ? leaf.mY + sz - 1 : DY[d] < 0 ? leaf.mY : leaf.mY + e;
+                            const LLVector2 from(a.mOrigin.mV[VX] + (x + 0.5f) * mCell, a.mOrigin.mV[VY] + (y + 0.5f) * mCell);
+                            const S32 f = airFloorAt(a.mGaps[g], leaf, x, y) + mTiles[t].mZOff;
+                            for (S32 k = 1; k <= reach; ++k)
+                            {
+                                x += DX[d];
+                                y += DY[d];
+                                U32 u;
+                                S32 bx, by;
+                                if (resolve(t, x, y, u, bx, by) != 0)
+                                {
+                                    break;
+                                }
+                                S32 hit = -1, hf = 0;
+                                const U32 n = column(u, bx, by, col);
+                                for (U32 j = 0; j < n; ++j)
+                                {
+                                    const S32 fo = floorAt(u, col, j, bx, by);
+                                    if (std::abs(fo - f) <= mClimb && ceilOf(u, air(u).mGaps[col.mGap[j]]) > f + mClimb)
+                                    {
+                                        hit = static_cast<S32>(j);
+                                        hf = fo;
+                                        break;
+                                    }
+                                }
+                                if (hit < 0)
+                                {
+                                    break;
+                                }
+                                const U32 og = col.mGap[hit];
+                                const U32 o = mGapSpace[u][og];
+                                if (!o || !floorGap(u, air(u).mGaps[og]))
+                                {
+                                    continue;
+                                }
+                                if (o != s)
+                                {
+                                    if (!out[o - 1].mFlight && !out[o - 1].mLift)
+                                    {
+                                        const TileAir& b = air(u);
+                                        const LLVector2 to(b.mOrigin.mV[VX] + (bx + 0.5f) * mCell, b.mOrigin.mV[VY] + (by + 0.5f) * mCell);
+                                        contacts[{ s - 1, o - 1 }].push_back({ from, to, 0.5f * (f + hf) * mUnit });
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Each lone space opens onto the ground it meets along the most cells.
+        std::vector<std::pair<U32, const std::vector<Contact>*>> best(out.size(), { 0, nullptr });
+        for (const auto& [key, list] : contacts)
+        {
+            auto& b = best[key.first];
+            if (!b.second || list.size() > b.second->size())
+            {
+                b = { key.second, &list };
+            }
+        }
+        for (U32 s = 0; s < out.size(); ++s)
+        {
+            const std::vector<Contact>* list = best[s].second;
+            if (!list)
+            {
+                continue;
+            }
+            LLVector2 n(0.f, 0.f), mid(0.f, 0.f);
+            F32 z = 0.f;
+            for (const Contact& c : *list)
+            {
+                n += c.mTo - c.mFrom;
+                mid += (c.mFrom + c.mTo) * 0.5f;
+                z += c.mZ;
+            }
+            mid /= static_cast<F32>(list->size());
+            z /= static_cast<F32>(list->size());
+            n.normVec();
+            const LLVector2 along(-n.mV[VY], n.mV[VX]);
+            F32 lo = 1e30f, hi = -1e30f;
+            for (const Contact& c : *list)
+            {
+                const F32 v = (((c.mFrom + c.mTo) * 0.5f) - mid) * along;
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+            // Narrower than an avatar passes is no way out.
+            if (hi - lo + mCell < 2.f * params().mAgentRadiusM)
+            {
+                continue;
+            }
+            Portal q;
+            q.mKind = PortalKind::OPENING;
+            q.mSpaces[0] = s;
+            q.mSpaces[1] = best[s].first;
+            const LLVector2 pa = mid + along * (lo - 0.5f * mCell), pb = mid + along * (hi + 0.5f * mCell);
+            q.mA.set(pa.mV[VX], pa.mV[VY], z);
+            q.mB.set(pb.mV[VX], pb.mV[VY], z);
+            q.mCentre.set(mid.mV[VX], mid.mV[VY], z);
+            q.mNormal.set(n.mV[VX], n.mV[VY], 0.f);
+            q.mWidth = hi - lo + mCell;
+            q.mSill = z;
+            mPortals.push_back(q);
+        }
     }
 
     void SpacesPass::State::spaces()
@@ -3181,7 +4582,7 @@ namespace sknav
             F64 mCells = 0.0, mBoundary = 0.0, mWalled = 0.0, mFlightCells = 0.0;
             F64 mSumX = 0.0, mSumY = 0.0, mSumXX = 0.0, mSumXY = 0.0, mSumYY = 0.0;
             S32 mFloorMin = INT_MAX, mFloorMax = INT_MIN;
-            F64 mWeight = 0.0, mS = 0.0, mCover = 0.0, mE = 0.0, mKnown = 0.0, mVolume = 0.0, mCeilSum = 0.0, mCeilArea = 0.0, mOpen = 0.0;
+            F64 mWeight = 0.0, mS = 0.0, mCover = 0.0, mSideOpen = 0.0, mE = 0.0, mKnown = 0.0, mVolume = 0.0, mCeilSum = 0.0, mCeilArea = 0.0, mOpen = 0.0;
             F32 mEMin = 1.f, mEMax = 0.f, mCeilMin = 1e30f, mCeilMax = -1e30f;
         };
         std::vector<Acc> acc(nsp);
@@ -3211,6 +4612,7 @@ namespace sknav
             a.mWeight += si.mWeight;
             a.mS += si.mS;
             a.mCover += si.mCover;
+            a.mSideOpen += si.mSideOpen;
             a.mE += si.mE;
             a.mKnown += si.mKnown;
             a.mEMin = std::min(a.mEMin, si.mEMin);
@@ -3259,6 +4661,7 @@ namespace sknav
             sp.mMeanFreePath = sp.mSurface > 0.f ? 4.f * sp.mVolume / sp.mSurface : 0.f;
             sp.mSMean = a.mWeight > 0.0 ? static_cast<F32>(a.mS / a.mWeight) : 0.f;
             sp.mCoverMean = a.mWeight > 0.0 ? static_cast<F32>(a.mCover / a.mWeight) : 0.f;
+            sp.mSideOpenMean = a.mWeight > 0.0 ? static_cast<F32>(a.mSideOpen / a.mWeight) : 0.f;
             sp.mEMean = a.mKnown > 0.0 ? static_cast<F32>(a.mE / a.mKnown) : 0.f;
             sp.mEMin = a.mKnown > 0.0 ? a.mEMin : 0.f;
             sp.mEMax = a.mKnown > 0.0 ? a.mEMax : 0.f;
@@ -3324,10 +4727,24 @@ namespace sknav
 
         // Lifts: a census shaft, or a tall shaft behind a door, is a space of its own.
         std::vector<std::vector<std::pair<U32, U32>>> lifts;
+        std::vector<std::pair<LLVector3d, LLVector3d>> shafts;
         const F64 leaf_min = 1.0;
         for (const auto& box : mInput->mLifts)
         {
-            const LLVector3d lo = box.first - mInput->mMeshOrigin, hi = box.second - mInput->mMeshOrigin;
+            LLVector3d lo = box.first - mInput->mMeshOrigin, hi = box.second - mInput->mMeshOrigin;
+            // A stack of doors stands in the shaft's wall: look either side of it for tall air only.
+            const bool stack = std::min(hi.mdV[VX] - lo.mdV[VX], hi.mdV[VY] - lo.mdV[VY]) < LIFT_STACK_M;
+            if (stack)
+            {
+                for (S32 k : { VX, VY })
+                {
+                    if (hi.mdV[k] - lo.mdV[k] < LIFT_STACK_M)
+                    {
+                        lo.mdV[k] -= LIFT_REACH_M;
+                        hi.mdV[k] += LIFT_REACH_M;
+                    }
+                }
+            }
             std::vector<std::pair<U32, U32>> gaps;
             F64 got = 0.0;
             for (U32 t = 0; t < mTiles.size(); ++t)
@@ -3345,7 +4762,9 @@ namespace sknav
                     {
                         const U32 g = leaf.mFirstGap + i;
                         const F32 z = floorOf(t, a.mGaps[g]) * mUnit;
-                        if (mGapSpace[t][g] && z >= lo.mdV[VZ] - 1.0 && z <= hi.mdV[VZ] + 1.0)
+                        const S32 c_top = ceilOf(t, a.mGaps[g]);
+                        const bool tall = c_top < OPEN_TOP && (c_top - floorOf(t, a.mGaps[g])) * mUnit >= LIFT_SHAFT_M;
+                        if (mGapSpace[t][g] && z >= lo.mdV[VZ] - 1.0 && z <= hi.mdV[VZ] + 1.0 && (!stack || tall))
                         {
                             gaps.emplace_back(t, g);
                             got += 4.0 * half * half;
@@ -3356,6 +4775,7 @@ namespace sknav
             if (got >= leaf_min)
             {
                 lifts.push_back(std::move(gaps));
+                shafts.emplace_back(lo, hi);
             }
         }
         for (const DoorSpan& d : mDoors)
@@ -3376,7 +4796,8 @@ namespace sknav
                 }
                 const U32 home = mGapSpace[pr.mTile][pr.mGap];
                 std::vector<std::pair<U32, U32>> gaps;
-                F64 got = 0.0, around = 0.0;
+                F64 got = 0.0, around = 0.0, sky = 0.0;
+                F32 tallest = 0.f;
                 const F32 reach = LIFT_REACH_M + 2.f;
                 for (U32 t = 0; t < mTiles.size(); ++t)
                 {
@@ -3406,42 +4827,52 @@ namespace sknav
                                 around += 4.0 * half * half;
                                 if (dc <= LIFT_REACH_M)
                                 {
+                                    const GapEnclosure& ge = mEnc->mTiles[mTiles[t].mEnc].mGaps[g];
                                     gaps.emplace_back(t, g);
                                     got += 4.0 * half * half;
+                                    sky += 4.0 * half * half * ge.mS / 255.0;
+                                    tallest = std::max(tallest, (c_top - f) * mUnit);
                                 }
                             }
                         }
                     }
                 }
-                // Small, and nothing more of it just beyond: a shaft, not a hall.
-                if (got >= 1.0 && around <= 16.0)
+                // Small, running up through storeys, mostly blind to the sky, and nothing more of it just beyond: a shaft, not a hall or a doorstep.
+                if (got < 1.0 || around > 16.0 || tallest < LIFT_SHAFT_M || sky >= OPEN_MIN_S * got)
+                {
+                    continue;
+                }
+                // A door in a census shaft's stack of doors opens onto that shaft.
+                size_t into = shafts.size();
+                F64 nearest = 1.0;
+                for (size_t k = 0; k < shafts.size(); ++k)
+                {
+                    const LLVector3d& lo = shafts[k].first;
+                    const LLVector3d& hi = shafts[k].second;
+                    const F64 dx = std::max({ lo.mdV[VX] - d.mC.mV[VX], d.mC.mV[VX] - hi.mdV[VX], 0.0 });
+                    const F64 dy = std::max({ lo.mdV[VY] - d.mC.mV[VY], d.mC.mV[VY] - hi.mdV[VY], 0.0 });
+                    if (std::hypot(dx, dy) <= nearest)
+                    {
+                        nearest = std::hypot(dx, dy);
+                        into = k;
+                    }
+                }
+                if (into < shafts.size())
+                {
+                    lifts[into].insert(lifts[into].end(), gaps.begin(), gaps.end());
+                }
+                else
                 {
                     lifts.push_back(std::move(gaps));
                 }
             }
         }
-        for (auto& gaps : lifts)
-        {
-            // A shaft two doors found is one lift.
-            gaps.erase(std::remove_if(gaps.begin(), gaps.end(), [&](const std::pair<U32, U32>& tg) {
-                           const U32 s = mGapSpace[tg.first][tg.second];
-                           return !s || out[s - 1].mLift;
-                       }),
-                       gaps.end());
-            if (gaps.empty())
-            {
-                continue;
-            }
-            const U32 id = static_cast<U32>(out.size());
-            out.emplace_back();
-            Space& sp = out.back();
-            sp.mLift = true;
-            sp.mBucket = EnclosureBucket::INDOORS;
-            sp.mL = 1.f;
-            F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0;
-            F32 lo = 1e30f, hi = -1e30f;
+        // A new space of these gaps: its floor, volume, ceilings and raster; old gets the spaces they leave.
+        const auto takeGaps = [&](U32 id, const std::vector<std::pair<U32, U32>>& gaps, std::set<U32>& old) {
+            Space& sp = out[id];
+            F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
+            F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
-            std::set<U32> old;
             for (const auto& tg : gaps)
             {
                 const TileAir& a = air(tg.first);
@@ -3472,6 +4903,7 @@ namespace sknav
                 sx += area * x;
                 sy += area * y;
                 s += area * ge.mS / 255.0;
+                cv += area * ge.mCover / 255.0;
                 if (ge.mD != ENCLOSURE_D_UNKNOWN)
                 {
                     e += area * ge.mE / 255.0;
@@ -3479,6 +4911,13 @@ namespace sknav
                 }
                 const S32 c_top = ceilOf(tg.first, gap);
                 vol += area * (c_top >= OPEN_TOP ? OPEN_HEIGHT_M : (c_top - floorOf(tg.first, gap)) * mUnit);
+                if (c_top < OPEN_TOP)
+                {
+                    ceil_sum += area * c_top * mUnit;
+                    ceil_area += area;
+                    ceil_lo = std::min(ceil_lo, c_top * mUnit);
+                    ceil_hi = std::max(ceil_hi, c_top * mUnit);
+                }
                 lo = std::min(lo, z);
                 hi = std::max(hi, z);
                 raster[rasterKey(x, y, z)] += static_cast<U32>(std::lround(area / cell_area));
@@ -3489,6 +4928,13 @@ namespace sknav
             sp.mFloorMax = hi;
             sp.mCentre.set(static_cast<F32>(sx / std::max(w, 1e-9)), static_cast<F32>(sy / std::max(w, 1e-9)), lo);
             sp.mSMean = static_cast<F32>(s / std::max(w, 1e-9));
+            sp.mCoverMean = static_cast<F32>(cv / std::max(w, 1e-9));
+            if (ceil_area > 0.0)
+            {
+                sp.mCeilingMin = ceil_lo;
+                sp.mCeilingMax = ceil_hi;
+                sp.mCeilingMean = static_cast<F32>(ceil_sum / ceil_area);
+            }
             sp.mEMean = known > 0.0 ? static_cast<F32>(e / known) : 0.f;
             sp.mUnknown = static_cast<F32>(1.0 - known / std::max(w, 1e-9));
             sp.mAnchor.set(std::floor(sp.mCentre.mV[VX]), std::floor(sp.mCentre.mV[VY]), std::floor(lo));
@@ -3511,6 +4957,29 @@ namespace sknav
                     out[o].mFloorArea = std::max(0.f, out[o].mFloorArea - sp.mFloorArea);
                 }
             }
+        };
+        for (auto& gaps : lifts)
+        {
+            std::sort(gaps.begin(), gaps.end());
+            gaps.erase(std::unique(gaps.begin(), gaps.end()), gaps.end());
+            // A shaft two doors found is one lift.
+            gaps.erase(std::remove_if(gaps.begin(), gaps.end(), [&](const std::pair<U32, U32>& tg) {
+                           const U32 s = mGapSpace[tg.first][tg.second];
+                           return !s || out[s - 1].mLift;
+                       }),
+                       gaps.end());
+            if (gaps.empty())
+            {
+                continue;
+            }
+            const U32 id = static_cast<U32>(out.size());
+            out.emplace_back();
+            Space& sp = out.back();
+            sp.mLift = true;
+            sp.mBucket = EnclosureBucket::INDOORS;
+            sp.mL = 1.f;
+            std::set<U32> old;
+            takeGaps(id, gaps, old);
             // The doors into it now open onto it.
             const LLVector2 centre(sp.mCentre.mV[VX], sp.mCentre.mV[VY]);
             for (Portal& q : mPortals)
@@ -3528,9 +4997,8 @@ namespace sknav
         }
 
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
-        // space around it, or else the one below across a thin solid; a floor
-        // on a solid thicker than that is a level of its own.
-        const S32 slab = static_cast<S32>(std::lround(CARRY_SLAB_M / mUnit));
+        // space it steps onto; never the one below across a solid, which no
+        // one walks to from there.
         std::vector<std::vector<U32>> leaf_of(mTiles.size());
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
@@ -3548,7 +5016,7 @@ namespace sknav
         auto around = [&](U32 t, U32 g, const std::function<void(U32, U32)>& fn) {
             const TileAir& a = air(t);
             const AirLeaf& leaf = a.mLeaves[leaf_of[t][g]];
-            const S32 f = floorOf(t, a.mGaps[g]), c = ceilOf(t, a.mGaps[g]);
+            const S32 c = ceilOf(t, a.mGaps[g]);
             const S32 sz = 1 << leaf.mLevel;
             for (S32 d = 0; d < 4; ++d)
             {
@@ -3556,25 +5024,29 @@ namespace sknav
                 {
                     const S32 x = DX[d] > 0 ? leaf.mX + sz : DX[d] < 0 ? leaf.mX - 1 : leaf.mX + k;
                     const S32 y = DY[d] > 0 ? leaf.mY + sz : DY[d] < 0 ? leaf.mY - 1 : leaf.mY + k;
+                    const S32 f = airFloorAt(a.mGaps[g], leaf, x - DX[d], y - DY[d]) + mTiles[t].mZOff;
                     U32 u;
                     S32 bx, by;
                     if (resolve(t, x, y, u, bx, by) != 0)
                     {
                         continue;
                     }
-                    const S32 lb = mTiles[u].mLeafMap[bx + by * air(u).mWidth];
-                    if (lb < 0)
+                    for (S32 lb = mTiles[u].mLeafMap[bx + by * air(u).mWidth]; lb >= 0; lb = parentLeaf(air(u), lb))
                     {
-                        continue;
-                    }
-                    const AirLeaf& ol = air(u).mLeaves[lb];
-                    for (U32 j = 0; j < ol.mGapCount; ++j)
-                    {
-                        const AirGap& o = air(u).mGaps[ol.mFirstGap + j];
-                        const S32 fo = floorOf(u, o);
-                        if (floorGap(u, o) && std::abs(fo - f) <= mClimb && std::min(c, ceilOf(u, o)) - std::max(f, fo) >= mWalkOverlap)
+                        // A leaf over this gap's own cells holds air beside it in the same columns, not a step away.
+                        const AirLeaf& ol = air(u).mLeaves[lb];
+                        if (u == t && leaf.mX >= ol.mX && leaf.mY >= ol.mY && leaf.mX < ol.mX + (1 << ol.mLevel) && leaf.mY < ol.mY + (1 << ol.mLevel))
                         {
-                            fn(u, ol.mFirstGap + j);
+                            break;
+                        }
+                        for (U32 j = 0; j < ol.mGapCount; ++j)
+                        {
+                            const AirGap& o = air(u).mGaps[ol.mFirstGap + j];
+                            const S32 fo = airFloorAt(o, ol, bx, by) + mTiles[u].mZOff;
+                            if (floorGap(u, o) && std::abs(fo - f) <= mClimb && std::min(c, ceilOf(u, o)) - std::max(f, fo) >= mWalkOverlap)
+                            {
+                                fn(u, ol.mFirstGap + j);
+                            }
                         }
                     }
                 }
@@ -3636,25 +5108,130 @@ namespace sknav
             }
         };
         spread();
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
+
+        // Roofs: floors open to the sky over a building's roofed floors. A gap's
+        // cells each look down their column for the first gap in a space; the
+        // air's indoor or sheltered bucket there makes the cell cover that space.
+        const F64 cell_m2 = static_cast<F64>(mCell) * mCell;
+        AirColumn below;
+        const auto coverOf = [&](U32 t, U32 g, F64& open, F64& covered, std::map<U32, F64>& covers) {
             const TileAir& a = air(t);
-            std::vector<U32>& gs = mGapSpace[t];
-            for (const AirLeaf& leaf : a.mLeaves)
+            if (ceilOf(t, a.mGaps[g]) < OPEN_TOP)
             {
-                U32 below = 0;
-                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                return;
+            }
+            const AirLeaf& leaf = a.mLeaves[leaf_of[t][g]];
+            const S32 n = 1 << leaf.mLevel;
+            const TileEnclosure& te = mEnc->mTiles[mTiles[t].mEnc];
+            for (S32 iy = leaf.mY; iy < leaf.mY + n && iy < a.mHeight; ++iy)
+            {
+                for (S32 ix = leaf.mX; ix < leaf.mX + n && ix < a.mWidth; ++ix)
                 {
-                    U32& s = gs[leaf.mFirstGap + i];
-                    if (!s && below && floorOf(t, a.mGaps[leaf.mFirstGap + i]) - ceilOf(t, a.mGaps[leaf.mFirstGap + i - 1]) <= slab)
+                    open += cell_m2;
+                    column(t, ix, iy, below);
+                    U32 k = 0;
+                    while (k < below.mCount && below.mGap[k] != g)
                     {
-                        s = below;
+                        ++k;
                     }
-                    below = s;
+                    while (k-- > 0 && k < below.mCount)
+                    {
+                        const U32 s = mGapSpace[t][below.mGap[k]];
+                        if (s)
+                        {
+                            if (const EnclosureBucket bk = static_cast<EnclosureBucket>(te.mGaps[below.mGap[k]].mBucket); bk == EnclosureBucket::INDOORS || bk == EnclosureBucket::SHELTERED)
+                            {
+                                covered += cell_m2;
+                                covers[s - 1] += cell_m2;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        };
+        const auto keepCover = [&](Space& sp, F64 covered, const std::map<U32, F64>& covers) {
+            sp.mOverRoofed = sp.mFloorArea > 0.f ? static_cast<F32>(covered / sp.mFloorArea) : 0.f;
+            sp.mCovers.clear();
+            sp.mCoverM2.clear();
+            for (const auto& c : covers)
+            {
+                sp.mCovers.push_back(c.first);
+                sp.mCoverM2.push_back(static_cast<F32>(c.second));
+            }
+        };
+        {
+            // The spaces standing now, any of which may be a roof once its bucket is known.
+            const size_t standing = out.size();
+            std::vector<F64> open(standing, 0.0), covered(standing, 0.0);
+            std::vector<std::map<U32, F64>> covers(standing);
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                const TileAir& a = air(t);
+                for (U32 g = 0; g < a.mGaps.size(); ++g)
+                {
+                    const U32 s = mGapSpace[t][g];
+                    if (s && s <= standing && floorGap(t, a.mGaps[g]))
+                    {
+                        coverOf(t, g, open[s - 1], covered[s - 1], covers[s - 1]);
+                    }
+                }
+            }
+            for (size_t s = 0; s < standing; ++s)
+            {
+                covers[s].erase(static_cast<U32>(s));
+                keepCover(out[s], covered[s], covers[s]);
+            }
+
+            // Floors no space steps onto: each joined set of them is a roof when open and over indoor floors enough.
+            std::vector<std::vector<U8>> seen(mTiles.size());
+            for (U32 t = 0; t < mTiles.size(); ++t)
+            {
+                seen[t].assign(air(t).mGaps.size(), 0);
+            }
+            for (U32 t0 = 0; t0 < mTiles.size(); ++t0)
+            {
+                for (U32 g0 = 0; g0 < air(t0).mGaps.size(); ++g0)
+                {
+                    if (seen[t0][g0] || mGapSpace[t0][g0] || !floorGap(t0, air(t0).mGaps[g0]))
+                    {
+                        continue;
+                    }
+                    std::vector<std::pair<U32, U32>> gaps(1, { t0, g0 });
+                    seen[t0][g0] = 1;
+                    for (size_t head = 0; head < gaps.size(); ++head)
+                    {
+                        around(gaps[head].first, gaps[head].second, [&](U32 u, U32 o) {
+                            if (!seen[u][o] && !mGapSpace[u][o])
+                            {
+                                seen[u][o] = 1;
+                                gaps.emplace_back(u, o);
+                            }
+                        });
+                    }
+                    F64 area = 0.0, open_m2 = 0.0, covered_m2 = 0.0;
+                    std::map<U32, F64> over;
+                    for (const auto& tg : gaps)
+                    {
+                        const AirLeaf& leaf = air(tg.first).mLeaves[leaf_of[tg.first][tg.second]];
+                        area += cell_m2 * (1 << leaf.mLevel) * (1 << leaf.mLevel);
+                        coverOf(tg.first, tg.second, open_m2, covered_m2, over);
+                    }
+                    if (area < ROOF_MIN_M2 || open_m2 < ROOF_OPEN_SHARE * area || covered_m2 < ROOF_COVER_SHARE * area)
+                    {
+                        continue;
+                    }
+                    std::sort(gaps.begin(), gaps.end());
+                    const U32 id = static_cast<U32>(out.size());
+                    out.emplace_back();
+                    out.back().mRoof = true;
+                    out.back().mBucket = EnclosureBucket::OUTDOORS;
+                    std::set<U32> old;
+                    takeGaps(id, gaps, old);
+                    keepCover(out.back(), covered_m2, over);
                 }
             }
         }
-        spread();
 
         // Bounds over every gap a space holds, now that all have joined.
         for (U32 t = 0; t < mTiles.size(); ++t)
@@ -3672,12 +5249,22 @@ namespace sknav
                         continue;
                     }
                     Space& sp = out[s - 1];
-                    const F32 z = floorOf(t, a.mGaps[leaf.mFirstGap + i]) * mUnit;
-                    sp.mMin.set(std::min(sp.mMin.mV[VX], x0), std::min(sp.mMin.mV[VY], y0), std::min(sp.mMin.mV[VZ], z));
-                    sp.mMax.set(std::max(sp.mMax.mV[VX], x0 + side), std::max(sp.mMax.mV[VY], y0 + side), std::max(sp.mMax.mV[VZ], z));
+                    const AirGap& g = a.mGaps[leaf.mFirstGap + i];
+                    const S32 n = (1 << leaf.mLevel) - 1;
+                    S32 f_lo = g.mFloor, f_hi = g.mFloor;
+                    for (S32 k = 0; k < 4; ++k)
+                    {
+                        const S32 f = airFloorAt(g, leaf, leaf.mX + (k & 1) * n, leaf.mY + (k >> 1) * n);
+                        f_lo = std::min(f_lo, f);
+                        f_hi = std::max(f_hi, f);
+                    }
+                    const F32 z_lo = (f_lo + mTiles[t].mZOff) * mUnit, z_hi = (f_hi + mTiles[t].mZOff) * mUnit;
+                    sp.mMin.set(std::min(sp.mMin.mV[VX], x0), std::min(sp.mMin.mV[VY], y0), std::min(sp.mMin.mV[VZ], z_lo));
+                    sp.mMax.set(std::max(sp.mMax.mV[VX], x0 + side), std::max(sp.mMax.mV[VY], y0 + side), std::max(sp.mMax.mV[VZ], z_hi));
                 }
             }
         }
+        joinUnderFlights(out);
         for (U32 i = 0; i < mPortals.size(); ++i)
         {
             for (U32 s : mPortals[i].mSpaces)
@@ -3835,10 +5422,6 @@ namespace sknav
         // Buckets, held against the space's last one; few walls cap one at SHELTERED.
         for (Space& sp : out)
         {
-            if (sp.mLift)
-            {
-                continue;
-            }
             if (sp.mUnknown >= 1.f)
             {
                 sp.mBucket = EnclosureBucket::UNKNOWN;
@@ -3849,6 +5432,92 @@ namespace sknav
             if (sp.mBucket == EnclosureBucket::INDOORS && sp.mL < p.mIndoorL)
             {
                 sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // A shaft is indoors whatever its depth reads.
+            if (sp.mLift)
+            {
+                sp.mBucket = EnclosureBucket::INDOORS;
+            }
+            if (sp.mBucket == EnclosureBucket::INDOORS && sp.mUnderFlight)
+            {
+                sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // Unroofed air under open sky is never indoors, lift or not.
+            if (sp.mBucket == EnclosureBucket::INDOORS && sp.mCoverMean <= OPEN_MAX_COVER && sp.mSMean > OPEN_MIN_S)
+            {
+                sp.mBucket = EnclosureBucket::SHELTERED;
+            }
+            // A roof is outdoors; so is an outdoor floor over indoor ones, and that makes it a roof.
+            sp.mRoof = sp.mRoof || (sp.mBucket == EnclosureBucket::OUTDOORS && sp.mOverRoofed >= ROOF_COVER_SHARE);
+            if (sp.mRoof)
+            {
+                sp.mBucket = EnclosureBucket::OUTDOORS;
+            }
+        }
+
+        // Buildings: indoor spaces joined by a portal, and every roofed space a roof covers with the roof.
+        {
+            UnionFind uf;
+            uf.reset(out.size());
+            const auto indoor = [&](U32 s) { return s < out.size() && out[s].mBucket == EnclosureBucket::INDOORS; };
+            const auto roofed = [&](U32 s) { return indoor(s) || (s < out.size() && out[s].mBucket == EnclosureBucket::SHELTERED); };
+            for (const Portal& q : mProduct->mPortals)
+            {
+                if (indoor(q.mSpaces[0]) && indoor(q.mSpaces[1]))
+                {
+                    uf.unite(q.mSpaces[0], q.mSpaces[1]);
+                }
+            }
+            std::vector<U8> member(out.size(), 0);
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                member[s] = indoor(s) ? 1 : 0;
+                Space& sp = out[s];
+                if (sp.mRoof)
+                {
+                    // A roof covers the roofed space it lies most over, and those it lies over a quarter of: an eave over a street joins nothing.
+                    size_t keep = 0, most = sp.mCovers.size();
+                    for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+                    {
+                        if (roofed(sp.mCovers[k]) && (most == sp.mCovers.size() || sp.mCoverM2[k] > sp.mCoverM2[most]))
+                        {
+                            most = k;
+                        }
+                    }
+                    for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+                    {
+                        const U32 c = sp.mCovers[k];
+                        if (roofed(c) && (k == most || sp.mCoverM2[k] >= ROOF_COVERS_SHARE * out[c].mFloorArea))
+                        {
+                            sp.mCovers[keep] = c;
+                            sp.mCoverM2[keep++] = sp.mCoverM2[k];
+                            uf.unite(s, c);
+                        }
+                    }
+                    sp.mCovers.resize(keep);
+                    sp.mCoverM2.resize(keep);
+                }
+            }
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                for (const U32 c : out[s].mRoof ? out[s].mCovers : std::vector<U32>())
+                {
+                    member[c] = 1;
+                }
+            }
+            std::unordered_map<U32, U32> least;
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                if (member[s])
+                {
+                    auto it = least.emplace(uf.find(s), out[s].mId).first;
+                    it->second = std::min(it->second, out[s].mId);
+                }
+            }
+            for (U32 s = 0; s < out.size(); ++s)
+            {
+                const auto it = least.find(uf.find(s));
+                out[s].mBuilding = (member[s] || out[s].mRoof) && it != least.end() ? it->second : 0;
             }
         }
 
@@ -3931,6 +5600,7 @@ namespace sknav
                             continue;
                         }
                         const S32 cell = cx + cy * c.mWidth;
+                        const S32 mx = std::max<S32>(leaf.mX, cx * c.mCells) + (ox - 1) / 2, my = std::max<S32>(leaf.mY, cy * c.mCells) + (oy - 1) / 2;
                         for (U32 i = 0; i < leaf.mGapCount; ++i)
                         {
                             const U32 g = leaf.mFirstGap + i;
@@ -3938,7 +5608,7 @@ namespace sknav
                             {
                                 continue;
                             }
-                            const U16 f = a.mGaps[g].mFloor;
+                            const U16 f = airFloorUnits(airFloorAt(a.mGaps[g], leaf, mx, my));
                             for (U32 k = c.mStart[cell]; k < c.mStart[cell + 1]; ++k)
                             {
                                 if (c.mGaps[k].mFloor <= f && f <= c.mGaps[k].mFloor + mClimb)
@@ -4058,6 +5728,8 @@ namespace sknav
                 s.mCells.clear();
                 s.mCells.shrink_to_fit();
                 s.mTiles.clear();
+                s.mSolidMaps = {};
+                s.mWindowCount = 0;
             }
         }
         return s.mStage == STAGE_DONE;

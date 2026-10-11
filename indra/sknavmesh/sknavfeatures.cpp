@@ -199,6 +199,88 @@ namespace
         return n;
     }
 
+    // Nearest hit along the ray within reach, Moller-Trumbore.
+    bool rayHitsTriangle(const LLVector3& o, const LLVector3& d, const LLVector3& a, const LLVector3& b, const LLVector3& c, F32 reach)
+    {
+        const LLVector3 e1 = b - a, e2 = c - a;
+        const LLVector3 p = d % e2;
+        const F32 det = e1 * p;
+        if (std::fabs(det) < 1e-9f)
+        {
+            return false;
+        }
+        const F32 inv = 1.f / det;
+        const LLVector3 s = o - a;
+        const F32 u = (s * p) * inv;
+        if (u < 0.f || u > 1.f)
+        {
+            return false;
+        }
+        const LLVector3 q = s % e1;
+        const F32 v = (d * q) * inv;
+        if (v < 0.f || u + v > 1.f)
+        {
+            return false;
+        }
+        const F32 t = (e2 * q) * inv;
+        return t > 1e-4f && t <= reach;
+    }
+
+    // A ray against an analytic record's oriented box; spheres and cylinders
+    // are taken as their boxes, which only ever covers more.
+    bool rayHitsBox(const LLVector3& o, const LLVector3& d, const Record& r, F32 reach)
+    {
+        F32 t0 = 1e-4f, t1 = reach;
+        const LLVector3 rel = o - r.mCenter;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            const F32 p = rel * r.mAxes[k];
+            const F32 v = d * r.mAxes[k];
+            if (std::fabs(v) < 1e-9f)
+            {
+                if (std::fabs(p) > r.mHalf.mV[k])
+                {
+                    return false;
+                }
+                continue;
+            }
+            F32 a = (-r.mHalf.mV[k] - p) / v, b = (r.mHalf.mV[k] - p) / v;
+            if (a > b)
+            {
+                std::swap(a, b);
+            }
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, b);
+            if (t0 > t1)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool rayHitsRecord(const LLVector3d& origin, const LLVector3& d, const Record& r, F32 reach)
+    {
+        const LLVector3 o(origin - r.mOrigin);
+        if (r.mShape != Shape::TRIANGLES)
+        {
+            return rayHitsBox(o, d, r, reach);
+        }
+        if (!r.mTriangles)
+        {
+            return false;
+        }
+        const std::vector<LLVector3>& t = *r.mTriangles;
+        for (size_t i = 0; i + 2 < t.size(); i += 3)
+        {
+            if (rayHitsTriangle(o, d, t[i], t[i + 1], t[i + 2], reach))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Two poses of one leaf are one when its centre and every half axis,
     // and so every corner, lie within the tolerance.
     bool samePose(const FeaturePart& a, const FeaturePart& b, F32 tolerance)
@@ -303,7 +385,7 @@ namespace sknav
         {
             case FeatureKind::DOOR: return EXCLUDE_AVATAR;
             case FeatureKind::ELEVATOR: return EXCLUDE_ALL;     // a riding car must rebuild nothing
-            case FeatureKind::VEHICLE: return EXCLUDE_AVATAR | EXCLUDE_WEATHER;
+            case FeatureKind::VEHICLE: return EXCLUDE_AVATAR | EXCLUDE_SOLID;
             default: return 0;
         }
     }
@@ -319,6 +401,85 @@ namespace sknav
             case FeatureKind::SEAT: return "seat";
             default: return "none";
         }
+    }
+
+    bool doorShaped(const FeaturePart& part, const FeatureParams& params)
+    {
+        LLVector3 normal;
+        F32 thickness = 0.f;
+        return thinPanel(part, params, normal, thickness);
+    }
+
+    F32 faceCover(const FeaturePart& leaf, const std::vector<RecordPtr>& records, const FeatureParams& params)
+    {
+        LLVector3 flat;
+        F32 thickness = 0.f;
+        if (!thinPanel(leaf, params, flat, thickness))
+        {
+            return -1.f;
+        }
+        S32 up = 0;
+        for (S32 k = 0; k < 3; ++k)
+        {
+            if (std::fabs(leaf.mAxes[k].mV[VZ]) >= 0.95f)
+            {
+                up = k;
+            }
+        }
+        const S32 a = (up + 1) % 3, b = (up + 2) % 3;
+        const S32 thin = leaf.mHalf.mV[a] <= leaf.mHalf.mV[b] ? a : b;
+        const S32 wide = thin == a ? b : a;
+        const LLVector3 n = leaf.mAxes[thin];
+
+        const F64 reach = params.mFaceReach + leaf.mHalf.mV[thin];
+        const LLVector3d grow_by(reach, reach, reach);
+        const LLVector3d mn = leaf.mMin - grow_by, mx = leaf.mMax + grow_by;
+        std::vector<const Record*> nearby;
+        for (const RecordPtr& r : records)
+        {
+            if (r && r->mPart != leaf.mPart && r->mRole == Role::NAV && overlapsPlan(mn, mx, r->mMin, r->mMax)
+                && r->mMin.mdV[VZ] <= mx.mdV[VZ] && r->mMax.mdV[VZ] >= mn.mdV[VZ])
+            {
+                nearby.push_back(r.get());
+            }
+        }
+        if (nearby.empty())
+        {
+            return 0.f;
+        }
+
+        // The frame and the sill are allowed to touch: only the face's middle counts.
+        const S32 GRID = 8;
+        // Rays start just inside the face, so a wall flush behind it is hit.
+        const F32 edge = 0.1f, sill = 0.15f, inset = std::min(0.01f, leaf.mHalf.mV[thin]);
+        const F32 hw = std::max(0.f, leaf.mHalf.mV[wide] - edge);
+        const F32 lo = -leaf.mHalf.mV[up] + sill, hi = leaf.mHalf.mV[up] - edge;
+        F32 worst = 0.f;
+        for (const F32 side : { 1.f, -1.f })
+        {
+            const LLVector3 d = n * side;
+            S32 hit = 0;
+            for (S32 i = 0; i < GRID; ++i)
+            {
+                for (S32 j = 0; j < GRID; ++j)
+                {
+                    const F32 w = -hw + 2.f * hw * (i + 0.5f) / GRID;
+                    const F32 h = lo + (hi - lo) * (j + 0.5f) / GRID;
+                    const LLVector3 off = d * (leaf.mHalf.mV[thin] - inset) + leaf.mAxes[wide] * w + leaf.mAxes[up] * h;
+                    const LLVector3d origin = leaf.mCenter + LLVector3d(off);
+                    for (const Record* r : nearby)
+                    {
+                        if (rayHitsRecord(origin, d, *r, params.mFaceReach + inset))
+                        {
+                            ++hit;
+                            break;
+                        }
+                    }
+                }
+            }
+            worst = std::max(worst, static_cast<F32>(hit) / (GRID * GRID));
+        }
+        return worst;
     }
 
     std::vector<Feature> classifyFeatures(const std::vector<FeaturePart>& parts, const std::vector<FeatureRoot>& roots,
@@ -500,9 +661,10 @@ namespace sknav
         }
 
         // Doors: a door-sized thin upright panel with real evidence it opens,
-        // a name or two of its own script, touch and motion; a scripted root
-        // alone only adds to that. A panel mostly seen through, or named as a
-        // window, is a pane, however door-shaped and whatever else it has.
+        // a name, motion, or its own script and touch with both faces open; a
+        // scripted root alone only adds to that. A panel mostly seen through,
+        // or named as a window, is a pane, however door-shaped and whatever
+        // else it has.
         struct Leaf
         {
             S32 mPart;
@@ -536,17 +698,32 @@ namespace sknav
             };
             // The linkset's name speaks for the whole build, so an Outdoor Cafe
             // or a house with doors needs one more sign before a panel is one.
-            if (containsWordNoCase(p.mName, "door"))
+            const bool named = containsWordNoCase(p.mName, "door");
+            const bool linkset_named = !named && containsWordNoCase(root_name, "door");
+            // A root's motion speaks for the root's own prim; a child panel
+            // of a house that was nudged has not opened.
+            const bool moved = r && r->mEverMoved && p.mPart == p.mRoot;
+            // Something lying flat against a face mounts the panel on it: a
+            // painting on a wall, a headboard on its bed, a decal on its slab.
+            // Only a name or motion outweighs that; a leaf open into a wall is
+            // kept by its history.
+            if (p.mFaceCover >= params.mFaceBlocked && !named && !linkset_named && !moved)
+            {
+                continue;
+            }
+            if (named)
             {
                 add(0.5f, "named");
             }
-            else if (containsWordNoCase(root_name, "door"))
+            else if (linkset_named)
             {
                 add(0.25f, "linkset named");
             }
+            // Script and touch say the linkset does something, not that this
+            // panel opens: together they need open faces besides.
             if (p.mScripted)
             {
-                add(0.25f, "scripted");
+                add(0.15f, "scripted");
             }
             else if (r && r->mScripted == TriState::YES)
             {
@@ -554,13 +731,15 @@ namespace sknav
             }
             if (p.mTouch)
             {
-                add(0.25f, "touch");
+                add(0.15f, "touch");
             }
-            // A root's motion speaks for the root's own prim; a child panel
-            // of a house that was nudged has not opened.
-            if (r && r->mEverMoved && p.mPart == p.mRoot)
+            if (moved)
             {
-                add(0.25f, "moved");
+                add(0.35f, "moved");
+            }
+            if (p.mFaceCover >= 0.f && p.mFaceCover <= params.mFaceClear)
+            {
+                add(0.2f, "open faces");
             }
             if (confidence < params.mDoorConfidence)
             {

@@ -69,7 +69,8 @@ namespace sknav
         F32 mWalledL = 0.6f;        ///< unless one side is this walled
         F32 mOutdoorCover = 0.3f;   ///< or either is roofed over this share of its sky
         F32 mIndoorL = 0.4f;        ///< a space less walled than this is at most SHELTERED
-        F32 mAvatarAreaM2 = 2.f;    ///< a floor smaller than this seeds no space
+        F32 mAvatarAreaM2 = 2.f;    ///< a floor smaller than this seeds no space, and a region smaller is a fragment
+        F32 mAgentRadiusM = 0.3f;   ///< a cut narrower than two of these is no passage
         F32 mHysteresis = 0.05f;    ///< a space's bucket holds until its mean e is this far past its edge
     };
 
@@ -118,6 +119,7 @@ namespace sknav
         F32 mElongation = 1.f;
         F32 mSMean = 0.f;
         F32 mCoverMean = 0.f;       ///< share of the sky roofed over, walls aside, floor-weighted
+        F32 mSideOpenMean = 0.f;    ///< side openness O, floor-weighted: L's per-spot counterpart
         F32 mEMean = 0.f;
         F32 mEMin = 0.f;
         F32 mEMax = 0.f;
@@ -125,7 +127,13 @@ namespace sknav
         F32 mUnknown = 0.f;         ///< share of the floor with no enclosure answer
         bool mLift = false;
         bool mFlight = false;       ///< a stair flight's own space
+        bool mUnderFlight = false;  ///< ground under an outdoor flight, sheltered by it
         bool mFrozen = false;       ///< kept from an earlier pass for tiles whose detail was evicted
+        bool mRoof = false;         ///< a building's roof: walkable, under open sky, over its roofed floors
+        F32 mOverRoofed = 0.f;      ///< share of the floor open to the sky over an indoor or sheltered floor
+        U32 mBuilding = 0;          ///< its building's least member id, 0 in none: indoor spaces, roofs and what they cover
+        std::vector<U32> mCovers;   ///< a roof's: indices of the roofed spaces it lies most over or over a quarter of, ascending
+        std::vector<F32> mCoverM2;  ///< m² of each of those it lies over
         std::vector<U32> mPortals;  ///< indices into the product's portals
         /// Floor area per 0.5 m x 0.5 m x 1 m cell, sorted by key: what ids are tracked by.
         std::vector<std::pair<U64, U32>> mRaster;
@@ -232,6 +240,7 @@ namespace sknav
         std::vector<Portal> mPortals;
         std::vector<RoomsTile> mTiles;      ///< sorted by key
         std::vector<SeedLink> mLinks;
+        std::vector<SeedLink> mApart;       ///< seeds either side of an aperture cut, kept apart while both their tiles' air stands
         F32 mMillis = 0.f;
         U32 mSeeds = 0;
         U32 mDirtyTiles = 0;
@@ -282,6 +291,7 @@ namespace sknav
         std::vector<std::pair<LLVector3d, LLVector3d>> mLifts;  ///< elevator shafts, global boxes
         RoomsProductPtr mPrevious;
         SpaceParams mParams;
+        bool mFrameApertures = true;    ///< doorways cut from below read their cells in bulk; off, a sample at a time, as a check
     };
 
     /// The spaces pass over an enclosure product: the feature transform and

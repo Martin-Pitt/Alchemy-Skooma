@@ -1,6 +1,6 @@
 /**
  * @file sknavairdistil.h
- * @brief A tile's air distilled into a restricted quadtree, its seam strips and its solid tops.
+ * @brief A tile's air distilled into per-gap quadtrees, its seam strips and its solid tops.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -26,6 +26,7 @@
 #define SK_NAVAIRDISTIL_H
 
 #include "sknavair.h"
+#include "sknavfaceoffsets.h"
 #include "sknavflights.h"
 
 #include <memory>
@@ -33,24 +34,46 @@
 #include <vector>
 
 struct rcHeightfield;
+struct rcCompactHeightfield;
 
 namespace sknav
 {
+    struct AirBuildStats;
+
     constexpr S32 AIR_MAX_LEVEL = 4;            ///< a level-4 leaf is 16 cells, 2 m at 0.125 m
     constexpr U16 AIR_HEIGHT_MAX = 8191;        ///< heights are 13 bits, 1023.9 m at 0.125 m
     constexpr U16 AIR_CEILING_OPEN = 0xffff;    ///< a distilled ceiling with nothing above in the tile
     constexpr F32 AIR_PASS_M = 1.f;             ///< a closed, unwalkable gap lower than this is no way through
+    constexpr S32 AIR_PLANE_TOL = 1;            ///< units a walkable floor may lie under its merged plane
 
-    /// A square block of 2^mLevel cells whose gaps agree, from (mX, mY) in
-    /// cells of the tile. Its gaps are mGapCount records from mFirstGap.
+    /// A square block of 2^mLevel cells, from (mX, mY) in cells of the tile,
+    /// over which mGapCount gaps from mFirstGap agree, lowest first. Leaves
+    /// nest: a finer leaf inside a coarser one holds the gaps of its columns
+    /// that the coarser one does not, so a column's gaps are those of every
+    /// leaf over it. A merged gap's floor is a plane through its leaf's
+    /// centre (airFloorAt).
     struct AirLeaf
     {
         U16 mX = 0;
         U16 mY = 0;
         U8 mLevel = 0;
         U8 mGapCount = 0;
+        U16 mParent = 0;        ///< how many leaves back the nearest coarser leaf over this one is; 0 for none
         U32 mFirstGap = 0;
     };
+
+    /// The Morton key of a cell: x in the even bits, y in the odd ones.
+    inline U32 airKey(U32 x, U32 y)
+    {
+        auto spread = [](U32 v) {
+            v &= 0xffff;
+            v = (v | (v << 8)) & 0x00ff00ff;
+            v = (v | (v << 4)) & 0x0f0f0f0f;
+            v = (v | (v << 2)) & 0x33333333;
+            return (v | (v << 1)) & 0x55555555;
+        };
+        return spread(x) | (spread(y) << 1);
+    }
 
     /// The gaps of the level-0 cells along one tile edge, in order along it,
     /// for stitching to the neighbour without its quadtree.
@@ -80,7 +103,7 @@ namespace sknav
         F32 mUnit = 0.f;
         S32 mWidth = 0;                 ///< cells along SL x
         S32 mHeight = 0;                ///< along SL y
-        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, row-major by origin
+        std::vector<AirLeaf> mLeaves;   ///< leaves with air only, in airKey order of their origins, coarsest first at a shared origin
         std::vector<AirGap> mGaps;
         /// -x and +x run along y, -y and +y along x.
         SeamStrip mSeams[4];
@@ -90,16 +113,66 @@ namespace sknav
         S32 mTopHeight = 0;
         std::vector<U32> mTopStart;
         std::vector<TopInterval> mTop;
+        /// Where walls' true faces sit inside their solid cells (sknavfaceoffsets.h); empty for coarse air.
+        std::vector<FaceOffset> mFaceOffsets;
 
         size_t bytes() const;
     };
     typedef std::shared_ptr<const TileAir> TileAirPtr;
 
-    /// Merge the fine grid into leaves of up to AIR_MAX_LEVEL. A block
-    /// merges when every column has the same gaps with equal flags, floors
-    /// and ceilings each within climb, and no usable gap (walkable, open or AIR_PASS_M tall) touching a wall; leaves
-    /// that touch differ by at most one level. A merged gap keeps the highest
-    /// floor, the lowest ceiling and the least clearance of those it replaced.
+    /// The finest leaf covering a fine cell, or -1, from the last leaf whose
+    /// key is at most the cell's; the coarser ones over it follow parentLeaf.
+    S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy);
+
+    /// The nearest coarser leaf over a leaf, or -1.
+    inline S32 parentLeaf(const TileAir& air, S32 leaf)
+    {
+        return air.mLeaves[leaf].mParent ? leaf - air.mLeaves[leaf].mParent : -1;
+    }
+
+    /// A gap's floor at a cell of the leaf holding it: its plane's height at the cell's centre.
+    inline S32 airFloorAt(const AirGap& g, const AirLeaf& leaf, S32 ix, S32 iy)
+    {
+        if (!g.mSlopeX && !g.mSlopeY)
+        {
+            return g.mFloor;
+        }
+        const S32 s = 1 << leaf.mLevel;
+        const S32 rise = g.mSlopeX * (2 * (ix - leaf.mX) + 1 - s) + g.mSlopeY * (2 * (iy - leaf.mY) + 1 - s);
+        return g.mFloor + static_cast<S32>(floorDiv(rise + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q));
+    }
+
+    /// A floor read off a plane as a stored height.
+    inline U16 airFloorUnits(S32 units)
+    {
+        return static_cast<U16>(std::clamp<S32>(units, 0, AIR_HEIGHT_MAX));
+    }
+
+    /// A column's gaps gathered from every leaf over it, lowest first.
+    struct AirColumn
+    {
+        U32 mCount = 0;
+        U32 mGap[0xff];     ///< indices into TileAir::mGaps
+        S32 mLeaf[0xff];    ///< the leaf holding each
+
+        /// The gap's floor at the column's cell.
+        S32 floorAt(const TileAir& air, U32 k, S32 ix, S32 iy) const;
+    };
+
+    /// The gaps over a fine cell, starting from its finest leaf; none when leaf is negative.
+    void airColumn(const TileAir& air, S32 leaf, AirColumn& out);
+
+    /// Sort leaves into key order, coarsest first at a shared origin, and link each to its parent.
+    void linkLeaves(TileAir& air);
+
+    /// Merge the fine grid's gaps into leaves of up to AIR_MAX_LEVEL, gap by
+    /// gap: a gap merges over a block when every column has one gap matching
+    /// it, with equal flags, floors and ceilings each within climb (walkable
+    /// floors within half of one), and none is a usable gap (walkable, open
+    /// or AIR_PASS_M tall) touching a wall. The other gaps of those columns stay
+    /// in finer leaves, and a gap beside an overlapping one is at most one
+    /// level coarser. A merged gap keeps the highest floor, the lowest ceiling
+    /// and the least clearance of those it replaced.
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out);
 
     /// The seam strips of a tile's fine grid.
@@ -109,12 +182,36 @@ namespace sknav
     /// cells_per_top columns a side.
     void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out);
 
-    /// Everything a tile's air is built from its WEATHER heightfield: gaps
+    /// Everything a tile's air is built from the solid raster: gaps
     /// read pad_cells past the tile so clearance is exact on it, slivers
     /// under min_gap units folded away, the treads of any flights marked,
     /// then the distil, seams and tops. Null when the tile has no air.
+    /// fine, when given, gets the fine grid the air was distilled from;
+    /// extracted, when not empty, is taken as the padded gaps already read and folded.
     TileAirPtr buildTileAir(const rcHeightfield& hf, S32 border_cells, S32 pad_cells, S32 climb, S32 overlap, S32 min_gap,
-                            const std::vector<Flight>* flights = nullptr);
+                            const std::vector<Flight>* flights = nullptr, AirBuildStats* stats = nullptr, const U8* area_lut = nullptr,
+                            const SpanFlags* extra = nullptr, AirGrid* fine = nullptr, AirGrid* extracted = nullptr);
+
+    constexpr U32 SPAN_NO_GAP = 0xffffffff;
+
+    /// Per span of a compact heightfield with border cells round the tile, the
+    /// gap of the distilled air whose [floor - 1, ceiling) holds its top. Found
+    /// in the fine grid the air was distilled from, since a merged leaf keeps
+    /// only its highest floor; SPAN_NO_GAP off the tile or with no such gap.
+    /// tops, when given, is each span's top as rasterised, where a later pass
+    /// moved it.
+    void spanGaps(const rcCompactHeightfield& chf, S32 border, const AirGrid& fine, const TileAir& air, std::vector<U32>& out,
+                  const std::vector<U16>* tops = nullptr);
+
+    /// A coarse tile's air in cells and height units factor times finer, so the
+    /// passes read it beside a fine tile's: each leaf factor times as wide,
+    /// split into leaves of AIR_MAX_LEVEL past it, heights times factor.
+    TileAirPtr upsampleAir(const TileAir& coarse, S32 factor);
+
+    /// spanGaps for air with no fine grid, read off its leaves: the gap whose
+    /// [floor - 1 - slack, ceiling) holds a span's top moved by z_shift units
+    /// into the air's frame.
+    void leafSpanGaps(const rcCompactHeightfield& chf, S32 border, const TileAir& air, S32 z_shift, S32 slack, std::vector<U32>& out);
 
     /// A compact little-endian form of the records, and a JSON object naming
     /// the sections in the order they appear and each record's layout.

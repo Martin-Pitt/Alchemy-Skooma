@@ -41,7 +41,7 @@
 namespace sknav
 {
     /// Version 2 adds the root table and the clusters' dominant roots, version 3 the reflection probes; older versions still read.
-    constexpr U32 CENSUS_FORMAT_VERSION = 3;
+    constexpr U32 CENSUS_FORMAT_VERSION = 4;
     constexpr size_t ROOT_DESCRIPTION_MAX = 256;
 
     /// Where a root's name came from: the region's linkset reply, or the object properties the viewer had cached.
@@ -116,6 +116,7 @@ namespace sknav
         OCTREE,         ///< automatic, one per octree node
         NAV_SPHERE,     ///< automatic, held by a navmesh room part
         NAV_BOX,        ///< reserved: navmesh room boxes do not exist yet
+        CLUSTER,        ///< automatic, a fill over one cell of a census cluster
         COUNT
     };
     const char* probeKindName(ProbeKind kind);
@@ -156,7 +157,6 @@ namespace sknav
         /// per-tile fields (origin, index, z range, records, terrain) are unset.
         TileBuildInput mParams;
         F32 mAirRadius = 128.f;     ///< tiles further from the camera build their air only on demand
-        bool mBuildWeather = false; ///< SKNavBuildWeather: WEATHER is built past the air radius too
         F64 mClusterGap = 0.5;
         F32 mGroundedMargin = 5.f;
         F32 mVoidMargin = 256.f;

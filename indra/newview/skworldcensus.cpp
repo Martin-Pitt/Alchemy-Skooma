@@ -50,9 +50,11 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skcaptureexport.h"
 #include "sknavmarkobjects.h"
 #include "sknavmesh.h"
 #include "skphysicsshape.h"
+#include "threadpool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -70,44 +72,7 @@ namespace
     // is solid to the sim and told apart from a door only here.
     F32 seeThrough(const LLViewerObject* object)
     {
-        const U8 faces = object->getNumTEs();
-        if (faces == 0)
-        {
-            return 0.f;
-        }
-        U32 clear = 0;
-        for (U8 f = 0; f < faces; ++f)
-        {
-            const LLTextureEntry* te = object->getTE(f);
-            if (!te)
-            {
-                continue;
-            }
-            // A face set to blend is glass whatever its tint, as the mark's
-            // alpha mode reads it.
-            F32 alpha = te->getColor().mV[VALPHA];
-            bool blended = true;
-            bool blend_mode = false;
-            if (const LLGLTFMaterial* gltf = te->getGLTFRenderMaterial())
-            {
-                alpha *= gltf->mBaseColor.mV[VW];
-                blended = gltf->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND;
-                blend_mode = blended;
-            }
-            else if (const LLMaterialPtr material = te->getMaterialParams(); material.notNull())
-            {
-                // A legacy material defaults to blend, so an opaque door with a
-                // normal map reads as blended; only a texture with alpha is glass.
-                const LLViewerTexture* image = object->getTEImage(f);
-                blend_mode = material->getDiffuseAlphaMode() == LLMaterial::DIFFUSE_ALPHA_MODE_BLEND && image &&
-                             image->getComponents() == 4;
-            }
-            if (te->getID() == IMG_TRANSPARENT || blend_mode || (blended && alpha < 0.95f))
-            {
-                clear++;
-            }
-        }
-        return static_cast<F32>(clear) / faces;
+        return skcapture::seeThroughShare(object);
     }
 
     LLViewerObject* rootOf(LLViewerObject* object)
@@ -313,7 +278,35 @@ bool SKWorldCensus::sameRegions(const std::vector<U64>& regions) const
 void SKWorldCensus::update()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - update");
-    if (!wanted() || !LLWorld::instanceExists() || !gAgent.getRegion())
+    const bool enabled = wanted() && LLWorld::instanceExists() && gAgent.getRegion();
+    if (mClusterJob.valid())
+    {
+        mDiscardClusterJob = mDiscardClusterJob || !enabled || !sameRegions(mClusterRegions);
+        if (mClusterJob.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        {
+            if (enabled && mRolesWanted) requestRoles();
+            return;
+        }
+        auto done = mClusterJob.get();
+        SKCensusSnapshotPtr retired;
+        if (!mDiscardClusterJob)
+        {
+            done->mStamp = ++mStamp;
+            retired = std::move(mSnapshot);
+            mSnapshot = std::move(done);
+        }
+        else
+        {
+            retired = std::move(done);
+        }
+        // Large tile maps must also be destroyed off-thread. Explicitly reset
+        // the payload there even if the queue retains a copy of the callable.
+        auto held = std::make_shared<SKCensusSnapshotPtr>(std::move(retired));
+        LL::WorkQueue::getInstance("CensusClusters")->post([held]() { held->reset(); });
+        mClusterRegions.clear();
+        mDiscardClusterJob = false;
+    }
+    if (!enabled)
     {
         if (mScan.mActive)
         {
@@ -380,6 +373,7 @@ void SKWorldCensus::beginScan()
 
 void SKWorldCensus::abandonScan()
 {
+    mDiscardClusterJob = true;
     mScan.mPending.reset();
     mScan.mObjects.clear();
     mScan.mActive = false;
@@ -428,9 +422,16 @@ void SKWorldCensus::finishScan()
     mScan.mActive = false;
     mScan.mPending.reset();
 
+    // Clusters stop where the region meshes' void does: a kilometre megaprim
+    // would otherwise tile kilometres and join whatever it overhangs.
+    static LLCachedControl<F32> void_margin(gSavedSettings, "SKNavVoidMargin", 256.f);
+    std::vector<sknav::RegionSquare> squares;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        squares.push_back({ region->getOriginGlobal(), region->getWidth() });
+    }
+    const auto window = sknav::regionWindow(squares, void_margin);
     LLTimer timer;
-    done->mClusters = cluster(done->mRecords, gap);
-    done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
     done->mStats.mScanMs = mScan.mElapsedMs;
     done->mStats.mRecords = static_cast<U32>(done->mRecords.size());
     done->mStats.mRolesKnown = static_cast<U32>(mRoles.size());
@@ -438,7 +439,6 @@ void SKWorldCensus::finishScan()
     gatherCrew();
     classify(*done);
     done->mStats.mFeatureMs = timer.getElapsedTimeF32() * 1000.f;
-    done->mStamp = ++mStamp;
 
     // Parts and roots not seen for a minute leave the caches, and a root's
     // history ten minutes out of sight unless it is a vehicle or a working
@@ -461,7 +461,29 @@ void SKWorldCensus::finishScan()
     {
         it = (gFrameTimeSeconds - it->second.mLastSeen > 60.f) ? mRest.erase(it) : std::next(it);
     }
-    mSnapshot = done;
+    if (!mClusterWorkers)
+    {
+        mClusterWorkers = std::make_unique<LL::ThreadPool>("CensusClusters", 1);
+        mClusterWorkers->start();
+    }
+    // All viewer-derived data is now detached. The worker owns this unpublished
+    // snapshot and never accesses the census, settings or live viewer objects.
+    auto task = std::make_shared<std::packaged_task<std::shared_ptr<SKCensusSnapshot>()>>(
+        [done, cluster_gap = static_cast<F32>(gap), window]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("skcensus - cluster worker");
+            LLTimer timer;
+            done->mClusters = cluster(done->mRecords, cluster_gap, sknav::TILE_M, window);
+            done->mStats.mClusterMs = timer.getElapsedTimeF32() * 1000.f;
+            return done;
+        });
+    auto future = task->get_future();
+    if (LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
+    {
+        mClusterJob = std::move(future);
+        mClusterRegions = mScan.mRegions;
+        mDiscardClusterJob = false;
+    }
 }
 
 bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
@@ -980,6 +1002,9 @@ sknav::RecordPtr SKWorldCensus::record(LLVOVolume* volume, LLViewerObject* root,
             q.scaleVec(scale);
             q = q * rot + pos;
             tris->push_back(q);
+        }
+        for (const LLVector3& q : *tris)
+        {
             extend(rec->mMin, rec->mMax, rec->mOrigin + LLVector3d(q));
         }
         rec->mTriangles = tris;
@@ -1147,6 +1172,14 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
         roots.push_back(std::move(r));
     }
 
+    // Only a door-shaped part with something to say for it is worth the rays.
+    for (FeaturePart& p : mScan.mFeatureParts)
+    {
+        if ((p.mScripted || p.mTouch || !p.mName.empty()) && doorShaped(p, params))
+        {
+            p.mFaceCover = faceCover(p, snap.mRecords, params);
+        }
+    }
     snap.mFeatures = classifyFeatures(mScan.mFeatureParts, roots, params);
     snap.mStats.mFeatures = static_cast<U32>(snap.mFeatures.size());
     // A leaf is watched from the scan it is first a door, and stays watched
@@ -1163,7 +1196,7 @@ void SKWorldCensus::classify(SKCensusSnapshot& snap)
     {
         if (leaves.count(p.mPart) || mLeaves.count(p.mPart))
         {
-            observeLeaf(mLeaves[p.mPart], p, gFrameTimeSeconds);
+            observeLeaf(mLeaves[p.mPart], p, static_cast<F32>(gFrameTimeSeconds.value()));
         }
     }
     snap.mDoors = buildDoorEntities(snap.mFeatures, mScan.mFeatureParts, roots, &mLeaves);

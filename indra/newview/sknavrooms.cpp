@@ -26,6 +26,9 @@
 
 #include "sknavrooms.h"
 
+#include "sknavlayout.h"
+#include "sknavspaceproducts.h"
+
 #include "llagent.h"
 #include "llbase64.h"
 #include "llthread.h"
@@ -273,6 +276,36 @@ void SKNavWorldView::raster(const LLVector3d& min, const LLVector3d& max, F32 re
     }
 }
 
+void SKNavWorldView::sheet(const LLVector3d& min, const LLVector3d& max, F32 res, std::vector<SpaceId>& out) const
+{
+    res = llmax(res, 0.05f);
+    const S32 nx = llmax(1, static_cast<S32>(std::ceil((max.mdV[VX] - min.mdV[VX]) / res)));
+    const S32 ny = llmax(1, static_cast<S32>(std::ceil((max.mdV[VY] - min.mdV[VY]) / res)));
+    out.assign(static_cast<size_t>(nx) * ny, SpaceId());
+    std::vector<F64> best(out.size(), -std::numeric_limits<F64>::max());
+    for (const Mesh& m : mMeshes)
+    {
+        if (!m.mProduct || !overlapsXY(m.mMin, m.mMax, min, max))
+        {
+            continue;
+        }
+        // The mesh's own reading, on the same cells in its frame.
+        std::vector<SheetCell> cells;
+        const LLVector3d lo = min - m.mOrigin, hi = lo + LLVector3d(nx * res, ny * res, max.mdV[VZ] - min.mdV[VZ]);
+        sheetSpaces(*m.mProduct, LLVector3(lo), LLVector3(hi), res, cells);
+        for (size_t i = 0; i < out.size() && i < cells.size(); ++i)
+        {
+            const F64 floor = cells[i].mFloor + m.mOrigin.mdV[VZ];
+            if (cells[i].mHit && floor > best[i])
+            {
+                best[i] = floor;
+                out[i].mMesh = m.mId;
+                out[i].mId = cells[i].mSpace;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- wind
 
 namespace
@@ -282,6 +315,20 @@ namespace
         deg = std::fmod(deg, 360.f);
         return deg < 0.f ? deg + 360.f : deg;
     }
+}
+
+bool SKNavRooms::settlingIn(const LLVector3d& min, const LLVector3d& max) const
+{
+    for (const auto& m : mMeshes)
+    {
+        const MeshState& s = m.second;
+        if ((s.mDirty || s.mInFlight) && overlapsXY(s.mMin, s.mMax, min, max) &&
+            s.mMin.mdV[VZ] <= max.mdV[VZ] && min.mdV[VZ] <= s.mMax.mdV[VZ])
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 SKNavWorldViewPtr SKNavRooms::view() const
@@ -538,12 +585,14 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     {
         return;
     }
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - update");
     static LLCachedControl<U32> settle_ms(gSavedSettings, "SKNavRoomsSettleMs", 500);
     const F64 now = LLTimer::getTotalSeconds();
 
     // A publish moves the navmesh's revision; only then can a mesh's air have moved.
     if (navmesh.mRevision != mSeenRevision || navmesh.mFeatureStamp != mSeenFeatures)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - revision walk");
         mSeenRevision = navmesh.mRevision;
         mSeenFeatures = navmesh.mFeatureStamp;
         std::map<LLUUID, bool> seen;
@@ -555,13 +604,13 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             LLVector3d lo(1e300, 1e300, 0.0), hi(-1e300, -1e300, 0.0);
             for (const auto& t : mesh.mTiles)
             {
-                if (!t.second.mAir)
+                // Air on disk for a settled mesh is still its air: the same id comes back with it.
+                if (!t.second.mAir && !t.second.mAirSpilled)
                 {
                     evicted += t.second.mAirCoarse ? 1 : 0;
                     continue;
                 }
-                sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)),
-                          reinterpret_cast<uintptr_t>(t.second.mAir.get()));
+                sig = mix(mix(sig, (static_cast<U64>(static_cast<U32>(t.first.mX)) << 32) | static_cast<U32>(t.first.mY)), t.second.mAirId);
                 lo.mdV[VX] = llmin(lo.mdV[VX], t.second.mMin.mdV[VX]);
                 lo.mdV[VY] = llmin(lo.mdV[VY], t.second.mMin.mdV[VY]);
                 hi.mdV[VX] = llmax(hi.mdV[VX], t.second.mMax.mdV[VX]);
@@ -579,6 +628,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             U64 doors = SEED;
             if (sig != SEED)
             {
+                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - doors and lifts");
                 const LLVector3d dlo(lo.mdV[VX], lo.mdV[VY], -1e9), dhi(hi.mdV[VX], hi.mdV[VY], 1e9);
                 navmesh.doorsIn(dlo, dhi, [&doors](const DoorEntity& d) {
                     doors = mix(mix(mixF64(mixF64(mix(doors, d.mId.getCRC32()), d.mPlanePoint.mdV[VX]), d.mPlanePoint.mdV[VY]), d.mPlaneKnown),
@@ -636,6 +686,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         MeshState& state = entry.second;
         if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post");
             if (state.mAirSignature == SEED)
             {
                 // Its air is gone: nothing to answer with.
@@ -650,7 +701,24 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 }
                 continue;
             }
-            post(state, navmesh);
+            // A pass reads its own detail and its neighbours': any on disk comes back first.
+            bool away = !navmesh.detailResident(state.mId);
+            if (away)
+            {
+                navmesh.requestDetail(state.mId);
+            }
+            for (const auto& other : mMeshes)
+            {
+                if (other.first != state.mId && other.second.mProduct && touches(state, other.second) && !navmesh.detailResident(other.first))
+                {
+                    navmesh.requestDetail(other.first);
+                    away = true;
+                }
+            }
+            if (!away)
+            {
+                post(state, navmesh);
+            }
         }
     }
 
@@ -663,6 +731,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         const bool quiet = !state.mDirty && !state.mInFlight && (now - state.mWindChanged) * 1000.0 >= wind_settle_ms;
         if (quiet && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
         {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post wind");
             postWind(state);
         }
     }
@@ -670,6 +739,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     // The view's sky map is the copy the last pass was handed, not one per publish.
     if (mViewDirty)
     {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - rebuild view");
         rebuildView();
     }
 }
@@ -742,6 +812,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     rooms->mMeshOrigin = mesh.mOrigin;
     rooms->mPrevious = state.mRooms;
     rooms->mParams.mWalkHeadM = input->mParams.mWalkHeadM;
+    rooms->mParams.mAgentRadiusM = build.mParams[static_cast<S32>(sknav::AgentClass::AVATAR)].mRadius;
     const LLVector3d dlo(state.mMin.mdV[VX], state.mMin.mdV[VY], -1e9), dhi(state.mMax.mdV[VX], state.mMax.mdV[VY], 1e9);
     navmesh.doorsIn(dlo, dhi, [&rooms](const DoorEntity& d) { rooms->mDoors.push_back(d); });
     rooms->mLifts = lifts(dlo, dhi);
@@ -1171,7 +1242,7 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
                 // strike the annotator draws over it on top.
                 const std::vector<U32>& ids = m.mProduct->mSpaceIds;
                 if (!ids.empty() && p.mSpaces[0] < ids.size() && p.mSpaces[1] < ids.size()
-                    && crossed(m.mId, ids[p.mSpaces[0]], ids[p.mSpaces[1]]))
+                    && crossed(m.mId, ids[p.mSpaces[0]], ids[p.mSpaces[1]], (a + b) * 0.5 - LLVector3d(0.0, 0.0, 0.15)))
                 {
                     color = LLColor4(0.35f, 0.35f, 0.35f, opaque ? 1.f : 0.3f);
                     const LLVector3 pa = gAgent.getPosAgentFromGlobal(a), pb = gAgent.getPosAgentFromGlobal(b);
@@ -1259,7 +1330,7 @@ void SKNavRooms::gatherSpaces(SKNavOverlayGeom& geom, const LLVector3d& camera, 
     }
 }
 
-void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
+void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh, const sknav::StoreyProduct* storeys) const
 {
     if (!mView)
     {
@@ -1269,10 +1340,50 @@ void SKNavRooms::writeSpaces(std::ostream& file, const LLUUID& mesh) const
     {
         if (m.mId == mesh && m.mRooms)
         {
-            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get());
+            writeExportSpaces(file, m.mOrigin, *m.mRooms, m.mWind.get(), storeys);
             return;
         }
     }
+}
+
+bool SKNavRooms::landed(const LLUUID& mesh, EnclosureProductPtr& enclosure, RoomsProductPtr& rooms) const
+{
+    const auto it = mMeshes.find(mesh);
+    if (it == mMeshes.end() || !it->second.mProduct || !it->second.mRooms)
+    {
+        return false;
+    }
+    enclosure = it->second.mProduct;
+    rooms = it->second.mRooms;
+    return true;
+}
+
+bool SKNavRooms::passPending(const LLUUID& mesh) const
+{
+    const auto it = mMeshes.find(mesh);
+    return it != mMeshes.end() && (it->second.mDirty || it->second.mInFlight || (!it->second.mProduct && it->second.mAirSignature != SEED));
+}
+
+bool SKNavRooms::windPending(const LLUUID& mesh) const
+{
+    const auto it = mMeshes.find(mesh);
+    return it != mMeshes.end() && it->second.mProduct && (it->second.mWindDirty || it->second.mWindInFlight);
+}
+
+bool SKNavRooms::swapAir(const LLUUID& mesh, const AirSwap& swap, EnclosureProductPtr& enclosure, RoomsProductPtr& rooms)
+{
+    const auto it = mMeshes.find(mesh);
+    if (it == mMeshes.end() || !it->second.mProduct || !it->second.mRooms || it->second.mInFlight || it->second.mWindInFlight)
+    {
+        return false;
+    }
+    MeshState& state = it->second;
+    state.mProduct = withTileAir(*state.mProduct, swap);
+    state.mRooms = withTileAir(*state.mRooms, swap);
+    enclosure = state.mProduct;
+    rooms = state.mRooms;
+    mViewDirty = true;
+    return true;
 }
 
 const TileEnclosure* SKNavRooms::enclosureTile(const LLUUID& mesh, const TileKey& key, const TileAirPtr& air, U64& generation) const

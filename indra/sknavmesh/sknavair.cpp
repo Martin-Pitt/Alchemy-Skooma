@@ -32,7 +32,7 @@
 
 namespace sknav
 {
-    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out)
+    void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut, const SpanFlags* extra)
     {
         // Recast (x, y, z) is SL (y, z, x): a heightfield row along Recast x is
         // a run along SL y, so SL ix is Recast z and SL iy is Recast x.
@@ -54,15 +54,18 @@ namespace sknav
         {
             for (S32 ix = 0; ix < out.mWidth; ++ix)
             {
-                const rcSpan* s = hf.spans[(x0 + iy) + (z0 + ix) * hf.width];
-                for (; s; s = s->next)
+                const S32 column = (x0 + iy) + (z0 + ix) * hf.width;
+                U32 k = extra ? extra->mStart[column] : 0;
+                for (const rcSpan* s = hf.spans[column]; s; s = s->next, ++k)
                 {
                     AirGap gap;
                     gap.mFloor = static_cast<U16>(s->smax);
-                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::WALKABLE : 0;
-                    if (s->area >= 1 && s->area <= 3)
+                    const U8 area = area_lut ? area_lut[s->area] : static_cast<U8>(s->area);
+                    gap.mFlags = s->area != RC_NULL_AREA ? AirGap::TOP : 0;
+                    gap.mFlags |= extra ? extra->mFlags[k] : 0;
+                    if (area >= 1 && area <= 3)
                     {
-                        gap.mFlags |= static_cast<U8>(s->area << AirGap::AREA_SHIFT);
+                        gap.mFlags |= static_cast<U8>(area << AirGap::AREA_SHIFT);
                     }
                     if (s->next)
                     {

@@ -136,7 +136,7 @@ namespace sknav_test
                     {
                         AirGap gap;
                         gap.mFloor = static_cast<U16>(merged[i].mZ1 + 8);   // heights from -1 m
-                        gap.mFlags = merged[i].mWalk ? AirGap::WALKABLE : 0;
+                        gap.mFlags = merged[i].mWalk ? AirGap::TOP : 0;
                         if (merged[i].mTerrain)
                         {
                             gap.mFlags |= static_cast<U8>(AREA_GROUND << AirGap::AREA_SHIFT);
