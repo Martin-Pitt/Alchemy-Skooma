@@ -671,6 +671,8 @@ void SKMapComposite::draw(const skmap::MapView& view)
     static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", true);
     static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", true);
     static LLCachedControl<bool> region_edges(gSavedSettings, "SKMapLayerVoid", true);
+    static LLCachedControl<bool> walls(gSavedSettings, "SKMapLayerCover", true);
+    static LLCachedControl<bool> stairs(gSavedSettings, "SKMapLayerStairs", true);
     if (!SKNavMesh::instanceExists() || mGLFailed)
     {
         return;
@@ -686,6 +688,8 @@ void SKMapComposite::draw(const skmap::MapView& view)
     opts.mContours = contours;
     opts.mDoors = doors;
     opts.mRegionEdges = region_edges;
+    opts.mWalls = walls;
+    opts.mStairs = stairs;
     const bool options_moved = !(opts == mOptions);
     mOptions = opts;
 
@@ -754,6 +758,7 @@ void SKMapComposite::draw(const skmap::MapView& view)
             mStats.mGatherMs = t.getElapsedTimeF32() * 1000.f;
             mHasSelection = false;
             mViewerSpace = -2;
+            mGeometryDirty = true;
         }
     }
 

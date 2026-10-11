@@ -52,9 +52,6 @@ namespace skmap
     constexpr F32 LAYER_GAP_M = 1.8f;           ///< surfaces closer than this in median z may share a layer
     constexpr F32 INDEX_CELL_M = 4.f;
     constexpr F32 LINK_REACH_M = 1.f;           ///< a ladder or elevator end this close to a polygon joins it
-    constexpr F32 STOREY_REACH_M = 5.f;
-    constexpr F32 INSIDE_ABOVE_M = 1.f;
-    constexpr S32 INTERIOR_CAP_CELLS = 64;
     constexpr F32 FLOOR_SAME_M = 2.f;
     constexpr F32 FLOOR_RAW_M = 2.5f;
 
@@ -456,18 +453,6 @@ namespace skmap
     enum class FloorRelation : U8 { SAME, ABOVE, BELOW, UNKNOWN };
     /// Another avatar's floor against the agent's. z_known is false for a coarse avatar.
     FloorRelation floorRelation(const Scene& scene, const AgentFloor& agent, const LLVector3d& other, bool z_known);
-
-    /// The layers to draw and the cells cut out of them.
-    struct LayerSelection
-    {
-        bool mInside = false;
-        std::vector<S32> mDrawn;                ///< in draw order
-        std::map<S32, std::set<std::pair<S32, S32>>> mCut;  ///< per layer, global 4 m cells left out
-        std::set<S32> mStorey;                  ///< the set S of an inside selection
-    };
-    /// Storey selection: everything within the vertical fade outdoors; inside, the floors over
-    /// the interior that are not on the agent's storey are cut.
-    LayerSelection selectLayers(const Scene& scene, const AgentFloor& agent, sknav::EnclosureBucket bucket, F32 fade);
 }
 
 #endif // SK_MAPGEOM_H

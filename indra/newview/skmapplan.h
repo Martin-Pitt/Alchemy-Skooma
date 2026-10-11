@@ -180,6 +180,8 @@ namespace plan
         bool mShade = true;
         bool mTerrain = true;
         bool mRegionEdges = true;
+        bool mWalls = true;
+        bool mStairs = true;
         bool operator==(const Options& o) const;
     };
 

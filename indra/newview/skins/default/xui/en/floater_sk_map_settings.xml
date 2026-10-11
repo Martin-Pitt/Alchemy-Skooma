@@ -97,16 +97,6 @@
              top_pad="5"
              width="308" />
             <check_box
-             control_name="SKMapHeatmap"
-             follows="left|top"
-             height="16"
-             label="Heatmap: colour by height"
-             layout="topleft"
-             left="8"
-             name="sk_heatmap"
-             top_pad="5"
-             width="308" />
-            <check_box
              control_name="SKMapCoverAhead"
              follows="left|top"
              height="16"
@@ -135,22 +125,6 @@
              left="8"
              name="sk_layer_floorplan"
              top="8"
-             width="308" />
-            <slider
-             control_name="SKMapVerticalFade"
-             decimal_digits="0"
-             follows="left|top|right"
-             height="16"
-             increment="1"
-             label="Vertical fade (m)"
-             label_width="110"
-             layout="topleft"
-             left="8"
-             max_val="100"
-             min_val="5"
-             name="sk_vertical_fade"
-             text_width="40"
-             top_pad="5"
              width="308" />
             <check_box
              control_name="SKMapLayerCover"

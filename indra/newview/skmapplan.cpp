@@ -105,7 +105,7 @@ bool Options::operator==(const Options& o) const
 {
     return mOverlap == o.mOverlap && mOutside == o.mOutside && mGaps == o.mGaps && mLedges == o.mLedges && mOther == o.mOther
         && mContours == o.mContours && mRoofOutline == o.mRoofOutline && mDoors == o.mDoors && mShade == o.mShade && mTerrain == o.mTerrain
-        && mRegionEdges == o.mRegionEdges;
+        && mRegionEdges == o.mRegionEdges && mWalls == o.mWalls && mStairs == o.mStairs;
 }
 
 void Selection::set(U32 s, F32 r)
@@ -936,7 +936,7 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
     for (const auto& e : walls)
     {
         const Wall& w = d.mWalls[e.first];
-        if (w.mClass == WallClass::NONE && !opts.mLedges)
+        if ((w.mClass == WallClass::NONE && !opts.mLedges) || (w.mClass != WallClass::NONE && !opts.mWalls))
         {
             continue;
         }
@@ -1029,7 +1029,7 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
     // Flight marks after each rank's lines: casing, rungs, caps, centreline; then arrowheads, then their edges.
     {
         std::map<F32, std::vector<Vertex>> tris, edges;
-        for (const auto& e : sel.mFlights)
+        for (const auto& e : opts.mStairs ? sel.mFlights : std::vector<std::pair<U32, F32>>())
         {
             flightMarks(d, d.mFlights[e.first], mpp, opts.mGaps, drawn_poly, B.rank(e.second).mLines, tris[e.second], edges[e.second]);
         }
@@ -1267,7 +1267,7 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
 
         // Polys, tile by tile; the Detour refs name them for the flight ends and the border links.
         std::unordered_map<U64, U32> by_ref;
-        std::map<std::pair<S32, S32>, U32> tile_base;
+        std::map<std::pair<S32, S32>, std::pair<U32, U32>> tile_base;     // first poly, poly count
         std::map<U64, U32> flight_of_key;
         nav.polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
         {
@@ -1276,7 +1276,7 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
                 return;
             }
             const U32 base = static_cast<U32>(d->mPolys.size());
-            tile_base[{ t.mKey.mX, t.mKey.mY }] = base;
+            tile_base[{ t.mKey.mX, t.mKey.mY }] = { base, static_cast<U32>(t.mPolys->mPolys.size()) };
             const LLVector3 to = local(t.mOrigin);
             LLViewerRegion* region = LLWorld::getInstance()->getRegionFromHandle(t.mRegion);
             const F32 water = region ? region->getWaterHeight() : 0.f;
@@ -1335,11 +1335,11 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
         {
             const auto tb = tile_base.find({ key.mX, key.mY });
             const auto nb = by_ref.find(nbr);
-            if (mesh != m.mId || tb == tile_base.end() || nb == by_ref.end())
+            if (mesh != m.mId || tb == tile_base.end() || nb == by_ref.end() || poly >= tb->second.second)
             {
                 return;
             }
-            d->mBorder[(static_cast<U64>(tb->second + poly) << 3) | edge].push_back({ nb->second, t0, t1 });
+            d->mBorder[(static_cast<U64>(tb->second.first + poly) << 3) | edge].push_back({ nb->second, t0, t1 });
         });
         if (storeys)
         {
@@ -1380,7 +1380,10 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
             w.mFloor = r.mFloorZ + ol.mV[VZ];
             for (U16 p : r.mPolys)
             {
-                w.mPolys.push_back(tb->second + p);
+                if (p < tb->second.second)
+                {
+                    w.mPolys.push_back(tb->second.first + p);
+                }
             }
             d->mWalls.push_back(std::move(w));
         });

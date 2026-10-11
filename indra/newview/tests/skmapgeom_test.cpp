@@ -440,56 +440,6 @@ namespace tut
         ensure("tie: smaller first", s->mLayers[s->mOrder[2]].mArea < s->mLayers[s->mOrder[3]].mArea);
     }
 
-    // Storeys: a roof 12 m up makes inside; a roof elsewhere stays drawn.
-    template<> template<>
-    void skmapgeom_object::test<6>()
-    {
-        TileMaker t;
-        t.quad(0.f, 0.f, 32.f, 32.f, 0.f, 0.f, AREA_GROUND);
-        t.quad(8.f, 8.f, 16.f, 16.f, 12.f, 12.f);
-        skmap::ScenePtr s = skmap::buildScene(input({ t.make(LAND, true, 0, 0) }));
-        const skmap::AgentFloor under = agentAt(*s, LLVector3d(12.0, 12.0, 0.0));
-        ensure("agent on the ground", under.mFound);
-        skmap::LayerSelection sel = skmap::selectLayers(*s, under, EnclosureBucket::UNKNOWN, 30.f);
-        ensure("a roof overhead makes inside", sel.mInside);
-        ensure("the roof is cut over the agent", !sel.mCut.empty());
-
-        const skmap::AgentFloor away = agentAt(*s, LLVector3d(28.0, 28.0, 0.0));
-        sel = skmap::selectLayers(*s, away, EnclosureBucket::UNKNOWN, 30.f);
-        ensure("outside", !sel.mInside);
-        ensure_equals("both drawn", sel.mDrawn.size(), static_cast<size_t>(2));
-        ensure("nothing cut", sel.mCut.empty());
-        sel = skmap::selectLayers(*s, away, EnclosureBucket::UNKNOWN, 10.f);
-        ensure_equals("past the fade the roof is skipped", sel.mDrawn.size(), static_cast<size_t>(1));
-    }
-
-    // Inside: the storey above over the interior is cut, the neighbour's is kept, a
-    // drop-only roof is cut and a stair-connected mezzanine within 5 m is drawn.
-    template<> template<>
-    void skmapgeom_object::test<7>()
-    {
-        skmap::ScenePtr s = building(true);
-        const skmap::AgentFloor agent = agentAt(*s, LLVector3d(13.0, 13.0, 0.0));
-        ensure("agent on the ground", agent.mFound);
-        const skmap::LayerSelection sel = skmap::selectLayers(*s, agent, EnclosureBucket::INDOORS, 30.f);
-        ensure("inside", sel.mInside);
-        const S32 roof = layerOf(*s, LLVector3d(9.0, 15.0, 6.0));
-        const S32 neighbour = layerOf(*s, LLVector3d(27.0, 27.0, 6.0));
-        const S32 mezzanine = layerOf(*s, LLVector3d(14.0, 10.0, 3.0));
-        ensure("three layers found", roof >= 0 && neighbour >= 0 && mezzanine >= 0);
-        ensure("the roof over the interior is cut", sel.mCut.count(roof) > 0);
-        ensure("the neighbour's floor is kept", sel.mCut.count(neighbour) == 0);
-        ensure("the mezzanine is on the storey", sel.mStorey.count(mezzanine) > 0);
-        ensure("the mezzanine is not cut", sel.mCut.count(mezzanine) == 0);
-        ensure("every layer drawn", sel.mDrawn.size() == s->mOrder.size());
-
-        // Without the stair the roof is still joined to nothing but a drop: still cut.
-        skmap::ScenePtr bare = building(false);
-        const skmap::AgentFloor bare_agent = agentAt(*bare, LLVector3d(13.0, 13.0, 0.0));
-        const skmap::LayerSelection bare_sel = skmap::selectLayers(*bare, bare_agent, EnclosureBucket::INDOORS, 30.f);
-        ensure("a drop-only roof is cut", bare_sel.mCut.count(layerOf(*bare, LLVector3d(9.0, 15.0, 6.0))) > 0);
-    }
-
     // Floor relations: same, above, below, the raw fallback and unknown for coarse avatars.
     template<> template<>
     void skmapgeom_object::test<8>()
@@ -848,7 +798,7 @@ namespace tut
                                           == skmap::cellKey(*rb, rgb, skmap::cellAt(0, 28.0, 28.0)));
     }
 
-    // The building at a mainland origin: every layer, footprint, floor and cut moves by whole
+    // The building at a mainland origin: every layer, footprint and floor moves by whole
     // cells, so nothing mixes scene-local and global coordinates.
     template<> template<>
     void skmapgeom_object::test<19>()
@@ -879,18 +829,6 @@ namespace tut
             const S32 la = layerOf(*a, p);
             ensure("a floor at home", la >= 0);
             ensure_equals("the same floor abroad", layerOf(*b, p + by), la);
-        }
-        const skmap::LayerSelection sa = skmap::selectLayers(*a, agentAt(*a, LLVector3d(13.0, 13.0, 0.0)), EnclosureBucket::INDOORS, 30.f);
-        const skmap::LayerSelection sb = skmap::selectLayers(*b, agentAt(*b, LLVector3d(13.0, 13.0, 0.0) + by), EnclosureBucket::INDOORS, 30.f);
-        ensure("something cut", !sa.mCut.empty());
-        ensure("same drawn", sa.mDrawn == sb.mDrawn);
-        ensure("same storey", sa.mStorey == sb.mStorey);
-        ensure_equals("same cut layers", sa.mCut.size(), sb.mCut.size());
-        for (const auto& entry : sa.mCut)
-        {
-            const auto other = sb.mCut.find(entry.first);
-            ensure("the cut layer abroad", other != sb.mCut.end());
-            ensure("the cut moves whole", move(entry.second) == other->second);
         }
     }
 

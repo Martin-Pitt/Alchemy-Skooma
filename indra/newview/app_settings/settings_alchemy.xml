@@ -5068,17 +5068,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKMapVerticalFade</key>
-        <map>
-            <key>Comment</key>
-            <string>Metres above or below your floor over which other floors fade on the mini-map; past it they are not drawn.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>30.0</real>
-        </map>
         <key>SKMapLayerCover</key>
         <map>
             <key>Comment</key>
@@ -5122,17 +5111,6 @@
             <string>Boolean</string>
             <key>Value</key>
             <integer>1</integer>
-        </map>
-        <key>SKMapHeatmap</key>
-        <map>
-            <key>Comment</key>
-            <string>Colour the mini-map floorplan by height against your floor: blue below, red above.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
         </map>
         <key>SKMapLayerVoid</key>
         <map>
@@ -5432,17 +5410,6 @@
             <integer>0</integer>
         </map>
         <!-- <SK:Nexii> SKNetMap mini-map section cut -->
-        <key>SKMapSection</key>
-        <map>
-            <key>Comment</key>
-            <string>Draw mini-map walls as a section through the objects at 0.5 and 1.5 m over each floor; off draws the navmesh's wall lines.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <!-- </SK:Nexii> -->
         <key>SKNavCensusAlways</key>
         <map>
