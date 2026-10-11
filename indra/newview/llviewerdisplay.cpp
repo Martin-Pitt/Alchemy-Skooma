@@ -89,6 +89,7 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 
 #include <filesystem>
 #include <iomanip>
@@ -1064,6 +1065,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLAppViewer::instance()->pingMainloopTimeout("Display:RenderUI");
         if (!for_snapshot)
         {
+            SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
             render_ui();
             swap();
         }

@@ -113,6 +113,7 @@
 #include "llworld.h"
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
+#include "skoutlinecapture.h" // <SK:Nexii> outline capture
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
@@ -1326,6 +1327,8 @@ void LLPipeline::refreshCachedSettings()
 void LLPipeline::releaseGLBuffers()
 {
     assertInitialized();
+
+    SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
 
     if (mNoiseMap)
     {

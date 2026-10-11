@@ -3576,6 +3576,21 @@ function="World.EnvPreset"
          label="Render Tests"
          name="Render Tests"
          tear_off="true">
+            <!-- <SK:Nexii> outline capture: the atlas and per-capture stats, behind SKOutlineCaptureDebug -->
+            <menu_item_check
+             label="Outline Capture Runtime"
+             name="SK Outline Capture Runtime">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="sk_outline_capture" />
+                <menu_item_check.on_visible
+                 function="CheckControl"
+                 parameter="SKOutlineCaptureDebug" />
+            </menu_item_check>
+            <!-- </SK:Nexii> -->
             <menu_item_check
              label="Camera Offset"
              name="Camera Offset">

@@ -2101,6 +2101,11 @@ if(AL_BUILD_VIEWER)
       ${viewer_RESOURCE_FILES}
   )
 
+  # <SK:Nexii> outline capture
+  list(APPEND viewer_SOURCES skoutlinecapture.cpp skoutlinepolicy.cpp skfloateroutlinecapture.cpp)
+  list(APPEND viewer_HEADERS skoutlinecapture.h skoutlinepolicy.h skfloateroutlinecapture.h)
+  # </SK:Nexii>
+
   add_executable(${AL_VIEWER_BINARY_NAME} WIN32 MACOSX_BUNDLE)
 
   target_sources(${AL_VIEWER_BINARY_NAME} PRIVATE ${viewer_SOURCES} ${viewer_HEADERS})
