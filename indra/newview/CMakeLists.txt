@@ -2530,6 +2530,9 @@ if(AL_BUILD_TESTS)
   )
     al_add_test(${test} UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endforeach()
+  # <SK:Nexii> outline capture: the grid, atlas slots, render order and budget
+  al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  # </SK:Nexii>
   # The vectorscope bins on the colour wheels' own chroma plane, so the scope
   # data test links the model that defines it rather than keeping a second copy
   # of the basis that could drift from it.
