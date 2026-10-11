@@ -5079,28 +5079,6 @@
             <key>Value</key>
             <real>30.0</real>
         </map>
-        <key>SKMapBakeBudgetMB</key>
-        <map>
-            <key>Comment</key>
-            <string>Megabytes of baked mini-map floorplan cells kept, least recently drawn dropped first.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>96</integer>
-        </map>
-        <key>SKMapBakeUploadsPerFrame</key>
-        <map>
-            <key>Comment</key>
-            <string>Baked mini-map cells uploaded to the GPU per frame at most.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>U32</string>
-            <key>Value</key>
-            <integer>2</integer>
-        </map>
         <key>SKMapLayerCover</key>
         <map>
             <key>Comment</key>
@@ -5309,6 +5287,94 @@
             <string>F32</string>
             <key>Value</key>
             <real>120.0</real>
+        </map>
+        <key>SKMapPlanMSAA</key>
+        <map>
+            <key>Comment</key>
+            <string>Samples per texel of the mini-map plan composite: 4 by default, 8 at most, 0 for none.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>4</integer>
+        </map>
+        <key>SKMapPlanOtherLevel</key>
+        <map>
+            <key>Comment</key>
+            <string>Show floors reached only by stairs from the drawn plan as a muted fill where nothing else is drawn.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapPlanOutside</key>
+        <map>
+            <key>Comment</key>
+            <string>What the mini-map plan shows outside when the agent is off the ground level: 0 the ground at full strength, 1 dimmed, 2 nothing.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapPlanOverlap</key>
+        <map>
+            <key>Comment</key>
+            <string>Which storeys of buildings the mini-map plan shows from outside: 0 the ground storey with each street room on top, 1 the ground storey only, 2 roofs.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapPlanGaps</key>
+        <map>
+            <key>Comment</key>
+            <string>Hatch magenta where the navmesh leaves a link out: floors with no portal or space beside the plan, rooms with no storey, flight ends meeting no floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapPlanLedges</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw open floor edges (wall runs with no solid) as ledge lines on the mini-map plan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapPlanRoofOutlines</key>
+        <map>
+            <key>Comment</key>
+            <string>Outline the roofs of buildings the agent is not in on the mini-map plan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapPlanTerrain</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the regions' land under the mini-map plan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
         </map>
         <key>SKMapPing</key>
         <map>

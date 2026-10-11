@@ -104,7 +104,8 @@ namespace
 bool Options::operator==(const Options& o) const
 {
     return mOverlap == o.mOverlap && mOutside == o.mOutside && mGaps == o.mGaps && mLedges == o.mLedges && mOther == o.mOther
-        && mContours == o.mContours && mRoofOutline == o.mRoofOutline && mDoors == o.mDoors && mShade == o.mShade && mTerrain == o.mTerrain;
+        && mContours == o.mContours && mRoofOutline == o.mRoofOutline && mDoors == o.mDoors && mShade == o.mShade && mTerrain == o.mTerrain
+        && mRegionEdges == o.mRegionEdges;
 }
 
 void Selection::set(U32 s, F32 r)
@@ -964,12 +965,12 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
         // Poché between the face and the far face (R8), one surface per pixel in the composite.
         if (w.mClass != WallClass::NONE && w.mFar > w.mFace)
         {
-            const std::vector<LLVector3> far = offsetLine(w.mLine, w.mFar);
+            const std::vector<LLVector3> back = offsetLine(w.mLine, w.mFar);
             const F32 half = w.mClass == WallClass::SOLID ? 0.f : 1.f;
             const Rgba c{ 0.f, 0.f, 0.f, 1.f };
             for (size_t k = 0; k + 1 < line.size(); ++k)
             {
-                for (const LLVector3* q : { &line[k], &line[k + 1], &far[k + 1], &line[k], &far[k + 1], &far[k] })
+                for (const LLVector3* q : { &line[k], &line[k + 1], &back[k + 1], &line[k], &back[k + 1], &back[k] })
                 {
                     vtx(g.mWalls, q->mV[VX], q->mV[VY], w.mFloor, c, half, 1.f);
                 }
@@ -1085,6 +1086,10 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
     out.mTop.clear();
     for (const Region& r : d.mRegions)
     {
+        if (!opts.mRegionEdges)
+        {
+            break;
+        }
         const LLVector2 a = r.mMin, b = r.mMin + LLVector2(static_cast<F32>(r.mSide), 0.f),
                         c = r.mMin + LLVector2(static_cast<F32>(r.mSide), static_cast<F32>(r.mSide)),
                         e = r.mMin + LLVector2(0.f, static_cast<F32>(r.mSide));

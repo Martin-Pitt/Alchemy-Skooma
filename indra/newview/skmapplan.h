@@ -26,7 +26,7 @@
 #define SK_MAPPLAN_H
 
 #include "llmath.h"
-#include "llvector3d.h"
+#include "v3dmath.h"
 #include "v2math.h"
 #include "v3math.h"
 #include "lluuid.h"
@@ -179,6 +179,7 @@ namespace plan
         bool mDoors = true;
         bool mShade = true;
         bool mTerrain = true;
+        bool mRegionEdges = true;
         bool operator==(const Options& o) const;
     };
 

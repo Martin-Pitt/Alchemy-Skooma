@@ -72,9 +72,9 @@ private:
 
     skmap::plan::DataPtr mData;
     U64 mDataKey = 0;
-    U64 mNavRevision = U64_MAX;
+    U64 mNavRevision = ~0ULL;
     const void* mViewSeen = nullptr;
-    U64 mViewRevision = U64_MAX;
+    U64 mViewRevision = ~0ULL;
     S32 mViewerSpace = -2;
     skmap::plan::Options mOptions;
     skmap::plan::Selection mSelection;

@@ -26,6 +26,8 @@
 
 #include "sknetmap.h"
 
+#include "skmapcomposite.h"
+
 #include "llfloaterreg.h"
 #include "llfocusmgr.h"
 #include "llfontgl.h"
@@ -296,8 +298,7 @@ void SKNetMap::draw()
         drawChromeTint();
         drawTerrain();
         drawObjects();
-        SKMapScene::instance().drawFloorplan(mView);
-        SKMapScene::instance().drawVoid(mView);
+        drawPlan();
         mParcels->draw(mView);
         drawEvents();
         drawPings();
@@ -333,6 +334,20 @@ void SKNetMap::draw()
     drawReadout();
 
     LLUICtrl::draw();
+}
+
+void SKNetMap::drawPlan()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
+    if (!show)
+    {
+        return;
+    }
+    if (!mPlan)
+    {
+        mPlan = std::make_unique<SKMapComposite>();
+    }
+    mPlan->draw(mView);
 }
 
 void SKNetMap::drawTerrain()
@@ -1202,8 +1217,11 @@ void SKNetMap::drawReadout()
     }
     const SKMapScene::Stats& stats = SKMapScene::instance().stats();
     std::vector<std::string> lines;
-    lines.push_back(llformat("draw %.2f ms, cells %u, queue %u, uploads %u, cache %.1f MB", mDrawMs, stats.mCells, stats.mQueued,
-                             stats.mUploads, stats.mCacheMB));
+    lines.push_back(llformat("draw %.2f ms", mDrawMs));
+    if (mPlan)
+    {
+        lines.push_back(mPlan->statsLine());
+    }
     lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
     lines.push_back(llformat("probes %u in flight, %u queued", resolver.probesInFlight(), resolver.probesQueued()));

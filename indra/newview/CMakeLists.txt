@@ -1918,6 +1918,8 @@ if(AL_BUILD_VIEWER)
     sknavpolys.cpp
     skmapview.cpp
     skmapgeom.cpp
+    skmapplan.cpp
+    skmapcomposite.cpp
     skmapraster.cpp
     skmapribbons.cpp
     skmapsection.cpp
@@ -1943,6 +1945,8 @@ if(AL_BUILD_VIEWER)
     sknavpolys.h
     skmapview.h
     skmapgeom.h
+    skmapplan.h
+    skmapcomposite.h
     skmapraster.h
     skmappalette.h
     skmapribbons.h

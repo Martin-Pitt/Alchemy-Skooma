@@ -32,6 +32,7 @@
 #include "lltimer.h"
 #include "llviewercontrol.h"
 #include "llvertexbuffer.h"
+#include "llviewerregion.h"
 #include "skmapview.h"
 #include "sknavmesh.h"
 #include "sknavrooms.h"
@@ -44,7 +45,7 @@ namespace
 {
     // The frame covers the widget's diagonal with this much to spare, so a turn never shows its edge and a walk
     // redraws only when the centre has moved an eighth of the diagonal.
-    constexpr F32 FRAME_MARGIN = 1.25f;
+    constexpr F32 PLAN_FRAME_MARGIN = 1.25f;
     constexpr U32 MAX_SIDE = 4096;          // the composite's largest side in texels
     constexpr U32 MAX_SAMPLES = 8;          // ruling 19: 4x default, 8x allowed
 
@@ -527,7 +528,7 @@ void SKMapComposite::render(F32 vz)
     glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glEnable(GL_BLEND);
-    glBlendEquation(GL_FUNC_ADD);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     // Clears obey the write masks; set them before every clear.
     glDepthMask(GL_TRUE);
@@ -628,11 +629,11 @@ void SKMapComposite::render(F32 vz)
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glStencilFunc(GL_EQUAL, 1, 1);
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
-        glBlendEquation(GL_MAX);
+        glBlendEquationSeparate(GL_MAX, GL_MAX);
         glBlendFunc(GL_ONE, GL_ONE);
         mode(2);
         draw(sLayout.mShadowBand);
-        glBlendEquation(GL_FUNC_ADD);
+        glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_STENCIL_TEST);
 
@@ -669,6 +670,7 @@ void SKMapComposite::draw(const skmap::MapView& view)
     static LLCachedControl<bool> terrain(gSavedSettings, "SKMapPlanTerrain", true);
     static LLCachedControl<bool> contours(gSavedSettings, "SKMapLayerContours", true);
     static LLCachedControl<bool> doors(gSavedSettings, "SKMapLayerDoors", true);
+    static LLCachedControl<bool> region_edges(gSavedSettings, "SKMapLayerVoid", true);
     if (!SKNavMesh::instanceExists() || mGLFailed)
     {
         return;
@@ -683,6 +685,7 @@ void SKMapComposite::draw(const skmap::MapView& view)
     opts.mTerrain = terrain;
     opts.mContours = contours;
     opts.mDoors = doors;
+    opts.mRegionEdges = region_edges;
     const bool options_moved = !(opts == mOptions);
     mOptions = opts;
 
@@ -691,7 +694,7 @@ void SKMapComposite::draw(const skmap::MapView& view)
     GLint max_rb = 0;
     glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_rb);
     const F32 diag = std::sqrt(view.width() * view.width() + view.height() * view.height());
-    const U32 side = llmin(static_cast<U32>(std::ceil(diag * FRAME_MARGIN * ui)), MAX_SIDE, static_cast<U32>(llmax(max_rb, 1)));
+    const U32 side = llmin(static_cast<U32>(std::ceil(diag * PLAN_FRAME_MARGIN * ui)), MAX_SIDE, static_cast<U32>(llmax(max_rb, 1)));
     const F32 mpp = view.mpp() / ui;
     GLint max_samples = 0;
     glGetIntegerv(GL_MAX_SAMPLES, &max_samples);

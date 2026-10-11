@@ -40,6 +40,7 @@
 
 class LLFontGL;
 class LLViewerTexture;
+class SKMapComposite;
 class SKMapObjects;
 class SKMapParcels;
 class SKPopupPanes;
@@ -118,6 +119,7 @@ public:
 private:
     /// The view for this frame: the agent plus the pan, the zoom, the rotation.
     void updateView();
+    void drawPlan();
     void drawTerrain();
     void drawSelf();
     void drawSelfExtras();
@@ -155,6 +157,7 @@ private:
     void drawObjects();
 
     std::unique_ptr<SKMapObjects> mObjects;
+    std::unique_ptr<SKMapComposite> mPlan;
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
     bool mHovered = false;
