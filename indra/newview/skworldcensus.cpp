@@ -204,6 +204,12 @@ SKWorldCensus::~SKWorldCensus()
 void SKWorldCensus::cleanupSingleton()
 {
     abandonScan();
+    // Join the pool now; a singleton destroyed at static teardown outlives the fiber machinery.
+    if (mClusterWorkers)
+    {
+        mClusterWorkers->close();
+        mClusterWorkers.reset();
+    }
 }
 
 void SKWorldCensus::addDemand(const std::string& who, F32 range_m)
