@@ -27,8 +27,10 @@
 #include "skmapallyresolver.h"
 
 #include "alobjectproperties.h"
+#include "llagent.h"
 #include "llnamevalue.h"
-#include "llselectmgr.h"
+#include "llviewerregion.h"
+#include "message.h"
 #include "llviewercontrol.h"
 #include "llviewerjointattachment.h"
 #include "llviewerobjectlist.h"
@@ -96,6 +98,24 @@ void SKMapAllyResolver::noteAvatar(LLVOAvatar* avatar, bool in_view, F64 now)
     }
 }
 
+namespace
+{
+    void selectAndDeselect(LLViewerObject* object)
+    {
+        LLMessageSystem* msg = gMessageSystem;
+        for (const char* name : { _PREHASH_ObjectSelect, _PREHASH_ObjectDeselect })
+        {
+            msg->newMessageFast(name);
+            msg->nextBlockFast(_PREHASH_AgentData);
+            msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
+            msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+            msg->nextBlockFast(_PREHASH_ObjectData);
+            msg->addU32Fast(_PREHASH_ObjectLocalID, object->getLocalID());
+            msg->sendReliable(object->getRegion()->getHost());
+        }
+    }
+}
+
 void SKMapAllyResolver::dispatch(F64 now)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -152,12 +172,14 @@ void SKMapAllyResolver::dispatch(F64 now)
             continue;
         }
         LLViewerObject* object = gObjectList.findObject(target);
-        if (!object || object->isDead())
+        // A raw deselect of something the user is editing would desync the sim's selection.
+        if (!object || object->isDead() || !object->getRegion() || object->isSelected())
         {
             continue;
         }
-        // Our own pending table: family replies never clear the cache's.
-        LLSelectMgr::getInstance()->requestObjectPropertiesFamily(object);
+        // The sim never answers a family request for an attachment; a select and deselect it does.
+        selectAndDeselect(object);
+        ALObjectPropertiesCache::instance().markPending(target);
         mBudget.sent(id, now);
         mProbedRoots.insert(target);
         mPendingRoots[target] = id;
