@@ -29,9 +29,11 @@
 #include "../sknavtilecache.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <thread>
 
 namespace
 {
@@ -491,5 +493,56 @@ namespace tut
         TileBuildResult static_back;
         ensure("static unpacked", unpackTileProduct(static_bytes.data(), static_bytes.size(), 0xfeedull, static_back));
         ensure("no stamp, no Detour", !static_back.mStamp.mStamped && static_back.mData[0].empty());
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<13>()
+    {
+        set_test_name("a file stored again after its remove failed is not removed by the retry");
+#if LL_WINDOWS
+        const std::string dir = scratch("sknavtilecache_restore");
+        const std::vector<U8> blob(100, 3);
+        TileDiskCache cache(dir, 1 << 20);
+        cache.index();
+        cache.store(1, blob);
+        const std::filesystem::path held = std::filesystem::path(dir) / "0000000000000001.snt";
+        {
+            std::ifstream open_file(held, std::ios::binary);
+            cache.erase(1);
+            ensure_equals("pending", cache.pendingRemovals(), size_t(1));
+        }
+        ensure("stored again", cache.store(1, blob));
+        ensure("stored another", cache.store(2, blob));
+        std::vector<U8> got;
+        ensure("the second store survives the retry", std::filesystem::exists(held) && cache.load(1, got) && got == blob);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+#endif
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<14>()
+    {
+        set_test_name("indexing while another thread stores leaves its half-written files alone");
+        const std::string dir = scratch("sknavtilecache_race");
+        const std::vector<U8> blob(64 * 1024, 5);
+        TileDiskCache cache(dir, U64(1) << 32);
+        std::atomic<bool> done{ false };
+        std::thread indexer([&]() {
+            while (!done)
+            {
+                cache.index();
+            }
+        });
+        S32 failed = 0;
+        for (U64 k = 1; k <= 400; ++k)
+        {
+            failed += cache.store(k, blob) ? 0 : 1;
+        }
+        done = true;
+        indexer.join();
+        ensure_equals("every store landed", failed, 0);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
     }
 }

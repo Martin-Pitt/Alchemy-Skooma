@@ -112,8 +112,11 @@ namespace sknav
             U64 mUsed = 0;
         };
         std::string pathOf(U64 key) const;
-        void pruneLocked(std::vector<std::string>& doomed);
+        /// Retry the failed removes, then drop the least recently used past the cap.
+        void pruneLocked();
+        void pruneEntriesLocked(std::vector<std::string>& doomed);
         void removeFiles(const std::vector<std::string>& paths);
+        void removeFilesLocked(const std::vector<std::string>& paths);
 
         mutable std::mutex mMutex;
         std::string mDir;
@@ -122,6 +125,7 @@ namespace sknav
         U64 mClock = 0;
         std::unordered_map<U64, Entry> mEntries;
         std::vector<std::string> mDoomed;
+        std::string mTmpTag;
     };
 
     /// Nearness integrated over time with a decay: a tile the camera sits by
