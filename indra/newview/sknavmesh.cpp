@@ -633,6 +633,13 @@ void SKNavMesh::spillMesh(Mesh& mesh)
     {
         return;
     }
+    // The agent's region's terrain keeps its detail: it is what the mesh is
+    // here to serve, and spilling it would set the rooms pass chasing its own
+    // tail through the air budget.
+    if (meshPriority(mesh) == 0)
+    {
+        return;
+    }
     auto job = std::make_shared<SpillJob>();
     job->mMesh = mesh.mId;
     job->mGeneration = mesh.mGeneration;
@@ -709,7 +716,9 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
     Mesh& mesh = *it->second;
     mesh.mResidency = Mesh::Residency::RESIDENT;
     // Something moved or asked for the detail while it was written: it stays.
-    if (LLTimer::getTotalSeconds() - mesh.mDetailWanted < hold || !mSettleGate.settled(mesh.mId))
+    // So does the agent's region's terrain, whatever changed while the spill
+    // was in flight.
+    if (LLTimer::getTotalSeconds() - mesh.mDetailWanted < hold || !mSettleGate.settled(mesh.mId) || meshPriority(mesh) == 0)
     {
         return;
     }
@@ -888,10 +897,10 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
             continue;
         }
         Tile& tile = t->second;
-        tile.mAirSpilled = false;
-        ++mStats.mReloads;
         if (swap.count(e.mKey))
         {
+            tile.mAirSpilled = false;
+            ++mStats.mReloads;
             tile.mAir = std::move(e.mAir);
             tile.mRaster = std::move(e.mRaster);
             tile.mAirCoarse.reset();
@@ -899,9 +908,13 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
         }
         else
         {
-            // Lost from disk: built again with its detail, which gives it new air the spaces read anew.
+            // Lost from disk: what was published stands, and only the detail
+            // is wanted again, where it is wanted. Throwing the build away
+            // would rebuild the tile's air, move the signature the rooms pass
+            // settles against, and churn a thrashed cache past its quiet time
+            // without ever letting one land.
             ++mStats.mReloadMisses;
-            tile.mBuilt = 0;
+            tile.mAirBuilt = 0;
         }
     }
     if (!job->mEntries.empty())
