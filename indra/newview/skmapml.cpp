@@ -1,0 +1,360 @@
+/**
+ * @file skmapml.cpp
+ * @brief The Mouselook map: the mini-map's content drawn faintly over the world while in mouselook.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Alchemy Viewer Source Code
+ * Copyright (C) 2026, Alchemy Viewer Project.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "skmapml.h"
+
+#include "llagent.h"
+#include "llagentcamera.h"
+#include "llglslshader.h"
+#include "llrender.h"
+#include "llrendertarget.h"
+#include "llui.h"
+#include "llfloaterreg.h"
+#include "llviewercamera.h"
+#include "llviewercontrol.h"
+#include "llviewershadermgr.h"
+#include "llworld.h"
+#include "skfloatermap.h"
+#include "sknetmap.h"
+
+namespace
+{
+    constexpr U32 MAX_SIDE = 4096;
+
+    // One quad over the map's square; each layer is masked by its own fade, its colour premultiplied.
+    const char* VS_MASK = R"(#version 330 core
+uniform vec4 u_rect;
+out vec2 v_t;
+void main()
+{
+    v_t = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    gl_Position = vec4(mix(u_rect.xy, u_rect.zw, v_t), 0.0, 1.0);
+}
+)";
+
+    // The study's radial gradients: two linear segments meeting at a middle stop.
+    const char* FS_MASK = R"(#version 330 core
+in vec2 v_t;
+out vec4 o;
+uniform sampler2D u_t;
+uniform int u_mode;
+uniform float u_side;
+uniform float u_outer;
+uniform float u_centre;
+uniform float u_self;
+float ramp(float t, float a0, float tm, float am, float a1)
+{
+    t = clamp(t, 0.0, 1.0);
+    return t < tm ? mix(a0, am, t / tm) : mix(am, a1, (t - tm) / (1.0 - tm));
+}
+void main()
+{
+    vec4 p = texture(u_t, v_t);
+    float d = length((v_t - 0.5) * u_side);
+    float k = 1.0;
+    if (u_mode < 2)
+    {
+        float r = u_side * 0.45;
+        float inner = r * (1.0 - u_outer);
+        k *= ramp((d - inner) / max(r - inner, 1e-3), 1.0, 0.48, 0.58, 0.0);
+    }
+    if (u_mode == 0)
+    {
+        float r0 = u_centre * 0.18;
+        k *= 1.0 - ramp((d - r0) / max(u_centre - r0, 1e-3), 0.92, 0.38, 0.70, 0.0);
+    }
+    else if (u_mode == 2)
+    {
+        float r0 = min(4.0, u_self * 0.3);
+        k *= 1.0 - ramp((d - r0) / max(u_self - r0, 1e-3), 1.0, 0.5, 0.5, 0.0);
+    }
+    o = p * k;
+}
+)";
+
+    GLuint compileStage(GLenum type, const char* src)
+    {
+        const GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        GLint ok = 0;
+        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok)
+        {
+            char log[1024] = {};
+            glGetShaderInfoLog(s, sizeof(log) - 1, nullptr, log);
+            LL_WARNS("SKMap") << "Mouselook map shader failed to compile: " << log << LL_ENDL;
+            glDeleteShader(s);
+            return 0;
+        }
+        return s;
+    }
+
+    U32 compileProgram()
+    {
+        const GLuint vs = compileStage(GL_VERTEX_SHADER, VS_MASK);
+        const GLuint fs = compileStage(GL_FRAGMENT_SHADER, FS_MASK);
+        if (!vs || !fs)
+        {
+            if (vs) glDeleteShader(vs);
+            if (fs) glDeleteShader(fs);
+            return 0;
+        }
+        const GLuint p = glCreateProgram();
+        glAttachShader(p, vs);
+        glAttachShader(p, fs);
+        glLinkProgram(p);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        GLint ok = 0;
+        glGetProgramiv(p, GL_LINK_STATUS, &ok);
+        if (!ok)
+        {
+            LL_WARNS("SKMap") << "Mouselook map shader failed to link" << LL_ENDL;
+            glDeleteProgram(p);
+            return 0;
+        }
+        return p;
+    }
+
+    struct State
+    {
+        LLRenderTarget mTarget;
+        U32 mProgram = 0;
+        U32 mVao = 0;
+        bool mFailed = false;
+
+        ~State()
+        {
+            mTarget.release();
+            if (mProgram)
+            {
+                glDeleteProgram(mProgram);
+            }
+            if (mVao)
+            {
+                glDeleteVertexArrays(1, &mVao);
+            }
+        }
+    };
+    State* sState = nullptr;
+
+    struct Fades
+    {
+        F32 mOuter = 0.f;
+        F32 mCentre = 0.f;
+        F32 mSelf = 0.f;
+    };
+
+    /// The target's layer over the window: viewport is the window's, side the map's, both in pixels.
+    void blit(State& s, const GLint* viewport, F32 side, S32 mode, const Fades& fades)
+    {
+        GLint program = 0, vao = 0, src_rgb = 0, dst_rgb = 0, src_a = 0, dst_a = 0, eq_rgb = 0, eq_a = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &src_rgb);
+        glGetIntegerv(GL_BLEND_DST_RGB, &dst_rgb);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &src_a);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &dst_a);
+        glGetIntegerv(GL_BLEND_EQUATION_RGB, &eq_rgb);
+        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eq_a);
+        const GLboolean blend = glIsEnabled(GL_BLEND);
+
+        const F32 hw = side / static_cast<F32>(viewport[2]);
+        const F32 hh = side / static_cast<F32>(viewport[3]);
+        glUseProgram(s.mProgram);
+        glBindVertexArray(s.mVao);
+        glUniform4f(glGetUniformLocation(s.mProgram, "u_rect"), -hw, -hh, hw, hh);
+        glUniform1i(glGetUniformLocation(s.mProgram, "u_t"), 0);
+        glUniform1i(glGetUniformLocation(s.mProgram, "u_mode"), mode);
+        glUniform1f(glGetUniformLocation(s.mProgram, "u_side"), side);
+        glUniform1f(glGetUniformLocation(s.mProgram, "u_outer"), fades.mOuter);
+        glUniform1f(glGetUniformLocation(s.mProgram, "u_centre"), fades.mCentre);
+        glUniform1f(glGetUniformLocation(s.mProgram, "u_self"), fades.mSelf);
+        gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, s.mTarget.getTexture(), 0);
+        glEnable(GL_BLEND);
+        glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        gGL.getTextureSlot(0)->unbind();
+
+        blend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
+        glBlendFuncSeparate(src_rgb, dst_rgb, src_a, dst_a);
+        glBlendEquationSeparate(eq_rgb, eq_a);
+        glBindVertexArray(vao);
+        glUseProgram(program);
+    }
+}
+
+// static
+bool SKMapML::showing()
+{
+    static LLCachedControl<bool> enable(gSavedSettings, "SKMapMLEnable", true);
+    return enable && gAgentCamera.cameraMouselook();
+}
+
+// static
+void SKMapML::draw()
+{
+    static LLCachedControl<bool> rotate(gSavedSettings, "SKMapMLRotate", false);
+    static LLCachedControl<F32> span(gSavedSettings, "SKMapMLSpanMeters", 96.f);
+    static LLCachedControl<F32> size(gSavedSettings, "SKMapMLSize", 0.8f);
+    static LLCachedControl<F32> lines(gSavedSettings, "SKMapMLLineStrength", 0.8f);
+    static LLCachedControl<F32> surface(gSavedSettings, "SKMapMLSurfaceOpacity", 0.2f);
+    static LLCachedControl<F32> centre_fade(gSavedSettings, "SKMapMLCentreFade", 0.18f);
+    static LLCachedControl<F32> self_fade(gSavedSettings, "SKMapMLSelfFadePx", 28.f);
+    static LLCachedControl<F32> outer_fade(gSavedSettings, "SKMapMLOuterFade", 0.38f);
+    if (!showing() || !LLWorld::instanceExists() || !gAgent.getRegion())
+    {
+        return;
+    }
+    // The corner map's own widget, built if its floater never was; the floater is not opened.
+    SKFloaterMap* floater = LLFloaterReg::getTypedInstance<SKFloaterMap>("mini_map");
+    SKNetMap* map = floater ? floater->map() : nullptr;
+    if (!map)
+    {
+        return;
+    }
+    if (!sState)
+    {
+        sState = new State();
+    }
+    State& s = *sState;
+    if (s.mFailed)
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_SCOPED;
+
+    GLint viewport[4] = {};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (viewport[2] <= 0 || viewport[3] <= 0)
+    {
+        return;
+    }
+    // Sized and faded against the window's height, so any aspect keeps the same map.
+    const F32 height = static_cast<F32>(viewport[3]);
+    const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f))), 16U, MAX_SIDE);
+    if (!s.mProgram)
+    {
+        s.mProgram = compileProgram();
+        glGenVertexArrays(1, &s.mVao);
+        if (!s.mProgram)
+        {
+            s.mFailed = true;
+            return;
+        }
+    }
+    if (!s.mTarget.isComplete() || s.mTarget.getWidth() != side)
+    {
+        s.mTarget.release();
+        if (!s.mTarget.allocate(side, side, GL_RGBA8))
+        {
+            LL_WARNS("SKMap") << "Mouselook map target failed at " << side << " pixels" << LL_ENDL;
+            s.mFailed = true;
+            return;
+        }
+    }
+    F32 rotation = 0.f;
+    if (rotate)
+    {
+        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+        rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
+    }
+
+    // The markers keep their UI size: the map is laid out in UI pixels and scaled to the window's.
+    const F32 ui = llmax(LLUI::getScaleFactor().mV[VX], 0.01f);
+    const F32 side_ui = side / ui;
+    Fades fades;
+    fades.mOuter = llclamp(static_cast<F32>(outer_fade), 0.05f, 1.f);
+    fades.mCentre = height * llclamp(static_cast<F32>(centre_fade), 0.f, 0.5f);
+    fades.mSelf = llmin(llclamp(static_cast<F32>(self_fade), 0.f, 128.f) * ui, fades.mCentre * 0.65f);
+
+    gGL.flush();
+    LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
+    GLfloat clear[4] = {};
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+    GLint draw_fbo = 0, read_fbo = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+    LLGLDisable scissor(GL_SCISSOR_TEST);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+    gGL.ortho(0.f, static_cast<F32>(side), 0.f, static_cast<F32>(side), -1.f, 1.f);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+    gGL.scalef(ui, ui, 1.f);
+    gGL.pushUIMatrix();
+    gGL.loadUIIdentity();
+    gUIProgram.bind();
+
+    for (S32 mode : { 0, 1, 2 })
+    {
+        s.mTarget.bindTarget();
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+        s.mTarget.clear(GL_COLOR_BUFFER_BIT);
+        gGL.getTextureSlot(0)->unbind();
+        gGL.color4f(1.f, 1.f, 1.f, 1.f);
+        // Onto transparent black: colour by its alpha, alpha accumulated, so the target is premultiplied.
+        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+        const SKNetMap::OverlayLayer layer = mode == 0 ? SKNetMap::OverlayLayer::PLAN : mode == 1 ? SKNetMap::OverlayLayer::MARKERS
+                                                                                                : SKNetMap::OverlayLayer::SELF;
+        map->drawOverlay(layer, llclamp(static_cast<F32>(span), skmap::ZOOM_MIN_M, skmap::ZOOM_MAX_M), rotation, side_ui,
+                            llclamp(static_cast<F32>(lines), 0.f, 1.f), llclamp(static_cast<F32>(surface), 0.f, 1.f));
+        gGL.flush();
+        s.mTarget.flush();
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        blit(s, viewport, static_cast<F32>(side), mode, fades);
+    }
+
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.popUIMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    glClearColor(clear[0], clear[1], clear[2], clear[3]);
+    if (shader)
+    {
+        shader->bind();
+    }
+    else
+    {
+        LLGLSLShader::unbind();
+    }
+}
+
+// static
+void SKMapML::cleanup()
+{
+    delete sState;
+    sState = nullptr;
+}

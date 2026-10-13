@@ -93,6 +93,17 @@ public:
 
     const skmap::MapView& view() const { return mView; }
 
+    /// The Mouselook map's layers, each drawn into its own target so each can fade on its own.
+    enum class OverlayLayer
+    {
+        PLAN,
+        MARKERS,
+        SELF
+    };
+    /// Draw one layer around the camera, span metres across a side px square; PLAN sets the view first and the
+    /// next draw() puts the widget's own view back.
+    void drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface);
+
     /// Told of every ping the user places on a map, for whatever will carry it to allies.
     typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;
     static boost::signals2::connection setPingCallback(const ping_signal_t::slot_type& cb);

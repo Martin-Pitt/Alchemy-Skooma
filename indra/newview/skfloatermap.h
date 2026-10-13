@@ -47,6 +47,9 @@ public:
     void onMouseEnter(S32 x, S32 y, MASK mask) override;
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
 
+    /// The one map, which the Mouselook map also draws through.
+    SKNetMap* map() const { return mMap; }
+
 protected:
     /// Records which base buttons the floater shows, so the chrome can hide them at rest.
     void updateTitleButtons() override;

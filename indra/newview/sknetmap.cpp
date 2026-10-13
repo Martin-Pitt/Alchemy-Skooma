@@ -336,6 +336,48 @@ void SKNetMap::draw()
     LLUICtrl::draw();
 }
 
+void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface)
+{
+    if (!LLWorld::instanceExists() || !gAgent.getRegion())
+    {
+        return;
+    }
+    switch (layer)
+    {
+        case OverlayLayer::PLAN:
+        {
+            static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
+            mView.set(gAgentCamera.getCameraPositionGlobal(), span, rotation, side, side);
+            SKMapPeople::instance().noteDrawn(mView);
+            SKMapScene::instance().noteDrawn(*this);
+            if (show)
+            {
+                if (!mPlan)
+                {
+                    mPlan = std::make_unique<SKMapComposite>();
+                }
+                SKMapComposite::Overlay overlay;
+                overlay.mLines = lines;
+                overlay.mSurface = surface;
+                mPlan->draw(mView, &overlay);
+            }
+            break;
+        }
+        case OverlayLayer::MARKERS:
+            drawEvents();
+            drawPings();
+            drawProjectiles();
+            drawFiringLines();
+            drawVehicles();
+            collectDots();
+            drawPeople();
+            break;
+        case OverlayLayer::SELF:
+            drawSelf();
+            break;
+    }
+}
+
 void SKNetMap::drawPlan()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);

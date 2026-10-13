@@ -114,6 +114,7 @@
 #include "llfloaterland.h"
 #include "llfloaterinspect.h"
 //#include "llfloatermap.h" // <SK:Nexii> SKNetMap retired the classic mini-map floater
+#include "skmapml.h" // <SK:Nexii> The Mouselook map
 #include "llfloaternamedesc.h"
 #include "llfloaterpreference.h"
 #include "llfloatersnapshot.h"
@@ -2755,6 +2756,7 @@ void LLViewerWindow::shutdownGL()
     stop_glerror();
 
     LLWorldMapView::cleanupTextures();
+    SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
     LLViewerTextureManager::cleanup() ;
     SUBSYSTEM_CLEANUP(LLImageGL) ;
@@ -3086,6 +3088,10 @@ void LLViewerWindow::draw()
             gGL.scalef(zoom_factor, zoom_factor, 1.f);
             LLUI::getScaleFactor() *= zoom_factor;
         }
+
+        // <SK:Nexii> The Mouselook map, under the crosshair and mouselook text
+        SKMapML::draw();
+        // </SK:Nexii>
 
         // Draw tool specific overlay on world
         LLToolMgr::getInstance()->getCurrentTool()->draw();
@@ -6459,6 +6465,8 @@ void LLViewerWindow::stopGL()
 
         gSky.destroyGL();
         stop_glerror();
+
+        SKMapML::cleanup(); // <SK:Nexii> The Mouselook map's GL objects
 
         LLManipTranslate::destroyGL() ;
         stop_glerror();
