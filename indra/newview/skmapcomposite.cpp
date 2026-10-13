@@ -176,6 +176,39 @@ void main()
 }
 )";
 
+    // The overlay's quad: lines and surfaces weighted apart by the plan's brightness, its colour premultiplied.
+    const char* VS_BLIT = R"(#version 330 core
+uniform vec2 u_pos[4];
+uniform vec2 u_uv[4];
+out vec2 v_t;
+void main()
+{
+    const int corner[6] = int[6](0, 1, 2, 0, 2, 3);
+    int k = corner[gl_VertexID];
+    v_t = u_uv[k];
+    gl_Position = vec4(u_pos[k], 0.0, 1.0);
+}
+)";
+
+    const char* FS_BLIT = R"(#version 330 core
+in vec2 v_t;
+out vec4 o;
+uniform sampler2D u_t;
+uniform vec2 u_weight;
+void main()
+{
+    vec4 p = texture(u_t, v_t);
+    if (p.a <= 0.0)
+    {
+        o = vec4(0.0);
+        return;
+    }
+    // Floors are dark and walls, ledges and stairs light, so brightness tells the two apart.
+    float l = dot(p.rgb / p.a, vec3(0.2126, 0.7152, 0.0722));
+    o = p * mix(u_weight.y, u_weight.x, smoothstep(0.3, 0.6, l));
+}
+)";
+
     U32 compile(const char* vs, const char* fs)
     {
         const auto stage = [](GLenum type, const char* src) -> GLuint
@@ -376,6 +409,16 @@ void SKMapComposite::release()
     {
         glDeleteProgram(mShadeProgram);
         mShadeProgram = 0;
+    }
+    if (mBlitProgram)
+    {
+        glDeleteProgram(mBlitProgram);
+        mBlitProgram = 0;
+    }
+    if (mBlitVao)
+    {
+        glDeleteVertexArrays(1, &mBlitVao);
+        mBlitVao = 0;
     }
     mSide = 0;
     mSamples = 0;
@@ -794,7 +837,7 @@ void SKMapComposite::land()
     mStats.mUploadMs = t.getElapsedTimeF32() * 1000.f;
 }
 
-void SKMapComposite::draw(const skmap::MapView& view)
+void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
 {
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<U32> overlap(gSavedSettings, "SKMapPlanOverlap", 0);
@@ -946,6 +989,11 @@ void SKMapComposite::draw(const skmap::MapView& view)
         uv[k] = LLVector2((static_cast<F32>(g.mdV[VX] - origin.mdV[VX]) - mFrameMin.mV[VX]) / mFrameSize,
                           (static_cast<F32>(g.mdV[VY] - origin.mdV[VY]) - mFrameMin.mV[VY]) / mFrameSize);
     }
+    if (overlay)
+    {
+        drawOverlay(view, uv, corner, *overlay);
+        return;
+    }
     gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mResolveTex, 0);
     gGL.color4f(1.f, 1.f, 1.f, 1.f);
     // The composite was blended onto transparent black, so its colour is premultiplied.
@@ -959,6 +1007,49 @@ void SKMapComposite::draw(const skmap::MapView& view)
     gGL.end();
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTextureSlot(0)->unbind();
+}
+
+void SKMapComposite::drawOverlay(const skmap::MapView& view, const LLVector2* uv, const F32 (*corner)[2], const Overlay& overlay)
+{
+    gGL.flush();
+    SavedState saved;
+    saved.save();
+    LLGLSLShader::unbind();
+    if (!mBlitProgram)
+    {
+        mBlitProgram = compile(VS_BLIT, FS_BLIT);
+        glGenVertexArrays(1, &mBlitVao);
+    }
+    if (!mBlitProgram || !mBlitVao)
+    {
+        saved.restore();
+        return;
+    }
+    // The bound viewport is the view, so its corners are clip space's.
+    GLfloat pos[8], tex[8];
+    for (S32 k = 0; k < 4; ++k)
+    {
+        pos[k * 2] = corner[k][0] / view.width() * 2.f - 1.f;
+        pos[k * 2 + 1] = corner[k][1] / view.height() * 2.f - 1.f;
+        tex[k * 2] = uv[k].mV[VX];
+        tex[k * 2 + 1] = uv[k].mV[VY];
+    }
+    glUseProgram(mBlitProgram);
+    glBindVertexArray(mBlitVao);
+    glUniform2fv(glGetUniformLocation(mBlitProgram, "u_pos"), 4, pos);
+    glUniform2fv(glGetUniformLocation(mBlitProgram, "u_uv"), 4, tex);
+    glUniform2f(glGetUniformLocation(mBlitProgram, "u_weight"), overlay.mLines, overlay.mSurface);
+    glUniform1i(glGetUniformLocation(mBlitProgram, "u_t"), 0);
+    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mResolveTex, 0);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    gGL.getTextureSlot(0)->unbind();
+    saved.restore();
 }
 
 std::string SKMapComposite::statsLine() const

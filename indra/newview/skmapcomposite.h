@@ -44,8 +44,16 @@ public:
     SKMapComposite(const SKMapComposite&) = delete;
     SKMapComposite& operator=(const SKMapComposite&) = delete;
 
+    /// How a plan drawn as an overlay weighs its lines and its surfaces, each 0 to 1.
+    struct Overlay
+    {
+        F32 mLines = 1.f;
+        F32 mSurface = 1.f;
+    };
+
     /// Bring the plan up to date for this view and draw it over the widget, in widget coordinates.
-    void draw(const skmap::MapView& view);
+    /// With an overlay the bound viewport must be exactly the view, as a target sized to it is.
+    void draw(const skmap::MapView& view, const Overlay* overlay = nullptr);
     void release();
 
     struct Stats
@@ -78,6 +86,7 @@ public:
 
 private:
     bool ensureGL(U32 side, U32 samples);
+    void drawOverlay(const skmap::MapView& view, const LLVector2* uv, const F32 (*corner)[2], const Overlay& overlay);
     void render(F32 vz);
 
     struct Job;
@@ -121,6 +130,8 @@ private:
     // GL objects.
     U32 mProgram = 0;
     U32 mShadeProgram = 0;
+    U32 mBlitProgram = 0;
+    U32 mBlitVao = 0;
     U32 mVao = 0;
     U32 mVbo = 0;
     U32 mTerrainVbo = 0;
