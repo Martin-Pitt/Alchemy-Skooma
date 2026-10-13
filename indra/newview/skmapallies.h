@@ -107,8 +107,8 @@ namespace skmap
     void probeTimeout(AllyRecord& record, F64 now);
 
     enum class AllyVerdict : U8 { UNKNOWN, ALLY };
-    /// ALLY on a resolved candidate group or a roster hit; anything else is unknown.
-    AllyVerdict allyVerdict(const AllyRecord& record, const std::set<LLUUID>& candidates, bool roster_hit);
+    /// ALLY only when the active group read off the attachments is a candidate; membership alone is not enough.
+    AllyVerdict allyVerdict(const AllyRecord& record, const std::set<LLUUID>& candidates);
 
     /// The probe's rate limit: a token bucket, an in-flight cap with a timeout, and a bounded queue.
     class ProbeBudget

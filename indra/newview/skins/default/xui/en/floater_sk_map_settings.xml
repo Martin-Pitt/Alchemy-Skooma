@@ -339,16 +339,6 @@
          top="0"
          width="332">
             <check_box
-             control_name="SKMapAllyRoster"
-             follows="left|top"
-             height="16"
-             label="Group rosters count as allies"
-             layout="topleft"
-             left="8"
-             name="sk_ally_roster"
-             top="8"
-             width="308" />
-            <check_box
              control_name="SKMapAllyProbeUntitled"
              follows="left|top"
              height="16"
@@ -356,7 +346,7 @@
              layout="topleft"
              left="8"
              name="sk_ally_probe_untitled"
-             top_pad="5"
+             top="8"
              width="308" />
             <check_box
              control_name="SKMapMarkerLabels"

@@ -188,7 +188,7 @@ namespace tut
         ensure("unknown at once", r.mState == ProbeState::UNKNOWN && r.mGroup.isNull());
         ensure("asks at once", skmap::wantsProbe(r, 5.0, true));
         ensure("with a fresh request", r.mFresh);
-        ensure("no longer an ally", skmap::allyVerdict(r, { ASH_G }, false) == skmap::AllyVerdict::UNKNOWN);
+        ensure("no longer an ally", skmap::allyVerdict(r, { ASH_G }) == skmap::AllyVerdict::UNKNOWN);
 
         // A pending record also drops on a title change; a cleared tag goes untitled.
         skmap::probeSent(r, root(1), roots, 5.0);
@@ -207,7 +207,7 @@ namespace tut
         ensure("nothing asked, nothing taken", idle.mState == ProbeState::UNKNOWN);
     }
 
-    // The verdict: a roster hit beats a resolved non-candidate and survives a title change;
+    // The verdict: only a resolved candidate group is an ally, and a title change takes it away;
     // nothing yields anything but ally or unknown.
     template<> template<>
     void skmapallies_object::test<6>()
@@ -217,25 +217,21 @@ namespace tut
         skmap::observe(r, "Soldier", { root(1) }, 0.0, false);
         skmap::probeSent(r, root(1), { root(1) }, 0.0);
         skmap::probeReply(r, root(1), OTHER, 0.1);
-        ensure("a non-candidate is unknown", skmap::allyVerdict(r, candidates, false) == skmap::AllyVerdict::UNKNOWN);
-        ensure("the roster beats it", skmap::allyVerdict(r, candidates, true) == skmap::AllyVerdict::ALLY);
-        skmap::observe(r, "Other tag", { root(1) }, 1.0, false);
-        ensure("the roster survives a tag switch", skmap::allyVerdict(r, candidates, true) == skmap::AllyVerdict::ALLY);
+        ensure("a non-candidate is unknown", skmap::allyVerdict(r, candidates) == skmap::AllyVerdict::UNKNOWN);
         skmap::AllyRecord a;
         skmap::observe(a, "Soldier", { root(1) }, 0.0, false);
         skmap::probeSent(a, root(1), { root(1) }, 0.0);
         skmap::probeReply(a, root(1), ASH_M, 0.1);
-        ensure("a candidate is an ally", skmap::allyVerdict(a, candidates, false) == skmap::AllyVerdict::ALLY);
+        ensure("a candidate is an ally", skmap::allyVerdict(a, candidates) == skmap::AllyVerdict::ALLY);
+        skmap::observe(a, "Other tag", { root(1) }, 1.0, false);
+        ensure("a tag switch takes it away", skmap::allyVerdict(a, candidates) == skmap::AllyVerdict::UNKNOWN);
         for (S32 s = 0; s <= static_cast<S32>(ProbeState::NONE); ++s)
         {
             skmap::AllyRecord any;
             any.mState = static_cast<ProbeState>(s);
             any.mGroup = s % 2 ? ASH_G : OTHER;
-            for (bool hit : { false, true })
-            {
-                const skmap::AllyVerdict v = skmap::allyVerdict(any, candidates, hit);
-                ensure("ally or unknown", v == skmap::AllyVerdict::ALLY || v == skmap::AllyVerdict::UNKNOWN);
-            }
+            const skmap::AllyVerdict v = skmap::allyVerdict(any, candidates);
+            ensure("ally or unknown", v == skmap::AllyVerdict::ALLY || v == skmap::AllyVerdict::UNKNOWN);
         }
     }
 

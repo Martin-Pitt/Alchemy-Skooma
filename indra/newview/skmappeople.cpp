@@ -131,13 +131,13 @@ void SKMapPeople::idle()
         {
             mCombat = false;
         }
-        mResolver.update(false, false, mCandidates, LLFrameTimer::getUptimeSeconds().value());
+        mResolver.update(false, mCandidates);
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
     updateCombat();
     updateCandidates();
-    mResolver.update(mCombat, mCombat, mCandidates, LLFrameTimer::getUptimeSeconds().value());
+    mResolver.update(mCombat, mCandidates);
     gatherPeople();
     mResolver.dispatch(LLFrameTimer::getUptimeSeconds().value());
     updateFiringLines();

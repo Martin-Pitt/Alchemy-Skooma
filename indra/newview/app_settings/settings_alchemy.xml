@@ -5268,17 +5268,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKMapAllyRoster</key>
-        <map>
-            <key>Comment</key>
-            <string>In combat, count members of your ally groups you belong to as allies, by the group rosters.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>1</integer>
-        </map>
         <key>SKMapAllyProbeRate</key>
         <map>
             <key>Comment</key>

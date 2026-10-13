@@ -265,12 +265,8 @@ namespace skmap
         }
     }
 
-    AllyVerdict allyVerdict(const AllyRecord& record, const std::set<LLUUID>& candidates, bool roster_hit)
+    AllyVerdict allyVerdict(const AllyRecord& record, const std::set<LLUUID>& candidates)
     {
-        if (roster_hit)
-        {
-            return AllyVerdict::ALLY;
-        }
         if (record.mState == ProbeState::RESOLVED && candidates.count(record.mGroup))
         {
             return AllyVerdict::ALLY;
