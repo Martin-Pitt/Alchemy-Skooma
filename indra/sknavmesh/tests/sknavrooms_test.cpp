@@ -2089,4 +2089,37 @@ template<> template<>
             ensure_equals("one aperture cut either way" + at, incremental.mRooms->mApart.size(), full.mRooms->mApart.size());
         }
     }
+
+    template<> template<>
+    void sknavrooms_object::test<58>()
+    {
+        set_test_name("a doorway beside a wide opening parts its rooms or not alike wherever a tile seam crosses it");
+        // A partition across a hall: a wall, a 2 m doorway under a lintel, a short wall, then open to the north wall.
+        for (F32 top : { 10.f, 20.f })
+        {
+            S32 parted = -1;
+            for (F32 shift : { 0.f, 21.75f, 24.f })
+            {
+                Scene s;
+                s.wall(2.f, 2.f, 18.f, 2.25f);
+                s.wall(2.f, top, 18.f, top + 0.25f);
+                s.wall(2.f, 2.f, 2.25f, top + 0.25f);
+                s.wall(17.75f, 2.f, 18.f, top + 0.25f);
+                s.wall(10.f, 2.25f, 10.25f, 3.f);
+                s.box(10.f, 3.f, 10.25f, 5.f, 2.2f, 3.f, false);
+                s.wall(10.f, 5.f, 10.25f, 6.f);
+                s.box(2.f, 2.f, 18.f, top + 0.25f, 3.f, 3.25f);
+                s.mShift = shift;
+                const Result r = run(s.input(2));
+                const Space* w = r.at(4.f + shift, 4.f);
+                const Space* e = r.at(16.f + shift, 4.f);
+                ensure("both rooms found", w && e);
+                const S32 now = w != e ? 1 : 0;
+                ensure(llformat("the same answer at shift %.2f", shift), parted < 0 || parted == now);
+                ensure_equals("a cut where they part", r.mRooms->mApart.size(), static_cast<size_t>(now));
+                parted = now;
+            }
+            ensure("a short opening parts them, a long one does not", parted == (top < 15.f ? 1 : 0));
+        }
+    }
 }
