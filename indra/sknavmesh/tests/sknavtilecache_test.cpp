@@ -587,4 +587,27 @@ namespace tut
         parts.mRunoff = &whole.mRunoff;
         ensure("same bytes", packTileProduct(bare, 42, parts) == packTileProduct(whole, 42));
     }
+
+    template<> template<>
+    void sknavtilecache_object::test<18>()
+    {
+        set_test_name("eviction takes the lowest rank first, whatever its nearness");
+        // Four tiles at the same distance: the agent's region's (rank 3) stays,
+        // the void's (rank 0) goes, even though the void's sat nearer just as long.
+        std::vector<EvictionCandidate> c(4);
+        c[0] = { 100, 9.0, 500.0, 3 };
+        c[1] = { 100, 9.0, 500.0, 0 };
+        c[2] = { 100, 9.0, 500.0, 1 };
+        c[3] = { 100, 9.0, 500.0, 2 };
+        const std::vector<size_t> out = chooseEvictions(c, 300, 192.0);
+        ensure_equals("one goes", out.size(), size_t(1));
+        ensure_equals("the void's", out[0], size_t(1));
+        const std::vector<size_t> more = chooseEvictions(c, 200, 192.0);
+        ensure_equals("two more go", more.size(), size_t(2));
+        ensure("the next two, lowest rank first", more[0] == size_t(1) && more[1] == size_t(2));
+        // Evicting to a bare 100 keeps only the agent region's.
+        const std::vector<size_t> rest = chooseEvictions(c, 100, 192.0);
+        ensure_equals("three go", rest.size(), size_t(3));
+        ensure("rank three stays", rest[2] == size_t(3));
+    }
 }

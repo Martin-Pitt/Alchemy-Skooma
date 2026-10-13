@@ -453,7 +453,9 @@ void SKNavMesh::evictAir()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air worker");
         std::vector<EvictionCandidate> candidates;
         candidates.reserve(held->size());
-        for (const auto& tile : *held) candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance, tile.mPriority});
+        // The rank keeps a candidate longer than the priority ranks it: a
+        // priority's 0 is what the budget gives up last.
+        for (const auto& tile : *held) candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance, static_cast<U8>(3 - tile.mPriority)});
         auto result = std::make_shared<std::vector<AirCandidate>>();
         for (size_t index : chooseEvictions(candidates, budget, protect))
         {
@@ -489,7 +491,10 @@ void SKNavMesh::evictRasters(size_t budget, F64 radius)
     std::vector<TileRasterPtr> dropped;
     for (const RasterCandidate& c : scan)
     {
-        if (c.mDistance <= 1.5 * radius && (!over || total <= cap / 8 * 7)) break;
+        // The order is priority first, so distance no longer falls away
+        // monotonically: a protected raster is passed over, not a stopping
+        // line, and the walk carries on to whatever farther tier follows.
+        if (c.mDistance <= 1.5 * radius && (!over || total <= cap / 8 * 7)) continue;
         const auto mesh = mMeshes.find(c.mMesh);
         if (mesh == mMeshes.end() || mesh->second->mGeneration != c.mGeneration) continue;
         const auto found = mesh->second->mTiles.find(c.mKey);
