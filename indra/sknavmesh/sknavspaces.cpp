@@ -2254,6 +2254,76 @@ namespace sknav
                 stale.push_back(t);
             }
         }
+        // A basin of the block's that runs on along a seam between ring tiles, into kept seeds no
+        // earlier pass joined to the rest of it: those tiles are cut again with the block.
+        {
+            std::unordered_set<S32> block_labels;
+            for (const TileInfo& ti : mTiles)
+            {
+                if (ti.mInBlock)
+                {
+                    block_labels.insert(ti.mSeedLabels.begin(), ti.mSeedLabels.end());
+                }
+            }
+            std::unordered_map<U64, U32> index;
+            UnionFind joined;
+            joined.reset(0);
+            auto at = [&index, &joined](U32 t, U32 seed) {
+                const auto it = index.emplace((static_cast<U64>(t) << 32) | seed, static_cast<U32>(index.size())).first;
+                if (it->second == joined.mParent.size())
+                {
+                    joined.mParent.push_back(it->second);
+                }
+                return it->second;
+            };
+            // label -> one kept seed of it reached from the block, then any reached along a ring seam.
+            std::unordered_map<S32, std::pair<U32, U32>> reached;
+            std::vector<std::tuple<S32, U32, U32>> seam;
+            for (size_t pass = 0; pass < 2; ++pass)
+            {
+                for (const auto& [where, label] : pass ? mSeamShadow[0] : mShadow[0])
+                {
+                    const U32 t = static_cast<U32>(where >> 32);
+                    const TileInfo& ti = mTiles[t];
+                    const U32 gap = static_cast<U32>(where);
+                    if (ti.mDirty || !block_labels.count(label) || gap >= ti.mRooms.mSeeds.size() || !ti.mRooms.mSeeds[gap])
+                    {
+                        continue;
+                    }
+                    const U32 k = at(t, ti.mRooms.mSeeds[gap]);
+                    if (pass)
+                    {
+                        seam.emplace_back(label, k, t);
+                    }
+                    else
+                    {
+                        reached.emplace(label, std::make_pair(k, t));
+                    }
+                }
+            }
+            if (!seam.empty() && mInput->mPrevious)
+            {
+                for (const SeedLink& l : mInput->mPrevious->mLinks)
+                {
+                    const U32 a = tileAt(l.mA), b = tileAt(l.mB);
+                    if (a != NONE && b != NONE && !mTiles[a].mDirty && !mTiles[b].mDirty)
+                    {
+                        joined.unite(at(a, l.mSeedA), at(b, l.mSeedB));
+                    }
+                }
+            }
+            for (const auto& [label, k, t] : seam)
+            {
+                auto it = reached.emplace(label, std::make_pair(k, t)).first;
+                if (joined.find(it->second.first) != joined.find(k))
+                {
+                    stale.push_back(t);
+                    stale.push_back(it->second.second);
+                }
+            }
+            std::sort(stale.begin(), stale.end());
+            stale.erase(std::unique(stale.begin(), stale.end()), stale.end());
+        }
         if (stale.empty())
         {
             return false;
@@ -3315,16 +3385,11 @@ namespace sknav
         }
         // A kept seed of a ring tile is in the basin the cut's watershed labelled its gaps with:
         // seeds of ring tiles in one basin are one region, as a full pass would cut them.
-        // Along edges with other ring tiles, only a basin the block's seeds are in: its run there was cut with the block's air round it.
         std::unordered_map<U32, S32> ring_label;
-        for (size_t pass = 0; pass < 2 && !mShadow.empty(); ++pass)
+        for (size_t pass = 0; pass < 1 && !mShadow.empty(); ++pass)
         {
-            for (const auto& [where, label] : pass ? mSeamShadow[0] : mShadow[0])
+            for (const auto& [where, label] : mShadow[0])
             {
-                if (pass && !first.count(label))
-                {
-                    continue;
-                }
                 const U32 t = static_cast<U32>(where >> 32);
                 const TileInfo& ti = mTiles[t];
                 const U32 gap = static_cast<U32>(where);
