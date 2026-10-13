@@ -35,7 +35,6 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
-#include <functional>
 #include <iterator>
 #include <limits>
 
@@ -267,7 +266,7 @@ namespace sknav
         const F32 none = std::numeric_limits<F32>::max();
 
         // Every fine cell of a detailed tile, with its raster cell.
-        auto forCells = [&](const std::function<void(const TileEnclosure&, S32, S32, size_t)>& fn) {
+        auto forCells = [&](auto&& fn) {
             for (const TileEnclosure& t : enclosure.mTiles)
             {
                 if (!t.mAir)
@@ -314,8 +313,17 @@ namespace sknav
             }
         }
         // Leaves fill finest last, so the map holds each cell's finest leaf; the column gathers the rest.
+        // Cells walk their leaves in rows, so a column is gathered again only when the leaf changes.
+        const TileEnclosure* col_tile = nullptr;
+        S32 col_leaf = -1;
         auto column = [&](const TileEnclosure& t, S32 ix, S32 iy, AirColumn& out) {
-            airColumn(*t.mAir, leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth], out);
+            const S32 leaf = leafOf[&t - enclosure.mTiles.data()][ix + iy * t.mWidth];
+            if (&t != col_tile || leaf != col_leaf)
+            {
+                airColumn(*t.mAir, leaf, out);
+                col_tile = &t;
+                col_leaf = leaf;
+            }
             return out.mCount > 0;
         };
         AirColumn col;
