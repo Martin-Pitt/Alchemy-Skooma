@@ -39,6 +39,7 @@
 #include <fstream>
 #include <functional>
 #include <numeric>
+#include <random>
 #include <thread>
 #include <type_traits>
 
@@ -875,6 +876,11 @@ namespace sknav
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
         h = mix(h, input.mCoarseAir);
+        // Mixed only when asked for, so every key built without fine air stays as it was.
+        if (input.mFineAir)
+        {
+            h = mix(h, input.mFineAir);
+        }
         h = mix(h, input.mFaceOffsets);
         h = mix(h, input.mAlignWallEdges);
 
@@ -898,6 +904,14 @@ namespace sknav
 
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key)
     {
+        return packTileProduct(result, key, TileProductParts());
+    }
+
+    std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key, const TileProductParts& parts)
+    {
+        const std::vector<WallFace>& faces = parts.mFaces ? *parts.mFaces : result.mFaces;
+        const std::vector<WallSegment>& ledges = parts.mLedges ? *parts.mLedges : result.mLedges;
+        const std::vector<DropLink>& runoff = parts.mRunoff ? *parts.mRunoff : result.mRunoff;
         Writer w;
         w.pod(MAGIC);
         w.pod(TILE_PRODUCT_VERSION);
@@ -926,8 +940,8 @@ namespace sknav
         }
 
         s = w.open(TAG_FACES);
-        w.pod(static_cast<U32>(result.mFaces.size()));
-        for (const WallFace& f : result.mFaces)
+        w.pod(static_cast<U32>(faces.size()));
+        for (const WallFace& f : faces)
         {
             w.vec(f.mMin);
             w.vec(f.mMax);
@@ -956,10 +970,10 @@ namespace sknav
         }
 
         s = w.open(TAG_LEDGES);
-        writeSegments(w, result.mLedges);
+        writeSegments(w, ledges);
         w.close(s);
         s = w.open(TAG_RUNOFF);
-        writeLinks(w, result.mRunoff);
+        writeLinks(w, runoff);
         w.close(s);
 
         if (result.mAir)
@@ -1227,6 +1241,10 @@ namespace sknav
 
     TileDiskCache::TileDiskCache(const std::string& dir, U64 cap_bytes) : mDir(dir), mCap(cap_bytes)
     {
+        // Marks this cache's half-written files, which index() must leave to the writer.
+        char tag[32];
+        std::snprintf(tag, sizeof(tag), ".%08x-", static_cast<U32>(std::random_device()()));
+        mTmpTag = tag;
     }
 
     void TileDiskCache::index()
@@ -1249,7 +1267,11 @@ namespace sknav
             // A write a crash cut short never got renamed into place.
             if (p.extension() == ".tmp")
             {
-                leftovers.push_back(mDir + "/" + p.filename().string());
+                const std::string name = p.filename().string();
+                if (name.find(mTmpTag) == std::string::npos)
+                {
+                    leftovers.push_back(mDir + "/" + name);
+                }
                 continue;
             }
             if (p.extension() != ".snt")
@@ -1270,7 +1292,6 @@ namespace sknav
         removeFiles(leftovers);
         // The oldest file was the least recently used last session.
         std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.mTime < b.mTime; });
-        std::vector<std::string> doomed;
         {
             std::lock_guard<std::mutex> lock(mMutex);
             // Anything stored while this ran is newer than what was found.
@@ -1290,9 +1311,8 @@ namespace sknav
                 mEntries[e.first] = { e.second.mBytes, ++mClock };
                 mBytes += e.second.mBytes;
             }
-            pruneLocked(doomed);
+            pruneLocked();
         }
-        removeFiles(doomed);
     }
 
     std::string TileDiskCache::pathOf(U64 key) const
@@ -1341,7 +1361,7 @@ namespace sknav
         const std::string path = pathOf(key);
         // Written aside and renamed, so a reader never sees half a file.
         char suffix[32];
-        std::snprintf(suffix, sizeof(suffix), ".%zx.tmp", std::hash<std::thread::id>()(std::this_thread::get_id()));
+        std::snprintf(suffix, sizeof(suffix), "%s%zx.tmp", mTmpTag.c_str(), std::hash<std::thread::id>()(std::this_thread::get_id()));
         const fs::path tmp = pathFromUtf8(path + suffix);
         {
             std::error_code dir_ec;
@@ -1356,6 +1376,8 @@ namespace sknav
                 return false;
             }
         }
+        // Renamed under the lock, so no prune can remove the path between the rename and the entry.
+        std::lock_guard<std::mutex> lock(mMutex);
         std::error_code ec;
         fs::rename(tmp, pathFromUtf8(path), ec);
         if (ec)
@@ -1363,31 +1385,26 @@ namespace sknav
             fs::remove(tmp, ec);
             return false;
         }
-        std::vector<std::string> doomed;
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            Entry& e = mEntries[key];
-            mBytes = mBytes - e.mBytes + bytes.size();
-            e.mBytes = bytes.size();
-            e.mUsed = ++mClock;
-            pruneLocked(doomed);
-        }
-        removeFiles(doomed);
+        // A remove that failed on the file this replaced is not to be retried on this one.
+        mDoomed.erase(std::remove(mDoomed.begin(), mDoomed.end(), path), mDoomed.end());
+        Entry& e = mEntries[key];
+        mBytes = mBytes - e.mBytes + bytes.size();
+        e.mBytes = bytes.size();
+        e.mUsed = ++mClock;
+        pruneLocked();
         return true;
     }
 
     void TileDiskCache::erase(U64 key)
     {
+        std::lock_guard<std::mutex> lock(mMutex);
+        const auto it = mEntries.find(key);
+        if (it != mEntries.end())
         {
-            std::lock_guard<std::mutex> lock(mMutex);
-            const auto it = mEntries.find(key);
-            if (it != mEntries.end())
-            {
-                mBytes -= it->second.mBytes;
-                mEntries.erase(it);
-            }
+            mBytes -= it->second.mBytes;
+            mEntries.erase(it);
         }
-        removeFiles({ pathOf(key) });
+        removeFilesLocked({ pathOf(key) });
     }
 
     bool TileDiskCache::contains(U64 key) const
@@ -1398,13 +1415,9 @@ namespace sknav
 
     void TileDiskCache::setCap(U64 cap_bytes)
     {
-        std::vector<std::string> doomed;
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            mCap = cap_bytes;
-            pruneLocked(doomed);
-        }
-        removeFiles(doomed);
+        std::lock_guard<std::mutex> lock(mMutex);
+        mCap = cap_bytes;
+        pruneLocked();
     }
 
     U64 TileDiskCache::bytes() const
@@ -1425,15 +1438,20 @@ namespace sknav
         return mDoomed.size();
     }
 
-    void TileDiskCache::pruneLocked(std::vector<std::string>& doomed)
+    void TileDiskCache::pruneLocked()
     {
         // Files a remove failed on before are tried again with every prune.
-        doomed.insert(doomed.end(), mDoomed.begin(), mDoomed.end());
-        mDoomed.clear();
-        if (mBytes <= mCap)
+        std::vector<std::string> doomed;
+        doomed.swap(mDoomed);
+        if (mBytes > mCap)
         {
-            return;
+            pruneEntriesLocked(doomed);
         }
+        removeFilesLocked(doomed);
+    }
+
+    void TileDiskCache::pruneEntriesLocked(std::vector<std::string>& doomed)
+    {
         std::vector<std::pair<U64, U64>> order;     // used, key
         order.reserve(mEntries.size());
         for (const auto& e : mEntries)
@@ -1456,19 +1474,19 @@ namespace sknav
 
     void TileDiskCache::removeFiles(const std::vector<std::string>& paths)
     {
-        std::vector<std::string> failed;
+        std::lock_guard<std::mutex> lock(mMutex);
+        removeFilesLocked(paths);
+    }
+
+    void TileDiskCache::removeFilesLocked(const std::vector<std::string>& paths)
+    {
         for (const std::string& path : paths)
         {
             std::error_code ec;
             if (!std::filesystem::remove(pathFromUtf8(path), ec) && ec)
             {
-                failed.push_back(path);
+                mDoomed.push_back(path);
             }
-        }
-        if (!failed.empty())
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            mDoomed.insert(mDoomed.end(), failed.begin(), failed.end());
         }
     }
 
