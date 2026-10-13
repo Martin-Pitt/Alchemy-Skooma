@@ -502,7 +502,8 @@ void SKMapComposite::render(F32 vz)
     // Clears obey the write masks; set them before every clear.
     glDepthMask(GL_TRUE);
     glStencilMask(0xff);
-    glClearColor(0.f, 0.f, 0.f, 1.f);
+    // Transparent where nothing is drawn, so the map shows through to the world behind it.
+    glClearColor(0.f, 0.f, 0.f, 0.f);
     glClearDepth(1.0);
     glClearStencil(0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -947,6 +948,8 @@ void SKMapComposite::draw(const skmap::MapView& view)
     }
     gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mResolveTex, 0);
     gGL.color4f(1.f, 1.f, 1.f, 1.f);
+    // The composite was blended onto transparent black, so its colour is premultiplied.
+    gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
     gGL.begin(LLRender::TRIANGLES);
     for (S32 k : { 0, 1, 2, 0, 2, 3 })
     {
@@ -954,6 +957,7 @@ void SKMapComposite::draw(const skmap::MapView& view)
         gGL.vertex2f(corner[k][0], corner[k][1]);
     }
     gGL.end();
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTextureSlot(0)->unbind();
 }
 
