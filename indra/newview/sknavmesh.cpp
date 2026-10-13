@@ -1801,7 +1801,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mPolySpace.reset();
     tile.mPortalEdges.reset();
     tile.mWallRuns.reset();
-    tile.mWallRunsAt = 0;
+    tile.mWallRunsKey = {};
     mSlotSpaces.erase(tile.mStampSlot);
     tile.mStaticAt = 0.0;
     tile.mStampDue = false;
@@ -2772,7 +2772,9 @@ StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
         return nullptr;
     }
     const Mesh& mesh = *it->second;
-    if (mesh.mStoreys && mesh.mStoreysAt == mRevision)
+    std::vector<U64> inputs;
+    storeyInputs(mesh, inputs);
+    if (mesh.mStoreys && mesh.mStoreysKey == inputs)
     {
         return mesh.mStoreys;
     }
@@ -2819,8 +2821,82 @@ StoreyProductPtr SKNavMesh::storeys(const LLUUID& mesh_id) const
                  },
                  10.f, all);
     mesh.mStoreys = out;
-    mesh.mStoreysAt = mRevision;
+    mesh.mStoreysKey = std::move(inputs);
     return out;
+}
+
+void SKNavMesh::storeyInputs(const Mesh& mesh, std::vector<U64>& out) const
+{
+    // What buildStoreys reads: the Detour tiles, their stamp slots and spaces, their flights, and the rooms.
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    const dtNavMesh* nav = mesh.mNav[c];
+    out.clear();
+    out.reserve(mesh.mTiles.size() * 5 + 2);
+    out.push_back(reinterpret_cast<uintptr_t>(nav));
+    out.push_back(reinterpret_cast<uintptr_t>(mesh.mStampRooms.get()));
+    for (const auto& entry : mesh.mTiles)
+    {
+        const dtMeshTile* dt = nav ? nav->getTileAt(entry.first.mY, entry.first.mX, 0) : nullptr;
+        const auto slot = dt && dt->header ? mSlotSpaces.find(dt->header->userId) : mSlotSpaces.end();
+        out.push_back(dt && dt->header ? nav->getTileRef(dt) : 0);
+        out.push_back(entry.second.mStampSlot);
+        out.push_back(reinterpret_cast<uintptr_t>(entry.second.mPolySpace.get()));
+        out.push_back(slot != mSlotSpaces.end() ? reinterpret_cast<uintptr_t>(slot->second.get()) : 0);
+        out.push_back(reinterpret_cast<uintptr_t>(entry.second.mFlights[c].get()));
+    }
+}
+
+U64 SKNavMesh::mapInputsKey(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max) const
+{
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end())
+    {
+        return 0;
+    }
+    const Mesh& mesh = *it->second;
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    const auto mix = [](U64 h, U64 v) { return (h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2))) * 0xff51afd7ed558ccdULL; };
+    U64 h = mix(reinterpret_cast<uintptr_t>(mesh.mStampEnc.get()), reinterpret_cast<uintptr_t>(mesh.mStampRooms.get()));
+    for (const auto& entry : mesh.mTiles)
+    {
+        const Tile& t = entry.second;
+        if (!overlapsXY(t.mMin, t.mMax, min, max))
+        {
+            continue;
+        }
+        const dtMeshTile* dt = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(entry.first.mY, entry.first.mX, 0) : nullptr;
+        h = mix(h, t.mBuilt ? t.mContentKey : 0);
+        h = mix(h, dt && dt->header ? mesh.mNav[c]->getTileRef(dt) : 0);
+        h = mix(h, t.mAir ? (t.mAirId ? t.mAirId : reinterpret_cast<uintptr_t>(t.mAir.get())) : 0);
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mPolySpace.get()));
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mPortalEdges.get()));
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mSegments[c].get()));
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mLinks[c].get()));
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mFlights[c].get()));
+    }
+    return h;
+}
+
+bool SKNavMesh::terrainTilesIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max) const
+{
+    // The test polysIn's visitor made, without extracting any polygons.
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end() || !it->second->mTerrain)
+    {
+        return false;
+    }
+    const Mesh& mesh = *it->second;
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    bool found = false;
+    visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
+    {
+        if (!found && tile.mBuilt && overlapsXY(tile.mMin, tile.mMax, min, max) && tile.mSegments[c])
+        {
+            const dtMeshTile* dt = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(key.mY, key.mX, 0) : nullptr;
+            found = dt && dt->header;
+        }
+    });
+    return found;
 }
 
 std::vector<ClimbLink> SKNavMesh::climbLinks(const LLUUID& mesh, U32 space) const
@@ -2980,32 +3056,35 @@ std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& 
     {
         return nullptr;
     }
-    // The runs are rebuilt only when what they read changes: the Detour tile, its spaces, the enclosure, the air around it.
-    const EnclosureProductPtr enc = mesh.mStampEnc;
-    U64 inputs = 1469598103934665603ull;
-    const auto mix = [&inputs](U64 v) { inputs = (inputs ^ v) * 1099511628211ull; };
-    mix(static_cast<U64>(nav->getPolyRefBase(dt)));
-    mix(reinterpret_cast<uintptr_t>(tile.mPolySpace.get()));
-    mix(enc->mGeneration);
-    std::vector<WallAir> around;
-    for (S32 dy = -1; dy <= 1; ++dy)
+    // Keyed on exactly what the runs read: the Detour tile, its spaces, the stamp's spaces and the 3x3 air.
+    std::array<U64, 12> inputs{};
+    inputs[0] = nav->getTileRef(dt);
+    inputs[1] = reinterpret_cast<uintptr_t>(tile.mPolySpace.get());
+    inputs[2] = reinterpret_cast<uintptr_t>(mesh.mStampEnc.get());
+    const Tile* around_tiles[9] = {};
+    for (S32 i = 0; i < 9; ++i)
     {
-        for (S32 dx = -1; dx <= 1; ++dx)
+        const auto it = mesh.mTiles.find(TileKey{ key.mX + i % 3 - 1, key.mY + i / 3 - 1 });
+        if (it != mesh.mTiles.end() && it->second.mAir)
         {
-            const auto it = mesh.mTiles.find(TileKey{ key.mX + dx, key.mY + dy });
-            const bool has = it != mesh.mTiles.end() && it->second.mAir;
-            mix(has ? it->second.mAirId : 0);
-            if (has)
-            {
-                around.push_back({ it->second.mAir, enc->tile(it->first) });
-            }
+            around_tiles[i] = &it->second;
+            inputs[3 + i] = it->second.mAirId ? it->second.mAirId : reinterpret_cast<uintptr_t>(it->second.mAir.get());
         }
     }
-    if (tile.mWallRuns && tile.mWallRunsAt == inputs)
+    if (tile.mWallRuns && tile.mWallRunsKey == inputs)
     {
         return tile.mWallRuns;
     }
     LL_PROFILE_ZONE_SCOPED;
+    const EnclosureProductPtr enc = mesh.mStampEnc;
+    std::vector<WallAir> around;
+    for (S32 i = 0; i < 9; ++i)
+    {
+        if (around_tiles[i])
+        {
+            around.push_back({ around_tiles[i]->mAir, enc->tile(TileKey{ key.mX + i % 3 - 1, key.mY + i / 3 - 1 }) });
+        }
+    }
     const WallAirReader reader(std::move(around), [enc](U16 s) { return s <= enc->mSpaceIds.size() ? enc->mSpaceIds[s - 1] : 0u; });
     TileBuildInput params;
     fillParams(params);
@@ -3016,7 +3095,7 @@ std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& 
     auto runs = std::make_shared<std::vector<WallRun>>();
     buildWallRuns(*dt, *tile.mPolySpace, reader, wp, *runs);
     tile.mWallRuns = runs;
-    tile.mWallRunsAt = inputs;
+    tile.mWallRunsKey = inputs;
     return runs;
 }
 
@@ -3082,7 +3161,53 @@ void SKNavMesh::polysIn(const LLVector3d& min, const LLVector3d& max, AgentClass
                 out.mPolySpace = tile.mPolySpace;
                 out.mPortalEdges = tile.mPortalEdges;
             }
+            if (const dtMeshTile* dt_tile = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(key.mY, key.mX, 0) : nullptr)
+            {
+                out.mPolyRefBase = mesh.mNav[c]->getPolyRefBase(dt_tile);
+            }
             fn(out);
+        });
+    }
+}
+
+void SKNavMesh::borderLinksIn(const LLVector3d& min, const LLVector3d& max, AgentClass cls, const BorderLinkFn& fn) const
+{
+    const S32 c = static_cast<S32>(cls);
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        if (!mesh.mNav[c])
+        {
+            continue;
+        }
+        visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
+        {
+            if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max))
+            {
+                return;
+            }
+            const dtMeshTile* dt_tile = mesh.mNav[c]->getTileAt(key.mY, key.mX, 0);
+            if (!dt_tile || !dt_tile->header)
+            {
+                return;
+            }
+            for (S32 i = 0; i < dt_tile->header->polyCount; ++i)
+            {
+                const dtPoly& poly = dt_tile->polys[i];
+                if (poly.getType() != DT_POLYTYPE_GROUND)
+                {
+                    continue;
+                }
+                for (U32 l = poly.firstLink; l != DT_NULL_LINK; l = dt_tile->links[l].next)
+                {
+                    const dtLink& link = dt_tile->links[l];
+                    if (link.side == 0xff)
+                    {
+                        continue;   // an internal link: TilePolys already holds it
+                    }
+                    fn(mesh.mId, key, static_cast<U16>(i), link.edge, link.ref, link.bmin / 255.f, link.bmax / 255.f);
+                }
+            }
         });
     }
 }
