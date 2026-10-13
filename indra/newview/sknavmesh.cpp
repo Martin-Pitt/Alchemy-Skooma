@@ -2058,8 +2058,8 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
         ++mStats.mStampOverflow;
         LL_INFOS("SKNav") << "tile " << key.mX << "," << key.mY << " of mesh " << mesh_id << ": stamp palette over its codes, cascade stage "
                           << static_cast<S32>(result->mStamp.mOverflow) << ", " << result->mStamp.mPairs << " codes" << LL_ENDL;
-        // One colour for everything is a stamp in name only: the stamped tile already there is the better one.
-        if (result->mStamp.mOverflow == TileStamp::ONE_COLOUR && !tile.mDetour[avatar].empty() && tile.mStampGeom)
+        // One colour for everything is a stamp in name only: the stamped tile already there is the better one, if built from this raster.
+        if (result->mStamp.mOverflow == TileStamp::ONE_COLOUR && !tile.mDetour[avatar].empty() && tile.mStampGeom && tile.mStampBuilt == signature)
         {
             return;
         }
