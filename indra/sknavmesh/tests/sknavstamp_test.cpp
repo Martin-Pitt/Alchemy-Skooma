@@ -970,4 +970,67 @@ namespace tut
         ensure_equals("the east poly took its neighbour's space", geom.mPolyComponent[1], 0);
         ensure_equals("one joined", geom.mJoinedPolys, 1u);
     }
+
+    template<> template<>
+    void sknavstamp_object::test<14>()
+    {
+        set_test_name("a tile-seam edge takes a door portal along it, not one crossing it");
+        const ChfPtr chf = floorOf(8, 8, [](S32, S32) { return AREA_CODE_BASE; });
+        std::vector<U32> gaps(chf->spanCount, 0u);
+        TileStamp st;
+        st.mSpanComponent.assign(chf->spanCount, 0);
+        st.mComponentColour = { 1 };
+        for (S32 i = 0; i < chf->spanCount; ++i)
+        {
+            chf->spans[i].reg = 1;
+        }
+        // One 2 m quad; its edge 0 runs along SL y = 0, x 0..2, and lies on the tile's seam.
+        const auto geomWith = [&](const LLVector3& a, const LLVector3& b) {
+            TileStampInput in;
+            in.mGapComponent = { 0 };
+            in.mComponentSpace = { 3 };
+            StampPortal door;
+            door.mA = a;
+            door.mB = b;
+            door.mCentre = (a + b) * 0.5f;
+            door.mSide[0] = 0;
+            door.mSide[1] = 1;
+            door.mKind = static_cast<U8>(PortalKind::DOOR);
+            in.mPortals.push_back(door);
+            rcPolyMesh* pm = rcAllocPolyMesh();
+            pm->nvp = 6;
+            pm->nverts = 4;
+            pm->npolys = 1;
+            pm->maxpolys = 1;
+            pm->cs = 0.25f;
+            pm->ch = 0.25f;
+            rcVcopy(pm->bmin, chf->bmin);
+            rcVcopy(pm->bmax, chf->bmax);
+            const unsigned short verts[12] = { 0, 4, 0, 0, 4, 8, 8, 4, 8, 8, 4, 0 };
+            pm->verts = static_cast<unsigned short*>(rcAlloc(sizeof(verts), RC_ALLOC_PERM));
+            std::copy(verts, verts + 12, pm->verts);
+            pm->polys = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short) * 12, RC_ALLOC_PERM));
+            std::fill(pm->polys, pm->polys + 12, RC_MESH_NULL_IDX);
+            for (unsigned short k = 0; k < 4; ++k)
+            {
+                pm->polys[k] = k;
+            }
+            pm->polys[6 + 0] = 0x8000;
+            pm->regs = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short), RC_ALLOC_PERM));
+            pm->regs[0] = 1;
+            pm->flags = static_cast<unsigned short*>(rcAlloc(sizeof(unsigned short), RC_ALLOC_PERM));
+            pm->flags[0] = 1;
+            pm->areas = static_cast<unsigned char*>(rcAlloc(1, RC_ALLOC_PERM));
+            pm->areas[0] = AREA_CODE_BASE;
+            TileStampGeom geom;
+            stampGeometry(*pm, *chf, 0, gaps, in, st, geom);
+            rcFreePolyMesh(pm);
+            return geom;
+        };
+        const TileStampGeom along = geomWith(LLVector3(0.f, 0.f, 1.f), LLVector3(2.f, 0.f, 1.f));
+        ensure_equals("a door along the seam is on the edge", along.mPortalEdges.size(), size_t(1));
+        ensure_equals("on edge 0", static_cast<S32>(along.mPortalEdges[0].mEdge), 0);
+        const TileStampGeom across = geomWith(LLVector3(1.f, -1.f, 1.f), LLVector3(1.f, 1.f, 1.f));
+        ensure_equals("a door crossing the seam is not", across.mPortalEdges.size(), size_t(0));
+    }
 }

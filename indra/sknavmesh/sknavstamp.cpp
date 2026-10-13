@@ -958,6 +958,8 @@ namespace sknav
                 }
                 const LLVector3 va = at(poly[e]), vb = at(poly[(e + 1) % nv]);
                 const LLVector3 mid = (va + vb) * 0.5f;
+                const F32 ex = vb.mV[VX] - va.mV[VX], ey = vb.mV[VY] - va.mV[VY];
+                const F32 elen = std::sqrt(ex * ex + ey * ey);
                 S32 best = -1;
                 F32 best_d = 0.5f;
                 for (size_t k = 0; k < input.mPortals.size(); ++k)
@@ -967,6 +969,16 @@ namespace sknav
                     if (!sides || std::fabs(mid.mV[VZ] - sp.mCentre.mV[VZ]) > 1.f)
                     {
                         continue;
+                    }
+                    // A seam edge has no space across to vouch for it: it lies on the portal only if it runs along it, within 30 degrees.
+                    if (seam)
+                    {
+                        const F32 px = sp.mB.mV[VX] - sp.mA.mV[VX], py = sp.mB.mV[VY] - sp.mA.mV[VY];
+                        const F32 plen = std::sqrt(px * px + py * py);
+                        if (elen <= 0.f || plen <= 0.f || std::fabs(ex * py - ey * px) > 0.5f * elen * plen)
+                        {
+                            continue;
+                        }
                     }
                     const F32 d = planDistance(mid.mV[VX], mid.mV[VY], sp.mA, sp.mB);
                     if (d <= best_d)
