@@ -2181,6 +2181,40 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     mStats.mLastStampMs = out->mMillis;
     if (out->mKind == StampOutcome::REBIND)
     {
+        // <SK:Nexii> nav/streaming: a tile whose spaces did not move under new rooms keeps its products and revision.
+        const auto same_spaces = [](const auto& a, const auto& b) {
+            if (!a || !b)
+            {
+                return !a && !b;
+            }
+            if (a->size() != b->size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a->size(); ++i)
+            {
+                if ((*a)[i].mSpace[0] != (*b)[i].mSpace[0] || (*a)[i].mSpace[1] != (*b)[i].mSpace[1])
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const TileBinding* was = tile.mBinding.get();
+        const TileBinding& now = *out->mBinding;
+        const bool same = was && was->mComponentSpaceId == now.mComponentSpaceId && was->mPolyFlags == now.mPolyFlags &&
+                          was->mPortalKeys == now.mPortalKeys && was->mPortalIndex == now.mPortalIndex &&
+                          (!out->mSegments || same_spaces(out->mSegments, tile.mSegments[static_cast<S32>(AgentClass::AVATAR)])) &&
+                          (!out->mFaces || same_spaces(out->mFaces, tile.mFaces));
+        if (same)
+        {
+            tile.mStampInput = out->mInput;
+            tile.mBinding = out->mBinding;
+            tile.mStampedBy = rooms;
+            ++mStats.mRebindsQuiet;
+            return;
+        }
+        // </SK:Nexii>
         tile.mStampInput = out->mInput;
         tile.mBinding = out->mBinding;
         tile.mStampedBy = rooms;
@@ -2653,8 +2687,8 @@ bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
-    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
-                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mAwaitingStamp, mStats.mLastStampMs,
+    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds, %u unchanged), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
+                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
     return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",

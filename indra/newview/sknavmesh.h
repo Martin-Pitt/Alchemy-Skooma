@@ -317,6 +317,7 @@ public:
         U32 mStampLoads = 0;        ///< of those, polys found on disk under the stamp's pattern
         U32 mStampReRasters = 0;    ///< of those, rasterised again for want of a held raster
         U32 mRebinds = 0;           ///< tiles whose spaces moved but whose pattern did not: flags only
+        U32 mRebindsQuiet = 0;      ///< <SK:Nexii> nav/streaming: rebinds that moved nothing, so no revision
         U32 mStampOverflow = 0;     ///< stamps whose palette went down the cascade (sknavstamp.h)
         U32 mPolyOverflowTiles = 0; ///< polys over a Detour tile's budget: not published
         U32 mUnstampedPublishes = 0;    ///< tiles with air published without a stamp; should stay 0
