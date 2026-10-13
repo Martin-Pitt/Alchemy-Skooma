@@ -237,9 +237,13 @@ public:
 
     /// Every built mesh, tile, polygon, segment, link and face to one JSON
     /// file in the logs folder, for reading offline: the mini-map's test
-    /// fixtures, and evidence attached to a report. Returns a line for the
-    /// console with the counts, the size and the full path.
-    std::string exportAll() const;
+    /// fixtures, and evidence attached to a report. Written once no spaces
+    /// are pending and every tile is stamped against the spaces landed, so
+    /// one file holds one generation of them. Returns a line for the console
+    /// with the counts, the size and the full path, or that it waits.
+    std::string exportAll();
+    /// The last line exportAll gave, updated when a waiting export is written.
+    const std::string& exportStatus() const { return mExportStatus; }
 
     /// What every tile is built from, to logs/sknav-census-<UTC>.json:
     /// the census's records, clusters, doors, features and spans, each
@@ -586,6 +590,12 @@ private:
     U32 polySpace(const dtMeshTile* tile, U32 poly) const;
     /// A Detour tile's polys' space ids, for the space filter.
     sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
+    /// Tiles still to be stamped against their mesh's landed spaces, a mesh with spaces pending counting one.
+    U32 stampsUnsettled() const;
+    std::string writeExport() const;
+    bool mExportPending = false;
+    F64 mExportAsked = 0.0;
+    std::string mExportStatus;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
     /// Forget a retiring mesh's tiles' entries in mSlotSpaces.
     void dropSlots(const Mesh& mesh);

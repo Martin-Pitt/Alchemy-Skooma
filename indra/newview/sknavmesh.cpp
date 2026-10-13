@@ -2384,6 +2384,21 @@ void SKNavMesh::update()
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tiles");
         stampTiles();
     }
+    // A waiting export writes once the stamps settle, or after a minute as they stand.
+    if (mExportPending)
+    {
+        const U32 waiting = stampsUnsettled();
+        if (!waiting || LLTimer::getTotalSeconds() - mExportAsked > 60.0)
+        {
+            mExportPending = false;
+            mExportStatus = writeExport();
+            if (waiting)
+            {
+                mExportStatus += llformat(" (%u tiles still stamping)", waiting);
+            }
+            LL_INFOS("SKNavExport") << mExportStatus << LL_ENDL;
+        }
+    }
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - air residency");
         updateResidency();
@@ -4136,7 +4151,46 @@ namespace
     }
 }
 
-std::string SKNavMesh::exportAll() const
+U32 SKNavMesh::stampsUnsettled() const
+{
+    U32 waiting = 0;
+    for (const auto& entry : mMeshes)
+    {
+        const Mesh& mesh = *entry.second;
+        EnclosureProductPtr enc;
+        RoomsProductPtr rooms;
+        if (mRooms->passPending(mesh.mId) || (mRooms->landed(mesh.mId, enc, rooms) && rooms != mesh.mStampRooms))
+        {
+            ++waiting;
+            continue;
+        }
+        for (const auto& t : mesh.mTiles)
+        {
+            waiting += t.second.mStampDue || t.second.mStampInFlight ? 1 : 0;
+        }
+    }
+    return waiting;
+}
+
+std::string SKNavMesh::exportAll()
+{
+    const U32 waiting = stampsUnsettled();
+    if (waiting)
+    {
+        if (!mExportPending)
+        {
+            mExportPending = true;
+            mExportAsked = LLTimer::getTotalSeconds();
+        }
+        mExportStatus = llformat("waiting for %u tiles to be stamped against their spaces; the export writes when they land", waiting);
+        return mExportStatus;
+    }
+    mExportPending = false;
+    mExportStatus = writeExport();
+    return mExportStatus;
+}
+
+std::string SKNavMesh::writeExport() const
 {
     // Written straight to the file rather than through an LLSD tree: a built
     // region is hundreds of thousands of numbers, and holding them as LLSD
