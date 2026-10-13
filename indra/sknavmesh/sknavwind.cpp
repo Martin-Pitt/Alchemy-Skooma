@@ -548,8 +548,13 @@ namespace sknav
         const F32 rad = heading_deg * DEG_TO_RAD;
         const LLVector2 wd(std::cos(rad), std::sin(rad)), pp(-wd.mV[VY], wd.mV[VX]);
         const F32 ox = f.mOrigin.mV[VX], oy = f.mOrigin.mV[VY];
+        // Dividing by a power of two is multiplying by its reciprocal, exactly.
+        S32 cell_exp = 0;
+        const bool pow2 = std::frexp(cell, &cell_exp) == 0.5f;
+        const F32 per_cell = 1.f / cell;
         auto index = [&](F32 x, F32 y) -> S32 {
-            const S32 ix = static_cast<S32>(std::floor((x - ox) / cell)), iy = static_cast<S32>(std::floor((y - oy) / cell));
+            const F32 fx = pow2 ? (x - ox) * per_cell : (x - ox) / cell, fy = pow2 ? (y - oy) * per_cell : (y - oy) / cell;
+            const S32 ix = static_cast<S32>(std::floor(fx)), iy = static_cast<S32>(std::floor(fy));
             return ix < 0 || iy < 0 || ix >= w || iy >= h ? -1 : ix + iy * w;
         };
         auto blocked = [&](S32 i) { return (f.mFlags[i] & WindCell::BLOCKED) != 0; };
@@ -558,6 +563,21 @@ namespace sknav
         SK_NAV_ZONE("nav.wind.slab.lee");
         std::vector<F32> lee(n, 1.f), width(n, 0.f);
         const F32 cap = params.mLeeCapM;
+        // Per cell, what the marches read: the cells a march skips from an open one, nothing on a blocked one, and
+        // a blocked one's lee length.
+        std::vector<S32> hop(n);
+        std::vector<F32> lee_len(n, 0.f);
+        for (size_t j = 0; j < n; ++j)
+        {
+            if (f.mFlags[j] & WindCell::BLOCKED)
+            {
+                lee_len[j] = std::min(params.mLeePerHeight * std::max(f.mSolid[j], params.mLeeMinHeightM), cap);
+            }
+            else
+            {
+                hop[j] = skip(f.mReach[j]);
+            }
+        }
         for (S32 y = 0; y < h; ++y)
         {
             for (S32 x = 0; x < w; ++x)
@@ -577,15 +597,14 @@ namespace sknav
                     {
                         break;      // the raster is convex: nothing further is on it
                     }
-                    if (blocked(j))
+                    if (!hop[j])
                     {
-                        const F32 len = std::min(params.mLeePerHeight * std::max(f.mSolid[j], params.mLeeMinHeightM), cap);
-                        best = std::min(best, s / len);
+                        best = std::min(best, s / lee_len[j]);
                         s += cell;
                     }
                     else
                     {
-                        s += skip(f.mReach[j]) * cell;
+                        s += hop[j] * cell;
                     }
                 }
                 lee[i] = best;
@@ -602,12 +621,12 @@ namespace sknav
                         {
                             break;
                         }
-                        if (blocked(j))
+                        if (!hop[j])
                         {
                             span = s;
                             break;
                         }
-                        s += skip(f.mReach[j]) * cell;
+                        s += hop[j] * cell;
                     }
                     sum += span;
                 }
