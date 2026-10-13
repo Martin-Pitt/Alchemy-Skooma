@@ -3302,7 +3302,39 @@ namespace sknav
                 unite(first.emplace(mSeedLabel[s], s).first->second, s);
             }
         }
-        // Nor does it part seeds an earlier pass joined, while both their tiles stand.
+        // A kept seed of a ring tile is in the basin the cut's watershed labelled its gaps with:
+        // seeds of ring tiles in one basin are one region, as a full pass would cut them.
+        std::unordered_map<U32, S32> ring_label;
+        for (const auto& shadow : mShadow)
+        {
+            for (const auto& [where, label] : shadow)
+            {
+                const U32 t = static_cast<U32>(where >> 32);
+                const TileInfo& ti = mTiles[t];
+                const U32 gap = static_cast<U32>(where);
+                if (ti.mBatch >= 0 || gap >= ti.mRooms.mSeeds.size() || !ti.mRooms.mSeeds[gap])
+                {
+                    continue;
+                }
+                const U32 s = ti.mSeedBase + ti.mRooms.mSeeds[gap] - 1;
+                ring_label.emplace(s, label);
+            }
+        }
+        std::vector<std::pair<S32, U32>> ring_seeds;
+        for (const auto& [s, label] : ring_label)
+        {
+            ring_seeds.emplace_back(label, s);
+        }
+        std::sort(ring_seeds.begin(), ring_seeds.end());
+        for (const auto& [label, s] : ring_seeds)
+        {
+            const auto it = first.emplace(label, s).first;
+            if (it->second != s)
+            {
+                unite(it->second, s);
+            }
+        }
+        // Nor does it part seeds an earlier pass joined, while both their tiles stand and no basin now parts them.
         if (mInput->mPrevious)
         {
             for (const SeedLink& l : mInput->mPrevious->mLinks)
@@ -3318,7 +3350,13 @@ namespace sknav
                 {
                     continue;
                 }
-                unite(ta.mSeedBase + l.mSeedA - 1, tb.mSeedBase + l.mSeedB - 1);
+                const U32 sa = ta.mSeedBase + l.mSeedA - 1, sb = tb.mSeedBase + l.mSeedB - 1;
+                const auto la = ring_label.find(sa), lb = ring_label.find(sb);
+                if (la != ring_label.end() && lb != ring_label.end() && la->second != lb->second)
+                {
+                    continue;
+                }
+                unite(sa, sb);
             }
         }
     }
