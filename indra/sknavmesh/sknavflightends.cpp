@@ -147,17 +147,65 @@ namespace sknav
         }
     }
 
+    void PlanBoxIndex::add(U32 id, F32 x0, F32 y0, F32 x1, F32 y1)
+    {
+        for (S32 cy = cellOf(y0), cy1 = cellOf(y1); cy <= cy1; ++cy)
+        {
+            for (S32 cx = cellOf(x0), cx1 = cellOf(x1); cx <= cx1; ++cx)
+            {
+                mCells[cellKey(cx, cy)].push_back(id);
+            }
+        }
+    }
+
+    void PlanBoxIndex::query(F32 x0, F32 y0, F32 x1, F32 y1, std::vector<U32>& out) const
+    {
+        out.clear();
+        for (S32 cy = cellOf(y0), cy1 = cellOf(y1); cy <= cy1; ++cy)
+        {
+            for (S32 cx = cellOf(x0), cx1 = cellOf(x1); cx <= cx1; ++cx)
+            {
+                const auto it = mCells.find(cellKey(cx, cy));
+                if (it != mCells.end())
+                {
+                    out.insert(out.end(), it->second.begin(), it->second.end());
+                }
+            }
+        }
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    }
+
+    bool homeCopy(const dtMeshTile* tile, const Flight& f)
+    {
+        if (!tile || !tile->header || f.mFootprint.empty())
+        {
+            return f.mEroded;
+        }
+        LLVector2 mid;
+        for (const LLVector2& p : f.mFootprint)
+        {
+            mid += p / static_cast<F32>(f.mFootprint.size());
+        }
+        const LLVector3 b0 = fromRecast(tile->header->bmin), b1 = fromRecast(tile->header->bmax);
+        return mid.mV[VX] >= std::min(b0.mV[VX], b1.mV[VX]) && mid.mV[VX] < std::max(b0.mV[VX], b1.mV[VX]) &&
+               mid.mV[VY] >= std::min(b0.mV[VY], b1.mV[VY]) && mid.mV[VY] < std::max(b0.mV[VY], b1.mV[VY]);
+    }
+
     void flightEnds(const dtNavMesh& nav, const std::vector<const Flight*>& flights, const PolyFlightFn& flight_of, std::vector<FlightEnds>& out)
     {
         out.clear();
-        std::map<U64, const Flight*> by_key;
+        // A flight split across tiles has a copy in each, each fitted to its own tile: the home tile's copy is read.
+        std::map<U64, std::pair<const Flight*, bool>> by_key;
         for (const Flight* f : flights)
         {
             if (f)
             {
-                by_key.emplace(f->mKey, f);
+                by_key.emplace(f->mKey, std::make_pair(f, f->mEroded));
             }
         }
+        std::unordered_map<const Flight*, bool> home_of;
+        PlanBoxIndex index;
         std::vector<Info> polys;
         std::unordered_map<U64, std::vector<size_t>> own;
         std::unordered_map<U64, U64> key_of_ref;
@@ -188,7 +236,16 @@ namespace sknav
                 {
                     in.mFlight = f->mKey;
                     in.mOwned = true;
-                    by_key.emplace(f->mKey, f);
+                    const auto hc = home_of.try_emplace(f, false);
+                    if (hc.second)
+                    {
+                        hc.first->second = homeCopy(tile, *f);
+                    }
+                    auto& slot = by_key.try_emplace(f->mKey, std::make_pair(f, hc.first->second)).first->second;
+                    if (!slot.second && hc.first->second)
+                    {
+                        slot = std::make_pair(f, true);
+                    }
                     own[f->mKey].push_back(polys.size());
                     key_of_ref[in.mRef] = f->mKey;
                 }
@@ -202,6 +259,7 @@ namespace sknav
                     in.mX1 = std::max(in.mX1, a.mV[VX]);
                     in.mY1 = std::max(in.mY1, a.mV[VY]);
                 }
+                index.add(static_cast<U32>(polys.size()), in.mX0, in.mY0, in.mX1, in.mY1);
                 polys.push_back(in);
             }
         }
@@ -209,8 +267,10 @@ namespace sknav
             return std::any_of(tiles.begin(), tiles.end(), [x, y](const Box& b) { return x >= b.mX0 && x <= b.mX1 && y >= b.mY0 && y <= b.mY1; });
         };
 
-        for (const auto& [key, f] : by_key)
+        std::vector<U32> near_ids;
+        for (const auto& [key, copy] : by_key)
         {
+            const Flight* f = copy.first;
             FlightEnds fe;
             fe.mFlight = key;
             const LLVector3 a[2] = { f->mBottomA, f->mTopA }, b[2] = { f->mBottomB, f->mTopB };
@@ -259,8 +319,10 @@ namespace sknav
                     }
                     const F32 x0 = std::min(a[e].mV[VX], b[e].mV[VX]) - reach, x1 = std::max(a[e].mV[VX], b[e].mV[VX]) + reach;
                     const F32 y0 = std::min(a[e].mV[VY], b[e].mV[VY]) - reach, y1 = std::max(a[e].mV[VY], b[e].mV[VY]) + reach;
-                    for (const Info& in : polys)
+                    index.query(x0, y0, x1, y1, near_ids);
+                    for (const U32 id : near_ids)
                     {
+                        const Info& in = polys[id];
                         if ((in.mOwned && in.mFlight == key) || in.mX1 < x0 || in.mX0 > x1 || in.mY1 < y0 || in.mY0 > y1)
                         {
                             continue;
