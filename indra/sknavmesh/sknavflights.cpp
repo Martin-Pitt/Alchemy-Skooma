@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavflights.h"
+#include "sknavprofile.h"
 
 #include "llstring.h"
 
@@ -158,6 +159,7 @@ namespace
         void build(const std::vector<LLVector3>& verts, const std::vector<S32>& tris, const std::vector<U8>& areas,
                    const std::vector<U8>& two_sided, U8 part_area)
         {
+            SK_NAV_ZONE("nav.flights.build.weld");
             // weld on the millimetre, across the whole soup
             std::unordered_map<WeldKey, S32, WeldHash> key;
             std::vector<S32> remap(verts.size());
@@ -174,6 +176,7 @@ namespace
                 }
                 remap[i] = it->second;
             }
+            SK_NAV_ZONE("nav.flights.build.tris");
             const S32 n = static_cast<S32>(tris.size() / 3);
             mT.resize(tris.size());
             mValid.assign(n, 0);
@@ -227,7 +230,11 @@ namespace
                     mEdges.emplace_back((static_cast<U64>(std::min(i, j)) << 32) | static_cast<U64>(std::max(i, j)), t);
                 }
             }
-            std::sort(mEdges.begin(), mEdges.end());
+            {
+                SK_NAV_ZONE("nav.flights.build.sort");
+                std::sort(mEdges.begin(), mEdges.end());
+            }
+            SK_NAV_ZONE("nav.flights.build.grid");
             buildGrid();
         }
 
@@ -777,6 +784,7 @@ namespace
                          const std::vector<U8>& cues, const std::vector<S32>& sources, const std::vector<std::pair<S32, S32>>& level_links,
                          F64 max_grade_deg, std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.flights.connectors");
         // Per source record: its walkable area facing up, and its extent in plan.
         S32 nsources = 0;
         for (const S32 s : sources)
@@ -1321,6 +1329,7 @@ namespace sknav
                                    const std::vector<U8>& two_sided, U8 partitioned_area, F32 climb, F32 walk_slope_deg, S32 max_codes,
                                    const std::vector<U8>& cues, const std::vector<S32>& sources)
     {
+        SK_NAV_ZONE("nav.flights.partition");
         SlopePartition out;
         Partitioner P;
         P.mCosTurn = std::cos(SLOPE_TURN_DEG * DEG_TO_RAD);
@@ -1329,6 +1338,7 @@ namespace sknav
         const S32 n = P.ntris();
 
         // 1. groups: flood over shared edges within the crease angle
+        SK_NAV_ZONE("nav.flights.candidates");
         P.eachEdge([&](U64, size_t s, size_t e) {
             for (size_t a = s; a < e; ++a)
             {
@@ -1344,6 +1354,7 @@ namespace sknav
         });
 
         // coplanar neighbours that share no vertices (separate prims) join too
+        SK_NAV_ZONE("nav.flights.merge");
         std::vector<S32> g_of = P.groupsOf();
         std::vector<Boundary> edges;
         P.boundaries(g_of, edges);
@@ -1410,6 +1421,7 @@ namespace sknav
         }
 
         // 2. level groups are treads or landings
+        SK_NAV_ZONE("nav.flights.kinds");
         enum Kind : U8 { SLOPE = SLOPE_GROUP, LANDING = LANDING_GROUP, TREAD = TREAD_GROUP };
         std::vector<U8> kind(ngroups, SLOPE);
         for (S32 g = 0; g < ngroups; ++g)
@@ -1630,6 +1642,7 @@ namespace sknav
 
     void mapFlightPolys(std::vector<Flight>& flights, const std::vector<LLVector3>& centroids, const std::vector<U8>& codes, F32 climb)
     {
+        SK_NAV_ZONE("nav.flights.mappolys");
         for (Flight& f : flights)
         {
             f.mPolys.clear();
@@ -1656,6 +1669,7 @@ namespace sknav
     void fitFlightEdges(std::vector<Flight>& flights, const std::vector<std::vector<LLVector3>>& polys, F32 radius, const LLVector2& lo,
                         const LLVector2& hi)
     {
+        SK_NAV_ZONE("nav.flights.fitedges");
         const auto on_edge = [&](const LLVector3& v) {
             return v.mV[VX] - lo.mV[VX] < 0.05f || hi.mV[VX] - v.mV[VX] < 0.05f || v.mV[VY] - lo.mV[VY] < 0.05f || hi.mV[VY] - v.mV[VY] < 0.05f;
         };
@@ -1761,6 +1775,7 @@ namespace sknav
 
     void markFlights(AirGrid& grid, const std::vector<Flight>& flights)
     {
+        SK_NAV_ZONE("nav.flights.mark");
         for (const Flight& f : flights)
         {
             // a climb links levels through the mesh alone, with no stair portal

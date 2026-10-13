@@ -27,6 +27,7 @@
 #include "sknavwind.h"
 
 #include "sknavbuild.h"
+#include "sknavprofile.h"
 
 #include "llmath.h"
 
@@ -52,6 +53,7 @@ namespace sknav
         /// The 8-neighbour chamfer from blocked cells, scaled down to a lower bound on the true distance.
         void reachField(WindField& f)
         {
+            SK_NAV_ZONE("nav.wind.reach");
             const S32 w = f.mWidth, h = f.mHeight;
             const F32 inf = static_cast<F32>(w + h) * 2.f;
             f.mReach.assign(static_cast<size_t>(w) * h, inf);
@@ -102,6 +104,7 @@ namespace sknav
         /// A separable Gaussian over the valid cells only, normalised by their weight; edges repeat.
         void smooth(std::vector<F32>& v, const std::vector<F32>& weight, S32 w, S32 h, F32 sigma_cells)
         {
+            SK_NAV_ZONE("nav.wind.smooth");
             const S32 r = static_cast<S32>(3.f * sigma_cells);
             std::vector<F32> k(2 * r + 1);
             F32 sum = 0.f;
@@ -203,6 +206,7 @@ namespace sknav
 
     WindFieldPtr buildWindField(const EnclosureProduct& enclosure, const RoomsProduct* rooms, const WindLevel& level, const WindParams& params)
     {
+        SK_NAV_ZONE("nav.wind.field");
         auto f = std::make_shared<WindField>();
         f->mCell = params.mCellM;
         f->mLevel = level;
@@ -252,6 +256,7 @@ namespace sknav
             }
         };
         // Each leaf's gaps over its cells, looked up once per tile.
+        SK_NAV_ZONE("nav.wind.field.leaves");
         std::vector<std::vector<S32>> leafOf(enclosure.mTiles.size());
         for (size_t ti = 0; ti < enclosure.mTiles.size(); ++ti)
         {
@@ -283,6 +288,7 @@ namespace sknav
         AirColumn col;
 
         // The ground: the lowest terrain floor, else carried from the nearest one.
+        SK_NAV_ZONE("nav.wind.field.ground");
         f->mZ.assign(n, none);
         if (level.mAbsolute)
         {
@@ -339,6 +345,7 @@ namespace sknav
         }
 
         // The slab through every fine cell: in air, or in a solid of some height.
+        SK_NAV_ZONE("nav.wind.field.slab");
         std::vector<U16> covered(n, 0), solid(n, 0);
         std::vector<const TileEnclosure*> repTile(n, nullptr);
         std::vector<U32> repGap(n, 0);
@@ -406,6 +413,7 @@ namespace sknav
         // Courtyards: open spaces whose edge at the slab is mostly solid.
         if (rooms)
         {
+            SK_NAV_ZONE("nav.wind.field.courts");
             const size_t spaces = rooms->mSpaces.size();
             std::vector<U32> cells(spaces, 0), edge(spaces, 0), walled(spaces, 0);
             std::vector<F32> top(spaces, 0.f);      ///< summed over walled edge cells: the wall's top
@@ -474,6 +482,7 @@ namespace sknav
 
     std::shared_ptr<WindSlab> computeWindSlab(const WindField& f, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params)
     {
+        SK_NAV_ZONE("nav.wind.slab");
         auto slab = std::make_shared<WindSlab>();
         slab->mOrigin = f.mOrigin;
         slab->mCell = f.mCell;
@@ -497,6 +506,7 @@ namespace sknav
         auto blocked = [&](S32 i) { return (f.mFlags[i] & WindCell::BLOCKED) != 0; };
 
         // Lee: the least of s / min(8 h, cap) over solids s upwind.
+        SK_NAV_ZONE("nav.wind.slab.lee");
         std::vector<F32> lee(n, 1.f), width(n, 0.f), weight(n, 0.f);
         const F32 cap = params.mLeeCapM;
         for (S32 y = 0; y < h; ++y)
@@ -559,6 +569,7 @@ namespace sknav
         smooth(width, weight, w, h, params.mSmoothM / cell);
 
         // Venturi, calm indoors, damped and swirling courtyards.
+        SK_NAV_ZONE("nav.wind.slab.venturi");
         const F32 fu = 1.f / WIND_FACTOR_UNIT, du = 1.f / WIND_DEFLECT_UNIT;
         auto put = [&](WindCell& c, F32 speed, const LLVector2& deflect) {
             c.mFactor = static_cast<U8>(std::clamp<S32>(static_cast<S32>(std::lround(speed * fu)), 0, 255));
@@ -611,6 +622,7 @@ namespace sknav
         // Draughts through portals whose sides differ in S, where the slab crosses them.
         if (rooms)
         {
+            SK_NAV_ZONE("nav.wind.slab.draughts");
             for (const Portal& p : rooms->mPortals)
             {
                 if (p.mSpaces[0] >= rooms->mSpaces.size() || p.mSpaces[1] >= rooms->mSpaces.size())

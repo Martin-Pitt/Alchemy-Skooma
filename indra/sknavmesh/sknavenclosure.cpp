@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavenclosure.h"
+#include "sknavprofile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -138,6 +139,7 @@ namespace
         bool step(std::vector<U32>& dist, const std::vector<U32>& start, const std::vector<GraphArc>& arcs, U8 mask, ADMIT admit, REACHED reached,
                   S64& budget)
         {
+            SK_NAV_ZONE("nav.enclosure.flood");
             while (budget > 0)
             {
                 if (mQueued == 0 && mAt == 0)
@@ -466,6 +468,7 @@ namespace sknav
 
     void EnclosurePass::State::prepare()
     {
+        SK_NAV_ZONE("nav.enclosure.prepare");
         const EnclosureParams& p = params();
         const EnclosureInput& in = *mInput;
         mProduct = std::make_shared<EnclosureProduct>();
@@ -568,6 +571,7 @@ namespace sknav
 
     void EnclosurePass::State::graphTile(size_t t)
     {
+        SK_NAV_ZONE("nav.enclosure.graph");
         const TileAir& a = air(t);
         const S32 w = a.mWidth, h = a.mHeight;
         // Leaves are stored coarsest first over a cell, so each cell ends up with its finest.
@@ -649,6 +653,7 @@ namespace sknav
 
     void EnclosurePass::State::seamTile(size_t t)
     {
+        SK_NAV_ZONE("nav.enclosure.seam");
         // Across the +x and +y seams, gap by gap along the neighbours' level-0
         // strips: the strip's k-th gap is the column's k-th. The key only
         // finds the leaves; a cell whose counts disagree is skipped.
@@ -720,6 +725,7 @@ namespace sknav
 
     void EnclosurePass::State::finishGraph()
     {
+        SK_NAV_ZONE("nav.enclosure.finish");
         const size_t n = mNodeFlags.size();
         mStart.assign(n + 1, 0);
         for (const GraphEdge& e : mEdges)
@@ -847,6 +853,7 @@ namespace sknav
 
     void EnclosurePass::State::answerTile(size_t t)
     {
+        SK_NAV_ZONE("nav.enclosure.answer");
         const EnclosureInput& in = *mInput;
         const EnclosureParams& p = params();
         const TileAir& a = air(t);
@@ -913,6 +920,7 @@ namespace sknav
 
     void EnclosurePass::State::coarseTile(size_t t)
     {
+        SK_NAV_ZONE("nav.enclosure.coarse");
         const TileAir& a = air(t);
         TileEnclosure& out = mProduct->mTiles[t];
         CoarseAir& c = out.mCoarse;
@@ -1061,6 +1069,7 @@ namespace sknav
             case STAGE_SKY:
                 if (!mStarted)
                 {
+                    SK_NAV_ZONE("nav.enclosure.sky");
                     const EnclosureParams& p = params();
                     std::vector<std::pair<U32, U32>> seeds;
                     // Per 2 m square of the tile, the covers read there, by whole metre of height.
@@ -1245,6 +1254,7 @@ namespace sknav
                 // Else the walkable gap straight below it, through no more than a climb of solid, in any column under it.
                 for (size_t t = 0; t < tiles; ++t)
                 {
+                    SK_NAV_ZONE("nav.enclosure.below");
                     const TileAir& a = air(t);
                     AirColumn column;
                     for (const AirLeaf& leaf : a.mLeaves)
@@ -1325,6 +1335,7 @@ namespace sknav
 
     bool EnclosurePass::step(U32 budget)
     {
+        SK_NAV_ZONE("nav.enclosure.step");
         State& s = *mState;
         S64 left = budget;
         while (s.mStage != STAGE_DONE && left > 0)
