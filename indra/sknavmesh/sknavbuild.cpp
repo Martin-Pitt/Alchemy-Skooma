@@ -2484,7 +2484,7 @@ namespace sknav
         TileAirPtr coarseAirOf(const TileBuildInput& input, const TileSoup& ts)
         {
             const S32 factor = static_cast<S32>(std::lround(COARSE_AIR_M / std::max(input.mCell, 1e-3f)));
-            if (factor < 1 || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
+            if (factor < 1 || (factor & (factor - 1)) || std::fabs(factor * input.mCell - COARSE_AIR_M) > 1e-4f)
             {
                 return nullptr;
             }

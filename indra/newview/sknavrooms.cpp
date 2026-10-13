@@ -40,6 +40,7 @@
 #include "skworldcensus.h"
 #include "workqueue.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -624,6 +625,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             MeshState& state = mMeshes[mesh.mId];
             state.mId = mesh.mId;
             state.mOrigin = mesh.mOrigin;
+            state.mPriority = navmesh.meshPriority(mesh);
             // The doors and lifts over it cut its spaces too.
             U64 doors = SEED;
             if (sig != SEED)
@@ -681,10 +683,21 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         }
     }
 
+    // The one rooms thread serves the agent's region first: collect what is
+    // ready, then post in the navmesh's order rather than the map's.
+    std::vector<MeshState*> ready;
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
         if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
+        {
+            ready.push_back(&state);
+        }
+    }
+    std::stable_sort(ready.begin(), ready.end(), [](const MeshState* a, const MeshState* b) { return a->mPriority < b->mPriority; });
+    for (MeshState* statep : ready)
+    {
+        MeshState& state = *statep;
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post");
             if (state.mAirSignature == SEED)

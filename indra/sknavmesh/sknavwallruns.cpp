@@ -383,9 +383,10 @@ namespace sknav
                         }
                     }
                     run.mFace = face_n ? static_cast<F32>(face_sum / face_n) : -1.f;
-                    run.mFar = far_n ? static_cast<F32>(far_sum / far_n) : -1.f;
-                    run.mDepth = depth_n ? static_cast<F32>(depth_sum / depth_n) : -1.f;
                     run.mThick = thick_n > far_n;
+                    // A thick run is drawn with no back face, so it has none.
+                    run.mFar = far_n && !run.mThick ? static_cast<F32>(far_sum / far_n) : -1.f;
+                    run.mDepth = depth_n && !run.mThick ? static_cast<F32>(depth_sum / depth_n) : -1.f;
                     run.mFloorZ = n ? static_cast<F32>(floor_sum / n) : 0.f;
                     std::sort(run.mPolys.begin(), run.mPolys.end());
                     run.mPolys.erase(std::unique(run.mPolys.begin(), run.mPolys.end()), run.mPolys.end());
@@ -422,7 +423,7 @@ namespace sknav
                         }
                         close();
                     }
-                    if (run.mLine.empty() || run.mLine.back() != e.mPts[k])
+                    if (run.mLine.empty())
                     {
                         run.mLine.push_back(e.mPts[k]);
                     }
@@ -494,6 +495,8 @@ namespace sknav
                     tail.mFar = blend(tail.mFar, head.mFar);
                     tail.mDepth = blend(tail.mDepth, head.mDepth);
                     tail.mThick = nh > nt ? head.mThick : tail.mThick;
+                    tail.mFar = tail.mThick ? -1.f : tail.mFar;
+                    tail.mDepth = tail.mThick ? -1.f : tail.mDepth;
                     tail.mFloorZ = (tail.mFloorZ * nt + head.mFloorZ * nh) / (nt + nh);
                     tail.mPolys.insert(tail.mPolys.end(), head.mPolys.begin(), head.mPolys.end());
                     std::sort(tail.mPolys.begin(), tail.mPolys.end());

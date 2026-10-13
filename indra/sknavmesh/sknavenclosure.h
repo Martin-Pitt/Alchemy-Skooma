@@ -75,7 +75,7 @@ namespace sknav
         U8 mBucket = static_cast<U8>(EnclosureBucket::UNKNOWN);
         U8 mFlags = 0;              ///< ENCLOSURE_SEALED
         U8 mCover = 0;              ///< share of the sky roofed over, walls aside, in 1/255
-        U8 mOpen = 0;               ///< O, the share of spokes no wall crosses at eye height, in 1/255; 0 unread
+        U8 mOpen = 0;               ///< O, the share of spokes no wall crosses at eye height on their way under open sky, in 1/255; 0 unread
     };
 
     /// A 1 m cell's gaps as a far reader needs them, kept when detail is not.

@@ -536,6 +536,11 @@ namespace tut
         ensure("foot space first, then the top's", l.mSpace[0] == ground && l.mSpace[1] == deck_id);
         ensure("the climb's, at its ends", l.mFlight == climb->mKey && dist_vec(l.mFoot, climb->mBottom) < 1e-4f && dist_vec(l.mTop, climb->mTop) < 1e-4f);
         ensure("found by either space", apart.climbLinksOf(ground).size() == 1 && apart.climbLinksOf(deck_id).size() == 1 && apart.climbLinksOf(7u).empty());
+        // A climb makes no portal, so no seam either where its polys meet the deck's.
+        for (const SeamPortal& sp : apart.mSeamPortals)
+        {
+            ensure("no seam across the climb", !(sp.mSpace[0] == std::min(ground, deck_id) && sp.mSpace[1] == std::max(ground, deck_id)));
+        }
     }
 
     template<> template<>

@@ -31,6 +31,17 @@
 
 namespace sknav
 {
+    bool sameTops(const TileAir& a, const TileAir& b)
+    {
+        if (a.mOrigin != b.mOrigin || a.mCell != b.mCell || a.mUnit != b.mUnit || a.mTopCell != b.mTopCell ||
+            a.mTopWidth != b.mTopWidth || a.mTopHeight != b.mTopHeight || a.mTopStart != b.mTopStart || a.mTop.size() != b.mTop.size())
+        {
+            return false;
+        }
+        return std::equal(a.mTop.begin(), a.mTop.end(), b.mTop.begin(),
+                          [](const TopInterval& x, const TopInterval& y) { return x.mBottom == y.mBottom && x.mTop == y.mTop; });
+    }
+
     const std::vector<SkyMap::Interval>* SkyMap::find(S64 x, S64 y) const
     {
         const auto b = mBlocks.find(blockKey(x, y));
@@ -172,8 +183,9 @@ namespace sknav
     namespace
     {
         /// The share of 16 spokes out of pos no column standing through pos's
-        /// height crosses within SIDE_OPEN_REACH_M, read a metre at a time
-        /// along each so no wall is stepped over, stopping at the first.
+        /// height crosses within SIDE_OPEN_REACH_M and that pass under open
+        /// sky on the way, read a metre at a time along each so no wall is
+        /// stepped over, stopping at the first.
         template<typename AT>
         F32 sides(const AT& at, const LLVector3d& pos)
         {
@@ -190,7 +202,7 @@ namespace sknav
             }();
             (void)init;
             const F64 z = pos.mdV[VZ];
-            auto wall = [&](F64 x, F64 y) {
+            auto wall = [&](F64 x, F64 y, bool& sky) {
                 if (const std::vector<SkyMap::Interval>* cell = at(static_cast<S64>(std::floor(x)), static_cast<S64>(std::floor(y))))
                 {
                     for (const SkyMap::Interval& i : *cell)
@@ -199,6 +211,7 @@ namespace sknav
                         {
                             return true;
                         }
+                        sky = sky && i.mBottom <= z;
                     }
                 }
                 return false;
@@ -206,12 +219,15 @@ namespace sknav
             S32 open = 0;
             for (S32 j = 0; j < SPOKES; ++j)
             {
-                bool walled = false;
+                // A spoke roofed all the way out is a hall too wide to see across, not a canopy's open side.
+                bool walled = false, seen_sky = false;
                 for (F64 r = 0.5; r < SIDE_OPEN_REACH_M && !walled; r += 1.0)
                 {
-                    walled = wall(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1]);
+                    bool sky = true;
+                    walled = wall(pos.mdV[VX] + r * dirs[j][0], pos.mdV[VY] + r * dirs[j][1], sky);
+                    seen_sky = seen_sky || (!walled && sky);
                 }
-                open += walled ? 0 : 1;
+                open += walled || !seen_sky ? 0 : 1;
             }
             return static_cast<F32>(open) / SPOKES;
         }

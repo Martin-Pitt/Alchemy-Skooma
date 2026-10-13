@@ -1905,11 +1905,39 @@ namespace sknav
             }
             return seen.size() >= min_cells;
         };
+        // A ring tile's lintel near the block may cut a doorway whose far side the block holds, as a full pass would.
+        const F32 ring_reach = SCORE_REACH_M + APERTURE_MAX_M;
+        const auto nearBlock = [&](const Cell& cell) {
+            const TileInfo& ti = mTiles[cell.mTile];
+            const F32 lx = (cell.mX + 0.5f) * mCell, ly = (cell.mY + 0.5f) * mCell;
+            const F32 wx = ti.mAir->mWidth * mCell, wy = ti.mAir->mHeight * mCell;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    TileKey k = ti.mKey;
+                    k.mX += dx;
+                    k.mY += dy;
+                    const U32 it = tileAt(k);
+                    if (it != NONE && mTiles[it].mInBlock && (dx < 0 ? lx : dx > 0 ? wx - lx : 0.f) <= ring_reach &&
+                        (dy < 0 ? ly : dy > 0 ? wy - ly : 0.f) <= ring_reach)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        const auto blockSide = [&](const Run& r) {
+            Probe pr;
+            return (pastLintel(r, 1.f, pr) && mTiles[pr.mTile].mInBlock) || (pastLintel(r, -1.f, pr) && mTiles[pr.mTile].mInBlock);
+        };
         const size_t n = mCells.size();
         for (U32 c = 0; c < n; ++c)
         {
             const Cell& cell = mCells[c];
-            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP)
+            const bool ring = !mTiles[cell.mTile].mInBlock;
+            if (!mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP || (ring && !nearBlock(cell)))
             {
                 continue;
             }
@@ -2005,6 +2033,11 @@ namespace sknav
                     r.mA += shift;
                     r.mB += shift;
                     r.mC += shift;
+                }
+                // A cut wholly among clean tiles is kept from the last pass, not made again.
+                if (ring && !blockSide(r))
+                {
+                    continue;
                 }
                 undo.clear();
                 sever(r, &undo);
@@ -4904,6 +4937,7 @@ namespace sknav
             F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
             F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
+            std::map<U32, F64> taken;
             for (const auto& tg : gaps)
             {
                 const TileAir& a = air(tg.first);
@@ -4927,6 +4961,7 @@ namespace sknav
                 const GapEnclosure& ge = mEnc->mTiles[mTiles[tg.first].mEnc].mGaps[tg.second];
                 const F32 z = floorOf(tg.first, gap) * mUnit;
                 old.insert(mGapSpace[tg.first][tg.second] - 1);
+                taken[mGapSpace[tg.first][tg.second] - 1] += area;
                 mGapSpace[tg.first][tg.second] = id + 1;
                 w += area;
                 sx += area * x;
@@ -4979,11 +5014,12 @@ namespace sknav
                 sp.mMax.mV[VX] = std::max(sp.mMax.mV[VX], x + RASTER_XY_M);
                 sp.mMax.mV[VY] = std::max(sp.mMax.mV[VY], y + RASTER_XY_M);
             }
-            for (U32 o : old)
+            // Each space it took from loses the floor it took there, not the whole of it.
+            for (const auto& o : taken)
             {
-                if (o < id && !out[o].mLift)
+                if (o.first < id && !out[o.first].mLift)
                 {
-                    out[o].mFloorArea = std::max(0.f, out[o].mFloorArea - sp.mFloorArea);
+                    out[o.first].mFloorArea = std::max(0.f, out[o.first].mFloorArea - static_cast<F32>(o.second));
                 }
             }
         };
@@ -5545,6 +5581,7 @@ namespace sknav
             by_id[out[i].mId] = i;
         }
         std::unordered_map<U32, U32> remap;
+        const size_t live = out.size();
         for (TileEnclosure& te : mEnc->mTiles)
         {
             if (te.mAir || !prev)
@@ -5582,6 +5619,29 @@ namespace sknav
                     it = remap.emplace(old, to).first;
                 }
                 g.mSpace = static_cast<U16>(std::min<U32>(it->second, 0xffff));
+            }
+        }
+        // A frozen roof's covers name the last product's spaces: name them in this one, by id.
+        for (size_t s = live; s < out.size(); ++s)
+        {
+            Space& sp = out[s];
+            std::vector<std::pair<U32, F32>> covers;
+            for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+            {
+                const U32 c = sp.mCovers[k];
+                const auto hit = c < prev->mSpaces.size() ? by_id.find(prev->mSpaces[c].mId) : by_id.end();
+                if (hit != by_id.end())
+                {
+                    covers.emplace_back(hit->second, sp.mCoverM2[k]);
+                }
+            }
+            std::sort(covers.begin(), covers.end());
+            sp.mCovers.clear();
+            sp.mCoverM2.clear();
+            for (const auto& c : covers)
+            {
+                sp.mCovers.push_back(c.first);
+                sp.mCoverM2.push_back(c.second);
             }
         }
 
