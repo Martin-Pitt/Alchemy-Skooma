@@ -1815,6 +1815,8 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         mRevision++;                // the tile's walls are gone: the overlay moved
         return;
     }
+    // Built again to the air it has: the published air stands, so nothing that reads it runs again.
+    const bool same_air = tile.mAir && !tile.mAirSpilled && result->mAir && tile.mAir != result->mAir && sameAir(*tile.mAir, *result->mAir);
     if (awaitsStamp(*result))
     {
         // The raster stage alone: its air goes to the spaces, and the polygons
@@ -1822,9 +1824,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
         tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
         tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
-        tile.mAir = result->mAir;
-        tile.mAirId = ++mNextAirId;
-        tile.mAirSpilled = false;
+        if (!same_air)
+        {
+            tile.mAir = result->mAir;
+            tile.mAirId = ++mNextAirId;
+            tile.mAirSpilled = false;
+        }
         tile.mAirBuilt = result->mCoarseAir ? 0 : signature;
         tile.mAirCoarse.reset();
         tile.mContentKey = content_key;
@@ -1887,9 +1892,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
     tile.mLedges = std::make_shared<const std::vector<WallSegment>>(std::move(result->mLedges));
     tile.mRunoff = std::make_shared<const std::vector<DropLink>>(std::move(result->mRunoff));
-    tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
-    tile.mAirId = tile.mAir ? ++mNextAirId : 0;
-    tile.mAirSpilled = false;
+    if (!result->mAirBuilt || !same_air)
+    {
+        tile.mAir = result->mAirBuilt ? result->mAir : nullptr;
+        tile.mAirId = tile.mAir ? ++mNextAirId : 0;
+        tile.mAirSpilled = false;
+    }
     tile.mAirBuilt = result->mAirBuilt && !result->mCoarseAir ? signature : 0;
     // Nothing to stamp this tile with: its polygons are final as built.
     mStats.mUnstampedPublishes += result->mAir && !result->mAir->mLeaves.empty() ? 1 : 0;

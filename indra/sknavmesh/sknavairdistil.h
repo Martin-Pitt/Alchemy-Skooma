@@ -141,6 +141,10 @@ namespace sknav
     /// key is at most the cell's; the coarser ones over it follow parentLeaf.
     S32 findLeafByKey(const TileAir& air, S32 ix, S32 iy);
 
+    /// Whether two airs hold the same cells, gaps, seams, tops and face offsets, whatever their serials: a tile
+    /// built again to the same air can keep the one it has, and nothing that reads it need run again.
+    bool sameAir(const TileAir& a, const TileAir& b);
+
     /// The nearest coarser leaf over a leaf, or -1.
     inline S32 parentLeaf(const TileAir& air, S32 leaf)
     {
