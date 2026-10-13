@@ -926,10 +926,10 @@ namespace
         {
             pushLine(lines, mpp, s.first, s.second, PX_CASING_LINE, COL_CASING_LINE);
         }
-        if (f.mStair && f.mTreads > 0)
+        if (f.mStair)
         {
-            // One rung per tread riser, thinned to the ruling-18 minimum pitch.
-            const S32 n = llmin(f.mTreads + 1, llmax(1, static_cast<S32>(std::floor(len / (PX_RUNG_PITCH * mpp)))));
+            // Rungs are a fixed screen-pitch pattern marking a stair, never a step count.
+            const S32 n = llmax(1, static_cast<S32>(std::floor(len / (PX_RUNG_PITCH * mpp))));
             for (S32 i = 1; i < n; ++i)
             {
                 pushLine(lines, mpp, at(len * i / n, a0), at(len * i / n, a1), PX_RUNG, COL_RUNG);
@@ -1603,7 +1603,6 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
                         it = flight_of_key.emplace(f.mKey, static_cast<U32>(d->mFlights.size())).first;
                         Flight out;
                         out.mStair = f.mKind == sknav::ConnectorKind::STAIR;
-                        out.mTreads = f.mTreadCount;
                         out.mBottom[0] = to + f.mBottomA;
                         out.mBottom[1] = to + f.mBottomB;
                         out.mTop[0] = to + f.mTopA;
