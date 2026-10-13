@@ -4991,17 +4991,6 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
-        <key>SKMapLayerGuideLine</key>
-        <map>
-            <key>Comment</key>
-            <string>Draw a line from you along the camera on the mini-map.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>Boolean</string>
-            <key>Value</key>
-            <integer>0</integer>
-        </map>
         <key>SKMapLayerObjects</key>
         <map>
             <key>Comment</key>
@@ -5401,7 +5390,7 @@
         <key>SKMapLayerProjectiles</key>
         <map>
             <key>Comment</key>
-            <string>Draw fast physical objects on the mini-map as streaks and thrown ones as dots; never in combat.</string>
+            <string>Draw fast physical objects on the mini-map as streaks and thrown ones as dots.</string>
             <key>Persist</key>
             <integer>1</integer>
             <key>Type</key>

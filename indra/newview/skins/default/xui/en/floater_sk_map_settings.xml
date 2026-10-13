@@ -272,7 +272,7 @@
              control_name="SKMapLayerProjectiles"
              follows="left|top"
              height="16"
-             label="Projectiles (never in combat)"
+             label="Projectiles"
              layout="topleft"
              left="8"
              name="sk_layer_projectiles"
@@ -286,16 +286,6 @@
              layout="topleft"
              left="8"
              name="sk_layer_chat_rings"
-             top_pad="5"
-             width="308" />
-            <check_box
-             control_name="SKMapLayerGuideLine"
-             follows="left|top"
-             height="16"
-             label="Guide line"
-             layout="topleft"
-             left="8"
-             name="sk_layer_guide_line"
              top_pad="5"
              width="308" />
         </panel>

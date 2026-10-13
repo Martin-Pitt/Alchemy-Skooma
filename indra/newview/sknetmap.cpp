@@ -495,7 +495,6 @@ void SKNetMap::drawSelf()
 void SKNetMap::drawSelfExtras()
 {
     static LLCachedControl<bool> chat_rings(gSavedSettings, "SKMapLayerChatRings", false);
-    static LLCachedControl<bool> guide_line(gSavedSettings, "SKMapLayerGuideLine", false);
     const LLVector2 self = mView.toWidget(gAgent.getPositionGlobal());
     const sknav::Cover cover = SKMapPeople::instance().coverAhead();
     if (cover != sknav::Cover::NONE)
@@ -536,22 +535,6 @@ void SKNetMap::drawSelfExtras()
         gGL.color4fv(shout_colour.get().mV);
         skmapdraw::ring(self, region->getShoutRange() * ppm, 1.75f, 100);
         gGL.end();
-    }
-    if (guide_line)
-    {
-        // From the camera along its facing, out to its far clip.
-        static LLUIColor line_colour = LLUIColorTable::instance().getColor("MapLineColor", LLColor4::red);
-        LLViewerCamera* camera = LLViewerCamera::getInstance();
-        const LLVector3 at = camera->getAtAxis();
-        LLVector2 dir = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
-        if (dir.normVec() > 1e-6f)
-        {
-            gGL.begin(LLRender::TRIANGLES);
-            gGL.color4fv(line_colour.get().mV);
-            const LLVector2 eye = mView.toWidget(gAgentCamera.getCameraPositionGlobal());
-            skmapdraw::line(eye, eye + dir * (camera->getFar() * mView.pixelsPerMetre()), 1.f);
-            gGL.end();
-        }
     }
 }
 

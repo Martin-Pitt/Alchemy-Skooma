@@ -75,7 +75,7 @@ void SKFloaterMap::seed()
     }
     static const char* CLASSIC[] = { "MiniMapScale", "MiniMapRotate", "MiniMapAutoCenter", "MiniMapShowPropertyLines",
                                      "AlchemyMiniMapForSaleParcels", "AlchemyMiniMapCollisionParcels", "AlchemyMinimapChatRings",
-                                     "AlchemyMinimapGuideLine", "AlchemyMinimapRenderObjects" };
+                                     "AlchemyMinimapRenderObjects" };
     LLSD classic = LLSD::emptyMap();
     for (const char* name : CLASSIC)
     {
