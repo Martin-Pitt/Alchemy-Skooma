@@ -1111,4 +1111,51 @@ namespace sknav
         }
         out.mHash = h;
     }
+
+    U64 stampRoomsKey(const EnclosureProduct& enc, const TileEnclosure& tile, const RoomsProduct& rooms)
+    {
+        SK_NAV_ZONE("nav.stamp.key");
+        if (!tile.mAir)
+        {
+            return 0;
+        }
+        const LLVector3 lo(static_cast<F32>(tile.mKey.mX * TILE_M), static_cast<F32>(tile.mKey.mY * TILE_M), 0.f);
+        const LLVector3 hi(lo.mV[VX] + static_cast<F32>(TILE_M), lo.mV[VY] + static_cast<F32>(TILE_M), 0.f);
+        TileStampInput in;
+        stampInput(*tile.mAir, tile, rooms, lo, hi, in);
+        U64 h = mix(SEED, in.mPattern);
+        for (const U32 s : in.mComponentSpace)
+        {
+            h = mix(mix(h, rooms.mSpaces[s].mId), static_cast<U64>(rooms.mSpaces[s].mBucket));
+        }
+        for (const StampPortal& p : in.mPortals)
+        {
+            h = mix(h, p.mPortal);
+        }
+        for (const GapEnclosure& g : tile.mGaps)
+        {
+            h = mix(h, g.mBucket);
+        }
+        for (S32 dy = -1; dy <= 1; ++dy)
+        {
+            for (S32 dx = -1; dx <= 1; ++dx)
+            {
+                TileKey k = tile.mKey;
+                k.mX += dx;
+                k.mY += dy;
+                const TileEnclosure* n = enc.tile(k);
+                if (!n)
+                {
+                    h = mix(h, 0xffu);
+                    continue;
+                }
+                h = mix(mix(h, static_cast<U64>(reinterpret_cast<uintptr_t>(n->mAir.get()))), n->mGaps.size());
+                for (const GapEnclosure& g : n->mGaps)
+                {
+                    h = mix(h, g.mSpace && g.mSpace <= rooms.mSpaces.size() ? rooms.mSpaces[g.mSpace - 1].mId : 0u);
+                }
+            }
+        }
+        return h;
+    }
 }

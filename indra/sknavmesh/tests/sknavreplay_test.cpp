@@ -1989,6 +1989,12 @@ namespace tut
                         std::ofstream(stem + "_inc.txt", std::ios::binary) << ci;
                         std::ofstream(stem + "_full.txt", std::ios::binary) << canonicalRooms(*settled.first, *settled.second);
                     }
+                    // What the edit sends to the stamp: tiles whose stamp key moved, of those with one.
+                    U32 restamp = 0;
+                    for (const auto& k : inc.second->mStampKeys)
+                    {
+                        restamp += before.second->stampKey(k.first) != k.second ? 1 : 0;
+                    }
                     same += ok ? 1 : 0;
                     differ += ok ? 0 : 1;
                     differ_raw += raw ? 0 : 1;
@@ -1997,11 +2003,13 @@ namespace tut
                     json << (first ? "" : ",") << "{\"mesh\":" << mi << ",\"tile\":[" << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << "],\"lose\":" << lose
                          << ",\"same\":" << (ok ? "true" : "false") << ",\"same_unsettled\":" << (raw ? "true" : "false")
                          << ",\"spaces\":" << inc.second->mSpaces.size() << ",\"portals\":" << inc.second->mPortals.size() << ",\"inc_ms\":" << t_inc
-                         << ",\"full_ms\":" << t_full << "}";
+                         << ",\"full_ms\":" << t_full << ",\"restamp\":" << restamp << ",\"tiles\":" << inc.second->mStampKeys.size()
+                         << ",\"dirty\":" << inc.second->mDirtyTiles << "}";
                     first = false;
                     std::cout << "mesh " << mi << " tile " << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << (lose ? " lost" : " same") << ": "
                               << (ok ? "equal" : "DIFFER") << (raw ? "" : " (differs from the unsettled full pass)") << ", " << t_inc
-                              << " ms incremental, " << t_full << " ms full" << std::endl;
+                              << " ms incremental, " << t_full << " ms full, " << inc.second->mDirtyTiles << " cut, " << restamp << "/"
+                              << inc.second->mStampKeys.size() << " to restamp" << std::endl;
                 }
             }
         }

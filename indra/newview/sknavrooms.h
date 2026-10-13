@@ -238,12 +238,29 @@ private:
         bool mWindDirty = false;            ///< its rooms landed since its slabs were built
         bool mWindInFlight = false;
         F64 mWindChanged = 0.0;             ///< when its answers last moved
+        F64 mWindDirtySince = 0.0;          ///< when its slabs last went stale: churn delays a refresh this long at most
+        U64 mWindGeneration = 0;
+        std::shared_ptr<std::atomic<U64>> mWindLatest;  ///< what cancels a wind pass: only a preemption, never the air moving
         U32 mEvicted = 0;                   ///< tiles whose detail the air cache let go
         U8 mPriority = 3;                   ///< the navmesh's order for it: the agent's region first
 
         sknav::RoomsSchedule schedule() const
         {
             return { mProduct != nullptr, mDirty, mInFlight, mChanged, mDirtySince, mLastPosted, mPriority };
+        }
+        /// Wind is scheduled as the rooms are: a mesh with no slabs builds them on the rooms it has.
+        sknav::RoomsSchedule windSchedule() const
+        {
+            return { mWind != nullptr, mWindDirty, mWindInFlight, mWindChanged, mWindDirtySince, 0.0, mPriority };
+        }
+        void windStale(F64 now)
+        {
+            if (!mWindDirty)
+            {
+                mWindDirtySince = now;
+            }
+            mWindDirty = true;
+            mWindChanged = now;
         }
     };
 

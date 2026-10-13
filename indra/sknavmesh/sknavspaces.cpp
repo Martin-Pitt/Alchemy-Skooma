@@ -27,6 +27,7 @@
 #include "sknavspaces.h"
 
 #include "sknavstairalign.h"
+#include "sknavstamp.h"
 #include "sknavprofile.h"
 
 #include <algorithm>
@@ -562,6 +563,12 @@ namespace sknav
         return it != mTiles.end() && it->mKey == key ? &*it : nullptr;
     }
 
+    U64 RoomsProduct::stampKey(const TileKey& key) const
+    {
+        const auto it = std::lower_bound(mStampKeys.begin(), mStampKeys.end(), key, [](const std::pair<TileKey, U64>& t, const TileKey& k) { return t.first < k; });
+        return it != mStampKeys.end() && it->first == key ? it->second : 0;
+    }
+
     size_t RoomsProduct::bytes() const
     {
         size_t n = sizeof(RoomsProduct) + mPortals.capacity() * sizeof(Portal) + mApart.capacity() * sizeof(SeedLink);
@@ -577,6 +584,7 @@ namespace sknav
                 n += sizeof(SeedStats) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
             }
         }
+        n += mStampKeys.capacity() * sizeof(std::pair<TileKey, U64>);
         return n + (mMemo ? mMemo->bytes() : 0) + (mFloors ? mFloors->bytes() : 0) + (mDraw ? mDraw->bytes() : 0);
     }
 
@@ -6157,6 +6165,13 @@ namespace sknav
                 // The overlay's draw, traced once with the pass and read by
                 // every gather until the next one lands.
                 s.mProduct->mDraw = buildSpacesDraw(*s.mEnc, *s.mProduct);
+                // What each tile's stamp reads of the spaces, so a stamp is read again only where that moved.
+                for (const TileEnclosure& te : s.mEnc->mTiles)
+                {
+                    s.mProduct->mStampKeys.emplace_back(te.mKey, stampRoomsKey(*s.mEnc, te, *s.mProduct));
+                }
+                std::sort(s.mProduct->mStampKeys.begin(), s.mProduct->mStampKeys.end(),
+                          [](const std::pair<TileKey, U64>& a, const std::pair<TileKey, U64>& b) { return a.first < b.first; });
                 // Nothing reads the cells again.
                 s.mCells.clear();
                 s.mCells.shrink_to_fit();

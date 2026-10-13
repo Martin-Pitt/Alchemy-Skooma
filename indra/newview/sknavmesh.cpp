@@ -1863,6 +1863,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mStampGeom.reset();
     tile.mBinding.reset();
     tile.mStampedBy.reset();
+    tile.mStampKey = 0;     // <SK:Nexii> nav/streaming-2
     tile.mStampBuilt = 0;
     // The side tables describe the stamped polys just replaced.
     tile.mPolySpace.reset();
@@ -1951,14 +1952,27 @@ void SKNavMesh::stampTiles()
         }
         if (rooms != mesh.mStampRooms)
         {
-            // New spaces: every tile under them is read against them again.
+            // <SK:Nexii> nav/streaming-2: new spaces are read again only by tiles whose stamp reads something of them that moved.
             mesh.mStampRooms = rooms;
             mesh.mStampEnc = enc;
             for (auto& t : mesh.mTiles)
             {
-                t.second.mStampDue = t.second.mStampDue || (t.second.mAir && !t.second.mAir->mLeaves.empty());
+                Tile& tile = t.second;
+                if (!tile.mAir || tile.mAir->mLeaves.empty())
+                {
+                    continue;
+                }
+                const U64 stamp_key = rooms->stampKey(t.first);
+                if (!tile.mStampDue && tile.mStampedBy && stamp_key && stamp_key == tile.mStampKey)
+                {
+                    tile.mStampedBy = rooms;
+                    ++mStats.mStampsKept;
+                    continue;
+                }
+                tile.mStampDue = true;
             }
             mesh.mStampScan = true;
+            // </SK:Nexii>
         }
         if (!mesh.mStampScan)
         {
@@ -2171,13 +2185,28 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     }
     Tile& tile = tit->second;
     tile.mStampInFlight = false;
-    // One ticket: the input, the air and the spaces it was stamped with must all still stand.
-    if (tile.mSignature != signature || tile.mAir != air || mesh.mStampRooms != rooms || out->mKind == StampOutcome::DROP)
+    // One ticket: the input and the air it was stamped with must still stand.
+    if (tile.mSignature != signature || tile.mAir != air || out->mKind == StampOutcome::DROP)
     {
         tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
         mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
         return;
     }
+    // <SK:Nexii> nav/streaming-2: spaces newer than the stamp's do not hold it back, as outdated beats nothing;
+    // it is read again against them only if what it read of the spaces moved.
+    const U64 stamp_key = rooms ? rooms->stampKey(key) : 0;
+    if (mesh.mStampRooms != rooms)
+    {
+        const U64 now_key = mesh.mStampRooms ? mesh.mStampRooms->stampKey(key) : 0;
+        if (!now_key || now_key != stamp_key)
+        {
+            tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
+            mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
+            ++mStats.mStampsOutdated;
+        }
+    }
+    tile.mStampKey = stamp_key;
+    // </SK:Nexii>
     mStats.mLastStampMs = out->mMillis;
     if (out->mKind == StampOutcome::REBIND)
     {
@@ -2687,8 +2716,8 @@ bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
-    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds, %u unchanged), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
-                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mAwaitingStamp, mStats.mLastStampMs,
+    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds, %u unchanged, %u kept, %u outdated), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
+                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mStampsKept, mStats.mStampsOutdated, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
     return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",

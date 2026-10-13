@@ -255,7 +255,10 @@ namespace sknav
                                             ///< them; a pass that would change it lands a new product.
         std::shared_ptr<const MergeMemo> mMemo;
         std::shared_ptr<const FloorMemo> mFloors;
+        std::vector<std::pair<TileKey, U64>> mStampKeys;    ///< per tile, by key: what its stamp reads of these spaces (stampRoomsKey)
 
+        /// A tile's stamp key, 0 for a tile it has none for.
+        U64 stampKey(const TileKey& key) const;
         /// The space with this id, or null.
         const Space* byId(U32 id) const;
         const RoomsTile* tile(const TileKey& key) const;
