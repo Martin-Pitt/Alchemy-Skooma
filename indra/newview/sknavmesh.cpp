@@ -1720,6 +1720,13 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mStampGeom.reset();
     tile.mBinding.reset();
     tile.mStampedBy.reset();
+    tile.mStampBuilt = 0;
+    // The side tables describe the stamped polys just replaced.
+    tile.mPolySpace.reset();
+    tile.mPortalEdges.reset();
+    tile.mWallRuns.reset();
+    tile.mWallRunsAt = 0;
+    mSlotSpaces.erase(tile.mStampSlot);
     tile.mStaticAt = 0.0;
     tile.mStampDue = false;
     // A tile rebuilt without its air keeps the tops it had only while its input holds.
