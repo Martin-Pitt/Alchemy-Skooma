@@ -156,6 +156,121 @@ namespace
         }
         return out;
     }
+
+    /// The poly's floor height at (x, y), or false when the point is outside it.
+    bool polyHeightAt(const Data& d, U32 poly, F32 x, F32 y, F32& z)
+    {
+        const LLVector3& o = d.vert(poly, 0);
+        for (U32 k = 1; k + 1 < d.mPolys[poly].mCount; ++k)
+        {
+            const LLVector3 &b = d.vert(poly, k), &c = d.vert(poly, k + 1);
+            const F32 v0x = b.mV[VX] - o.mV[VX], v0y = b.mV[VY] - o.mV[VY];
+            const F32 v1x = c.mV[VX] - o.mV[VX], v1y = c.mV[VY] - o.mV[VY];
+            const F32 px = x - o.mV[VX], py = y - o.mV[VY];
+            const F32 den = v0x * v1y - v1x * v0y;
+            if (fabsf(den) < 1e-6f)
+            {
+                continue;
+            }
+            const F32 u = (px * v1y - v1x * py) / den, v = (v0x * py - px * v0y) / den;
+            if (u >= -1e-3f && v >= -1e-3f && u + v <= 1.001f)
+            {
+                z = o.mV[VZ] + u * (b.mV[VZ] - o.mV[VZ]) + v * (c.mV[VZ] - o.mV[VZ]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Region meshes share no Detour links: an open edge of outdoor floor with another mesh's outdoor floor just
+    /// across it, at the same height, joins the two spaces with an adjacent portal, so the ground floods across.
+    void joinRegionSeams(Data& d)
+    {
+        LL_PROFILE_ZONE_NAMED("SKMapPlan.Seams");
+        constexpr F32 CELL_M = 8.f;
+        constexpr F32 REACH_M = 0.5f;   // across the edge, past the agent-radius erosion of both sides
+        constexpr F32 CLIMB_M = 1.f;
+        const auto meshOf = [&](U32 p) { return d.mSpaces[d.mPolys[p].mSpace].mMesh; };
+        const auto groundPoly = [&](U32 p) { return d.mPolys[p].mSpace >= 0 && d.outdoorish(d.mPolys[p].mSpace); };
+        const auto cellKey = [](S32 x, S32 y) { return (static_cast<U64>(static_cast<U32>(x)) << 32) | static_cast<U32>(y); };
+        if (d.mSpaceIndex.size() < 2)
+        {
+            return;
+        }
+        std::unordered_map<U64, std::vector<U32>> grid;
+        for (U32 p = 0; p < d.mPolys.size(); ++p)
+        {
+            if (!groundPoly(p))
+            {
+                continue;
+            }
+            F32 x0 = F32_MAX, y0 = F32_MAX, x1 = -F32_MAX, y1 = -F32_MAX;
+            for (U32 k = 0; k < d.mPolys[p].mCount; ++k)
+            {
+                const LLVector3& v = d.vert(p, k);
+                x0 = llmin(x0, v.mV[VX]), y0 = llmin(y0, v.mV[VY]), x1 = llmax(x1, v.mV[VX]), y1 = llmax(y1, v.mV[VY]);
+            }
+            for (S32 y = ll_round(floorf(y0 / CELL_M)); y <= ll_round(floorf(y1 / CELL_M)); ++y)
+            {
+                for (S32 x = ll_round(floorf(x0 / CELL_M)); x <= ll_round(floorf(x1 / CELL_M)); ++x)
+                {
+                    grid[cellKey(x, y)].push_back(p);
+                }
+            }
+        }
+        std::unordered_set<U64> joined;
+        for (U32 p = 0; p < d.mPolys.size(); ++p)
+        {
+            if (!groundPoly(p))
+            {
+                continue;
+            }
+            const U32 mesh = meshOf(p);
+            const S32 a = d.mPolys[p].mSpace;
+            for (U32 e = 0; e < d.mPolys[p].mCount; ++e)
+            {
+                const S32 n = d.mNbr[d.mPolys[p].mFirst + e];
+                if (n >= 0 || (n == NBR_BORDER && d.mBorder.count((static_cast<U64>(p) << 3) | e)))
+                {
+                    continue;
+                }
+                const LLVector3 &va = d.vert(p, e), &vb = d.vert(p, e + 1);
+                const LLVector3 mid = (va + vb) * 0.5f;
+                LLVector2 nrm(vb.mV[VY] - va.mV[VY], va.mV[VX] - vb.mV[VX]);
+                if (nrm.normalize() < 1e-4f)
+                {
+                    continue;
+                }
+                // The polys' winding is not known here: probe both sides and the edge itself, where the meshes overlap.
+                for (F32 side : { 0.f, REACH_M, -REACH_M })
+                {
+                    const F32 x = mid.mV[VX] + nrm.mV[VX] * side, y = mid.mV[VY] + nrm.mV[VY] * side;
+                    const auto cell = grid.find(cellKey(ll_round(floorf(x / CELL_M)), ll_round(floorf(y / CELL_M))));
+                    if (cell == grid.end())
+                    {
+                        continue;
+                    }
+                    for (U32 q : cell->second)
+                    {
+                        F32 z = 0.f;
+                        const S32 b = d.mPolys[q].mSpace;
+                        if (meshOf(q) == mesh || joined.count(pairKey(a, b)) || !polyHeightAt(d, q, x, y, z) || fabsf(z - mid.mV[VZ]) > CLIMB_M)
+                        {
+                            continue;
+                        }
+                        joined.insert(pairKey(a, b));
+                        Portal out;
+                        out.mKind = PortalKind::ADJACENT;
+                        out.mSpaces[0] = a;
+                        out.mSpaces[1] = b;
+                        out.mA = va;
+                        out.mB = vb;
+                        d.mPortals.push_back(out);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void Data::finish()
@@ -285,7 +400,8 @@ void Data::finish()
     std::unordered_map<U64, std::map<S32, U32>> links;   // building -> storey -> street links
     for (S32 root : roots)
     {
-        if (root < 0)
+        // A region whose ground joins an earlier one's across the seam is already flooded.
+        if (root < 0 || mGround[root])
         {
             continue;
         }
@@ -1635,6 +1751,7 @@ DataPtr skmap::plan::assemble(const Snapshot& snap)
         r.mHeights = *l.mHeights;
         d->mRegions.push_back(std::move(r));
     }
+    joinRegionSeams(*d);
     d->finish();
     return d;
 }

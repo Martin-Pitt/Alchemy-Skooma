@@ -1052,12 +1052,11 @@ void SKMapComposite::drawOverlay(const skmap::MapView& view, const LLVector2* uv
     saved.restore();
 }
 
-std::string SKMapComposite::statsLine() const
+std::vector<std::string> SKMapComposite::statsLines() const
 {
-    // Main thread: snapshot and upload. The plan's thread: gather, select, geometry.
-    return llformat("plan: main snap %.2f upload %.2f render %.2f ms | thread gather %.1f select %.2f geometry %.1f ms, %u jobs, %u tiles read | "
-                    "%u tris, %u ranks, %u/%u spaces, %u walls | polys %u drawn %u spaced %u | %u meshes over %u regions | %u px %ux, %u redraws",
-                    mStats.mSnapshotMs, mStats.mUploadMs, mStats.mRenderMs, mStats.mGatherMs, mStats.mSelectMs, mStats.mGeometryMs, mStats.mJobs,
-                    mStats.mTilesRead, mStats.mTriangles, mStats.mRanks, mStats.mSpaces, mStats.mSpacesAll, mStats.mWallRuns, mStats.mPolys,
-                    mStats.mPolysDrawn, mStats.mPolysSpaced, mStats.mMeshes, mStats.mRegions, mStats.mSide, mStats.mSamples, mStats.mRedraws);
+    // What it costs on each thread, then how much it drew.
+    const F32 main_ms = mStats.mSnapshotMs + mStats.mUploadMs + mStats.mRenderMs;
+    const F32 thread_ms = mStats.mGatherMs + mStats.mSelectMs + mStats.mGeometryMs;
+    return { llformat("plan main %.2f ms, thread %.1f ms (%u jobs)", main_ms, thread_ms, mStats.mJobs),
+             llformat("plan %u tris, %u/%u spaces, %u px", mStats.mTriangles, mStats.mSpaces, mStats.mSpacesAll, mStats.mSide) };
 }

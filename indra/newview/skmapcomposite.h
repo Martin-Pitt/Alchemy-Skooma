@@ -29,6 +29,7 @@
 #include "threadpool.h"
 
 #include <string>
+#include <vector>
 
 namespace skmap
 {
@@ -82,7 +83,7 @@ public:
         U32 mSpacesAll = 0;
     };
     const Stats& stats() const { return mStats; }
-    std::string statsLine() const;
+    std::vector<std::string> statsLines() const;
 
 private:
     bool ensureGL(U32 side, U32 samples);
