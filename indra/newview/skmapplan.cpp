@@ -1139,12 +1139,7 @@ namespace
             {
                 continue;
             }
-            bool terrain = false;
-            SKNavMesh::instance().polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
-            {
-                terrain = terrain || (t.mMesh == m.mId && t.mTerrain);
-            });
-            if (terrain)
+            if (SKNavMesh::instance().terrainTilesIn(m.mId, m.mMin, m.mMax))
             {
                 fn(m);
             }
@@ -1157,21 +1152,14 @@ U64 skmap::plan::gatherKey(const LLVector3d& min, const LLVector3d& max)
     LL_PROFILE_ZONE_NAMED("SKMapPlan.GatherKey");
     SKNavMesh& nav = SKNavMesh::instance();
     U64 h = 0;
-    std::vector<U64> keys;
     forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
     {
         U64 id[2];
         memcpy(id, m.mId.mData, sizeof(id));
         h = mix(mix(h, id[0]), id[1]);
         h = mix(h, m.mRooms->mGeneration);
-        h = mix(h, reinterpret_cast<uintptr_t>(nav.storeys(m.mId).get()));
         h = mix(h, nav.detailResident(m.mId) ? 1 : 0);
-        keys.clear();
-        nav.tileContentKeysIn(m.mId, m.mMin, m.mMax, keys);
-        for (U64 k : keys)
-        {
-            h = mix(h, k);
-        }
+        h = mix(h, nav.mapInputsKey(m.mId, m.mMin, m.mMax));
     });
     for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
     {

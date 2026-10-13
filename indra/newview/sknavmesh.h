@@ -26,6 +26,7 @@
 #define SK_NAVMESH_H
 
 #include "llsingleton.h"
+#include <array>
 #include "sknavbuild.h"
 #include "sknavexport.h"
 #include "sknavlayout.h"
@@ -79,6 +80,10 @@ public:
     /// The content keys of a mesh's tiles whose footprint meets the global
     /// box, 0 for a tile not published under one.
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+    /// A hash of what a mesh's map products (polys, storeys, wall runs) meeting the box are built from.
+    U64 mapInputsKey(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether a terrain mesh has a published AVATAR tile meeting the box.
+    bool terrainTilesIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
     /// Whether anything meeting the global box is still on its way: a tile
     /// queued or building, or a rooms pass not yet landed over it.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
@@ -401,9 +406,9 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
-        /// AVATAR's wall runs, built on first read for the revision in mWallRunsAt.
+        /// AVATAR's wall runs, built on first read from the inputs named in mWallRunsKey.
         mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
-        mutable U64 mWallRunsAt = 0;
+        mutable std::array<U64, 12> mWallRunsKey{};
         /// The Detour tile's bytes, which Detour reads but does not own.
         std::vector<U8> mDetour[sknav::NUM_CLASSES];
         /// What the published polygons were built from, held near the camera
@@ -468,7 +473,7 @@ private:
         sknav::RoomsProductPtr mStampRooms;
         bool mStampScan = false;            ///< some tile may be due a stamp
         mutable sknav::StoreyProductPtr mStoreys;
-        mutable U64 mStoreysAt = 0;         ///< the revision they were built at
+        mutable std::vector<U64> mStoreysKey;   ///< the per-tile inputs they were built from
         /// Where its detail air is: every tile's in memory, on its way to disk, there, or on its way back.
         enum class Residency : U8 { RESIDENT, SPILLING, SPILLED, RELOADING };
         Residency mResidency = Residency::RESIDENT;
@@ -642,6 +647,7 @@ private:
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
     /// A tile's wall runs as of this revision, null without a Detour tile, stamp or air.
+    void storeyInputs(const Mesh& mesh, std::vector<U64>& out) const;
     std::shared_ptr<const std::vector<sknav::WallRun>> tileWallRuns(const Mesh& mesh, const sknav::TileKey& key, const Tile& tile) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;
