@@ -146,11 +146,12 @@ namespace sknav
         size_t mBytes = 0;
         F64 mScore = 0.0;       ///< accumulateNearness
         F64 mDistance = 0.0;
+        U8 mRank = 0;           ///< what the candidate serves: higher ranks evict last
     };
 
-    /// Indices to evict, least near first, until the rest fit the budget.
-    /// Nothing within protect_distance is ever chosen, so the result may
-    /// still leave the total over it.
+    /// Indices to evict, lowest rank first, then least near, until the rest
+    /// fit the budget. Nothing within protect_distance is ever chosen, so the
+    /// result may still leave the total over it.
     std::vector<size_t> chooseEvictions(const std::vector<EvictionCandidate>& candidates, size_t budget_bytes, F64 protect_distance);
 }
 

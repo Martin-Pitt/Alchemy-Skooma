@@ -494,6 +494,7 @@ private:
         sknav::TileKey mKey;
         sknav::TileAirPtr mAir, mCoarse;
         F64 mNearness, mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
     struct RasterCandidate
@@ -504,6 +505,7 @@ private:
         sknav::TileRasterPtr mRaster;
         size_t mBytes;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::vector<RasterCandidate> mRasterScan;
     /// Held rasters get a quarter of the air budget; past it the farthest go
@@ -524,6 +526,7 @@ private:
         U32 mGeneration;
         sknav::TileKey mKey;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<BuildCandidate>> mScheduleScan, mBuildCandidates;
     std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
@@ -548,6 +551,11 @@ private:
     static bool probesDemanded();
     /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
     bool inAirRadius(const Tile& tile) const;
+    /// Which mesh the work queues serve first: 0 the agent's region's own
+    /// terrain, 1 the terrain of the regions touching it, 2 the clusters
+    /// owned by either, 3 everything else. Within a tier the distance orders,
+    /// so a surround in the void can never come before the ground it rings.
+    U8 meshPriority(const Mesh& mesh) const;
     /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
     std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
     void findHomeBoxes(const SKCensusSnapshotPtr& snap);

@@ -238,6 +238,64 @@ bool SKNavMesh::inAirRadius(const Tile& tile) const
     return false;
 }
 
+U8 SKNavMesh::meshPriority(const Mesh& mesh) const
+{
+    LLViewerRegion* current = gAgent.getRegion();
+    if (!current)
+    {
+        return 3;
+    }
+    if (mesh.mTerrain)
+    {
+        if (mesh.mId == current->getRegionID())
+        {
+            return 0;
+        }
+        if (LLWorld* world = LLWorld::getInstance())
+        {
+            const LLVector3d here = current->getOriginGlobal();
+            for (LLViewerRegion* region : world->getRegionList())
+            {
+                if (!region || region->getRegionID() != mesh.mId)
+                {
+                    continue;
+                }
+                const LLVector3d d = region->getOriginGlobal() - here;
+                const F64 width = llmax(region->getWidth(), current->getWidth());
+                // Past the touching regions the terrain ranks with everything
+                // else that is not here or next door.
+                return std::fabs(d.mdV[VX]) <= width && std::fabs(d.mdV[VY]) <= width ? 1 : 3;
+            }
+        }
+        return 3;
+    }
+    // A cluster's mesh belongs to the region that owns it: the one its records
+    // stood in when the mesh was made. A mesh of the current or a touching
+    // region builds with the regions; anything past them waits for them.
+    if (mesh.mRegion != 0)
+    {
+        if (mesh.mRegion == current->getHandle())
+        {
+            return 2;
+        }
+        if (LLWorld* world = LLWorld::getInstance())
+        {
+            const LLVector3d here = current->getOriginGlobal();
+            for (LLViewerRegion* region : world->getRegionList())
+            {
+                if (!region || region->getHandle() != mesh.mRegion)
+                {
+                    continue;
+                }
+                const LLVector3d d = region->getOriginGlobal() - here;
+                const F64 width = llmax(region->getWidth(), current->getWidth());
+                return std::fabs(d.mdV[VX]) <= width && std::fabs(d.mdV[VY]) <= width ? 2 : 3;
+            }
+        }
+    }
+    return 3;
+}
+
 void SKNavMesh::findHomeBoxes(const SKCensusSnapshotPtr& snap)
 {
     static LLCachedControl<bool> whole(gSavedSettings, "SKNavAirWholeCluster", true);
@@ -374,11 +432,11 @@ void SKNavMesh::evictAir()
             const F64 distance = std::sqrt(dx * dx + dy * dy);
             if (tile.mRaster)
             {
-                mRasterScan.push_back({mesh.mId, mesh.mGeneration, key, tile.mRaster, tile.mRaster->bytes(), distance});
+                mRasterScan.push_back({mesh.mId, mesh.mGeneration, key, tile.mRaster, tile.mRaster->bytes(), distance, meshPriority(mesh)});
             }
             if (!tile.mAir) return;
             tile.mNearness = accumulateNearness(tile.mNearness, distance, radius, dt);
-            mEvictionScan->push_back({mesh.mId, mesh.mGeneration, key, tile.mAir, nullptr, tile.mNearness, distance});
+            mEvictionScan->push_back({mesh.mId, mesh.mGeneration, key, tile.mAir, nullptr, tile.mNearness, distance, meshPriority(mesh)});
         })) return;
     // One ledger: the held rasters first, then the air in what they leave of the budget.
     const size_t whole = static_cast<size_t>(budget_mb) * 1048576;
@@ -394,7 +452,8 @@ void SKNavMesh::evictAir()
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - evict air worker");
         std::vector<EvictionCandidate> candidates;
-        for (const auto& tile : *held) candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance});
+        candidates.reserve(held->size());
+        for (const auto& tile : *held) candidates.push_back({tile.mAir->bytes(), tile.mNearness, tile.mDistance, tile.mPriority});
         auto result = std::make_shared<std::vector<AirCandidate>>();
         for (size_t index : chooseEvictions(candidates, budget, protect))
         {
@@ -421,7 +480,12 @@ void SKNavMesh::evictRasters(size_t budget, F64 radius)
     for (const RasterCandidate& c : scan) total += c.mBytes;
     const size_t cap = budget / 4;
     const bool over = total > cap;
-    std::sort(scan.begin(), scan.end(), [](const RasterCandidate& a, const RasterCandidate& b) { return a.mDistance > b.mDistance; });
+    // The farthest go first, and within a distance the lowest priority's: the
+    // agent's region holds its rasters while anything farther can give them up.
+    std::sort(scan.begin(), scan.end(), [](const RasterCandidate& a, const RasterCandidate& b)
+    {
+        return a.mPriority != b.mPriority ? a.mPriority > b.mPriority : a.mDistance > b.mDistance;
+    });
     std::vector<TileRasterPtr> dropped;
     for (const RasterCandidate& c : scan)
     {
@@ -1799,7 +1863,17 @@ void SKNavMesh::stampTiles()
     }
     const S32 in_flight_cap = in_flight_max > 0 ? static_cast<S32>(in_flight_max) : static_cast<S32>(mWorkers->getWidth());
     S32 launched = 0;
+    // The stamps-per-frame budget serves the agent's region first, the regions
+    // touching it next, and the rest of the world last; within a tier the map
+    // keeps the order it had.
+    std::vector<std::pair<U8, Mesh*>> ordered;
+    ordered.reserve(mMeshes.size());
     for (auto& entry : mMeshes)
+    {
+        ordered.emplace_back(meshPriority(*entry.second), entry.second.get());
+    }
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& entry : ordered)
     {
         Mesh& mesh = *entry.second;
         EnclosureProductPtr enc;
@@ -2290,7 +2364,7 @@ void SKNavMesh::schedule()
             if (!due(tile)) return;
             const LLVector3d centre = (tile.mMin + tile.mMax) * 0.5;
             const F64 distance = llmin(dist_vec_squared2D(centre, agent), dist_vec_squared2D(centre, camera));
-            mScheduleScan->push_back({mesh.mId, mesh.mGeneration, key, distance});
+            mScheduleScan->push_back({mesh.mId, mesh.mGeneration, key, distance, meshPriority(mesh)});
         })) return;
     mScheduleScanReady = true;
     auto candidates = mScheduleScan;
@@ -2298,7 +2372,10 @@ void SKNavMesh::schedule()
     auto task = std::make_shared<std::packaged_task<std::shared_ptr<std::vector<BuildCandidate>>()>>([candidates]()
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - schedule worker");
-        std::sort(candidates->begin(), candidates->end(), [](const auto& a, const auto& b) { return a.mDistance < b.mDistance; });
+        std::sort(candidates->begin(), candidates->end(), [](const auto& a, const auto& b)
+        {
+            return a.mPriority != b.mPriority ? a.mPriority < b.mPriority : a.mDistance < b.mDistance;
+        });
         return candidates;
     });
     auto future = task->get_future();

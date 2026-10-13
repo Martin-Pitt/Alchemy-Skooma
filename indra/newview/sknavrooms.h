@@ -236,6 +236,7 @@ private:
         bool mWindInFlight = false;
         F64 mWindChanged = 0.0;             ///< when its answers last moved
         U32 mEvicted = 0;                   ///< tiles whose detail the air cache let go
+        U8 mPriority = 3;                   ///< the navmesh's order for it: the agent's region first
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);
