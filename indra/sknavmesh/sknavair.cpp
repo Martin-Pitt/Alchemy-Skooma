@@ -25,6 +25,7 @@
 #include "linden_common.h"
 
 #include "sknavair.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
@@ -34,6 +35,7 @@ namespace sknav
 {
     void extractAir(const rcHeightfield& hf, S32 border_cells, AirGrid& out, const U8* area_lut, const SpanFlags* extra)
     {
+        SK_NAV_ZONE("nav.air.extract");
         // Recast (x, y, z) is SL (y, z, x): a heightfield row along Recast x is
         // a run along SL y, so SL ix is Recast z and SL iy is Recast x.
         const S32 x0 = border_cells, z0 = border_cells;
@@ -88,6 +90,7 @@ namespace sknav
 
     void computeClearance(AirGrid& grid, S32 climb, S32 overlap)
     {
+        SK_NAV_ZONE("nav.air.clearance");
         const S32 w = grid.mWidth, h = grid.mHeight;
         const size_t n = grid.mGaps.size();
         if (n == 0)
@@ -192,6 +195,7 @@ namespace sknav
 
     void foldSlivers(AirGrid& grid, S32 min_height)
     {
+        SK_NAV_ZONE("nav.air.fold");
         size_t at = 0;
         U32 begin = 0;
         for (size_t c = 0; c + 1 < grid.mStart.size(); ++c)
@@ -213,6 +217,7 @@ namespace sknav
 
     void cropAir(const AirGrid& in, S32 pad, AirGrid& out)
     {
+        SK_NAV_ZONE("nav.air.crop");
         out.mCell = in.mCell;
         out.mUnit = in.mUnit;
         out.mWidth = std::max(0, in.mWidth - 2 * pad);

@@ -28,6 +28,7 @@
 
 #include "sknavenclosure.h"
 #include "sknavspaces.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
@@ -319,6 +320,7 @@ namespace sknav
     void stampInput(const TileAir& air, const TileEnclosure& enclosure, const RoomsProduct& rooms, const LLVector3& tile_min,
                     const LLVector3& tile_max, TileStampInput& out)
     {
+        SK_NAV_ZONE("nav.stamp.input");
         out = TileStampInput();
         std::unordered_map<U32, U16> component;
         const auto of = [&](U32 space) {
@@ -391,6 +393,7 @@ namespace sknav
     void stampTile(const rcCompactHeightfield& chf, S32 border, const std::vector<U32>& span_gap, const TileStampInput& input,
                    const std::vector<U8>& real, const std::vector<Flight>& flights, const StampParams& params, TileStamp& out)
     {
+        SK_NAV_ZONE("nav.stamp.tile");
         out = TileStamp();
         const S32 n = chf.spanCount;
         const Spans spans(chf, border);
@@ -720,6 +723,7 @@ namespace sknav
     void stampGeometry(const rcPolyMesh& pmesh, const rcCompactHeightfield& chf, S32 border, const std::vector<U32>& span_gap,
                        const TileStampInput& input, const TileStamp& stamp, TileStampGeom& out)
     {
+        SK_NAV_ZONE("nav.stamp.geometry");
         out = TileStampGeom();
         out.mStamped = true;
         out.mPattern = input.mPattern;
@@ -1034,6 +1038,7 @@ namespace sknav
     void bindStamp(const TileStampGeom& geom, const TileStampInput& input, const TileEnclosure* enclosure, const RoomsProduct& rooms,
                    TileBinding& out)
     {
+        SK_NAV_ZONE("nav.stamp.bind");
         out = TileBinding();
         const auto spaceOf = [&](U16 c) -> const Space* {
             if (c == STAMP_NONE || c >= input.mComponentSpace.size() || input.mComponentSpace[c] >= rooms.mSpaces.size())

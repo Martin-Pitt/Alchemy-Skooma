@@ -1508,7 +1508,9 @@ namespace sknav
         std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
             const EvictionCandidate& x = candidates[a];
             const EvictionCandidate& y = candidates[b];
-            return x.mScore != y.mScore ? x.mScore < y.mScore : x.mDistance > y.mDistance;
+            return x.mRank != y.mRank ? x.mRank < y.mRank
+                 : x.mScore != y.mScore ? x.mScore < y.mScore
+                 : x.mDistance > y.mDistance;
         });
         std::vector<size_t> out;
         for (size_t i : order)

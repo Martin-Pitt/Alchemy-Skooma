@@ -26,6 +26,7 @@
 #define SK_NAVMESH_H
 
 #include "llsingleton.h"
+#include <array>
 #include "sknavbuild.h"
 #include "sknavexport.h"
 #include "sknavlayout.h"
@@ -79,6 +80,10 @@ public:
     /// The content keys of a mesh's tiles whose footprint meets the global
     /// box, 0 for a tile not published under one.
     void tileContentKeysIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, std::vector<U64>& out) const;
+    /// A hash of what a mesh's map products (polys, storeys, wall runs) meeting the box are built from.
+    U64 mapInputsKey(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
+    /// Whether a terrain mesh has a published AVATAR tile meeting the box.
+    bool terrainTilesIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max) const;
     /// Whether anything meeting the global box is still on its way: a tile
     /// queued or building, or a rooms pass not yet landed over it.
     bool settlingIn(const LLVector3d& min, const LLVector3d& max) const;
@@ -129,10 +134,15 @@ public:
         std::shared_ptr<const std::vector<sknav::Flight>> mFlights;
         std::shared_ptr<const std::vector<U32>> mPolySpace;            ///< per poly of mPolys, its space id; 0 for none
         std::shared_ptr<const std::vector<PortalEdge>> mPortalEdges;   ///< its polys' edges on portals
+        U64 mPolyRefBase = 0;           ///< Detour ref of poly 0; poly i is mPolyRefBase | i
     };
     typedef std::function<void(const PolyTile&)> PolyTileFn;
     /// Every published tile of the class whose footprint meets the box; polygons extracted once per publish.
     void polysIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const PolyTileFn& fn) const;
+    /// A poly edge's neighbour across its tile's border, from Detour's external links as they stand now: the edge,
+    /// the neighbour's ref and the stretch of the edge they share, as fractions from the edge's first vertex.
+    typedef std::function<void(const LLUUID& mesh, const sknav::TileKey& key, U16 poly, U8 edge, U64 neighbour, F32 t0, F32 t1)> BorderLinkFn;
+    void borderLinksIn(const LLVector3d& min, const LLVector3d& max, sknav::AgentClass cls, const BorderLinkFn& fn) const;
 
     /// Whether anything the debug pass draws is switched on: the navmesh
     /// surface from the pipeline's debug mask, or any layer that reads the
@@ -400,9 +410,9 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
-        /// AVATAR's wall runs, built on first read for the inputs hashed in mWallRunsAt.
+        /// AVATAR's wall runs, built on first read from the inputs named in mWallRunsKey.
         mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
-        mutable U64 mWallRunsAt = 0;
+        mutable std::array<U64, 12> mWallRunsKey{};
         /// The Detour tile's bytes, which Detour reads but does not own.
         std::vector<U8> mDetour[sknav::NUM_CLASSES];
         /// What the published polygons were built from, held near the camera
@@ -468,7 +478,7 @@ private:
         sknav::RoomsProductPtr mStampRooms;
         bool mStampScan = false;            ///< some tile may be due a stamp
         mutable sknav::StoreyProductPtr mStoreys;
-        mutable U64 mStoreysAt = 0;         ///< the revision they were built at
+        mutable std::vector<U64> mStoreysKey;   ///< the per-tile inputs they were built from
         /// Where its detail air is: every tile's in memory, on its way to disk, there, or on its way back.
         enum class Residency : U8 { RESIDENT, SPILLING, SPILLED, RELOADING };
         Residency mResidency = Residency::RESIDENT;
@@ -494,6 +504,7 @@ private:
         sknav::TileKey mKey;
         sknav::TileAirPtr mAir, mCoarse;
         F64 mNearness, mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
     struct RasterCandidate
@@ -504,6 +515,7 @@ private:
         sknav::TileRasterPtr mRaster;
         size_t mBytes;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::vector<RasterCandidate> mRasterScan;
     /// Held rasters get a quarter of the air budget; past it the farthest go
@@ -524,6 +536,7 @@ private:
         U32 mGeneration;
         sknav::TileKey mKey;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<BuildCandidate>> mScheduleScan, mBuildCandidates;
     std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
@@ -548,6 +561,11 @@ private:
     static bool probesDemanded();
     /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
     bool inAirRadius(const Tile& tile) const;
+    /// Which mesh the work queues serve first: 0 the agent's region's own
+    /// terrain, 1 the terrain of the regions touching it, 2 the clusters
+    /// owned by either, 3 everything else. Within a tier the distance orders,
+    /// so a surround in the void can never come before the ground it rings.
+    U8 meshPriority(const Mesh& mesh) const;
     /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
     std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
     void findHomeBoxes(const SKCensusSnapshotPtr& snap);
@@ -650,6 +668,7 @@ private:
     /// Every published tile whose footprint meets the box, with its mesh.
     void forEachTileIn(const LLVector3d& min, const LLVector3d& max, const std::function<void(const Mesh&, const Tile&)>& fn) const;
     /// A tile's wall runs as of this revision, null without a Detour tile, stamp or air.
+    void storeyInputs(const Mesh& mesh, std::vector<U64>& out) const;
     std::shared_ptr<const std::vector<sknav::WallRun>> tileWallRuns(const Mesh& mesh, const sknav::TileKey& key, const Tile& tile) const;
 
     std::map<LLUUID, std::unique_ptr<Mesh>> mMeshes;

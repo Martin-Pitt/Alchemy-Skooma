@@ -27,6 +27,7 @@
 #include "sknavwalls.h"
 
 #include "sknavbuild.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
@@ -222,6 +223,7 @@ namespace sknav
 
     void extractWallFaces(const rcHeightfield& hf, S32 border_cells, F32 min_height, std::vector<WallFace>& out, const U8* area_lut)
     {
+        SK_NAV_ZONE("nav.walls.faces");
         // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z. Faces of one side, one
         // across-column and one z-interval merge along the wall's direction.
         static const S32 DX[4] = { 1, -1, 0, 0 };
@@ -311,6 +313,7 @@ namespace sknav
     void extractRunoff(const rcHeightfield& hf, S32 border_cells, S32 climb, S32 headroom, F32 drop_max, F32 spacing,
                        std::vector<WallSegment>& ledges, std::vector<DropLink>& links)
     {
+        SK_NAV_ZONE("nav.walls.runoff");
         // Sides in Recast: 0 +x, 1 -x, 2 +z, 3 -z, as for the faces.
         static const S32 DX[4] = { 1, -1, 0, 0 };
         static const S32 DZ[4] = { 0, 0, 1, -1 };
@@ -505,6 +508,7 @@ namespace sknav
                        F32 drop_max, bool walkable_landing, F32 link_spacing,
                        std::vector<WallSegment>& segments, std::vector<DropLink>& links)
     {
+        SK_NAV_ZONE("nav.walls.classify");
         EdgeField field;
         takeEdgeField(hf, field);
         classifyEdges(pmesh, field, chf, params, drop_max, walkable_landing, link_spacing, segments, links);
@@ -514,6 +518,7 @@ namespace sknav
                        F32 drop_max, bool walkable_landing, F32 link_spacing,
                        std::vector<WallSegment>& segments, std::vector<DropLink>& links)
     {
+        SK_NAV_ZONE("nav.walls.classify");
         const EdgeField& hf = field;
         const S32 nvp = pmesh.nvp;
         // Erosion pulled the floor back from whatever bounds it by the agent
