@@ -2160,6 +2160,57 @@ template<> template<>
     }
 
     template<> template<>
+    void sknavrooms_object::test<60>()
+    {
+        set_test_name("a rooftop's over-roofed share is of the floor its cover was read on, pedestals spread onto it included");
+        // The rooftop reached from a stair hut's door, so a space of its own walking, with pedestals too small to stand on.
+        Scene s = twoRooms();
+        s.box(12.f, 4.f, 16.f, 4.25f, 3.25f, 6.f, false);
+        s.box(12.f, 7.75f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(15.75f, 4.f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 4.f, 12.25f, 5.5f, 3.25f, 6.f, false);
+        s.box(12.f, 6.5f, 12.25f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 5.5f, 12.25f, 6.5f, 5.45f, 6.f, false);
+        s.box(12.f, 4.f, 16.f, 8.f, 6.f, 6.25f);
+        for (F32 px = 3.f; px < 11.f; px += 1.5f)
+        {
+            s.box(px, 3.f, px + 0.5f, 3.5f, 3.25f, 3.75f);
+            s.box(px, 8.5f, px + 0.5f, 9.f, 3.25f, 3.75f);
+        }
+        const Result r = run(s.input(1));
+        const Space* top = r.at(6.f, 6.f, 3.75f);
+        ensure("the rooftop" + info(r), top && top->mRoof);
+        // Its floors, as the cover is read: walkable tops an avatar's head clears.
+        F64 floor = 0.0, cover = 0.0;
+        for (const TileEnclosure& te : r.mEnc->mTiles)
+        {
+            const TileAir& a = *te.mAir;
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const AirGap& g = a.mGaps[leaf.mFirstGap + i];
+                    const bool tall = g.mCeiling == AIR_CEILING_OPEN || (g.mCeiling - g.mFloor) * a.mUnit >= 1.f - 1e-3f;
+                    if (te.mGaps[leaf.mFirstGap + i].mSpace == r.index(top) + 1 && (g.mFlags & AirGap::TOP) && tall)
+                    {
+                        floor += a.mCell * a.mCell * (1 << leaf.mLevel) * (1 << leaf.mLevel);
+                    }
+                }
+            }
+        }
+        for (F32 m2 : top->mCoverM2)
+        {
+            cover += m2;
+        }
+        ensure(llformat("the share is the cover over that floor: %.4f, %.2f / %.2f, seeds' floor %.2f", top->mOverRoofed, cover, floor, top->mFloorArea),
+               floor > 0.0 && std::fabs(top->mOverRoofed - cover / floor) < 1e-3);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure(llformat("a share, %.3f", sp.mOverRoofed), sp.mOverRoofed >= 0.f && sp.mOverRoofed <= 1.f);
+        }
+    }
+
+    template<> template<>
     void sknavrooms_object::test<61>()
     {
         set_test_name("a lift across a partition takes from each room the floor it took there, no more");
