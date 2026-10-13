@@ -325,7 +325,7 @@ void SKNavMesh::evictAir()
             const auto cache = diskCache();
             if (cache && tile.mContentKey && !cache->contains(tile.mContentKey))
             {
-                // Pack the shared products on the worker.
+                // Pack the shared products on the worker, in place.
                 struct Spill
                 {
                     TileBuildResult mProduct;
@@ -347,10 +347,11 @@ void SKNavMesh::evictAir()
                 workers->post([spill, cache, content_key]()
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill air worker");
-                    if (spill->mFaces) spill->mProduct.mFaces = *spill->mFaces;
-                    if (spill->mLedges) spill->mProduct.mLedges = *spill->mLedges;
-                    if (spill->mRunoff) spill->mProduct.mRunoff = *spill->mRunoff;
-                    cache->store(content_key, packTileProduct(spill->mProduct, content_key));
+                    TileProductParts parts;
+                    parts.mFaces = spill->mFaces.get();
+                    parts.mLedges = spill->mLedges.get();
+                    parts.mRunoff = spill->mRunoff.get();
+                    cache->store(content_key, packTileProduct(spill->mProduct, content_key, parts));
                 });
             }
             tile.mAirCoarse = candidate.mCoarse;
@@ -671,6 +672,15 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
 
 void SKNavMesh::reloadMesh(Mesh& mesh)
 {
+    // A refused swap keeps what it read: try the swap again rather than read it all again.
+    if (mesh.mRefusedReload)
+    {
+        const std::shared_ptr<SpillJob> refused = std::move(mesh.mRefusedReload);
+        mesh.mRefusedReload.reset();
+        mesh.mResidency = Mesh::Residency::RELOADING;
+        finishReload(refused);
+        return;
+    }
     LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
     LL::WorkQueue::ptr_t workers = workerQueue();
     const std::shared_ptr<TileDiskCache> cache = diskCache();
@@ -748,6 +758,7 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
     if (!swap.empty() && !swapProductsAir(mesh, swap))
     {
         mesh.mResidency = Mesh::Residency::SPILLED;
+        mesh.mRefusedReload = job;
         return;
     }
     F32 millis = 0.f;
@@ -2566,7 +2577,8 @@ void SKNavMesh::syncSkyMap()
         {
             const auto old = previous->find(entry.first);
             const auto& air = entry.second.mAir;
-            if (old == previous->end() || old->second != air)
+            // A spill or reload swaps the air but keeps its tops: the cells stay.
+            if (old == previous->end() || (old->second != air && !sameTops(*old->second, *air)))
                 result->mMap.set(entry.first, entry.second.mOrigin + LLVector3d(air->mOrigin), *air);
             result->mTiles.emplace(entry.first, air);
         }

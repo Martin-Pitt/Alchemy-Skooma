@@ -138,6 +138,12 @@ void SKNavMesh::gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, 
         for (const auto& t : mesh.mTiles)
         {
             const Tile& tile = t.second;
+            // Only a tile in reach asks for its spilled detail back.
+            const F64 d2 = planDistance2(camera, tile.mMin, tile.mMax);
+            if (d2 > reach2)
+            {
+                continue;
+            }
             if (!tile.mAir)
             {
                 // A settled tile's detail is on disk: it is drawn once it is back.
@@ -153,11 +159,7 @@ void SKNavMesh::gatherAirOverlay(const LLVector3d& camera, F64 reach, U32 mode, 
             {
                 continue;
             }
-            const F64 d2 = planDistance2(camera, tile.mMin, tile.mMax);
-            if (d2 <= reach2)
-            {
-                tiles.push_back({ d2, &mesh, t.first, &tile, coarse });
-            }
+            tiles.push_back({ d2, &mesh, t.first, &tile, coarse });
         }
     }
     std::sort(tiles.begin(), tiles.end(), [](const Near& a, const Near& b) { return a.mDistance2 < b.mDistance2; });

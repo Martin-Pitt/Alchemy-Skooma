@@ -26,12 +26,15 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavskymap.h"
 #include "../sknavtilecache.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <thread>
 
 namespace
 {
@@ -491,5 +494,97 @@ namespace tut
         TileBuildResult static_back;
         ensure("static unpacked", unpackTileProduct(static_bytes.data(), static_bytes.size(), 0xfeedull, static_back));
         ensure("no stamp, no Detour", !static_back.mStamp.mStamped && static_back.mData[0].empty());
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<13>()
+    {
+        set_test_name("a file stored again after its remove failed is not removed by the retry");
+#if LL_WINDOWS
+        const std::string dir = scratch("sknavtilecache_restore");
+        const std::vector<U8> blob(100, 3);
+        TileDiskCache cache(dir, 1 << 20);
+        cache.index();
+        cache.store(1, blob);
+        const std::filesystem::path held = std::filesystem::path(dir) / "0000000000000001.snt";
+        {
+            std::ifstream open_file(held, std::ios::binary);
+            cache.erase(1);
+            ensure_equals("pending", cache.pendingRemovals(), size_t(1));
+        }
+        ensure("stored again", cache.store(1, blob));
+        ensure("stored another", cache.store(2, blob));
+        std::vector<U8> got;
+        ensure("the second store survives the retry", std::filesystem::exists(held) && cache.load(1, got) && got == blob);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+#endif
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<14>()
+    {
+        set_test_name("indexing while another thread stores leaves its half-written files alone");
+        const std::string dir = scratch("sknavtilecache_race");
+        const std::vector<U8> blob(64 * 1024, 5);
+        TileDiskCache cache(dir, U64(1) << 32);
+        std::atomic<bool> done{ false };
+        std::thread indexer([&]() {
+            while (!done)
+            {
+                cache.index();
+            }
+        });
+        S32 failed = 0;
+        for (U64 k = 1; k <= 400; ++k)
+        {
+            failed += cache.store(k, blob) ? 0 : 1;
+        }
+        done = true;
+        indexer.join();
+        ensure_equals("every store landed", failed, 0);
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<15>()
+    {
+        set_test_name("asking for fine air moves the content key");
+        TileBuildInput a = input({});
+        a.mAir = true;
+        TileBuildInput b = a;
+        b.mFineAir = true;
+        ensure("fine air keyed", tileContentKey(a) != tileContentKey(b));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<16>()
+    {
+        set_test_name("a spilled tile's coarse air sets the sky map's cells as its detail did");
+        const TileAir full = air();
+        const TileAirPtr coarse = coarseAir(full);
+        ensure("same tops", sameTops(full, *coarse));
+        TileAir moved = *coarse;
+        ensure("tops to move", !moved.mTop.empty());
+        moved.mTop.back().mTop += 1;
+        ensure("a moved top differs", !sameTops(full, moved));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<17>()
+    {
+        set_test_name("products packed from parts held apart are the same bytes as packed whole");
+        const TileBuildResult whole = result();
+        ensure("the result has faces, ledges and runoff", !whole.mFaces.empty() && !whole.mLedges.empty() && !whole.mRunoff.empty());
+        TileBuildResult bare = whole;
+        bare.mFaces.clear();
+        bare.mLedges.clear();
+        bare.mRunoff.clear();
+        TileProductParts parts;
+        parts.mFaces = &whole.mFaces;
+        parts.mLedges = &whole.mLedges;
+        parts.mRunoff = &whole.mRunoff;
+        ensure("same bytes", packTileProduct(bare, 42, parts) == packTileProduct(whole, 42));
     }
 }

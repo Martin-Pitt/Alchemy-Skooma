@@ -206,6 +206,7 @@ namespace sknav
     /// A coarse tile's air in cells and height units factor times finer, so the
     /// passes read it beside a fine tile's: each leaf factor times as wide,
     /// split into leaves of AIR_MAX_LEVEL past it, heights times factor.
+    /// Null unless factor is a power of two.
     TileAirPtr upsampleAir(const TileAir& coarse, S32 factor);
 
     /// spanGaps for air with no fine grid, read off its leaves: the gap whose

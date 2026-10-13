@@ -31,6 +31,17 @@
 
 namespace sknav
 {
+    bool sameTops(const TileAir& a, const TileAir& b)
+    {
+        if (a.mOrigin != b.mOrigin || a.mCell != b.mCell || a.mUnit != b.mUnit || a.mTopCell != b.mTopCell ||
+            a.mTopWidth != b.mTopWidth || a.mTopHeight != b.mTopHeight || a.mTopStart != b.mTopStart || a.mTop.size() != b.mTop.size())
+        {
+            return false;
+        }
+        return std::equal(a.mTop.begin(), a.mTop.end(), b.mTop.begin(),
+                          [](const TopInterval& x, const TopInterval& y) { return x.mBottom == y.mBottom && x.mTop == y.mTop; });
+    }
+
     const std::vector<SkyMap::Interval>* SkyMap::find(S64 x, S64 y) const
     {
         const auto b = mBlocks.find(blockKey(x, y));
