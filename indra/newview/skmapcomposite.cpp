@@ -27,6 +27,7 @@
 #include "skmapcomposite.h"
 
 #include "llagent.h"
+#include "llagentcamera.h"
 #include "llglslshader.h"
 #include "llrender.h"
 #include "lltimer.h"
@@ -899,10 +900,19 @@ void SKMapComposite::draw(const skmap::MapView& view)
         mHasKey = true;
     }
     nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
+    // The room and storey follow what the camera looks at; a focus over no floor falls back to the avatar.
+    LLVector3d focus = gAgentCamera.cameraMouselook() ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
+    F32 vz = static_cast<F32>(focus.mdV[VZ]);
+    if (!nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz))
+    {
+        focus = gAgent.getPositionGlobal();
+        vz = static_cast<F32>(focus.mdV[VZ]);
+        nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz);
+    }
     Want want;
     want.mDataKey = mDataKey;
     want.mOrigin = want_origin;
-    want.mViewer = viewerSpaceRef(gAgent.getPositionGlobal());
+    want.mViewer = viewerSpaceRef(focus);
     want.mOptions = opts;
     want.mMpp = mpp;
     // One job at a time: inputs that move while one runs are taken by the next, so a burst of changes costs one build.
@@ -920,9 +930,6 @@ void SKMapComposite::draw(const skmap::MapView& view)
         return;
     }
 
-    const LLVector3d agent = gAgent.getPositionGlobal();
-    F32 vz = static_cast<F32>(agent.mdV[VZ]);
-    nav.floorUnder(agent, sknav::AgentClass::AVATAR, vz);
     if (vz != mDrawnVz)
     {
         mRenderDirty = true;

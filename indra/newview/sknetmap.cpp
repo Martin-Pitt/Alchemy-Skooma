@@ -1525,9 +1525,10 @@ bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
             const F32 dx = static_cast<F32>(gViewerWindow->getCurrentMouseDX());
             const F32 dy = static_cast<F32>(gViewerWindow->getCurrentMouseDY());
             const LLVector3d now = mView.toGlobal(mView.width() * 0.5f - dx, mView.height() * 0.5f - dy);
-            const LLVector3d agent = gAgent.getPositionGlobal();
-            mPan.set(static_cast<F32>(now.mdV[VX] - agent.mdV[VX]), static_cast<F32>(now.mdV[VY] - agent.mdV[VY]));
-            mView.set(agent + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0), mView.span(), mView.rotation(), mView.width(), mView.height());
+            // Relative to the camera, as updateView centres the map on it.
+            const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+            mPan.set(static_cast<F32>(now.mdV[VX] - eye.mdV[VX]), static_cast<F32>(now.mdV[VY] - eye.mdV[VY]));
+            mView.set(eye + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0), mView.span(), mView.rotation(), mView.width(), mView.height());
             gViewerWindow->moveCursorToCenter();
         }
     }
