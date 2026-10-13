@@ -101,10 +101,9 @@ namespace sknav
         /// Cells a march may skip from a cell this far from any solid, and still land on the first one.
         S32 skip(F32 reach) { return std::max(1, static_cast<S32>(reach - 0.75f)); }
 
-        /// A separable Gaussian over the valid cells only, normalised by their weight; edges repeat.
-        void smooth(std::vector<F32>& v, const std::vector<F32>& weight, S32 w, S32 h, F32 sigma_cells)
+        /// A normalised Gaussian kernel of radius three sigma.
+        std::vector<F32> gaussian(F32 sigma_cells)
         {
-            SK_NAV_ZONE("nav.wind.smooth");
             const S32 r = static_cast<S32>(3.f * sigma_cells);
             std::vector<F32> k(2 * r + 1);
             F32 sum = 0.f;
@@ -117,42 +116,76 @@ namespace sknav
             {
                 x /= sum;
             }
-            std::vector<F32> num(v.size()), den(v.size());
+            return k;
+        }
+
+        /// A separable blur of v by k, edges repeating: along x, then along y. Each tap is added to a whole row in
+        /// kernel order, which streams along memory and keeps every cell's sum in that order.
+        void blur(const std::vector<F32>& v, const std::vector<F32>& k, S32 w, S32 h, std::vector<F32>& out)
+        {
+            SK_NAV_ZONE("nav.wind.blur");
+            const S32 r = static_cast<S32>(k.size() / 2);
+            std::vector<F32> tmp(v.size()), row(static_cast<size_t>(w) + 2 * r);
+            for (S32 y = 0; y < h; ++y)
+            {
+                const F32* src = v.data() + static_cast<size_t>(y) * w;
+                for (S32 x = -r; x < w + r; ++x)
+                {
+                    row[x + r] = src[std::clamp(x, 0, w - 1)];
+                }
+                F32* dst = tmp.data() + static_cast<size_t>(y) * w;
+                for (S32 i = 0; i <= 2 * r; ++i)
+                {
+                    const F32 ki = k[i];
+                    const F32* tap = row.data() + i;
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        dst[x] += ki * tap[x];
+                    }
+                }
+            }
+            out.assign(v.size(), 0.f);
+            for (S32 y = 0; y < h; ++y)
+            {
+                F32* dst = out.data() + static_cast<size_t>(y) * w;
+                for (S32 i = 0; i <= 2 * r; ++i)
+                {
+                    const F32 ki = k[i];
+                    const F32* tap = tmp.data() + static_cast<size_t>(std::clamp(y + i - r, 0, h - 1)) * w;
+                    for (S32 x = 0; x < w; ++x)
+                    {
+                        dst[x] += ki * tap[x];
+                    }
+                }
+            }
+        }
+
+        /// A separable Gaussian over the valid cells only, normalised by their smoothed weight; edges repeat.
+        void smooth(std::vector<F32>& v, const std::vector<F32>& weight, const std::vector<F32>& weight_blur, S32 w, S32 h, F32 sigma_cells)
+        {
+            SK_NAV_ZONE("nav.wind.smooth");
+            std::vector<F32> num(v.size());
             for (size_t i = 0; i < v.size(); ++i)
             {
                 num[i] = v[i] * weight[i];
-                den[i] = weight[i];
             }
-            std::vector<F32> tn(v.size()), td(v.size());
-            for (S32 y = 0; y < h; ++y)
+            std::vector<F32> sum;
+            blur(num, gaussian(sigma_cells), w, h, sum);
+            for (size_t i = 0; i < v.size(); ++i)
             {
-                for (S32 x = 0; x < w; ++x)
-                {
-                    F32 a = 0.f, b = 0.f;
-                    for (S32 i = -r; i <= r; ++i)
-                    {
-                        const S32 j = std::clamp(x + i, 0, w - 1) + y * w;
-                        a += k[i + r] * num[j];
-                        b += k[i + r] * den[j];
-                    }
-                    tn[x + y * w] = a;
-                    td[x + y * w] = b;
-                }
+                v[i] = sum[i] / std::max(weight_blur[i], 1e-6f);
             }
-            for (S32 y = 0; y < h; ++y)
+        }
+
+        /// One for an open cell, nothing for a blocked one.
+        std::vector<F32> windWeight(const WindField& f)
+        {
+            std::vector<F32> weight(f.mFlags.size(), 0.f);
+            for (size_t i = 0; i < weight.size(); ++i)
             {
-                for (S32 x = 0; x < w; ++x)
-                {
-                    F32 a = 0.f, b = 0.f;
-                    for (S32 i = -r; i <= r; ++i)
-                    {
-                        const S32 j = x + std::clamp(y + i, 0, h - 1) * w;
-                        a += k[i + r] * tn[j];
-                        b += k[i + r] * td[j];
-                    }
-                    v[x + y * w] = a / std::max(b, 1e-6f);
-                }
+                weight[i] = (f.mFlags[i] & WindCell::BLOCKED) ? 0.f : 1.f;
             }
+            return weight;
         }
     }
 
@@ -480,7 +513,15 @@ namespace sknav
         return f;
     }
 
-    std::shared_ptr<WindSlab> computeWindSlab(const WindField& f, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params)
+    std::vector<F32> windWeightBlur(const WindField& f, const WindParams& params)
+    {
+        std::vector<F32> out;
+        blur(windWeight(f), gaussian(params.mSmoothM / f.mCell), f.mWidth, f.mHeight, out);
+        return out;
+    }
+
+    std::shared_ptr<WindSlab> computeWindSlab(const WindField& f, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params,
+                                              const std::vector<F32>* weight_blur)
     {
         SK_NAV_ZONE("nav.wind.slab");
         auto slab = std::make_shared<WindSlab>();
@@ -507,7 +548,7 @@ namespace sknav
 
         // Lee: the least of s / min(8 h, cap) over solids s upwind.
         SK_NAV_ZONE("nav.wind.slab.lee");
-        std::vector<F32> lee(n, 1.f), width(n, 0.f), weight(n, 0.f);
+        std::vector<F32> lee(n, 1.f), width(n, 0.f);
         const F32 cap = params.mLeeCapM;
         for (S32 y = 0; y < h; ++y)
         {
@@ -563,10 +604,10 @@ namespace sknav
                     sum += span;
                 }
                 width[i] = sum;
-                weight[i] = 1.f;
             }
         }
-        smooth(width, weight, w, h, params.mSmoothM / cell);
+        // The weight is the same for every heading, so a pass may blur it once.
+        smooth(width, windWeight(f), weight_blur ? *weight_blur : windWeightBlur(f, params), w, h, params.mSmoothM / cell);
 
         // Venturi, calm indoors, damped and swirling courtyards.
         SK_NAV_ZONE("nav.wind.slab.venturi");
@@ -688,6 +729,7 @@ namespace sknav
         S32 mHeading = -1;          ///< -1 while the band's field is still to build
         WindFieldPtr mField;
         std::shared_ptr<const std::vector<F32>> mZ;
+        std::vector<F32> mWeightBlur;
         F64 mMs = 0.0;
         bool mDone = false;
     };
@@ -717,11 +759,12 @@ namespace sknav
         {
             s.mField = buildWindField(*in.mEnclosure, in.mRooms.get(), in.mBands[s.mBand], in.mParams);
             s.mZ = std::make_shared<const std::vector<F32>>(s.mField->mZ);
+            s.mWeightBlur = windWeightBlur(*s.mField, in.mParams);
             s.mHeading = 0;
         }
         else
         {
-            std::shared_ptr<WindSlab> slab = computeWindSlab(*s.mField, in.mRooms.get(), windHeadingDeg(s.mHeading), in.mParams);
+            std::shared_ptr<WindSlab> slab = computeWindSlab(*s.mField, in.mRooms.get(), windHeadingDeg(s.mHeading), in.mParams, &s.mWeightBlur);
             slab->mHeading = s.mHeading;
             slab->mBand = static_cast<S32>(s.mBand);
             slab->mZ = s.mZ;
@@ -730,6 +773,7 @@ namespace sknav
             {
                 s.mHeading = -1;
                 s.mField.reset();
+                s.mWeightBlur.clear();
                 s.mDone = ++s.mBand == in.mBands.size();
             }
         }
