@@ -904,6 +904,14 @@ namespace sknav
 
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key)
     {
+        return packTileProduct(result, key, TileProductParts());
+    }
+
+    std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key, const TileProductParts& parts)
+    {
+        const std::vector<WallFace>& faces = parts.mFaces ? *parts.mFaces : result.mFaces;
+        const std::vector<WallSegment>& ledges = parts.mLedges ? *parts.mLedges : result.mLedges;
+        const std::vector<DropLink>& runoff = parts.mRunoff ? *parts.mRunoff : result.mRunoff;
         Writer w;
         w.pod(MAGIC);
         w.pod(TILE_PRODUCT_VERSION);
@@ -932,8 +940,8 @@ namespace sknav
         }
 
         s = w.open(TAG_FACES);
-        w.pod(static_cast<U32>(result.mFaces.size()));
-        for (const WallFace& f : result.mFaces)
+        w.pod(static_cast<U32>(faces.size()));
+        for (const WallFace& f : faces)
         {
             w.vec(f.mMin);
             w.vec(f.mMax);
@@ -962,10 +970,10 @@ namespace sknav
         }
 
         s = w.open(TAG_LEDGES);
-        writeSegments(w, result.mLedges);
+        writeSegments(w, ledges);
         w.close(s);
         s = w.open(TAG_RUNOFF);
-        writeLinks(w, result.mRunoff);
+        writeLinks(w, runoff);
         w.close(s);
 
         if (result.mAir)

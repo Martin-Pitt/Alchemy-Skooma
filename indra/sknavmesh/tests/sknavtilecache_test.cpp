@@ -570,4 +570,21 @@ namespace tut
         moved.mTop.back().mTop += 1;
         ensure("a moved top differs", !sameTops(full, moved));
     }
+
+    template<> template<>
+    void sknavtilecache_object::test<17>()
+    {
+        set_test_name("products packed from parts held apart are the same bytes as packed whole");
+        const TileBuildResult whole = result();
+        ensure("the result has faces, ledges and runoff", !whole.mFaces.empty() && !whole.mLedges.empty() && !whole.mRunoff.empty());
+        TileBuildResult bare = whole;
+        bare.mFaces.clear();
+        bare.mLedges.clear();
+        bare.mRunoff.clear();
+        TileProductParts parts;
+        parts.mFaces = &whole.mFaces;
+        parts.mLedges = &whole.mLedges;
+        parts.mRunoff = &whole.mRunoff;
+        ensure("same bytes", packTileProduct(bare, 42, parts) == packTileProduct(whole, 42));
+    }
 }

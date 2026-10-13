@@ -62,6 +62,14 @@ namespace sknav
     /// a header, then tagged sections a reader skips when it does not know
     /// them, then a checksum over everything before it.
     std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key);
+    /// Products held apart from the result, each packed in place of the result's own when given.
+    struct TileProductParts
+    {
+        const std::vector<WallFace>* mFaces = nullptr;
+        const std::vector<WallSegment>* mLedges = nullptr;
+        const std::vector<DropLink>* mRunoff = nullptr;
+    };
+    std::vector<U8> packTileProduct(const TileBuildResult& result, U64 key, const TileProductParts& parts);
     /// False, leaving out untouched, when the bytes are short, damaged, of
     /// another version or written for another key.
     bool unpackTileProduct(const U8* data, size_t size, U64 key, TileBuildResult& out);

@@ -325,7 +325,7 @@ void SKNavMesh::evictAir()
             const auto cache = diskCache();
             if (cache && tile.mContentKey && !cache->contains(tile.mContentKey))
             {
-                // Pack the shared products on the worker.
+                // Pack the shared products on the worker, in place.
                 struct Spill
                 {
                     TileBuildResult mProduct;
@@ -347,10 +347,11 @@ void SKNavMesh::evictAir()
                 workers->post([spill, cache, content_key]()
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill air worker");
-                    if (spill->mFaces) spill->mProduct.mFaces = *spill->mFaces;
-                    if (spill->mLedges) spill->mProduct.mLedges = *spill->mLedges;
-                    if (spill->mRunoff) spill->mProduct.mRunoff = *spill->mRunoff;
-                    cache->store(content_key, packTileProduct(spill->mProduct, content_key));
+                    TileProductParts parts;
+                    parts.mFaces = spill->mFaces.get();
+                    parts.mLedges = spill->mLedges.get();
+                    parts.mRunoff = spill->mRunoff.get();
+                    cache->store(content_key, packTileProduct(spill->mProduct, content_key, parts));
                 });
             }
             tile.mAirCoarse = candidate.mCoarse;
