@@ -928,7 +928,12 @@ namespace sknav
 
     TileAirPtr upsampleAir(const TileAir& coarse, S32 factor)
     {
+        // A leaf's side is a power of two, so it scales only by one.
         const S32 f = std::max(1, factor);
+        if (f & (f - 1))
+        {
+            return nullptr;
+        }
         S32 shift = 0;
         while ((1 << shift) < f)
         {

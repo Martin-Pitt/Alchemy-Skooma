@@ -1020,4 +1020,42 @@ namespace tut
         ensure("the ramp is over the crawl gap at the corner", column.floorAt(air, 1, 3, 3) > air.mGaps[column.mGap[0]].mCeiling);
         ensure_equals("the crawl gap first", air.mGaps[column.mGap[0]].mCeiling, 24);
     }
+
+    template<> template<>
+    void sknavairdistil_object::test<24>()
+    {
+        set_test_name("coarse air upsampled only by a power of two; any other factor is refused");
+        AirGrid coarse = field([](S32, S32) { return 2; }, nullptr, 16);
+        coarse.mCell = coarse.mUnit = 1.f;
+        TileAir air;
+        distilAir(coarse, CLIMB, air);
+        airSeams(coarse, air);
+        ensure("a factor of 4 upsamples", upsampleAir(air, 4) != nullptr);
+        for (S32 f : { 3, 5, 6, 10 })
+        {
+            const TileAirPtr fine = upsampleAir(air, f);
+            if (!fine)
+            {
+                continue;
+            }
+            // Were it upsampled, every fine cell would have to lie under exactly one leaf of the coarse floor.
+            std::vector<S32> hits(static_cast<size_t>(fine->mWidth) * fine->mHeight, 0);
+            for (const AirLeaf& l : fine->mLeaves)
+            {
+                const S32 s = 1 << l.mLevel;
+                for (S32 y = l.mY; y < l.mY + s; ++y)
+                {
+                    for (S32 x = l.mX; x < l.mX + s; ++x)
+                    {
+                        ensure(llformat("factor %d: leaf (%d, %d) inside the tile", f, l.mX, l.mY), x < fine->mWidth && y < fine->mHeight);
+                        ++hits[x + y * fine->mWidth];
+                    }
+                }
+            }
+            for (S32 h : hits)
+            {
+                ensure_equals(llformat("factor %d: each cell under one leaf", f).c_str(), h, 1);
+            }
+        }
+    }
 }
