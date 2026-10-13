@@ -1802,9 +1802,8 @@ namespace sknav
                     {
                         AirGap& g = grid.mGaps[base + i];
                         const F32 z = grid.height(g.mFloor);
-                        // A tread stands off the fitted plane by up to half a riser.
-                        if ((g.mFlags & AirGap::TOP) && z >= f.mZMin - 0.25f && z <= f.mZMax + 0.25f &&
-                            std::fabs(z - plane) <= std::max(0.5f, f.mRise))
+                        // A tread stands off the fitted plane by up to half a riser, never the whole rise.
+                        if ((g.mFlags & AirGap::TOP) && z >= f.mZMin - 0.25f && z <= f.mZMax + 0.25f && std::fabs(z - plane) <= FLIGHT_PLANE_DZ_M)
                         {
                             g.mFlags |= AirGap::FLIGHT;
                         }
