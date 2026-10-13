@@ -988,8 +988,9 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
         mHasKey = true;
     }
     nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
-    // The room and storey follow what the camera looks at; a focus over no floor falls back to the avatar.
-    LLVector3d focus = gAgentCamera.cameraMouselook() ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
+    // The room and storey are the avatar's while the camera follows it, else what the camera looks at; a focus over no floor falls back to the avatar.
+    const bool on_avatar = gAgentCamera.cameraMouselook() || gAgentCamera.getFocusOnAvatar();
+    LLVector3d focus = on_avatar ? gAgent.getPositionGlobal() : gAgentCamera.getFocusGlobal();
     F32 vz = static_cast<F32>(focus.mdV[VZ]);
     if (!nav.floorUnder(focus, sknav::AgentClass::AVATAR, vz))
     {
