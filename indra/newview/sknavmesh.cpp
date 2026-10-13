@@ -2538,7 +2538,8 @@ void SKNavMesh::syncSkyMap()
         {
             const auto old = previous->find(entry.first);
             const auto& air = entry.second.mAir;
-            if (old == previous->end() || old->second != air)
+            // A spill or reload swaps the air but keeps its tops: the cells stay.
+            if (old == previous->end() || (old->second != air && !sameTops(*old->second, *air)))
                 result->mMap.set(entry.first, entry.second.mOrigin + LLVector3d(air->mOrigin), *air);
             result->mTiles.emplace(entry.first, air);
         }

@@ -26,6 +26,7 @@
 
 #include "../test/lltut.h"
 
+#include "../sknavskymap.h"
 #include "../sknavtilecache.h"
 
 #include <algorithm>
@@ -555,5 +556,18 @@ namespace tut
         TileBuildInput b = a;
         b.mFineAir = true;
         ensure("fine air keyed", tileContentKey(a) != tileContentKey(b));
+    }
+
+    template<> template<>
+    void sknavtilecache_object::test<16>()
+    {
+        set_test_name("a spilled tile's coarse air sets the sky map's cells as its detail did");
+        const TileAir full = air();
+        const TileAirPtr coarse = coarseAir(full);
+        ensure("same tops", sameTops(full, *coarse));
+        TileAir moved = *coarse;
+        ensure("tops to move", !moved.mTop.empty());
+        moved.mTop.back().mTop += 1;
+        ensure("a moved top differs", !sameTops(full, moved));
     }
 }
