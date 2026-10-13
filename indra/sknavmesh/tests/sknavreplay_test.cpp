@@ -1867,8 +1867,8 @@ namespace tut
 
     // SKNAV_REPLAY_ORACLE names a census: for each mesh with spaces, edits of
     // single tiles (SKNAV_REPLAY_ORACLE_EDITS per mesh, default 6) run the
-    // enclosure and spaces passes incrementally from the last products and from
-    // nothing on the same air; the two must cut the same rooms. The full pass
+    // enclosure and spaces passes incrementally from a settled full pass on the
+    // air before, and from nothing on the air after; the two must cut the same rooms. The full pass
     // is settled once (run again over itself), as the viewer's always is.
     // SKNAV_REPLAY_ORACLE_OUT names a JSON file for the results.
     template<> template<>
@@ -1937,18 +1937,10 @@ namespace tut
             {
                 continue;
             }
-            if (!only_mesh.empty())
-            {
-                // Controls: nothing moved, over the replay's products and over a full pass settled once.
-                F64 t0 = 0.0;
-                const auto kept = run(mesh, tiles, mesh.mEnclosure, mesh.mRooms, t0);
-                const auto scratch = run(mesh, tiles, nullptr, nullptr, t0);
-                const auto settled = run(mesh, tiles, scratch.first, scratch.second, t0);
-                const auto twice = run(mesh, tiles, settled.first, settled.second, t0);
-                const std::string cs = canonicalRooms(*settled.first, *settled.second);
-                std::cout << "control: replay products rerun " << (canonicalRooms(*kept.first, *kept.second) == cs ? "equal" : "DIFFER")
-                          << ", settled rerun " << (canonicalRooms(*twice.first, *twice.second) == cs ? "equal" : "DIFFER") << std::endl;
-            }
+            // What the viewer holds before the edit: a full pass on the air as it was, settled once.
+            F64 t_before = 0.0;
+            const auto before_scratch = run(mesh, tiles, nullptr, nullptr, t_before);
+            const auto before = run(mesh, tiles, before_scratch.first, before_scratch.second, t_before);
             // Spread over the mesh: every k-th tile, its floor lost and unchanged.
             const size_t step = std::max<size_t>(1, tiles.size() / std::max<size_t>(1, edits));
             for (size_t e = 0, k = 0; e < edits && k < tiles.size(); ++e, k += step)
@@ -1958,7 +1950,7 @@ namespace tut
                     std::vector<EnclosureInput::Tile> after = tiles;
                     after[k].mAir = editedAir(*tiles[k].mAir, lose != 0);
                     F64 t_inc = 0.0, t_full = 0.0, t_settle = 0.0;
-                    const auto inc = run(mesh, after, mesh.mEnclosure, mesh.mRooms, t_inc);
+                    const auto inc = run(mesh, after, before.first, before.second, t_inc);
                     const auto scratch = run(mesh, after, nullptr, nullptr, t_full);
                     const auto settled = run(mesh, after, scratch.first, scratch.second, t_settle);
                     const std::string ci = canonicalRooms(*inc.first, *inc.second);
