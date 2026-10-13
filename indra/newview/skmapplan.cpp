@@ -27,6 +27,7 @@
 #include "skmapplan.h"
 
 #include "llsurface.h"
+#include "llsurfacepatch.h"
 #include "llviewerregion.h"
 #include "llworld.h"
 #include "sknavmesh.h"
@@ -1173,22 +1174,212 @@ U64 skmap::plan::gatherKey(const LLVector3d& min, const LLVector3d& max)
     return h;
 }
 
-DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, const LLVector3d& max)
+struct skmap::plan::Snapshot
+{
+    struct Border
+    {
+        U16 mPoly = 0;
+        U8 mEdge = 0;
+        U64 mNbr = 0;
+        F32 mT0 = 0.f;
+        F32 mT1 = 1.f;
+    };
+    struct Tile
+    {
+        SKNavMesh::PolyTile mPoly;
+        F32 mWater = 0.f;
+        std::shared_ptr<const std::vector<Border>> mBorder;
+        std::shared_ptr<const std::vector<sknav::WallRun>> mRuns;
+    };
+    struct Mesh
+    {
+        LLUUID mId;
+        LLVector3d mOrigin;
+        sknav::RoomsProductPtr mRooms;
+        sknav::StoreyProductPtr mStoreys;
+        std::vector<Tile> mTiles;
+    };
+    struct Land
+    {
+        LLVector3d mOrigin;
+        S32 mSide = 256;
+        F32 mWater = 0.f;
+        std::shared_ptr<const std::vector<F32>> mHeights;
+    };
+    LLVector3d mOrigin;
+    std::vector<Mesh> mMeshes;
+    std::vector<Land> mLands;
+    U32 mTilesRead = 0;     ///< tiles whose border links were read again
+    U32 mLandsRead = 0;
+};
+
+struct skmap::plan::Gatherer::Cache
+{
+    struct Border
+    {
+        U64 mKey = 0;
+        std::shared_ptr<const std::vector<Snapshot::Border>> mLinks;
+    };
+    struct Land
+    {
+        U64 mStamp = 0;
+        std::shared_ptr<const std::vector<F32>> mHeights;
+    };
+    std::map<std::pair<LLUUID, std::pair<S32, S32>>, Border> mBorders;
+    std::map<U64, Land> mLands;
+};
+
+skmap::plan::Gatherer::Gatherer() : mCache(std::make_unique<Cache>()) {}
+skmap::plan::Gatherer::~Gatherer() = default;
+
+namespace
+{
+    /// The land's patches as they stand, the way SKNavMesh::landStamp reads them.
+    U64 landStamp(LLViewerRegion& region)
+    {
+        LLSurface& land = region.getLand();
+        const S32 per_edge = land.getPatchesPerEdge();
+        U64 h = mix(0ULL, region.getHandle());
+        for (S32 y = 0; y < per_edge; ++y)
+        {
+            for (S32 x = 0; x < per_edge; ++x)
+            {
+                if (const LLSurfacePatch* patch = land.getPatch(x, y))
+                {
+                    h = mix(h, static_cast<U64>(patch->getUpdateCount()));
+                }
+            }
+        }
+        return mix(h, static_cast<U64>(region.getWidth()));
+    }
+}
+
+SnapshotPtr skmap::plan::Gatherer::snapshot(const LLVector3d& origin, const LLVector3d& min, const LLVector3d& max)
+{
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.Snapshot");
+    SKNavMesh& nav = SKNavMesh::instance();
+    auto snap = std::make_shared<Snapshot>();
+    snap->mOrigin = origin;
+    decltype(Cache::mBorders) borders;
+    forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
+    {
+        nav.requestDetail(m.mId);   // wall runs read the tiles' air (ruling 13)
+        Snapshot::Mesh ms;
+        ms.mId = m.mId;
+        ms.mOrigin = m.mOrigin;
+        ms.mRooms = m.mRooms;
+        ms.mStoreys = nav.storeysLatest(m.mId);
+        std::map<std::pair<S32, S32>, size_t> at;
+        nav.polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
+        {
+            if (t.mMesh != m.mId || !t.mPolys)
+            {
+                return;
+            }
+            at[{ t.mKey.mX, t.mKey.mY }] = ms.mTiles.size();
+            Snapshot::Tile st;
+            st.mPoly = t;
+            LLViewerRegion* region = LLWorld::getInstance()->getRegionFromHandle(t.mRegion);
+            st.mWater = region ? region->getWaterHeight() : 0.f;
+            ms.mTiles.push_back(std::move(st));
+        });
+        // Border links name the neighbours' Detour refs: read again only when a tile or a neighbour is re-added.
+        for (Snapshot::Tile& st : ms.mTiles)
+        {
+            const sknav::TileKey& key = st.mPoly.mKey;
+            U64 k = 0;
+            for (S32 i = 0; i < 9; ++i)
+            {
+                const auto n = at.find({ key.mX + i % 3 - 1, key.mY + i / 3 - 1 });
+                k = mix(k, n == at.end() ? 0 : ms.mTiles[n->second].mPoly.mPolyRefBase);
+            }
+            const auto id = std::make_pair(m.mId, std::make_pair(key.mX, key.mY));
+            const auto cached = mCache->mBorders.find(id);
+            if (cached != mCache->mBorders.end() && cached->second.mKey == k)
+            {
+                st.mBorder = cached->second.mLinks;
+            }
+            else
+            {
+                auto links = std::make_shared<std::vector<Snapshot::Border>>();
+                nav.borderLinksIn(st.mPoly.mMin, st.mPoly.mMax, sknav::AgentClass::AVATAR,
+                                  [&](const LLUUID& mesh, const sknav::TileKey& lk, U16 poly, U8 edge, U64 nbr, F32 t0, F32 t1)
+                {
+                    if (mesh == m.mId && lk.mX == key.mX && lk.mY == key.mY)
+                    {
+                        links->push_back({ poly, edge, nbr, t0, t1 });
+                    }
+                });
+                st.mBorder = links;
+                ++snap->mTilesRead;
+            }
+            borders[id] = { k, st.mBorder };
+        }
+        nav.wallRunsLatestIn(m.mId, m.mMin, m.mMax, [&](const sknav::TileKey& key, const std::shared_ptr<const std::vector<sknav::WallRun>>& runs)
+        {
+            const auto it = at.find({ key.mX, key.mY });
+            if (it != at.end())
+            {
+                ms.mTiles[it->second].mRuns = runs;
+            }
+        });
+        snap->mMeshes.push_back(std::move(ms));
+    });
+    mCache->mBorders.swap(borders);
+
+    // The regions' land: one height per metre, the surface's own grid, read again when a patch updates.
+    decltype(Cache::mLands) lands;
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        const LLVector3d o = region->getOriginGlobal();
+        const S32 side = static_cast<S32>(region->getWidth());
+        if (!overlaps(o, o + LLVector3d(side, side, 0.0), min, max))
+        {
+            continue;
+        }
+        const U64 stamp = landStamp(*region);
+        Cache::Land& c = lands[region->getHandle()];
+        const auto cached = mCache->mLands.find(region->getHandle());
+        if (cached != mCache->mLands.end() && cached->second.mStamp == stamp)
+        {
+            c = cached->second;
+        }
+        else
+        {
+            LL_PROFILE_ZONE_NAMED("SKMapPlan.Land");
+            auto heights = std::make_shared<std::vector<F32>>((side + 1) * (side + 1));
+            const LLSurface& land = region->getLand();
+            for (S32 y = 0; y <= side; ++y)
+            {
+                for (S32 x = 0; x <= side; ++x)
+                {
+                    (*heights)[y * (side + 1) + x] = land.resolveHeightRegion(static_cast<F32>(llmin(x, side - 1)), static_cast<F32>(llmin(y, side - 1)));
+                }
+            }
+            c = { stamp, heights };
+            ++snap->mLandsRead;
+        }
+        snap->mLands.push_back({ o, side, region->getWaterHeight(), c.mHeights });
+    }
+    mCache->mLands.swap(lands);
+    return snap;
+}
+
+DataPtr skmap::plan::assemble(const Snapshot& snap)
 {
     LL_PROFILE_ZONE_NAMED("SKMapPlan.Gather");
-    SKNavMesh& nav = SKNavMesh::instance();
     auto d = std::make_shared<Data>();
+    const LLVector3d origin = snap.mOrigin;
     d->mOrigin = origin;
     const auto local = [&](const LLVector3d& g) { return LLVector3(g - origin); };
 
-    forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
+    for (const Snapshot::Mesh& m : snap.mMeshes)
     {
         const U32 mi = static_cast<U32>(d->mSpaceIndex.size());
         d->mSpaceIndex.emplace_back(m.mId, std::unordered_map<U32, U32>());
         auto& ids = d->mSpaceIndex.back().second;
-        nav.requestDetail(m.mId);   // wall runs read the tiles' air (ruling 13)
         const sknav::RoomsProduct& rooms = *m.mRooms;
-        const sknav::StoreyProductPtr storeys = nav.storeys(m.mId);
+        const sknav::StoreyProductPtr& storeys = m.mStoreys;
         const U32 space_base = static_cast<U32>(d->mSpaces.size()), storey_base = static_cast<U32>(d->mStoreyFloor.size());
         const U32 portal_base = static_cast<U32>(d->mPortals.size());
         const LLVector3 mo = local(m.mOrigin);
@@ -1255,19 +1446,15 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
 
         // Polys, tile by tile; the Detour refs name them for the flight ends and the border links.
         std::unordered_map<U64, U32> by_ref;
-        std::map<std::pair<S32, S32>, std::pair<U32, U32>> tile_base;     // first poly, poly count
+        std::vector<U32> tile_base(m.mTiles.size(), 0);
         std::map<U64, U32> flight_of_key;
-        nav.polysIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR, [&](const SKNavMesh::PolyTile& t)
+        for (size_t ti = 0; ti < m.mTiles.size(); ++ti)
         {
-            if (t.mMesh != m.mId || !t.mPolys)
-            {
-                return;
-            }
+            const SKNavMesh::PolyTile& t = m.mTiles[ti].mPoly;
             const U32 base = static_cast<U32>(d->mPolys.size());
-            tile_base[{ t.mKey.mX, t.mKey.mY }] = { base, static_cast<U32>(t.mPolys->mPolys.size()) };
+            tile_base[ti] = base;
             const LLVector3 to = local(t.mOrigin);
-            LLViewerRegion* region = LLWorld::getInstance()->getRegionFromHandle(t.mRegion);
-            const F32 water = region ? region->getWaterHeight() : 0.f;
+            const F32 water = m.mTiles[ti].mWater;
             const sknav::TilePolys& tp = *t.mPolys;
             for (U32 i = 0; i < tp.mPolys.size(); ++i)
             {
@@ -1316,19 +1503,24 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
                     }
                 }
             }
-        });
+        }
         // Cross-tile neighbours from Detour's own external links (R13).
-        nav.borderLinksIn(m.mMin, m.mMax, sknav::AgentClass::AVATAR,
-                          [&](const LLUUID& mesh, const sknav::TileKey& key, U16 poly, U8 edge, U64 nbr, F32 t0, F32 t1)
+        for (size_t ti = 0; ti < m.mTiles.size(); ++ti)
         {
-            const auto tb = tile_base.find({ key.mX, key.mY });
-            const auto nb = by_ref.find(nbr);
-            if (mesh != m.mId || tb == tile_base.end() || nb == by_ref.end() || poly >= tb->second.second)
+            const U32 count = static_cast<U32>(m.mTiles[ti].mPoly.mPolys->mPolys.size());
+            if (!m.mTiles[ti].mBorder)
             {
-                return;
+                continue;
             }
-            d->mBorder[(static_cast<U64>(tb->second.first + poly) << 3) | edge].push_back({ nb->second, t0, t1 });
-        });
+            for (const Snapshot::Border& b : *m.mTiles[ti].mBorder)
+            {
+                const auto nb = by_ref.find(b.mNbr);
+                if (nb != by_ref.end() && b.mPoly < count)
+                {
+                    d->mBorder[(static_cast<U64>(tile_base[ti] + b.mPoly) << 3) | b.mEdge].push_back({ nb->second, b.mT0, b.mT1 });
+                }
+            }
+        }
         if (storeys)
         {
             for (const auto& kf : flight_of_key)
@@ -1349,33 +1541,36 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
                 }
             }
         }
-        nav.wallRunsIn(m.mMin, m.mMax, [&](const LLVector3d& o, const LLUUID& mesh, const sknav::TileKey& key, const sknav::WallRun& r)
+        const LLVector3 ol = local(m.mOrigin);
+        for (size_t ti = 0; ti < m.mTiles.size(); ++ti)
         {
-            const auto tb = tile_base.find({ key.mX, key.mY });
-            if (mesh != m.mId || tb == tile_base.end())
+            if (!m.mTiles[ti].mRuns)
             {
-                return;
+                continue;
             }
-            const LLVector3 ol = local(o);
-            Wall w;
-            for (const LLVector3& v : r.mLine)
+            const U32 count = static_cast<U32>(m.mTiles[ti].mPoly.mPolys->mPolys.size());
+            for (const sknav::WallRun& r : *m.mTiles[ti].mRuns)
             {
-                w.mLine.push_back(ol + v);
-            }
-            w.mClass = r.mClass == sknav::WallClass::SOLID ? WallClass::SOLID : r.mClass == sknav::WallClass::HATCHED ? WallClass::HATCHED : WallClass::NONE;
-            w.mFace = r.mFace;
-            w.mFar = r.mFar;
-            w.mFloor = r.mFloorZ + ol.mV[VZ];
-            for (U16 p : r.mPolys)
-            {
-                if (p < tb->second.second)
+                Wall w;
+                for (const LLVector3& v : r.mLine)
                 {
-                    w.mPolys.push_back(tb->second.first + p);
+                    w.mLine.push_back(ol + v);
                 }
+                w.mClass = r.mClass == sknav::WallClass::SOLID ? WallClass::SOLID : r.mClass == sknav::WallClass::HATCHED ? WallClass::HATCHED : WallClass::NONE;
+                w.mFace = r.mFace;
+                w.mFar = r.mFar;
+                w.mFloor = r.mFloorZ + ol.mV[VZ];
+                for (U16 p : r.mPolys)
+                {
+                    if (p < count)
+                    {
+                        w.mPolys.push_back(tile_base[ti] + p);
+                    }
+                }
+                d->mWalls.push_back(std::move(w));
             }
-            d->mWalls.push_back(std::move(w));
-        });
-    });
+        }
+    }
 
     // Flight outlines: their polys' edge stretches no other of their polys shares (ruling 20).
     std::vector<S32> flight_of(d->mPolys.size(), -1);
@@ -1431,47 +1626,45 @@ DataPtr skmap::plan::gather(const LLVector3d& origin, const LLVector3d& min, con
             }
         }
     }
-    // The regions' land: one height per metre, the surface's own grid.
-    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    for (const Snapshot::Land& l : snap.mLands)
     {
-        const LLVector3d o = region->getOriginGlobal();
-        const S32 side = static_cast<S32>(region->getWidth());
-        if (!overlaps(o, o + LLVector3d(side, side, 0.0), min, max))
-        {
-            continue;
-        }
         Region r;
-        r.mMin = xy(local(o));
-        r.mSide = side;
-        r.mWater = region->getWaterHeight();
-        r.mHeights.resize((side + 1) * (side + 1));
-        const LLSurface& land = region->getLand();
-        for (S32 y = 0; y <= side; ++y)
-        {
-            for (S32 x = 0; x <= side; ++x)
-            {
-                r.mHeights[y * (side + 1) + x] = land.resolveHeightRegion(static_cast<F32>(llmin(x, side - 1)), static_cast<F32>(llmin(y, side - 1)));
-            }
-        }
+        r.mMin = xy(local(l.mOrigin));
+        r.mSide = l.mSide;
+        r.mWater = l.mWater;
+        r.mHeights = *l.mHeights;
         d->mRegions.push_back(std::move(r));
     }
     d->finish();
     return d;
 }
 
-S32 skmap::plan::viewerSpace(const Data& d, const LLVector3d& pos)
+skmap::plan::SpaceRef skmap::plan::viewerSpaceRef(const LLVector3d& pos)
 {
-    LLUUID mesh;
-    U32 id = 0;
-    if (!SKNavMesh::instance().spaceAt(pos, mesh, id) || !id)
+    SpaceRef out;
+    if (!SKNavMesh::instance().spaceAt(pos, out.mMesh, out.mId))
+    {
+        out = SpaceRef();
+    }
+    return out;
+}
+
+skmap::plan::SnapshotStats skmap::plan::stats(const Snapshot& snap)
+{
+    return { snap.mTilesRead, static_cast<U32>(snap.mLands.size()), static_cast<U32>(snap.mMeshes.size()) };
+}
+
+S32 skmap::plan::spaceIndex(const Data& d, const SpaceRef& ref)
+{
+    if (!ref.mId)
     {
         return -1;
     }
     for (const auto& m : d.mSpaceIndex)
     {
-        if (m.first == mesh)
+        if (m.first == ref.mMesh)
         {
-            const auto it = m.second.find(id);
+            const auto it = m.second.find(ref.mId);
             return it == m.second.end() ? -1 : static_cast<S32>(it->second);
         }
     }

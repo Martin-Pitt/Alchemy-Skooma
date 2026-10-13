@@ -26,6 +26,7 @@
 #define SK_MAPCOMPOSITE_H
 
 #include "skmapplan.h"
+#include "threadpool.h"
 
 #include <string>
 
@@ -49,7 +50,9 @@ public:
 
     struct Stats
     {
-        F32 mGatherMs = 0.f;
+        F32 mSnapshotMs = 0.f;      ///< main thread
+        F32 mUploadMs = 0.f;        ///< main thread
+        F32 mGatherMs = 0.f;        ///< the rest on the plan's thread
         F32 mSelectMs = 0.f;
         F32 mGeometryMs = 0.f;
         F32 mRenderMs = 0.f;
@@ -61,6 +64,14 @@ public:
         U32 mSamples = 0;
         U32 mSide = 0;
         U32 mRedraws = 0;
+        U32 mJobs = 0;
+        U32 mTilesRead = 0;         ///< tiles whose border links the last snapshot read again
+        // Coverage, for the owner's question of how much of the view the plan reaches.
+        U32 mRegions = 0;           ///< regions meeting the frame
+        U32 mMeshes = 0;            ///< region meshes in the plan (those with spaces)
+        U32 mPolysSpaced = 0;       ///< polys in some space
+        U32 mPolysDrawn = 0;        ///< polys of drawn spaces
+        U32 mSpacesAll = 0;
     };
     const Stats& stats() const { return mStats; }
     std::string statsLine() const;
@@ -68,20 +79,36 @@ public:
 private:
     bool ensureGL(U32 side, U32 samples);
     void render(F32 vz);
-    void buildTerrain();
 
-    skmap::plan::DataPtr mData;
-    U64 mDataKey = 0;
+    struct Job;
+    struct Want
+    {
+        U64 mDataKey = 0;
+        LLVector3d mOrigin;
+        skmap::plan::SpaceRef mViewer;
+        skmap::plan::Options mOptions;
+        F32 mMpp = 0.f;
+    };
+    void land();
+    void post(const Want& want, const LLVector3d& gmin, const LLVector3d& gmax, bool new_data);
+
+    skmap::plan::Gatherer mGatherer;
+    std::unique_ptr<LL::ThreadPool> mPool;
+    std::shared_ptr<Job> mJob;      ///< in flight on the plan's thread
+    bool mHasPosted = false;
+    Want mPosted;                   ///< what the last job was posted for
     U64 mNavRevision = ~0ULL;
     const void* mViewSeen = nullptr;
     U64 mViewRevision = ~0ULL;
-    S32 mViewerSpace = -2;
+    U64 mDataKey = 0;               ///< the gather key at the last check
+    LLVector3d mKeyOrigin;
+    bool mHasKey = false;
+
+    // What is shown: the last job that landed.
+    skmap::plan::DataPtr mData;
     skmap::plan::Options mOptions;
     skmap::plan::Selection mSelection;
-    bool mHasSelection = false;
-    skmap::plan::Geometry mGeometry;
-    U64 mGeometryKey = 0;
-    bool mGeometryDirty = true;
+    LLVector3d mFrameOrigin;
 
     // The frame the composite covers, plan-local metres.
     LLVector2 mFrameMin;
@@ -99,7 +126,6 @@ private:
     U32 mTerrainVbo = 0;
     U32 mTerrainIbo = 0;
     U32 mTerrainCount = 0;
-    const void* mTerrainData = nullptr;
     U32 mMsaaFbo = 0, mMsaaColour = 0, mMsaaDepth = 0;
     U32 mResolveFbo = 0, mResolveTex = 0;
     U32 mShadeFbo = 0, mShadeTex = 0, mShadeDepth = 0;

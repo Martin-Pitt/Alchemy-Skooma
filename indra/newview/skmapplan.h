@@ -240,10 +240,48 @@ namespace plan
 
     /// What a gather over the box would read: moves when any of it does. Main thread.
     U64 gatherKey(const LLVector3d& min, const LLVector3d& max);
-    /// The region meshes meeting the box, whole, and the regions' land, plan-local to origin. Main thread.
-    DataPtr gather(const LLVector3d& origin, const LLVector3d& min, const LLVector3d& max);
-    /// The space under a global position (SKNavMesh::spaceAt) as a Data index, -1 for none.
-    S32 viewerSpace(const Data& data, const LLVector3d& pos);
+    /// What a plan is built from: the region meshes meeting a box, whole, and the regions' land.
+    struct Snapshot;
+    typedef std::shared_ptr<const Snapshot> SnapshotPtr;
+
+    /// Reads snapshots on the main thread without building anything there: the navmesh's products by shared pointer
+    /// (storeys and wall runs as last built; stale ones build on the navmesh's workers), and per tile what has to be
+    /// copied, read again only for tiles whose inputs moved.
+    class Gatherer
+    {
+    public:
+        Gatherer();
+        ~Gatherer();
+        SnapshotPtr snapshot(const LLVector3d& origin, const LLVector3d& min, const LLVector3d& max);
+
+    private:
+        struct Cache;
+        std::unique_ptr<Cache> mCache;
+    };
+
+    struct SnapshotStats
+    {
+        U32 mTilesRead = 0;     ///< tiles whose border links were read again
+        U32 mRegions = 0;
+        U32 mMeshes = 0;
+    };
+    SnapshotStats stats(const Snapshot& snap);
+
+    /// The plan's data from a snapshot, plan-local to its origin. Any thread.
+    DataPtr assemble(const Snapshot& snap);
+
+    /// A space by its mesh and id; mId 0 for none.
+    struct SpaceRef
+    {
+        LLUUID mMesh;
+        U32 mId = 0;
+        bool operator==(const SpaceRef& o) const { return mMesh == o.mMesh && mId == o.mId; }
+        bool operator!=(const SpaceRef& o) const { return !(*this == o); }
+    };
+    /// The space under a global position (SKNavMesh::spaceAt). Main thread.
+    SpaceRef viewerSpaceRef(const LLVector3d& pos);
+    /// A space as a Data index, -1 for none. Any thread.
+    S32 spaceIndex(const Data& data, const SpaceRef& ref);
 }
 }
 

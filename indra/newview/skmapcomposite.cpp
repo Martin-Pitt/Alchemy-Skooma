@@ -37,6 +37,7 @@
 #include "sknavmesh.h"
 #include "sknavrooms.h"
 
+#include <atomic>
 #include <cmath>
 
 using namespace skmap::plan;
@@ -336,6 +337,11 @@ void main()
 
 SKMapComposite::~SKMapComposite()
 {
+    if (mPool)
+    {
+        mPool->close();
+        mPool.reset();
+    }
     release();
 }
 
@@ -373,9 +379,9 @@ void SKMapComposite::release()
     }
     mSide = 0;
     mSamples = 0;
-    mTerrainData = nullptr;
     mTerrainCount = 0;
-    mGeometryDirty = true;
+    sLayout = Layout();
+    mHasPosted = false;     // the buffers went with the context: the next job builds everything again
     mRenderDirty = true;
 }
 
@@ -461,43 +467,6 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
         mGLFailed = true;
     }
     return ok;
-}
-
-void SKMapComposite::buildTerrain()
-{
-    mTerrainData = mData.get();
-    std::vector<Vertex> verts;
-    std::vector<U32> idx;
-    for (const Region& r : mData->mRegions)
-    {
-        const U32 base = static_cast<U32>(verts.size()), n = r.mSide + 1;
-        for (S32 y = 0; y <= r.mSide; ++y)
-        {
-            for (S32 x = 0; x <= r.mSide; ++x)
-            {
-                verts.push_back({ { r.mMin.mV[VX] + x, r.mMin.mV[VY] + y, r.mHeights[y * n + x] }, { 0.f, 0.f, 0.f, 1.f }, { 1.f, 1.f, r.mWater, 0.f } });
-            }
-        }
-        for (S32 y = 0; y < r.mSide; ++y)
-        {
-            for (S32 x = 0; x < r.mSide; ++x)
-            {
-                const U32 a = base + y * n + x, b = a + 1, c = a + n + 1, d = a + n;
-                idx.insert(idx.end(), { a, b, c, a, c, d });
-            }
-        }
-    }
-    if (!mTerrainVbo)
-    {
-        glGenBuffers(1, &mTerrainVbo);
-        glGenBuffers(1, &mTerrainIbo);
-    }
-    glBindVertexArray(mVao);
-    glBindBuffer(GL_ARRAY_BUFFER, mTerrainVbo);
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), verts.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mTerrainIbo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(U32), idx.data(), GL_STATIC_DRAW);
-    mTerrainCount = static_cast<U32>(idx.size());
 }
 
 void SKMapComposite::render(F32 vz)
@@ -657,6 +626,173 @@ void SKMapComposite::render(F32 vz)
     ++mStats.mRedraws;
 }
 
+struct SKMapComposite::Job
+{
+    // In: a snapshot to assemble, or the shown data to select from again.
+    SnapshotPtr mSnap;
+    DataPtr mData;
+    SpaceRef mViewer;
+    Options mOptions;
+    F32 mMpp = 0.f;
+    // Out.
+    Selection mSelection;
+    std::vector<Vertex> mVerts;
+    Layout mLayout;
+    bool mHasTerrain = false;
+    std::vector<Vertex> mTerrainVerts;
+    std::vector<U32> mTerrainIdx;
+    U32 mRanks = 0, mWallRuns = 0, mPolysSpaced = 0, mPolysDrawn = 0, mRegions = 0, mMeshes = 0;
+    F32 mGatherMs = 0.f, mSelectMs = 0.f, mGeometryMs = 0.f;
+    std::atomic<bool> mDone{ false };
+
+    void run()
+    {
+        LL_PROFILE_ZONE_NAMED("SKMapPlan.Job");
+        LLTimer t;
+        if (mSnap)
+        {
+            mData = assemble(*mSnap);
+            mGatherMs = t.getElapsedTimeF32() * 1000.f;
+            mRegions = skmap::plan::stats(*mSnap).mRegions;
+            mMeshes = skmap::plan::stats(*mSnap).mMeshes;
+            mSnap.reset();
+            // The land's grid, one vertex per height sample.
+            mHasTerrain = true;
+            for (const Region& r : mData->mRegions)
+            {
+                const U32 base = static_cast<U32>(mTerrainVerts.size()), n = r.mSide + 1;
+                for (S32 y = 0; y <= r.mSide; ++y)
+                {
+                    for (S32 x = 0; x <= r.mSide; ++x)
+                    {
+                        mTerrainVerts.push_back({ { r.mMin.mV[VX] + x, r.mMin.mV[VY] + y, r.mHeights[y * n + x] }, { 0.f, 0.f, 0.f, 1.f }, { 1.f, 1.f, r.mWater, 0.f } });
+                    }
+                }
+                for (S32 y = 0; y < r.mSide; ++y)
+                {
+                    for (S32 x = 0; x < r.mSide; ++x)
+                    {
+                        const U32 a = base + y * n + x, b = a + 1, c = a + n + 1, d = a + n;
+                        mTerrainIdx.insert(mTerrainIdx.end(), { a, b, c, a, c, d });
+                    }
+                }
+            }
+        }
+        t.reset();
+        mSelection = select(*mData, spaceIndex(*mData, mViewer), mOptions);
+        mSelectMs = t.getElapsedTimeF32() * 1000.f;
+        t.reset();
+        Geometry geom;
+        buildGeometry(*mData, mSelection, mOptions, mMpp, geom);
+        const auto add = [this](const std::vector<Vertex>& v)
+        {
+            Range r{ static_cast<U32>(mVerts.size()), static_cast<U32>(v.size()) };
+            mVerts.insert(mVerts.end(), v.begin(), v.end());
+            return r;
+        };
+        for (const Geometry::Rank& g : geom.mRanks)
+        {
+            mLayout.mRanks.push_back({ add(g.mFloors), add(g.mWalls), add(g.mWallLines), add(g.mLines) });
+        }
+        mLayout.mShadowClip = add(geom.mShadowClip);
+        mLayout.mShadowBand = add(geom.mShadowBand);
+        mLayout.mTop = add(geom.mTop);
+        const Vertex q[6] = { { { -1, -1, 0 }, {}, {} }, { { 1, -1, 0 }, {}, {} }, { { 1, 1, 0 }, {}, {} },
+                              { { -1, -1, 0 }, {}, {} }, { { 1, 1, 0 }, {}, {} }, { { -1, 1, 0 }, {}, {} } };
+        mLayout.mQuad = add(std::vector<Vertex>(q, q + 6));
+        mRanks = static_cast<U32>(geom.mRanks.size());
+        mWallRuns = geom.mWallRuns;
+        for (const Poly& p : mData->mPolys)
+        {
+            mPolysSpaced += p.mSpace >= 0 ? 1 : 0;
+            mPolysDrawn += mSelection.has(p.mSpace) ? 1 : 0;
+        }
+        mGeometryMs = t.getElapsedTimeF32() * 1000.f;
+        mDone.store(true, std::memory_order_release);
+    }
+};
+
+void SKMapComposite::post(const Want& want, const LLVector3d& gmin, const LLVector3d& gmax, bool new_data)
+{
+    if (!mPool)
+    {
+        // One thread: plans build one at a time, the newest inputs taken when the last lands.
+        mPool = std::make_unique<LL::ThreadPool>("SKMapPlan", 1);
+        mPool->start();
+    }
+    const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance("SKMapPlan");
+    if (!queue)
+    {
+        return;
+    }
+    auto job = std::make_shared<Job>();
+    if (new_data || !mData)
+    {
+        LLTimer t;
+        job->mSnap = mGatherer.snapshot(want.mOrigin, gmin, gmax);
+        mStats.mSnapshotMs = t.getElapsedTimeF32() * 1000.f;
+        mStats.mTilesRead = skmap::plan::stats(*job->mSnap).mTilesRead;
+    }
+    else
+    {
+        job->mData = mData;
+    }
+    job->mViewer = want.mViewer;
+    job->mOptions = want.mOptions;
+    job->mMpp = want.mMpp;
+    mJob = job;
+    mPosted = want;
+    mHasPosted = true;
+    ++mStats.mJobs;
+    queue->post([job]() { job->run(); });
+}
+
+void SKMapComposite::land()
+{
+    if (!mJob || !mJob->mDone.load(std::memory_order_acquire))
+    {
+        return;
+    }
+    LL_PROFILE_ZONE_NAMED("SKMapPlan.Upload");
+    LLTimer t;
+    const std::shared_ptr<Job> job = std::move(mJob);
+    mData = job->mData;
+    mSelection = std::move(job->mSelection);
+    mOptions = job->mOptions;
+    sLayout = std::move(job->mLayout);
+    glBindVertexArray(mVao);
+    if (job->mHasTerrain)
+    {
+        if (!mTerrainVbo)
+        {
+            glGenBuffers(1, &mTerrainVbo);
+            glGenBuffers(1, &mTerrainIbo);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, mTerrainVbo);
+        glBufferData(GL_ARRAY_BUFFER, job->mTerrainVerts.size() * sizeof(Vertex), job->mTerrainVerts.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mTerrainIbo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, job->mTerrainIdx.size() * sizeof(U32), job->mTerrainIdx.data(), GL_STATIC_DRAW);
+        mTerrainCount = static_cast<U32>(job->mTerrainIdx.size());
+        mStats.mGatherMs = job->mGatherMs;
+        mStats.mRegions = job->mRegions;
+        mStats.mMeshes = job->mMeshes;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, mVbo);
+    glBufferData(GL_ARRAY_BUFFER, job->mVerts.size() * sizeof(Vertex), job->mVerts.data(), GL_STATIC_DRAW);
+    mStats.mSelectMs = job->mSelectMs;
+    mStats.mGeometryMs = job->mGeometryMs;
+    mStats.mTriangles = static_cast<U32>(job->mVerts.size() / 3 + mTerrainCount / 3);
+    mStats.mRanks = job->mRanks;
+    mStats.mWallRuns = job->mWallRuns;
+    mStats.mSpaces = static_cast<U32>(mSelection.mRank.size());
+    mStats.mSpacesAll = static_cast<U32>(mData->mSpaces.size());
+    mStats.mPolys = static_cast<U32>(mData->mPolys.size());
+    mStats.mPolysSpaced = job->mPolysSpaced;
+    mStats.mPolysDrawn = job->mPolysDrawn;
+    mRenderDirty = true;
+    mStats.mUploadMs = t.getElapsedTimeF32() * 1000.f;
+}
+
 void SKMapComposite::draw(const skmap::MapView& view)
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -690,8 +826,6 @@ void SKMapComposite::draw(const skmap::MapView& view)
     opts.mRegionEdges = region_edges;
     opts.mWalls = walls;
     opts.mStairs = stairs;
-    const bool options_moved = !(opts == mOptions);
-    mOptions = opts;
 
     // The frame: north-up, the widget's diagonal with margin, in window texels.
     const F32 ui = gGL.getUIScale().mV[VX];
@@ -711,75 +845,6 @@ void SKMapComposite::draw(const skmap::MapView& view)
     {
         return;
     }
-    // The plan's origin is the agent region's corner at z 0, so plan z is global z and the hatch is region-anchored.
-    LLVector3d origin = agent_region->getOriginGlobal();
-    origin.mdV[VZ] = 0.0;
-    const F32 size_m = side * mpp;
-    const LLVector2 centre_local(static_cast<F32>(origin_of_view.mdV[VX] - origin.mdV[VX]), static_cast<F32>(origin_of_view.mdV[VY] - origin.mdV[VY]));
-    const bool origin_moved = mData && (mData->mOrigin - origin).lengthSquared() > 0.0;
-    const LLVector2 frame_centre = mFrameMin + LLVector2(mFrameSize, mFrameSize) * 0.5f;
-    const F32 slack = (size_m - diag * view.mpp()) * 0.5f;
-    const bool recentre = origin_moved || side != mSide || mpp != mMpp || std::fabs(centre_local.mV[VX] - frame_centre.mV[VX]) > slack
-                          || std::fabs(centre_local.mV[VY] - frame_centre.mV[VY]) > slack;
-    if (recentre)
-    {
-        // Snapped to the texel lattice so a recentre does not move what is drawn.
-        mFrameMin = LLVector2(std::floor((centre_local.mV[VX] - size_m * 0.5f) / mpp) * mpp, std::floor((centre_local.mV[VY] - size_m * 0.5f) / mpp) * mpp);
-        mFrameSize = size_m;
-        mRenderDirty = true;
-    }
-    if (view.span() != mSpan)
-    {
-        mSpan = view.span();
-        mRenderDirty = true;
-    }
-    if (mpp != mMpp)
-    {
-        mMpp = mpp;
-        mGeometryDirty = true;
-    }
-
-    // Data: the region meshes meeting the frame, gathered again only when what they are built from moves.
-    const SKNavWorldViewPtr world = nav.view();
-    const bool nav_moved = nav.revision() != mNavRevision || world.get() != mViewSeen || (world && world->revision() != mViewRevision);
-    if (nav_moved || recentre || !mData)
-    {
-        mNavRevision = nav.revision();
-        mViewSeen = world.get();
-        mViewRevision = world ? world->revision() : 0;
-        const LLVector3d gmin = origin + LLVector3d(mFrameMin.mV[VX], mFrameMin.mV[VY], 0.0);
-        const LLVector3d gmax = gmin + LLVector3d(mFrameSize, mFrameSize, 0.0);
-        const U64 key = gatherKey(gmin, gmax);
-        if (!mData || key != mDataKey || origin_moved)
-        {
-            LLTimer t;
-            mData = gather(origin, gmin, gmax);
-            mDataKey = key;
-            mStats.mGatherMs = t.getElapsedTimeF32() * 1000.f;
-            mHasSelection = false;
-            mViewerSpace = -2;
-            mGeometryDirty = true;
-        }
-    }
-
-    const LLVector3d agent = gAgent.getPositionGlobal();
-    const S32 vs = viewerSpace(*mData, agent);
-    if (!mHasSelection || vs != mViewerSpace || options_moved)
-    {
-        LLTimer t;
-        mSelection = select(*mData, vs, mOptions);
-        mStats.mSelectMs = t.getElapsedTimeF32() * 1000.f;
-        mViewerSpace = vs;
-        mHasSelection = true;
-        if (mSelection.mHash != mGeometryKey || options_moved)
-        {
-            mGeometryKey = mSelection.mHash;
-            mGeometryDirty = true;
-        }
-    }
-    F32 vz = static_cast<F32>(agent.mdV[VZ]);
-    nav.floorUnder(agent, sknav::AgentClass::AVATAR, vz);
-
     gGL.flush();
     SavedState saved;
     saved.save();
@@ -789,38 +854,74 @@ void SKMapComposite::draw(const skmap::MapView& view)
         saved.restore();
         return;
     }
-    if (mTerrainData != mData.get())
+    land();
+
+    // The plan's origin is the agent region's corner at z 0, so plan z is global z and the hatch is region-anchored.
+    // The frame stays in the shown data's coordinates until data for a new origin lands.
+    LLVector3d want_origin = agent_region->getOriginGlobal();
+    want_origin.mdV[VZ] = 0.0;
+    const LLVector3d origin = mData ? mData->mOrigin : want_origin;
+    const F32 size_m = side * mpp;
+    const LLVector2 centre_local(static_cast<F32>(origin_of_view.mdV[VX] - origin.mdV[VX]), static_cast<F32>(origin_of_view.mdV[VY] - origin.mdV[VY]));
+    const bool origin_moved = (mFrameOrigin - origin).lengthSquared() > 0.0;
+    const LLVector2 frame_centre = mFrameMin + LLVector2(mFrameSize, mFrameSize) * 0.5f;
+    const F32 slack = (size_m - diag * view.mpp()) * 0.5f;
+    const bool recentre = origin_moved || side != mSide || mpp != mMpp || std::fabs(centre_local.mV[VX] - frame_centre.mV[VX]) > slack
+                          || std::fabs(centre_local.mV[VY] - frame_centre.mV[VY]) > slack;
+    if (recentre)
     {
-        buildTerrain();
+        // Snapped to the texel lattice so a recentre does not move what is drawn.
+        mFrameOrigin = origin;
+        mFrameMin = LLVector2(std::floor((centre_local.mV[VX] - size_m * 0.5f) / mpp) * mpp, std::floor((centre_local.mV[VY] - size_m * 0.5f) / mpp) * mpp);
+        mFrameSize = size_m;
+        mMpp = mpp;
         mRenderDirty = true;
     }
-    if (mGeometryDirty)
+    if (view.span() != mSpan)
     {
-        LLTimer t;
-        buildGeometry(*mData, mSelection, mOptions, mMpp, mGeometry);
-        mStats.mGeometryMs = t.getElapsedTimeF32() * 1000.f;
-        std::vector<Vertex> all;
-        sLayout.mRanks.clear();
-        const auto add = [&all](const std::vector<Vertex>& v) { Range r{ static_cast<U32>(all.size()), static_cast<U32>(v.size()) }; all.insert(all.end(), v.begin(), v.end()); return r; };
-        for (const Geometry::Rank& g : mGeometry.mRanks)
+        mSpan = view.span();
+        mRenderDirty = true;
+    }
+
+    // What the plan should be built from; the key is read again only when the navmesh or the frame moved.
+    const LLVector3d gmin = origin + LLVector3d(mFrameMin.mV[VX], mFrameMin.mV[VY], 0.0);
+    const LLVector3d gmax = gmin + LLVector3d(mFrameSize, mFrameSize, 0.0);
+    const SKNavWorldViewPtr world = nav.view();
+    const bool nav_moved = nav.revision() != mNavRevision || world.get() != mViewSeen || (world && world->revision() != mViewRevision);
+    if (nav_moved || recentre || !mHasKey || (mKeyOrigin - want_origin).lengthSquared() > 0.0)
+    {
+        mNavRevision = nav.revision();
+        mViewSeen = world.get();
+        mViewRevision = world ? world->revision() : 0;
+        mDataKey = gatherKey(gmin, gmax);
+        mKeyOrigin = want_origin;
+        mHasKey = true;
+    }
+    nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
+    Want want;
+    want.mDataKey = mDataKey;
+    want.mOrigin = want_origin;
+    want.mViewer = viewerSpaceRef(gAgent.getPositionGlobal());
+    want.mOptions = opts;
+    want.mMpp = mpp;
+    // One job at a time: inputs that move while one runs are taken by the next, so a burst of changes costs one build.
+    if (!mJob)
+    {
+        const bool new_data = !mHasPosted || want.mDataKey != mPosted.mDataKey || (want.mOrigin - mPosted.mOrigin).lengthSquared() > 0.0;
+        if (new_data || want.mViewer != mPosted.mViewer || !(want.mOptions == mPosted.mOptions) || want.mMpp != mPosted.mMpp)
         {
-            sLayout.mRanks.push_back({ add(g.mFloors), add(g.mWalls), add(g.mWallLines), add(g.mLines) });
+            post(want, gmin, gmax, new_data);
         }
-        sLayout.mShadowClip = add(mGeometry.mShadowClip);
-        sLayout.mShadowBand = add(mGeometry.mShadowBand);
-        sLayout.mTop = add(mGeometry.mTop);
-        const Vertex q[6] = { { { -1, -1, 0 }, {}, {} }, { { 1, -1, 0 }, {}, {} }, { { 1, 1, 0 }, {}, {} },
-                              { { -1, -1, 0 }, {}, {} }, { { 1, 1, 0 }, {}, {} }, { { -1, 1, 0 }, {}, {} } };
-        sLayout.mQuad = add(std::vector<Vertex>(q, q + 6));
-        glBindVertexArray(mVao);
-        glBindBuffer(GL_ARRAY_BUFFER, mVbo);
-        glBufferData(GL_ARRAY_BUFFER, all.size() * sizeof(Vertex), all.data(), GL_STATIC_DRAW);
-        mStats.mTriangles = static_cast<U32>(all.size() / 3 + mTerrainCount / 3);
-        mStats.mRanks = static_cast<U32>(mGeometry.mRanks.size());
-        mStats.mWallRuns = mGeometry.mWallRuns;
-        mGeometryDirty = false;
-        mRenderDirty = true;
     }
+    if (!mData)
+    {
+        saved.restore();
+        return;
+    }
+
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    F32 vz = static_cast<F32>(agent.mdV[VZ]);
+    nav.floorUnder(agent, sknav::AgentClass::AVATAR, vz);
     if (vz != mDrawnVz)
     {
         mRenderDirty = true;
@@ -832,8 +933,6 @@ void SKMapComposite::draw(const skmap::MapView& view)
         mRenderDirty = false;
     }
     saved.restore();
-    mStats.mSpaces = static_cast<U32>(mSelection.mRank.size());
-    mStats.mPolys = static_cast<U32>(mData->mPolys.size());
     mStats.mSamples = mSamples;
     mStats.mSide = mSide;
 
@@ -860,7 +959,10 @@ void SKMapComposite::draw(const skmap::MapView& view)
 
 std::string SKMapComposite::statsLine() const
 {
-    return llformat("plan: gather %.1f select %.2f geometry %.1f render %.2f ms | %u tris, %u ranks, %u spaces, %u walls, %u polys | %u px %ux, %u redraws",
-                    mStats.mGatherMs, mStats.mSelectMs, mStats.mGeometryMs, mStats.mRenderMs, mStats.mTriangles, mStats.mRanks, mStats.mSpaces,
-                    mStats.mWallRuns, mStats.mPolys, mStats.mSide, mStats.mSamples, mStats.mRedraws);
+    // Main thread: snapshot and upload. The plan's thread: gather, select, geometry.
+    return llformat("plan: main snap %.2f upload %.2f render %.2f ms | thread gather %.1f select %.2f geometry %.1f ms, %u jobs, %u tiles read | "
+                    "%u tris, %u ranks, %u/%u spaces, %u walls | polys %u drawn %u spaced %u | %u meshes over %u regions | %u px %ux, %u redraws",
+                    mStats.mSnapshotMs, mStats.mUploadMs, mStats.mRenderMs, mStats.mGatherMs, mStats.mSelectMs, mStats.mGeometryMs, mStats.mJobs,
+                    mStats.mTilesRead, mStats.mTriangles, mStats.mRanks, mStats.mSpaces, mStats.mSpacesAll, mStats.mWallRuns, mStats.mPolys,
+                    mStats.mPolysDrawn, mStats.mPolysSpaced, mStats.mMeshes, mStats.mRegions, mStats.mSide, mStats.mSamples, mStats.mRedraws);
 }
