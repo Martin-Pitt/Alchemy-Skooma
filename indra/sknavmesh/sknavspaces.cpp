@@ -647,6 +647,8 @@ namespace sknav
         /// Per batch, the label it gave a ring tile's gap along a tile edge:
         /// what tells a seam its two sides are one basin.
         std::vector<std::unordered_map<U64, S32>> mShadow;
+        /// Per batch, the label it gave a ring tile's gap along an edge with another ring tile: what tells kept seeds the cut parts or joins.
+        std::vector<std::unordered_map<U64, S32>> mSeamShadow;
 
         std::vector<Cell> mCells;
         std::vector<U32> mLink;         ///< 4 per cell
@@ -1561,6 +1563,7 @@ namespace sknav
             mBatches.push_back(std::move(dirty));
         }
         mShadow.resize(mBatches.size());
+        mSeamShadow.resize(mBatches.size());
         mDoors = doorSpans(in.mDoors, in.mMeshOrigin);
         if (in.mPrevious)
         {
@@ -2268,6 +2271,7 @@ namespace sknav
             ti.mSeedLabels.clear();
         }
         mShadow[0].clear();
+        mSeamShadow[0].clear();
         mForced.clear();
         mLabelBase = 0;
         mBatch = 0;
@@ -3019,32 +3023,31 @@ namespace sknav
             if (!ti.mInBlock)
             {
                 // Only the edges it shares with the block make seams with it;
-                // its far edges meet tiles cut when it was.
-                bool facing[4];
+                // its far edges meet tiles cut when it was. Its edges with other
+                // ring tiles only check that its kept seeds agree with the cut.
+                // A basin can pass a tile corner alone: a tile diagonal to it shares that corner's leaves.
+                U8 facing[4], corner[4];
                 for (S32 d = 0; d < 4; ++d)
                 {
                     TileKey k = ti.mKey;
                     k.mX += DX[d];
                     k.mY += DY[d];
-                    const U32 o = tileAt(k);
-                    facing[d] = o != NONE && mTiles[o].mWork;
-                }
-                // A basin can pass a tile corner alone: a block tile diagonal to it shares that corner's leaves.
-                bool corner[4];
-                for (S32 d = 0; d < 4; ++d)
-                {
-                    TileKey k = ti.mKey;
+                    U32 o = tileAt(k);
+                    facing[d] = o == NONE ? 0 : mTiles[o].mInBlock ? 2 : mTiles[o].mWork ? 1 : 0;
+                    k = ti.mKey;
                     k.mX += (d & 1) ? -1 : 1;
                     k.mY += (d & 2) ? -1 : 1;
-                    const U32 o = tileAt(k);
-                    corner[d] = o != NONE && mTiles[o].mWork;
+                    o = tileAt(k);
+                    corner[d] = o == NONE ? 0 : mTiles[o].mInBlock ? 2 : mTiles[o].mWork ? 1 : 0;
                 }
                 for (const AirLeaf& leaf : a.mLeaves)
                 {
                     const S32 s = 1 << leaf.mLevel;
                     const bool hx = leaf.mX + s >= a.mWidth, lx = leaf.mX <= 0, hy = leaf.mY + s >= a.mHeight, ly = leaf.mY <= 0;
-                    if (!(facing[0] && hx) && !(facing[1] && lx) && !(facing[2] && hy) && !(facing[3] && ly) && !(corner[0] && hx && hy) &&
-                        !(corner[1] && lx && hy) && !(corner[2] && hx && ly) && !(corner[3] && lx && ly))
+                    const U8 seam = std::max({ hx ? facing[0] : U8(0), lx ? facing[1] : U8(0), hy ? facing[2] : U8(0), ly ? facing[3] : U8(0),
+                                               hx && hy ? corner[0] : U8(0), lx && hy ? corner[1] : U8(0), hx && ly ? corner[2] : U8(0),
+                                               lx && ly ? corner[3] : U8(0) });
+                    if (!seam)
                     {
                         continue;
                     }
@@ -3053,7 +3056,7 @@ namespace sknav
                         const S32 label = majority(ti, leaf, leaf.mFirstGap + i);
                         if (label >= 0)
                         {
-                            mShadow[b][(static_cast<U64>(t) << 32) | (leaf.mFirstGap + i)] = mLabelBase + label;
+                            (seam == 2 ? mShadow : mSeamShadow)[b][(static_cast<U64>(t) << 32) | (leaf.mFirstGap + i)] = mLabelBase + label;
                         }
                     }
                 }
@@ -3312,11 +3315,16 @@ namespace sknav
         }
         // A kept seed of a ring tile is in the basin the cut's watershed labelled its gaps with:
         // seeds of ring tiles in one basin are one region, as a full pass would cut them.
+        // Along edges with other ring tiles, only a basin the block's seeds are in: its run there was cut with the block's air round it.
         std::unordered_map<U32, S32> ring_label;
-        for (const auto& shadow : mShadow)
+        for (size_t pass = 0; pass < 2 && !mShadow.empty(); ++pass)
         {
-            for (const auto& [where, label] : shadow)
+            for (const auto& [where, label] : pass ? mSeamShadow[0] : mShadow[0])
             {
+                if (pass && !first.count(label))
+                {
+                    continue;
+                }
                 const U32 t = static_cast<U32>(where >> 32);
                 const TileInfo& ti = mTiles[t];
                 const U32 gap = static_cast<U32>(where);
@@ -4232,6 +4240,7 @@ namespace sknav
             }
         }
         std::vector<std::unordered_map<U64, S32>>().swap(mShadow);
+        std::vector<std::unordered_map<U64, S32>>().swap(mSeamShadow);
         collectApart();
         absorbFragments();
         auto kept_apart = [this](UnionFind& uf, U32 u, U32 v) { return keptApart(uf, u, v); };
