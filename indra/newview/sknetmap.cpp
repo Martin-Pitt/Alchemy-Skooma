@@ -255,11 +255,17 @@ void SKNetMap::updateView()
         }
     }
 
-    // The map follows the camera: centred on it and turned so its facing is up.
+    // The map centres on its anchor and turns so the camera's facing is up.
     const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
     const F32 rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
-    const LLVector3d centre = gAgentCamera.getCameraPositionGlobal() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
+    const LLVector3d centre = anchorGlobal() + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0);
     mView.set(centre, span, rotation, static_cast<F32>(getRect().getWidth()), static_cast<F32>(getRect().getHeight()));
+}
+
+// The avatar while the camera follows it, so a shoulder offset does not shift the map; the camera once detached.
+LLVector3d SKNetMap::anchorGlobal()
+{
+    return gAgentCamera.getFocusOnAvatar() ? gAgent.getPositionGlobal() : gAgentCamera.getCameraPositionGlobal();
 }
 
 void SKNetMap::recentre()
@@ -347,7 +353,7 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
         case OverlayLayer::PLAN:
         {
             static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
-            mView.set(gAgentCamera.getCameraPositionGlobal(), span, rotation, side, side);
+            mView.set(anchorGlobal(), span, rotation, side, side);
             SKMapPeople::instance().noteDrawn(mView);
             SKMapScene::instance().noteDrawn(*this);
             if (show)
@@ -460,8 +466,8 @@ void SKNetMap::drawObjects()
 
 void SKNetMap::drawSelf()
 {
-    const LLVector2 eye = mView.toWidget(gAgentCamera.getCameraPositionGlobal());
-    // The sight cone sits at the camera and spans its horizontal field of view, a fixed size on screen.
+    const LLVector2 eye = mView.toWidget(anchorGlobal());
+    // The sight cone sits at the anchor and spans its horizontal field of view, a fixed size on screen.
     LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLVector3 at = camera->getAtAxis();
     LLVector2 ahead = mView.toWidgetOffset(at.mV[VX], at.mV[VY]);
@@ -1585,8 +1591,8 @@ bool SKNetMap::handleHover(S32 x, S32 y, MASK mask)
             const F32 dx = static_cast<F32>(gViewerWindow->getCurrentMouseDX());
             const F32 dy = static_cast<F32>(gViewerWindow->getCurrentMouseDY());
             const LLVector3d now = mView.toGlobal(mView.width() * 0.5f - dx, mView.height() * 0.5f - dy);
-            // Relative to the camera, as updateView centres the map on it.
-            const LLVector3d eye = gAgentCamera.getCameraPositionGlobal();
+            // Relative to the anchor, as updateView centres the map on it.
+            const LLVector3d eye = anchorGlobal();
             mPan.set(static_cast<F32>(now.mdV[VX] - eye.mdV[VX]), static_cast<F32>(now.mdV[VY] - eye.mdV[VY]));
             mView.set(eye + LLVector3d(mPan.mV[VX], mPan.mV[VY], 0.0), mView.span(), mView.rotation(), mView.width(), mView.height());
             gViewerWindow->moveCursorToCenter();
