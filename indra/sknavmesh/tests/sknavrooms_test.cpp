@@ -2014,4 +2014,47 @@ template<> template<>
         ensure("the rooftop covers the rooms", std::find(top->mCovers.begin(), top->mCovers.end(), r.index(west)) != top->mCovers.end());
         ensure("both in the building under them", west->mBuilding && top->mBuilding == west->mBuilding && hut->mBuilding == west->mBuilding);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<56>()
+    {
+        set_test_name("a frozen roof covers the spaces it covered: its covers index the product it is in");
+        // The building in the second tile, a wall in the first so the live spaces there come first.
+        Scene s = twoRooms();
+        s.mShift = 32.f;
+        s.box(-28.f, 16.f, -20.f, 16.25f, 0.f, 3.f, false);
+        s.box(-28.f, 16.f, -27.75f, 24.f, 0.f, 3.f, false);
+        s.box(-20.25f, 16.f, -20.f, 24.f, 0.f, 3.f, false);
+        s.box(-28.f, 23.75f, -20.f, 24.f, 0.f, 3.f, false);
+        s.box(-28.f, 16.f, -20.f, 24.f, 3.f, 3.25f);
+        auto in = s.input(2);
+        const Result first = run(in);
+        const Space* roof = first.at(38.f, 6.f, 3.75f);
+        ensure("a roof over the rooms" + info(first), roof && roof->mRoof && !roof->mCovers.empty());
+        std::vector<U32> covered;
+        for (U32 c : roof->mCovers)
+        {
+            covered.push_back(first.mRooms->mSpaces[c].mId);
+        }
+        // The building's tile is evicted; the pass runs again on the first tile alone.
+        in->mPrevious = first.mEnc;
+        in->mKept.push_back(*first.mEnc->tile(in->mTiles[1].mKey));
+        in->mTiles.pop_back();
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mPrevious = first.mRooms;
+        const Result second = run(in, rooms);
+        const Space* frozen = nullptr;
+        for (const Space& sp : second.mRooms->mSpaces)
+        {
+            frozen = sp.mId == roof->mId ? &sp : frozen;
+        }
+        ensure("the roof kept, frozen" + info(second), frozen && frozen->mFrozen && frozen->mRoof);
+        std::vector<U32> now;
+        for (U32 c : frozen->mCovers)
+        {
+            ensure("a cover in the product", c < second.mRooms->mSpaces.size());
+            now.push_back(second.mRooms->mSpaces[c].mId);
+        }
+        ensure("the same spaces covered", now == covered);
+    }
 }

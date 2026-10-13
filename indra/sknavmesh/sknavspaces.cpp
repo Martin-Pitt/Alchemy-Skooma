@@ -5528,6 +5528,7 @@ namespace sknav
             by_id[out[i].mId] = i;
         }
         std::unordered_map<U32, U32> remap;
+        const size_t live = out.size();
         for (TileEnclosure& te : mEnc->mTiles)
         {
             if (te.mAir || !prev)
@@ -5565,6 +5566,29 @@ namespace sknav
                     it = remap.emplace(old, to).first;
                 }
                 g.mSpace = static_cast<U16>(std::min<U32>(it->second, 0xffff));
+            }
+        }
+        // A frozen roof's covers name the last product's spaces: name them in this one, by id.
+        for (size_t s = live; s < out.size(); ++s)
+        {
+            Space& sp = out[s];
+            std::vector<std::pair<U32, F32>> covers;
+            for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+            {
+                const U32 c = sp.mCovers[k];
+                const auto hit = c < prev->mSpaces.size() ? by_id.find(prev->mSpaces[c].mId) : by_id.end();
+                if (hit != by_id.end())
+                {
+                    covers.emplace_back(hit->second, sp.mCoverM2[k]);
+                }
+            }
+            std::sort(covers.begin(), covers.end());
+            sp.mCovers.clear();
+            sp.mCoverM2.clear();
+            for (const auto& c : covers)
+            {
+                sp.mCovers.push_back(c.first);
+                sp.mCoverM2.push_back(c.second);
             }
         }
 
