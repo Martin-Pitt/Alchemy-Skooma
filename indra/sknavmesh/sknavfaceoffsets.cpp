@@ -29,6 +29,7 @@
 #include "sknavair.h"
 #include "sknavairdistil.h"
 #include "sknavwalls.h"
+#include "sknavprofile.h"
 
 #include "DetourCommon.h"
 #include "DetourNavMesh.h"
@@ -156,6 +157,7 @@ namespace sknav
     void computeFaceOffsets(const AirGrid& grid, const F32* verts, const S32* tris, S32 ntris, S32 climb, std::vector<FaceOffset>& out,
                             FaceOffsetStats* stats, S32 trace_every, std::vector<FaceOffsetTrace>* trace)
     {
+        SK_NAV_ZONE("nav.faceoffsets.compute");
         const auto started = std::chrono::steady_clock::now();
         out.clear();
         if (grid.empty() || grid.mCell <= 0.f || grid.mUnit <= 0.f)
@@ -343,6 +345,7 @@ namespace sknav
 
     void alignWallFaces(std::vector<WallFace>& faces, const F32* verts, const S32* tris, S32 ntris, F32 cell, F32 unit)
     {
+        SK_NAV_ZONE("nav.faceoffsets.alignfaces");
         if (faces.empty() || ntris <= 0 || cell <= 0.f)
         {
             return;
@@ -469,6 +472,7 @@ namespace sknav
 
     void cropFaceOffsets(const std::vector<FaceOffset>& padded, S32 padded_width, S32 pad, S32 width, S32 height, std::vector<FaceOffset>& out)
     {
+        SK_NAV_ZONE("nav.faceoffsets.crop");
         out.clear();
         for (const FaceOffset& f : padded)
         {
@@ -528,6 +532,7 @@ namespace sknav
 
     void alignWallEdges(U8* data, S32 size, F32 radius, F32 cell, const FaceProbe& probe, EdgeAlignStats* stats)
     {
+        SK_NAV_ZONE("nav.faceoffsets.alignedges");
         if (!data || size < static_cast<S32>(sizeof(dtMeshHeader)))
         {
             return;

@@ -28,6 +28,7 @@
 
 #include "sknavbuild.h"
 #include "sknavenclosure.h"
+#include "sknavprofile.h"
 
 #include "DetourNavMesh.h"
 
@@ -188,6 +189,7 @@ namespace sknav
     void buildWallRuns(const dtMeshTile& tile, const std::vector<U32>& poly_space, const WallAirReader& air, const WallRunParams& params,
                        std::vector<WallRun>& out, WallRunStats* stats)
     {
+        SK_NAV_ZONE("nav.wallruns.build");
         out.clear();
         if (!tile.header)
         {

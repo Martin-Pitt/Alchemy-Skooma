@@ -28,6 +28,7 @@
 
 #include "sknavairdistil.h"
 #include "sknavannotate.h"
+#include "sknavprofile.h"
 
 #include "llbase64.h"
 
@@ -82,6 +83,7 @@ namespace sknav
 
     void writeExportTile(std::ostream& file, const LLVector3d& mesh_origin, const TileExport& tile, ExportCounts& counts)
     {
+        SK_NAV_ZONE("nav.export.tile");
         ++counts.mTiles;
         file << "{\"key\":[" << tile.mKey.mX << ',' << tile.mKey.mY << "],\"min\":";
         writeVec3d(file, tile.mMin);
@@ -382,6 +384,7 @@ namespace sknav
 
     void writeExportEnclosure(std::ostream& file, U64 generation, const TileEnclosure& tile)
     {
+        SK_NAV_ZONE("nav.export.enclosure");
         std::vector<U8> blob;
         blob.reserve(tile.mGaps.size() * 9);
         for (const GapEnclosure& g : tile.mGaps)
@@ -404,6 +407,7 @@ namespace sknav
 
     void writeExportSpaces(std::ostream& file, const LLVector3d& origin, const RoomsProduct& rooms, const WindProduct* wind, const StoreyProduct* storeys)
     {
+        SK_NAV_ZONE("nav.export.spaces");
         static const char* buckets[] = { "outdoors", "sheltered", "indoors", "unknown" };
         auto vec = [&file](const LLVector3d& v) { file << '[' << v.mdV[VX] << ',' << v.mdV[VY] << ',' << v.mdV[VZ] << ']'; };
         const F64 oz = origin.mdV[VZ];
@@ -528,6 +532,7 @@ namespace sknav
 
     void writeExportStoreys(std::ostream& file, const LLVector3d& origin, const StoreyProduct& storeys)
     {
+        SK_NAV_ZONE("nav.export.storeys");
         file << ",\"storeys\":[";
         for (size_t i = 0; i < storeys.mStoreys.size(); ++i)
         {

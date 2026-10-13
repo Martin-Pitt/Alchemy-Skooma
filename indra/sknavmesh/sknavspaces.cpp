@@ -27,6 +27,7 @@
 #include "sknavspaces.h"
 
 #include "sknavstairalign.h"
+#include "sknavprofile.h"
 
 #include <algorithm>
 #include <array>
@@ -1409,6 +1410,7 @@ namespace sknav
 
     void SpacesPass::State::prepare()
     {
+        SK_NAV_ZONE("nav.spaces.prepare");
         const RoomsInput& in = *mInput;
         const SpaceParams& p = params();
         mProduct = std::make_shared<RoomsProduct>();
@@ -1524,6 +1526,7 @@ namespace sknav
 
     void SpacesPass::State::memoContext()
     {
+        SK_NAV_ZONE("nav.spaces.memo");
         // What any score or run reads besides its own cut and tiles: the parameters and the doors.
         MemoKey context;
         F32 values[sizeof(SpaceParams) / sizeof(F32)];
@@ -1583,6 +1586,7 @@ namespace sknav
 
     void SpacesPass::State::runBatch(size_t b)
     {
+        SK_NAV_ZONE("nav.spaces.cut.batch");
         // The block's tiles and the ring round them: enough air on every
         // side for the transform, which stops at mClearMaxM, to be right.
         for (TileInfo& ti : mTiles)
@@ -1627,6 +1631,7 @@ namespace sknav
 
     void SpacesPass::State::wallEnds()
     {
+        SK_NAV_ZONE("nav.spaces.cut.wallends");
         // Walls that stop in open air make no saddle for the watershed to
         // cut at: pair up facing wall ends, score the gap between them as
         // any cut is scored, and where it is a portal sever the floor across
@@ -1858,6 +1863,7 @@ namespace sknav
 
     void SpacesPass::State::apertureCuts()
     {
+        SK_NAV_ZONE("nav.spaces.cut.apertures");
         // A doorway whose rooms the watershed sees as one basin makes no
         // saddle to cut at: find it from below, where the ceiling drops to a
         // lintel, take the aperture between its jambs, and sever the floor
@@ -2137,6 +2143,7 @@ namespace sknav
 
     bool SpacesPass::State::recut()
     {
+        SK_NAV_ZONE("nav.spaces.cut.recut");
         // A clean ring tile whose kept seeds split its edge where the cut
         // just saw one basin, or join what it saw as two, would make the
         // seam disagree from pass to pass: cut it again with the rest.
@@ -2200,6 +2207,7 @@ namespace sknav
 
     void SpacesPass::State::buildCells()
     {
+        SK_NAV_ZONE("nav.spaces.cells");
         size_t gaps = 0;
         for (const TileInfo& ti : mTiles)
         {
@@ -2326,6 +2334,7 @@ namespace sknav
 
     void SpacesPass::State::transform()
     {
+        SK_NAV_ZONE("nav.spaces.transform");
         // Nearest-wall propagation: each cell carries the point on the
         // nearest side where floor stops, and hands it on while that is nearer.
         const size_t n = mCells.size();
@@ -2402,6 +2411,7 @@ namespace sknav
 
     void SpacesPass::State::cutSeeds(size_t b)
     {
+        SK_NAV_ZONE("nav.spaces.cut.seeds");
         const SpaceParams& p = params();
         const size_t n = mCells.size();
         const F32 cell_area = mCell * mCell;
@@ -2917,6 +2927,7 @@ namespace sknav
 
     void SpacesPass::State::number()
     {
+        SK_NAV_ZONE("nav.spaces.seeds");
         // Every tile's seeds, numbered across the mesh.
         U32 total = 0;
         for (TileInfo& ti : mTiles)
@@ -3037,6 +3048,7 @@ namespace sknav
 
     void SpacesPass::State::edges()
     {
+        SK_NAV_ZONE("nav.spaces.edges");
         // Every level-0 step between floor gaps of two seeds, within and across tiles.
         mEdges.clear();
         AirColumn colb;
@@ -3524,6 +3536,7 @@ namespace sknav
 
     bool SpacesPass::State::demoteFlatFlights(F32 min_rise)
     {
+        SK_NAV_ZONE("nav.spaces.demoteflights");
         // A staircase pairs its ends. Within one flight region the stair
         // portals join by stairPairs - each exit to the nearest end within
         // reach in plan - and a pair has to climb min_rise, so a real
@@ -3709,6 +3722,7 @@ namespace sknav
 
     void SpacesPass::State::absorbFragments()
     {
+        SK_NAV_ZONE("nav.spaces.merge.absorb");
         // A region smaller than an avatar's floor is a fragment of a cut, not
         // a space: smallest first, it joins the neighbour it shares the most
         // boundary with before any cut is scored, flight or floor, and the
@@ -3815,6 +3829,7 @@ namespace sknav
 
     void SpacesPass::State::merge()
     {
+        SK_NAV_ZONE("nav.spaces.merge");
         edges();
         mEdgeKey.resize(mEdges.size());
         for (size_t i = 0; i < mEdges.size(); ++i)
@@ -4244,6 +4259,7 @@ namespace sknav
 
     void SpacesPass::State::joinUnderFlights(std::vector<Space>& out)
     {
+        SK_NAV_ZONE("nav.spaces.joinunder");
         // A space's own avatar floor, not air it took over above a thin solid.
         auto ownFloor = [&](const Space& sp, U32 t, const AirGap& g) {
             const F32 z = floorOf(t, g) * mUnit;
@@ -4434,6 +4450,7 @@ namespace sknav
 
     void SpacesPass::State::spaces()
     {
+        SK_NAV_ZONE("nav.spaces.spaces");
         const SpaceParams& p = params();
         const U32 total = static_cast<U32>(mSeeds.size());
         const F32 cell_area = mCell * mCell;
@@ -4900,6 +4917,20 @@ namespace sknav
                 }
             }
         }
+        // Each gap's leaf.
+        std::vector<std::vector<U32>> leaf_of(mTiles.size());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            leaf_of[t].resize(a.mGaps.size());
+            for (U32 l = 0; l < a.mLeaves.size(); ++l)
+            {
+                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
+                {
+                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
+                }
+            }
+        }
         // A new space of these gaps: its floor, volume, ceilings and raster; old gets the spaces they leave.
         const auto takeGaps = [&](U32 id, const std::vector<std::pair<U32, U32>>& gaps, std::set<U32>& old) {
             Space& sp = out[id];
@@ -4911,12 +4942,10 @@ namespace sknav
             {
                 const TileAir& a = air(tg.first);
                 const S32 leaf = [&]() {
-                    for (size_t l = 0; l < a.mLeaves.size(); ++l)
+                    const U32 l = leaf_of[tg.first][tg.second];
+                    if (l < a.mLeaves.size() && tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
                     {
-                        if (tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
-                        {
-                            return static_cast<S32>(l);
-                        }
+                        return static_cast<S32>(l);
                     }
                     return -1;
                 }();
@@ -5035,19 +5064,6 @@ namespace sknav
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
         // space it steps onto; never the one below across a solid, which no
         // one walks to from there.
-        std::vector<std::vector<U32>> leaf_of(mTiles.size());
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
-            const TileAir& a = air(t);
-            leaf_of[t].resize(a.mGaps.size());
-            for (U32 l = 0; l < a.mLeaves.size(); ++l)
-            {
-                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
-                {
-                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
-                }
-            }
-        }
         // Calls fn(tile, gap) for every floor gap a step from gap g of tile t.
         auto around = [&](U32 t, U32 g, const std::function<void(U32, U32)>& fn) {
             const TileAir& a = air(t);
@@ -5317,6 +5333,7 @@ namespace sknav
 
     void SpacesPass::State::ids()
     {
+        SK_NAV_ZONE("nav.spaces.ids");
         const SpaceParams& p = params();
         std::vector<Space>& out = mProduct->mSpaces;
         const RoomsProductPtr& prev = mInput->mPrevious;
@@ -5765,6 +5782,7 @@ namespace sknav
 
     bool SpacesPass::step(U32 budget)
     {
+        SK_NAV_ZONE("nav.spaces.step");
         State& s = *mState;
         if (s.mStage != STAGE_DONE && budget > 0)
         {
@@ -6085,6 +6103,7 @@ namespace sknav
 
     SpacesDrawPtr buildSpacesDraw(const EnclosureProduct& enclosure, const RoomsProduct& rooms)
     {
+        SK_NAV_ZONE("nav.spaces.draw");
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("spaces - build draw");
         auto draw = std::make_shared<SpacesDraw>();
         const std::vector<U32>& ids = enclosure.mSpaceIds;

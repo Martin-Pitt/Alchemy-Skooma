@@ -29,6 +29,7 @@
 
 #include "sknavbuild.h"
 #include "sknavstamp.h"
+#include "sknavprofile.h"
 
 #include "DetourNavMesh.h"
 
@@ -195,6 +196,7 @@ namespace sknav
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
                       const PolyFlightFn& flight_of, F32 min_area, const std::vector<const Flight*>& flights)
     {
+        SK_NAV_ZONE("nav.storeys");
         out = StoreyProduct();
         std::vector<U32> base;
         const U32 n = polyIndexBase(nav, base);
@@ -1018,6 +1020,7 @@ namespace sknav
 
     std::vector<std::vector<LLVector3>> spacePolys(const dtNavMesh& nav, const PolySpaceFn& space_of, U32 space)
     {
+        SK_NAV_ZONE("nav.spaces.polys");
         std::vector<std::vector<LLVector3>> out;
         if (!space || !space_of)
         {

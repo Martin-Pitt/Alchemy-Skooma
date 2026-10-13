@@ -64,6 +64,7 @@ target_sources(
         sknavlayout.h
         sknavprobecache.h
         sknavprobes.h
+        sknavprofile.h
         sknavreplay.h
         sknavreplaystats.h
         sknavresidency.h

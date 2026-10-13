@@ -152,7 +152,12 @@ namespace sknav
     /// One heading over a field: lee behind solids, venturi from the smoothed
     /// free width, calm indoors, damped and swirling courtyards, and draughts
     /// at portals whose sides differ in S.
-    std::shared_ptr<WindSlab> computeWindSlab(const WindField& field, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params);
+    /// weight_blur, when given, is windWeightBlur of the same field and params.
+    std::shared_ptr<WindSlab> computeWindSlab(const WindField& field, const RoomsProduct* rooms, F32 heading_deg, const WindParams& params,
+                                              const std::vector<F32>* weight_blur = nullptr);
+
+    /// The smoothed weight of a field's open cells, which every heading's free width is normalised by.
+    std::vector<F32> windWeightBlur(const WindField& field, const WindParams& params);
 
     struct WindInput
     {
