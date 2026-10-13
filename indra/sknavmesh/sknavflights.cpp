@@ -116,7 +116,15 @@ namespace
         F64 mGx0 = 0, mGy0 = 0;
         F64 mGcell = GRID_M;
         S32 mGw = 0, mGh = 0;
-        std::vector<std::vector<S32>> mGrid;
+        std::vector<U32> mGridStart;    // cells + 1 offsets into mGridTris
+        std::vector<S32> mGridTris;     // each cell's triangles, in triangle order
+
+        /// The triangles whose plan bounds touch a cell of the probe index.
+        std::pair<const S32*, const S32*> cellTris(S32 cx, S32 cy) const
+        {
+            const size_t c = static_cast<size_t>(cy) * mGw + cx;
+            return { mGridTris.data() + mGridStart[c], mGridTris.data() + mGridStart[c + 1] };
+        }
 
         S32 ntris() const { return static_cast<S32>(mT.size() / 3); }
 
@@ -162,6 +170,7 @@ namespace
             SK_NAV_ZONE("nav.flights.build.weld");
             // weld on the millimetre, across the whole soup
             std::unordered_map<WeldKey, S32, WeldHash> key;
+            key.reserve(verts.size());
             std::vector<S32> remap(verts.size());
             for (size_t i = 0; i < verts.size(); ++i)
             {
@@ -187,6 +196,7 @@ namespace
             mLevel.assign(n, 0);
             mPart.assign(n, 0);
             mParent.resize(n);
+            mEdges.reserve(static_cast<size_t>(n) * 3);
             const F64 cos_level = std::cos(SLOPE_LEVEL_DEG * DEG_TO_RAD);
             for (S32 t = 0; t < n; ++t)
             {
@@ -279,13 +289,10 @@ namespace
             mGcell = std::max(GRID_M, std::sqrt((x1 - x0 + GRID_M) * (y1 - y0 + GRID_M) / static_cast<F64>(GRID_MAX_CELLS)));
             mGw = static_cast<S32>((x1 - x0) / mGcell) + 1;
             mGh = static_cast<S32>((y1 - y0) / mGcell) + 1;
-            mGrid.assign(static_cast<size_t>(mGw) * mGh, {});
-            for (S32 t = 0; t < ntris(); ++t)
-            {
-                if (!mWalk[t])
-                {
-                    continue;
-                }
+            // Counted, then filled, so each cell's triangles lie in one run.
+            const size_t cells = static_cast<size_t>(mGw) * mGh;
+            mGridStart.assign(cells + 1, 0);
+            const auto eachCell = [&](S32 t, auto&& fn) {
                 F64 tx0 = 1e30, ty0 = 1e30, tx1 = -1e30, ty1 = -1e30;
                 for (S32 k = 0; k < 3; ++k)
                 {
@@ -301,8 +308,28 @@ namespace
                 {
                     for (S32 cx = cx0; cx <= cx1; ++cx)
                     {
-                        mGrid[static_cast<size_t>(cy) * mGw + cx].push_back(t);
+                        fn(static_cast<size_t>(cy) * mGw + cx);
                     }
+                }
+            };
+            for (S32 t = 0; t < ntris(); ++t)
+            {
+                if (mWalk[t])
+                {
+                    eachCell(t, [&](size_t c) { ++mGridStart[c + 1]; });
+                }
+            }
+            for (size_t c = 0; c < cells; ++c)
+            {
+                mGridStart[c + 1] += mGridStart[c];
+            }
+            mGridTris.resize(mGridStart[cells]);
+            std::vector<U32> fill(mGridStart.begin(), mGridStart.end() - 1);
+            for (S32 t = 0; t < ntris(); ++t)
+            {
+                if (mWalk[t])
+                {
+                    eachCell(t, [&](size_t c) { mGridTris[fill[c]++] = t; });
                 }
             }
         }
@@ -381,8 +408,10 @@ namespace
                 return false;
             }
             bool found = false;
-            for (const S32 u : mGrid[static_cast<size_t>(cy) * mGw + cx])
+            const auto [first, last] = cellTris(cx, cy);
+            for (const S32* it = first; it != last; ++it)
             {
+                const S32 u = *it;
                 F64 z = 0;
                 if (g_of[u] == e.mGroup || !zAt(u, px, py, z))
                 {
@@ -647,8 +676,10 @@ namespace
         {
             for (S32 cx = std::max(cx0, 0); cx <= std::min(cx1, P.mGw - 1); ++cx)
             {
-                for (const S32 t : P.mGrid[static_cast<size_t>(cy) * P.mGw + cx])
+                const auto [first, last] = P.cellTris(cx, cy);
+                for (const S32* it = first; it != last; ++it)
                 {
+                    const S32 t = *it;
                     if (seen[t] != stamp)
                     {
                         seen[t] = stamp;
