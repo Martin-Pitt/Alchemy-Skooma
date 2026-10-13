@@ -2158,4 +2158,26 @@ template<> template<>
         const Space* hall = r.at(36.f, 36.f);
         ensure("the hall is an INDOORS space" + info(r), hall && hall->mBucket == EnclosureBucket::INDOORS);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<61>()
+    {
+        set_test_name("a lift across a partition takes from each room the floor it took there, no more");
+        Scene s = twoRooms();
+        s.wall(10.f, 2.f, 10.25f, 5.f);
+        s.wall(10.f, 6.f, 10.25f, 10.f);
+        s.box(10.f, 5.f, 10.25f, 6.f, 2.2f, 3.f, false);
+        const Result plain = run(s.input(1));
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mLifts.emplace_back(LLVector3d(9.f, 7.f, -0.5f), LLVector3d(11.f, 9.f, 20.f));
+        const Result r = run(s.input(1), rooms);
+        const Space* lift = r.at(9.5f, 8.f);
+        const Space* west = r.at(6.f, 4.f);
+        const Space* east = r.at(14.f, 4.f);
+        ensure("a lift and two rooms" + info(r), lift && west && east && lift->mLift && west != east && lift != west && lift != east);
+        ensure("the lift is on both sides", r.at(10.75f, 8.f) == lift);
+        const F32 before = plain.at(6.f, 4.f)->mFloorArea + plain.at(14.f, 4.f)->mFloorArea;
+        const F32 lost = before - west->mFloorArea - east->mFloorArea;
+        ensure(llformat("the rooms lose the lift's floor: lost %.2f, the lift %.2f", lost, lift->mFloorArea), std::fabs(lost - lift->mFloorArea) < 0.5f);
+    }
 }

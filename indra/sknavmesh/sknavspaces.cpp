@@ -4906,6 +4906,7 @@ namespace sknav
             F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
             F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
+            std::map<U32, F64> taken;
             for (const auto& tg : gaps)
             {
                 const TileAir& a = air(tg.first);
@@ -4931,6 +4932,7 @@ namespace sknav
                 const GapEnclosure& ge = mEnc->mTiles[mTiles[tg.first].mEnc].mGaps[tg.second];
                 const F32 z = floorOf(tg.first, gap) * mUnit;
                 old.insert(mGapSpace[tg.first][tg.second] - 1);
+                taken[mGapSpace[tg.first][tg.second] - 1] += area;
                 mGapSpace[tg.first][tg.second] = id + 1;
                 w += area;
                 sx += area * x;
@@ -4983,11 +4985,12 @@ namespace sknav
                 sp.mMax.mV[VX] = std::max(sp.mMax.mV[VX], x + RASTER_XY_M);
                 sp.mMax.mV[VY] = std::max(sp.mMax.mV[VY], y + RASTER_XY_M);
             }
-            for (U32 o : old)
+            // Each space it took from loses the floor it took there, not the whole of it.
+            for (const auto& o : taken)
             {
-                if (o < id && !out[o].mLift)
+                if (o.first < id && !out[o.first].mLift)
                 {
-                    out[o].mFloorArea = std::max(0.f, out[o].mFloorArea - sp.mFloorArea);
+                    out[o.first].mFloorArea = std::max(0.f, out[o.first].mFloorArea - static_cast<F32>(o.second));
                 }
             }
         };
