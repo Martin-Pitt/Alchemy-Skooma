@@ -113,7 +113,6 @@ namespace skmap
             { "AlchemyMiniMapForSaleParcels", "SKMapLayerParcelsForSale" },
             { "AlchemyMiniMapCollisionParcels", "SKMapLayerParcelsCollision" },
             { "AlchemyMinimapChatRings", "SKMapLayerChatRings" },
-            { "AlchemyMinimapGuideLine", "SKMapLayerGuideLine" },
         };
         for (const auto& toggle : TOGGLES)
         {
@@ -257,23 +256,23 @@ namespace skmap
                          { "SKMapLayerContours", false },       { "SKMapLayerDoors", true },
                          { "SKMapLayerParcels", false },        { "SKMapLayerParcelsForSale", false },
                          { "SKMapLayerParcelsCollision", false }, { "SKMapLayerChatRings", false },
-                         { "SKMapLayerGuideLine", false },      { "SKMapLayerVehicles", true },
-                         { "SKMapLayerFiringLines", true },     { "SKMapLayerObjects", 1 } };
+                         { "SKMapLayerVehicles", true },        { "SKMapLayerFiringLines", true },
+                         { "SKMapLayerProjectiles", true },     { "SKMapLayerObjects", 1 } };
             case Preset::EXPLORE:
                 return { { "SKMapLayerCover", true },           { "SKMapLayerStairs", true },
                          { "SKMapLayerContours", true },        { "SKMapLayerDoors", true },
                          { "SKMapLayerParcels", true },         { "SKMapLayerParcelsForSale", true },
                          { "SKMapLayerParcelsCollision", false }, { "SKMapLayerChatRings", false },
-                         { "SKMapLayerGuideLine", false },      { "SKMapLayerVehicles", true },
-                         { "SKMapLayerFiringLines", false },    { "SKMapLayerObjects", 1 } };
+                         { "SKMapLayerVehicles", true },        { "SKMapLayerFiringLines", false },
+                         { "SKMapLayerProjectiles", false },    { "SKMapLayerObjects", 1 } };
             case Preset::MINIMAL:
             default:
                 return { { "SKMapLayerFloorplan", true },       { "SKMapLayerCover", false },
                          { "SKMapLayerStairs", false },         { "SKMapLayerContours", false },
                          { "SKMapLayerDoors", false },          { "SKMapLayerParcels", false },
                          { "SKMapLayerParcelsForSale", false }, { "SKMapLayerParcelsCollision", false },
-                         { "SKMapLayerChatRings", false },      { "SKMapLayerGuideLine", false },
-                         { "SKMapLayerVehicles", false },       { "SKMapLayerFiringLines", false },
+                         { "SKMapLayerChatRings", false },      { "SKMapLayerVehicles", false },
+                         { "SKMapLayerFiringLines", false },    { "SKMapLayerProjectiles", false },
                          { "SKMapLayerObjects", 0 } };
         }
     }

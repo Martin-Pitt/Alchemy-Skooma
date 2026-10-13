@@ -158,7 +158,6 @@ namespace tut
         classic["AlchemyMiniMapForSaleParcels"] = true;
         classic["AlchemyMiniMapCollisionParcels"] = false;
         classic["AlchemyMinimapChatRings"] = true;
-        classic["AlchemyMinimapGuideLine"] = true;
         classic["AlchemyMinimapRenderObjects"] = false;
         const LLSD seeded = seedFromClassic(classic, 200.f);
         ensure("128 at 200 px is 400 m", std::fabs(seeded["SKMapZoomMeters"].asReal() - 400.0) < 1e-6);
@@ -166,7 +165,7 @@ namespace tut
         ensure("auto-centre", !seeded["SKMapAutoCenter"].asBoolean());
         ensure("parcels", seeded["SKMapLayerParcels"].asBoolean() && seeded["SKMapLayerParcelsForSale"].asBoolean());
         ensure("collision", !seeded["SKMapLayerParcelsCollision"].asBoolean());
-        ensure("chat rings and guide line", seeded["SKMapLayerChatRings"].asBoolean() && seeded["SKMapLayerGuideLine"].asBoolean());
+        ensure("chat rings", seeded["SKMapLayerChatRings"].asBoolean());
         ensure_equals("objects off", seeded["SKMapLayerObjects"].asInteger(), 0);
         classic["MiniMapScale"] = 8.0;
         classic["AlchemyMinimapRenderObjects"] = true;
@@ -356,8 +355,8 @@ namespace tut
         };
         const std::set<std::string> common = { "SKMapLayerCover", "SKMapLayerStairs", "SKMapLayerContours", "SKMapLayerDoors",
                                                "SKMapLayerParcels", "SKMapLayerParcelsForSale", "SKMapLayerParcelsCollision",
-                                               "SKMapLayerChatRings", "SKMapLayerGuideLine", "SKMapLayerVehicles",
-                                               "SKMapLayerFiringLines", "SKMapLayerObjects" };
+                                               "SKMapLayerChatRings", "SKMapLayerVehicles",
+                                               "SKMapLayerFiringLines", "SKMapLayerProjectiles", "SKMapLayerObjects" };
         ensure("combat", keys(Preset::COMBAT) == common);
         ensure("explore", keys(Preset::EXPLORE) == common);
         std::set<std::string> minimal = common;
@@ -372,6 +371,10 @@ namespace tut
             if (kv.first == "SKMapLayerFiringLines")
             {
                 ensure("combat keeps firing lines", kv.second.asBoolean());
+            }
+            if (kv.first == "SKMapLayerProjectiles")
+            {
+                ensure("combat shows projectiles", kv.second.asBoolean());
             }
         }
     }

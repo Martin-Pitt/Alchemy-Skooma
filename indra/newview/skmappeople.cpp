@@ -371,9 +371,7 @@ void SKMapPeople::updateProjectiles()
 {
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerProjectiles", false);
-    // Never in combat: a shot's owner cannot be told without asking, and it would show where
-    // someone hidden is shooting from.
-    if (!show || mCombat)
+    if (!show)
     {
         mProjectiles.clear();
         mLastObjectPos.clear();

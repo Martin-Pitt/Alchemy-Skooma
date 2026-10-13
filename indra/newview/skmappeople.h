@@ -118,7 +118,7 @@ public:
     };
     const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
 
-    /// Fast physical objects in view, opt-in and never in combat.
+    /// Fast physical objects in view, opt-in.
     struct Projectile
     {
         LLVector3d mPos;
