@@ -533,6 +533,7 @@ struct SKNavMesh::SpillJob
     U32 mGeneration = 0;
     std::vector<Entry> mEntries;
     size_t mPending = 0;            ///< reloads still on the workers
+    size_t mNextPost = 0;           ///< reloads not posted yet, when the cap held some back
     F64 mAsked = 0.0;
 };
 
@@ -554,6 +555,22 @@ void SKNavMesh::updateResidency()
     static LLCachedControl<U32> show_air(gSavedSettings, "SKNavOverlayAir", 0);
     static LLCachedControl<F32> overlay_range(gSavedSettings, "SKNavOverlayRange", 96.f);
     const F64 now = LLTimer::getTotalSeconds();
+    // The cap held reads back: they post as the pool's slots free, ahead of
+    // everything else in this pass, so a mesh half read back cannot sit in the
+    // backlog while nothing drains it.
+    if (!mReloadBacklog.empty() && workerQueue())
+    {
+        const U32 width = llmax(static_cast<U32>(mWorkers->getWidth()), 1u);
+        for (auto it = mReloadBacklog.begin(); it != mReloadBacklog.end();)
+        {
+            const std::shared_ptr<SpillJob>& job = *it;
+            while (job->mNextPost < job->mEntries.size() && mReloadReadsInFlight < width)
+            {
+                postReloadRead(job, job->mNextPost++);
+            }
+            it = job->mNextPost >= job->mEntries.size() ? mReloadBacklog.erase(it) : it + 1;
+        }
+    }
     // The air overlay draws detail: what it reaches stays in memory while it is on.
     if (show_air && overlayActive())
     {
@@ -775,35 +792,67 @@ void SKNavMesh::reloadMesh(Mesh& mesh)
     }
     mesh.mResidency = Mesh::Residency::RELOADING;
     job->mPending = job->mEntries.size();
-    // One job a tile, so a mesh comes back across every worker at once.
+    // One job a tile, so a mesh comes back across every worker at once. The
+    // reads cap at the pool's width: a whole region's reads must not queue the
+    // whole pool ahead of the builds and stamps already in flight, and what
+    // the cap holds back waits in the backlog for the drain.
+    const U32 width = llmax<U32>(mWorkers->getWidth(), 1);
     for (size_t i = 0; i < job->mEntries.size(); ++i)
     {
-        const bool posted = main_queue->postTo(
-            workers,
-            [job, cache, i]()
+        if (mReloadReadsInFlight >= width)
+        {
+            job->mNextPost = i;
+            mReloadBacklog.push_back(job);
+            return;
+        }
+        postReloadRead(job, i);
+    }
+}
+
+bool SKNavMesh::postReloadRead(const std::shared_ptr<SpillJob>& job, size_t i)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    if (!main_queue || !workers || workers->isClosed() || !cache)
+    {
+        return false;
+    }
+    const bool posted = main_queue->postTo(
+        workers,
+        [job, cache, i]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
+            LLTimer timer;
+            SpillJob::Entry& e = job->mEntries[i];
+            const U64 key = spillKey(e.mContentKey);
+            std::vector<U8> bytes;
+            e.mOk = cache->load(key, bytes) && unpackSpill(bytes.data(), bytes.size(), key, e.mAir, e.mRaster) && e.mAir;
+            e.mBytes = bytes.size();
+            e.mMillis = timer.getElapsedTimeF32() * 1000.f;
+            return job;
+        },
+        [this](std::shared_ptr<SpillJob> done)
+        {
+            --mReloadReadsInFlight;
+            if (--done->mPending == 0)
             {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
-                LLTimer timer;
-                SpillJob::Entry& e = job->mEntries[i];
-                const U64 key = spillKey(e.mContentKey);
-                std::vector<U8> bytes;
-                e.mOk = cache->load(key, bytes) && unpackSpill(bytes.data(), bytes.size(), key, e.mAir, e.mRaster) && e.mAir;
-                e.mBytes = bytes.size();
-                e.mMillis = timer.getElapsedTimeF32() * 1000.f;
-                return job;
-            },
-            [this](std::shared_ptr<SpillJob> done)
-            {
-                if (--done->mPending == 0)
-                {
-                    finishReload(done);
-                }
-            });
-        if (!posted && --job->mPending == 0)
+                finishReload(done);
+            }
+        });
+    if (posted)
+    {
+        ++mReloadReadsInFlight;
+    }
+    else
+    {
+        // The queue refused it: its slot never filled, and its tile is not coming back this way.
+        if (--job->mPending == 0)
         {
             finishReload(job);
         }
     }
+    return posted;
 }
 
 void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)

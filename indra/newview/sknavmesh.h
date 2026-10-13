@@ -486,6 +486,8 @@ private:
         F64 mResidencyChecked = 0.0;
         F64 mReloadAsked = 0.0;
         std::shared_ptr<SpillJob> mRefusedReload;   ///< what a reload read whose swap was refused, to try again
+        U32 mReloadReadsInFlight = 0;               ///< the reload cap, so a whole region's reads cannot flood the pool
+        std::vector<std::shared_ptr<SpillJob>> mReloadBacklog;  ///< reloads the cap held back, in the order they asked
         ~Mesh();
     };
 
@@ -632,6 +634,9 @@ private:
     void updateResidency();
     void spillMesh(Mesh& mesh);
     void reloadMesh(Mesh& mesh);
+    /// One tile's read, posted to the pool under the reload cap; false when
+    /// the queue refused it, which retires the entry as if it had read nothing.
+    bool postReloadRead(const std::shared_ptr<SpillJob>& job, size_t i);
     void finishSpill(const std::shared_ptr<SpillJob>& job);
     void finishReload(const std::shared_ptr<SpillJob>& job);
     /// Point a mesh's landed products and its stamp at other air, keeping their contents.
