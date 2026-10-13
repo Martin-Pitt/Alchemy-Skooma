@@ -103,6 +103,8 @@ public:
     /// Draw one layer around the camera, span metres across a side px square; PLAN sets the view first and the
     /// next draw() puts the widget's own view back.
     void drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface);
+    /// Free the plan's GL objects; they are made again on the next draw.
+    void releaseGL();
 
     /// Told of every ping the user places on a map, for whatever will carry it to allies.
     typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;

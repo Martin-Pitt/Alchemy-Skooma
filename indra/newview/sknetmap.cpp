@@ -378,6 +378,14 @@ void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side,
     }
 }
 
+void SKNetMap::releaseGL()
+{
+    if (mPlan)
+    {
+        mPlan->release();
+    }
+}
+
 void SKNetMap::drawPlan()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);

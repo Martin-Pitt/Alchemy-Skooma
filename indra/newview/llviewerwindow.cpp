@@ -3089,8 +3089,11 @@ void LLViewerWindow::draw()
             LLUI::getScaleFactor() *= zoom_factor;
         }
 
-        // <SK:Nexii> The Mouselook map, under the crosshair and mouselook text
-        SKMapML::draw();
+        // <SK:Nexii> The Mouselook map, under the crosshair and mouselook text; not in tiled snapshots
+        if (zoom_factor <= 1.f)
+        {
+            SKMapML::draw();
+        }
         // </SK:Nexii>
 
         // Draw tool specific overlay on world

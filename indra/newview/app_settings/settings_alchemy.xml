@@ -5057,17 +5057,6 @@
             <key>Value</key>
             <integer>1</integer>
         </map>
-        <key>SKMapMLSpanMeters</key>
-        <map>
-            <key>Comment</key>
-            <string>Metres across the Mouselook map.</string>
-            <key>Persist</key>
-            <integer>1</integer>
-            <key>Type</key>
-            <string>F32</string>
-            <key>Value</key>
-            <real>96.0</real>
-        </map>
         <key>SKMapMLSize</key>
         <map>
             <key>Comment</key>

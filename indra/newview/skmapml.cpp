@@ -28,6 +28,8 @@
 
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "llcallbacklist.h"
+#include "llframetimer.h"
 #include "llglslshader.h"
 #include "llrender.h"
 #include "llrendertarget.h"
@@ -145,7 +147,11 @@ void main()
         LLRenderTarget mTarget;
         U32 mProgram = 0;
         U32 mVao = 0;
-        bool mFailed = false;
+        bool mFailed = false;       ///< the shader failed to build; nothing will draw
+        GLint mLocRect = -1, mLocMode = -1, mLocSide = -1, mLocOuter = -1, mLocCentre = -1, mLocSelf = -1;
+        U32 mDrawnFrame = 0;        ///< the frame the overlay last drew in, plus one
+        F32 mHeading = 0.f;         ///< the last heading the camera gave, held while it looks straight up or down
+        bool mIdleAdded = false;
 
         ~State()
         {
@@ -162,12 +168,36 @@ void main()
     };
     State* sState = nullptr;
 
+    State& state()
+    {
+        if (!sState)
+        {
+            sState = new State();
+        }
+        return *sState;
+    }
+
     struct Fades
     {
         F32 mOuter = 0.f;
         F32 mCentre = 0.f;
         F32 mSelf = 0.f;
     };
+
+    bool wanted()
+    {
+        static LLCachedControl<bool> enable(gSavedSettings, "SKMapMLEnable", true);
+        return enable && gAgentCamera.cameraMouselook();
+    }
+
+    /// Outside the draw pass: the corner map's floater is built, never opened, so the overlay has its widget.
+    void onIdle(void*)
+    {
+        if (wanted() && !LLFloaterReg::findTypedInstance<SKFloaterMap>("mini_map"))
+        {
+            LLFloaterReg::getTypedInstance<SKFloaterMap>("mini_map");
+        }
+    }
 
     /// The target's layer over the window: viewport is the window's, side the map's, both in pixels.
     void blit(State& s, const GLint* viewport, F32 side, S32 mode, const Fades& fades)
@@ -187,13 +217,12 @@ void main()
         const F32 hh = side / static_cast<F32>(viewport[3]);
         glUseProgram(s.mProgram);
         glBindVertexArray(s.mVao);
-        glUniform4f(glGetUniformLocation(s.mProgram, "u_rect"), -hw, -hh, hw, hh);
-        glUniform1i(glGetUniformLocation(s.mProgram, "u_t"), 0);
-        glUniform1i(glGetUniformLocation(s.mProgram, "u_mode"), mode);
-        glUniform1f(glGetUniformLocation(s.mProgram, "u_side"), side);
-        glUniform1f(glGetUniformLocation(s.mProgram, "u_outer"), fades.mOuter);
-        glUniform1f(glGetUniformLocation(s.mProgram, "u_centre"), fades.mCentre);
-        glUniform1f(glGetUniformLocation(s.mProgram, "u_self"), fades.mSelf);
+        glUniform4f(s.mLocRect, -hw, -hh, hw, hh);
+        glUniform1i(s.mLocMode, mode);
+        glUniform1f(s.mLocSide, side);
+        glUniform1f(s.mLocOuter, fades.mOuter);
+        glUniform1f(s.mLocCentre, fades.mCentre);
+        glUniform1f(s.mLocSelf, fades.mSelf);
         gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, s.mTarget.getTexture(), 0);
         glEnable(GL_BLEND);
         glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
@@ -207,154 +236,185 @@ void main()
         glBindVertexArray(vao);
         glUseProgram(program);
     }
+
+    /// One frame of the overlay; false when nothing was drawn.
+    bool drawOverlay()
+    {
+        static LLCachedControl<F32> span(gSavedSettings, "SKMapZoomMeters", skmap::ZOOM_DEFAULT_M);
+        static LLCachedControl<bool> rotate(gSavedSettings, "SKMapMLRotate", false);
+        static LLCachedControl<F32> size(gSavedSettings, "SKMapMLSize", 0.8f);
+        static LLCachedControl<F32> lines(gSavedSettings, "SKMapMLLineStrength", 0.8f);
+        static LLCachedControl<F32> surface(gSavedSettings, "SKMapMLSurfaceOpacity", 0.2f);
+        static LLCachedControl<F32> centre_fade(gSavedSettings, "SKMapMLCentreFade", 0.18f);
+        static LLCachedControl<F32> self_fade(gSavedSettings, "SKMapMLSelfFadePx", 28.f);
+        static LLCachedControl<F32> outer_fade(gSavedSettings, "SKMapMLOuterFade", 0.38f);
+        State& s = state();
+        if (!s.mIdleAdded)
+        {
+            gIdleCallbacks.addFunction(onIdle, nullptr);
+            s.mIdleAdded = true;
+        }
+        if (s.mFailed || !wanted() || !LLWorld::instanceExists() || !gAgent.getRegion())
+        {
+            return false;
+        }
+        SKFloaterMap* floater = LLFloaterReg::findTypedInstance<SKFloaterMap>("mini_map");
+        SKNetMap* map = floater ? floater->map() : nullptr;
+        if (!map)
+        {
+            return false;
+        }
+        GLint viewport[4] = {};
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        if (viewport[2] <= 0 || viewport[3] <= 0)
+        {
+            return false;
+        }
+        // Sized and faded against the window's height, so any aspect keeps the same map.
+        const F32 height = static_cast<F32>(viewport[3]);
+        const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f))), 16U, MAX_SIDE);
+        if (!s.mProgram)
+        {
+            s.mProgram = compileProgram();
+            if (!s.mProgram)
+            {
+                s.mFailed = true;
+                return false;
+            }
+            glGenVertexArrays(1, &s.mVao);
+            s.mLocRect = glGetUniformLocation(s.mProgram, "u_rect");
+            s.mLocMode = glGetUniformLocation(s.mProgram, "u_mode");
+            s.mLocSide = glGetUniformLocation(s.mProgram, "u_side");
+            s.mLocOuter = glGetUniformLocation(s.mProgram, "u_outer");
+            s.mLocCentre = glGetUniformLocation(s.mProgram, "u_centre");
+            s.mLocSelf = glGetUniformLocation(s.mProgram, "u_self");
+            GLint program = 0;
+            glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+            glUseProgram(s.mProgram);
+            glUniform1i(glGetUniformLocation(s.mProgram, "u_t"), 0);
+            glUseProgram(program);
+        }
+        if (!s.mTarget.isComplete() || s.mTarget.getWidth() != side)
+        {
+            // Not latched: a later frame or another size may succeed.
+            s.mTarget.release();
+            if (!s.mTarget.allocate(side, side, GL_RGBA8))
+            {
+                return false;
+            }
+        }
+        F32 rotation = 0.f;
+        if (rotate)
+        {
+            const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
+            if (at.mV[VX] * at.mV[VX] + at.mV[VY] * at.mV[VY] > 0.01f)
+            {
+                s.mHeading = std::atan2(at.mV[VY], at.mV[VX]);
+            }
+            rotation = skmap::MapView::rotationForHeading(s.mHeading);
+        }
+
+        // The markers keep their UI size: the map is laid out in UI pixels and scaled to the window's.
+        const F32 ui = llmax(LLUI::getScaleFactor().mV[VX], 0.01f);
+        const F32 side_ui = side / ui;
+        Fades fades;
+        fades.mOuter = llclamp(static_cast<F32>(outer_fade), 0.05f, 1.f);
+        fades.mCentre = height * llclamp(static_cast<F32>(centre_fade), 0.f, 0.5f);
+        fades.mSelf = llmin(llclamp(static_cast<F32>(self_fade), 0.f, 128.f) * ui, fades.mCentre * 0.65f);
+        const F32 metres = llclamp(static_cast<F32>(span), skmap::ZOOM_MIN_M, skmap::ZOOM_MAX_M);
+
+        gGL.flush();
+        LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
+        GLfloat clear[4] = {};
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+        GLint draw_fbo = 0, read_fbo = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        gGL.ortho(0.f, static_cast<F32>(side), 0.f, static_cast<F32>(side), -1.f, 1.f);
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.pushMatrix();
+        gGL.loadIdentity();
+        gGL.scalef(ui, ui, 1.f);
+        gGL.pushUIMatrix();
+        gGL.loadUIIdentity();
+        gUIProgram.bind();
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+
+        for (S32 mode : { 0, 1, 2 })
+        {
+            s.mTarget.bindTarget();
+            s.mTarget.clear(GL_COLOR_BUFFER_BIT);
+            gGL.getTextureSlot(0)->unbind();
+            gGL.color4f(1.f, 1.f, 1.f, 1.f);
+            // Onto transparent black: colour by its alpha, alpha accumulated, so the target is premultiplied.
+            gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+            const SKNetMap::OverlayLayer layer = mode == 0 ? SKNetMap::OverlayLayer::PLAN
+                                                 : mode == 1 ? SKNetMap::OverlayLayer::MARKERS
+                                                             : SKNetMap::OverlayLayer::SELF;
+            map->drawOverlay(layer, metres, rotation, side_ui, llclamp(static_cast<F32>(lines), 0.f, 1.f),
+                             llclamp(static_cast<F32>(surface), 0.f, 1.f));
+            gGL.flush();
+            s.mTarget.flush();
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+            glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+            blit(s, viewport, static_cast<F32>(side), mode, fades);
+        }
+
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+        gGL.popUIMatrix();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        gGL.popMatrix();
+        gGL.matrixMode(LLRender::MM_PROJECTION);
+        gGL.popMatrix();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        glClearColor(clear[0], clear[1], clear[2], clear[3]);
+        // Unbound first, so the bind below is never skipped as already current.
+        LLGLSLShader::unbind();
+        if (shader)
+        {
+            shader->bind();
+        }
+        return true;
+    }
 }
 
 // static
 bool SKMapML::showing()
 {
-    static LLCachedControl<bool> enable(gSavedSettings, "SKMapMLEnable", true);
-    return enable && gAgentCamera.cameraMouselook();
+    // Drawn this frame or the last: the floater draws after the overlay in the same frame.
+    return sState && sState->mDrawnFrame >= LLFrameTimer::getFrameCount();
 }
 
 // static
 void SKMapML::draw()
 {
-    static LLCachedControl<bool> rotate(gSavedSettings, "SKMapMLRotate", false);
-    static LLCachedControl<F32> span(gSavedSettings, "SKMapMLSpanMeters", 96.f);
-    static LLCachedControl<F32> size(gSavedSettings, "SKMapMLSize", 0.8f);
-    static LLCachedControl<F32> lines(gSavedSettings, "SKMapMLLineStrength", 0.8f);
-    static LLCachedControl<F32> surface(gSavedSettings, "SKMapMLSurfaceOpacity", 0.2f);
-    static LLCachedControl<F32> centre_fade(gSavedSettings, "SKMapMLCentreFade", 0.18f);
-    static LLCachedControl<F32> self_fade(gSavedSettings, "SKMapMLSelfFadePx", 28.f);
-    static LLCachedControl<F32> outer_fade(gSavedSettings, "SKMapMLOuterFade", 0.38f);
-    if (!showing() || !LLWorld::instanceExists() || !gAgent.getRegion())
-    {
-        return;
-    }
-    // The corner map's own widget, built if its floater never was; the floater is not opened.
-    SKFloaterMap* floater = LLFloaterReg::getTypedInstance<SKFloaterMap>("mini_map");
-    SKNetMap* map = floater ? floater->map() : nullptr;
-    if (!map)
-    {
-        return;
-    }
-    if (!sState)
-    {
-        sState = new State();
-    }
-    State& s = *sState;
-    if (s.mFailed)
-    {
-        return;
-    }
     LL_PROFILE_ZONE_SCOPED;
-
-    GLint viewport[4] = {};
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    if (viewport[2] <= 0 || viewport[3] <= 0)
+    if (drawOverlay())
     {
-        return;
-    }
-    // Sized and faded against the window's height, so any aspect keeps the same map.
-    const F32 height = static_cast<F32>(viewport[3]);
-    const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f))), 16U, MAX_SIDE);
-    if (!s.mProgram)
-    {
-        s.mProgram = compileProgram();
-        glGenVertexArrays(1, &s.mVao);
-        if (!s.mProgram)
-        {
-            s.mFailed = true;
-            return;
-        }
-    }
-    if (!s.mTarget.isComplete() || s.mTarget.getWidth() != side)
-    {
-        s.mTarget.release();
-        if (!s.mTarget.allocate(side, side, GL_RGBA8))
-        {
-            LL_WARNS("SKMap") << "Mouselook map target failed at " << side << " pixels" << LL_ENDL;
-            s.mFailed = true;
-            return;
-        }
-    }
-    F32 rotation = 0.f;
-    if (rotate)
-    {
-        const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
-        rotation = skmap::MapView::rotationForHeading(std::atan2(at.mV[VY], at.mV[VX]));
-    }
-
-    // The markers keep their UI size: the map is laid out in UI pixels and scaled to the window's.
-    const F32 ui = llmax(LLUI::getScaleFactor().mV[VX], 0.01f);
-    const F32 side_ui = side / ui;
-    Fades fades;
-    fades.mOuter = llclamp(static_cast<F32>(outer_fade), 0.05f, 1.f);
-    fades.mCentre = height * llclamp(static_cast<F32>(centre_fade), 0.f, 0.5f);
-    fades.mSelf = llmin(llclamp(static_cast<F32>(self_fade), 0.f, 128.f) * ui, fades.mCentre * 0.65f);
-
-    gGL.flush();
-    LLGLSLShader* shader = LLGLSLShader::sCurBoundShaderPtr;
-    GLfloat clear[4] = {};
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
-    GLint draw_fbo = 0, read_fbo = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
-    LLGLDisable scissor(GL_SCISSOR_TEST);
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.loadIdentity();
-    gGL.ortho(0.f, static_cast<F32>(side), 0.f, static_cast<F32>(side), -1.f, 1.f);
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.pushMatrix();
-    gGL.loadIdentity();
-    gGL.scalef(ui, ui, 1.f);
-    gGL.pushUIMatrix();
-    gGL.loadUIIdentity();
-    gUIProgram.bind();
-
-    for (S32 mode : { 0, 1, 2 })
-    {
-        s.mTarget.bindTarget();
-        glClearColor(0.f, 0.f, 0.f, 0.f);
-        s.mTarget.clear(GL_COLOR_BUFFER_BIT);
-        gGL.getTextureSlot(0)->unbind();
-        gGL.color4f(1.f, 1.f, 1.f, 1.f);
-        // Onto transparent black: colour by its alpha, alpha accumulated, so the target is premultiplied.
-        gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA, LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
-        const SKNetMap::OverlayLayer layer = mode == 0 ? SKNetMap::OverlayLayer::PLAN : mode == 1 ? SKNetMap::OverlayLayer::MARKERS
-                                                                                                : SKNetMap::OverlayLayer::SELF;
-        map->drawOverlay(layer, llclamp(static_cast<F32>(span), skmap::ZOOM_MIN_M, skmap::ZOOM_MAX_M), rotation, side_ui,
-                            llclamp(static_cast<F32>(lines), 0.f, 1.f), llclamp(static_cast<F32>(surface), 0.f, 1.f));
-        gGL.flush();
-        s.mTarget.flush();
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
-        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-        blit(s, viewport, static_cast<F32>(side), mode, fades);
-    }
-
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-    gGL.popUIMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    glClearColor(clear[0], clear[1], clear[2], clear[3]);
-    if (shader)
-    {
-        shader->bind();
-    }
-    else
-    {
-        LLGLSLShader::unbind();
+        state().mDrawnFrame = LLFrameTimer::getFrameCount() + 1;
     }
 }
 
 // static
 void SKMapML::cleanup()
 {
+    // The corner map's plan holds the overlay's blit too; a restarted context rebuilds both.
+    if (SKFloaterMap* floater = LLFloaterReg::findTypedInstance<SKFloaterMap>("mini_map"))
+    {
+        if (SKNetMap* map = floater->map())
+        {
+            map->releaseGL();
+        }
+    }
+    if (sState && sState->mIdleAdded)
+    {
+        gIdleCallbacks.deleteFunction(onIdle, nullptr);
+    }
     delete sState;
     sState = nullptr;
 }
