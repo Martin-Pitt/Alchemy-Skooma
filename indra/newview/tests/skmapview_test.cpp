@@ -67,62 +67,6 @@ namespace tut
         ensure("heading points up", ahead.mV[VY] > 59.f && std::fabs(ahead.mV[VX] - 50.f) < 1e-3f);
     }
 
-    // A 10% zoom across a tier boundary keeps the tier; 20% moves it.
-    template<> template<>
-    void skmapview_object::test<2>()
-    {
-        // Target texel = mpp / 2. Tier 5 (1 m texel) holds targets in [1, 2).
-        const S32 start = skmap::chooseTier(2.f * 1.99f, -1);
-        ensure_equals("start tier", start, 5);
-        ensure_equals("10% out keeps", skmap::chooseTier(2.f * 1.99f * 1.1f, start), 5);
-        ensure_equals("20% out moves", skmap::chooseTier(2.f * 1.99f * 1.2f, start), 6);
-        const S32 low = skmap::chooseTier(2.f * 1.f, -1);
-        ensure_equals("at the lower edge", low, 5);
-        ensure_equals("10% in keeps", skmap::chooseTier(2.f * 0.9f, low), 5);
-        ensure_equals("20% in moves", skmap::chooseTier(2.f * 0.8f, low), 4);
-    }
-
-    // The tier never leaves 0..6, however far the scale goes.
-    template<> template<>
-    void skmapview_object::test<3>()
-    {
-        for (F32 mpp = 1e-4f; mpp < 1e4f; mpp *= 1.37f)
-        {
-            const S32 t = skmap::chooseTier(mpp, -1);
-            ensure("tier in range", t >= skmap::TIER_MIN && t <= skmap::TIER_MAX);
-            ensure("kept tier in range", skmap::chooseTier(mpp, t) == t);
-        }
-        ensure_equals("finest", skmap::chooseTier(1e-5f, 3), 0);
-        ensure_equals("coarsest", skmap::chooseTier(1e5f, 3), 6);
-        ensure("cell 8 m at tier 0", std::fabs(skmap::tierCellSize(0) - 8.0) < 1e-9);
-        ensure("cell 512 m at tier 6", std::fabs(skmap::tierCellSize(6) - 512.0) < 1e-9);
-    }
-
-    // cellsInBox covers the box: every point of it lies in a returned cell.
-    template<> template<>
-    void skmapview_object::test<4>()
-    {
-        const LLVector3d min(-37.5, 12.25, 0.0), max(91.0, 140.0, 0.0);
-        for (S32 tier = 0; tier <= 6; tier += 2)
-        {
-            std::vector<skmap::CellId> cells;
-            skmap::cellsInBox(tier, min, max, cells);
-            ensure("some cells", !cells.empty());
-            for (F64 x = min.mdV[VX]; x <= max.mdV[VX]; x += 3.3)
-            {
-                for (F64 y = min.mdV[VY]; y <= max.mdV[VY]; y += 3.3)
-                {
-                    const skmap::CellId c = skmap::cellAt(tier, x, y);
-                    ensure("point covered", std::find(cells.begin(), cells.end(), c) != cells.end());
-                }
-            }
-        }
-        const skmap::CellId c = skmap::cellAt(0, -0.5, 9.0);
-        ensure_equals("negative floors", c.mX, -1);
-        ensure_equals("positive", c.mY, 1);
-        ensure("ancestor holds the cell", c.ancestor(2) == skmap::cellAt(2, -0.5, 9.0));
-    }
-
     // The analysis box holds a 256 m reach around a centre 128 m off the agent, and only moves in 64 m steps.
     template<> template<>
     void skmapview_object::test<5>()
@@ -167,33 +111,5 @@ namespace tut
         skmap::MapView view;
         view.set(LLVector3d(), 5000.f, 0.f, 100.f, 100.f);
         ensure_equals("view clamps", view.span(), 2048.f);
-        const S32 b = skmap::zoomBucket(0.5f);
-        ensure("bucket round trip", std::fabs(skmap::bucketMpp(b) - 0.5f) < 0.03f);
-        ensure("bucket steps", skmap::zoomBucket(0.5f * 1.1f) == b + 1);
-    }
-
-    // The scene origin starts at the box's minimum and stays there while re-snaps keep the box near it.
-    template<> template<>
-    void skmapview_object::test<7>()
-    {
-        const LLVector3d min(256064.0, 255936.0, -1.0e4);
-        const LLVector3d first = skmap::analysisOrigin(min, nullptr);
-        ensure("the first is the minimum, z 0", first == LLVector3d(min.mdV[VX], min.mdV[VY], 0.0));
-        for (S32 axis = 0; axis < 2; ++axis)
-        {
-            for (F64 sign : { -1.0, 1.0 })
-            {
-                LLVector3d step = min;
-                step.mdV[axis] += sign * skmap::ANALYSIS_SNAP_M;
-                ensure("one snap step keeps it", skmap::analysisOrigin(step, &first) == first);
-                LLVector3d edge = min;
-                edge.mdV[axis] += sign * skmap::ANALYSIS_ORIGIN_DRIFT_M;
-                ensure("as far as the drift keeps it", skmap::analysisOrigin(edge, &first) == first);
-                LLVector3d past = min;
-                past.mdV[axis] += sign * (skmap::ANALYSIS_ORIGIN_DRIFT_M + skmap::ANALYSIS_SNAP_M);
-                ensure("past the drift it moves to the minimum",
-                       skmap::analysisOrigin(past, &first) == LLVector3d(past.mdV[VX], past.mdV[VY], 0.0));
-            }
-        }
     }
 }

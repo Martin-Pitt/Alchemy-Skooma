@@ -1264,7 +1264,6 @@ void SKNetMap::drawReadout()
     {
         return;
     }
-    const SKMapScene::Stats& stats = SKMapScene::instance().stats();
     std::vector<std::string> lines;
     lines.push_back(llformat("draw %.2f ms", mDrawMs));
     if (mPlan)
@@ -1274,7 +1273,7 @@ void SKNetMap::drawReadout()
             lines.push_back(line);
         }
     }
-    lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
+    lines.push_back(llformat("navmesh %u tiles built", SKMapScene::instance().builtTiles()));
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
     lines.push_back(llformat("probes %u in flight, %u queued", resolver.probesInFlight(), resolver.probesQueued()));
     const LLFontGL* font = LLFontGL::getFontMonospace();

@@ -33,13 +33,20 @@
 
 #include "skmapallies.h"
 #include "skmapallyresolver.h"
-#include "skmapgeom.h"
 #include "skmapmarkers.h"
 #include "skmappolicy.h"
+#include "skmapview.h"
+#include "sknavwalls.h"
 
 #include <deque>
 #include <map>
 #include <vector>
+
+namespace skmap
+{
+    /// Another avatar's floor against the reference floor (the agent's, or the camera's when it has left the agent's storey).
+    enum class FloorRelation : U8 { SAME, ABOVE, BELOW, UNKNOWN };
+}
 
 /// A vehicle's captured outline, keyed by its root. A seam for the outline capture module.
 class SKMapVehicleGlyphs
@@ -154,6 +161,18 @@ private:
     void loadFactions();
 
     std::vector<Person> mPeople;
+    /// The navmesh floor under a position: its height and storey, read from the walkable poly nearest it.
+    struct NavFloor
+    {
+        bool mFound = false;
+        F32 mZ = 0.f;
+        LLUUID mMesh;
+        S32 mStorey = -1;
+    };
+    NavFloor navFloor(const LLVector3d& pos) const;
+    /// Each person's last floor read and where it was read, dropped when the navmesh moves.
+    std::map<LLUUID, std::pair<LLVector3d, NavFloor>> mFloors;
+    U64 mFloorsRevision = 0;
     F64 mLastDrawn = -1.0e9;
     sknav::Cover mCoverAhead = sknav::Cover::NONE;
     F64 mCoverAt = -1.0e9;

@@ -1917,10 +1917,8 @@ if(AL_BUILD_VIEWER)
     APPEND viewer_SOURCES
     sknavpolys.cpp
     skmapview.cpp
-    skmapgeom.cpp
     skmapplan.cpp
     skmapcomposite.cpp
-    skmapsection.cpp
     skmaplabels.cpp
     skmapmarkers.cpp
     skmapallies.cpp
@@ -1943,11 +1941,9 @@ if(AL_BUILD_VIEWER)
     APPEND viewer_HEADERS
     sknavpolys.h
     skmapview.h
-    skmapgeom.h
     skmapplan.h
     skmapcomposite.h
     skmappalette.h
-    skmapsection.h
     skmaplabels.h
     skmapmarkers.h
     skmapallies.h
@@ -3111,21 +3107,6 @@ if(AL_BUILD_TESTS)
   # <SK:Nexii> SKNetMap mini-map unit tests
   al_add_test(sknavpolys UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
   al_add_test(skmapview UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
-  al_add_test(
-    skmapgeom
-    UNIT
-    PROJECT ${test_project}
-    SOURCES skmapview.cpp skmapsection.cpp
-    LIBRARIES sknavmesh ${test_libs}
-  )
-  al_add_test(skmapsection UNIT PROJECT ${test_project} LIBRARIES sknavmesh ${test_libs})
-  # The section build on a captured census (SKMAP_SECTION_CENSUS), cold and warm, with a fingerprint.
-  al_add_bench(
-    skmapsection
-    PROJECT ${test_project}
-    SOURCES skmapgeom.cpp skmapview.cpp skmapsection.cpp sknavpolys.cpp
-    LIBRARIES sknavmesh ${test_libs}
-  )
   al_add_test(skmaplabels UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(skmapmarkers UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   al_add_test(

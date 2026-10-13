@@ -43,7 +43,7 @@ using namespace skmap::plan;
 namespace
 {
     // Selection and style constants are proto2's (V:/Scratch/minimap-gpu/proto2 README, owner rulings 10, 15, 18, 22).
-    constexpr F32 CONTOUR_STEP_M = 0.5f;        // skmapgeom.h CONTOUR_STEP_M, the scene's contour interval
+    constexpr F32 CONTOUR_STEP_M = 0.5f;        // the contour interval
     constexpr F32 DIM_ALPHA = 0.45f;            // the proto's "dimmed outside"
     constexpr F32 ROOF_SHADOW_M = 2.f;          // inner roof shadow falloff width
     constexpr F32 ROOF_SHADOW_ALPHA = 0.1f;
