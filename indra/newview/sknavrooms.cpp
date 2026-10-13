@@ -758,11 +758,17 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     if (!ready.empty())
     {
         U8 best = 3;
+        sknav::RoomsSchedule first;     // the best tier's first publication that just posted
+        first.mPriority = 4;
         for (const MeshState* statep : ready)
         {
             if (statep->mInFlight)
             {
                 best = llmin(best, statep->mPriority);
+                if (!statep->mProduct)
+                {
+                    first.mPriority = llmin(first.mPriority, statep->mPriority);
+                }
             }
         }
         for (auto& entry : mMeshes)
@@ -778,9 +784,9 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 state.mPriority = navmesh.meshPriority(*mit->second);
             }
-            // A first publication is never preempted: an old layout beats none.
-            const bool rooms = roomsPreemptible(state.schedule(), best);
-            if (rooms || (state.mWindInFlight && state.mPriority > best))
+            // Only a refresh gives way, and only to a better tier's first publication.
+            const bool rooms = roomsPreemptible(state.schedule(), first);
+            if (rooms || (state.mWindInFlight && !state.mInFlight && state.mPriority > best))
             {
                 state.mLatest->store(++state.mGeneration);
                 if (!state.mDirty)

@@ -55,24 +55,32 @@ namespace sknav
         return !s.mPublished || now - s.mChanged >= settle_s || now - s.mDirtySince >= ROOMS_MAX_SETTLES * settle_s;
     }
 
-    /// Posting order: first publications, then the navmesh's order, then the longest unserved.
+    /// A refresh's wait counts this many seconds less per tier behind the agent's region.
+    constexpr F64 ROOMS_TIER_AGE_S = 2.0;
+
+    /// Posting order: first publications by tier, then refreshes by how long
+    /// they have waited, a tier further out counting as waiting less, so a
+    /// churning agent's region cannot starve the rest of the world.
     inline bool roomsBefore(const RoomsSchedule& a, const RoomsSchedule& b)
     {
         if (a.mPublished != b.mPublished)
         {
             return !a.mPublished;
         }
-        if (a.mPriority != b.mPriority)
+        if (!a.mPublished)
         {
-            return a.mPriority < b.mPriority;
+            return a.mPriority != b.mPriority ? a.mPriority < b.mPriority : a.mLastPosted < b.mLastPosted;
         }
-        return a.mLastPosted < b.mLastPosted;
+        const F64 ka = a.mDirtySince + a.mPriority * ROOMS_TIER_AGE_S, kb = b.mDirtySince + b.mPriority * ROOMS_TIER_AGE_S;
+        return ka != kb ? ka < kb : a.mPriority < b.mPriority;
     }
 
-    /// Whether a better tier's pass may cancel this one mid-flight: never a first publication.
-    inline bool roomsPreemptible(const RoomsSchedule& s, U8 best)
+    /// Whether a ready mesh's pass may cancel this one mid-flight: only a
+    /// better tier's first publication cancels, and only a refresh, so no
+    /// layout is withheld and a churning region cannot cancel the rest forever.
+    inline bool roomsPreemptible(const RoomsSchedule& running, const RoomsSchedule& ready)
     {
-        return s.mInFlight && s.mPublished && s.mPriority > best;
+        return running.mInFlight && running.mPublished && !ready.mPublished && running.mPriority > ready.mPriority;
     }
 }
 

@@ -84,7 +84,7 @@ namespace
                 }
             }
             std::stable_sort(ready.begin(), ready.end(), [this](S32 a, S32 b) { return roomsBefore(mMeshes[a].mS, mMeshes[b].mS); });
-            if (!ready.empty() && mRunning >= 0 && roomsPreemptible(mMeshes[mRunning].mS, mMeshes[ready[0]].mS.mPriority))
+            if (!ready.empty() && mRunning >= 0 && roomsPreemptible(mMeshes[mRunning].mS, mMeshes[ready[0]].mS))
             {
                 Mesh& m = mMeshes[mRunning];
                 m.mS.mInFlight = false;
@@ -158,8 +158,12 @@ namespace tut
         fresh.mInFlight = old.mInFlight = true;
         fresh.mPriority = old.mPriority = 2;
         old.mPublished = true;
-        ensure("a first pass runs on", !roomsPreemptible(fresh, 0));
-        ensure("a refresh gives way", roomsPreemptible(old, 0));
+        RoomsSchedule first_ready, refresh_ready;
+        first_ready.mPriority = refresh_ready.mPriority = 0;
+        refresh_ready.mPublished = true;
+        ensure("a first pass runs on", !roomsPreemptible(fresh, first_ready));
+        ensure("a refresh gives way to a better first publication", roomsPreemptible(old, first_ready));
+        ensure("but not to a better refresh", !roomsPreemptible(old, refresh_ready));
         RoomsSchedule a, b;
         a.mPriority = 3;
         b.mPriority = 0;
@@ -172,5 +176,41 @@ namespace tut
         ensure("never published: at once", roomsReady(churn, 10.0, 0.5));
         churn.mPublished = true;
         ensure("published and churning: after the bounded wait", roomsReady(churn, 10.0, 0.5) && !roomsReady(churn, 1.0, 0.5));
+    }
+
+    template<> template<>
+    void sknavroomsschedule_object::test<3>()
+    {
+        set_test_name("a churning agent's region whose passes take as long as its wait does not starve another region's refresh");
+        Sim sim;
+        sim.mMeshes.resize(2);
+        sim.mMeshes[0].mS.mPriority = 0;
+        sim.mMeshes[0].mPassS = 1.9;
+        sim.mMeshes[1].mS.mPriority = 2;
+        constexpr F64 STEP = 0.01;
+        sim.change(0, 0.0);
+        sim.change(1, 0.0);
+        F64 a_change = 0.0, b_change = -1.0, b_refreshed = -1.0;
+        for (F64 now = 0.0; now < 60.0; now += STEP)
+        {
+            if (now - a_change >= 0.1)
+            {
+                sim.change(0, now);
+                a_change = now;
+            }
+            if (b_change < 0.0 && now >= 20.0)
+            {
+                sim.change(1, now);
+                b_change = now;
+            }
+            sim.frame(now);
+            if (b_change >= 0.0 && b_refreshed < 0.0 && sim.mMeshes[1].mLastLanded > b_change)
+            {
+                b_refreshed = sim.mMeshes[1].mLastLanded;
+            }
+        }
+        ensure("the other region refreshes within its bound, the tier's age and a pass of each", b_refreshed > 0.0 &&
+               b_refreshed - b_change <= ROOMS_MAX_SETTLES * sim.mSettleS + 2 * ROOMS_TIER_AGE_S + 1.9 + 0.3 + 0.1);
+        ensure("and the churning region keeps refreshing", sim.mMeshes[0].mLanded >= 20);
     }
 }
