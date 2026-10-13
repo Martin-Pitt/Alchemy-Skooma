@@ -3019,7 +3019,7 @@ namespace sknav
                     k.mX += DX[d];
                     k.mY += DY[d];
                     const U32 o = tileAt(k);
-                    facing[d] = o != NONE && mTiles[o].mInBlock;
+                    facing[d] = o != NONE && mTiles[o].mWork;
                 }
                 // A basin can pass a tile corner alone: a block tile diagonal to it shares that corner's leaves.
                 bool corner[4];
@@ -3029,7 +3029,7 @@ namespace sknav
                     k.mX += (d & 1) ? -1 : 1;
                     k.mY += (d & 2) ? -1 : 1;
                     const U32 o = tileAt(k);
-                    corner[d] = o != NONE && mTiles[o].mInBlock;
+                    corner[d] = o != NONE && mTiles[o].mWork;
                 }
                 for (const AirLeaf& leaf : a.mLeaves)
                 {
