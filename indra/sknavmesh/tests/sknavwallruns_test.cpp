@@ -265,6 +265,19 @@ namespace tut
             ensure("the ground past the wall across it", r.mAcross == north);
         }
         ensure("runs along the wall's south side", seen > 0);
+        // A line keeps its edges' ends and its splits, not a point every sample.
+        F32 metres = 0.f;
+        size_t points = 0;
+        for (const WallRun& r : b.mRuns)
+        {
+            for (size_t i = 1; i < r.mLine.size(); ++i)
+            {
+                metres += dist_vec(r.mLine[i], r.mLine[i - 1]);
+            }
+            points += r.mLine.size();
+        }
+        std::cout << points << " points over " << metres << " m of runs" << std::endl;
+        ensure("fewer points than metres", points > 0 && static_cast<F32>(points) < metres);
     }
 
     template<> template<>
@@ -398,5 +411,24 @@ namespace tut
             }
         }
         ensure("runs along both", thin > 0 && deep > 0);
+
+        // One face, a third of it a 0.3 m wall and the rest a deep block: thick, so no far face at all.
+        TileBuildInput mixed = tileInput();
+        mixed.mRecords.push_back(box(4.f, 12.1f, 0.f, 12.f, 12.4f, 3.f));
+        mixed.mRecords.push_back(box(12.f, 12.1f, 0.f, 28.f, 18.f, 3.f));
+        Built m(mixed);
+        U32 thick = 0;
+        for (const WallRun& r : m.mRuns)
+        {
+            const LLVector3 mid = (r.mLine.front() + r.mLine.back()) * 0.5f;
+            if (std::fabs(r.mFloorZ) > 0.3f || r.mClass != WallClass::SOLID || std::fabs(mid.mV[VY] - 11.75f) > 0.3f)
+            {
+                continue;
+            }
+            std::cout << "mixed: face " << r.mFace << " far " << r.mFar << " depth " << r.mDepth << " thick " << r.mThick << std::endl;
+            ensure("a thick run has no far face", !r.mThick || (r.mFar < 0.f && r.mDepth < 0.f));
+            thick += r.mThick ? 1 : 0;
+        }
+        ensure("the face is thick", thick > 0);
     }
 }
