@@ -671,6 +671,15 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
 
 void SKNavMesh::reloadMesh(Mesh& mesh)
 {
+    // A refused swap keeps what it read: try the swap again rather than read it all again.
+    if (mesh.mRefusedReload)
+    {
+        const std::shared_ptr<SpillJob> refused = std::move(mesh.mRefusedReload);
+        mesh.mRefusedReload.reset();
+        mesh.mResidency = Mesh::Residency::RELOADING;
+        finishReload(refused);
+        return;
+    }
     LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
     LL::WorkQueue::ptr_t workers = workerQueue();
     const std::shared_ptr<TileDiskCache> cache = diskCache();
@@ -748,6 +757,7 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
     if (!swap.empty() && !swapProductsAir(mesh, swap))
     {
         mesh.mResidency = Mesh::Residency::SPILLED;
+        mesh.mRefusedReload = job;
         return;
     }
     F32 millis = 0.f;

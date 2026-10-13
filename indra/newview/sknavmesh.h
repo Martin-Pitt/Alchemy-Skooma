@@ -432,6 +432,7 @@ private:
         F64 mMinZ = 0., mMaxZ = 0.;
     };
 
+    struct SpillJob;
     struct Mesh
     {
         LLUUID mId;                         ///< cluster id, or the region id for terrain
@@ -470,6 +471,7 @@ private:
         F64 mDetailWanted = 0.0;            ///< when something last needed its detail
         F64 mResidencyChecked = 0.0;
         F64 mReloadAsked = 0.0;
+        std::shared_ptr<SpillJob> mRefusedReload;   ///< what a reload read whose swap was refused, to try again
         ~Mesh();
     };
 
@@ -600,7 +602,6 @@ private:
     void updateResidency();
     void spillMesh(Mesh& mesh);
     void reloadMesh(Mesh& mesh);
-    struct SpillJob;
     void finishSpill(const std::shared_ptr<SpillJob>& job);
     void finishReload(const std::shared_ptr<SpillJob>& job);
     /// Point a mesh's landed products and its stamp at other air, keeping their contents.
