@@ -465,23 +465,6 @@
              width="308" />
             <slider
              enabled_control="SKMapMLEnable"
-             control_name="SKMapMLSpanMeters"
-             decimal_digits="0"
-             follows="left|top|right"
-             height="16"
-             increment="4"
-             label="Span (m)"
-             label_width="110"
-             layout="topleft"
-             left="8"
-             max_val="512"
-             min_val="16"
-             name="sk_ml_span"
-             text_width="40"
-             top_pad="5"
-             width="308" />
-            <slider
-             enabled_control="SKMapMLEnable"
              control_name="SKMapMLSize"
              decimal_digits="2"
              follows="left|top|right"
@@ -582,35 +565,17 @@
              text_width="40"
              top_pad="5"
              width="308" />
-            <radio_group
+            <check_box
              control_name="SKMapMLRotate"
              enabled_control="SKMapMLEnable"
              follows="left|top"
-             height="20"
+             height="16"
+             label="Rotate with camera (off: north up)"
              layout="topleft"
              left="8"
              name="sk_ml_rotate"
              top_pad="8"
-             width="308">
-                <radio_item
-                 height="16"
-                 label="North up"
-                 layout="topleft"
-                 left="0"
-                 name="sk_ml_north_up"
-                 top="0"
-                 value="false"
-                 width="120" />
-                <radio_item
-                 height="16"
-                 label="Rotate with camera"
-                 layout="topleft"
-                 left_pad="5"
-                 name="sk_ml_heading_up"
-                 top_delta="0"
-                 value="true"
-                 width="160" />
-            </radio_group>
+             width="308" />
         </panel>
         <panel
          follows="all"
