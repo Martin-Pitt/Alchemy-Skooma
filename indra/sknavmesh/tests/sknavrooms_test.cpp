@@ -2122,4 +2122,40 @@ template<> template<>
             ensure("a short opening parts them, a long one does not", parted == (top < 15.f ? 1 : 0));
         }
     }
+
+    template<> template<>
+    void sknavrooms_object::test<59>()
+    {
+        set_test_name("a low hall wider than the side reads is INDOORS in its middle; a canopy on posts is still SHELTERED");
+        Scene s;
+        s.wall(4.f, 4.f, 68.f, 4.5f);
+        s.wall(4.f, 67.5f, 68.f, 68.f);
+        s.wall(4.f, 4.f, 4.5f, 30.f);
+        s.wall(4.f, 32.f, 4.5f, 68.f);
+        s.box(4.f, 30.f, 4.5f, 32.f, 2.2f, 3.f, false);
+        s.wall(67.5f, 4.f, 68.f, 68.f);
+        s.box(4.f, 4.f, 68.f, 68.f, 3.f, 3.25f);
+        // A canopy on posts out past the hall, wider than a stall but within the side reads.
+        s.box(76.f, 24.f, 88.f, 36.f, 3.f, 3.25f);
+        for (F32 px : { 76.f, 87.5f })
+        {
+            for (F32 py : { 24.f, 35.5f })
+            {
+                s.box(px, py, px + 0.5f, py + 0.5f, 0.f, 3.f, false);
+            }
+        }
+        auto in = s.input(3, 3);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure mid, side, canopy;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(36.f, 36.f, 0.5f), mid) && r.mEnc->enclosureAt(LLVector3(10.f, 36.f, 0.5f), side) &&
+                           r.mEnc->enclosureAt(LLVector3(82.f, 30.f, 0.5f), canopy));
+        ensure("the hall's middle is no canopy", !mid.mCanopy);
+        ensure("the hall's middle is INDOORS", mid.mBucket == EnclosureBucket::INDOORS);
+        ensure("so is its side", side.mBucket == EnclosureBucket::INDOORS);
+        ensure("the canopy is one", canopy.mCanopy);
+        ensure("and SHELTERED", canopy.mBucket == EnclosureBucket::SHELTERED);
+        const Space* hall = r.at(36.f, 36.f);
+        ensure("the hall is an INDOORS space" + info(r), hall && hall->mBucket == EnclosureBucket::INDOORS);
+    }
 }
