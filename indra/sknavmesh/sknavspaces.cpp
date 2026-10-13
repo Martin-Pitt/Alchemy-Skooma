@@ -2741,11 +2741,22 @@ namespace sknav
                     const U32 o = tileAt(k);
                     facing[d] = o != NONE && mTiles[o].mInBlock;
                 }
+                // A basin can pass a tile corner alone: a block tile diagonal to it shares that corner's leaves.
+                bool corner[4];
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    TileKey k = ti.mKey;
+                    k.mX += (d & 1) ? -1 : 1;
+                    k.mY += (d & 2) ? -1 : 1;
+                    const U32 o = tileAt(k);
+                    corner[d] = o != NONE && mTiles[o].mInBlock;
+                }
                 for (const AirLeaf& leaf : a.mLeaves)
                 {
                     const S32 s = 1 << leaf.mLevel;
-                    if (!(facing[0] && leaf.mX + s >= a.mWidth) && !(facing[1] && leaf.mX <= 0) && !(facing[2] && leaf.mY + s >= a.mHeight) &&
-                        !(facing[3] && leaf.mY <= 0))
+                    const bool hx = leaf.mX + s >= a.mWidth, lx = leaf.mX <= 0, hy = leaf.mY + s >= a.mHeight, ly = leaf.mY <= 0;
+                    if (!(facing[0] && hx) && !(facing[1] && lx) && !(facing[2] && hy) && !(facing[3] && ly) && !(corner[0] && hx && hy) &&
+                        !(corner[1] && lx && hy) && !(corner[2] && hx && ly) && !(corner[3] && lx && ly))
                     {
                         continue;
                     }
@@ -3866,6 +3877,31 @@ namespace sknav
                 if (it != mShadow[xb].end() && it->second == mSeedLabel[e.mB])
                 {
                     unite(e.mA, e.mB);
+                }
+            }
+        }
+        // A ring gap the batch's watershed ran into is in that basin, as a full pass would cut it, seam or corner.
+        {
+            std::unordered_map<S32, U32> by_label;
+            for (U32 sd = 0; sd < mSeeds.size(); ++sd)
+            {
+                if (mSeedLabel[sd] >= 0)
+                {
+                    by_label.emplace(mSeedLabel[sd], sd);
+                }
+            }
+            for (const auto& shadow : mShadow)
+            {
+                for (const auto& [where, label] : shadow)
+                {
+                    const auto it = by_label.find(label);
+                    const TileInfo& ti = mTiles[static_cast<U32>(where >> 32)];
+                    const U32 gap = static_cast<U32>(where);
+                    if (it == by_label.end() || ti.mBatch >= 0 || gap >= ti.mRooms.mSeeds.size() || !ti.mRooms.mSeeds[gap])
+                    {
+                        continue;
+                    }
+                    unite(it->second, ti.mSeedBase + ti.mRooms.mSeeds[gap] - 1);
                 }
             }
         }
