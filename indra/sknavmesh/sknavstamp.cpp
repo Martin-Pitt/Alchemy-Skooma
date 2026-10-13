@@ -1146,7 +1146,7 @@ namespace sknav
                     h = mix(h, 0xffu);
                     continue;
                 }
-                h = mix(mix(h, static_cast<U64>(reinterpret_cast<uintptr_t>(n->mAir.get()))), n->mGaps.size());
+                h = mix(mix(h, n->mAir ? n->mAir->mSerial.mValue : 0), n->mGaps.size());
                 for (const GapEnclosure& g : n->mGaps)
                 {
                     h = mix(h, g.mSpace && g.mSpace <= rooms.mSpaces.size() ? rooms.mSpaces[g.mSpace - 1].mId : 0u);
