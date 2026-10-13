@@ -82,7 +82,6 @@ namespace skmap
         std::string mTitle;                     ///< the nametag title at the last probe, or as first seen
         bool mSeenTitle = false;
         std::vector<LLUUID> mSignature;         ///< the attachment roots, sorted
-        std::set<LLUUID> mAsked;                ///< roots asked since the title last changed
         bool mInFlight = false;
         LLUUID mTarget;                         ///< the root asked
         F64 mSentAt = 0.0;
@@ -98,15 +97,12 @@ namespace skmap
     void observe(AllyRecord& record, const std::string& title, const std::vector<LLUUID>& roots, F64 now, bool probe_untitled);
     /// Whether to send a probe now.
     bool wantsProbe(const AllyRecord& record, F64 now, bool has_roots);
-    /// The root to ask: the first not asked yet, else the first.
-    LLUUID chooseTarget(const std::set<LLUUID>& asked, const std::vector<LLUUID>& roots);
+    /// The root to ask: the first not in the previous signature, else the first.
+    LLUUID chooseTarget(const std::vector<LLUUID>& previous, const std::vector<LLUUID>& roots);
     /// A request went out to target, with the roots it was chosen from.
     void probeSent(AllyRecord& record, const LLUUID& target, const std::vector<LLUUID>& roots, F64 now);
     /// The answer for root came in; one for a root not asked changes nothing.
     void probeReply(AllyRecord& record, const LLUUID& root, const LLUUID& group, F64 now);
-    /// After a reply that is no candidate: ask the next root at once while any is left, since one
-    /// attachment rezzed under another group must not hide an ally.
-    void askNextRoot(AllyRecord& record, const std::vector<LLUUID>& roots, const std::set<LLUUID>& candidates);
     /// Give up on a request older than the timeout.
     void probeTimeout(AllyRecord& record, F64 now);
 
