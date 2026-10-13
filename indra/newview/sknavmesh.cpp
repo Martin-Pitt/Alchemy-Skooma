@@ -1875,6 +1875,12 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
         fillParams(*input);
         records = std::make_shared<const std::vector<RecordPtr>>();
     }
+    // A raster built again numbers its gaps against the air the stamp reads: coarse air stays coarse when the tile comes into range.
+    if (tile.mAir && !tile.mAirBuilt)
+    {
+        input->mAir = false;
+        input->mCoarseAir = true;
+    }
     const LLUUID id = mesh.mId;
     const U32 generation = mesh.mGeneration;
     const U64 signature = tile.mSignature;
