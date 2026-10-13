@@ -375,6 +375,8 @@ void SKMapPeople::updateProjectiles()
     {
         mProjectiles.clear();
         mLastObjectPos.clear();
+        mTrails.clear();
+        mShooters.clear();
         return;
     }
     const F64 now = LLFrameTimer::getUptimeSeconds().value();
@@ -383,8 +385,10 @@ void SKMapPeople::updateProjectiles()
         return;
     }
     mProjectilesAt = now;
+    updateTrails(now);
     std::vector<Projectile> found;
     std::map<LLUUID, LLVector3d> seen;
+    std::map<LLUUID, LLUUID> shooters;
     for (const LLPointer<LLViewerObject>& ptr : gObjectList.getMapObjects())
     {
         LLViewerObject* object = ptr.get();
@@ -417,11 +421,67 @@ void SKMapPeople::updateProjectiles()
         {
             continue;
         }
+        // Traced once, when first seen, while the trails still hold where everyone was.
+        const auto traced = mShooters.find(object->getID());
+        p.mShooter = traced != mShooters.end() ? traced->second : traceShooter(pos, object->getVelocity(), now);
+        shooters[object->getID()] = p.mShooter;
         seen[object->getID()] = pos;
         found.push_back(p);
     }
     mProjectiles.swap(found);
     mLastObjectPos.swap(seen);
+    mShooters.swap(shooters);
+}
+
+void SKMapPeople::updateTrails(F64 now)
+{
+    constexpr F64 TRAIL_S = 2.0;
+    uuid_vec_t ids;
+    std::vector<LLVector3d> positions;
+    LLWorld::getInstance()->getAvatars(&ids, &positions, gAgent.getPositionGlobal(), PEOPLE_REACH_M);
+    ids.push_back(gAgentID);
+    positions.push_back(gAgent.getPositionGlobal());
+    std::map<LLUUID, std::deque<std::pair<F64, LLVector3d>>> trails;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        auto& trail = trails[ids[i]];
+        const auto old = mTrails.find(ids[i]);
+        if (old != mTrails.end())
+        {
+            trail.swap(old->second);
+        }
+        trail.emplace_back(now, positions[i]);
+        while (!trail.empty() && now - trail.front().first > TRAIL_S)
+        {
+            trail.pop_front();
+        }
+    }
+    mTrails.swap(trails);
+}
+
+LLUUID SKMapPeople::traceShooter(const LLVector3d& pos, const LLVector3& velocity, F64 now) const
+{
+    // Run the shot backwards in time and find whose chest it passed through at that moment.
+    constexpr F64 CHEST_M = 0.5;        ///< above the avatar's reported position
+    constexpr F64 FIT_M = 1.5;          ///< how near the shot must pass, before tick slack
+    const LLVector3d v(velocity);
+    const F64 slack = v.magVec() * 0.1; // positions are sampled at 10 Hz
+    LLUUID best;
+    F64 best_d = FIT_M + slack;
+    for (const auto& trail : mTrails)
+    {
+        for (const auto& sample : trail.second)
+        {
+            const LLVector3d back = pos - v * (now - sample.first);
+            const F64 d = dist_vec(back, sample.second + LLVector3d(0.0, 0.0, CHEST_M));
+            if (d < best_d)
+            {
+                best_d = d;
+                best = trail.first;
+            }
+        }
+    }
+    return best;
 }
 
 void SKMapPeople::updateCombat()

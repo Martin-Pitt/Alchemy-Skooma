@@ -636,24 +636,33 @@ void SKNetMap::drawProjectiles()
     {
         return;
     }
+    // A shot traced to someone the map draws takes their colour; anyone else's keeps the plain one.
+    std::map<LLUUID, LLColor4> drawn;
+    for (const SKMapPeople::Person& person : SKMapPeople::instance().people())
+    {
+        drawn[person.mId] = person.mColour;
+    }
+    const LLColor4 plain = toColor4(skmap::palette::PROJECTILE);
     gGL.begin(LLRender::TRIANGLES);
     for (const SKMapPeople::Projectile& p : shots)
     {
+        const auto shooter = p.mShooter.notNull() ? drawn.find(p.mShooter) : drawn.end();
+        const LLColor4 c = shooter != drawn.end() ? shooter->second : plain;
         const LLVector2 head = mView.toWidget(p.mPos);
         if (p.mFast)
         {
             // A streak and a bright head.
-            skmapdraw::colour(skmap::palette::PROJECTILE, 0.5f);
+            gGL.color4f(c.mV[VRED], c.mV[VGREEN], c.mV[VBLUE], 0.5f);
             skmapdraw::line(mView.toWidget(p.mTail), head, 1.f);
-            skmapdraw::colour(skmap::palette::PROJECTILE);
+            gGL.color4fv(c.mV);
             skmapdraw::disc(head, 1.5f, 8);
         }
         else
         {
             // A thrown object: a dot and a ring.
-            skmapdraw::colour(skmap::palette::PROJECTILE);
+            gGL.color4fv(c.mV);
             skmapdraw::disc(head, 1.5f, 8);
-            skmapdraw::colour(skmap::palette::PROJECTILE, 0.6f);
+            gGL.color4f(c.mV[VRED], c.mV[VGREEN], c.mV[VBLUE], 0.6f);
             skmapdraw::ring(head, 4.f, 1.f, 16);
         }
     }

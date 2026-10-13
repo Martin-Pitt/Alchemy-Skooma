@@ -37,6 +37,7 @@
 #include "skmapmarkers.h"
 #include "skmappolicy.h"
 
+#include <deque>
 #include <map>
 #include <vector>
 
@@ -124,6 +125,7 @@ public:
         LLVector3d mPos;
         LLVector3d mTail;                   ///< where it was a tenth of a second ago
         bool mFast = false;                 ///< a streak, not a thrown dot
+        LLUUID mShooter;                    ///< who it was traced back to, null when nobody fits
     };
     const std::vector<Projectile>& projectiles() const { return mProjectiles; }
 
@@ -145,6 +147,8 @@ private:
     void gatherVehicles();
     void updateCombat();
     void updateFiringLines();
+    void updateTrails(F64 now);
+    LLUUID traceShooter(const LLVector3d& pos, const LLVector3& velocity, F64 now) const;
     void updateProjectiles();
     void updateCandidates();
     void loadFactions();
@@ -170,6 +174,9 @@ private:
     F64 mRayAllowance = 0.0;            ///< seconds of ray time earned and not yet spent
     std::vector<Projectile> mProjectiles;
     std::map<LLUUID, LLVector3d> mLastObjectPos;
+    /// Every nearby avatar's recent positions, oldest first, to trace shots back to; never drawn.
+    std::map<LLUUID, std::deque<std::pair<F64, LLVector3d>>> mTrails;
+    std::map<LLUUID, LLUUID> mShooters;  ///< shots already traced, by object
     F64 mProjectilesAt = -1.0e9;
     LLVector3d mViewMin, mViewMax;      ///< the map's view with 10% to spare, where probes go
     boost::signals2::connection mTeleportConnection;
