@@ -1775,9 +1775,26 @@ namespace sknav
 
     bool flightSurvives(const rcCompactHeightfield& chf, S32 border, const Flight& flight, F32 climb)
     {
-        for (S32 z = border; z < chf.height - border; ++z)
+        if (flight.mFootprint.empty())
         {
-            for (S32 x = border; x < chf.width - border; ++x)
+            return false;
+        }
+        // Only columns within reach of the footprint can count. Recast x is SL y, Recast z SL x.
+        F32 sx0 = 1e30f, sy0 = 1e30f, sx1 = -1e30f, sy1 = -1e30f;
+        for (const LLVector2& p : flight.mFootprint)
+        {
+            sx0 = std::min(sx0, p.mV[VX]);
+            sy0 = std::min(sy0, p.mV[VY]);
+            sx1 = std::max(sx1, p.mV[VX]);
+            sy1 = std::max(sy1, p.mV[VY]);
+        }
+        const S32 z0 = std::max(border, static_cast<S32>(std::floor((sx0 - 0.25f - chf.bmin[2]) / chf.cs)) - 1);
+        const S32 z1 = std::min(chf.height - border - 1, static_cast<S32>(std::ceil((sx1 + 0.25f - chf.bmin[2]) / chf.cs)) + 1);
+        const S32 x0 = std::max(border, static_cast<S32>(std::floor((sy0 - 0.25f - chf.bmin[0]) / chf.cs)) - 1);
+        const S32 x1 = std::min(chf.width - border - 1, static_cast<S32>(std::ceil((sy1 + 0.25f - chf.bmin[0]) / chf.cs)) + 1);
+        for (S32 z = z0; z <= z1; ++z)
+        {
+            for (S32 x = x0; x <= x1; ++x)
             {
                 const rcCompactCell& cell = chf.cells[x + z * chf.width];
                 for (U32 i = cell.index, n = cell.index + cell.count; i < n; ++i)
