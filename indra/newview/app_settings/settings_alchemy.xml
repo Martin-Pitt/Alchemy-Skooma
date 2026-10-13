@@ -5046,6 +5046,96 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- <SK:Nexii> Mouselook map (Automap) -->
+        <key>SKMapMLEnable</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the Mouselook map, the mini-map faintly over the world, while in mouselook.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>1</integer>
+        </map>
+        <key>SKMapMLSize</key>
+        <map>
+            <key>Comment</key>
+            <string>The Mouselook map's size as a fraction of the window height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.8</real>
+        </map>
+        <key>SKMapMLLineStrength</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity of the Mouselook map's walls, ledges and stairs, 0 to 1.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.8</real>
+        </map>
+        <key>SKMapMLSurfaceOpacity</key>
+        <map>
+            <key>Comment</key>
+            <string>Opacity of the Mouselook map's floors, 0.02 to 0.5.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.2</real>
+        </map>
+        <key>SKMapMLCentreFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius the Mouselook map clears around the crosshair, as a fraction of the window height.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.18</real>
+        </map>
+        <key>SKMapMLRotate</key>
+        <map>
+            <key>Comment</key>
+            <string>Turn the Mouselook map with the camera instead of keeping north up.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKMapMLSelfFadePx</key>
+        <map>
+            <key>Comment</key>
+            <string>Radius in pixels the Mouselook map clears of your own dot and sight cone.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>28.0</real>
+        </map>
+        <key>SKMapMLOuterFade</key>
+        <map>
+            <key>Comment</key>
+            <string>Breadth of the Mouselook map's soft outer edge, as a fraction of its radius.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>0.38</real>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKMapLayerFloorplan</key>
         <map>
             <key>Comment</key>

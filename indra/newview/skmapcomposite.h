@@ -45,8 +45,16 @@ public:
     SKMapComposite(const SKMapComposite&) = delete;
     SKMapComposite& operator=(const SKMapComposite&) = delete;
 
+    /// How a plan drawn as an overlay weighs its lines and its surfaces, each 0 to 1.
+    struct Overlay
+    {
+        F32 mLines = 1.f;
+        F32 mSurface = 1.f;
+    };
+
     /// Bring the plan up to date for this view and draw it over the widget, in widget coordinates.
-    void draw(const skmap::MapView& view);
+    /// With an overlay the bound viewport must be exactly the view, as a target sized to it is.
+    void draw(const skmap::MapView& view, const Overlay* overlay = nullptr);
     void release();
 
     struct Stats
@@ -79,7 +87,16 @@ public:
 
 private:
     bool ensureGL(U32 side, U32 samples);
-    void render(F32 vz);
+    void drawOverlay(const skmap::MapView& view, const LLVector2* uv, const F32 (*corner)[2], const Overlay& overlay);
+    /// The overlay renders surfaces and lines into separate textures, so each takes its own weight.
+    enum class RenderPass
+    {
+        ALL,
+        SURFACES,
+        LINES
+    };
+    void render(F32 vz, RenderPass pass, U32 target_fbo);
+    bool ensureLineTarget();
 
     struct Job;
     struct Want
@@ -118,10 +135,14 @@ private:
     F32 mSpan = 0.f;                ///< metres across the widget's short side, as the view has it
     F32 mDrawnVz = F32_MAX;
     bool mRenderDirty = true;
+    bool mDrawnSplit = false;       ///< the last render was the overlay's two layers
 
     // GL objects.
     U32 mProgram = 0;
     U32 mShadeProgram = 0;
+    U32 mBlitProgram = 0;
+    U32 mBlitVao = 0;
+    S32 mLocPos = -1, mLocUv = -1, mLocWeight = -1;
     U32 mVao = 0;
     U32 mVbo = 0;
     U32 mTerrainVbo = 0;
@@ -129,6 +150,7 @@ private:
     U32 mTerrainCount = 0;
     U32 mMsaaFbo = 0, mMsaaColour = 0, mMsaaDepth = 0;
     U32 mResolveFbo = 0, mResolveTex = 0;
+    U32 mLineFbo = 0, mLineTex = 0; ///< the overlay's lines; the resolve target then holds its surfaces
     U32 mShadeFbo = 0, mShadeTex = 0, mShadeDepth = 0;
     U32 mSide = 0;
     U32 mSamples = 0;

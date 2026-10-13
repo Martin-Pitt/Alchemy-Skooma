@@ -177,6 +177,33 @@ void main()
 }
 )";
 
+    // The overlay's quad: the lines over the surfaces, each layer at its own weight, colour premultiplied.
+    const char* VS_BLIT = R"(#version 330 core
+uniform vec2 u_pos[4];
+uniform vec2 u_uv[4];
+out vec2 v_t;
+void main()
+{
+    const int corner[6] = int[6](0, 1, 2, 0, 2, 3);
+    int k = corner[gl_VertexID];
+    v_t = u_uv[k];
+    gl_Position = vec4(u_pos[k], 0.0, 1.0);
+}
+)";
+
+    const char* FS_BLIT = R"(#version 330 core
+in vec2 v_t;
+out vec4 o;
+uniform sampler2D u_surfaces;
+uniform sampler2D u_lines;
+uniform vec2 u_weight;
+void main()
+{
+    vec4 l = texture(u_lines, v_t) * u_weight.x;
+    o = l + texture(u_surfaces, v_t) * u_weight.y * (1.0 - l.a);
+}
+)";
+
     U32 compile(const char* vs, const char* fs)
     {
         const auto stage = [](GLenum type, const char* src) -> GLuint
@@ -357,6 +384,8 @@ void SKMapComposite::release()
     del_rb(mMsaaDepth);
     del_fbo(mResolveFbo);
     del_tex(mResolveTex);
+    del_fbo(mLineFbo);
+    del_tex(mLineTex);
     del_fbo(mShadeFbo);
     del_tex(mShadeTex);
     del_rb(mShadeDepth);
@@ -377,6 +406,16 @@ void SKMapComposite::release()
     {
         glDeleteProgram(mShadeProgram);
         mShadeProgram = 0;
+    }
+    if (mBlitProgram)
+    {
+        glDeleteProgram(mBlitProgram);
+        mBlitProgram = 0;
+    }
+    if (mBlitVao)
+    {
+        glDeleteVertexArrays(1, &mBlitVao);
+        mBlitVao = 0;
     }
     mSide = 0;
     mSamples = 0;
@@ -433,8 +472,9 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     };
     // The texture is bound outside the slot cache; the slot forgets what it held.
-    GLint old_tex = 0;
+    GLint old_tex = 0, old_rb = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_tex);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &old_rb);
     storage(mMsaaColour, samples, GL_RGBA8, side);
     storage(mMsaaDepth, samples, GL_DEPTH24_STENCIL8, side);
     glGenFramebuffers(1, &mMsaaFbo);
@@ -457,7 +497,7 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, mShadeDepth);
     ok = ok && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     glBindTexture(GL_TEXTURE_2D, old_tex);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, old_rb);
 
     mSide = side;
     mSamples = samples;
@@ -470,7 +510,37 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
     return ok;
 }
 
-void SKMapComposite::render(F32 vz)
+bool SKMapComposite::ensureLineTarget()
+{
+    if (mLineFbo)
+    {
+        return true;
+    }
+    GLint old_tex = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_tex);
+    glGenTextures(1, &mLineTex);
+    glBindTexture(GL_TEXTURE_2D, mLineTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, mSide, mSide, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, old_tex);
+    glGenFramebuffers(1, &mLineFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, mLineFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mLineTex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        glDeleteFramebuffers(1, &mLineFbo);
+        glDeleteTextures(1, &mLineTex);
+        mLineFbo = mLineTex = 0;
+        return false;
+    }
+    mRenderDirty = true;
+    return true;
+}
+
+void SKMapComposite::render(F32 vz, RenderPass pass, U32 target_fbo)
 {
     LL_PROFILE_ZONE_NAMED("SKMapPlan.Composite");
     LLTimer timer;
@@ -509,9 +579,21 @@ void SKMapComposite::render(F32 vz)
     glClearStencil(0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     glBindVertexArray(mVao);
+    // The lines' pass draws the floors only to erase what they cover, as the plan's painter order does.
+    const bool surfaces = pass != RenderPass::LINES;
+    const bool lines = pass != RenderPass::SURFACES;
+    const auto floorBlend = [&](bool on)
+    {
+        if (!surfaces)
+        {
+            on ? glBlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA)
+               : glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        }
+    };
 
     if (mOptions.mTerrain && mTerrainCount)
     {
+        floorBlend(true);
         mode(0);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
@@ -520,6 +602,7 @@ void SKMapComposite::render(F32 vz)
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mTerrainIbo);
         attribs();
         glDrawElements(GL_TRIANGLES, mTerrainCount, GL_UNSIGNED_INT, nullptr);
+        floorBlend(false);
     }
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
     attribs();
@@ -535,9 +618,11 @@ void SKMapComposite::render(F32 vz)
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);
             glDepthMask(GL_TRUE);
+            floorBlend(true);
             draw(g.mFloors);
+            floorBlend(false);
         }
-        if (g.mWalls.mCount)
+        if (lines && g.mWalls.mCount)
         {
             // Poché at the run's floor; each pixel takes the wall colour once, full walls before half.
             mode(1);
@@ -558,7 +643,7 @@ void SKMapComposite::render(F32 vz)
             glUniform1f(loc_only, -1.f);
             glDisable(GL_STENCIL_TEST);
         }
-        if (g.mWallLines.mCount)
+        if (lines && g.mWallLines.mCount)
         {
             // Each pixel of the rank's wall lines once.
             mode(2);
@@ -575,7 +660,7 @@ void SKMapComposite::render(F32 vz)
             glStencilMask(0xff);
             glDisable(GL_STENCIL_TEST);
         }
-        if (g.mLines.mCount)
+        if (lines && g.mLines.mCount)
         {
             mode(2);
             glDisable(GL_DEPTH_TEST);
@@ -583,7 +668,7 @@ void SKMapComposite::render(F32 vz)
         }
     }
     // Roof inner shadow: the falloff max-blended into its own target clipped to the roofs, then darkening by it.
-    if (sLayout.mShadowBand.mCount && sLayout.mShadowClip.mCount)
+    if (surfaces && sLayout.mShadowBand.mCount && sLayout.mShadowClip.mCount)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, mShadeFbo);
         glDisable(GL_DEPTH_TEST);
@@ -617,12 +702,15 @@ void SKMapComposite::render(F32 vz)
         glUseProgram(mProgram);
     }
     // Region edges over everything.
-    mode(2);
-    glDisable(GL_DEPTH_TEST);
-    draw(sLayout.mTop);
+    if (lines)
+    {
+        mode(2);
+        glDisable(GL_DEPTH_TEST);
+        draw(sLayout.mTop);
+    }
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, mMsaaFbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mResolveFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target_fbo);
     glBlitFramebuffer(0, 0, mSide, mSide, 0, 0, mSide, mSide, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     mStats.mRenderMs = timer.getElapsedTimeF32() * 1000.f;
     ++mStats.mRedraws;
@@ -795,7 +883,7 @@ void SKMapComposite::land()
     mStats.mUploadMs = t.getElapsedTimeF32() * 1000.f;
 }
 
-void SKMapComposite::draw(const skmap::MapView& view)
+void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
 {
     LL_PROFILE_ZONE_SCOPED;
     static LLCachedControl<U32> overlap(gSavedSettings, "SKMapPlanOverlap", 0);
@@ -934,9 +1022,28 @@ void SKMapComposite::draw(const skmap::MapView& view)
     {
         mRenderDirty = true;
     }
+    const bool split = overlay != nullptr;
+    if (split && !ensureLineTarget())
+    {
+        saved.restore();
+        return;
+    }
+    if (split != mDrawnSplit)
+    {
+        mRenderDirty = true;
+    }
     if (mRenderDirty)
     {
-        render(vz);
+        if (split)
+        {
+            render(vz, RenderPass::SURFACES, mResolveFbo);
+            render(vz, RenderPass::LINES, mLineFbo);
+        }
+        else
+        {
+            render(vz, RenderPass::ALL, mResolveFbo);
+        }
+        mDrawnSplit = split;
         mDrawnVz = vz;
         mRenderDirty = false;
     }
@@ -953,6 +1060,11 @@ void SKMapComposite::draw(const skmap::MapView& view)
         uv[k] = LLVector2((static_cast<F32>(g.mdV[VX] - origin.mdV[VX]) - mFrameMin.mV[VX]) / mFrameSize,
                           (static_cast<F32>(g.mdV[VY] - origin.mdV[VY]) - mFrameMin.mV[VY]) / mFrameSize);
     }
+    if (overlay)
+    {
+        drawOverlay(view, uv, corner, *overlay);
+        return;
+    }
     gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mResolveTex, 0);
     gGL.color4f(1.f, 1.f, 1.f, 1.f);
     // The composite was blended onto transparent black, so its colour is premultiplied.
@@ -966,6 +1078,59 @@ void SKMapComposite::draw(const skmap::MapView& view)
     gGL.end();
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTextureSlot(0)->unbind();
+}
+
+void SKMapComposite::drawOverlay(const skmap::MapView& view, const LLVector2* uv, const F32 (*corner)[2], const Overlay& overlay)
+{
+    gGL.flush();
+    SavedState saved;
+    saved.save();
+    LLGLSLShader::unbind();
+    if (!mBlitProgram)
+    {
+        mBlitProgram = compile(VS_BLIT, FS_BLIT);
+        glGenVertexArrays(1, &mBlitVao);
+        if (mBlitProgram)
+        {
+            mLocPos = glGetUniformLocation(mBlitProgram, "u_pos");
+            mLocUv = glGetUniformLocation(mBlitProgram, "u_uv");
+            mLocWeight = glGetUniformLocation(mBlitProgram, "u_weight");
+            glUseProgram(mBlitProgram);
+            glUniform1i(glGetUniformLocation(mBlitProgram, "u_surfaces"), 0);
+            glUniform1i(glGetUniformLocation(mBlitProgram, "u_lines"), 1);
+        }
+    }
+    if (!mBlitProgram || !mBlitVao)
+    {
+        saved.restore();
+        return;
+    }
+    // The bound viewport is the view, so its corners are clip space's.
+    GLfloat pos[8], tex[8];
+    for (S32 k = 0; k < 4; ++k)
+    {
+        pos[k * 2] = corner[k][0] / view.width() * 2.f - 1.f;
+        pos[k * 2 + 1] = corner[k][1] / view.height() * 2.f - 1.f;
+        tex[k * 2] = uv[k].mV[VX];
+        tex[k * 2 + 1] = uv[k].mV[VY];
+    }
+    glUseProgram(mBlitProgram);
+    glBindVertexArray(mBlitVao);
+    glUniform2fv(mLocPos, 4, pos);
+    glUniform2fv(mLocUv, 4, tex);
+    glUniform2f(mLocWeight, overlay.mLines, overlay.mSurface);
+    gGL.getTextureSlot(1)->bindManual(ALTextureSlot::TT_TEXTURE, mLineTex, 0);
+    gGL.getTextureSlot(0)->bindManual(ALTextureSlot::TT_TEXTURE, mResolveTex, 0);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    gGL.getTextureSlot(1)->unbind();
+    gGL.getTextureSlot(0)->unbind();
+    saved.restore();
 }
 
 std::vector<std::string> SKMapComposite::statsLines() const

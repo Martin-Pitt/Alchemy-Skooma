@@ -336,6 +336,56 @@ void SKNetMap::draw()
     LLUICtrl::draw();
 }
 
+void SKNetMap::drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface)
+{
+    if (!LLWorld::instanceExists() || !gAgent.getRegion())
+    {
+        return;
+    }
+    switch (layer)
+    {
+        case OverlayLayer::PLAN:
+        {
+            static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
+            mView.set(gAgentCamera.getCameraPositionGlobal(), span, rotation, side, side);
+            SKMapPeople::instance().noteDrawn(mView);
+            SKMapScene::instance().noteDrawn(*this);
+            if (show)
+            {
+                if (!mPlan)
+                {
+                    mPlan = std::make_unique<SKMapComposite>();
+                }
+                SKMapComposite::Overlay overlay;
+                overlay.mLines = lines;
+                overlay.mSurface = surface;
+                mPlan->draw(mView, &overlay);
+            }
+            break;
+        }
+        case OverlayLayer::MARKERS:
+            drawEvents();
+            drawPings();
+            drawProjectiles();
+            drawFiringLines();
+            drawVehicles();
+            collectDots();
+            drawPeople();
+            break;
+        case OverlayLayer::SELF:
+            drawSelf();
+            break;
+    }
+}
+
+void SKNetMap::releaseGL()
+{
+    if (mPlan)
+    {
+        mPlan->release();
+    }
+}
+
 void SKNetMap::drawPlan()
 {
     static LLCachedControl<bool> show(gSavedSettings, "SKMapLayerFloorplan", true);
@@ -566,7 +616,8 @@ void SKNetMap::drawEvents()
     static LLCachedControl<F32> line_s(gSavedSettings, "SKMapKillLineSeconds", 0.5f);
     static LLCachedControl<F32> icon_s(gSavedSettings, "SKMapDeathIconSeconds", 2.f);
     const SKMapPeople& people = SKMapPeople::instance();
-    std::vector<skmap::EventRing::Draw> draws;
+    std::vector<skmap::EventRing::Draw>& draws = mEventDraws;
+    draws.clear();
     people.events().visible(LLFrameTimer::getUptimeSeconds().value(), line_s, icon_s, people.combat(), draws);
     if (draws.empty())
     {

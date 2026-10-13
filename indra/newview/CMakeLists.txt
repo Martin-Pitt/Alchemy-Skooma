@@ -1926,6 +1926,7 @@ if(AL_BUILD_VIEWER)
     skmapallies.cpp
     skmappolicy.cpp
     sknetmap.cpp
+    skmapml.cpp
     skfloatermap.cpp
     skmappeople.cpp
     skmapobjects.cpp
@@ -1952,6 +1953,7 @@ if(AL_BUILD_VIEWER)
     skmapallies.h
     skmappolicy.h
     sknetmap.h
+    skmapml.h
     skfloatermap.h
     skmappeople.h
     skmapobjects.h

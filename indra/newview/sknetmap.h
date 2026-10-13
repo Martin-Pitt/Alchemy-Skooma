@@ -83,6 +83,8 @@ public:
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
 
     bool isHovered() const { return mHovered; }
+    /// Forget the pointer, for when the map stops taking it without a mouse-leave.
+    void clearHover() { mHovered = false; }
     /// Whether nametags show; they bring the chrome with them.
     bool namesShown() const { return !mHover.empty(); }
     /// Whether the right-click panes are open.
@@ -92,6 +94,19 @@ public:
     void setChrome(bool chrome) { mChrome = chrome; }
 
     const skmap::MapView& view() const { return mView; }
+
+    /// The Mouselook map's layers, each drawn into its own target so each can fade on its own.
+    enum class OverlayLayer
+    {
+        PLAN,
+        MARKERS,
+        SELF
+    };
+    /// Draw one layer around the camera, span metres across a side px square; PLAN sets the view first and the
+    /// next draw() puts the widget's own view back.
+    void drawOverlay(OverlayLayer layer, F32 span, F32 rotation, F32 side, F32 lines, F32 surface);
+    /// Free the plan's GL objects; they are made again on the next draw.
+    void releaseGL();
 
     /// Told of every ping the user places on a map, for whatever will carry it to allies.
     typedef boost::signals2::signal<void(const LLVector3d&)> ping_signal_t;
@@ -160,6 +175,7 @@ private:
     std::unique_ptr<SKMapComposite> mPlan;
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
+    std::vector<skmap::EventRing::Draw> mEventDraws;   ///< reused each frame
     bool mHovered = false;
     bool mChrome = false;
     skmap::HoverSet mHover;

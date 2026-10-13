@@ -35,6 +35,7 @@
 
 #include "llagentcamera.h"
 #include "llviewercontrol.h"
+#include "skmapml.h"
 #include "sknetmap.h"
 #include "skmappolicy.h"
 
@@ -182,6 +183,21 @@ void SKFloaterMap::draw()
     const bool opaque = !gAgentCamera.cameraMouselook();
     setMouseOpaque(opaque);
     getDragHandle()->setMouseOpaque(opaque);
+    // The Mouselook map shows this map in its place; the floater stays open, undrawn and deaf to the mouse.
+    const bool replaced = SKMapML::showing();
+    if (replaced == getEnabled())
+    {
+        setEnabled(!replaced);
+        mHovered = false;
+        if (mMap)
+        {
+            mMap->clearHover();
+        }
+    }
+    if (replaced)
+    {
+        return;
+    }
 
     // Borderless at rest: the base buttons show only with the chrome.
     const bool chrome = chromeWanted();
