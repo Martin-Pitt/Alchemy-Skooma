@@ -4884,6 +4884,20 @@ namespace sknav
                 }
             }
         }
+        // Each gap's leaf.
+        std::vector<std::vector<U32>> leaf_of(mTiles.size());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            leaf_of[t].resize(a.mGaps.size());
+            for (U32 l = 0; l < a.mLeaves.size(); ++l)
+            {
+                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
+                {
+                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
+                }
+            }
+        }
         // A new space of these gaps: its floor, volume, ceilings and raster; old gets the spaces they leave.
         const auto takeGaps = [&](U32 id, const std::vector<std::pair<U32, U32>>& gaps, std::set<U32>& old) {
             Space& sp = out[id];
@@ -4894,12 +4908,10 @@ namespace sknav
             {
                 const TileAir& a = air(tg.first);
                 const S32 leaf = [&]() {
-                    for (size_t l = 0; l < a.mLeaves.size(); ++l)
+                    const U32 l = leaf_of[tg.first][tg.second];
+                    if (l < a.mLeaves.size() && tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
                     {
-                        if (tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
-                        {
-                            return static_cast<S32>(l);
-                        }
+                        return static_cast<S32>(l);
                     }
                     return -1;
                 }();
@@ -5016,19 +5028,6 @@ namespace sknav
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
         // space it steps onto; never the one below across a solid, which no
         // one walks to from there.
-        std::vector<std::vector<U32>> leaf_of(mTiles.size());
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
-            const TileAir& a = air(t);
-            leaf_of[t].resize(a.mGaps.size());
-            for (U32 l = 0; l < a.mLeaves.size(); ++l)
-            {
-                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
-                {
-                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
-                }
-            }
-        }
         // Calls fn(tile, gap) for every floor gap a step from gap g of tile t.
         auto around = [&](U32 t, U32 g, const std::function<void(U32, U32)>& fn) {
             const TileAir& a = air(t);
