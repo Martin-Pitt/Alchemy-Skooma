@@ -309,7 +309,17 @@ void SKMapPeople::updateFiringLines()
         const auto it = mFiring.find(p.mId);
         if (it != mFiring.end())
         {
-            kept[p.mId] = it->second;
+            // The aim is cheap and follows the head every idle; only the reach waits for a ray.
+            FiringLine line = it->second;
+            LLVOAvatar* avatar = dynamic_cast<LLVOAvatar*>(gObjectList.findObject(p.mId));
+            if (LLJoint* head = avatar ? avatar->getJoint("mHead") : nullptr)
+            {
+                const LLVector3 from = head->getWorldPosition();
+                const LLVector3 dir = LLVector3::x_axis * head->getWorldRotation();
+                line.mFrom = gAgent.getPosGlobalFromAgent(from);
+                line.mTo = gAgent.getPosGlobalFromAgent(from + dir * line.mLength);
+            }
+            kept[p.mId] = line;
         }
         const F64 last = it != mFiring.end() ? it->second.mCast : -1.0e9;
         if (now - last >= RECAST_S)
@@ -351,6 +361,7 @@ void SKMapPeople::updateFiringLines()
         FiringLine& line = kept[entry.second->mId];
         line.mFrom = gAgent.getPosGlobalFromAgent(from);
         line.mTo = gAgent.getPosGlobalFromAgent(stop);
+        line.mLength = dist_vec(from, stop);
         line.mCast = now;
     }
     mFiring.swap(kept);

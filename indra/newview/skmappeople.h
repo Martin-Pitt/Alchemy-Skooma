@@ -113,6 +113,7 @@ public:
     {
         LLVector3d mFrom;
         LLVector3d mTo;
+        F32 mLength = 0.f; ///< the last ray's reach, kept while the aim follows the head every idle
         F64 mCast = -1.0e9;
     };
     const std::map<LLUUID, FiringLine>& firingLines() const { return mFiring; }
