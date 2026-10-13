@@ -91,6 +91,9 @@ public:
     bool detailResident(const LLUUID& mesh) const;
     /// Bring a mesh's detail air back from disk, and keep it for SKNavAirDetailHoldSeconds after the last ask.
     void requestDetail(const LLUUID& mesh) const;
+    /// Treat a global box like the camera's SKNavAirRadius: its tiles build and keep detail air while asked for within
+    /// SKNavAirDetailHoldSeconds. One box per consumer; the mini-map asks for the frame it shows (ruling 13).
+    void requestAir(const std::string& who, const LLVector3d& min, const LLVector3d& max) const;
 
     /// Close the build pool before the singleton goes: a job in flight holds
     /// this pointer to publish its result.
@@ -172,6 +175,11 @@ public:
     /// Built on the first read after a publish, from the same polys, spaces and air.
     typedef std::function<void(const LLVector3d& origin, const LLUUID& mesh, const sknav::TileKey& key, const sknav::WallRun& run)> WallRunFn;
     void wallRunsIn(const LLVector3d& min, const LLVector3d& max, const WallRunFn& fn) const;
+    /// The map's reads, which never build on this thread: the last storeys and wall runs built, null for none yet.
+    /// Stale ones are built again on the navmesh workers and land in a later update(), moving mapInputsKey.
+    sknav::StoreyProductPtr storeysLatest(const LLUUID& mesh) const;
+    typedef std::function<void(const sknav::TileKey& key, const std::shared_ptr<const std::vector<sknav::WallRun>>& runs)> TileWallRunsFn;
+    void wallRunsLatestIn(const LLUUID& mesh, const LLVector3d& min, const LLVector3d& max, const TileWallRunsFn& fn) const;
     /// The climb links touching a space: the spaces a climb joins it to, with no geometry of their own.
     std::vector<sknav::ClimbLink> climbLinks(const LLUUID& mesh, U32 space) const;
 
@@ -413,6 +421,7 @@ private:
         /// AVATAR's wall runs, built on first read from the inputs named in mWallRunsKey.
         mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
         mutable std::array<U64, 12> mWallRunsKey{};
+        mutable std::array<U64, 12> mWallRunsAsked{};  ///< the inputs of the build on the workers, if any
         /// The Detour tile's bytes, which Detour reads but does not own.
         std::vector<U8> mDetour[sknav::NUM_CLASSES];
         /// What the published polygons were built from, held near the camera
@@ -479,6 +488,7 @@ private:
         bool mStampScan = false;            ///< some tile may be due a stamp
         mutable sknav::StoreyProductPtr mStoreys;
         mutable std::vector<U64> mStoreysKey;   ///< the per-tile inputs they were built from
+        mutable std::vector<U64> mStoreysAsked; ///< the inputs of the build on the workers, if any
         /// Where its detail air is: every tile's in memory, on its way to disk, there, or on its way back.
         enum class Residency : U8 { RESIDENT, SPILLING, SPILLED, RELOADING };
         Residency mResidency = Residency::RESIDENT;
@@ -568,6 +578,12 @@ private:
     U8 meshPriority(const Mesh& mesh) const;
     /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
     std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
+    struct AirRequest
+    {
+        LLVector3d mMin, mMax;
+        F64 mAt = 0.0;
+    };
+    mutable std::map<std::string, AirRequest> mAirRequests;   ///< boxes consumers show, by who
     void findHomeBoxes(const SKCensusSnapshotPtr& snap);
     /// Bring the sky map in line with the published tiles' air.
     void syncSkyMap();
@@ -617,6 +633,9 @@ private:
     F64 mExportAsked = 0.0;
     std::string mExportStatus;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+    struct MapJobs;
+    mutable std::shared_ptr<MapJobs> mMapJobs;  ///< storeys and wall runs built on the workers for the map's reads
+    void landMapJobs();
     /// Forget a retiring mesh's tiles' entries in mSlotSpaces.
     void dropSlots(const Mesh& mesh);
     U32 mNextSlot = 0;

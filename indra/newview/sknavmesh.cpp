@@ -78,6 +78,7 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <set>
 #include <thread>
@@ -235,6 +236,15 @@ bool SKNavMesh::inAirRadius(const Tile& tile) const
             return true;
         }
     }
+    static LLCachedControl<F32> hold(gSavedSettings, "SKNavAirDetailHoldSeconds", 20.f);
+    const F64 now = LLTimer::getTotalSeconds();
+    for (const auto& r : mAirRequests)
+    {
+        if (now - r.second.mAt < hold && overlapsXY(r.second.mMin, r.second.mMax, tile.mMin, tile.mMax))
+        {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -294,6 +304,11 @@ U8 SKNavMesh::meshPriority(const Mesh& mesh) const
         }
     }
     return 3;
+}
+
+void SKNavMesh::requestAir(const std::string& who, const LLVector3d& min, const LLVector3d& max) const
+{
+    mAirRequests[who] = { min, max, LLTimer::getTotalSeconds() };
 }
 
 void SKNavMesh::findHomeBoxes(const SKCensusSnapshotPtr& snap)
@@ -2431,6 +2446,7 @@ void SKNavMesh::update()
         reconcile(snap);
     }
     findHomeBoxes(snap);
+    landMapJobs();
 
     applyLayouts();
 
@@ -2878,8 +2894,9 @@ U64 SKNavMesh::mapInputsKey(const LLUUID& mesh_id, const LLVector3d& min, const 
         h = mix(h, reinterpret_cast<uintptr_t>(t.mSegments[c].get()));
         h = mix(h, reinterpret_cast<uintptr_t>(t.mLinks[c].get()));
         h = mix(h, reinterpret_cast<uintptr_t>(t.mFlights[c].get()));
+        h = mix(h, reinterpret_cast<uintptr_t>(t.mWallRuns.get()));
     }
-    return h;
+    return mix(h, reinterpret_cast<uintptr_t>(mesh.mStoreys.get()));
 }
 
 bool SKNavMesh::terrainTilesIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max) const
@@ -2902,6 +2919,323 @@ bool SKNavMesh::terrainTilesIn(const LLUUID& mesh_id, const LLVector3d& min, con
         }
     });
     return found;
+}
+
+// ---------- the map's reads, built on the workers ----------
+
+struct SKNavMesh::MapJobs
+{
+    struct Runs
+    {
+        LLUUID mMesh;
+        U32 mGeneration = 0;
+        TileKey mKey;
+        std::array<U64, 12> mInputs{};
+        std::shared_ptr<const std::vector<WallRun>> mRuns;
+    };
+    struct Storeys
+    {
+        LLUUID mMesh;
+        U32 mGeneration = 0;
+        std::vector<U64> mInputs;
+        StoreyProductPtr mStoreys;
+    };
+    std::mutex mMutex;
+    std::vector<Runs> mRuns;
+    std::vector<Storeys> mStoreys;
+};
+
+namespace
+{
+    /// A Detour tile's bytes added to a navmesh of its own at its own ref, so a worker reads it while the live one changes.
+    struct DetourCopy
+    {
+        dtNavMesh* mNav = nullptr;
+        std::vector<std::vector<U8>> mData;
+        ~DetourCopy() { dtFreeNavMesh(mNav); }
+        bool init(const dtNavMeshParams& params)
+        {
+            mNav = dtAllocNavMesh();
+            return mNav && dtStatusSucceed(mNav->init(&params));
+        }
+        const dtMeshTile* add(const std::vector<U8>& bytes, dtTileRef ref)
+        {
+            mData.push_back(bytes);
+            std::vector<U8>& d = mData.back();
+            dtTileRef out = 0;
+            if (d.empty() || dtStatusFailed(mNav->addTile(d.data(), static_cast<int>(d.size()), 0, ref, &out)))
+            {
+                return nullptr;
+            }
+            return mNav->getTileByRef(out);
+        }
+    };
+}
+
+void SKNavMesh::landMapJobs()
+{
+    if (!mMapJobs)
+    {
+        return;
+    }
+    std::vector<MapJobs::Runs> runs;
+    std::vector<MapJobs::Storeys> storeys;
+    {
+        std::lock_guard<std::mutex> lock(mMapJobs->mMutex);
+        runs.swap(mMapJobs->mRuns);
+        storeys.swap(mMapJobs->mStoreys);
+    }
+    for (MapJobs::Runs& r : runs)
+    {
+        const auto m = mMeshes.find(r.mMesh);
+        if (m == mMeshes.end() || m->second->mGeneration != r.mGeneration)
+        {
+            continue;
+        }
+        const auto t = m->second->mTiles.find(r.mKey);
+        if (t == m->second->mTiles.end())
+        {
+            continue;
+        }
+        if (t->second.mWallRunsAsked == r.mInputs)
+        {
+            t->second.mWallRunsAsked = {};
+        }
+        // A synchronous read may have built newer runs meanwhile; a null result (the copy failed) keeps the old.
+        if (r.mRuns && t->second.mWallRunsKey != r.mInputs)
+        {
+            t->second.mWallRuns = std::move(r.mRuns);
+            t->second.mWallRunsKey = r.mInputs;
+        }
+    }
+    for (MapJobs::Storeys& s : storeys)
+    {
+        const auto m = mMeshes.find(s.mMesh);
+        if (m == mMeshes.end() || m->second->mGeneration != s.mGeneration)
+        {
+            continue;
+        }
+        Mesh& mesh = *m->second;
+        if (mesh.mStoreysAsked == s.mInputs)
+        {
+            mesh.mStoreysAsked.clear();
+        }
+        if (s.mStoreys && mesh.mStoreysKey != s.mInputs)
+        {
+            mesh.mStoreys = std::move(s.mStoreys);
+            mesh.mStoreysKey = std::move(s.mInputs);
+        }
+    }
+}
+
+StoreyProductPtr SKNavMesh::storeysLatest(const LLUUID& mesh_id) const
+{
+    LL_PROFILE_ZONE_SCOPED;
+    const auto it = mMeshes.find(mesh_id);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (it == mMeshes.end() || !it->second->mNav[c])
+    {
+        return nullptr;
+    }
+    const Mesh& mesh = *it->second;
+    std::vector<U64> inputs;
+    storeyInputs(mesh, inputs);
+    if ((mesh.mStoreys && mesh.mStoreysKey == inputs) || mesh.mStoreysAsked == inputs)
+    {
+        return mesh.mStoreys;
+    }
+    const LL::WorkQueue::ptr_t workers = const_cast<SKNavMesh*>(this)->workerQueue();
+    if (!workers)
+    {
+        return mesh.mStoreys;
+    }
+    if (!mMapJobs)
+    {
+        mMapJobs = std::make_shared<MapJobs>();
+    }
+    // What buildStoreys reads, held by the job: each Detour tile's bytes at its ref, the slots' spaces and flights, the rooms.
+    struct Job
+    {
+        dtNavMeshParams mParams{};
+        std::vector<std::pair<dtTileRef, std::vector<U8>>> mTiles;
+        std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+        struct Flights { U32 mSlot = 0; size_t mPolys = 0; std::shared_ptr<const std::vector<Flight>> mFlights; };
+        std::vector<Flights> mFlights;  // by stamp slot, 0 for none
+        RoomsProductPtr mRooms;
+    };
+    auto job = std::make_shared<Job>();
+    job->mParams = *mesh.mNav[c]->getParams();
+    job->mRooms = mesh.mStampRooms;
+    for (const auto& entry : mesh.mTiles)
+    {
+        const Tile& tile = entry.second;
+        const dtMeshTile* dt = mesh.mNav[c]->getTileAt(entry.first.mY, entry.first.mX, 0);
+        if (!dt || !dt->header)
+        {
+            if (tile.mFlights[c])
+            {
+                job->mFlights.push_back({ 0, 0, tile.mFlights[c] });
+            }
+            continue;
+        }
+        job->mTiles.emplace_back(mesh.mNav[c]->getTileRef(dt), std::vector<U8>(dt->data, dt->data + dt->dataSize));
+        const auto slot = mSlotSpaces.find(dt->header->userId);
+        if (slot != mSlotSpaces.end())
+        {
+            job->mSlotSpaces[slot->first] = slot->second;
+        }
+        if (tile.mFlights[c])
+        {
+            const bool slotted = tile.mStampSlot && tile.mPolySpace;
+            job->mFlights.push_back({ slotted ? tile.mStampSlot : 0, slotted ? tile.mPolySpace->size() : 0, tile.mFlights[c] });
+        }
+    }
+    mesh.mStoreysAsked = inputs;
+    const std::weak_ptr<MapJobs> mailbox = mMapJobs;
+    workers->post([job, mailbox, id = mesh.mId, generation = mesh.mGeneration, inputs = std::move(inputs)]() mutable
+    {
+        LL_PROFILE_ZONE_NAMED("SKNavMesh.StoreysJob");
+        StoreyProductPtr result;
+        DetourCopy copy;
+        if (copy.init(job->mParams))
+        {
+            for (const auto& t : job->mTiles)
+            {
+                copy.add(t.second, t.first);
+            }
+            std::unordered_map<U32, std::vector<const Flight*>> flights;
+            std::vector<const Flight*> all;
+            for (const auto& f : job->mFlights)
+            {
+                if (f.mSlot)
+                {
+                    std::vector<const Flight*>& by_poly = flights[f.mSlot];
+                    by_poly.assign(f.mPolys, nullptr);
+                    for (const Flight& fl : *f.mFlights)
+                    {
+                        for (const U16 p : fl.mPolys)
+                        {
+                            if (p < by_poly.size())
+                            {
+                                by_poly[p] = &fl;
+                            }
+                        }
+                    }
+                }
+                for (const Flight& fl : *f.mFlights)
+                {
+                    all.push_back(&fl);
+                }
+            }
+            const auto& slots = job->mSlotSpaces;
+            auto out = std::make_shared<StoreyProduct>();
+            static const RoomsProduct no_rooms;
+            buildStoreys(*copy.mNav,
+                         [&slots](const dtMeshTile* t, U32 p) -> U32 {
+                             const auto it = t && t->header ? slots.find(t->header->userId) : slots.end();
+                             return it != slots.end() && it->second && p < it->second->size() ? (*it->second)[p] : 0;
+                         },
+                         job->mRooms ? *job->mRooms : no_rooms, *out,
+                         [&flights](const dtMeshTile* t, U32 p) -> const Flight* {
+                             const auto f = t && t->header ? flights.find(t->header->userId) : flights.end();
+                             return f != flights.end() && p < f->second.size() ? f->second[p] : nullptr;
+                         },
+                         10.f, all);
+            result = out;
+        }
+        if (const auto box = mailbox.lock())
+        {
+            std::lock_guard<std::mutex> lock(box->mMutex);
+            box->mStoreys.push_back({ id, generation, std::move(inputs), std::move(result) });
+        }
+    });
+    return mesh.mStoreys;
+}
+
+void SKNavMesh::wallRunsLatestIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max, const TileWallRunsFn& fn) const
+{
+    LL_PROFILE_ZONE_SCOPED;
+    const auto it = mMeshes.find(mesh_id);
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    if (it == mMeshes.end() || !it->second->mNav[c])
+    {
+        return;
+    }
+    const Mesh& mesh = *it->second;
+    const dtNavMesh* nav = mesh.mNav[c];
+    const LL::WorkQueue::ptr_t workers = const_cast<SKNavMesh*>(this)->workerQueue();
+    if (!mMapJobs)
+    {
+        mMapJobs = std::make_shared<MapJobs>();
+    }
+    TileBuildInput params;
+    fillParams(params);
+    WallRunParams wp;
+    wp.mRadius = params.mParams[c].mRadius;
+    wp.mClimb = params.mParams[c].mClimb;
+    wp.mHeight = params.mParams[c].mHeight;
+    visitTilesIn(mesh.mTiles, mesh.mOrigin, min, max, [&](const TileKey& key, const Tile& tile)
+    {
+        if (!tile.mBuilt || !overlapsXY(tile.mMin, tile.mMax, min, max))
+        {
+            return;
+        }
+        const dtMeshTile* dt = nav->getTileAt(key.mY, key.mX, 0);
+        if (!dt || !dt->header || !tile.mPolySpace || !tile.mAir || !mesh.mStampEnc)
+        {
+            return;
+        }
+        // The same inputs tileWallRuns keys on.
+        std::array<U64, 12> inputs{};
+        inputs[0] = nav->getTileRef(dt);
+        inputs[1] = reinterpret_cast<uintptr_t>(tile.mPolySpace.get());
+        inputs[2] = reinterpret_cast<uintptr_t>(mesh.mStampEnc.get());
+        std::vector<WallAir> around;
+        std::vector<TileKey> around_keys;
+        for (S32 i = 0; i < 9; ++i)
+        {
+            const TileKey k{ key.mX + i % 3 - 1, key.mY + i / 3 - 1 };
+            const auto t = mesh.mTiles.find(k);
+            if (t != mesh.mTiles.end() && t->second.mAir)
+            {
+                inputs[3 + i] = t->second.mAirId ? t->second.mAirId : reinterpret_cast<uintptr_t>(t->second.mAir.get());
+                around.push_back({ t->second.mAir, nullptr });
+                around_keys.push_back(k);
+            }
+        }
+        if (!(tile.mWallRuns && tile.mWallRunsKey == inputs) && tile.mWallRunsAsked != inputs && workers)
+        {
+            tile.mWallRunsAsked = inputs;
+            const std::weak_ptr<MapJobs> mailbox = mMapJobs;
+            workers->post([mailbox, id = mesh.mId, generation = mesh.mGeneration, key, inputs, wp, around = std::move(around),
+                           around_keys = std::move(around_keys), enc = mesh.mStampEnc, space = tile.mPolySpace,
+                           bytes = std::vector<U8>(dt->data, dt->data + dt->dataSize), params = *nav->getParams()]() mutable
+            {
+                LL_PROFILE_ZONE_NAMED("SKNavMesh.WallRunsJob");
+                std::shared_ptr<std::vector<WallRun>> runs;
+                DetourCopy copy;
+                const dtMeshTile* t = copy.init(params) ? copy.add(bytes, static_cast<dtTileRef>(inputs[0])) : nullptr;
+                if (t)
+                {
+                    for (size_t i = 0; i < around.size(); ++i)
+                    {
+                        around[i].mEnclosure = enc->tile(around_keys[i]);
+                    }
+                    const WallAirReader reader(std::move(around), [enc](U16 s) { return s <= enc->mSpaceIds.size() ? enc->mSpaceIds[s - 1] : 0u; });
+                    runs = std::make_shared<std::vector<WallRun>>();
+                    buildWallRuns(*t, *space, reader, wp, *runs);
+                }
+                if (const auto box = mailbox.lock())
+                {
+                    std::lock_guard<std::mutex> lock(box->mMutex);
+                    box->mRuns.push_back({ id, generation, key, inputs, std::move(runs) });
+                }
+            });
+        }
+        // Older runs while the new ones build, only when they index the same Detour polys and spaces.
+        const bool same_polys = tile.mWallRuns && tile.mWallRunsKey[0] == inputs[0] && tile.mWallRunsKey[1] == inputs[1] && tile.mWallRunsKey[2] == inputs[2];
+        fn(key, same_polys ? tile.mWallRuns : nullptr);
+    });
 }
 
 std::vector<ClimbLink> SKNavMesh::climbLinks(const LLUUID& mesh, U32 space) const
