@@ -691,6 +691,12 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         MeshState& state = entry.second;
         if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
         {
+            // The tier is read fresh: the agent's region may have moved since
+            // the last revision walk, and this is the frame the order matters.
+            if (const auto mit = navmesh.mMeshes.find(state.mId); mit != navmesh.mMeshes.end())
+            {
+                state.mPriority = navmesh.meshPriority(*mit->second);
+            }
             ready.push_back(&state);
         }
     }
@@ -731,6 +737,44 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             if (!away)
             {
                 post(state, navmesh);
+            }
+        }
+    }
+
+    // A better mesh that just took the thread preempts a worse one's pass
+    // mid-flight: the pass's next chunk comes back cancelled, and the mesh
+    // runs again once the better one has had the thread. Without this, a long
+    // pass that posted first keeps its 20 ms chunks ahead of a tier the agent
+    // is standing in. A ready mesh that did not post this frame (its detail is
+    // still away) preempts nothing.
+    if (!ready.empty())
+    {
+        U8 best = 3;
+        for (const MeshState* statep : ready)
+        {
+            if (statep->mInFlight)
+            {
+                best = llmin(best, statep->mPriority);
+            }
+        }
+        for (auto& entry : mMeshes)
+        {
+            MeshState& state = entry.second;
+            if (!(state.mInFlight || state.mWindInFlight) || state.mPriority <= best)
+            {
+                continue;
+            }
+            // The tier is read fresh here too: the region may have moved while
+            // this mesh's pass was running.
+            if (const auto mit = navmesh.mMeshes.find(state.mId); mit != navmesh.mMeshes.end())
+            {
+                state.mPriority = navmesh.meshPriority(*mit->second);
+            }
+            if (state.mPriority > best)
+            {
+                state.mLatest->store(++state.mGeneration);
+                state.mDirty = true;
+                state.mChanged = now;
             }
         }
     }
