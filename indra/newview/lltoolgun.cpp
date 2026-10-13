@@ -166,7 +166,6 @@ void LLToolGun::draw()
 
     static LLCachedControl<bool> show_crosshairs(gSavedSettings, "ShowCrosshairs");
     static LLCachedControl<bool> show_iff(gSavedSettings, "AlchemyMouselookIFF", true);
-    static LLCachedControl<bool> show_iff_markers(gSavedSettings, "AlchemyMouselookIFFMarkers", false);
     static LLCachedControl<F32> iff_range(gSavedSettings, "AlchemyMouselookIFFRange", 380.f);
     static LLCachedControl<F32> userPresetX(gSavedSettings, "AlchemyMouselookTextOffsetX", 0.f);
     static LLCachedControl<F32> userPresetY(gSavedSettings, "AlchemyMouselookTextOffsetY", -25.f);
@@ -180,8 +179,7 @@ void LLToolGun::draw()
 
     if (show_iff)
     {
-        bool target_rendered = false;
-
+        // <SK:Nexii/> Offscreen IFF markers removed: they found every avatar in range through walls, which the combat render lockout forbids
         LLVector3d myPosition = gAgentCamera.getCameraPositionGlobal();
         LLQuaternion myRotation = LLViewerCamera::getInstance()->getQuaternion();
         myRotation.set(-myRotation.mQ[VX], -myRotation.mQ[VY], -myRotation.mQ[VZ], myRotation.mQ[VW]);
@@ -197,17 +195,10 @@ void LLToolGun::draw()
                 continue;
             }
 
-            LLColor4 marker_color = LLColor4::white;
-            if(show_iff_markers || !target_rendered)
-                marker_color = ALAvatarGroups::instance().getAvatarColor(id, LLColor4::white, ALAvatarGroups::COLOR_MINIMAP);
+            LLColor4 marker_color = ALAvatarGroups::instance().getAvatarColor(id, LLColor4::white, ALAvatarGroups::COLOR_MINIMAP);
             marker_color.mV[VALPHA] = 0.75f;
 
-            if (show_iff_markers)
-            {
-                LLTracker::instance()->drawMarker(targetPosition, marker_color, true);
-            }
-
-            if (!target_rendered && !gRlvHandler.hasBehaviour(RLV_BHVR_SHOWNAMES))
+            if (!gRlvHandler.hasBehaviour(RLV_BHVR_SHOWNAMES))
             {
                 LLVector3d magicVector = (targetPosition - myPosition) * myRotation;
                 magicVector.setVec(-magicVector.mdV[VY], magicVector.mdV[VZ], magicVector.mdV[VX]);
@@ -229,11 +220,7 @@ void LLToolGun::draw()
                         (LLFontGL::HAlign)((S32)userPresetHAlign), LLFontGL::TOP, LLFontGL::BOLD, LLFontGL::DROP_SHADOW
                     );
 
-                    if (!show_iff_markers)
-                    {
-                        break;
-                    }
-                    target_rendered = true;
+                    break;
                 }
             }
         }
