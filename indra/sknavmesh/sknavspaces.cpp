@@ -482,6 +482,58 @@ namespace sknav
         }
     };
 
+    struct FloorMemo
+    {
+        struct Comp
+        {
+            U32 mCells = 0;
+            U32 mOpen = 0;              ///< sides with no floor to step to
+            U32 mDrops = 0;             ///< of those, sides over a floor well below
+            bool mEdge = false;         ///< a side onto a tile without detail
+        };
+        /// A link from one of the tile's cells to a neighbour's floor cell.
+        struct Cross
+        {
+            U32 mComp;
+            U8 mDir;
+            U16 mX, mY;                 ///< the neighbour's fine cell
+            U32 mGap;                   ///< the neighbour's gap
+        };
+        static U64 cellKey(S32 x, S32 y, U32 gap) { return (static_cast<U64>(static_cast<U16>(x)) << 48) | (static_cast<U64>(static_cast<U16>(y)) << 32) | gap; }
+        struct Tile
+        {
+            TileAirPtr mAir;
+            TileAirPtr mNear[4];        ///< the neighbours' airs, by DX/DY
+            S8 mNearState[4] = {};      ///< 0 held, -1 past the mesh, -2 without detail
+            std::vector<Comp> mComps;
+            std::vector<Cross> mCross;
+            std::vector<std::pair<U64, U32>> mBorder;   ///< the edge columns' floor cells by cellKey, sorted, to their components
+
+            U32 borderComp(S32 x, S32 y, U32 gap) const
+            {
+                const U64 k = cellKey(x, y, gap);
+                const auto it = std::lower_bound(mBorder.begin(), mBorder.end(), std::make_pair(k, U32(0)));
+                return it != mBorder.end() && it->first == k ? it->second : U32(~0u);
+            }
+            size_t bytes() const
+            {
+                return sizeof(Tile) + mComps.capacity() * sizeof(Comp) + mCross.capacity() * sizeof(Cross) + mBorder.capacity() * sizeof(std::pair<U64, U32>);
+            }
+        };
+        S32 mClimb = 0, mWalkHead = 0, mWalkOverlap = 0;
+        std::map<TileKey, std::shared_ptr<const Tile>> mTiles;
+
+        size_t bytes() const
+        {
+            size_t n = sizeof(FloorMemo);
+            for (const auto& t : mTiles)
+            {
+                n += sizeof(TileKey) + 32 + t.second->bytes();
+            }
+            return n;
+        }
+    };
+
     const char* portalKindName(PortalKind kind)
     {
         switch (kind)
@@ -525,7 +577,7 @@ namespace sknav
                 n += sizeof(SeedStats) + s.mRaster.capacity() * sizeof(std::pair<U64, U32>);
             }
         }
-        return n + (mMemo ? mMemo->bytes() : 0) + (mDraw ? mDraw->bytes() : 0);
+        return n + (mMemo ? mMemo->bytes() : 0) + (mFloors ? mFloors->bytes() : 0) + (mDraw ? mDraw->bytes() : 0);
     }
 
     struct SpacesPass::State
@@ -728,6 +780,15 @@ namespace sknav
         void buildCells();
         void transform();
         void cutSeeds(size_t b);
+        /// Floors an avatar stands on, judged per walkable component of the whole mesh: each tile's
+        /// components and their links out, taken from the last pass while its air and its neighbours' stand.
+        std::shared_ptr<FloorMemo> mFloors;
+        std::vector<std::shared_ptr<const FloorMemo::Tile>> mFloorTiles;
+        std::vector<std::vector<U32>> mFloorCells;  ///< per tile, per floor cell its component, once a cut needs them
+        std::vector<U32> mFloorBase;                ///< per tile, its first component in the mesh's
+        std::vector<U8> mFloorAvatar;               ///< per component of the mesh
+        void floors();
+        std::shared_ptr<FloorMemo::Tile> tileFloors(U32 t, std::vector<U32>& cells) const;
         void wallEnds();
         U32 mWallEndCuts = 0;
         void apertureCuts();
@@ -2409,48 +2470,311 @@ namespace sknav
         }
     }
 
-    void SpacesPass::State::cutSeeds(size_t b)
+    std::shared_ptr<FloorMemo::Tile> SpacesPass::State::tileFloors(U32 t, std::vector<U32>& cells) const
     {
-        SK_NAV_ZONE("nav.spaces.cut.seeds");
-        const SpaceParams& p = params();
-        const size_t n = mCells.size();
-        const F32 cell_area = mCell * mCell;
-
-        // Floors an avatar stands on: walkable components not ended mostly by drops.
-        std::vector<U32> comp(n, NONE);
-        std::vector<F64> comp_area, comp_open, comp_drops;
-        std::vector<bool> comp_edge;
-        std::vector<U32> stack;
-        for (U32 c = 0; c < n; ++c)
+        SK_NAV_ZONE("nav.spaces.floors.tile");
+        // The tile's floor cells in buildCells' order, linked as it links them, components joined through links either way.
+        auto out = std::make_shared<FloorMemo::Tile>();
+        FloorMemo::Tile& f = *out;
+        const TileInfo& ti = mTiles[t];
+        const TileAir& a = *ti.mAir;
+        const S32 w = a.mWidth, h = a.mHeight;
+        f.mAir = ti.mAir;
+        std::vector<U32> col_start(static_cast<size_t>(w) * h + 1, 0);
+        std::vector<U32> gaps;
+        std::vector<S32> floors, ceils;
+        AirColumn col;
+        for (S32 iy = 0; iy < h; ++iy)
         {
-            if (comp[c] != NONE)
+            for (S32 ix = 0; ix < w; ++ix)
             {
-                continue;
-            }
-            const U32 id = static_cast<U32>(comp_area.size());
-            comp_area.push_back(0.0);
-            comp_open.push_back(0.0);
-            comp_drops.push_back(0.0);
-            comp_edge.push_back(false);
-            comp[c] = id;
-            stack.assign(1, c);
-            while (!stack.empty())
-            {
-                const U32 k = stack.back();
-                stack.pop_back();
-                comp_area[id] += cell_area;
-                for (S32 d = 0; d < 4; ++d)
+                const S32 c = ix + iy * w;
+                col_start[c] = static_cast<U32>(gaps.size());
+                airColumn(a, ti.mLeafMap[c], col);
+                for (U32 i = 0; i < col.mCount; ++i)
                 {
-                    const U32 o = mLink[k * 4 + d];
-                    if (o != NONE && comp[o] == NONE)
+                    const AirGap& g = a.mGaps[col.mGap[i]];
+                    if (floorGap(t, g))
                     {
-                        comp[o] = id;
-                        stack.push_back(o);
+                        gaps.push_back(col.mGap[i]);
+                        floors.push_back(floorAt(t, col, i, ix, iy));
+                        ceils.push_back(ceilOf(t, g));
                     }
                 }
             }
         }
-        // Each side with no floor to step to: past the cells held, or open, and a drop when the floor beyond is well below.
+        const U32 n = static_cast<U32>(gaps.size());
+        col_start.back() = n;
+        UnionFind uf;
+        uf.reset(n);
+        std::vector<U32> open(n, 0), drops(n, 0);
+        std::vector<U8> edge(n, 0);
+        struct Pending
+        {
+            U32 mCell;
+            U8 mDir;
+            U16 mX, mY;
+            U32 mGap;
+        };
+        std::vector<Pending> pending;
+        std::vector<U32> o_gap;
+        std::vector<S32> o_floor, o_ceil;
+        for (S32 iy = 0; iy < h; ++iy)
+        {
+            for (S32 ix = 0; ix < w; ++ix)
+            {
+                const U32 c0 = col_start[ix + iy * w], c1 = col_start[ix + iy * w + 1];
+                for (S32 d = 0; d < 4 && c0 < c1; ++d)
+                {
+                    U32 u = NONE;
+                    S32 x = 0, y = 0;
+                    const S32 r = resolve(t, ix + DX[d], iy + DY[d], u, x, y);
+                    if (r == -2)
+                    {
+                        for (U32 c = c0; c < c1; ++c)
+                        {
+                            edge[c] = 1;
+                        }
+                        continue;
+                    }
+                    // The neighbour column's floor cells, in its tile's order.
+                    U32 n0 = 0, n1 = 0;
+                    const bool inside = r == 0 && u == t;
+                    if (inside)
+                    {
+                        n0 = col_start[x + y * w];
+                        n1 = col_start[x + y * w + 1];
+                    }
+                    else if (r == 0)
+                    {
+                        o_gap.clear();
+                        o_floor.clear();
+                        o_ceil.clear();
+                        AirColumn oc;
+                        for (U32 i = 0; i < column(u, x, y, oc); ++i)
+                        {
+                            const AirGap& g = air(u).mGaps[oc.mGap[i]];
+                            if (floorGap(u, g))
+                            {
+                                o_gap.push_back(oc.mGap[i]);
+                                o_floor.push_back(floorAt(u, oc, i, x, y));
+                                o_ceil.push_back(ceilOf(u, g));
+                            }
+                        }
+                        n1 = static_cast<U32>(o_gap.size());
+                    }
+                    AirColumn nc;
+                    U32 count = 0;
+                    bool counted = false;
+                    for (U32 c = c0; c < c1; ++c)
+                    {
+                        U32 best = NONE;
+                        S32 best_step = 0;
+                        for (U32 o = n0; o < n1; ++o)
+                        {
+                            const S32 of = inside ? floors[o] : o_floor[o];
+                            const S32 oc = inside ? ceils[o] : o_ceil[o];
+                            const S32 step = std::abs(of - floors[c]);
+                            const S32 overlap = std::min(oc, ceils[c]) - std::max(of, floors[c]);
+                            if (step <= mClimb && overlap >= mWalkOverlap && (best == NONE || step < best_step))
+                            {
+                                best = o;
+                                best_step = step;
+                            }
+                        }
+                        if (best != NONE)
+                        {
+                            if (inside)
+                            {
+                                uf.unite(c, best);
+                            }
+                            else
+                            {
+                                pending.push_back({ c, static_cast<U8>(d), static_cast<U16>(x), static_cast<U16>(y), o_gap[best] });
+                            }
+                            continue;
+                        }
+                        // No floor to step to: open, and a drop when the floor beyond is well below.
+                        ++open[c];
+                        if (r != 0)
+                        {
+                            continue;   // the mesh's edge ends open ground as a wall or void does
+                        }
+                        if (!counted)
+                        {
+                            count = column(u, x, y, nc);
+                            counted = true;
+                        }
+                        for (U32 i = 0; i < count; ++i)
+                        {
+                            const AirGap& gi = air(u).mGaps[nc.mGap[i]];
+                            const S32 fl = floorAt(u, nc, i, x, y);
+                            if (fl <= floors[c] - 1 && ceilOf(u, gi) >= floors[c] + 14)
+                            {
+                                drops[c] += fl < floors[c] - mClimb ? 1 : 0;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cells.assign(n, NONE);
+        for (U32 c = 0; c < n; ++c)
+        {
+            const U32 root = uf.find(c);
+            if (cells[root] == NONE)
+            {
+                cells[root] = static_cast<U32>(f.mComps.size());
+                f.mComps.emplace_back();
+            }
+            cells[c] = cells[root];
+            FloorMemo::Comp& k = f.mComps[cells[c]];
+            ++k.mCells;
+            k.mOpen += open[c];
+            k.mDrops += drops[c];
+            k.mEdge = k.mEdge || edge[c];
+        }
+        for (const Pending& q : pending)
+        {
+            f.mCross.push_back({ cells[q.mCell], q.mDir, q.mX, q.mY, q.mGap });
+        }
+        for (S32 iy = 0; iy < h; ++iy)
+        {
+            for (S32 ix = 0; ix < w; ++ix)
+            {
+                if (ix != 0 && iy != 0 && ix != w - 1 && iy != h - 1)
+                {
+                    continue;
+                }
+                for (U32 c = col_start[ix + iy * w]; c < col_start[ix + iy * w + 1]; ++c)
+                {
+                    f.mBorder.emplace_back(FloorMemo::cellKey(ix, iy, gaps[c]), cells[c]);
+                }
+            }
+        }
+        std::sort(f.mBorder.begin(), f.mBorder.end());
+        return out;
+    }
+
+    void SpacesPass::State::floors()
+    {
+        SK_NAV_ZONE("nav.spaces.floors");
+        const FloorMemo* old = mInput->mPrevious ? mInput->mPrevious->mFloors.get() : nullptr;
+        if (old && (old->mClimb != mClimb || old->mWalkHead != mWalkHead || old->mWalkOverlap != mWalkOverlap))
+        {
+            old = nullptr;
+        }
+        mFloors = std::make_shared<FloorMemo>();
+        mFloors->mClimb = mClimb;
+        mFloors->mWalkHead = mWalkHead;
+        mFloors->mWalkOverlap = mWalkOverlap;
+        const size_t tiles = mTiles.size();
+        mFloorTiles.assign(tiles, nullptr);
+        mFloorCells.assign(tiles, std::vector<U32>());
+        mFloorBase.assign(tiles + 1, 0);
+        for (U32 t = 0; t < tiles; ++t)
+        {
+            const TileInfo& ti = mTiles[t];
+            TileAirPtr near_air[4];
+            S8 near_state[4];
+            for (S32 d = 0; d < 4; ++d)
+            {
+                TileKey k = ti.mKey;
+                k.mX += DX[d];
+                k.mY += DY[d];
+                const U32 u = tileAt(k);
+                near_state[d] = u != NONE ? 0 : mEnc->tile(k) ? -2 : -1;
+                if (u != NONE)
+                {
+                    near_air[d] = mTiles[u].mAir;
+                }
+            }
+            std::shared_ptr<const FloorMemo::Tile> kept;
+            if (old)
+            {
+                const auto it = old->mTiles.find(ti.mKey);
+                if (it != old->mTiles.end() && it->second->mAir == ti.mAir)
+                {
+                    kept = it->second;
+                    for (S32 d = 0; d < 4 && kept; ++d)
+                    {
+                        if (kept->mNearState[d] != near_state[d] || kept->mNear[d] != near_air[d])
+                        {
+                            kept = nullptr;
+                        }
+                    }
+                }
+            }
+            if (!kept)
+            {
+                std::shared_ptr<FloorMemo::Tile> fresh = tileFloors(t, mFloorCells[t]);
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    fresh->mNear[d] = near_air[d];
+                    fresh->mNearState[d] = near_state[d];
+                }
+                kept = fresh;
+            }
+            mFloorTiles[t] = kept;
+            mFloors->mTiles.emplace(ti.mKey, kept);
+            mFloorBase[t + 1] = mFloorBase[t] + static_cast<U32>(kept->mComps.size());
+        }
+        // Components joined across tile edges, by links either way.
+        UnionFind uf;
+        uf.reset(mFloorBase[tiles]);
+        for (U32 t = 0; t < tiles; ++t)
+        {
+            for (const FloorMemo::Cross& q : mFloorTiles[t]->mCross)
+            {
+                TileKey k = mTiles[t].mKey;
+                k.mX += DX[q.mDir];
+                k.mY += DY[q.mDir];
+                const U32 u = tileAt(k);
+                const U32 other = u == NONE ? NONE : mFloorTiles[u]->borderComp(q.mX, q.mY, q.mGap);
+                if (other != NONE)
+                {
+                    uf.unite(mFloorBase[t] + q.mComp, mFloorBase[u] + other);
+                }
+            }
+        }
+        const size_t comps = mFloorBase[tiles];
+        std::vector<U64> cells(comps, 0), open(comps, 0), drop(comps, 0);
+        std::vector<U8> edge(comps, 0);
+        for (U32 t = 0; t < tiles; ++t)
+        {
+            for (U32 i = 0; i < mFloorTiles[t]->mComps.size(); ++i)
+            {
+                const FloorMemo::Comp& k = mFloorTiles[t]->mComps[i];
+                const U32 root = uf.find(mFloorBase[t] + i);
+                cells[root] += k.mCells;
+                open[root] += k.mOpen;
+                drop[root] += k.mDrops;
+                edge[root] |= k.mEdge ? 1 : 0;
+            }
+        }
+        const F64 cell_area = static_cast<F64>(mCell) * mCell;
+        const F64 min_area = params().mAvatarAreaM2;
+        mFloorAvatar.assign(comps, 0);
+        for (U32 i = 0; i < comps; ++i)
+        {
+            const U32 root = uf.find(i);
+            const F64 frac = static_cast<F64>(drop[root]) / std::max<F64>(1.0, static_cast<F64>(open[root]));
+            mFloorAvatar[i] = frac < 0.5 && (cells[root] * cell_area >= min_area || edge[root]) ? 1 : 0;
+        }
+    }
+
+    void SpacesPass::State::cutSeeds(size_t b)
+    {
+        SK_NAV_ZONE("nav.spaces.cut.seeds");
+        const size_t n = mCells.size();
+
+        // Floors an avatar stands on: walkable components of the whole mesh not ended mostly by drops.
+        if (!mFloors)
+        {
+            floors();
+        }
+        mAvatar.assign(n, 0);
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
             const TileInfo& ti = mTiles[t];
@@ -2458,64 +2782,19 @@ namespace sknav
             {
                 continue;
             }
-            const S32 w = ti.mAir->mWidth, h = ti.mAir->mHeight;
-            for (S32 iy = 0; iy < h; ++iy)
+            if (mFloorCells[t].empty() && ti.mColStart.back() > ti.mColStart.front())
             {
-                for (S32 ix = 0; ix < w; ++ix)
-                {
-                    const U32 c0 = ti.mColStart[ix + iy * w], c1 = ti.mColStart[ix + iy * w + 1];
-                    for (S32 d = 0; d < 4 && c0 < c1; ++d)
-                    {
-                        U32 u = NONE;
-                        S32 x, y;
-                        AirColumn col;
-                        U32 count = 0;
-                        for (U32 k = c0; k < c1; ++k)
-                        {
-                            if (mLink[k * 4 + d] != NONE)
-                            {
-                                continue;
-                            }
-                            const U32 id = comp[k];
-                            if (mSide[k * 4 + d] == SIDE_UNKNOWN)
-                            {
-                                comp_edge[id] = true;
-                                continue;
-                            }
-                            comp_open[id] += 1.0;
-                            if (u == NONE)
-                            {
-                                if (resolve(t, ix + DX[d], iy + DY[d], u, x, y) != 0)
-                                {
-                                    u = NONE - 1;   // the mesh's edge ends open ground as a wall or void does
-                                }
-                                else
-                                {
-                                    count = column(u, x, y, col);
-                                }
-                            }
-                            const S32 floor = mCells[k].mFloor;
-                            for (U32 i = 0; i < count; ++i)
-                            {
-                                const AirGap& gi = air(u).mGaps[col.mGap[i]];
-                                const S32 f = floorAt(u, col, i, x, y);
-                                if (f <= floor - 1 && ceilOf(u, gi) >= floor + 14)
-                                {
-                                    comp_drops[id] += f < floor - mClimb ? 1.0 : 0.0;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                std::vector<U32> cells;
+                tileFloors(t, cells);
+                mFloorCells[t] = std::move(cells);
             }
-        }
-        mAvatar.assign(n, 0);
-        for (U32 c = 0; c < n; ++c)
-        {
-            const U32 id = comp[c];
-            const F64 frac = comp_drops[id] / std::max(1.0, comp_open[id]);
-            mAvatar[c] = frac < 0.5 && (comp_area[id] >= p.mAvatarAreaM2 || comp_edge[id]) ? 1 : 0;
+            const std::vector<U32>& cells = mFloorCells[t];
+            const U32 first = ti.mColStart.front();
+            llassert(cells.size() == ti.mColStart.back() - first);
+            for (U32 c = first; c < ti.mColStart.back(); ++c)
+            {
+                mAvatar[c] = mFloorAvatar[mFloorBase[t] + cells[c - first]];
+            }
         }
 
         wallEnds();
@@ -5759,6 +6038,7 @@ namespace sknav
             }
         }
         mProduct->mMemo = mMemo;
+        mProduct->mFloors = mFloors ? mFloors : mInput->mPrevious ? mInput->mPrevious->mFloors : nullptr;
         mEnc->mSpaceIds.resize(out.size());
         for (size_t i = 0; i < out.size(); ++i)
         {

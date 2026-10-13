@@ -232,6 +232,9 @@ namespace sknav
     /// The merge's runs and cut scores, each keyed by everything it read, for the next pass to reuse.
     struct MergeMemo;
 
+    /// Each tile's walkable components and their links into its neighbours, keyed by the airs they read, for the next pass to reuse.
+    struct FloorMemo;
+
     /// One mesh's spaces and portals. Positions are mesh-local.
     struct RoomsProduct
     {
@@ -251,6 +254,7 @@ namespace sknav
                                             ///< draw copies what it read, so it cannot go stale beside
                                             ///< them; a pass that would change it lands a new product.
         std::shared_ptr<const MergeMemo> mMemo;
+        std::shared_ptr<const FloorMemo> mFloors;
 
         /// The space with this id, or null.
         const Space* byId(U32 id) const;
