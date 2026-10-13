@@ -27,6 +27,7 @@
 #include "sknavrooms.h"
 
 #include "sknavlayout.h"
+#include "sknavroomsschedule.h"
 #include "sknavspaceproducts.h"
 
 #include "llagent.h"
@@ -655,6 +656,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 state.mDoorSignature = doors;
                 state.mMin = lo;
                 state.mMax = hi;
+                if (!state.mDirty)
+                {
+                    state.mDirtySince = now;
+                }
                 state.mDirty = true;
                 state.mChanged = now;
                 state.mReruns = 0;
@@ -662,7 +667,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mLatest = std::make_shared<std::atomic<U64>>(0);
                 }
-                state.mLatest->store(++state.mGeneration);
+                // A pass in flight is not cancelled: it lands on the air it read, and the next one refreshes it.
+                ++state.mGeneration;
             }
         }
         for (auto it = mMeshes.begin(); it != mMeshes.end();)
@@ -689,7 +695,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
-        if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
+        // A mesh never published runs at once; churn may only delay a refresh, and only by a bounded wait.
+        if (roomsReady(state.schedule(), now, settle_ms / 1000.0))
         {
             // The tier is read fresh: the agent's region may have moved since
             // the last revision walk, and this is the frame the order matters.
@@ -700,7 +707,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             ready.push_back(&state);
         }
     }
-    std::stable_sort(ready.begin(), ready.end(), [](const MeshState* a, const MeshState* b) { return a->mPriority < b->mPriority; });
+    // First publications before refreshes, then the navmesh's order, then whoever waited longest.
+    std::stable_sort(ready.begin(), ready.end(), [](const MeshState* a, const MeshState* b) { return roomsBefore(a->schedule(), b->schedule()); });
     for (MeshState* statep : ready)
     {
         MeshState& state = *statep;
@@ -770,11 +778,16 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             {
                 state.mPriority = navmesh.meshPriority(*mit->second);
             }
-            if (state.mPriority > best)
+            // A first publication is never preempted: an old layout beats none.
+            const bool rooms = roomsPreemptible(state.schedule(), best);
+            if (rooms || (state.mWindInFlight && state.mPriority > best))
             {
                 state.mLatest->store(++state.mGeneration);
+                if (!state.mDirty)
+                {
+                    state.mDirtySince = now;
+                }
                 state.mDirty = true;
-                state.mChanged = now;
             }
         }
     }
@@ -821,6 +834,9 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     }
 
     const SKNavMesh::Mesh& mesh = *mit->second;
+    // The pass runs on this snapshot; only a preemption cancels it.
+    state.mLatest->store(state.mGeneration);
+    state.mLastPosted = LLTimer::getTotalSeconds();
     auto input = std::make_shared<EnclosureInput>();
     input->mGeneration = state.mGeneration;
     input->mMeshOrigin = mesh.mOrigin;
@@ -958,11 +974,13 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     state.mInFlight = false;
-    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mSpaces || !job->mSpaces->done())
+    if (job->mCancelled || !job->mSpaces || !job->mSpaces->done())
     {
         ++mCancelled;
-        return;     // superseded: the state is dirty again and posts anew once settled
+        return;     // preempted: the state is dirty again and posts anew
     }
+    // Air that moved while it ran left the state dirty: this lands now, and the refresh follows.
+
     const EnclosureProductPtr product = job->mPass->product();
     ++mPasses;
     mLastMs = product->mMillis;

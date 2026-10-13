@@ -30,6 +30,7 @@
 #include "sknavresidency.h"
 #include "sknavspaceproducts.h"
 #include "sknavspaces.h"
+#include "sknavroomsschedule.h"
 #include "sknavwind.h"
 #include "threadpool.h"
 #include "v3dmath.h"
@@ -226,6 +227,8 @@ private:
         bool mDirty = false;
         bool mInFlight = false;
         F64 mChanged = 0.0;                 ///< when its air last moved
+        F64 mDirtySince = 0.0;              ///< when it last went dirty: churn delays a refresh this long at most
+        F64 mLastPosted = 0.0;              ///< ready meshes take turns: the longest unserved goes first
         U64 mGeneration = 0;
         U32 mReruns = 0;                    ///< neighbour-driven re-runs since its air last moved
         std::shared_ptr<std::atomic<U64>> mLatest;
@@ -237,6 +240,11 @@ private:
         F64 mWindChanged = 0.0;             ///< when its answers last moved
         U32 mEvicted = 0;                   ///< tiles whose detail the air cache let go
         U8 mPriority = 3;                   ///< the navmesh's order for it: the agent's region first
+
+        sknav::RoomsSchedule schedule() const
+        {
+            return { mProduct != nullptr, mDirty, mInFlight, mChanged, mDirtySince, mLastPosted, mPriority };
+        }
     };
 
     void post(MeshState& state, const SKNavMesh& navmesh);

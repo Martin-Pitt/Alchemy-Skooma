@@ -68,6 +68,7 @@ target_sources(
         sknavreplay.h
         sknavreplaystats.h
         sknavresidency.h
+        sknavroomsschedule.h
         sknavskymap.h
         sknavspacefilter.h
         sknavspaceproducts.h
@@ -116,6 +117,7 @@ if(AL_BUILD_TESTS)
   al_add_test(sknavcluster PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavbuild PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwalls PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
+  al_add_test(sknavroomsschedule PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavwallruns PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfaceoffsets PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
   al_add_test(sknavfeatures PROJECT sknavmesh LIBRARIES sknavmesh llcommon)
