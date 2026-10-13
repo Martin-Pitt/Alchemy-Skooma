@@ -423,7 +423,7 @@ void SKMapPeople::updateProjectiles()
         }
         // Traced once, when first seen, while the trails still hold where everyone was.
         const auto traced = mShooters.find(object->getID());
-        p.mShooter = traced != mShooters.end() ? traced->second : traceShooter(pos, object->getVelocity(), now);
+        p.mShooter = traced != mShooters.end() ? traced->second : traceShooter(pos, object->getVelocity());
         shooters[object->getID()] = p.mShooter;
         seen[object->getID()] = pos;
         found.push_back(p);
@@ -459,21 +459,28 @@ void SKMapPeople::updateTrails(F64 now)
     mTrails.swap(trails);
 }
 
-LLUUID SKMapPeople::traceShooter(const LLVector3d& pos, const LLVector3& velocity, F64 now) const
+LLUUID SKMapPeople::traceShooter(const LLVector3d& pos, const LLVector3& velocity) const
 {
-    // Run the shot backwards in time and find whose chest it passed through at that moment.
+    // Whose chest the shot's line passed nearest, run backwards over the trails' two seconds; sideways distance
+    // alone, as 10 Hz samples put a 200 m/s shot 20 m off along its track.
     constexpr F64 CHEST_M = 0.5;        ///< above the avatar's reported position
-    constexpr F64 FIT_M = 1.5;          ///< how near the shot must pass, before tick slack
-    const LLVector3d v(velocity);
-    const F64 slack = v.magVec() * 0.1; // positions are sampled at 10 Hz
+    constexpr F64 FIT_M = 2.0;          ///< recorded shots pass within 1.8 m, p90
+    const F64 speed = velocity.length();
+    if (speed < 1e-3)
+    {
+        return LLUUID::null;
+    }
+    const LLVector3d back = LLVector3d(velocity) * (-1.0 / speed);
+    const F64 reach = speed * 2.0;
     LLUUID best;
-    F64 best_d = FIT_M + slack;
+    F64 best_d = FIT_M;
     for (const auto& trail : mTrails)
     {
         for (const auto& sample : trail.second)
         {
-            const LLVector3d back = pos - v * (now - sample.first);
-            const F64 d = dist_vec(back, sample.second + LLVector3d(0.0, 0.0, CHEST_M));
+            const LLVector3d w = sample.second + LLVector3d(0.0, 0.0, CHEST_M) - pos;
+            const F64 along = llclamp(w * back, 0.0, reach);
+            const F64 d = (w - back * along).magVec();
             if (d < best_d)
             {
                 best_d = d;

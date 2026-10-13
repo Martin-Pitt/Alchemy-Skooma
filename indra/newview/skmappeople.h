@@ -148,7 +148,7 @@ private:
     void updateCombat();
     void updateFiringLines();
     void updateTrails(F64 now);
-    LLUUID traceShooter(const LLVector3d& pos, const LLVector3& velocity, F64 now) const;
+    LLUUID traceShooter(const LLVector3d& pos, const LLVector3& velocity) const;
     void updateProjectiles();
     void updateCandidates();
     void loadFactions();
