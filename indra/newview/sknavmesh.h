@@ -486,8 +486,6 @@ private:
         F64 mResidencyChecked = 0.0;
         F64 mReloadAsked = 0.0;
         std::shared_ptr<SpillJob> mRefusedReload;   ///< what a reload read whose swap was refused, to try again
-        U32 mReloadReadsInFlight = 0;               ///< the reload cap, so a whole region's reads cannot flood the pool
-        std::vector<std::shared_ptr<SpillJob>> mReloadBacklog;  ///< reloads the cap held back, in the order they asked
         ~Mesh();
     };
 
@@ -690,6 +688,8 @@ private:
     U64 mCensusStamp = 0;
     U32 mNextGeneration = 1;
     S32 mInFlight = 0;
+    U32 mReloadReadsInFlight = 0;           ///< the reload cap, so a whole region's reads cannot flood the pool
+    std::vector<std::shared_ptr<SpillJob>> mReloadBacklog;  ///< reloads the cap held back, in the order they asked
     Stats mStats;
     F64 mLastLog = 0.f;
     bool mDemanding = false;
