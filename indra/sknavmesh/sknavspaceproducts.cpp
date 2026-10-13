@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -206,6 +207,63 @@ namespace sknav
     constexpr F32 CLIMB_END_STEP_M = 0.4f;     ///< a climb's floor is looked for this far past each end
     constexpr F32 CLIMB_END_REACH_M = 1.5f;    ///< within this in plan
     constexpr F32 CLIMB_END_DZ_M = 1.f;        ///< and this in height
+
+    U64 storeyRoomsKey(const RoomsProduct& rooms)
+    {
+        const auto mix = [](U64 h, U64 v) { return (h ^ (v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2))) * 0xff51afd7ed558ccdull; };
+        const auto mixF = [&mix](U64 h, F32 f) {
+            U32 bits;
+            std::memcpy(&bits, &f, sizeof(bits));
+            return mix(h, bits);
+        };
+        const size_t n = rooms.mSpaces.size();
+        std::vector<U32> order(n);
+        for (U32 i = 0; i < n; ++i)
+        {
+            order[i] = i;
+        }
+        std::sort(order.begin(), order.end(), [&rooms](U32 a, U32 b) { return rooms.mSpaces[a].mId < rooms.mSpaces[b].mId; });
+        U64 h = mix(0x5354u, n);
+        for (const U32 i : order)
+        {
+            const Space& sp = rooms.mSpaces[i];
+            h = mix(mix(h, sp.mId), sp.mFlight ? 1u : 0u);
+            if (!sp.mFlight)
+            {
+                continue;
+            }
+            for (const U32 pi : sp.mPortals)
+            {
+                if (pi >= rooms.mPortals.size() || rooms.mPortals[pi].mKind != PortalKind::STAIR)
+                {
+                    continue;
+                }
+                const Portal& portal = rooms.mPortals[pi];
+                const U32 other = portal.mSpaces[0] == i ? portal.mSpaces[1] : portal.mSpaces[0];
+                h = mix(h, other < n ? rooms.mSpaces[other].mId : 0xffffffffu);
+                for (S32 k = 0; k < 3; ++k)
+                {
+                    h = mixF(h, portal.mCentre.mV[k]);
+                }
+            }
+        }
+        std::vector<std::pair<U32, U32>> joined;
+        for (const Portal& q : rooms.mPortals)
+        {
+            if (q.mSpaces[0] < n && q.mSpaces[1] < n)
+            {
+                const U32 a = rooms.mSpaces[q.mSpaces[0]].mId, b = rooms.mSpaces[q.mSpaces[1]].mId;
+                joined.emplace_back(std::min(a, b), std::max(a, b));
+            }
+        }
+        std::sort(joined.begin(), joined.end());
+        joined.erase(std::unique(joined.begin(), joined.end()), joined.end());
+        for (const auto& j : joined)
+        {
+            h = mix(mix(h, j.first), j.second);
+        }
+        return h;
+    }
 
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
                       const PolyFlightFn& flight_of, F32 min_area, const std::vector<const Flight*>& flights)
