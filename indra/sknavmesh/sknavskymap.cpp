@@ -53,6 +53,27 @@ namespace sknav
         return c == b->second->mCells.end() ? nullptr : &c->second;
     }
 
+    U64 SkyMap::windowKey(F64 x0, F64 y0, F64 x1, F64 y1, std::vector<std::shared_ptr<const void>>& keep) const
+    {
+        const S64 bx0 = static_cast<S64>(std::floor(x0)) >> BLOCK_SHIFT, bx1 = static_cast<S64>(std::floor(x1)) >> BLOCK_SHIFT;
+        const S64 by0 = static_cast<S64>(std::floor(y0)) >> BLOCK_SHIFT, by1 = static_cast<S64>(std::floor(y1)) >> BLOCK_SHIFT;
+        U64 h = 0xcbf29ce484222325ull;
+        for (S64 by = by0; by <= by1; ++by)
+        {
+            for (S64 bx = bx0; bx <= bx1; ++bx)
+            {
+                const auto b = mBlocks.find(cellKey(bx, by));
+                const Block* p = b == mBlocks.end() ? nullptr : b->second.get();
+                h = (h ^ static_cast<U64>(reinterpret_cast<uintptr_t>(p))) * 0x100000001b3ull;
+                if (p)
+                {
+                    keep.push_back(b->second);
+                }
+            }
+        }
+        return h;
+    }
+
     SkyMap::Block& SkyMap::writable(S64 x, S64 y)
     {
         std::shared_ptr<Block>& b = mBlocks[blockKey(x, y)];
