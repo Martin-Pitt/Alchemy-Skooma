@@ -2774,6 +2774,7 @@ namespace sknav
         {
             floors();
         }
+        std::vector<U32> stack;
         mAvatar.assign(n, 0);
         for (U32 t = 0; t < mTiles.size(); ++t)
         {
