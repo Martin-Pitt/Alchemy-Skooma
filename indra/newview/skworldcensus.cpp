@@ -484,12 +484,15 @@ void SKWorldCensus::finishScan()
             return done;
         });
     auto future = task->get_future();
-    if (LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
+    if (!LL::WorkQueue::getInstance("CensusClusters")->tryPost([task]() { (*task)(); }))
     {
-        mClusterJob = std::move(future);
-        mClusterRegions = mScan.mRegions;
-        mDiscardClusterJob = false;
+        // A refused post would drop the finished scan, so it is clustered here instead.
+        LL_WARNS("SKNav") << "Census cluster queue refused the scan; clustering on this thread" << LL_ENDL;
+        (*task)();
     }
+    mClusterJob = std::move(future);
+    mClusterRegions = mScan.mRegions;
+    mDiscardClusterJob = false;
 }
 
 bool SKWorldCensus::classifyRest(LLViewerObject* root, const LLVector3d& pos, const LLQuaternion& rot)
