@@ -604,6 +604,32 @@ namespace sknav
         {
             // Then the spaces: the smallest that touches another takes its smallest neighbour's colour.
             out.mOverflow = TileStamp::SPACES_FUSED;
+            // The codes and components present, once: a fusion recolours components, and the pairs follow from these alone.
+            std::vector<U32> present;
+            present.reserve(n);
+            for (S32 i = 0; i < n; ++i)
+            {
+                if (chf.areas[i] != RC_NULL_AREA)
+                {
+                    present.push_back((static_cast<U32>(slope_map[chf.areas[i]]) << 16) | (spans.interior(i) ? comp[i] : STAMP_NONE));
+                }
+            }
+            std::sort(present.begin(), present.end());
+            present.erase(std::unique(present.begin(), present.end()), present.end());
+            const auto fusedPairs = [&]() {
+                std::vector<std::pair<U8, U8>> out_pairs;
+                out_pairs.reserve(present.size());
+                for (const U32 k : present)
+                {
+                    const U16 c = static_cast<U16>(k & 0xffff);
+                    out_pairs.emplace_back(static_cast<U8>(k >> 16), c == STAMP_NONE ? 0 : colours[c]);
+                }
+                std::sort(out_pairs.begin(), out_pairs.end());
+                out_pairs.erase(std::unique(out_pairs.begin(), out_pairs.end()), out_pairs.end());
+                return out_pairs;
+            };
+            std::map<U16, std::set<U16>> nadj;
+            colours = colourGroups(adj, group, &nadj);
             while (static_cast<S32>(used.size()) > cap)
             {
                 std::map<U16, U32> gsize;
@@ -611,8 +637,6 @@ namespace sknav
                 {
                     gsize[group[c]] += size[c];
                 }
-                std::map<U16, std::set<U16>> nadj;
-                colourGroups(adj, group, &nadj);
                 S32 pick = -1;
                 for (const auto& [g, s] : gsize)
                 {
@@ -639,8 +663,8 @@ namespace sknav
                     g = g == hi ? lo : g;
                 }
                 ++out.mFused;
-                colours = colourGroups(adj, group, nullptr);
-                used = pairs();
+                colours = colourGroups(adj, group, &nadj);
+                used = fusedPairs();
             }
         }
         if (static_cast<S32>(used.size()) > cap)

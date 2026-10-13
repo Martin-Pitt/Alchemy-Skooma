@@ -1033,4 +1033,52 @@ namespace tut
         const TileStampGeom across = geomWith(LLVector3(1.f, -1.f, 1.f), LLVector3(1.f, 1.f, 1.f));
         ensure_equals("a door crossing the seam is not", across.mPortalEdges.size(), size_t(0));
     }
+
+    template<> template<>
+    void sknavstamp_object::test<15>()
+    {
+        set_test_name("spaces fused to fit a small palette fuse the same way every time");
+        const ChfPtr chf = floorOf(16, 16, [](S32 x, S32 z) { return static_cast<U8>(AREA_CODE_BASE + (x + z) % 3); });
+        const std::vector<U32> gaps = gapsOf(*chf, [](S32 x, S32 z) { return (x / 3) + (z / 4) * 6; });
+        TileStampInput in;
+        for (U16 c = 0; c < 24; ++c)
+        {
+            in.mGapComponent.push_back(c);
+            in.mComponentSpace.push_back(c);
+        }
+        // Diagonal neighbours joined through portals, so the spaces need more than two colours.
+        for (U16 c = 0; c + 7 < 24; c += 2)
+        {
+            StampPortal p;
+            p.mSide[0] = c;
+            p.mSide[1] = static_cast<U16>(c + 7);
+            p.mKind = static_cast<U8>(PortalKind::OPENING);
+            p.mCentre.set(-50.f, -50.f, 0.f);
+            p.mA = p.mB = p.mCentre;
+            in.mPortals.push_back(p);
+        }
+        StampParams params;
+        params.mPaletteMax = 2;
+        TileStamp st;
+        stampTile(*chf, 0, gaps, in, identityReal(), {}, params, st);
+        U64 h = 1469598103934665603ULL;
+        const auto mixIn = [&h](U64 v) { h = (h ^ v) * 1099511628211ULL; };
+        for (const U8 c : st.mSpanCode)
+        {
+            mixIn(c);
+        }
+        for (const U8 c : st.mComponentColour)
+        {
+            mixIn(c);
+        }
+        for (const StampCode& c : st.mPalette)
+        {
+            mixIn(c.mSlope);
+            mixIn(c.mColour);
+        }
+        ensure_equals("fused", static_cast<S32>(st.mOverflow), static_cast<S32>(TileStamp::SPACES_FUSED));
+        ensure("it fits", st.mPairs <= 2u);
+        ensure_equals("fusions", st.mFused, 20u);
+        ensure_equals("the stamp", h, 3357995856058945624ULL);
+    }
 }
