@@ -545,4 +545,15 @@ namespace tut
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
     }
+
+    template<> template<>
+    void sknavtilecache_object::test<15>()
+    {
+        set_test_name("asking for fine air moves the content key");
+        TileBuildInput a = input({});
+        a.mAir = true;
+        TileBuildInput b = a;
+        b.mFineAir = true;
+        ensure("fine air keyed", tileContentKey(a) != tileContentKey(b));
+    }
 }

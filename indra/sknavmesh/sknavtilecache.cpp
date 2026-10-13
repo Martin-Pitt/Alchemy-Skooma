@@ -876,6 +876,11 @@ namespace sknav
         h = mix(h, static_cast<U32>(input.mAirPad));
         h = mixF32(h, input.mAirMinGap);
         h = mix(h, input.mCoarseAir);
+        // Mixed only when asked for, so every key built without fine air stays as it was.
+        if (input.mFineAir)
+        {
+            h = mix(h, input.mFineAir);
+        }
         h = mix(h, input.mFaceOffsets);
         h = mix(h, input.mAlignWallEdges);
 
