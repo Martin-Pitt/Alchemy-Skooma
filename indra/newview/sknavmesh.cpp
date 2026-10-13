@@ -805,7 +805,7 @@ void SKNavMesh::reloadMesh(Mesh& mesh)
     // reads cap at the pool's width: a whole region's reads must not queue the
     // whole pool ahead of the builds and stamps already in flight, and what
     // the cap holds back waits in the backlog for the drain.
-    const U32 width = llmax<U32>(mWorkers->getWidth(), 1);
+    const U32 width = llmax(static_cast<U32>(mWorkers->getWidth()), 1u);
     for (size_t i = 0; i < job->mEntries.size(); ++i)
     {
         if (mReloadReadsInFlight >= width)
