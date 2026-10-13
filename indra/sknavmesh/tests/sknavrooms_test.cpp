@@ -2014,4 +2014,221 @@ template<> template<>
         ensure("the rooftop covers the rooms", std::find(top->mCovers.begin(), top->mCovers.end(), r.index(west)) != top->mCovers.end());
         ensure("both in the building under them", west->mBuilding && top->mBuilding == west->mBuilding && hut->mBuilding == west->mBuilding);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<56>()
+    {
+        set_test_name("a frozen roof covers the spaces it covered: its covers index the product it is in");
+        // The building in the second tile, a wall in the first so the live spaces there come first.
+        Scene s = twoRooms();
+        s.mShift = 32.f;
+        s.box(-28.f, 16.f, -20.f, 16.25f, 0.f, 3.f, false);
+        s.box(-28.f, 16.f, -27.75f, 24.f, 0.f, 3.f, false);
+        s.box(-20.25f, 16.f, -20.f, 24.f, 0.f, 3.f, false);
+        s.box(-28.f, 23.75f, -20.f, 24.f, 0.f, 3.f, false);
+        s.box(-28.f, 16.f, -20.f, 24.f, 3.f, 3.25f);
+        auto in = s.input(2);
+        const Result first = run(in);
+        const Space* roof = first.at(38.f, 6.f, 3.75f);
+        ensure("a roof over the rooms" + info(first), roof && roof->mRoof && !roof->mCovers.empty());
+        std::vector<U32> covered;
+        for (U32 c : roof->mCovers)
+        {
+            covered.push_back(first.mRooms->mSpaces[c].mId);
+        }
+        // The building's tile is evicted; the pass runs again on the first tile alone.
+        in->mPrevious = first.mEnc;
+        in->mKept.push_back(*first.mEnc->tile(in->mTiles[1].mKey));
+        in->mTiles.pop_back();
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mPrevious = first.mRooms;
+        const Result second = run(in, rooms);
+        const Space* frozen = nullptr;
+        for (const Space& sp : second.mRooms->mSpaces)
+        {
+            frozen = sp.mId == roof->mId ? &sp : frozen;
+        }
+        ensure("the roof kept, frozen" + info(second), frozen && frozen->mFrozen && frozen->mRoof);
+        std::vector<U32> now;
+        for (U32 c : frozen->mCovers)
+        {
+            ensure("a cover in the product", c < second.mRooms->mSpaces.size());
+            now.push_back(second.mRooms->mSpaces[c].mId);
+        }
+        ensure("the same spaces covered", now == covered);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<57>()
+    {
+        set_test_name("an aperture cut whose lintel lies in a clean ring tile holds on an incremental pass");
+        // The doorway's lintel lies wholly in the first tile, the room past it in the moved second.
+        for (F32 shift : { 21.25f, 21.5f, 21.625f, 21.75f, 22.f, 9.75f })
+        {
+            Scene before = loopedRooms();
+            before.mShift = shift;
+            Scene after = before;
+            after.box(55.f - shift, 20.f, 56.f - shift, 21.f, 0.f, 3.f, false);
+            const Result first = run(before.input(2));
+            std::shared_ptr<EnclosureInput> in = after.input(2);
+            for (EnclosureInput::Tile& t : in->mTiles)
+            {
+                const RoomsTile* was = first.mRooms->tile(t.mKey);
+                if (was && t.mKey.mX == 0)
+                {
+                    t.mAir = was->mAir;
+                }
+            }
+            auto rooms = std::make_shared<RoomsInput>();
+            rooms->mPrevious = first.mRooms;
+            const Result incremental = run(in, rooms);
+            const Result full = run(in);
+            const std::string at = llformat(" at shift %.3f", shift);
+            ensure("the full pass parts the rooms" + at, full.at(6.f + shift, 6.f) && full.at(6.f + shift, 6.f) != full.at(14.f + shift, 6.f));
+            ensure("so does the incremental pass" + at, incremental.at(6.f + shift, 6.f) && incremental.at(6.f + shift, 6.f) != incremental.at(14.f + shift, 6.f));
+            ensure_equals("one aperture cut either way" + at, incremental.mRooms->mApart.size(), full.mRooms->mApart.size());
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<58>()
+    {
+        set_test_name("a doorway beside a wide opening parts its rooms or not alike wherever a tile seam crosses it");
+        // A partition across a hall: a wall, a 2 m doorway under a lintel, a short wall, then open to the north wall.
+        for (F32 top : { 10.f, 20.f })
+        {
+            S32 parted = -1;
+            for (F32 shift : { 0.f, 21.75f, 24.f })
+            {
+                Scene s;
+                s.wall(2.f, 2.f, 18.f, 2.25f);
+                s.wall(2.f, top, 18.f, top + 0.25f);
+                s.wall(2.f, 2.f, 2.25f, top + 0.25f);
+                s.wall(17.75f, 2.f, 18.f, top + 0.25f);
+                s.wall(10.f, 2.25f, 10.25f, 3.f);
+                s.box(10.f, 3.f, 10.25f, 5.f, 2.2f, 3.f, false);
+                s.wall(10.f, 5.f, 10.25f, 6.f);
+                s.box(2.f, 2.f, 18.f, top + 0.25f, 3.f, 3.25f);
+                s.mShift = shift;
+                const Result r = run(s.input(2));
+                const Space* w = r.at(4.f + shift, 4.f);
+                const Space* e = r.at(16.f + shift, 4.f);
+                ensure("both rooms found", w && e);
+                const S32 now = w != e ? 1 : 0;
+                ensure(llformat("the same answer at shift %.2f", shift), parted < 0 || parted == now);
+                ensure_equals("a cut where they part", r.mRooms->mApart.size(), static_cast<size_t>(now));
+                parted = now;
+            }
+            ensure("a short opening parts them, a long one does not", parted == (top < 15.f ? 1 : 0));
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<59>()
+    {
+        set_test_name("a low hall wider than the side reads is INDOORS in its middle; a canopy on posts is still SHELTERED");
+        Scene s;
+        s.wall(4.f, 4.f, 68.f, 4.5f);
+        s.wall(4.f, 67.5f, 68.f, 68.f);
+        s.wall(4.f, 4.f, 4.5f, 30.f);
+        s.wall(4.f, 32.f, 4.5f, 68.f);
+        s.box(4.f, 30.f, 4.5f, 32.f, 2.2f, 3.f, false);
+        s.wall(67.5f, 4.f, 68.f, 68.f);
+        s.box(4.f, 4.f, 68.f, 68.f, 3.f, 3.25f);
+        // A canopy on posts out past the hall, wider than a stall but within the side reads.
+        s.box(76.f, 24.f, 88.f, 36.f, 3.f, 3.25f);
+        for (F32 px : { 76.f, 87.5f })
+        {
+            for (F32 py : { 24.f, 35.5f })
+            {
+                s.box(px, py, px + 0.5f, py + 0.5f, 0.f, 3.f, false);
+            }
+        }
+        auto in = s.input(3, 3);
+        s.addSky(*in);
+        const Result r = run(in);
+        Enclosure mid, side, canopy;
+        ensure("read", r.mEnc->enclosureAt(LLVector3(36.f, 36.f, 0.5f), mid) && r.mEnc->enclosureAt(LLVector3(10.f, 36.f, 0.5f), side) &&
+                           r.mEnc->enclosureAt(LLVector3(82.f, 30.f, 0.5f), canopy));
+        ensure("the hall's middle is no canopy", !mid.mCanopy);
+        ensure("the hall's middle is INDOORS", mid.mBucket == EnclosureBucket::INDOORS);
+        ensure("so is its side", side.mBucket == EnclosureBucket::INDOORS);
+        ensure("the canopy is one", canopy.mCanopy);
+        ensure("and SHELTERED", canopy.mBucket == EnclosureBucket::SHELTERED);
+        const Space* hall = r.at(36.f, 36.f);
+        ensure("the hall is an INDOORS space" + info(r), hall && hall->mBucket == EnclosureBucket::INDOORS);
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<60>()
+    {
+        set_test_name("a rooftop's over-roofed share is of the floor its cover was read on, pedestals spread onto it included");
+        // The rooftop reached from a stair hut's door, so a space of its own walking, with pedestals too small to stand on.
+        Scene s = twoRooms();
+        s.box(12.f, 4.f, 16.f, 4.25f, 3.25f, 6.f, false);
+        s.box(12.f, 7.75f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(15.75f, 4.f, 16.f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 4.f, 12.25f, 5.5f, 3.25f, 6.f, false);
+        s.box(12.f, 6.5f, 12.25f, 8.f, 3.25f, 6.f, false);
+        s.box(12.f, 5.5f, 12.25f, 6.5f, 5.45f, 6.f, false);
+        s.box(12.f, 4.f, 16.f, 8.f, 6.f, 6.25f);
+        for (F32 px = 3.f; px < 11.f; px += 1.5f)
+        {
+            s.box(px, 3.f, px + 0.5f, 3.5f, 3.25f, 3.75f);
+            s.box(px, 8.5f, px + 0.5f, 9.f, 3.25f, 3.75f);
+        }
+        const Result r = run(s.input(1));
+        const Space* top = r.at(6.f, 6.f, 3.75f);
+        ensure("the rooftop" + info(r), top && top->mRoof);
+        // Its floors, as the cover is read: walkable tops an avatar's head clears.
+        F64 floor = 0.0, cover = 0.0;
+        for (const TileEnclosure& te : r.mEnc->mTiles)
+        {
+            const TileAir& a = *te.mAir;
+            for (const AirLeaf& leaf : a.mLeaves)
+            {
+                for (U32 i = 0; i < leaf.mGapCount; ++i)
+                {
+                    const AirGap& g = a.mGaps[leaf.mFirstGap + i];
+                    const bool tall = g.mCeiling == AIR_CEILING_OPEN || (g.mCeiling - g.mFloor) * a.mUnit >= 1.f - 1e-3f;
+                    if (te.mGaps[leaf.mFirstGap + i].mSpace == r.index(top) + 1 && (g.mFlags & AirGap::TOP) && tall)
+                    {
+                        floor += a.mCell * a.mCell * (1 << leaf.mLevel) * (1 << leaf.mLevel);
+                    }
+                }
+            }
+        }
+        for (F32 m2 : top->mCoverM2)
+        {
+            cover += m2;
+        }
+        ensure(llformat("the share is the cover over that floor: %.4f, %.2f / %.2f, seeds' floor %.2f", top->mOverRoofed, cover, floor, top->mFloorArea),
+               floor > 0.0 && std::fabs(top->mOverRoofed - cover / floor) < 1e-3);
+        for (const Space& sp : r.mRooms->mSpaces)
+        {
+            ensure(llformat("a share, %.3f", sp.mOverRoofed), sp.mOverRoofed >= 0.f && sp.mOverRoofed <= 1.f);
+        }
+    }
+
+    template<> template<>
+    void sknavrooms_object::test<61>()
+    {
+        set_test_name("a lift across a partition takes from each room the floor it took there, no more");
+        Scene s = twoRooms();
+        s.wall(10.f, 2.f, 10.25f, 5.f);
+        s.wall(10.f, 6.f, 10.25f, 10.f);
+        s.box(10.f, 5.f, 10.25f, 6.f, 2.2f, 3.f, false);
+        const Result plain = run(s.input(1));
+        auto rooms = std::make_shared<RoomsInput>();
+        rooms->mLifts.emplace_back(LLVector3d(9.f, 7.f, -0.5f), LLVector3d(11.f, 9.f, 20.f));
+        const Result r = run(s.input(1), rooms);
+        const Space* lift = r.at(9.5f, 8.f);
+        const Space* west = r.at(6.f, 4.f);
+        const Space* east = r.at(14.f, 4.f);
+        ensure("a lift and two rooms" + info(r), lift && west && east && lift->mLift && west != east && lift != west && lift != east);
+        ensure("the lift is on both sides", r.at(10.75f, 8.f) == lift);
+        const F32 before = plain.at(6.f, 4.f)->mFloorArea + plain.at(14.f, 4.f)->mFloorArea;
+        const F32 lost = before - west->mFloorArea - east->mFloorArea;
+        ensure(llformat("the rooms lose the lift's floor: lost %.2f, the lift %.2f", lost, lift->mFloorArea), std::fabs(lost - lift->mFloorArea) < 0.5f);
+    }
 }

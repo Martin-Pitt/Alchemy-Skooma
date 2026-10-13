@@ -2533,6 +2533,14 @@ void LLReflectionMapManager::cleanup()
     mReflectionMaps.clear();
     abandonProbeUpdate();
 
+    // <SK:Nexii> Navmesh rooms probes: join the solids pool here, as gPipeline is destroyed after the fiber machinery.
+    if (mSolidWorkers)
+    {
+        mSolidWorkers->close();
+        mSolidWorkers.reset();
+    }
+    // </SK:Nexii>
+
     mDefaultProbe = nullptr;
 
     mUBO.release();

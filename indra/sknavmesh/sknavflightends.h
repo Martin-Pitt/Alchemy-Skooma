@@ -28,7 +28,9 @@
 
 #include "sknavflights.h"
 
+#include <cmath>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 class dtNavMesh;
@@ -55,6 +57,26 @@ namespace sknav
 
     /// The Flight a tile's poly belongs to, or null.
     typedef std::function<const Flight*(const dtMeshTile* tile, U32 poly)> PolyFlightFn;
+
+    /// Plan boxes bucketed on a square grid, so a search near a point reads only the boxes there.
+    class PlanBoxIndex
+    {
+    public:
+        explicit PlanBoxIndex(F32 cell = 4.f) : mCell(cell) {}
+        void add(U32 id, F32 x0, F32 y0, F32 x1, F32 y1);
+        /// The ids of every box meeting the query box, and maybe a few near it: ascending, each once.
+        void query(F32 x0, F32 y0, F32 x1, F32 y1, std::vector<U32>& out) const;
+
+    private:
+        U64 cellKey(S32 cx, S32 cy) const { return (static_cast<U64>(static_cast<U32>(cx)) << 32) | static_cast<U32>(cy); }
+        S32 cellOf(F32 v) const { return static_cast<S32>(std::floor(v / mCell)); }
+
+        F32 mCell;
+        std::unordered_map<U64, std::vector<U32>> mCells;
+    };
+
+    /// Whether this copy of a flight is its home tile's: the one its footprint's middle lies in, or a flight with no polys kept there.
+    bool homeCopy(const dtMeshTile* tile, const Flight& f);
 
     /// Each flight's end polys: ground polys that are not its own and meet an
     /// end, either linked to its own polys across an edge at that end's height

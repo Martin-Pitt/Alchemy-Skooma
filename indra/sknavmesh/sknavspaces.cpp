@@ -27,6 +27,7 @@
 #include "sknavspaces.h"
 
 #include "sknavstairalign.h"
+#include "sknavprofile.h"
 
 #include <algorithm>
 #include <array>
@@ -1409,6 +1410,7 @@ namespace sknav
 
     void SpacesPass::State::prepare()
     {
+        SK_NAV_ZONE("nav.spaces.prepare");
         const RoomsInput& in = *mInput;
         const SpaceParams& p = params();
         mProduct = std::make_shared<RoomsProduct>();
@@ -1524,6 +1526,7 @@ namespace sknav
 
     void SpacesPass::State::memoContext()
     {
+        SK_NAV_ZONE("nav.spaces.memo");
         // What any score or run reads besides its own cut and tiles: the parameters and the doors.
         MemoKey context;
         F32 values[sizeof(SpaceParams) / sizeof(F32)];
@@ -1583,6 +1586,7 @@ namespace sknav
 
     void SpacesPass::State::runBatch(size_t b)
     {
+        SK_NAV_ZONE("nav.spaces.cut.batch");
         // The block's tiles and the ring round them: enough air on every
         // side for the transform, which stops at mClearMaxM, to be right.
         for (TileInfo& ti : mTiles)
@@ -1627,6 +1631,7 @@ namespace sknav
 
     void SpacesPass::State::wallEnds()
     {
+        SK_NAV_ZONE("nav.spaces.cut.wallends");
         // Walls that stop in open air make no saddle for the watershed to
         // cut at: pair up facing wall ends, score the gap between them as
         // any cut is scored, and where it is a portal sever the floor across
@@ -1858,6 +1863,7 @@ namespace sknav
 
     void SpacesPass::State::apertureCuts()
     {
+        SK_NAV_ZONE("nav.spaces.cut.apertures");
         // A doorway whose rooms the watershed sees as one basin makes no
         // saddle to cut at: find it from below, where the ceiling drops to a
         // lintel, take the aperture between its jambs, and sever the floor
@@ -1899,11 +1905,39 @@ namespace sknav
             }
             return seen.size() >= min_cells;
         };
+        // A ring tile's lintel near the block may cut a doorway whose far side the block holds, as a full pass would.
+        const F32 ring_reach = SCORE_REACH_M + APERTURE_MAX_M;
+        const auto nearBlock = [&](const Cell& cell) {
+            const TileInfo& ti = mTiles[cell.mTile];
+            const F32 lx = (cell.mX + 0.5f) * mCell, ly = (cell.mY + 0.5f) * mCell;
+            const F32 wx = ti.mAir->mWidth * mCell, wy = ti.mAir->mHeight * mCell;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    TileKey k = ti.mKey;
+                    k.mX += dx;
+                    k.mY += dy;
+                    const U32 it = tileAt(k);
+                    if (it != NONE && mTiles[it].mInBlock && (dx < 0 ? lx : dx > 0 ? wx - lx : 0.f) <= ring_reach &&
+                        (dy < 0 ? ly : dy > 0 ? wy - ly : 0.f) <= ring_reach)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        const auto blockSide = [&](const Run& r) {
+            Probe pr;
+            return (pastLintel(r, 1.f, pr) && mTiles[pr.mTile].mInBlock) || (pastLintel(r, -1.f, pr) && mTiles[pr.mTile].mInBlock);
+        };
         const size_t n = mCells.size();
         for (U32 c = 0; c < n; ++c)
         {
             const Cell& cell = mCells[c];
-            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP)
+            const bool ring = !mTiles[cell.mTile].mInBlock;
+            if (!mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP || (ring && !nearBlock(cell)))
             {
                 continue;
             }
@@ -1999,6 +2033,11 @@ namespace sknav
                     r.mA += shift;
                     r.mB += shift;
                     r.mC += shift;
+                }
+                // A cut wholly among clean tiles is kept from the last pass, not made again.
+                if (ring && !blockSide(r))
+                {
+                    continue;
                 }
                 undo.clear();
                 sever(r, &undo);
@@ -2104,6 +2143,7 @@ namespace sknav
 
     bool SpacesPass::State::recut()
     {
+        SK_NAV_ZONE("nav.spaces.cut.recut");
         // A clean ring tile whose kept seeds split its edge where the cut
         // just saw one basin, or join what it saw as two, would make the
         // seam disagree from pass to pass: cut it again with the rest.
@@ -2167,6 +2207,7 @@ namespace sknav
 
     void SpacesPass::State::buildCells()
     {
+        SK_NAV_ZONE("nav.spaces.cells");
         size_t gaps = 0;
         for (const TileInfo& ti : mTiles)
         {
@@ -2293,6 +2334,7 @@ namespace sknav
 
     void SpacesPass::State::transform()
     {
+        SK_NAV_ZONE("nav.spaces.transform");
         // Nearest-wall propagation: each cell carries the point on the
         // nearest side where floor stops, and hands it on while that is nearer.
         const size_t n = mCells.size();
@@ -2369,6 +2411,7 @@ namespace sknav
 
     void SpacesPass::State::cutSeeds(size_t b)
     {
+        SK_NAV_ZONE("nav.spaces.cut.seeds");
         const SpaceParams& p = params();
         const size_t n = mCells.size();
         const F32 cell_area = mCell * mCell;
@@ -2884,6 +2927,7 @@ namespace sknav
 
     void SpacesPass::State::number()
     {
+        SK_NAV_ZONE("nav.spaces.seeds");
         // Every tile's seeds, numbered across the mesh.
         U32 total = 0;
         for (TileInfo& ti : mTiles)
@@ -3004,6 +3048,7 @@ namespace sknav
 
     void SpacesPass::State::edges()
     {
+        SK_NAV_ZONE("nav.spaces.edges");
         // Every level-0 step between floor gaps of two seeds, within and across tiles.
         mEdges.clear();
         AirColumn colb;
@@ -3491,6 +3536,7 @@ namespace sknav
 
     bool SpacesPass::State::demoteFlatFlights(F32 min_rise)
     {
+        SK_NAV_ZONE("nav.spaces.demoteflights");
         // A staircase pairs its ends. Within one flight region the stair
         // portals join by stairPairs - each exit to the nearest end within
         // reach in plan - and a pair has to climb min_rise, so a real
@@ -3676,6 +3722,7 @@ namespace sknav
 
     void SpacesPass::State::absorbFragments()
     {
+        SK_NAV_ZONE("nav.spaces.merge.absorb");
         // A region smaller than an avatar's floor is a fragment of a cut, not
         // a space: smallest first, it joins the neighbour it shares the most
         // boundary with before any cut is scored, flight or floor, and the
@@ -3782,6 +3829,7 @@ namespace sknav
 
     void SpacesPass::State::merge()
     {
+        SK_NAV_ZONE("nav.spaces.merge");
         edges();
         mEdgeKey.resize(mEdges.size());
         for (size_t i = 0; i < mEdges.size(); ++i)
@@ -4211,6 +4259,7 @@ namespace sknav
 
     void SpacesPass::State::joinUnderFlights(std::vector<Space>& out)
     {
+        SK_NAV_ZONE("nav.spaces.joinunder");
         // A space's own avatar floor, not air it took over above a thin solid.
         auto ownFloor = [&](const Space& sp, U32 t, const AirGap& g) {
             const F32 z = floorOf(t, g) * mUnit;
@@ -4401,6 +4450,7 @@ namespace sknav
 
     void SpacesPass::State::spaces()
     {
+        SK_NAV_ZONE("nav.spaces.spaces");
         const SpaceParams& p = params();
         const U32 total = static_cast<U32>(mSeeds.size());
         const F32 cell_area = mCell * mCell;
@@ -4867,22 +4917,35 @@ namespace sknav
                 }
             }
         }
+        // Each gap's leaf.
+        std::vector<std::vector<U32>> leaf_of(mTiles.size());
+        for (U32 t = 0; t < mTiles.size(); ++t)
+        {
+            const TileAir& a = air(t);
+            leaf_of[t].resize(a.mGaps.size());
+            for (U32 l = 0; l < a.mLeaves.size(); ++l)
+            {
+                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
+                {
+                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
+                }
+            }
+        }
         // A new space of these gaps: its floor, volume, ceilings and raster; old gets the spaces they leave.
         const auto takeGaps = [&](U32 id, const std::vector<std::pair<U32, U32>>& gaps, std::set<U32>& old) {
             Space& sp = out[id];
             F64 w = 0.0, sx = 0.0, sy = 0.0, s = 0.0, e = 0.0, known = 0.0, vol = 0.0, cv = 0.0, ceil_sum = 0.0, ceil_area = 0.0;
             F32 lo = 1e30f, hi = -1e30f, ceil_lo = 1e30f, ceil_hi = -1e30f;
             std::map<U64, U32> raster;
+            std::map<U32, F64> taken;
             for (const auto& tg : gaps)
             {
                 const TileAir& a = air(tg.first);
                 const S32 leaf = [&]() {
-                    for (size_t l = 0; l < a.mLeaves.size(); ++l)
+                    const U32 l = leaf_of[tg.first][tg.second];
+                    if (l < a.mLeaves.size() && tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
                     {
-                        if (tg.second >= a.mLeaves[l].mFirstGap && tg.second < a.mLeaves[l].mFirstGap + a.mLeaves[l].mGapCount)
-                        {
-                            return static_cast<S32>(l);
-                        }
+                        return static_cast<S32>(l);
                     }
                     return -1;
                 }();
@@ -4898,6 +4961,7 @@ namespace sknav
                 const GapEnclosure& ge = mEnc->mTiles[mTiles[tg.first].mEnc].mGaps[tg.second];
                 const F32 z = floorOf(tg.first, gap) * mUnit;
                 old.insert(mGapSpace[tg.first][tg.second] - 1);
+                taken[mGapSpace[tg.first][tg.second] - 1] += area;
                 mGapSpace[tg.first][tg.second] = id + 1;
                 w += area;
                 sx += area * x;
@@ -4950,11 +5014,12 @@ namespace sknav
                 sp.mMax.mV[VX] = std::max(sp.mMax.mV[VX], x + RASTER_XY_M);
                 sp.mMax.mV[VY] = std::max(sp.mMax.mV[VY], y + RASTER_XY_M);
             }
-            for (U32 o : old)
+            // Each space it took from loses the floor it took there, not the whole of it.
+            for (const auto& o : taken)
             {
-                if (o < id && !out[o].mLift)
+                if (o.first < id && !out[o.first].mLift)
                 {
-                    out[o].mFloorArea = std::max(0.f, out[o].mFloorArea - sp.mFloorArea);
+                    out[o.first].mFloorArea = std::max(0.f, out[o.first].mFloorArea - static_cast<F32>(o.second));
                 }
             }
         };
@@ -4999,19 +5064,6 @@ namespace sknav
         // Air over no avatar floor, furniture tops, seats and roofs, joins the
         // space it steps onto; never the one below across a solid, which no
         // one walks to from there.
-        std::vector<std::vector<U32>> leaf_of(mTiles.size());
-        for (U32 t = 0; t < mTiles.size(); ++t)
-        {
-            const TileAir& a = air(t);
-            leaf_of[t].resize(a.mGaps.size());
-            for (U32 l = 0; l < a.mLeaves.size(); ++l)
-            {
-                for (U32 i = 0; i < a.mLeaves[l].mGapCount; ++i)
-                {
-                    leaf_of[t][a.mLeaves[l].mFirstGap + i] = l;
-                }
-            }
-        }
         // Calls fn(tile, gap) for every floor gap a step from gap g of tile t.
         auto around = [&](U32 t, U32 g, const std::function<void(U32, U32)>& fn) {
             const TileAir& a = air(t);
@@ -5281,6 +5333,7 @@ namespace sknav
 
     void SpacesPass::State::ids()
     {
+        SK_NAV_ZONE("nav.spaces.ids");
         const SpaceParams& p = params();
         std::vector<Space>& out = mProduct->mSpaces;
         const RoomsProductPtr& prev = mInput->mPrevious;
@@ -5528,6 +5581,7 @@ namespace sknav
             by_id[out[i].mId] = i;
         }
         std::unordered_map<U32, U32> remap;
+        const size_t live = out.size();
         for (TileEnclosure& te : mEnc->mTiles)
         {
             if (te.mAir || !prev)
@@ -5565,6 +5619,29 @@ namespace sknav
                     it = remap.emplace(old, to).first;
                 }
                 g.mSpace = static_cast<U16>(std::min<U32>(it->second, 0xffff));
+            }
+        }
+        // A frozen roof's covers name the last product's spaces: name them in this one, by id.
+        for (size_t s = live; s < out.size(); ++s)
+        {
+            Space& sp = out[s];
+            std::vector<std::pair<U32, F32>> covers;
+            for (size_t k = 0; k < sp.mCovers.size() && k < sp.mCoverM2.size(); ++k)
+            {
+                const U32 c = sp.mCovers[k];
+                const auto hit = c < prev->mSpaces.size() ? by_id.find(prev->mSpaces[c].mId) : by_id.end();
+                if (hit != by_id.end())
+                {
+                    covers.emplace_back(hit->second, sp.mCoverM2[k]);
+                }
+            }
+            std::sort(covers.begin(), covers.end());
+            sp.mCovers.clear();
+            sp.mCoverM2.clear();
+            for (const auto& c : covers)
+            {
+                sp.mCovers.push_back(c.first);
+                sp.mCoverM2.push_back(c.second);
             }
         }
 
@@ -5705,6 +5782,7 @@ namespace sknav
 
     bool SpacesPass::step(U32 budget)
     {
+        SK_NAV_ZONE("nav.spaces.step");
         State& s = *mState;
         if (s.mStage != STAGE_DONE && budget > 0)
         {
@@ -6025,6 +6103,7 @@ namespace sknav
 
     SpacesDrawPtr buildSpacesDraw(const EnclosureProduct& enclosure, const RoomsProduct& rooms)
     {
+        SK_NAV_ZONE("nav.spaces.draw");
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("spaces - build draw");
         auto draw = std::make_shared<SpacesDraw>();
         const std::vector<U32>& ids = enclosure.mSpaceIds;

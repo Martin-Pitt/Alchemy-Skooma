@@ -247,9 +247,13 @@ public:
 
     /// Every built mesh, tile, polygon, segment, link and face to one JSON
     /// file in the logs folder, for reading offline: the mini-map's test
-    /// fixtures, and evidence attached to a report. Returns a line for the
-    /// console with the counts, the size and the full path.
-    std::string exportAll() const;
+    /// fixtures, and evidence attached to a report. Written once no spaces
+    /// are pending and every tile is stamped against the spaces landed, so
+    /// one file holds one generation of them. Returns a line for the console
+    /// with the counts, the size and the full path, or that it waits.
+    std::string exportAll();
+    /// The last line exportAll gave, updated when a waiting export is written.
+    const std::string& exportStatus() const { return mExportStatus; }
 
     /// What every tile is built from, to logs/sknav-census-<UTC>.json:
     /// the census's records, clusters, doors, features and spans, each
@@ -442,6 +446,7 @@ private:
         F64 mMinZ = 0., mMaxZ = 0.;
     };
 
+    struct SpillJob;
     struct Mesh
     {
         LLUUID mId;                         ///< cluster id, or the region id for terrain
@@ -480,6 +485,7 @@ private:
         F64 mDetailWanted = 0.0;            ///< when something last needed its detail
         F64 mResidencyChecked = 0.0;
         F64 mReloadAsked = 0.0;
+        std::shared_ptr<SpillJob> mRefusedReload;   ///< what a reload read whose swap was refused, to try again
         ~Mesh();
     };
 
@@ -498,6 +504,7 @@ private:
         sknav::TileKey mKey;
         sknav::TileAirPtr mAir, mCoarse;
         F64 mNearness, mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<AirCandidate>> mEvictionScan;
     struct RasterCandidate
@@ -508,6 +515,7 @@ private:
         sknav::TileRasterPtr mRaster;
         size_t mBytes;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::vector<RasterCandidate> mRasterScan;
     /// Held rasters get a quarter of the air budget; past it the farthest go
@@ -528,6 +536,7 @@ private:
         U32 mGeneration;
         sknav::TileKey mKey;
         F64 mDistance;
+        U8 mPriority = 3;
     };
     std::shared_ptr<std::vector<BuildCandidate>> mScheduleScan, mBuildCandidates;
     std::future<std::shared_ptr<std::vector<BuildCandidate>>> mScheduleJob;
@@ -552,6 +561,11 @@ private:
     static bool probesDemanded();
     /// Whether a tile builds its air eagerly: near the camera, or under the cluster the agent is in.
     bool inAirRadius(const Tile& tile) const;
+    /// Which mesh the work queues serve first: 0 the agent's region's own
+    /// terrain, 1 the terrain of the regions touching it, 2 the clusters
+    /// owned by either, 3 everything else. Within a tier the distance orders,
+    /// so a surround in the void can never come before the ground it rings.
+    U8 meshPriority(const Mesh& mesh) const;
     /// The plan boxes of the clusters around the agent, whose tiles all get detail air.
     std::vector<std::pair<LLVector3d, LLVector3d>> mHomeBoxes;
     void findHomeBoxes(const SKCensusSnapshotPtr& snap);
@@ -596,7 +610,15 @@ private:
     U32 polySpace(const dtMeshTile* tile, U32 poly) const;
     /// A Detour tile's polys' space ids, for the space filter.
     sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
+    /// Tiles still to be stamped against their mesh's landed spaces, a mesh with spaces pending counting one.
+    U32 stampsUnsettled() const;
+    std::string writeExport() const;
+    bool mExportPending = false;
+    F64 mExportAsked = 0.0;
+    std::string mExportStatus;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+    /// Forget a retiring mesh's tiles' entries in mSlotSpaces.
+    void dropSlots(const Mesh& mesh);
     U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
                  U64 content_key = 0, bool loaded = false, sknav::TileRasterPtr raster = nullptr);
@@ -610,7 +632,6 @@ private:
     void updateResidency();
     void spillMesh(Mesh& mesh);
     void reloadMesh(Mesh& mesh);
-    struct SpillJob;
     void finishSpill(const std::shared_ptr<SpillJob>& job);
     void finishReload(const std::shared_ptr<SpillJob>& job);
     /// Point a mesh's landed products and its stamp at other air, keeping their contents.

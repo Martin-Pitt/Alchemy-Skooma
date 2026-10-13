@@ -42,6 +42,9 @@ namespace sknav
     /// snapshot for a worker costs a pointer per block.
     constexpr F32 SIDE_OPEN_REACH_M = 24.f;    ///< side openness looks for walls this far out
 
+    /// Whether two airs give a sky map the same solid tops, so either sets the same cells.
+    bool sameTops(const TileAir& a, const TileAir& b);
+
     class SkyMap
     {
     public:

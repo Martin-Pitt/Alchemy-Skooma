@@ -1001,11 +1001,11 @@ if(AL_BUILD_VIEWER)
     rlvactions.cpp
     rlvenvironment.cpp
     skphysicsshape.cpp
-    skcaptureexport.cpp
-    skclusterprobes.cpp
+    skcaptureexport.cpp # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.cpp # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.cpp
     skfloaternavmesh.cpp
-    sknavairoverlay.cpp
+    sknavairoverlay.cpp # <SK:Nexii> navmesh: air overlay
     sknavannotator.cpp
     sknavmarkobjects.cpp
     sknavmesh.cpp
@@ -1886,8 +1886,8 @@ if(AL_BUILD_VIEWER)
     rlvactions.h
     rlvcommon.h
     skphysicsshape.h
-    skcaptureexport.h
-    skclusterprobes.h
+    skcaptureexport.h # <SK:Nexii> navmesh: linkset and avatar capture export
+    skclusterprobes.h # <SK:Nexii> navmesh: reflection probes over census clusters
     skfloaternavannotate.h
     skfloaternavmesh.h
     sknavannotator.h

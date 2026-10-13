@@ -28,6 +28,7 @@
 
 #include "sknavenclosure.h"
 #include "sknavspaces.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
@@ -319,6 +320,7 @@ namespace sknav
     void stampInput(const TileAir& air, const TileEnclosure& enclosure, const RoomsProduct& rooms, const LLVector3& tile_min,
                     const LLVector3& tile_max, TileStampInput& out)
     {
+        SK_NAV_ZONE("nav.stamp.input");
         out = TileStampInput();
         std::unordered_map<U32, U16> component;
         const auto of = [&](U32 space) {
@@ -391,6 +393,7 @@ namespace sknav
     void stampTile(const rcCompactHeightfield& chf, S32 border, const std::vector<U32>& span_gap, const TileStampInput& input,
                    const std::vector<U8>& real, const std::vector<Flight>& flights, const StampParams& params, TileStamp& out)
     {
+        SK_NAV_ZONE("nav.stamp.tile");
         out = TileStamp();
         const S32 n = chf.spanCount;
         const Spans spans(chf, border);
@@ -604,6 +607,32 @@ namespace sknav
         {
             // Then the spaces: the smallest that touches another takes its smallest neighbour's colour.
             out.mOverflow = TileStamp::SPACES_FUSED;
+            // The codes and components present, once: a fusion recolours components, and the pairs follow from these alone.
+            std::vector<U32> present;
+            present.reserve(n);
+            for (S32 i = 0; i < n; ++i)
+            {
+                if (chf.areas[i] != RC_NULL_AREA)
+                {
+                    present.push_back((static_cast<U32>(slope_map[chf.areas[i]]) << 16) | (spans.interior(i) ? comp[i] : STAMP_NONE));
+                }
+            }
+            std::sort(present.begin(), present.end());
+            present.erase(std::unique(present.begin(), present.end()), present.end());
+            const auto fusedPairs = [&]() {
+                std::vector<std::pair<U8, U8>> out_pairs;
+                out_pairs.reserve(present.size());
+                for (const U32 k : present)
+                {
+                    const U16 c = static_cast<U16>(k & 0xffff);
+                    out_pairs.emplace_back(static_cast<U8>(k >> 16), c == STAMP_NONE ? 0 : colours[c]);
+                }
+                std::sort(out_pairs.begin(), out_pairs.end());
+                out_pairs.erase(std::unique(out_pairs.begin(), out_pairs.end()), out_pairs.end());
+                return out_pairs;
+            };
+            std::map<U16, std::set<U16>> nadj;
+            colours = colourGroups(adj, group, &nadj);
             while (static_cast<S32>(used.size()) > cap)
             {
                 std::map<U16, U32> gsize;
@@ -611,8 +640,6 @@ namespace sknav
                 {
                     gsize[group[c]] += size[c];
                 }
-                std::map<U16, std::set<U16>> nadj;
-                colourGroups(adj, group, &nadj);
                 S32 pick = -1;
                 for (const auto& [g, s] : gsize)
                 {
@@ -639,8 +666,8 @@ namespace sknav
                     g = g == hi ? lo : g;
                 }
                 ++out.mFused;
-                colours = colourGroups(adj, group, nullptr);
-                used = pairs();
+                colours = colourGroups(adj, group, &nadj);
+                used = fusedPairs();
             }
         }
         if (static_cast<S32>(used.size()) > cap)
@@ -696,6 +723,7 @@ namespace sknav
     void stampGeometry(const rcPolyMesh& pmesh, const rcCompactHeightfield& chf, S32 border, const std::vector<U32>& span_gap,
                        const TileStampInput& input, const TileStamp& stamp, TileStampGeom& out)
     {
+        SK_NAV_ZONE("nav.stamp.geometry");
         out = TileStampGeom();
         out.mStamped = true;
         out.mPattern = input.mPattern;
@@ -958,6 +986,8 @@ namespace sknav
                 }
                 const LLVector3 va = at(poly[e]), vb = at(poly[(e + 1) % nv]);
                 const LLVector3 mid = (va + vb) * 0.5f;
+                const F32 ex = vb.mV[VX] - va.mV[VX], ey = vb.mV[VY] - va.mV[VY];
+                const F32 elen = std::sqrt(ex * ex + ey * ey);
                 S32 best = -1;
                 F32 best_d = 0.5f;
                 for (size_t k = 0; k < input.mPortals.size(); ++k)
@@ -967,6 +997,16 @@ namespace sknav
                     if (!sides || std::fabs(mid.mV[VZ] - sp.mCentre.mV[VZ]) > 1.f)
                     {
                         continue;
+                    }
+                    // A seam edge has no space across to vouch for it: it lies on the portal only if it runs along it, within 30 degrees.
+                    if (seam)
+                    {
+                        const F32 px = sp.mB.mV[VX] - sp.mA.mV[VX], py = sp.mB.mV[VY] - sp.mA.mV[VY];
+                        const F32 plen = std::sqrt(px * px + py * py);
+                        if (elen <= 0.f || plen <= 0.f || std::fabs(ex * py - ey * px) > 0.5f * elen * plen)
+                        {
+                            continue;
+                        }
                     }
                     const F32 d = planDistance(mid.mV[VX], mid.mV[VY], sp.mA, sp.mB);
                     if (d <= best_d)
@@ -998,6 +1038,7 @@ namespace sknav
     void bindStamp(const TileStampGeom& geom, const TileStampInput& input, const TileEnclosure* enclosure, const RoomsProduct& rooms,
                    TileBinding& out)
     {
+        SK_NAV_ZONE("nav.stamp.bind");
         out = TileBinding();
         const auto spaceOf = [&](U16 c) -> const Space* {
             if (c == STAMP_NONE || c >= input.mComponentSpace.size() || input.mComponentSpace[c] >= rooms.mSpaces.size())

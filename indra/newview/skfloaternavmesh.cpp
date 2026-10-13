@@ -107,6 +107,10 @@ void SKFloaterNavMesh::draw()
         getChild<LLUICtrl>("overlay_air_slice")->setEnabled(air);
         getChild<LLUICtrl>("overlay_air_slice_camera")->setEnabled(air);
         getChild<LLUICtrl>("census_status")->setValue(SKWorldCensus::instance().statsLine());
+        if (SKNavMesh::instanceExists() && !SKNavMesh::instance().exportStatus().empty())
+        {
+            getChild<LLUICtrl>("export_status")->setValue(SKNavMesh::instance().exportStatus());
+        }
     }
     LLFloater::draw();
 }

@@ -26,13 +26,16 @@
 
 #include "sknavairdistil.h"
 #include "sknavbuildstats.h"
+#include "sknavprofile.h"
 
 #include "Recast.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <functional>
 #include <sstream>
+#include <utility>
 
 namespace
 {
@@ -151,10 +154,12 @@ namespace sknav
             const AirLeaf& l = air.mLeaves[leaf];
             for (U32 i = 0; i < l.mGapCount && out.mCount < 0xff; ++i)
             {
-                // Insert by floor: a column's gaps are disjoint, and few.
+                // Insert by ceiling, which no plane tilts: a column's gaps are disjoint, and few.
                 const U32 g = l.mFirstGap + i;
                 U32 at = out.mCount++;
-                while (at > 0 && air.mGaps[out.mGap[at - 1]].mFloor > air.mGaps[g].mFloor)
+                const AirGap& gap = air.mGaps[g];
+                while (at > 0 && std::make_pair(air.mGaps[out.mGap[at - 1]].mCeiling, air.mGaps[out.mGap[at - 1]].mFloor) >
+                                     std::make_pair(gap.mCeiling, gap.mFloor))
                 {
                     out.mGap[at] = out.mGap[at - 1];
                     out.mLeaf[at] = out.mLeaf[at - 1];
@@ -199,6 +204,7 @@ namespace sknav
 
     void distilAir(const AirGrid& grid, S32 climb, TileAir& out)
     {
+        SK_NAV_ZONE("nav.air.distil");
         out.mOrigin = grid.mOrigin;
         out.mCell = grid.mCell;
         out.mUnit = grid.mUnit;
@@ -291,16 +297,17 @@ namespace sknav
 
         // A walkable floor's plane holds every fine floor under it to within this; other floors to within a climb.
         const S32 plane_tol = std::min(AIR_PLANE_TOL, flat);
-        std::vector<std::pair<S32, S32>> points;    // per fine floor of a block, its height and its rise from the block's centre
         // Any level's gaps, for the passes that move between levels.
         auto belowStart = [&](S32 L, size_t b) { return L == 0 ? fine.start(b) : lv[L].mStart[b]; };
         auto belowEnd = [&](S32 L, size_t b) { return L == 0 ? fine.end(b) : lv[L].mStart[b + 1]; };
         auto stateOf = [&](S32 L, U32 i) -> U8& { return L == 0 ? state[i] : lv[L].mAggs[i].mState; };
         auto aggOf = [&](S32 L, U32 i) { return L == 0 ? fine.agg(i) : lv[L].mAggs[i].mG; };
 
-        // The fine floors under four kid gaps of level B, the first in kid block (kx, ky), each with its rise
-        // on a plane of the given slopes from the centre of their parent block, side cells wide.
-        auto finePoints = [&](S32 B, const U32* four, S32 kx, S32 ky, S32 side, S32 sx, S32 sy, std::vector<std::pair<S32, S32>>& out) {
+        // The fine floors under four kid gaps of level B, the first in kid block (kx, ky), less their rise on a
+        // plane of the given slopes from the centre of their parent block, side cells wide: the highest and lowest.
+        // The plane stands at the highest, capped, so it is over the lowest by more than tol once the running
+        // extremes are, and the walk stops there with false.
+        auto finePoints = [&](S32 B, const U32* four, S32 kx, S32 ky, S32 side, S32 sx, S32 sy, S32 tol, S32& hi, S32& lo) {
             struct Node
             {
                 S32 mLevel;
@@ -314,13 +321,21 @@ namespace sknav
                 stack[top++] = { B, four[k], kx + (k & 1), ky + (k >> 1) };
             }
             const S32 x0 = (kx >> 1) * side, y0 = (ky >> 1) * side;
+            hi = 0;
+            lo = INT_MAX;
             while (top > 0)
             {
                 const Node n = stack[--top];
                 if (n.mLevel == 0)
                 {
                     const S32 x2 = 2 * (n.mX - x0) + 1 - side, y2 = 2 * (n.mY - y0) + 1 - side;
-                    out.emplace_back(clipHeight(grid.mGaps[n.mAgg].mFloor), static_cast<S32>(floorDiv(sx * x2 + sy * y2 + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q)));
+                    const S32 z = clipHeight(grid.mGaps[n.mAgg].mFloor) - static_cast<S32>(floorDiv(sx * x2 + sy * y2 + AIR_SLOPE_Q, 2 * AIR_SLOPE_Q));
+                    hi = std::max(hi, z);
+                    lo = std::min(lo, z);
+                    if (std::min<S32>(hi, AIR_HEIGHT_MAX) - lo > tol)
+                    {
+                        return false;
+                    }
                     continue;
                 }
                 const Agg& a = lv[n.mLevel].mAggs[n.mAgg];
@@ -329,11 +344,13 @@ namespace sknav
                     stack[top++] = { n.mLevel - 1, lv[n.mLevel].mKids[a.mKid + k], 2 * n.mX + (k & 1), 2 * n.mY + (k >> 1) };
                 }
             }
+            return true;
         };
 
         // Each level merges a gap over a 2 x 2 block when every kid has one gap that agrees with it; the
         // kids' finest live level is known once their block is done.
         auto mergeLevel = [&](S32 L, const auto& below_gaps) {
+            SK_NAV_ZONE("nav.air.distil.merge");
             const S32 B = L - 1;
             Grade& below = lv[B];
             Grade& l = lv[L];
@@ -425,23 +442,12 @@ namespace sknav
                             m.mSlopeX = slope(m.mSumXZ);
                             m.mSlopeY = slope(m.mSumYZ);
                             // The lowest plane at or over every fine floor, and how far over the lowest it stands.
-                            points.clear();
-                            finePoints(B, four, 2 * bx, 2 * by, side, m.mSlopeX, m.mSlopeY, points);
-                            S32 top = 0;
-                            for (const auto& p : points)
-                            {
-                                top = std::max(top, p.first - p.second);
-                            }
-                            m.mFloor = std::min<S32>(top, AIR_HEIGHT_MAX);
-                            S32 over = 0;
-                            for (const auto& p : points)
-                            {
-                                over = std::max(over, m.mFloor + p.second - p.first);
-                            }
-                            if (over > ((m.mFlags & AirGap::TOP) ? plane_tol : climb))
+                            S32 top = 0, low = 0;
+                            if (!finePoints(B, four, 2 * bx, 2 * by, side, m.mSlopeX, m.mSlopeY, (m.mFlags & AirGap::TOP) ? plane_tol : climb, top, low))
                             {
                                 continue;
                             }
+                            m.mFloor = std::min<S32>(top, AIR_HEIGHT_MAX);
                             Agg merged;
                             merged.mG = m;
                             merged.mState = MERGE | LIVE;
@@ -575,6 +581,7 @@ namespace sknav
             S32 mX;     ///< its block
             S32 mY;
         };
+        SK_NAV_ZONE("nav.air.distil.restrict");
         std::vector<Ref> work;
         for (S32 L = 2; L <= AIR_MAX_LEVEL; ++L)
         {
@@ -666,6 +673,7 @@ namespace sknav
         }
 
         // Which blocks have live air under them, bottom up, so the walk skips the rest.
+        SK_NAV_ZONE("nav.air.distil.emit");
         for (S32 L = 1; L <= AIR_MAX_LEVEL; ++L)
         {
             Grade& l = lv[L];
@@ -755,6 +763,7 @@ namespace sknav
 
     void airSeams(const AirGrid& grid, TileAir& out)
     {
+        SK_NAV_ZONE("nav.air.seams");
         const S32 w = grid.mWidth, h = grid.mHeight;
         for (S32 side = 0; side < 4; ++side)
         {
@@ -783,6 +792,7 @@ namespace sknav
 
     void airTops(const rcHeightfield& hf, S32 border_cells, S32 cells_per_top, TileAir& out)
     {
+        SK_NAV_ZONE("nav.air.tops");
         // Recast (x, y, z) is SL (y, z, x), as in extractAir.
         const S32 w = std::max(0, hf.height - 2 * border_cells), h = std::max(0, hf.width - 2 * border_cells);
         const S32 c = std::max(1, cells_per_top);
@@ -829,6 +839,7 @@ namespace sknav
                             const std::vector<Flight>* flights, AirBuildStats* stats, const U8* area_lut, const SpanFlags* extra, AirGrid* fine,
                             AirGrid* extracted)
     {
+        SK_NAV_ZONE("nav.air.build");
         StageClock clock(stats ? stats->mMs : nullptr);
         const S32 pad = std::clamp(pad_cells, 0, border_cells);
         AirGrid padded, grid;
@@ -890,6 +901,7 @@ namespace sknav
     void spanGaps(const rcCompactHeightfield& chf, S32 border, const AirGrid& fine, const TileAir& air, std::vector<U32>& out,
                   const std::vector<U16>* tops)
     {
+        SK_NAV_ZONE("nav.air.spangaps");
         out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
         AirColumn column;
         // Recast (x, y, z) is SL (y, z, x): the grid's ix runs along chf z, iy along chf x.
@@ -925,7 +937,13 @@ namespace sknav
 
     TileAirPtr upsampleAir(const TileAir& coarse, S32 factor)
     {
+        SK_NAV_ZONE("nav.air.upsample");
+        // A leaf's side is a power of two, so it scales only by one.
         const S32 f = std::max(1, factor);
+        if (f & (f - 1))
+        {
+            return nullptr;
+        }
         S32 shift = 0;
         while ((1 << shift) < f)
         {
@@ -1029,6 +1047,7 @@ namespace sknav
 
     void leafSpanGaps(const rcCompactHeightfield& chf, S32 border, const TileAir& air, S32 z_shift, S32 slack, std::vector<U32>& out)
     {
+        SK_NAV_ZONE("nav.air.leafspangaps");
         out.assign(static_cast<size_t>(chf.spanCount), SPAN_NO_GAP);
         AirColumn column;
         for (S32 iy = 0; iy < air.mHeight && border + iy < chf.width; ++iy)

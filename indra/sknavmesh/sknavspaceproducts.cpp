@@ -29,6 +29,7 @@
 
 #include "sknavbuild.h"
 #include "sknavstamp.h"
+#include "sknavprofile.h"
 
 #include "DetourNavMesh.h"
 
@@ -69,6 +70,20 @@ namespace sknav
         LLVector3 polyVert(const dtMeshTile* tile, const dtPoly& poly, S32 v)
         {
             return fromRecast(&tile->verts[poly.verts[v] * 3]);
+        }
+
+        /// The part of a poly's edge a link covers: on a tile border one edge links to several polys, each over its own stretch.
+        void linkSpan(const dtMeshTile* tile, const dtPoly& poly, const dtLink& link, LLVector3& a, LLVector3& b)
+        {
+            const LLVector3 v0 = polyVert(tile, poly, link.edge), v1 = polyVert(tile, poly, (link.edge + 1) % poly.vertCount);
+            if (link.side == 0xff || (link.bmin == 0 && link.bmax == 255))
+            {
+                a = v0;
+                b = v1;
+                return;
+            }
+            a = v0 + (v1 - v0) * (link.bmin / 255.f);
+            b = v0 + (v1 - v0) * (link.bmax / 255.f);
         }
 
         U64 rasterKey(F32 x, F32 y, F32 z)
@@ -195,6 +210,7 @@ namespace sknav
     void buildStoreys(const dtNavMesh& nav, const PolySpaceFn& space_of, const RoomsProduct& rooms, StoreyProduct& out,
                       const PolyFlightFn& flight_of, F32 min_area, const std::vector<const Flight*>& flights)
     {
+        SK_NAV_ZONE("nav.storeys");
         out = StoreyProduct();
         std::vector<U32> base;
         const U32 n = polyIndexBase(nav, base);
@@ -211,6 +227,7 @@ namespace sknav
 
         std::vector<U32> space(n, 0), root(n);
         std::vector<U8> kind(n, 0);     // 0 not ground, 1 floor, 2 flight
+        std::vector<U8> climb(n, 0);    // a climb's own, which makes no portal
         std::vector<F32> height(n, 0.f), area(n, 0.f);
         for (U32 i = 0; i < n; ++i)
         {
@@ -234,6 +251,8 @@ namespace sknav
                 }
                 space[i] = space_of ? space_of(tile, static_cast<U32>(p)) : 0;
                 kind[i] = (poly.flags & POLY_FLIGHT) || flight_spaces.count(space[i]) ? 2 : 1;
+                const Flight* fp = flight_of ? flight_of(tile, static_cast<U32>(p)) : nullptr;
+                climb[i] = fp && fp->mKind == ConnectorKind::CLIMB ? 1 : 0;
                 F32 z = 0.f, a2 = 0.f;
                 const LLVector3 v0 = polyVert(tile, poly, 0);
                 for (S32 v = 0; v < poly.vertCount; ++v)
@@ -269,7 +288,8 @@ namespace sknav
                 {
                     continue;
                 }
-                const LLVector3 a = polyVert(tile, poly, link.edge), b = polyVert(tile, poly, (link.edge + 1) % poly.vertCount);
+                LLVector3 a, b;
+                linkSpan(tile, poly, link, a, b);
                 fn(base[it] + ip, (a + b) * 0.5f);
             }
         };
@@ -510,6 +530,7 @@ namespace sknav
 
         // Each Flight's connector between the storeys its ends meet.
         std::unordered_map<U64, const Flight*> flight_by_key;
+        std::unordered_set<U64> home_by_key;    // keys whose copy above is its home tile's
         std::unordered_map<U64, std::map<U32, F32>> flight_space_area;
         for (S32 t = 0; flight_of && t < ntiles; ++t)
         {
@@ -518,7 +539,12 @@ namespace sknav
             {
                 if (const Flight* f = flight_of(tile, static_cast<U32>(p)))
                 {
-                    flight_by_key.emplace(f->mKey, f);
+                    const auto fk = flight_by_key.emplace(f->mKey, f);
+                    if ((fk.second || fk.first->second != f) && !home_by_key.count(f->mKey) && homeCopy(tile, *f))
+                    {
+                        fk.first->second = f;
+                        home_by_key.insert(f->mKey);
+                    }
                     const U32 i = base[t] + static_cast<U32>(p);
                     if (space[i])
                     {
@@ -709,24 +735,54 @@ namespace sknav
                 const Flight* f = flight_of(tile, static_cast<U32>(p));
                 if (f && f->mKind == ConnectorKind::CLIMB)
                 {
-                    climbs[f->mKey] = f;
+                    // The home tile's copy, as flightEnds reads, else the first.
+                    const auto ck = climbs.emplace(f->mKey, f);
+                    if (!ck.second && ck.first->second != f && homeCopy(tile, *f))
+                    {
+                        ck.first->second = f;
+                    }
                 }
             }
         }
         // Flight polys are never floors, so the climb's own are passed over.
+        // Floor polys by plan box, so each end reads only the polys near it, in mesh order.
+        PlanBoxIndex floors;
+        std::vector<std::pair<S32, S32>> floor_at;
+        for (S32 t = 0; !climbs.empty() && t < ntiles; ++t)
+        {
+            const dtMeshTile* tile = nav.getTile(t);
+            for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
+            {
+                if (kind[base[t] + static_cast<U32>(p)] != 1)
+                {
+                    continue;
+                }
+                const dtPoly& poly = tile->polys[p];
+                F32 x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+                for (S32 v = 0; v < poly.vertCount; ++v)
+                {
+                    const LLVector3 a = polyVert(tile, poly, v);
+                    x0 = std::min(x0, a.mV[VX]);
+                    y0 = std::min(y0, a.mV[VY]);
+                    x1 = std::max(x1, a.mV[VX]);
+                    y1 = std::max(y1, a.mV[VY]);
+                }
+                floors.add(static_cast<U32>(floor_at.size()), x0, y0, x1, y1);
+                floor_at.emplace_back(t, p);
+            }
+        }
+        std::vector<U32> near_ids;
         const auto floorPast = [&](const LLVector3& at) {
             U32 best = n;
             F32 best_score = CLIMB_END_REACH_M + CLIMB_END_DZ_M;
-            for (S32 t = 0; t < ntiles; ++t)
+            floors.query(at.mV[VX] - CLIMB_END_REACH_M, at.mV[VY] - CLIMB_END_REACH_M, at.mV[VX] + CLIMB_END_REACH_M, at.mV[VY] + CLIMB_END_REACH_M,
+                         near_ids);
+            for (const U32 id : near_ids)
             {
-                const dtMeshTile* tile = nav.getTile(t);
-                for (S32 p = 0; tile && tile->header && p < tile->header->polyCount; ++p)
                 {
-                    const U32 i = base[t] + static_cast<U32>(p);
-                    if (kind[i] != 1)
-                    {
-                        continue;
-                    }
+                    const dtMeshTile* tile = nav.getTile(floor_at[id].first);
+                    const S32 p = floor_at[id].second;
+                    const U32 i = base[floor_at[id].first] + static_cast<U32>(p);
                     const dtPoly& poly = tile->polys[p];
                     F32 d = 1e30f, wz = 0.f, w = 0.f;
                     bool inside = true;
@@ -873,7 +929,7 @@ namespace sknav
             {
                 const U32 i = base[t] + static_cast<U32>(p);
                 const dtPoly& poly = tile->polys[p];
-                if (!space[i] || !kind[i])
+                if (!space[i] || !kind[i] || climb[i])
                 {
                     continue;
                 }
@@ -887,11 +943,12 @@ namespace sknav
                         continue;
                     }
                     const U32 j = base[it] + ip;
-                    if (j >= n || !kind[j] || !space[j] || space[i] >= space[j] || joined.count({ space[i], space[j] }))
+                    if (j >= n || !kind[j] || climb[j] || !space[j] || space[i] >= space[j] || joined.count({ space[i], space[j] }))
                     {
                         continue;
                     }
-                    const LLVector3 a = polyVert(tile, poly, link.edge), b = polyVert(tile, poly, (link.edge + 1) % poly.vertCount);
+                    LLVector3 a, b;
+                    linkSpan(tile, poly, link, a, b);
                     const dtMeshTile* other = nav.getTile(static_cast<S32>(it));
                     const bool door = (poly.flags & POLY_DOOR) || (other && ip < static_cast<unsigned int>(other->header->polyCount) && (other->polys[ip].flags & POLY_DOOR));
                     SeamPortal& sp = seams[{ space[i], space[j] }];
@@ -1015,6 +1072,7 @@ namespace sknav
 
     std::vector<std::vector<LLVector3>> spacePolys(const dtNavMesh& nav, const PolySpaceFn& space_of, U32 space)
     {
+        SK_NAV_ZONE("nav.spaces.polys");
         std::vector<std::vector<LLVector3>> out;
         if (!space || !space_of)
         {
