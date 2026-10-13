@@ -150,10 +150,10 @@ namespace tut
         const std::vector<LLUUID> more = { root(1), root(2), root(3) };
         skmap::observe(r, "Soldier", more, 10.0, false);
         ensure("re-probe on a new root", skmap::wantsProbe(r, 10.0, true));
-        ensure("the new root is the target", skmap::chooseTarget(r.mSignature, more) == root(3));
-        skmap::probeSent(r, root(3), more, 10.0);
+        ensure("an unasked root is the target", skmap::chooseTarget(r.mAsked, more) == root(2));
+        skmap::probeSent(r, root(2), more, 10.0);
         ensure("the group holds meanwhile", r.mState == ProbeState::RESOLVED && r.mGroup == ASH_G);
-        skmap::probeReply(r, root(3), LLUUID::null, 10.5);
+        skmap::probeReply(r, root(2), LLUUID::null, 10.5);
         ensure("a null group is none", r.mState == ProbeState::NONE);
         ensure("none waits", !skmap::wantsProbe(r, 20.0, true));
         ensure("then retries after 30 s", skmap::wantsProbe(r, 40.6, true));
@@ -205,6 +205,37 @@ namespace tut
         skmap::observe(idle, "Soldier", roots, 0.0, false);
         skmap::probeReply(idle, root(1), ASH_G, 0.1);
         ensure("nothing asked, nothing taken", idle.mState == ProbeState::UNKNOWN);
+    }
+
+    // An answer that is no candidate asks the next root at once, until one is or none is left.
+    template<> template<>
+    void skmapallies_object::test<8>()
+    {
+        const std::set<LLUUID> candidates = { ASH_G, ASH_M, ASH_L };
+        const std::vector<LLUUID> roots = { root(1), root(2), root(3) };
+        skmap::AllyRecord r;
+        skmap::observe(r, "Soldier", roots, 0.0, false);
+        skmap::probeSent(r, skmap::chooseTarget(r.mAsked, roots), roots, 0.0);
+        skmap::probeReply(r, root(1), OTHER, 0.1);
+        skmap::askNextRoot(r, roots, candidates);
+        ensure("asks again at once", skmap::wantsProbe(r, 0.1, true));
+        ensure("the second root", skmap::chooseTarget(r.mAsked, roots) == root(2));
+        skmap::probeSent(r, root(2), roots, 0.1);
+        skmap::probeReply(r, root(2), LLUUID::null, 0.2);
+        skmap::askNextRoot(r, roots, candidates);
+        ensure("past a null group too", skmap::wantsProbe(r, 0.2, true) && skmap::chooseTarget(r.mAsked, roots) == root(3));
+        skmap::probeSent(r, root(3), roots, 0.2);
+        skmap::probeReply(r, root(3), ASH_M, 0.3);
+        skmap::askNextRoot(r, roots, candidates);
+        ensure("found the ally", skmap::allyVerdict(r, candidates) == skmap::AllyVerdict::ALLY && !skmap::wantsProbe(r, 0.3, true));
+        skmap::AllyRecord n;
+        skmap::observe(n, "Soldier", { root(1) }, 0.0, false);
+        skmap::probeSent(n, root(1), { root(1) }, 0.0);
+        skmap::probeReply(n, root(1), OTHER, 0.1);
+        skmap::askNextRoot(n, { root(1) }, candidates);
+        ensure("nothing left, nothing asked", !skmap::wantsProbe(n, 0.1, true));
+        skmap::observe(n, "Ashguard", { root(1) }, 1.0, false);
+        ensure("a title change asks the same root afresh", skmap::wantsProbe(n, 1.0, true) && n.mFresh && n.mAsked.empty());
     }
 
     // The verdict: only a resolved candidate group is an ally, and a title change takes it away;

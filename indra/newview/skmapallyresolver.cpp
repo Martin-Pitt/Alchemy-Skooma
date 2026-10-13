@@ -140,7 +140,7 @@ void SKMapAllyResolver::dispatch(F64 now)
             continue;
         }
         skmap::AllyRecord& record = it->second;
-        const LLUUID target = skmap::chooseTarget(record.mSignature, roots->second);
+        const LLUUID target = skmap::chooseTarget(record.mAsked, roots->second);
         // A root never asked about may already be in the cache; a re-probe after a title change
         // must ask afresh, since the cached group is what it replaces.
         const ALObjectPropertiesCache::ServerProps* cached = ALObjectPropertiesCache::instance().get(target);
@@ -149,6 +149,7 @@ void SKMapAllyResolver::dispatch(F64 now)
             mProbedRoots.insert(target);
             skmap::probeSent(record, target, roots->second, now);
             skmap::probeReply(record, target, cached->mGroupId, now);
+            skmap::askNextRoot(record, roots->second, mCandidates);
             continue;
         }
         LLViewerObject* object = gObjectList.findObject(target);
@@ -180,6 +181,11 @@ void SKMapAllyResolver::onProperties(const LLUUID& object)
     if (it != mRecords.end() && props)
     {
         skmap::probeReply(it->second, object, props->mGroupId, LLFrameTimer::getUptimeSeconds().value());
+        const auto roots = mRoots.find(wearer);
+        if (roots != mRoots.end())
+        {
+            skmap::askNextRoot(it->second, roots->second, mCandidates);
+        }
     }
 }
 

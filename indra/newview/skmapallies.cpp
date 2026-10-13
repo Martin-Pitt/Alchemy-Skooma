@@ -161,6 +161,7 @@ namespace skmap
             // asked again, never answered from the cache that holds the old group.
             record.mTitle = title;
             record.mGroup.setNull();
+            record.mAsked.clear();
             record.mInFlight = false;
             if (untitled)
             {
@@ -205,11 +206,11 @@ namespace skmap
         }
     }
 
-    LLUUID chooseTarget(const std::vector<LLUUID>& previous, const std::vector<LLUUID>& roots)
+    LLUUID chooseTarget(const std::set<LLUUID>& asked, const std::vector<LLUUID>& roots)
     {
         for (const LLUUID& root : roots)
         {
-            if (std::find(previous.begin(), previous.end(), root) == previous.end())
+            if (!asked.count(root))
             {
                 return root;
             }
@@ -221,6 +222,7 @@ namespace skmap
     {
         record.mInFlight = true;
         record.mTarget = target;
+        record.mAsked.insert(target);
         record.mSentAt = now;
         record.mSignature = roots;
         record.mNeedProbe = false;
@@ -248,6 +250,22 @@ namespace skmap
         {
             record.mState = ProbeState::RESOLVED;
             record.mGroup = group;
+        }
+    }
+
+    void askNextRoot(AllyRecord& record, const std::vector<LLUUID>& roots, const std::set<LLUUID>& candidates)
+    {
+        if (record.mInFlight || (record.mState == ProbeState::RESOLVED && candidates.count(record.mGroup)))
+        {
+            return;
+        }
+        for (const LLUUID& root : roots)
+        {
+            if (!record.mAsked.count(root))
+            {
+                record.mNeedProbe = true;
+                return;
+            }
         }
     }
 
