@@ -2057,4 +2057,36 @@ template<> template<>
         }
         ensure("the same spaces covered", now == covered);
     }
+
+    template<> template<>
+    void sknavrooms_object::test<57>()
+    {
+        set_test_name("an aperture cut whose lintel lies in a clean ring tile holds on an incremental pass");
+        // The doorway's lintel lies wholly in the first tile, the room past it in the moved second.
+        for (F32 shift : { 21.25f, 21.5f, 21.625f, 21.75f, 22.f, 9.75f })
+        {
+            Scene before = loopedRooms();
+            before.mShift = shift;
+            Scene after = before;
+            after.box(55.f - shift, 20.f, 56.f - shift, 21.f, 0.f, 3.f, false);
+            const Result first = run(before.input(2));
+            std::shared_ptr<EnclosureInput> in = after.input(2);
+            for (EnclosureInput::Tile& t : in->mTiles)
+            {
+                const RoomsTile* was = first.mRooms->tile(t.mKey);
+                if (was && t.mKey.mX == 0)
+                {
+                    t.mAir = was->mAir;
+                }
+            }
+            auto rooms = std::make_shared<RoomsInput>();
+            rooms->mPrevious = first.mRooms;
+            const Result incremental = run(in, rooms);
+            const Result full = run(in);
+            const std::string at = llformat(" at shift %.3f", shift);
+            ensure("the full pass parts the rooms" + at, full.at(6.f + shift, 6.f) && full.at(6.f + shift, 6.f) != full.at(14.f + shift, 6.f));
+            ensure("so does the incremental pass" + at, incremental.at(6.f + shift, 6.f) && incremental.at(6.f + shift, 6.f) != incremental.at(14.f + shift, 6.f));
+            ensure_equals("one aperture cut either way" + at, incremental.mRooms->mApart.size(), full.mRooms->mApart.size());
+        }
+    }
 }

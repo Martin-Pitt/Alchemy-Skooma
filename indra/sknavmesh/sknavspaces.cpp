@@ -1899,11 +1899,39 @@ namespace sknav
             }
             return seen.size() >= min_cells;
         };
+        // A ring tile's lintel near the block may cut a doorway whose far side the block holds, as a full pass would.
+        const F32 ring_reach = SCORE_REACH_M + APERTURE_MAX_M;
+        const auto nearBlock = [&](const Cell& cell) {
+            const TileInfo& ti = mTiles[cell.mTile];
+            const F32 lx = (cell.mX + 0.5f) * mCell, ly = (cell.mY + 0.5f) * mCell;
+            const F32 wx = ti.mAir->mWidth * mCell, wy = ti.mAir->mHeight * mCell;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    TileKey k = ti.mKey;
+                    k.mX += dx;
+                    k.mY += dy;
+                    const U32 it = tileAt(k);
+                    if (it != NONE && mTiles[it].mInBlock && (dx < 0 ? lx : dx > 0 ? wx - lx : 0.f) <= ring_reach &&
+                        (dy < 0 ? ly : dy > 0 ? wy - ly : 0.f) <= ring_reach)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        const auto blockSide = [&](const Run& r) {
+            Probe pr;
+            return (pastLintel(r, 1.f, pr) && mTiles[pr.mTile].mInBlock) || (pastLintel(r, -1.f, pr) && mTiles[pr.mTile].mInBlock);
+        };
         const size_t n = mCells.size();
         for (U32 c = 0; c < n; ++c)
         {
             const Cell& cell = mCells[c];
-            if (!mTiles[cell.mTile].mInBlock || !mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP)
+            const bool ring = !mTiles[cell.mTile].mInBlock;
+            if (!mAvatar[c] || cell.mFlight || cell.mCeil >= OPEN_TOP || (ring && !nearBlock(cell)))
             {
                 continue;
             }
@@ -1999,6 +2027,11 @@ namespace sknav
                     r.mA += shift;
                     r.mB += shift;
                     r.mC += shift;
+                }
+                // A cut wholly among clean tiles is kept from the last pass, not made again.
+                if (ring && !blockSide(r))
+                {
+                    continue;
                 }
                 undo.clear();
                 sever(r, &undo);
