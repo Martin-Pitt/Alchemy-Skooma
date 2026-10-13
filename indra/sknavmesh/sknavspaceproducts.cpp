@@ -211,6 +211,7 @@ namespace sknav
 
         std::vector<U32> space(n, 0), root(n);
         std::vector<U8> kind(n, 0);     // 0 not ground, 1 floor, 2 flight
+        std::vector<U8> climb(n, 0);    // a climb's own, which makes no portal
         std::vector<F32> height(n, 0.f), area(n, 0.f);
         for (U32 i = 0; i < n; ++i)
         {
@@ -234,6 +235,8 @@ namespace sknav
                 }
                 space[i] = space_of ? space_of(tile, static_cast<U32>(p)) : 0;
                 kind[i] = (poly.flags & POLY_FLIGHT) || flight_spaces.count(space[i]) ? 2 : 1;
+                const Flight* fp = flight_of ? flight_of(tile, static_cast<U32>(p)) : nullptr;
+                climb[i] = fp && fp->mKind == ConnectorKind::CLIMB ? 1 : 0;
                 F32 z = 0.f, a2 = 0.f;
                 const LLVector3 v0 = polyVert(tile, poly, 0);
                 for (S32 v = 0; v < poly.vertCount; ++v)
@@ -873,7 +876,7 @@ namespace sknav
             {
                 const U32 i = base[t] + static_cast<U32>(p);
                 const dtPoly& poly = tile->polys[p];
-                if (!space[i] || !kind[i])
+                if (!space[i] || !kind[i] || climb[i])
                 {
                     continue;
                 }
@@ -887,7 +890,7 @@ namespace sknav
                         continue;
                     }
                     const U32 j = base[it] + ip;
-                    if (j >= n || !kind[j] || !space[j] || space[i] >= space[j] || joined.count({ space[i], space[j] }))
+                    if (j >= n || !kind[j] || climb[j] || !space[j] || space[i] >= space[j] || joined.count({ space[i], space[j] }))
                     {
                         continue;
                     }
