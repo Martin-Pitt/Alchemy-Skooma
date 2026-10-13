@@ -33,6 +33,7 @@
 #include <cmath>
 #include <functional>
 #include <sstream>
+#include <utility>
 
 namespace
 {
@@ -151,10 +152,12 @@ namespace sknav
             const AirLeaf& l = air.mLeaves[leaf];
             for (U32 i = 0; i < l.mGapCount && out.mCount < 0xff; ++i)
             {
-                // Insert by floor: a column's gaps are disjoint, and few.
+                // Insert by ceiling, which no plane tilts: a column's gaps are disjoint, and few.
                 const U32 g = l.mFirstGap + i;
                 U32 at = out.mCount++;
-                while (at > 0 && air.mGaps[out.mGap[at - 1]].mFloor > air.mGaps[g].mFloor)
+                const AirGap& gap = air.mGaps[g];
+                while (at > 0 && std::make_pair(air.mGaps[out.mGap[at - 1]].mCeiling, air.mGaps[out.mGap[at - 1]].mFloor) >
+                                     std::make_pair(gap.mCeiling, gap.mFloor))
                 {
                     out.mGap[at] = out.mGap[at - 1];
                     out.mLeaf[at] = out.mLeaf[at - 1];

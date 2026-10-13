@@ -985,4 +985,39 @@ namespace tut
         ensure("the coarse leaves tilt", tilted);
         ensure("and split when upsampled", split);
     }
+
+    template<> template<>
+    void sknavairdistil_object::test<23>()
+    {
+        set_test_name("a column under a ramp runs the crawl gap below the ramp, though the ramp's centre floor is lower");
+        // A 4 x 4 leaf of ramp rising to its far corner, over a fine leaf at that corner holding a crawl gap under it.
+        TileAir air;
+        air.mCell = air.mUnit = 0.125f;
+        air.mWidth = air.mHeight = 4;
+        AirGap ramp;
+        ramp.mFloor = 20;
+        ramp.mCeiling = AIR_CEILING_OPEN;
+        ramp.mFlags = AirGap::TOP | AirGap::OPEN;
+        ramp.mSlopeX = ramp.mSlopeY = 127;
+        AirGap crawl;
+        crawl.mFloor = 21;
+        crawl.mCeiling = 24;
+        crawl.mFlags = AirGap::TOP;
+        air.mGaps = { ramp, crawl };
+        AirLeaf coarse;
+        coarse.mLevel = 2;
+        coarse.mGapCount = 1;
+        coarse.mFirstGap = 0;
+        AirLeaf fine;
+        fine.mX = fine.mY = 3;
+        fine.mGapCount = 1;
+        fine.mFirstGap = 1;
+        air.mLeaves = { coarse, fine };
+        linkLeaves(air);
+        AirColumn column;
+        airColumn(air, findLeafByKey(air, 3, 3), column);
+        ensure_equals("two gaps", column.mCount, 2U);
+        ensure("the ramp is over the crawl gap at the corner", column.floorAt(air, 1, 3, 3) > air.mGaps[column.mGap[0]].mCeiling);
+        ensure_equals("the crawl gap first", air.mGaps[column.mGap[0]].mCeiling, 24);
+    }
 }
