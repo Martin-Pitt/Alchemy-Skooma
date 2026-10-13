@@ -35,7 +35,6 @@
 #include <cmath>
 #include <map>
 #include <set>
-#include <unordered_map>
 
 namespace
 {
@@ -169,21 +168,34 @@ namespace
         {
             SK_NAV_ZONE("nav.flights.build.weld");
             // weld on the millimetre, across the whole soup
-            std::unordered_map<WeldKey, S32, WeldHash> key;
-            key.reserve(verts.size());
+            // Open addressing at most half full: a soup's vertices are many and the table lives only here.
+            size_t slots = 16;
+            while (slots < 2 * verts.size())
+            {
+                slots *= 2;
+            }
+            std::vector<WeldKey> keys(slots);
+            std::vector<S32> ids(slots, -1);
+            const WeldHash hash;
             std::vector<S32> remap(verts.size());
+            mV.reserve(verts.size());
             for (size_t i = 0; i < verts.size(); ++i)
             {
                 const S64 kx = std::llround(verts[i].mV[VX] * 1000.0), ky = std::llround(verts[i].mV[VY] * 1000.0),
                           kz = std::llround(verts[i].mV[VZ] * 1000.0);
                 const WeldKey k { kx, ky, kz };
-                auto it = key.find(k);
-                if (it == key.end())
+                size_t at = hash(k) & (slots - 1);
+                while (ids[at] >= 0 && !(keys[at] == k))
                 {
-                    it = key.emplace(k, static_cast<S32>(mV.size())).first;
+                    at = (at + 1) & (slots - 1);
+                }
+                if (ids[at] < 0)
+                {
+                    keys[at] = k;
+                    ids[at] = static_cast<S32>(mV.size());
                     mV.push_back({ kx / 1000.0, ky / 1000.0, kz / 1000.0 });
                 }
-                remap[i] = it->second;
+                remap[i] = ids[at];
             }
             SK_NAV_ZONE("nav.flights.build.tris");
             const S32 n = static_cast<S32>(tris.size() / 3);
