@@ -616,7 +616,8 @@ void SKNetMap::drawEvents()
     static LLCachedControl<F32> line_s(gSavedSettings, "SKMapKillLineSeconds", 0.5f);
     static LLCachedControl<F32> icon_s(gSavedSettings, "SKMapDeathIconSeconds", 2.f);
     const SKMapPeople& people = SKMapPeople::instance();
-    std::vector<skmap::EventRing::Draw> draws;
+    std::vector<skmap::EventRing::Draw>& draws = mEventDraws;
+    draws.clear();
     people.events().visible(LLFrameTimer::getUptimeSeconds().value(), line_s, icon_s, people.combat(), draws);
     if (draws.empty())
     {

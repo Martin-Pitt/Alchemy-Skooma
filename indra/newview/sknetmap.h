@@ -83,6 +83,8 @@ public:
     void onMouseLeave(S32 x, S32 y, MASK mask) override;
 
     bool isHovered() const { return mHovered; }
+    /// Forget the pointer, for when the map stops taking it without a mouse-leave.
+    void clearHover() { mHovered = false; }
     /// Whether nametags show; they bring the chrome with them.
     bool namesShown() const { return !mHover.empty(); }
     /// Whether the right-click panes are open.
@@ -173,6 +175,7 @@ private:
     std::unique_ptr<SKMapComposite> mPlan;
     std::unique_ptr<SKMapParcels> mParcels;
     std::vector<DrawnDot> mDots;
+    std::vector<skmap::EventRing::Draw> mEventDraws;   ///< reused each frame
     bool mHovered = false;
     bool mChrome = false;
     skmap::HoverSet mHover;
