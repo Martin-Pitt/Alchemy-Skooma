@@ -1203,7 +1203,10 @@ void SKNetMap::drawReadout()
     lines.push_back(llformat("draw %.2f ms", mDrawMs));
     if (mPlan)
     {
-        lines.push_back(mPlan->statsLine());
+        for (const std::string& line : mPlan->statsLines())
+        {
+            lines.push_back(line);
+        }
     }
     lines.push_back(llformat("scene %u polys, %u layers, job %.1f ms (%u)", stats.mPolys, stats.mLayers, stats.mJobMs, stats.mJobs));
     const SKMapAllyResolver& resolver = SKMapPeople::instance().resolver();
