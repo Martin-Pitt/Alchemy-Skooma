@@ -1199,6 +1199,7 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
     {
         if (live.count(it->first)) { ++it; continue; }
         // Detached meshes have no readers; destroy their large tables on the pool.
+        dropSlots(*it->second);
         std::shared_ptr<Mesh> retired(std::move(it->second));
         retireOn(workers, std::move(retired));
         it = mMeshes.erase(it);
@@ -2194,6 +2195,14 @@ void SKNavMesh::applyBinding(Mesh& mesh, const TileKey& key, Tile& tile)
     tile.mPolyCache[avatar].reset();
 }
 
+void SKNavMesh::dropSlots(const Mesh& mesh)
+{
+    for (const auto& t : mesh.mTiles)
+    {
+        mSlotSpaces.erase(t.second.mStampSlot);
+    }
+}
+
 U32 SKNavMesh::polySpace(const dtMeshTile* tile, U32 poly) const
 {
     if (!tile || !tile->header)
@@ -2339,6 +2348,7 @@ void SKNavMesh::update()
         {
             if (gFrameTimeSeconds - it->second->mLastSeen > 30.f)
             {
+                dropSlots(*it->second);
                 std::shared_ptr<Mesh> retired(std::move(it->second));
                 retireOn(workerQueue(), std::move(retired));
                 it = mMeshes.erase(it);

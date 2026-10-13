@@ -587,6 +587,8 @@ private:
     /// A Detour tile's polys' space ids, for the space filter.
     sknav::SpaceQueryFilter::TileSpaces polySpaces(const dtMeshTile* tile) const;
     std::unordered_map<U32, std::shared_ptr<const std::vector<U32>>> mSlotSpaces;
+    /// Forget a retiring mesh's tiles' entries in mSlotSpaces.
+    void dropSlots(const Mesh& mesh);
     U32 mNextSlot = 0;
     void publish(const LLUUID& mesh_id, U32 generation, const sknav::TileKey& key, U64 signature, std::shared_ptr<sknav::TileBuildResult> result,
                  U64 content_key = 0, bool loaded = false, sknav::TileRasterPtr raster = nullptr);
