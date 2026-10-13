@@ -5046,6 +5046,7 @@
             <key>Value</key>
             <integer>0</integer>
         </map>
+        <!-- <SK:Nexii> Mouselook map (Automap) -->
         <key>SKMapMLEnable</key>
         <map>
             <key>Comment</key>
@@ -5134,6 +5135,7 @@
             <key>Value</key>
             <real>0.38</real>
         </map>
+        <!-- </SK:Nexii> -->
         <key>SKMapLayerFloorplan</key>
         <map>
             <key>Comment</key>

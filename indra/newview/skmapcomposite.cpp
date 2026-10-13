@@ -471,8 +471,9 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     };
     // The texture is bound outside the slot cache; the slot forgets what it held.
-    GLint old_tex = 0;
+    GLint old_tex = 0, old_rb = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_tex);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &old_rb);
     storage(mMsaaColour, samples, GL_RGBA8, side);
     storage(mMsaaDepth, samples, GL_DEPTH24_STENCIL8, side);
     glGenFramebuffers(1, &mMsaaFbo);
@@ -495,7 +496,7 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, mShadeDepth);
     ok = ok && glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     glBindTexture(GL_TEXTURE_2D, old_tex);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, old_rb);
 
     mSide = side;
     mSamples = samples;

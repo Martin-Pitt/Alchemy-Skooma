@@ -45,6 +45,7 @@
 namespace
 {
     constexpr U32 MAX_SIDE = 4096;
+    constexpr U32 SIDE_STEP = 32;
 
     // One quad over the map's square; each layer is masked by its own fade, its colour premultiplied.
     const char* VS_MASK = R"(#version 330 core
@@ -212,6 +213,14 @@ void main()
         glGetIntegerv(GL_BLEND_EQUATION_RGB, &eq_rgb);
         glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eq_a);
         const GLboolean blend = glIsEnabled(GL_BLEND);
+        GLboolean colour_mask[4] = {}, depth_mask = GL_TRUE;
+        glGetBooleanv(GL_COLOR_WRITEMASK, colour_mask);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+        LLGLDisable depth(GL_DEPTH_TEST);
+        LLGLDisable stencil(GL_STENCIL_TEST);
+        LLGLDisable cull(GL_CULL_FACE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthMask(GL_FALSE);
 
         const F32 hw = side / static_cast<F32>(viewport[2]);
         const F32 hh = side / static_cast<F32>(viewport[3]);
@@ -231,6 +240,8 @@ void main()
         gGL.getTextureSlot(0)->unbind();
 
         blend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
+        glColorMask(colour_mask[0], colour_mask[1], colour_mask[2], colour_mask[3]);
+        glDepthMask(depth_mask);
         glBlendFuncSeparate(src_rgb, dst_rgb, src_a, dst_a);
         glBlendEquationSeparate(eq_rgb, eq_a);
         glBindVertexArray(vao);
@@ -272,7 +283,9 @@ void main()
         }
         // Sized and faded against the window's height, so any aspect keeps the same map.
         const F32 height = static_cast<F32>(viewport[3]);
-        const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f))), 16U, MAX_SIDE);
+        // Stepped, so dragging the window's height reallocates the target and the plan only every SIDE_STEP pixels.
+        const U32 side = llclamp(static_cast<U32>(ll_round(height * llclamp(static_cast<F32>(size), 0.2f, 1.5f) / SIDE_STEP)) * SIDE_STEP,
+                                 SIDE_STEP, MAX_SIDE);
         if (!s.mProgram)
         {
             s.mProgram = compileProgram();
@@ -320,7 +333,12 @@ void main()
         Fades fades;
         fades.mOuter = llclamp(static_cast<F32>(outer_fade), 0.05f, 1.f);
         fades.mCentre = height * llclamp(static_cast<F32>(centre_fade), 0.f, 0.5f);
-        fades.mSelf = llmin(llclamp(static_cast<F32>(self_fade), 0.f, 128.f) * ui, fades.mCentre * 0.65f);
+        // As the study: never wider than most of the map's centre fade, while there is one.
+        fades.mSelf = llclamp(static_cast<F32>(self_fade), 0.f, 128.f) * ui;
+        if (fades.mCentre > 0.f)
+        {
+            fades.mSelf = llmin(fades.mSelf, fades.mCentre * 0.65f);
+        }
         const F32 metres = llclamp(static_cast<F32>(span), skmap::ZOOM_MIN_M, skmap::ZOOM_MAX_M);
 
         gGL.flush();
