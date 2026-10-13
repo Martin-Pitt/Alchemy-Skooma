@@ -60,6 +60,7 @@ namespace sknav
     EnclosureProductPtr withTileAir(const EnclosureProduct& product, const AirSwap& swap)
     {
         auto out = std::make_shared<EnclosureProduct>(product);
+        out->mSkyMemo.reset();      // it holds the airs it read: they must be free to go
         for (TileEnclosure& t : out->mTiles)
         {
             if (const auto it = swap.find(t.mKey); it != swap.end())
@@ -73,6 +74,9 @@ namespace sknav
     RoomsProductPtr withTileAir(const RoomsProduct& product, const AirSwap& swap)
     {
         auto out = std::make_shared<RoomsProduct>(product);
+        out->mFloors.reset();       // they hold the airs they read: they must be free to go
+        out->mCovers.reset();
+        out->mEdgeMemo.reset();
         for (RoomsTile& t : out->mTiles)
         {
             if (const auto it = swap.find(t.mKey); it != swap.end())

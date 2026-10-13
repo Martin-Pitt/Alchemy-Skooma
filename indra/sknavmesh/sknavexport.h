@@ -75,6 +75,9 @@ namespace sknav
         /// AVATAR's stamp and what binds it to the spaces, when its polys were stamped.
         const TileStampGeom* mStamp = nullptr;
         const TileBinding* mBinding = nullptr;
+        /// The spaces exported beside it: a binding's portal indices are read through its portal keys against these,
+        /// as a binding kept under newer spaces holds the indices of the ones it was made with.
+        const RoomsProduct* mRooms = nullptr;
         /// AVATAR's wall runs over those polys, and the mesh's storeys they stand in, from the same build.
         const std::vector<WallRun>* mWallRuns = nullptr;
         const StoreyProduct* mStoreys = nullptr;

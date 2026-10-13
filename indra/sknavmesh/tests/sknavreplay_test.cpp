@@ -1773,4 +1773,285 @@ namespace tut
         ensure("the same spaces over reloaded air", same_spaces);
         ensure_equals("stamps that differ over reloaded air", stamp_differ, 0u);
     }
+    /// Spaces, portals and every gap's space with space ids and indices replaced
+    /// by ranks of the spaces' own content: two products that cut the same rooms
+    /// under different ids read the same.
+    std::string canonicalRooms(const EnclosureProduct& enc, const RoomsProduct& rooms)
+    {
+        auto line = [](const Space& sp) {
+            std::ostringstream o;
+            o << std::hexfloat << static_cast<S32>(sp.mBucket) << ',' << sp.mLift << sp.mFlight << sp.mFrozen << ';';
+            for (const LLVector3& v : { sp.mMin, sp.mMax, sp.mCentre })
+            {
+                o << v.mV[0] << ',' << v.mV[1] << ',' << v.mV[2] << ';';
+            }
+            for (F32 f : { sp.mFloorArea, sp.mVolume, sp.mSurface, sp.mCeilingMin, sp.mCeilingMax, sp.mFloorMin, sp.mFloorMax, sp.mSMean, sp.mEMean })
+            {
+                o << f << ',';
+            }
+            for (const auto& c : sp.mRaster)
+            {
+                o << 'r' << c.first << ':' << c.second;
+            }
+            return o.str();
+        };
+        const size_t n = rooms.mSpaces.size();
+        std::vector<std::string> lines(n);
+        std::vector<U32> order(n), rank(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            lines[i] = line(rooms.mSpaces[i]);
+            order[i] = static_cast<U32>(i);
+        }
+        std::stable_sort(order.begin(), order.end(), [&lines](U32 a, U32 b) { return lines[a] < lines[b]; });
+        for (size_t r = 0; r < n; ++r)
+        {
+            rank[order[r]] = static_cast<U32>(r);
+        }
+        std::vector<std::string> portals;
+        for (const Portal& p : rooms.mPortals)
+        {
+            std::ostringstream o;
+            o << std::hexfloat << static_cast<S32>(p.mKind) << ',';
+            const U32 a = p.mSpaces[0] < n ? rank[p.mSpaces[0]] : ~0u, b = p.mSpaces[1] < n ? rank[p.mSpaces[1]] : ~0u;
+            o << a << ',' << b << ',' << static_cast<S32>(p.mCues) << ',' << p.mDoor << ',' << p.mCrossMesh << ';';
+            for (const LLVector3& v : { p.mCentre, p.mA, p.mB })
+            {
+                o << v.mV[0] << ',' << v.mV[1] << ',' << v.mV[2] << ';';
+            }
+            o << p.mWidth << ',' << p.mSill << ',' << p.mHead;
+            portals.push_back(o.str());
+        }
+        std::sort(portals.begin(), portals.end());
+        std::ostringstream o;
+        for (size_t r = 0; r < n; ++r)
+        {
+            o << 'S' << lines[order[r]] << '\n';
+        }
+        for (const std::string& p : portals)
+        {
+            o << 'P' << p << '\n';
+        }
+        for (const TileEnclosure& te : enc.mTiles)
+        {
+            o << 'T' << te.mKey.mX << ',' << te.mKey.mY << ':';
+            for (const GapEnclosure& g : te.mGaps)
+            {
+                o << (g.mSpace && g.mSpace <= n ? rank[g.mSpace - 1] + 1 : 0u) << ',';
+            }
+            o << '\n';
+        }
+        return o.str();
+    }
+
+    /// The air a tile would have after an edit: its middle 4 m square's floors gone, or a copy unchanged.
+    TileAirPtr editedAir(const TileAir& air, bool lose)
+    {
+        auto fresh = std::make_shared<TileAir>(air);
+        if (lose)
+        {
+            const S32 half = static_cast<S32>(2.f / fresh->mCell), mx = fresh->mWidth / 2, my = fresh->mHeight / 2;
+            for (const AirLeaf& leaf : fresh->mLeaves)
+            {
+                if (leaf.mX >= mx - half && leaf.mX < mx + half && leaf.mY >= my - half && leaf.mY < my + half)
+                {
+                    for (U32 k = 0; k < leaf.mGapCount; ++k)
+                    {
+                        fresh->mGaps[leaf.mFirstGap + k].mFlags &= static_cast<U8>(~AirGap::TOP);
+                    }
+                }
+            }
+        }
+        return fresh;
+    }
+
+    // SKNAV_REPLAY_ORACLE names a census: for each mesh with spaces, edits of
+    // single tiles (SKNAV_REPLAY_ORACLE_EDITS per mesh, default 6) run the
+    // enclosure and spaces passes incrementally from a settled full pass on the
+    // air before, and from nothing on the air after; the two must cut the same rooms. The full pass
+    // is settled once (run again over itself), as the viewer's always is.
+    // SKNAV_REPLAY_ORACLE_OUT names a JSON file for the results.
+    template<> template<>
+    void sknavreplay_object::test<14>()
+    {
+        set_test_name("incremental rooms equal a full pass from nothing on the same air, edit by edit, when a census is named");
+        const std::string path = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE");
+        if (path.empty())
+        {
+            return;
+        }
+        CensusFile c;
+        std::string error;
+        ensure("read " + path + ": " + error, readCensusFile(path, c, &error));
+        ReplayResult r;
+        replayCensus(c, ReplayOptions(), r);
+        const std::string edits_env = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_EDITS");
+        const size_t edits = edits_env.empty() ? 6 : static_cast<size_t>(std::stoul(edits_env));
+        typedef std::chrono::steady_clock Clock;
+        const auto ms = [](Clock::time_point t0) { return std::chrono::duration<F64, std::milli>(Clock::now() - t0).count(); };
+        F64 stage_ms[SpacesPass::NUM_STAGES + 1] = {};     // the last run's: enclosure, then the spaces stages
+        auto run = [&](const ReplayMesh& mesh, const std::vector<EnclosureInput::Tile>& tiles, const EnclosureProductPtr& prev_enc,
+                       const RoomsProductPtr& prev_rooms, F64& took) {
+            auto in = std::make_shared<EnclosureInput>();
+            in->mGeneration = 7;
+            in->mMeshOrigin = mesh.mOrigin;
+            in->mSky = r.mSky;
+            in->mPrevious = prev_enc;
+            in->mParams = c.mEnclosure;
+            in->mTiles = tiles;
+            const Clock::time_point t0 = Clock::now();
+            EnclosurePass pass(in);
+            while (!pass.step(1u << 30))
+            {
+            }
+            std::shared_ptr<EnclosureProduct> enc = pass.takeProduct();
+            stage_ms[0] = ms(t0);
+            std::shared_ptr<RoomsInput> rooms = replayRoomsInput(c, mesh, 7);
+            rooms->mPrevious = prev_rooms;
+            SpacesPass spaces(rooms, enc);
+            while (!spaces.step(1u << 30))
+            {
+            }
+            const RoomsProductPtr out = spaces.product();
+            for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+            {
+                stage_ms[k + 1] = spaces.stageMillis(k);
+            }
+            took = ms(t0);
+            return std::make_pair(EnclosureProductPtr(enc), out);
+        };
+        const std::string only_mesh = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_MESH");
+        const std::string diff_dir = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_DIFF");
+        const bool inc_only = !LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_INC_ONLY").empty();
+        std::ostringstream json;
+        json << "{\"census\":\"" << path << "\",\"edits\":[";
+        U32 same = 0, differ = 0, differ_raw = 0;
+        F64 inc_ms = 0.0, full_ms = 0.0;
+        bool first = true;
+        for (size_t mi = 0; mi < r.mMeshes.size(); ++mi)
+        {
+            const ReplayMesh& mesh = *r.mMeshes[mi];
+            if (!mesh.mRooms || !mesh.mEnclosure || (!only_mesh.empty() && std::to_string(mi) != only_mesh))
+            {
+                continue;
+            }
+            std::vector<EnclosureInput::Tile> tiles;
+            for (const auto& t : mesh.mTiles)
+            {
+                const TileBuildResult& tr = *t.second.mResult;
+                if (tr.mStatus != TileBuildResult::FAILED && tr.mAirBuilt && tr.mAir && !tr.mAir->mLeaves.empty())
+                {
+                    tiles.push_back({ t.first, tr.mAir, skyContributor(mesh.mId, t.first) });
+                }
+            }
+            if (tiles.empty())
+            {
+                continue;
+            }
+            // What the viewer holds before the edit: a full pass on the air as it was, settled once.
+            F64 t_before = 0.0;
+            const auto before_scratch = run(mesh, tiles, nullptr, nullptr, t_before);
+            const auto before = run(mesh, tiles, before_scratch.first, before_scratch.second, t_before);
+            if (inc_only)
+            {
+                // A profiler started now sees the incremental passes alone.
+                std::cout << "ready mesh " << mi << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(4));
+            }
+            // Spread over the mesh: every k-th tile, its floor lost and unchanged.
+            const size_t step = std::max<size_t>(1, tiles.size() / std::max<size_t>(1, edits));
+            for (size_t e = 0, k = 0; e < edits && k < tiles.size(); ++e, k += step)
+            {
+                for (S32 lose = 1; lose >= 0; --lose)
+                {
+                    std::vector<EnclosureInput::Tile> after = tiles;
+                    after[k].mAir = editedAir(*tiles[k].mAir, lose != 0);
+                    F64 t_inc = 0.0, t_full = 0.0, t_settle = 0.0;
+                    const auto inc = run(mesh, after, before.first, before.second, t_inc);
+                    std::ostringstream stages;
+                    stages << "{\"enclosure\":" << stage_ms[0];
+                    for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+                    {
+                        stages << ",\"" << SpacesPass::stageName(k) << "\":" << stage_ms[k + 1];
+                    }
+                    stages << '}';
+                    if (inc_only)
+                    {
+                        // SKNAV_REPLAY_ORACLE_INC_ONLY: the incremental passes alone, for a profile; nothing is compared.
+                        std::cout << "mesh " << mi << " tile " << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << (lose ? " lost" : " same") << ": " << t_inc
+                                  << " ms incremental " << stages.str() << std::endl;
+                        continue;
+                    }
+                    const auto scratch = run(mesh, after, nullptr, nullptr, t_full);
+                    const auto settled = run(mesh, after, scratch.first, scratch.second, t_settle);
+                    const std::string ci = canonicalRooms(*inc.first, *inc.second);
+                    const bool ok = ci == canonicalRooms(*settled.first, *settled.second);
+                    const bool raw = ci == canonicalRooms(*scratch.first, *scratch.second);
+                    if (!ok && !only_mesh.empty())
+                    {
+                        // Which tiles' seeds part their gaps differently, and the links between seeds.
+                        for (const RoomsTile& a : inc.second->mTiles)
+                        {
+                            const RoomsTile* b = settled.second->tile(a.mKey);
+                            std::map<U16, U16> ab, ba;
+                            bool part = b && b->mSeeds.size() == a.mSeeds.size();
+                            for (size_t g = 0; part && g < a.mSeeds.size(); ++g)
+                            {
+                                part = ab.emplace(a.mSeeds[g], b->mSeeds[g]).first->second == b->mSeeds[g] &&
+                                       ba.emplace(b->mSeeds[g], a.mSeeds[g]).first->second == a.mSeeds[g];
+                            }
+                            if (!part)
+                            {
+                                std::cout << "  seeds differ in tile " << a.mKey.mX << ',' << a.mKey.mY << std::endl;
+                            }
+                        }
+                        auto key = [](const SeedLink& l) { return llformat("%d,%d#%u-%d,%d#%u", l.mA.mX, l.mA.mY, l.mSeedA, l.mB.mX, l.mB.mY, l.mSeedB); };
+                        std::set<std::string> li, ls;
+                        for (const SeedLink& l : inc.second->mLinks) li.insert(key(l));
+                        for (const SeedLink& l : settled.second->mLinks) ls.insert(key(l));
+                        for (const std::string& k2 : ls) if (!li.count(k2)) std::cout << "  only full: " << k2 << std::endl;
+                        for (const std::string& k2 : li) if (!ls.count(k2)) std::cout << "  only inc: " << k2 << std::endl;
+                        std::cout << "  links " << inc.second->mLinks.size() << " vs " << settled.second->mLinks.size() << ", apart "
+                                  << inc.second->mApart.size() << " vs " << settled.second->mApart.size() << ", dirty " << inc.second->mDirtyTiles << std::endl;
+                    }
+                    if (!ok && !diff_dir.empty())
+                    {
+                        const std::string stem = llformat("%s/m%u_%d_%d_%d", diff_dir.c_str(), static_cast<U32>(mi), tiles[k].mKey.mX, tiles[k].mKey.mY, lose);
+                        std::ofstream(stem + "_inc.txt", std::ios::binary) << ci;
+                        std::ofstream(stem + "_full.txt", std::ios::binary) << canonicalRooms(*settled.first, *settled.second);
+                    }
+                    // What the edit sends to the stamp: tiles whose stamp key moved, of those with one.
+                    U32 restamp = 0;
+                    for (const auto& k : inc.second->mStampKeys)
+                    {
+                        restamp += before.second->stampKey(k.first) != k.second ? 1 : 0;
+                    }
+                    same += ok ? 1 : 0;
+                    differ += ok ? 0 : 1;
+                    differ_raw += raw ? 0 : 1;
+                    inc_ms += t_inc;
+                    full_ms += t_full;
+                    json << (first ? "" : ",") << "{\"mesh\":" << mi << ",\"tile\":[" << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << "],\"lose\":" << lose
+                         << ",\"same\":" << (ok ? "true" : "false") << ",\"same_unsettled\":" << (raw ? "true" : "false")
+                         << ",\"spaces\":" << inc.second->mSpaces.size() << ",\"portals\":" << inc.second->mPortals.size() << ",\"inc_ms\":" << t_inc
+                         << ",\"full_ms\":" << t_full << ",\"restamp\":" << restamp << ",\"tiles\":" << inc.second->mStampKeys.size()
+                         << ",\"dirty\":" << inc.second->mDirtyTiles << ",\"inc_stages\":" << stages.str() << "}";
+                    first = false;
+                    std::cout << "mesh " << mi << " tile " << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << (lose ? " lost" : " same") << ": "
+                              << (ok ? "equal" : "DIFFER") << (raw ? "" : " (differs from the unsettled full pass)") << ", " << t_inc
+                              << " ms incremental, " << t_full << " ms full, " << inc.second->mDirtyTiles << " cut, " << restamp << "/"
+                              << inc.second->mStampKeys.size() << " to restamp" << std::endl;
+                }
+            }
+        }
+        json << "],\"same\":" << same << ",\"differ\":" << differ << ",\"differ_unsettled\":" << differ_raw << ",\"inc_ms\":" << inc_ms
+             << ",\"full_ms\":" << full_ms << "}\n";
+        const std::string out = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_OUT");
+        if (!out.empty())
+        {
+            std::ofstream(out, std::ios::binary) << json.str();
+        }
+        std::cout << same << " equal, " << differ << " differ; " << inc_ms << " ms incremental, " << full_ms << " ms full" << std::endl;
+        ensure_equals("edits whose incremental rooms differ from the full pass", differ, 0u);
+    }
 }

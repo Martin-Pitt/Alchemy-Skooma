@@ -27,6 +27,7 @@
 #include "sknavrooms.h"
 
 #include "sknavlayout.h"
+#include "sknavroomsschedule.h"
 #include "sknavspaceproducts.h"
 
 #include "llagent.h"
@@ -645,7 +646,7 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
             if (evicted > state.mEvicted && state.mWind)
             {
                 state.mWind.reset();
-                state.mWindDirty = true;
+                state.windStale(now);
                 mViewDirty = true;
             }
             state.mEvicted = evicted;
@@ -655,6 +656,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 state.mDoorSignature = doors;
                 state.mMin = lo;
                 state.mMax = hi;
+                if (!state.mDirty)
+                {
+                    state.mDirtySince = now;
+                }
                 state.mDirty = true;
                 state.mChanged = now;
                 state.mReruns = 0;
@@ -662,7 +667,8 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 {
                     state.mLatest = std::make_shared<std::atomic<U64>>(0);
                 }
-                state.mLatest->store(++state.mGeneration);
+                // A pass in flight is not cancelled: it lands on the air it read, and the next one refreshes it.
+                ++state.mGeneration;
             }
         }
         for (auto it = mMeshes.begin(); it != mMeshes.end();)
@@ -672,6 +678,10 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
                 if (it->second.mLatest)
                 {
                     it->second.mLatest->store(~0ull);   // cancel anything in flight
+                }
+                if (it->second.mWindLatest)
+                {
+                    it->second.mWindLatest->store(~0ull);
                 }
                 it = mMeshes.erase(it);
                 mViewDirty = true;
@@ -689,12 +699,20 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
-        if (state.mDirty && !state.mInFlight && (now - state.mChanged) * 1000.0 >= settle_ms)
+        // A mesh never published runs at once; churn may only delay a refresh, and only by a bounded wait.
+        if (roomsReady(state.schedule(), now, settle_ms / 1000.0))
         {
+            // The tier is read fresh: the agent's region may have moved since
+            // the last revision walk, and this is the frame the order matters.
+            if (const auto mit = navmesh.mMeshes.find(state.mId); mit != navmesh.mMeshes.end())
+            {
+                state.mPriority = navmesh.meshPriority(*mit->second);
+            }
             ready.push_back(&state);
         }
     }
-    std::stable_sort(ready.begin(), ready.end(), [](const MeshState* a, const MeshState* b) { return a->mPriority < b->mPriority; });
+    // First publications before refreshes, then the navmesh's order, then whoever waited longest.
+    std::stable_sort(ready.begin(), ready.end(), [](const MeshState* a, const MeshState* b) { return roomsBefore(a->schedule(), b->schedule()); });
     for (MeshState* statep : ready)
     {
         MeshState& state = *statep;
@@ -735,14 +753,67 @@ void SKNavRooms::update(const SKNavMesh& navmesh)
         }
     }
 
-    // Wind follows the rooms: a mesh whose spaces landed builds its slabs next.
+    // A better mesh that just took the thread preempts a worse one's pass
+    // mid-flight: the pass's next chunk comes back cancelled, and the mesh
+    // runs again once the better one has had the thread. Without this, a long
+    // pass that posted first keeps its 20 ms chunks ahead of a tier the agent
+    // is standing in. A ready mesh that did not post this frame (its detail is
+    // still away) preempts nothing.
+    if (!ready.empty())
+    {
+        U8 best = 3;
+        sknav::RoomsSchedule first;     // the best tier's first publication that just posted
+        first.mPriority = 4;
+        for (const MeshState* statep : ready)
+        {
+            if (statep->mInFlight)
+            {
+                best = llmin(best, statep->mPriority);
+                if (!statep->mProduct)
+                {
+                    first.mPriority = llmin(first.mPriority, statep->mPriority);
+                }
+            }
+        }
+        for (auto& entry : mMeshes)
+        {
+            MeshState& state = entry.second;
+            if (!(state.mInFlight || state.mWindInFlight) || state.mPriority <= best)
+            {
+                continue;
+            }
+            // The tier is read fresh here too: the region may have moved while
+            // this mesh's pass was running.
+            if (const auto mit = navmesh.mMeshes.find(state.mId); mit != navmesh.mMeshes.end())
+            {
+                state.mPriority = navmesh.meshPriority(*mit->second);
+            }
+            // Only a refresh gives way, and only to a better tier's first publication.
+            if (roomsPreemptible(state.schedule(), first))
+            {
+                state.mLatest->store(++state.mGeneration);
+                if (!state.mDirty)
+                {
+                    state.mDirtySince = now;
+                }
+                state.mDirty = true;
+            }
+            // So do slabs: only a refresh, to a better tier's first rooms; slabs a mesh has none of are never held back.
+            if (state.mWindInFlight && state.mWind && first.mPriority < state.mPriority && state.mWindLatest)
+            {
+                state.mWindLatest->store(++state.mWindGeneration);
+                state.windStale(now);
+            }
+        }
+    }
+
+    // Wind follows the rooms: a mesh whose spaces landed builds its slabs next, on the rooms it has.
+    // Churn delays only a refresh, and only boundedly; a mesh with no slabs builds them at once.
     static LLCachedControl<U32> wind_settle_ms(gSavedSettings, "SKNavWindSettleMs", 3000);
     for (auto& entry : mMeshes)
     {
         MeshState& state = entry.second;
-        // A mesh still streaming in lands its rooms again and again: wait for it to be quiet.
-        const bool quiet = !state.mDirty && !state.mInFlight && (now - state.mWindChanged) * 1000.0 >= wind_settle_ms;
-        if (quiet && state.mWindDirty && !state.mWindInFlight && state.mRooms && state.mProduct)
+        if (state.mRooms && state.mProduct && roomsReady(state.windSchedule(), now, wind_settle_ms / 1000.0))
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknr - post wind");
             postWind(state);
@@ -777,6 +848,9 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     }
 
     const SKNavMesh::Mesh& mesh = *mit->second;
+    // The pass runs on this snapshot; only a preemption cancels it.
+    state.mLatest->store(state.mGeneration);
+    state.mLastPosted = LLTimer::getTotalSeconds();
     auto input = std::make_shared<EnclosureInput>();
     input->mGeneration = state.mGeneration;
     input->mMeshOrigin = mesh.mOrigin;
@@ -914,11 +988,13 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
         return;
     }
     state.mInFlight = false;
-    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mSpaces || !job->mSpaces->done())
+    if (job->mCancelled || !job->mSpaces || !job->mSpaces->done())
     {
         ++mCancelled;
-        return;     // superseded: the state is dirty again and posts anew once settled
+        return;     // preempted: the state is dirty again and posts anew
     }
+    // Air that moved while it ran left the state dirty: this lands now, and the refresh follows.
+
     const EnclosureProductPtr product = job->mPass->product();
     ++mPasses;
     mLastMs = product->mMillis;
@@ -938,8 +1014,7 @@ void SKNavRooms::finish(const std::shared_ptr<Job>& job)
     // Only answers that moved, or none yet, are worth a new set of slabs.
     if (moved || !state.mWind)
     {
-        state.mWindDirty = true;
-        state.mWindChanged = LLTimer::getTotalSeconds();
+        state.windStale(LLTimer::getTotalSeconds());
     }
     mViewDirty = true;
     if (!moved)
@@ -964,6 +1039,11 @@ void SKNavRooms::postWind(MeshState& state)
     {
         return;
     }
+    if (!state.mWindLatest)
+    {
+        state.mWindLatest = std::make_shared<std::atomic<U64>>(0);
+    }
+    state.mWindLatest->store(++state.mWindGeneration);
     auto input = std::make_shared<WindInput>();
     input->mGeneration = state.mGeneration;
     input->mEnclosure = state.mProduct;
@@ -971,8 +1051,8 @@ void SKNavRooms::postWind(MeshState& state)
     input->mBands = defaultWindBands();
     auto job = std::make_shared<WindJob>();
     job->mId = state.mId;
-    job->mGeneration = state.mGeneration;
-    job->mLatest = state.mLatest;
+    job->mGeneration = state.mWindGeneration;
+    job->mLatest = state.mWindLatest;
     job->mPass = std::make_unique<WindPass>(input);
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
@@ -1032,16 +1112,17 @@ void SKNavRooms::runWind(const std::shared_ptr<WindJob>& job, const std::weak_pt
 void SKNavRooms::finishWind(const std::shared_ptr<WindJob>& job)
 {
     const auto it = mMeshes.find(job->mId);
-    if (it == mMeshes.end() || it->second.mLatest != job->mLatest)
+    if (it == mMeshes.end() || it->second.mWindLatest != job->mLatest)
     {
         return;
     }
     MeshState& state = it->second;
     state.mWindInFlight = false;
-    if (job->mCancelled || state.mGeneration != job->mGeneration || !job->mPass->done())
+    if (job->mCancelled || state.mWindGeneration != job->mGeneration || !job->mPass->done())
     {
-        return;     // its air moved: the rooms land again, and the wind follows them
+        return;     // preempted: it runs again once the better tier has had the thread
     }
+    // Slabs over the rooms it read land even if newer rooms have landed since: those set it stale again.
     const WindProductPtr product = job->mPass->product();
     ++mWindPasses;
     mLastWindMs = product->mMillis;

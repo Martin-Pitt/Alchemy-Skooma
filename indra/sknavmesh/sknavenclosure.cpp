@@ -31,6 +31,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <unordered_map>
 
@@ -412,6 +413,28 @@ namespace sknav
         }
         return n;
     }
+
+    struct SkyMemo
+    {
+        /// One gap's sky stage results, in the order the stage read them.
+        struct Read
+        {
+            U32 mGap;
+            U32 mSeed;          ///< the sky flood's start, NONE when the gap is not under sky
+            U32 mWalkSeed;      ///< the depth flood's start from its sky, NONE for none
+            U8 mCover;
+            U8 mOpen;
+        };
+        struct Tile
+        {
+            TileAirPtr mAir;
+            U64 mKey = 0;
+            std::vector<std::shared_ptr<const void>> mKeep;
+            std::vector<Read> mReads;
+        };
+        static constexpr U32 NONE = 0xffffffffu;
+        std::map<TileKey, std::shared_ptr<const Tile>> mTiles;
+    };
 
     struct EnclosurePass::State
     {
@@ -1101,9 +1124,65 @@ namespace sknav
                         view = std::make_unique<SkyView>(*in.mSky, lo[0] - m, lo[1] - m, hi[0] + m, hi[1] + m);
                         budget -= static_cast<S64>((hi[0] - lo[0] + 2 * m) * (hi[1] - lo[1] + 2 * m));
                     }
+                    // A tile reads the sky within this of its plan: the cover's radius or the side openness's reach, and the cell a read lands in.
+                    const F64 sky_reach = std::max<F64>(p.mSkyReachM, SIDE_OPEN_REACH_M) + 1.0;
+                    const SkyMemo* old_memo = in.mPrevious ? in.mPrevious->mSkyMemo.get() : nullptr;
+                    auto memo = std::make_shared<SkyMemo>();
                     for (size_t t = 0; t < tiles; ++t)
                     {
                         const TileAir& a = air(t);
+                        auto fresh = std::make_shared<SkyMemo::Tile>();
+                        fresh->mAir = in.mTiles[t].mAir;
+                        if (view)
+                        {
+                            const F64 x0 = in.mMeshOrigin.mdV[VX] + a.mOrigin.mV[VX], y0 = in.mMeshOrigin.mdV[VY] + a.mOrigin.mV[VY];
+                            fresh->mKey = in.mSky->windowKey(x0 - sky_reach, y0 - sky_reach, x0 + a.mWidth * a.mCell + sky_reach,
+                                                             y0 + a.mHeight * a.mCell + sky_reach, fresh->mKeep);
+                            for (const F64 v : { x0, y0, in.mMeshOrigin.mdV[VZ], static_cast<F64>(p.mSkyReachM), static_cast<F64>(p.mSkyDecayM),
+                                                 static_cast<F64>(p.mDepthFullM), static_cast<F64>(mHalfCellM), static_cast<F64>(mWalkHead) })
+                            {
+                                U64 bits;
+                                std::memcpy(&bits, &v, sizeof(bits));
+                                fresh->mKey = (fresh->mKey ^ bits) * 0x100000001b3ull;
+                            }
+                        }
+                        std::shared_ptr<const SkyMemo::Tile> kept;
+                        if (old_memo && view)
+                        {
+                            const auto it = old_memo->mTiles.find(in.mTiles[t].mKey);
+                            if (it != old_memo->mTiles.end() && it->second->mAir == fresh->mAir && it->second->mKey == fresh->mKey)
+                            {
+                                kept = it->second;
+                            }
+                        }
+                        if (kept)
+                        {
+                            // Its air and every block of sky it reads stand: the same reads, without reading.
+                            for (const SkyMemo::Read& r : kept->mReads)
+                            {
+                                const U32 n = mBase[t] + r.mGap;
+                                mCover[n] = r.mCover;
+                                mOpen[n] = r.mOpen;
+                                if (r.mSeed != SkyMemo::NONE)
+                                {
+                                    mNodeFlags[n] |= NODE_SKY;
+                                    seeds.emplace_back(r.mSeed, n);
+                                }
+                                if (r.mWalkSeed != SkyMemo::NONE)
+                                {
+                                    mSkyWalkSeeds.emplace_back(r.mWalkSeed, n);
+                                }
+                            }
+                            memo->mTiles.emplace(in.mTiles[t].mKey, kept);
+                            continue;
+                        }
+                        const auto keep = [&](U32 n) {
+                            const U32 g = n - mBase[t];
+                            const bool sky = (mNodeFlags[n] & NODE_SKY) != 0;
+                            const bool walk = sky && !mSkyWalkSeeds.empty() && mSkyWalkSeeds.back().second == n;
+                            fresh->mReads.push_back({ g, sky ? seeds.back().first : SkyMemo::NONE, walk ? mSkyWalkSeeds.back().first : SkyMemo::NONE,
+                                                      mCover[n], mOpen[n] });
+                        };
                         const S32 side = static_cast<S32>(std::ceil(a.mWidth * a.mCell * 0.5)) + 1;
                         covers.assign(static_cast<size_t>(side) * (static_cast<S32>(std::ceil(a.mHeight * a.mCell * 0.5)) + 1), {});
                         // In row order, so the leaf whose read speaks for its square does not depend on how leaves are stored.
@@ -1151,6 +1230,7 @@ namespace sknav
                                         }
                                         mOpen[n] = quantise(open);
                                     }
+                                    keep(n);
                                     continue;
                                 }
                                 // The sky a standing head sees, less what the solids over it hide.
@@ -1180,6 +1260,7 @@ namespace sknav
                                 mOpen[n] = quantise(open);
                                 if (cover > 1.f - SKY_COVER_OPEN_MIN)
                                 {
+                                    keep(n);
                                     continue;
                                 }
                                 // Seeded as far out as its hidden sky: S starts at the open share, and D at the share of full depth
@@ -1190,8 +1271,17 @@ namespace sknav
                                 {
                                     mSkyWalkSeeds.emplace_back(static_cast<U32>(std::lround((roof + (cover - roof) * roof) * p.mDepthFullM / mHalfCellM)), n);
                                 }
+                                keep(n);
                             }
                         }
+                        if (view)
+                        {
+                            memo->mTiles.emplace(in.mTiles[t].mKey, std::shared_ptr<const SkyMemo::Tile>(fresh));
+                        }
+                    }
+                    if (view)
+                    {
+                        mProduct->mSkyMemo = memo;
                     }
                     neighbourSeeds(seeds, mWalkSeeds);
                     mFlood.begin(std::move(seeds));

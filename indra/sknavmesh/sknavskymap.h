@@ -81,6 +81,10 @@ namespace sknav
 
         /// Bumped on every change, for readers holding derived results.
         U64 version() const { return mVersion; }
+        /// The blocks holding the cells of a global plan box, by identity: a block is copied before
+        /// it changes while anything else holds it, so the key stands exactly while what the box
+        /// reads does. keep takes a hold on each block, so none is freed and replaced at its address.
+        U64 windowKey(F64 x0, F64 y0, F64 x1, F64 y1, std::vector<std::shared_ptr<const void>>& keep) const;
         size_t cells() const { return mCellCount; }
         size_t bytes() const;
 

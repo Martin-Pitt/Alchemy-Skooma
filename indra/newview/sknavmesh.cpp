@@ -548,6 +548,7 @@ struct SKNavMesh::SpillJob
     U32 mGeneration = 0;
     std::vector<Entry> mEntries;
     size_t mPending = 0;            ///< reloads still on the workers
+    size_t mNextPost = 0;           ///< reloads not posted yet, when the cap held some back
     F64 mAsked = 0.0;
 };
 
@@ -569,6 +570,22 @@ void SKNavMesh::updateResidency()
     static LLCachedControl<U32> show_air(gSavedSettings, "SKNavOverlayAir", 0);
     static LLCachedControl<F32> overlay_range(gSavedSettings, "SKNavOverlayRange", 96.f);
     const F64 now = LLTimer::getTotalSeconds();
+    // The cap held reads back: they post as the pool's slots free, ahead of
+    // everything else in this pass, so a mesh half read back cannot sit in the
+    // backlog while nothing drains it.
+    if (!mReloadBacklog.empty() && workerQueue())
+    {
+        const U32 width = llmax(static_cast<U32>(mWorkers->getWidth()), 1u);
+        for (auto it = mReloadBacklog.begin(); it != mReloadBacklog.end();)
+        {
+            const std::shared_ptr<SpillJob>& job = *it;
+            while (job->mNextPost < job->mEntries.size() && mReloadReadsInFlight < width)
+            {
+                postReloadRead(job, job->mNextPost++);
+            }
+            it = job->mNextPost >= job->mEntries.size() ? mReloadBacklog.erase(it) : it + 1;
+        }
+    }
     // The air overlay draws detail: what it reaches stays in memory while it is on.
     if (show_air && overlayActive())
     {
@@ -628,6 +645,13 @@ void SKNavMesh::spillMesh(Mesh& mesh)
     LL::WorkQueue::ptr_t workers = workerQueue();
     const std::shared_ptr<TileDiskCache> cache = diskCache();
     if (!main_queue || !workers || workers->isClosed() || !cache)
+    {
+        return;
+    }
+    // The agent's region's terrain keeps its detail: it is what the mesh is
+    // here to serve, and spilling it would set the rooms pass chasing its own
+    // tail through the air budget.
+    if (meshPriority(mesh) == 0)
     {
         return;
     }
@@ -707,7 +731,9 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
     Mesh& mesh = *it->second;
     mesh.mResidency = Mesh::Residency::RESIDENT;
     // Something moved or asked for the detail while it was written: it stays.
-    if (LLTimer::getTotalSeconds() - mesh.mDetailWanted < hold || !mSettleGate.settled(mesh.mId))
+    // So does the agent's region's terrain, whatever changed while the spill
+    // was in flight.
+    if (LLTimer::getTotalSeconds() - mesh.mDetailWanted < hold || !mSettleGate.settled(mesh.mId) || meshPriority(mesh) == 0)
     {
         return;
     }
@@ -790,35 +816,67 @@ void SKNavMesh::reloadMesh(Mesh& mesh)
     }
     mesh.mResidency = Mesh::Residency::RELOADING;
     job->mPending = job->mEntries.size();
-    // One job a tile, so a mesh comes back across every worker at once.
+    // One job a tile, so a mesh comes back across every worker at once. The
+    // reads cap at the pool's width: a whole region's reads must not queue the
+    // whole pool ahead of the builds and stamps already in flight, and what
+    // the cap holds back waits in the backlog for the drain.
+    const U32 width = llmax(static_cast<U32>(mWorkers->getWidth()), 1u);
     for (size_t i = 0; i < job->mEntries.size(); ++i)
     {
-        const bool posted = main_queue->postTo(
-            workers,
-            [job, cache, i]()
+        if (mReloadReadsInFlight >= width)
+        {
+            job->mNextPost = i;
+            mReloadBacklog.push_back(job);
+            return;
+        }
+        postReloadRead(job, i);
+    }
+}
+
+bool SKNavMesh::postReloadRead(const std::shared_ptr<SpillJob>& job, size_t i)
+{
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t workers = workerQueue();
+    const std::shared_ptr<TileDiskCache> cache = diskCache();
+    if (!main_queue || !workers || workers->isClosed() || !cache)
+    {
+        return false;
+    }
+    const bool posted = main_queue->postTo(
+        workers,
+        [job, cache, i]()
+        {
+            LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
+            LLTimer timer;
+            SpillJob::Entry& e = job->mEntries[i];
+            const U64 key = spillKey(e.mContentKey);
+            std::vector<U8> bytes;
+            e.mOk = cache->load(key, bytes) && unpackSpill(bytes.data(), bytes.size(), key, e.mAir, e.mRaster) && e.mAir;
+            e.mBytes = bytes.size();
+            e.mMillis = timer.getElapsedTimeF32() * 1000.f;
+            return job;
+        },
+        [this](std::shared_ptr<SpillJob> done)
+        {
+            --mReloadReadsInFlight;
+            if (--done->mPending == 0)
             {
-                LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
-                LLTimer timer;
-                SpillJob::Entry& e = job->mEntries[i];
-                const U64 key = spillKey(e.mContentKey);
-                std::vector<U8> bytes;
-                e.mOk = cache->load(key, bytes) && unpackSpill(bytes.data(), bytes.size(), key, e.mAir, e.mRaster) && e.mAir;
-                e.mBytes = bytes.size();
-                e.mMillis = timer.getElapsedTimeF32() * 1000.f;
-                return job;
-            },
-            [this](std::shared_ptr<SpillJob> done)
-            {
-                if (--done->mPending == 0)
-                {
-                    finishReload(done);
-                }
-            });
-        if (!posted && --job->mPending == 0)
+                finishReload(done);
+            }
+        });
+    if (posted)
+    {
+        ++mReloadReadsInFlight;
+    }
+    else
+    {
+        // The queue refused it: its slot never filled, and its tile is not coming back this way.
+        if (--job->mPending == 0)
         {
             finishReload(job);
         }
     }
+    return posted;
 }
 
 void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
@@ -854,10 +912,10 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
             continue;
         }
         Tile& tile = t->second;
-        tile.mAirSpilled = false;
-        ++mStats.mReloads;
         if (swap.count(e.mKey))
         {
+            tile.mAirSpilled = false;
+            ++mStats.mReloads;
             tile.mAir = std::move(e.mAir);
             tile.mRaster = std::move(e.mRaster);
             tile.mAirCoarse.reset();
@@ -865,9 +923,13 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
         }
         else
         {
-            // Lost from disk: built again with its detail, which gives it new air the spaces read anew.
+            // Lost from disk: what was published stands, and only the detail
+            // is wanted again, where it is wanted. Throwing the build away
+            // would rebuild the tile's air, move the signature the rooms pass
+            // settles against, and churn a thrashed cache past its quiet time
+            // without ever letting one land.
             ++mStats.mReloadMisses;
-            tile.mBuilt = 0;
+            tile.mAirBuilt = 0;
         }
     }
     if (!job->mEntries.empty())
@@ -1816,6 +1878,7 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
     tile.mStampGeom.reset();
     tile.mBinding.reset();
     tile.mStampedBy.reset();
+    tile.mStampKey = 0;     // <SK:Nexii> nav/streaming-2
     tile.mStampBuilt = 0;
     // The side tables describe the stamped polys just replaced.
     tile.mPolySpace.reset();
@@ -1904,14 +1967,27 @@ void SKNavMesh::stampTiles()
         }
         if (rooms != mesh.mStampRooms)
         {
-            // New spaces: every tile under them is read against them again.
+            // <SK:Nexii> nav/streaming-2: new spaces are read again only by tiles whose stamp reads something of them that moved.
             mesh.mStampRooms = rooms;
             mesh.mStampEnc = enc;
             for (auto& t : mesh.mTiles)
             {
-                t.second.mStampDue = t.second.mStampDue || (t.second.mAir && !t.second.mAir->mLeaves.empty());
+                Tile& tile = t.second;
+                if (!tile.mAir || tile.mAir->mLeaves.empty())
+                {
+                    continue;
+                }
+                const U64 stamp_key = rooms->stampKey(t.first);
+                if (!tile.mStampDue && tile.mStampedBy && stamp_key && stamp_key == tile.mStampKey)
+                {
+                    tile.mStampedBy = rooms;
+                    ++mStats.mStampsKept;
+                    continue;
+                }
+                tile.mStampDue = true;
             }
             mesh.mStampScan = true;
+            // </SK:Nexii>
         }
         if (!mesh.mStampScan)
         {
@@ -2124,16 +2200,65 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     }
     Tile& tile = tit->second;
     tile.mStampInFlight = false;
-    // One ticket: the input, the air and the spaces it was stamped with must all still stand.
-    if (tile.mSignature != signature || tile.mAir != air || mesh.mStampRooms != rooms || out->mKind == StampOutcome::DROP)
+    // One ticket: the input and the air it was stamped with must still stand.
+    if (tile.mSignature != signature || tile.mAir != air || out->mKind == StampOutcome::DROP)
     {
         tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
         mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
         return;
     }
+    // <SK:Nexii> nav/streaming-2: spaces newer than the stamp's do not hold it back, as outdated beats nothing;
+    // it is read again against them only if what it read of the spaces moved.
+    const U64 stamp_key = rooms ? rooms->stampKey(key) : 0;
+    if (mesh.mStampRooms != rooms)
+    {
+        const U64 now_key = mesh.mStampRooms ? mesh.mStampRooms->stampKey(key) : 0;
+        if (!now_key || now_key != stamp_key)
+        {
+            tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
+            mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
+            ++mStats.mStampsOutdated;
+        }
+    }
+    tile.mStampKey = stamp_key;
+    // </SK:Nexii>
     mStats.mLastStampMs = out->mMillis;
     if (out->mKind == StampOutcome::REBIND)
     {
+        // <SK:Nexii> nav/streaming: a tile whose spaces did not move under new rooms keeps its products and revision.
+        const auto same_spaces = [](const auto& a, const auto& b) {
+            if (!a || !b)
+            {
+                return !a && !b;
+            }
+            if (a->size() != b->size())
+            {
+                return false;
+            }
+            for (size_t i = 0; i < a->size(); ++i)
+            {
+                if ((*a)[i].mSpace[0] != (*b)[i].mSpace[0] || (*a)[i].mSpace[1] != (*b)[i].mSpace[1])
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const TileBinding* was = tile.mBinding.get();
+        const TileBinding& now = *out->mBinding;
+        const bool same = was && was->mComponentSpaceId == now.mComponentSpaceId && was->mPolyFlags == now.mPolyFlags &&
+                          was->mPortalKeys == now.mPortalKeys && was->mPortalIndex == now.mPortalIndex &&
+                          (!out->mSegments || same_spaces(out->mSegments, tile.mSegments[static_cast<S32>(AgentClass::AVATAR)])) &&
+                          (!out->mFaces || same_spaces(out->mFaces, tile.mFaces));
+        if (same)
+        {
+            tile.mStampInput = out->mInput;
+            tile.mBinding = out->mBinding;
+            tile.mStampedBy = rooms;
+            ++mStats.mRebindsQuiet;
+            return;
+        }
+        // </SK:Nexii>
         tile.mStampInput = out->mInput;
         tile.mBinding = out->mBinding;
         tile.mStampedBy = rooms;
@@ -2607,8 +2732,8 @@ bool SKNavMesh::settlingIn(const LLVector3d& min, const LLVector3d& max) const
 std::string SKNavMesh::statsLine() const
 {
     const U32 looked = mStats.mDiskLoads + mStats.mDiskRebuilds;
-    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
-                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mAwaitingStamp, mStats.mLastStampMs,
+    const std::string stamps = llformat(", stamps %u (%u from disk, %u re-rastered, %u rebinds, %u unchanged, %u kept, %u outdated), awaiting %u, last stamp %.1f ms, latency %.0f ms (worst %.0f), stamp overflow %u, poly overflow %u, unstamped %u",
+                                        mStats.mStamps, mStats.mStampLoads, mStats.mStampReRasters, mStats.mRebinds, mStats.mRebindsQuiet, mStats.mStampsKept, mStats.mStampsOutdated, mStats.mAwaitingStamp, mStats.mLastStampMs,
                                         mStats.mLastStampLatencyMs, mStats.mWorstStampLatencyMs, mStats.mStampOverflow, mStats.mPolyOverflowTiles,
                                         mStats.mUnstampedPublishes);
     return llformat("navmesh: %u meshes, %u/%u tiles built (%u queued, %u in flight), %u faces, %u segments, %u links, %u builds, %u failures, last %.1f ms, worst %.1f ms, exclusion %.2f ms, raster %.1f + polys %.1f ms, held rasters %u tiles %.1f MB (%u dropped, %u re-rastered), air %u tiles %.1f MB (%u evicted), sky %u cells %.1f MB, disk %.1f MB in %u, %u loads %u rebuilds %u corrupt, hit %.0f%%, load %.2f ms",
@@ -2854,7 +2979,8 @@ void SKNavMesh::storeyInputs(const Mesh& mesh, std::vector<U64>& out) const
     out.clear();
     out.reserve(mesh.mTiles.size() * 5 + 2);
     out.push_back(reinterpret_cast<uintptr_t>(nav));
-    out.push_back(reinterpret_cast<uintptr_t>(mesh.mStampRooms.get()));
+    // <SK:Nexii> nav/streaming-2: new spaces rebuild the storeys only where what they read of them moved.
+    out.push_back(mesh.mStampRooms ? mesh.mStampRooms->mStoreyKey : 0);
     for (const auto& entry : mesh.mTiles)
     {
         const dtMeshTile* dt = nav ? nav->getTileAt(entry.first.mY, entry.first.mX, 0) : nullptr;
@@ -4610,6 +4736,14 @@ void SKNavMesh::writeTile(std::ostream& file, const Mesh& mesh, const TileKey& k
     }
     out.mStamp = tile.mStampGeom.get();
     out.mBinding = tile.mBinding.get();
+    // <SK:Nexii> nav/streaming-2: portal edges name the portals of the spaces exported beside them.
+    EnclosureProductPtr landed_enc;
+    RoomsProductPtr landed_rooms;
+    if (mRooms->landed(mesh.mId, landed_enc, landed_rooms))
+    {
+        out.mRooms = landed_rooms.get();
+    }
+    // </SK:Nexii>
     const auto runs = tileWallRuns(mesh, key, tile);
     out.mWallRuns = runs.get();
     const StoreyProductPtr st = storeys(mesh.mId);

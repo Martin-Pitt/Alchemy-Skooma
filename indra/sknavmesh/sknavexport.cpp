@@ -320,7 +320,22 @@ namespace sknav
                 {
                     const StampPortalEdge& pe = g.mPortalEdges[e];
                     // The portal's index into the mesh's portals (-1 for none), then its key.
-                    const U32 pi = e < b.mPortalIndex.size() ? b.mPortalIndex[e] : NO_PORTAL;
+                    U32 pi = e < b.mPortalIndex.size() ? b.mPortalIndex[e] : NO_PORTAL;
+                    if (tile.mRooms && e < b.mPortalKeys.size())
+                    {
+                        const RoomsProduct& rooms = *tile.mRooms;
+                        const auto keyOf = [&rooms](U32 i) {
+                            const Portal& q = rooms.mPortals[i];
+                            const U32 a = q.mSpaces[0] < rooms.mSpaces.size() ? rooms.mSpaces[q.mSpaces[0]].mId : 0;
+                            const U32 c = q.mSpaces[1] < rooms.mSpaces.size() ? rooms.mSpaces[q.mSpaces[1]].mId : 0;
+                            return portalKey(a, c, static_cast<U8>(q.mKind), q.mCentre);
+                        };
+                        if (pi == NO_PORTAL || pi >= rooms.mPortals.size() || keyOf(pi) != b.mPortalKeys[e])
+                        {
+                            const U32 found = rooms.portalIndex(b.mPortalKeys[e]);
+                            pi = found == ~0u ? NO_PORTAL : found;
+                        }
+                    }
                     file << (e ? "," : "") << '[' << pe.mPoly << ',' << static_cast<S32>(pe.mEdge) << ',' << static_cast<S32>(pe.mSide) << ','
                          << (pi == NO_PORTAL ? -1 : static_cast<S64>(pi)) << ",\"" << std::hex << (e < b.mPortalKeys.size() ? b.mPortalKeys[e] : 0) << std::dec
                          << "\"]";

@@ -134,6 +134,8 @@ namespace sknav
     };
 
     /// One mesh's answers. Positions are mesh-local.
+    struct SkyMemo;
+
     struct EnclosureProduct
     {
         U64 mGeneration = 0;
@@ -146,6 +148,8 @@ namespace sknav
         F32 mMillis = 0.f;                     ///< worker time over all chunks
         U64 mSummary = 0;                      ///< hash of the coarse answers, what neighbours read
         std::vector<U32> mSpaceIds;            ///< per space the spaces pass cut, its id
+        /// Each tile's sky reads, kept while its air and the sky map blocks they read stand.
+        std::shared_ptr<const SkyMemo> mSkyMemo;
 
         const TileEnclosure* tile(const TileKey& key) const;
         /// The gap holding pos: detail where the tile has it, else coarse.
