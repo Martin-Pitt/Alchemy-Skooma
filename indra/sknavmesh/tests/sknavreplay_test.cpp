@@ -1889,6 +1889,7 @@ namespace tut
         const size_t edits = edits_env.empty() ? 6 : static_cast<size_t>(std::stoul(edits_env));
         typedef std::chrono::steady_clock Clock;
         const auto ms = [](Clock::time_point t0) { return std::chrono::duration<F64, std::milli>(Clock::now() - t0).count(); };
+        F64 stage_ms[SpacesPass::NUM_STAGES + 1] = {};     // the last run's: enclosure, then the spaces stages
         auto run = [&](const ReplayMesh& mesh, const std::vector<EnclosureInput::Tile>& tiles, const EnclosureProductPtr& prev_enc,
                        const RoomsProductPtr& prev_rooms, F64& took) {
             auto in = std::make_shared<EnclosureInput>();
@@ -1904,14 +1905,24 @@ namespace tut
             {
             }
             std::shared_ptr<EnclosureProduct> enc = pass.takeProduct();
+            stage_ms[0] = ms(t0);
             std::shared_ptr<RoomsInput> rooms = replayRoomsInput(c, mesh, 7);
             rooms->mPrevious = prev_rooms;
-            const RoomsProductPtr out = computeSpaces(rooms, enc);
+            SpacesPass spaces(rooms, enc);
+            while (!spaces.step(1u << 30))
+            {
+            }
+            const RoomsProductPtr out = spaces.product();
+            for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+            {
+                stage_ms[k + 1] = spaces.stageMillis(k);
+            }
             took = ms(t0);
             return std::make_pair(EnclosureProductPtr(enc), out);
         };
         const std::string only_mesh = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_MESH");
         const std::string diff_dir = LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_DIFF");
+        const bool inc_only = !LLStringUtil::getenv("SKNAV_REPLAY_ORACLE_INC_ONLY").empty();
         std::ostringstream json;
         json << "{\"census\":\"" << path << "\",\"edits\":[";
         U32 same = 0, differ = 0, differ_raw = 0;
@@ -1941,6 +1952,12 @@ namespace tut
             F64 t_before = 0.0;
             const auto before_scratch = run(mesh, tiles, nullptr, nullptr, t_before);
             const auto before = run(mesh, tiles, before_scratch.first, before_scratch.second, t_before);
+            if (inc_only)
+            {
+                // A profiler started now sees the incremental passes alone.
+                std::cout << "ready mesh " << mi << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(4));
+            }
             // Spread over the mesh: every k-th tile, its floor lost and unchanged.
             const size_t step = std::max<size_t>(1, tiles.size() / std::max<size_t>(1, edits));
             for (size_t e = 0, k = 0; e < edits && k < tiles.size(); ++e, k += step)
@@ -1951,6 +1968,20 @@ namespace tut
                     after[k].mAir = editedAir(*tiles[k].mAir, lose != 0);
                     F64 t_inc = 0.0, t_full = 0.0, t_settle = 0.0;
                     const auto inc = run(mesh, after, before.first, before.second, t_inc);
+                    std::ostringstream stages;
+                    stages << "{\"enclosure\":" << stage_ms[0];
+                    for (S32 k = 0; k < SpacesPass::NUM_STAGES; ++k)
+                    {
+                        stages << ",\"" << SpacesPass::stageName(k) << "\":" << stage_ms[k + 1];
+                    }
+                    stages << '}';
+                    if (inc_only)
+                    {
+                        // SKNAV_REPLAY_ORACLE_INC_ONLY: the incremental passes alone, for a profile; nothing is compared.
+                        std::cout << "mesh " << mi << " tile " << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << (lose ? " lost" : " same") << ": " << t_inc
+                                  << " ms incremental " << stages.str() << std::endl;
+                        continue;
+                    }
                     const auto scratch = run(mesh, after, nullptr, nullptr, t_full);
                     const auto settled = run(mesh, after, scratch.first, scratch.second, t_settle);
                     const std::string ci = canonicalRooms(*inc.first, *inc.second);
@@ -1989,6 +2020,12 @@ namespace tut
                         std::ofstream(stem + "_inc.txt", std::ios::binary) << ci;
                         std::ofstream(stem + "_full.txt", std::ios::binary) << canonicalRooms(*settled.first, *settled.second);
                     }
+                    // What the edit sends to the stamp: tiles whose stamp key moved, of those with one.
+                    U32 restamp = 0;
+                    for (const auto& k : inc.second->mStampKeys)
+                    {
+                        restamp += before.second->stampKey(k.first) != k.second ? 1 : 0;
+                    }
                     same += ok ? 1 : 0;
                     differ += ok ? 0 : 1;
                     differ_raw += raw ? 0 : 1;
@@ -1997,11 +2034,13 @@ namespace tut
                     json << (first ? "" : ",") << "{\"mesh\":" << mi << ",\"tile\":[" << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << "],\"lose\":" << lose
                          << ",\"same\":" << (ok ? "true" : "false") << ",\"same_unsettled\":" << (raw ? "true" : "false")
                          << ",\"spaces\":" << inc.second->mSpaces.size() << ",\"portals\":" << inc.second->mPortals.size() << ",\"inc_ms\":" << t_inc
-                         << ",\"full_ms\":" << t_full << "}";
+                         << ",\"full_ms\":" << t_full << ",\"restamp\":" << restamp << ",\"tiles\":" << inc.second->mStampKeys.size()
+                         << ",\"dirty\":" << inc.second->mDirtyTiles << ",\"inc_stages\":" << stages.str() << "}";
                     first = false;
                     std::cout << "mesh " << mi << " tile " << tiles[k].mKey.mX << ',' << tiles[k].mKey.mY << (lose ? " lost" : " same") << ": "
                               << (ok ? "equal" : "DIFFER") << (raw ? "" : " (differs from the unsettled full pass)") << ", " << t_inc
-                              << " ms incremental, " << t_full << " ms full" << std::endl;
+                              << " ms incremental, " << t_full << " ms full, " << inc.second->mDirtyTiles << " cut, " << restamp << "/"
+                              << inc.second->mStampKeys.size() << " to restamp" << std::endl;
                 }
             }
         }
