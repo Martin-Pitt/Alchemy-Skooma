@@ -716,6 +716,38 @@ namespace tut
         ensure("a tread inside", (g.gaps(10, 4)[1].mFlags & AirGap::FLIGHT) != 0);
         ensure("not the floor under it", (g.gaps(10, 4)[0].mFlags & AirGap::FLIGHT) == 0);
         ensure("not outside the footprint", (g.gaps(10, 20)[1].mFlags & AirGap::FLIGHT) == 0);
+
+        // A 3 m flight over open floor: the floor under its upper half lies within its height band, but not on its plane.
+        AirGrid h;
+        h.mOrigin.set(0.f, 0.f, 0.f);
+        h.mCell = 0.125f;
+        h.mUnit = 0.125f;
+        h.mWidth = h.mHeight = 32;
+        h.mStart.assign(32 * 32 + 1, 0);
+        for (S32 i = 0; i < 32 * 32; ++i)
+        {
+            const F32 x = (i % 32 + 0.5f) * 0.125f;
+            AirGap floor;
+            floor.mFloor = 0;
+            floor.mCeiling = static_cast<U16>(std::lround(0.75f * x / 0.125f));
+            floor.mFlags = AirGap::TOP;
+            AirGap tread;
+            tread.mFloor = static_cast<U16>(std::lround(0.75f * x / 0.125f));
+            tread.mCeiling = 100;
+            tread.mFlags = AirGap::TOP | AirGap::OPEN;
+            h.mGaps.push_back(floor);
+            h.mGaps.push_back(tread);
+            h.mStart[i + 1] = static_cast<U32>(h.mGaps.size());
+        }
+        Flight tall;
+        tall.mFootprint = f.mFootprint;
+        tall.mPlane[0] = 0.75f;
+        tall.mZMin = 0.f;
+        tall.mZMax = 3.f;
+        tall.mRise = 3.f;
+        markFlights(h, { tall });
+        ensure("its tread high up", (h.gaps(24, 4)[1].mFlags & AirGap::FLIGHT) != 0);
+        ensure("not the floor under it", (h.gaps(24, 4)[0].mFlags & AirGap::FLIGHT) == 0);
     }
 
     template<> template<>

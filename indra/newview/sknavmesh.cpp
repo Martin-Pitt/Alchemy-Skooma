@@ -2973,10 +2973,6 @@ void SKNavMesh::forEachTileIn(const LLVector3d& min, const LLVector3d& max, cons
 
 std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& mesh, const TileKey& key, const Tile& tile) const
 {
-    if (tile.mWallRuns && tile.mWallRunsAt == mRevision)
-    {
-        return tile.mWallRuns;
-    }
     const S32 c = static_cast<S32>(AgentClass::AVATAR);
     const dtNavMesh* nav = mesh.mNav[c];
     const dtMeshTile* dt = nav ? nav->getTileAt(key.mY, key.mX, 0) : nullptr;
@@ -2984,21 +2980,32 @@ std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& 
     {
         return nullptr;
     }
-    LL_PROFILE_ZONE_SCOPED;
-    // The tile's air and its neighbours', each with the gaps' spaces the stamp was bound to.
+    // The runs are rebuilt only when what they read changes: the Detour tile, its spaces, the enclosure, the air around it.
     const EnclosureProductPtr enc = mesh.mStampEnc;
+    U64 inputs = 1469598103934665603ull;
+    const auto mix = [&inputs](U64 v) { inputs = (inputs ^ v) * 1099511628211ull; };
+    mix(static_cast<U64>(nav->getPolyRefBase(dt)));
+    mix(reinterpret_cast<uintptr_t>(tile.mPolySpace.get()));
+    mix(enc->mGeneration);
     std::vector<WallAir> around;
     for (S32 dy = -1; dy <= 1; ++dy)
     {
         for (S32 dx = -1; dx <= 1; ++dx)
         {
             const auto it = mesh.mTiles.find(TileKey{ key.mX + dx, key.mY + dy });
-            if (it != mesh.mTiles.end() && it->second.mAir)
+            const bool has = it != mesh.mTiles.end() && it->second.mAir;
+            mix(has ? it->second.mAirId : 0);
+            if (has)
             {
                 around.push_back({ it->second.mAir, enc->tile(it->first) });
             }
         }
     }
+    if (tile.mWallRuns && tile.mWallRunsAt == inputs)
+    {
+        return tile.mWallRuns;
+    }
+    LL_PROFILE_ZONE_SCOPED;
     const WallAirReader reader(std::move(around), [enc](U16 s) { return s <= enc->mSpaceIds.size() ? enc->mSpaceIds[s - 1] : 0u; });
     TileBuildInput params;
     fillParams(params);
@@ -3009,7 +3016,7 @@ std::shared_ptr<const std::vector<WallRun>> SKNavMesh::tileWallRuns(const Mesh& 
     auto runs = std::make_shared<std::vector<WallRun>>();
     buildWallRuns(*dt, *tile.mPolySpace, reader, wp, *runs);
     tile.mWallRuns = runs;
-    tile.mWallRunsAt = mRevision;
+    tile.mWallRunsAt = inputs;
     return runs;
 }
 

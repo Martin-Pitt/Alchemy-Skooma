@@ -400,7 +400,7 @@ private:
         /// The Detour tile's polygons, extracted on first read and valid only for the publish
         /// that set it: every path that adds or removes the Detour tile resets it.
         mutable std::shared_ptr<const sknav::TilePolys> mPolyCache[sknav::NUM_CLASSES];
-        /// AVATAR's wall runs, built on first read for the revision in mWallRunsAt.
+        /// AVATAR's wall runs, built on first read for the inputs hashed in mWallRunsAt.
         mutable std::shared_ptr<const std::vector<sknav::WallRun>> mWallRuns;
         mutable U64 mWallRunsAt = 0;
         /// The Detour tile's bytes, which Detour reads but does not own.
