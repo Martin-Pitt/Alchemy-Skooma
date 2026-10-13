@@ -493,11 +493,23 @@ LLUUID SKMapPeople::traceShooter(const LLVector3d& pos, const LLVector3& velocit
 
 void SKMapPeople::updateCombat()
 {
-    // The check behind the health display: the agent's own parcel, nothing else. The debug
-    // switch can only turn combat on, never show anyone it would hide.
+    // The check behind the health display: the agent's own parcel, nothing else. Damage land is
+    // combat only once the user engages there. The debug switch can only turn combat on, never
+    // show anyone it would hide.
     static LLCachedControl<bool> force(gSavedSettings, "SKMapDebugForceCombat", false);
     LLViewerParcelMgr* parcels = LLViewerParcelMgr::getInstance();
-    mCombat = force || parcels->allowAgentDamage(gAgent.getRegion(), parcels->getAgentParcel());
+    const bool damage = parcels->allowAgentDamage(gAgent.getRegion(), parcels->getAgentParcel());
+    const bool engaged = mEngagement.update(damage, gAgentCamera.cameraMouselook(), LLFrameTimer::getUptimeSeconds().value());
+    mCombat = force || engaged;
+}
+
+void SKMapPeople::addEvent(const SKCombatEvent& event)
+{
+    if (event.actor == gAgentID || event.target == gAgentID)
+    {
+        mEngagement.engage(LLFrameTimer::getUptimeSeconds().value());
+    }
+    mEvents.add(event);
 }
 
 void SKMapPeople::loadFactions()

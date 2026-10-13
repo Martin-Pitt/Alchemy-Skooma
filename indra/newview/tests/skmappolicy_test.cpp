@@ -378,4 +378,26 @@ namespace tut
             }
         }
     }
+
+    // Damage land is combat only while engaged, held 240 s past the last engagement.
+    template<> template<>
+    void skmappolicy_object::test<10>()
+    {
+        Engagement e;
+        ensure("damage land alone is peace", !e.update(true, false, 0.0));
+        ensure("mouselook off damage land is peace", !e.update(false, true, 1.0));
+        ensure("no change yet", e.changedAt() < 0.0);
+        ensure("mouselook on damage land", e.update(true, true, 10.0));
+        ensure_equals("change noted", e.changedAt(), 10.0);
+        ensure("held after mouselook", e.update(true, false, 100.0));
+        ensure("suspended off damage land", !e.update(false, false, 150.0));
+        ensure("resumed on return within the hold", e.update(true, false, 200.0));
+        ensure("held to the end", e.update(true, false, 249.0));
+        ensure("ends at the hold", !e.update(true, false, 250.0));
+        ensure_equals("end noted", e.changedAt(), 250.0);
+        e.engage(300.0);
+        ensure("a hit restarts it", e.update(true, false, 301.0));
+        ensure("held from the hit", e.update(true, false, 539.0));
+        ensure("and ends", !e.update(true, false, 540.0));
+    }
 }

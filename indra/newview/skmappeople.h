@@ -92,8 +92,10 @@ public:
     };
     /// Linksets the census has seen driven this session, at their live pose.
     const std::vector<Vehicle>& vehicles() const { return mVehicles; }
-    /// Whether the agent stands where it can be hurt, or the debug switch forces it.
+    /// Whether the agent is engaged on land where it can be hurt, or the debug switch forces it.
     bool combat() const { return mCombat; }
+    /// When combat last started or ended, for the map's brief notice.
+    F64 combatChangedAt() const { return mEngagement.changedAt(); }
     /// The ally probes, for the debug readout.
     const SKMapAllyResolver& resolver() const { return mResolver; }
     /// A local marker at a point, fading over 4 s. Nothing is sent anywhere.
@@ -106,7 +108,7 @@ public:
     const std::vector<Ping>& pings() const { return mPings; }
 
     /// A hit, kill or death the combat log reported.
-    void addEvent(const SKCombatEvent& event) { mEvents.add(event); }
+    void addEvent(const SKCombatEvent& event);
     const skmap::EventRing& events() const { return mEvents; }
 
     /// Where a drawn avatar is aiming: its head's ray to what it hits, or 64 m out.
@@ -161,6 +163,7 @@ private:
     /// Seat roots of everyone near, shown or not: whether a vehicle is crewed, and by an ally.
     std::map<LLUUID, std::pair<bool, bool>> mSeats;
     bool mCombat = false;
+    skmap::Engagement mEngagement;
     SKMapAllyResolver mResolver;
     skmap::FactionTable mFactions;
     bool mFactionsLoaded = false;

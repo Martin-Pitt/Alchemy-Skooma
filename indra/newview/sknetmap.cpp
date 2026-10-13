@@ -333,6 +333,7 @@ void SKNetMap::draw()
         LLLocalClipRect clip(getLocalRect());
         drawPeopleCodes();
         drawNorthText();
+        drawCombatNotice();
     }
     // Tags sit wherever there is room in the window, over the map or the world.
     drawTags();
@@ -1255,6 +1256,23 @@ void SKNetMap::drawNorthText()
                         std::fabs(north.mV[VY]) > 1e-4f ? hy / std::fabs(north.mV[VY]) : 1e9f);
     const LLVector2 at = centre + north * t;
     font->renderUTF8("N", 0, at.mV[VX], at.mV[VY], text, LLFontGL::HCENTER, LLFontGL::VCENTER, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW);
+}
+
+void SKNetMap::drawCombatNotice()
+{
+    // Shown for a moment when the map enters or leaves combat, fading out over the last half second.
+    constexpr F64 SHOW_S = 2.5, FADE_S = 0.5;
+    const SKMapPeople& people = SKMapPeople::instance();
+    const F64 age = LLFrameTimer::getUptimeSeconds().value() - people.combatChangedAt();
+    if (age < 0.0 || age >= SHOW_S)
+    {
+        return;
+    }
+    LLColor4 text = toColor4(skmap::palette::NORTH);
+    text.mV[VALPHA] *= static_cast<F32>(llclamp((SHOW_S - age) / FADE_S, 0.0, 1.0));
+    const LLFontGL* font = LLFontGL::getFontSansSerif();
+    font->renderUTF8(people.combat() ? "Combat" : "Peace", 0, mView.width() * 0.5f, mView.height() - 24.f, text, LLFontGL::HCENTER,
+                     LLFontGL::VCENTER, LLFontGL::BOLD, LLFontGL::DROP_SHADOW);
 }
 
 void SKNetMap::drawReadout()

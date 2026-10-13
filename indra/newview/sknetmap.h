@@ -153,6 +153,7 @@ private:
     void drawTrackingAt(const LLVector3d& pos, const LLColor4& colour);
     void drawNorth();
     /// The N glyph or the compass letters, drawn after the classic matrix block.
+    void drawCombatNotice();
     void drawNorthText();
     void drawChromeTint();
     void drawChromeFrame();

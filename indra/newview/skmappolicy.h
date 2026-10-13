@@ -46,6 +46,28 @@ namespace skmap
     enum class Visibility : U8 { HIDDEN, SELF, DOT, DOT_CODED };
     Visibility visibilityOf(bool combat, bool self, bool ally);
 
+    /// How long combat outlasts the last engagement. Fixed, so nobody can shorten it.
+    constexpr F64 ENGAGEMENT_HOLD_S = 240.0;
+
+    /// Combat on damage land is earned: mouselook there, or a hit to or from the user, holds it
+    /// for ENGAGEMENT_HOLD_S. Leaving damage land suspends it but does not reset the hold.
+    class Engagement
+    {
+    public:
+        /// Whether the map is in combat now.
+        bool update(bool damage_land, bool mouselook, F64 now);
+        /// A hit to or from the user.
+        void engage(F64 now) { mLast = now; }
+        bool combat() const { return mCombat; }
+        /// When combat last started or ended, for the brief notice; negative before any change.
+        F64 changedAt() const { return mChanged; }
+
+    private:
+        F64 mLast = -1.0e9;
+        F64 mChanged = -1.0e9;
+        bool mCombat = false;
+    };
+
     enum class VehicleLook : U8 { HIDDEN, CIVILIAN, ALLY, NEUTRAL };
     /// General: every vehicle civilian. Combat: ally aboard, uncrewed neutral, crewed by
     /// nobody allied hidden.

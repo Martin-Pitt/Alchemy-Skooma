@@ -43,6 +43,21 @@ namespace skmap
         return ally ? Visibility::DOT_CODED : Visibility::HIDDEN;
     }
 
+    bool Engagement::update(bool damage_land, bool mouselook, F64 now)
+    {
+        if (damage_land && mouselook)
+        {
+            mLast = now;
+        }
+        const bool combat = damage_land && now - mLast < ENGAGEMENT_HOLD_S;
+        if (combat != mCombat)
+        {
+            mCombat = combat;
+            mChanged = now;
+        }
+        return mCombat;
+    }
+
     VehicleLook vehicleLook(bool combat, bool ally_aboard, bool crewed)
     {
         if (!combat)
