@@ -31,6 +31,7 @@
 #include "sknavspaceproducts.h"
 
 #include "llagent.h"
+#include "llapp.h"
 #include "llbase64.h"
 #include "llthread.h"
 #include "llviewercontrol.h"
@@ -908,7 +909,7 @@ void SKNavRooms::post(MeshState& state, const SKNavMesh& navmesh)
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
     const bool posted = queue && queue->post([this, job, alive]() {
-        if (!alive.expired())
+        if (!alive.expired() && !LLApp::isExiting())
         {
             runChunk(job, alive);
         }
@@ -957,7 +958,7 @@ void SKNavRooms::runChunk(const std::shared_ptr<Job>& job, const std::weak_ptr<b
             // Yield, so a newer generation can cancel this one between chunks.
             const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
             const bool posted = queue && queue->post([this, job, alive]() {
-                if (!alive.expired())
+                if (!alive.expired() && !LLApp::isExiting())
                 {
                     runChunk(job, alive);
                 }
@@ -1057,7 +1058,7 @@ void SKNavRooms::postWind(MeshState& state)
     std::weak_ptr<bool> alive = mAlive;
     const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
     const bool posted = queue && queue->post([this, job, alive]() {
-        if (!alive.expired())
+        if (!alive.expired() && !LLApp::isExiting())
         {
             runWind(job, alive);
         }
@@ -1093,7 +1094,7 @@ void SKNavRooms::runWind(const std::shared_ptr<WindJob>& job, const std::weak_pt
         {
             const LL::WorkQueue::ptr_t queue = LL::WorkQueue::getInstance(QUEUE_NAME);
             const bool posted = queue && queue->post([this, job, alive]() {
-                if (!alive.expired())
+                if (!alive.expired() && !LLApp::isExiting())
                 {
                     runWind(job, alive);
                 }

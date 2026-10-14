@@ -346,7 +346,7 @@ std::shared_ptr<TileDiskCache> SKNavMesh::diskCache()
         if (LL::WorkQueue::ptr_t workers = workerQueue())
         {
             std::shared_ptr<TileDiskCache> cache = mDiskCache;
-            workers->post([cache]() { cache->index(); });
+            workers->post([cache]() { if (!LLApp::isExiting()) cache->index(); });
         }
     }
     else
@@ -405,6 +405,7 @@ void SKNavMesh::evictAir()
                 workers->post([spill, cache, content_key]()
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill air worker");
+                    if (LLApp::isExiting()) return;
                     TileProductParts parts;
                     parts.mFaces = spill->mFaces.get();
                     parts.mLedges = spill->mLedges.get();
@@ -666,6 +667,7 @@ void SKNavMesh::spillMesh(Mesh& mesh)
         [job, cache]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - spill mesh worker");
+            if (LLApp::isExiting()) return job;
             for (SpillJob::Entry& e : job->mEntries)
             {
                 const U64 key = spillKey(e.mContentKey);
@@ -832,6 +834,7 @@ bool SKNavMesh::postReloadRead(const std::shared_ptr<SpillJob>& job, size_t i)
         [job, cache, i]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - reload air worker");
+            if (LLApp::isExiting()) return job;
             LLTimer timer;
             SpillJob::Entry& e = job->mEntries[i];
             const U64 key = spillKey(e.mContentKey);
@@ -1647,6 +1650,8 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
         [input, records, cache, skip_load]()
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - build tile worker");
+            // A pool drains its queue before it joins, so work left at logout skips itself.
+            if (LLApp::isExiting()) return std::make_shared<Outcome>();
             finishTileInput(*records, input->mMeshOrigin, *input);
             auto out = std::make_shared<Outcome>();
             // What the tile is built from, keyed so the same world finds it on disk
@@ -2069,6 +2074,7 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - stamp tile worker");
             LLTimer timer;
             auto out = std::make_shared<StampOutcome>();
+            if (LLApp::isExiting()) return out;
             const TileEnclosure* te = enc->tile(key);
             if (!te || te->mAir != air)
             {
