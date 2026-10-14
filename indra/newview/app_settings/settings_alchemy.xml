@@ -5303,6 +5303,52 @@
             <real>0.38</real>
         </map>
         <!-- </SK:Nexii> -->
+        <!-- <SK:Nexii> overview capture: the mini-map base rendered from above -->
+        <key>SKMapCaptureBase</key>
+        <map>
+            <key>Comment</key>
+            <string>Draw the mini-map's base from a top-down render of the region instead of the navmesh floorplan.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>Boolean</string>
+            <key>Value</key>
+            <integer>0</integer>
+        </map>
+        <key>SKOverviewCutHeight</key>
+        <map>
+            <key>Comment</key>
+            <string>Metres above the agent where the top-down capture cuts the world, so ceilings and roofs above do not hide the floor.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>2.5</real>
+        </map>
+        <key>SKOverviewRefresh</key>
+        <map>
+            <key>Comment</key>
+            <string>Seconds between top-down captures of the region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>F32</string>
+            <key>Value</key>
+            <real>1.0</real>
+        </map>
+        <key>SKOverviewResolution</key>
+        <map>
+            <key>Comment</key>
+            <string>Texels along a side of the top-down capture of the region.</string>
+            <key>Persist</key>
+            <integer>1</integer>
+            <key>Type</key>
+            <string>U32</string>
+            <key>Value</key>
+            <integer>1024</integer>
+        </map>
+        <!-- </SK:Nexii> -->
         <key>SKMapLayerFloorplan</key>
         <map>
             <key>Comment</key>

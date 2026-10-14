@@ -117,6 +117,7 @@
 #include "llcubemap.h"
 #include "llviewershadermgr.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
@@ -1413,6 +1414,7 @@ void LLPipeline::releaseGLBuffers()
     gBumpImageList.destroyGL();
     LLVOAvatar::resetImpostors();
     SKOutlineCapture::cleanupGL(); // <SK:Nexii> outline capture: the atlas goes with the context and every capture renders again
+    SKOverviewCapture::cleanupGL(); // <SK:Nexii> overview capture: its targets go with the context
 }
 
 void LLPipeline::releaseLUTBuffers()
@@ -12395,6 +12397,178 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
 
     popRenderTypeMask();
     return draw_infos;
+}
+// </SK:Nexii>
+
+// <SK:Nexii> overview capture: the shadow programs from a top-down ortho camera, one colour channel a class.
+U32 LLPipeline::skRenderOverview(const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
+    LL_PROFILE_GPU_ZONE("skRenderOverview");
+
+    struct Restore
+    {
+        LLCullResult* cull = sCull;
+        LLViewerCamera::eCameraID camera_id = LLViewerCamera::sCurCameraID;
+        LLCamera current = LLViewerCamera::getCurrent();
+        S32 occlusion = sUseOcclusion;
+        bool shadow = sShadowRender;
+        bool impostor = sImpostorRender;
+        ~Restore()
+        {
+            sImpostorRender = impostor;
+            sShadowRender = shadow;
+            sUseOcclusion = occlusion;
+            LLViewerCamera::setCurrent(current);
+            LLViewerCamera::sCurCameraID = camera_id;
+            sCull = cull;
+        }
+    } restore;
+
+    pushRenderTypeMask();
+    clearRenderTypeMask(RENDER_TYPE_SKY, RENDER_TYPE_WL_SKY, RENDER_TYPE_GRASS, RENDER_TYPE_TREE, RENDER_TYPE_VOIDWATER,
+                        RENDER_TYPE_WATER, RENDER_TYPE_PASS_GRASS, RENDER_TYPE_HUD, RENDER_TYPE_PARTICLES, RENDER_TYPE_CLOUDS,
+                        RENDER_TYPE_HUD_PARTICLES, END_RENDER_TYPES);
+
+    // The coverage camera's id: a non-world camera never updates LOD, so parts keep the LOD the agent's own view chose.
+    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SK_COVERAGE;
+    sUseOcclusion = 0;
+    sShadowRender = true;
+    sImpostorRender = false;
+    LLViewerCamera::setCurrent(camera);
+
+    static LLCullResult result;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview cull");
+        updateCull(camera, result);
+        stateSort(camera, result);
+    }
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadMatrix(proj);
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadMatrix(view);
+    gGLLastMatrix = NULL;
+    gGL.getTextureSlot(0)->unbind();
+    LLVertexBuffer::unbind();
+
+    // Double-sided: a plane seen from below still has a top.
+    LLGLDisable cull_face(GL_CULL_FACE);
+    U32 draws = 0;
+    const U32 target_width = LLRenderTarget::sCurResX;
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview terrain");
+        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
+        gGL.setColorMask(true, false, false, false);
+        for (LLDrawPool* pool : mPools)
+        {
+            if (pool->getType() != LLDrawPool::POOL_TERRAIN || !hasRenderType(pool->getType()))
+            {
+                continue;
+            }
+            pool->prerender();
+            gGLLastMatrix = NULL;
+            gGL.loadMatrix(view);
+            for (S32 i = 0; i < pool->getNumShadowPasses(); ++i)
+            {
+                pool->beginShadowPass(i);
+                pool->renderShadow(i);
+                pool->endShadowPass(i);
+            }
+            ++draws;
+        }
+    }
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview objects");
+        LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_LESS);
+        gGL.setColorMask(false, true, false, false);
+        static const U32 types[] = { LLRenderPass::PASS_SIMPLE,        LLRenderPass::PASS_FULLBRIGHT,
+                                     LLRenderPass::PASS_SHINY,         LLRenderPass::PASS_BUMP,
+                                     LLRenderPass::PASS_FULLBRIGHT_SHINY, LLRenderPass::PASS_MATERIAL,
+                                     LLRenderPass::PASS_MATERIAL_ALPHA_EMISSIVE, LLRenderPass::PASS_SPECMAP,
+                                     LLRenderPass::PASS_SPECMAP_EMISSIVE, LLRenderPass::PASS_NORMMAP,
+                                     LLRenderPass::PASS_NORMMAP_EMISSIVE, LLRenderPass::PASS_NORMSPEC,
+                                     LLRenderPass::PASS_NORMSPEC_EMISSIVE };
+        gDeferredShadowProgram.bind();
+        gGL.diffuseColor4f(1, 1, 1, 1);
+        for (U32 type : types)
+        {
+            renderObjects(type, false, false, false);
+        }
+        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
+
+        const S32 sun_up = 1;
+        gDeferredShadowAlphaMaskProgram.bind();
+        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
+        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
+        renderMaskedObjects(LLRenderPass::PASS_ALPHA_MASK, true, true, false);
+        renderAlphaObjects(false);
+        gDeferredShadowFullbrightAlphaMaskProgram.bind();
+        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
+        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
+        renderFullbrightMaskedObjects(LLRenderPass::PASS_FULLBRIGHT_ALPHA_MASK, true, true, false);
+        gDeferredTreeShadowProgram.bind();
+        LLGLSLShader::sCurBoundShaderPtr->setMinimumAlpha(ALPHA_BLEND_CUTOFF);
+        renderMaskedObjects(LLRenderPass::PASS_NORMSPEC_MASK, true, false, false);
+        renderMaskedObjects(LLRenderPass::PASS_MATERIAL_ALPHA_MASK, true, false, false);
+        renderMaskedObjects(LLRenderPass::PASS_SPECMAP_MASK, true, false, false);
+        renderMaskedObjects(LLRenderPass::PASS_NORMMAP_MASK, true, false, false);
+        gDeferredShadowGLTFAlphaMaskProgram.bind();
+        LLGLSLShader::sCurBoundShaderPtr->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up);
+        LLGLSLShader::sCurBoundShaderPtr->uniform1f(LLShaderMgr::DEFERRED_SHADOW_TARGET_WIDTH, (F32)target_width);
+        gGL.loadMatrix(view);
+        gGLLastMatrix = NULL;
+        mAlphaMaskPool->pushGLTFBatches(LLRenderPass::PASS_GLTF_PBR_ALPHA_MASK);
+    }
+    {
+        // Section: where the top surface is a back face the cut went through a solid, so that texel is wall, not the
+        // solid's underside; the walls' sides are edge-on from above and would draw nothing.
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview section");
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
+        LLGLEnable cull_back(GL_CULL_FACE);
+        glCullFace(GL_FRONT);
+        gGL.setColorMask(false, false, false, true);
+        gDeferredShadowProgram.bind();
+        static const U32 solid_types[] = { LLRenderPass::PASS_SIMPLE, LLRenderPass::PASS_FULLBRIGHT, LLRenderPass::PASS_SHINY,
+                                           LLRenderPass::PASS_BUMP, LLRenderPass::PASS_FULLBRIGHT_SHINY,
+                                           LLRenderPass::PASS_MATERIAL, LLRenderPass::PASS_SPECMAP,
+                                           LLRenderPass::PASS_NORMMAP, LLRenderPass::PASS_NORMSPEC };
+        for (U32 type : solid_types)
+        {
+            renderObjects(type, false, false, false);
+        }
+        renderGLTFObjects(LLRenderPass::PASS_GLTF_PBR, false, false);
+        glCullFace(GL_BACK);
+    }
+    {
+        // Invisible faces tint what is under them and hide nothing: no depth write, equal depth passes.
+        LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("sk overview invisible");
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE, GL_LEQUAL);
+        gGL.setColorMask(false, false, true, false);
+        gDeferredShadowProgram.bind();
+        renderObjects(LLRenderPass::PASS_INVISIBLE, false, false, false);
+        renderObjects(LLRenderPass::PASS_ALPHA_INVISIBLE, false, false, false);
+    }
+
+    for (U32 type = 0; type < LLRenderPass::NUM_RENDER_TYPES; ++type)
+    {
+        for (LLCullResult::drawinfo_iterator i = result.beginRenderMap(type); i != result.endRenderMap(type); ++i)
+        {
+            ++draws;
+        }
+    }
+
+    gDeferredShadowProgram.unbind();
+    gGL.setColorMask(true, true);
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = NULL;
+    popRenderTypeMask();
+    return draws;
 }
 // </SK:Nexii>
 

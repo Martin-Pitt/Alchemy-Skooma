@@ -90,6 +90,7 @@
 #include "llworld.h"
 #include "pipeline.h"
 #include "skoutlinecapture.h" // <SK:Nexii> outline capture
+#include "skoverviewcapture.h" // <SK:Nexii> overview capture
 
 #include <filesystem>
 #include <iomanip>
@@ -1066,6 +1067,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         if (!for_snapshot)
         {
             SKOutlineCapture::onFrame(); // <SK:Nexii> outline capture: coverage renders after the world, before the UI
+            SKOverviewCapture::onFrame(); // <SK:Nexii> overview capture: the mini-map base from above, on its timer
             render_ui();
             swap();
         }

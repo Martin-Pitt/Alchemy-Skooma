@@ -1937,6 +1937,7 @@ if(AL_BUILD_VIEWER)
     skmapparcelfacts.cpp
     skmapallyresolver.cpp
     skfloatermapsettings.cpp
+    skoverviewcapture.cpp
   )
   list(
     APPEND viewer_HEADERS
@@ -1958,6 +1959,7 @@ if(AL_BUILD_VIEWER)
     skmapscene.h
     skmaprecorder.h
     skpopuplayout.h
+    skoverviewcapture.h
     skpopuppanes.h
     skmapmenu.h
     skmapparcelfacts.h
