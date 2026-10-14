@@ -40,7 +40,7 @@ namespace skmap
 class SKMapComposite
 {
 public:
-    SKMapComposite() = default;
+    SKMapComposite();
     ~SKMapComposite();
     SKMapComposite(const SKMapComposite&) = delete;
     SKMapComposite& operator=(const SKMapComposite&) = delete;
@@ -113,6 +113,28 @@ private:
     };
     void land();
     void post(const Want& want, const LLVector3d& gmin, const LLVector3d& gmax, bool new_data);
+    /// Why the next render redraws, for the map recorder.
+    enum DirtyWhy : U32
+    {
+        DIRTY_RELEASE = 1 << 0,
+        DIRTY_TARGET = 1 << 1,
+        DIRTY_LINES = 1 << 2,
+        DIRTY_LAND = 1 << 3,
+        DIRTY_RECENTRE = 1 << 4,
+        DIRTY_SPAN = 1 << 5,
+        DIRTY_FLOOR = 1 << 6,
+        DIRTY_SPLIT = 1 << 7,
+    };
+    void dirty(U32 why)
+    {
+        mRenderDirty = true;
+        mDirtyWhy |= why;
+    }
+    struct Record;
+    std::unique_ptr<Record> mRecord;    ///< what the map recorder last saw; null while it is off
+    void recordGatherKey(const LLVector3d& gmin, const LLVector3d& gmax, bool nav_moved, bool recentre, bool baseline);
+    void recordLand(const Job& job);
+    U32 mDirtyWhy = 0;
 
     skmap::plan::Gatherer mGatherer;
     std::unique_ptr<LL::ThreadPool> mPool;

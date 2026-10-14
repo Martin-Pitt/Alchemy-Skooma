@@ -1310,6 +1310,25 @@ U64 skmap::plan::gatherKey(const LLVector3d& min, const LLVector3d& max)
     return h;
 }
 
+void skmap::plan::gatherKeyParts(const LLVector3d& min, const LLVector3d& max, GatherParts& out)
+{
+    SKNavMesh& nav = SKNavMesh::instance();
+    out = GatherParts();
+    forRegionMeshes(min, max, [&](const SKNavWorldView::Mesh& m)
+    {
+        out.mMeshes.push_back({ m.mId, m.mMin, m.mMax, m.mRooms->mGeneration, nav.detailResident(m.mId), nav.mapInputsKey(m.mId, m.mMin, m.mMax) });
+    });
+    for (LLViewerRegion* region : LLWorld::getInstance()->getRegionList())
+    {
+        const LLVector3d o = region->getOriginGlobal();
+        const F64 w = region->getWidth();
+        if (overlaps(o, o + LLVector3d(w, w, 0.0), min, max))
+        {
+            out.mRegions.emplace_back(region->getHandle(), region->getWaterHeight());
+        }
+    }
+}
+
 struct skmap::plan::Snapshot
 {
     struct Border

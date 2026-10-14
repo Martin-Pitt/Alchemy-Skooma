@@ -1930,6 +1930,7 @@ if(AL_BUILD_VIEWER)
     skmapobjects.cpp
     skmapparcels.cpp
     skmapscene.cpp
+    skmaprecorder.cpp
     skpopuplayout.cpp
     skpopuppanes.cpp
     skmapmenu.cpp
@@ -1955,6 +1956,7 @@ if(AL_BUILD_VIEWER)
     skmapobjects.h
     skmapparcels.h
     skmapscene.h
+    skmaprecorder.h
     skpopuplayout.h
     skpopuppanes.h
     skmapmenu.h

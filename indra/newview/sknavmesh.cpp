@@ -70,6 +70,7 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skmaprecorder.h"
 #include "skphysicsshape.h"
 #include "workqueue.h"
 
@@ -90,6 +91,18 @@ namespace
     using skcapture::faceAlphaMode;
     using skcapture::facePbrAlpha;
     using skcapture::linkNumber;
+
+    const char* causeName(U8 cause)
+    {
+        static const char* names[] = { "none", "created", "records", "terrain", "params", "failed" };
+        return cause < LL_ARRAY_SIZE(names) ? names[cause] : "?";
+    }
+
+    /// The map recorder's line for one tile, with where it is and why it last built.
+    template <typename T> void recordTile(const char* type, const LLUUID& mesh, const TileKey& key, const T& tile)
+    {
+        SKMapRecorder::Line(type).mesh(mesh).tile(key.mX, key.mY).box(tile.mMin, tile.mMax).str("cause", causeName(tile.mCause));
+    }
 
     template<typename T>
     void retireOn(const LL::WorkQueue::ptr_t& workers, T value)
@@ -431,7 +444,11 @@ void SKNavMesh::evictAir()
             tile.mAir.reset();
             tile.mAirBuilt = 0;
             ++mStats.mAirEvicted;
-            ++mRevision;
+            if (SKMapRecorder::isRecording())
+            {
+                recordTile("air.evict", candidate.mMesh, candidate.mKey, tile);
+            }
+            bumpRevision("air.evict");
         }
         auto retired = std::move(mPendingEvictions);
         retireOn(workers, std::move(retired));
@@ -771,13 +788,17 @@ void SKNavMesh::finishSpill(const std::shared_ptr<SpillJob>& job)
         tile.mRaster.reset();
         tile.mAirSpilled = true;
         ++mStats.mSpills;
+        if (SKMapRecorder::isRecording())
+        {
+            recordTile("air.spill", mesh.mId, e.mKey, tile);
+        }
         mStats.mSpillBytes += e.mBytes;
         retired->emplace_back(std::move(e.mAir), std::move(e.mRaster));
     }
     mStats.mSpillFreed = freed;
     retireOn(workerQueue(), std::move(retired));
     mesh.mResidency = Mesh::Residency::SPILLED;
-    ++mRevision;
+    bumpRevision("air.spill");
 }
 
 void SKNavMesh::reloadMesh(Mesh& mesh)
@@ -920,6 +941,10 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
             tile.mRaster = std::move(e.mRaster);
             tile.mAirCoarse.reset();
             millis += e.mMillis;
+            if (SKMapRecorder::isRecording())
+            {
+                recordTile("air.reload", mesh.mId, e.mKey, tile);
+            }
         }
         else
         {
@@ -930,6 +955,10 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
             // without ever letting one land.
             ++mStats.mReloadMisses;
             tile.mAirBuilt = 0;
+            if (SKMapRecorder::isRecording())
+            {
+                recordTile("air.lost", mesh.mId, e.mKey, tile);
+            }
         }
     }
     if (!job->mEntries.empty())
@@ -939,7 +968,7 @@ void SKNavMesh::finishReload(const std::shared_ptr<SpillJob>& job)
     }
     mesh.mResidency = Mesh::Residency::RESIDENT;
     mesh.mDetailWanted = LLTimer::getTotalSeconds();
-    ++mRevision;
+    bumpRevision("air.reload");
 }
 
 void SKNavMesh::cleanupSingleton()
@@ -1359,8 +1388,12 @@ void SKNavMesh::reconcile(const SKCensusSnapshotPtr& snap)
         dropSlots(*it->second);
         std::shared_ptr<Mesh> retired(std::move(it->second));
         retireOn(workers, std::move(retired));
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("mesh.drop").mesh(it->first).str("why", "census");
+        }
         it = mMeshes.erase(it);
-        ++mRevision;
+        bumpRevision("mesh.drop");
     }
 }
 
@@ -1438,8 +1471,12 @@ void SKNavMesh::applyLayouts()
             mSlotSpaces.erase(current->second.mStampSlot);
             auto retired = std::make_shared<Tile>(std::move(current->second));
             retireOn(workers, std::move(retired));
+            if (SKMapRecorder::isRecording())
+            {
+                recordTile("tile.drop", mesh.mId, current->first, *retired);
+            }
             mesh.mTiles.erase(current);
-            ++mRevision;
+            bumpRevision("tile.drop");
         }
         mesh.mLayoutCensus = layout.mCensus;
         mesh.mLayoutWorld = layout.mWorld;
@@ -1529,6 +1566,15 @@ bool SKNavMesh::changedRecord(const std::vector<RecordPtr>& before, const std::v
         }
     }
     return false;
+}
+
+void SKNavMesh::bumpRevision(const char* why)
+{
+    ++mRevision;
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line("nav.rev").str("why", why).num("rev", static_cast<S64>(mRevision));
+    }
 }
 
 void SKNavMesh::tileBlip(const Mesh& mesh, const Tile& tile) const
@@ -1736,6 +1782,10 @@ bool SKNavMesh::launch(Mesh& mesh, const TileKey& key, Tile& tile)
     {
         tile.mInFlight = true;
         mInFlight++;
+        if (SKMapRecorder::isRecording())
+        {
+            recordTile("tile.launch", id, key, tile);
+        }
     }
     return posted;
 }
@@ -1799,7 +1849,11 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mCause = CAUSE_FAILED;
         tile.mHasCauseAt = false;
         tileBlip(mesh, tile);
-        mRevision++;                // the tile's walls are gone: the overlay moved
+        if (SKMapRecorder::isRecording())
+        {
+            recordTile("tile.fail", mesh_id, key, tile);
+        }
+        bumpRevision("tile.fail");  // the tile's walls are gone: the overlay moved
         return;
     }
     if (awaitsStamp(*result))
@@ -1825,7 +1879,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mStampDue = true;
         mesh.mStampScan = true;
         tileBlip(mesh, tile);
-        mRevision++;                // new air: the spaces over it are cut again
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("air.built").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax).str("cause", causeName(tile.mCause))
+                .flag("loaded", loaded).flag("coarse", result->mCoarseAir).flag("restamp", tile.mStampedBy != nullptr);
+        }
+        bumpRevision("air.built");  // new air: the spaces over it are cut again
         return;
     }
     bool kept = false;
@@ -1863,6 +1922,10 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         tile.mBuilt = refused ? 0 : signature;
         tile.mDiskRefused = refused;
         tileBlip(mesh, tile);
+        if (SKMapRecorder::isRecording())
+        {
+            recordTile("tile.refused", mesh_id, key, tile);
+        }
         return;
     }
     tile.mFaces = std::make_shared<const std::vector<WallFace>>(std::move(result->mFaces));
@@ -1920,7 +1983,12 @@ void SKNavMesh::publish(const LLUUID& mesh_id, U32 generation, const TileKey& ke
         }
     }
     tileBlip(mesh, tile);
-    mRevision++;                    // a published tile is one the overlay redraws
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line("tile.publish").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax).str("cause", causeName(tile.mCause))
+            .flag("loaded", loaded).flag("air", tile.mAir != nullptr);
+    }
+    bumpRevision("tile.publish");   // a published tile is one the overlay redraws
 }
 
 struct SKNavMesh::StampOutcome
@@ -1970,6 +2038,7 @@ void SKNavMesh::stampTiles()
             // <SK:Nexii> nav/streaming-2: new spaces are read again only by tiles whose stamp reads something of them that moved.
             mesh.mStampRooms = rooms;
             mesh.mStampEnc = enc;
+            S32 restamps = 0;
             for (auto& t : mesh.mTiles)
             {
                 Tile& tile = t.second;
@@ -1985,8 +2054,13 @@ void SKNavMesh::stampTiles()
                     continue;
                 }
                 tile.mStampDue = true;
+                ++restamps;
             }
             mesh.mStampScan = true;
+            if (SKMapRecorder::isRecording())
+            {
+                SKMapRecorder::Line("stamp.rooms").mesh(mesh.mId).num("due", restamps).num("tiles", static_cast<S64>(mesh.mTiles.size()));
+            }
             // </SK:Nexii>
         }
         if (!mesh.mStampScan)
@@ -2179,6 +2253,10 @@ bool SKNavMesh::launchStamp(Mesh& mesh, const TileKey& key, Tile& tile)
         tile.mStampInFlight = true;
         tile.mStampDue = false;
         mInFlight++;
+        if (SKMapRecorder::isRecording())
+        {
+            recordTile("stamp.launch", mesh.mId, key, tile);
+        }
     }
     return posted;
 }
@@ -2203,6 +2281,11 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     // One ticket: the input and the air it was stamped with must still stand.
     if (tile.mSignature != signature || tile.mAir != air || out->mKind == StampOutcome::DROP)
     {
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("stamp.drop").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax)
+                .str("why", out->mKind == StampOutcome::DROP ? "drop" : tile.mSignature != signature ? "signature" : "air");
+        }
         tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
         mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
         return;
@@ -2218,6 +2301,10 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
             tile.mStampDue = tile.mAir && !tile.mAir->mLeaves.empty();
             mesh.mStampScan = mesh.mStampScan || tile.mStampDue;
             ++mStats.mStampsOutdated;
+            if (SKMapRecorder::isRecording())
+            {
+                SKMapRecorder::Line("stamp.outdated").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax);
+            }
         }
     }
     tile.mStampKey = stamp_key;
@@ -2256,6 +2343,10 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
             tile.mBinding = out->mBinding;
             tile.mStampedBy = rooms;
             ++mStats.mRebindsQuiet;
+            if (SKMapRecorder::isRecording())
+            {
+                SKMapRecorder::Line("stamp.quiet").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax);
+            }
             return;
         }
         // </SK:Nexii>
@@ -2272,7 +2363,11 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
         }
         applyBinding(mesh, key, tile);
         ++mStats.mRebinds;
-        mRevision++;
+        if (SKMapRecorder::isRecording())
+        {
+            SKMapRecorder::Line("stamp.rebind").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax);
+        }
+        bumpRevision("stamp.rebind");
         return;
     }
     const std::shared_ptr<TileBuildResult>& result = out->mResult;
@@ -2339,6 +2434,7 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
     {
         tile.mFaces = out->mFaces;
     }
+    const bool restamp = tile.mStampGeom != nullptr;
     tile.mStampGeom = std::make_shared<const TileStampGeom>(std::move(result->mStamp));
     tile.mStampBuilt = signature;
     tile.mStampInput = out->mInput;
@@ -2369,7 +2465,12 @@ void SKNavMesh::publishStamped(const LLUUID& mesh_id, U32 generation, const Tile
         }
     }
     tileBlip(mesh, tile);
-    mRevision++;
+    if (SKMapRecorder::isRecording())
+    {
+        SKMapRecorder::Line(restamp ? "tile.restamped" : "tile.stamped").mesh(mesh_id).tile(key.mX, key.mY).box(tile.mMin, tile.mMax)
+            .flag("loaded", out->mLoaded);
+    }
+    bumpRevision(restamp ? "tile.restamped" : "tile.stamped");
 }
 
 void SKNavMesh::applyBinding(Mesh& mesh, const TileKey& key, Tile& tile)
@@ -2535,6 +2636,7 @@ void SKNavMesh::schedule()
 void SKNavMesh::update()
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("sknm - update");
+    SKMapRecorder::onFrame();
     SKWorldCensus& census = SKWorldCensus::instance();
     const bool want = wanted();
     if (want != mDemanding)
@@ -2585,8 +2687,12 @@ void SKNavMesh::update()
                 dropSlots(*it->second);
                 std::shared_ptr<Mesh> retired(std::move(it->second));
                 retireOn(workerQueue(), std::move(retired));
+                if (SKMapRecorder::isRecording())
+                {
+                    SKMapRecorder::Line("mesh.drop").mesh(it->first).str("why", "unseen");
+                }
                 it = mMeshes.erase(it);
-                mRevision++;
+                bumpRevision("mesh.drop");
             }
             else
             {
@@ -3023,6 +3129,45 @@ U64 SKNavMesh::mapInputsKey(const LLUUID& mesh_id, const LLVector3d& min, const 
         h = mix(h, reinterpret_cast<uintptr_t>(t.mWallRuns.get()));
     }
     return mix(h, reinterpret_cast<uintptr_t>(mesh.mStoreys.get()));
+}
+
+void SKNavMesh::mapInputsParts(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max, MapInputParts& out) const
+{
+    out = MapInputParts();
+    const auto it = mMeshes.find(mesh_id);
+    if (it == mMeshes.end())
+    {
+        return;
+    }
+    const Mesh& mesh = *it->second;
+    const S32 c = static_cast<S32>(AgentClass::AVATAR);
+    const auto ptr = [](const auto& p) { return static_cast<U64>(reinterpret_cast<uintptr_t>(p.get())); };
+    out.mMesh[0] = ptr(mesh.mStampEnc);
+    out.mMesh[1] = ptr(mesh.mStampRooms);
+    out.mMesh[2] = ptr(mesh.mStoreys);
+    for (const auto& entry : mesh.mTiles)
+    {
+        const Tile& t = entry.second;
+        if (!overlapsXY(t.mMin, t.mMax, min, max))
+        {
+            continue;
+        }
+        const dtMeshTile* dt = mesh.mNav[c] ? mesh.mNav[c]->getTileAt(entry.first.mY, entry.first.mX, 0) : nullptr;
+        MapInputParts::Tile p;
+        p.mKey = entry.first;
+        p.mMin = t.mMin;
+        p.mMax = t.mMax;
+        p.mField[0] = t.mBuilt ? t.mContentKey : 0;
+        p.mField[1] = dt && dt->header ? mesh.mNav[c]->getTileRef(dt) : 0;
+        p.mField[2] = t.mAir ? (t.mAirId ? t.mAirId : ptr(t.mAir)) : 0;
+        p.mField[3] = ptr(t.mPolySpace);
+        p.mField[4] = ptr(t.mPortalEdges);
+        p.mField[5] = ptr(t.mSegments[c]);
+        p.mField[6] = ptr(t.mLinks[c]);
+        p.mField[7] = ptr(t.mFlights[c]);
+        p.mField[8] = ptr(t.mWallRuns);
+        out.mTiles.push_back(p);
+    }
 }
 
 bool SKNavMesh::terrainTilesIn(const LLUUID& mesh_id, const LLVector3d& min, const LLVector3d& max) const
@@ -3982,7 +4127,7 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
         };
         if (!std::equal(next.begin(), next.end(), mFeatureLinks.begin(), mFeatureLinks.end(), same_region))
         {
-            mRevision++;
+            bumpRevision("features");
         }
         mFeatureLinks.swap(next);
 
@@ -4006,7 +4151,7 @@ void SKNavMesh::syncFeatureLinks(const SKCensusSnapshotPtr& snap)
             {
                 findExits(entry.second);
                 entry.second.mDirty = false;
-                mRevision++;
+                bumpRevision("feature.exits");
             }
         }
     }
