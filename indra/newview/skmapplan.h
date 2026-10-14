@@ -32,6 +32,7 @@
 #include "lluuid.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -234,6 +235,16 @@ namespace plan
         size_t triangles() const;
     };
 
+    /// How much of a line layer shows at a zoom, by metres per pixel: 1 up to full_mpp, 0 from gone_mpp, and a smoothstep
+    /// in log2(mpp) between, so a zoom moves it smoothly and never pops.
+    inline F32 zoomFade(F32 mpp, F32 full_mpp, F32 gone_mpp)
+    {
+        const F32 t = llclamp((std::log2(llmax(mpp, 1e-6f)) - std::log2(full_mpp)) / (std::log2(gone_mpp) - std::log2(full_mpp)), 0.f, 1.f);
+        return 1.f - t * t * (3.f - 2.f * t);
+    }
+    constexpr F32 ZOOM_DETAIL_MPP = 0.125f;     ///< closer than this (32 m across 256 px) every line is as drawn
+    constexpr F32 ZOOM_LEDGE_GONE_MPP = 0.5f;   ///< ledges and drops are gone from here (128 m across 256 px)
+    constexpr F32 ZOOM_WALL_GONE_MPP = 1.f;     ///< wall outlines, contours and the half-cover hatch from here; walls are fill
     /// The composite's geometry for a selection, line widths in texels of mpp metres.
     void buildGeometry(const Data& data, const Selection& sel, const Options& opts, F32 mpp, Geometry& out);
 

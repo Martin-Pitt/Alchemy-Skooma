@@ -59,7 +59,6 @@ namespace
     const F32 COL_WALL_FULL[4] = { 229 / 255.f, 228 / 255.f, 225 / 255.f, 0.57f };
     const F32 COL_WALL_HALF[4] = { 208 / 255.f, 208 / 255.f, 205 / 255.f, 0.16f };
     const F32 COL_HATCH[4] = { 208 / 255.f, 208 / 255.f, 205 / 255.f, 0.47f };
-    constexpr F32 HATCH_SPAN_M = 128.f;     // the half-cover poché hatch shows at spans up to this
 
     const char* VS_PLAN = R"(#version 330 core
 layout(location = 0) in vec3 a_p;
@@ -552,13 +551,20 @@ void SKMapComposite::render(F32 vz, RenderPass pass, U32 target_fbo)
     glUniform4f(loc_frame, mFrameMin.mV[VX], mFrameMin.mV[VY], mFrameSize, mMpp);
     glUniform1f(glGetUniformLocation(mProgram, "u_vz"), vz);
     glUniform1f(glGetUniformLocation(mProgram, "u_shade"), mOptions.mShade ? 1.f : 0.f);
-    glUniform1f(glGetUniformLocation(mProgram, "u_hatchOn"), mSpan <= HATCH_SPAN_M ? 1.f : 0.f);
+    // The half-cover poché hatch weakens with the wall outlines as the map zooms out.
+    const F32 hatch_fade = skmap::plan::zoomFade(mMpp, skmap::plan::ZOOM_DETAIL_MPP, skmap::plan::ZOOM_WALL_GONE_MPP);
+    F32 hatch[4];
+    for (S32 i = 0; i < 4; ++i)
+    {
+        hatch[i] = lerp(COL_WALL_HALF[i], COL_HATCH[i], hatch_fade);
+    }
+    glUniform1f(glGetUniformLocation(mProgram, "u_hatchOn"), hatch_fade > 0.f ? 1.f : 0.f);
     glUniform3fv(glGetUniformLocation(mProgram, "u_floor"), 1, COL_FLOOR);
     glUniform3fv(glGetUniformLocation(mProgram, "u_terrain"), 1, COL_TERRAIN);
     glUniform3fv(glGetUniformLocation(mProgram, "u_other"), 1, COL_OTHER);
     glUniform4fv(glGetUniformLocation(mProgram, "u_wf"), 1, COL_WALL_FULL);
     glUniform4fv(glGetUniformLocation(mProgram, "u_wh"), 1, COL_WALL_HALF);
-    glUniform4fv(glGetUniformLocation(mProgram, "u_hatch"), 1, COL_HATCH);
+    glUniform4fv(glGetUniformLocation(mProgram, "u_hatch"), 1, hatch);
     glUniform1f(loc_only, -1.f);
     const auto mode = [&](S32 m) { glUniform1i(loc_mode, m); };
     const auto draw = [](const Range& r) { if (r.mCount) glDrawArrays(GL_TRIANGLES, r.mFirst, r.mCount); };

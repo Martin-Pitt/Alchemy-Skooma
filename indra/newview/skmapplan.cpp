@@ -979,6 +979,8 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
     LL_PROFILE_ZONE_NAMED("SKMapPlan.Geometry");
     Builder B;
     B.mMpp = mpp;
+    const F32 ledge_fade = zoomFade(mpp, ZOOM_DETAIL_MPP, ZOOM_LEDGE_GONE_MPP);
+    const F32 wall_fade = zoomFade(mpp, ZOOM_DETAIL_MPP, ZOOM_WALL_GONE_MPP);
     const F32 NONE = -F32_MAX;
     std::vector<F32> drawn_poly(d.mPolys.size(), NONE);
     std::vector<U32> drawn_order;
@@ -1100,21 +1102,30 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
                 }
             }
         }
-        const F32 px = w.mClass == WallClass::SOLID ? PX_SOLID : w.mClass == WallClass::HATCHED ? PX_HATCHED : PX_LEDGE;
-        const Rgba& c = w.mClass == WallClass::SOLID ? COL_WALL_LINE : w.mClass == WallClass::HATCHED ? COL_HATCH_LINE : COL_LEDGE;
+        // Zoomed out, ledges fade away and wall outlines thin and fade, leaving the walls their fill.
+        const F32 fade = w.mClass == WallClass::NONE ? ledge_fade : wall_fade;
+        if (fade <= 0.f)
+        {
+            continue;
+        }
+        const F32 px = (w.mClass == WallClass::SOLID ? PX_SOLID : w.mClass == WallClass::HATCHED ? PX_HATCHED : PX_LEDGE) * (w.mClass == WallClass::NONE ? 1.f : 0.5f + 0.5f * fade);
+        Rgba c = w.mClass == WallClass::SOLID ? COL_WALL_LINE : w.mClass == WallClass::HATCHED ? COL_HATCH_LINE : COL_LEDGE;
+        c.a *= fade;
         for (size_t k = 0; k + 1 < line.size(); ++k)
         {
             pushLine(g.mWallLines, mpp, xy(line[k]), xy(line[k + 1]), px, c, w.mFloor);
         }
     }
     // Contours on drawn floors (build.py leaves stairs out).
-    if (opts.mContours)
+    if (opts.mContours && wall_fade > 0.f)
     {
+        Rgba contour = COL_CONTOUR;
+        contour.a *= wall_fade;
         for (const Contour& c : d.mContours)
         {
             if (drawn_poly[c.mPoly] != NONE)
             {
-                pushLine(B.rank(drawn_poly[c.mPoly]).mLines, mpp, c.mA, c.mB, PX_CONTOUR, COL_CONTOUR);
+                pushLine(B.rank(drawn_poly[c.mPoly]).mLines, mpp, c.mA, c.mB, PX_CONTOUR, contour);
             }
         }
     }
@@ -1127,9 +1138,11 @@ void skmap::plan::buildGeometry(const Data& d, const Selection& sel, const Optio
             top = llmax(top, r.first);
         }
         std::vector<Vertex>& l = B.rank(top + 1.f).mLines;
+        Rgba roof = COL_ROOF_LINE;
+        roof.a *= 0.5f + 0.5f * wall_fade;
         for (const auto& s : sel.mRoofLines)
         {
-            pushLine(l, mpp, xy(s.first), xy(s.second), PX_ROOF, COL_ROOF_LINE);
+            pushLine(l, mpp, xy(s.first), xy(s.second), PX_ROOF, roof);
         }
     }
     // Doors and openings on the higher rank of their drawn sides; seam 'adjacent' portals are plain shared floor.
