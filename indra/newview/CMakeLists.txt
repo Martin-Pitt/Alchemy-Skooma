@@ -2180,6 +2180,11 @@ if(AL_BUILD_VIEWER)
       ${viewer_RESOURCE_FILES}
   )
 
+  # <SK:Nexii> outline capture
+  list(APPEND viewer_SOURCES skoutlinecapture.cpp skoutlinepolicy.cpp skfloateroutlinecapture.cpp)
+  list(APPEND viewer_HEADERS skoutlinecapture.h skoutlinepolicy.h skfloateroutlinecapture.h)
+  # </SK:Nexii>
+
   add_executable(${AL_VIEWER_BINARY_NAME} WIN32 MACOSX_BUNDLE)
 
   target_sources(${AL_VIEWER_BINARY_NAME} PRIVATE ${viewer_SOURCES} ${viewer_HEADERS})
@@ -2611,6 +2616,9 @@ if(AL_BUILD_TESTS)
   )
     al_add_test(${test} UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endforeach()
+  # <SK:Nexii> outline capture: the grid, atlas slots, render order and budget
+  al_add_test(skoutlinepolicy UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
+  # </SK:Nexii>
   # The vectorscope bins on the colour wheels' own chroma plane, so the scope
   # data test links the model that defines it rather than keeping a second copy
   # of the basis that could drift from it.
