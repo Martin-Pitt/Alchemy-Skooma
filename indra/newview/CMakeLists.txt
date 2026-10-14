@@ -1009,6 +1009,7 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skworldmapmath.cpp
   )
 
   set(
@@ -1883,6 +1884,7 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skworldmapmath.h
   )
 
   # Discord rich presence, over the SDK from the private registry.
@@ -2527,6 +2529,7 @@ if(AL_BUILD_TESTS)
     llvocache
     lutcube
     noise
+    skworldmapmath
   )
     al_add_test(${test} UNIT PROJECT ${test_project} LIBRARIES ${test_libs})
   endforeach()
