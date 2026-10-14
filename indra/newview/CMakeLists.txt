@@ -1009,7 +1009,10 @@ if(AL_BUILD_VIEWER)
     rlvinventory.cpp
     rlvlocks.cpp
     rlvui.cpp
+    skmapmode.cpp
     skworldmapmath.cpp
+    skworldmapscene.cpp
+    skworldmaptiles.cpp
   )
 
   set(
@@ -1884,7 +1887,10 @@ if(AL_BUILD_VIEWER)
     rlvmodifiers.h
     rlvui.h
     roles_constants.h
+    skmapmode.h
     skworldmapmath.h
+    skworldmapscene.h
+    skworldmaptiles.h
   )
 
   # Discord rich presence, over the SDK from the private registry.

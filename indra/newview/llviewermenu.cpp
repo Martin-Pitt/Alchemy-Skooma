@@ -139,6 +139,7 @@
 #include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 #include "llviewerjoystick.h"
 #include "llfloatercamera.h"
 #include "lluilistener.h"
@@ -10454,6 +10455,10 @@ static void register_agent_ui_callbacks()
     global_enable.add("Agent.IsMicrophoneOn", boost::bind(&LLAgent::isMicrophoneOn, _2));
     global_enable.add("Agent.IsActionAllowed", boost::bind(&LLAgent::isActionAllowed, _2));
     global_enable.add("Avatar.IsMyProfileOpen", boost::bind(&LLAvatarActions::myProfileVisible));
+    // <SK:Nexii> 3D world map: toggles map mode from the World menu and its shortcut.
+    global_commit.add("WorldMap3D.Toggle", boost::bind(&SKMapMode::toggle, boost::bind(&SKMapMode::getInstance)));
+    global_enable.add("WorldMap3D.IsOpen", boost::bind(&SKMapMode::isOpen));
+    // </SK:Nexii>
     global_enable.add("Avatar.IsPicksTabOpen", boost::bind(&LLAvatarActions::myPicksTabVisible));
 }
 

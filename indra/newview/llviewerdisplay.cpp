@@ -89,6 +89,7 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 #include <filesystem>
 #include <iomanip>
@@ -140,6 +141,30 @@ void render_hud_attachments();
 void render_ui_3d();
 void render_ui_2d();
 void render_disconnected_background();
+
+// <SK:Nexii> 3D world map: a map frame keeps the image updates of a world frame, then draws the map and the UI.
+static bool sSKMapFrame = false;
+
+static void sk_display_map()
+{
+    LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("World Map Frame");
+    LLViewerTexture::updateClass();
+    gBumpImageList.updateImages();
+    const F32 max_image_decode_time = llclamp(0.050f * gFrameIntervalSeconds.value(), 0.002f, 0.005f);
+    gTextureList.updateImages(max_image_decode_time);
+    gGLTFMaterialList.flushMaterials();
+
+    gGL.setColorMask(true, true);
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    SKMapMode::instance().render(gViewerWindow->getWorldViewRectRaw());
+
+    sSKMapFrame = true;
+    render_ui();
+    sSKMapFrame = false;
+    swap();
+}
+// </SK:Nexii>
 
 void getProfileStatsContext(LLSD& stats);
 std::string getProfileStatsFilename();
@@ -732,7 +757,24 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
     gPipeline.resetFrameStats();    // Reset per-frame statistics.
 
-    if (!gDisconnected && !LLApp::isExiting())
+    // <SK:Nexii> 3D world map: map mode draws the map in place of the world, as the disconnected
+    // screen does above; a teleport, a disconnect, logging out or a GL restore closes it.
+    bool sk_map_frame = false;
+    if (SKMapMode::isOpen())
+    {
+        if (gTeleportDisplay || gDisconnected || gRestoreGL || LLApp::isExiting() || LLAppViewer::instance()->logoutRequestSent())
+        {
+            SKMapMode::instance().close();
+        }
+        else if (!for_snapshot)
+        {
+            sk_map_frame = true;
+            sk_display_map();
+        }
+    }
+    // </SK:Nexii>
+
+    if (!gDisconnected && !sk_map_frame && !LLApp::isExiting()) // <SK:Nexii> 3D world map: no world in a map frame
     {
         // Render mirrors and associated hero probes before we render the rest of the scene.
         // This ensures the scene state in the hero probes are exactly the same as the rest of the scene before we render it.
@@ -1521,14 +1563,20 @@ void render_ui(F32 zoom_factor, int subfield)
     }
 
     // apply gamma correction and post effects
-    gPipeline.renderFinalize();
+    if (!sSKMapFrame) // <SK:Nexii> 3D world map: the map has already drawn its frame
+    {
+        gPipeline.renderFinalize();
+    }
 
     {
         LLGLState::checkStates();
 
 
         LL_PROFILE_ZONE_NAMED_CATEGORY_UI("HUD");
-        render_hud_elements();
+        if (!sSKMapFrame) // <SK:Nexii> 3D world map: no world overlays over the map
+        {
+            render_hud_elements();
+        }
         LLGLState::checkStates();
 // [RLVa:KB] - Checked: RLVa-2.2 (@setoverlay)
         if (RlvActions::hasBehaviour(RLV_BHVR_SETOVERLAY))
@@ -1536,7 +1584,10 @@ void render_ui(F32 zoom_factor, int subfield)
             LLVfxManager::instance().runEffect(EVisualEffect::RlvOverlay);
         }
 // [/RLVa:KB]
-        render_hud_attachments();
+        if (!sSKMapFrame) // <SK:Nexii> 3D world map: no HUD attachments over the map
+        {
+            render_hud_attachments();
+        }
 
         LLGLState::checkStates();
 
@@ -1570,7 +1621,10 @@ void render_ui(F32 zoom_factor, int subfield)
         if (render_ui)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_UI("UI 2D"); //LL_RECORD_BLOCK_TIME(FTM_RENDER_UI_2D);
-            LLHUDObject::renderAll();
+            if (!sSKMapFrame) // <SK:Nexii> 3D world map: hover text and name tags belong to the world
+            {
+                LLHUDObject::renderAll();
+            }
             render_ui_2d();
         }
 
@@ -1668,6 +1722,11 @@ void draw_axes()
 
 void render_ui_3d()
 {
+    if (sSKMapFrame) // <SK:Nexii> 3D world map: the world's 3D UI belongs to the world camera
+    {
+        return;
+    }
+
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
     LLGLSPipeline gls_pipeline;
 
