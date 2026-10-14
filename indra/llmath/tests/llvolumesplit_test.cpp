@@ -313,4 +313,49 @@ namespace tut
         }
         std::cout << std::endl;
     }
+
+    // A volume regenerated in place (an edited prim's unique volume) matches a fresh one when its face sizes change.
+    template<> template<>
+    void object::test<5>()
+    {
+        const F32 hollows[] = { 0.f, 0.5f };
+        const F32 cut_ends[] = { 1.f, 0.75f };
+        for (bool from_split : { true, false })
+        for (F32 hollow : hollows)
+        for (F32 cut_end : cut_ends)
+        {
+            LLVolumeParams params;
+            params.setType(LL_PCODE_PROFILE_SQUARE, LL_PCODE_PATH_LINE);
+            params.setBeginAndEndS(0.f, cut_end);
+            params.setBeginAndEndT(0.f, 1.f);
+            params.setRatio(1.f, 1.f);
+            params.setHollow(hollow);
+
+            LLPointer<LLVolume> volume = make(params, from_split);
+            LLVolume::sSplitFlatSides = !from_split;
+            volume->setDirty();
+            volume->regen();
+            LLVolume::sSplitFlatSides = false;
+            LLPointer<LLVolume> fresh = make(params, !from_split);
+
+            std::ostringstream what;
+            what << (from_split ? "split to plain" : "plain to split") << " hollow " << hollow << " cut " << cut_end;
+            ensure_equals(what.str() + ": face count", volume->getNumVolumeFaces(), fresh->getNumVolumeFaces());
+            for (S32 f = 0; f < fresh->getNumVolumeFaces(); ++f)
+            {
+                const LLVolumeFace& rf = volume->getVolumeFace(f);
+                const LLVolumeFace& ff = fresh->getVolumeFace(f);
+                std::ostringstream face;
+                face << what.str() << " face " << f;
+                ensure_equals(face.str() + ": vertices", rf.mNumVertices, ff.mNumVertices);
+                ensure_equals(face.str() + ": indices", rf.mNumIndices, ff.mNumIndices);
+                for (S32 i = 0; i < ff.mNumIndices; ++i)
+                {
+                    ensure_equals(face.str() + ": index", rf.mIndices[i], ff.mIndices[i]);
+                }
+                std::string err = covers(rf, triangles(ff), true);
+                ensure(face.str() + ": " + err, err.empty());
+            }
+        }
+    }
 }

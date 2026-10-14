@@ -6068,6 +6068,7 @@ bool LLVolumeFace::createUnCutCubeCap(LLVolume* volume, bool partial_build)
 
     // S32 i;
     S32 grid_size = (profile.size()-1)/4;
+    partial_build = partial_build && mNumIndices == grid_size*grid_size*6; // <SK:Nexii> Prim edge splits: a resized grid needs its indices rebuilt
     // VFExtents change
     LLVector4a& min = mExtents[0];
     LLVector4a& max = mExtents[1];
@@ -6869,7 +6870,7 @@ bool LLVolumeFace::createSide(LLVolume* volume, bool partial_build)
     num_vertices = mNumS*mNumT;
     num_indices = (mNumS-1)*(mNumT-1)*6;
 
-    partial_build = (num_vertices > mNumVertices || num_indices > mNumIndices) ? false : partial_build;
+    partial_build = (num_vertices != mNumVertices || num_indices != mNumIndices) ? false : partial_build; // <SK:Nexii> Prim edge splits: a shrunk face needs its indices rebuilt too
 
     if (!partial_build)
     {
