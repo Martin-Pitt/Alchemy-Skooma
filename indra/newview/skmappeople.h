@@ -148,6 +148,8 @@ public:
 
     /// A map drew this frame with this view: the idle work runs while one has, recently.
     void noteDrawn(const skmap::MapView& view);
+    /// The same for a view that is no map (the tactical overview): what it shows, as a global box.
+    void noteDrawn(const LLVector3d& min, const LLVector3d& max);
     bool active() const;
 
     static void onIdle(void*);

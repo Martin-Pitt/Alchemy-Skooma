@@ -229,6 +229,12 @@ namespace skmapdraw
     LLViewerTexture* shadowSprite();
     void shadow(const LLVector2& centre, F32 radius);
     void releaseTextures();
+    /// One person's marker inside a TRIANGLES batch: a disc in their colour (cyan for coded allies in combat), the
+    /// heading triangle along ahead (a unit vector in the same space; none when null) and the floor chevron.
+    void personMarker(const SKMapPeople::Person& p, const LLVector2& at, F32 radius, const LLVector2* ahead,
+                      skmap::FloorRelation floor, F32 font_px);
+    /// A marker's radius in pixels for a person drawn without a code label.
+    F32 plainMarkerRadius(skmap::FloorRelation floor);
 }
 
 #endif // SK_NETMAP_H

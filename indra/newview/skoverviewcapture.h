@@ -29,6 +29,8 @@
 #include "llcamera.h"
 #include "llmatrix4a.h"
 #include "llsingleton.h"
+#include "lluuid.h"
+#include "v2math.h"
 #include "skoverviewcensus.h"
 #include "v3dmath.h"
 
@@ -62,6 +64,9 @@ public:
     static void cleanupGL();
     /// Called after renderFinalize, before the HUD and UI: draws the tactical overview over the finished frame.
     static void onComposite();
+    /// Whether the tactical overview covers the world view this frame: world-space name tags and hover text stay off it.
+    static bool tacticalShown();
+
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
     /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
@@ -90,7 +95,9 @@ private:
     /// Caps Lock is taken from the OS while the tactical action is bound to it and the world has the keyboard.
     static void updateCapsLockCapture();
     /// The floor under the agent from the navmesh and the cut above it, or the agent's height and the old offset.
-    void cutHeights(F32& floor_z, F32& cut_z) const;
+    void cutHeights(const LLVector3d& at, F32 fallback_z, F32& floor_z, F32& cut_z) const;
+    /// What the tactical orbit centres on: the avatar, the alt-cam focus target, or the surface under a flycam.
+    void tacticalCentre(LLVector3d& centre) const;
     bool ensureGL(LLRenderTarget& capture, LLRenderTarget& resolved, S32 w, S32 h);
     bool ensureShaders();
     void releaseGL();
@@ -116,6 +123,16 @@ private:
     LLMatrix4a mTacticalProj;
     S32 mTacticalViewport[4] = {};
     bool mTacticalReady = false;
+    LLVector3 mTacticalCentre;   // agent space
+    F32 mTacticalReach = 0.f;
+    U32 mLastCompositeFrame = 0;
+    struct TacticalMark
+    {
+        LLUUID mId;
+        LLVector2 mAt;      // overview pixels
+    };
+    std::vector<TacticalMark> mTacticalMarks;  // the markers drawn last frame, for picks
+
 };
 
 #endif // SK_OVERVIEWCAPTURE_H

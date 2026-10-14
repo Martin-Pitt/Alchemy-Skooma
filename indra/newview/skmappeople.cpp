@@ -92,8 +92,16 @@ void SKMapPeople::cleanupSingleton()
 
 void SKMapPeople::noteDrawn(const skmap::MapView& view)
 {
+    LLVector3d min, max;
+    view.visibleBox(min, max);
+    noteDrawn(min, max);
+}
+
+void SKMapPeople::noteDrawn(const LLVector3d& min, const LLVector3d& max)
+{
     mLastDrawn = LLFrameTimer::getUptimeSeconds().value();
-    view.visibleBox(mViewMin, mViewMax);
+    mViewMin = min;
+    mViewMax = max;
     const LLVector3d pad = (mViewMax - mViewMin) * 0.05;
     mViewMin -= pad;
     mViewMax += pad;

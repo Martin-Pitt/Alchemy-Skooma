@@ -148,6 +148,51 @@ namespace skmapdraw
         }
     }
 
+    void personMarker(const SKMapPeople::Person& p, const LLVector2& at, F32 radius, const LLVector2* ahead,
+                      skmap::FloorRelation floor, F32 font_px)
+    {
+        static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
+        // Allies in combat are cyan; everyone else keeps the general colours.
+        if (p.mVisibility == skmap::Visibility::DOT_CODED)
+        {
+            colour(skmap::palette::DOT_COMBAT);
+        }
+        else
+        {
+            gGL.color4f(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
+        }
+        if (ahead)
+        {
+            const LLVector2 across(-ahead->mV[VY], ahead->mV[VX]);
+            const LLVector2 base = at + *ahead * (radius + skmap::palette::HEADING_BASE_PX);
+            triangle(at + *ahead * (radius + skmap::palette::HEADING_TIP_PX), base + across * skmap::palette::HEADING_HALF_PX,
+                     base - across * skmap::palette::HEADING_HALF_PX);
+        }
+        disc(at, radius);
+        if (chevron)
+        {
+            // Upright whatever the rotation: up for the floor above, down for the one below.
+            const F32 half = llmin(radius - skmap::palette::CHEVRON_STROKE_PX, font_px * 0.3f);
+            const F32 dy = half * 0.55f;
+            const F32 sign = floor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
+            colour(skmap::palette::CODE_INK);
+            const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
+            line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
+            line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
+        }
+    }
+
+    F32 plainMarkerRadius(skmap::FloorRelation floor)
+    {
+        static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
+        static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
+        static LLCachedControl<F32> padding(gSavedSettings, "SKMapMarkerPaddingPx", 0.5f);
+        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
+        return skmap::markerRadius(chevron, false, 0, 0.f, llclamp(static_cast<F32>(font_px), 8.f, 11.f),
+                                   llclamp(static_cast<F32>(padding), 0.f, 3.f));
+    }
+
     LLViewerTexture* shadowSprite()
     {
         if (sShadowSprite.isNull())
@@ -978,7 +1023,6 @@ void SKNetMap::collectDots()
 void SKNetMap::drawPeople()
 {
     static LLCachedControl<bool> triangles(gSavedSettings, "SKMapHeadingTriangles", true);
-    static LLCachedControl<bool> chevrons(gSavedSettings, "SKMapFloorChevrons", true);
     static LLCachedControl<U32> font_px(gSavedSettings, "SKMapMarkerFontPx", 8);
     const F32 FONT_PX = llclamp(static_cast<F32>(font_px), 8.f, 11.f);
     const std::vector<SKMapPeople::Person>& people = SKMapPeople::instance().people();
@@ -1002,38 +1046,14 @@ void SKNetMap::drawPeople()
         const LLVector2 at = d.mPos;
         const F32 radius = d.mRadius;
         const skmap::FloorRelation floor = d.mPerson < mFloorOf.size() ? mFloorOf[d.mPerson] : skmap::FloorRelation::SAME;
-        const bool chevron = chevrons && (floor == skmap::FloorRelation::ABOVE || floor == skmap::FloorRelation::BELOW);
-        // Allies in combat are cyan; everyone else keeps the general colours.
-        const bool ally_coded = p.mVisibility == skmap::Visibility::DOT_CODED;
-        if (ally_coded)
-        {
-            skmapdraw::colour(skmap::palette::DOT_COMBAT);
-        }
-        else
-        {
-            gGL.color4f(p.mColour.mV[0], p.mColour.mV[1], p.mColour.mV[2], 1.f);
-        }
+        LLVector2 ahead;
+        bool has_ahead = false;
         if (triangles && p.mHasHeading)
         {
-            LLVector2 ahead = mView.toWidgetOffset(std::cos(p.mHeading), std::sin(p.mHeading));
-            ahead.normVec();
-            const LLVector2 across(-ahead.mV[VY], ahead.mV[VX]);
-            const LLVector2 base = at + ahead * (radius + skmap::palette::HEADING_BASE_PX);
-            skmapdraw::triangle(at + ahead * (radius + skmap::palette::HEADING_TIP_PX), base + across * skmap::palette::HEADING_HALF_PX,
-                                base - across * skmap::palette::HEADING_HALF_PX);
+            ahead = mView.toWidgetOffset(std::cos(p.mHeading), std::sin(p.mHeading));
+            has_ahead = ahead.normVec() > 1e-6f;
         }
-        skmapdraw::disc(at, radius);
-        if (chevron)
-        {
-            // Upright whatever the rotation: up for the floor above, down for the one below.
-            const F32 half = llmin(radius - skmap::palette::CHEVRON_STROKE_PX, FONT_PX * 0.3f);
-            const F32 dy = half * 0.55f;
-            const F32 sign = floor == skmap::FloorRelation::ABOVE ? 1.f : -1.f;
-            skmapdraw::colour(skmap::palette::CODE_INK);
-            const LLVector2 left = at + LLVector2(-half, -sign * dy), apex = at + LLVector2(0.f, sign * dy), right = at + LLVector2(half, -sign * dy);
-            skmapdraw::line(left, apex, skmap::palette::CHEVRON_STROKE_PX);
-            skmapdraw::line(apex, right, skmap::palette::CHEVRON_STROKE_PX);
-        }
+        skmapdraw::personMarker(p, at, radius, has_ahead ? &ahead : nullptr, floor, FONT_PX);
     }
     gGL.end();
 }
