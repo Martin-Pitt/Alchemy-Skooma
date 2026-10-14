@@ -413,17 +413,11 @@ U32 SKOverviewCapture::render(LLRenderTarget& capture, LLRenderTarget& resolved,
         glUniform1f(glGetUniformLocation(prog, "sk_cut"), shot.mCut);
         glUniform1f(glGetUniformLocation(prog, "sk_water_z"), region->getWaterHeight());
         glUniform1f(glGetUniformLocation(prog, "sk_water_depth"), skmap::palette::WATER_DEPTH_M);
-        uniformColour(prog, "sk_floor", skmap::palette::MAT_OBJECT);
-        uniformColour(prog, "sk_terrain", skmap::palette::MAT_TERRAIN);
-        uniformColour(prog, "sk_water_shallow", skmap::palette::WATER_SHALLOW);
-        uniformColour(prog, "sk_water_deep", skmap::palette::WATER_DEEP);
-        uniformColour(prog, "sk_wall_full", skmap::palette::SECTION_FULL);
-        uniformColour(prog, "sk_wall_half", skmap::palette::SECTION_HALF);
         uniformColour(prog, "sk_invisible", skmap::palette::DROP_EDGE);
-        uniformColour(prog, "sk_door", skmap::palette::DOOR);
-        uniformColour(prog, "sk_ladder", skmap::palette::RUNG_CORE);
-        uniformColour(prog, "sk_vehicle", skmap::palette::VEH_NEUTRAL_HULL);
-        uniformColour(prog, "sk_ghost", skmap::palette::CHROME_BORDER);
+        const LLVector3 region_min = region->getOriginAgent();
+        const F32 region_width = region->getWidth();
+        glUniform4f(glGetUniformLocation(prog, "sk_region"), region_min.mV[VX], region_min.mV[VY],
+                    region_min.mV[VX] + region_width, region_min.mV[VY] + region_width);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
         gGL.getTextureSlot(1)->unbind();

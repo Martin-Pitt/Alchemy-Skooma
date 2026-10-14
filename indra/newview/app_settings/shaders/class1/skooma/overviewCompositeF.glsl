@@ -22,7 +22,7 @@
  */
 
 // Tactical overview: the resolved overview over a near-black ground, blurred toward the top and bottom of the view
-// (tilt-shift) so the band around the agent stays sharp.
+// (tilt-shift) so the band around the agent stays sharp, darkened toward the corners.
 
 out vec4 frag_color;
 
@@ -42,9 +42,10 @@ void main()
     float band = clamp(abs(uv.y - 0.5) * 2.0 - 0.25, 0.0, 1.0) / 0.75;
     float r = sk_tilt_px * band * band;
     vec2 texel = 1.0 / sk_viewport.zw;
+    float vignette = 1.0 - 0.35 * smoothstep(0.35, 0.85, length((uv - 0.5) * vec2(1.0, 0.8)));
     if (r < 0.5)
     {
-        frag_color = vec4(over(texture(overviewMap, uv)), 1.0);
+        frag_color = vec4(over(texture(overviewMap, uv)) * vignette, 1.0);
         return;
     }
     // Twelve taps on two rings, rotated per pixel to hide the pattern.
@@ -56,5 +57,5 @@ void main()
         float rad = r * (i < 6 ? 0.5 : 1.0);
         sum += over(texture(overviewMap, uv + vec2(cos(ang), sin(ang)) * rad * texel));
     }
-    frag_color = vec4(sum / 13.0, 1.0);
+    frag_color = vec4(sum / 13.0 * vignette, 1.0);
 }
