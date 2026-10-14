@@ -40,7 +40,7 @@ namespace skmap
 class SKMapComposite
 {
 public:
-    SKMapComposite() = default;
+    SKMapComposite();
     ~SKMapComposite();
     SKMapComposite(const SKMapComposite&) = delete;
     SKMapComposite& operator=(const SKMapComposite&) = delete;

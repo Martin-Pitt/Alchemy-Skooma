@@ -413,6 +413,8 @@ namespace
     }
 }
 
+SKMapComposite::SKMapComposite() = default;
+
 SKMapComposite::~SKMapComposite()
 {
     if (mPool)
