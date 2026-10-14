@@ -485,6 +485,7 @@ public:
     void clearAllRenderDebugDisplays() { mRenderDebugMask = 0x0; }
 
     bool hasRenderType(const U32 type) const;
+    bool isRenderTypeEnabled(const U32 type) const { return mRenderTypeEnabled[type]; } // <SK:Nexii/> the user's toggle, for the combat render lockout
     bool hasAnyRenderType(const U32 type, ...) const;
 
     static bool isWaterClip();
