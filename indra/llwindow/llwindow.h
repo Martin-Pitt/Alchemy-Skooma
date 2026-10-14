@@ -154,6 +154,10 @@ public:
     // may also be useful in other cases.
     virtual void setTitle(const std::string title);
 
+    // <SK:Nexii> tactical overview: take Caps Lock from the OS while wanted, so a binding on it never toggles caps; Windows only.
+    virtual void skSetCapsLockCapture(bool want) {}
+    // </SK:Nexii>
+
     // These two functions create a way to make a busy cursor instead
     // of an arrow when someone's busy doing something. Draw an
     // arrow/hour if busycount > 0.

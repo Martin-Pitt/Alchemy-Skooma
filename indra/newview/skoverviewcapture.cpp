@@ -28,6 +28,11 @@
 #include "skoverviewcapture.h"
 
 #include "llagent.h"
+#include "llfocusmgr.h"
+#include "llkeyboard.h"
+#include "llviewerinput.h"
+#include "llviewerwindow.h"
+#include "llwindow.h"
 #include "llcharacter.h"
 #include "llframetimer.h"
 #include "llgl.h"
@@ -84,6 +89,7 @@ SKOverviewCapture::~SKOverviewCapture() = default;
 
 void SKOverviewCapture::onFrame()
 {
+    updateCapsLockCapture();
     static LLCachedControl<bool> enabled(gSavedSettings, "SKMapCaptureBase", false);
     static LLCachedControl<bool> tactical(gSavedSettings, "SKTacticalOverview", false);
     if (!enabled && !tactical)
@@ -95,6 +101,39 @@ void SKOverviewCapture::onFrame()
         return;
     }
     instance().frame();
+}
+
+void SKOverviewCapture::updateCapsLockCapture()
+{
+    // Take Caps Lock from the OS only while the world has the keyboard and the tactical action sits on it bare, so
+    // chat and editors still type capitals with it.
+    static const std::string caps = LLKeyboard::stringFromAccelerator(MASK_NONE, KEY_CAPSLOCK);
+    static U32 frame = 0;
+    static bool bound = false;
+    if (frame++ % 30 == 0)
+    {
+        const std::string keys = gViewerInput.getKeyBindingAsString("", "tactical_overview");
+        bound = false;
+        for (size_t at = 0; at <= keys.size();)
+        {
+            const size_t end = keys.find(" | ", at);
+            if (keys.substr(at, end == std::string::npos ? std::string::npos : end - at) == caps)
+            {
+                bound = true;
+                break;
+            }
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            at = end + 3;
+        }
+    }
+    const bool want = bound && gFocusMgr.getAppHasFocus() && !gFocusMgr.getKeyboardFocus();
+    if (LLWindow* window = gViewerWindow ? gViewerWindow->getWindow() : nullptr)
+    {
+        window->skSetCapsLockCapture(want);
+    }
 }
 
 bool SKOverviewCapture::handleScrollWheel(F32 clicks)

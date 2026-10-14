@@ -184,6 +184,10 @@ void LLKeyboardWin32::resetMaskKeys()
 //}
 
 
+// <SK:Nexii> tactical overview: Caps Lock is between its down and up messages.
+static bool sCapsHeld = false;
+// </SK:Nexii>
+
 MASK LLKeyboardWin32::updateModifiers()
 {
     //RN: this seems redundant, as we should have already received the appropriate
@@ -191,6 +195,9 @@ MASK LLKeyboardWin32::updateModifiers()
 
     // Scan the modifier keys as of the last Windows key message
     // (keydown encoded in high order bit of short)
+    // <SK:Nexii> tactical overview: while Caps Lock is physically held its level is the key, so a binding sees press and release
+    if (!sCapsHeld)
+    // </SK:Nexii>
     mKeyLevel[KEY_CAPSLOCK] = (GetKeyState(VK_CAPITAL) & 0x0001) != 0; // Low order bit carries the toggle state.
     // Get mask for keyboard events
     MASK mask = currentMask(false);
@@ -238,6 +245,13 @@ bool LLKeyboardWin32::handleKeyDown(const LLKeyboard::NATIVE_KEY_TYPE key, MASK 
         {
             mKeyDownTranslation[phys] = translated_key;
         }
+        // <SK:Nexii> tactical overview: a fresh Caps Lock press is a down edge whatever its toggle state was
+        if (translated_key == KEY_CAPSLOCK && !sCapsHeld)
+        {
+            mKeyLevel[KEY_CAPSLOCK] = false;
+            sCapsHeld = true;
+        }
+        // </SK:Nexii>
         handled = handleTranslatedKeyDown(translated_key, translated_mask);
     }
 
@@ -268,6 +282,13 @@ bool LLKeyboardWin32::handleKeyUp(const LLKeyboard::NATIVE_KEY_TYPE key, MASK ma
     {
         handled = handleTranslatedKeyUp(translated_key, translated_mask);
     }
+    // <SK:Nexii> tactical overview: after the release, Caps Lock's level is its toggle state again
+    if (sCapsHeld && key == VK_CAPITAL)
+    {
+        sCapsHeld = false;
+        updateModifiers();
+    }
+    // </SK:Nexii>
 
     return handled;
 }

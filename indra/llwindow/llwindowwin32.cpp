@@ -27,6 +27,7 @@
 #include "linden_common.h"
 
 #include "llwindowwin32.h"
+#include <atomic> // <SK:Nexii> tactical overview
 
 // LLWindow library includes
 #include "llkeyboardwin32.h"
@@ -94,6 +95,34 @@ const F32   ICON_FLASH_TIME = 0.5f;
 // Claim a couple unused GetMessage() message IDs
 const UINT WM_DUMMY_(WM_USER + 0x0017);
 const UINT WM_POST_FUNCTION_(WM_USER + 0x0018);
+
+// <SK:Nexii> tactical overview: a low-level hook takes Caps Lock before the OS toggles caps and hands it to the window.
+const UINT WM_SK_CAPSLOCK_(WM_APP + 0x0A57); // wParam 1 down, 0 up
+namespace
+{
+    std::atomic<bool> sSKCapsWanted{ false };
+    std::atomic<HWND> sSKCapsWindow{ nullptr };
+    HHOOK sSKCapsHook = nullptr; // window thread only
+
+    // Trivial and fast: Windows drops a low-level hook that overruns LowLevelHooksTimeout.
+    LRESULT CALLBACK skCapsLockHook(int code, WPARAM w_param, LPARAM l_param)
+    {
+        if (code == HC_ACTION)
+        {
+            const KBDLLHOOKSTRUCT* k = reinterpret_cast<const KBDLLHOOKSTRUCT*>(l_param);
+            HWND window = sSKCapsWindow.load(std::memory_order_relaxed);
+            if (k->vkCode == VK_CAPITAL && !(k->flags & LLKHF_INJECTED) && window &&
+                sSKCapsWanted.load(std::memory_order_relaxed) && GetForegroundWindow() == window)
+            {
+                const bool up = w_param == WM_KEYUP || w_param == WM_SYSKEYUP;
+                PostMessage(window, WM_SK_CAPSLOCK_, up ? 0 : 1, 0);
+                return 1;
+            }
+        }
+        return CallNextHookEx(nullptr, code, w_param, l_param);
+    }
+}
+// </SK:Nexii>
 
 extern bool gDebugWindowProc;
 
@@ -1000,9 +1029,34 @@ bool destroy_window_handler(HWND hWnd)
 
 // close() destroys all OS-specific code associated with a window.
 // Usually called from LLWindowManager::destroyWindow()
+// <SK:Nexii> tactical overview: install the hook while wanted, on the window thread, which pumps its messages.
+void LLWindowWin32::skSetCapsLockCapture(bool want)
+{
+    if (want == sSKCapsWanted.load())
+    {
+        return;
+    }
+    sSKCapsWanted = want;
+    sSKCapsWindow = mWindowHandle;
+    mWindowThread->post([want]()
+        {
+            if (want && !sSKCapsHook)
+            {
+                sSKCapsHook = SetWindowsHookEx(WH_KEYBOARD_LL, skCapsLockHook, GetModuleHandle(nullptr), 0);
+            }
+            else if (!want && sSKCapsHook)
+            {
+                UnhookWindowsHookEx(sSKCapsHook);
+                sSKCapsHook = nullptr;
+            }
+        });
+}
+// </SK:Nexii>
+
 void LLWindowWin32::close()
 {
     LL_DEBUGS("Window") << "Closing LLWindowWin32" << LL_ENDL;
+    skSetCapsLockCapture(false); // <SK:Nexii> tactical overview: no hook outlives the window
     // Is window is already closed?
     if (!mWindowHandle)
     {
@@ -2940,6 +2994,24 @@ LRESULT CALLBACK LLWindowWin32::mainWindowProc(HWND h_wnd, UINT u_msg, WPARAM w_
             if (eat_keystroke) return 0;    // skip DefWindowProc() handling if we're consuming the keypress
             break;
         }
+        // <SK:Nexii> tactical overview: Caps Lock taken by the low-level hook, as a key press or release
+        case WM_SK_CAPSLOCK_:
+        {
+            const bool down = w_param != 0;
+            window_imp->post([=]()
+                {
+                    if (down)
+                    {
+                        gKeyboard->handleKeyDown((U16)VK_CAPITAL, 0);
+                    }
+                    else
+                    {
+                        gKeyboard->handleKeyUp((U16)VK_CAPITAL, 0);
+                    }
+                });
+            return 0;
+        }
+        // </SK:Nexii>
         case WM_SYSKEYUP:
             eat_keystroke = false;
             // intentional fall-through here

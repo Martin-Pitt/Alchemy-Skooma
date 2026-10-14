@@ -40,7 +40,7 @@
     <binding key="" mask="NONE" mouse="LMB" command="script_trigger_lbutton"/>
 
     <!-- <SK:Nexii> tactical overview -->
-    <binding key="TAB" mask="NONE" command="tactical_overview"/>
+    <binding key="CAPSLOCK" mask="NONE" command="tactical_overview"/>
   </first_person>
   <third_person>
     <binding key="A" mask="NONE" command="turn_left"/>
@@ -125,7 +125,7 @@
     <binding key="E" mask="CTL_SHIFT" command="roll_reset"/>
 
     <!-- <SK:Nexii> tactical overview -->
-    <binding key="TAB" mask="NONE" command="tactical_overview"/>
+    <binding key="CAPSLOCK" mask="NONE" command="tactical_overview"/>
   </third_person>
   <sitting>
     <binding key="A" mask="ALT" command="spin_around_cw"/>
