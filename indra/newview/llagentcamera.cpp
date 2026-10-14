@@ -2404,13 +2404,72 @@ void LLAgentCamera::handleScrollWheel(F32 clicks)
 // [/RLVa:KB]
 //          cameraOrbitIn(current_zoom_fraction * camera_offset_initial_mag * gSavedSettings.getF32("CameraOffsetScale"));
         }
-        else
+        // <SK:Nexii> Alt-cam zoom to cursor, classic zoom when it opts out or misses
+        else if (!cameraZoomToCursor(clicks))
+        // </SK:Nexii>
         {
             F32 current_zoom_fraction = (F32)mCameraFocusOffsetTarget.magVec();
             cameraOrbitIn(current_zoom_fraction * (1.f - (F32)pow(ROOT_ROOT_TWO, clicks)));
         }
     }
 }
+
+// <SK:Nexii> Alt-cam zoom to cursor
+bool LLAgentCamera::cameraZoomToCursor(F32 clicks)
+{
+    static LLCachedControl<bool> zoom_to_cursor(gSavedSettings, "SKCameraZoomToCursor", true);
+    if (!zoom_to_cursor || mCameraMode == CAMERA_MODE_CUSTOMIZE_AVATAR)
+    {
+        return false;
+    }
+
+    LLPickInfo pick = gViewerWindow->pickImmediate(gViewerWindow->getCurrentMouseX(), gViewerWindow->getCurrentMouseY(),
+                                                   false /*pick_transparent*/, false /*pick_rigged*/);
+    LLViewerObject* hit_obj = pick.getObject();
+    if ((!hit_obj && pick.mPosGlobal.isExactlyZero()) || (hit_obj && hit_obj->isHUDAttachment()))
+    {
+        return false;
+    }
+
+    // Scaling camera and focus about the picked point keeps that point under the cursor.
+    const LLVector3d cursor = pick.mPosGlobal;
+    const LLVector3d camera = mFocusTargetGlobal + mCameraFocusOffsetTarget;
+    const F64 focus_distance = mCameraFocusOffsetTarget.magVec();
+    const F64 cursor_distance = (camera - cursor).magVec();
+    if (focus_distance <= 0.0 || cursor_distance <= 0.0)
+    {
+        return false;
+    }
+
+    F64 scale = pow(sqrt(F_SQRT2), (F64)clicks);
+    if (!isDisableCameraConstraints())
+    {
+        F64 min_zoom = LAND_MIN_ZOOM;
+        if (hit_obj)
+        {
+            min_zoom = hit_obj->isAvatar() ? AVATAR_MIN_ZOOM : OBJECT_MIN_ZOOM;
+        }
+        scale = llmax(scale, min_zoom / llmin(focus_distance, cursor_distance));
+    }
+    scale = llmin(scale, (F64)getCameraMaxZoomDistance() / focus_distance);
+    if (RlvActions::isRlvEnabled() && !allowFocusOffsetChange(mCameraFocusOffsetTarget * scale))
+    {
+        return false;
+    }
+
+    setFocusObject(hit_obj);
+    mFocusTargetGlobal = cursor + (mFocusTargetGlobal - cursor) * scale;
+    mFocusGlobal = mFocusTargetGlobal;
+    mCameraFocusOffsetTarget *= scale;
+
+    // The focus moves sideways, so smoothing the camera behind it would swing the view.
+    mCameraSmoothingStop = true;
+    cameraZoomIn(1.f);
+    updateFocusOffset();
+    mCameraSmoothingLastPositionGlobal = calcCameraPositionTargetGlobal();
+    return true;
+}
+// </SK:Nexii>
 
 
 //-----------------------------------------------------------------------------
