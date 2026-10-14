@@ -596,6 +596,17 @@
              name="sk_debug_force_combat"
              top_pad="5"
              width="308" />
+            <check_box
+             control_name="SKMapRecord"
+             follows="left|top"
+             height="16"
+             label="Record map updates (to the logs folder)"
+             layout="topleft"
+             left="8"
+             name="sk_map_record"
+             tool_tip="Records why the map and the navmesh under it update, until unticked."
+             top_pad="5"
+             width="308" />
             <combo_box
              control_name="SKMapPlanOverlap"
              follows="left|top"
