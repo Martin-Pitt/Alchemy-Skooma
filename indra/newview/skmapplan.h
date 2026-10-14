@@ -239,6 +239,21 @@ namespace plan
 
     /// What a gather over the box would read: moves when any of it does. Main thread.
     U64 gatherKey(const LLVector3d& min, const LLVector3d& max);
+    /// What gatherKey mixes, part by part, so the map recorder can say which part moved. Main thread.
+    struct GatherParts
+    {
+        struct Mesh
+        {
+            LLUUID mId;
+            LLVector3d mMin, mMax;
+            U64 mRoomsGeneration = 0;
+            bool mResident = false;
+            U64 mInputs = 0;
+        };
+        std::vector<Mesh> mMeshes;
+        std::vector<std::pair<U64, F32>> mRegions;  ///< handle, water height
+    };
+    void gatherKeyParts(const LLVector3d& min, const LLVector3d& max, GatherParts& out);
     /// What a plan is built from: the region meshes meeting a box, whole, and the regions' land.
     struct Snapshot;
     typedef std::shared_ptr<const Snapshot> SnapshotPtr;

@@ -35,11 +35,13 @@
 #include "llviewercontrol.h"
 #include "llvertexbuffer.h"
 #include "llviewerregion.h"
+#include "skmaprecorder.h"
 #include "skmapview.h"
 #include "sknavmesh.h"
 #include "sknavrooms.h"
 
 #include <atomic>
+#include <map>
 #include <cmath>
 
 using namespace skmap::plan;
@@ -364,6 +366,53 @@ void main()
     Layout sLayout;
 }
 
+/// What the map recorder last saw of this composite, to write only what moved.
+struct SKMapComposite::Record
+{
+    struct Cover
+    {
+        LLVector3d mCentre;     ///< global, the mean of its polys' centres
+        S32 mStorey = -1;
+        U8 mBucket = 0;
+        U32 mPolys = 0;
+        F32 mRank = 0.f;
+        bool mDim = false;
+    };
+    typedef std::pair<LLUUID, U32> SpaceKey;
+    typedef std::pair<S32, S32> CellKey;
+
+    U32 mInstance = 0;
+    U32 mJobs = 0;
+    U64 mKey = 0;
+    bool mLanded = false;
+    GatherParts mParts;
+    std::map<LLUUID, SKNavMesh::MapInputParts> mInputs;
+    std::map<SpaceKey, Cover> mSpaces;
+    std::map<CellKey, U32> mCells;
+};
+
+namespace
+{
+    /// The map recorder's coverage cells, global metres: a navmesh tile's side.
+    constexpr F64 RECORD_CELL_M = 32.0;
+    const char* BUCKET_NAMES[] = { "outdoors", "sheltered", "indoors", "unknown" };
+
+    std::string dirtyNames(U32 why)
+    {
+        static const char* names[] = { "release", "target", "lines", "land", "recentre", "span", "floor", "split" };
+        std::string out;
+        for (U32 i = 0; i < LL_ARRAY_SIZE(names); ++i)
+        {
+            if (why & (1u << i))
+            {
+                out += out.empty() ? "" : "+";
+                out += names[i];
+            }
+        }
+        return out.empty() ? "none" : out;
+    }
+}
+
 SKMapComposite::~SKMapComposite()
 {
     if (mPool)
@@ -423,7 +472,7 @@ void SKMapComposite::release()
     mTerrainCount = 0;
     sLayout = Layout();
     mHasPosted = false;     // the buffers went with the context: the next job builds everything again
-    mRenderDirty = true;
+    dirty(DIRTY_RELEASE);
 }
 
 bool SKMapComposite::ensureGL(U32 side, U32 samples)
@@ -502,7 +551,7 @@ bool SKMapComposite::ensureGL(U32 side, U32 samples)
 
     mSide = side;
     mSamples = samples;
-    mRenderDirty = true;
+    dirty(DIRTY_TARGET);
     if (!ok)
     {
         LL_WARNS("SKMap") << "Plan composite target incomplete at " << side << " texels, " << samples << " samples" << LL_ENDL;
@@ -537,7 +586,7 @@ bool SKMapComposite::ensureLineTarget()
         mLineFbo = mLineTex = 0;
         return false;
     }
-    mRenderDirty = true;
+    dirty(DIRTY_LINES);
     return true;
 }
 
@@ -734,7 +783,59 @@ struct SKMapComposite::Job
     std::vector<U32> mTerrainIdx;
     U32 mRanks = 0, mWallRuns = 0, mPolysSpaced = 0, mPolysDrawn = 0, mRegions = 0, mMeshes = 0;
     F32 mGatherMs = 0.f, mSelectMs = 0.f, mGeometryMs = 0.f;
+    // For the map recorder: what this selection draws, per space and per cell.
+    bool mRecord = false;
+    U32 mId = 0;
+    std::vector<std::pair<Record::SpaceKey, Record::Cover>> mCover;
+    std::vector<std::pair<Record::CellKey, U32>> mCells;
     std::atomic<bool> mDone{ false };
+
+    void recordCover()
+    {
+        const Data& d = *mData;
+        std::vector<Record::SpaceKey> ids(d.mSpaces.size());
+        for (const auto& m : d.mSpaceIndex)
+        {
+            for (const auto& e : m.second)
+            {
+                if (e.second < ids.size())
+                {
+                    ids[e.second] = { m.first, e.first };
+                }
+            }
+        }
+        std::map<Record::CellKey, U32> cells;
+        for (U32 s = 0; s < d.mSpaces.size(); ++s)
+        {
+            if (!mSelection.has(s) || s >= d.mSpacePolys.size())
+            {
+                continue;
+            }
+            Record::Cover c;
+            LLVector3d sum;
+            for (U32 p : d.mSpacePolys[s])
+            {
+                LLVector3 centre;
+                const U32 n = d.mPolys[p].mCount;
+                for (U32 k = 0; k < n; ++k)
+                {
+                    centre += d.vert(p, k);
+                }
+                centre /= static_cast<F32>(llmax<U32>(n, 1));
+                const LLVector3d g = d.mOrigin + LLVector3d(centre);
+                sum += g;
+                ++cells[{ static_cast<S32>(std::floor(g.mdV[VX] / RECORD_CELL_M)), static_cast<S32>(std::floor(g.mdV[VY] / RECORD_CELL_M)) }];
+                ++c.mPolys;
+            }
+            c.mCentre = c.mPolys ? sum / static_cast<F64>(c.mPolys) : d.mOrigin;
+            c.mStorey = d.mSpaces[s].mStorey;
+            c.mBucket = static_cast<U8>(d.mSpaces[s].mBucket);
+            c.mRank = mSelection.rank(s);
+            c.mDim = s < mSelection.mDim.size() && mSelection.mDim[s];
+            mCover.emplace_back(ids[s], c);
+        }
+        mCells.assign(cells.begin(), cells.end());
+    }
 
     void run()
     {
@@ -798,6 +899,10 @@ struct SKMapComposite::Job
             mPolysSpaced += p.mSpace >= 0 ? 1 : 0;
             mPolysDrawn += mSelection.has(p.mSpace) ? 1 : 0;
         }
+        if (mRecord)
+        {
+            recordCover();
+        }
         mGeometryMs = t.getElapsedTimeF32() * 1000.f;
         mDone.store(true, std::memory_order_release);
     }
@@ -831,6 +936,29 @@ void SKMapComposite::post(const Want& want, const LLVector3d& gmin, const LLVect
     job->mViewer = want.mViewer;
     job->mOptions = want.mOptions;
     job->mMpp = want.mMpp;
+    if (mRecord && SKMapRecorder::isRecording())
+    {
+        std::string why;
+        const auto add = [&why](bool on, const char* name)
+        {
+            if (on)
+            {
+                why += why.empty() ? "" : "+";
+                why += name;
+            }
+        };
+        add(!mHasPosted, "first");
+        add(mHasPosted && want.mDataKey != mPosted.mDataKey, "data");
+        add(mHasPosted && (want.mOrigin - mPosted.mOrigin).lengthSquared() > 0.0, "origin");
+        add(mHasPosted && want.mViewer != mPosted.mViewer, "viewer");
+        add(mHasPosted && !(want.mOptions == mPosted.mOptions), "options");
+        add(mHasPosted && want.mMpp != mPosted.mMpp, "scale");
+        job->mRecord = true;
+        job->mId = ++mRecord->mJobs;
+        SKMapRecorder::Line("map.job.post").num("map", mRecord->mInstance).num("job", job->mId).str("why", why.empty() ? "none" : why)
+            .flag("new_data", job->mSnap != nullptr).hex("key", want.mDataKey).mesh("viewer_mesh", want.mViewer.mMesh)
+            .num("viewer_space", want.mViewer.mId).real("mpp", want.mMpp).num("tiles_read", mStats.mTilesRead);
+    }
     mJob = job;
     mPosted = want;
     mHasPosted = true;
@@ -880,8 +1008,212 @@ void SKMapComposite::land()
     mStats.mPolys = static_cast<U32>(mData->mPolys.size());
     mStats.mPolysSpaced = job->mPolysSpaced;
     mStats.mPolysDrawn = job->mPolysDrawn;
-    mRenderDirty = true;
+    dirty(DIRTY_LAND);
     mStats.mUploadMs = t.getElapsedTimeF32() * 1000.f;
+    if (job->mRecord && mRecord && SKMapRecorder::isRecording())
+    {
+        recordLand(*job);
+    }
+}
+
+void SKMapComposite::recordGatherKey(const LLVector3d& gmin, const LLVector3d& gmax, bool nav_moved, bool recentre, bool baseline)
+{
+    Record& r = *mRecord;
+    if (!baseline && mDataKey == r.mKey)
+    {
+        return;
+    }
+    GatherParts parts;
+    gatherKeyParts(gmin, gmax, parts);
+    SKMapRecorder::Line("map.gkey").num("map", r.mInstance).hex("key", mDataKey).flag("baseline", baseline).flag("nav", nav_moved)
+        .flag("recentre", recentre).box(gmin, gmax).num("meshes", static_cast<S64>(parts.mMeshes.size()));
+    static const char* MESH_FIELDS[] = { "stamp_answers", "stamp_rooms", "storeys" };
+    static const char* TILE_FIELDS[] = { "content", "detour", "air", "poly_spaces", "portals", "segments", "links", "flights", "wall_runs" };
+    std::map<LLUUID, const GatherParts::Mesh*> before;
+    for (const auto& m : r.mParts.mMeshes)
+    {
+        before[m.mId] = &m;
+    }
+    SKNavMesh& nav = SKNavMesh::instance();
+    for (const auto& m : parts.mMeshes)
+    {
+        const auto b = before.find(m.mId);
+        const bool added = b == before.end();
+        const GatherParts::Mesh* prev = added ? nullptr : b->second;
+        if (added)
+        {
+            SKMapRecorder::Line("map.gkey.mesh").num("map", r.mInstance).mesh(m.mId).box(m.mMin, m.mMax).str("what", "added");
+        }
+        else
+        {
+            if (b->second->mRoomsGeneration != m.mRoomsGeneration)
+            {
+                SKMapRecorder::Line("map.gkey.mesh").num("map", r.mInstance).mesh(m.mId).box(m.mMin, m.mMax).str("what", "rooms")
+                    .num("old", static_cast<S64>(b->second->mRoomsGeneration)).num("new", static_cast<S64>(m.mRoomsGeneration));
+            }
+            if (b->second->mResident != m.mResident)
+            {
+                SKMapRecorder::Line("map.gkey.mesh").num("map", r.mInstance).mesh(m.mId).box(m.mMin, m.mMax)
+                    .str("what", m.mResident ? "reloaded" : "spilled");
+            }
+            before.erase(b);
+        }
+        if (prev && prev->mInputs == m.mInputs && !baseline)
+        {
+            continue;
+        }
+        // Which of its tiles' inputs moved.
+        SKNavMesh::MapInputParts now;
+        nav.mapInputsParts(m.mId, m.mMin, m.mMax, now);
+        SKNavMesh::MapInputParts& was = r.mInputs[m.mId];
+        if (!added && !baseline)
+        {
+            for (S32 f = 0; f < SKNavMesh::MapInputParts::MESH_FIELDS; ++f)
+            {
+                if (was.mMesh[f] != now.mMesh[f])
+                {
+                    SKMapRecorder::Line("map.gkey.mesh").num("map", r.mInstance).mesh(m.mId).box(m.mMin, m.mMax).str("what", MESH_FIELDS[f]);
+                }
+            }
+            std::map<sknav::TileKey, const SKNavMesh::MapInputParts::Tile*> old_tiles;
+            for (const auto& t : was.mTiles)
+            {
+                old_tiles[t.mKey] = &t;
+            }
+            for (const auto& t : now.mTiles)
+            {
+                const auto o = old_tiles.find(t.mKey);
+                std::string fields;
+                if (o == old_tiles.end())
+                {
+                    fields = "new";
+                }
+                else
+                {
+                    for (S32 f = 0; f < SKNavMesh::MapInputParts::TILE_FIELDS; ++f)
+                    {
+                        if (o->second->mField[f] != t.mField[f])
+                        {
+                            fields += fields.empty() ? "" : "+";
+                            fields += TILE_FIELDS[f];
+                        }
+                    }
+                    old_tiles.erase(o);
+                }
+                if (!fields.empty())
+                {
+                    SKMapRecorder::Line("map.gkey.tile").num("map", r.mInstance).mesh(m.mId).tile(t.mKey.mX, t.mKey.mY).box(t.mMin, t.mMax)
+                        .str("fields", fields);
+                }
+            }
+            for (const auto& o : old_tiles)
+            {
+                SKMapRecorder::Line("map.gkey.tile").num("map", r.mInstance).mesh(m.mId).tile(o.first.mX, o.first.mY)
+                    .box(o.second->mMin, o.second->mMax).str("fields", "gone");
+            }
+        }
+        was = std::move(now);
+    }
+    for (const auto& gone : before)
+    {
+        SKMapRecorder::Line("map.gkey.mesh").num("map", r.mInstance).mesh(gone.first).box(gone.second->mMin, gone.second->mMax).str("what", "removed");
+        r.mInputs.erase(gone.first);
+    }
+    if (!baseline && parts.mRegions != r.mParts.mRegions)
+    {
+        SKMapRecorder::Line("map.gkey.regions").num("map", r.mInstance).num("old", static_cast<S64>(r.mParts.mRegions.size()))
+            .num("new", static_cast<S64>(parts.mRegions.size()));
+    }
+    r.mParts = std::move(parts);
+    r.mKey = mDataKey;
+}
+
+void SKMapComposite::recordLand(const Job& job)
+{
+    Record& r = *mRecord;
+    const Selection& sel = mSelection;
+    const S32 vs = mData ? spaceIndex(*mData, job.mViewer) : -1;
+    U32 dim = 0;
+    for (U8 d : sel.mDim)
+    {
+        dim += d ? 1 : 0;
+    }
+    SKMapRecorder::Line("map.job.land").num("map", r.mInstance).num("job", job.mId).flag("new_data", job.mHasTerrain).real("gather_ms", job.mGatherMs)
+        .real("select_ms", job.mSelectMs).real("geom_ms", job.mGeometryMs);
+    SKMapRecorder::Line line("map.select");
+    line.num("map", r.mInstance).num("job", job.mId).mesh("viewer_mesh", job.mViewer.mMesh).num("viewer_space", job.mViewer.mId)
+        .flag("viewer_found", vs >= 0);
+    if (vs >= 0)
+    {
+        line.num("storey", mData->mSpaces[vs].mStorey).str("bucket", BUCKET_NAMES[llmin<U32>(static_cast<U32>(mData->mSpaces[vs].mBucket), 3)]);
+    }
+    line.flag("inside", sel.mInside).flag("on_ground", sel.mOnGround).num("ranks", static_cast<S64>(job.mRanks))
+        .num("spaces", static_cast<S64>(sel.mRank.size())).num("spaces_all", static_cast<S64>(mData ? mData->mSpaces.size() : 0))
+        .num("dim", dim).num("flights", static_cast<S64>(sel.mFlights.size())).num("other", static_cast<S64>(sel.mOther.size()))
+        .num("gap_spaces", static_cast<S64>(sel.mGapSpaces.size())).num("gap_polys", static_cast<S64>(sel.mGapPolys.size()))
+        .num("polys_drawn", job.mPolysDrawn).num("polys_spaced", job.mPolysSpaced).hex("hash", sel.mHash);
+
+    // What it drew and withdrew, per space and per cell; the first landing is the baseline.
+    std::map<Record::SpaceKey, Record::Cover> spaces(job.mCover.begin(), job.mCover.end());
+    std::map<Record::CellKey, U32> cells(job.mCells.begin(), job.mCells.end());
+    if (r.mLanded)
+    {
+        const auto space_line = [&r, &job](const char* type, const Record::SpaceKey& k, const Record::Cover& c)
+        {
+            SKMapRecorder::Line(type).num("map", r.mInstance).num("job", job.mId).mesh(k.first).num("space", k.second).xy("c", c.mCentre)
+                .num("storey", c.mStorey).str("bucket", BUCKET_NAMES[llmin<U32>(c.mBucket, 3)]).num("polys", c.mPolys).real("rank", c.mRank)
+                .flag("dim", c.mDim);
+        };
+        for (const auto& s : spaces)
+        {
+            const auto o = r.mSpaces.find(s.first);
+            if (o == r.mSpaces.end())
+            {
+                space_line("map.draw", s.first, s.second);
+            }
+            else if (o->second.mRank != s.second.mRank || o->second.mDim != s.second.mDim || o->second.mPolys != s.second.mPolys)
+            {
+                space_line("map.restyle", s.first, s.second);
+            }
+        }
+        for (const auto& o : r.mSpaces)
+        {
+            if (!spaces.count(o.first))
+            {
+                space_line("map.withdraw", o.first, o.second);
+            }
+        }
+        const auto cell_line = [&r, &job](const Record::CellKey& k, U32 was, U32 now)
+        {
+            SKMapRecorder::Line l("map.cell");
+            l.num("map", r.mInstance).num("job", job.mId).xy("c", LLVector3d((k.first + 0.5) * RECORD_CELL_M, (k.second + 0.5) * RECORD_CELL_M, 0.0))
+                .num("old", was).num("new", now);
+        };
+        for (const auto& c : cells)
+        {
+            const auto o = r.mCells.find(c.first);
+            const U32 was = o == r.mCells.end() ? 0 : o->second;
+            if (was != c.second)
+            {
+                cell_line(c.first, was, c.second);
+            }
+        }
+        for (const auto& o : r.mCells)
+        {
+            if (!cells.count(o.first))
+            {
+                cell_line(o.first, o.second, 0);
+            }
+        }
+    }
+    else
+    {
+        SKMapRecorder::Line("map.cover.baseline").num("map", r.mInstance).num("job", job.mId).num("spaces", static_cast<S64>(spaces.size()))
+            .num("cells", static_cast<S64>(cells.size()));
+        r.mLanded = true;
+    }
+    r.mSpaces.swap(spaces);
+    r.mCells.swap(cells);
 }
 
 void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
@@ -930,6 +1262,20 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
     const U32 samples = llmin(static_cast<U32>(msaa), MAX_SAMPLES, static_cast<U32>(llmax(max_samples, 0)));
 
     SKNavMesh& nav = SKNavMesh::instance();
+    // The map recorder: a recording that has just started takes a baseline and a fresh job.
+    bool record_start = false;
+    if (!SKMapRecorder::isRecording())
+    {
+        mRecord.reset();
+    }
+    else if (!mRecord)
+    {
+        static U32 instances = 0;
+        mRecord = std::make_unique<Record>();
+        mRecord->mInstance = ++instances;
+        record_start = true;
+        mHasPosted = false;
+    }
     const LLVector3d origin_of_view = view.centre();
     LLViewerRegion* agent_region = gAgent.getRegion();
     if (!agent_region)
@@ -966,12 +1312,12 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
         mFrameMin = LLVector2(std::floor((centre_local.mV[VX] - size_m * 0.5f) / mpp) * mpp, std::floor((centre_local.mV[VY] - size_m * 0.5f) / mpp) * mpp);
         mFrameSize = size_m;
         mMpp = mpp;
-        mRenderDirty = true;
+        dirty(DIRTY_RECENTRE);
     }
     if (view.span() != mSpan)
     {
         mSpan = view.span();
-        mRenderDirty = true;
+        dirty(DIRTY_SPAN);
     }
 
     // What the plan should be built from; the key is read again only when the navmesh or the frame moved.
@@ -979,7 +1325,7 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
     const LLVector3d gmax = gmin + LLVector3d(mFrameSize, mFrameSize, 0.0);
     const SKNavWorldViewPtr world = nav.view();
     const bool nav_moved = nav.revision() != mNavRevision || world.get() != mViewSeen || (world && world->revision() != mViewRevision);
-    if (nav_moved || recentre || !mHasKey || (mKeyOrigin - want_origin).lengthSquared() > 0.0)
+    if (nav_moved || recentre || record_start || !mHasKey || (mKeyOrigin - want_origin).lengthSquared() > 0.0)
     {
         mNavRevision = nav.revision();
         mViewSeen = world.get();
@@ -987,6 +1333,10 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
         mDataKey = gatherKey(gmin, gmax);
         mKeyOrigin = want_origin;
         mHasKey = true;
+        if (mRecord)
+        {
+            recordGatherKey(gmin, gmax, nav_moved, recentre, record_start);
+        }
     }
     nav.requestAir("minimap", gmin, gmax);     // ruling 13: the plan's spaces and walls read the air of every tile it shows
     // The room and storey are the avatar's while the camera follows it, else what the camera looks at; a focus over no floor falls back to the avatar.
@@ -1022,7 +1372,7 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
 
     if (vz != mDrawnVz)
     {
-        mRenderDirty = true;
+        dirty(DIRTY_FLOOR);
     }
     const bool split = overlay != nullptr;
     if (split && !ensureLineTarget())
@@ -1032,10 +1382,16 @@ void SKMapComposite::draw(const skmap::MapView& view, const Overlay* overlay)
     }
     if (split != mDrawnSplit)
     {
-        mRenderDirty = true;
+        dirty(DIRTY_SPLIT);
     }
     if (mRenderDirty)
     {
+        if (mRecord)
+        {
+            SKMapRecorder::Line("map.redraw").num("map", mRecord->mInstance).str("why", dirtyNames(mDirtyWhy)).flag("split", split).real("floor", vz)
+                .box(gmin, gmax).real("mpp", mMpp);
+        }
+        mDirtyWhy = 0;
         if (split)
         {
             render(vz, RenderPass::SURFACES, mResolveFbo);
