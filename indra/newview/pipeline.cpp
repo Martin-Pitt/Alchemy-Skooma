@@ -264,6 +264,7 @@ const F32 BACKLIGHT_DAY_MAGNITUDE_OBJECT = 0.1f;
 const F32 BACKLIGHT_NIGHT_MAGNITUDE_OBJECT = 0.08f;
 const F32 ALPHA_BLEND_CUTOFF = 0.598f;
 static F32 sk_coverage_cutoff = 0.02f; // <SK:Nexii> outline capture: any rendered translucent surface covers
+static const std::function<bool(const LLDrawInfo*)>* sk_coverage_skip = nullptr; // <SK:Nexii> outline capture: draw infos a glyph leaves out
 const F32 DEFERRED_LIGHT_FALLOFF = 0.5f;
 const U32 DEFERRED_VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_TEXCOORD1;
 
@@ -12089,6 +12090,12 @@ void LLPipeline::renderShadow(const LLMatrix4a& view, const LLMatrix4a& proj, LL
     }
 
     stateSort(shadow_cam, result);
+    // <SK:Nexii> outline capture: parts a glyph leaves out, such as thin alpha planes.
+    if (sSKCoverageRender && sk_coverage_skip && *sk_coverage_skip)
+    {
+        result.skEraseDrawInfos(*sk_coverage_skip);
+    }
+    // </SK:Nexii>
 
     //generate shadow map
     gGL.matrixMode(LLRender::MM_PROJECTION);
@@ -12322,7 +12329,7 @@ namespace
 }
 
 U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4a& view, const LLMatrix4a& proj, LLCamera& camera,
-                                        F32 alpha_cutoff)
+                                        F32 alpha_cutoff, const std::function<bool(const LLDrawInfo*)>& skip)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
     LL_PROFILE_GPU_ZONE("skRenderOutlineCoverage");
@@ -12336,10 +12343,12 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
         bool shadow = sShadowRender;
         bool impostor = sImpostorRender;
         bool coverage = sSKCoverageRender;
+        const std::function<bool(const LLDrawInfo*)>* coverage_skip = sk_coverage_skip;
         ~Restore()
         {
             skSetCoverageCutoff(0.f);
             sSKCoverageRender = coverage;
+            sk_coverage_skip = coverage_skip;
             sImpostorRender = impostor;
             sShadowRender = shadow;
             sUseOcclusion = occlusion;
@@ -12360,6 +12369,7 @@ U32 LLPipeline::skRenderOutlineCoverage(LLSpatialBridge* bridge, const LLMatrix4
     sShadowRender = true;
     sImpostorRender = false;
     sSKCoverageRender = true;
+    sk_coverage_skip = &skip;
     sk_coverage_cutoff = llclamp(alpha_cutoff, 0.001f, 1.f);
     skSetCoverageCutoff(sk_coverage_cutoff);
     LLViewerCamera::setCurrent(camera);
