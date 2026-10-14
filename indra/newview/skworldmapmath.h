@@ -1,6 +1,6 @@
 /**
  * @file skworldmapmath.h
- * @brief The 3D world map's pure geometry: its two cameras, which map tile level to draw where,
+ * @brief The 3D world map's pure geometry: panning across the ground, which map tile level to draw where,
  *        and how agent clusters stack into columns of dots.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -41,49 +41,16 @@ namespace skworldmap
     constexpr F64 GROUND_Z = 20.0;          ///< the tile plane, at the default water height
     constexpr S32 GRID_REGIONS = 2048;      ///< tile roots cover region coordinates [0, GRID_REGIONS)
 
-    constexpr F64 ELEVATION_MIN = 10.0 * 0.017453292519943295;
-    constexpr F64 ELEVATION_MAX = 90.0 * 0.017453292519943295;
-    constexpr F64 DISTANCE_MIN = 30.0;
-    constexpr F64 DISTANCE_MAX = 600000.0;
-    constexpr F64 FLY_MIN_ABOVE_GROUND = 2.0;
-    constexpr F64 FLY_MAX_ABOVE_GROUND = 600000.0;
-
     /// Unit look direction from a heading (radians from east, counter-clockwise) and a pitch (negative looks down).
     LLVector3d lookDirection(F64 yaw, F64 pitch);
 
-    /// An alt-cam style orbit: a focus on the ground, a heading, an elevation above the horizon
-    /// (pi/2 looks straight down) and a distance.
-    struct OrbitCamera
-    {
-        LLVector3d mFocus;
-        F64 mYaw = 1.5707963267948966;
-        F64 mElevation = 0.9;
-        F64 mDistance = 1500.0;
+    /// Where a ray from `origin` along `dir` meets the ground plane; false if it never does.
+    bool groundHit(const LLVector3d& origin, const LLVector3d& dir, LLVector3d& hit, F64 ground_z = GROUND_Z);
 
-        void clamp();
-        LLVector3d eye() const;
-        F64 pitch() const { return -mElevation; }
-    };
-
-    /// A free camera: a position, a heading and a pitch.
-    struct FlyCamera
-    {
-        LLVector3d mPosition;
-        F64 mYaw = 1.5707963267948966;
-        F64 mPitch = -0.6;
-
-        void clamp(F64 ground_z = GROUND_Z);
-    };
-
-    /// The fly camera at the orbit camera's eye, looking the same way.
-    FlyCamera toFly(const OrbitCamera& orbit);
-
-    /// The orbit around where the fly camera's look meets the ground. A look flatter than
-    /// ELEVATION_MIN tilts down to it about the eye, so a switch never moves the eye.
-    OrbitCamera toOrbit(const FlyCamera& fly, F64 ground_z = GROUND_Z);
-
-    /// Fly speed in metres per second: proportional to the height above ground, at least 5 m/s.
-    F64 flySpeed(F64 eye_z, bool boost, F64 ground_z = GROUND_Z);
+    /// How far to move the camera and its focus across the ground, keeping height and angle, so that
+    /// `grabbed` (a ground point) lies under a cursor whose ray from `eye` runs along `dir`.
+    /// False when that ray does not meet the ground.
+    bool panOffset(const LLVector3d& eye, const LLVector3d& dir, const LLVector3d& grabbed, LLVector3d& offset, F64 ground_z = GROUND_Z);
 
     /// A view for tile selection: the eye, its heading and pitch, the vertical field of view and the screen.
     struct View

@@ -1,6 +1,6 @@
 /**
  * @file skworldmapmath.cpp
- * @brief The 3D world map's pure geometry: its two cameras, which map tile level to draw where,
+ * @brief The 3D world map's pure geometry: panning across the ground, which map tile level to draw where,
  *        and how agent clusters stack into columns of dots.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -37,8 +37,6 @@ namespace skworldmap
 {
 namespace
 {
-    constexpr F64 PI_D = 3.141592653589793;
-
     F64 clampd(F64 v, F64 lo, F64 hi)
     {
         return std::max(lo, std::min(hi, v));
@@ -113,51 +111,27 @@ void viewBasis(F64 yaw, F64 pitch, LLVector3d& forward, LLVector3d& right, LLVec
     up = right % forward;
 }
 
-void OrbitCamera::clamp()
+bool groundHit(const LLVector3d& origin, const LLVector3d& dir, LLVector3d& hit, F64 ground_z)
 {
-    mElevation = clampd(mElevation, ELEVATION_MIN, ELEVATION_MAX);
-    mDistance = clampd(mDistance, DISTANCE_MIN, DISTANCE_MAX);
-    mYaw = std::remainder(mYaw, 2.0 * PI_D);
+    const F64 dz = dir.mdV[VZ];
+    const F64 h = origin.mdV[VZ] - ground_z;
+    if (std::fabs(dz) < 1.0e-9 || h / -dz <= 0.0)
+    {
+        return false;
+    }
+    hit = origin + dir * (h / -dz);
+    return true;
 }
 
-LLVector3d OrbitCamera::eye() const
+bool panOffset(const LLVector3d& eye, const LLVector3d& dir, const LLVector3d& grabbed, LLVector3d& offset, F64 ground_z)
 {
-    const F64 elevation = clampd(mElevation, ELEVATION_MIN, ELEVATION_MAX);
-    const F64 distance = clampd(mDistance, DISTANCE_MIN, DISTANCE_MAX);
-    return mFocus - lookDirection(mYaw, -elevation) * distance;
-}
-
-void FlyCamera::clamp(F64 ground_z)
-{
-    mPitch = clampd(mPitch, -ELEVATION_MAX, 80.0 * PI_D / 180.0);
-    mYaw = std::remainder(mYaw, 2.0 * PI_D);
-    mPosition.mdV[VZ] = clampd(mPosition.mdV[VZ], ground_z + FLY_MIN_ABOVE_GROUND, ground_z + FLY_MAX_ABOVE_GROUND);
-}
-
-FlyCamera toFly(const OrbitCamera& orbit)
-{
-    FlyCamera fly;
-    fly.mPosition = orbit.eye();
-    fly.mYaw = orbit.mYaw;
-    fly.mPitch = -clampd(orbit.mElevation, ELEVATION_MIN, ELEVATION_MAX);
-    return fly;
-}
-
-OrbitCamera toOrbit(const FlyCamera& fly, F64 ground_z)
-{
-    OrbitCamera orbit;
-    orbit.mYaw = fly.mYaw;
-    orbit.mElevation = clampd(-fly.mPitch, ELEVATION_MIN, ELEVATION_MAX);
-    const F64 height = std::max(fly.mPosition.mdV[VZ] - ground_z, FLY_MIN_ABOVE_GROUND);
-    orbit.mDistance = clampd(height / std::sin(orbit.mElevation), DISTANCE_MIN, DISTANCE_MAX);
-    orbit.mFocus = fly.mPosition + lookDirection(orbit.mYaw, -orbit.mElevation) * orbit.mDistance;
-    return orbit;
-}
-
-F64 flySpeed(F64 eye_z, bool boost, F64 ground_z)
-{
-    const F64 speed = std::max(std::max(eye_z - ground_z, FLY_MIN_ABOVE_GROUND), 5.0);
-    return boost ? speed * 4.0 : speed;
+    LLVector3d under;
+    if (!groundHit(eye, dir, under, ground_z))
+    {
+        return false;
+    }
+    offset = LLVector3d(grabbed.mdV[VX] - under.mdV[VX], grabbed.mdV[VY] - under.mdV[VY], 0.0);
+    return true;
 }
 
 std::vector<SelectedTile> selectTiles(const View& view, const TileSelectParams& params)

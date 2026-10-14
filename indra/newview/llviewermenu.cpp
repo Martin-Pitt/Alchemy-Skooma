@@ -4836,6 +4836,13 @@ void reset_view_final(bool proceed);
 
 void handle_reset_view()
 {
+    // <SK:Nexii> 3D world map: Esc, Reset View's shortcut, leaves the map rather than resetting the camera.
+    if (SKMapMode::isOpen())
+    {
+        SKMapMode::instance().close();
+        return;
+    }
+    // </SK:Nexii>
     if (gAgentCamera.cameraCustomizeAvatar())
     {
         // switching to outfit selector should automagically save any currently edited wearable

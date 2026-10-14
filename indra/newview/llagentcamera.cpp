@@ -26,6 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 #include "llagentcamera.h"
+#include "skmapmode.h" // <SK:Nexii> 3D world map
 
 #include "pipeline.h"
 
@@ -111,7 +112,7 @@ const F32 OBJECT_EXTENTS_PADDING = 0.5f;
 static bool isDisableCameraConstraints()
 {
     static LLCachedControl<bool> sDisableCameraConstraints(gSavedSettings, "DisableCameraConstraints", false);
-    return sDisableCameraConstraints;
+    return sDisableCameraConstraints || SKMapMode::isOpen(); // <SK:Nexii> 3D world map: the map camera roams the grid
 }
 
 // The agent instance.
@@ -2264,7 +2265,7 @@ F32 LLAgentCamera::getCameraMaxZoomDistance()
 {
     // SL-14706 / SL-14885 TPV have relaxed camera constraints allowing you to mousewheeel zoom WAY out.
     static LLCachedControl<bool> s_disable_camera_constraints(gSavedSettings, "DisableCameraConstraints", false);
-    if (s_disable_camera_constraints)
+    if (s_disable_camera_constraints || SKMapMode::isOpen()) // <SK:Nexii> 3D world map: the map camera roams the grid
     {
         return (F32)INT_MAX;
     }

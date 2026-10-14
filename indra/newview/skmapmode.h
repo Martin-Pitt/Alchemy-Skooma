@@ -1,6 +1,6 @@
 /**
  * @file skmapmode.h
- * @brief Map mode: a 3D map of the grid shown in place of the world, with an orbit and a fly camera.
+ * @brief Map mode: a 3D map of the grid shown in place of the world, under the viewer's own camera.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -24,31 +24,30 @@
 
 #pragma once
 
-#include "llagentcamera.h"
 #include "llhandle.h"
 #include "llsingleton.h"
-#include "skworldmapmath.h"
+#include "lluuid.h"
+#include "v3dmath.h"
+#include "v3math.h"
 #include "skworldmapscene.h"
 
 #include <boost/signals2.hpp>
+#include <string>
 
 class LLView;
 
 /// While map mode is open the display loop draws the map instead of the world, the way it draws the
-/// progress screen instead while teleporting. The agent stays in the region and keeps sending agent
-/// updates; the world camera is left alone and put back on close. The map camera is kept for the next time.
+/// progress screen while teleporting. The map is drawn from the viewer's own camera, so alt-cam, the
+/// Camera Controls floater, the flycam, the scroll wheel and the camera key bindings move it as they
+/// move the camera in-world; the camera's distance constraints are lifted while it is open. The
+/// world camera is snapshotted on open and put back on close, and the map camera is kept for the
+/// next time. The agent stays in the region: its updates keep flowing, carrying the world camera.
 class SKMapMode : public LLSingleton<SKMapMode>
 {
     LLSINGLETON(SKMapMode);
     ~SKMapMode();
 
 public:
-    enum ECamera
-    {
-        CAMERA_ORBIT,
-        CAMERA_FLY
-    };
-
     /// True while the map replaces the world. Cheap enough for every frame.
     static bool isOpen();
 
@@ -56,13 +55,27 @@ public:
     bool open();
     void close();
 
-    /// Centres the camera on the agent, keeping its height and heading.
-    void home();
-    void switchCamera();
-    ECamera camera() const { return mCamera; }
+    /// Moves the camera and its focus across the map until the focus is over the agent.
+    void recentre();
 
-    /// Moves the camera for held keys, then draws the map over the world view's rectangle (raw pixels).
+    /// Draws the map over the world view's rectangle (raw pixels).
     void render(const LLRect& world_rect_raw);
+
+    /// The map's ground under a point of the world view (scaled UI coordinates), for alt-click focus.
+    bool groundUnderCursor(S32 x, S32 y, LLVector3d& ground) const;
+
+    /// A plain left-drag: the camera and its focus slide across the ground together, keeping their
+    /// height and angle, so the ground point grabbed stays under the cursor.
+    bool beginPan(S32 x, S32 y);
+    void pan(S32 x, S32 y);
+    void endPan() { mPanning = false; }
+
+    /// Key and mouse bindings that move the avatar, which do nothing while the map is open.
+    static bool blocksAction(const std::string& function_name);
+
+    /// The camera the sim is told about in agent updates: the world camera while the map is open,
+    /// so the interest list stays where the agent is. Leaves the arguments alone otherwise.
+    static void worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up);
 
     /// Fired as the map opens, while the last world frame is still in the targets: where a live
     /// impostor of the current region can be captured.
@@ -70,10 +83,6 @@ public:
     boost::signals2::connection setOpenCallback(const open_signal_t::slot_type& cb) { return mOpenSignal.connect(cb); }
 
     SKWorldMapScene& scene() { return mScene; }
-
-    // Input from the map's view, in screen pixels.
-    void drag(S32 dx, S32 dy, bool rotate);
-    void zoom(F32 notches);
 
 private:
     struct WorldCamera
@@ -83,20 +92,26 @@ private:
         LLVector3d mPosition;
         LLVector3d mFocus;
         LLUUID mFocusObject;
+        LLVector3d mViewOrigin;     ///< the viewer camera, for agent updates
+        LLVector3 mAt, mLeft, mUp;
     };
 
-    void moveForKeys(F64 dt);
     SKWorldMapFrame frame() const;
-    void startFromWorld();
+    void removeViews();
 
     bool mOpen = false;
-    bool mStarted = false;              ///< the map camera has been set once, so later opens resume it
-    ECamera mCamera = CAMERA_ORBIT;
-    skworldmap::OrbitCamera mOrbit;
-    skworldmap::FlyCamera mFly;
+    bool mHasMapCamera = false;     ///< the map camera has been set once, so later opens resume it
+    LLVector3d mMapPosition;
+    LLVector3d mMapFocus;
     WorldCamera mWorld;
-    F64 mLastFrame = 0.0;
+
+    bool mPanning = false;
+    LLVector3d mPanEye;
+    LLVector3d mPanFocus;
+    LLVector3d mPanGrabbed;
+
     LLHandle<LLView> mInput;
+    LLHandle<LLView> mOverlay;
     SKWorldMapScene mScene;
     open_signal_t mOpenSignal;
 };

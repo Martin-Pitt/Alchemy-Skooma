@@ -1,6 +1,6 @@
 /**
  * @file skworldmapmath_test.cpp
- * @brief The 3D world map's cameras, tile levels and dot stacks, pinned to the Python reference.
+ * @brief The 3D world map's pan, tile levels and dot stacks, pinned to the Python reference.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -75,41 +75,34 @@ namespace tut
     typedef skworldmapmath_group::object skworldmapmath_object;
     tut::skworldmapmath_group skworldmapmath_test("skworldmapmath");
 
-    // Orbit to fly and back keeps the focus, the elevation and the distance.
+    // A pan keeps the grabbed ground point under the cursor, and never moves the camera up or down.
     template<> template<>
     void skworldmapmath_object::test<1>()
     {
-        for (F64 yaw : { 0.0, 1.0, -2.5 })
-        {
-            for (F64 elev : { 15.0 * DEG, 45.0 * DEG, 90.0 * DEG })
-            {
-                for (F64 dist : { 100.0, 5000.0, 200000.0 })
-                {
-                    OrbitCamera o;
-                    o.mFocus = LLVector3d(256000.0, 256000.0, GROUND_Z);
-                    o.mYaw = yaw;
-                    o.mElevation = elev;
-                    o.mDistance = dist;
-                    const OrbitCamera back = toOrbit(toFly(o));
-                    ensure_approximately_equals("elevation", (F32)back.mElevation, (F32)elev, 16);
-                    ensure("distance", std::fabs(back.mDistance - dist) < 1.0e-6 * dist);
-                    ensure("focus", (back.mFocus - o.mFocus).magVec() < 1.0e-6 * dist);
-                }
-            }
-        }
+        const LLVector3d eye(1000.0, 2000.0, GROUND_Z + 500.0);
+        LLVector3d dir(0.3, 0.5, -0.8);
+        dir.normalize();
+        LLVector3d hit;
+        ensure("hits", groundHit(eye, dir, hit));
+        ensure("on the plane", std::fabs(hit.mdV[VZ] - GROUND_Z) < 1.0e-9);
+        const LLVector3d grabbed(1500.0, 2500.0, GROUND_Z);
+        LLVector3d offset;
+        ensure("offset", panOffset(eye, dir, grabbed, offset));
+        ensure("flat", offset.mdV[VZ] == 0.0);
+        LLVector3d moved_hit;
+        groundHit(eye + offset, dir, moved_hit);
+        ensure("grabbed point under the cursor", (moved_hit - grabbed).magVec() < 1.0e-6);
     }
 
-    // A look flatter than the minimum elevation tilts down about the eye: the eye does not move.
+    // A ray at or above the horizon never meets the ground.
     template<> template<>
     void skworldmapmath_object::test<2>()
     {
-        FlyCamera f;
-        f.mPosition = LLVector3d(1000.0, 1000.0, 520.0);
-        f.mYaw = 0.3;
-        f.mPitch = 0.1;
-        const OrbitCamera o = toOrbit(f);
-        ensure("min elevation", std::fabs(o.mElevation - ELEVATION_MIN) < 1.0e-12);
-        ensure("eye kept", (o.eye() - f.mPosition).magVec() < 1.0e-6);
+        LLVector3d hit, offset;
+        ensure("level", !groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), hit));
+        ensure("up", !groundHit(LLVector3d(0.0, 0.0, 100.0), LLVector3d(0.0, 0.6, 0.8), hit));
+        ensure("below the plane looking down", !groundHit(LLVector3d(0.0, 0.0, GROUND_Z - 5.0), LLVector3d(0.0, 0.0, -1.0), hit));
+        ensure("no pan", !panOffset(LLVector3d(0.0, 0.0, 100.0), LLVector3d(1.0, 0.0, 0.0), LLVector3d(), offset));
     }
 
     // Straight down, the level under the camera rises with height (Python reference: 1, 1, 2, 6).
@@ -191,12 +184,4 @@ namespace tut
         ensure("nearest first within budget", shown[0] == 3 && shown[1] == 8 && shown[2] == 1);
     }
 
-    // Fly speed follows height, with a floor and a boost.
-    template<> template<>
-    void skworldmapmath_object::test<8>()
-    {
-        ensure("floor", flySpeed(GROUND_Z + 1.0, false) == 5.0);
-        ensure("height", flySpeed(GROUND_Z + 1000.0, false) == 1000.0);
-        ensure("boost", flySpeed(GROUND_Z + 1000.0, true) == 4000.0);
-    }
 } // namespace tut

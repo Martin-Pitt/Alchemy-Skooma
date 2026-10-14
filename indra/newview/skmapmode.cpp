@@ -1,6 +1,6 @@
 /**
  * @file skmapmode.cpp
- * @brief Map mode: a 3D map of the grid shown in place of the world, with an orbit and a fly camera.
+ * @brief Map mode: a 3D map of the grid shown in place of the world, under the viewer's own camera.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Alchemy Viewer Source Code
@@ -27,132 +27,102 @@
 #include "skmapmode.h"
 
 #include "llagent.h"
+#include "llagentcamera.h"
 #include "llcallbacklist.h"
 #include "llfocusmgr.h"
-#include "llkeyboard.h"
+#include "llpanel.h"
 #include "llrootview.h"
 #include "llstartup.h"
+#include "lluictrlfactory.h"
 #include "lltimer.h"
-#include "lluictrl.h"
 #include "llviewercamera.h"
+#include "llviewerjoystick.h"
 #include "llviewerobject.h"
 #include "llviewerwindow.h"
-#include "llwindow.h"
 
 #include <cmath>
+#include <unordered_set>
 
 using namespace skworldmap;
 
 namespace
 {
-    constexpr F64 FOV_Y = 45.0 * 3.141592653589793 / 180.0;
     constexpr F64 START_DISTANCE = 1500.0;
     constexpr F64 START_ELEVATION = 50.0 * 3.141592653589793 / 180.0;
-    constexpr F64 ROTATE_PER_PX = 0.006;
-    constexpr F64 LOOK_PER_PX = 0.004;
-    constexpr F64 ZOOM_PER_NOTCH = 1.15;
-    constexpr F64 ORBIT_KEY_YAW = 1.2;          ///< radians per second
-    constexpr F64 ORBIT_KEY_PAN = 0.8;          ///< distances per second
 
-    bool movementKey(KEY key)
-    {
-        switch (key)
-        {
-            case 'W': case 'A': case 'S': case 'D': case 'Q': case 'E':
-            case KEY_UP: case KEY_DOWN: case KEY_LEFT: case KEY_RIGHT:
-            case KEY_PAGE_UP: case KEY_PAGE_DOWN:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    /// Full-screen and behind every other view: takes the clicks, drags, wheel and keys that would
-    /// otherwise reach the world, so WASD flies the map rather than walking the avatar.
-    class SKWorldMapInputView : public LLUICtrl
+    /// Behind every other view, over the world view: a plain left-drag pans the map, and plain clicks
+    /// and right-clicks go nowhere, so nothing reaches the hidden world. Alt and Ctrl clicks fall through
+    /// to the camera tool and the wheel to the camera's zoom, exactly as in-world.
+    class SKWorldMapInputView : public LLView
     {
     public:
-        explicit SKWorldMapInputView(const LLUICtrl::Params& p) : LLUICtrl(p) {}
+        explicit SKWorldMapInputView(const LLView::Params& p) : LLView(p) {}
 
-        bool handleMouseDown(S32 x, S32 y, MASK mask) override { return beginDrag(x, y, (mask & (MASK_ALT | MASK_CONTROL)) != 0); }
-        bool handleRightMouseDown(S32 x, S32 y, MASK mask) override { return beginDrag(x, y, true); }
-        bool handleMouseUp(S32 x, S32 y, MASK mask) override { return endDrag(); }
-        bool handleRightMouseUp(S32 x, S32 y, MASK mask) override { return endDrag(); }
+        bool handleMouseDown(S32 x, S32 y, MASK mask) override
+        {
+            if (mask & (MASK_ALT | MASK_CONTROL))
+            {
+                return false;
+            }
+            S32 sx, sy;
+            localPointToScreen(x, y, &sx, &sy);
+            if (SKMapMode::instance().beginPan(sx, sy))
+            {
+                gFocusMgr.setMouseCapture(this);
+            }
+            return true;
+        }
 
         bool handleHover(S32 x, S32 y, MASK mask) override
         {
             if (hasMouseCapture())
             {
-                SKMapMode::instance().drag(x - mLastX, y - mLastY, mRotate);
-                mLastX = x;
-                mLastY = y;
+                S32 sx, sy;
+                localPointToScreen(x, y, &sx, &sy);
+                SKMapMode::instance().pan(sx, sy);
+                gViewerWindow->setCursor(UI_CURSOR_TOOLPAN);
+                return true;
             }
-            gViewerWindow->setCursor(hasMouseCapture() ? UI_CURSOR_TOOLPAN : UI_CURSOR_ARROW);
-            return true;
-        }
-
-        bool handleScrollWheel(S32 x, S32 y, LLScrollDelta delta) override
-        {
-            SKMapMode::instance().zoom(delta.mPrecise);
-            return true;
-        }
-
-        bool handleKeyHere(KEY key, MASK mask) override
-        {
-            if (mask & (MASK_CONTROL | MASK_ALT))
+            if (mask & (MASK_ALT | MASK_CONTROL))
             {
                 return false;
             }
-            switch (key)
-            {
-                case KEY_ESCAPE:
-                    SKMapMode::instance().close();
-                    return true;
-                case KEY_HOME:
-                case 'H':
-                    SKMapMode::instance().home();
-                    return true;
-                case 'C':
-                    SKMapMode::instance().switchCamera();
-                    return true;
-                default:
-                    // Held keys are read each frame; taking them here keeps them from the avatar.
-                    return movementKey(key);
-            }
-        }
-
-        bool handleUnicodeCharHere(llwchar uni_char) override
-        {
-            const llwchar upper = LLStringOps::toUpper(uni_char);
-            return upper < 128 && (movementKey(static_cast<KEY>(upper)) || upper == 'H' || upper == 'C');
-        }
-
-        void onMouseCaptureLost() override { mRotate = false; }
-
-    private:
-        bool beginDrag(S32 x, S32 y, bool rotate)
-        {
-            setFocus(true);
-            gFocusMgr.setMouseCapture(this);
-            mLastX = x;
-            mLastY = y;
-            mRotate = rotate;
+            gViewerWindow->setCursor(UI_CURSOR_ARROW);
             return true;
         }
 
-        bool endDrag()
+        bool handleMouseUp(S32 x, S32 y, MASK mask) override
         {
             if (hasMouseCapture())
             {
                 gFocusMgr.setMouseCapture(nullptr);
+                return true;
             }
-            return true;
+            return !(mask & (MASK_ALT | MASK_CONTROL));
         }
 
-        S32 mLastX = 0;
-        S32 mLastY = 0;
-        bool mRotate = false;
+        bool handleDoubleClick(S32 x, S32 y, MASK mask) override { return !(mask & (MASK_ALT | MASK_CONTROL)); }
+        bool handleRightMouseDown(S32 x, S32 y, MASK mask) override { return true; }
+        bool handleRightMouseUp(S32 x, S32 y, MASK mask) override { return true; }
+        void onMouseCaptureLost() override { SKMapMode::instance().endPan(); }
     };
+
+    void deleteLater(const LLHandle<LLView>& handle)
+    {
+        if (LLView* view = handle.get())
+        {
+            if (gFocusMgr.getMouseCapture() == view)
+            {
+                gFocusMgr.setMouseCapture(nullptr);
+            }
+            if (view->getParent())
+            {
+                view->getParent()->removeChild(view);
+            }
+            // Deleted once the event that closed the map, possibly one of these views' own, has unwound.
+            doOnIdleOneTime([handle]() { delete handle.get(); });
+        }
+    }
 } // namespace
 
 SKMapMode::SKMapMode() = default;
@@ -183,7 +153,7 @@ bool SKMapMode::open()
     {
         return true;
     }
-    if (LLStartUp::getStartupState() < STATE_STARTED || !gViewerWindow)
+    if (LLStartUp::getStartupState() < STATE_STARTED || !gViewerWindow || !gAgentCamera.isInitialized())
     {
         return false;
     }
@@ -195,35 +165,66 @@ bool SKMapMode::open()
     mWorld.mFocus = gAgentCamera.getFocusGlobal();
     LLViewerObject* focus_object = gAgentCamera.getFocusObject();
     mWorld.mFocusObject = focus_object ? focus_object->getID() : LLUUID::null;
+    const LLViewerCamera* view = LLViewerCamera::getInstance();
+    mWorld.mViewOrigin = gAgent.getPosGlobalFromAgent(view->getOrigin());
+    mWorld.mAt = view->getAtAxis();
+    mWorld.mLeft = view->getLeftAxis();
+    mWorld.mUp = view->getUpAxis();
     if (mWorld.mMouselook)
     {
         gAgentCamera.changeCameraToDefault();
     }
 
     mOpenSignal();
+    mOpen = true;
 
-    if (!mStarted)
+    if (!mHasMapCamera)
     {
-        startFromWorld();
+        // Above the agent, looking the way the world camera did.
+        const LLVector3 at = view->getAtAxis();
+        const F64 yaw = (std::fabs(at.mV[VX]) + std::fabs(at.mV[VY]) > 1.0e-3f) ? std::atan2(at.mV[VY], at.mV[VX]) : 0.0;
+        mMapFocus = gAgent.getPositionGlobal();
+        mMapFocus.mdV[VZ] = GROUND_Z;
+        mMapPosition = mMapFocus - lookDirection(yaw, -START_ELEVATION) * START_DISTANCE;
+        mHasMapCamera = true;
     }
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(mMapPosition, mMapFocus, LLUUID::null);
 
-    LLUICtrl::Params p;
+    LLRootView* root = gViewerWindow->getRootView();
+    LLView::Params p;
     p.name = "world_map_3d_input";
     p.rect = gViewerWindow->getWorldViewRectScaled();
     p.follows.flags = FOLLOWS_ALL;
     p.mouse_opaque = true;
-    p.tab_stop = false;
-    SKWorldMapInputView* view = new SKWorldMapInputView(p);
-    LLRootView* root = gViewerWindow->getRootView();
-    root->addChild(view);
-    root->sendChildToBack(view);
-    view->setFocus(true);
-    mInput = view->getHandle();
+    SKWorldMapInputView* input = new SKWorldMapInputView(p);
+    root->addChild(input);
+    mInput = input->getHandle();
 
-    mOpen = true;
-    mLastFrame = LLTimer::getUptimeSeconds();
+    LLPanel* overlay = LLUICtrlFactory::getInstance()->createFromFile<LLPanel>("panel_sk_world_map.xml", nullptr, LLPanel::child_registry_t::instance());
+    if (overlay)
+    {
+        const LLRect world = gViewerWindow->getWorldViewRectScaled();
+        const LLRect rect = overlay->getRect();
+        overlay->setOrigin(world.mRight - rect.getWidth(), world.mTop - rect.getHeight());
+        overlay->getChild<LLUICtrl>("recentre_btn")->setCommitCallback([](LLUICtrl*, const LLSD&) { SKMapMode::instance().recentre(); });
+        root->addChild(overlay);
+        root->sendChildToBack(overlay);
+        mOverlay = overlay->getHandle();
+    }
+    root->sendChildToBack(input);
+
     LL_INFOS("WorldMap") << "map mode opened" << LL_ENDL;
     return true;
+}
+
+void SKMapMode::removeViews()
+{
+    deleteLater(mInput);
+    deleteLater(mOverlay);
+    mInput = LLHandle<LLView>();
+    mOverlay = LLHandle<LLView>();
+    mPanning = false;
 }
 
 void SKMapMode::close()
@@ -232,175 +233,111 @@ void SKMapMode::close()
     {
         return;
     }
+    mMapPosition = gAgentCamera.getCameraPositionGlobal();
+    mMapFocus = gAgentCamera.getFocusGlobal();
+    removeViews();
+    mScene.release();
     mOpen = false;
 
-    if (LLView* view = mInput.get())
+    // The world camera exactly as it was; a camera that followed the avatar follows it again from
+    // the same offset.
+    gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition, mWorld.mFocus, mWorld.mFocusObject);
+    if (mWorld.mFocusOnAvatar)
     {
-        if (gFocusMgr.getMouseCapture() == view)
-        {
-            gFocusMgr.setMouseCapture(nullptr);
-        }
-        if (view->hasFocus())
-        {
-            gFocusMgr.setKeyboardFocus(nullptr);
-        }
-        if (view->getParent())
-        {
-            view->getParent()->removeChild(view);
-        }
-        // Deleted once the event that closed the map, possibly the view's own, has unwound.
-        LLHandle<LLView> handle = mInput;
-        doOnIdleOneTime([handle]() { delete handle.get(); });
+        gAgentCamera.setFocusOnAvatar(true, false);
     }
-    mInput = LLHandle<LLView>();
-    mScene.release();
-
-    // Map mode never moves the world camera; this puts back what the open changed, and a detached
-    // camera exactly where it was. A camera following the avatar rebuilds itself from the avatar.
+    gAgentCamera.stopCameraAnimation();
     if (mWorld.mMouselook)
     {
         gAgentCamera.changeCameraToMouselook(false);
     }
-    else if (!mWorld.mFocusOnAvatar)
-    {
-        gAgentCamera.setCameraPosAndFocusGlobal(mWorld.mPosition, mWorld.mFocus, mWorld.mFocusObject);
-        gAgentCamera.stopCameraAnimation();
-    }
     LL_INFOS("WorldMap") << "map mode closed" << LL_ENDL;
 }
 
-void SKMapMode::startFromWorld()
+void SKMapMode::recentre()
 {
-    const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
-    mOrbit.mYaw = (std::fabs(at.mV[VX]) + std::fabs(at.mV[VY]) > 1.0e-3f) ? std::atan2(at.mV[VY], at.mV[VX]) : mOrbit.mYaw;
-    mOrbit.mElevation = START_ELEVATION;
-    mOrbit.mDistance = START_DISTANCE;
-    mOrbit.mFocus = gAgent.getPositionGlobal();
-    mOrbit.mFocus.mdV[VZ] = GROUND_Z;
-    mOrbit.clamp();
-    mFly = toFly(mOrbit);
-    mCamera = CAMERA_ORBIT;
-    mStarted = true;
+    if (!mOpen)
+    {
+        return;
+    }
+    const LLVector3d agent = gAgent.getPositionGlobal();
+    const LLVector3d focus = gAgentCamera.getFocusGlobal();
+    const LLVector3d offset(agent.mdV[VX] - focus.mdV[VX], agent.mdV[VY] - focus.mdV[VY], 0.0);
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(gAgentCamera.getCameraPositionGlobal() + offset, focus + offset, LLUUID::null);
 }
 
-void SKMapMode::home()
+bool SKMapMode::groundUnderCursor(S32 x, S32 y, LLVector3d& ground) const
 {
-    if (mCamera == CAMERA_FLY)
-    {
-        mOrbit = toOrbit(mFly);
-    }
-    mOrbit.mFocus = gAgent.getPositionGlobal();
-    mOrbit.mFocus.mdV[VZ] = GROUND_Z;
-    if (mCamera == CAMERA_FLY)
-    {
-        mFly = toFly(mOrbit);
-    }
+    const LLVector3d eye = gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin());
+    return groundHit(eye, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), ground);
 }
 
-void SKMapMode::switchCamera()
+bool SKMapMode::beginPan(S32 x, S32 y)
 {
-    if (mCamera == CAMERA_ORBIT)
+    if (!mOpen || !groundUnderCursor(x, y, mPanGrabbed))
     {
-        mFly = toFly(mOrbit);
-        mCamera = CAMERA_FLY;
+        return false;
     }
-    else
-    {
-        mOrbit = toOrbit(mFly);
-        mCamera = CAMERA_ORBIT;
-    }
+    mPanEye = gAgentCamera.getCameraPositionGlobal();
+    mPanFocus = gAgentCamera.getFocusGlobal();
+    mPanning = true;
+    return true;
 }
 
-void SKMapMode::drag(S32 dx, S32 dy, bool rotate)
+void SKMapMode::pan(S32 x, S32 y)
 {
-    if (mCamera == CAMERA_FLY)
+    // Solved from the drag's start, not step by step, so it never drifts. The camera only translates,
+    // so the cursor's direction is the same from any point of the drag.
+    LLVector3d offset;
+    if (!mPanning || !panOffset(mPanEye, LLVector3d(gViewerWindow->mouseDirectionGlobal(x, y)), mPanGrabbed, offset))
     {
-        mFly.mYaw -= dx * LOOK_PER_PX;
-        mFly.mPitch += dy * LOOK_PER_PX;
-        mFly.clamp();
         return;
     }
-    if (rotate)
-    {
-        mOrbit.mYaw -= dx * ROTATE_PER_PX;
-        mOrbit.mElevation += dy * ROTATE_PER_PX;
-        mOrbit.clamp();
-        return;
-    }
-    // Grab the ground: the point under the cursor follows it, foreshortened along the look.
-    const F64 height_px = std::max(1.0, static_cast<F64>(gViewerWindow->getWorldViewRectScaled().getHeight()));
-    const F64 metres_per_px = 2.0 * mOrbit.mDistance * std::tan(FOV_Y * 0.5) / height_px;
-    const LLVector3d right(std::sin(mOrbit.mYaw), -std::cos(mOrbit.mYaw), 0.0);
-    const LLVector3d ahead(std::cos(mOrbit.mYaw), std::sin(mOrbit.mYaw), 0.0);
-    const F64 along = metres_per_px / std::max(std::sin(mOrbit.mElevation), 0.3);
-    mOrbit.mFocus -= right * (dx * metres_per_px) + ahead * (dy * along);
+    gAgentCamera.setFocusOnAvatar(false, false);
+    gAgentCamera.setCameraPosAndFocusGlobal(mPanEye + offset, mPanFocus + offset, LLUUID::null);
+    gAgentCamera.stopCameraAnimation();
 }
 
-void SKMapMode::zoom(F32 notches)
+// static
+bool SKMapMode::blocksAction(const std::string& function_name)
 {
-    if (mCamera == CAMERA_FLY)
-    {
-        const F64 step = flySpeed(mFly.mPosition.mdV[VZ], false) * 0.25 * -notches;
-        mFly.mPosition += lookDirection(mFly.mYaw, mFly.mPitch) * step;
-        mFly.clamp();
-        return;
-    }
-    mOrbit.mDistance *= std::pow(ZOOM_PER_NOTCH, static_cast<F64>(notches));
-    mOrbit.clamp();
+    static const std::unordered_set<std::string> avatar_actions = {
+        "jump", "push_down", "push_forward", "push_backward", "look_up", "look_down", "toggle_fly",
+        "turn_left", "turn_right", "slide_left", "slide_right", "stop_moving", "run_forward",
+        "run_backward", "run_left", "run_right", "toggle_run", "toggle_down", "toggle_sit",
+        "teleport_to", "walk_to",
+    };
+    return isOpen() && avatar_actions.count(function_name) > 0;
 }
 
-void SKMapMode::moveForKeys(F64 dt)
+// static
+void SKMapMode::worldCameraForUpdate(LLVector3& position_agent, LLVector3& at, LLVector3& left, LLVector3& up)
 {
-    LLView* view = mInput.get();
-    if (!view || !view->hasFocus() || !gKeyboard)
+    if (!isOpen())
     {
         return;
     }
-    auto held = [](KEY a, KEY b) { return gKeyboard->getKeyDown(a) || gKeyboard->getKeyDown(b); };
-    const F64 forward = (held('W', KEY_UP) ? 1.0 : 0.0) - (held('S', KEY_DOWN) ? 1.0 : 0.0);
-    const F64 strafe = (held('D', KEY_RIGHT) ? 1.0 : 0.0) - (held('A', KEY_LEFT) ? 1.0 : 0.0);
-    const F64 rise = (held('E', KEY_PAGE_UP) ? 1.0 : 0.0) - (held('Q', KEY_PAGE_DOWN) ? 1.0 : 0.0);
-    if (forward == 0.0 && strafe == 0.0 && rise == 0.0)
-    {
-        return;
-    }
-    const bool boost = (gKeyboard->currentMask(false) & MASK_SHIFT) != 0;
-
-    if (mCamera == CAMERA_FLY)
-    {
-        LLVector3d f, r, u;
-        viewBasis(mFly.mYaw, mFly.mPitch, f, r, u);
-        const F64 speed = flySpeed(mFly.mPosition.mdV[VZ], boost) * dt;
-        mFly.mPosition += f * (forward * speed) + r * (strafe * speed) + LLVector3d(0.0, 0.0, rise * speed);
-        mFly.clamp();
-        return;
-    }
-
-    // The orbit: WASD slides the focus, Q and E turn about it.
-    const F64 pan = mOrbit.mDistance * ORBIT_KEY_PAN * dt * (boost ? 4.0 : 1.0);
-    const LLVector3d right(std::sin(mOrbit.mYaw), -std::cos(mOrbit.mYaw), 0.0);
-    const LLVector3d ahead(std::cos(mOrbit.mYaw), std::sin(mOrbit.mYaw), 0.0);
-    mOrbit.mFocus += ahead * (forward * pan) + right * (strafe * pan);
-    mOrbit.mYaw += rise * ORBIT_KEY_YAW * dt;
-    mOrbit.clamp();
+    const WorldCamera& world = getInstance()->mWorld;
+    position_agent = gAgent.getPosAgentFromGlobal(world.mViewOrigin);
+    at = world.mAt;
+    left = world.mLeft;
+    up = world.mUp;
 }
 
 SKWorldMapFrame SKMapMode::frame() const
 {
+    // Whatever drives the viewer camera, the map draws from it.
+    const LLViewerCamera* view = LLViewerCamera::getInstance();
+    const LLVector3 at = view->getAtAxis();
     SKWorldMapFrame f;
-    f.mFovY = FOV_Y;
-    if (mCamera == CAMERA_FLY)
+    f.mEye = gAgent.getPosGlobalFromAgent(view->getOrigin());
+    f.mYaw = std::atan2(at.mV[VY], at.mV[VX]);
+    f.mPitch = std::asin(llclamp(at.mV[VZ], -1.f, 1.f));
+    f.mFovY = view->getView();
+    if (!LLViewerJoystick::getInstance()->getOverrideCamera())
     {
-        f.mEye = mFly.mPosition;
-        f.mYaw = mFly.mYaw;
-        f.mPitch = mFly.mPitch;
-    }
-    else
-    {
-        f.mEye = mOrbit.eye();
-        f.mYaw = mOrbit.mYaw;
-        f.mPitch = mOrbit.pitch();
-        f.mFocus = mOrbit.mFocus;
+        f.mFocus = gAgentCamera.getFocusGlobal();
         f.mHasFocus = true;
     }
     return f;
@@ -408,12 +345,8 @@ SKWorldMapFrame SKMapMode::frame() const
 
 void SKMapMode::render(const LLRect& world_rect_raw)
 {
-    if (!mOpen)
+    if (mOpen)
     {
-        return;
+        mScene.render(frame(), world_rect_raw, LLTimer::getUptimeSeconds());
     }
-    const F64 now = LLTimer::getUptimeSeconds();
-    moveForKeys(llclamp(now - mLastFrame, 0.0, 0.1));
-    mLastFrame = now;
-    mScene.render(frame(), world_rect_raw, now);
 }
