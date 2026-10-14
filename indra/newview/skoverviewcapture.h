@@ -62,6 +62,8 @@ public:
     static void cleanupGL();
     /// The tactical view takes the wheel for its distance; false when it is off.
     static bool handleScrollWheel(F32 clicks);
+    /// The tactical overview key: held, it shows the view until released; tapped, it latches it until the next tap.
+    static void handleTacticalKey(bool down);
 
     /// The resolved map, 0 until the first capture; it covers the region at originGlobal() by regionWidth() metres.
     U32 texture() const;

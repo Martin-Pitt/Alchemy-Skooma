@@ -66,6 +66,7 @@ namespace
     const F32 TACTICAL_MIN_M = 8.f;
     const F32 TACTICAL_MAX_M = 400.f;
     const F32 DOT_PX = 4.f;
+    const F64 TACTICAL_TAP_S = 0.2;
 
     void uniformColour(GLint prog, const char* name, const skmap::PaletteColour& c)
     {
@@ -106,6 +107,33 @@ bool SKOverviewCapture::handleScrollWheel(F32 clicks)
     const F32 distance = gSavedSettings.getF32("SKTacticalDistance");
     gSavedSettings.setF32("SKTacticalDistance", llclamp(distance * std::pow(1.15f, clicks), TACTICAL_MIN_M, TACTICAL_MAX_M));
     return true;
+}
+
+void SKOverviewCapture::handleTacticalKey(bool down)
+{
+    static F64 pressed_at = -1.0;
+    static bool latched = false;
+    static bool closing = false;
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    if (down)
+    {
+        pressed_at = now;
+        closing = latched;
+        latched = false;
+        gSavedSettings.setBOOL("SKTacticalOverview", !closing);
+        return;
+    }
+    if (closing || pressed_at < 0.0)
+    {
+        closing = false;
+        return;
+    }
+    if (now - pressed_at < TACTICAL_TAP_S)
+    {
+        latched = true;
+        return;
+    }
+    gSavedSettings.setBOOL("SKTacticalOverview", false);
 }
 
 void SKOverviewCapture::cleanupGL()

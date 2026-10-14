@@ -208,6 +208,19 @@
          tool_tip="Reset camera roll"
          value="Roll Reset" />
     </rows>
+    <!-- <SK:Nexii> tactical overview -->
+    <rows
+     name="tactical_overview"
+     value="tactical_overview">
+        <columns
+         column="lst_action"
+         font="SansSerif"
+         halign="left"
+         name="lst_action"
+         tool_tip="Hold to show the tactical overview, tap to keep it open until the next tap"
+         value="Tactical Overview" />
+    </rows>
+    <!-- </SK:Nexii> -->
     <rows
      name="move_forward_sitting"
      value="move_forward_sitting">
